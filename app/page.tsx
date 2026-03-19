@@ -37,15 +37,17 @@ export default function JarvisPage() {
 
         {/* Main Content Area */}
         <div className="flex-1 flex flex-col gap-4">
-          {/* Analysis Message */}
-          <div className="space-y-3">
-            <h3 className="text-lg text-white leading-relaxed">
-              Analyzing route options for your trip to the airport, sir.
-            </h3>
-            <div className="w-8 h-px bg-[#4da6ff]/50" />
-            <p className="text-sm text-gray-400 leading-relaxed">
-              Traffic is currently moderate on US-101. Recommending the Express Shuttle for a 08:45 arrival.
-            </p>
+          {/* Analysis Message - Frosted Glass Panel */}
+          <div className="relative rounded-xl p-5 bg-[#0a1628]/85 backdrop-blur-xl border border-[#4da6ff]/20 shadow-[0_0_20px_rgba(77,166,255,0.15)]">
+            <div className="space-y-3">
+              <h3 className="text-lg text-white leading-relaxed">
+                Analyzing route options for your trip to the airport, sir.
+              </h3>
+              <div className="w-8 h-px bg-[#4da6ff]/50" />
+              <p className="text-sm text-gray-400 leading-relaxed">
+                Traffic is currently moderate on US-101. Recommending the Express Shuttle for a 08:45 arrival.
+              </p>
+            </div>
           </div>
 
           {/* Transit Card */}
