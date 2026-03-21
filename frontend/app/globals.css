@@ -123,3 +123,57 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* HUD Animations */
+@keyframes hudSlideUp {
+  from {
+    transform: translateY(12px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes hudBorderPulse {
+  0%, 100% {
+    border-color: rgba(0, 255, 255, 0.08);
+  }
+  50% {
+    border-color: rgba(0, 255, 255, 0.2);
+  }
+}
+
+@keyframes hudPillIn {
+  from {
+    transform: translateY(-6px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes hudAlertIn {
+  from {
+    transform: translateY(-8px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes alertBorderPulse {
+  0%, 100% {
+    border-color: rgba(245, 166, 35, 0.1);
+    box-shadow: 0 0 12px rgba(245, 166, 35, 0), inset 0 1px 0 rgba(255, 255, 255, 0.02);
+  }
+  50% {
+    border-color: rgba(245, 166, 35, 0.25);
+    box-shadow: 0 0 12px rgba(245, 166, 35, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.02);
+  }
+}
