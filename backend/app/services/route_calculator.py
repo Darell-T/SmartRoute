@@ -40,7 +40,12 @@ async def nearest_stops(origin: str, dest: str) -> dict:
     origin_stops = find_nearest_stops(origin_coords[0],origin_coords[1], gtfs.stops_by_id, 5)
     dest_stops = find_nearest_stops(dest_coords[0],dest_coords[1], gtfs.stops_by_id, 5)
 
-    return {"origin_stops": origin_stops, "dest_stops": dest_stops}
+    return {
+        "origin_stops": origin_stops,
+        "dest_stops": dest_stops,
+        "origin_coords": {"lat": origin_coords[0], "lng": origin_coords[1]},
+        "dest_coords": {"lat": dest_coords[0], "lng": dest_coords[1]},
+    }
 
 def possible_routes(stops: dict) -> list:
 

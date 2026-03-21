@@ -15,8 +15,9 @@ export interface TransitRouteData {
 
 interface JarvisMapProps {
   onLocationUpdate?: (coords: { lng: number; lat: number }) => void;
-  routeData?: TransitRouteData;
+  routeData?: TransitRouteData | null;
   isSpeaking?: boolean;
+  destCoords?: { lat: number; lng: number } | null;
 }
 
 const MTA_COLORS: Record<string, string> = {
@@ -37,9 +38,9 @@ function getLineColor(line: string): string {
   return MTA_COLORS[line.toUpperCase()] ?? "#FFD700";
 }
 
-const WALK_IN_DUR = 1000;
-const TRANSIT_DUR = 2000;
-const WALK_OUT_DUR = 800;
+const WALK_IN_DUR = 1500;
+const TRANSIT_DUR = 3000;
+const WALK_OUT_DUR = 1000;
 const PAUSE = 350;
 
 const SRC_WALK_IN = "jr-walk-in-src";
@@ -50,10 +51,11 @@ const LYR_TRANSIT_GLOW = "jr-transit-glow-lyr";
 const LYR_TRANSIT = "jr-transit-lyr";
 const LYR_WALK_OUT = "jr-walk-out-lyr";
 
-export function JarvisMap({ onLocationUpdate, routeData, isSpeaking }: JarvisMapProps) {
+export function JarvisMap({ onLocationUpdate, routeData, isSpeaking, destCoords }: JarvisMapProps) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<mapboxgl.Map | null>(null);
   const marker = useRef<mapboxgl.Marker | null>(null);
+  const destMarker = useRef<mapboxgl.Marker | null>(null);
   const onLocationUpdateRef = useRef(onLocationUpdate);
   const mapReadyRef = useRef(false);
   const rotationIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -61,6 +63,7 @@ export function JarvisMap({ onLocationUpdate, routeData, isSpeaking }: JarvisMap
   const animFrameRef = useRef<number | null>(null);
   const originRef = useRef<[number, number] | null>(null);
   const stationMarkersRef = useRef<mapboxgl.Marker[]>([]);
+  const initialFlyDoneRef = useRef(false);
 
   useEffect(() => {
     onLocationUpdateRef.current = onLocationUpdate;
@@ -127,19 +130,20 @@ export function JarvisMap({ onLocationUpdate, routeData, isSpeaking }: JarvisMap
           onLocationUpdateRef.current?.(coords);
           originRef.current = [coords.lng, coords.lat];
 
-          if (map.current) {
+          if (map.current && !initialFlyDoneRef.current) {
+            initialFlyDoneRef.current = true;
             map.current.flyTo({
               center: [coords.lng, coords.lat],
               zoom: 16,
               pitch: 55,
               duration: 2000,
             });
+          }
 
-            if (marker.current) {
-              marker.current.setLngLat([coords.lng, coords.lat]);
-            } else {
-              createOrbMarker(coords);
-            }
+          if (marker.current) {
+            marker.current.setLngLat([coords.lng, coords.lat]);
+          } else if (map.current) {
+            createOrbMarker(coords);
           }
         },
         (error) => {
@@ -165,19 +169,39 @@ export function JarvisMap({ onLocationUpdate, routeData, isSpeaking }: JarvisMap
         .addTo(map.current);
     }
 
-    map.current.scrollZoom.disable();
-    map.current.boxZoom.disable();
-    map.current.dragRotate.disable();
-    map.current.dragPan.disable();
-    map.current.keyboard.disable();
-    map.current.doubleClickZoom.disable();
-    map.current.touchZoomRotate.disable();
+    // Task 5: Map interactions are ENABLED — user can pan/zoom/rotate freely
+    // map.current.scrollZoom, dragPan, etc. are enabled by default
 
     return () => {
       map.current?.remove();
       if (watchId) navigator.geolocation.clearWatch(watchId);
     };
   }, []);
+
+  // Destination orb (Task 2e)
+  useEffect(() => {
+    if (!map.current || !mapReadyRef.current) return;
+
+    // Remove existing dest marker
+    if (destMarker.current) {
+      destMarker.current.remove();
+      destMarker.current = null;
+    }
+
+    if (destCoords) {
+      const el = document.createElement("div");
+      el.className = "jarvis-orb dest-orb";
+      el.innerHTML = `
+        <div class="orb-core dest-core"></div>
+        <div class="orb-glow dest-glow"></div>
+        <div class="orb-pulse dest-pulse"></div>
+      `;
+
+      destMarker.current = new mapboxgl.Marker({ element: el, anchor: "center" })
+        .setLngLat([destCoords.lng, destCoords.lat])
+        .addTo(map.current!);
+    }
+  }, [destCoords]);
 
   // Route animation + camera rotation
   useEffect(() => {
@@ -253,8 +277,8 @@ export function JarvisMap({ onLocationUpdate, routeData, isSpeaking }: JarvisMap
           paint: {
             "line-color": "#FFFFFF",
             "line-width": 2.5,
-            "line-opacity": 0.65,
-            "line-dasharray": [2, 2.5],
+            "line-opacity": 0.7,
+            "line-dasharray": [2, 4],
           },
         });
       }
@@ -271,7 +295,7 @@ export function JarvisMap({ onLocationUpdate, routeData, isSpeaking }: JarvisMap
           paint: {
             "line-color": lineColor,
             "line-width": 14,
-            "line-opacity": 0.22,
+            "line-opacity": 0.12,
             "line-blur": 6,
           },
         });
@@ -284,7 +308,7 @@ export function JarvisMap({ onLocationUpdate, routeData, isSpeaking }: JarvisMap
           layout: { "line-join": "round", "line-cap": "round" },
           paint: {
             "line-color": lineColor,
-            "line-width": 4,
+            "line-width": 5,
             "line-opacity": 0.95,
           },
         });
@@ -302,35 +326,49 @@ export function JarvisMap({ onLocationUpdate, routeData, isSpeaking }: JarvisMap
           paint: {
             "line-color": "#FFFFFF",
             "line-width": 2.5,
-            "line-opacity": 0.65,
-            "line-dasharray": [2, 2.5],
+            "line-opacity": 0.7,
+            "line-dasharray": [2, 4],
           },
         });
       }
     }
 
-    function addStationBadge(coords: [number, number], name: string) {
+    function addStationBadge(
+      coords: [number, number],
+      name: string,
+      lineLetter: string,
+      lineColor: string,
+    ) {
       const el = document.createElement("div");
       el.style.cssText = `
-        background: rgba(10, 22, 40, 0.92);
-        border: 1px solid rgba(77, 166, 255, 0.45);
-        border-radius: 20px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        background: ${lineColor};
+        border-radius: 12px;
         padding: 4px 10px;
-        font-size: 11px;
+        font-size: 12px;
         font-weight: 600;
-        color: #ffffff;
-        letter-spacing: 0.03em;
-        backdrop-filter: blur(8px);
+        color: ${lineColor === "#FCCC0A" || lineColor === "#6CBE45" ? "#000" : "#fff"};
+        letter-spacing: 0.01em;
         white-space: nowrap;
         pointer-events: none;
-        font-family: ui-sans-serif, system-ui, sans-serif;
+        font-family: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.3);
       `;
-      el.textContent = name;
+      el.innerHTML = `<span style="font-weight:700">${lineLetter}</span><span>${name}</span>`;
 
       const mk = new mapboxgl.Marker({ element: el, anchor: "bottom", offset: [0, -6] })
         .setLngLat(coords)
         .addTo(m);
       stationMarkersRef.current.push(mk);
+    }
+
+    // When routeData is cleared (new submission), clean up everything
+    if (!routeData) {
+      stopAll();
+      clearRouteFromMap();
+      return stopAll;
     }
 
     if (isSpeaking && routeData) {
@@ -340,8 +378,17 @@ export function JarvisMap({ onLocationUpdate, routeData, isSpeaking }: JarvisMap
       const lineColor = getLineColor(routeData.trainLine);
       ensureRouteLayers(lineColor);
 
-      // Phase boundaries (ms)
-      const T1 = WALK_IN_DUR;
+      // Fit bounds to encompass entire route
+      const allCoords = [...routeData.walkIn, ...routeData.transit, ...routeData.walkOut];
+      if (allCoords.length > 0) {
+        const bounds = new mapboxgl.LngLatBounds();
+        allCoords.forEach((c) => bounds.extend(c as mapboxgl.LngLatLike));
+        m.fitBounds(bounds, { padding: 80, duration: 1500, pitch: 55 });
+      }
+
+      // Phase boundaries (ms) — delay animation start to let fitBounds settle
+      const ANIM_DELAY = 1600;
+      const T1 = ANIM_DELAY + WALK_IN_DUR;
       const T2 = T1 + PAUSE;
       const T3 = T2 + TRANSIT_DUR;
       const T4 = T3 + PAUSE;
@@ -353,21 +400,21 @@ export function JarvisMap({ onLocationUpdate, routeData, isSpeaking }: JarvisMap
       function frame(now: number) {
         const e = now - startTime;
 
-        // Walk-in
-        if (e >= 0) {
-          const p = Math.min(e / WALK_IN_DUR, 1);
+        // Walk-in (starts after fitBounds delay)
+        if (e >= ANIM_DELAY) {
+          const p = Math.min((e - ANIM_DELAY) / WALK_IN_DUR, 1);
           const n = Math.max(2, Math.ceil(p * routeData!.walkIn.length));
           setSourceData(SRC_WALK_IN, routeData!.walkIn.slice(0, n));
         }
 
-        // Transit (starts after pause)
+        // Transit (starts after walk-in + pause)
         if (e >= T2) {
           const p = Math.min((e - T2) / TRANSIT_DUR, 1);
           const n = Math.max(2, Math.ceil(p * routeData!.transit.length));
           setSourceData(SRC_TRANSIT, routeData!.transit.slice(0, n));
         }
 
-        // Walk-out (starts after second pause)
+        // Walk-out (starts after transit + pause)
         if (e >= T4) {
           const p = Math.min((e - T4) / WALK_OUT_DUR, 1);
           const n = Math.max(2, Math.ceil(p * routeData!.walkOut.length));
@@ -387,8 +434,8 @@ export function JarvisMap({ onLocationUpdate, routeData, isSpeaking }: JarvisMap
           // Station badges at transit endpoints
           const originCoord = routeData!.transit[0];
           const destCoord = routeData!.transit[routeData!.transit.length - 1];
-          addStationBadge(originCoord, routeData!.originStationName);
-          addStationBadge(destCoord, routeData!.destStationName);
+          addStationBadge(originCoord, routeData!.originStationName, routeData!.trainLine, lineColor);
+          addStationBadge(destCoord, routeData!.destStationName, routeData!.trainLine, lineColor);
 
           // Fly to destination then begin slow rotation
           m.flyTo({ center: destCoord, zoom: 15, pitch: 60, duration: 2000 });
@@ -401,12 +448,12 @@ export function JarvisMap({ onLocationUpdate, routeData, isSpeaking }: JarvisMap
       }
 
       animFrameRef.current = requestAnimationFrame(frame);
-    } else if (!isSpeaking) {
+    } else if (!isSpeaking && routeData) {
       // Audio ended — stop rotation, fly back to origin, keep route visible
       stopRotation();
       const origin = originRef.current;
       if (origin) {
-        m.flyTo({ center: origin, zoom: 16, pitch: 55, duration: 3000 });
+        m.flyTo({ center: origin, zoom: 16, pitch: 55, speed: 0.5, duration: 3000 });
       }
     }
 
@@ -470,6 +517,37 @@ export function JarvisMap({ onLocationUpdate, routeData, isSpeaking }: JarvisMap
           position: absolute;
           z-index: 1;
           animation: orbPulse 3s ease-in-out infinite;
+        }
+
+        /* Destination orb — warm amber/gold */
+        .dest-core {
+          background: radial-gradient(
+            circle,
+            #F5A623 0%,
+            #D4891A 50%,
+            #B06E12 100%
+          ) !important;
+          box-shadow:
+            0 0 10px #F5A623,
+            0 0 20px #F5A623,
+            0 0 30px #D4891A !important;
+        }
+
+        .dest-glow {
+          background: radial-gradient(
+            circle,
+            rgba(245, 166, 35, 0.3) 0%,
+            rgba(212, 137, 26, 0.1) 50%,
+            transparent 70%
+          ) !important;
+        }
+
+        .dest-pulse {
+          background: radial-gradient(
+            circle,
+            rgba(245, 166, 35, 0.15) 0%,
+            transparent 60%
+          ) !important;
         }
 
         @keyframes orbGlow {

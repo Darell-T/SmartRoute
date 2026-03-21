@@ -77,7 +77,7 @@ def find_nearest_stops(lat: float, lon: float, stops_by_id: dict, limit: int = 5
         stop_lat = float(stop["stop_lat"])
         stop_lon = float(stop["stop_lon"])
         dist = distance_meters(lat, lon, stop_lat, stop_lon)
-        distances.append({"stop_id": stop["stop_id"], "stop_name": stop["stop_name"], "distance_m": round(dist, 1)})
+        distances.append({"stop_id": stop["stop_id"], "stop_name": stop["stop_name"], "stop_lat": stop_lat, "stop_lon": stop_lon, "distance_m": round(dist, 1)})
 
     distances.sort(key=lambda x: x["distance_m"])
     return distances[:limit]

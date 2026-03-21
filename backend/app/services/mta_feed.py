@@ -93,11 +93,98 @@ def parse_bytes(rawBytes: bytes) -> list:
                 trip_updates.append({"route_id": route_id,
                 "trip_id": trip_id,
                 "stop_id": stop.stop_id,
-                "arrival_time": datetime.fromtimestamp(stop.arrival.time, tz=NYC_TZ).strftime("%I:%M %p") if stop.arrival.time else None,
+                "arrival_time": stop.arrival.time if stop.arrival.time else None,
                 "delay": stop.arrival.delay})
             
     
     return trip_updates
+
+ALERTS_URL = "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/camsys%2Fsubway-alerts"
+
+
+async def fetch_service_alerts() -> bytes:
+    from app.utils.cache import cache_get, cache_set
+
+    cached = cache_get(ALERTS_URL)
+    if cached:
+        return cached
+
+    async with httpx.AsyncClient() as client:
+        response = await client.get(ALERTS_URL)
+    cache_set(ALERTS_URL, response.content, 60)
+    return response.content
+
+
+def parse_service_alerts(rawBytes: bytes) -> list:
+    feed = gtfs_realtime_pb2.FeedMessage()
+    feed.ParseFromString(rawBytes)
+
+    now = datetime.now(tz=NYC_TZ).timestamp()
+    alerts = []
+
+    for entity in feed.entity:
+        if not entity.HasField("alert"):
+            continue
+
+        alert = entity.alert
+
+        # Extract active_period (take first if present)
+        start = None
+        end = None
+        if alert.active_period:
+            period = alert.active_period[0]
+            start = period.start if period.start else None
+            end = period.end if period.end else None
+
+        # Filter to currently active alerts
+        if start and now < start:
+            continue
+        if end and end > 0 and now > end:
+            continue
+
+        # Extract english text from header_text
+        header = ""
+        if alert.header_text and alert.header_text.translation:
+            for t in alert.header_text.translation:
+                if t.language == "en" or not header:
+                    header = t.text
+                    if t.language == "en":
+                        break
+
+        # Extract english text from description_text
+        description = ""
+        if alert.description_text and alert.description_text.translation:
+            for t in alert.description_text.translation:
+                if t.language == "en" or not description:
+                    description = t.text
+                    if t.language == "en":
+                        break
+
+        # Collect route_ids and stop_ids from informed_entity
+        route_ids = set()
+        stop_ids = set()
+        for ie in alert.informed_entity:
+            if ie.route_id:
+                route_ids.add(ie.route_id)
+            if ie.stop_id:
+                stop_ids.add(ie.stop_id)
+
+        alerts.append({
+            "alert_id": entity.id,
+            "header": header,
+            "description": description,
+            "route_ids": list(route_ids),
+            "stop_ids": list(stop_ids),
+            "start": start,
+            "end": end,
+        })
+
+    return alerts
+
+
+def filter_alerts_for_routes(alerts: list, route_ids: set) -> list:
+    return [a for a in alerts if set(a["route_ids"]) & route_ids]
+
 
 def parse_vehicle_positions(rawBytes: bytes) -> list:
     locations = gtfs_realtime_pb2.FeedMessage()

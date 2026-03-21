@@ -1,4 +1,5 @@
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
 export async function getThinkingAudio(): Promise<ArrayBuffer> {
   const res = await fetch(`${API_URL}/api/thinking`, {
     method: "POST",
@@ -9,13 +10,29 @@ export async function getThinkingAudio(): Promise<ArrayBuffer> {
   return res.arrayBuffer();
 }
 
+export interface ServiceAlert {
+  header: string;
+  routeIds: string[];
+}
+
+export interface TripResponse {
+  text: string;
+  audio: string;
+  originCoords?: { lat: number; lng: number };
+  destCoords?: { lat: number; lng: number };
+  trainLine?: string;
+  originStation?: { name: string; lat: number; lng: number };
+  destStation?: { name: string; lat: number; lng: number };
+  departureTimestamp?: number | null;
+  direction?: string;
+  rideDurationMinutes?: number | null;
+  serviceAlerts?: ServiceAlert[];
+}
+
 export async function planTrip(
   origin: string,
   destination: string,
-): Promise<{
-  text: string;
-  audio: string;
-}> {
+): Promise<TripResponse> {
   const res = await fetch(`${API_URL}/api/trip`, {
     method: "POST",
     headers: {
