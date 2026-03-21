@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+httpx
+protobuf
+gtfs-realtime-bindings
+sqlalchemy[asyncio]
+asyncpg
+redis[hiredis]
+anthropic
+python-dotenv
+geopy

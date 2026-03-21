@@ -1,0 +1,11 @@
+# Place MTA static GTFS files here
+# Download from: https://new.mta.info/developers
+#
+# Required files:
+# - stops.txt
+# - routes.txt
+# - trips.txt
+# - stop_times.txt
+# - transfers.txt
+# - calendar.txt
+# - calendar_dates.txt
