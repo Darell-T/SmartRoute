@@ -1,6 +1,6 @@
 import csv
-import io
 import os
+import tempfile
 import time
 import zipfile
 from pathlib import Path
@@ -47,12 +47,17 @@ def download_supplemented_gtfs() -> bool:
     _downloading = True
     try:
         print("[gtfs] downloading supplemented GTFS...")
-        resp = httpx.get(SUPPLEMENTED_URL, timeout=60, follow_redirects=True)
-        resp.raise_for_status()
-
         _supplemented_dir.mkdir(parents=True, exist_ok=True)
+        temp_zip_path = None
 
-        with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+        with httpx.stream("GET", SUPPLEMENTED_URL, timeout=60, follow_redirects=True) as resp:
+            resp.raise_for_status()
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as temp_zip:
+                temp_zip_path = Path(temp_zip.name)
+                for chunk in resp.iter_bytes():
+                    temp_zip.write(chunk)
+
+        with zipfile.ZipFile(temp_zip_path) as zf:
             zf.extractall(_supplemented_dir)
 
         print(f"[gtfs] supplemented GTFS extracted to {_supplemented_dir}")
@@ -62,6 +67,11 @@ def download_supplemented_gtfs() -> bool:
         print(f"[gtfs] download failed, keeping existing files: {exc}")
         return False
     finally:
+        if "temp_zip_path" in locals() and temp_zip_path and temp_zip_path.exists():
+            try:
+                temp_zip_path.unlink()
+            except OSError:
+                pass
         _downloading = False
 
 
@@ -81,30 +91,68 @@ class GTFSStaticData:
         self._data_dir = _active_data_dir()
         print(f"[gtfs] loading data from {self._data_dir}")
 
-        # load all data
-        stops = self._load_csv("stops.txt")
-        routes = self._load_csv("routes.txt")
-        transfers = self._load_csv("transfers.txt")
-        trips = self._load_csv("trips.txt")
-        stop_times = self._load_csv("stop_times.txt")
+        # Stream CSVs into in-memory indexes to avoid large temporary lists.
+        stops_by_id: dict = {}
+        for row in self._iter_csv("stops.txt"):
+            stop_id = row.get("stop_id")
+            if stop_id:
+                stops_by_id[stop_id] = row
 
-        # insert data into dictionaries
-        self.stops_by_id = self._buildIdxDict(stops, "stop_id")
-        self.routes_by_id = self._buildIdxDict(routes, "route_id")
-        self.transfers_by_stop = self._buildGroupDict(transfers, "from_stop_id")
-        self.trips_to_routes = {trip["trip_id"]: trip["route_id"] for trip in trips}
+        routes_by_id: dict = {}
+        for row in self._iter_csv("routes.txt"):
+            route_id = row.get("route_id")
+            if route_id:
+                routes_by_id[route_id] = row
+
+        transfers_by_stop: dict = {}
+        for row in self._iter_csv("transfers.txt"):
+            from_stop_id = row.get("from_stop_id")
+            if from_stop_id:
+                transfers_by_stop.setdefault(from_stop_id, []).append(row)
+
+        trips_to_routes: dict = {}
+        for row in self._iter_csv("trips.txt"):
+            trip_id = row.get("trip_id")
+            route_id = row.get("route_id")
+            if trip_id and route_id:
+                trips_to_routes[trip_id] = route_id
 
         # build routes by stop
         routes_by_stop: dict = {}
         stops_by_trip: dict = {}
-        for data in stop_times:
-            trip_id = data["trip_id"]
-            stop_id = data["stop_id"]
-            route = self.trips_to_routes[trip_id]
+        for data in self._iter_csv("stop_times.txt"):
+            trip_id = data.get("trip_id")
+            stop_id = data.get("stop_id")
+            if not trip_id or not stop_id:
+                continue
+
+            route = trips_to_routes.get(trip_id)
+            if route is None:
+                continue
+
+            stop_sequence = data.get("stop_sequence")
+            try:
+                seq = int(stop_sequence) if stop_sequence is not None else None
+            except ValueError:
+                continue
+            if seq is None:
+                continue
+
             routes_by_stop.setdefault(stop_id, set()).add(route)
-            stops_by_trip.setdefault(trip_id, []).append((int(data["stop_sequence"]), stop_id))
+            stops_by_trip.setdefault(trip_id, []).append((seq, stop_id))
+
+        self.stops_by_id = stops_by_id
+        self.routes_by_id = routes_by_id
+        self.transfers_by_stop = transfers_by_stop
+        self.trips_to_routes = trips_to_routes
         self.routes_by_stop = routes_by_stop
         self.stops_by_trip = stops_by_trip
+
+    def _iter_csv(self, filename: str):
+        with open(self._data_dir / filename, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                yield row
 
     def reload(self):
         """Re-read CSV files and rebuild all dictionaries in place."""
