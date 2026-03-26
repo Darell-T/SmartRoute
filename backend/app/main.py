@@ -11,6 +11,7 @@
 # - Include routers from routers/ directory
 # - Health check endpoint
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -28,6 +29,16 @@ from fastapi import FastAPI
 from app.routers import thinking, trips
 from fastapi.middleware.cors import CORSMiddleware
 from app.utils.gtfs_static import GTFSStaticData, download_supplemented_gtfs
+
+
+def _allowed_origins() -> list[str]:
+    raw = os.getenv("CORS_ORIGINS", "")
+    from_env = [origin.strip() for origin in raw.split(",") if origin.strip()]
+    return [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        *from_env,
+    ]
 
 
 async def _load_gtfs_into_state(app: FastAPI) -> None:
@@ -84,7 +95,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=_allowed_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
