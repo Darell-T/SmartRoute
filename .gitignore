@@ -8,6 +8,7 @@ __pycache__/
 backend/data/gtfs_static/stop_times.txt
 backend/data/gtfs_static/shapes.txt
 backend/data/gtfs_static/trips.txt
+backend/data/gtfs_supplemented/stop_times.txt
 
 # v0 sandbox internal files
 __v0_runtime_loader.js
@@ -25,3 +26,5 @@ next.user-config.*
 node_modules/
 .next/
 .DS_Store
+# TypeScript build info
+*.tsbuildinfo

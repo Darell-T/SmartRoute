@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 ROUTES_URL = "https://routes.googleapis.com/directions/v2:computeRoutes"
 key = os.getenv("GOOGLE_ROUTES_API_KEY")
 
-FIELD_MASK = FIELD_MASK = ",".join([
+FIELD_MASK = ",".join([
     "routes.legs.steps.transitDetails",
     "routes.legs.steps.travelMode",
     "routes.legs.steps.startLocation",
@@ -49,7 +49,6 @@ async def get_transit_route(origin: tuple, dest: str) -> dict:
     }
 
     async with httpx.AsyncClient() as client:
-        # implementation goes here
         response = await client.post(
             ROUTES_URL,
             json = request_body,
@@ -68,7 +67,7 @@ def parse_response(response: dict) -> list:
         for step in route["legs"][0]["steps"]:
 
             if step["travelMode"] == "TRANSIT":
-                train_line = step["transitDetails"]["transitLine"]["nameShort"].replace("Line", "").strip()
+                route_id = step["transitDetails"]["transitLine"]["nameShort"].replace("Line", "").strip()
                 line_color = step["transitDetails"]["transitLine"]["color"]
                 direction = step["transitDetails"]["headsign"]
                 stop_count = step["transitDetails"]["stopCount"]
@@ -95,17 +94,18 @@ def parse_response(response: dict) -> list:
 
                 transit_step = {
                     "type": step["transitDetails"]["transitLine"]["vehicle"]["type"],
-                "train_line": train_line,
-                "line_color": line_color,
-                "direction": direction,
-                "stop_count": stop_count,
-                "departure_stop": departure_stop,
-                "arrival_stop": arrival_stop,
-                "departure_coords": departure_coords,
-                "arrival_coords": arrival_coords,
-                "minutes_until_train_arrives": minutes_until_train_arrives,
-                "minutes_until_arrival": arrival,
-                "polyline": step["polyline"]
+                    "route_id": route_id,
+                    "train_line": route_id,
+                    "line_color": line_color,
+                    "direction": direction,
+                    "stop_count": stop_count,
+                    "departure_stop": departure_stop,
+                    "arrival_stop": arrival_stop,
+                    "departure_coords": departure_coords,
+                    "arrival_coords": arrival_coords,
+                    "minutes_until_train_arrives": minutes_until_train_arrives,
+                    "minutes_until_arrival": arrival,
+                    "polyline": step["polyline"]
 
                 }
                 steps.append(transit_step)
@@ -118,12 +118,5 @@ def parse_response(response: dict) -> list:
                     "polyline": step["polyline"],
                 })
         routes.append(steps)
-    
+
     return routes
-
-
-
-
-            
-
-

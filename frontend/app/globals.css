@@ -156,24 +156,71 @@
   }
 }
 
-@keyframes hudAlertIn {
-  from {
-    transform: translateY(-8px);
-    opacity: 0;
-  }
-  to {
-    transform: translateY(0);
-    opacity: 1;
-  }
+/* Input bar focus glow */
+.hud-input-bar:focus-within {
+  box-shadow: 0 0 20px rgba(0, 212, 255, 0.08);
+  border-color: rgba(0, 212, 255, 0.2) !important;
 }
 
-@keyframes alertBorderPulse {
-  0%, 100% {
-    border-color: rgba(245, 166, 35, 0.1);
-    box-shadow: 0 0 12px rgba(245, 166, 35, 0), inset 0 1px 0 rgba(255, 255, 255, 0.02);
-  }
-  50% {
-    border-color: rgba(245, 166, 35, 0.25);
-    box-shadow: 0 0 12px rgba(245, 166, 35, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.02);
+/* Placeholder color for HUD inputs */
+.hud-input-bar input::placeholder {
+  color: rgba(0, 212, 255, 0.25);
+}
+
+/* ── Fade in ── */
+@keyframes hudFadeIn {
+  from { opacity: 0; transform: translateX(-6px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+/* ── Spinner ── */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ── Audio waveform bars ── */
+@keyframes waveBar {
+  0% { height: 2px; }
+  100% { height: 14px; }
+}
+
+/* ── HUD Action Pill Buttons ── */
+.hud-action-btn-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 16px;
+  background: rgba(8, 10, 18, 0.6);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(0, 212, 255, 0.1);
+  color: rgba(0, 212, 255, 0.6);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.hud-action-btn-pill:hover {
+  background: rgba(0, 212, 255, 0.08);
+  border-color: rgba(0, 212, 255, 0.2);
+  color: rgba(0, 212, 255, 0.9);
+}
+.hud-action-btn-pill:active {
+  transform: scale(0.95);
+}
+
+/* Mobile: taller pill for 44px touch target */
+@media (max-width: 767px) {
+  .hud-action-btn-pill {
+    height: 44px;
+    min-height: 44px;
+    padding: 0 14px;
+    font-size: 12px;
   }
 }
