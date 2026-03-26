@@ -2,14 +2,13 @@ import base64
 import asyncio
 import re
 import time
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from app.services.directions import get_transit_route, parse_response
 from app.services.ai_advisor import stream_recommendation
 from app.services.incident_monitor import get_incidents
 from app.services.mta_feed import fetch_service_alerts, get_stalled_buses, parse_service_alerts, filter_alerts_for_routes, get_stalled_trains
 from app.services.voice import generate_speech
-from app.services.route_calculator import gtfs
 
 router = APIRouter()
 
@@ -19,11 +18,16 @@ class TripRequest(BaseModel):
     destination: str
 
 @router.post("/api/trip")
-async def plan_trip(request: TripRequest):
+async def plan_trip(request: Request, payload: TripRequest):
     t0 = time.monotonic()
     try:
+        gtfs = getattr(request.app.state, "gtfs", None)
+        if gtfs is None:
+            detail = getattr(request.app.state, "gtfs_error", None) or "GTFS data is still loading"
+            raise HTTPException(status_code=503, detail=detail)
+
         # 1. Get routes from Google
-        response = await get_transit_route((request.origin_lat, request.origin_lng), request.destination)
+        response = await get_transit_route((payload.origin_lat, payload.origin_lng), payload.destination)
 
         # 2. Parse the response into structured routes
         parsed_response = parse_response(response)
