@@ -33,12 +33,19 @@ from app.utils.gtfs_static import GTFSStaticData, download_supplemented_gtfs
 
 def _allowed_origins() -> list[str]:
     raw = os.getenv("CORS_ORIGINS", "")
-    from_env = [origin.strip() for origin in raw.split(",") if origin.strip()]
+    from_env = [origin.strip().rstrip("/") for origin in raw.split(",") if origin.strip()]
     return [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         *from_env,
     ]
+
+
+def _allowed_origin_regex() -> str | None:
+    # Supports Vercel preview URLs like:
+    # https://transitagent-<hash>-<scope>.vercel.app
+    raw = os.getenv("CORS_ORIGIN_REGEX", "").strip()
+    return raw or None
 
 
 async def _load_gtfs_into_state(app: FastAPI) -> None:
@@ -96,6 +103,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins(),
+    allow_origin_regex=_allowed_origin_regex(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
