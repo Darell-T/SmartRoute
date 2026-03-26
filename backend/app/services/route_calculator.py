@@ -1,3 +1,5 @@
 from app.utils.gtfs_static import GTFSStaticData
 
-gtfs = GTFSStaticData()
+
+def create_gtfs() -> GTFSStaticData:
+    return GTFSStaticData()

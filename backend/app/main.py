@@ -13,6 +13,7 @@
 import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -23,38 +24,52 @@ _repo_root = _backend_dir.parent
 load_dotenv(_repo_root / ".env")
 load_dotenv(_backend_dir / ".env")
 
-from app.utils.gtfs_static import download_supplemented_gtfs
-
-# Routers import GTFS at module load; fetch supplemented zip first so stop_times exists.
-download_supplemented_gtfs()
-
 from fastapi import FastAPI
 from app.routers import thinking, trips
 from fastapi.middleware.cors import CORSMiddleware
+from app.utils.gtfs_static import GTFSStaticData, download_supplemented_gtfs
 
 
-async def _gtfs_refresh_loop():
-    """Download supplemented GTFS and reload the in-memory data every 60 minutes."""
+async def _load_gtfs_into_state(app: FastAPI) -> None:
+    try:
+        await asyncio.to_thread(download_supplemented_gtfs)
+        app.state.gtfs = await asyncio.to_thread(GTFSStaticData)
+        app.state.gtfs_error = None
+        print("[main] GTFS data loaded")
+    except Exception as exc:
+        app.state.gtfs = None
+        app.state.gtfs_error = f"GTFS initialization failed: {exc}"
+        print(f"[main] GTFS initialization error: {exc}")
+
+
+async def _gtfs_refresh_loop(app: FastAPI):
+    """Keep GTFS data fresh without blocking app startup."""
     while True:
-        await asyncio.sleep(3600)
         try:
+            if app.state.gtfs is None:
+                await _load_gtfs_into_state(app)
+                if app.state.gtfs is None:
+                    await asyncio.sleep(30)
+                    continue
+
+            await asyncio.sleep(3600)
             updated = await asyncio.to_thread(download_supplemented_gtfs)
-            if updated:
-                # Reload the module-level gtfs instance in route_calculator
-                from app.services.route_calculator import gtfs
-                gtfs.reload()
+            gtfs: Optional[GTFSStaticData] = getattr(app.state, "gtfs", None)
+            if updated and gtfs is not None:
+                await asyncio.to_thread(gtfs.reload)
                 print("[main] GTFS data reloaded")
         except Exception as exc:
             print(f"[main] GTFS refresh error: {exc}")
+            await asyncio.sleep(30)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: download supplemented GTFS before anything uses it
-    await asyncio.to_thread(download_supplemented_gtfs)
+    app.state.gtfs = None
+    app.state.gtfs_error = None
 
-    # Start hourly refresh in the background
-    refresh_task = asyncio.create_task(_gtfs_refresh_loop())
+    # Start GTFS initialization/refresh in the background so the web port can open immediately.
+    refresh_task = asyncio.create_task(_gtfs_refresh_loop(app))
 
     yield
 
@@ -81,4 +96,8 @@ app.include_router(trips.router)
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "gtfs_ready": app.state.gtfs is not None,
+        "gtfs_error": app.state.gtfs_error,
+    }
