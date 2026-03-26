@@ -3,6 +3,7 @@ uvicorn[standard]
 pydantic
 pydantic-settings
 httpx
+requests
 protobuf
 gtfs-realtime-bindings
 sqlalchemy[asyncio]
@@ -10,5 +11,6 @@ asyncpg
 redis[hiredis]
 anthropic
 elevenlabs
+xai_sdk
 python-dotenv
 geopy
