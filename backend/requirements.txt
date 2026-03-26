@@ -9,5 +9,6 @@ sqlalchemy[asyncio]
 asyncpg
 redis[hiredis]
 anthropic
+elevenlabs
 python-dotenv
 geopy
