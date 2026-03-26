@@ -1,9 +1,9 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
-import { JarvisMap, TransitRouteData } from "@/components/jarvis-map";
-import { ArrowRight, AudioLines, ChevronUp, ChevronDown, Zap, TriangleAlert } from "lucide-react";
-import { planTrip, getThinkingAudio, ServiceAlert } from "@/lib/api";
+import { JarvisMap, TransitRouteData, RouteStep } from "@/components/jarvis-map";
+import { ArrowRight, AudioLines, ChevronUp, ChevronDown, Zap, X, Loader2, Crosshair } from "lucide-react";
+import { planTrip, getThinking } from "@/lib/api";
 
 const MTA_COLORS: Record<string, string> = {
   A: "#0039A6", C: "#0039A6", E: "#0039A6",
@@ -19,6 +19,41 @@ const MTA_COLORS: Record<string, string> = {
   SI: "#00A9CE",
 };
 
+/* ── Audio waveform bar component ── */
+function WaveformBars({ active }: { active: boolean }) {
+  const barCount = 24;
+  return (
+    <div
+      className="hud-waveform"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "2px",
+        height: "16px",
+        marginBottom: "10px",
+        overflow: "hidden",
+        opacity: active ? 1 : 0,
+        transition: "opacity 0.4s ease",
+      }}
+    >
+      {Array.from({ length: barCount }, (_, i) => (
+        <div
+          key={i}
+          style={{
+            width: "2px",
+            borderRadius: "1px",
+            background: "rgba(0, 212, 255, 0.35)",
+            height: active ? undefined : "2px",
+            animation: active
+              ? `waveBar 0.8s ease-in-out ${i * 0.04}s infinite alternate`
+              : "none",
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
 export default function JarvisPage() {
   const [inputValue, setInputValue] = useState("");
   const [drawerOpen, setDrawerOpen] = useState(true);
@@ -26,13 +61,17 @@ export default function JarvisPage() {
     lng: number;
     lat: number;
   } | null>(null);
+  const [gpsError, setGpsError] = useState(false);
   const [jarvisText, setJarvisText] = useState("");
   const [displayedText, setDisplayedText] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [thinkingText, setThinkingText] = useState("");
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [errorText, setErrorText] = useState<string | null>(null);
   const [latencyMs, setLatencyMs] = useState<number | null>(null);
+  const [isListening, setIsListening] = useState(false);
 
-  // Structured route data from API (Task 6)
+  // Structured route data from API
   const [trainLine, setTrainLine] = useState<string | null>(null);
   const [departureTimestamp, setDepartureTimestamp] = useState<number | null>(null);
   const [departureMinutes, setDepartureMinutes] = useState<number | null>(null);
@@ -40,13 +79,13 @@ export default function JarvisPage() {
   const [rideDurationMinutes, setRideDurationMinutes] = useState<number | null>(null);
   const [routeData, setRouteData] = useState<TransitRouteData | null>(null);
   const [destCoords, setDestCoords] = useState<{ lat: number; lng: number } | null>(null);
-  const [serviceAlerts, setServiceAlerts] = useState<ServiceAlert[]>([]);
 
   const wordRevealIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const thinkingRevealRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const revealStartedRef = useRef(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const departureIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
+  const mapActionsRef = useRef<{ recenter: () => void } | null>(null);
   // Live departure countdown from raw timestamp
   useEffect(() => {
     if (departureIntervalRef.current) {
@@ -63,7 +102,7 @@ export default function JarvisPage() {
       setDepartureMinutes(Math.max(0, Math.round((departureTimestamp! - Date.now() / 1000) / 60)));
     }
 
-    tick(); // immediate first computation
+    tick();
     departureIntervalRef.current = setInterval(tick, 15000);
 
     return () => {
@@ -74,15 +113,79 @@ export default function JarvisPage() {
     };
   }, [departureTimestamp]);
 
+  // GPS error detection
+  useEffect(() => {
+    if (!navigator.geolocation) {
+      setGpsError(true);
+      return;
+    }
+    const timeout = setTimeout(() => {
+      if (!userLocation) setGpsError(true);
+    }, 8000);
+    return () => clearTimeout(timeout);
+  }, [userLocation]);
+
   const handleLocationUpdate = useCallback(
     (coords: { lng: number; lat: number }) => {
       setUserLocation(coords);
+      setGpsError(false);
     },
     [],
   );
 
+  const handleMapReady = useCallback(
+    (actions: { recenter: () => void }) => {
+      mapActionsRef.current = actions;
+    },
+    [],
+  );
+
+  function handleRecenter() {
+    mapActionsRef.current?.recenter();
+  }
+
+  function handleVoiceInput() {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) return;
+    const recognition = new SpeechRecognition();
+    recognition.lang = "en-US";
+    recognition.onstart = () => setIsListening(true);
+    recognition.onresult = (e: any) => setInputValue(e.results[0][0].transcript);
+    recognition.onend = () => setIsListening(false);
+    recognition.onerror = () => setIsListening(false);
+    recognition.start();
+  }
+
+  function handleClearRoute() {
+    // Stop any playing audio
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    if (wordRevealIntervalRef.current) clearInterval(wordRevealIntervalRef.current);
+    if (thinkingRevealRef.current) clearInterval(thinkingRevealRef.current);
+    revealStartedRef.current = false;
+    setJarvisText("");
+    setDisplayedText("");
+    setThinkingText("");
+    setIsSpeaking(false);
+    setTrainLine(null);
+    setDepartureTimestamp(null);
+    setDirection(null);
+    setRideDurationMinutes(null);
+    setRouteData(null);
+    setDestCoords(null);
+    setLatencyMs(null);
+    setErrorText(null);
+  }
+
   async function handleSubmit() {
-    if (!userLocation || !inputValue.trim()) return;
+    if (!inputValue.trim()) return;
+    if (!userLocation) {
+      setErrorText("Waiting for GPS location...");
+      setTimeout(() => setErrorText(null), 3000);
+      return;
+    }
 
     // Stop any playing audio
     if (audioRef.current) {
@@ -92,8 +195,10 @@ export default function JarvisPage() {
 
     // Reset for new request
     if (wordRevealIntervalRef.current) clearInterval(wordRevealIntervalRef.current);
+    if (thinkingRevealRef.current) clearInterval(thinkingRevealRef.current);
     revealStartedRef.current = false;
     setDisplayedText("");
+    setThinkingText("");
     setIsSpeaking(false);
     setTrainLine(null);
     setDepartureTimestamp(null);
@@ -101,55 +206,86 @@ export default function JarvisPage() {
     setRideDurationMinutes(null);
     setRouteData(null);
     setDestCoords(null);
-    setServiceAlerts([]);
+    setErrorText(null);
     setIsLoading(true);
     const t0 = performance.now();
 
     try {
-      const origin = `${userLocation.lat}, ${userLocation.lng}`;
+      // Fire thinking audio immediately with word-by-word reveal
+      getThinking()
+        .then(({ text, audio }) => {
+          const bytes = Uint8Array.from(atob(audio), (c) => c.charCodeAt(0));
+          const thinkAudio = new Audio(
+            URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" })),
+          );
 
-      // Fire thinking audio immediately — fire and forget
-      getThinkingAudio()
-        .then((buf) => {
-          new Audio(
-            URL.createObjectURL(new Blob([buf], { type: "audio/mpeg" })),
-          ).play();
+          // Word-by-word reveal synced to audio
+          const words = text.split(/\s+/).filter((w) => w.length > 0);
+          let wordIdx = 0;
+
+          function startThinkingReveal(duration: number) {
+            const intervalMs = Math.max((duration * 1000) / words.length, 80);
+            if (thinkingRevealRef.current) clearInterval(thinkingRevealRef.current);
+            thinkingRevealRef.current = setInterval(() => {
+              wordIdx++;
+              setThinkingText(words.slice(0, wordIdx).join(" "));
+              if (wordIdx >= words.length) {
+                clearInterval(thinkingRevealRef.current!);
+              }
+            }, intervalMs);
+          }
+
+          const fallback = words.length * 0.35;
+          thinkAudio.addEventListener("loadedmetadata", () => {
+            const dur = isFinite(thinkAudio.duration) && thinkAudio.duration > 0
+              ? thinkAudio.duration : fallback;
+            startThinkingReveal(dur);
+          });
+          setTimeout(() => {
+            if (!thinkingRevealRef.current) startThinkingReveal(fallback);
+          }, 200);
+
+          thinkAudio.play();
         })
-        .catch(console.error);
+        .catch(() => {});
 
-      const trip_data = await planTrip(origin, inputValue);
+      const trip_data = await planTrip(userLocation.lat, userLocation.lng, inputValue);
       setLatencyMs(Math.round(performance.now() - t0));
 
-      const text = trip_data.text;
+      const text = trip_data.recommendation;
       setJarvisText(text);
 
-      // Use structured data from API (Task 6)
-      setTrainLine(trip_data.trainLine || null);
-      setDepartureTimestamp(trip_data.departureTimestamp ?? null);
-      setDirection(trip_data.direction || null);
-      setRideDurationMinutes(trip_data.rideDurationMinutes ?? null);
-      setDestCoords(trip_data.destCoords || null);
-      setServiceAlerts(trip_data.serviceAlerts || []);
+      // Extract HUD pill data from the chosen route
+      const chosenRoute = trip_data.route || [];
+      const firstTransit = chosenRoute.find(
+        (s: RouteStep) => s.type === "SUBWAY" || s.type === "BUS"
+      );
 
-      // Build route data for the map (Task 4)
-      if (trip_data.originStation && trip_data.destStation) {
-        const originLngLat: [number, number] = [trip_data.originStation.lng, trip_data.originStation.lat];
-        const destLngLat: [number, number] = [trip_data.destStation.lng, trip_data.destStation.lat];
-        const userLngLat: [number, number] = [userLocation.lng, userLocation.lat];
-        const finalDestLngLat: [number, number] = trip_data.destCoords
-          ? [trip_data.destCoords.lng, trip_data.destCoords.lat]
-          : destLngLat;
+      setTrainLine(firstTransit?.train_line || null);
+      setDepartureTimestamp(
+        firstTransit?.minutes_until_train_arrives != null
+          ? Date.now() / 1000 + firstTransit.minutes_until_train_arrives * 60
+          : null
+      );
+      setDirection(firstTransit?.direction || null);
+      setRideDurationMinutes(
+        firstTransit?.minutes_until_arrival != null
+          ? Math.round(firstTransit.minutes_until_arrival)
+          : null
+      );
 
-        setRouteData({
-          walkIn: [userLngLat, originLngLat],
-          // TODO: replace with GTFS shapes polyline when available
-          transit: [originLngLat, destLngLat],
-          walkOut: [destLngLat, finalDestLngLat],
-          trainLine: trip_data.trainLine || "?",
-          originStationName: trip_data.originStation.name,
-          destStationName: trip_data.destStation.name,
-        });
-      }
+      // Destination coords from last step's end point
+      const lastStep = chosenRoute[chosenRoute.length - 1];
+      const rawDest = lastStep?.type === "WALK"
+        ? lastStep.end_point
+        : lastStep?.arrival_coords;
+      const destCoordsComputed = rawDest
+        ? { lat: rawDest.latitude, lng: rawDest.longitude }
+        : null;
+      setDestCoords(destCoordsComputed);
+
+      // Pass chosen route to map
+      setRouteData({ steps: chosenRoute });
 
       // Build trip audio element
       const bytes = Uint8Array.from(atob(trip_data.audio), (c) =>
@@ -160,7 +296,7 @@ export default function JarvisPage() {
       );
       audioRef.current = tripAudio;
 
-      // Word-by-word reveal synced to audio duration (Task 3)
+      // Word-by-word reveal synced to audio duration
       function startWordReveal(audioDuration: number) {
         if (revealStartedRef.current) return;
         revealStartedRef.current = true;
@@ -168,7 +304,7 @@ export default function JarvisPage() {
         if (words.length === 0) return;
         const intervalMs = Math.max(
           (audioDuration * 1000) / words.length,
-          80, // minimum 80ms per word fallback
+          80,
         );
         let wordIndex = 0;
         if (wordRevealIntervalRef.current)
@@ -182,7 +318,7 @@ export default function JarvisPage() {
         }, intervalMs);
       }
 
-      const fallbackDuration = text.split(" ").length * 0.45; // ~130 wpm
+      const fallbackDuration = text.split(" ").length * 0.45;
 
       tripAudio.addEventListener("loadedmetadata", () => {
         const dur =
@@ -192,7 +328,6 @@ export default function JarvisPage() {
         startWordReveal(dur);
       });
 
-      // Fallback if loadedmetadata doesn't fire within 300ms
       setTimeout(() => startWordReveal(fallbackDuration), 300);
 
       setIsSpeaking(true);
@@ -204,25 +339,30 @@ export default function JarvisPage() {
 
       setInputValue("");
     } catch (error) {
-      console.error("Error:", error);
-      setJarvisText("Unable to plan your trip. Please try again.");
-      setDisplayedText("Unable to plan your trip. Please try again.");
+      const msg = error instanceof Error ? error.message : "Unknown error";
+      if (msg.includes("Failed to plan trip")) {
+        setErrorText("No route found. Try a different destination.");
+      } else {
+        setErrorText("Connection error. Check your network and try again.");
+      }
+      setJarvisText("");
+      setDisplayedText("");
     } finally {
       setIsLoading(false);
     }
   }
 
-  // Bubble visibility: show when loading or when we have a response
+  // Bubble visibility
   const showBubble = isLoading || !!jarvisText;
   const bubbleText = isLoading
-    ? "Scanning MTA feeds, sir..."
+    ? (thinkingText || "Processing, sir...")
     : displayedText || jarvisText;
 
-  // Pill visibility: show when we have structured route data
+  // Pill visibility
   const hasRouteData = !!trainLine;
   const trainLineColor = trainLine ? (MTA_COLORS[trainLine] || "#FFD700") : "#FFD700";
+  const showActions = !!routeData && !isLoading;
 
-  // Format pill content (Task 6)
   const transitPillText = trainLine
     ? departureMinutes != null
       ? `${trainLine} \u2014 in ${departureMinutes} min${direction ? ` \u00B7 ${direction}` : ""}`
@@ -233,6 +373,20 @@ export default function JarvisPage() {
     ? `~${rideDurationMinutes} min ride`
     : "ETA pending";
 
+  /* ── Shared HUD pill style ── */
+  const hudPill: React.CSSProperties = {
+    fontFamily: "var(--font-geist-mono), monospace",
+    backdropFilter: "blur(16px)",
+    WebkitBackdropFilter: "blur(16px)",
+    background: "rgba(8, 10, 18, 0.5)",
+    border: "1px solid rgba(0, 212, 255, 0.08)",
+    padding: "6px 14px",
+    borderRadius: "20px",
+    fontSize: "12px",
+    color: "rgba(255, 255, 255, 0.88)",
+    whiteSpace: "nowrap" as const,
+  };
+
   return (
     <div className="relative h-screen w-full overflow-hidden bg-[#0a0a0f]">
       {/* Full-screen Mapbox 3D Map */}
@@ -241,13 +395,37 @@ export default function JarvisPage() {
         routeData={routeData}
         isSpeaking={isSpeaking}
         destCoords={destCoords}
+        onMapReady={handleMapReady}
       />
+
+      {/* ── Viewport Effects ── */}
+      <div
+        className="fixed inset-0 pointer-events-none z-[1]"
+        style={{
+          background: "radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.4) 80%, rgba(0,0,0,0.7) 100%)",
+        }}
+      />
+      <div
+        className="fixed inset-0 pointer-events-none z-[1]"
+        style={{
+          background: "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.03) 2px, rgba(0,0,0,0.03) 4px)",
+        }}
+      />
+      {/* HUD Corner Brackets */}
+      <div className="fixed pointer-events-none z-[2]" style={{ top: 16, left: 16, width: 30, height: 30, borderTop: "1px solid rgba(0,212,255,0.15)", borderLeft: "1px solid rgba(0,212,255,0.15)" }} />
+      <div className="fixed pointer-events-none z-[2]" style={{ top: 16, right: 16, width: 30, height: 30, borderTop: "1px solid rgba(0,212,255,0.15)", borderRight: "1px solid rgba(0,212,255,0.15)" }} />
+      <div className="fixed pointer-events-none z-[2]" style={{ bottom: 16, left: 16, width: 30, height: 30, borderBottom: "1px solid rgba(0,212,255,0.15)", borderLeft: "1px solid rgba(0,212,255,0.15)" }} />
+      <div className="fixed pointer-events-none z-[2]" style={{ bottom: 16, right: 16, width: 30, height: 30, borderBottom: "1px solid rgba(0,212,255,0.15)", borderRight: "1px solid rgba(0,212,255,0.15)" }} />
 
       {/* JARVIS Logo — Top Left (hidden on mobile) */}
       <div className="hidden md:block absolute top-6 left-6 z-10">
         <h1
-          className="text-sm font-medium tracking-widest"
-          style={{ color: "rgba(255, 255, 255, 0.4)" }}
+          style={{
+            fontFamily: "var(--font-geist-mono), monospace",
+            fontSize: "11px",
+            letterSpacing: "0.15em",
+            color: "rgba(0, 212, 255, 0.3)",
+          }}
         >
           JARVIS
         </h1>
@@ -255,35 +433,47 @@ export default function JarvisPage() {
 
       {/* AI CORE ALPHA — Top Right (hidden on mobile) */}
       <div className="hidden md:flex absolute top-6 right-6 z-10 items-center gap-2.5">
-        <Zap size={14} style={{ color: "rgba(0, 255, 255, 0.6)" }} />
+        <Zap size={14} style={{ color: "rgba(0, 212, 255, 0.5)" }} />
         <span
-          className="text-xs tracking-wider"
-          style={{ color: "rgba(255, 255, 255, 0.4)" }}
+          style={{
+            fontFamily: "var(--font-geist-mono), monospace",
+            fontSize: "11px",
+            letterSpacing: "0.1em",
+            color: "rgba(0, 212, 255, 0.5)",
+          }}
         >
-          AI CORE ALPHA{latencyMs != null ? ` \u2014 ${latencyMs}ms` : ""}
+          AI CORE ALPHA
+          {latencyMs != null && (
+            <span style={{ color: "rgba(0, 212, 255, 0.8)" }}>{` \u2014 ${latencyMs}ms`}</span>
+          )}
         </span>
       </div>
 
-      {/* HUD Overlay Pills — Top Center (Task 2c, 6) */}
+      {/* GPS Error — Top Center */}
+      {gpsError && !userLocation && (
+        <div
+          className="absolute top-6 left-1/2 -translate-x-1/2 z-10"
+          style={{
+            ...hudPill,
+            border: "1px solid rgba(255, 59, 48, 0.15)",
+            color: "rgba(255, 59, 48, 0.8)",
+            animation: "hudPillIn 300ms cubic-bezier(0.16, 1, 0.3, 1) forwards",
+          }}
+        >
+          GPS unavailable — location required
+        </div>
+      )}
+
+      {/* HUD Overlay Pills — Top Center */}
       {hasRouteData && (
         <div className="absolute top-6 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2">
-          {/* NEXT TRANSIT pill */}
           <div
             style={{
-              backdropFilter: "blur(16px)",
-              WebkitBackdropFilter: "blur(16px)",
-              background: "rgba(8, 10, 18, 0.65)",
-              border: "1px solid rgba(255, 255, 255, 0.06)",
-              padding: "6px 14px",
-              borderRadius: "20px",
-              fontSize: "13px",
-              letterSpacing: "0.01em",
-              color: "rgba(255, 255, 255, 0.88)",
+              ...hudPill,
               display: "flex",
               alignItems: "center",
               gap: "8px",
               animation: "hudPillIn 300ms cubic-bezier(0.16, 1, 0.3, 1) forwards",
-              whiteSpace: "nowrap" as const,
             }}
           >
             <span
@@ -298,22 +488,11 @@ export default function JarvisPage() {
             />
             <span>{transitPillText}</span>
           </div>
-
-          {/* ETA pill */}
           <div
             style={{
-              backdropFilter: "blur(16px)",
-              WebkitBackdropFilter: "blur(16px)",
-              background: "rgba(8, 10, 18, 0.65)",
-              border: "1px solid rgba(255, 255, 255, 0.06)",
-              padding: "6px 14px",
-              borderRadius: "20px",
-              fontSize: "13px",
-              letterSpacing: "0.01em",
-              color: "rgba(255, 255, 255, 0.88)",
+              ...hudPill,
               animation: "hudPillIn 300ms cubic-bezier(0.16, 1, 0.3, 1) 100ms forwards",
               opacity: 0,
-              whiteSpace: "nowrap" as const,
             }}
           >
             {etaPillText}
@@ -321,73 +500,26 @@ export default function JarvisPage() {
         </div>
       )}
 
-      {/* Service Alert Banner — Desktop, below pills (Step 7) */}
-      {serviceAlerts.length > 0 && (
+      {/* Error Toast */}
+      {errorText && (
         <div
-          className="hidden md:flex absolute z-10 left-1/2 -translate-x-1/2 flex-col items-center gap-1.5"
-          style={{ top: hasRouteData ? "58px" : "24px" }}
+          className="absolute top-16 left-1/2 -translate-x-1/2 z-20"
+          style={{
+            ...hudPill,
+            border: "1px solid rgba(255, 59, 48, 0.15)",
+            color: "rgba(255, 200, 180, 0.9)",
+            animation: "hudPillIn 300ms cubic-bezier(0.16, 1, 0.3, 1) forwards",
+          }}
         >
-          {serviceAlerts.slice(0, 2).map((alert, i) => (
-            <div
-              key={i}
-              style={{
-                backdropFilter: "blur(16px)",
-                WebkitBackdropFilter: "blur(16px)",
-                background: "rgba(8, 10, 18, 0.7)",
-                border: "1px solid rgba(245, 166, 35, 0.15)",
-                padding: "7px 14px",
-                borderRadius: "20px",
-                fontSize: "12px",
-                letterSpacing: "0.01em",
-                color: "rgba(255, 255, 255, 0.85)",
-                display: "flex",
-                alignItems: "center",
-                gap: "8px",
-                maxWidth: "460px",
-                animation: `hudAlertIn 350ms cubic-bezier(0.16, 1, 0.3, 1) ${200 + i * 120}ms forwards, alertBorderPulse 3s ease-in-out ${200 + i * 120}ms infinite`,
-                opacity: 0,
-              }}
-            >
-              <TriangleAlert
-                size={13}
-                style={{ color: "#F5A623", flexShrink: 0 }}
-              />
-              <span
-                style={{
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {alert.routeIds.length > 0 && (
-                  <span style={{ color: "#F5A623", fontWeight: 600, marginRight: 6 }}>
-                    {alert.routeIds.join(", ")}
-                  </span>
-                )}
-                {alert.header}
-              </span>
-            </div>
-          ))}
-          {serviceAlerts.length > 2 && (
-            <span
-              style={{
-                fontSize: "11px",
-                color: "rgba(245, 166, 35, 0.6)",
-                letterSpacing: "0.02em",
-                animation: "hudAlertIn 350ms cubic-bezier(0.16, 1, 0.3, 1) 450ms forwards",
-                opacity: 0,
-              }}
-            >
-              +{serviceAlerts.length - 2} more alert{serviceAlerts.length - 2 > 1 ? "s" : ""}
-            </span>
-          )}
+          {errorText}
         </div>
       )}
 
-      {/* JARVIS Response Bubble — Bottom Center, above input (Task 2b) */}
+      {/* JARVIS Response Bubble — Desktop */}
       {showBubble && (
         <div className="hidden md:block absolute bottom-24 left-1/2 -translate-x-1/2 z-10 w-full max-w-[600px] px-4">
           <div
+            className="hud-bubble"
             style={{
               backdropFilter: "blur(20px) saturate(1.4)",
               WebkitBackdropFilter: "blur(20px) saturate(1.4)",
@@ -409,26 +541,80 @@ export default function JarvisPage() {
               scrollbarColor: "rgba(0, 255, 255, 0.15) transparent",
             }}
           >
+            {/* Audio waveform visualizer */}
+            <WaveformBars active={isSpeaking} />
+            <div style={{
+              fontFamily: "var(--font-geist-mono), monospace",
+              fontSize: "10px",
+              letterSpacing: "0.15em",
+              color: "rgba(0, 212, 255, 0.4)",
+              marginBottom: "8px",
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
+            }}>
+              JARVIS
+              {isLoading && (
+                <Loader2
+                  size={10}
+                  style={{ color: "rgba(0, 212, 255, 0.4)", animation: "spin 1s linear infinite" }}
+                />
+              )}
+            </div>
             {bubbleText}
           </div>
         </div>
       )}
 
-      {/* Desktop Input Bar — Bottom Center */}
+      {/* Floating Action Buttons — Bottom Left, stacked vertically */}
+      {showActions && (
+        <div
+          className="hidden md:flex absolute z-10 flex-col gap-2"
+          style={{
+            bottom: "40px",
+            left: "16px",
+            animation: "hudFadeIn 300ms ease forwards",
+          }}
+        >
+          <button
+            onClick={handleRecenter}
+            className="hud-action-btn-pill"
+            title="Re-center"
+          >
+            <Crosshair size={13} />
+            <span>Re-center</span>
+          </button>
+          <button
+            onClick={handleClearRoute}
+            className="hud-action-btn-pill"
+            title="Clear route"
+          >
+            <X size={13} />
+            <span>Clear</span>
+          </button>
+        </div>
+      )}
+
+      {/* Desktop Input Bar */}
       <div className="hidden md:block absolute bottom-8 left-1/2 -translate-x-1/2 z-10 w-full max-w-xl px-4">
         <div
-          className="flex items-center gap-3 rounded-full px-5 py-3"
+          className="flex items-center gap-3 rounded-full px-5 py-3 hud-input-bar"
           style={{
             background: "rgba(8, 10, 18, 0.65)",
             backdropFilter: "blur(16px)",
             WebkitBackdropFilter: "blur(16px)",
-            border: "1px solid rgba(255, 255, 255, 0.06)",
+            border: "1px solid rgba(0, 212, 255, 0.1)",
+            transition: "border-color 0.3s ease, box-shadow 0.3s ease",
           }}
         >
           <AudioLines
-            className="shrink-0"
+            className="shrink-0 cursor-pointer transition-colors duration-200"
             size={20}
-            style={{ color: "rgba(0, 255, 255, 0.6)" }}
+            style={{ color: isListening ? "rgba(0, 212, 255, 1)" : "rgba(0, 212, 255, 0.6)",
+              animation: isListening ? "hudBorderPulse 1.5s ease-in-out infinite" : undefined,
+              filter: isListening ? "drop-shadow(0 0 6px rgba(0, 212, 255, 0.6))" : undefined,
+            }}
+            onClick={handleVoiceInput}
           />
           <input
             type="text"
@@ -436,16 +622,24 @@ export default function JarvisPage() {
             onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
             placeholder="Where are you headed, sir?"
-            className="flex-1 bg-transparent text-white placeholder-gray-500 outline-none text-sm"
+            className="flex-1 bg-transparent text-white outline-none text-sm"
+            style={{
+              fontFamily: "var(--font-geist-mono), monospace",
+              color: "rgba(255, 255, 255, 0.9)",
+            }}
             disabled={isLoading}
           />
           <button
             onClick={handleSubmit}
             disabled={isLoading}
-            className="w-9 h-9 rounded-full flex items-center justify-center transition-opacity disabled:opacity-40"
-            style={{ background: "rgba(0, 255, 255, 0.15)" }}
+            className="w-9 h-9 rounded-full flex items-center justify-center transition-all duration-200 disabled:opacity-40 active:scale-95"
+            style={{ background: "rgba(0, 212, 255, 0.15)" }}
           >
-            <ArrowRight size={18} style={{ color: "rgba(0, 255, 255, 0.8)" }} />
+            {isLoading ? (
+              <Loader2 size={18} style={{ color: "rgba(0, 212, 255, 0.8)", animation: "spin 1s linear infinite" }} />
+            ) : (
+              <ArrowRight size={18} style={{ color: "rgba(0, 212, 255, 0.8)" }} />
+            )}
           </button>
         </div>
       </div>
@@ -459,7 +653,7 @@ export default function JarvisPage() {
         {/* Drawer Handle */}
         <button
           onClick={() => setDrawerOpen(!drawerOpen)}
-          className="absolute -top-5 left-1/2 -translate-x-1/2 w-12 h-5 rounded-t-lg flex items-center justify-center"
+          className="absolute -top-6 left-1/2 -translate-x-1/2 w-14 h-6 rounded-t-lg flex items-center justify-center active:opacity-70"
           style={{
             background: "rgba(8, 10, 18, 0.8)",
             borderTop: "1px solid rgba(0, 255, 255, 0.12)",
@@ -474,7 +668,7 @@ export default function JarvisPage() {
           )}
         </button>
 
-        {/* Drawer Content — frosted glass (Task 2f) */}
+        {/* Drawer Content */}
         <div
           className="rounded-t-2xl max-h-[70vh] overflow-hidden flex flex-col"
           style={{
@@ -492,7 +686,7 @@ export default function JarvisPage() {
               <div
                 style={{
                   background: "rgba(8, 10, 18, 0.5)",
-                  border: "1px solid rgba(0, 255, 255, 0.08)",
+                  border: "1px solid rgba(0, 212, 255, 0.08)",
                   borderRadius: "12px",
                   padding: "16px",
                   color: "rgba(255, 255, 255, 0.92)",
@@ -503,22 +697,54 @@ export default function JarvisPage() {
                   animation: isLoading ? "hudBorderPulse 2s ease-in-out infinite" : undefined,
                 }}
               >
+                <WaveformBars active={isSpeaking} />
+                <div style={{
+                  fontFamily: "var(--font-geist-mono), monospace",
+                  fontSize: "10px",
+                  letterSpacing: "0.15em",
+                  color: "rgba(0, 212, 255, 0.4)",
+                  marginBottom: "6px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px",
+                }}>
+                  JARVIS
+                  {isLoading && (
+                    <Loader2
+                      size={10}
+                      style={{ color: "rgba(0, 212, 255, 0.4)", animation: "spin 1s linear infinite" }}
+                    />
+                  )}
+                </div>
                 {bubbleText}
               </div>
             )}
 
-            {/* HUD data pills (mobile) */}
+            {/* Error in mobile drawer */}
+            {errorText && !showBubble && (
+              <div
+                style={{
+                  background: "rgba(8, 10, 18, 0.5)",
+                  border: "1px solid rgba(255, 59, 48, 0.12)",
+                  borderRadius: "12px",
+                  padding: "16px",
+                  color: "rgba(255, 200, 180, 0.9)",
+                  fontSize: "14px",
+                  fontFamily: "var(--font-geist-mono), monospace",
+                }}
+              >
+                {errorText}
+              </div>
+            )}
+
+            {/* HUD data pills + action buttons (mobile) */}
             {hasRouteData && (
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <div
                   className="flex items-center gap-2"
                   style={{
-                    background: "rgba(8, 10, 18, 0.5)",
-                    border: "1px solid rgba(255, 255, 255, 0.06)",
+                    ...hudPill,
                     padding: "6px 12px",
-                    borderRadius: "20px",
-                    fontSize: "12px",
-                    color: "rgba(255, 255, 255, 0.88)",
                   }}
                 >
                   <span
@@ -532,100 +758,60 @@ export default function JarvisPage() {
                   />
                   <span>{transitPillText}</span>
                 </div>
-                <div
-                  style={{
-                    background: "rgba(8, 10, 18, 0.5)",
-                    border: "1px solid rgba(255, 255, 255, 0.06)",
-                    padding: "6px 12px",
-                    borderRadius: "20px",
-                    fontSize: "12px",
-                    color: "rgba(255, 255, 255, 0.88)",
-                  }}
-                >
+                <div style={{ ...hudPill, padding: "6px 12px" }}>
                   {etaPillText}
                 </div>
-              </div>
-            )}
-
-            {/* Service alerts (mobile) */}
-            {serviceAlerts.length > 0 && (
-              <div className="flex flex-col gap-1.5">
-                {serviceAlerts.slice(0, 2).map((alert, i) => (
-                  <div
-                    key={i}
-                    className="flex items-center gap-2"
-                    style={{
-                      background: "rgba(8, 10, 18, 0.5)",
-                      border: "1px solid rgba(245, 166, 35, 0.15)",
-                      padding: "7px 12px",
-                      borderRadius: "16px",
-                      fontSize: "11px",
-                      color: "rgba(255, 255, 255, 0.85)",
-                      animation: `alertBorderPulse 3s ease-in-out ${i * 120}ms infinite`,
-                    }}
-                  >
-                    <TriangleAlert
-                      size={12}
-                      style={{ color: "#F5A623", flexShrink: 0 }}
-                    />
-                    <span
-                      style={{
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {alert.routeIds.length > 0 && (
-                        <span style={{ color: "#F5A623", fontWeight: 600, marginRight: 5 }}>
-                          {alert.routeIds.join(", ")}
-                        </span>
-                      )}
-                      {alert.header}
-                    </span>
-                  </div>
-                ))}
-                {serviceAlerts.length > 2 && (
-                  <span
-                    style={{
-                      fontSize: "10px",
-                      color: "rgba(245, 166, 35, 0.5)",
-                      paddingLeft: "4px",
-                    }}
-                  >
-                    +{serviceAlerts.length - 2} more alert{serviceAlerts.length - 2 > 1 ? "s" : ""}
-                  </span>
+                {showActions && (
+                  <>
+                    <button onClick={handleRecenter} className="hud-action-btn-pill" title="Re-center">
+                      <Crosshair size={13} /><span>Re-center</span>
+                    </button>
+                    <button onClick={handleClearRoute} className="hud-action-btn-pill" title="Clear">
+                      <X size={13} /><span>Clear</span>
+                    </button>
+                  </>
                 )}
               </div>
             )}
 
             {/* AI Core Alpha — inside drawer on mobile */}
             <div className="flex items-center gap-2.5 pt-2">
-              <Zap size={13} style={{ color: "rgba(0, 255, 255, 0.5)" }} />
+              <Zap size={13} style={{ color: "rgba(0, 212, 255, 0.4)" }} />
               <span
-                className="text-xs tracking-wider"
-                style={{ color: "rgba(255, 255, 255, 0.35)" }}
+                style={{
+                  fontFamily: "var(--font-geist-mono), monospace",
+                  fontSize: "11px",
+                  letterSpacing: "0.1em",
+                  color: "rgba(0, 212, 255, 0.4)",
+                }}
               >
-                AI CORE ALPHA{latencyMs != null ? ` \u2014 ${latencyMs}ms` : ""}
+                AI CORE ALPHA
+                {latencyMs != null && (
+                  <span style={{ color: "rgba(0, 212, 255, 0.7)" }}>{` \u2014 ${latencyMs}ms`}</span>
+                )}
               </span>
             </div>
           </div>
 
-          {/* Mobile Input Bar — inside drawer */}
+          {/* Mobile Input Bar */}
           <div
             className="p-4"
-            style={{ borderTop: "1px solid rgba(255, 255, 255, 0.04)" }}
+            style={{ borderTop: "1px solid rgba(0, 212, 255, 0.06)" }}
           >
             <div
-              className="flex items-center gap-3 rounded-full px-4 py-3"
+              className="flex items-center gap-3 rounded-full px-4 py-3 hud-input-bar"
               style={{
                 background: "rgba(8, 10, 18, 0.5)",
-                border: "1px solid rgba(255, 255, 255, 0.06)",
+                border: "1px solid rgba(0, 212, 255, 0.1)",
               }}
             >
               <AudioLines
-                className="shrink-0"
+                className="shrink-0 cursor-pointer transition-colors duration-200"
                 size={20}
-                style={{ color: "rgba(0, 255, 255, 0.5)" }}
+                style={{ color: isListening ? "rgba(0, 212, 255, 1)" : "rgba(0, 212, 255, 0.5)",
+                  filter: isListening ? "drop-shadow(0 0 6px rgba(0, 212, 255, 0.6))" : undefined,
+                }}
+                onClick={handleVoiceInput}
               />
               <input
                 type="text"
@@ -633,16 +819,25 @@ export default function JarvisPage() {
                 onChange={(e) => setInputValue(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
                 placeholder="Where are you headed, sir?"
-                className="flex-1 bg-transparent text-white placeholder-gray-500 outline-none text-sm"
+                className="flex-1 bg-transparent text-white outline-none text-sm"
+                style={{
+                  fontFamily: "var(--font-geist-mono), monospace",
+                  color: "rgba(255, 255, 255, 0.9)",
+                  fontSize: "16px", // prevents iOS zoom on focus
+                }}
                 disabled={isLoading}
               />
               <button
                 onClick={handleSubmit}
                 disabled={isLoading}
-                className="w-9 h-9 rounded-full flex items-center justify-center disabled:opacity-40"
-                style={{ background: "rgba(0, 255, 255, 0.15)" }}
+                className="w-11 h-11 rounded-full flex items-center justify-center transition-all duration-200 disabled:opacity-40 active:scale-95"
+                style={{ background: "rgba(0, 212, 255, 0.15)", minWidth: "44px", minHeight: "44px" }}
               >
-                <ArrowRight size={18} style={{ color: "rgba(0, 255, 255, 0.8)" }} />
+                {isLoading ? (
+                  <Loader2 size={18} style={{ color: "rgba(0, 212, 255, 0.8)", animation: "spin 1s linear infinite" }} />
+                ) : (
+                  <ArrowRight size={18} style={{ color: "rgba(0, 212, 255, 0.8)" }} />
+                )}
               </button>
             </div>
           </div>

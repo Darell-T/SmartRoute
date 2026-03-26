@@ -23,10 +23,14 @@ _repo_root = _backend_dir.parent
 load_dotenv(_repo_root / ".env")
 load_dotenv(_backend_dir / ".env")
 
+from app.utils.gtfs_static import download_supplemented_gtfs
+
+# Routers import GTFS at module load; fetch supplemented zip first so stop_times exists.
+download_supplemented_gtfs()
+
 from fastapi import FastAPI
 from app.routers import thinking, trips
 from fastapi.middleware.cors import CORSMiddleware
-from app.utils.gtfs_static import download_supplemented_gtfs
 
 
 async def _gtfs_refresh_loop():

@@ -18,8 +18,9 @@ _downloading = False  # simple flag to prevent concurrent downloads
 
 
 def _active_data_dir() -> Path:
-    """Return supplemented dir if it has data, otherwise fall back to static."""
-    if _supplemented_dir.exists() and (_supplemented_dir / "stops.txt").exists():
+    """Return supplemented dir if complete, otherwise fall back to static."""
+    st = _supplemented_dir / "stop_times.txt"
+    if _supplemented_dir.exists() and (_supplemented_dir / "stops.txt").exists() and st.exists():
         return _supplemented_dir
     return _static_dir
 
@@ -35,8 +36,8 @@ def download_supplemented_gtfs() -> bool:
         print("[gtfs] download already in progress, skipping")
         return False
 
-    # Check freshness — skip if files are recent enough
-    marker = _supplemented_dir / "stops.txt"
+    # Check freshness — skip if files are recent enough (stop_times is the large required file)
+    marker = _supplemented_dir / "stop_times.txt"
     if marker.exists():
         age = time.time() - marker.stat().st_mtime
         if age < _REFRESH_INTERVAL:
@@ -72,6 +73,7 @@ class GTFSStaticData:
         self.transfers_by_stop = {}
         self.routes_by_stop = {}
         self.trips_to_routes = {}
+        self.stops_by_trip = {}
         self._load_all()
 
     def _load_all(self):
@@ -94,12 +96,15 @@ class GTFSStaticData:
 
         # build routes by stop
         routes_by_stop: dict = {}
+        stops_by_trip: dict = {}
         for data in stop_times:
             trip_id = data["trip_id"]
             stop_id = data["stop_id"]
             route = self.trips_to_routes[trip_id]
             routes_by_stop.setdefault(stop_id, set()).add(route)
+            stops_by_trip.setdefault(trip_id, []).append((int(data["stop_sequence"]), stop_id))
         self.routes_by_stop = routes_by_stop
+        self.stops_by_trip = stops_by_trip
 
     def reload(self):
         """Re-read CSV files and rebuild all dictionaries in place."""
@@ -139,25 +144,30 @@ class GTFSStaticData:
 
     def get_transfers(self, stop_id):
         return self.transfers_by_stop.get(stop_id, [])
+    
+    def get_intermediate_stops(self, route_id: str, origin: str, dest: str) -> list:
+        origin_ids = {oid.rstrip("NS") for oid in self.get_stop_by_name(origin)}
+        dest_ids = {did.rstrip("NS") for did in self.get_stop_by_name(dest)}
 
+        for tid, rid in self.trips_to_routes.items():
+            if rid != route_id:
+                continue
 
-# this is for testing only will clean up later
-if __name__ == "__main__":
-    download_supplemented_gtfs()
-    test = GTFSStaticData()
+            stop_id_list = [sid for _, sid in sorted(self.stops_by_trip[tid])]
 
-    print("=== Stop Lookup ===")
-    print("Times Sq stop IDs:", test.get_stop_by_name("Times Sq-42 St"))
+            origin_idx = None
+            dest_idx = None
+            for i, sid in enumerate(stop_id_list):
+                stripped = sid.rstrip("NS")
+                if origin_idx is None and stripped in origin_ids:
+                    origin_idx = i
+                if stripped in dest_ids:
+                    dest_idx = i
+                    if origin_idx is not None:
+                        break
 
-    print("\n=== Routes for Stations ===")
-    print("Routes at Van Cortlandt (101):", test.get_routes_for_stops("101"))
-    print("Routes at Times Sq (725):", test.get_routes_for_stops("725"))
-    print("Routes at Times Sq (127):", test.get_routes_for_stops("127"))
+            if origin_idx is not None and dest_idx is not None and origin_idx < dest_idx:
+                route_stop_ids = stop_id_list[origin_idx:dest_idx + 1]
+                return [self.stops_by_id[sid]["stop_name"] for sid in route_stop_ids]
 
-    print("\n=== Transfers ===")
-    print("Transfers from 101:", test.get_transfers("101"))
-
-    print("\n=== Stats ===")
-    print("Total stops:", len(test.stops_by_id))
-    print("Total routes:", len(test.routes_by_id))
-    print("Total stops with routes:", len(test.routes_by_stop))
+        return []

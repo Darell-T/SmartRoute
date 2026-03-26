@@ -1,5 +1,4 @@
 from elevenlabs.client import ElevenLabs
-from elevenlabs.play import play
 import os
 
 client = ElevenLabs(
@@ -15,5 +14,3 @@ def generate_speech(text: str) -> bytes:
         output_format="mp3_44100_128",
     )
     return b"".join(chunks)
-
-

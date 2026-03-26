@@ -18,11 +18,12 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import httpx
 import asyncio
-import json
+import os
 
 NYC_TZ = ZoneInfo("America/New_York")
 
 BASE_URL = "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs"
+BUS_URL = "https://bustime.mta.info/api/siri/vehicle-monitoring.json"
 
 route_to_feed = {
     "A": "ace", "C": "ace", "E": "ace",
@@ -216,3 +217,57 @@ def parse_vehicle_positions(rawBytes: bytes) -> list:
     
     return vehicle_positions
 
+
+async def get_stalled_trains(route_ids: set) -> list:
+    """Fetch vehicle positions for the given route IDs and return any trains
+    that haven't reported a position update in over 5 minutes."""
+    if not route_ids:
+        return []
+
+    raw_feeds = await fetch_feeds(list(route_ids))
+    all_positions = []
+    for feed in raw_feeds:
+        all_positions.extend(parse_vehicle_positions(feed))
+
+    now = datetime.now(tz=NYC_TZ).timestamp()
+    stalled = []
+    for pos in all_positions:
+        if pos["route_id"] in route_ids and pos["timestamp"] and (now - pos["timestamp"]) > 300:
+            stalled.append({
+                "route_id": pos["route_id"],
+                "stop_id": pos["stop_id"],
+                "status": pos["status"],
+                "stalled_minutes": round((now - pos["timestamp"]) / 60),
+            })
+    return stalled
+
+async def fetch_bus_positions(route_id) -> dict:
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            BUS_URL, params={
+                "key": os.getenv("MTA_BUS_API_KEY"),
+                "version": 2,
+                "LineRef": route_id,
+            }, timeout=10.0
+        )
+        return response.json()
+
+
+async def get_stalled_buses(route_ids:set) -> list:
+    stalled_buses = []
+
+    tasks = [fetch_bus_positions(line) for line in route_ids]
+    results = await asyncio.gather(*tasks)
+
+    for res in results:
+        vehicles = res["Siri"]["ServiceDelivery"]["VehicleMonitoringDelivery"][0].get("VehicleActivity", [])
+        for vehicle in vehicles:
+            vehicle_position = vehicle["MonitoredVehicleJourney"]
+            if vehicle_position["ProgressRate"] == "noProgress" and "layover" not in vehicle_position.get("ProgressStatus", []):
+                stalled_buses.append({
+                    "route_id": vehicle["MonitoredVehicleJourney"]["LineRef"].replace("MTA NYCT_", ""),
+                    "location": vehicle_position["VehicleLocation"],
+                    "time_recorded": vehicle_position["RecordedAtTime"] 
+                })
+    
+    return stalled_buses
