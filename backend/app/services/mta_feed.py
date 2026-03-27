@@ -254,20 +254,44 @@ async def fetch_bus_positions(route_id) -> dict:
 
 
 async def get_stalled_buses(route_ids:set) -> list:
+    if not route_ids:
+        return []
+
     stalled_buses = []
 
     tasks = [fetch_bus_positions(line) for line in route_ids]
-    results = await asyncio.gather(*tasks)
+    results = await asyncio.gather(*tasks, return_exceptions=True)
 
     for res in results:
-        vehicles = res["Siri"]["ServiceDelivery"]["VehicleMonitoringDelivery"][0].get("VehicleActivity", [])
+        if isinstance(res, Exception):
+            print(f"[mta_feed] bus feed fetch error: {res}")
+            continue
+
+        vehicles = (
+            res.get("Siri", {})
+            .get("ServiceDelivery", {})
+            .get("VehicleMonitoringDelivery", [{}])[0]
+            .get("VehicleActivity", [])
+        )
+
         for vehicle in vehicles:
-            vehicle_position = vehicle["MonitoredVehicleJourney"]
-            if vehicle_position["ProgressRate"] == "noProgress" and "layover" not in vehicle_position.get("ProgressStatus", []):
+            vehicle_position = vehicle.get("MonitoredVehicleJourney", {})
+            progress_rate = vehicle_position.get("ProgressRate")
+            progress_status = vehicle_position.get("ProgressStatus", [])
+
+            if progress_rate == "noProgress" and "layover" not in progress_status:
+                line_ref = vehicle_position.get("LineRef", "")
+                location = vehicle_position.get("VehicleLocation")
+                # SIRI often puts RecordedAtTime at VehicleActivity level.
+                recorded_at_time = vehicle.get("RecordedAtTime") or vehicle_position.get("RecordedAtTime")
+
+                if not line_ref or location is None:
+                    continue
+
                 stalled_buses.append({
-                    "route_id": vehicle["MonitoredVehicleJourney"]["LineRef"].replace("MTA NYCT_", ""),
-                    "location": vehicle_position["VehicleLocation"],
-                    "time_recorded": vehicle_position["RecordedAtTime"] 
+                    "route_id": line_ref.replace("MTA NYCT_", ""),
+                    "location": location,
+                    "time_recorded": recorded_at_time
                 })
     
     return stalled_buses
