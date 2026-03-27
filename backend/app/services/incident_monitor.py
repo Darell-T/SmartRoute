@@ -84,16 +84,21 @@ Only report real, specific incidents from actual posts.
 Do not speculate or make up incidents. If you are unsure, do not include it."""
 
 async def get_incidents(route_stops: list) -> str:
-
     station_names = ", ".join(route_stops)
+    if not station_names:
+        return []
 
-    chat = client.chat.create(model = "grok-4-1-fast-reasoning")
-    chat.append(system(GROK_SYSTEM_PROMPT))
-    chat.append(user(
-        f"Check for incidents near these subway stations: {station_names}"
-    ))
+    try:
+        chat = client.chat.create(model="grok-4-1-fast-reasoning")
+        chat.append(system(GROK_SYSTEM_PROMPT))
+        chat.append(user(
+            f"Check for incidents near these subway stations: {station_names}"
+        ))
 
-    response = chat.sample()
-    #caching here 
-
-    return response.content
+        response = chat.sample()
+        # caching here
+        return response.content
+    except Exception as exc:
+        # Do not fail trip planning when external incident intelligence is unavailable.
+        print(f"[incident_monitor] get_incidents failed, returning empty list: {exc}")
+        return []
