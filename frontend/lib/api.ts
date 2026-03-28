@@ -1,5 +1,8 @@
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+/** Empire State Building — demo fallback when GPS is unavailable */
+export const DEFAULT_LOCATION = { lng: -73.9857, lat: 40.7484 } as const;
+
 export interface ThinkingResponse {
   text: string;
   audio: string; // base64-encoded audio

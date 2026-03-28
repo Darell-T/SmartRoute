@@ -194,6 +194,10 @@ class GTFSStaticData:
         return self.transfers_by_stop.get(stop_id, [])
     
     def get_intermediate_stops(self, route_id: str, origin: str, dest: str) -> list:
+        # Bus routes are in a separate GTFS feed and won't be found here
+        if route_id not in self.routes_by_id:
+            return []
+
         origin_ids = {oid.rstrip("NS") for oid in self.get_stop_by_name(origin)}
         dest_ids = {did.rstrip("NS") for did in self.get_stop_by_name(dest)}
 

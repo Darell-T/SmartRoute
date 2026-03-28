@@ -92,16 +92,16 @@ export function addIntermediateStopLabels(
     dot.style.cssText = `
       width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
       background: ${lineColor};
-      opacity: 0.4;
-      box-shadow: 0 0 4px ${lineColor};
+      opacity: 0.5;
+      box-shadow: 0 0 6px ${lineColor};
     `;
     // Label
     const label = document.createElement("span");
     label.textContent = inner[i];
     label.style.cssText = `
       font-family: var(--font-geist-mono), 'Geist Mono', monospace;
-      font-size: 9px;
-      color: rgba(255, 255, 255, 0.25);
+      font-size: 10px;
+      color: rgba(255, 255, 255, 0.45);
       white-space: nowrap;
       letter-spacing: 0.02em;
       text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
