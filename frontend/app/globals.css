@@ -119,8 +119,15 @@
   * {
     @apply border-border outline-ring/50;
   }
+  html {
+    background: #000;
+  }
   body {
     @apply bg-background text-foreground;
+    margin: 0;
+    padding: 0;
+    background: #000;
+    padding-top: env(safe-area-inset-top);
   }
 }
 

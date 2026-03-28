@@ -88,11 +88,11 @@ export function applyHudMapStyle(m: mapboxgl.Map) {
       }
 
       if (isMajor) {
-        m.setPaintProperty(id, "line-color", "rgba(0, 212, 255, 0.35)");
+        m.setPaintProperty(id, "line-color", "rgba(0, 212, 255, 0.4)");
         m.setPaintProperty(id, "line-width", 1);
         m.setPaintProperty(id, "line-opacity", 1);
       } else {
-        m.setPaintProperty(id, "line-color", "rgba(0, 212, 255, 0.2)");
+        m.setPaintProperty(id, "line-color", "rgba(0, 212, 255, 0.25)");
         m.setPaintProperty(id, "line-width", 0.5);
         m.setPaintProperty(id, "line-opacity", 1);
       }
@@ -100,8 +100,16 @@ export function applyHudMapStyle(m: mapboxgl.Map) {
     }
 
     if (type === "symbol") {
+      const idLower = id.toLowerCase();
+      const isPlace =
+        idLower.includes("place") ||
+        idLower.includes("settlement") ||
+        idLower.includes("neighbourhood") ||
+        idLower.includes("neighborhood") ||
+        idLower.includes("borough") ||
+        idLower.includes("locality");
       try {
-        m.setPaintProperty(id, "text-color", "rgba(0, 212, 255, 0.2)");
+        m.setPaintProperty(id, "text-color", isPlace ? "rgba(0, 212, 255, 0.3)" : "rgba(0, 212, 255, 0.25)");
         m.setPaintProperty(id, "text-halo-width", 0);
         m.setPaintProperty(id, "text-halo-color", "rgba(0, 0, 0, 0)");
         m.setLayoutProperty(id, "text-size", 10);

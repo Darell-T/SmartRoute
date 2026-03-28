@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect } from "react";
 import { JarvisMap, TransitRouteData, RouteStep } from "@/components/jarvis-map";
-import { ArrowRight, AudioLines, ChevronUp, ChevronDown, Zap, X, Loader2, Crosshair } from "lucide-react";
+import { ArrowRight, AudioLines, ChevronUp, ChevronDown, X, Loader2, Crosshair, RotateCcw } from "lucide-react";
 import { planTrip, getThinking } from "@/lib/api";
 
 const MTA_COLORS: Record<string, string> = {
@@ -56,7 +56,6 @@ function WaveformBars({ active }: { active: boolean }) {
 
 export default function JarvisPage() {
   const [inputValue, setInputValue] = useState("");
-  const [drawerOpen, setDrawerOpen] = useState(true);
   const [userLocation, setUserLocation] = useState<{
     lng: number;
     lat: number;
@@ -68,8 +67,8 @@ export default function JarvisPage() {
   const [thinkingText, setThinkingText] = useState("");
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
-  const [latencyMs, setLatencyMs] = useState<number | null>(null);
   const [isListening, setIsListening] = useState(false);
+  const [mobileBubbleExpanded, setMobileBubbleExpanded] = useState(false);
 
   // Structured route data from API
   const [trainLine, setTrainLine] = useState<string | null>(null);
@@ -175,7 +174,6 @@ export default function JarvisPage() {
     setRideDurationMinutes(null);
     setRouteData(null);
     setDestCoords(null);
-    setLatencyMs(null);
     setErrorText(null);
   }
 
@@ -207,8 +205,8 @@ export default function JarvisPage() {
     setRouteData(null);
     setDestCoords(null);
     setErrorText(null);
+    setMobileBubbleExpanded(false);
     setIsLoading(true);
-    const t0 = performance.now();
 
     try {
       // Fire thinking audio immediately with word-by-word reveal
@@ -250,7 +248,6 @@ export default function JarvisPage() {
         .catch(() => {});
 
       const trip_data = await planTrip(userLocation.lat, userLocation.lng, inputValue);
-      setLatencyMs(Math.round(performance.now() - t0));
 
       const text = trip_data.recommendation;
       setJarvisText(text);
@@ -341,7 +338,7 @@ export default function JarvisPage() {
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Unknown error";
       if (msg.includes("Failed to plan trip")) {
-        setErrorText("No route found. Try a different destination.");
+        setErrorText("No route found, sir. Try a more specific address.");
       } else {
         setErrorText("Connection error. Check your network and try again.");
       }
@@ -352,11 +349,18 @@ export default function JarvisPage() {
     }
   }
 
-  // Bubble visibility
-  const showBubble = isLoading || !!jarvisText;
+  // Bubble visibility — also show bubble for errors so retry button is accessible
+  const showBubble = isLoading || !!jarvisText || !!errorText;
   const bubbleText = isLoading
     ? (thinkingText || "Processing, sir...")
     : displayedText || jarvisText;
+
+  // First sentence for collapsed mobile bubble
+  const firstSentence = (() => {
+    if (!bubbleText) return "";
+    const end = bubbleText.indexOf(". ");
+    return end > 0 ? bubbleText.slice(0, end + 1) : bubbleText;
+  })();
 
   // Pill visibility
   const hasRouteData = !!trainLine;
@@ -431,24 +435,6 @@ export default function JarvisPage() {
         </h1>
       </div>
 
-      {/* AI CORE ALPHA — Top Right (hidden on mobile) */}
-      <div className="hidden md:flex absolute top-6 right-6 z-10 items-center gap-2.5">
-        <Zap size={14} style={{ color: "rgba(0, 212, 255, 0.5)" }} />
-        <span
-          style={{
-            fontFamily: "var(--font-geist-mono), monospace",
-            fontSize: "11px",
-            letterSpacing: "0.1em",
-            color: "rgba(0, 212, 255, 0.5)",
-          }}
-        >
-          AI CORE ALPHA
-          {latencyMs != null && (
-            <span style={{ color: "rgba(0, 212, 255, 0.8)" }}>{` \u2014 ${latencyMs}ms`}</span>
-          )}
-        </span>
-      </div>
-
       {/* GPS Error — Top Center */}
       {gpsError && !userLocation && (
         <div
@@ -500,21 +486,6 @@ export default function JarvisPage() {
         </div>
       )}
 
-      {/* Error Toast */}
-      {errorText && (
-        <div
-          className="absolute top-16 left-1/2 -translate-x-1/2 z-20"
-          style={{
-            ...hudPill,
-            border: "1px solid rgba(255, 59, 48, 0.15)",
-            color: "rgba(255, 200, 180, 0.9)",
-            animation: "hudPillIn 300ms cubic-bezier(0.16, 1, 0.3, 1) forwards",
-          }}
-        >
-          {errorText}
-        </div>
-      )}
-
       {/* JARVIS Response Bubble — Desktop */}
       {showBubble && (
         <div className="hidden md:block absolute bottom-24 left-1/2 -translate-x-1/2 z-10 w-full max-w-[600px] px-4">
@@ -561,7 +532,21 @@ export default function JarvisPage() {
                 />
               )}
             </div>
-            {bubbleText}
+            {errorText ? (
+              <>
+                <div style={{ color: "rgba(255, 200, 180, 0.9)" }}>{errorText}</div>
+                <button
+                  onClick={handleSubmit}
+                  className="hud-action-btn-pill"
+                  style={{ marginTop: "10px" }}
+                >
+                  <RotateCcw size={13} />
+                  <span>Retry</span>
+                </button>
+              </>
+            ) : (
+              bubbleText
+            )}
           </div>
         </div>
       )}
@@ -644,66 +629,43 @@ export default function JarvisPage() {
         </div>
       </div>
 
-      {/* ─── Mobile Bottom Drawer ─── */}
+      {/* ─── Mobile Bottom ─── */}
       <div
-        className={`md:hidden fixed inset-x-0 bottom-0 z-20 transition-transform duration-300 ease-out ${
-          drawerOpen ? "translate-y-0" : "translate-y-[calc(100%-56px)]"
-        }`}
+        className="md:hidden fixed inset-x-0 bottom-0 z-20 flex flex-col"
+        style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
       >
-        {/* Drawer Handle */}
-        <button
-          onClick={() => setDrawerOpen(!drawerOpen)}
-          className="absolute -top-6 left-1/2 -translate-x-1/2 w-14 h-6 rounded-t-lg flex items-center justify-center active:opacity-70"
-          style={{
-            background: "rgba(8, 10, 18, 0.8)",
-            borderTop: "1px solid rgba(0, 255, 255, 0.12)",
-            borderLeft: "1px solid rgba(0, 255, 255, 0.12)",
-            borderRight: "1px solid rgba(0, 255, 255, 0.12)",
-          }}
-        >
-          {drawerOpen ? (
-            <ChevronDown size={16} style={{ color: "rgba(0, 255, 255, 0.6)" }} />
-          ) : (
-            <ChevronUp size={16} style={{ color: "rgba(0, 255, 255, 0.6)" }} />
-          )}
-        </button>
-
-        {/* Drawer Content */}
-        <div
-          className="rounded-t-2xl max-h-[70vh] overflow-hidden flex flex-col"
-          style={{
-            backdropFilter: "blur(20px) saturate(1.4)",
-            WebkitBackdropFilter: "blur(20px) saturate(1.4)",
-            background: "rgba(8, 10, 18, 0.75)",
-            borderTop: "1px solid rgba(0, 255, 255, 0.12)",
-            boxShadow: "0 -10px 40px rgba(0, 0, 0, 0.3)",
-          }}
-        >
-          {/* Scrollable Content */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-3">
-            {/* JARVIS Response */}
-            {showBubble && (
-              <div
-                style={{
-                  background: "rgba(8, 10, 18, 0.5)",
-                  border: "1px solid rgba(0, 212, 255, 0.08)",
-                  borderRadius: "12px",
-                  padding: "16px",
-                  color: "rgba(255, 255, 255, 0.92)",
-                  fontSize: "14px",
-                  lineHeight: 1.6,
-                  maxHeight: "120px",
-                  overflowY: "auto" as const,
-                  animation: isLoading ? "hudBorderPulse 2s ease-in-out infinite" : undefined,
-                }}
-              >
-                <WaveformBars active={isSpeaking} />
+        {/* Collapsible JARVIS Bubble */}
+        {showBubble && (
+          <div
+            style={{
+              backdropFilter: "blur(20px) saturate(1.4)",
+              WebkitBackdropFilter: "blur(20px) saturate(1.4)",
+              background: "rgba(8, 10, 18, 0.85)",
+              borderTop: "1px solid rgba(0, 255, 255, 0.12)",
+              boxShadow: "0 -10px 40px rgba(0, 0, 0, 0.3)",
+              maxHeight: mobileBubbleExpanded ? "50vh" : "120px",
+              overflow: "hidden",
+              transition: "max-height 0.3s ease-out",
+              animation: isLoading ? "hudBorderPulse 2s ease-in-out infinite" : undefined,
+            }}
+          >
+            <div style={{
+              padding: "12px 16px",
+              overflowY: mobileBubbleExpanded ? "auto" as const : "hidden" as const,
+              maxHeight: mobileBubbleExpanded ? "calc(50vh - 1px)" : "119px",
+            }}>
+              {/* JARVIS label + chevron toggle */}
+              <div style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: "6px",
+              }}>
                 <div style={{
                   fontFamily: "var(--font-geist-mono), monospace",
                   fontSize: "10px",
                   letterSpacing: "0.15em",
                   color: "rgba(0, 212, 255, 0.4)",
-                  marginBottom: "6px",
                   display: "flex",
                   alignItems: "center",
                   gap: "6px",
@@ -716,130 +678,158 @@ export default function JarvisPage() {
                     />
                   )}
                 </div>
-                {bubbleText}
-              </div>
-            )}
-
-            {/* Error in mobile drawer */}
-            {errorText && !showBubble && (
-              <div
-                style={{
-                  background: "rgba(8, 10, 18, 0.5)",
-                  border: "1px solid rgba(255, 59, 48, 0.12)",
-                  borderRadius: "12px",
-                  padding: "16px",
-                  color: "rgba(255, 200, 180, 0.9)",
-                  fontSize: "14px",
-                  fontFamily: "var(--font-geist-mono), monospace",
-                }}
-              >
-                {errorText}
-              </div>
-            )}
-
-            {/* HUD data pills + action buttons (mobile) */}
-            {hasRouteData && (
-              <div className="flex flex-wrap items-center gap-2">
-                <div
-                  className="flex items-center gap-2"
-                  style={{
-                    ...hudPill,
-                    padding: "6px 12px",
-                  }}
-                >
-                  <span
+                {!isLoading && (
+                  <button
+                    onClick={() => setMobileBubbleExpanded(!mobileBubbleExpanded)}
                     style={{
-                      width: 7,
-                      height: 7,
-                      borderRadius: "50%",
-                      background: trainLineColor,
-                      display: "inline-block",
+                      background: "none",
+                      border: "none",
+                      padding: "4px",
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
                     }}
-                  />
-                  <span>{transitPillText}</span>
-                </div>
-                <div style={{ ...hudPill, padding: "6px 12px" }}>
-                  {etaPillText}
-                </div>
-                {showActions && (
-                  <>
-                    <button onClick={handleRecenter} className="hud-action-btn-pill" title="Re-center">
-                      <Crosshair size={13} /><span>Re-center</span>
-                    </button>
-                    <button onClick={handleClearRoute} className="hud-action-btn-pill" title="Clear">
-                      <X size={13} /><span>Clear</span>
-                    </button>
-                  </>
+                  >
+                    {mobileBubbleExpanded ? (
+                      <ChevronDown size={16} style={{ color: "rgba(0, 255, 255, 0.6)" }} />
+                    ) : (
+                      <ChevronUp size={16} style={{ color: "rgba(0, 255, 255, 0.6)" }} />
+                    )}
+                  </button>
                 )}
               </div>
-            )}
 
-            {/* AI Core Alpha — inside drawer on mobile */}
-            <div className="flex items-center gap-2.5 pt-2">
-              <Zap size={13} style={{ color: "rgba(0, 212, 255, 0.4)" }} />
-              <span
-                style={{
-                  fontFamily: "var(--font-geist-mono), monospace",
-                  fontSize: "11px",
-                  letterSpacing: "0.1em",
-                  color: "rgba(0, 212, 255, 0.4)",
-                }}
-              >
-                AI CORE ALPHA
-                {latencyMs != null && (
-                  <span style={{ color: "rgba(0, 212, 255, 0.7)" }}>{` \u2014 ${latencyMs}ms`}</span>
-                )}
-              </span>
+              {/* Waveform — only when expanded */}
+              {mobileBubbleExpanded && <WaveformBars active={isSpeaking} />}
+
+              {/* Response text or error */}
+              {errorText ? (
+                <>
+                  <div style={{
+                    color: "rgba(255, 200, 180, 0.9)",
+                    fontSize: "14px",
+                    lineHeight: 1.6,
+                  }}>
+                    {errorText}
+                  </div>
+                  <button
+                    onClick={handleSubmit}
+                    className="hud-action-btn-pill"
+                    style={{ marginTop: "8px" }}
+                  >
+                    <RotateCcw size={13} />
+                    <span>Retry</span>
+                  </button>
+                </>
+              ) : (
+                <div style={{
+                  color: "rgba(255, 255, 255, 0.92)",
+                  fontSize: "14px",
+                  lineHeight: 1.6,
+                }}>
+                  {mobileBubbleExpanded ? bubbleText : firstSentence}
+                </div>
+              )}
+
+              {/* HUD pills — always visible (collapsed + expanded) */}
+              {hasRouteData && (
+                <div style={{
+                  display: "flex",
+                  flexWrap: "wrap" as const,
+                  gap: "8px",
+                  marginTop: "10px",
+                }}>
+                  <div
+                    style={{
+                      ...hudPill,
+                      padding: "6px 12px",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "8px",
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: 7,
+                        height: 7,
+                        borderRadius: "50%",
+                        background: trainLineColor,
+                        display: "inline-block",
+                      }}
+                    />
+                    <span>{transitPillText}</span>
+                  </div>
+                  <div style={{ ...hudPill, padding: "6px 12px" }}>
+                    {etaPillText}
+                  </div>
+                </div>
+              )}
+
+              {/* Action buttons — only when expanded */}
+              {mobileBubbleExpanded && showActions && (
+                <div style={{ display: "flex", gap: "8px", marginTop: "10px" }}>
+                  <button onClick={handleRecenter} className="hud-action-btn-pill" title="Re-center">
+                    <Crosshair size={13} /><span>Re-center</span>
+                  </button>
+                  <button onClick={handleClearRoute} className="hud-action-btn-pill" title="Clear">
+                    <X size={13} /><span>Clear</span>
+                  </button>
+                </div>
+              )}
             </div>
           </div>
+        )}
 
-          {/* Mobile Input Bar */}
+        {/* Mobile Input Bar — always visible */}
+        <div
+          style={{
+            padding: "12px 16px",
+            background: "rgba(8, 10, 18, 0.9)",
+            borderTop: showBubble ? "1px solid rgba(0, 212, 255, 0.06)" : "1px solid rgba(0, 255, 255, 0.12)",
+          }}
+        >
           <div
-            className="p-4"
-            style={{ borderTop: "1px solid rgba(0, 212, 255, 0.06)" }}
+            className="flex items-center gap-3 rounded-full px-4 py-3 hud-input-bar"
+            style={{
+              background: "rgba(8, 10, 18, 0.5)",
+              border: "1px solid rgba(0, 212, 255, 0.1)",
+            }}
           >
-            <div
-              className="flex items-center gap-3 rounded-full px-4 py-3 hud-input-bar"
+            <AudioLines
+              className="shrink-0 cursor-pointer transition-colors duration-200"
+              size={20}
               style={{
-                background: "rgba(8, 10, 18, 0.5)",
-                border: "1px solid rgba(0, 212, 255, 0.1)",
+                color: isListening ? "rgba(0, 212, 255, 1)" : "rgba(0, 212, 255, 0.5)",
+                filter: isListening ? "drop-shadow(0 0 6px rgba(0, 212, 255, 0.6))" : undefined,
               }}
+              onClick={handleVoiceInput}
+            />
+            <input
+              type="text"
+              value={inputValue}
+              onChange={(e) => setInputValue(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
+              placeholder="Where are you headed, sir?"
+              className="flex-1 bg-transparent text-white outline-none text-sm"
+              style={{
+                fontFamily: "var(--font-geist-mono), monospace",
+                color: "rgba(255, 255, 255, 0.9)",
+                fontSize: "16px",
+              }}
+              disabled={isLoading}
+            />
+            <button
+              onClick={handleSubmit}
+              disabled={isLoading}
+              className="w-11 h-11 rounded-full flex items-center justify-center transition-all duration-200 disabled:opacity-40 active:scale-95"
+              style={{ background: "rgba(0, 212, 255, 0.15)", minWidth: "44px", minHeight: "44px" }}
             >
-              <AudioLines
-                className="shrink-0 cursor-pointer transition-colors duration-200"
-                size={20}
-                style={{ color: isListening ? "rgba(0, 212, 255, 1)" : "rgba(0, 212, 255, 0.5)",
-                  filter: isListening ? "drop-shadow(0 0 6px rgba(0, 212, 255, 0.6))" : undefined,
-                }}
-                onClick={handleVoiceInput}
-              />
-              <input
-                type="text"
-                value={inputValue}
-                onChange={(e) => setInputValue(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
-                placeholder="Where are you headed, sir?"
-                className="flex-1 bg-transparent text-white outline-none text-sm"
-                style={{
-                  fontFamily: "var(--font-geist-mono), monospace",
-                  color: "rgba(255, 255, 255, 0.9)",
-                  fontSize: "16px", // prevents iOS zoom on focus
-                }}
-                disabled={isLoading}
-              />
-              <button
-                onClick={handleSubmit}
-                disabled={isLoading}
-                className="w-11 h-11 rounded-full flex items-center justify-center transition-all duration-200 disabled:opacity-40 active:scale-95"
-                style={{ background: "rgba(0, 212, 255, 0.15)", minWidth: "44px", minHeight: "44px" }}
-              >
-                {isLoading ? (
-                  <Loader2 size={18} style={{ color: "rgba(0, 212, 255, 0.8)", animation: "spin 1s linear infinite" }} />
-                ) : (
-                  <ArrowRight size={18} style={{ color: "rgba(0, 212, 255, 0.8)" }} />
-                )}
-              </button>
-            </div>
+              {isLoading ? (
+                <Loader2 size={18} style={{ color: "rgba(0, 212, 255, 0.8)", animation: "spin 1s linear infinite" }} />
+              ) : (
+                <ArrowRight size={18} style={{ color: "rgba(0, 212, 255, 0.8)" }} />
+              )}
+            </button>
           </div>
         </div>
       </div>

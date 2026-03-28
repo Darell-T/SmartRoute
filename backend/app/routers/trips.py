@@ -98,8 +98,12 @@ async def plan_trip(request: Request, payload: TripRequest):
         tts_text = tts_text.replace(" Pkwy ", " Parkway ")
         tts_text = tts_text.replace(" Ctr", " Center")
         tts_text = tts_text.replace(" Rd ", " Road ")
-        audio_bytes = await asyncio.to_thread(generate_speech, tts_text)
-        audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
+        try:
+            audio_bytes = await asyncio.to_thread(generate_speech, tts_text)
+            audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
+        except Exception as exc:
+            print(f"[trip] TTS unavailable, returning text-only response: {exc}")
+            audio_b64 = ""
 
         # 10. Return response — only the chosen route goes to the frontend
         chosen_route = parsed_response[chosen_index] if parsed_response else []
