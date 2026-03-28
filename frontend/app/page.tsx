@@ -452,7 +452,7 @@ export default function JarvisPage() {
 
       {/* HUD Overlay Pills — Top Center */}
       {hasRouteData && (
-        <div className="absolute top-6 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2">
+        <div className="hidden md:flex absolute top-6 left-1/2 -translate-x-1/2 z-10 items-center gap-2">
           <div
             style={{
               ...hudPill,
