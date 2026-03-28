@@ -114,8 +114,8 @@ export function addStepLayers(
       layout: { "line-join": "round", "line-cap": "round" },
       paint: {
         "line-color": "#FFFFFF",
-        "line-width": 2.5,
-        "line-opacity": 0.7,
+        "line-width": 3,
+        "line-opacity": 0.85,
         "line-dasharray": [2, 4],
       },
     });
@@ -131,8 +131,8 @@ export function addStepLayers(
       layout: { "line-join": "round", "line-cap": "round" },
       paint: {
         "line-color": color,
-        "line-width": 14,
-        "line-opacity": 0.12,
+        "line-width": 16,
+        "line-opacity": 0.18,
         "line-blur": 6,
       },
     });

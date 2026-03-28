@@ -3,7 +3,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { JarvisMap, TransitRouteData, RouteStep } from "@/components/jarvis-map";
 import { ArrowRight, AudioLines, ChevronUp, ChevronDown, X, Loader2, Crosshair, RotateCcw } from "lucide-react";
-import { planTrip, getThinking } from "@/lib/api";
+import { planTrip, getThinking, checkHealth } from "@/lib/api";
 
 const MTA_COLORS: Record<string, string> = {
   A: "#0039A6", C: "#0039A6", E: "#0039A6",
@@ -69,6 +69,7 @@ export default function JarvisPage() {
   const [errorText, setErrorText] = useState<string | null>(null);
   const [isListening, setIsListening] = useState(false);
   const [mobileBubbleExpanded, setMobileBubbleExpanded] = useState(false);
+  const [gtfsReady, setGtfsReady] = useState(false);
 
   // Structured route data from API
   const [trainLine, setTrainLine] = useState<string | null>(null);
@@ -123,6 +124,26 @@ export default function JarvisPage() {
     }, 8000);
     return () => clearTimeout(timeout);
   }, [userLocation]);
+
+  // Poll backend readiness until GTFS is loaded
+  useEffect(() => {
+    if (gtfsReady) return;
+    let cancelled = false;
+    async function poll() {
+      while (!cancelled) {
+        try {
+          const health = await checkHealth();
+          if (health.gtfs_ready) {
+            setGtfsReady(true);
+            return;
+          }
+        } catch { /* backend not reachable yet */ }
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+    }
+    poll();
+    return () => { cancelled = true; };
+  }, [gtfsReady]);
 
   const handleLocationUpdate = useCallback(
     (coords: { lng: number; lat: number }) => {
@@ -404,13 +425,19 @@ export default function JarvisPage() {
 
       {/* ── Viewport Effects ── */}
       <div
-        className="fixed inset-0 pointer-events-none z-[1]"
+        className="fixed inset-0 pointer-events-none z-[1] hidden md:block"
         style={{
-          background: "radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.4) 80%, rgba(0,0,0,0.7) 100%)",
+          background: "radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.3) 80%, rgba(0,0,0,0.55) 100%)",
         }}
       />
       <div
-        className="fixed inset-0 pointer-events-none z-[1]"
+        className="fixed inset-0 pointer-events-none z-[1] md:hidden"
+        style={{
+          background: "radial-gradient(ellipse at center, transparent 60%, rgba(0,0,0,0.15) 85%, rgba(0,0,0,0.3) 100%)",
+        }}
+      />
+      <div
+        className="fixed inset-0 pointer-events-none z-[1] hidden md:block"
         style={{
           background: "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.03) 2px, rgba(0,0,0,0.03) 4px)",
         }}
@@ -606,22 +633,24 @@ export default function JarvisPage() {
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
-            placeholder="Where are you headed, sir?"
+            placeholder={gtfsReady ? "Where are you headed, sir?" : "Preparing live transit data\u2026"}
             className="flex-1 bg-transparent text-white outline-none text-sm"
             style={{
               fontFamily: "var(--font-geist-mono), monospace",
               color: "rgba(255, 255, 255, 0.9)",
             }}
-            disabled={isLoading}
+            disabled={isLoading || !gtfsReady}
           />
           <button
             onClick={handleSubmit}
-            disabled={isLoading}
+            disabled={isLoading || !gtfsReady}
             className="w-9 h-9 rounded-full flex items-center justify-center transition-all duration-200 disabled:opacity-40 active:scale-95"
             style={{ background: "rgba(0, 212, 255, 0.15)" }}
           >
             {isLoading ? (
               <Loader2 size={18} style={{ color: "rgba(0, 212, 255, 0.8)", animation: "spin 1s linear infinite" }} />
+            ) : !gtfsReady ? (
+              <Loader2 size={18} style={{ color: "rgba(0, 212, 255, 0.5)", animation: "spin 2s linear infinite" }} />
             ) : (
               <ArrowRight size={18} style={{ color: "rgba(0, 212, 255, 0.8)" }} />
             )}
@@ -809,23 +838,25 @@ export default function JarvisPage() {
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
-              placeholder="Where are you headed, sir?"
+              placeholder={gtfsReady ? "Where are you headed, sir?" : "Preparing live transit data\u2026"}
               className="flex-1 bg-transparent text-white outline-none text-sm"
               style={{
                 fontFamily: "var(--font-geist-mono), monospace",
                 color: "rgba(255, 255, 255, 0.9)",
                 fontSize: "16px",
               }}
-              disabled={isLoading}
+              disabled={isLoading || !gtfsReady}
             />
             <button
               onClick={handleSubmit}
-              disabled={isLoading}
+              disabled={isLoading || !gtfsReady}
               className="w-11 h-11 rounded-full flex items-center justify-center transition-all duration-200 disabled:opacity-40 active:scale-95"
               style={{ background: "rgba(0, 212, 255, 0.15)", minWidth: "44px", minHeight: "44px" }}
             >
               {isLoading ? (
                 <Loader2 size={18} style={{ color: "rgba(0, 212, 255, 0.8)", animation: "spin 1s linear infinite" }} />
+              ) : !gtfsReady ? (
+                <Loader2 size={18} style={{ color: "rgba(0, 212, 255, 0.5)", animation: "spin 2s linear infinite" }} />
               ) : (
                 <ArrowRight size={18} style={{ color: "rgba(0, 212, 255, 0.8)" }} />
               )}
