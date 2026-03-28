@@ -4,7 +4,8 @@ import { useEffect, useRef } from "react";
 import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 
-import { createOrb, createOrbMarker, ORB_PULSE_KEYFRAME } from "./map/orbs";
+import { DEFAULT_LOCATION } from "@/lib/api";
+import { createOrb, createOrbMarker } from "./map/orbs";
 import { applyHudMapStyle } from "./map/style";
 import { calculateBearing, flyToRoute, startRotation, stopRotation, flyToOrigin } from "./map/camera";
 import { addStationBadge, addIntermediateStopLabels, clearBadges } from "./map/station-badges";
@@ -83,12 +84,10 @@ export function JarvisMap({ onLocationUpdate, routeData, isSpeaking, destCoords,
 
     mapboxgl.accessToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
 
-    const defaultLocation = { lng: -73.9857, lat: 40.7484 };
-
     map.current = new mapboxgl.Map({
       container: mapContainer.current,
       style: "mapbox://styles/mapbox/dark-v11",
-      center: [defaultLocation.lng, defaultLocation.lat],
+      center: [DEFAULT_LOCATION.lng, DEFAULT_LOCATION.lat],
       zoom: 16,
       pitch: 60,
       bearing: 15,
@@ -134,45 +133,45 @@ export function JarvisMap({ onLocationUpdate, routeData, isSpeaking, destCoords,
       });
     });
 
+    function handlePosition(coords: { lng: number; lat: number }) {
+      onLocationUpdateRef.current?.(coords);
+      originRef.current = [coords.lng, coords.lat];
+
+      if (map.current && !initialFlyDoneRef.current) {
+        initialFlyDoneRef.current = true;
+        map.current.flyTo({
+          center: [coords.lng, coords.lat],
+          zoom: 16,
+          pitch: 60,
+          duration: 2000,
+        });
+      }
+
+      if (marker.current) {
+        marker.current.setLngLat([coords.lng, coords.lat]);
+      } else if (map.current) {
+        marker.current = createOrbMarker(map.current, coords, "#00D4FF", "rgba(0, 212, 255, 0.4)");
+      }
+    }
+
     let watchId: number;
 
     if (navigator.geolocation) {
       watchId = navigator.geolocation.watchPosition(
         (position) => {
-          const coords = {
+          handlePosition({
             lng: position.coords.longitude,
             lat: position.coords.latitude,
-          };
-
-          onLocationUpdateRef.current?.(coords);
-          originRef.current = [coords.lng, coords.lat];
-
-          if (map.current && !initialFlyDoneRef.current) {
-            initialFlyDoneRef.current = true;
-            map.current.flyTo({
-              center: [coords.lng, coords.lat],
-              zoom: 16,
-              pitch: 60,
-              duration: 2000,
-            });
-          }
-
-          if (marker.current) {
-            marker.current.setLngLat([coords.lng, coords.lat]);
-          } else if (map.current) {
-            initOrbMarker(coords);
-          }
+          });
         },
         (error) => {
           console.error("Geolocation error:", error.message);
+          handlePosition(DEFAULT_LOCATION);
         },
         { enableHighAccuracy: true, maximumAge: 10000, timeout: 5000 },
       );
-    }
-
-    function initOrbMarker(coords: { lng: number; lat: number }) {
-      if (!map.current) return;
-      marker.current = createOrbMarker(map.current, coords, "#00D4FF", "rgba(0, 212, 255, 0.4)");
+    } else {
+      handlePosition(DEFAULT_LOCATION);
     }
 
     return () => {
@@ -409,9 +408,6 @@ export function JarvisMap({ onLocationUpdate, routeData, isSpeaking, destCoords,
   }, [destLng, destLat]);
 
   return (
-    <>
-      <style jsx global>{ORB_PULSE_KEYFRAME}</style>
-      <div ref={mapContainer} className="absolute inset-0 w-full h-full" />
-    </>
+    <div ref={mapContainer} className="absolute inset-0 w-full h-full" />
   );
 }

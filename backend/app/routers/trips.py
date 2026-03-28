@@ -12,6 +12,26 @@ from app.services.voice import generate_speech
 
 router = APIRouter()
 
+_TTS_ABBREVIATIONS = [
+    (re.compile(r'\bSt\b'), 'Street'),
+    (re.compile(r'\bSq\b'), 'Square'),
+    (re.compile(r'\bAv\b'), 'Avenue'),
+    (re.compile(r'\bAve\b'), 'Avenue'),
+    (re.compile(r'\bBlvd\b'), 'Boulevard'),
+    (re.compile(r'\bHwy\b'), 'Highway'),
+    (re.compile(r'\bPkwy\b'), 'Parkway'),
+    (re.compile(r'\bCtr\b'), 'Center'),
+    (re.compile(r'\bRd\b'), 'Road'),
+    (re.compile(r'\bPl\b'), 'Place'),
+    (re.compile(r'\bDr\b'), 'Drive'),
+    (re.compile(r'\bLn\b'), 'Lane'),
+]
+
+def _expand_abbreviations(text: str) -> str:
+    for pattern, replacement in _TTS_ABBREVIATIONS:
+        text = pattern.sub(replacement, text)
+    return text
+
 class TripRequest(BaseModel):
     origin_lat: float
     origin_lng: float
@@ -87,17 +107,7 @@ async def plan_trip(request: Request, payload: TripRequest):
         print(f"[trip] JARVIS chose route index {chosen_index}")
 
         # 9. Generate speech (with tag stripped, abbreviations expanded for TTS)
-        tts_text = recommendation
-        tts_text = tts_text.replace(" St ", " Street ")
-        tts_text = tts_text.replace(" St.", " Street")
-        tts_text = tts_text.replace(" Sq ", " Square ")
-        tts_text = tts_text.replace(" Hwy ", " Highway ")
-        tts_text = tts_text.replace(" Av ", " Avenue ")
-        tts_text = tts_text.replace(" Av.", " Avenue")
-        tts_text = tts_text.replace(" Blvd ", " Boulevard ")
-        tts_text = tts_text.replace(" Pkwy ", " Parkway ")
-        tts_text = tts_text.replace(" Ctr", " Center")
-        tts_text = tts_text.replace(" Rd ", " Road ")
+        tts_text = _expand_abbreviations(recommendation)
         try:
             audio_bytes = await asyncio.to_thread(generate_speech, tts_text)
             audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")

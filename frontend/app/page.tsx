@@ -3,7 +3,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { JarvisMap, TransitRouteData, RouteStep } from "@/components/jarvis-map";
 import { ArrowRight, AudioLines, ChevronUp, ChevronDown, X, Loader2, Crosshair, RotateCcw } from "lucide-react";
-import { planTrip, getThinking, checkHealth } from "@/lib/api";
+import { planTrip, getThinking, checkHealth, DEFAULT_LOCATION } from "@/lib/api";
 
 const MTA_COLORS: Record<string, string> = {
   A: "#0039A6", C: "#0039A6", E: "#0039A6",
@@ -60,7 +60,6 @@ export default function JarvisPage() {
     lng: number;
     lat: number;
   } | null>(null);
-  const [gpsError, setGpsError] = useState(false);
   const [jarvisText, setJarvisText] = useState("");
   const [displayedText, setDisplayedText] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -113,17 +112,17 @@ export default function JarvisPage() {
     };
   }, [departureTimestamp]);
 
-  // GPS error detection
+  // GPS fallback — use demo location if GPS unavailable or times out
   useEffect(() => {
     if (!navigator.geolocation) {
-      setGpsError(true);
+      setUserLocation(DEFAULT_LOCATION);
       return;
     }
     const timeout = setTimeout(() => {
-      if (!userLocation) setGpsError(true);
+      setUserLocation((prev) => prev ?? DEFAULT_LOCATION);
     }, 8000);
     return () => clearTimeout(timeout);
-  }, [userLocation]);
+  }, []);
 
   // Poll backend readiness until GTFS is loaded
   useEffect(() => {
@@ -148,7 +147,6 @@ export default function JarvisPage() {
   const handleLocationUpdate = useCallback(
     (coords: { lng: number; lat: number }) => {
       setUserLocation(coords);
-      setGpsError(false);
     },
     [],
   );
@@ -461,21 +459,6 @@ export default function JarvisPage() {
           JARVIS
         </h1>
       </div>
-
-      {/* GPS Error — Top Center */}
-      {gpsError && !userLocation && (
-        <div
-          className="absolute top-6 left-1/2 -translate-x-1/2 z-10"
-          style={{
-            ...hudPill,
-            border: "1px solid rgba(255, 59, 48, 0.15)",
-            color: "rgba(255, 59, 48, 0.8)",
-            animation: "hudPillIn 300ms cubic-bezier(0.16, 1, 0.3, 1) forwards",
-          }}
-        >
-          GPS unavailable — location required
-        </div>
-      )}
 
       {/* HUD Overlay Pills — Top Center */}
       {hasRouteData && (

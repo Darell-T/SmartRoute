@@ -1,5 +1,18 @@
 import mapboxgl from "mapbox-gl";
 
+/** Inject orbPulse keyframe into the document once */
+let _keyframeInjected = false;
+function ensureKeyframe() {
+  if (_keyframeInjected) return;
+  _keyframeInjected = true;
+  const style = document.createElement("style");
+  style.textContent = `@keyframes orbPulse {
+  0% { transform: translate(-50%, -50%) scale(1); opacity: 0.5; }
+  100% { transform: translate(-50%, -50%) scale(4); opacity: 0; }
+}`;
+  document.head.appendChild(style);
+}
+
 /**
  * Shared orb element factory. Both user and destination orbs use
  * identical HTML/CSS; only the color changes.
@@ -9,6 +22,7 @@ import mapboxgl from "mapbox-gl";
  *   - 2 pulse rings (absolute centered, same animation, staggered)
  */
 export function createOrb(color: string, glowColor: string): HTMLDivElement {
+  ensureKeyframe();
   const el = document.createElement("div");
   el.style.cssText = "width:20px;height:20px;position:relative;overflow:visible;";
   const c = "position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);border-radius:50%;";
