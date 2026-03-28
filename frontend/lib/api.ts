@@ -69,11 +69,14 @@ export async function planTrip(
   return res.json();
 }
 
-export async function checkHealth(): Promise<boolean> {
-  try {
-    const res = await fetch(`${API_URL}/health`);
-    return res.ok;
-  } catch {
-    return false;
-  }
+export interface HealthResponse {
+  status: string;
+  gtfs_ready: boolean;
+  gtfs_error: string | null;
+}
+
+export async function checkHealth(): Promise<HealthResponse> {
+  const res = await fetch(`${API_URL}/health`);
+  if (!res.ok) throw new Error("Health check failed");
+  return res.json();
 }

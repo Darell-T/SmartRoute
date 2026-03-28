@@ -20,7 +20,7 @@ export function applyHudMapStyle(m: mapboxgl.Map) {
     const type = layer.type;
 
     if (type === "background") {
-      m.setPaintProperty(id, "background-color", "#050508");
+      m.setPaintProperty(id, "background-color", "#0c0c14");
       continue;
     }
 
@@ -43,8 +43,8 @@ export function applyHudMapStyle(m: mapboxgl.Map) {
       const idLower = id.toLowerCase();
 
       if (idLower.includes("water")) {
-        m.setPaintProperty(id, "line-color", "rgba(0, 212, 255, 0.2)");
-        m.setPaintProperty(id, "line-width", 1);
+        m.setPaintProperty(id, "line-color", "rgba(0, 212, 255, 0.3)");
+        m.setPaintProperty(id, "line-width", 1.2);
         m.setPaintProperty(id, "line-opacity", 1);
         continue;
       }
@@ -55,7 +55,7 @@ export function applyHudMapStyle(m: mapboxgl.Map) {
         idLower.includes("borough") ||
         idLower.includes("neighborhood")
       ) {
-        m.setPaintProperty(id, "line-color", "rgba(0, 212, 255, 0.08)");
+        m.setPaintProperty(id, "line-color", "rgba(0, 212, 255, 0.12)");
         m.setPaintProperty(id, "line-width", 0.8);
         m.setPaintProperty(id, "line-dasharray", [4, 4]);
         m.setPaintProperty(id, "line-opacity", 1);
@@ -88,12 +88,12 @@ export function applyHudMapStyle(m: mapboxgl.Map) {
       }
 
       if (isMajor) {
-        m.setPaintProperty(id, "line-color", "rgba(0, 212, 255, 0.4)");
-        m.setPaintProperty(id, "line-width", 1);
+        m.setPaintProperty(id, "line-color", "rgba(0, 212, 255, 0.55)");
+        m.setPaintProperty(id, "line-width", 1.2);
         m.setPaintProperty(id, "line-opacity", 1);
       } else {
-        m.setPaintProperty(id, "line-color", "rgba(0, 212, 255, 0.25)");
-        m.setPaintProperty(id, "line-width", 0.5);
+        m.setPaintProperty(id, "line-color", "rgba(0, 212, 255, 0.35)");
+        m.setPaintProperty(id, "line-width", 0.7);
         m.setPaintProperty(id, "line-opacity", 1);
       }
       continue;
@@ -109,10 +109,10 @@ export function applyHudMapStyle(m: mapboxgl.Map) {
         idLower.includes("borough") ||
         idLower.includes("locality");
       try {
-        m.setPaintProperty(id, "text-color", isPlace ? "rgba(0, 212, 255, 0.3)" : "rgba(0, 212, 255, 0.25)");
-        m.setPaintProperty(id, "text-halo-width", 0);
-        m.setPaintProperty(id, "text-halo-color", "rgba(0, 0, 0, 0)");
-        m.setLayoutProperty(id, "text-size", 10);
+        m.setPaintProperty(id, "text-color", isPlace ? "rgba(0, 212, 255, 0.45)" : "rgba(0, 212, 255, 0.35)");
+        m.setPaintProperty(id, "text-halo-width", 1);
+        m.setPaintProperty(id, "text-halo-color", "rgba(0, 0, 0, 0.6)");
+        m.setLayoutProperty(id, "text-size", 11);
         m.setPaintProperty(id, "icon-opacity", 0);
       } catch {
         m.setLayoutProperty(id, "visibility", "none");
