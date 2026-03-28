@@ -42,7 +42,11 @@ router = APIRouter()
 @router.post("/api/thinking")
 async def thinking_audio():
     phrase = random.choice(thinking_phrases)
-    audio = generate_speech(phrase)
-    audio_b64 = base64.b64encode(audio).decode("utf-8")
+    try:
+        audio = generate_speech(phrase)
+        audio_b64 = base64.b64encode(audio).decode("utf-8")
+    except Exception as exc:
+        print(f"[thinking] TTS unavailable, returning text-only response: {exc}")
+        audio_b64 = ""
 
     return JSONResponse(content={"text": phrase, "audio": audio_b64})
