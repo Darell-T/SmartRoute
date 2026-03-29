@@ -69,11 +69,9 @@ def distance_meters(lat1: float, lon1: float, lat2: float, lon2: float) -> float
     return geodesic((lat1, lon1), (lat2, lon2)).meters
 
 
-def find_nearest_stops(lat: float, lon: float, stops_by_id: dict, limit: int = 5) -> list:
+def find_nearest_stops(lat: float, lon: float, gtfs, limit: int = 5) -> list:
     distances = []
-    for stop in stops_by_id.values():
-        if stop["location_type"] != "1":
-            continue
+    for stop in gtfs.get_all_parent_stops():
         stop_lat = float(stop["stop_lat"])
         stop_lon = float(stop["stop_lon"])
         dist = distance_meters(lat, lon, stop_lat, stop_lon)
@@ -96,7 +94,7 @@ if __name__ == "__main__":
     if result:
         gtfs = GTFSStaticData()
         lat, lon = result
-        nearest = find_nearest_stops(lat, lon, gtfs.stops_by_id)
+        nearest = find_nearest_stops(lat, lon, gtfs)
         print(f"\nNearest stations:")
         for stop in nearest:
             walk = walking_time_minutes(stop["distance_m"])
