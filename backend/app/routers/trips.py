@@ -42,9 +42,6 @@ async def plan_trip(request: Request, payload: TripRequest):
     t0 = time.monotonic()
     try:
         gtfs = getattr(request.app.state, "gtfs", None)
-        if gtfs is None:
-            detail = getattr(request.app.state, "gtfs_error", None) or "GTFS data is still loading"
-            raise HTTPException(status_code=503, detail=detail)
 
         # 1. Get routes from Google
         response = await get_transit_route((payload.origin_lat, payload.origin_lng), payload.destination)
@@ -60,11 +57,14 @@ async def plan_trip(request: Request, payload: TripRequest):
             for step in route:
                 if step["type"] in ("SUBWAY", "BUS"):
                     route_ids.add(step["route_id"])
-                    intermediate = gtfs.get_intermediate_stops(
-                        step["route_id"], step["departure_stop"], step["arrival_stop"]
-                    )
-                    step["intermediate_stops"] = intermediate
-                    all_stops.extend(intermediate)
+                    if gtfs:
+                        intermediate = gtfs.get_intermediate_stops(
+                            step["route_id"], step["departure_stop"], step["arrival_stop"]
+                        )
+                        step["intermediate_stops"] = intermediate
+                        all_stops.extend(intermediate)
+                    else:
+                        step["intermediate_stops"] = []
 
                 if step["type"] == "BUS":
                     bus_route_ids.add(step["route_id"])
