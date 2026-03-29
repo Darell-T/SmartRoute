@@ -1,11 +1,11 @@
 import csv
-import os
 import tempfile
 import time
 import zipfile
 from pathlib import Path
 
 import httpx
+import sqlite3
 
 
 _backend_dir = Path(__file__).parent.parent.parent
@@ -78,134 +78,185 @@ def download_supplemented_gtfs() -> bool:
 class GTFSStaticData:
 
     def __init__(self):
-        self.stops_by_id = {}
-        self.routes_by_id = {}
-        self.transfers_by_stop = {}
-        self.routes_by_stop = {}
-        self.trips_to_routes = {}
-        self.stops_by_trip = {}
-        self._load_all()
-
-    def _load_all(self):
-        """(Re)load all CSV data from the active data directory."""
+        self.db: sqlite3.Connection | None = None
         self._data_dir = _active_data_dir()
+        self._load_tables()
+
+    def _load_tables(self):
+        """Load all GTFS CSV data into an in-memory SQLite database."""
         print(f"[gtfs] loading data from {self._data_dir}")
+        t0 = time.time()
 
-        # Stream CSVs into in-memory indexes to avoid large temporary lists.
-        stops_by_id: dict = {}
-        for row in self._iter_csv("stops.txt"):
-            stop_id = row.get("stop_id")
-            if stop_id:
-                stops_by_id[stop_id] = row
+        if self.db:
+            self.db.close()
 
-        routes_by_id: dict = {}
-        for row in self._iter_csv("routes.txt"):
-            route_id = row.get("route_id")
-            if route_id:
-                routes_by_id[route_id] = row
+        db = sqlite3.connect(":memory:")
+        db.row_factory = sqlite3.Row
+        cur = db.cursor()
 
-        transfers_by_stop: dict = {}
-        for row in self._iter_csv("transfers.txt"):
-            from_stop_id = row.get("from_stop_id")
-            if from_stop_id:
-                transfers_by_stop.setdefault(from_stop_id, []).append(row)
+        # Create tables
+        cur.executescript("""
+            CREATE TABLE stops (
+                stop_id TEXT PRIMARY KEY,
+                stop_name TEXT,
+                stop_lat REAL,
+                stop_lon REAL,
+                parent_station TEXT,
+                location_type TEXT
+            );
+            CREATE TABLE routes (
+                route_id TEXT PRIMARY KEY,
+                route_short_name TEXT,
+                route_long_name TEXT,
+                route_type TEXT,
+                route_color TEXT,
+                route_text_color TEXT
+            );
+            CREATE TABLE transfers (
+                from_stop_id TEXT,
+                to_stop_id TEXT,
+                transfer_type TEXT,
+                min_transfer_time TEXT
+            );
+            CREATE TABLE trips (
+                trip_id TEXT PRIMARY KEY,
+                route_id TEXT
+            );
+            CREATE TABLE stop_times (
+                trip_id TEXT,
+                stop_id TEXT,
+                stop_sequence INTEGER
+            );
+        """)
 
-        trips_to_routes: dict = {}
-        for row in self._iter_csv("trips.txt"):
-            trip_id = row.get("trip_id")
-            route_id = row.get("route_id")
-            if trip_id and route_id:
-                trips_to_routes[trip_id] = route_id
+        # Bulk-load stops
+        cur.executemany(
+            "INSERT OR IGNORE INTO stops VALUES (?,?,?,?,?,?)",
+            self._read_cols("stops.txt",
+                            ["stop_id", "stop_name", "stop_lat", "stop_lon",
+                             "parent_station", "location_type"]),
+        )
 
-        # build routes by stop
-        routes_by_stop: dict = {}
-        stops_by_trip: dict = {}
-        for data in self._iter_csv("stop_times.txt"):
-            trip_id = data.get("trip_id")
-            stop_id = data.get("stop_id")
-            if not trip_id or not stop_id:
-                continue
+        # Bulk-load routes
+        cur.executemany(
+            "INSERT OR IGNORE INTO routes VALUES (?,?,?,?,?,?)",
+            self._read_cols("routes.txt",
+                            ["route_id", "route_short_name", "route_long_name",
+                             "route_type", "route_color", "route_text_color"]),
+        )
 
-            route = trips_to_routes.get(trip_id)
-            if route is None:
-                continue
+        # Bulk-load transfers
+        cur.executemany(
+            "INSERT INTO transfers VALUES (?,?,?,?)",
+            self._read_cols("transfers.txt",
+                            ["from_stop_id", "to_stop_id", "transfer_type",
+                             "min_transfer_time"]),
+        )
 
-            stop_sequence = data.get("stop_sequence")
-            try:
-                seq = int(stop_sequence) if stop_sequence is not None else None
-            except ValueError:
-                continue
-            if seq is None:
-                continue
+        # Bulk-load trips (only need trip_id and route_id)
+        cur.executemany(
+            "INSERT OR IGNORE INTO trips VALUES (?,?)",
+            self._read_cols("trips.txt", ["trip_id", "route_id"]),
+        )
 
-            routes_by_stop.setdefault(stop_id, set()).add(route)
-            stops_by_trip.setdefault(trip_id, []).append((seq, stop_id))
+        # Bulk-load stop_times — the big one (~900k rows)
+        cur.executemany(
+            "INSERT INTO stop_times VALUES (?,?,?)",
+            self._read_cols("stop_times.txt",
+                            ["trip_id", "stop_id", "stop_sequence"]),
+        )
 
-        self.stops_by_id = stops_by_id
-        self.routes_by_id = routes_by_id
-        self.transfers_by_stop = transfers_by_stop
-        self.trips_to_routes = trips_to_routes
-        self.routes_by_stop = routes_by_stop
-        self.stops_by_trip = stops_by_trip
+        # Create indexes AFTER bulk insert (faster than indexing during insert)
+        cur.executescript("""
+            CREATE INDEX idx_stops_name ON stops(stop_name);
+            CREATE INDEX idx_stops_parent ON stops(parent_station);
+            CREATE INDEX idx_transfers_from ON transfers(from_stop_id);
+            CREATE INDEX idx_trips_route ON trips(route_id);
+            CREATE INDEX idx_stop_times_trip ON stop_times(trip_id);
+            CREATE INDEX idx_stop_times_stop ON stop_times(stop_id);
+        """)
 
-    def _iter_csv(self, filename: str):
-        with open(self._data_dir / filename, newline="", encoding="utf-8") as f:
+        db.commit()
+        self.db = db
+        print(f"[gtfs] SQLite loaded in {time.time() - t0:.2f}s")
+
+    def _read_cols(self, filename: str, columns: list[str]):
+        """Yield tuples of the requested columns from a GTFS CSV file."""
+        path = self._data_dir / filename
+        if not path.exists():
+            return
+        with open(path, newline="", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for row in reader:
-                yield row
+                yield tuple(row.get(c, "") for c in columns)
 
     def reload(self):
-        """Re-read CSV files and rebuild all dictionaries in place."""
-        self._load_all()
+        """Re-read CSV files and rebuild SQLite tables."""
+        self._data_dir = _active_data_dir()
+        self._load_tables()
 
-    def _load_csv(self, filename: str) -> list:
-        with open(self._data_dir / filename, newline="", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            return list(reader)
+    # ------------------------------------------------------------------
+    # Query helpers (replace former dict lookups)
+    # ------------------------------------------------------------------
 
-    def _buildIdxDict(self, data: list, key: str) -> dict:
-        result = {}
-        for dataset in data:
-            result[dataset[key]] = dataset
-        return result
+    def get_stop(self, stop_id: str) -> dict | None:
+        row = self.db.execute("SELECT * FROM stops WHERE stop_id = ?", (stop_id,)).fetchone()
+        return dict(row) if row else None
 
-    def _buildGroupDict(self, data: list, key: str) -> dict:
-        result = {}
-        for dataset in data:
-            result.setdefault(dataset[key], []).append(dataset)
-        return result
+    def get_all_parent_stops(self) -> list[dict]:
+        """Return all stops where location_type = '1' (stations)."""
+        rows = self.db.execute(
+            "SELECT stop_id, stop_name, stop_lat, stop_lon, location_type "
+            "FROM stops WHERE location_type = '1'"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def route_exists(self, route_id: str) -> bool:
+        row = self.db.execute("SELECT 1 FROM routes WHERE route_id = ?", (route_id,)).fetchone()
+        return row is not None
 
     def get_stop_by_name(self, name: str) -> list:
-        stops = []
-        for stop in self.stops_by_id.values():
-            if stop["stop_name"] == name:
-                stops.append(stop["stop_id"])
-        return stops
+        rows = self.db.execute(
+            "SELECT stop_id FROM stops WHERE stop_name = ?", (name,)
+        ).fetchall()
+        return [r[0] for r in rows]
 
     def get_routes_for_stops(self, stop_id):
-        routes = set()
-        for stop in self.stops_by_id.values():
-            if stop["parent_station"] == stop_id:
-                child_id = stop["stop_id"]
-                routes.update(self.routes_by_stop.get(child_id, set()))
-        return routes
+        rows = self.db.execute("""
+            SELECT DISTINCT t.route_id
+            FROM stops s
+            JOIN stop_times st ON st.stop_id = s.stop_id
+            JOIN trips t ON t.trip_id = st.trip_id
+            WHERE s.parent_station = ?
+        """, (stop_id,)).fetchall()
+        return {r[0] for r in rows}
 
     def get_transfers(self, stop_id):
-        return self.transfers_by_stop.get(stop_id, [])
-    
+        rows = self.db.execute(
+            "SELECT * FROM transfers WHERE from_stop_id = ?", (stop_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
     def get_intermediate_stops(self, route_id: str, origin: str, dest: str) -> list:
-        # Bus routes are in a separate GTFS feed and won't be found here
-        if route_id not in self.routes_by_id:
+        if not self.route_exists(route_id):
             return []
 
         origin_ids = {oid.rstrip("NS") for oid in self.get_stop_by_name(origin)}
         dest_ids = {did.rstrip("NS") for did in self.get_stop_by_name(dest)}
+        if not origin_ids or not dest_ids:
+            return []
 
-        for tid, rid in self.trips_to_routes.items():
-            if rid != route_id:
-                continue
+        # Get one trip for this route
+        trip_rows = self.db.execute(
+            "SELECT trip_id FROM trips WHERE route_id = ?", (route_id,)
+        ).fetchall()
 
-            stop_id_list = [sid for _, sid in sorted(self.stops_by_trip[tid])]
+        for (tid,) in trip_rows:
+            stops = self.db.execute(
+                "SELECT stop_id FROM stop_times WHERE trip_id = ? ORDER BY stop_sequence",
+                (tid,)
+            ).fetchall()
+            stop_id_list = [r[0] for r in stops]
 
             origin_idx = None
             dest_idx = None
@@ -220,6 +271,12 @@ class GTFSStaticData:
 
             if origin_idx is not None and dest_idx is not None and origin_idx < dest_idx:
                 route_stop_ids = stop_id_list[origin_idx:dest_idx + 1]
-                return [self.stops_by_id[sid]["stop_name"] for sid in route_stop_ids]
+                names = []
+                for sid in route_stop_ids:
+                    row = self.db.execute(
+                        "SELECT stop_name FROM stops WHERE stop_id = ?", (sid,)
+                    ).fetchone()
+                    names.append(row[0] if row else sid)
+                return names
 
         return []
