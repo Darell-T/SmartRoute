@@ -90,7 +90,7 @@ class GTFSStaticData:
         if self.db:
             self.db.close()
 
-        db = sqlite3.connect(":memory:")
+        db = sqlite3.connect(":memory:", check_same_thread=False)
         db.row_factory = sqlite3.Row
         cur = db.cursor()
 
