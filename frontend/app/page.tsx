@@ -1,9 +1,12 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
+import dynamic from "next/dynamic";
 import { JarvisMap, TransitRouteData, RouteStep } from "@/components/jarvis-map";
 import { ArrowRight, AudioLines, ChevronUp, ChevronDown, X, Loader2, Crosshair, RotateCcw } from "lucide-react";
 import { planTrip, getThinking, DEFAULT_LOCATION } from "@/lib/api";
+
+const ParticleIntro = dynamic(() => import("@/components/particle-intro"), { ssr: false });
 
 const MTA_COLORS: Record<string, string> = {
   A: "#0039A6", C: "#0039A6", E: "#0039A6",
@@ -68,6 +71,7 @@ export default function JarvisPage() {
   const [errorText, setErrorText] = useState<string | null>(null);
   const [isListening, setIsListening] = useState(false);
   const [mobileBubbleExpanded, setMobileBubbleExpanded] = useState(false);
+  const [introPhase, setIntroPhase] = useState<"idle" | "thinking" | "scattering" | "done">("idle");
 
   // Structured route data from API
   const [trainLine, setTrainLine] = useState<string | null>(null);
@@ -139,6 +143,10 @@ export default function JarvisPage() {
     [],
   );
 
+  const handleScatterComplete = useCallback(() => {
+    setIntroPhase("done");
+  }, []);
+
   function handleRecenter() {
     mapActionsRef.current?.recenter();
   }
@@ -179,6 +187,7 @@ export default function JarvisPage() {
     setRouteData(null);
     setDestCoords(null);
     setErrorText(null);
+    setIntroPhase("idle");
   }
 
   async function handleSubmit() {
@@ -188,6 +197,10 @@ export default function JarvisPage() {
       setTimeout(() => setErrorText(null), 3000);
       return;
     }
+
+    // Track if this is the first request (particle intro active)
+    const wasIdle = introPhase === "idle";
+    if (wasIdle) setIntroPhase("thinking");
 
     // Stop any playing audio
     if (audioRef.current) {
@@ -298,6 +311,9 @@ export default function JarvisPage() {
       // Pass chosen route to map
       setRouteData({ steps: chosenRoute });
 
+      // Transition intro: scatter particles + fade in map
+      if (wasIdle) setIntroPhase("scattering");
+
       // Reuse the unlocked audio element for trip audio
       const bytes = Uint8Array.from(atob(trip_data.audio), (c) =>
         c.charCodeAt(0),
@@ -377,6 +393,9 @@ export default function JarvisPage() {
 
       setInputValue("");
     } catch (error) {
+      // Revert to idle intro on first-request failure
+      if (wasIdle) setIntroPhase("idle");
+
       const msg = error instanceof Error ? error.message : "Unknown error";
       if (msg.includes("Failed to plan trip")) {
         setErrorText("No route found, sir. Try a more specific address.");
@@ -434,14 +453,50 @@ export default function JarvisPage() {
 
   return (
     <div className="relative h-screen w-full overflow-hidden bg-[#0a0a0f]">
-      {/* Full-screen Mapbox 3D Map */}
-      <JarvisMap
-        onLocationUpdate={handleLocationUpdate}
-        routeData={routeData}
-        isSpeaking={isSpeaking}
-        destCoords={destCoords}
-        onMapReady={handleMapReady}
-      />
+      {/* Particle Intro Screen — shown until first route is found */}
+      {introPhase !== "done" && (
+        <ParticleIntro
+          phase={introPhase as "idle" | "thinking" | "scattering"}
+          onScatterComplete={handleScatterComplete}
+        />
+      )}
+
+      {/* Centered JARVIS title during idle intro */}
+      {introPhase === "idle" && (
+        <div
+          className="fixed inset-0 flex items-center justify-center pointer-events-none"
+          style={{ zIndex: 6 }}
+        >
+          <h1
+            style={{
+              fontFamily: "var(--font-geist-mono), monospace",
+              fontSize: "28px",
+              letterSpacing: "0.35em",
+              color: "rgba(0, 212, 255, 0.12)",
+            }}
+          >
+            JARVIS
+          </h1>
+        </div>
+      )}
+
+      {/* Full-screen Mapbox 3D Map — loads behind particles, fades in during scatter */}
+      <div style={{
+        position: "absolute",
+        inset: 0,
+        opacity: introPhase === "scattering" || introPhase === "done" ? 1 : 0,
+        transition: "opacity 1s ease",
+        pointerEvents: introPhase === "done" ? "auto" : "none",
+        zIndex: 0,
+      }}>
+        <JarvisMap
+          onLocationUpdate={handleLocationUpdate}
+          routeData={routeData}
+          isSpeaking={isSpeaking}
+          destCoords={destCoords}
+          onMapReady={handleMapReady}
+        />
+      </div>
 
       {/* ── Viewport Effects ── */}
       <div
@@ -468,19 +523,21 @@ export default function JarvisPage() {
       <div className="fixed pointer-events-none z-[2]" style={{ bottom: 16, left: 16, width: 30, height: 30, borderBottom: "1px solid rgba(0,212,255,0.15)", borderLeft: "1px solid rgba(0,212,255,0.15)" }} />
       <div className="fixed pointer-events-none z-[2]" style={{ bottom: 16, right: 16, width: 30, height: 30, borderBottom: "1px solid rgba(0,212,255,0.15)", borderRight: "1px solid rgba(0,212,255,0.15)" }} />
 
-      {/* JARVIS Logo — Top Left (hidden on mobile) */}
-      <div className="hidden md:block absolute top-6 left-6 z-10">
-        <h1
-          style={{
-            fontFamily: "var(--font-geist-mono), monospace",
-            fontSize: "11px",
-            letterSpacing: "0.15em",
-            color: "rgba(0, 212, 255, 0.3)",
-          }}
-        >
-          JARVIS
-        </h1>
-      </div>
+      {/* JARVIS Logo — Top Left (hidden on mobile, hidden during intro) */}
+      {introPhase === "done" && (
+        <div className="hidden md:block absolute top-6 left-6 z-10">
+          <h1
+            style={{
+              fontFamily: "var(--font-geist-mono), monospace",
+              fontSize: "11px",
+              letterSpacing: "0.15em",
+              color: "rgba(0, 212, 255, 0.3)",
+            }}
+          >
+            JARVIS
+          </h1>
+        </div>
+      )}
 
       {/* HUD Overlay Pills — Top Center */}
       {hasRouteData && (
