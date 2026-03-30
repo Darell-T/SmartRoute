@@ -56,20 +56,40 @@ export async function planTrip(
   originLng: number,
   destination: string,
 ): Promise<TripResponse> {
-  const res = await fetch(`${API_URL}/api/trip`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ origin_lat: originLat, origin_lng: originLng, destination }),
-  });
+  async function attempt(): Promise<TripResponse> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 60_000);
+    try {
+      const res = await fetch(`${API_URL}/api/trip`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ origin_lat: originLat, origin_lng: originLng, destination }),
+        signal: controller.signal,
+      });
 
-  if (!res.ok) {
-    const errorText = await res.text();
-    console.error("Backend error:", res.status, errorText);
-    throw new Error("Failed to plan trip");
+      if (!res.ok) {
+        const errorText = await res.text();
+        console.error("Backend error:", res.status, errorText);
+        throw new Error(res.status === 503 ? "Service unavailable" : "Failed to plan trip");
+      }
+      return res.json();
+    } finally {
+      clearTimeout(timeout);
+    }
   }
-  return res.json();
+
+  try {
+    return await attempt();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "";
+    const isRetryable = msg === "Service unavailable" || msg.includes("abort") || msg === "Failed to fetch";
+    if (isRetryable) {
+      console.log("[api] first attempt failed, retrying in 2s…", msg);
+      await new Promise((r) => setTimeout(r, 2000));
+      return attempt();
+    }
+    throw err;
+  }
 }
 
 export interface HealthResponse {
