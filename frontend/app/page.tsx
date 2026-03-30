@@ -82,6 +82,7 @@ export default function JarvisPage() {
   const thinkingRevealRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const revealStartedRef = useRef(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const speakingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const departureIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mapActionsRef = useRef<{ recenter: () => void } | null>(null);
   // Live departure countdown from raw timestamp
@@ -160,6 +161,10 @@ export default function JarvisPage() {
       audioRef.current.pause();
       audioRef.current = null;
     }
+    if (speakingTimeoutRef.current) {
+      clearTimeout(speakingTimeoutRef.current);
+      speakingTimeoutRef.current = null;
+    }
     if (wordRevealIntervalRef.current) clearInterval(wordRevealIntervalRef.current);
     if (thinkingRevealRef.current) clearInterval(thinkingRevealRef.current);
     revealStartedRef.current = false;
@@ -189,6 +194,16 @@ export default function JarvisPage() {
       audioRef.current.pause();
       audioRef.current = null;
     }
+    if (speakingTimeoutRef.current) {
+      clearTimeout(speakingTimeoutRef.current);
+      speakingTimeoutRef.current = null;
+    }
+
+    // Unlock audio on user gesture (mobile browsers require this)
+    const unlockedAudio = new Audio();
+    unlockedAudio.src = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=";
+    unlockedAudio.play().catch(() => {});
+    audioRef.current = unlockedAudio;
 
     // Reset for new request
     if (wordRevealIntervalRef.current) clearInterval(wordRevealIntervalRef.current);
@@ -242,7 +257,7 @@ export default function JarvisPage() {
             if (!thinkingRevealRef.current) startThinkingReveal(fallback);
           }, 200);
 
-          thinkAudio.play();
+          thinkAudio.play().catch(() => {});
         })
         .catch(() => {});
 
@@ -283,13 +298,13 @@ export default function JarvisPage() {
       // Pass chosen route to map
       setRouteData({ steps: chosenRoute });
 
-      // Build trip audio element
+      // Reuse the unlocked audio element for trip audio
       const bytes = Uint8Array.from(atob(trip_data.audio), (c) =>
         c.charCodeAt(0),
       );
-      const tripAudio = new Audio(
-        URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" })),
-      );
+      const tripAudioUrl = URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" }));
+      const tripAudio = unlockedAudio;
+      tripAudio.src = tripAudioUrl;
       audioRef.current = tripAudio;
 
       // Word-by-word reveal synced to audio duration
@@ -327,11 +342,38 @@ export default function JarvisPage() {
       setTimeout(() => startWordReveal(fallbackDuration), 300);
 
       setIsSpeaking(true);
-      tripAudio.play();
+
+      // Safety timeout — stop spinning after 60s no matter what
+      speakingTimeoutRef.current = setTimeout(() => {
+        setIsSpeaking(false);
+        speakingTimeoutRef.current = null;
+      }, 60_000);
+
       tripAudio.onended = () => {
         setIsSpeaking(false);
         audioRef.current = null;
+        if (speakingTimeoutRef.current) {
+          clearTimeout(speakingTimeoutRef.current);
+          speakingTimeoutRef.current = null;
+        }
       };
+
+      tripAudio.onerror = () => {
+        setIsSpeaking(false);
+        audioRef.current = null;
+        if (speakingTimeoutRef.current) {
+          clearTimeout(speakingTimeoutRef.current);
+          speakingTimeoutRef.current = null;
+        }
+      };
+
+      tripAudio.play().catch(() => {
+        setIsSpeaking(false);
+        if (speakingTimeoutRef.current) {
+          clearTimeout(speakingTimeoutRef.current);
+          speakingTimeoutRef.current = null;
+        }
+      });
 
       setInputValue("");
     } catch (error) {
