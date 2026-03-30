@@ -31,3 +31,6 @@ node_modules/
 
 # Local Cursor / agent skills lock (not for repo)
 skills-lock.json
+
+# Local design reference assets (not for remote)
+reference_images/
