@@ -1,12 +1,9 @@
+import type { ThinkingResponse, TripResponse, HealthResponse } from "@/types";
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 /** Empire State Building — demo fallback when GPS is unavailable */
 export const DEFAULT_LOCATION = { lng: -73.9857, lat: 40.7484 } as const;
-
-export interface ThinkingResponse {
-  text: string;
-  audio: string; // base64-encoded audio
-}
 
 export async function getThinking(): Promise<ThinkingResponse> {
   const res = await fetch(`${API_URL}/api/thinking`, {
@@ -16,39 +13,6 @@ export async function getThinking(): Promise<ThinkingResponse> {
   if (!res.ok) throw new Error("Failed to get thinking audio");
 
   return res.json();
-}
-
-export interface ServiceAlert {
-  header: string;
-  routeIds: string[];
-}
-
-export interface RouteStep {
-  type: "WALK" | "SUBWAY" | "BUS";
-  // Walk fields
-  start_point?: { latitude: number; longitude: number };
-  end_point?: { latitude: number; longitude: number };
-  polyline?: { encodedPolyline: string };
-  // Transit fields
-  train_line?: string;
-  line_color?: string;
-  direction?: string;
-  departure_stop?: string;
-  arrival_stop?: string;
-  departure_coords?: { latitude: number; longitude: number };
-  arrival_coords?: { latitude: number; longitude: number };
-  minutes_until_train_arrives?: number;
-  minutes_until_arrival?: number;
-  stop_count?: number;
-  route_id?: string;
-  intermediate_stops?: string[];
-}
-
-export interface TripResponse {
-  recommendation: string;
-  audio: string;
-  route: RouteStep[];
-  alerts: ServiceAlert[];
 }
 
 export async function planTrip(
@@ -90,12 +54,6 @@ export async function planTrip(
     }
     throw err;
   }
-}
-
-export interface HealthResponse {
-  status: string;
-  gtfs_ready: boolean;
-  gtfs_error: string | null;
 }
 
 export async function checkHealth(): Promise<HealthResponse> {
