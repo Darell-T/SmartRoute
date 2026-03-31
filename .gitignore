@@ -34,6 +34,3 @@ skills-lock.json
 
 # Local design reference assets (not for remote)
 reference_images/
-
-# Agent skills and prompt files (local only)
-.agents/
