@@ -2,7 +2,8 @@
 
 import { useState, useCallback, useRef, useEffect } from "react";
 import dynamic from "next/dynamic";
-import { JarvisMap, TransitRouteData, RouteStep } from "@/components/jarvis-map";
+import type { TransitRouteData, RouteStep } from "@/types";
+import { JarvisMap } from "@/components/jarvis-map";
 import { ArrowRight, AudioLines, ChevronUp, ChevronDown, X, Loader2, Crosshair, RotateCcw } from "lucide-react";
 import { planTrip, getThinking, DEFAULT_LOCATION } from "@/lib/api";
 
