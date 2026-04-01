@@ -37,6 +37,7 @@ def _allowed_origins() -> list[str]:
     return [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        "https://smartroute.fyi",
         *from_env,
     ]
 

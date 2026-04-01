@@ -165,13 +165,13 @@
 
 /* Input bar focus glow */
 .hud-input-bar:focus-within {
-  box-shadow: 0 0 20px rgba(0, 212, 255, 0.08);
-  border-color: rgba(0, 212, 255, 0.2) !important;
+  box-shadow: 0 0 20px rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.85) !important;
 }
 
 /* Placeholder color for HUD inputs */
 .hud-input-bar input::placeholder {
-  color: rgba(0, 212, 255, 0.25);
+  color: rgba(255, 255, 255, 0.35);
 }
 
 /* ── Fade in ── */
