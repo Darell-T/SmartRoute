@@ -49,15 +49,25 @@ def _allowed_origin_regex() -> str | None:
 
 
 async def _load_gtfs_into_state(app: FastAPI) -> None:
+    import time as _time
+    t0 = _time.monotonic()
+    print("[main] === GTFS init start ===")
     try:
-        await asyncio.to_thread(download_supplemented_gtfs)
+        print("[main] step 1: download_supplemented_gtfs()")
+        downloaded = await asyncio.to_thread(download_supplemented_gtfs)
+        print(f"[main] step 1 done in {_time.monotonic()-t0:.1f}s — downloaded={downloaded}")
+
+        print("[main] step 2: GTFSStaticData() (SQLite load)")
+        t1 = _time.monotonic()
         app.state.gtfs = await asyncio.to_thread(GTFSStaticData)
+        print(f"[main] step 2 done in {_time.monotonic()-t1:.1f}s")
+
         app.state.gtfs_error = None
-        print("[main] GTFS data loaded")
+        print(f"[main] === GTFS ready — total {_time.monotonic()-t0:.1f}s ===")
     except Exception as exc:
         app.state.gtfs = None
         app.state.gtfs_error = f"GTFS initialization failed: {exc}"
-        print(f"[main] GTFS initialization error: {exc}")
+        print(f"[main] GTFS initialization error after {_time.monotonic()-t0:.1f}s: {exc}")
 
 
 async def _gtfs_refresh_loop(app: FastAPI):
