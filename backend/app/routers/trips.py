@@ -61,12 +61,15 @@ async def plan_trip(request: Request, payload: TripRequest):
     t0 = time.monotonic()
     try:
         gtfs = getattr(request.app.state, "gtfs", None)
+        print(f"[trip] gtfs check: {time.monotonic()-t0:.2f}s")
 
         # 1. Get routes from Google
         response = await get_transit_route((payload.origin_lat, payload.origin_lng), payload.destination)
+        print(f"[trip] google directions: {time.monotonic()-t0:.2f}s")
 
         # 2. Parse the response into structured routes
         parsed_response = parse_response(response)
+        print(f"[trip] parse response: {time.monotonic()-t0:.2f}s")
 
         # 3. Extract route IDs and station names from all routes
         route_ids = set()
@@ -88,6 +91,7 @@ async def plan_trip(request: Request, payload: TripRequest):
                 if step["type"] == "BUS":
                     bus_route_ids.add(step["route_id"])
 
+        print(f"[trip] intermediate stops: {time.monotonic()-t0:.2f}s")
 
         # 4. Fetch alerts, incidents, and stalled trains in parallel
         raw_alerts, incidents, stalled, stalled_buses = await asyncio.gather(
@@ -96,6 +100,7 @@ async def plan_trip(request: Request, payload: TripRequest):
             get_stalled_trains(route_ids),
             get_stalled_buses(bus_route_ids)
         )
+        print(f"[trip] gather alerts/incidents/stalled: {time.monotonic()-t0:.2f}s")
 
         # 5. Filter alerts for relevant routes
         parsed_alerts = parse_service_alerts(raw_alerts) if raw_alerts else []
@@ -114,6 +119,7 @@ async def plan_trip(request: Request, payload: TripRequest):
         raw_recommendation = ""
         async for chunk in stream_recommendation(jarvis_payload):
             raw_recommendation += chunk
+        print(f"[trip] claude stream: {time.monotonic()-t0:.2f}s")
 
         # 8. Parse chosen route index from JARVIS tag, then strip it
         chosen_index = 0
@@ -134,6 +140,7 @@ async def plan_trip(request: Request, payload: TripRequest):
         except Exception as exc:
             print(f"[trip] TTS unavailable, returning text-only response: {exc}")
             audio_b64 = ""
+        print(f"[trip] tts: {time.monotonic()-t0:.2f}s")
 
         # 10. Return response — only the chosen route goes to the frontend
         chosen_route = parsed_response[chosen_index] if parsed_response else []
