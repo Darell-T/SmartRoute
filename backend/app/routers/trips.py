@@ -27,10 +27,29 @@ _TTS_ABBREVIATIONS = [
     (re.compile(r'\bLn\b'), 'Lane'),
 ]
 
+_INTERNAL_LEAK_PATTERN = re.compile(
+    r"\b(backend|frontend|api|json|payload|database|sql|gtfs|server|model|prompt|route index)\b",
+    re.IGNORECASE,
+)
+
+_TELEMETRY_LEAK_PATTERN = re.compile(
+    r"(RecordedAtTime|ProgressStatus|noProgress|layover|route_id|stop_id|stalled_minutes|\bis\s+stalled\s+for\s+\d+\s+minutes?\b)",
+    re.IGNORECASE,
+)
+
 def _expand_abbreviations(text: str) -> str:
     for pattern, replacement in _TTS_ABBREVIATIONS:
         text = pattern.sub(replacement, text)
     return text
+
+def _sanitize_recommendation(text: str) -> str:
+    if not _INTERNAL_LEAK_PATTERN.search(text) and not _TELEMETRY_LEAK_PATTERN.search(text):
+        return text
+    print("[trip] model output included internal/telemetry details; using rider-facing fallback")
+    return (
+        "Take the next recommended train from your departure station, then follow the transfer shown on your map, sir. "
+        "There may be minor operational delays, and total time should stay close to the displayed estimate."
+    )
 
 class TripRequest(BaseModel):
     origin_lat: float
@@ -104,6 +123,7 @@ async def plan_trip(request: Request, payload: TripRequest):
             if chosen_index >= len(parsed_response):
                 chosen_index = 0
         recommendation = re.sub(r"\s*\[ROUTE:\d+\]\s*", "", raw_recommendation).strip()
+        recommendation = _sanitize_recommendation(recommendation)
         print(f"[trip] JARVIS chose route index {chosen_index}")
 
         # 9. Generate speech (with tag stripped, abbreviations expanded for TTS)

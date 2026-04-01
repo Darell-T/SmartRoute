@@ -1,24 +1,4 @@
-# ai_advisor.py - Claude AI Integration
-#
-# This file will contain:
-# - Anthropic Python SDK client initialization
-# - Service alert translation:
-#   - Input: Raw MTA service alert text (often cryptic/technical)
-#   - Output: Plain-English explanation for riders
-# - Route recommendation reasoning:
-#   - Synthesize delay data, route options, and context
-#   - Generate natural language recommendation
-#   - Include confidence explanation
-# - Use Claude tool use / structured output for clean JSON responses:
-#   {
-#     "departure_time": "...",
-#     "arrival_estimate": "...",
-#     "confidence": 0.85,
-#     "explanation": "...",
-#     "alternatives": [...]
-#   }
-# - Prompt templates for consistent, helpful responses
-# - Error handling for API rate limits and failures
+
 import anthropic
 import asyncio
 import json
@@ -136,15 +116,33 @@ Sentence 3: Total trip time or a brief quip.
 
 Speak like JARVIS — composed, efficient, and genuinely funny when the moment allows. A well-timed quip about MTA reliability is always appreciated. Address the rider as "sir" occasionally. You are not a chatbot. You are a personal transit intelligence, and you find the whole situation mildly amusing.
 
-Use punctuation to control TTS pacing. Insert em dashes for dramatic pauses before dry observations. Use commas liberally to slow the pace. End quips with a period followed by "sir" after a comma for a natural pause.
+Use punctuation to control TTS pacing. Do not use em dashes or double hyphens. Use commas and periods for pauses. Keep rhythm deliberate and clean.
 
 Example delivery style:
-- "The F departs in 16 minutes -- no transfers, no drama, sir."
+- "The F departs in 16 minutes, no transfers, no drama, sir."
 - "The N line is, to put it diplomatically, a mess right now."
 - "Total trip is 47 minutes, which the MTA would call efficient."
 
 ROUTE SELECTION TAG — mandatory:
 After your spoken response, on a new line, output exactly [ROUTE:N] where N is the zero-based index of the route from the "routes" array that you are recommending. This tag is stripped before text-to-speech and never read aloud. If you recommend routes[0], output [ROUTE:0]. If you recommend routes[2], output [ROUTE:2]. This tag must always be present."""
+
+
+SYSTEM_PROMPT += """
+
+NON-NEGOTIABLE CONTENT BOUNDARY:
+- Speak only as a rider-facing transit assistant.
+- Never mention implementation or internal systems.
+- Never mention: backend, frontend, API, JSON, payload, database, SQL, GTFS, server, model, prompt, or route index.
+- Never expose internal labels or mechanics. The rider should only hear actionable transit guidance.
+- Never narrate raw operations telemetry. Do not mention vehicle IDs, stop IDs, route_id/stop_id fields, RecordedAtTime, ProgressStatus, layover, noProgress, or stalled_minutes.
+- Do not say things like "D82 is stalled for 10 minutes." Convert that to rider language like "there is a delay on this option."
+
+PAUSE AND CADENCE RULES FOR TTS:
+- Use short spoken chunks with natural pauses.
+- Sentence 1 must include one pause comma after the core instruction.
+- Sentence 2 must include one pause comma before the key caveat or transfer detail.
+- Sentence 3 should close with a short finish, optionally ending with ", sir."
+"""
 
 
 _MODEL_PRIORITY = ["claude-sonnet-4-6", "claude-haiku-4-5-20251001"]
