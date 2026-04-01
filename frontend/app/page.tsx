@@ -4,20 +4,44 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import dynamic from "next/dynamic";
 import type { TransitRouteData, RouteStep } from "@/types";
 import { JarvisMap } from "@/components/jarvis-map";
-import { ArrowRight, AudioLines, ChevronUp, ChevronDown, X, Loader2, Crosshair, RotateCcw } from "lucide-react";
+import {
+  ArrowRight,
+  AudioLines,
+  ChevronUp,
+  ChevronDown,
+  X,
+  Loader2,
+  Crosshair,
+  RotateCcw,
+} from "lucide-react";
 import { planTrip, getThinking, DEFAULT_LOCATION } from "@/lib/api";
 
-const ParticleIntro = dynamic(() => import("@/components/particle-intro"), { ssr: false });
+const ParticleIntro = dynamic(() => import("@/components/particle-intro"), {
+  ssr: false,
+});
 
 const MTA_COLORS: Record<string, string> = {
-  A: "#0039A6", C: "#0039A6", E: "#0039A6",
-  B: "#FF6319", D: "#FF6319", F: "#FF6319", M: "#FF6319",
+  A: "#0039A6",
+  C: "#0039A6",
+  E: "#0039A6",
+  B: "#FF6319",
+  D: "#FF6319",
+  F: "#FF6319",
+  M: "#FF6319",
   G: "#6CBE45",
-  J: "#996633", Z: "#996633",
+  J: "#996633",
+  Z: "#996633",
   L: "#A7A9AC",
-  N: "#FCCC0A", Q: "#FCCC0A", R: "#FCCC0A", W: "#FCCC0A",
-  "1": "#EE352E", "2": "#EE352E", "3": "#EE352E",
-  "4": "#00933C", "5": "#00933C", "6": "#00933C",
+  N: "#FCCC0A",
+  Q: "#FCCC0A",
+  R: "#FCCC0A",
+  W: "#FCCC0A",
+  "1": "#EE352E",
+  "2": "#EE352E",
+  "3": "#EE352E",
+  "4": "#00933C",
+  "5": "#00933C",
+  "6": "#00933C",
   "7": "#B933AD",
   S: "#808183",
   SI: "#00A9CE",
@@ -72,23 +96,36 @@ export default function JarvisPage() {
   const [errorText, setErrorText] = useState<string | null>(null);
   const [isListening, setIsListening] = useState(false);
   const [mobileBubbleExpanded, setMobileBubbleExpanded] = useState(false);
-  const [introPhase, setIntroPhase] = useState<"idle" | "thinking" | "scattering" | "done">("idle");
+  const [introPhase, setIntroPhase] = useState<
+    "idle" | "thinking" | "scattering" | "done"
+  >("idle");
 
   // Structured route data from API
   const [trainLine, setTrainLine] = useState<string | null>(null);
-  const [departureTimestamp, setDepartureTimestamp] = useState<number | null>(null);
+  const [departureTimestamp, setDepartureTimestamp] = useState<number | null>(
+    null,
+  );
   const [departureMinutes, setDepartureMinutes] = useState<number | null>(null);
   const [direction, setDirection] = useState<string | null>(null);
-  const [rideDurationMinutes, setRideDurationMinutes] = useState<number | null>(null);
+  const [rideDurationMinutes, setRideDurationMinutes] = useState<number | null>(
+    null,
+  );
   const [routeData, setRouteData] = useState<TransitRouteData | null>(null);
-  const [destCoords, setDestCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [destCoords, setDestCoords] = useState<{
+    lat: number;
+    lng: number;
+  } | null>(null);
 
-  const wordRevealIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const wordRevealIntervalRef = useRef<ReturnType<typeof setInterval> | null>(
+    null,
+  );
   const thinkingRevealRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const revealStartedRef = useRef(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const speakingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const departureIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const departureIntervalRef = useRef<ReturnType<typeof setInterval> | null>(
+    null,
+  );
   const mapActionsRef = useRef<{ recenter: () => void } | null>(null);
   // Live departure countdown from raw timestamp
   useEffect(() => {
@@ -103,7 +140,9 @@ export default function JarvisPage() {
     }
 
     function tick() {
-      setDepartureMinutes(Math.max(0, Math.round((departureTimestamp! - Date.now() / 1000) / 60)));
+      setDepartureMinutes(
+        Math.max(0, Math.round((departureTimestamp! - Date.now() / 1000) / 60)),
+      );
     }
 
     tick();
@@ -129,7 +168,6 @@ export default function JarvisPage() {
     return () => clearTimeout(timeout);
   }, []);
 
-
   const handleLocationUpdate = useCallback(
     (coords: { lng: number; lat: number }) => {
       setUserLocation(coords);
@@ -137,12 +175,9 @@ export default function JarvisPage() {
     [],
   );
 
-  const handleMapReady = useCallback(
-    (actions: { recenter: () => void }) => {
-      mapActionsRef.current = actions;
-    },
-    [],
-  );
+  const handleMapReady = useCallback((actions: { recenter: () => void }) => {
+    mapActionsRef.current = actions;
+  }, []);
 
   const handleScatterComplete = useCallback(() => {
     setIntroPhase("done");
@@ -153,12 +188,15 @@ export default function JarvisPage() {
   }
 
   function handleVoiceInput() {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    const SpeechRecognition =
+      (window as any).SpeechRecognition ||
+      (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) return;
     const recognition = new SpeechRecognition();
     recognition.lang = "en-US";
     recognition.onstart = () => setIsListening(true);
-    recognition.onresult = (e: any) => setInputValue(e.results[0][0].transcript);
+    recognition.onresult = (e: any) =>
+      setInputValue(e.results[0][0].transcript);
     recognition.onend = () => setIsListening(false);
     recognition.onerror = () => setIsListening(false);
     recognition.start();
@@ -174,7 +212,8 @@ export default function JarvisPage() {
       clearTimeout(speakingTimeoutRef.current);
       speakingTimeoutRef.current = null;
     }
-    if (wordRevealIntervalRef.current) clearInterval(wordRevealIntervalRef.current);
+    if (wordRevealIntervalRef.current)
+      clearInterval(wordRevealIntervalRef.current);
     if (thinkingRevealRef.current) clearInterval(thinkingRevealRef.current);
     revealStartedRef.current = false;
     setJarvisText("");
@@ -215,12 +254,14 @@ export default function JarvisPage() {
 
     // Unlock audio on user gesture (mobile browsers require this)
     const unlockedAudio = new Audio();
-    unlockedAudio.src = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=";
+    unlockedAudio.src =
+      "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=";
     unlockedAudio.play().catch(() => {});
     audioRef.current = unlockedAudio;
 
     // Reset for new request
-    if (wordRevealIntervalRef.current) clearInterval(wordRevealIntervalRef.current);
+    if (wordRevealIntervalRef.current)
+      clearInterval(wordRevealIntervalRef.current);
     if (thinkingRevealRef.current) clearInterval(thinkingRevealRef.current);
     revealStartedRef.current = false;
     setDisplayedText("");
@@ -251,7 +292,8 @@ export default function JarvisPage() {
 
           function startThinkingReveal(duration: number) {
             const intervalMs = Math.max((duration * 1000) / words.length, 80);
-            if (thinkingRevealRef.current) clearInterval(thinkingRevealRef.current);
+            if (thinkingRevealRef.current)
+              clearInterval(thinkingRevealRef.current);
             thinkingRevealRef.current = setInterval(() => {
               wordIdx++;
               setThinkingText(words.slice(0, wordIdx).join(" "));
@@ -263,8 +305,10 @@ export default function JarvisPage() {
 
           const fallback = words.length * 0.35;
           thinkAudio.addEventListener("loadedmetadata", () => {
-            const dur = isFinite(thinkAudio.duration) && thinkAudio.duration > 0
-              ? thinkAudio.duration : fallback;
+            const dur =
+              isFinite(thinkAudio.duration) && thinkAudio.duration > 0
+                ? thinkAudio.duration
+                : fallback;
             startThinkingReveal(dur);
           });
           setTimeout(() => {
@@ -275,7 +319,11 @@ export default function JarvisPage() {
         })
         .catch(() => {});
 
-      const trip_data = await planTrip(userLocation.lat, userLocation.lng, inputValue);
+      const trip_data = await planTrip(
+        userLocation.lat,
+        userLocation.lng,
+        inputValue,
+      );
 
       const text = trip_data.recommendation;
       setJarvisText(text);
@@ -283,27 +331,28 @@ export default function JarvisPage() {
       // Extract HUD pill data from the chosen route
       const chosenRoute = trip_data.route || [];
       const firstTransit = chosenRoute.find(
-        (s: RouteStep) => s.type === "SUBWAY" || s.type === "BUS"
+        (s: RouteStep) => s.type === "SUBWAY" || s.type === "BUS",
       );
 
       setTrainLine(firstTransit?.train_line || null);
       setDepartureTimestamp(
         firstTransit?.minutes_until_train_arrives != null
           ? Date.now() / 1000 + firstTransit.minutes_until_train_arrives * 60
-          : null
+          : null,
       );
       setDirection(firstTransit?.direction || null);
       setRideDurationMinutes(
         firstTransit?.minutes_until_arrival != null
           ? Math.round(firstTransit.minutes_until_arrival)
-          : null
+          : null,
       );
 
       // Destination coords from last step's end point
       const lastStep = chosenRoute[chosenRoute.length - 1];
-      const rawDest = lastStep?.type === "WALK"
-        ? lastStep.end_point
-        : lastStep?.arrival_coords;
+      const rawDest =
+        lastStep?.type === "WALK"
+          ? lastStep.end_point
+          : lastStep?.arrival_coords;
       const destCoordsComputed = rawDest
         ? { lat: rawDest.latitude, lng: rawDest.longitude }
         : null;
@@ -319,7 +368,9 @@ export default function JarvisPage() {
       const bytes = Uint8Array.from(atob(trip_data.audio), (c) =>
         c.charCodeAt(0),
       );
-      const tripAudioUrl = URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" }));
+      const tripAudioUrl = URL.createObjectURL(
+        new Blob([bytes], { type: "audio/mpeg" }),
+      );
       const tripAudio = unlockedAudio;
       tripAudio.src = tripAudioUrl;
       audioRef.current = tripAudio;
@@ -330,10 +381,7 @@ export default function JarvisPage() {
         revealStartedRef.current = true;
         const words = text.split(/\s+/).filter((w) => w.length > 0);
         if (words.length === 0) return;
-        const intervalMs = Math.max(
-          (audioDuration * 1000) / words.length,
-          80,
-        );
+        const intervalMs = Math.max((audioDuration * 1000) / words.length, 80);
         let wordIndex = 0;
         if (wordRevealIntervalRef.current)
           clearInterval(wordRevealIntervalRef.current);
@@ -413,7 +461,7 @@ export default function JarvisPage() {
   // Bubble visibility — also show bubble for errors so retry button is accessible
   const showBubble = isLoading || !!jarvisText || !!errorText;
   const bubbleText = isLoading
-    ? (thinkingText || "Processing, sir...")
+    ? thinkingText || "Processing, sir..."
     : displayedText || jarvisText;
 
   // First sentence for collapsed mobile bubble
@@ -425,7 +473,9 @@ export default function JarvisPage() {
 
   // Pill visibility
   const hasRouteData = !!trainLine;
-  const trainLineColor = trainLine ? (MTA_COLORS[trainLine] || "#FFD700") : "#FFD700";
+  const trainLineColor = trainLine
+    ? MTA_COLORS[trainLine] || "#FFD700"
+    : "#FFD700";
   const showActions = !!routeData && !isLoading;
 
   const transitPillText = trainLine
@@ -434,9 +484,10 @@ export default function JarvisPage() {
       : `${trainLine} \u2014 checking...`
     : "";
 
-  const etaPillText = rideDurationMinutes != null
-    ? `~${rideDurationMinutes} min ride`
-    : "ETA pending";
+  const etaPillText =
+    rideDurationMinutes != null
+      ? `~${rideDurationMinutes} min ride`
+      : "ETA pending";
 
   /* ── Shared HUD pill style ── */
   const hudPill: React.CSSProperties = {
@@ -482,14 +533,16 @@ export default function JarvisPage() {
       )}
 
       {/* Full-screen Mapbox 3D Map — loads behind particles, fades in during scatter */}
-      <div style={{
-        position: "absolute",
-        inset: 0,
-        opacity: introPhase === "scattering" || introPhase === "done" ? 1 : 0,
-        transition: "opacity 1s ease",
-        pointerEvents: introPhase === "done" ? "auto" : "none",
-        zIndex: 0,
-      }}>
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          opacity: introPhase === "scattering" || introPhase === "done" ? 1 : 0,
+          transition: "opacity 1s ease",
+          pointerEvents: introPhase === "done" ? "auto" : "none",
+          zIndex: 0,
+        }}
+      >
         <JarvisMap
           onLocationUpdate={handleLocationUpdate}
           routeData={routeData}
@@ -503,26 +556,69 @@ export default function JarvisPage() {
       <div
         className="fixed inset-0 pointer-events-none z-[1] hidden md:block"
         style={{
-          background: "radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.3) 80%, rgba(0,0,0,0.55) 100%)",
+          background:
+            "radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.3) 80%, rgba(0,0,0,0.55) 100%)",
         }}
       />
       <div
         className="fixed inset-0 pointer-events-none z-[1] md:hidden"
         style={{
-          background: "radial-gradient(ellipse at center, transparent 60%, rgba(0,0,0,0.15) 85%, rgba(0,0,0,0.3) 100%)",
+          background:
+            "radial-gradient(ellipse at center, transparent 60%, rgba(0,0,0,0.15) 85%, rgba(0,0,0,0.3) 100%)",
         }}
       />
       <div
         className="fixed inset-0 pointer-events-none z-[1] hidden md:block"
         style={{
-          background: "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.03) 2px, rgba(0,0,0,0.03) 4px)",
+          background:
+            "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.03) 2px, rgba(0,0,0,0.03) 4px)",
         }}
       />
       {/* HUD Corner Brackets */}
-      <div className="fixed pointer-events-none z-[2]" style={{ top: 16, left: 16, width: 30, height: 30, borderTop: "1px solid rgba(0,212,255,0.15)", borderLeft: "1px solid rgba(0,212,255,0.15)" }} />
-      <div className="fixed pointer-events-none z-[2]" style={{ top: 16, right: 16, width: 30, height: 30, borderTop: "1px solid rgba(0,212,255,0.15)", borderRight: "1px solid rgba(0,212,255,0.15)" }} />
-      <div className="fixed pointer-events-none z-[2]" style={{ bottom: 16, left: 16, width: 30, height: 30, borderBottom: "1px solid rgba(0,212,255,0.15)", borderLeft: "1px solid rgba(0,212,255,0.15)" }} />
-      <div className="fixed pointer-events-none z-[2]" style={{ bottom: 16, right: 16, width: 30, height: 30, borderBottom: "1px solid rgba(0,212,255,0.15)", borderRight: "1px solid rgba(0,212,255,0.15)" }} />
+      <div
+        className="fixed pointer-events-none z-[2]"
+        style={{
+          top: 16,
+          left: 16,
+          width: 30,
+          height: 30,
+          borderTop: "1px solid rgba(0,212,255,0.15)",
+          borderLeft: "1px solid rgba(0,212,255,0.15)",
+        }}
+      />
+      <div
+        className="fixed pointer-events-none z-[2]"
+        style={{
+          top: 16,
+          right: 16,
+          width: 30,
+          height: 30,
+          borderTop: "1px solid rgba(0,212,255,0.15)",
+          borderRight: "1px solid rgba(0,212,255,0.15)",
+        }}
+      />
+      <div
+        className="fixed pointer-events-none z-[2]"
+        style={{
+          bottom: 16,
+          left: 16,
+          width: 30,
+          height: 30,
+          borderBottom: "1px solid rgba(0,212,255,0.15)",
+          borderLeft: "1px solid rgba(0,212,255,0.15)",
+        }}
+      />
+      <div
+        className="fixed pointer-events-none z-[2]"
+        style={{
+          bottom: 16,
+          right: 16,
+          width: 30,
+          height: 30,
+          borderBottom: "1px solid rgba(0,212,255,0.15)",
+          borderRight: "1px solid rgba(0,212,255,0.15)",
+        }}
+      />
 
       {/* JARVIS Logo — Top Left (hidden on mobile, hidden during intro) */}
       {introPhase === "done" && (
@@ -549,7 +645,8 @@ export default function JarvisPage() {
               display: "flex",
               alignItems: "center",
               gap: "8px",
-              animation: "hudPillIn 300ms cubic-bezier(0.16, 1, 0.3, 1) forwards",
+              animation:
+                "hudPillIn 300ms cubic-bezier(0.16, 1, 0.3, 1) forwards",
             }}
           >
             <span
@@ -567,7 +664,8 @@ export default function JarvisPage() {
           <div
             style={{
               ...hudPill,
-              animation: "hudPillIn 300ms cubic-bezier(0.16, 1, 0.3, 1) 100ms forwards",
+              animation:
+                "hudPillIn 300ms cubic-bezier(0.16, 1, 0.3, 1) 100ms forwards",
               opacity: 0,
             }}
           >
@@ -604,27 +702,34 @@ export default function JarvisPage() {
           >
             {/* Audio waveform visualizer */}
             <WaveformBars active={isSpeaking} />
-            <div style={{
-              fontFamily: "var(--font-geist-mono), monospace",
-              fontSize: "10px",
-              letterSpacing: "0.15em",
-              color: "rgba(0, 212, 255, 0.4)",
-              marginBottom: "8px",
-              display: "flex",
-              alignItems: "center",
-              gap: "6px",
-            }}>
+            <div
+              style={{
+                fontFamily: "var(--font-geist-mono), monospace",
+                fontSize: "10px",
+                letterSpacing: "0.15em",
+                color: "rgba(0, 212, 255, 0.4)",
+                marginBottom: "8px",
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+              }}
+            >
               JARVIS
               {isLoading && (
                 <Loader2
                   size={10}
-                  style={{ color: "rgba(0, 212, 255, 0.4)", animation: "spin 1s linear infinite" }}
+                  style={{
+                    color: "rgba(0, 212, 255, 0.4)",
+                    animation: "spin 1s linear infinite",
+                  }}
                 />
               )}
             </div>
             {errorText ? (
               <>
-                <div style={{ color: "rgba(255, 200, 180, 0.9)" }}>{errorText}</div>
+                <div style={{ color: "rgba(255, 200, 180, 0.9)" }}>
+                  {errorText}
+                </div>
                 <button
                   onClick={handleSubmit}
                   className="hud-action-btn-pill"
@@ -678,16 +783,23 @@ export default function JarvisPage() {
             background: "rgba(8, 10, 18, 0.65)",
             backdropFilter: "blur(16px)",
             WebkitBackdropFilter: "blur(16px)",
-            border: "1px solid rgba(0, 212, 255, 0.1)",
+            border: "1px solid rgba(255, 255, 255, 0.35)",
             transition: "border-color 0.3s ease, box-shadow 0.3s ease",
           }}
         >
           <AudioLines
             className="shrink-0 cursor-pointer transition-colors duration-200"
             size={20}
-            style={{ color: isListening ? "rgba(0, 212, 255, 1)" : "rgba(0, 212, 255, 0.6)",
-              animation: isListening ? "hudBorderPulse 1.5s ease-in-out infinite" : undefined,
-              filter: isListening ? "drop-shadow(0 0 6px rgba(0, 212, 255, 0.6))" : undefined,
+            style={{
+              color: isListening
+                ? "rgba(0, 212, 255, 1)"
+                : "rgba(0, 212, 255, 0.6)",
+              animation: isListening
+                ? "hudBorderPulse 1.5s ease-in-out infinite"
+                : undefined,
+              filter: isListening
+                ? "drop-shadow(0 0 6px rgba(0, 212, 255, 0.6))"
+                : undefined,
             }}
             onClick={handleVoiceInput}
           />
@@ -711,9 +823,18 @@ export default function JarvisPage() {
             style={{ background: "rgba(0, 212, 255, 0.15)" }}
           >
             {isLoading ? (
-              <Loader2 size={18} style={{ color: "rgba(0, 212, 255, 0.8)", animation: "spin 1s linear infinite" }} />
+              <Loader2
+                size={18}
+                style={{
+                  color: "rgba(0, 212, 255, 0.8)",
+                  animation: "spin 1s linear infinite",
+                }}
+              />
             ) : (
-              <ArrowRight size={18} style={{ color: "rgba(0, 212, 255, 0.8)" }} />
+              <ArrowRight
+                size={18}
+                style={{ color: "rgba(0, 212, 255, 0.8)" }}
+              />
             )}
           </button>
         </div>
@@ -736,41 +857,56 @@ export default function JarvisPage() {
               maxHeight: mobileBubbleExpanded ? "50vh" : "120px",
               overflow: "hidden",
               transition: "max-height 0.3s ease-out",
-              animation: isLoading ? "hudBorderPulse 2s ease-in-out infinite" : undefined,
+              animation: isLoading
+                ? "hudBorderPulse 2s ease-in-out infinite"
+                : undefined,
             }}
           >
-            <div style={{
-              padding: "12px 16px",
-              overflowY: mobileBubbleExpanded ? "auto" as const : "hidden" as const,
-              maxHeight: mobileBubbleExpanded ? "calc(50vh - 1px)" : "119px",
-            }}>
+            <div
+              style={{
+                padding: "12px 16px",
+                overflowY: mobileBubbleExpanded
+                  ? ("auto" as const)
+                  : ("hidden" as const),
+                maxHeight: mobileBubbleExpanded ? "calc(50vh - 1px)" : "119px",
+              }}
+            >
               {/* JARVIS label + chevron toggle */}
-              <div style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginBottom: "6px",
-              }}>
-                <div style={{
-                  fontFamily: "var(--font-geist-mono), monospace",
-                  fontSize: "10px",
-                  letterSpacing: "0.15em",
-                  color: "rgba(0, 212, 255, 0.4)",
+              <div
+                style={{
                   display: "flex",
+                  justifyContent: "space-between",
                   alignItems: "center",
-                  gap: "6px",
-                }}>
+                  marginBottom: "6px",
+                }}
+              >
+                <div
+                  style={{
+                    fontFamily: "var(--font-geist-mono), monospace",
+                    fontSize: "10px",
+                    letterSpacing: "0.15em",
+                    color: "rgba(0, 212, 255, 0.4)",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                  }}
+                >
                   JARVIS
                   {isLoading && (
                     <Loader2
                       size={10}
-                      style={{ color: "rgba(0, 212, 255, 0.4)", animation: "spin 1s linear infinite" }}
+                      style={{
+                        color: "rgba(0, 212, 255, 0.4)",
+                        animation: "spin 1s linear infinite",
+                      }}
                     />
                   )}
                 </div>
                 {!isLoading && (
                   <button
-                    onClick={() => setMobileBubbleExpanded(!mobileBubbleExpanded)}
+                    onClick={() =>
+                      setMobileBubbleExpanded(!mobileBubbleExpanded)
+                    }
                     style={{
                       background: "none",
                       border: "none",
@@ -781,9 +917,15 @@ export default function JarvisPage() {
                     }}
                   >
                     {mobileBubbleExpanded ? (
-                      <ChevronDown size={16} style={{ color: "rgba(0, 255, 255, 0.6)" }} />
+                      <ChevronDown
+                        size={16}
+                        style={{ color: "rgba(0, 255, 255, 0.6)" }}
+                      />
                     ) : (
-                      <ChevronUp size={16} style={{ color: "rgba(0, 255, 255, 0.6)" }} />
+                      <ChevronUp
+                        size={16}
+                        style={{ color: "rgba(0, 255, 255, 0.6)" }}
+                      />
                     )}
                   </button>
                 )}
@@ -795,11 +937,13 @@ export default function JarvisPage() {
               {/* Response text or error */}
               {errorText ? (
                 <>
-                  <div style={{
-                    color: "rgba(255, 200, 180, 0.9)",
-                    fontSize: "14px",
-                    lineHeight: 1.6,
-                  }}>
+                  <div
+                    style={{
+                      color: "rgba(255, 200, 180, 0.9)",
+                      fontSize: "14px",
+                      lineHeight: 1.6,
+                    }}
+                  >
                     {errorText}
                   </div>
                   <button
@@ -812,23 +956,27 @@ export default function JarvisPage() {
                   </button>
                 </>
               ) : (
-                <div style={{
-                  color: "rgba(255, 255, 255, 0.92)",
-                  fontSize: "14px",
-                  lineHeight: 1.6,
-                }}>
+                <div
+                  style={{
+                    color: "rgba(255, 255, 255, 0.92)",
+                    fontSize: "14px",
+                    lineHeight: 1.6,
+                  }}
+                >
                   {mobileBubbleExpanded ? bubbleText : firstSentence}
                 </div>
               )}
 
               {/* HUD pills — always visible (collapsed + expanded) */}
               {hasRouteData && (
-                <div style={{
-                  display: "flex",
-                  flexWrap: "wrap" as const,
-                  gap: "8px",
-                  marginTop: "10px",
-                }}>
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap" as const,
+                    gap: "8px",
+                    marginTop: "10px",
+                  }}
+                >
                   <div
                     style={{
                       ...hudPill,
@@ -858,11 +1006,21 @@ export default function JarvisPage() {
               {/* Action buttons — only when expanded */}
               {mobileBubbleExpanded && showActions && (
                 <div style={{ display: "flex", gap: "8px", marginTop: "10px" }}>
-                  <button onClick={handleRecenter} className="hud-action-btn-pill" title="Re-center">
-                    <Crosshair size={13} /><span>Re-center</span>
+                  <button
+                    onClick={handleRecenter}
+                    className="hud-action-btn-pill"
+                    title="Re-center"
+                  >
+                    <Crosshair size={13} />
+                    <span>Re-center</span>
                   </button>
-                  <button onClick={handleClearRoute} className="hud-action-btn-pill" title="Clear">
-                    <X size={13} /><span>Clear</span>
+                  <button
+                    onClick={handleClearRoute}
+                    className="hud-action-btn-pill"
+                    title="Clear"
+                  >
+                    <X size={13} />
+                    <span>Clear</span>
                   </button>
                 </div>
               )}
@@ -875,22 +1033,28 @@ export default function JarvisPage() {
           style={{
             padding: "12px 16px",
             background: "rgba(8, 10, 18, 0.9)",
-            borderTop: showBubble ? "1px solid rgba(0, 212, 255, 0.06)" : "1px solid rgba(0, 255, 255, 0.12)",
+            borderTop: showBubble
+              ? "1px solid rgba(0, 212, 255, 0.06)"
+              : "1px solid rgba(0, 255, 255, 0.12)",
           }}
         >
           <div
             className="flex items-center gap-3 rounded-full px-4 py-3 hud-input-bar"
             style={{
               background: "rgba(8, 10, 18, 0.5)",
-              border: "1px solid rgba(0, 212, 255, 0.1)",
+              border: "1px solid rgba(255, 255, 255, 0.35)",
             }}
           >
             <AudioLines
               className="shrink-0 cursor-pointer transition-colors duration-200"
               size={20}
               style={{
-                color: isListening ? "rgba(0, 212, 255, 1)" : "rgba(0, 212, 255, 0.5)",
-                filter: isListening ? "drop-shadow(0 0 6px rgba(0, 212, 255, 0.6))" : undefined,
+                color: isListening
+                  ? "rgba(0, 212, 255, 1)"
+                  : "rgba(0, 212, 255, 0.5)",
+                filter: isListening
+                  ? "drop-shadow(0 0 6px rgba(0, 212, 255, 0.6))"
+                  : undefined,
               }}
               onClick={handleVoiceInput}
             />
@@ -903,7 +1067,7 @@ export default function JarvisPage() {
               className="flex-1 bg-transparent text-white outline-none text-sm"
               style={{
                 fontFamily: "var(--font-geist-mono), monospace",
-                color: "rgba(255, 255, 255, 0.9)",
+                color: "rgba(255, 255, 255, 1)",
                 fontSize: "16px",
               }}
               disabled={isLoading}
@@ -912,12 +1076,25 @@ export default function JarvisPage() {
               onClick={handleSubmit}
               disabled={isLoading}
               className="w-11 h-11 rounded-full flex items-center justify-center transition-all duration-200 disabled:opacity-40 active:scale-95"
-              style={{ background: "rgba(0, 212, 255, 0.15)", minWidth: "44px", minHeight: "44px" }}
+              style={{
+                background: "rgba(0, 212, 255, 0.15)",
+                minWidth: "44px",
+                minHeight: "44px",
+              }}
             >
               {isLoading ? (
-                <Loader2 size={18} style={{ color: "rgba(0, 212, 255, 0.8)", animation: "spin 1s linear infinite" }} />
+                <Loader2
+                  size={18}
+                  style={{
+                    color: "rgba(0, 212, 255, 0.8)",
+                    animation: "spin 1s linear infinite",
+                  }}
+                />
               ) : (
-                <ArrowRight size={18} style={{ color: "rgba(0, 212, 255, 0.8)" }} />
+                <ArrowRight
+                  size={18}
+                  style={{ color: "rgba(0, 212, 255, 0.8)" }}
+                />
               )}
             </button>
           </div>

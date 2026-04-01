@@ -74,42 +74,52 @@ export function addIntermediateStopLabels(
 ): mapboxgl.Marker[] {
   const markers: mapboxgl.Marker[] = [];
   if (!stopNames || stopNames.length < 3 || coords.length < 2) return markers;
-  // Skip first and last (they get full station badges)
+
   const inner = stopNames.slice(1, -1);
+  const totalStops = stopNames.length - 1;
+
   for (let i = 0; i < inner.length; i++) {
-    const pointIndex = Math.round(((i + 1) / (stopNames.length - 1)) * (coords.length - 1));
-    const coord = coords[Math.min(pointIndex, coords.length - 1)];
+    // Evenly distribute stops by distance along the polyline
+    const progress = (i + 1) / totalStops;
+    const coord = interpolateAlongLine(coords, progress);
+    const anchor = i % 2 === 0 ? "left" : "right";
 
     const el = document.createElement("div");
     el.style.cssText = `
       display: flex;
       align-items: center;
-      gap: 4px;
+      gap: 5px;
       pointer-events: none;
+      flex-direction: ${anchor === "right" ? "row-reverse" : "row"};
     `;
-    // Dot
+
     const dot = document.createElement("div");
     dot.style.cssText = `
-      width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+      width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
       background: ${lineColor};
-      opacity: 0.5;
-      box-shadow: 0 0 6px ${lineColor};
+      border: 1.5px solid rgba(255, 255, 255, 0.7);
+      box-shadow: 0 0 6px ${lineColor}, 0 0 12px rgba(0, 0, 0, 0.5);
     `;
-    // Label
+
     const label = document.createElement("span");
     label.textContent = inner[i];
     label.style.cssText = `
       font-family: var(--font-geist-mono), 'Geist Mono', monospace;
       font-size: 10px;
-      color: rgba(255, 255, 255, 0.45);
+      color: rgba(255, 255, 255, 0.8);
       white-space: nowrap;
       letter-spacing: 0.02em;
-      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+      text-shadow: 0 0 4px rgba(0, 0, 0, 0.9), 0 1px 2px rgba(0, 0, 0, 0.7);
+      background: rgba(8, 10, 18, 0.55);
+      padding: 1px 5px;
+      border-radius: 4px;
     `;
+
     el.appendChild(dot);
     el.appendChild(label);
 
-    const mk = new mapboxgl.Marker({ element: el, anchor: "left", offset: [0, 0] })
+    const xOffset = anchor === "right" ? -4 : 4;
+    const mk = new mapboxgl.Marker({ element: el, anchor, offset: [xOffset, 0] })
       .setLngLat(coord)
       .addTo(m);
     markers.push(mk);
