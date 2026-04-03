@@ -29,7 +29,6 @@ from fastapi import FastAPI
 from app.routers import thinking, trips
 from fastapi.middleware.cors import CORSMiddleware
 from app.utils.gtfs_static import GTFSStaticData, download_supplemented_gtfs
-from app.utils.gtfs_static import GTFSStaticData
 from fastapi import Depends, Security, HTTPException
 from fastapi.security.api_key import APIKeyHeader
 
