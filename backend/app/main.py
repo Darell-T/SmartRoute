@@ -129,7 +129,8 @@ app.add_middleware(
 app.include_router(thinking.router)
 app.include_router(trips.router)
 
-@app.get("/health", dependencies= [])
+@app.get("/health", dependencies=[], include_in_schema=False)
+@app.head("/health", dependencies=[], include_in_schema=False)
 async def health():
     return {
         "status": "ok",
