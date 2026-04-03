@@ -25,7 +25,7 @@ _repo_root = _backend_dir.parent
 load_dotenv(_repo_root / ".env")
 load_dotenv(_backend_dir / ".env")
 
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI
 from app.routers import thinking, trips
 from fastapi.middleware.cors import CORSMiddleware
 from app.utils.gtfs_static import GTFSStaticData, download_supplemented_gtfs
@@ -114,7 +114,7 @@ async def lifespan(app: FastAPI):
         pass
 
 
-app = FastAPI(lifespan=lifespan, dependencies= [Depends(_verify_api_key)])
+app = FastAPI(lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins(),
@@ -124,9 +124,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-app.include_router(thinking.router)
-app.include_router(trips.router)
+protected_api = APIRouter(dependencies=[Depends(_verify_api_key)])
+protected_api.include_router(thinking.router)
+protected_api.include_router(trips.router)
+app.include_router(protected_api)
 
 @app.get("/health", dependencies=[])
 @app.head("/health", dependencies=[])
