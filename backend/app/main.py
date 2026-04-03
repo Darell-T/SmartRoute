@@ -29,16 +29,21 @@ from fastapi import FastAPI
 from app.routers import thinking, trips
 from fastapi.middleware.cors import CORSMiddleware
 from app.utils.gtfs_static import GTFSStaticData, download_supplemented_gtfs
+from app.utils.gtfs_static import GTFSStaticData
+from fastapi import Depends, Security, HTTPException
+from fastapi.security.api_key import APIKeyHeader
+
+
+api_key_header = APIKeyHeader(name = "X-App-Key")
+
+async def _verify_api_key(api_key: str = Security(api_key_header)):
+    if api_key != os.getenv("APP_KEY"):
+        raise HTTPException(status_code = 403, detail = "Forbidden") 
 
 
 def _allowed_origins() -> list[str]:
-    raw = os.getenv("CORS_ORIGINS", "")
-    from_env = [origin.strip().rstrip("/") for origin in raw.split(",") if origin.strip()]
     return [
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
         "https://smartroute.fyi",
-        *from_env,
     ]
 
 
@@ -110,7 +115,7 @@ async def lifespan(app: FastAPI):
         pass
 
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(lifespan=lifespan, dependencies= [Depends(_verify_api_key)])
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins(),
@@ -124,7 +129,7 @@ app.add_middleware(
 app.include_router(thinking.router)
 app.include_router(trips.router)
 
-@app.get("/health")
+@app.get("/health", dependencies= [])
 async def health():
     return {
         "status": "ok",

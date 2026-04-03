@@ -6,7 +6,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 export const DEFAULT_LOCATION = { lng: -73.9857, lat: 40.7484 } as const;
 
 export async function getThinking(): Promise<ThinkingResponse> {
-  const res = await fetch(`${API_URL}/api/thinking`, {
+  const res = await fetch(`/api/thinking`, {
     method: "POST",
   });
 
@@ -24,7 +24,7 @@ export async function planTrip(
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 60_000);
     try {
-      const res = await fetch(`${API_URL}/api/trip`, {
+      const res = await fetch("/api/trip", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ origin_lat: originLat, origin_lng: originLng, destination }),
