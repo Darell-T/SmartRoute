@@ -8,7 +8,7 @@ import type { RouteStep, TransitRouteData, Coordinates } from "@/types";
 import { DEFAULT_LOCATION } from "@/lib/api";
 import { createOrb, createOrbMarker } from "./map/orbs";
 import { applyHudMapStyle } from "./map/style";
-import { calculateBearing, flyToRoute, startRotation, stopRotation, flyToOrigin } from "./map/camera";
+import { flyToRoute, startRotation, stopRotation, flyToOrigin } from "./map/camera";
 import { addStationBadge, addIntermediateStopLabels, clearBadges } from "./map/station-badges";
 import {
   addStepLayers, clearRouteLayers, startWirePulse, stopWirePulse,

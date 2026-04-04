@@ -34,13 +34,6 @@ export function createOrb(color: string, glowColor: string): HTMLDivElement {
   return el;
 }
 
-/** The orbPulse keyframe CSS string for injection via <style> tag */
-export const ORB_PULSE_KEYFRAME = `
-@keyframes orbPulse {
-  0% { transform: translate(-50%, -50%) scale(1); opacity: 0.5; }
-  100% { transform: translate(-50%, -50%) scale(4); opacity: 0; }
-}`;
-
 /** Create a Mapbox marker using the orb element, anchored at center */
 export function createOrbMarker(
   map: mapboxgl.Map,

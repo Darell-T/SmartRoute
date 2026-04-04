@@ -25,12 +25,11 @@ _repo_root = _backend_dir.parent
 load_dotenv(_repo_root / ".env")
 load_dotenv(_backend_dir / ".env")
 
-from fastapi import APIRouter, FastAPI
-from app.routers import thinking, trips
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Security
 from fastapi.middleware.cors import CORSMiddleware
-from app.utils.gtfs_static import GTFSStaticData, download_supplemented_gtfs
-from fastapi import Depends, Security, HTTPException
 from fastapi.security.api_key import APIKeyHeader
+from app.routers import thinking, trips
+from app.utils.gtfs_static import GTFSStaticData, download_supplemented_gtfs
 
 
 api_key_header = APIKeyHeader(name = "X-App-Key")
