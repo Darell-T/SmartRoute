@@ -10,7 +10,6 @@ interface Props {
   onScatterComplete: () => void;
 }
 
-const COUNT = 700;
 const SPHERE_R = 1.5;
 const CONVERGE_S = 1.5;
 const SCATTER_S = 1.0;
@@ -50,6 +49,7 @@ export default function ParticleIntro({ phase, onScatterComplete }: Props) {
     cam.position.z = 8;
 
     const isMobile = innerWidth < 768;
+    const COUNT = isMobile ? 1500 : 2500;
 
     /* Soft circular sprite texture */
     const spriteCanvas = document.createElement("canvas");
@@ -171,6 +171,7 @@ export default function ParticleIntro({ phase, onScatterComplete }: Props) {
     const snapPos = new Float32Array(COUNT * 3);
 
     const cyan = new THREE.Color(0x00d4ff);
+    const teal = new THREE.Color(0x00a0cc);
     const blue = new THREE.Color(0x0044ff);
     const brightCyan = new THREE.Color(0x88eeff);
     const white = new THREE.Color(0xc8f0ff);
@@ -178,10 +179,10 @@ export default function ParticleIntro({ phase, onScatterComplete }: Props) {
     for (let i = 0; i < COUNT; i++) {
       const i3 = i * 3;
 
-      const gr = Math.abs(gaussRandom()) * 1.5;
-      const r = Math.min(gr, 4);
+      const gr = Math.abs(gaussRandom()) * 1.2;
+      const r = Math.min(gr, 3.5);
       const theta = Math.random() * Math.PI * 2;
-      const y = gaussRandom() * 1.0;
+      const y = gaussRandom() * 0.8;
 
       homeR[i] = r;
       homeTheta[i] = theta;
@@ -197,22 +198,24 @@ export default function ParticleIntro({ phase, onScatterComplete }: Props) {
       rOscFreq[i] = 0.3 + Math.random() * 0.4;
       yOscFreq[i] = 0.2 + Math.random() * 0.3;
 
-      /* Color: hot white core fading to cyan then deep blue */
+      /* Color: hot white core → bright cyan → cyan → teal → deep blue */
       const distFactor = Math.min(r / 3, 1);
-      const colorT = distFactor * 0.7 + Math.random() * 0.3;
+      const colorT = distFactor * 0.6 + Math.random() * 0.4;
       let c: THREE.Color;
-      if (r < 0.5 && Math.random() < 0.4) {
-        c = white.clone().lerp(brightCyan, Math.random() * 0.4);
-      } else if (r < 1.2 && Math.random() < 0.3) {
+      if (r < 0.4 && Math.random() < 0.5) {
+        c = white.clone().lerp(brightCyan, Math.random() * 0.3);
+      } else if (r < 0.9 && Math.random() < 0.4) {
         c = brightCyan.clone().lerp(cyan, Math.random() * 0.5);
+      } else if (r < 1.8 && Math.random() < 0.35) {
+        c = cyan.clone().lerp(teal, Math.random() * 0.6);
       } else {
-        c = cyan.clone().lerp(blue, colorT);
+        c = teal.clone().lerp(blue, colorT);
       }
       col[i3] = c.r;
       col[i3 + 1] = c.g;
       col[i3 + 2] = c.b;
 
-      baseSize[i] = 0.04 + Math.random() * 0.08 + (r < 1.5 ? 0.03 : 0);
+      baseSize[i] = 0.03 + Math.random() * 0.06 + (r < 1.2 ? 0.03 : 0);
       siz[i] = baseSize[i];
 
       baseAlpha[i] = 0.5 + Math.random() * 0.4 + (r < 1 ? 0.1 : 0);
@@ -306,7 +309,7 @@ export default function ParticleIntro({ phase, onScatterComplete }: Props) {
             const i3 = i * 3;
             const x = pos[i3], y = pos[i3 + 1], z = pos[i3 + 2];
             const len = Math.sqrt(x * x + y * y + z * z) || 1;
-            const spd = 5 + Math.random() * 8;
+            const spd = 6 + Math.random() * 12;
             scatVel[i3] = (x / len) * spd;
             scatVel[i3 + 1] = (y / len) * spd;
             scatVel[i3 + 2] = (z / len) * spd;
@@ -335,8 +338,9 @@ export default function ParticleIntro({ phase, onScatterComplete }: Props) {
           pos[i3 + 1] = y;
           pos[i3 + 2] = r * Math.sin(theta);
 
-          alp[i] = baseAlpha[i];
-          siz[i] = baseSize[i];
+          const shimmer = Math.sin(elapsed * 1.5 + i * 0.7) * 0.15;
+          alp[i] = baseAlpha[i] + shimmer;
+          siz[i] = baseSize[i] * (1 + Math.sin(elapsed * 2.0 + i * 1.3) * 0.1);
         }
         points.rotation.y += 0.002;
         points.scale.setScalar(1);
