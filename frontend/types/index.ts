@@ -1,4 +1,3 @@
-export type { IntroPhase } from "@/components/particle-intro";
 export type {
   Coordinates,
   RouteStep,
@@ -6,5 +5,4 @@ export type {
   ServiceAlert,
   ThinkingResponse,
   TripResponse,
-  HealthResponse,
 } from "./api";

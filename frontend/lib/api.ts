@@ -1,6 +1,4 @@
-import type { ThinkingResponse, TripResponse, HealthResponse } from "@/types";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+import type { ThinkingResponse, TripResponse } from "@/types";
 
 /** Empire State Building — demo fallback when GPS is unavailable */
 export const DEFAULT_LOCATION = { lng: -73.9857, lat: 40.7484 } as const;
@@ -54,10 +52,4 @@ export async function planTrip(
     }
     throw err;
   }
-}
-
-export async function checkHealth(): Promise<HealthResponse> {
-  const res = await fetch(`${API_URL}/health`);
-  if (!res.ok) throw new Error("Health check failed");
-  return res.json();
 }

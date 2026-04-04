@@ -15,37 +15,11 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { planTrip, getThinking, DEFAULT_LOCATION } from "@/lib/api";
+import { getLineColor } from "@/components/map/route-layers";
 
 const ParticleIntro = dynamic(() => import("@/components/particle-intro"), {
   ssr: false,
 });
-
-const MTA_COLORS: Record<string, string> = {
-  A: "#0039A6",
-  C: "#0039A6",
-  E: "#0039A6",
-  B: "#FF6319",
-  D: "#FF6319",
-  F: "#FF6319",
-  M: "#FF6319",
-  G: "#6CBE45",
-  J: "#996633",
-  Z: "#996633",
-  L: "#A7A9AC",
-  N: "#FCCC0A",
-  Q: "#FCCC0A",
-  R: "#FCCC0A",
-  W: "#FCCC0A",
-  "1": "#EE352E",
-  "2": "#EE352E",
-  "3": "#EE352E",
-  "4": "#00933C",
-  "5": "#00933C",
-  "6": "#00933C",
-  "7": "#B933AD",
-  S: "#808183",
-  SI: "#00A9CE",
-};
 
 /* ── Audio waveform bar component ── */
 function WaveformBars({ active }: { active: boolean }) {
@@ -474,7 +448,7 @@ export default function JarvisPage() {
   // Pill visibility
   const hasRouteData = !!trainLine;
   const trainLineColor = trainLine
-    ? MTA_COLORS[trainLine] || "#FFD700"
+    ? getLineColor(trainLine)
     : "#FFD700";
   const showActions = !!routeData && !isLoading;
 

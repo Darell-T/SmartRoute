@@ -43,8 +43,3 @@ export interface TripResponse {
   alerts: ServiceAlert[];
 }
 
-export interface HealthResponse {
-  status: string;
-  gtfs_ready: boolean;
-  gtfs_error: string | null;
-}
