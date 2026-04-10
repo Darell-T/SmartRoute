@@ -23,11 +23,10 @@ It is not a wrapper around Google Maps. Google provides the route candidates. JA
 The frontend is a full-screen 3D Mapbox map with a dark HUD aesthetic — black background, faint cyan road grid, glowing route lines. When a route loads:
 
 1. The camera flies to fit the full route
-2. A cyan beam fires upward from your location
-3. Route segments draw sequentially — dashed white for walking, MTA-colored glowing lines for subway, blue for bus
-4. A particle pulse animates along the completed route
-5. A red beam fires at the destination
-6. The camera rotates slowly around the destination, then returns to your position
+2. Route segments draw sequentially — dashed white for walking, MTA-colored glowing lines for subway, blue for bus
+3. A particle pulse animates along the completed route
+4. A red beam fires at the destination
+5. The camera rotates slowly around the destination, then returns to your position
 
 Station badges show the line letter in its official MTA color alongside the station name. Intermediate stops appear as subtle glowing dots along the route. The user's position pulses as a cyan orb; the destination pulses red.
 
