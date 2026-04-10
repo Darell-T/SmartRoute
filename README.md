@@ -1,12 +1,12 @@
-# JARVIS
+# SmartRoute
 
-JARVIS is a real-time NYC transit assistant that combines live MTA data, AI route reasoning, and voice narration into a single interface. You tell it where you want to go. It pulls routes from Google, enriches every one of them with live train positions, service alerts, stalled vehicle detection, and breaking incidents near stations — then hands the full picture to Claude, which picks the absolute best route and explains why. Out loud, with a synchronized 3D map animation.
+SmartRoute is a real-time NYC transit assistant that combines live MTA data, AI route reasoning, and voice narration into a single interface. You tell it where you want to go. It pulls routes from Google, enriches every one of them with live train positions, service alerts, stalled vehicle detection, and breaking incidents near stations — then hands the full picture to Claude, which picks the absolute best route and explains why. Out loud, with a synchronized 3D map animation.
 
 It is not a wrapper around Google Maps. Google provides the route candidates. JARVIS layers on real-time intelligence that Google doesn't have — a train that hasn't moved in six minutes, a partial suspension on the D between 36 St and Atlantic, a fire near the Canal St station entrance that @NYCrimeNow tweeted about ten minutes before the MTA posts an alert — and Claude makes the final call with all of that context.
 
 ## What It Does
 
-**Route selection with real-time intelligence.** Enter a destination in natural language ("Atlantic Terminal," "JFK," "my dentist on 57th"). JARVIS geocodes it, pulls transit route alternatives from Google Routes, then enriches every route with live MTA data. All routes — along with service alerts, stalled trains, stalled buses, and nearby incidents — are packaged together and sent to Claude. Claude evaluates the full picture and selects the best route. The response is three short sentences, specific enough to act on: "Take the Q from DeKalb. It's 4 minutes out, heading uptown. 16-minute ride, no alerts on the line."
+**Route selection with real-time intelligence.** Enter a destination in natural language ("Atlantic Terminal," "JFK," "774 Grand St"). JARVIS geocodes it, pulls transit route alternatives from Google Routes, then enriches every route with live MTA data. All routes — along with service alerts, stalled trains, stalled buses, and nearby incidents — are packaged together and sent to Claude. Claude evaluates the full picture and selects the best route. The response is three short sentences, specific enough to act on: "Take the Q from DeKalb. It's 4 minutes out, heading uptown. 16-minute ride, no alerts on the line."
 
 **Voice narration.** Every recommendation is converted to speech via ElevenLabs. Audio plays automatically while the text reveals word-by-word in sync. Abbreviations are expanded before TTS so "Pkwy" becomes "Parkway" and "Av" becomes "Avenue."
 
@@ -25,8 +25,7 @@ The frontend is a full-screen 3D Mapbox map with a dark HUD aesthetic — black 
 1. The camera flies to fit the full route
 2. Route segments draw sequentially — dashed white for walking, MTA-colored glowing lines for subway, blue for bus
 3. A particle pulse animates along the completed route
-4. A red beam fires at the destination
-5. The camera rotates slowly around the destination, then returns to your position
+4. The camera rotates slowly around the destination, then returns to your position
 
 Station badges show the line letter in its official MTA color alongside the station name. Intermediate stops appear as subtle glowing dots along the route. The user's position pulses as a cyan orb; the destination pulses red.
 
