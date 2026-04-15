@@ -2,9 +2,8 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from backend.app.utils.geo import find_nearest_stops
-from backend.app.utils.gtfs_static import get_unique_routes_for_stops
-from backend.app.services import mta_feed
+from app.utils.geo import find_nearest_stops
+from app.services import mta_feed
 import asyncio
 
 
@@ -25,7 +24,7 @@ async def live_feed(request: Request, payload: LiveFeedRequest):
     # 2. get_unique_routes_for_stops 
     unique_routes = gtfs.get_unique_routes_for_stops(nearest_stops)
     # 3. fetch_feeds + parse_bytes for arrivals
-    route_ids = list(unique_routes.values())
+    route_ids = [r for routes in unique_routes.values() for r in routes]
     feeds = await mta_feed.fetch_feeds(route_ids)
 
     parse_tasks = [asyncio.to_thread(mta_feed.parse_bytes, feed) for feed in feeds]
