@@ -1,9 +1,5 @@
-import mapboxgl from "mapbox-gl";
 import polyline from "@mapbox/polyline";
 import type { RouteStep } from "@/types";
-
-const SRC_PARTICLES = "jr-pulse-src";
-const LYR_PARTICLES = "jr-pulse-lyr";
 
 const MTA_COLORS: Record<string, string> = {
   A: "#0039A6", C: "#0039A6", E: "#0039A6",
@@ -19,249 +15,126 @@ const MTA_COLORS: Record<string, string> = {
   SI: "#00A9CE",
 };
 
+const BUS_COLOR = "#0057B8";
+const WALK_COLOR = "#FFFFFF";
+
 export function getLineColor(line: string): string {
   return MTA_COLORS[line.toUpperCase()] ?? "#FFD700";
 }
 
-/** Decode a Google-encoded polyline into [lng, lat] pairs for Mapbox */
 export function decodePolyline(encoded: string): [number, number][] {
   const decoded = polyline.decode(encoded);
   return decoded.map(([lat, lng]: [number, number]) => [lng, lat]);
 }
 
-/** Get animation duration for a step type */
+export type StepType = "WALK" | "SUBWAY" | "BUS" | string;
+
+export interface Trip {
+  path: [number, number][];
+  timestamps: number[];
+  color: [number, number, number];
+  width: number;
+  type: StepType;
+}
+
+export interface BuiltTrips {
+  trips: Trip[];
+  stepCoords: [number, number][][];
+  stepEndTimes: number[];
+  totalDuration: number;
+}
+
+const STEP_DURATION: Record<string, number> = {
+  WALK: 1200,
+  SUBWAY: 2400,
+  BUS: 1800,
+};
+const STEP_PAUSE = 180;
+
+function invEaseOutCubic(p: number): number {
+  if (p <= 0) return 0;
+  if (p >= 1) return 1;
+  return 1 - Math.cbrt(1 - p);
+}
+
 export function getStepDuration(type: string): number {
-  switch (type) {
-    case "WALK": return 1000;
-    case "SUBWAY": return 2000;
-    case "BUS": return 1500;
-    default: return 1000;
-  }
+  return STEP_DURATION[type] ?? 1000;
 }
 
-/** Ease-out cubic for smooth deceleration */
-export function easeOutCubic(t: number): number {
-  return 1 - Math.pow(1 - t, 3);
+function hexToRgb(hex: string): [number, number, number] {
+  const h = hex.replace("#", "");
+  const n = h.length === 3
+    ? h.split("").map((c) => c + c).join("")
+    : h;
+  const v = parseInt(n, 16);
+  return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
 }
 
-/**
- * Build a smooth sub-path of coordinates from index 0 up to a fractional
- * position along the line.
- */
-export function subPath(coords: [number, number][], fraction: number): [number, number][] {
-  if (coords.length < 2 || fraction <= 0) return [coords[0], coords[0]];
-  if (fraction >= 1) return coords;
-
-  const segLens: number[] = [];
+function segmentLengths(coords: [number, number][]): { lens: number[]; total: number } {
+  const lens: number[] = [];
   let total = 0;
   for (let i = 1; i < coords.length; i++) {
     const dx = coords[i][0] - coords[i - 1][0];
     const dy = coords[i][1] - coords[i - 1][1];
     const d = Math.sqrt(dx * dx + dy * dy);
-    segLens.push(d);
+    lens.push(d);
     total += d;
   }
-  if (total === 0) return [coords[0]];
-
-  const targetDist = fraction * total;
-  let traveled = 0;
-
-  for (let i = 0; i < segLens.length; i++) {
-    if (traveled + segLens[i] >= targetDist) {
-      const t = (targetDist - traveled) / segLens[i];
-      const interpPoint: [number, number] = [
-        coords[i][0] + t * (coords[i + 1][0] - coords[i][0]),
-        coords[i][1] + t * (coords[i + 1][1] - coords[i][1]),
-      ];
-      return [...coords.slice(0, i + 1), interpPoint];
-    }
-    traveled += segLens[i];
-  }
-  return coords;
+  return { lens, total };
 }
 
-/** Add a source + layer(s) for a single route step and return the source ID */
-export function addStepLayers(
-  m: mapboxgl.Map,
-  step: RouteStep,
-  index: number,
-  dynamicLayerIds: string[],
-  dynamicSourceIds: string[],
-): { sourceId: string; coords: [number, number][] } {
-  const sourceId = `jr-step-${index}-src`;
-  const emptyGeom = {
-    type: "Feature" as const,
-    properties: {},
-    geometry: { type: "LineString" as const, coordinates: [] as [number, number][] },
-  };
-
-  let coords: [number, number][] = [];
-  if (step.polyline?.encodedPolyline) {
-    coords = decodePolyline(step.polyline.encodedPolyline);
-  }
-
-  m.addSource(sourceId, { type: "geojson", data: emptyGeom });
-  dynamicSourceIds.push(sourceId);
-
-  if (step.type === "WALK") {
-    const layerId = `jr-step-${index}-walk`;
-    m.addLayer({
-      id: layerId,
-      type: "line",
-      source: sourceId,
-      layout: { "line-join": "round", "line-cap": "round" },
-      paint: {
-        "line-color": "#FFFFFF",
-        "line-width": 3,
-        "line-opacity": 0.85,
-        "line-dasharray": [2, 4],
-      },
-    });
-    dynamicLayerIds.push(layerId);
-  } else if (step.type === "SUBWAY") {
-    const color = step.line_color || getLineColor(step.train_line || "");
-    const glowId = `jr-step-${index}-glow`;
-    const lineId = `jr-step-${index}-line`;
-    m.addLayer({
-      id: glowId,
-      type: "line",
-      source: sourceId,
-      layout: { "line-join": "round", "line-cap": "round" },
-      paint: {
-        "line-color": color,
-        "line-width": 16,
-        "line-opacity": 0.18,
-        "line-blur": 6,
-      },
-    });
-    m.addLayer({
-      id: lineId,
-      type: "line",
-      source: sourceId,
-      layout: { "line-join": "round", "line-cap": "round" },
-      paint: {
-        "line-color": color,
-        "line-width": 5,
-        "line-opacity": 0.95,
-      },
-    });
-    dynamicLayerIds.push(glowId, lineId);
-  } else if (step.type === "BUS") {
-    const glowId = `jr-step-${index}-bus-glow`;
-    const lineId = `jr-step-${index}-bus-line`;
-    m.addLayer({
-      id: glowId,
-      type: "line",
-      source: sourceId,
-      layout: { "line-join": "round", "line-cap": "round" },
-      paint: {
-        "line-color": "#0057B8",
-        "line-width": 12,
-        "line-opacity": 0.1,
-        "line-blur": 6,
-      },
-    });
-    m.addLayer({
-      id: lineId,
-      type: "line",
-      source: sourceId,
-      layout: { "line-join": "round", "line-cap": "round" },
-      paint: {
-        "line-color": "#0057B8",
-        "line-width": 4,
-        "line-opacity": 0.9,
-      },
-    });
-    dynamicLayerIds.push(glowId, lineId);
-  }
-
-  return { sourceId, coords };
+function stepColor(step: RouteStep): [number, number, number] {
+  if (step.type === "WALK") return hexToRgb(WALK_COLOR);
+  if (step.type === "BUS") return hexToRgb(BUS_COLOR);
+  const hex = step.line_color || getLineColor(step.train_line || "");
+  return hexToRgb(hex);
 }
 
-/** Remove all dynamically created route layers and sources */
-export function clearRouteLayers(
-  m: mapboxgl.Map,
-  dynamicLayerIds: string[],
-  dynamicSourceIds: string[],
-) {
-  for (const id of dynamicLayerIds) {
-    if (m.getLayer(id)) m.removeLayer(id);
-  }
-  for (const id of dynamicSourceIds) {
-    if (m.getSource(id)) m.removeSource(id);
-  }
-  dynamicLayerIds.length = 0;
-  dynamicSourceIds.length = 0;
+function stepWidth(step: RouteStep): number {
+  if (step.type === "WALK") return 4;
+  if (step.type === "BUS") return 5;
+  return 6;
 }
 
-/** Start wire pulse animation along the full route */
-export function startWirePulse(
-  m: mapboxgl.Map,
-  allCoords: [number, number][],
-  particleFrameRef: { current: number | null },
-) {
-  if (allCoords.length < 2) return;
+export function buildTrips(steps: RouteStep[], fitSettleMs = 1200): BuiltTrips {
+  const trips: Trip[] = [];
+  const stepCoords: [number, number][][] = [];
+  const stepEndTimes: number[] = [];
+  let cursor = fitSettleMs;
 
-  if (m.getLayer(LYR_PARTICLES)) m.removeLayer(LYR_PARTICLES);
-  if (m.getSource(SRC_PARTICLES)) m.removeSource(SRC_PARTICLES);
+  for (const step of steps) {
+    const coords: [number, number][] = step.polyline?.encodedPolyline
+      ? decodePolyline(step.polyline.encodedPolyline)
+      : [];
+    stepCoords.push(coords);
 
-  m.addSource(SRC_PARTICLES, {
-    type: "geojson",
-    data: {
-      type: "Feature",
-      properties: {},
-      geometry: { type: "LineString", coordinates: allCoords },
-    },
-  });
+    const duration = getStepDuration(step.type);
 
-  const dashSeg = 2;
-  const gapLen = 60;
-  const totalCycle = dashSeg + gapLen;
+    if (coords.length >= 2) {
+      const { lens, total } = segmentLengths(coords);
+      const timestamps: number[] = [cursor];
+      if (total === 0) {
+        for (let i = 1; i < coords.length; i++) timestamps.push(cursor + duration);
+      } else {
+        let traveled = 0;
+        for (let i = 0; i < lens.length; i++) {
+          traveled += lens[i];
+          timestamps.push(cursor + duration * invEaseOutCubic(traveled / total));
+        }
+      }
 
-  m.addLayer({
-    id: LYR_PARTICLES,
-    type: "line",
-    source: SRC_PARTICLES,
-    layout: { "line-join": "round", "line-cap": "round" },
-    paint: {
-      "line-color": "#FFFFFF",
-      "line-width": 3,
-      "line-opacity": 0.85,
-      "line-dasharray": [0, totalCycle],
-    },
-  });
-
-  const speed = 0.04;
-
-  function tick(now: number) {
-    const step = (now * speed) % totalCycle;
-
-    if (step <= gapLen) {
-      m.setPaintProperty(LYR_PARTICLES, "line-dasharray", [
-        0, step, dashSeg, gapLen - step,
-      ]);
-    } else {
-      const d = step - gapLen;
-      m.setPaintProperty(LYR_PARTICLES, "line-dasharray", [
-        d, gapLen, dashSeg - d, 0,
-      ]);
+      trips.push({
+        path: coords,
+        timestamps,
+        color: stepColor(step),
+        width: stepWidth(step),
+        type: step.type,
+      });
     }
 
-    particleFrameRef.current = requestAnimationFrame(tick);
+    stepEndTimes.push(cursor + duration);
+    cursor += duration + STEP_PAUSE;
   }
-  particleFrameRef.current = requestAnimationFrame(tick);
-}
 
-/** Stop wire pulse animation and remove its layers */
-export function stopWirePulse(
-  m: mapboxgl.Map,
-  particleFrameRef: { current: number | null },
-) {
-  if (particleFrameRef.current) {
-    cancelAnimationFrame(particleFrameRef.current);
-    particleFrameRef.current = null;
-  }
-  if (m.getLayer(LYR_PARTICLES)) m.removeLayer(LYR_PARTICLES);
-  if (m.getSource(SRC_PARTICLES)) m.removeSource(SRC_PARTICLES);
+  return { trips, stepCoords, stepEndTimes, totalDuration: cursor };
 }
-

@@ -1,6 +1,7 @@
 from app.services.voice import generate_speech
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
+import asyncio
 import base64
 import random
 
@@ -39,12 +40,29 @@ thinking_phrases = [
 
 router = APIRouter()
 
+_audio_cache: dict[str, str] = {}
+_phrase_queue: list[str] = []
+
+
+def _next_phrase() -> str:
+    """Draw the next phrase without repeats until all have been used."""
+    if not _phrase_queue:
+        _phrase_queue.extend(thinking_phrases)
+        random.shuffle(_phrase_queue)
+    return _phrase_queue.pop()
+
+
 @router.post("/api/thinking")
 async def thinking_audio():
-    phrase = random.choice(thinking_phrases)
+    phrase = _next_phrase()
+
+    if phrase in _audio_cache:
+        return JSONResponse(content={"text": phrase, "audio": _audio_cache[phrase]})
+
     try:
-        audio = generate_speech(phrase)
+        audio = await asyncio.to_thread(generate_speech, phrase)
         audio_b64 = base64.b64encode(audio).decode("utf-8")
+        _audio_cache[phrase] = audio_b64
     except Exception as exc:
         print(f"[thinking] TTS unavailable, returning text-only response: {exc}")
         audio_b64 = ""
