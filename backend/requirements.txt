@@ -14,3 +14,4 @@ elevenlabs
 xai_sdk
 python-dotenv
 geopy
+psycopg2-binary
