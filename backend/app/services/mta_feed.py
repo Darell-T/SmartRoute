@@ -1,17 +1,4 @@
-# mta_feed.py - MTA GTFS-RT Feed Fetcher
-#
-# This file will contain:
-# - Functions to fetch and parse MTA GTFS-RT protobuf feeds:
-#   - Trip Updates: Real-time arrival/departure predictions per stop
-#   - Service Alerts: Planned work, delays, suspensions
-#   - Vehicle Positions: Live train/bus locations
-# - Use gtfs-realtime-bindings package to parse protobuf responses
-# - Cache parsed feed data in Redis with 30-60 second TTL
-# - Handle feed fetch errors gracefully with fallback to cached data
-# - Periodic background task to poll feeds and update cache
-# - Feed URLs:
-#   - Subway: https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs
-#   - Bus: https://bustime.mta.info/api/siri/vehicle-monitoring.json
+
 
 from google.transit import gtfs_realtime_pb2
 from datetime import datetime
@@ -73,7 +60,7 @@ async def fetch_feeds(routes: list) -> list:
             results.append((url, response.content))
 
     return [content for _, content in results]
-    
+
 
 
 def parse_bytes(rawBytes: bytes) -> list:
@@ -86,7 +73,7 @@ def parse_bytes(rawBytes: bytes) -> list:
     for entity in user_feed.entity:
         if entity.HasField("trip_update"):
             trip = entity.trip_update
-            
+
             trip_id = trip.trip.trip_id
             route_id = trip.trip.route_id
 
@@ -96,8 +83,8 @@ def parse_bytes(rawBytes: bytes) -> list:
                 "stop_id": stop.stop_id,
                 "arrival_time": stop.arrival.time if stop.arrival.time else None,
                 "delay": stop.arrival.delay})
-            
-    
+
+
     return trip_updates
 
 ALERTS_URL = "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/camsys%2Fsubway-alerts"

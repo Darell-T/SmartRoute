@@ -9,6 +9,10 @@
     "lint": "eslint ."
   },
   "dependencies": {
+    "@deck.gl/core": "^9.3.0",
+    "@deck.gl/geo-layers": "^9.3.0",
+    "@deck.gl/layers": "^9.3.0",
+    "@deck.gl/mapbox": "^9.3.0",
     "@hookform/resolvers": "^3.9.1",
     "@mapbox/polyline": "^1.2.1",
     "@radix-ui/react-accordion": "1.2.12",
@@ -50,7 +54,7 @@
     "input-otp": "1.4.2",
     "lucide-react": "^0.564.0",
     "mapbox-gl": "^3.9.0",
-    "next": "16.1.6",
+    "next": "^16.1.6",
     "next-themes": "^0.4.6",
     "react": "19.2.4",
     "react-day-picker": "9.13.2",

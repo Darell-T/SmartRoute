@@ -3,17 +3,17 @@
 import { useEffect, useRef } from "react";
 import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
+import { MapboxOverlay } from "@deck.gl/mapbox";
+import { TripsLayer } from "@deck.gl/geo-layers";
+import { PathLayer } from "@deck.gl/layers";
 
-import type { RouteStep, TransitRouteData, Coordinates } from "@/types";
+import type { TransitRouteData, Coordinates } from "@/types";
 import { DEFAULT_LOCATION } from "@/lib/api";
 import { createOrb, createOrbMarker } from "./map/orbs";
 import { applyHudMapStyle } from "./map/style";
 import { flyToRoute, startRotation, stopRotation, flyToOrigin } from "./map/camera";
 import { addStationBadge, addIntermediateStopLabels, clearBadges } from "./map/station-badges";
-import {
-  addStepLayers, clearRouteLayers, startWirePulse, stopWirePulse,
-  getStepDuration, easeOutCubic, subPath, getLineColor
-} from "./map/route-layers";
+import { buildTrips, getLineColor, type Trip } from "./map/route-layers";
 
 function toLngLat(c: Coordinates): [number, number] {
   return [c.longitude, c.latitude];
@@ -41,9 +41,7 @@ export function JarvisMap({ onLocationUpdate, routeData, isSpeaking, destCoords,
   const originRef = useRef<[number, number] | null>(null);
   const stationMarkersRef = useRef<mapboxgl.Marker[]>([]);
   const initialFlyDoneRef = useRef(false);
-  const particleFrameRef = useRef<number | null>(null);
-  const dynamicLayerIds = useRef<string[]>([]);
-  const dynamicSourceIds = useRef<string[]>([]);
+  const overlayRef = useRef<MapboxOverlay | null>(null);
 
   const rotationRefs = {
     rotationTimeout: rotationTimeoutRef,
@@ -97,6 +95,11 @@ export function JarvisMap({ onLocationUpdate, routeData, isSpeaking, destCoords,
       );
 
       applyHudMapStyle(map.current);
+
+      const overlay = new MapboxOverlay({ interleaved: true, layers: [] });
+      map.current.addControl(overlay as unknown as mapboxgl.IControl);
+      overlayRef.current = overlay;
+
       mapReadyRef.current = true;
 
       onMapReady?.({
@@ -158,9 +161,63 @@ export function JarvisMap({ onLocationUpdate, routeData, isSpeaking, destCoords,
 
   // Route animation + camera rotation
   useEffect(() => {
-    if (!map.current || !mapReadyRef.current) return;
+    if (!map.current || !mapReadyRef.current || !overlayRef.current) return;
 
     const m = map.current;
+    const overlay = overlayRef.current;
+
+    const TRAIL_LENGTH = 850;
+    const FADE_IN = 700;
+
+    type CompletedStep = { trip: Trip; revealedAt: number };
+
+    function renderTrips(
+      trips: Trip[],
+      currentTime: number,
+      completedSteps: CompletedStep[],
+    ) {
+      const layers: import("@deck.gl/core").Layer[] = [];
+
+      for (let i = 0; i < completedSteps.length; i++) {
+        const cs = completedSteps[i];
+        const fade = Math.min(Math.max((currentTime - cs.revealedAt) / FADE_IN, 0), 1);
+        const eased = fade * fade * (3 - 2 * fade);
+        layers.push(
+          new PathLayer<Trip>({
+            id: `jr-path-${i}`,
+            data: [cs.trip],
+            getPath: (t) => t.path,
+            getColor: (t) => [t.color[0], t.color[1], t.color[2], 255],
+            getWidth: (t) => t.width,
+            widthUnits: "pixels",
+            widthMinPixels: 3,
+            opacity: 0.95 * eased,
+            capRounded: true,
+            jointRounded: true,
+          }),
+        );
+      }
+
+      layers.push(
+        new TripsLayer<Trip>({
+          id: "jr-trips",
+          data: trips,
+          getPath: (t) => t.path,
+          getTimestamps: (t) => t.timestamps,
+          getColor: (t) => t.color,
+          getWidth: (t) => t.width,
+          widthUnits: "pixels",
+          opacity: 0.95,
+          capRounded: true,
+          jointRounded: true,
+          trailLength: TRAIL_LENGTH,
+          currentTime,
+          fadeTrail: true,
+        }),
+      );
+
+      overlay.setProps({ layers });
+    }
 
     function stopAnimation() {
       if (animFrameRef.current) {
@@ -172,15 +229,13 @@ export function JarvisMap({ onLocationUpdate, routeData, isSpeaking, destCoords,
     function stopAll() {
       stopRotation(rotationRefs);
       stopAnimation();
-      stopWirePulse(m, particleFrameRef);
     }
 
     function clearRouteFromMap() {
       clearBadges(stationMarkersRef.current);
-      clearRouteLayers(m, dynamicLayerIds.current, dynamicSourceIds.current);
+      overlay.setProps({ layers: [] });
     }
 
-    // When routeData is cleared, clean up everything
     if (!routeData) {
       stopAll();
       clearRouteFromMap();
@@ -194,132 +249,98 @@ export function JarvisMap({ onLocationUpdate, routeData, isSpeaking, destCoords,
       const steps = routeData.steps;
       if (!steps || steps.length === 0) return stopAll;
 
-      // Prepare all step layers and decode coords
-      const stepData: { sourceId: string; coords: [number, number][]; step: RouteStep }[] = [];
-      for (let i = 0; i < steps.length; i++) {
-        const { sourceId, coords } = addStepLayers(
-          m, steps[i], i, dynamicLayerIds.current, dynamicSourceIds.current,
-        );
-        stepData.push({ sourceId, coords, step: steps[i] });
-      }
+      const { trips, stepCoords, stepEndTimes, totalDuration } = buildTrips(steps);
 
-      // Collect all coordinates for fitBounds
-      const allCoords = stepData.flatMap((s) => s.coords);
+      const allCoords = stepCoords.flat();
       if (allCoords.length > 0) {
         flyToRoute(m, allCoords);
       }
 
       const userOrigin: [number, number] = originRef.current || allCoords[0] || [0, 0];
-
-      const FIT_SETTLE = 1200;
-      const PAUSE = 350;
-
-      const timeline: { startMs: number; durMs: number; idx: number }[] = [];
-      let cursor = FIT_SETTLE;
-      for (let i = 0; i < stepData.length; i++) {
-        const dur = getStepDuration(stepData[i].step.type);
-        timeline.push({ startMs: cursor, durMs: dur, idx: i });
-        cursor += dur + PAUSE;
-      }
-      const totalDuration = cursor;
-
+      const endTime = totalDuration + TRAIL_LENGTH;
       const startTime = performance.now();
       let done = false;
 
+      const stepTripIndex = new Map<number, number>();
+      {
+        let ti = 0;
+        for (let i = 0; i < steps.length; i++) {
+          if (stepCoords[i].length >= 2) {
+            stepTripIndex.set(i, ti);
+            ti++;
+          }
+        }
+      }
+
+      const completedSteps: CompletedStep[] = [];
+      const badgeKeys = new Set<string>();
+      let badgeCount = 0;
+      let nextStepToReveal = 0;
+
+      function addBadgeIfNew(coords: [number, number], name: string, letter: string, color: string) {
+        const key = `${coords[0].toFixed(4)},${coords[1].toFixed(4)}`;
+        if (badgeKeys.has(key)) return;
+        badgeKeys.add(key);
+        const mk = addStationBadge(m, coords, name, letter, color, badgeCount++);
+        stationMarkersRef.current.push(mk);
+      }
+
+      function revealStep(i: number) {
+        const step = steps[i];
+        const coords = stepCoords[i];
+
+        const ti = stepTripIndex.get(i);
+        if (ti !== undefined) {
+          completedSteps.push({ trip: trips[ti], revealedAt: stepEndTimes[i] });
+        }
+
+        if (step.type === "SUBWAY" || step.type === "BUS") {
+          const color = step.type === "SUBWAY"
+            ? (step.line_color || getLineColor(step.train_line || ""))
+            : "#0057B8";
+          const letter = step.train_line || (step.type === "BUS" ? "BUS" : "?");
+
+          if (step.departure_coords && step.departure_stop) {
+            addBadgeIfNew(toLngLat(step.departure_coords), step.departure_stop, letter, color);
+          } else if (coords.length > 0 && step.departure_stop) {
+            addBadgeIfNew(coords[0], step.departure_stop, letter, color);
+          }
+
+          if (step.arrival_coords && step.arrival_stop) {
+            addBadgeIfNew(toLngLat(step.arrival_coords), step.arrival_stop, letter, color);
+          } else if (coords.length > 0 && step.arrival_stop) {
+            addBadgeIfNew(coords[coords.length - 1], step.arrival_stop, letter, color);
+          }
+
+          if (step.intermediate_stops) {
+            const labels = addIntermediateStopLabels(m, coords, step.intermediate_stops, color);
+            stationMarkersRef.current.push(...labels);
+          }
+        }
+      }
+
       function frame(now: number) {
         const e = now - startTime;
+        const currentTime = Math.min(e, endTime);
 
-        for (const seg of timeline) {
-          if (e >= seg.startMs) {
-            const rawP = Math.min((e - seg.startMs) / seg.durMs, 1);
-            const p = easeOutCubic(rawP);
-            const coords = stepData[seg.idx].coords;
-            const smoothCoords = subPath(coords, p);
-            const source = m.getSource(stepData[seg.idx].sourceId) as mapboxgl.GeoJSONSource | undefined;
-            if (source) {
-              source.setData({
-                type: "Feature",
-                properties: {},
-                geometry: { type: "LineString", coordinates: smoothCoords },
-              });
-            }
-          }
+        while (nextStepToReveal < steps.length && e >= stepEndTimes[nextStepToReveal]) {
+          revealStep(nextStepToReveal);
+          nextStepToReveal++;
         }
 
-        if (e < totalDuration) {
+        renderTrips(trips, currentTime, completedSteps);
+
+        if (e < endTime) {
           animFrameRef.current = requestAnimationFrame(frame);
-        } else if (!done) {
-          done = true;
-
-          for (const seg of stepData) {
-            const source = m.getSource(seg.sourceId) as mapboxgl.GeoJSONSource | undefined;
-            if (source) {
-              source.setData({
-                type: "Feature",
-                properties: {},
-                geometry: { type: "LineString", coordinates: seg.coords },
-              });
-            }
-          }
-
-          const badgeKeys = new Set<string>();
-          let badgeCount = 0;
-          function addBadgeIfNew(coords: [number, number], name: string, letter: string, color: string) {
-            const key = `${coords[0].toFixed(4)},${coords[1].toFixed(4)}`;
-            if (badgeKeys.has(key)) return;
-            badgeKeys.add(key);
-            const mk = addStationBadge(m, coords, name, letter, color, badgeCount++);
-            stationMarkersRef.current.push(mk);
-          }
-
-          for (const seg of stepData) {
-            if (seg.step.type === "SUBWAY" || seg.step.type === "BUS") {
-              const color = seg.step.type === "SUBWAY"
-                ? (seg.step.line_color || getLineColor(seg.step.train_line || ""))
-                : "#0057B8";
-              const letter = seg.step.train_line || (seg.step.type === "BUS" ? "BUS" : "?");
-
-              if (seg.step.departure_coords && seg.step.departure_stop) {
-                addBadgeIfNew(
-                  toLngLat(seg.step.departure_coords),
-                  seg.step.departure_stop,
-                  letter,
-                  color,
-                );
-              } else if (seg.coords.length > 0 && seg.step.departure_stop) {
-                addBadgeIfNew(seg.coords[0], seg.step.departure_stop, letter, color);
-              }
-
-              if (seg.step.arrival_coords && seg.step.arrival_stop) {
-                addBadgeIfNew(
-                  toLngLat(seg.step.arrival_coords),
-                  seg.step.arrival_stop,
-                  letter,
-                  color,
-                );
-              } else if (seg.coords.length > 0 && seg.step.arrival_stop) {
-                addBadgeIfNew(seg.coords[seg.coords.length - 1], seg.step.arrival_stop, letter, color);
-              }
-            }
-          }
-
-          for (const seg of stepData) {
-            if ((seg.step.type === "SUBWAY" || seg.step.type === "BUS") && seg.step.intermediate_stops) {
-              const segColor = seg.step.type === "SUBWAY"
-                ? (seg.step.line_color || getLineColor(seg.step.train_line || ""))
-                : "#0057B8";
-              const labels = addIntermediateStopLabels(m, seg.coords, seg.step.intermediate_stops, segColor);
-              stationMarkersRef.current.push(...labels);
-            }
-          }
-
-          const fullRouteCoords = stepData.flatMap((s) => s.coords);
-          startWirePulse(m, fullRouteCoords, particleFrameRef);
-
-          const lastCoords = stepData[stepData.length - 1].coords;
-          const destEnd = lastCoords[lastCoords.length - 1] || userOrigin;
-          startRotation(m, destEnd, rotationRefs);
+          return;
         }
+
+        if (done) return;
+        done = true;
+
+        const lastCoords = stepCoords[stepCoords.length - 1] || [];
+        const destEnd = lastCoords[lastCoords.length - 1] || userOrigin;
+        startRotation(m, destEnd, rotationRefs);
       }
 
       animFrameRef.current = requestAnimationFrame(frame);
