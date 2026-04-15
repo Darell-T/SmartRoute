@@ -9,6 +9,9 @@ backend/data/gtfs_static/stop_times.txt
 backend/data/gtfs_static/shapes.txt
 backend/data/gtfs_static/trips.txt
 backend/data/gtfs_supplemented/stop_times.txt
+backend /data/gtfs_static
+data/
+backend/data/
 
 # v0 sandbox internal files
 __v0_runtime_loader.js
