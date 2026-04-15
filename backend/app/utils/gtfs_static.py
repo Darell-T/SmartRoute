@@ -66,21 +66,27 @@ class GTFSStaticData:
         (1,)
     )
 
-    #need to get the trains that serve the nearest stops
-    def get_trains_for_feeds(self, nearest_stops: dict):
-        routes = []
+    def get_unique_routes_for_stops(self, nearest_stops):
+        seen_routes = set()
+        result = {}
+
         for stop in nearest_stops:
-            routes.extend(self._query(
+            rows = self._query(
                 """
-                SELECT DISTINCT t.route_id, s.stop_name
+                SELECT DISTINCT t.route_id
                 FROM stops s
                 JOIN stop_times st ON st.stop_id = s.stop_id
                 JOIN trips t ON t.trip_id = st.trip_id
                 WHERE s.parent_station = %s
                 """, (stop["stop_id"],)
-            ))
-        
-        return routes
-       
+            )
+            routes = [r["route_id"] for r in rows]
+            new_routes = [r for r in routes if r not in seen_routes]
 
+            if new_routes:
+                result[stop["stop_name"]] = new_routes
+                seen_routes.update(new_routes)
+
+        return result
+   
 
