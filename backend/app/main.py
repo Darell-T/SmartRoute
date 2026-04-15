@@ -15,7 +15,7 @@ load_dotenv(_backend_dir / ".env")
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security.api_key import APIKeyHeader
-from app.routers import thinking, trips
+from app.routers import thinking, trips, live_feed
 from app.utils.gtfs_static import GTFSStaticData
 from app.models.migrate_gtfs import migrate
 
