@@ -10,7 +10,7 @@ _pool = psycopg2.pool.ThreadedConnectionPool(1, 10, os.getenv("DATABASE_URL"))
 class GTFSStaticData:
 
     # ------------------------------------------------------------------
-    # Query helpers
+    # Simplified my over engineered support for concurrent users
     # ------------------------------------------------------------------
 
     def _query(self, sql, params=None):
@@ -59,5 +59,28 @@ class GTFSStaticData:
                 return [name_map.get(sid, sid) for sid in route_stop_ids]
 
         return []
+    
+    def get_all_parent_stops(self):
+        return self._query(
+        "SELECT stop_id, stop_name, stop_lat, stop_long FROM stops WHERE location_type = %s",
+        (1,)
+    )
+
+    #need to get the trains that serve the nearest stops
+    def get_trains_for_feeds(self, nearest_stops: dict):
+        routes = []
+        for stop in nearest_stops:
+            routes.extend(self._query(
+                """
+                SELECT DISTINCT t.route_id, s.stop_name
+                FROM stops s
+                JOIN stop_times st ON st.stop_id = s.stop_id
+                JOIN trips t ON t.trip_id = st.trip_id
+                WHERE s.parent_station = %s
+                """, (stop["stop_id"],)
+            ))
+        
+        return routes
+       
 
 
