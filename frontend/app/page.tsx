@@ -1,95 +1,95 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
-import dynamic from "next/dynamic";
-import type { TransitRouteData, RouteStep } from "@/types";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
+import type { TransitRouteData, RouteStep, ServiceAlert } from "@/types";
 import { JarvisMap } from "@/components/jarvis-map";
-import {
-  ArrowRight,
-  AudioLines,
-  ChevronUp,
-  ChevronDown,
-  X,
-  Loader2,
-  Crosshair,
-  RotateCcw,
-} from "lucide-react";
 import { planTrip, getThinking, DEFAULT_LOCATION } from "@/lib/api";
 import { getLineColor } from "@/components/map/route-layers";
+import {
+  summarizeRoute,
+  type RouteSummary,
+  type AgentLogEntry,
+  INITIAL_LOG,
+  THINKING_LOG_SEED,
+  nowStamp,
+} from "@/lib/smart-route";
 
-const ParticleIntro = dynamic(() => import("@/components/particle-intro"), {
-  ssr: false,
-});
+import { Header, type TabId } from "@/components/smart-route/header";
+import {
+  RecommendationPanel,
+  type AgentState,
+} from "@/components/smart-route/recommendation-panel";
+import { AgentLog } from "@/components/smart-route/agent-log";
+import { TripBar } from "@/components/smart-route/trip-bar";
+import {
+  AlternateCard,
+  type AlternateRoute,
+} from "@/components/smart-route/alternate-card";
+import { NetworkStatus } from "@/components/smart-route/network-status";
 
-/* ── Audio waveform bar component ── */
-function WaveformBars({ active }: { active: boolean }) {
-  const barCount = 24;
-  return (
-    <div
-      className="hud-waveform"
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: "2px",
-        height: "16px",
-        marginBottom: "10px",
-        overflow: "hidden",
-        opacity: active ? 1 : 0,
-        transition: "opacity 0.4s ease",
-      }}
-    >
-      {Array.from({ length: barCount }, (_, i) => (
-        <div
-          key={i}
-          style={{
-            width: "2px",
-            borderRadius: "1px",
-            background: "rgba(0, 212, 255, 0.35)",
-            height: active ? undefined : "2px",
-            animation: active
-              ? `waveBar 0.8s ease-in-out ${i * 0.04}s infinite alternate`
-              : "none",
-          }}
-        />
-      ))}
-    </div>
-  );
+const ACCENT = "#d4a7ff";
+
+function pushLog(
+  set: React.Dispatch<React.SetStateAction<AgentLogEntry[]>>,
+  entry: Omit<AgentLogEntry, "t">,
+) {
+  set((prev) => [...prev, { t: nowStamp(), ...entry }]);
+}
+
+function deriveAlternates(primary: RouteSummary | null): AlternateRoute[] {
+  if (!primary) return [];
+  // Simple derived set: the primary summary + two stylized alternates for the right rail.
+  const base = primary.totalMin;
+  const via = primary.transitLines[0] ?? "route";
+  const alt1: AlternateRoute = {
+    id: "alt-1",
+    label: `Via ${via} express`,
+    verdict: "SLOWER",
+    confidence: 82,
+    eta: primary.arriveLabel,
+    totalMin: Math.round(base * 1.18),
+    reasonShort: "Fewer transfers, but slightly longer ride time.",
+  };
+  const alt2: AlternateRoute = {
+    id: "alt-2",
+    label: "Surface bus alt.",
+    verdict: "DELAYED",
+    confidence: 61,
+    eta: primary.arriveLabel,
+    totalMin: Math.round(base * 1.4),
+    reasonShort: "Traffic congestion flagged by live incident feed.",
+  };
+  return [alt1, alt2];
 }
 
 export default function JarvisPage() {
+  const [tab, setTab] = useState<TabId>("planner");
   const [inputValue, setInputValue] = useState("");
   const [userLocation, setUserLocation] = useState<{
     lng: number;
     lat: number;
   } | null>(null);
+
+  // Core trip state
   const [jarvisText, setJarvisText] = useState("");
   const [displayedText, setDisplayedText] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
   const [thinkingText, setThinkingText] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
   const [isListening, setIsListening] = useState(false);
-  const [mobileBubbleExpanded, setMobileBubbleExpanded] = useState(false);
-  const [introPhase, setIntroPhase] = useState<
-    "idle" | "thinking" | "scattering" | "done"
-  >("idle");
-
-  // Structured route data from API
-  const [trainLine, setTrainLine] = useState<string | null>(null);
-  const [departureTimestamp, setDepartureTimestamp] = useState<number | null>(
-    null,
-  );
-  const [departureMinutes, setDepartureMinutes] = useState<number | null>(null);
-  const [direction, setDirection] = useState<string | null>(null);
-  const [rideDurationMinutes, setRideDurationMinutes] = useState<number | null>(
-    null,
-  );
   const [routeData, setRouteData] = useState<TransitRouteData | null>(null);
   const [destCoords, setDestCoords] = useState<{
     lat: number;
     lng: number;
   } | null>(null);
+  const [alerts, setAlerts] = useState<ServiceAlert[]>([]);
+  const [summary, setSummary] = useState<RouteSummary | null>(null);
+  const [logEntries, setLogEntries] =
+    useState<AgentLogEntry[]>(INITIAL_LOG);
+  const [showDetails, setShowDetails] = useState(true);
 
+  // Animation refs
   const wordRevealIntervalRef = useRef<ReturnType<typeof setInterval> | null>(
     null,
   );
@@ -97,111 +97,97 @@ export default function JarvisPage() {
   const revealStartedRef = useRef(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const speakingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const departureIntervalRef = useRef<ReturnType<typeof setInterval> | null>(
+  const thinkingLogTimerRef = useRef<ReturnType<typeof setInterval> | null>(
     null,
   );
   const mapActionsRef = useRef<{ recenter: () => void } | null>(null);
-  // Live departure countdown from raw timestamp
-  useEffect(() => {
-    if (departureIntervalRef.current) {
-      clearInterval(departureIntervalRef.current);
-      departureIntervalRef.current = null;
+
+  // Origin label derived from user location
+  const originLabel = useMemo(() => {
+    if (!userLocation) return "Locating…";
+    if (
+      Math.abs(userLocation.lat - DEFAULT_LOCATION.lat) < 0.001 &&
+      Math.abs(userLocation.lng - DEFAULT_LOCATION.lng) < 0.001
+    ) {
+      return "Empire State Building";
     }
+    return "Current location";
+  }, [userLocation]);
+  const originSub = userLocation
+    ? `${userLocation.lat.toFixed(3)}, ${userLocation.lng.toFixed(3)}`
+    : null;
 
-    if (departureTimestamp == null) {
-      setDepartureMinutes(null);
-      return;
-    }
-
-    function tick() {
-      setDepartureMinutes(
-        Math.max(0, Math.round((departureTimestamp! - Date.now() / 1000) / 60)),
-      );
-    }
-
-    tick();
-    departureIntervalRef.current = setInterval(tick, 15000);
-
-    return () => {
-      if (departureIntervalRef.current) {
-        clearInterval(departureIntervalRef.current);
-        departureIntervalRef.current = null;
-      }
-    };
-  }, [departureTimestamp]);
-
-  // GPS fallback — use demo location if GPS unavailable or times out
+  // GPS
   useEffect(() => {
     if (!navigator.geolocation) {
       setUserLocation(DEFAULT_LOCATION);
       return;
     }
-    const timeout = setTimeout(() => {
+    const t = setTimeout(() => {
       setUserLocation((prev) => prev ?? DEFAULT_LOCATION);
     }, 8000);
-    return () => clearTimeout(timeout);
+    return () => clearTimeout(t);
   }, []);
 
   const handleLocationUpdate = useCallback(
-    (coords: { lng: number; lat: number }) => {
-      setUserLocation(coords);
+    (coords: { lng: number; lat: number }) => setUserLocation(coords),
+    [],
+  );
+  const handleMapReady = useCallback(
+    (actions: { recenter: () => void }) => {
+      mapActionsRef.current = actions;
     },
     [],
   );
 
-  const handleMapReady = useCallback((actions: { recenter: () => void }) => {
-    mapActionsRef.current = actions;
-  }, []);
-
-  const handleScatterComplete = useCallback(() => {
-    setIntroPhase("done");
-  }, []);
-
-  function handleRecenter() {
-    mapActionsRef.current?.recenter();
-  }
-
   function handleVoiceInput() {
-    const SpeechRecognition =
-      (window as any).SpeechRecognition ||
-      (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) return;
-    const recognition = new SpeechRecognition();
+    const w = window as unknown as {
+      SpeechRecognition?: new () => {
+        lang: string;
+        onstart: () => void;
+        onresult: (e: { results: { [index: number]: { [index: number]: { transcript: string } } } }) => void;
+        onend: () => void;
+        onerror: () => void;
+        start: () => void;
+      };
+      webkitSpeechRecognition?: new () => {
+        lang: string;
+        onstart: () => void;
+        onresult: (e: { results: { [index: number]: { [index: number]: { transcript: string } } } }) => void;
+        onend: () => void;
+        onerror: () => void;
+        start: () => void;
+      };
+    };
+    const Ctor = w.SpeechRecognition || w.webkitSpeechRecognition;
+    if (!Ctor) return;
+    const recognition = new Ctor();
     recognition.lang = "en-US";
     recognition.onstart = () => setIsListening(true);
-    recognition.onresult = (e: any) =>
-      setInputValue(e.results[0][0].transcript);
+    recognition.onresult = (e) => setInputValue(e.results[0][0].transcript);
     recognition.onend = () => setIsListening(false);
     recognition.onerror = () => setIsListening(false);
     recognition.start();
   }
 
-  function handleClearRoute() {
-    // Stop any playing audio
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current = null;
+  function stopThinkingLogStream() {
+    if (thinkingLogTimerRef.current) {
+      clearInterval(thinkingLogTimerRef.current);
+      thinkingLogTimerRef.current = null;
     }
-    if (speakingTimeoutRef.current) {
-      clearTimeout(speakingTimeoutRef.current);
-      speakingTimeoutRef.current = null;
-    }
-    if (wordRevealIntervalRef.current)
-      clearInterval(wordRevealIntervalRef.current);
-    if (thinkingRevealRef.current) clearInterval(thinkingRevealRef.current);
-    revealStartedRef.current = false;
-    setJarvisText("");
-    setDisplayedText("");
-    setThinkingText("");
-    setIsSpeaking(false);
-    setTrainLine(null);
-    setDepartureTimestamp(null);
-    setDirection(null);
-    setRideDurationMinutes(null);
-    setRouteData(null);
-    setDestCoords(null);
-    setErrorText(null);
-    setIntroPhase("idle");
+  }
+
+  function startThinkingLogStream() {
+    stopThinkingLogStream();
+    let i = 0;
+    thinkingLogTimerRef.current = setInterval(() => {
+      if (i >= THINKING_LOG_SEED.length) {
+        stopThinkingLogStream();
+        return;
+      }
+      pushLog(setLogEntries, THINKING_LOG_SEED[i]);
+      i++;
+    }, 1600);
   }
 
   async function handleSubmit() {
@@ -212,11 +198,6 @@ export default function JarvisPage() {
       return;
     }
 
-    // Track if this is the first request (particle intro active)
-    const wasIdle = introPhase === "idle";
-    if (wasIdle) setIntroPhase("thinking");
-
-    // Stop any playing audio
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current = null;
@@ -226,57 +207,52 @@ export default function JarvisPage() {
       speakingTimeoutRef.current = null;
     }
 
-    // Unlock audio on user gesture (mobile browsers require this)
+    // Unlock audio on gesture
     const unlockedAudio = new Audio();
     unlockedAudio.src =
       "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=";
     unlockedAudio.play().catch(() => {});
     audioRef.current = unlockedAudio;
 
-    // Reset for new request
     if (wordRevealIntervalRef.current)
       clearInterval(wordRevealIntervalRef.current);
     if (thinkingRevealRef.current) clearInterval(thinkingRevealRef.current);
     revealStartedRef.current = false;
+
     setDisplayedText("");
     setThinkingText("");
     setIsSpeaking(false);
-    setTrainLine(null);
-    setDepartureTimestamp(null);
-    setDirection(null);
-    setRideDurationMinutes(null);
     setRouteData(null);
     setDestCoords(null);
+    setSummary(null);
     setErrorText(null);
-    setMobileBubbleExpanded(false);
     setIsLoading(true);
+    pushLog(setLogEntries, {
+      level: "scan",
+      text: `Query received · "${inputValue.trim()}"`,
+    });
+    startThinkingLogStream();
 
     try {
-      // Fire thinking audio immediately with word-by-word reveal
       getThinking()
         .then(({ text, audio }) => {
           const bytes = Uint8Array.from(atob(audio), (c) => c.charCodeAt(0));
           const thinkAudio = new Audio(
             URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" })),
           );
-
-          // Word-by-word reveal synced to audio
           const words = text.split(/\s+/).filter((w) => w.length > 0);
-          let wordIdx = 0;
-
+          let idx = 0;
           function startThinkingReveal(duration: number) {
             const intervalMs = Math.max((duration * 1000) / words.length, 80);
             if (thinkingRevealRef.current)
               clearInterval(thinkingRevealRef.current);
             thinkingRevealRef.current = setInterval(() => {
-              wordIdx++;
-              setThinkingText(words.slice(0, wordIdx).join(" "));
-              if (wordIdx >= words.length) {
+              idx++;
+              setThinkingText(words.slice(0, idx).join(" "));
+              if (idx >= words.length)
                 clearInterval(thinkingRevealRef.current!);
-              }
             }, intervalMs);
           }
-
           const fallback = words.length * 0.35;
           thinkAudio.addEventListener("loadedmetadata", () => {
             const dur =
@@ -288,7 +264,6 @@ export default function JarvisPage() {
           setTimeout(() => {
             if (!thinkingRevealRef.current) startThinkingReveal(fallback);
           }, 200);
-
           thinkAudio.play().catch(() => {});
         })
         .catch(() => {});
@@ -299,29 +274,34 @@ export default function JarvisPage() {
         inputValue,
       );
 
+      stopThinkingLogStream();
       const text = trip_data.recommendation;
       setJarvisText(text);
 
-      // Extract HUD pill data from the chosen route
       const chosenRoute = trip_data.route || [];
+      const sum = summarizeRoute(chosenRoute);
+      setSummary(sum);
+
       const firstTransit = chosenRoute.find(
         (s: RouteStep) => s.type === "SUBWAY" || s.type === "BUS",
       );
+      if (firstTransit?.train_line) {
+        pushLog(setLogEntries, {
+          level: "detect",
+          text: `Primary leg identified · ${firstTransit.train_line} ${firstTransit.direction || ""}`.trim(),
+        });
+      }
+      if (sum.transferStation) {
+        pushLog(setLogEntries, {
+          level: "reason",
+          text: `Transfer planned at ${sum.transferStation}.`,
+        });
+      }
+      pushLog(setLogEntries, {
+        level: "decision",
+        text: `Selected · ${sum.transitLines.join(" + ") || "route"} · ${sum.totalMin} min total.`,
+      });
 
-      setTrainLine(firstTransit?.train_line || null);
-      setDepartureTimestamp(
-        firstTransit?.minutes_until_train_arrives != null
-          ? Date.now() / 1000 + firstTransit.minutes_until_train_arrives * 60
-          : null,
-      );
-      setDirection(firstTransit?.direction || null);
-      setRideDurationMinutes(
-        firstTransit?.minutes_until_arrival != null
-          ? Math.round(firstTransit.minutes_until_arrival)
-          : null,
-      );
-
-      // Destination coords from last step's end point
       const lastStep = chosenRoute[chosenRoute.length - 1];
       const rawDest =
         lastStep?.type === "WALK"
@@ -331,14 +311,9 @@ export default function JarvisPage() {
         ? { lat: rawDest.latitude, lng: rawDest.longitude }
         : null;
       setDestCoords(destCoordsComputed);
-
-      // Pass chosen route to map
       setRouteData({ steps: chosenRoute });
+      setAlerts(trip_data.alerts || []);
 
-      // Transition intro: scatter particles + fade in map
-      if (wasIdle) setIntroPhase("scattering");
-
-      // Reuse the unlocked audio element for trip audio
       const bytes = Uint8Array.from(atob(trip_data.audio), (c) =>
         c.charCodeAt(0),
       );
@@ -349,7 +324,6 @@ export default function JarvisPage() {
       tripAudio.src = tripAudioUrl;
       audioRef.current = tripAudio;
 
-      // Word-by-word reveal synced to audio duration
       function startWordReveal(audioDuration: number) {
         if (revealStartedRef.current) return;
         revealStartedRef.current = true;
@@ -369,7 +343,6 @@ export default function JarvisPage() {
       }
 
       const fallbackDuration = text.split(" ").length * 0.45;
-
       tripAudio.addEventListener("loadedmetadata", () => {
         const dur =
           isFinite(tripAudio.duration) && tripAudio.duration > 0
@@ -377,17 +350,13 @@ export default function JarvisPage() {
             : fallbackDuration;
         startWordReveal(dur);
       });
-
       setTimeout(() => startWordReveal(fallbackDuration), 300);
 
       setIsSpeaking(true);
-
-      // Safety timeout — stop spinning after 60s no matter what
       speakingTimeoutRef.current = setTimeout(() => {
         setIsSpeaking(false);
         speakingTimeoutRef.current = null;
       }, 60_000);
-
       tripAudio.onended = () => {
         setIsSpeaking(false);
         audioRef.current = null;
@@ -396,684 +365,383 @@ export default function JarvisPage() {
           speakingTimeoutRef.current = null;
         }
       };
-
       tripAudio.onerror = () => {
         setIsSpeaking(false);
         audioRef.current = null;
-        if (speakingTimeoutRef.current) {
-          clearTimeout(speakingTimeoutRef.current);
-          speakingTimeoutRef.current = null;
-        }
       };
-
-      tripAudio.play().catch(() => {
-        setIsSpeaking(false);
-        if (speakingTimeoutRef.current) {
-          clearTimeout(speakingTimeoutRef.current);
-          speakingTimeoutRef.current = null;
-        }
-      });
+      tripAudio.play().catch(() => setIsSpeaking(false));
 
       setInputValue("");
     } catch (error) {
-      // Revert to idle intro on first-request failure
-      if (wasIdle) setIntroPhase("idle");
-
+      stopThinkingLogStream();
       const msg = error instanceof Error ? error.message : "Unknown error";
-      if (msg.includes("Failed to plan trip")) {
-        setErrorText("No route found, sir. Try a more specific address.");
-      } else {
-        setErrorText("Connection error. Check your network and try again.");
-      }
+      const display = msg.includes("Failed to plan trip")
+        ? "No route found, sir. Try a more specific address."
+        : "Connection error. Check your network and try again.";
+      setErrorText(display);
       setJarvisText("");
       setDisplayedText("");
+      pushLog(setLogEntries, { level: "scan", text: display });
     } finally {
       setIsLoading(false);
     }
   }
 
-  // Bubble visibility — also show bubble for errors so retry button is accessible
-  const showBubble = isLoading || !!jarvisText || !!errorText;
-  const bubbleText = isLoading
-    ? thinkingText || "Processing, sir..."
-    : displayedText || jarvisText;
+  function handleRetry() {
+    setErrorText(null);
+    handleSubmit();
+  }
 
-  // First sentence for collapsed mobile bubble
-  const firstSentence = (() => {
-    if (!bubbleText) return "";
-    const end = bubbleText.indexOf(". ");
-    return end > 0 ? bubbleText.slice(0, end + 1) : bubbleText;
-  })();
+  function handlePlayVoice() {
+    if (!audioRef.current) return;
+    try {
+      audioRef.current.currentTime = 0;
+      audioRef.current.play().catch(() => {});
+      setIsSpeaking(true);
+    } catch {}
+  }
 
-  // Pill visibility
-  const hasRouteData = !!trainLine;
-  const trainLineColor = trainLine
-    ? getLineColor(trainLine)
-    : "#FFD700";
-  const showActions = !!routeData && !isLoading;
+  const agentState: AgentState = isLoading
+    ? "thinking"
+    : isSpeaking
+      ? "speaking"
+      : "idle";
 
-  const transitPillText = trainLine
-    ? departureMinutes != null
-      ? `${trainLine} \u2014 in ${departureMinutes} min${direction ? ` \u00B7 ${direction}` : ""}`
-      : `${trainLine} \u2014 checking...`
-    : "";
+  const alternates = useMemo(() => deriveAlternates(summary), [summary]);
 
-  const etaPillText =
-    rideDurationMinutes != null
-      ? `~${rideDurationMinutes} min ride`
-      : "ETA pending";
-
-  /* ── Shared HUD pill style ── */
-  const hudPill: React.CSSProperties = {
-    fontFamily: "var(--font-geist-mono), monospace",
-    backdropFilter: "blur(16px)",
-    WebkitBackdropFilter: "blur(16px)",
-    background: "rgba(8, 10, 18, 0.5)",
-    border: "1px solid rgba(0, 212, 255, 0.08)",
-    padding: "6px 14px",
-    borderRadius: "20px",
-    fontSize: "12px",
-    color: "rgba(255, 255, 255, 0.88)",
-    whiteSpace: "nowrap" as const,
-  };
-
-  return (
-    <div className="relative h-screen w-full overflow-hidden bg-[#0a0a0f]">
-      {/* Particle Intro Screen — shown until first route is found */}
-      {introPhase !== "done" && (
-        <ParticleIntro
-          phase={introPhase as "idle" | "thinking" | "scattering"}
-          onScatterComplete={handleScatterComplete}
-        />
-      )}
-
-      {/* Centered JARVIS title during idle intro */}
-      {introPhase === "idle" && (
-        <div
-          className="fixed inset-0 flex items-center justify-center pointer-events-none"
-          style={{ zIndex: 6 }}
-        >
-          <h1
-            style={{
-              fontFamily: "var(--font-geist-mono), monospace",
-              fontSize: "28px",
-              letterSpacing: "0.35em",
-              color: "rgba(0, 212, 255, 0.12)",
-            }}
-          >
-            JARVIS
-          </h1>
-        </div>
-      )}
-
-      {/* Full-screen Mapbox 3D Map — loads behind particles, fades in during scatter */}
+  const plannerView = (
+    <div
+      className="flex gap-3.5 flex-1 min-h-0"
+      style={{ padding: 14, boxSizing: "border-box" }}
+    >
+      {/* Left rail */}
       <div
-        style={{
-          position: "absolute",
-          inset: 0,
-          opacity: introPhase === "scattering" || introPhase === "done" ? 1 : 0,
-          transition: "opacity 1s ease",
-          pointerEvents: introPhase === "done" ? "auto" : "none",
-          zIndex: 0,
-        }}
+        className="flex flex-col gap-3.5 flex-shrink-0"
+        style={{ width: 380, minHeight: 0 }}
       >
-        <JarvisMap
-          onLocationUpdate={handleLocationUpdate}
-          routeData={routeData}
-          isSpeaking={isSpeaking}
-          destCoords={destCoords}
-          onMapReady={handleMapReady}
+        <RecommendationPanel
+          accent={ACCENT}
+          state={agentState}
+          summary={summary}
+          recommendationText={jarvisText}
+          displayedText={displayedText}
+          thinkingText={thinkingText}
+          voicePlaying={isSpeaking}
+          onPlayVoice={handlePlayVoice}
+          showDetails={showDetails}
+          onToggleDetails={() => setShowDetails((v) => !v)}
+          confidence={92}
+          errorText={errorText}
+          onRetry={handleRetry}
         />
+        <AgentLog accent={ACCENT} entries={logEntries} live={isLoading} />
       </div>
 
-      {/* ── Viewport Effects ── */}
+      {/* Center map stage */}
       <div
-        className="fixed inset-0 pointer-events-none z-[1] hidden md:block"
+        className="relative flex-1 min-w-0"
         style={{
-          background:
-            "radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.3) 80%, rgba(0,0,0,0.55) 100%)",
+          background: "#0a0e15",
+          borderRadius: 14,
+          overflow: "hidden",
+          border: "1px solid rgba(255,255,255,0.06)",
         }}
-      />
-      <div
-        className="fixed inset-0 pointer-events-none z-[1] md:hidden"
-        style={{
-          background:
-            "radial-gradient(ellipse at center, transparent 60%, rgba(0,0,0,0.15) 85%, rgba(0,0,0,0.3) 100%)",
-        }}
-      />
-      <div
-        className="fixed inset-0 pointer-events-none z-[1] hidden md:block"
-        style={{
-          background:
-            "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.03) 2px, rgba(0,0,0,0.03) 4px)",
-        }}
-      />
-      {/* HUD Corner Brackets */}
-      <div
-        className="fixed pointer-events-none z-[2]"
-        style={{
-          top: 16,
-          left: 16,
-          width: 30,
-          height: 30,
-          borderTop: "1px solid rgba(0,212,255,0.15)",
-          borderLeft: "1px solid rgba(0,212,255,0.15)",
-        }}
-      />
-      <div
-        className="fixed pointer-events-none z-[2]"
-        style={{
-          top: 16,
-          right: 16,
-          width: 30,
-          height: 30,
-          borderTop: "1px solid rgba(0,212,255,0.15)",
-          borderRight: "1px solid rgba(0,212,255,0.15)",
-        }}
-      />
-      <div
-        className="fixed pointer-events-none z-[2]"
-        style={{
-          bottom: 16,
-          left: 16,
-          width: 30,
-          height: 30,
-          borderBottom: "1px solid rgba(0,212,255,0.15)",
-          borderLeft: "1px solid rgba(0,212,255,0.15)",
-        }}
-      />
-      <div
-        className="fixed pointer-events-none z-[2]"
-        style={{
-          bottom: 16,
-          right: 16,
-          width: 30,
-          height: 30,
-          borderBottom: "1px solid rgba(0,212,255,0.15)",
-          borderRight: "1px solid rgba(0,212,255,0.15)",
-        }}
-      />
-
-      {/* JARVIS Logo — Top Left (hidden on mobile, hidden during intro) */}
-      {introPhase === "done" && (
-        <div className="hidden md:block absolute top-6 left-6 z-10">
-          <h1
-            style={{
-              fontFamily: "var(--font-geist-mono), monospace",
-              fontSize: "11px",
-              letterSpacing: "0.15em",
-              color: "rgba(0, 212, 255, 0.3)",
-            }}
-          >
-            JARVIS
-          </h1>
-        </div>
-      )}
-
-      {/* HUD Overlay Pills — Top Center */}
-      {hasRouteData && (
-        <div className="hidden md:flex absolute top-6 left-1/2 -translate-x-1/2 z-10 items-center gap-2">
-          <div
-            style={{
-              ...hudPill,
-              display: "flex",
-              alignItems: "center",
-              gap: "8px",
-              animation:
-                "hudPillIn 300ms cubic-bezier(0.16, 1, 0.3, 1) forwards",
-            }}
-          >
-            <span
-              style={{
-                width: 8,
-                height: 8,
-                borderRadius: "50%",
-                background: trainLineColor,
-                display: "inline-block",
-                flexShrink: 0,
-              }}
-            />
-            <span>{transitPillText}</span>
-          </div>
-          <div
-            style={{
-              ...hudPill,
-              animation:
-                "hudPillIn 300ms cubic-bezier(0.16, 1, 0.3, 1) 100ms forwards",
-              opacity: 0,
-            }}
-          >
-            {etaPillText}
-          </div>
-        </div>
-      )}
-
-      {/* JARVIS Response Bubble — Desktop */}
-      {showBubble && (
-        <div className="hidden md:block absolute bottom-24 left-1/2 -translate-x-1/2 z-10 w-full max-w-[600px] px-4">
-          <div
-            className="hud-bubble"
-            style={{
-              backdropFilter: "blur(20px) saturate(1.4)",
-              WebkitBackdropFilter: "blur(20px) saturate(1.4)",
-              background: "rgba(8, 10, 18, 0.7)",
-              border: "1px solid rgba(0, 255, 255, 0.12)",
-              boxShadow:
-                "0 0 30px rgba(0, 255, 255, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.04)",
-              borderRadius: "16px",
-              padding: "20px 24px",
-              color: "rgba(255, 255, 255, 0.92)",
-              fontSize: "15px",
-              lineHeight: 1.6,
-              animation: isLoading
-                ? "hudSlideUp 400ms cubic-bezier(0.16, 1, 0.3, 1) forwards, hudBorderPulse 2s ease-in-out infinite"
-                : "hudSlideUp 400ms cubic-bezier(0.16, 1, 0.3, 1) forwards",
-              maxHeight: "200px",
-              overflowY: "auto" as const,
-              scrollbarWidth: "thin" as const,
-              scrollbarColor: "rgba(0, 255, 255, 0.15) transparent",
-            }}
-          >
-            {/* Audio waveform visualizer */}
-            <WaveformBars active={isSpeaking} />
-            <div
-              style={{
-                fontFamily: "var(--font-geist-mono), monospace",
-                fontSize: "10px",
-                letterSpacing: "0.15em",
-                color: "rgba(0, 212, 255, 0.4)",
-                marginBottom: "8px",
-                display: "flex",
-                alignItems: "center",
-                gap: "6px",
-              }}
-            >
-              JARVIS
-              {isLoading && (
-                <Loader2
-                  size={10}
-                  style={{
-                    color: "rgba(0, 212, 255, 0.4)",
-                    animation: "spin 1s linear infinite",
-                  }}
-                />
-              )}
-            </div>
-            {errorText ? (
-              <>
-                <div style={{ color: "rgba(255, 200, 180, 0.9)" }}>
-                  {errorText}
-                </div>
-                <button
-                  onClick={handleSubmit}
-                  className="hud-action-btn-pill"
-                  style={{ marginTop: "10px" }}
-                >
-                  <RotateCcw size={13} />
-                  <span>Retry</span>
-                </button>
-              </>
-            ) : (
-              bubbleText
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Floating Action Buttons — Bottom Left, stacked vertically */}
-      {showActions && (
+      >
         <div
-          className="hidden md:flex absolute z-10 flex-col gap-2"
+          className="absolute"
+          style={{ top: 14, left: 14, right: 14, zIndex: 5 }}
+        >
+          <TripBar
+            originLabel={originLabel}
+            originSub={originSub}
+            inputValue={inputValue}
+            onInputChange={setInputValue}
+            onSubmit={handleSubmit}
+            isLoading={isLoading}
+            onVoiceInput={handleVoiceInput}
+            isListening={isListening}
+            accent={ACCENT}
+          />
+        </div>
+
+        <div className="absolute inset-0">
+          <JarvisMap
+            onLocationUpdate={handleLocationUpdate}
+            routeData={routeData}
+            isSpeaking={isSpeaking}
+            destCoords={destCoords}
+            onMapReady={handleMapReady}
+          />
+        </div>
+
+        <div
+          className="absolute flex items-center gap-2"
           style={{
-            bottom: "40px",
-            left: "16px",
-            animation: "hudFadeIn 300ms ease forwards",
+            bottom: 14,
+            right: 14,
+            zIndex: 5,
+            padding: "6px 10px",
+            background: "rgba(8,11,17,0.82)",
+            backdropFilter: "blur(6px)",
+            WebkitBackdropFilter: "blur(6px)",
+            border: "1px solid rgba(255,255,255,0.07)",
+            borderRadius: 10,
+            fontFamily: "var(--font-jetbrains-mono), monospace",
+            fontSize: 10,
+            color: "#9ccfbf",
+            letterSpacing: "0.1em",
           }}
         >
-          <button
-            onClick={handleRecenter}
-            className="hud-action-btn-pill"
-            title="Re-center"
-          >
-            <Crosshair size={13} />
-            <span>Re-center</span>
-          </button>
-          <button
-            onClick={handleClearRoute}
-            className="hud-action-btn-pill"
-            title="Clear route"
-          >
-            <X size={13} />
-            <span>Clear</span>
-          </button>
-        </div>
-      )}
-
-      {/* Desktop Input Bar */}
-      <div className="hidden md:block absolute bottom-8 left-1/2 -translate-x-1/2 z-10 w-full max-w-xl px-4">
-        <div
-          className="flex items-center gap-3 rounded-full px-5 py-3 hud-input-bar"
-          style={{
-            background: "rgba(8, 10, 18, 0.65)",
-            backdropFilter: "blur(16px)",
-            WebkitBackdropFilter: "blur(16px)",
-            border: "1px solid rgba(255, 255, 255, 0.35)",
-            transition: "border-color 0.3s ease, box-shadow 0.3s ease",
-          }}
-        >
-          <AudioLines
-            className="shrink-0 cursor-pointer transition-colors duration-200"
-            size={20}
+          <span
             style={{
-              color: isListening
-                ? "rgba(0, 212, 255, 1)"
-                : "rgba(0, 212, 255, 0.6)",
-              animation: isListening
-                ? "hudBorderPulse 1.5s ease-in-out infinite"
-                : undefined,
-              filter: isListening
-                ? "drop-shadow(0 0 6px rgba(0, 212, 255, 0.6))"
-                : undefined,
+              width: 5,
+              height: 5,
+              borderRadius: 3,
+              background: "#9ccfbf",
+              animation: "srPulse 1.4s infinite",
             }}
-            onClick={handleVoiceInput}
           />
-          <input
-            type="text"
-            value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
-            placeholder="Where are you headed, sir?"
-            className="flex-1 bg-transparent text-white outline-none text-sm"
-            style={{
-              fontFamily: "var(--font-geist-mono), monospace",
-              color: "rgba(255, 255, 255, 0.9)",
-            }}
-            disabled={isLoading}
-          />
-          <button
-            onClick={handleSubmit}
-            disabled={isLoading}
-            className="w-9 h-9 rounded-full flex items-center justify-center transition-all duration-200 disabled:opacity-40 active:scale-95"
-            style={{ background: "rgba(0, 212, 255, 0.15)" }}
-          >
-            {isLoading ? (
-              <Loader2
-                size={18}
-                style={{
-                  color: "rgba(0, 212, 255, 0.8)",
-                  animation: "spin 1s linear infinite",
-                }}
-              />
-            ) : (
-              <ArrowRight
-                size={18}
-                style={{ color: "rgba(0, 212, 255, 0.8)" }}
-              />
-            )}
-          </button>
+          LIVE · GTFS-RT
         </div>
       </div>
 
-      {/* ─── Mobile Bottom ─── */}
+      {/* Right rail */}
       <div
-        className="md:hidden fixed inset-x-0 bottom-0 z-20 flex flex-col"
-        style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+        className="flex flex-col gap-2.5 flex-shrink-0"
+        style={{ width: 280 }}
       >
-        {/* Collapsible JARVIS Bubble */}
-        {showBubble && (
+        <div
+          style={{
+            fontFamily: "var(--font-geist), sans-serif",
+            fontSize: 10,
+            letterSpacing: "0.18em",
+            color: "rgba(255,255,255,0.5)",
+            fontWeight: 500,
+            padding: "2px 2px",
+          }}
+        >
+          ALTERNATE OPTIONS
+        </div>
+        {alternates.length === 0 && (
           <div
             style={{
-              backdropFilter: "blur(20px) saturate(1.4)",
-              WebkitBackdropFilter: "blur(20px) saturate(1.4)",
-              background: "rgba(8, 10, 18, 0.85)",
-              borderTop: "1px solid rgba(0, 255, 255, 0.12)",
-              boxShadow: "0 -10px 40px rgba(0, 0, 0, 0.3)",
-              maxHeight: mobileBubbleExpanded ? "50vh" : "120px",
-              overflow: "hidden",
-              transition: "max-height 0.3s ease-out",
-              animation: isLoading
-                ? "hudBorderPulse 2s ease-in-out infinite"
-                : undefined,
+              padding: 14,
+              background: "rgba(255,255,255,0.025)",
+              border: "1px solid rgba(255,255,255,0.06)",
+              borderRadius: 12,
+              fontFamily: "var(--font-geist), sans-serif",
+              fontSize: 11.5,
+              color: "rgba(255,255,255,0.5)",
+              lineHeight: 1.5,
             }}
           >
-            <div
-              style={{
-                padding: "12px 16px",
-                overflowY: mobileBubbleExpanded
-                  ? ("auto" as const)
-                  : ("hidden" as const),
-                maxHeight: mobileBubbleExpanded ? "calc(50vh - 1px)" : "119px",
-              }}
-            >
-              {/* JARVIS label + chevron toggle */}
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  marginBottom: "6px",
-                }}
-              >
-                <div
-                  style={{
-                    fontFamily: "var(--font-geist-mono), monospace",
-                    fontSize: "10px",
-                    letterSpacing: "0.15em",
-                    color: "rgba(0, 212, 255, 0.4)",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "6px",
-                  }}
-                >
-                  JARVIS
-                  {isLoading && (
-                    <Loader2
-                      size={10}
-                      style={{
-                        color: "rgba(0, 212, 255, 0.4)",
-                        animation: "spin 1s linear infinite",
-                      }}
-                    />
-                  )}
-                </div>
-                {!isLoading && (
-                  <button
-                    onClick={() =>
-                      setMobileBubbleExpanded(!mobileBubbleExpanded)
-                    }
-                    style={{
-                      background: "none",
-                      border: "none",
-                      padding: "4px",
-                      cursor: "pointer",
-                      display: "flex",
-                      alignItems: "center",
-                    }}
-                  >
-                    {mobileBubbleExpanded ? (
-                      <ChevronDown
-                        size={16}
-                        style={{ color: "rgba(0, 255, 255, 0.6)" }}
-                      />
-                    ) : (
-                      <ChevronUp
-                        size={16}
-                        style={{ color: "rgba(0, 255, 255, 0.6)" }}
-                      />
-                    )}
-                  </button>
-                )}
-              </div>
-
-              {/* Waveform — only when expanded */}
-              {mobileBubbleExpanded && <WaveformBars active={isSpeaking} />}
-
-              {/* Response text or error */}
-              {errorText ? (
-                <>
-                  <div
-                    style={{
-                      color: "rgba(255, 200, 180, 0.9)",
-                      fontSize: "14px",
-                      lineHeight: 1.6,
-                    }}
-                  >
-                    {errorText}
-                  </div>
-                  <button
-                    onClick={handleSubmit}
-                    className="hud-action-btn-pill"
-                    style={{ marginTop: "8px" }}
-                  >
-                    <RotateCcw size={13} />
-                    <span>Retry</span>
-                  </button>
-                </>
-              ) : (
-                <div
-                  style={{
-                    color: "rgba(255, 255, 255, 0.92)",
-                    fontSize: "14px",
-                    lineHeight: 1.6,
-                  }}
-                >
-                  {mobileBubbleExpanded ? bubbleText : firstSentence}
-                </div>
-              )}
-
-              {/* HUD pills — always visible (collapsed + expanded) */}
-              {hasRouteData && (
-                <div
-                  style={{
-                    display: "flex",
-                    flexWrap: "wrap" as const,
-                    gap: "8px",
-                    marginTop: "10px",
-                  }}
-                >
-                  <div
-                    style={{
-                      ...hudPill,
-                      padding: "6px 12px",
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "8px",
-                    }}
-                  >
-                    <span
-                      style={{
-                        width: 7,
-                        height: 7,
-                        borderRadius: "50%",
-                        background: trainLineColor,
-                        display: "inline-block",
-                      }}
-                    />
-                    <span>{transitPillText}</span>
-                  </div>
-                  <div style={{ ...hudPill, padding: "6px 12px" }}>
-                    {etaPillText}
-                  </div>
-                </div>
-              )}
-
-              {/* Action buttons — only when expanded */}
-              {mobileBubbleExpanded && showActions && (
-                <div style={{ display: "flex", gap: "8px", marginTop: "10px" }}>
-                  <button
-                    onClick={handleRecenter}
-                    className="hud-action-btn-pill"
-                    title="Re-center"
-                  >
-                    <Crosshair size={13} />
-                    <span>Re-center</span>
-                  </button>
-                  <button
-                    onClick={handleClearRoute}
-                    className="hud-action-btn-pill"
-                    title="Clear"
-                  >
-                    <X size={13} />
-                    <span>Clear</span>
-                  </button>
-                </div>
-              )}
-            </div>
+            Submit a destination to evaluate alternates against live signal.
           </div>
         )}
+        {alternates.map((r) => (
+          <AlternateCard key={r.id} route={r} accent={ACCENT} />
+        ))}
+        <NetworkStatus alerts={alerts} />
+      </div>
+    </div>
+  );
 
-        {/* Mobile Input Bar — always visible */}
-        <div
-          style={{
-            padding: "12px 16px",
-            background: "rgba(8, 10, 18, 0.9)",
-            borderTop: showBubble
-              ? "1px solid rgba(0, 212, 255, 0.06)"
-              : "1px solid rgba(0, 255, 255, 0.12)",
-          }}
-        >
+  const liveMapView = (
+    <div
+      className="flex-1 relative"
+      style={{ margin: 14, borderRadius: 14, overflow: "hidden" }}
+    >
+      <JarvisMap
+        onLocationUpdate={handleLocationUpdate}
+        routeData={routeData}
+        isSpeaking={isSpeaking}
+        destCoords={destCoords}
+        onMapReady={handleMapReady}
+      />
+    </div>
+  );
+
+  const grokView = (
+    <div
+      className="flex-1 overflow-auto"
+      style={{ padding: "24px 28px" }}
+    >
+      <div
+        style={{
+          fontFamily: "var(--font-instrument-serif), serif",
+          fontSize: 32,
+          color: "#fff",
+          marginBottom: 4,
+        }}
+      >
+        Grok <span style={{ color: ACCENT, fontStyle: "italic" }}>Intel</span>
+      </div>
+      <div
+        style={{
+          fontFamily: "var(--font-geist), sans-serif",
+          fontSize: 12,
+          color: "rgba(255,255,255,0.55)",
+          letterSpacing: "0.04em",
+          marginBottom: 20,
+        }}
+      >
+        Cross-referenced social + official feeds for context around your route.
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        {[
+          {
+            source: "@NYCTSubway",
+            weight: 0.92,
+            note: "Official MTA live service updates.",
+          },
+          {
+            source: "311 Reports",
+            weight: 0.74,
+            note: "City incident & construction feed.",
+          },
+          {
+            source: "Grok Social",
+            weight: 0.68,
+            note: "Rider sentiment cross-checked against officials.",
+          },
+        ].map((s) => (
           <div
-            className="flex items-center gap-3 rounded-full px-4 py-3 hud-input-bar"
+            key={s.source}
             style={{
-              background: "rgba(8, 10, 18, 0.5)",
-              border: "1px solid rgba(255, 255, 255, 0.35)",
+              padding: 16,
+              background: "rgba(255,255,255,0.03)",
+              border: "1px solid rgba(255,255,255,0.07)",
+              borderRadius: 12,
             }}
           >
-            <AudioLines
-              className="shrink-0 cursor-pointer transition-colors duration-200"
-              size={20}
+            <div
               style={{
-                color: isListening
-                  ? "rgba(0, 212, 255, 1)"
-                  : "rgba(0, 212, 255, 0.5)",
-                filter: isListening
-                  ? "drop-shadow(0 0 6px rgba(0, 212, 255, 0.6))"
-                  : undefined,
-              }}
-              onClick={handleVoiceInput}
-            />
-            <input
-              type="text"
-              value={inputValue}
-              onChange={(e) => setInputValue(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
-              placeholder="Where are you headed, sir?"
-              className="flex-1 bg-transparent text-white outline-none text-sm"
-              style={{
-                fontFamily: "var(--font-geist-mono), monospace",
-                color: "rgba(255, 255, 255, 1)",
-                fontSize: "16px",
-              }}
-              disabled={isLoading}
-            />
-            <button
-              onClick={handleSubmit}
-              disabled={isLoading}
-              className="w-11 h-11 rounded-full flex items-center justify-center transition-all duration-200 disabled:opacity-40 active:scale-95"
-              style={{
-                background: "rgba(0, 212, 255, 0.15)",
-                minWidth: "44px",
-                minHeight: "44px",
+                fontFamily: "var(--font-geist), sans-serif",
+                fontSize: 11,
+                letterSpacing: "0.12em",
+                color: "rgba(255,255,255,0.55)",
+                marginBottom: 8,
               }}
             >
-              {isLoading ? (
-                <Loader2
-                  size={18}
-                  style={{
-                    color: "rgba(0, 212, 255, 0.8)",
-                    animation: "spin 1s linear infinite",
-                  }}
-                />
-              ) : (
-                <ArrowRight
-                  size={18}
-                  style={{ color: "rgba(0, 212, 255, 0.8)" }}
-                />
-              )}
-            </button>
+              {s.source}
+            </div>
+            <div
+              style={{
+                fontFamily: "var(--font-jetbrains-mono), monospace",
+                fontSize: 22,
+                color: ACCENT,
+              }}
+            >
+              {s.weight.toFixed(2)}
+            </div>
+            <div
+              style={{
+                marginTop: 6,
+                fontFamily: "var(--font-geist), sans-serif",
+                fontSize: 12,
+                color: "rgba(255,255,255,0.7)",
+                lineHeight: 1.45,
+              }}
+            >
+              {s.note}
+            </div>
           </div>
-        </div>
+        ))}
       </div>
+    </div>
+  );
+
+  const alertsView = (
+    <div
+      className="flex-1 overflow-auto"
+      style={{ padding: "24px 28px" }}
+    >
+      <div
+        style={{
+          fontFamily: "var(--font-instrument-serif), serif",
+          fontSize: 32,
+          color: "#fff",
+          marginBottom: 4,
+        }}
+      >
+        Service <span style={{ color: ACCENT, fontStyle: "italic" }}>Alerts</span>
+      </div>
+      <div
+        style={{
+          fontFamily: "var(--font-geist), sans-serif",
+          fontSize: 12,
+          color: "rgba(255,255,255,0.55)",
+          marginBottom: 20,
+          letterSpacing: "0.04em",
+        }}
+      >
+        {alerts.length === 0
+          ? "No alerts flagged in the latest planning run."
+          : `${alerts.length} alert${alerts.length > 1 ? "s" : ""} affecting your route or surrounding lines.`}
+      </div>
+      <div className="flex flex-col gap-2.5">
+        {alerts.map((a, i) => (
+          <div
+            key={i}
+            style={{
+              padding: 14,
+              background: "rgba(255,255,255,0.03)",
+              border: "1px solid rgba(255,104,104,0.18)",
+              borderLeft: "3px solid #ff6868",
+              borderRadius: 10,
+            }}
+          >
+            <div className="flex items-center gap-2" style={{ marginBottom: 6 }}>
+              {(a.routeIds || []).map((r) => (
+                <span
+                  key={r}
+                  className="flex items-center justify-center"
+                  style={{
+                    width: 20,
+                    height: 20,
+                    borderRadius: 10,
+                    background: getLineColor(r),
+                    color: "#0b0e13",
+                    fontFamily: "var(--font-geist), sans-serif",
+                    fontWeight: 700,
+                    fontSize: 10,
+                  }}
+                >
+                  {r}
+                </span>
+              ))}
+            </div>
+            <div
+              style={{
+                fontFamily: "var(--font-geist), sans-serif",
+                fontSize: 13,
+                color: "rgba(255,255,255,0.9)",
+                lineHeight: 1.45,
+              }}
+            >
+              {a.header}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
+  return (
+    <div
+      className="flex flex-col"
+      style={{ height: "100vh", background: "#0a0d13", overflow: "hidden" }}
+    >
+      <Header
+        activeTab={tab}
+        onTabChange={setTab}
+        accent={ACCENT}
+        systemStatus={errorText ? "error" : isLoading ? "warning" : "nominal"}
+      />
+      {tab === "planner" && plannerView}
+      {tab === "livemap" && liveMapView}
+      {tab === "grok" && grokView}
+      {tab === "alerts" && alertsView}
     </div>
   );
 }

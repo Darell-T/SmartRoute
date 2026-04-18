@@ -120,15 +120,40 @@
     @apply border-border outline-ring/50;
   }
   html {
-    background: #000;
+    background: #0a0d13;
   }
   body {
     @apply bg-background text-foreground;
     margin: 0;
     padding: 0;
-    background: #000;
+    background: #0a0d13;
+    color: #fff;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overflow: hidden;
     padding-top: env(safe-area-inset-top);
   }
+  /* Scrollbar — dashboard style */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.16); }
+}
+
+/* ── SmartRoute dashboard animations ── */
+@keyframes srPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.55; transform: scale(0.9); }
+}
+
+@keyframes srDrawIn {
+  from { stroke-dasharray: 0 400; }
+  to   { stroke-dasharray: 400 0; }
+}
+
+@keyframes srCardIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 /* HUD Animations */

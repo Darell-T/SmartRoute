@@ -86,8 +86,7 @@ function segmentLengths(coords: [number, number][]): { lens: number[]; total: nu
 function stepColor(step: RouteStep): [number, number, number] {
   if (step.type === "WALK") return hexToRgb(WALK_COLOR);
   if (step.type === "BUS") return hexToRgb(BUS_COLOR);
-  const hex = step.line_color || getLineColor(step.train_line || "");
-  return hexToRgb(hex);
+  return hexToRgb(getLineColor(step.train_line || ""));
 }
 
 function stepWidth(step: RouteStep): number {
