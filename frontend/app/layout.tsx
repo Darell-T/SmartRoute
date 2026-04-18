@@ -1,13 +1,26 @@
 import type { Metadata, Viewport } from 'next'
-import { Space_Grotesk } from 'next/font/google'
-import { GeistMono } from 'geist/font/mono'
+import { Geist, Instrument_Serif, JetBrains_Mono } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/next'
 import './globals.css'
 
-const spaceGrotesk = Space_Grotesk({
-  subsets: ["latin"],
-  weight: ['400', '500', '600'],
-});
+const geist = Geist({
+  subsets: ['latin'],
+  weight: ['300', '400', '500', '600', '700'],
+  variable: '--font-geist',
+})
+
+const instrumentSerif = Instrument_Serif({
+  subsets: ['latin'],
+  weight: ['400'],
+  style: ['normal', 'italic'],
+  variable: '--font-instrument-serif',
+})
+
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ['latin'],
+  weight: ['300', '400', '500'],
+  variable: '--font-jetbrains-mono',
+})
 
 export const viewport: Viewport = {
   width: 'device-width',
@@ -44,7 +57,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${spaceGrotesk.className} ${GeistMono.variable} antialiased`}>
+      <body
+        className={`${geist.variable} ${instrumentSerif.variable} ${jetbrainsMono.variable} antialiased`}
+        style={{ fontFamily: 'var(--font-geist), system-ui, -apple-system, sans-serif' }}
+      >
         {children}
         <Analytics />
       </body>
