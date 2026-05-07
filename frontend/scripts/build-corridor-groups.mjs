@@ -52,7 +52,7 @@ const ROUTE_2_EDGE_STITCH_EPSILON_METERS = 1.5;
 // in geographic space (not screen space) — invariant under zoom. Tune by
 // taking a screenshot at zoom 14 of a known multi-route trunk and adjusting
 // until bundle separation matches the MTA map.
-const LANE_WIDTH_METERS = 6;
+const LANE_WIDTH_METERS = 12;
 
 // Distance over which the perpendicular shift ramps from full lane offset
 // down to zero at solo↔group transitions. Prevents visible jumps when a
