@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-05-07T11:43:11.787Z",
+  "generated_at": "2026-05-07T16:34:46.472Z",
   "source": "build-corridor-groups",
   "route_2_summary": {
     "raw_shape_count": 5,
@@ -24605,7 +24605,7 @@
       "effective_render_key": "1|1-main|lane:-1|z:179|color:#D82233|kind:group|style:subway-ribbon-v1",
       "handoff_node_id": "handoff-1-1-main--73.96838,40.79945",
       "handoff_reason": "detected-corridor-exit",
-      "length_meters": 10154,
+      "length_meters": 10150,
       "bbox_start": "canal-broadway-lafayette",
       "bbox_end": null
     },
@@ -24736,7 +24736,7 @@
       "effective_render_key": "2|2-main|lane:-1.5|z:285|color:#D82233|kind:group|style:subway-ribbon-v1",
       "handoff_node_id": "handoff-2-2-main--73.98049,40.68825",
       "handoff_reason": "station-adjacent-membership-change",
-      "length_meters": 4315,
+      "length_meters": 4314,
       "bbox_start": "eastern-pkwy",
       "bbox_end": "lower-manhattan-river-crossings"
     },
@@ -25059,7 +25059,7 @@
       "effective_render_key": "3|3-main|lane:1|z:241|color:#D82233|kind:group|style:subway-ribbon-v1",
       "handoff_node_id": "handoff-3-3-main--73.93624,40.82042",
       "handoff_reason": "detected-corridor-exit",
-      "length_meters": 19096,
+      "length_meters": 19091,
       "bbox_start": "lower-manhattan-river-crossings",
       "bbox_end": null
     },
@@ -25182,7 +25182,7 @@
       "effective_render_key": "4|4-main|lane:0.5|z:287|color:#009952|kind:group|style:subway-ribbon-v1",
       "handoff_node_id": "handoff-4-4-main--73.98049,40.68825",
       "handoff_reason": "station-adjacent-membership-change",
-      "length_meters": 5040,
+      "length_meters": 5039,
       "bbox_start": "eastern-pkwy",
       "bbox_end": "lower-manhattan-river-crossings"
     },
@@ -25251,7 +25251,7 @@
       "effective_render_key": "4|4-main|lane:-1|z:189|color:#009952|kind:group|style:subway-ribbon-v1",
       "handoff_node_id": "handoff-4-4-main--73.92735,40.81838",
       "handoff_reason": "detected-corridor-exit",
-      "length_meters": 18466,
+      "length_meters": 18457,
       "bbox_start": "lower-manhattan-river-crossings",
       "bbox_end": null
     },
@@ -25392,7 +25392,7 @@
       "effective_render_key": "5|5-main|lane:1.5|z:288|color:#009952|kind:group|style:subway-ribbon-v1",
       "handoff_node_id": "handoff-5-5-main--73.98049,40.68825",
       "handoff_reason": "station-adjacent-membership-change",
-      "length_meters": 5035,
+      "length_meters": 5034,
       "bbox_start": "eastern-pkwy",
       "bbox_end": "lower-manhattan-river-crossings"
     },
@@ -25585,7 +25585,7 @@
       "effective_render_key": "6|6-main|lane:1|z:211|color:#009952|kind:group|style:subway-ribbon-v1",
       "handoff_node_id": "handoff-6-6-main--73.92614,40.81048",
       "handoff_reason": "detected-corridor-exit",
-      "length_meters": 13240,
+      "length_meters": 13237,
       "bbox_start": "chambers-park-place-wtc",
       "bbox_end": null
     },
@@ -25839,7 +25839,7 @@
       "effective_render_key": "A|a-main|lane:-1|z:69|color:#0062CF|kind:group|style:subway-ribbon-v1",
       "handoff_node_id": "handoff-a-a-main--73.93956,40.84072",
       "handoff_reason": "detected-corridor-exit",
-      "length_meters": 29939,
+      "length_meters": 29934,
       "bbox_start": null,
       "bbox_end": null
     },
@@ -25926,7 +25926,7 @@
       "effective_render_key": "B|b-main|lane:-0.5|z:295|color:#EB6800|kind:group|style:subway-ribbon-v1",
       "handoff_node_id": "handoff-b-b-main--73.97237,40.67705",
       "handoff_reason": "station-adjacent-membership-change",
-      "length_meters": 11573,
+      "length_meters": 11572,
       "bbox_start": null,
       "bbox_end": "dekalb-atlantic-barclays"
     },
@@ -26044,7 +26044,7 @@
       "effective_render_key": "B|b-main|lane:-1.5|z:220|color:#EB6800|kind:group|style:subway-ribbon-v1",
       "handoff_node_id": "handoff-b-b-main--73.98174,40.76830",
       "handoff_reason": "station-adjacent-membership-change",
-      "length_meters": 6885,
+      "length_meters": 6883,
       "bbox_start": "canal-broadway-lafayette",
       "bbox_end": "59-lex-5av-57"
     },
@@ -26100,7 +26100,7 @@
       "effective_render_key": "B|b-main|lane:-1.5|z:118.5|color:#EB6800|kind:group|style:subway-ribbon-v1",
       "handoff_node_id": "handoff-b-b-main--73.98174,40.76830",
       "handoff_reason": "station-adjacent-membership-change",
-      "length_meters": 15288,
+      "length_meters": 15274,
       "bbox_start": "59-lex-5av-57",
       "bbox_end": "bedford-park-blvd"
     },
@@ -26384,7 +26384,7 @@
       "effective_render_key": "D|d-main|lane:-0.5|z:129.5|color:#EB6800|kind:group|style:subway-ribbon-v1",
       "handoff_node_id": "handoff-d-d-main--73.88714,40.87324",
       "handoff_reason": "detected-corridor-exit",
-      "length_meters": 15275,
+      "length_meters": 15273,
       "bbox_start": "59-lex-5av-57",
       "bbox_end": "bedford-park-blvd"
     },
@@ -26464,7 +26464,7 @@
       "effective_render_key": "E|e-main|lane:1|z:91|color:#0062CF|kind:group|style:subway-ribbon-v1",
       "handoff_node_id": "handoff-e-e-main--73.98598,40.76246",
       "handoff_reason": "detected-corridor-exit",
-      "length_meters": 6154,
+      "length_meters": 6153,
       "bbox_start": "chambers-park-place-wtc",
       "bbox_end": "59-lex-5av-57"
     },
@@ -26634,7 +26634,7 @@
       "effective_render_key": "F|f-main|lane:0.5|z:222|color:#EB6800|kind:group|style:subway-ribbon-v1",
       "handoff_node_id": "handoff-f-f-main--73.97745,40.76397",
       "handoff_reason": "station-adjacent-membership-change",
-      "length_meters": 5694,
+      "length_meters": 5693,
       "bbox_start": "canal-broadway-lafayette",
       "bbox_end": "59-lex-5av-57"
     },
@@ -26686,7 +26686,7 @@
       "effective_render_key": "F|f-main|lane:0.5|z:100.5|color:#EB6800|kind:group|style:subway-ribbon-v1",
       "handoff_node_id": "handoff-f-f-main--73.84452,40.72169",
       "handoff_reason": "detected-corridor-exit",
-      "length_meters": 13675,
+      "length_meters": 13673,
       "bbox_start": "59-lex-5av-57",
       "bbox_end": null
     },
@@ -26889,7 +26889,7 @@
       "effective_render_key": "J|j-main|lane:-0.5|z:49.5|color:#8E5C33|kind:group|style:subway-ribbon-v1",
       "handoff_node_id": "handoff-j-j-main--73.98744,40.71831",
       "handoff_reason": "station-adjacent-membership-change",
-      "length_meters": 18467,
+      "length_meters": 18466,
       "bbox_start": null,
       "bbox_end": null
     },
@@ -27067,7 +27067,7 @@
       "effective_render_key": "M|m-main|lane:1.5|z:223|color:#EB6800|kind:group|style:subway-ribbon-v1",
       "handoff_node_id": "handoff-m-m-main--73.97745,40.76397",
       "handoff_reason": "station-adjacent-membership-change",
-      "length_meters": 5117,
+      "length_meters": 5116,
       "bbox_start": "canal-broadway-lafayette",
       "bbox_end": "59-lex-5av-57"
     },
@@ -27115,7 +27115,7 @@
       "effective_render_key": "M|m-main|lane:1.5|z:111.5|color:#EB6800|kind:group|style:subway-ribbon-v1",
       "handoff_node_id": "handoff-m-m-main--73.97745,40.76397",
       "handoff_reason": "station-adjacent-membership-change",
-      "length_meters": 13676,
+      "length_meters": 13664,
       "bbox_start": "59-lex-5av-57",
       "bbox_end": null
     },
@@ -27210,7 +27210,7 @@
       "effective_render_key": "N|n-main|lane:-1.5|z:138.5|color:#F6BC26|kind:group|style:subway-ribbon-v1",
       "handoff_node_id": "handoff-n-n-main--73.98311,40.67732",
       "handoff_reason": "station-adjacent-membership-change",
-      "length_meters": 12143,
+      "length_meters": 12135,
       "bbox_start": null,
       "bbox_end": "dekalb-atlantic-barclays"
     },
@@ -27250,7 +27250,7 @@
       "effective_render_key": "N|n-main|lane:-1.1|z:302|color:#F6BC26|kind:group|style:subway-ribbon-v1",
       "handoff_node_id": "handoff-n-n-main--73.99178,40.69410",
       "handoff_reason": "station-adjacent-membership-change",
-      "length_meters": 2729,
+      "length_meters": 2728,
       "bbox_start": "dekalb-atlantic-barclays",
       "bbox_end": "lower-manhattan-river-crossings"
     },
@@ -27308,7 +27308,7 @@
       "effective_render_key": "N|n-main|lane:-1.5|z:240|color:#F6BC26|kind:group|style:subway-ribbon-v1",
       "handoff_node_id": "handoff-n-n-main--73.96726,40.76266",
       "handoff_reason": "station-adjacent-membership-change",
-      "length_meters": 11675,
+      "length_meters": 11664,
       "bbox_start": "lower-manhattan-river-crossings",
       "bbox_end": "59-lex-5av-57"
     },
@@ -27354,7 +27354,7 @@
       "effective_render_key": "N|n-main|lane:-1.5|z:138.5|color:#F6BC26|kind:group|style:subway-ribbon-v1",
       "handoff_node_id": "handoff-n-n-main--73.96726,40.76266",
       "handoff_reason": "station-adjacent-membership-change",
-      "length_meters": 6537,
+      "length_meters": 6536,
       "bbox_start": "59-lex-5av-57",
       "bbox_end": null
     },
@@ -27440,7 +27440,7 @@
       "effective_render_key": "Q|q-main|lane:0.5|z:296|color:#F6BC26|kind:group|style:subway-ribbon-v1",
       "handoff_node_id": "handoff-q-q-main--73.97237,40.67705",
       "handoff_reason": "station-adjacent-membership-change",
-      "length_meters": 12848,
+      "length_meters": 12847,
       "bbox_start": "coney-island-stillwell",
       "bbox_end": "dekalb-atlantic-barclays"
     },
@@ -27529,7 +27529,7 @@
       "effective_render_key": "Q|q-main|lane:-0.5|z:241|color:#F6BC26|kind:group|style:subway-ribbon-v1",
       "handoff_node_id": "handoff-q-q-main--73.98182,40.69064",
       "handoff_reason": "station-adjacent-membership-change",
-      "length_meters": 13610,
+      "length_meters": 13609,
       "bbox_start": "lower-manhattan-river-crossings",
       "bbox_end": null
     },
@@ -27612,7 +27612,7 @@
       "effective_render_key": "R|r-main|lane:0.5|z:160.5|color:#F6BC26|kind:group|style:subway-ribbon-v1",
       "handoff_node_id": "handoff-r-r-main--73.97335,40.76481",
       "handoff_reason": "station-adjacent-membership-change",
-      "length_meters": 4615,
+      "length_meters": 4614,
       "bbox_start": null,
       "bbox_end": "59-lex-5av-57"
     },
@@ -27663,7 +27663,7 @@
       "effective_render_key": "R|r-main|lane:0.5|z:242|color:#F6BC26|kind:group|style:subway-ribbon-v1",
       "handoff_node_id": "handoff-r-r-main--74.01299,40.70309",
       "handoff_reason": "station-adjacent-membership-change",
-      "length_meters": 8823,
+      "length_meters": 8826,
       "bbox_start": "59-lex-5av-57",
       "bbox_end": "lower-manhattan-river-crossings"
     },
@@ -27746,7 +27746,7 @@
       "effective_render_key": "R|r-main|lane:-1.55|z:301|color:#F6BC26|kind:group|style:subway-ribbon-v1",
       "handoff_node_id": "handoff-r-r-main--73.98311,40.67732",
       "handoff_reason": "station-adjacent-membership-change",
-      "length_meters": 2757,
+      "length_meters": 2756,
       "bbox_start": "lower-manhattan-river-crossings",
       "bbox_end": "dekalb-atlantic-barclays"
     },
@@ -27961,7 +27961,7 @@
       "effective_render_key": "W|w-main|lane:1.5|z:171.5|color:#F6BC26|kind:group|style:subway-ribbon-v1",
       "handoff_node_id": "handoff-w-w-main--73.98311,40.67732",
       "handoff_reason": "station-adjacent-membership-change",
-      "length_meters": 12129,
+      "length_meters": 12124,
       "bbox_start": null,
       "bbox_end": "dekalb-atlantic-barclays"
     },
@@ -27999,7 +27999,7 @@
       "effective_render_key": "W|w-main|lane:-2|z:300|color:#F6BC26|kind:group|style:subway-ribbon-v1",
       "handoff_node_id": "handoff-w-w-main--73.99178,40.69410",
       "handoff_reason": "station-adjacent-membership-change",
-      "length_meters": 2723,
+      "length_meters": 2720,
       "bbox_start": "dekalb-atlantic-barclays",
       "bbox_end": "lower-manhattan-river-crossings"
     },
@@ -28084,7 +28084,7 @@
       "effective_render_key": "W|w-main|lane:1.5|z:243|color:#F6BC26|kind:group|style:subway-ribbon-v1",
       "handoff_node_id": "handoff-w-w-main--73.97335,40.76481",
       "handoff_reason": "station-adjacent-membership-change",
-      "length_meters": 8476,
+      "length_meters": 8469,
       "bbox_start": "lower-manhattan-river-crossings",
       "bbox_end": "59-lex-5av-57"
     },
@@ -28129,7 +28129,7 @@
       "effective_render_key": "W|w-main|lane:1.5|z:171.5|color:#F6BC26|kind:group|style:subway-ribbon-v1",
       "handoff_node_id": "handoff-w-w-main--73.97335,40.76481",
       "handoff_reason": "station-adjacent-membership-change",
-      "length_meters": 7133,
+      "length_meters": 7131,
       "bbox_start": "59-lex-5av-57",
       "bbox_end": null
     },
@@ -28215,7 +28215,7 @@
       "effective_render_key": "Z|z-main|lane:0.5|z:60.5|color:#8E5C33|kind:group|style:subway-ribbon-v1",
       "handoff_node_id": "handoff-z-z-main--73.98744,40.71831",
       "handoff_reason": "station-adjacent-membership-change",
-      "length_meters": 18472,
+      "length_meters": 18470,
       "bbox_start": null,
       "bbox_end": null
     }

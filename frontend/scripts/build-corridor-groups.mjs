@@ -2224,31 +2224,21 @@ function featureForRun(line, run, coordinates, segmentIndex, group) {
     );
   }
 
-  // Bake the perpendicular lane offset directly into geometry coordinates so
-  // MapLibre does not need to apply line-offset at runtime (which produces
-  // V-gaps and phantom lines at curves). Solo segments have laneSlot = 0, so
-  // bakeLaneOffsetIntoPolyline returns the canonical coordinates unchanged.
-  //
-  // Taper: the runs-per-line model emits exactly one segment per route, so
-  // every grouped run is both the first and last segment for that route.
-  // We taper the perpendicular shift to 0 over the last TAPER_LENGTH_METERS
-  // at both endpoints so the line meets canonical geometry at terminals and
-  // bundle handoffs without a visible jump.
-  const offsetMeters = laneSlot * LANE_WIDTH_METERS;
-  const isGrouped = run.kind === "group" && Math.abs(offsetMeters) > 1e-9;
-  const bakedCoordinates = bakeLaneOffsetIntoPolyline(
-    coordinates,
-    offsetMeters,
-    isGrouped ? buildTaperFn(true, true) : null,
-  );
-
+  // Per-edge features intentionally emit CANONICAL coordinates here. The
+  // perpendicular lane offset is applied post-merge by
+  // `bakeOffsetsOnMergedFeatures()` inside `finalizeVisualFeatures()` so the
+  // taper at the endpoints applies only to true bundle entry/exit points
+  // (or route terminals), not to every per-stop-pair edge boundary. The
+  // historical per-edge bake produced "lines kiss the canonical track at
+  // every station" pinch points that visually collapsed bundled trios into
+  // a single line at typical viewing zoom. See the design plan for details.
   return {
     type: "Feature",
     id: debugId,
     properties: baseProperties,
     geometry: {
       type: "LineString",
-      coordinates: bakedCoordinates,
+      coordinates,
     },
   };
 }
@@ -3014,8 +3004,64 @@ function buildRoute2Summary(finalFeatures, route2RawEdgeArtifact) {
   };
 }
 
+/**
+ * Apply the perpendicular lane offset to each merged feature's coordinates.
+ *
+ * Runs AFTER mergeContiguousFeatures() so the bake operates on already-merged
+ * corridor segments. Taper applies only at each merged feature's true
+ * endpoints — i.e. route terminals or actual bundle entry/exit points — not
+ * at every per-stop-pair edge boundary. This is what eliminates the
+ * "pinch at every station" visual artifact.
+ *
+ * Solo features (laneSlot = 0) and features without a finite numeric slot
+ * pass through unchanged. Features whose geometry is not a LineString also
+ * pass through unchanged (defensive — the build script only emits
+ * LineStrings, but this keeps the helper safe under future changes).
+ */
+function bakeOffsetsOnMergedFeatures(features) {
+  return features.map((feature) => {
+    if (feature.geometry?.type !== "LineString") return feature;
+
+    const laneSlot = Number(feature.properties?.visual_lane_slot ?? 0);
+    if (!Number.isFinite(laneSlot) || Math.abs(laneSlot) < 1e-9) {
+      return feature;
+    }
+
+    const segmentKind = feature.properties?.segment_kind;
+    if (segmentKind !== "group") return feature;
+
+    const offsetMeters = laneSlot * LANE_WIDTH_METERS;
+    const baked = bakeLaneOffsetIntoPolyline(
+      feature.geometry.coordinates,
+      offsetMeters,
+      buildTaperFn(true, true),
+    );
+
+    return {
+      ...feature,
+      geometry: {
+        ...feature.geometry,
+        coordinates: baked,
+      },
+    };
+  });
+}
+
 function finalizeVisualFeatures(features) {
-  return annotateBranches(mergeContiguousFeatures(features));
+  // Order matters:
+  //   1. mergeContiguousFeatures  — stitches same-slot edges into one feature per
+  //                                 contiguous corridor segment.
+  //   2. bakeOffsetsOnMergedFeatures — applies the perpendicular offset to each
+  //                                 merged feature's coords, with taper only at
+  //                                 the merged feature's true endpoints.
+  //   3. annotateBranches         — adds handoff metadata and snaps adjacent
+  //                                 features' shared endpoints together. The
+  //                                 endpoints are already at canonical position
+  //                                 (offset = 0 at the taper boundary), so
+  //                                 snapping is a no-op against the bake.
+  return annotateBranches(
+    bakeOffsetsOnMergedFeatures(mergeContiguousFeatures(features)),
+  );
 }
 
 function buildCorridorGroups(familyVisual) {
