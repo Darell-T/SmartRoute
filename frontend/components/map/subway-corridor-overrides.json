@@ -65,6 +65,24 @@
     "transitionLengthMeters": 30
   },
   {
+    "corridorId": "manhattan-bridge-approach",
+    "routeIds": ["N", "Q"],
+    "bounds": { "minLng": -74.002, "minLat": 40.708, "maxLng": -73.982, "maxLat": 40.722 },
+    "laneOrder": ["N", "Q"],
+    "laneSlots": { "N": -0.5, "Q": 0.5 },
+    "zOrderBase": 250,
+    "transitionLengthMeters": 30
+  },
+  {
+    "corridorId": "broadway-south-rw",
+    "routeIds": ["R", "W"],
+    "bounds": { "minLng": -74.015, "minLat": 40.7, "maxLng": -74.000, "maxLat": 40.722 },
+    "laneOrder": ["R", "W"],
+    "laneSlots": { "R": -0.5, "W": 0.5 },
+    "zOrderBase": 245,
+    "transitionLengthMeters": 30
+  },
+  {
     "corridorId": "broadway-yellow-trunk",
     "routeIds": ["N", "Q", "R", "W"],
     "bounds": { "minLng": -74.015, "minLat": 40.7, "maxLng": -73.976, "maxLat": 40.768 },
