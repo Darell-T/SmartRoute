@@ -436,6 +436,50 @@ if (lexF4 && lexF6) {
   );
 }
 
+// Canal St join regression: B and D each have two merged features that meet
+// at [-73.993753, 40.718267] (the family-bundle ↔ 6av-orange-trunk
+// boundary). Pre-fix, both features tapered to canonical at the join,
+// producing a visible "kissing point". Post-fix, suppress-taper-at-same-
+// slot-endpoint logic keeps the join at full perpendicular offset.
+const canalJoin = [-73.993753, 40.718267];
+const distFromCanal = (c) => {
+  const dx = (c[0] - canalJoin[0]) * 84500;
+  const dy = (c[1] - canalJoin[1]) * 111320;
+  return Math.hypot(dx, dy);
+};
+for (const routeId of ["B", "D"]) {
+  const expectedOffset =
+    routeId === "B" ? 1.5 * 6 : 0.5 * 6; // |slot| × LANE_WIDTH_METERS
+  const segments = taperVisual.features.filter(
+    (f) =>
+      f.properties.route_id === routeId &&
+      f.properties.segment_kind === "group",
+  );
+  const touching = segments.filter((f) => {
+    const first = f.geometry.coordinates[0];
+    const last = f.geometry.coordinates.at(-1);
+    return distFromCanal(first) < 12 || distFromCanal(last) < 12;
+  });
+  if (touching.length >= 2) {
+    for (const f of touching) {
+      const first = f.geometry.coordinates[0];
+      const last = f.geometry.coordinates.at(-1);
+      const startDist = distFromCanal(first);
+      const endDist = distFromCanal(last);
+      const checkEndpoint = (dist, label) => {
+        if (dist < 12) {
+          assert.ok(
+            Math.abs(dist - expectedOffset) < 3,
+            `route ${routeId} ${label} at Canal join is ${dist.toFixed(2)}m from canonical, expected ~${expectedOffset}m (the per-corridor-boundary kissing should be suppressed)`,
+          );
+        }
+      };
+      checkEndpoint(startDist, "start");
+      checkEndpoint(endDist, "end");
+    }
+  }
+}
+
 console.log("corridor group checks passed", {
   groups: groups.groups.length,
   features: visual.features.length,
