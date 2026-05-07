@@ -482,6 +482,29 @@ for (const routeId of ["B", "D"]) {
   }
 }
 
+// Canal St divergence: N/Q south of Canal must be in manhattan-bridge-approach
+// (curving toward Manhattan Bridge), R/W south of Canal must be in
+// broadway-south-rw (continuing south on Broadway to Whitehall). Pre-fix all
+// four were lumped into broadway-yellow-trunk, producing the lens/teardrop
+// visual at the divergence point.
+const canalDivergenceCases = [
+  { routeId: "N", expectedCorridor: "manhattan-bridge-approach" },
+  { routeId: "Q", expectedCorridor: "manhattan-bridge-approach" },
+  { routeId: "R", expectedCorridor: "broadway-south-rw" },
+  { routeId: "W", expectedCorridor: "broadway-south-rw" },
+];
+for (const { routeId, expectedCorridor } of canalDivergenceCases) {
+  const matching = taperVisual.features.filter(
+    (f) =>
+      f.properties.route_id === routeId &&
+      f.properties.corridor_id === expectedCorridor,
+  );
+  assert.ok(
+    matching.length > 0,
+    `route ${routeId} must have at least one feature in ${expectedCorridor} after the Canal St override split`,
+  );
+}
+
 console.log("corridor group checks passed", {
   groups: groups.groups.length,
   features: visual.features.length,

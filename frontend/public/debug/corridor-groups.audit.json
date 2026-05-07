@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-05-07T17:33:57.166Z",
+  "generated_at": "2026-05-07T22:46:23.131Z",
   "source": "build-corridor-groups",
   "route_2_summary": {
     "raw_shape_count": 5,
@@ -325,6 +325,28 @@
       "total_length_meters": 24419
     },
     {
+      "group_id": "group-manual-broadway-south-rw",
+      "visual_family": "manual:broadway-south-rw",
+      "member_routes": [
+        "R",
+        "W"
+      ],
+      "member_visual_routes": [
+        "R",
+        "W"
+      ],
+      "lane_order": [
+        "R",
+        "W"
+      ],
+      "lane_order_visual": [
+        "R",
+        "W"
+      ],
+      "segment_count": 9,
+      "total_length_meters": 5496
+    },
+    {
       "group_id": "group-manual-broadway-yellow-trunk",
       "visual_family": "manual:broadway-yellow-trunk",
       "member_routes": [
@@ -351,8 +373,8 @@
         "R",
         "W"
       ],
-      "segment_count": 52,
-      "total_length_meters": 35325
+      "segment_count": 41,
+      "total_length_meters": 27971
     },
     {
       "group_id": "group-manual-dekalb-atlantic",
@@ -437,6 +459,28 @@
       ],
       "segment_count": 28,
       "total_length_meters": 19445
+    },
+    {
+      "group_id": "group-manual-manhattan-bridge-approach",
+      "visual_family": "manual:manhattan-bridge-approach",
+      "member_routes": [
+        "N",
+        "Q"
+      ],
+      "member_visual_routes": [
+        "N",
+        "Q"
+      ],
+      "lane_order": [
+        "N",
+        "Q"
+      ],
+      "lane_order_visual": [
+        "N",
+        "Q"
+      ],
+      "segment_count": 2,
+      "total_length_meters": 1858
     },
     {
       "group_id": "group-manual-montague-nrw-tunnel",
@@ -19430,12 +19474,10 @@
       "visual_branch_id": "n-main",
       "segment_index": 0,
       "segment_kind": "group",
-      "group_id": "group-manual-broadway-yellow-trunk",
+      "group_id": "group-manual-manhattan-bridge-approach",
       "member_routes": [
         "N",
-        "Q",
-        "R",
-        "W"
+        "Q"
       ],
       "length_meters": 1063
     },
@@ -20586,12 +20628,10 @@
       "visual_branch_id": "q-main",
       "segment_index": 0,
       "segment_kind": "group",
-      "group_id": "group-manual-broadway-yellow-trunk",
+      "group_id": "group-manual-manhattan-bridge-approach",
       "member_routes": [
         "N",
-        "Q",
-        "R",
-        "W"
+        "Q"
       ],
       "length_meters": 795
     },
@@ -21626,10 +21666,8 @@
       "visual_branch_id": "r-main",
       "segment_index": 0,
       "segment_kind": "group",
-      "group_id": "group-manual-broadway-yellow-trunk",
+      "group_id": "group-manual-broadway-south-rw",
       "member_routes": [
-        "N",
-        "Q",
         "R",
         "W"
       ],
@@ -21658,10 +21696,8 @@
       "visual_branch_id": "r-main",
       "segment_index": 0,
       "segment_kind": "group",
-      "group_id": "group-manual-broadway-yellow-trunk",
+      "group_id": "group-manual-broadway-south-rw",
       "member_routes": [
-        "N",
-        "Q",
         "R",
         "W"
       ],
@@ -21690,10 +21726,8 @@
       "visual_branch_id": "r-main",
       "segment_index": 0,
       "segment_kind": "group",
-      "group_id": "group-manual-broadway-yellow-trunk",
+      "group_id": "group-manual-broadway-south-rw",
       "member_routes": [
-        "N",
-        "Q",
         "R",
         "W"
       ],
@@ -21722,10 +21756,8 @@
       "visual_branch_id": "r-main",
       "segment_index": 0,
       "segment_kind": "group",
-      "group_id": "group-manual-broadway-yellow-trunk",
+      "group_id": "group-manual-broadway-south-rw",
       "member_routes": [
-        "N",
-        "Q",
         "R",
         "W"
       ],
@@ -21754,10 +21786,8 @@
       "visual_branch_id": "r-main",
       "segment_index": 0,
       "segment_kind": "group",
-      "group_id": "group-manual-broadway-yellow-trunk",
+      "group_id": "group-manual-broadway-south-rw",
       "member_routes": [
-        "N",
-        "Q",
         "R",
         "W"
       ],
@@ -23347,10 +23377,8 @@
       "visual_branch_id": "w-main",
       "segment_index": 0,
       "segment_kind": "group",
-      "group_id": "group-manual-broadway-yellow-trunk",
+      "group_id": "group-manual-broadway-south-rw",
       "member_routes": [
-        "N",
-        "Q",
         "R",
         "W"
       ],
@@ -23378,10 +23406,8 @@
       "visual_branch_id": "w-main",
       "segment_index": 0,
       "segment_kind": "group",
-      "group_id": "group-manual-broadway-yellow-trunk",
+      "group_id": "group-manual-broadway-south-rw",
       "member_routes": [
-        "N",
-        "Q",
         "R",
         "W"
       ],
@@ -23409,10 +23435,8 @@
       "visual_branch_id": "w-main",
       "segment_index": 0,
       "segment_kind": "group",
-      "group_id": "group-manual-broadway-yellow-trunk",
+      "group_id": "group-manual-broadway-south-rw",
       "member_routes": [
-        "N",
-        "Q",
         "R",
         "W"
       ],
@@ -23440,10 +23464,8 @@
       "visual_branch_id": "w-main",
       "segment_index": 0,
       "segment_kind": "group",
-      "group_id": "group-manual-broadway-yellow-trunk",
+      "group_id": "group-manual-broadway-south-rw",
       "member_routes": [
-        "N",
-        "Q",
         "R",
         "W"
       ],
@@ -27262,8 +27284,81 @@
       ],
       "raw_shape_ids": [
         "N..N20R",
-        "N..S20R",
+        "N..S20R"
+      ],
+      "visual_edge_ids": [
+        "n:R27-R28",
+        "n:R26-R27",
+        "n:R25-R26",
+        "n:R24-R25",
+        "n:R23-R24"
+      ],
+      "edge_count": 5,
+      "from_stop_id": "R28",
+      "to_stop_id": "R23",
+      "from_stop_name": "Court St",
+      "to_stop_name": "Canal St",
+      "edge_sequence": 21,
+      "visual_branch_id": "n-main",
+      "group_sequence": 3,
+      "segment_kind": "group",
+      "group_id": "group-manual-montague-nrw-tunnel",
+      "merged_group_ids": [
+        "group-manual-montague-nrw-tunnel",
+        "group-manual-broadway-yellow-trunk"
+      ],
+      "visual_lane_slot": -1.5,
+      "effective_render_key": "N|n-main|lane:-1.5|z:240|color:#F6BC26|kind:group|style:subway-ribbon-v1",
+      "handoff_node_id": "handoff-n-n-main--74.00177,40.71953",
+      "handoff_reason": "station-adjacent-membership-change",
+      "length_meters": 4434,
+      "bbox_start": "lower-manhattan-river-crossings",
+      "bbox_end": "canal-broadway-lafayette"
+    },
+    {
+      "route_id": "N",
+      "visual_route_id": "N",
+      "raw_route_ids": [
+        "N"
+      ],
+      "raw_shape_ids": [
+        "N..N20R",
+        "N..S20R"
+      ],
+      "visual_edge_ids": [
+        "n:R22-R23"
+      ],
+      "edge_count": 1,
+      "from_stop_id": "R23",
+      "to_stop_id": "R22",
+      "from_stop_name": "Canal St",
+      "to_stop_name": "Prince St",
+      "edge_sequence": 26,
+      "visual_branch_id": "n-main",
+      "group_sequence": 4,
+      "segment_kind": "group",
+      "group_id": "group-manual-manhattan-bridge-approach",
+      "merged_group_ids": [
+        "group-manual-manhattan-bridge-approach"
+      ],
+      "visual_lane_slot": -0.5,
+      "effective_render_key": "N|n-main|lane:-0.5|z:250|color:#F6BC26|kind:group|style:subway-ribbon-v1",
+      "handoff_node_id": "handoff-n-n-main--73.99770,40.72433",
+      "handoff_reason": "station-adjacent-membership-change",
+      "length_meters": 1070,
+      "bbox_start": "canal-broadway-lafayette",
+      "bbox_end": "canal-broadway-lafayette"
+    },
+    {
+      "route_id": "N",
+      "visual_route_id": "N",
+      "raw_route_ids": [
+        "N"
+      ],
+      "raw_shape_ids": [
+        "N..N20R",
         "N..N23R",
+        "N..S20R",
         "N..S27R",
         "N..N16R",
         "N..N31R",
@@ -27272,12 +27367,6 @@
         "N..S31R"
       ],
       "visual_edge_ids": [
-        "n:R27-R28",
-        "n:R26-R27",
-        "n:R25-R26",
-        "n:R24-R25",
-        "n:R23-R24",
-        "n:R22-R23",
         "n:R21-R22",
         "n:R20-R21",
         "n:R19-R20",
@@ -27289,18 +27378,17 @@
         "n:R13-R14",
         "n:R11-R13"
       ],
-      "edge_count": 16,
-      "from_stop_id": "R28",
+      "edge_count": 10,
+      "from_stop_id": "R22",
       "to_stop_id": "R11",
-      "from_stop_name": "Court St",
+      "from_stop_name": "Prince St",
       "to_stop_name": "Lexington Av/59 St",
-      "edge_sequence": 21,
+      "edge_sequence": 27,
       "visual_branch_id": "n-main",
-      "group_sequence": 3,
+      "group_sequence": 5,
       "segment_kind": "group",
-      "group_id": "group-manual-montague-nrw-tunnel",
+      "group_id": "group-manual-broadway-yellow-trunk",
       "merged_group_ids": [
-        "group-manual-montague-nrw-tunnel",
         "group-manual-broadway-yellow-trunk",
         "group-manual-63st-yellow-nq"
       ],
@@ -27308,8 +27396,8 @@
       "effective_render_key": "N|n-main|lane:-1.5|z:240|color:#F6BC26|kind:group|style:subway-ribbon-v1",
       "handoff_node_id": "handoff-n-n-main--73.96715,40.76280",
       "handoff_reason": "station-adjacent-membership-change",
-      "length_meters": 11715,
-      "bbox_start": "lower-manhattan-river-crossings",
+      "length_meters": 6185,
+      "bbox_start": "canal-broadway-lafayette",
       "bbox_end": "59-lex-5av-57"
     },
     {
@@ -27343,7 +27431,7 @@
       "to_stop_name": "Astoria-Ditmars Blvd",
       "edge_sequence": 37,
       "visual_branch_id": "n-main",
-      "group_sequence": 4,
+      "group_sequence": 6,
       "segment_kind": "group",
       "group_id": "group-n-q-r-w-n-r-w",
       "merged_group_ids": [
@@ -27496,8 +27584,79 @@
         "Q..S39R"
       ],
       "visual_edge_ids": [
-        "q:Q01-R30",
-        "q:Q01-R22",
+        "q:Q01-R30"
+      ],
+      "edge_count": 1,
+      "from_stop_id": "R30",
+      "to_stop_id": "Q01",
+      "from_stop_name": "DeKalb Av",
+      "to_stop_name": "Canal St",
+      "edge_sequence": 19,
+      "visual_branch_id": "q-main",
+      "group_sequence": 3,
+      "segment_kind": "group",
+      "group_id": "group-manual-broadway-yellow-trunk",
+      "merged_group_ids": [
+        "group-manual-broadway-yellow-trunk"
+      ],
+      "visual_lane_slot": -0.5,
+      "effective_render_key": "Q|q-main|lane:-0.5|z:241|color:#F6BC26|kind:group|style:subway-ribbon-v1",
+      "handoff_node_id": "handoff-q-q-main--74.00046,40.71838",
+      "handoff_reason": "station-adjacent-membership-change",
+      "length_meters": 3531,
+      "bbox_start": "lower-manhattan-river-crossings",
+      "bbox_end": "canal-broadway-lafayette"
+    },
+    {
+      "route_id": "Q",
+      "visual_route_id": "Q",
+      "raw_route_ids": [
+        "Q"
+      ],
+      "raw_shape_ids": [
+        "Q..N19R",
+        "Q..N39R",
+        "Q..S19R",
+        "Q..S39R"
+      ],
+      "visual_edge_ids": [
+        "q:Q01-R22"
+      ],
+      "edge_count": 1,
+      "from_stop_id": "Q01",
+      "to_stop_id": "R22",
+      "from_stop_name": "Canal St",
+      "to_stop_name": "Prince St",
+      "edge_sequence": 20,
+      "visual_branch_id": "q-main",
+      "group_sequence": 4,
+      "segment_kind": "group",
+      "group_id": "group-manual-manhattan-bridge-approach",
+      "merged_group_ids": [
+        "group-manual-manhattan-bridge-approach"
+      ],
+      "visual_lane_slot": 0.5,
+      "effective_render_key": "Q|q-main|lane:0.5|z:251|color:#F6BC26|kind:group|style:subway-ribbon-v1",
+      "handoff_node_id": "handoff-q-q-main--73.99770,40.72433",
+      "handoff_reason": "station-adjacent-membership-change",
+      "length_meters": 787,
+      "bbox_start": "canal-broadway-lafayette",
+      "bbox_end": "canal-broadway-lafayette"
+    },
+    {
+      "route_id": "Q",
+      "visual_route_id": "Q",
+      "raw_route_ids": [
+        "Q"
+      ],
+      "raw_shape_ids": [
+        "Q..N19R",
+        "Q..N39R",
+        "Q..S19R",
+        "Q..S39R",
+        "Q..S37R"
+      ],
+      "visual_edge_ids": [
         "q:R21-R22",
         "q:R20-R21",
         "q:R19-R20",
@@ -27511,14 +27670,14 @@
         "q:Q03-Q04",
         "q:Q04-Q05"
       ],
-      "edge_count": 14,
-      "from_stop_id": "R30",
+      "edge_count": 12,
+      "from_stop_id": "R22",
       "to_stop_id": "Q05",
-      "from_stop_name": "DeKalb Av",
+      "from_stop_name": "Prince St",
       "to_stop_name": "96 St",
-      "edge_sequence": 19,
+      "edge_sequence": 21,
       "visual_branch_id": "q-main",
-      "group_sequence": 3,
+      "group_sequence": 5,
       "segment_kind": "group",
       "group_id": "group-manual-broadway-yellow-trunk",
       "merged_group_ids": [
@@ -27527,10 +27686,10 @@
       ],
       "visual_lane_slot": -0.5,
       "effective_render_key": "Q|q-main|lane:-0.5|z:241|color:#F6BC26|kind:group|style:subway-ribbon-v1",
-      "handoff_node_id": "handoff-q-q-main--73.98182,40.69064",
+      "handoff_node_id": "handoff-q-q-main--73.99770,40.72433",
       "handoff_reason": "station-adjacent-membership-change",
-      "length_meters": 13612,
-      "bbox_start": "lower-manhattan-river-crossings",
+      "length_meters": 9277,
+      "bbox_start": "canal-broadway-lafayette",
       "bbox_end": null
     },
     {
@@ -27639,18 +27798,13 @@
         "r:R18-R19",
         "r:R19-R20",
         "r:R20-R21",
-        "r:R21-R22",
-        "r:R22-R23",
-        "r:R23-R24",
-        "r:R24-R25",
-        "r:R25-R26",
-        "r:R26-R27"
+        "r:R21-R22"
       ],
-      "edge_count": 14,
+      "edge_count": 9,
       "from_stop_id": "R13",
-      "to_stop_id": "R27",
+      "to_stop_id": "R22",
       "from_stop_name": "5 Av/59 St",
-      "to_stop_name": "Whitehall St-South Ferry",
+      "to_stop_name": "Prince St",
       "edge_sequence": 14,
       "visual_branch_id": "r-main",
       "group_sequence": 2,
@@ -27661,10 +27815,52 @@
       ],
       "visual_lane_slot": 0.5,
       "effective_render_key": "R|r-main|lane:0.5|z:242|color:#F6BC26|kind:group|style:subway-ribbon-v1",
-      "handoff_node_id": "handoff-r-r-main--74.01306,40.70308",
+      "handoff_node_id": "handoff-r-r-main--73.99770,40.72433",
       "handoff_reason": "station-adjacent-membership-change",
-      "length_meters": 8840,
+      "length_meters": 5587,
       "bbox_start": "59-lex-5av-57",
+      "bbox_end": "canal-broadway-lafayette"
+    },
+    {
+      "route_id": "R",
+      "visual_route_id": "R",
+      "raw_route_ids": [
+        "R"
+      ],
+      "raw_shape_ids": [
+        "R..N76R",
+        "R..N78R",
+        "R..N93R",
+        "R..N96R",
+        "R..S71R",
+        "R..S96R"
+      ],
+      "visual_edge_ids": [
+        "r:R22-R23",
+        "r:R23-R24",
+        "r:R24-R25",
+        "r:R25-R26",
+        "r:R26-R27"
+      ],
+      "edge_count": 5,
+      "from_stop_id": "R22",
+      "to_stop_id": "R27",
+      "from_stop_name": "Prince St",
+      "to_stop_name": "Whitehall St-South Ferry",
+      "edge_sequence": 23,
+      "visual_branch_id": "r-main",
+      "group_sequence": 3,
+      "segment_kind": "group",
+      "group_id": "group-manual-broadway-south-rw",
+      "merged_group_ids": [
+        "group-manual-broadway-south-rw"
+      ],
+      "visual_lane_slot": -0.5,
+      "effective_render_key": "R|r-main|lane:-0.5|z:245|color:#F6BC26|kind:group|style:subway-ribbon-v1",
+      "handoff_node_id": "handoff-r-r-main--74.01299,40.70309",
+      "handoff_reason": "station-adjacent-membership-change",
+      "length_meters": 3209,
+      "bbox_start": "canal-broadway-lafayette",
       "bbox_end": "lower-manhattan-river-crossings"
     },
     {
@@ -27693,7 +27889,7 @@
       "to_stop_name": "Court St",
       "edge_sequence": 28,
       "visual_branch_id": "r-main",
-      "group_sequence": 3,
+      "group_sequence": 4,
       "segment_kind": "group",
       "group_id": "group-manual-montague-nrw-tunnel",
       "merged_group_ids": [
@@ -27736,7 +27932,7 @@
       "to_stop_name": "Union St",
       "edge_sequence": 29,
       "visual_branch_id": "r-main",
-      "group_sequence": 4,
+      "group_sequence": 5,
       "segment_kind": "group",
       "group_id": "group-manual-dekalb-atlantic",
       "merged_group_ids": [
@@ -27779,7 +27975,7 @@
       "to_stop_name": "36 St",
       "edge_sequence": 33,
       "visual_branch_id": "r-main",
-      "group_sequence": 5,
+      "group_sequence": 6,
       "segment_kind": "group",
       "group_id": "group-n-q-r-w-n-r-w",
       "merged_group_ids": [
@@ -27814,7 +28010,7 @@
       "to_stop_name": "Bay Pkwy",
       "edge_sequence": 37,
       "visual_branch_id": "r-main",
-      "group_sequence": 6,
+      "group_sequence": 7,
       "segment_kind": "solo",
       "group_id": null,
       "merged_group_ids": [],
@@ -28032,9 +28228,9 @@
       ],
       "visual_lane_slot": 1.5,
       "effective_render_key": "W|w-main|lane:1.5|z:242|color:#F6BC26|kind:group|style:subway-ribbon-v1",
-      "handoff_node_id": "handoff-w-w-main--74.01278,40.70312",
+      "handoff_node_id": "handoff-w-w-main--74.01299,40.70309",
       "handoff_reason": "station-adjacent-membership-change",
-      "length_meters": 2116,
+      "length_meters": 2117,
       "bbox_start": "lower-manhattan-river-crossings",
       "bbox_end": "lower-manhattan-river-crossings"
     },
@@ -28055,7 +28251,43 @@
         "w:R26-R27",
         "w:R25-R26",
         "w:R24-R25",
-        "w:R23-R24",
+        "w:R23-R24"
+      ],
+      "edge_count": 4,
+      "from_stop_id": "R27",
+      "to_stop_id": "R23",
+      "from_stop_name": "Whitehall St-South Ferry",
+      "to_stop_name": "Canal St",
+      "edge_sequence": 21,
+      "visual_branch_id": "w-main",
+      "group_sequence": 3,
+      "segment_kind": "group",
+      "group_id": "group-manual-broadway-south-rw",
+      "merged_group_ids": [
+        "group-manual-broadway-south-rw"
+      ],
+      "visual_lane_slot": 0.5,
+      "effective_render_key": "W|w-main|lane:0.5|z:246|color:#F6BC26|kind:group|style:subway-ribbon-v1",
+      "handoff_node_id": "handoff-w-w-main--74.00177,40.71953",
+      "handoff_reason": "station-adjacent-membership-change",
+      "length_meters": 2262,
+      "bbox_start": "lower-manhattan-river-crossings",
+      "bbox_end": "canal-broadway-lafayette"
+    },
+    {
+      "route_id": "W",
+      "visual_route_id": "W",
+      "raw_route_ids": [
+        "W"
+      ],
+      "raw_shape_ids": [
+        "N..N70R",
+        "N..N72R",
+        "N..S70R",
+        "N..S72R",
+        "N..S74R"
+      ],
+      "visual_edge_ids": [
         "w:R22-R23",
         "w:R21-R22",
         "w:R20-R21",
@@ -28067,14 +28299,14 @@
         "w:R14-R15",
         "w:R13-R14"
       ],
-      "edge_count": 14,
-      "from_stop_id": "R27",
+      "edge_count": 10,
+      "from_stop_id": "R23",
       "to_stop_id": "R13",
-      "from_stop_name": "Whitehall St-South Ferry",
+      "from_stop_name": "Canal St",
       "to_stop_name": "5 Av/59 St",
-      "edge_sequence": 21,
+      "edge_sequence": 25,
       "visual_branch_id": "w-main",
-      "group_sequence": 3,
+      "group_sequence": 4,
       "segment_kind": "group",
       "group_id": "group-manual-broadway-yellow-trunk",
       "merged_group_ids": [
@@ -28084,8 +28316,8 @@
       "effective_render_key": "W|w-main|lane:1.5|z:243|color:#F6BC26|kind:group|style:subway-ribbon-v1",
       "handoff_node_id": "handoff-w-w-main--73.97332,40.76465",
       "handoff_reason": "station-adjacent-membership-change",
-      "length_meters": 8453,
-      "bbox_start": "lower-manhattan-river-crossings",
+      "length_meters": 6204,
+      "bbox_start": "canal-broadway-lafayette",
       "bbox_end": "59-lex-5av-57"
     },
     {
@@ -28118,7 +28350,7 @@
       "to_stop_name": "Astoria-Ditmars Blvd",
       "edge_sequence": 35,
       "visual_branch_id": "w-main",
-      "group_sequence": 4,
+      "group_sequence": 5,
       "segment_kind": "group",
       "group_id": "group-n-q-r-w-n-r-w",
       "merged_group_ids": [
