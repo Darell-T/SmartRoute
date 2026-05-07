@@ -65,30 +65,15 @@ const style = {
   ],
 };
 
-assert.deepEqual(
-  JSON.parse(JSON.stringify(subwayLaneOffsetExpression())),
-  [
-    "interpolate",
-    ["linear"],
-    ["zoom"],
-    9,
-    ["*", ["coalesce", ["get", "visual_lane_slot"], 0], 0.6],
-    11,
-    ["*", ["coalesce", ["get", "visual_lane_slot"], 0], 1.2],
-    12,
-    ["*", ["coalesce", ["get", "visual_lane_slot"], 0], 1.8],
-    13,
-    ["*", ["coalesce", ["get", "visual_lane_slot"], 0], 2.8],
-    14,
-    ["*", ["coalesce", ["get", "visual_lane_slot"], 0], 4.0],
-    15,
-    ["*", ["coalesce", ["get", "visual_lane_slot"], 0], 5.5],
-    16,
-    ["*", ["coalesce", ["get", "visual_lane_slot"], 0], 7.0],
-    18,
-    ["*", ["coalesce", ["get", "visual_lane_slot"], 0], 8.0],
-  ],
-  "subway line offset expression should use the Phase 4A multipliers in MapLibre-valid top-level zoom form",
+// Lane offsets are now baked into geometry coordinates by
+// frontend/scripts/build-corridor-groups.mjs. The runtime line-offset MUST
+// be 0 — any non-zero value would double-shift the line and produce 2× the
+// intended spacing. The legacy zoom-interpolated expression lives in git
+// history if a fallback to runtime offsets is ever needed.
+assert.equal(
+  subwayLaneOffsetExpression(),
+  0,
+  "subway lane offset expression must return 0; offsets are baked into geometry by build-corridor-groups.mjs",
 );
 
 assert.equal(
