@@ -2228,12 +2228,18 @@ function featureForRun(line, run, coordinates, segmentIndex, group) {
   // MapLibre does not need to apply line-offset at runtime (which produces
   // V-gaps and phantom lines at curves). Solo segments have laneSlot = 0, so
   // bakeLaneOffsetIntoPolyline returns the canonical coordinates unchanged.
-  // Task 6 plugs in the taper function for routes entering/leaving a bundle.
+  //
+  // Taper: the runs-per-line model emits exactly one segment per route, so
+  // every grouped run is both the first and last segment for that route.
+  // We taper the perpendicular shift to 0 over the last TAPER_LENGTH_METERS
+  // at both endpoints so the line meets canonical geometry at terminals and
+  // bundle handoffs without a visible jump.
   const offsetMeters = laneSlot * LANE_WIDTH_METERS;
+  const isGrouped = run.kind === "group" && Math.abs(offsetMeters) > 1e-9;
   const bakedCoordinates = bakeLaneOffsetIntoPolyline(
     coordinates,
     offsetMeters,
-    null,
+    isGrouped ? buildTaperFn(true, true) : null,
   );
 
   return {

@@ -368,6 +368,31 @@ assert.ok(
   `taper end should have ~0m offset, got ${helperDyAtEnd}m`,
 );
 
+// Task 6 taper regression: grouped features (any corridor) have finite
+// coordinates and ≥2 vertices after the taper-baked emit.
+const taperVisualPath = resolve(publicDir, "subway-network.group-visual.geojson");
+const taperVisual = JSON.parse(readFileSync(taperVisualPath, "utf8"));
+const taperCorridorFeatures = taperVisual.features.filter(
+  (f) => f.properties?.corridor_id != null,
+);
+assert.ok(
+  taperCorridorFeatures.length > 0,
+  "at least one feature must carry a manual corridor_id after the build",
+);
+for (const f of taperCorridorFeatures) {
+  const coords = f.geometry.coordinates;
+  assert.ok(
+    coords.length >= 2,
+    `${f.properties.corridor_id} ${f.properties.route_id} feature must have ≥2 coords`,
+  );
+  for (const [lng, lat] of coords) {
+    assert.ok(
+      Number.isFinite(lng) && Number.isFinite(lat),
+      `${f.properties.corridor_id} ${f.properties.route_id} feature must have finite coords`,
+    );
+  }
+}
+
 console.log("corridor group checks passed", {
   groups: groups.groups.length,
   features: visual.features.length,
