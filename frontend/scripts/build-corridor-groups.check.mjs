@@ -308,7 +308,7 @@ const {
   TAPER_LENGTH_METERS,
 } = await import("./build-corridor-groups.mjs");
 
-assert.equal(LANE_WIDTH_METERS, 6, "LANE_WIDTH_METERS default must be 6");
+assert.equal(LANE_WIDTH_METERS, 12, "LANE_WIDTH_METERS default must be 12");
 assert.equal(TAPER_LENGTH_METERS, 30, "TAPER_LENGTH_METERS default must be 30");
 
 const helperIdentityCoords = [
@@ -449,7 +449,9 @@ const distFromCanal = (c) => {
 };
 for (const routeId of ["B", "D"]) {
   const expectedOffset =
-    routeId === "B" ? 1.5 * 6 : 0.5 * 6; // |slot| × LANE_WIDTH_METERS
+    routeId === "B"
+      ? 1.5 * LANE_WIDTH_METERS
+      : 0.5 * LANE_WIDTH_METERS;
   const segments = taperVisual.features.filter(
     (f) =>
       f.properties.route_id === routeId &&
