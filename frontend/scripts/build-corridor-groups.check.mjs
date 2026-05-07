@@ -393,6 +393,49 @@ for (const f of taperCorridorFeatures) {
   }
 }
 
+// Regression: per-edge baking would produce "0m-distance" pinch points at
+// every station along a shared-track stretch (4/5/6 on Lex Av is the
+// canonical example). Post-merge baking should produce at most a handful
+// of pinch points (one per merged-segment endpoint, not one per station).
+const lexF4 = taperVisual.features.find(
+  (f) =>
+    f.properties.route_id === "4" &&
+    f.geometry.coordinates.length > 200 &&
+    f.properties.visual_lane_slot === -1,
+);
+const lexF6 = taperVisual.features.find(
+  (f) =>
+    f.properties.route_id === "6" &&
+    f.geometry.coordinates.length > 200 &&
+    f.properties.visual_lane_slot === 1,
+);
+if (lexF4 && lexF6) {
+  const distM = (a, b) => {
+    const dx = (a[0] - b[0]) * 84500;
+    const dy = (a[1] - b[1]) * 111320;
+    return Math.hypot(dx, dy);
+  };
+  const inOverlap = lexF4.geometry.coordinates.filter(
+    (c) => c[1] > 40.71 && c[1] < 40.81,
+  );
+  let pinchCount = 0;
+  for (const c4 of inOverlap) {
+    let best = Infinity;
+    for (const c6 of lexF6.geometry.coordinates) {
+      const d = distM(c4, c6);
+      if (d < best) best = d;
+    }
+    if (best < 1) pinchCount += 1;
+  }
+  // Allow up to 4 pinch points: at most one per merged-feature endpoint
+  // touching the overlap region, with a small margin for floating-point
+  // edge cases. The pre-fix value was 26.
+  assert.ok(
+    pinchCount <= 4,
+    `route 4 vs route 6 in the Manhattan Lex Av overlap has ${pinchCount} 0m-distance vertex pairs; expected <= 4. This usually means bakeOffsetsOnMergedFeatures has regressed back into per-edge baking — see the design plan.`,
+  );
+}
+
 console.log("corridor group checks passed", {
   groups: groups.groups.length,
   features: visual.features.length,
