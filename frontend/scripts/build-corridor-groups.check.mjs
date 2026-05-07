@@ -301,6 +301,73 @@ for (const [routeLaneKey, laneSlots] of laneSlotsByGroupRoute) {
   );
 }
 
+// Perpendicular-shift helper assertions (Task 4 of the lane-baking plan).
+const {
+  bakeLaneOffsetIntoPolyline,
+  LANE_WIDTH_METERS,
+  TAPER_LENGTH_METERS,
+} = await import("./build-corridor-groups.mjs");
+
+assert.equal(LANE_WIDTH_METERS, 6, "LANE_WIDTH_METERS default must be 6");
+assert.equal(TAPER_LENGTH_METERS, 30, "TAPER_LENGTH_METERS default must be 30");
+
+const helperIdentityCoords = [
+  [-74.0, 40.75],
+  [-73.99, 40.75],
+];
+assert.deepEqual(
+  bakeLaneOffsetIntoPolyline(helperIdentityCoords, 0, null),
+  helperIdentityCoords,
+  "bakeLaneOffsetIntoPolyline with offset=0 must return identity coords",
+);
+
+const helperEastGoingCoords = [
+  [-74.0, 40.75],
+  [-73.99, 40.75],
+  [-73.98, 40.75],
+];
+const helperEastGoingShifted = bakeLaneOffsetIntoPolyline(
+  helperEastGoingCoords,
+  6,
+  null,
+);
+for (const c of helperEastGoingShifted) {
+  assert.ok(
+    c[1] < 40.75,
+    "east-travel right-of-travel offset must shift south (decreasing lat)",
+  );
+  const dyMeters = (40.75 - c[1]) * 111320;
+  assert.ok(
+    dyMeters > 4 && dyMeters < 8,
+    `east-travel +6m offset should produce ~6m southward shift, got ${dyMeters}m`,
+  );
+}
+
+const helperTaperCoords = [
+  [-74.0, 40.75],
+  [-73.999, 40.75],
+  [-73.998, 40.75],
+  [-73.997, 40.75],
+  [-73.996, 40.75],
+];
+const helperTaperedShifted = bakeLaneOffsetIntoPolyline(
+  helperTaperCoords,
+  6,
+  (fromStart, fromEnd, total) => fromEnd / total,
+);
+const helperDyAtStart = (40.75 - helperTaperedShifted[0][1]) * 111320;
+const helperDyAtEnd =
+  Math.abs(40.75 - helperTaperedShifted[helperTaperedShifted.length - 1][1]) *
+  111320;
+assert.ok(
+  helperDyAtStart > 4,
+  `taper start should have ~6m offset, got ${helperDyAtStart}m`,
+);
+assert.ok(
+  helperDyAtEnd < 0.01,
+  `taper end should have ~0m offset, got ${helperDyAtEnd}m`,
+);
+
 console.log("corridor group checks passed", {
   groups: groups.groups.length,
   features: visual.features.length,
