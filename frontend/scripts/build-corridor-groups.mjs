@@ -3019,6 +3019,16 @@ function buildRoute2Summary(finalFeatures, route2RawEdgeArtifact) {
  * LineStrings, but this keeps the helper safe under future changes).
  */
 function bakeOffsetsOnMergedFeatures(features) {
+  // Build an index of every grouped feature's endpoints, keyed by
+  // (routeId, coordKey, slot). Two adjacent merged features that share a
+  // coordinate AND have the same lane slot represent a logically continuous
+  // line at the same offset — we should NOT taper at their shared join,
+  // because tapering both ends to canonical creates a visible "kissing"
+  // artifact at corridor boundaries (e.g. where B transitions from a family
+  // bundle into 6av-orange-trunk at Canal St).
+  const endpointKey = (routeId, coord, slot) =>
+    `${routeId}|${coord[0].toFixed(6)},${coord[1].toFixed(6)}|${slot.toFixed(2)}`;
+
   return features.map((feature) => {
     if (feature.geometry?.type !== "LineString") return feature;
 
@@ -3030,11 +3040,46 @@ function bakeOffsetsOnMergedFeatures(features) {
     const segmentKind = feature.properties?.segment_kind;
     if (segmentKind !== "group") return feature;
 
+    const routeId = String(feature.properties?.route_id ?? "");
+    const coords = feature.geometry.coordinates;
+    if (!routeId || coords.length < 2) return feature;
+
+    // Count occurrences of each endpoint coord across all same-slot features
+    // for this route. A start coord appears once for THIS feature; if it
+    // appears more than once total, that means another feature shares the
+    // same endpoint with the same slot → they connect at full offset,
+    // suppress the taper at this end.
+    const startKey = endpointKey(routeId, coords[0], laneSlot);
+    const endKey = endpointKey(routeId, coords[coords.length - 1], laneSlot);
+    let startCount = 0;
+    let endCount = 0;
+    for (const f of features) {
+      if (f.geometry?.type !== "LineString") continue;
+      if (f.properties?.segment_kind !== "group") continue;
+      if (String(f.properties?.route_id ?? "") !== routeId) continue;
+      const fSlot = Number(f.properties?.visual_lane_slot ?? 0);
+      if (!Number.isFinite(fSlot) || fSlot.toFixed(2) !== laneSlot.toFixed(2))
+        continue;
+      const fCoords = f.geometry.coordinates;
+      if (fCoords.length < 2) continue;
+      if (endpointKey(routeId, fCoords[0], fSlot) === startKey) startCount += 1;
+      if (endpointKey(routeId, fCoords[fCoords.length - 1], fSlot) === startKey)
+        startCount += 1;
+      if (endpointKey(routeId, fCoords[0], fSlot) === endKey) endCount += 1;
+      if (endpointKey(routeId, fCoords[fCoords.length - 1], fSlot) === endKey)
+        endCount += 1;
+    }
+    // startCount/endCount include this feature's own contribution (1 for
+    // start, 1 for end). A neighbor adds another count. So count >= 2 means
+    // a same-slot neighbor shares this endpoint.
+    const taperStart = startCount < 2;
+    const taperEnd = endCount < 2;
+
     const offsetMeters = laneSlot * LANE_WIDTH_METERS;
     const baked = bakeLaneOffsetIntoPolyline(
-      feature.geometry.coordinates,
+      coords,
       offsetMeters,
-      buildTaperFn(true, true),
+      buildTaperFn(taperStart, taperEnd),
     );
 
     return {
