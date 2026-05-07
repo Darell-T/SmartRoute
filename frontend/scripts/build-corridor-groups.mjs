@@ -48,6 +48,18 @@ const FALLBACK_VISUAL_EDGE_METERS = 650;
 const VISUAL_EDGE_STITCH_TOLERANCE_METERS = 12;
 const ROUTE_2_EDGE_STITCH_EPSILON_METERS = 1.5;
 
+// Lane spacing baked into geometry. Adjacent slots are LANE_WIDTH_METERS apart
+// in geographic space (not screen space) — invariant under zoom. Tune by
+// taking a screenshot at zoom 14 of a known multi-route trunk and adjusting
+// until bundle separation matches the MTA map.
+const LANE_WIDTH_METERS = 6;
+
+// Distance over which the perpendicular shift ramps from full lane offset
+// down to zero at solo↔group transitions. Prevents visible jumps when a
+// route branches off independent track. 30m matches the existing
+// transitionLengthMeters on every override.
+const TAPER_LENGTH_METERS = 30;
+
 // Cross-family corridor overrides. Single source of truth lives in
 // frontend/components/map/subway-corridor-overrides.json so this build script
 // and the runtime TS module read identical data. When a route's representative
@@ -367,6 +379,102 @@ function tangentAtDistance(line, distance) {
   const length = Math.hypot(vector[0], vector[1]);
   if (length === 0) return [1, 0];
   return [vector[0] / length, vector[1] / length];
+}
+
+const METERS_PER_DEGREE_LAT = 111_320;
+
+function metersPerDegreeLng(lat) {
+  return METERS_PER_DEGREE_LAT * Math.cos((lat * Math.PI) / 180);
+}
+
+/**
+ * Given a tangent expressed in lng/lat units (degree-space) and the local
+ * latitude, return the perpendicular unit direction (rotated 90° clockwise
+ * = right-hand of travel) scaled so its magnitude equals 1 meter of
+ * perpendicular displacement, in degree-space.
+ */
+function perpendicularDegreesPerMeter(tangent, lat) {
+  const mPerLng = metersPerDegreeLng(lat);
+  const tx_m = tangent[0] * mPerLng;
+  const ty_m = tangent[1] * METERS_PER_DEGREE_LAT;
+  const len_m = Math.hypot(tx_m, ty_m);
+  if (len_m < 1e-9) return [0, 0];
+  // Rotate 90° clockwise: (x, y) -> (y, -x). Right-hand of travel direction.
+  const px_m = ty_m / len_m;
+  const py_m = -tx_m / len_m;
+  return [px_m / mPerLng, py_m / METERS_PER_DEGREE_LAT];
+}
+
+/**
+ * Shift a single coordinate perpendicular to the local tangent by
+ * `offsetMeters`. Positive offsetMeters = right of travel direction.
+ */
+function shiftCoordinatePerpendicular(coord, tangent, offsetMeters) {
+  if (Math.abs(offsetMeters) < 1e-9) return [coord[0], coord[1]];
+  const [pdLng, pdLat] = perpendicularDegreesPerMeter(tangent, coord[1]);
+  return [coord[0] + pdLng * offsetMeters, coord[1] + pdLat * offsetMeters];
+}
+
+/**
+ * Bake a perpendicular offset into every coordinate of a polyline. Tangent at
+ * coordinate i is computed from the (i-1 → i+1) chord so adjacent coordinates
+ * agree on the perpendicular direction at curves.
+ *
+ * `taperFn(distanceFromStart, distanceFromEnd, totalLength)` returns a
+ * scalar in [0, 1] applied to the offset at that coordinate. Pass `null`
+ * for no taper (full offset everywhere).
+ */
+function bakeLaneOffsetIntoPolyline(coords, offsetMeters, taperFn) {
+  if (coords.length < 2 || Math.abs(offsetMeters) < 1e-9) {
+    return coords.map((c) => [c[0], c[1]]);
+  }
+
+  // Pre-compute cumulative meter-distances along the polyline for the taper.
+  const cumMeters = [0];
+  for (let i = 1; i < coords.length; i += 1) {
+    const dx =
+      (coords[i][0] - coords[i - 1][0]) * metersPerDegreeLng(coords[i][1]);
+    const dy = (coords[i][1] - coords[i - 1][1]) * METERS_PER_DEGREE_LAT;
+    cumMeters.push(cumMeters[i - 1] + Math.hypot(dx, dy));
+  }
+  const totalMeters = cumMeters[cumMeters.length - 1];
+
+  const out = [];
+  for (let i = 0; i < coords.length; i += 1) {
+    const prev = coords[Math.max(0, i - 1)];
+    const next = coords[Math.min(coords.length - 1, i + 1)];
+    const tangent = [next[0] - prev[0], next[1] - prev[1]];
+
+    const taperScale = taperFn
+      ? taperFn(cumMeters[i], totalMeters - cumMeters[i], totalMeters)
+      : 1;
+
+    out.push(
+      shiftCoordinatePerpendicular(
+        coords[i],
+        tangent,
+        offsetMeters * taperScale,
+      ),
+    );
+  }
+  return out;
+}
+
+function buildTaperFn(isFirstInGroup, isLastInGroup) {
+  // Middle of a bundle (no handoffs at either end): no taper.
+  if (!isFirstInGroup && !isLastInGroup) return null;
+  return (fromStart, fromEnd, _total) => {
+    let scale = 1;
+    if (isFirstInGroup) {
+      const ramp = Math.min(1, fromStart / TAPER_LENGTH_METERS);
+      scale = Math.min(scale, ramp);
+    }
+    if (isLastInGroup) {
+      const ramp = Math.min(1, fromEnd / TAPER_LENGTH_METERS);
+      scale = Math.min(scale, ramp);
+    }
+    return scale;
+  };
 }
 
 function coordinateKey(coordinate, digits = 5) {
@@ -3120,3 +3228,12 @@ if (
     `[corridor-groups] manual cross-family corridor segments: ${result.manualCorridorCount}`,
   );
 }
+
+export {
+  bakeLaneOffsetIntoPolyline,
+  shiftCoordinatePerpendicular,
+  perpendicularDegreesPerMeter,
+  buildTaperFn,
+  LANE_WIDTH_METERS,
+  TAPER_LENGTH_METERS,
+};
