@@ -13,6 +13,8 @@ const transpiled = ts.transpileModule(helperSource, {
   compilerOptions: {
     module: ts.ModuleKind.CommonJS,
     target: ts.ScriptTarget.ES2020,
+    esModuleInterop: true,
+    resolveJsonModule: true,
   },
 });
 
