@@ -2224,13 +2224,25 @@ function featureForRun(line, run, coordinates, segmentIndex, group) {
     );
   }
 
+  // Bake the perpendicular lane offset directly into geometry coordinates so
+  // MapLibre does not need to apply line-offset at runtime (which produces
+  // V-gaps and phantom lines at curves). Solo segments have laneSlot = 0, so
+  // bakeLaneOffsetIntoPolyline returns the canonical coordinates unchanged.
+  // Task 6 plugs in the taper function for routes entering/leaving a bundle.
+  const offsetMeters = laneSlot * LANE_WIDTH_METERS;
+  const bakedCoordinates = bakeLaneOffsetIntoPolyline(
+    coordinates,
+    offsetMeters,
+    null,
+  );
+
   return {
     type: "Feature",
     id: debugId,
     properties: baseProperties,
     geometry: {
       type: "LineString",
-      coordinates,
+      coordinates: bakedCoordinates,
     },
   };
 }
