@@ -173,29 +173,32 @@ const style = {
 const lineOpacityExpression = JSON.stringify(
   subwayFocusedLineOpacityExpression(focusState, "line"),
 );
+// Updated for the MTA-poster-bold opacity rebalance: line layer states are now
+// idle 0.92, selected 1, incident 0.98, nearby 0.94, sibling 0.86, background 0.44.
+// (was: 0.52 / 0.96 / 0.9 / 0.78 / 0.52 / 0.24 in the dusk-mode tuning.)
 assert.match(
   lineOpacityExpression,
-  /0\.96/,
-  "selected route opacity should be the strongest route state",
+  /(?:^|\D)1(?:\D|$)/,
+  "selected route opacity should be the strongest route state (now 1.0)",
 );
 assert.match(
   lineOpacityExpression,
-  /0\.9/,
+  /0\.98/,
   "incident-affected routes should be promoted without recoloring",
 );
 assert.match(
   lineOpacityExpression,
-  /0\.78/,
+  /0\.94/,
   "nearby routes should sit above the background network",
 );
 assert.match(
   lineOpacityExpression,
-  /0\.52/,
+  /0\.86/,
   "same-family siblings should stay visible but subdued",
 );
 assert.match(
   lineOpacityExpression,
-  /0\.24/,
+  /0\.44/,
   "unrelated routes should dim to a quiet background level",
 );
 assert.match(
