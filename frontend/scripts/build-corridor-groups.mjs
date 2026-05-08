@@ -424,6 +424,63 @@ function shiftCoordinatePerpendicular(coord, tangent, offsetMeters) {
  * scalar in [0, 1] applied to the offset at that coordinate. Pass `null`
  * for no taper (full offset everywhere).
  */
+/**
+ * Project `point` onto the polyline `coords` and return the closest segment's
+ * index plus the projected point. Distance is measured in meters using the
+ * local lat-aware projection.
+ *
+ * Returns `{ segmentIndex, projectedPoint, distanceMeters }`. If the polyline
+ * is degenerate (length < 2), returns segmentIndex=0 and projectedPoint=coords[0]
+ * (or [0,0] if even that's missing) with distanceMeters=Infinity.
+ */
+function nearestPointOnPolylineDeg(point, coords) {
+  if (!Array.isArray(coords) || coords.length < 2) {
+    return {
+      segmentIndex: 0,
+      projectedPoint: coords && coords.length > 0 ? coords[0] : [0, 0],
+      distanceMeters: Number.POSITIVE_INFINITY,
+    };
+  }
+
+  let bestIndex = 0;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  let bestPoint = coords[0];
+
+  for (let i = 1; i < coords.length; i += 1) {
+    const a = coords[i - 1];
+    const b = coords[i];
+    const lat = (point[1] + a[1] + b[1]) / 3;
+    const mPerLng = metersPerDegreeLng(lat);
+    const px = point[0] * mPerLng;
+    const py = point[1] * METERS_PER_DEGREE_LAT;
+    const ax = a[0] * mPerLng;
+    const ay = a[1] * METERS_PER_DEGREE_LAT;
+    const bx = b[0] * mPerLng;
+    const by = b[1] * METERS_PER_DEGREE_LAT;
+    const dx = bx - ax;
+    const dy = by - ay;
+    const len2 = dx * dx + dy * dy;
+    let t = 0;
+    if (len2 > 1e-12) {
+      t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len2));
+    }
+    const projx = ax + t * dx;
+    const projy = ay + t * dy;
+    const distance = Math.hypot(px - projx, py - projy);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestIndex = i - 1;
+      bestPoint = [projx / mPerLng, projy / METERS_PER_DEGREE_LAT];
+    }
+  }
+
+  return {
+    segmentIndex: bestIndex,
+    projectedPoint: bestPoint,
+    distanceMeters: bestDistance,
+  };
+}
+
 function bakeLaneOffsetIntoPolyline(coords, offsetMeters, taperFn) {
   if (coords.length < 2 || Math.abs(offsetMeters) < 1e-9) {
     return coords.map((c) => [c[0], c[1]]);
@@ -449,6 +506,77 @@ function bakeLaneOffsetIntoPolyline(coords, offsetMeters, taperFn) {
       ? taperFn(cumMeters[i], totalMeters - cumMeters[i], totalMeters)
       : 1;
 
+    out.push(
+      shiftCoordinatePerpendicular(
+        coords[i],
+        tangent,
+        offsetMeters * taperScale,
+      ),
+    );
+  }
+  return out;
+}
+
+/**
+ * Bake a perpendicular offset where the offset direction is taken from the
+ * BUNDLE CENTERLINE's tangent at each vertex's nearest point on the centerline,
+ * not from the polyline's own tangent. This makes all bundle members render
+ * strictly parallel through curves, even if their individual canonical tracks
+ * diverge slightly.
+ *
+ * For each vertex of `coords`:
+ *   1. Find the nearest segment of `centerline`.
+ *   2. Use that segment's tangent as the perpendicular reference.
+ *   3. Apply `offsetMeters * taperScale` perpendicular to the centerline
+ *      tangent at the route's OWN vertex (NOT snapped to the centerline).
+ *
+ * Keeping the route's own vertex (rather than snapping to the centerline)
+ * preserves the route's individual geography — critical because snapping can
+ * collapse a route whose extent differs from the centerline into a tiny
+ * fragment that violates the build script's >=50m sanity check. The
+ * centerline tangent (rather than the route's own tangent) is what makes
+ * all bundle members render strictly parallel through curves: every member
+ * uses the SAME tangent at corresponding points along the bundle, so their
+ * perpendicular offsets all point in the same direction.
+ *
+ * Solo features (no bundle, no centerline) call the existing
+ * `bakeLaneOffsetIntoPolyline` instead — this function is for grouped features.
+ */
+function bakeLaneOffsetUsingCenterline(coords, offsetMeters, taperFn, centerline) {
+  if (
+    coords.length < 2 ||
+    Math.abs(offsetMeters) < 1e-9 ||
+    !Array.isArray(centerline) ||
+    centerline.length < 2
+  ) {
+    return coords.map((c) => [c[0], c[1]]);
+  }
+
+  // Pre-compute cumulative meter-distances along the polyline for the taper.
+  const cumMeters = [0];
+  for (let i = 1; i < coords.length; i += 1) {
+    const dx =
+      (coords[i][0] - coords[i - 1][0]) * metersPerDegreeLng(coords[i][1]);
+    const dy = (coords[i][1] - coords[i - 1][1]) * METERS_PER_DEGREE_LAT;
+    cumMeters.push(cumMeters[i - 1] + Math.hypot(dx, dy));
+  }
+  const totalMeters = cumMeters[cumMeters.length - 1];
+
+  const out = [];
+  for (let i = 0; i < coords.length; i += 1) {
+    const nearest = nearestPointOnPolylineDeg(coords[i], centerline);
+    const segIdx = nearest.segmentIndex;
+    const a = centerline[segIdx];
+    const b = centerline[Math.min(segIdx + 1, centerline.length - 1)];
+    const tangent = [b[0] - a[0], b[1] - a[1]];
+
+    const taperScale = taperFn
+      ? taperFn(cumMeters[i], totalMeters - cumMeters[i], totalMeters)
+      : 1;
+
+    // Use route's own coord (preserve geography), but the centerline's tangent
+    // (consistent perpendicular direction across all bundle members → parallel
+    // rendering through curves).
     out.push(
       shiftCoordinatePerpendicular(
         coords[i],
@@ -2041,6 +2169,16 @@ function registerGroup(groupsByKey, line, run, coordinates) {
   if (existing) {
     existing.segment_count += 1;
     existing.total_length_meters += run.endMeters - run.startMeters;
+    // Keep the longest member's coords as the bundle centerline. Bundle
+    // members have nearly-identical canonical tracks (they share track) but
+    // sometimes a member contributes only a sparse partial path; preferring
+    // the longest avoids those degraded references for downstream geometry.
+    if (
+      Array.isArray(coordinates) &&
+      coordinates.length > (existing.centerline?.coordinates?.length ?? 0)
+    ) {
+      existing.centerline = { type: "LineString", coordinates };
+    }
     return existing;
   }
 
@@ -3018,7 +3156,23 @@ function buildRoute2Summary(finalFeatures, route2RawEdgeArtifact) {
  * pass through unchanged (defensive — the build script only emits
  * LineStrings, but this keeps the helper safe under future changes).
  */
-function bakeOffsetsOnMergedFeatures(features) {
+function bakeOffsetsOnMergedFeatures(features, groupsByKey) {
+  // Build a map from group_id to centerline coordinates so we can look up
+  // the bundle centerline by feature.properties.group_id at bake time.
+  const centerlinesByGroupId = new Map();
+  if (groupsByKey instanceof Map) {
+    for (const group of groupsByKey.values()) {
+      const coords = group?.centerline?.coordinates;
+      if (
+        group?.group_id &&
+        Array.isArray(coords) &&
+        coords.length >= 2
+      ) {
+        centerlinesByGroupId.set(group.group_id, coords);
+      }
+    }
+  }
+
   // Build an index of every grouped feature's endpoints, keyed by
   // (routeId, coordKey, slot). Two adjacent merged features that share a
   // coordinate AND have the same lane slot represent a logically continuous
@@ -3076,11 +3230,18 @@ function bakeOffsetsOnMergedFeatures(features) {
     const taperEnd = endCount < 2;
 
     const offsetMeters = laneSlot * LANE_WIDTH_METERS;
-    const baked = bakeLaneOffsetIntoPolyline(
-      coords,
-      offsetMeters,
-      buildTaperFn(taperStart, taperEnd),
-    );
+    const taperFn = buildTaperFn(taperStart, taperEnd);
+
+    // If the feature has a resolvable bundle centerline, use the centerline-
+    // aware bake so the offset is perpendicular to the bundle's tangent (not
+    // to this feature's own tangent). This is what eliminates the per-route
+    // tangent fanning at curves.
+    const groupId = feature.properties?.group_id;
+    const centerline = groupId ? centerlinesByGroupId.get(groupId) : null;
+    const baked =
+      centerline && centerline.length >= 2
+        ? bakeLaneOffsetUsingCenterline(coords, offsetMeters, taperFn, centerline)
+        : bakeLaneOffsetIntoPolyline(coords, offsetMeters, taperFn);
 
     return {
       ...feature,
@@ -3092,20 +3253,25 @@ function bakeOffsetsOnMergedFeatures(features) {
   });
 }
 
-function finalizeVisualFeatures(features) {
+function finalizeVisualFeatures(features, groupsByKey) {
   // Order matters:
   //   1. mergeContiguousFeatures  — stitches same-slot edges into one feature per
   //                                 contiguous corridor segment.
   //   2. bakeOffsetsOnMergedFeatures — applies the perpendicular offset to each
   //                                 merged feature's coords, with taper only at
-  //                                 the merged feature's true endpoints.
+  //                                 the merged feature's true endpoints. When a
+  //                                 bundle centerline is resolvable via the
+  //                                 feature's group_id (looked up in groupsByKey),
+  //                                 uses the centerline tangent for perpendicular
+  //                                 reference so all bundle members render
+  //                                 strictly parallel.
   //   3. annotateBranches         — adds handoff metadata and snaps adjacent
   //                                 features' shared endpoints together. The
   //                                 endpoints are already at canonical position
   //                                 (offset = 0 at the taper boundary), so
   //                                 snapping is a no-op against the bake.
   return annotateBranches(
-    bakeOffsetsOnMergedFeatures(mergeContiguousFeatures(features)),
+    bakeOffsetsOnMergedFeatures(mergeContiguousFeatures(features), groupsByKey),
   );
 }
 
@@ -3148,7 +3314,7 @@ function buildCorridorGroups(familyVisual) {
     }
   }
 
-  const finalFeatures = finalizeVisualFeatures(outputFeatures);
+  const finalFeatures = finalizeVisualFeatures(outputFeatures, groupsByKey);
   const routes = new Set();
   for (const feature of finalFeatures) {
     routes.add(normalizeRouteId(feature.properties.route_id));
@@ -3340,6 +3506,8 @@ if (
 
 export {
   bakeLaneOffsetIntoPolyline,
+  bakeLaneOffsetUsingCenterline,
+  nearestPointOnPolylineDeg,
   shiftCoordinatePerpendicular,
   perpendicularDegreesPerMeter,
   buildTaperFn,
