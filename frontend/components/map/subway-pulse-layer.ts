@@ -1,21 +1,45 @@
 import type { Layer } from "@deck.gl/core";
 import { TripsLayer } from "@deck.gl/geo-layers";
 
-export const SUBWAY_PULSE_LOOP_MS = 22_000;
+export const SUBWAY_PULSE_LOOP_MS = 12_000;
 
 // Geographic anchor for "the heart of NYC" — the convergence point all pulses
 // flow toward. Times Sq area: roughly equidistant from major express trunk
 // terminals and visually iconic. Tunable.
 export const MANHATTAN_HEART: [number, number] = [-73.985, 40.755];
 
-const PULSE_OFFSETS = [0, 7_333, 14_666];
-const TRAIL_LENGTH = 140;
-const PULSE_WIDTH = 5.2;
-const BACKGROUND_PULSE_WIDTH = 3.4;
-const EMPHASIZED_PULSE_WIDTH = 6.6;
-const IDLE_PULSE_ALPHA = 226;
-const BACKGROUND_PULSE_ALPHA = 118;
-const EMPHASIZED_PULSE_ALPHA = 248;
+// Four pulses per loop, evenly spaced. Denser than the previous 3 for an
+// "electric current" feel — multiple sparks chasing each other along the line.
+const PULSE_OFFSETS = [0, 3_000, 6_000, 9_000];
+
+// Halo trail (outer, route-color, soft).
+const HALO_TRAIL_LENGTH = 160;
+const HALO_PULSE_WIDTH = 6.5;
+const HALO_BACKGROUND_PULSE_WIDTH = 4.2;
+const HALO_EMPHASIZED_PULSE_WIDTH = 8.2;
+const HALO_IDLE_ALPHA = 168;
+const HALO_BACKGROUND_ALPHA = 88;
+const HALO_EMPHASIZED_ALPHA = 220;
+
+// Core trail (inner, near-white, sharp). Narrower + shorter trail = "spark
+// head" feel chasing along inside the halo.
+const CORE_TRAIL_LENGTH = 70;
+const CORE_PULSE_WIDTH = 2.4;
+const CORE_BACKGROUND_PULSE_WIDTH = 1.6;
+const CORE_EMPHASIZED_PULSE_WIDTH = 3.0;
+const CORE_IDLE_ALPHA = 244;
+const CORE_BACKGROUND_ALPHA = 140;
+const CORE_EMPHASIZED_ALPHA = 252;
+
+// Legacy aliases preserved for resolveSubwayPulseVisuals — that function
+// returns the HALO visuals (current external contract).
+const TRAIL_LENGTH = HALO_TRAIL_LENGTH;
+const PULSE_WIDTH = HALO_PULSE_WIDTH;
+const BACKGROUND_PULSE_WIDTH = HALO_BACKGROUND_PULSE_WIDTH;
+const EMPHASIZED_PULSE_WIDTH = HALO_EMPHASIZED_PULSE_WIDTH;
+const IDLE_PULSE_ALPHA = HALO_IDLE_ALPHA;
+const BACKGROUND_PULSE_ALPHA = HALO_BACKGROUND_ALPHA;
+const EMPHASIZED_PULSE_ALPHA = HALO_EMPHASIZED_ALPHA;
 
 export type SubwayPulseTrip = {
   id: string;
@@ -125,6 +149,54 @@ function resolveSubwayPulseVisualsForSet(
     ],
     width,
   };
+}
+
+/**
+ * Returns the BRIGHT-CORE color tuple for a trip — symmetric to
+ * `resolveSubwayPulseVisuals` (which returns the halo color). Used by the
+ * core TripsLayer to render a near-white spark head inside the route-color
+ * halo.
+ *
+ * Computes the core color from the trip's halo color (which is already
+ * route-color-brightened-22%) by re-pushing it 75% toward white. This means
+ * the core auto-derives from whatever the halo color is — no separate hex
+ * constants to maintain.
+ */
+export function resolveSubwayPulseCoreColor(
+  trip: SubwayPulseTrip,
+  emphasizedRouteIds?: Iterable<string>,
+): [number, number, number, number] {
+  const emphasized = normalizedRouteSet(emphasizedRouteIds);
+  const hasEmphasis = emphasized.size > 0;
+  const isEmphasized = emphasized.has(normalizePulseRouteId(trip.routeId));
+  const alpha = !hasEmphasis
+    ? CORE_IDLE_ALPHA
+    : isEmphasized
+      ? CORE_EMPHASIZED_ALPHA
+      : CORE_BACKGROUND_ALPHA;
+  // Recover the original hue from the halo color (route color brightened 22%
+  // toward white) and push it 75% toward white. Inline the inversion so we
+  // don't have to store the original color on the trip.
+  const debrightened: [number, number, number] = [
+    Math.max(0, Math.round((trip.color[0] - 255 * 0.22) / (1 - 0.22))),
+    Math.max(0, Math.round((trip.color[1] - 255 * 0.22) / (1 - 0.22))),
+    Math.max(0, Math.round((trip.color[2] - 255 * 0.22) / (1 - 0.22))),
+  ];
+  const r = Math.min(255, Math.round(debrightened[0] + (255 - debrightened[0]) * 0.75));
+  const g = Math.min(255, Math.round(debrightened[1] + (255 - debrightened[1]) * 0.75));
+  const b = Math.min(255, Math.round(debrightened[2] + (255 - debrightened[2]) * 0.75));
+  return [r, g, b, alpha];
+}
+
+function resolveSubwayPulseCoreWidth(
+  trip: SubwayPulseTrip,
+  emphasizedRouteIds?: Iterable<string>,
+): number {
+  const emphasized = normalizedRouteSet(emphasizedRouteIds);
+  const hasEmphasis = emphasized.size > 0;
+  const isEmphasized = emphasized.has(normalizePulseRouteId(trip.routeId));
+  if (!hasEmphasis) return CORE_PULSE_WIDTH;
+  return isEmphasized ? CORE_EMPHASIZED_PULSE_WIDTH : CORE_BACKGROUND_PULSE_WIDTH;
 }
 
 function segmentDistances(path: [number, number][]) {
@@ -260,8 +332,9 @@ export function buildSubwayPulseTrips(
           routeId,
           path: subPath,
           timestamps: timestampsForPath(subPath, offset),
+          // halo color — core derives from this via resolveSubwayPulseCoreColor
           color,
-          width: PULSE_WIDTH,
+          width: HALO_PULSE_WIDTH,
         });
       }
     }
@@ -270,15 +343,31 @@ export function buildSubwayPulseTrips(
   return trips;
 }
 
-export function createSubwayPulseLayer(
+/**
+ * Build the electric-current pulse: TWO stacked TripsLayers.
+ *
+ *   [0] halo: outer route-color trail, wide+soft, longer trail (160) — this is
+ *       the "energy bolt" body.
+ *   [1] core: inner near-white trail, narrow+sharp, short trail (70) — this is
+ *       the "spark head" chasing along inside the halo.
+ *
+ * Both layers consume the SAME `trips` array (one source of truth — no
+ * duplicate trip-building). The halo color comes from `trip.color` (already
+ * brightened-22%); the core color is derived per-frame via
+ * `resolveSubwayPulseCoreColor`.
+ *
+ * Caller spreads the returned array into deck.gl's layers list. Layer order
+ * matters: halo MUST come before core so the core renders on top.
+ */
+export function createSubwayPulseLayers(
   trips: SubwayPulseTrip[],
   currentTime: number,
   options: SubwayPulseLayerOptions = {},
-): Layer {
+): Layer[] {
   const emphasizedRouteIds = normalizedRouteSet(options.emphasizedRouteIds);
 
-  return new TripsLayer<SubwayPulseTrip>({
-    id: "sr-subway-pulse-trips",
+  const halo = new TripsLayer<SubwayPulseTrip>({
+    id: "sr-subway-pulse-trips-halo",
     data: trips,
     getPath: (trip) => trip.path,
     getTimestamps: (trip) => trip.timestamps,
@@ -288,14 +377,36 @@ export function createSubwayPulseLayer(
       resolveSubwayPulseVisualsForSet(trip, emphasizedRouteIds).width,
     widthUnits: "pixels",
     widthMinPixels: 3.2,
-    opacity: 0.78,
+    opacity: 0.62,
     capRounded: true,
     jointRounded: true,
-    trailLength: TRAIL_LENGTH,
+    trailLength: HALO_TRAIL_LENGTH,
     currentTime,
     fadeTrail: true,
     parameters: {
       depthTest: false,
     },
   } as ConstructorParameters<typeof TripsLayer<SubwayPulseTrip>>[0]);
+
+  const core = new TripsLayer<SubwayPulseTrip>({
+    id: "sr-subway-pulse-trips-core",
+    data: trips,
+    getPath: (trip) => trip.path,
+    getTimestamps: (trip) => trip.timestamps,
+    getColor: (trip) => resolveSubwayPulseCoreColor(trip, emphasizedRouteIds),
+    getWidth: (trip) => resolveSubwayPulseCoreWidth(trip, emphasizedRouteIds),
+    widthUnits: "pixels",
+    widthMinPixels: 1.6,
+    opacity: 0.96,
+    capRounded: true,
+    jointRounded: true,
+    trailLength: CORE_TRAIL_LENGTH,
+    currentTime,
+    fadeTrail: true,
+    parameters: {
+      depthTest: false,
+    },
+  } as ConstructorParameters<typeof TripsLayer<SubwayPulseTrip>>[0]);
+
+  return [halo, core];
 }
