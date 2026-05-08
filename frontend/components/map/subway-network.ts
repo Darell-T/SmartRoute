@@ -70,37 +70,45 @@ const LINE_OPACITY: Record<
     background: number;
   }
 > = {
+  // Shadow: trace lift only. Was 0.18 atmospheric depth — now just enough to
+  // separate the line from the dark road grid without re-introducing dusk-mode
+  // softness.
   shadow: {
-    idle: 0.18,
-    selected: 0.42,
-    incident: 0.34,
-    nearby: 0.26,
-    sibling: 0.14,
-    background: 0.06,
+    idle: 0.08,
+    selected: 0.22,
+    incident: 0.18,
+    nearby: 0.13,
+    sibling: 0.07,
+    background: 0.03,
   },
+  // Casing: more visible separator so adjacent bundle members (e.g. N/Q/R/W)
+  // show a clear grey gutter between them, like the MTA poster's white casings.
   casing: {
-    idle: 0.46,
-    selected: 0.86,
-    incident: 0.76,
-    nearby: 0.64,
-    sibling: 0.44,
-    background: 0.2,
-  },
-  glow: {
-    idle: 0.032,
-    selected: 0.18,
-    incident: 0.12,
-    nearby: 0.075,
-    sibling: 0.035,
-    background: 0.006,
-  },
-  line: {
-    idle: 0.52,
+    idle: 0.62,
     selected: 0.96,
-    incident: 0.9,
+    incident: 0.88,
     nearby: 0.78,
-    sibling: 0.52,
-    background: 0.24,
+    sibling: 0.6,
+    background: 0.28,
+  },
+  // Glow: removed (idle 0). MTA poster aesthetic has no luminous halo. Selected/
+  // incident states keep a tiny ambient glow for selection emphasis only.
+  glow: {
+    idle: 0,
+    selected: 0.05,
+    incident: 0.035,
+    nearby: 0.012,
+    sibling: 0.005,
+    background: 0,
+  },
+  // Line: solid bold MTA color (was 0.52 translucent).
+  line: {
+    idle: 0.92,
+    selected: 1,
+    incident: 0.98,
+    nearby: 0.94,
+    sibling: 0.86,
+    background: 0.44,
   },
 };
 
@@ -128,9 +136,11 @@ const LINE_WIDTH: Record<
     muted: [1.6, 2.8, 4.4],
   },
   line: {
-    idle: [1.62, 2.68, 4.4],
-    focused: [2.45, 3.85, 6.15],
-    muted: [1.1, 1.9, 3.2],
+    // ~13% thicker than the dusk-mode tuning. Pairs with the new opacity 0.92
+    // for an MTA-poster-bold read while still respecting the road grid.
+    idle: [1.85, 3.1, 5.05],
+    focused: [2.8, 4.4, 7.05],
+    muted: [1.25, 2.18, 3.65],
   },
 };
 
@@ -757,7 +767,10 @@ export function addSubwayNetwork(m: maplibregl.Map) {
       type: "line",
       source: SOURCE_ID,
       paint: {
-        "line-color": "#0a0d13",
+        // Mid-grey neutral. Acts as the MTA poster's "white casing" tuned for
+        // the dark basemap: adjacent bundle members (N/Q/R/W, B/D/F/M, etc.)
+        // now show a clear lighter gutter between them.
+        "line-color": "#3a4350",
         "line-opacity": subwayFocusedLineOpacityExpression([], "casing"),
         "line-offset": subwayLaneOffsetExpression(),
         "line-width": subwayFocusedLineWidthExpression([], "casing"),
