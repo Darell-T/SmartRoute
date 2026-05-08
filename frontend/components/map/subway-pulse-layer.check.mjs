@@ -25,6 +25,8 @@ vm.runInNewContext(transpiled.outputText, {
 const {
   buildSubwayPulseTrips,
   resolveSubwayPulseVisuals,
+  resolveSubwayPulseCoreColor,
+  createSubwayPulseLayers,
   MANHATTAN_HEART,
   SUBWAY_PULSE_LOOP_MS,
 } = helperModule.exports;
@@ -52,7 +54,11 @@ const network = {
 };
 
 const trips = buildSubwayPulseTrips(network);
-assert.equal(trips.length, 3, "each canonical shape should create pulse offsets");
+assert.equal(
+  trips.length,
+  4,
+  "each single-end canonical shape should create 1 sub-path × 4 pulse offsets = 4 trips",
+);
 
 const idle = resolveSubwayPulseVisuals(trips[0]);
 const emphasized = resolveSubwayPulseVisuals(trips[0], new Set(["b"]));
@@ -83,8 +89,8 @@ assert.equal(
 // converging-pulse rewrite (was 18s).
 assert.equal(
   SUBWAY_PULSE_LOOP_MS,
-  22000,
-  "SUBWAY_PULSE_LOOP_MS must be 22s for the converging-pulse loop",
+  12000,
+  "SUBWAY_PULSE_LOOP_MS must be 12s for the electric-current loop",
 );
 
 // Manhattan-heart anchor regression: the [-73.985, 40.755] anchor (Times Sq
@@ -130,8 +136,8 @@ const tripsForConvergenceAssertion = buildSubwayPulseTrips({
 });
 assert.equal(
   tripsForConvergenceAssertion.length,
-  6,
-  "synthetic through-route must emit 2 halves × 3 offsets = 6 trips",
+  8,
+  "synthetic through-route must emit 2 halves × 4 offsets = 8 trips",
 );
 for (const trip of tripsForConvergenceAssertion) {
   const startD = distFromHeartM(trip.path[0]);
@@ -141,5 +147,40 @@ for (const trip of tripsForConvergenceAssertion) {
     `trip ${trip.id} must flow toward Manhattan (start ${startD.toFixed(0)}m vs end ${endD.toFixed(0)}m from heart)`,
   );
 }
+
+// Layered output regression: createSubwayPulseLayers must return a 2-element
+// array — the halo (drawn first) and the core (drawn on top). Layer ids must
+// differ so deck.gl can dedupe them; ordering must be [halo, core] so the
+// core renders above the halo.
+const layers = createSubwayPulseLayers(trips, 0);
+assert.equal(
+  Array.isArray(layers) && layers.length === 2,
+  true,
+  "createSubwayPulseLayers must return exactly 2 layers (halo + core)",
+);
+assert.equal(
+  layers[0].id,
+  "sr-subway-pulse-trips-halo",
+  "first layer must be the halo",
+);
+assert.equal(
+  layers[1].id,
+  "sr-subway-pulse-trips-core",
+  "second layer must be the core (drawn on top)",
+);
+
+// Brightness regression: the core color must be lighter than the halo color
+// for the SAME trip (the core is the bright-white spark head; the halo is
+// the route-color body). Pick any non-grey route to avoid degenerate cases.
+const haloColor = resolveSubwayPulseVisuals(trips[0]).color;
+const coreColor = resolveSubwayPulseCoreColor(trips[0]);
+const haloLuminance =
+  0.299 * haloColor[0] + 0.587 * haloColor[1] + 0.114 * haloColor[2];
+const coreLuminance =
+  0.299 * coreColor[0] + 0.587 * coreColor[1] + 0.114 * coreColor[2];
+assert.ok(
+  coreLuminance > haloLuminance,
+  `core luminance (${coreLuminance.toFixed(0)}) must exceed halo luminance (${haloLuminance.toFixed(0)}) — core is the bright spark head inside the route-color halo`,
+);
 
 console.log("subway pulse layer checks passed");

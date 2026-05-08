@@ -110,8 +110,8 @@ assert.deepEqual(
 );
 assert.deepEqual(
   JSON.parse(JSON.stringify(focusState.nearbyRouteIds)),
-  ["G", "Q"],
-  "nearby routes should normalize independently without losing selected overlap",
+  [],
+  "auto-nearby is disabled — nearbyRouteIds input must be dropped from state",
 );
 assert.deepEqual(
   JSON.parse(JSON.stringify(focusState.sameFamilySiblingRouteIds)),
@@ -120,8 +120,8 @@ assert.deepEqual(
 );
 assert.deepEqual(
   JSON.parse(JSON.stringify(focusState.allEmphasisRouteIds)),
-  ["Q", "4", "G"],
-  "all-emphasis routes should dedupe selected, incident, and nearby buckets",
+  ["Q", "4"],
+  "all-emphasis routes dedupe selected + incident only (auto-nearby disabled)",
 );
 
 assert.deepEqual(
@@ -221,6 +221,31 @@ assert.deepEqual(
   validateStyleMin(style).map((error) => error.message),
   [],
   "focused subway paint/filter expressions should be valid MapLibre syntax",
+);
+
+// Auto-nearby emphasis is disabled at the source: even when callers pass
+// `nearbyRouteIds`, the normalized state must drop them so idle rendering
+// stays uniform across the whole network. Manual selection/incident
+// emphasis is unaffected.
+//
+// (Component-wise length checks because arrays constructed in a vm context
+// have different prototype identity than host-built arrays — assert.deepEqual
+// resolves to deepStrictEqual under node:assert/strict and would fail on
+// prototype inequality even when the values match.)
+const stateWithNearby = normalizeSubwayNetworkFocusState({
+  selectedRouteIds: [],
+  incidentRouteIds: [],
+  nearbyRouteIds: ["1", "2", "3"],
+});
+assert.equal(
+  stateWithNearby.nearbyRouteIds.length,
+  0,
+  "normalizeSubwayNetworkFocusState must drop nearbyRouteIds (auto-nearby disabled)",
+);
+assert.equal(
+  stateWithNearby.allEmphasisRouteIds.length,
+  0,
+  "allEmphasisRouteIds must be empty when only nearbyRouteIds was provided",
 );
 
 console.log("subway network focus checks passed");

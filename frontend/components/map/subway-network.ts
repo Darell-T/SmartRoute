@@ -306,16 +306,19 @@ export function normalizeSubwayNetworkFocusState(
   const incidentRouteIds = isStructuredFocusInput(input)
     ? normalizeSubwayFocusRouteIds(input.incidentRouteIds)
     : [];
-  const nearbyRouteIds = isStructuredFocusInput(input)
-    ? normalizeSubwayFocusRouteIds(input.nearbyRouteIds)
-    : [];
+  // Auto-nearby (proximity-based) emphasis is intentionally disabled. Idle
+  // rendering must be uniform across the whole network — only manual focus
+  // (clicking a route, opening an incident) should change line styling.
+  // Callers may still pass `nearbyRouteIds`; the input is accepted for API
+  // shape compatibility but always normalized to an empty bucket here.
+  const nearbyRouteIds: string[] = [];
   const sameFamilySiblingRouteIds = selectedFamilySiblings(selectedRouteIds);
   const allEmphasisRouteIds: string[] = [];
   const seen = new Set<string>();
 
   addRouteBucket(allEmphasisRouteIds, seen, selectedRouteIds);
   addRouteBucket(allEmphasisRouteIds, seen, incidentRouteIds);
-  addRouteBucket(allEmphasisRouteIds, seen, nearbyRouteIds);
+  // nearbyRouteIds is always empty (see above) — no bucket to add.
 
   return {
     selectedRouteIds,
