@@ -9,8 +9,14 @@ import { rateLimit } from "./rate-limit";
 
 export { appendRequestSearch } from "./backend-proxy-core";
 
+// API_URL / NEXT_PUBLIC_API_URL win when set. Otherwise fall back by
+// environment so a Vercel deploy that is missing the env var still reaches the
+// prod backend instead of localhost (local dev keeps using localhost).
+const PROD_API_FALLBACK = "https://jarvis-mta-assistant.onrender.com";
 const backendBase =
-  process.env.API_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+  process.env.API_URL ??
+  process.env.NEXT_PUBLIC_API_URL ??
+  (process.env.VERCEL ? PROD_API_FALLBACK : "http://localhost:8000");
 
 // Trip planning is the slowest backend call (real-time providers + advisor +
 // TTS), so the default proxy budget is generous; faster routes can override.
