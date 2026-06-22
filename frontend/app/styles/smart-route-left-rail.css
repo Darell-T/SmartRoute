@@ -1,0 +1,523 @@
+/* ════════════════════════════════════════════════════════════════════════
+   SmartRoute — Left Rail tokens, keyframes, primitives
+
+   A flat, dark, agent-first aesthetic. ATLAS is the only visible brand
+   presence — the orb appears exclusively in conversational contexts. All
+   selectors are namespaced under `.sr-rail` (or its descendants) so this
+   stylesheet never bleeds into the rest of the app.
+
+   Token nomenclature mirrors the prototype's `--sr-*` namespace; everything
+   feeds the three views (Route / Hub / Alerts) and is shared with the FX
+   primitives in `LeftRail/fx.tsx`. Spacing, motion, and color decisions are
+   pinned to the design handoff (`design_handoff_left_rail/README.md`).
+   ════════════════════════════════════════════════════════════════════════ */
+
+.sr-rail {
+  --rail-bg: rgba(13, 11, 7, 0.82);
+  --rail-surface: rgba(216, 155, 43, 0.08);
+  --rail-surface-strong: rgba(216, 155, 43, 0.13);
+  --rail-border: rgba(216, 155, 43, 0.32);
+  --rail-border-strong: rgba(240, 185, 75, 0.48);
+  --rail-accent: #d89b2b;
+  --rail-accent-strong: #f0b94b;
+  --rail-accent-deep: #6e4a12;
+  --rail-text-muted: #b88a3a;
+  --rail-text-soft: #f4efe2;
+  --rail-glow: rgba(216, 155, 43, 0.36);
+  --rail-hover: rgba(216, 155, 43, 0.1);
+
+  /* ── surfaces (liquid glass) ─────────────────────────────────
+     The rail floats over the live map; surfaces are translucent so
+     the basemap glows through the backdrop blur. Nested cards and
+     inputs are lighter glass chips, not solid panels. The recipe is
+     calibrated against the bubbbly glass reference (blur 22 /
+     saturate / white-alpha fill + 1px specular inset + deep drop
+     shadow), re-tuned for a dark basemap. */
+  --sr-bg: rgba(13, 11, 7, 0.42);
+  --sr-surface: var(--rail-bg); /* rail panel fill (under blur) */
+  --sr-surface-2: var(--rail-surface); /* nested cards, inputs */
+  --sr-surface-3: var(--rail-surface-strong);
+  --sr-surface-edge: rgba(17, 16, 11, 0.72);
+  /* Blur radius drives backdrop-filter cost (the rail floats over the live
+     map, so the strip behind it is re-blurred every pan frame). 16px keeps
+     the frosted-glass read at a fraction of the 28px cost; the contrast()
+     pass is dropped (extra filter = extra GPU work) and saturation eased. */
+  --sr-glass-blur: blur(16px) saturate(1.3);
+  --sr-glass-border: var(--rail-border);
+  --sr-glass-specular: rgba(244, 239, 226, 0.28);
+  --sr-glass-rim: var(--rail-border-strong);
+  --sr-glass-refract-accent: rgba(216, 155, 43, 0.13);
+  --sr-glass-refract-warm: rgba(240, 185, 75, 0.13);
+  --sr-glass-shadow: 0 34px 80px rgba(0, 0, 0, 0.54);
+
+  /* ── foreground ──────────────────────────────────────────────── */
+  --sr-fg: var(--rail-text-soft);
+  --sr-fg-2: rgba(244, 239, 226, 0.78);
+  --sr-fg-3: rgba(215, 202, 175, 0.66);
+  --sr-muted: var(--rail-text-muted);
+
+  /* ── rules / borders ────────────────────────────────────────── */
+  --sr-rule: rgba(216, 155, 43, 0.18);
+  --sr-rule-bright: rgba(240, 185, 75, 0.34);
+
+  /* ── accents ────────────────────────────────────────────────── */
+  --sr-cyan: var(--rail-accent); /* rail active/live accent */
+  --sr-cyan-deep: var(--rail-accent-deep);
+  --sr-amber: var(--rail-accent-strong); /* warnings, stale, planned */
+  --sr-coral: #f87171; /* errors, major incidents */
+  --sr-sage: #86c29a;
+
+  /* ── motion ─────────────────────────────────────────────────── */
+  --sr-ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --sr-dur-1: 150ms; /* hover transitions */
+  --sr-dur-2: 220ms; /* small state changes */
+  --sr-dur-3: 360ms; /* tab/section enter */
+  --sr-dur-4: 600ms; /* number ticker */
+
+  /* ── type ───────────────────────────────────────────────────── */
+  --sr-display: var(--font-space-grotesk), "Space Grotesk", ui-sans-serif,
+    system-ui, sans-serif;
+  --sr-mono: var(--font-jetbrains-mono), "JetBrains Mono", "IBM Plex Mono",
+    ui-monospace, monospace;
+
+  /* Liquid glass panel: translucent fill + heavy backdrop blur with a
+     saturation lift so the map's line colors bloom through, a hairline
+     glass border, a 1px specular top inset, and a deep soft drop shadow
+     that floats the panel off the map. */
+  background:
+    radial-gradient(circle at 14% 3%, var(--sr-glass-refract-accent), transparent 34%),
+    radial-gradient(circle at 92% 12%, var(--sr-glass-refract-warm), transparent 36%),
+    linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.13) 0%,
+      rgba(255, 255, 255, 0.035) 34%,
+      rgba(255, 255, 255, 0) 62%
+    ),
+    var(--sr-surface);
+  -webkit-backdrop-filter: var(--sr-glass-blur);
+  backdrop-filter: var(--sr-glass-blur);
+  border: 1px solid var(--sr-glass-border);
+  border-radius: 30px;
+  box-shadow:
+    var(--sr-glass-shadow),
+    0 0 0 0.5px rgba(255, 255, 255, 0.08),
+    0 24px 60px rgba(0, 0, 0, 0.45),
+    0 2px 10px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 var(--sr-glass-specular),
+    inset 1px 0 0 rgba(255, 255, 255, 0.08),
+    inset -1px 0 0 rgba(240, 185, 75, 0.1),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.05);
+  color: var(--sr-fg);
+  font-family: var(--sr-display);
+  -webkit-font-smoothing: antialiased;
+  isolation: isolate;
+}
+
+/* Conic-gradient angle property — drives the ATLAS thinking beam. The
+   `@property` declaration must live OUTSIDE the .sr-rail nest because the
+   spec requires it at the top level of the stylesheet. */
+@property --sr-beam-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+/* ── keyframes ────────────────────────────────────────────────── */
+@keyframes srBeamRotate {
+  to {
+    --sr-beam-angle: 360deg;
+  }
+}
+
+@keyframes srPulse {
+  0% {
+    box-shadow: 0 0 0 0 currentColor;
+  }
+  70% {
+    box-shadow: 0 0 0 6px rgba(216, 155, 43, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(216, 155, 43, 0);
+  }
+}
+
+@keyframes srBlurIn {
+  from {
+    opacity: 0;
+    filter: blur(6px);
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+    transform: translateY(0);
+  }
+}
+
+@keyframes srSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes srWave {
+  from {
+    transform: scaleY(0.4);
+  }
+  to {
+    transform: scaleY(1.4);
+  }
+}
+
+@keyframes srOrbBreath {
+  from {
+    opacity: 0.55;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* ── accordion (grid-rows trick — smooth height to unknown content) ── */
+.sr-rail .sr-accordion {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 350ms var(--sr-ease);
+}
+.sr-rail .sr-accordion[data-open="true"] {
+  grid-template-rows: 1fr;
+}
+.sr-rail .sr-accordion > .sr-accordion-inner {
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* ── entry animations ────────────────────────────────────────── */
+.sr-rail .sr-fade-in {
+  animation: srBlurIn 360ms var(--sr-ease) both;
+}
+.sr-rail .sr-slide-in {
+  animation: srSlideIn 220ms var(--sr-ease) both;
+}
+
+/* ── scrollbar (accent-tinted, unobtrusive) ───────────────────── */
+.sr-rail::-webkit-scrollbar {
+  width: 8px;
+}
+.sr-rail::-webkit-scrollbar-track {
+  background: transparent;
+}
+.sr-rail::-webkit-scrollbar-thumb {
+  background: rgba(216, 155, 43, 0.18);
+  border-radius: 8px;
+}
+.sr-rail::-webkit-scrollbar-thumb:hover {
+  background: rgba(240, 185, 75, 0.35);
+}
+
+/* ── glass specular sheen ──────────────────────────────────────
+   The film-grain ::before was removed: a mix-blend-mode layer over a
+   backdrop-blurred panel that floats over the moving map forces a
+   compositor readback every pan frame for negligible visual gain. The
+   ::after specular highlight is kept but uses NORMAL compositing (no
+   mix-blend-mode: screen) so it doesn't re-sample the moving backdrop. */
+.sr-rail-grain::after {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  z-index: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background:
+    linear-gradient(118deg, transparent 0 16%, rgba(255, 255, 255, 0.1) 17%, transparent 28%),
+    radial-gradient(520px 260px at 18% 0%, rgba(255, 255, 255, 0.1), transparent 62%),
+    radial-gradient(320px 240px at 94% 18%, rgba(255, 199, 142, 0.085), transparent 68%),
+    radial-gradient(260px 180px at 58% 4%, rgba(216, 155, 43, 0.095), transparent 70%);
+  opacity: 0.85;
+  -webkit-mask-image: linear-gradient(#000, rgba(0, 0, 0, 0.72) 58%, transparent 100%);
+  mask-image: linear-gradient(#000, rgba(0, 0, 0, 0.72) 58%, transparent 100%);
+}
+
+.sr-rail > * {
+  position: relative;
+  z-index: 1;
+}
+
+.sr-rail .sr-liquid-card,
+.sr-rail .sr-liquid-control,
+.sr-rail .sr-arrival-card {
+  position: relative;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.115), rgba(255, 255, 255, 0.035) 44%, rgba(255, 255, 255, 0.02)),
+    rgba(255, 255, 255, 0.052);
+  -webkit-backdrop-filter: blur(18px) saturate(1.35);
+  backdrop-filter: blur(18px) saturate(1.35);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.045),
+    0 14px 36px rgba(0, 0, 0, 0.24);
+}
+
+.sr-rail .sr-liquid-card::before,
+.sr-rail .sr-liquid-control::before,
+.sr-rail .sr-arrival-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.12), transparent 34%),
+    radial-gradient(220px 80px at 12% 0%, rgba(216, 155, 43, 0.14), transparent 80%);
+  opacity: 0.75;
+}
+
+.sr-rail .sr-liquid-card {
+  border-radius: 22px;
+  overflow: hidden;
+}
+
+.sr-rail .sr-liquid-control {
+  border-radius: 18px;
+}
+
+.sr-rail .sr-search-glass {
+  min-height: 48px;
+}
+
+.sr-rail .sr-search-glass:focus-within {
+  border-color: rgba(240, 185, 75, 0.46);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.26),
+    0 0 0 1px rgba(216, 155, 43, 0.18),
+    0 16px 42px rgba(216, 155, 43, 0.14);
+}
+
+.sr-rail .sr-jarvis-panel {
+  margin: 14px 14px 8px;
+}
+
+.sr-rail .sr-direction-frame {
+  border-radius: 20px;
+  padding: 3px;
+}
+
+.sr-rail .sr-direction-option {
+  border-radius: 16px;
+}
+
+.sr-rail .sr-direction-option[aria-pressed="true"] {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.45),
+    0 8px 22px rgba(216, 155, 43, 0.24);
+}
+
+.sr-rail .sr-arrivals-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sr-rail .sr-arrival-shell {
+  border-top: 0 !important;
+}
+
+.sr-rail .sr-arrival-card {
+  margin: 0 14px;
+  border-radius: 18px;
+  overflow: hidden;
+  transition:
+    border-color var(--sr-dur-2) var(--sr-ease),
+    background var(--sr-dur-2) var(--sr-ease),
+    transform var(--sr-dur-1) var(--sr-ease);
+}
+
+.sr-rail .sr-arrival-card:hover {
+  border-color: rgba(255, 255, 255, 0.22);
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.05) 48%, rgba(255, 255, 255, 0.025)),
+    rgba(255, 255, 255, 0.064);
+}
+
+.sr-rail .sr-arrival-card:active {
+  transform: translateY(1px);
+}
+
+.sr-rail .sr-suggestion-popover {
+  border-radius: 18px !important;
+  border-color: rgba(255, 255, 255, 0.2) !important;
+  background:
+    radial-gradient(circle at 18% 0%, rgba(216, 155, 43, 0.13), transparent 48%),
+    rgba(13, 19, 31, 0.82) !important;
+  box-shadow:
+    0 18px 42px rgba(0, 0, 0, 0.46),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22) !important;
+}
+
+/* ── line chip (Network Pulse filter) ─────────────────────────────
+   A fixed square grid cell so the selection ring is a perfect circle —
+   an inline button wrapping an inline-flex bullet picks up baseline
+   descender space and renders the ring as an oval. Selection reads as a
+   double ring (surface gap + ink ring); line status is a small badge dot
+   anchored bottom-right, so the two vocabularies never compete. */
+.sr-rail .sr-line-chip {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  transition:
+    box-shadow var(--sr-dur-1) var(--sr-ease),
+    opacity var(--sr-dur-2) var(--sr-ease),
+    transform var(--sr-dur-1) var(--sr-ease);
+}
+.sr-rail .sr-line-chip:hover {
+  box-shadow: 0 0 0 1.5px var(--sr-rule-bright);
+}
+.sr-rail .sr-line-chip:active {
+  transform: scale(0.94);
+}
+.sr-rail .sr-line-chip:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px var(--sr-surface),
+    0 0 0 3.5px var(--sr-cyan);
+}
+.sr-rail .sr-line-chip[aria-pressed="true"] {
+  box-shadow:
+    0 0 0 2px var(--sr-surface),
+    0 0 0 3.5px var(--sr-fg);
+}
+/* status badge dot (major / minor / planned) */
+.sr-rail .sr-line-chip[data-status]::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 2px solid var(--sr-surface);
+}
+.sr-rail .sr-line-chip[data-status="major"]::after {
+  background: var(--sr-coral);
+}
+.sr-rail .sr-line-chip[data-status="minor"]::after {
+  background: var(--sr-amber);
+}
+.sr-rail .sr-line-chip[data-status="planned"]::after {
+  background: var(--sr-cyan);
+}
+/* when a filter is active, unselected chips recede; hover restores them */
+.sr-rail .sr-pulse-grid[data-filtered="true"] .sr-line-chip:not([aria-pressed="true"]) {
+  opacity: 0.3;
+}
+.sr-rail .sr-pulse-grid[data-filtered="true"] .sr-line-chip:not([aria-pressed="true"]):hover {
+  opacity: 0.85;
+}
+
+/* ── switch (Grok scan) ───────────────────────────────────────────
+   Standard pill toggle: products shouldn't reinvent this affordance. */
+.sr-rail .sr-switch {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--sr-rule-bright);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+  transition:
+    background var(--sr-dur-2) var(--sr-ease),
+    border-color var(--sr-dur-2) var(--sr-ease);
+}
+.sr-rail .sr-switch[aria-pressed="true"] {
+  background: var(--sr-cyan);
+  border-color: var(--sr-cyan);
+}
+.sr-rail .sr-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--sr-fg-3);
+  transition:
+    transform var(--sr-dur-2) var(--sr-ease),
+    background var(--sr-dur-2) var(--sr-ease);
+}
+.sr-rail .sr-switch[aria-pressed="true"]::after {
+  transform: translateX(14px);
+  background: #241704; /* warm ink to read on the amber-filled track */
+}
+.sr-rail .sr-switch:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px var(--sr-surface),
+    0 0 0 3.5px var(--sr-cyan);
+}
+
+/* ── small ghost button (Refresh, Clear filter) ──────────────────── */
+.sr-rail .sr-ghost-btn {
+  background: transparent;
+  border: 1px solid var(--sr-rule-bright);
+  color: var(--sr-fg-2);
+  padding: 5px 10px;
+  cursor: pointer;
+  font-family: var(--sr-mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  transition:
+    color var(--sr-dur-1) var(--sr-ease),
+    border-color var(--sr-dur-1) var(--sr-ease),
+    background var(--sr-dur-1) var(--sr-ease);
+}
+.sr-rail .sr-ghost-btn:hover {
+  color: var(--sr-fg);
+  border-color: rgba(255, 255, 255, 0.24);
+  background: rgba(255, 255, 255, 0.03);
+}
+.sr-rail .sr-ghost-btn:active {
+  background: rgba(255, 255, 255, 0.06);
+}
+.sr-rail .sr-ghost-btn:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px var(--sr-surface),
+    0 0 0 3.5px var(--sr-cyan);
+}
+
+/* ── reset for atoms inside the rail ──────────────────────────── */
+.sr-rail *,
+.sr-rail *::before,
+.sr-rail *::after {
+  box-sizing: border-box;
+}
+
+.sr-rail button {
+  font-family: inherit;
+}
+
+.sr-rail input,
+.sr-rail textarea {
+  font-family: inherit;
+  color: inherit;
+}
+
+.sr-rail input::placeholder {
+  color: var(--sr-muted);
+}

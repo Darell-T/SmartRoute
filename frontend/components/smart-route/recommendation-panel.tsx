@@ -3,11 +3,11 @@
 import dynamic from "next/dynamic";
 import { Loader2, Play } from "lucide-react";
 import type { RouteSummary, RouteLeg } from "@/lib/smart-route";
+import { getLineColor } from "@/components/map/route-layers";
 
-const AgentOrb = dynamic(
-  () => import("./agent-orb").then((m) => m.AgentOrb),
-  { ssr: false },
-);
+const AgentOrb = dynamic(() => import("./agent-orb").then((m) => m.AgentOrb), {
+  ssr: false,
+});
 
 export type AgentState = "idle" | "thinking" | "speaking";
 
@@ -25,6 +25,58 @@ interface Props {
   confidence: number;
   errorText: string | null;
   onRetry: () => void;
+}
+
+function LineBullet({
+  letter,
+  color,
+  size = 34,
+}: {
+  letter: string;
+  color: string;
+  size?: number;
+}) {
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: size,
+        height: size,
+        borderRadius: size / 2,
+        background: color,
+        color: "#0a0e15",
+        fontFamily: "var(--font-geist), sans-serif",
+        fontWeight: 700,
+        fontSize: size * 0.5,
+        letterSpacing: "-0.01em",
+        lineHeight: 1,
+        flexShrink: 0,
+        boxShadow: `0 0 0 1px rgba(0,0,0,0.35), 0 2px 10px ${color}33`,
+      }}
+    >
+      {letter}
+    </span>
+  );
+}
+
+function ArrowGlyph({ size = 14 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 14 14"
+      fill="none"
+      stroke="rgba(255,255,255,0.55)"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      style={{ flexShrink: 0 }}
+    >
+      <path d="M3 7 L11 7 M8 4 L11 7 L8 10" />
+    </svg>
+  );
 }
 
 function IconCheck({ color, size = 12 }: { color: string; size?: number }) {
@@ -108,7 +160,13 @@ function IconSwap({ size = 12 }: { size?: number }) {
 function LegRow({ leg, accent }: { leg: RouteLeg; accent: string }) {
   const isRail = leg.mode === "rail" || leg.mode === "bus";
   const isTransfer = leg.mode === "transfer";
-  const icon = isRail ? <IconTrain /> : isTransfer ? <IconSwap /> : <IconWalk />;
+  const icon = isRail ? (
+    <IconTrain />
+  ) : isTransfer ? (
+    <IconSwap />
+  ) : (
+    <IconWalk />
+  );
   return (
     <div
       className="flex items-center gap-2.5"
@@ -119,7 +177,11 @@ function LegRow({ leg, accent }: { leg: RouteLeg; accent: string }) {
         border: "1px solid rgba(255,255,255,0.04)",
       }}
     >
-      <div style={{ color: isRail && leg.color ? leg.color : "rgba(255,255,255,0.5)" }}>
+      <div
+        style={{
+          color: isRail && leg.color ? leg.color : "rgba(255,255,255,0.5)",
+        }}
+      >
         {icon}
       </div>
       {isRail && leg.line && (
@@ -185,7 +247,8 @@ export function RecommendationPanel({
   const arrive = summary?.arriveLabel ?? "—";
   const total = summary?.totalMin ? `${summary.totalMin} MIN` : "—";
 
-  const revealText = state === "speaking" && displayedText ? displayedText : recommendationText;
+  const revealText =
+    state === "speaking" && displayedText ? displayedText : recommendationText;
   const voiceBlurb = isThinking
     ? thinkingText || "Processing route options…"
     : isIdle
@@ -220,7 +283,10 @@ export function RecommendationPanel({
       />
 
       {/* Header — orb + label + confidence */}
-      <div className="flex items-center justify-between" style={{ marginBottom: 12 }}>
+      <div
+        className="flex items-center justify-between"
+        style={{ marginBottom: 12 }}
+      >
         <div className="flex items-center gap-2.5">
           <div
             style={{
@@ -240,13 +306,13 @@ export function RecommendationPanel({
           <span
             style={{
               fontFamily: "var(--font-geist), sans-serif",
-              fontSize: 10,
+              fontSize: 10.5,
               letterSpacing: "0.18em",
-              color: "rgba(255,255,255,0.7)",
+              color: "rgba(255,255,255,0.72)",
               fontWeight: 500,
             }}
           >
-            JARVIS RECOMMENDATION
+            ATLAS RECOMMENDATION
           </span>
           {isThinking && (
             <Loader2
@@ -262,8 +328,9 @@ export function RecommendationPanel({
           <span
             style={{
               fontFamily: "var(--font-jetbrains-mono), monospace",
-              fontSize: 10,
+              fontSize: 10.5,
               color: `${accent}cc`,
+              letterSpacing: "0.04em",
             }}
           >
             CONF · 0.{confidence}
@@ -304,25 +371,89 @@ export function RecommendationPanel({
         </>
       )}
 
-      {/* Route label — big serif */}
-      {!errorText && headline && (
-        <div
-          style={{
-            fontFamily: "var(--font-instrument-serif), serif",
-            fontSize: 30,
-            lineHeight: 1.05,
-            color: "#fff",
-            letterSpacing: "-0.01em",
-          }}
-        >
-          {headline.prefix}{" "}
-          <span style={{ color: accent, fontStyle: "italic" }}>{headline.emphasis}</span>
-          {headline.suffix}
+      {/* Route hero — line pills + transfer station lead; serif tagline demoted to subtext */}
+      {!errorText && summary && summary.transitLines.length > 0 && (
+        <div style={{ marginBottom: 2 }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              flexWrap: "wrap",
+              rowGap: 8,
+              columnGap: 10,
+              fontFamily: "var(--font-instrument-serif), serif",
+              fontSize: 40,
+              lineHeight: 1.04,
+              color: "#fff",
+              letterSpacing: "-0.02em",
+            }}
+          >
+            <span>Take</span>
+            {summary.transitLines.map((line, i) => (
+              <span
+                key={`${line}-${i}`}
+                style={{ display: "inline-flex", alignItems: "center", gap: 8 }}
+              >
+                {i > 0 && <ArrowGlyph size={16} />}
+                <LineBullet
+                  letter={line}
+                  color={getLineColor(line)}
+                  size={36}
+                />
+              </span>
+            ))}
+            {summary.transferStation && (
+              <span
+                style={{
+                  color: "rgba(255,255,255,0.72)",
+                  fontStyle: "italic",
+                  fontSize: 32,
+                  letterSpacing: "-0.01em",
+                }}
+              >
+                via {summary.transferStation}
+              </span>
+            )}
+          </div>
+          <div
+            style={{
+              marginTop: 8,
+              fontFamily: "var(--font-geist), sans-serif",
+              fontSize: 13,
+              lineHeight: 1.45,
+              color: "rgba(255,255,255,0.58)",
+              letterSpacing: "0.01em",
+            }}
+          >
+            Fastest reliable option right now.
+          </div>
         </div>
       )}
 
+      {/* Walk-only fallback headline (no transit lines) */}
+      {!errorText &&
+        summary &&
+        summary.transitLines.length === 0 &&
+        headline && (
+          <div
+            style={{
+              fontFamily: "var(--font-instrument-serif), serif",
+              fontSize: 32,
+              lineHeight: 1.08,
+              color: "#fff",
+              letterSpacing: "-0.015em",
+            }}
+          >
+            {headline.prefix}{" "}
+            <span style={{ color: accent, fontStyle: "italic" }}>
+              {headline.emphasis}
+            </span>
+            {headline.suffix}
+          </div>
+        )}
+
       {/* Idle placeholder headline */}
-      {!errorText && !headline && (
+      {!errorText && !summary && (
         <div
           style={{
             fontFamily: "var(--font-instrument-serif), serif",
@@ -334,11 +465,12 @@ export function RecommendationPanel({
         >
           {isThinking ? (
             <>
-              Thinking <span style={{ color: accent, fontStyle: "italic" }}>through</span> live signal…
+              Thinking <span style={{ color: accent }}>through</span> live
+              signal…
             </>
           ) : (
             <>
-              Where are you <span style={{ color: accent, fontStyle: "italic" }}>headed</span>, sir?
+              Where are you <span style={{ color: accent }}>headed</span>, sir?
             </>
           )}
         </div>
@@ -370,7 +502,9 @@ export function RecommendationPanel({
             onClick={onPlayVoice}
             className="flex items-center gap-1.5 cursor-pointer"
             style={{
-              background: voicePlaying ? `${accent}22` : "rgba(255,255,255,0.04)",
+              background: voicePlaying
+                ? `${accent}22`
+                : "rgba(255,255,255,0.04)",
               border: `1px solid ${voicePlaying ? accent + "66" : "rgba(255,255,255,0.08)"}`,
               borderRadius: 999,
               padding: "6px 12px",
@@ -381,7 +515,7 @@ export function RecommendationPanel({
             }}
           >
             <Play size={10} />
-            {voicePlaying ? "Playing…" : "Hear from agent"}
+            {voicePlaying ? "Playing…" : "Hear from ATLAS"}
           </button>
           <button
             onClick={onToggleDetails}
@@ -425,17 +559,19 @@ export function RecommendationPanel({
               key={k}
               style={{
                 padding: "0 12px",
-                borderRight: i < 2 ? "1px solid rgba(255,255,255,0.06)" : "none",
+                borderRight:
+                  i < 2 ? "1px solid rgba(255,255,255,0.06)" : "none",
                 paddingLeft: i === 0 ? 0 : 12,
               }}
             >
               <div
                 style={{
                   fontFamily: "var(--font-geist), sans-serif",
-                  fontSize: 9,
-                  letterSpacing: "0.14em",
-                  color: "rgba(255,255,255,0.45)",
+                  fontSize: 9.5,
+                  letterSpacing: "0.16em",
+                  color: "rgba(255,255,255,0.52)",
                   marginBottom: 4,
+                  fontWeight: 500,
                 }}
               >
                 {k}
@@ -471,9 +607,10 @@ export function RecommendationPanel({
             <span
               style={{
                 fontFamily: "var(--font-geist), sans-serif",
-                fontSize: 10,
-                letterSpacing: "0.14em",
-                color: "rgba(255,255,255,0.6)",
+                fontSize: 10.5,
+                letterSpacing: "0.16em",
+                color: "rgba(255,255,255,0.65)",
+                fontWeight: 500,
               }}
             >
               REASONING
@@ -481,10 +618,11 @@ export function RecommendationPanel({
             <span
               className="ml-auto flex items-center gap-1"
               style={{
-                fontSize: 9,
+                fontSize: 10,
                 color: "#ff6868",
                 fontFamily: "var(--font-jetbrains-mono), monospace",
-                letterSpacing: "0.1em",
+                letterSpacing: "0.12em",
+                fontWeight: 500,
               }}
             >
               <span
@@ -510,10 +648,7 @@ export function RecommendationPanel({
           >
             {recommendationText}
           </p>
-          <div
-            className="flex flex-col gap-1.5"
-            style={{ marginTop: 12 }}
-          >
+          <div className="flex flex-col gap-1.5" style={{ marginTop: 12 }}>
             {summary.legs.map((leg, i) => (
               <LegRow key={i} leg={leg} accent={accent} />
             ))}

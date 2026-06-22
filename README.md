@@ -18,30 +18,35 @@ It is not a wrapper around Google Maps. Google provides the route candidates. JA
 
 **Partial suspension awareness.** When the MTA suspends service on part of a line, JARVIS doesn't discard the entire line. It understands which segment is affected and Claude can route you through the working portion with a transfer or shuttle bus connection.
 
+**Apple-Maps-style subway map.** The full NYC subway system is rendered natively from GTFS and NYC OpenData geometry as a precomputed artifact. Shared trunks are split into parallel colored lanes with consistent baked offsets, then drawn with a four-layer stroke — dark ground shadow, near-black casing, bright color fill, and a faint inner sheen — plus zoom-interpolated widths and a dark gutter between adjacent colors, so bundled corridors read as distinct lines at every zoom instead of a tangle of overlapping strokes.
+
 ## What It Looks Like
 
-The frontend is a full-screen 3D Mapbox map with a dark HUD aesthetic — black background, faint cyan road grid, glowing route lines. When a route loads:
+The frontend is a full-screen MapLibre GL map on a premium dark basemap (muted CARTO Dark Matter) with native 3D buildings. The entire subway network is drawn in the Apple-Maps style described above — baked parallel lanes, casings, and round caps — so the map reads cleanly before any route is even requested.
 
-1. The camera flies to fit the full route
-2. Route segments draw sequentially — dashed white for walking, MTA-colored glowing lines for subway, blue for bus
-3. A particle pulse animates along the completed route
-4. The camera rotates slowly around the destination, then returns to your position
+A left rail (ATLAS) overlays the map with three views: a route brief with synchronized spoken narration, live next-arrivals (train and bus) for the nearest stations, and a service-alerts board. Live train positions stream over a WebSocket and animate as markers on the map.
 
-Station badges show the line letter in its official MTA color alongside the station name. Intermediate stops appear as subtle glowing dots along the route. The user's position pulses as a cyan orb; the destination pulses red.
+When a route loads:
 
-On mobile, the response appears in a collapsible bubble above the input bar — collapsed by default to keep the map visible, expandable to see full details and action buttons.
+1. The camera flies to fit the full route, your location, and the destination
+2. Route segments draw in context — dashed for walking legs, MTA-colored lines for subway, distinct styling for bus
+3. Intermediate stops appear as labeled dots along the route
+4. Your position pulses as a cyan orb; the destination pulses red
+
+On mobile, the rail collapses to keep the map visible and expands for full route detail.
 
 ## Tech Stack
 
 | Layer | Technologies |
 |---|---|
-| Frontend | Next.js, React, TypeScript, Mapbox GL, Three.js |
-| Backend | FastAPI, Python, Uvicorn |
-| Data | Google Routes API, MTA GTFS / GTFS-RT, MTA BusTIME SIRI |
+| Frontend | Next.js 16, React, TypeScript, MapLibre GL, deck.gl, MapTiler (3D buildings), Three.js |
+| Backend | FastAPI, Python, Uvicorn, PostgreSQL |
+| Data | Google Routes API, MTA GTFS / GTFS-RT, MTA BusTime SIRI, NYC OpenData (subway geometry) |
+| Realtime | WebSocket live feed with short-lived HMAC ticket auth |
 | AI | Anthropic Claude (route reasoning), xAI Grok (incident intelligence) |
 | Voice | ElevenLabs (text-to-speech) |
 | Cache | Redis (optional, in-memory fallback) |
-| Hosting | Vercel (frontend), Render (backend) |
+| Hosting | Vercel (frontend), Render (backend + PostgreSQL) |
 
 ## Repository Structure
 
@@ -85,17 +90,21 @@ Set these in your local `.env` and hosting providers.
 | Variable | Required | Purpose |
 |---|---|---|
 | `NEXT_PUBLIC_API_URL` | Yes | Backend base URL used by the browser |
-| `NEXT_PUBLIC_MAPBOX_TOKEN` | Yes | Map rendering token |
+| `NEXT_PUBLIC_MAPTILER_API_KEY` | Yes | Basemap tiles and 3D building tiles |
+| `NEXT_PUBLIC_MAPBOX_TOKEN` | Yes | Destination geocoding / search |
+| `APP_KEY` | Yes | Shared secret; the frontend signs short-lived WebSocket tickets with it |
 
 ### Backend (Render / local backend process)
 
 | Variable | Required | Purpose |
 |---|---|---|
+| `APP_KEY` | Yes | Shared secret; the backend refuses to start without it. Gates the API and verifies WebSocket tickets |
 | `GOOGLE_ROUTES_API_KEY` | Yes | Google Directions v2 computeRoutes |
 | `ANTHROPIC_API_KEY` | Yes | Route recommendation text generation |
 | `ELEVENLABS_API_KEY` | Yes (for audio) | Text-to-speech audio generation |
 | `XAI_API_KEY` | Optional | Incident intelligence via Grok |
 | `MTA_BUS_API_KEY` | Yes (bus monitoring) | MTA Bus SIRI API access |
+| `DATABASE_URL` | Optional | PostgreSQL used for GTFS enrichment; without it the GTFS query path is skipped (`GTFS_DB_FALLBACK=1` enables a local fallback) |
 | `REDIS_URL` | Optional | Shared caching; fallback is in-memory |
 | `CORS_ORIGINS` | Yes in production | Allowed frontend origins |
 | `CORS_ORIGIN_REGEX` | Optional | Preview domain support |

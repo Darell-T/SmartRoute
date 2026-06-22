@@ -1,110 +1,387 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect, useMemo } from "react";
-import type { TransitRouteData, RouteStep, ServiceAlert } from "@/types";
-import { JarvisMap } from "@/components/jarvis-map";
-import { planTrip, getThinking, DEFAULT_LOCATION } from "@/lib/api";
-import { getLineColor } from "@/components/map/route-layers";
 import {
-  summarizeRoute,
-  type RouteSummary,
-  type AgentLogEntry,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import type {
+  DestinationSelection,
+  FocusedLiveDirection,
+  LiveFeedIncident,
+  LiveVehicle,
+  RouteCandidate,
+  RouteStep,
+  ServiceAlert,
+  TransitRouteData,
+} from "@/types";
+import { JarvisMap } from "@/components/jarvis-map";
+import { IncidentA11yList } from "@/components/map/incidents/incident-a11y-list";
+import {
+  liveFeedIncidentToMapIncident,
+  type MapIncident,
+} from "@/components/map/incidents/incident-marker-types";
+import { normalizeIncidentType } from "@/components/map/incidents/incident-marker-tokens";
+import { DEFAULT_LOCATION, enrichRoute, getSwitchNarration, getThinking, planTrip } from "@/lib/api";
+import {
+  buildLiveDirectionRows,
+  directionFromVehicle,
+  normalizeLiveRouteId,
+} from "@/lib/live-directions";
+import { useLiveFeed } from "@/lib/use-live-feed";
+import { useServiceAlerts } from "@/lib/use-service-alerts";
+import {
+  deriveTransitRouteIds,
+  normalizeTripCandidates,
+} from "@/lib/route-planning";
+import {
   INITIAL_LOG,
-  THINKING_LOG_SEED,
   nowStamp,
+  summarizeRoute,
+  THINKING_LOG_SEED,
+  type AgentLogEntry,
 } from "@/lib/smart-route";
-
-import { Header, type TabId } from "@/components/smart-route/header";
+import {
+  SmartRouteShell,
+  type ShellMetric,
+  type TabId,
+} from "@/components/smart-route/shell";
+import { AgentLog } from "@/components/smart-route/agent-log";
 import {
   RecommendationPanel,
   type AgentState,
 } from "@/components/smart-route/recommendation-panel";
-import { AgentLog } from "@/components/smart-route/agent-log";
-import { TripBar } from "@/components/smart-route/trip-bar";
+import { ServiceAlertsCard } from "@/components/smart-route/service-alerts-card";
+import { ServiceAlertsBoard } from "@/components/smart-route/service-alerts-board";
+import { ReasonChips } from "@/components/smart-route/reason-chips";
 import {
-  AlternateCard,
-  type AlternateRoute,
-} from "@/components/smart-route/alternate-card";
-import { NetworkStatus } from "@/components/smart-route/network-status";
+  LeftRail,
+  type JarvisState,
+} from "@/components/smart-route/left-rail";
+import { buildLeftRailData } from "@/components/smart-route/left-rail/live-data";
 
-const ACCENT = "#d4a7ff";
+// ── v2 components (behind ?v=2 flag) ────────────────────────────────────────
+import {
+  IntelligenceDivider,
+  IntelligenceHub,
+} from "@/components/smart-route/intelligence-hub";
+import { NetworkHealthBlock } from "@/components/smart-route/network-health-block";
+import { NextArrivalsBlock } from "@/components/smart-route/next-arrivals-block";
+import { LiveIncidentsList } from "@/components/smart-route/live-incidents-list";
+import { DisruptionLegend } from "@/components/smart-route/disruption-legend";
+import { MapMiniControls } from "@/components/smart-route/map-mini-controls";
+import {
+  RouteMissionBriefRail,
+  type RouteMode,
+} from "@/components/smart-route/route-mission-brief-rail";
+import { WeatherChip } from "@/components/smart-route/weather-chip";
+import { normalizeNetworkStatus } from "@/components/smart-route/network-orb-color";
 
-function pushLog(
-  set: React.Dispatch<React.SetStateAction<AgentLogEntry[]>>,
-  entry: Omit<AgentLogEntry, "t">,
-) {
-  set((prev) => [...prev, { t: nowStamp(), ...entry }]);
-}
-
-function deriveAlternates(primary: RouteSummary | null): AlternateRoute[] {
-  if (!primary) return [];
-  // Simple derived set: the primary summary + two stylized alternates for the right rail.
-  const base = primary.totalMin;
-  const via = primary.transitLines[0] ?? "route";
-  const alt1: AlternateRoute = {
-    id: "alt-1",
-    label: `Via ${via} express`,
-    verdict: "SLOWER",
-    confidence: 82,
-    eta: primary.arriveLabel,
-    totalMin: Math.round(base * 1.18),
-    reasonShort: "Fewer transfers, but slightly longer ride time.",
-  };
-  const alt2: AlternateRoute = {
-    id: "alt-2",
-    label: "Surface bus alt.",
-    verdict: "DELAYED",
-    confidence: 61,
-    eta: primary.arriveLabel,
-    totalMin: Math.round(base * 1.4),
-    reasonShort: "Traffic congestion flagged by live incident feed.",
-  };
-  return [alt1, alt2];
-}
+import {
+  ACCENT,
+  appendLog,
+  EmptyRailCard,
+  formatShellClock,
+  type MapActions,
+} from "./page-parts";
 
 export default function JarvisPage() {
-  const [tab, setTab] = useState<TabId>("planner");
+  const [tab, setTab] = useState<TabId>("livemap");
   const [inputValue, setInputValue] = useState("");
+  const [selectedDestination, setSelectedDestination] =
+    useState<DestinationSelection | null>(null);
   const [userLocation, setUserLocation] = useState<{
     lng: number;
     lat: number;
   } | null>(null);
-
-  // Core trip state
   const [jarvisText, setJarvisText] = useState("");
   const [displayedText, setDisplayedText] = useState("");
   const [thinkingText, setThinkingText] = useState("");
+  // Canned ATLAS line after the user switches to an alternative route;
+  // overrides the rail's plan headline until the next trip or clear.
+  const [switchHeadline, setSwitchHeadline] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
   const [isListening, setIsListening] = useState(false);
-  const [routeData, setRouteData] = useState<TransitRouteData | null>(null);
-  const [destCoords, setDestCoords] = useState<{
-    lat: number;
-    lng: number;
-  } | null>(null);
+  const [plannedRouteSteps, setPlannedRouteSteps] = useState<RouteStep[]>([]);
+  const [routeCandidates, setRouteCandidates] = useState<RouteCandidate[]>([]);
+  const [activeRouteCandidateId, setActiveRouteCandidateId] =
+    useState<string | null>(null);
+  const [selectedRouteIndex, setSelectedRouteIndex] = useState<number | null>(
+    null,
+  );
   const [alerts, setAlerts] = useState<ServiceAlert[]>([]);
-  const [summary, setSummary] = useState<RouteSummary | null>(null);
-  const [logEntries, setLogEntries] =
-    useState<AgentLogEntry[]>(INITIAL_LOG);
-  const [showDetails, setShowDetails] = useState(true);
+  const [tripIncidents, setTripIncidents] = useState<LiveFeedIncident[]>([]);
+  const [logEntries, setLogEntries] = useState<AgentLogEntry[]>(INITIAL_LOG);
+  const [showDetails, setShowDetails] = useState(false);
+  const [refreshedAgo, setRefreshedAgo] = useState(0);
+  const [focusedLiveDirection, setFocusedLiveDirection] =
+    useState<FocusedLiveDirection | null>(null);
+  const [liveRailActivityKey, setLiveRailActivityKey] = useState(0);
+  // ATLAS incident scan is OFF by default. It drives a slow, paid Grok + X-search
+  // sweep of the half-mile radius, so the rider opts in: flipping it on starts the
+  // backend scan and surfaces incidents in the rail and as map markers.
+  const [atlasScanOn, setAtlasScanOn] = useState(false);
 
-  // Animation refs
-  const wordRevealIntervalRef = useRef<ReturnType<typeof setInterval> | null>(
-    null,
-  );
-  const thinkingRevealRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const revealStartedRef = useRef(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const speakingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const thinkingLogTimerRef = useRef<ReturnType<typeof setInterval> | null>(
-    null,
-  );
-  const mapActionsRef = useRef<{ recenter: () => void } | null>(null);
+  const audioUrlRef = useRef<string | null>(null);
+  const routePlanningRequestIdRef = useRef(0);
+  const mapActionsRef = useRef<MapActions | null>(null);
+  const liveMapFrameRef = useRef<HTMLElement | null>(null);
+  const liveArrivalSignatureRef = useRef<string | null>(null);
+  // Pre-warmed ATLAS "thinking" clip so the spoken phrase fires the instant
+  // route planning starts, with no network/TTS wait on the critical path.
+  const thinkingClipRef = useRef<{ text: string; audio: string } | null>(null);
 
-  // Origin label derived from user location
+  const activeRouteCandidate = useMemo(
+    () =>
+      routeCandidates.find(
+        (candidate) => candidate.id === activeRouteCandidateId,
+      ) ?? null,
+    [activeRouteCandidateId, routeCandidates],
+  );
+
+  const activeRouteSteps = activeRouteCandidate?.steps ?? plannedRouteSteps;
+
+  const routeData = useMemo<TransitRouteData | null>(
+    () => (activeRouteSteps.length > 0 ? { steps: activeRouteSteps } : null),
+    [activeRouteSteps],
+  );
+
+  const summary = useMemo(
+    () =>
+      activeRouteSteps.length > 0
+        ? summarizeRoute(activeRouteSteps, new Date(), activeRouteCandidate?.total_minutes)
+        : null,
+    [activeRouteSteps, activeRouteCandidate?.total_minutes],
+  );
+
+  const destCoords = useMemo(() => {
+    const lastStep = activeRouteSteps[activeRouteSteps.length - 1];
+    const rawDest =
+      lastStep?.type === "WALK" ? lastStep.end_point : lastStep?.arrival_coords;
+    if (rawDest) {
+      return { lat: rawDest.latitude, lng: rawDest.longitude };
+    }
+    return selectedDestination?.coordinates ?? null;
+  }, [activeRouteSteps, selectedDestination]);
+
+  const activeRouteIds = useMemo(
+    () => deriveTransitRouteIds(activeRouteSteps),
+    [activeRouteSteps],
+  );
+
+  const mapFocusedRouteIds = useMemo(() => {
+    if (activeRouteCandidate) return activeRouteIds;
+    if (focusedLiveDirection) return [focusedLiveDirection.routeId];
+    return [];
+  }, [activeRouteCandidate, activeRouteIds, focusedLiveDirection]);
+
+  const liveFeed = useLiveFeed(
+    userLocation,
+    activeRouteCandidate
+      ? activeRouteIds
+      : focusedLiveDirection
+        ? [focusedLiveDirection.routeId]
+        : [],
+    atlasScanOn,
+  );
+  const serviceAlerts = useServiceAlerts();
+
+  const combinedAlerts = useMemo(
+    () => [...alerts, ...liveFeed.alerts],
+    [alerts, liveFeed.alerts],
+  );
+  const liveAlerts = liveFeed.alerts;
+
+  // Convert backend `LiveFeedIncident` payloads to the marker-system
+  // `MapIncident` shape once. This feeds the map marker bridge and the
+  // screen-reader fallback list from the same source.
+  const routeAwareIncidents = useMemo<LiveFeedIncident[]>(() => {
+    const byId = new Map<string, LiveFeedIncident>();
+    for (const incident of liveFeed.incidents ?? []) {
+      byId.set(incident.id, incident);
+    }
+    for (const incident of tripIncidents) {
+      byId.set(incident.id, incident);
+    }
+    return Array.from(byId.values());
+  }, [liveFeed.incidents, tripIncidents]);
+
+  const mapIncidents = useMemo<MapIncident[]>(() => {
+    return routeAwareIncidents.map((incident) =>
+      liveFeedIncidentToMapIncident(incident, normalizeIncidentType),
+    );
+  }, [routeAwareIncidents]);
+
+  // Only real incidents render on the map -- live-feed + route incidents. The
+  // former dev-preview marker (a fake pin near the user that never cleared) is
+  // gone.
+  const visibleMapIncidents = atlasScanOn ? mapIncidents : [];
+
+  const activeIncidentRouteIds = useMemo(() => {
+    const routeIds = new Set<string>();
+    for (const incident of visibleMapIncidents) {
+      if (!incident.active) continue;
+      for (const routeId of incident.routeIds ?? []) {
+        if (routeId) routeIds.add(routeId);
+      }
+    }
+    return Array.from(routeIds);
+  }, [visibleMapIncidents]);
+
+  const liveDirectionRows = useMemo(
+    () => buildLiveDirectionRows(liveFeed.arrivals),
+    [liveFeed.arrivals],
+  );
+  const [clientNowMs, setClientNowMs] = useState(0);
+
+  useEffect(() => {
+    setClientNowMs(Date.now());
+  }, [liveFeed.clockTick]);
+
+  const leftRailFeed = useMemo(
+    () => ({
+      nearest_stop: liveFeed.nearestStop,
+      stops: liveFeed.stops,
+      arrivals: liveFeed.arrivals,
+      alerts: liveFeed.alerts,
+      vehicles: liveFeed.vehicles,
+      summary: liveFeed.summary,
+      signals: liveFeed.signals,
+      incidents: routeAwareIncidents,
+      updated_at: liveFeed.updatedAt ?? undefined,
+      degraded: liveFeed.degraded,
+      debug: liveFeed.debug ?? undefined,
+    }),
+    [
+      liveFeed.nearestStop,
+      liveFeed.stops,
+      liveFeed.arrivals,
+      liveFeed.alerts,
+      liveFeed.vehicles,
+      liveFeed.summary,
+      liveFeed.signals,
+      routeAwareIncidents,
+      liveFeed.updatedAt,
+      liveFeed.degraded,
+      liveFeed.debug,
+    ],
+  );
+
+  const leftRailData = useMemo(
+    () =>
+      buildLeftRailData({
+        liveFeed: leftRailFeed,
+        routeSteps: activeRouteSteps,
+        routeCandidates,
+        activeRouteCandidate,
+        switchHeadline,
+        recommendationText: jarvisText,
+        routeEta: summary?.arriveLabel ?? null,
+        routeTotalTime: summary ? `${summary.totalMin} min` : null,
+        serviceAlerts: serviceAlerts.alerts,
+        incidents: routeAwareIncidents,
+        nowMs: clientNowMs || 0,
+      }),
+    [
+      leftRailFeed,
+      activeRouteSteps,
+      routeCandidates,
+      activeRouteCandidate,
+      switchHeadline,
+      jarvisText,
+      summary,
+      serviceAlerts.alerts,
+      routeAwareIncidents,
+      liveFeed.clockTick,
+      clientNowMs,
+    ],
+  );
+
+  const leftRailDisplayData = useMemo(
+    () => ({
+      ...leftRailData,
+      incidents: routeAwareIncidents,
+    }),
+    [leftRailData, routeAwareIncidents],
+  );
+
+  const liveArrivalSignature = useMemo(
+    () =>
+      liveDirectionRows
+        .map((row) =>
+          [
+            row.key,
+            ...row.arrivals.slice(0, 5).map((arrival) =>
+              [
+                arrival.trip_id ?? arrival.stop_id ?? arrival.terminal_stop_id ?? "arrival",
+                arrival.arrival_time,
+                arrival.delay ?? 0,
+              ].join(":"),
+            ),
+          ].join("|"),
+        )
+        .join("||"),
+    [liveDirectionRows],
+  );
+
+  const pulseLiveRail = useCallback(() => {
+    setLiveRailActivityKey((key) => key + 1);
+  }, []);
+
+  useEffect(() => {
+    if (!liveArrivalSignature) return;
+    if (liveArrivalSignatureRef.current === null) {
+      liveArrivalSignatureRef.current = liveArrivalSignature;
+      return;
+    }
+    if (liveArrivalSignatureRef.current === liveArrivalSignature) return;
+    liveArrivalSignatureRef.current = liveArrivalSignature;
+    pulseLiveRail();
+  }, [liveArrivalSignature, pulseLiveRail]);
+
+  const visibleVehicles = useMemo(() => {
+    if (activeRouteCandidate) {
+      // While a planned route is displayed, live vehicles for its lines
+      // bloat the map (every train on those lines citywide) and drag the
+      // frame rate. The route + its stops are the focus; live trains
+      // return when the route is cleared.
+      return [];
+    }
+    if (!focusedLiveDirection) return [];
+    const byRoute = liveFeed.vehicles.filter(
+      (vehicle) =>
+        normalizeLiveRouteId(vehicle.route_id) === focusedLiveDirection.routeId,
+    );
+    const sameDirection = byRoute.filter(
+      (vehicle) =>
+        directionFromVehicle(vehicle) === focusedLiveDirection.direction,
+    );
+    if (sameDirection.length > 0) return sameDirection;
+    return byRoute.filter(
+      (vehicle) => directionFromVehicle(vehicle) === "UNKNOWN",
+    );
+  }, [activeRouteCandidate, focusedLiveDirection, liveFeed.vehicles]);
+
+  const liveNetworkStatus = normalizeNetworkStatus(
+    liveFeed.signals?.network_status ??
+      liveFeed.summary?.status ??
+      (liveFeed.degraded ? "caution" : "healthy"),
+  );
+
+  const shellStatus: "nominal" | "warning" | "error" =
+    errorText || liveFeed.error
+      ? "error"
+      : isLoading || liveFeed.isLoading || liveFeed.degraded
+        ? "warning"
+        : "nominal";
   const originLabel = useMemo(() => {
-    if (!userLocation) return "Locating…";
+    if (!userLocation) return "Locating...";
     if (
       Math.abs(userLocation.lat - DEFAULT_LOCATION.lat) < 0.001 &&
       Math.abs(userLocation.lng - DEFAULT_LOCATION.lng) < 0.001
@@ -113,39 +390,139 @@ export default function JarvisPage() {
     }
     return "Current location";
   }, [userLocation]);
-  const originSub = userLocation
-    ? `${userLocation.lat.toFixed(3)}, ${userLocation.lng.toFixed(3)}`
-    : null;
 
-  // GPS
+  const agentState: AgentState = isLoading
+    ? "thinking"
+    : isSpeaking
+      ? "speaking"
+      : "idle";
+  const recommendationConfidence = summary ? summary.confidence : 0;
+  const routeMode: RouteMode = isLoading
+    ? "loading"
+    : activeRouteCandidate
+      ? "active"
+      : errorText
+        ? "error"
+        : "idle";
+
+  // ── SmartRoute Left Rail state machine ───────────────────────────────────
+  // The new rail consumes a four-value ATLAS state. We derive it from the
+  // existing app signals so the rail stays in lockstep with the recommendation
+  // pipeline (loading → active → idle/error).
+  const jarvisState: JarvisState = isLoading
+    ? "thinking"
+    : errorText
+      ? "error"
+      : activeRouteCandidate
+        ? "result"
+        : "standby";
+
   useEffect(() => {
     if (!navigator.geolocation) {
       setUserLocation(DEFAULT_LOCATION);
       return;
     }
-    const t = setTimeout(() => {
-      setUserLocation((prev) => prev ?? DEFAULT_LOCATION);
-    }, 8000);
-    return () => clearTimeout(t);
+
+    let resolved = false;
+    const timeoutId = setTimeout(() => {
+      if (!resolved)
+        setUserLocation((previous) => previous ?? DEFAULT_LOCATION);
+    }, 8_000);
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        resolved = true;
+        clearTimeout(timeoutId);
+        setUserLocation({
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+        });
+      },
+      () => {
+        resolved = true;
+        clearTimeout(timeoutId);
+        setUserLocation(DEFAULT_LOCATION);
+      },
+      { enableHighAccuracy: true, timeout: 5_000, maximumAge: 30_000 },
+    );
+
+    return () => clearTimeout(timeoutId);
+  }, []);
+
+  useEffect(() => {
+    if (!summary) return;
+    const id = setInterval(() => setRefreshedAgo((value) => value + 1), 1_000);
+    return () => clearInterval(id);
+  }, [summary]);
+
+  useEffect(() => {
+    if (!focusedLiveDirection) return;
+    const stillExists = liveDirectionRows.some(
+      (row) =>
+        row.routeId === focusedLiveDirection.routeId &&
+        row.direction === focusedLiveDirection.direction &&
+        row.terminalKey === focusedLiveDirection.terminalKey,
+    );
+    if (!stillExists) setFocusedLiveDirection(null);
+  }, [focusedLiveDirection, liveDirectionRows]);
+
+  // Warm the first thinking clip on load so the very first plan plays its
+  // spoken phrase immediately rather than after a cold TTS round-trip.
+  useEffect(() => {
+    void prewarmThinking();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+      }
+      if (audioUrlRef.current) {
+        URL.revokeObjectURL(audioUrlRef.current);
+      }
+    };
   }, []);
 
   const handleLocationUpdate = useCallback(
-    (coords: { lng: number; lat: number }) => setUserLocation(coords),
+    (coords: { lng: number; lat: number }) => {
+      setUserLocation(coords);
+    },
     [],
   );
-  const handleMapReady = useCallback(
-    (actions: { recenter: () => void }) => {
-      mapActionsRef.current = actions;
+
+  const handleDestinationInputChange = useCallback((value: string) => {
+    setInputValue(value);
+    setSelectedDestination(null);
+  }, []);
+
+  const handleMapReady = useCallback((actions: MapActions) => {
+    mapActionsRef.current = actions;
+  }, []);
+
+  const handleSelectIncident = useCallback(
+    (incident: LiveFeedIncident) => {
+      const mapIncident = liveFeedIncidentToMapIncident(
+        incident,
+        normalizeIncidentType,
+      );
+      setAtlasScanOn(true);
+      setTab("livemap");
+      mapActionsRef.current?.focusIncident(mapIncident);
     },
     [],
   );
 
   function handleVoiceInput() {
-    const w = window as unknown as {
+    const win = window as unknown as {
       SpeechRecognition?: new () => {
         lang: string;
         onstart: () => void;
-        onresult: (e: { results: { [index: number]: { [index: number]: { transcript: string } } } }) => void;
+        onresult: (event: {
+          results: {
+            [index: number]: { [index: number]: { transcript: string } };
+          };
+        }) => void;
         onend: () => void;
         onerror: () => void;
         start: () => void;
@@ -153,243 +530,292 @@ export default function JarvisPage() {
       webkitSpeechRecognition?: new () => {
         lang: string;
         onstart: () => void;
-        onresult: (e: { results: { [index: number]: { [index: number]: { transcript: string } } } }) => void;
+        onresult: (event: {
+          results: {
+            [index: number]: { [index: number]: { transcript: string } };
+          };
+        }) => void;
         onend: () => void;
         onerror: () => void;
         start: () => void;
       };
     };
-    const Ctor = w.SpeechRecognition || w.webkitSpeechRecognition;
-    if (!Ctor) return;
-    const recognition = new Ctor();
+    const RecognitionCtor =
+      win.SpeechRecognition || win.webkitSpeechRecognition;
+    if (!RecognitionCtor) return;
+    const recognition = new RecognitionCtor();
     recognition.lang = "en-US";
     recognition.onstart = () => setIsListening(true);
-    recognition.onresult = (e) => setInputValue(e.results[0][0].transcript);
+    recognition.onresult = (event) => {
+      setInputValue(event.results[0][0].transcript);
+      setSelectedDestination(null);
+    };
     recognition.onend = () => setIsListening(false);
     recognition.onerror = () => setIsListening(false);
     recognition.start();
   }
 
-  function stopThinkingLogStream() {
-    if (thinkingLogTimerRef.current) {
-      clearInterval(thinkingLogTimerRef.current);
-      thinkingLogTimerRef.current = null;
-    }
-  }
-
-  function startThinkingLogStream() {
-    stopThinkingLogStream();
-    let i = 0;
-    thinkingLogTimerRef.current = setInterval(() => {
-      if (i >= THINKING_LOG_SEED.length) {
-        stopThinkingLogStream();
-        return;
-      }
-      pushLog(setLogEntries, THINKING_LOG_SEED[i]);
-      i++;
-    }, 1600);
-  }
-
-  async function handleSubmit() {
-    if (!inputValue.trim()) return;
+  async function handleSubmit(
+    destinationOverride?: string,
+    selectionOverride?: DestinationSelection | null,
+  ) {
+    const destination = (destinationOverride ?? inputValue).trim();
+    if (!destination) return;
     if (!userLocation) {
       setErrorText("Waiting for GPS location...");
-      setTimeout(() => setErrorText(null), 3000);
       return;
     }
+    const destinationSelection =
+      selectionOverride === undefined ? selectedDestination : selectionOverride;
+    const requestId = routePlanningRequestIdRef.current + 1;
+    routePlanningRequestIdRef.current = requestId;
 
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current = null;
     }
-    if (speakingTimeoutRef.current) {
-      clearTimeout(speakingTimeoutRef.current);
-      speakingTimeoutRef.current = null;
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current);
+      audioUrlRef.current = null;
     }
 
-    // Unlock audio on gesture
-    const unlockedAudio = new Audio();
-    unlockedAudio.src =
-      "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=";
-    unlockedAudio.play().catch(() => {});
-    audioRef.current = unlockedAudio;
+    const seededLog = THINKING_LOG_SEED.map((entry) => ({
+      ...entry,
+      t: nowStamp(),
+    }));
 
-    if (wordRevealIntervalRef.current)
-      clearInterval(wordRevealIntervalRef.current);
-    if (thinkingRevealRef.current) clearInterval(thinkingRevealRef.current);
-    revealStartedRef.current = false;
-
-    setDisplayedText("");
-    setThinkingText("");
-    setIsSpeaking(false);
-    setRouteData(null);
-    setDestCoords(null);
-    setSummary(null);
     setErrorText(null);
     setIsLoading(true);
-    pushLog(setLogEntries, {
-      level: "scan",
-      text: `Query received · "${inputValue.trim()}"`,
-    });
-    startThinkingLogStream();
+    setIsSpeaking(false);
+    setShowDetails(false);
+    const initialThinkingText = "Scanning live feeds, alerts, and route options...";
+    setThinkingText(initialThinkingText);
+    setJarvisText(initialThinkingText);
+    setDisplayedText(initialThinkingText);
+    setLogEntries(seededLog);
+    setRouteCandidates([]);
+    setActiveRouteCandidateId(null);
+    setSelectedRouteIndex(null);
+    setPlannedRouteSteps([]);
+    setTripIncidents([]);
 
-    try {
+    let tripSettled = false;
+    // Play ATLAS's thinking line the instant the state flips to "thinking".
+    // The clip is pre-warmed (on mount and after each plan), so there is no
+    // network wait on the critical path. Cold start (ref not yet filled)
+    // falls back to fetching on demand.
+    const warmClip = thinkingClipRef.current;
+    if (warmClip?.audio) {
+      thinkingClipRef.current = null;
+      if (warmClip.text) {
+        setThinkingText(warmClip.text);
+        setJarvisText(warmClip.text);
+        setDisplayedText(warmClip.text);
+      }
+      playNarrationAudio(warmClip.audio);
+      void prewarmThinking();
+    } else {
       getThinking()
-        .then(({ text, audio }) => {
-          const bytes = Uint8Array.from(atob(audio), (c) => c.charCodeAt(0));
-          const thinkAudio = new Audio(
-            URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" })),
-          );
-          const words = text.split(/\s+/).filter((w) => w.length > 0);
-          let idx = 0;
-          function startThinkingReveal(duration: number) {
-            const intervalMs = Math.max((duration * 1000) / words.length, 80);
-            if (thinkingRevealRef.current)
-              clearInterval(thinkingRevealRef.current);
-            thinkingRevealRef.current = setInterval(() => {
-              idx++;
-              setThinkingText(words.slice(0, idx).join(" "));
-              if (idx >= words.length)
-                clearInterval(thinkingRevealRef.current!);
-            }, intervalMs);
+        .then((thinking) => {
+          if (routePlanningRequestIdRef.current !== requestId || tripSettled) return;
+          if (thinking?.text) {
+            setThinkingText(thinking.text);
+            setJarvisText(thinking.text);
+            setDisplayedText(thinking.text);
           }
-          const fallback = words.length * 0.35;
-          thinkAudio.addEventListener("loadedmetadata", () => {
-            const dur =
-              isFinite(thinkAudio.duration) && thinkAudio.duration > 0
-                ? thinkAudio.duration
-                : fallback;
-            startThinkingReveal(dur);
-          });
-          setTimeout(() => {
-            if (!thinkingRevealRef.current) startThinkingReveal(fallback);
-          }, 200);
-          thinkAudio.play().catch(() => {});
+          if (thinking?.audio) {
+            playNarrationAudio(thinking.audio);
+          }
         })
         .catch(() => {});
+      void prewarmThinking();
+    }
 
-      const trip_data = await planTrip(
+    try {
+      const tripData = await planTrip(
         userLocation.lat,
         userLocation.lng,
-        inputValue,
+        destination,
+        destinationSelection,
       );
+      tripSettled = true;
+      if (routePlanningRequestIdRef.current !== requestId) return;
 
-      stopThinkingLogStream();
-      const text = trip_data.recommendation;
-      setJarvisText(text);
-
-      const chosenRoute = trip_data.route || [];
-      const sum = summarizeRoute(chosenRoute);
-      setSummary(sum);
-
-      const firstTransit = chosenRoute.find(
-        (s: RouteStep) => s.type === "SUBWAY" || s.type === "BUS",
+      const {
+        candidates: nextCandidates,
+        selected: selectedCandidate,
+        selectedIndex: nextSelectedIndex,
+      } = normalizeTripCandidates(tripData);
+      const selectedSteps = selectedCandidate?.steps ?? tripData.route;
+      const nextSummary = summarizeRoute(
+        selectedSteps,
+        new Date(),
+        selectedCandidate?.total_minutes,
       );
-      if (firstTransit?.train_line) {
-        pushLog(setLogEntries, {
-          level: "detect",
-          text: `Primary leg identified · ${firstTransit.train_line} ${firstTransit.direction || ""}`.trim(),
-        });
+      setRouteCandidates(nextCandidates);
+      setActiveRouteCandidateId(selectedCandidate?.id ?? nextCandidates[0]?.id ?? null);
+      setSelectedRouteIndex(nextSelectedIndex);
+      setPlannedRouteSteps(selectedSteps);
+      setAlerts(tripData.alerts ?? []);
+      setTripIncidents(tripData.incidents ?? []);
+      setSwitchHeadline(null);
+      setJarvisText(tripData.recommendation);
+      setDisplayedText(tripData.recommendation);
+      setRefreshedAgo(0);
+      setTab("livemap");
+      if (destinationSelection) {
+        setSelectedDestination(destinationSelection);
       }
-      if (sum.transferStation) {
-        pushLog(setLogEntries, {
-          level: "reason",
-          text: `Transfer planned at ${sum.transferStation}.`,
-        });
-      }
-      pushLog(setLogEntries, {
-        level: "decision",
-        text: `Selected · ${sum.transitLines.join(" + ") || "route"} · ${sum.totalMin} min total.`,
-      });
-
-      const lastStep = chosenRoute[chosenRoute.length - 1];
-      const rawDest =
-        lastStep?.type === "WALK"
-          ? lastStep.end_point
-          : lastStep?.arrival_coords;
-      const destCoordsComputed = rawDest
-        ? { lat: rawDest.latitude, lng: rawDest.longitude }
-        : null;
-      setDestCoords(destCoordsComputed);
-      setRouteData({ steps: chosenRoute });
-      setAlerts(trip_data.alerts || []);
-
-      const bytes = Uint8Array.from(atob(trip_data.audio), (c) =>
-        c.charCodeAt(0),
+      setLogEntries(
+        appendLog(
+          seededLog,
+          "decision",
+          `Selected ${nextSummary.transitLines.join(" + ") || "walking route"} · ETA ${nextSummary.arriveLabel}.`,
+        ),
       );
-      const tripAudioUrl = URL.createObjectURL(
-        new Blob([bytes], { type: "audio/mpeg" }),
-      );
-      const tripAudio = unlockedAudio;
-      tripAudio.src = tripAudioUrl;
-      audioRef.current = tripAudio;
 
-      function startWordReveal(audioDuration: number) {
-        if (revealStartedRef.current) return;
-        revealStartedRef.current = true;
-        const words = text.split(/\s+/).filter((w) => w.length > 0);
-        if (words.length === 0) return;
-        const intervalMs = Math.max((audioDuration * 1000) / words.length, 80);
-        let wordIndex = 0;
-        if (wordRevealIntervalRef.current)
-          clearInterval(wordRevealIntervalRef.current);
-        wordRevealIntervalRef.current = setInterval(() => {
-          wordIndex++;
-          setDisplayedText(words.slice(0, wordIndex).join(" "));
-          if (wordIndex >= words.length) {
-            clearInterval(wordRevealIntervalRef.current!);
-          }
-        }, intervalMs);
+      if (tripData.audio) {
+        playNarrationAudio(tripData.audio);
       }
-
-      const fallbackDuration = text.split(" ").length * 0.45;
-      tripAudio.addEventListener("loadedmetadata", () => {
-        const dur =
-          isFinite(tripAudio.duration) && tripAudio.duration > 0
-            ? tripAudio.duration
-            : fallbackDuration;
-        startWordReveal(dur);
-      });
-      setTimeout(() => startWordReveal(fallbackDuration), 300);
-
-      setIsSpeaking(true);
-      speakingTimeoutRef.current = setTimeout(() => {
-        setIsSpeaking(false);
-        speakingTimeoutRef.current = null;
-      }, 60_000);
-      tripAudio.onended = () => {
-        setIsSpeaking(false);
-        audioRef.current = null;
-        if (speakingTimeoutRef.current) {
-          clearTimeout(speakingTimeoutRef.current);
-          speakingTimeoutRef.current = null;
-        }
-      };
-      tripAudio.onerror = () => {
-        setIsSpeaking(false);
-        audioRef.current = null;
-      };
-      tripAudio.play().catch(() => setIsSpeaking(false));
-
-      setInputValue("");
     } catch (error) {
-      stopThinkingLogStream();
-      const msg = error instanceof Error ? error.message : "Unknown error";
-      const display = msg.includes("Failed to plan trip")
-        ? "No route found, sir. Try a more specific address."
-        : "Connection error. Check your network and try again.";
-      setErrorText(display);
-      setJarvisText("");
-      setDisplayedText("");
-      pushLog(setLogEntries, { level: "scan", text: display });
+      tripSettled = true;
+      if (routePlanningRequestIdRef.current !== requestId) return;
+      const message = error instanceof Error ? error.message : "Unknown error";
+      setErrorText(
+        message.includes("Failed to plan trip")
+          ? "No route found. Try a more specific address."
+          : "Connection error. Check your network and try again.",
+      );
+      setLogEntries(
+        appendLog(
+          seededLog,
+          "detect",
+          "Routing request failed. Awaiting a new destination.",
+        ),
+      );
     } finally {
-      setIsLoading(false);
+      if (routePlanningRequestIdRef.current === requestId) {
+        setIsLoading(false);
+      }
     }
   }
 
-  function handleRetry() {
+  /** Fetch one ATLAS thinking clip (text + cached audio) into the ref so the
+   *  next plan can play it immediately. Fire-and-forget; silent on failure. */
+  function prewarmThinking() {
+    return getThinking()
+      .then((thinking) => {
+        if (thinking?.audio) {
+          thinkingClipRef.current = { text: thinking.text ?? "", audio: thinking.audio };
+        }
+      })
+      .catch(() => {});
+  }
+
+  /** Decode base64 MP3 and play it through the shared audio ref, driving
+   *  isSpeaking. Pauses/revokes any narration already playing. */
+  function playNarrationAudio(audioB64: string) {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current);
+      audioUrlRef.current = null;
+    }
+    const bytes = Uint8Array.from(atob(audioB64), (char) => char.charCodeAt(0));
+    const nextAudioUrl = URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" }));
+    const routeAudio = new Audio(nextAudioUrl);
+    audioUrlRef.current = nextAudioUrl;
+    audioRef.current = routeAudio;
+    setIsSpeaking(true);
+    routeAudio.onended = () => {
+      setIsSpeaking(false);
+      audioRef.current = null;
+    };
+    routeAudio.onerror = () => {
+      setIsSpeaking(false);
+      audioRef.current = null;
+    };
+    routeAudio.play().catch(() => {
+      setIsSpeaking(false);
+    });
+  }
+
+  function handleSelectRouteCandidate(candidate: RouteCandidate) {
+    const isSwitch =
+      activeRouteCandidateId !== null && candidate.id !== activeRouteCandidateId;
+    setActiveRouteCandidateId(candidate.id);
+    setSelectedRouteIndex(candidate.index);
+    setPlannedRouteSteps(candidate.steps);
+    setRefreshedAgo(0);
+    setFocusedLiveDirection(null);
+    pulseLiveRail();
+
+    // Lazily enrich an alternate's intermediate stops the first time it's
+    // selected -- the initial trip only enriched the chosen route. Updating the
+    // candidate in state re-renders the map via the activeRouteCandidate memo.
+    if (candidate.enriched === false && candidate.can_enrich_on_select) {
+      enrichRoute(candidate.steps)
+        .then((result) => {
+          if (!result?.steps?.length) return;
+          setRouteCandidates((prev) =>
+            prev.map((c) =>
+              c.id === candidate.id
+                ? { ...c, steps: result.steps, enriched: true, can_enrich_on_select: false }
+                : c,
+            ),
+          );
+        })
+        .catch(() => {
+          // Keep the un-enriched route shown; stop dots simply won't appear.
+        });
+    }
+
+    if (!isSwitch) return;
+    const line = deriveTransitRouteIds(candidate.steps)[0];
+    if (!line) return;
+    // Show the local line immediately; the server's canned phrase (cached
+    // per line) replaces it and brings audio when TTS is available.
+    setSwitchHeadline(`Rerouting via the ${line}, sir.`);
+    getSwitchNarration(line)
+      .then((narration) => {
+        setSwitchHeadline(narration.text);
+        if (narration.audio) playNarrationAudio(narration.audio);
+      })
+      .catch(() => {
+        // Local text already showing.
+      });
+  }
+
+  function handleClearRoute() {
+    routePlanningRequestIdRef.current += 1;
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current);
+      audioUrlRef.current = null;
+    }
+    setInputValue("");
+    setSelectedDestination(null);
+    setRouteCandidates([]);
+    setActiveRouteCandidateId(null);
+    setSelectedRouteIndex(null);
+    setPlannedRouteSteps([]);
+    setAlerts([]);
+    setTripIncidents([]);
+    setJarvisText("");
+    setDisplayedText("");
+    setThinkingText("");
+    setSwitchHeadline(null);
     setErrorText(null);
-    handleSubmit();
+    setIsSpeaking(false);
+    setShowDetails(false);
+    setRefreshedAgo(0);
+    setFocusedLiveDirection(null);
+    pulseLiveRail();
   }
 
   function handlePlayVoice() {
@@ -398,350 +824,307 @@ export default function JarvisPage() {
       audioRef.current.currentTime = 0;
       audioRef.current.play().catch(() => {});
       setIsSpeaking(true);
-    } catch {}
+    } catch {
+      setIsSpeaking(false);
+    }
   }
 
-  const agentState: AgentState = isLoading
-    ? "thinking"
-    : isSpeaking
-      ? "speaking"
-      : "idle";
+  async function toggleFullscreen(target: HTMLElement | null) {
+    if (!target || typeof document === "undefined") return;
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+        return;
+      }
+      await target.requestFullscreen();
+    } catch {
+      mapActionsRef.current?.recenter();
+    }
+  }
 
-  const alternates = useMemo(() => deriveAlternates(summary), [summary]);
-
-  const plannerView = (
-    <div
-      className="flex gap-3.5 flex-1 min-h-0"
-      style={{ padding: 14, boxSizing: "border-box" }}
-    >
-      {/* Left rail */}
-      <div
-        className="flex flex-col gap-3.5 flex-shrink-0"
-        style={{ width: 380, minHeight: 0 }}
-      >
-        <RecommendationPanel
-          accent={ACCENT}
-          state={agentState}
-          summary={summary}
-          recommendationText={jarvisText}
-          displayedText={displayedText}
-          thinkingText={thinkingText}
-          voicePlaying={isSpeaking}
-          onPlayVoice={handlePlayVoice}
-          showDetails={showDetails}
-          onToggleDetails={() => setShowDetails((v) => !v)}
-          confidence={92}
-          errorText={errorText}
-          onRetry={handleRetry}
-        />
-        <AgentLog accent={ACCENT} entries={logEntries} live={isLoading} />
-      </div>
-
-      {/* Center map stage */}
-      <div
-        className="relative flex-1 min-w-0"
-        style={{
-          background: "#0a0e15",
-          borderRadius: 14,
-          overflow: "hidden",
-          border: "1px solid rgba(255,255,255,0.06)",
-        }}
-      >
-        <div
-          className="absolute"
-          style={{ top: 14, left: 14, right: 14, zIndex: 5 }}
-        >
-          <TripBar
-            originLabel={originLabel}
-            originSub={originSub}
-            inputValue={inputValue}
-            onInputChange={setInputValue}
-            onSubmit={handleSubmit}
-            isLoading={isLoading}
-            onVoiceInput={handleVoiceInput}
-            isListening={isListening}
-            accent={ACCENT}
-          />
-        </div>
-
+  function renderMapWorkspace(options: {
+    mode: "planner" | "liveFeed";
+    routeData?: TransitRouteData | null;
+    destCoords?: { lat: number; lng: number } | null;
+    vehicles?: LiveVehicle[];
+    liveVehicleScopeKey?: string;
+    focusedRouteIds?: string[];
+    topOverlay?: ReactNode;
+  }) {
+    return (
+      <section className="sr-shell-canvas sr-shell-canvas--map">
         <div className="absolute inset-0">
           <JarvisMap
             onLocationUpdate={handleLocationUpdate}
-            routeData={routeData}
+            mode={options.mode}
+            routeData={options.routeData}
             isSpeaking={isSpeaking}
-            destCoords={destCoords}
+            destCoords={options.destCoords}
+            vehicles={options.vehicles}
+            liveVehicleScopeKey={options.liveVehicleScopeKey}
+            focusedRouteIds={options.focusedRouteIds}
             onMapReady={handleMapReady}
           />
         </div>
 
-        <div
-          className="absolute flex items-center gap-2"
-          style={{
-            bottom: 14,
-            right: 14,
-            zIndex: 5,
-            padding: "6px 10px",
-            background: "rgba(8,11,17,0.82)",
-            backdropFilter: "blur(6px)",
-            WebkitBackdropFilter: "blur(6px)",
-            border: "1px solid rgba(255,255,255,0.07)",
-            borderRadius: 10,
-            fontFamily: "var(--font-jetbrains-mono), monospace",
-            fontSize: 10,
-            color: "#9ccfbf",
-            letterSpacing: "0.1em",
+        <div className="sr-map-vignette" aria-hidden="true" />
+        {options.topOverlay}
+        <MapMiniControls
+          onExpand={() => mapActionsRef.current?.recenter()}
+          onRecenter={() => mapActionsRef.current?.recenter()}
+        />
+      </section>
+    );
+  }
+
+  const liveWorkspace = (
+    <div
+      className="sr-live-console"
+      // Liquid-glass layout: the map runs full-bleed and the rail FLOATS
+      // over it as a detached glass panel — the basemap showing through
+      // the backdrop blur is what makes the glass read. Single column;
+      // the aside is absolutely positioned with an inset margin.
+      style={{ gridTemplateColumns: "minmax(0, 1fr)", position: "relative" }}
+    >
+      {/* SmartRoute Left Rail — agent-first surface that hosts Route / Hub /
+          Alerts. The ATLAS state bridges from the existing pipeline
+          signals (isLoading / activeRouteCandidate / errorText) so the rail
+          stays in lockstep with the rest of the app. */}
+      <aside
+        className="sr-live-left-rail-shell"
+        aria-label="SmartRoute Left Rail"
+        style={{
+          position: "absolute",
+          top: 14,
+          left: 14,
+          bottom: 14,
+          width: 400,
+          zIndex: 20,
+          padding: 0,
+          border: "none",
+          background: "transparent",
+          borderRadius: 26,
+          overflow: "hidden",
+          display: "flex",
+        }}
+      >
+        <LeftRail
+          width={400}
+          jarvisState={jarvisState}
+          isSpeaking={isSpeaking}
+          thinkingText={thinkingText}
+          data={leftRailDisplayData}
+          atlasScanOn={atlasScanOn}
+          onAtlasScanToggle={() => setAtlasScanOn((value) => !value)}
+          onSelectIncident={handleSelectIncident}
+          onSelectAlternative={(candidateId) => {
+            const candidate = routeCandidates.find((c) => c.id === candidateId);
+            if (candidate) handleSelectRouteCandidate(candidate);
           }}
-        >
-          <span
-            style={{
-              width: 5,
-              height: 5,
-              borderRadius: 3,
-              background: "#9ccfbf",
-              animation: "srPulse 1.4s infinite",
-            }}
+          search={{
+            inputValue,
+            isLoading,
+            isListening,
+            hasActiveRoute: Boolean(summary),
+            onInputChange: handleDestinationInputChange,
+            onSubmit: (destination, selection) => {
+              if (selection) setSelectedDestination(selection);
+              void handleSubmit(destination, selection);
+            },
+            onVoiceInput: handleVoiceInput,
+            onClear: handleClearRoute,
+          }}
+        />
+      </aside>
+
+      <section
+        ref={liveMapFrameRef}
+        className="sr-shell-canvas sr-shell-canvas--map sr-live-console__map"
+      >
+        <div className="absolute inset-0">
+          <JarvisMap
+            onLocationUpdate={handleLocationUpdate}
+            mode="liveFeed"
+            routeData={routeData}
+            destCoords={destCoords}
+            isSpeaking={isSpeaking}
+            vehicles={visibleVehicles}
+            focusedRouteIds={mapFocusedRouteIds}
+            incidentRouteIds={activeIncidentRouteIds}
+            incidents={visibleMapIncidents}
+            liveVehicleScopeKey={
+              activeRouteCandidate
+                ? `mission:${activeRouteCandidate.id}:${activeRouteIds.join(",")}`
+                : focusedLiveDirection
+                ? `${focusedLiveDirection.routeId}:${focusedLiveDirection.direction}:${focusedLiveDirection.terminalKey}`
+                : "live:none"
+            }
+            onMapReady={handleMapReady}
           />
-          LIVE · GTFS-RT
         </div>
-      </div>
 
-      {/* Right rail */}
-      <div
-        className="flex flex-col gap-2.5 flex-shrink-0"
-        style={{ width: 280 }}
-      >
-        <div
-          style={{
-            fontFamily: "var(--font-geist), sans-serif",
-            fontSize: 10,
-            letterSpacing: "0.18em",
-            color: "rgba(255,255,255,0.5)",
-            fontWeight: 500,
-            padding: "2px 2px",
-          }}
-        >
-          ALTERNATE OPTIONS
-        </div>
-        {alternates.length === 0 && (
-          <div
-            style={{
-              padding: 14,
-              background: "rgba(255,255,255,0.025)",
-              border: "1px solid rgba(255,255,255,0.06)",
-              borderRadius: 12,
-              fontFamily: "var(--font-geist), sans-serif",
-              fontSize: 11.5,
-              color: "rgba(255,255,255,0.5)",
-              lineHeight: 1.5,
-            }}
-          >
-            Submit a destination to evaluate alternates against live signal.
-          </div>
-        )}
-        {alternates.map((r) => (
-          <AlternateCard key={r.id} route={r} accent={ACCENT} />
-        ))}
-        <NetworkStatus alerts={alerts} />
-      </div>
+        <div className="sr-map-vignette" aria-hidden="true" />
+        {/* Search moved into the left rail's WHERE TO box — the floating
+            map overlay competed with it for the same job. */}
+        <MapMiniControls
+          onExpand={() => void toggleFullscreen(liveMapFrameRef.current)}
+          onRecenter={() => mapActionsRef.current?.recenter()}
+        />
+        <DisruptionLegend variant="map" />
+        {/* Hidden screen-reader mirror of the canvas-rendered incident
+            markers. deck.gl IconLayer paints to <canvas> and so does not
+            participate in the accessibility tree — this list bridges that
+            gap so assistive tech users get the same incident inventory. */}
+        <IncidentA11yList incidents={visibleMapIncidents} />
+      </section>
     </div>
   );
 
-  const liveMapView = (
-    <div
-      className="flex-1 relative"
-      style={{ margin: 14, borderRadius: 14, overflow: "hidden" }}
-    >
-      <JarvisMap
-        onLocationUpdate={handleLocationUpdate}
-        routeData={routeData}
-        isSpeaking={isSpeaking}
-        destCoords={destCoords}
-        onMapReady={handleMapReady}
+  const atlasWorkspace = renderMapWorkspace({
+    mode: routeData ? "planner" : "liveFeed",
+    routeData,
+    destCoords,
+  });
+
+  const atlasRail = (
+    <div className="sr-shell-rail-stack">
+      <RecommendationPanel
+        accent={ACCENT}
+        state={agentState}
+        summary={summary}
+        recommendationText={jarvisText}
+        displayedText={displayedText}
+        thinkingText={thinkingText}
+        voicePlaying={isSpeaking}
+        onPlayVoice={handlePlayVoice}
+        showDetails={showDetails}
+        onToggleDetails={() => setShowDetails((value) => !value)}
+        confidence={recommendationConfidence}
+        errorText={errorText}
+        onRetry={handleSubmit}
       />
+      {summary ? (
+        <ReasonChips
+          chips={summary.reasonChips}
+          reasonLong={summary.reasonLong}
+          accent={ACCENT}
+          expanded={showDetails}
+          onToggle={() => setShowDetails((value) => !value)}
+        />
+      ) : (
+        <EmptyRailCard
+          label="WHY THIS ROUTE?"
+          body="Search from Live Feed to arm the full recommendation stack and supporting reasoning."
+        />
+      )}
+      <AgentLog accent={ACCENT} entries={logEntries} live={isLoading} />
+      <ServiceAlertsCard alerts={combinedAlerts} />
     </div>
   );
 
-  const grokView = (
-    <div
-      className="flex-1 overflow-auto"
-      style={{ padding: "24px 28px" }}
-    >
-      <div
-        style={{
-          fontFamily: "var(--font-instrument-serif), serif",
-          fontSize: 32,
-          color: "#fff",
-          marginBottom: 4,
-        }}
-      >
-        Grok <span style={{ color: ACCENT, fontStyle: "italic" }}>Intel</span>
-      </div>
-      <div
-        style={{
-          fontFamily: "var(--font-geist), sans-serif",
-          fontSize: 12,
-          color: "rgba(255,255,255,0.55)",
-          letterSpacing: "0.04em",
-          marginBottom: 20,
-        }}
-      >
-        Cross-referenced social + official feeds for context around your route.
-      </div>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        {[
-          {
-            source: "@NYCTSubway",
-            weight: 0.92,
-            note: "Official MTA live service updates.",
-          },
-          {
-            source: "311 Reports",
-            weight: 0.74,
-            note: "City incident & construction feed.",
-          },
-          {
-            source: "Grok Social",
-            weight: 0.68,
-            note: "Rider sentiment cross-checked against officials.",
-          },
-        ].map((s) => (
-          <div
-            key={s.source}
-            style={{
-              padding: 16,
-              background: "rgba(255,255,255,0.03)",
-              border: "1px solid rgba(255,255,255,0.07)",
-              borderRadius: 12,
-            }}
-          >
-            <div
-              style={{
-                fontFamily: "var(--font-geist), sans-serif",
-                fontSize: 11,
-                letterSpacing: "0.12em",
-                color: "rgba(255,255,255,0.55)",
-                marginBottom: 8,
-              }}
-            >
-              {s.source}
-            </div>
-            <div
-              style={{
-                fontFamily: "var(--font-jetbrains-mono), monospace",
-                fontSize: 22,
-                color: ACCENT,
-              }}
-            >
-              {s.weight.toFixed(2)}
-            </div>
-            <div
-              style={{
-                marginTop: 6,
-                fontFamily: "var(--font-geist), sans-serif",
-                fontSize: 12,
-                color: "rgba(255,255,255,0.7)",
-                lineHeight: 1.45,
-              }}
-            >
-              {s.note}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
+  const alertsWorkspace = (
+    <ServiceAlertsBoard
+      alerts={serviceAlerts.alerts}
+      updatedAt={serviceAlerts.updatedAt}
+      activeCount={serviceAlerts.activeCount}
+      affectedRouteCount={serviceAlerts.affectedRouteCount}
+      isLoading={serviceAlerts.isLoading}
+      error={serviceAlerts.error}
+      connectionState={serviceAlerts.connectionState}
+      changedAlertIds={serviceAlerts.changedAlertIds}
+    />
   );
 
-  const alertsView = (
-    <div
-      className="flex-1 overflow-auto"
-      style={{ padding: "24px 28px" }}
-    >
-      <div
-        style={{
-          fontFamily: "var(--font-instrument-serif), serif",
-          fontSize: 32,
-          color: "#fff",
-          marginBottom: 4,
-        }}
-      >
-        Service <span style={{ color: ACCENT, fontStyle: "italic" }}>Alerts</span>
-      </div>
-      <div
-        style={{
-          fontFamily: "var(--font-geist), sans-serif",
-          fontSize: 12,
-          color: "rgba(255,255,255,0.55)",
-          marginBottom: 20,
-          letterSpacing: "0.04em",
-        }}
-      >
-        {alerts.length === 0
-          ? "No alerts flagged in the latest planning run."
-          : `${alerts.length} alert${alerts.length > 1 ? "s" : ""} affecting your route or surrounding lines.`}
-      </div>
-      <div className="flex flex-col gap-2.5">
-        {alerts.map((a, i) => (
-          <div
-            key={i}
-            style={{
-              padding: 14,
-              background: "rgba(255,255,255,0.03)",
-              border: "1px solid rgba(255,104,104,0.18)",
-              borderLeft: "3px solid #ff6868",
-              borderRadius: 10,
-            }}
-          >
-            <div className="flex items-center gap-2" style={{ marginBottom: 6 }}>
-              {(a.routeIds || []).map((r) => (
-                <span
-                  key={r}
-                  className="flex items-center justify-center"
-                  style={{
-                    width: 20,
-                    height: 20,
-                    borderRadius: 10,
-                    background: getLineColor(r),
-                    color: "#0b0e13",
-                    fontFamily: "var(--font-geist), sans-serif",
-                    fontWeight: 700,
-                    fontSize: 10,
-                  }}
-                >
-                  {r}
-                </span>
-              ))}
-            </div>
-            <div
-              style={{
-                fontFamily: "var(--font-geist), sans-serif",
-                fontSize: 13,
-                color: "rgba(255,255,255,0.9)",
-                lineHeight: 1.45,
-              }}
-            >
-              {a.header}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
+  const footerLeftByTab: Record<TabId, ShellMetric[]> = {
+    livemap: [
+      {
+        label: "Data Source",
+        value: "MTA GTFS-RT",
+        dot: "#2fd17b",
+        tone: "#e2f1ea",
+      },
+      { label: "Last Update", value: formatShellClock(liveFeed.updatedAt) },
+      { label: "Refresh", value: "Auto (15s)" },
+    ],
+    atlas: [
+      {
+        label: "Data Source",
+        value: "Reasoning Stack",
+        dot: "#d4a7ff",
+        tone: "#f1e5ff",
+      },
+      {
+        label: "Last Update",
+        value: summary ? `${refreshedAgo}s ago` : "Awaiting route",
+      },
+      { label: "Refresh", value: "Live-linked" },
+    ],
+    alerts: [
+      {
+        label: "Data Source",
+        value: "MTA Alerts",
+        dot: "#f0b04a",
+        tone: "#f8e3ba",
+      },
+      { label: "Last Update", value: formatShellClock(serviceAlerts.updatedAt) },
+      { label: "Refresh", value: "Continuous" },
+    ],
+  };
+
+  const footerRight: ShellMetric[] = [
+    {
+      label: "System Status",
+      value:
+        shellStatus === "nominal"
+          ? "Nominal"
+          : shellStatus === "warning"
+            ? "Monitoring"
+            : "Degraded",
+      dot:
+        shellStatus === "nominal"
+          ? "#2fd17b"
+          : shellStatus === "warning"
+            ? "#f0b04a"
+            : "#ff6868",
+      tone: "#dfe7f1",
+    },
+    { label: "Security", value: "Protected" },
+    { label: "Platform", value: "Command Shell" },
+  ];
+
+  // Per design feedback, the production UI is the SmartRoute Left Rail + the
+  // map only — no top navbar (brand + outer tabs + LIVE clock), no metrics
+  // footer, no bottom tray. The outer intelligence / Alerts tabs are subsumed by the
+  // rail's internal Route / Hub / Alerts tabs.
+  //
+  // The `atlasWorkspace`, `alertsWorkspace`, `atlasRail`, `footerLeftByTab`,
+  // and `footerRight` blocks above remain declared so their supporting
+  // hooks stay live (live feed, alerts SSE, route candidates, vehicles)
+  // and so the SmartRouteShell return can be restored cleanly if the team
+  // ever wants the outer chrome back. They are intentionally unused below.
+  void atlasWorkspace;
+  void alertsWorkspace;
+  void atlasRail;
+  void footerLeftByTab;
+  void footerRight;
 
   return (
     <div
-      className="flex flex-col"
-      style={{ height: "100vh", background: "#0a0d13", overflow: "hidden" }}
+      className="sr-app-shell"
+      data-active-tab="livemap"
+      style={{
+        // Replaces the SmartRouteShell column flex (header / main / footer)
+        // with a single full-viewport row: 400px LeftRail | 1fr Map. No
+        // chrome above or below — the rail's internal nav handles Route /
+        // Hub / Alerts, and the map carries its own search overlay.
+        height: "100dvh",
+        width: "100vw",
+        display: "flex",
+        flexDirection: "row",
+        overflow: "hidden",
+      }}
     >
-      <Header
-        activeTab={tab}
-        onTabChange={setTab}
-        accent={ACCENT}
-        systemStatus={errorText ? "error" : isLoading ? "warning" : "nominal"}
-      />
-      {tab === "planner" && plannerView}
-      {tab === "livemap" && liveMapView}
-      {tab === "grok" && grokView}
-      {tab === "alerts" && alertsView}
+      {liveWorkspace}
     </div>
   );
 }

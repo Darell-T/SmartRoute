@@ -1,72 +1,253 @@
+import asyncio
+import json
+import os
+from typing import Any
 
-import os 
-from xai_sdk import Client
-from xai_sdk.chat import user, system
+try:
+    from xai_sdk import Client
+    from xai_sdk.chat import system, user
+    from xai_sdk.tools import x_search
+except Exception:
+    Client = None
+    system = None
+    user = None
+    x_search = None
 
-client = Client(api_key = os.getenv("XAI_API_KEY"))
-GROK_SYSTEM_PROMPT = """You are an NYC incident scanner. Your job is to check 
-real-time posts on X (Twitter) for any incidents that could affect subway service.
 
-You will receive a list of subway station names and their neighborhoods.
-
-Search recent posts (last 60 minutes) from these types of sources:
-- Emergency scanner accounts (@NYCrimeNow, @NYScanner)
-- Citizen app reports (@CitizenAppNYC)
-- MTA-related accounts (@NYCTSubway, riders complaining about delays)
-- Local news accounts covering breaking events
-
-Look for incidents within ~0.3 miles of any listed station, including:
-- Fires (building fires, track fires, smoke conditions)
-- Police activity (crime scenes, investigations, suspicious packages)
-- Medical emergencies on platforms or trains
-- Protests or large gatherings blocking station entrances
-- Water main breaks or flooding near stations
-- Construction accidents near stations
-- Power outages affecting station areas
-- Any event causing street closures near a station entrance
-
-For each incident found, respond in this exact JSON format:
-{
-  "incidents": [
-    {
-      "location": "the address or cross-street",
-      "nearby_station": "the station name affected",
-      "severity": "low | medium | high",
-      "description": "one sentence plain English summary",
-      "source": "the X account or source that reported it"
-    }
-  ]
+_ALLOWED_SEVERITIES = {"low", "medium", "high"}
+_MODEL_NAME = "grok-4-1-fast-reasoning"
+_XAI_API_KEY = os.getenv("XAI_API_KEY")
+_STATION_TOKEN_MAP = {
+    "av": "avenue",
+    "ave": "avenue",
+    "blvd": "boulevard",
+    "bklyn": "brooklyn",
+    "ctr": "center",
+    "ct": "center",
+    "hwy": "highway",
+    "pkwy": "parkway",
+    "pl": "place",
+    "plz": "plaza",
+    "rd": "road",
+    "sq": "square",
+    "st": "street",
 }
 
-Severity guide:
-- high: directly affects subway ops (track fire, police on platform, 
-  flooding in station)
-- medium: near a station and could cause delays (building fire on 
-  same block, large police presence at street level)
-- low: in the area but unlikely to affect service (minor street 
-  incident 2+ blocks away)
 
-If no incidents are found, respond with: {"incidents": []}
+client = Client(api_key=_XAI_API_KEY) if Client is not None and _XAI_API_KEY else None
 
-Only report real, specific incidents from actual posts. 
-Do not speculate or make up incidents. If you are unsure, do not include it."""
+GROK_INCIDENT_PROMPT = """You are an NYC incident scanner. Your job is to check
+real-time posts on X (Twitter) for any incidents that could affect subway service.
 
-async def get_incidents(route_stops: list) -> str:
-    station_names = ", ".join(route_stops)
-    if not station_names:
-        return []
+Stations: {stations}
+
+Rules:
+- Only real incidents from the last 60 minutes within about 0.5 miles of any listed station.
+- Focus on @NYCTSubway, @NYCrimeNow, @NYScanner, @CitizenAppNYC, rider complaints, and local news.
+- If your first search is unclear or incomplete, call the search tool again with a better query.
+- Output ONLY this exact JSON. No other text.
+
+{{
+  "incidents": [
+    {{
+      "location": "address or cross-street",
+      "nearby_station": "exact station name",
+      "severity": "low | medium | high",
+      "description": "one sentence plain English summary",
+      "source": "@handle or source name"
+    }}
+  ]
+}}
+
+If nothing relevant is found, return {{"incidents": []}}.
+Only report real, specific incidents from actual posts. If you are unsure, leave it out."""
+
+
+def _normalize_text_field(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return " ".join(value.split()).strip()
+
+
+def _station_key(value: Any) -> str:
+    text = _normalize_text_field(value).casefold()
+    if not text:
+        return ""
+
+    translation = str.maketrans({
+        "&": " ",
+        ",": " ",
+        "-": " ",
+        "/": " ",
+    })
+    tokens = text.translate(translation).replace(".", " ").split()
+    normalized_tokens = [
+        _STATION_TOKEN_MAP.get(token, token)
+        for token in tokens
+        if token
+    ]
+    return " ".join(normalized_tokens)
+
+
+def _normalize_station_names(route_stops: list[str]) -> list[str]:
+    normalized = []
+    seen = set()
+    for stop in route_stops or []:
+        name = _normalize_text_field(stop)
+        if not name:
+            continue
+        key = _station_key(name)
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(name)
+    return normalized
+
+
+def _strip_code_fences(content: str) -> str:
+    text = (content or "").strip()
+    if text.startswith("```json"):
+        text = text[7:]
+    elif text.startswith("```"):
+        text = text[3:]
+    if text.endswith("```"):
+        text = text[:-3]
+    return text.strip()
+
+
+def _response_text(response: Any) -> str:
+    content = getattr(response, "content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        chunks: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                chunks.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str):
+                    chunks.append(text)
+            else:
+                text = getattr(item, "text", None)
+                if isinstance(text, str):
+                    chunks.append(text)
+        return "".join(chunks)
+    return str(content or "")
+
+
+def _parse_json_object(content: str) -> dict[str, Any] | None:
+    text = _strip_code_fences(content)
+    if not text:
+        return None
+    try:
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            return None
+        try:
+            parsed = json.loads(text[start : end + 1])
+            return parsed if isinstance(parsed, dict) else None
+        except json.JSONDecodeError:
+            return None
+
+
+def _normalize_incident(item: Any) -> dict[str, str] | None:
+    if not isinstance(item, dict):
+        return None
+
+    location = _normalize_text_field(item.get("location"))
+    nearby_station = _normalize_text_field(item.get("nearby_station"))
+    severity = _normalize_text_field(item.get("severity")).lower()
+    description = _normalize_text_field(item.get("description"))
+    source = _normalize_text_field(item.get("source"))
+
+    if not location or not nearby_station or not description or not source:
+        return None
+    if severity not in _ALLOWED_SEVERITIES:
+        return None
+
+    return {
+        "location": location,
+        "nearby_station": nearby_station,
+        "severity": severity,
+        "description": description,
+        "source": source,
+    }
+
+
+def _normalize_incident_payload(
+    payload: Any,
+    allowed_stations: list[str] | None = None,
+) -> dict[str, list[dict[str, str]]]:
+    if not isinstance(payload, dict):
+        return {"incidents": []}
+
+    incidents = payload.get("incidents")
+    if not isinstance(incidents, list):
+        return {"incidents": []}
+
+    station_map = {
+        _station_key(station): station
+        for station in (allowed_stations or [])
+        if station
+    }
+    normalized = []
+    for incident in incidents:
+        normalized_incident = _normalize_incident(incident)
+        if normalized_incident is None:
+            continue
+        if station_map:
+            canonical_station = station_map.get(_station_key(normalized_incident["nearby_station"]))
+            if not canonical_station:
+                continue
+            normalized_incident["nearby_station"] = canonical_station
+        normalized.append(normalized_incident)
+
+    return {"incidents": normalized}
+
+
+def _run_incident_agent(
+    station_names: str,
+    station_list: list[str],
+) -> dict[str, list[dict[str, str]]]:
+    if not client or not system or not user or not x_search or not _XAI_API_KEY:
+        return {"incidents": []}
+
+    chat = client.chat.create(
+        model=_MODEL_NAME,
+        tools=[x_search()],
+        temperature=0.0,
+    )
+    chat.append(system(GROK_INCIDENT_PROMPT.format(stations=station_names)))
+    chat.append(user(f"Find any incidents near these stations right now: {station_names}"))
+
+    for _ in range(3):
+        response = chat.sample()
+        if getattr(response, "finish_reason", None) == "tool_calls":
+            chat.append(response)
+            continue
+
+        payload = _parse_json_object(_response_text(response))
+        if payload is None:
+            return {"incidents": []}
+        return _normalize_incident_payload(payload, station_list)
+
+    return {"incidents": []}
+
+
+async def get_incidents(route_stops: list[str]) -> dict[str, list[dict[str, str]]]:
+    station_list = _normalize_station_names(route_stops)
+    if not station_list:
+        return {"incidents": []}
+
+    station_names = ", ".join(station_list)
 
     try:
-        chat = client.chat.create(model="grok-4-1-fast-reasoning")
-        chat.append(system(GROK_SYSTEM_PROMPT))
-        chat.append(user(
-            f"Check for incidents near these subway stations: {station_names}"
-        ))
-
-        response = chat.sample()
-        # caching here
-        return response.content
+        return await asyncio.to_thread(_run_incident_agent, station_names, station_list)
     except Exception as exc:
-        # Do not fail trip planning when external incident intelligence is unavailable.
-        print(f"[incident_monitor] get_incidents failed, returning empty list: {exc}")
-        return []
+        print(f"[incident_monitor] Grok agent failed: {exc}")
+        return {"incidents": []}

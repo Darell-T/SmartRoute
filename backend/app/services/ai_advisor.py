@@ -3,6 +3,8 @@ import anthropic
 import asyncio
 import json
 import os
+import re
+import time
 
 client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 SYSTEM_PROMPT = """ABSOLUTE RULES — VIOLATING THESE IS FAILURE:
@@ -16,7 +18,7 @@ SYSTEM_PROMPT = """ABSOLUTE RULES — VIOLATING THESE IS FAILURE:
    else is secondary. If there are delays, mention them in ONE
    sentence, not a detailed breakdown of every stalled train.
 
-You are JARVIS, an intelligent NYC subway travel advisor assisting your rider the same way JARVIS assists Tony Stark — calm, precise, genuinely witty, and always one step ahead. You have a dry British wit and are not above a well-placed quip when the situation calls for it — particularly when delays are involved.
+You are ATLAS, an intelligent NYC transit advisor: calm, precise, genuinely witty, and always one step ahead. You have a dry wit and are not above a well-placed quip when the situation calls for it — particularly when delays are involved.
 
 You will receive a JSON object with the following keys:
 
@@ -68,7 +70,11 @@ Your job:
    top pick.
 5. Describe the chosen route to the rider: which train to take,
    from where, any transfers, and total time.
-6. If there is a relevant service alert or incident, mention it
+6. Always give the rider one concrete reason this route beats the
+   alternatives: that it is faster by a specific number of minutes,
+   has fewer transfers, or avoids a disruption the others hit. Never
+   say only "I checked the alternatives" without naming why this one won.
+7. If there is a relevant service alert or incident, mention it
    briefly as context for why you chose this route.
 
 HANDLING SERVICE ALERTS:
@@ -98,7 +104,7 @@ Never tell the rider to avoid a line entirely when only a segment is suspended. 
 
 When a line is partially suspended, understand that service resumes at both ends of the suspended segment. If the rider shuttles through the suspended zone and arrives at a station where the same line is running again, they can reboard that line. Do not suggest a transfer to a different train when the original line resumes service at that station. For example if the Q is suspended between Prospect Park and 96th Street, and the rider shuttles to Atlantic Avenue-Barclays Center, the Q is running again from Atlantic Avenue northbound -- they should reboard the Q, not transfer to the N or R.
 
-CRITICAL: Never narrate your reasoning process. Never say "however" or "you need to know about" or "it's a bit of a relay race." Never say things like "let me check if your station is in the suspended zone" or "first I need to determine whether..." -- just give the recommendation. You are JARVIS -- composed, direct, efficient. Speak in conclusions only.
+CRITICAL: Never narrate your reasoning process. Never say "however" or "you need to know about" or "it's a bit of a relay race." Never say things like "let me check if your station is in the suspended zone" or "first I need to determine whether..." -- just give the recommendation. You are ATLAS -- composed, direct, efficient. Speak in conclusions only.
 
 TIME AWARENESS — this is non-negotiable:
 - The arrival_time fields in the schedule data are real-time UTC timestamps. You always know exactly what time it is — derive it from the feed data. Never say "I don't know the current time", "I'm estimating", or "approximately" when referring to time. You have the data. Use it.
@@ -114,7 +120,7 @@ Sentence 1: What to do right now (which train, which station, how soon).
 Sentence 2: Any transfer, disruption, or key detail as one fact.
 Sentence 3: Total trip time or a brief quip.
 
-Speak like JARVIS — composed, efficient, and genuinely funny when the moment allows. A well-timed quip about MTA reliability is always appreciated. Address the rider as "sir" occasionally. You are not a chatbot. You are a personal transit intelligence, and you find the whole situation mildly amusing.
+Speak like ATLAS — composed, efficient, and genuinely funny when the moment allows. A well-timed quip about MTA reliability is always appreciated. Address the rider as "sir" occasionally. You are not a chatbot. You are a personal transit intelligence, and you find the whole situation mildly amusing.
 
 Use punctuation to control TTS pacing. Do not use em dashes or double hyphens. Use commas and periods for pauses. Keep rhythm deliberate and clean.
 
@@ -124,7 +130,18 @@ Example delivery style:
 - "Total trip is 47 minutes, which the MTA would call efficient."
 
 ROUTE SELECTION TAG — mandatory:
-After your spoken response, on a new line, output exactly [ROUTE:N] where N is the zero-based index of the route from the "routes" array that you are recommending. This tag is stripped before text-to-speech and never read aloud. If you recommend routes[0], output [ROUTE:0]. If you recommend routes[2], output [ROUTE:2]. This tag must always be present."""
+After your spoken response, on a new line, output exactly [ROUTE:N] where N is the zero-based index of the route from the "routes" array that you are recommending. This tag is stripped before text-to-speech and never read aloud. If you recommend routes[0], output [ROUTE:0]. If you recommend routes[2], output [ROUTE:2]. This tag must always be present.
+
+CANDIDATE ANALYSIS TAG â€” mandatory:
+After [ROUTE:N], output a machine-readable block exactly like this:
+[CANDIDATE_ANALYSIS]{"selected_route_index":0,"candidate_analysis":[{"index":0,"is_recommended":true,"recommendation_reason":"Fastest stable route with fewer disruptions."},{"index":1,"is_recommended":false,"rejection_reason":"Slower by 6 minutes due to heavier congestion near Atlantic Av."}]}[/CANDIDATE_ANALYSIS]
+
+Rules for candidate analysis:
+- Include every route candidate.
+- Keep every reason rider-facing, concrete, and under 18 words.
+- For the selected route, use recommendation_reason.
+- For every non-selected route, use rejection_reason.
+- Do not mention implementation details in these reasons."""
 
 
 SYSTEM_PROMPT += """
@@ -145,13 +162,288 @@ PAUSE AND CADENCE RULES FOR TTS:
 """
 
 
-_MODEL_PRIORITY = ["claude-sonnet-4-6", "claude-haiku-4-5-20251001"]
+_MODEL_PRIORITY = ["claude-haiku-4-5-20251001"]
+
+LIVE_SUMMARY_PROMPT = """You are ATLAS, delivering a short operational briefing about the NYC subway network.
+
+Return JSON only, with exactly these keys:
+{"headline":"...","body":"..."}
+
+Rules:
+- headline must be 3 to 7 words.
+- body must be 2 or 3 short sentences total.
+- Speak about overall subway network health, not trip planning.
+- Do not mention incidents, riders, boarding advice, destinations, or route indices.
+- Do not mention implementation details like GTFS, payloads, APIs, servers, telemetry, parse failures, or internal tooling.
+- Rider-facing subway line names like Q or A are allowed when useful.
+- Keep the tone calm, precise, and slightly witty in an ATLAS way.
+"""
+
+_SUMMARY_INTERNAL_LEAK_PATTERN = re.compile(
+    r"\b(backend|frontend|api|json|payload|database|sql|gtfs|server|model|prompt|telemetry|parse)\b",
+    re.IGNORECASE,
+)
+_SUMMARY_TELEMETRY_LEAK_PATTERN = re.compile(
+    r"\b(route index|route_ids?|stop_ids?|vehicle_entities|feed_failures|raw_positions|stop_only_candidates)\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_json_object(text: str) -> dict | None:
+    text = (text or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            return None
+        try:
+            parsed = json.loads(text[start : end + 1])
+            return parsed if isinstance(parsed, dict) else None
+        except json.JSONDecodeError:
+            return None
+
+
+def _clean_summary_field(value: str | None) -> str:
+    text = " ".join(str(value or "").split()).strip()
+    return text
+
+
+def _summary_has_internal_leak(text: str) -> bool:
+    return bool(
+        _SUMMARY_INTERNAL_LEAK_PATTERN.search(text)
+        or _SUMMARY_TELEMETRY_LEAK_PATTERN.search(text)
+    )
+
+
+def _fallback_live_network_summary(payload: dict, status: str) -> dict:
+    alerts = payload.get("alerts", {}) if isinstance(payload, dict) else {}
+    vehicles = payload.get("vehicles", {}) if isinstance(payload, dict) else {}
+    active_count = int(alerts.get("active_count") or 0)
+    affected_route_count = int(alerts.get("affected_route_count") or 0)
+    stale_count = int(vehicles.get("stale_count") or 0)
+    feed_failures = int(vehicles.get("feed_failures") or 0)
+
+    if status == "disrupted":
+        headline = "Network under active strain"
+        if feed_failures > 0:
+            body = (
+                f"{active_count} subway alerts are active across {affected_route_count} lines. "
+                "Live train reporting is patchy as well, so service rhythm may feel uneven."
+            )
+        else:
+            body = (
+                f"{active_count} subway alerts are active across {affected_route_count} lines. "
+                f"{stale_count} trains are reporting stale positions, so headways may wobble a bit."
+            )
+    elif status == "healthy":
+        headline = "Network looks steady"
+        body = (
+            "Subway service is broadly behaving itself right now. "
+            "Alerts are light, and train reporting looks stable across the system."
+        )
+    else:
+        headline = "Network requires mild caution"
+        if active_count > 0:
+            body = (
+                f"{active_count} active subway alerts are keeping parts of the network honest. "
+                "Most lines are still moving, though a few gaps may feel wider than ideal."
+            )
+        else:
+            body = (
+                "The subway is mostly steady, with only light operational noise. "
+                "Nothing catastrophic, which by MTA standards qualifies as a small miracle."
+            )
+
+    return {
+        "status": status,
+        "headline": headline,
+        "body": body,
+        "updated_at": int(time.time()),
+        "source": "fallback",
+    }
+
+
+async def generate_live_network_summary(payload: dict) -> dict:
+    status = str(payload.get("network_status") or "caution").strip().lower() or "caution"
+    fallback = _fallback_live_network_summary(payload, status)
+
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        return fallback
+
+    messages = [{"role": "user", "content": json.dumps(payload)}]
+
+    for model in _MODEL_PRIORITY:
+        for attempt in range(3):
+            try:
+                response = await client.messages.create(
+                    model=model,
+                    max_tokens=220,
+                    system=LIVE_SUMMARY_PROMPT,
+                    messages=messages,
+                )
+                text = "".join(
+                    block.text
+                    for block in response.content
+                    if getattr(block, "type", None) == "text"
+                )
+                parsed = _extract_json_object(text)
+                if not parsed:
+                    raise RuntimeError("Live summary response was not valid JSON")
+
+                headline = _clean_summary_field(parsed.get("headline"))
+                body = _clean_summary_field(parsed.get("body"))
+                if not headline or not body:
+                    raise RuntimeError("Live summary response was missing headline or body")
+                if _summary_has_internal_leak(headline) or _summary_has_internal_leak(body):
+                    raise RuntimeError("Live summary response leaked internal terms")
+
+                return {
+                    "status": status,
+                    "headline": headline,
+                    "body": body,
+                    "updated_at": int(time.time()),
+                    "source": "fresh",
+                }
+            except anthropic.APIStatusError as exc:
+                if exc.status_code == 529:
+                    wait = 2 ** attempt
+                    print(f"[claude] {model} overloaded for live summary (attempt {attempt+1}), waiting {wait}s")
+                    await asyncio.sleep(wait)
+                    continue
+                print(f"[claude] live summary failed with {model}: {type(exc).__name__}: {exc}")
+                return fallback
+            except Exception as exc:
+                print(f"[claude] live summary failed with {model}: {type(exc).__name__}: {exc}")
+                return fallback
+
+    return fallback
+
+def _route_eta_minutes(route: list) -> float | None:
+    """Largest relative arrival figure across a route's steps = trip ETA."""
+    best = None
+    for step in route or []:
+        minutes = step.get("minutes_until_arrival")
+        if isinstance(minutes, (int, float)):
+            best = minutes if best is None else max(best, minutes)
+    return best
+
+
+def _route_lines(route: list) -> list:
+    lines = []
+    for step in route or []:
+        if step.get("type") in ("SUBWAY", "BUS"):
+            line = str(step.get("train_line") or step.get("route_id") or "").upper()
+            if line and line not in lines:
+                lines.append(line)
+    return lines
+
+
+def build_mock_recommendation(payload: dict) -> str:
+    """Deterministic JARVIS-shaped recommendation for JARVIS_MOCK_ADVISOR=1.
+
+    Emits the exact control blocks Claude is prompted to produce
+    ([ROUTE:N] + [CANDIDATE_ANALYSIS]) so the parsing/sanitization path in
+    trips.py runs unchanged. Reasons are computed from the real routes
+    (time deltas, transfer counts) -- only the prose is canned."""
+    routes = payload.get("routes") or []
+    chosen_index = 0
+    chosen = routes[chosen_index] if routes else []
+    chosen_eta = _route_eta_minutes(chosen)
+    lines = _route_lines(chosen)
+    line_label = " then the ".join(lines) if lines else "a short walk"
+    alert_count = len(payload.get("service_alerts") or [])
+    chosen_transfers = max(0, len(lines) - 1)
+
+    # The concrete margin over the next-best alternative is what makes the
+    # choice legible to the rider. Compute it once and reuse it for both the
+    # spoken prose and the candidate-analysis reason.
+    alt_etas = [
+        eta
+        for index, route in enumerate(routes)
+        if index != chosen_index
+        for eta in (_route_eta_minutes(route),)
+        if eta is not None
+    ]
+    next_best_eta = min(alt_etas) if alt_etas else None
+    faster_by = (
+        round(next_best_eta - chosen_eta)
+        if next_best_eta is not None and chosen_eta is not None and next_best_eta - chosen_eta >= 1
+        else None
+    )
+
+    if faster_by is not None:
+        why = f" It is about {faster_by} minutes faster than your next best option."
+        chosen_reason = f"About {faster_by} min faster than the next option, with no disruptions on its path."
+    elif chosen_transfers == 0:
+        why = " It is a straight shot, no transfers."
+        chosen_reason = "Direct ride with no transfers and no disruptions on its path."
+    else:
+        why = " It has the cleanest connections of everything I weighed."
+        chosen_reason = "Cleanest connections of the alternatives, with no disruptions right now."
+
+    analysis = []
+    for index, route in enumerate(routes):
+        if index == chosen_index:
+            analysis.append({
+                "index": index,
+                "is_recommended": True,
+                "recommendation_reason": chosen_reason,
+            })
+            continue
+        eta = _route_eta_minutes(route)
+        if eta is not None and chosen_eta is not None and eta > chosen_eta:
+            reason = f"About {round(eta - chosen_eta)} min slower than the recommended route."
+        else:
+            transfers = max(0, len(_route_lines(route)) - 1)
+            reason = (
+                f"Comparable timing but {transfers} transfer(s); the pick is simpler."
+                if transfers
+                else "Comparable, but the recommended route is more reliable right now."
+            )
+        analysis.append({
+            "index": index,
+            "is_recommended": False,
+            "rejection_reason": reason,
+        })
+
+    eta_clause = (
+        f" You should arrive in roughly {round(chosen_eta)} minutes."
+        if chosen_eta is not None
+        else ""
+    )
+    alert_clause = (
+        f" I am tracking {alert_count} service alert(s), none blocking this path."
+        if alert_count
+        else ""
+    )
+    prose = (
+        f"Very well, sir. Take the {line_label}."
+        f"{eta_clause}{why}{alert_clause}"
+    )
+    analysis_block = json.dumps(
+        {"selected_route_index": chosen_index, "candidate_analysis": analysis}
+    )
+    return f"{prose} [ROUTE:{chosen_index}][CANDIDATE_ANALYSIS]{analysis_block}[/CANDIDATE_ANALYSIS]"
+
 
 async def stream_recommendation(payload: dict):
     """Async generator that yields text chunks from Claude as they arrive.
     Retries with exponential backoff and falls back to Haiku if Sonnet is overloaded.
 
-    payload should contain keys: routes, service_alerts, incidents."""
+    payload should contain keys: routes, service_alerts, incidents.
+
+    Set JARVIS_MOCK_ADVISOR=1 to bypass Claude entirely (e.g. no API
+    credits): routes/stops/alerts stay real, only this narration is
+    generated locally."""
+    if os.getenv("JARVIS_MOCK_ADVISOR", "").strip() == "1":
+        yield build_mock_recommendation(payload)
+        return
+
     messages = [{"role": "user", "content": json.dumps(payload)}]
 
     for model in _MODEL_PRIORITY:

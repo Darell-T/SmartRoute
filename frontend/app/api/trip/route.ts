@@ -1,31 +1,21 @@
-import { NextRequest, NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+import { z } from "zod";
+import { postProxy } from "@/lib/backend-proxy";
 
-const backendBase =
-  process.env.API_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const TripSchema = z.object({
+  origin_lat: z.number(),
+  origin_lng: z.number(),
+  destination: z.string().min(1),
+  destination_lat: z.number().nullish(),
+  destination_lng: z.number().nullish(),
+});
 
-export async function POST(req: NextRequest) {
-  const appKey = process.env.APP_KEY;
-  if (!appKey) {
-    return NextResponse.json(
-      {
-        error:
-          "APP_KEY is not set for the Next.js server. Add APP_KEY in Vercel (or local .env) — it must match FastAPI APP_KEY.",
-      },
-      { status: 500 },
-    );
-  }
-
-  const body = await req.json();
-
-  const response = await fetch(`${backendBase}/api/trip`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-App-Key": appKey,
-    },
-    body: JSON.stringify(body),
+export function POST(req: NextRequest) {
+  return postProxy(req, {
+    path: "/api/trip",
+    key: "trip",
+    limit: 20,
+    schema: TripSchema,
+    invalidMessage: "Invalid trip request.",
   });
-
-  const data = await response.json();
-  return NextResponse.json(data, { status: response.status });
 }
