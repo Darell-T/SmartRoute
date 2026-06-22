@@ -27,10 +27,3 @@ def cache_set(key, value, ttl_seconds):
         redis_client.setex(key, ttl_seconds, value)
     else:
         _mem[key] = (value, time.monotonic() + ttl_seconds)
-
-
-def cache_delete(key):
-    if redis_client is not None:
-        redis_client.delete(key)
-    else:
-        _mem.pop(key, None)

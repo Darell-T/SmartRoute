@@ -15,8 +15,9 @@ loadEnvConfig(__dirname)
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  typescript: {
-    ignoreBuildErrors: true,
+  devIndicators: false,
+  turbopack: {
+    root: __dirname,
   },
   images: {
     unoptimized: true,

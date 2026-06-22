@@ -1,6 +1,5 @@
-from geopy.distance import geodesic
+from math import atan2, cos, radians, sin, sqrt
 import re
-import requests
 
 NYC_GEOSEARCH_URL = "https://geosearch.planninglabs.nyc/v2/search"
 
@@ -36,6 +35,8 @@ def geocode_address_with_reason(address: str) -> tuple[tuple[float, float] | Non
     # Use NYC Planning GeoSearch API — free, no key, NYC-specific
     print(f"[geo] GeoSearch query: {address!r}")
     try:
+        import requests
+
         resp = requests.get(
             NYC_GEOSEARCH_URL,
             params={"text": address.strip(), "size": 1},
@@ -66,15 +67,32 @@ def _is_in_nyc(lat: float, lon: float) -> bool:
 
 
 def distance_meters(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    return geodesic((lat1, lon1), (lat2, lon2)).meters
+    earth_radius_m = 6371008.8
+    d_lat = radians(lat2 - lat1)
+    d_lon = radians(lon2 - lon1)
+    origin_lat = radians(lat1)
+    target_lat = radians(lat2)
+    a = (
+        sin(d_lat / 2) ** 2
+        + cos(origin_lat) * cos(target_lat) * sin(d_lon / 2) ** 2
+    )
+    return earth_radius_m * 2 * atan2(sqrt(a), sqrt(1 - a))
 
 
-def find_nearest_stops(lat: float, lon: float, gtfs, limit: int = 5) -> list:
+def find_nearest_stops(
+    lat: float,
+    lon: float,
+    gtfs,
+    limit: int = 5,
+    radius_m: float | None = None,
+) -> list:
     distances = []
     for stop in gtfs.get_all_parent_stops():
         stop_lat = float(stop["stop_lat"])
         stop_lon = float(stop["stop_lon"])
         dist = distance_meters(lat, lon, stop_lat, stop_lon)
+        if radius_m is not None and dist > radius_m:
+            continue
         distances.append({"stop_id": stop["stop_id"], "stop_name": stop["stop_name"], "stop_lat": stop_lat, "stop_lon": stop_lon, "distance_m": round(dist, 1)})
 
     distances.sort(key=lambda x: x["distance_m"])

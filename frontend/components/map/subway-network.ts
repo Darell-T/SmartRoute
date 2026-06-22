@@ -1,1163 +1,1338 @@
-import type maplibregl from "maplibre-gl";
+import maplibregl from "maplibre-gl";
+import { getLineColor } from "./route-layers";
+import { subwayBulletName, subwayBulletSrc } from "../smart-route/train-bullet";
 
-import {
-  ENABLE_SUBWAY_LANE_SEPARATION,
-  normalizeSubwayRouteId,
-  prepareSubwayNetworkForLaneSeparation,
-  SUBWAY_ROUTE_FAMILY,
-  type SubwayLaneRenderMode,
-} from "./subway-lane-separation";
+// =====================================================================
+// Apple Maps-faithful subway rendering
+//
+// The map is drawn entirely from the build-time visual network artifact
+// (subway-network.visual.geojson). This module:
+//   1. Adapts that artifact into render features (one feature per
+//      distinct MTA color group per corridor) via
+//      buildSubwayLaneFeaturesFromVisual.
+//   2. Exposes a per-(station, route) stop-dot feature collection
+//      derived from subway-network.stations.geojson.
+//   3. Installs the MapLibre line / circle / symbol layers.
+// =====================================================================
 
-const SOURCE_ID = "sr-subway-network";
-const SHADOW_LAYER_ID = "sr-subway-network-shadow";
-const CASING_LAYER_ID = "sr-subway-network-casing";
-const GLOW_LAYER_ID = "sr-subway-network-glow";
-const LINE_LAYER_ID = "sr-subway-network-lines";
-export const SUBWAY_NETWORK_LINE_LAYER_ID = LINE_LAYER_ID;
-const IDENTITY_ANCHOR_SOURCE_ID = "sr-subway-route-identity-anchors";
-const IDENTITY_ANCHOR_LAYER_ID = "sr-subway-route-identity-anchors-core";
-const IDENTITY_ANCHOR_INTERVAL_LAYER_ID = "sr-subway-route-identity-anchors-interval";
-const FOCUS_IDENTITY_ANCHOR_LAYER_ID = "sr-subway-route-identity-anchors-focus";
-const GROUP_ENDPOINT_SOURCE_ID = "sr-subway-group-endpoints";
-const GROUP_ENDPOINT_START_LAYER_ID = "sr-subway-group-endpoints-start";
-const GROUP_ENDPOINT_END_LAYER_ID = "sr-subway-group-endpoints-end";
+// =====================================================================
+// Types
+// =====================================================================
 
-const STOPS_SOURCE_ID = "sr-subway-stops";
-const STOPS_DOT_LAYER_ID = "sr-subway-stops-dots";
-const STOPS_HUB_LAYER_ID = "sr-subway-stops-dots-hubs";
-const STOPS_LABEL_LAYER_ID = "sr-subway-stops-labels";
-
-export const FIRST_SUBWAY_NETWORK_LAYER_ID = SHADOW_LAYER_ID;
-
-type SubwayVisualLayerRole = "shadow" | "casing" | "glow" | "line";
-
-const NO_FOCUSED_ROUTE_ID = "__sr-no-focused-route__";
-export type SubwayNetworkFocusInput =
-  | Iterable<unknown>
-  | boolean
-  | {
-      selectedRouteIds?: Iterable<unknown> | unknown | null;
-      incidentRouteIds?: Iterable<unknown> | unknown | null;
-      nearbyRouteIds?: Iterable<unknown> | unknown | null;
-    };
-
-export type SubwayNetworkFocusState = {
-  selectedRouteIds: string[];
-  incidentRouteIds: string[];
-  nearbyRouteIds: string[];
-  sameFamilySiblingRouteIds: string[];
-  allEmphasisRouteIds: string[];
-};
-
-const EMPTY_SUBWAY_FOCUS_STATE: SubwayNetworkFocusState = {
-  selectedRouteIds: [],
-  incidentRouteIds: [],
-  nearbyRouteIds: [],
-  sameFamilySiblingRouteIds: [],
-  allEmphasisRouteIds: [],
-};
-
-const subwayFocusState = new WeakMap<maplibregl.Map, SubwayNetworkFocusState>();
-
-const LINE_OPACITY: Record<
-  SubwayVisualLayerRole,
+type StationFeature = GeoJSON.Feature<
+  GeoJSON.Point,
   {
-    idle: number;
-    selected: number;
-    incident: number;
-    nearby: number;
-    sibling: number;
-    background: number;
+    station_id: string;
+    name: string;
+    route_ids: string[];
+    is_transfer?: boolean;
   }
-> = {
-  // Shadow: trace lift only. Was 0.18 atmospheric depth — now just enough to
-  // separate the line from the dark road grid without re-introducing dusk-mode
-  // softness.
-  shadow: {
-    idle: 0.08,
-    selected: 0.22,
-    incident: 0.18,
-    nearby: 0.13,
-    sibling: 0.07,
-    background: 0.03,
-  },
-  // Casing: more visible separator so adjacent bundle members (e.g. N/Q/R/W)
-  // show a clear grey gutter between them, like the MTA poster's white casings.
-  casing: {
-    idle: 0.62,
-    selected: 0.96,
-    incident: 0.88,
-    nearby: 0.78,
-    sibling: 0.6,
-    background: 0.28,
-  },
-  // Glow: removed (idle 0). MTA poster aesthetic has no luminous halo. Selected/
-  // incident states keep a tiny ambient glow for selection emphasis only.
-  glow: {
-    idle: 0,
-    selected: 0.05,
-    incident: 0.035,
-    nearby: 0.012,
-    sibling: 0.005,
-    background: 0,
-  },
-  // Line: solid bold MTA color (was 0.52 translucent).
-  line: {
-    idle: 0.92,
-    selected: 1,
-    incident: 0.98,
-    nearby: 0.94,
-    sibling: 0.86,
-    background: 0.44,
-  },
+>;
+
+interface LaneSegmentProps {
+  route_id: string;
+  color: string;
+  lane_slot: number;
+  corridor: string | null;
+}
+
+interface StopDotProps {
+  station_id: string;
+  route_id: string;
+  color: string;
+  is_transfer: boolean;
+}
+
+type StationMarkerType =
+  | "single_stop_dot"
+  | "shared_stop_dot"
+  | "shared_stop_bar"
+  | "station_label"
+  | "station_route_badge";
+
+interface StationAnchorProps {
+  marker_type: StationMarkerType;
+  station_id: string;
+  name: string;
+  route_ids: string[];
+  route_count: number;
+  color?: string;
+  icon_id?: string;
+  icon_offset?: [number, number];
+  marker_priority?: number;
+  min_zoom?: number;
+  max_zoom?: number;
+}
+
+export interface SubwayStationMarkerCollections {
+  dots: GeoJSON.FeatureCollection<GeoJSON.Point, StationAnchorProps>;
+  sharedStops: GeoJSON.FeatureCollection<
+    GeoJSON.Point | GeoJSON.LineString,
+    StationAnchorProps
+  >;
+  labels: GeoJSON.FeatureCollection<GeoJSON.Point, StationAnchorProps>;
+  badges: GeoJSON.FeatureCollection<GeoJSON.Point, StationAnchorProps>;
+}
+
+// =====================================================================
+// Constants
+// =====================================================================
+
+const SUBWAY_NETWORK_SOURCE_ID = "sr-subway-network";
+const SUBWAY_STOP_SOURCE_ID = "sr-subway-stops";
+export const SUBWAY_STATION_DOTS_SOURCE_ID = "sr-subway-station-dots";
+export const SUBWAY_STATION_SHARED_STOPS_SOURCE_ID =
+  "sr-subway-station-shared-stops";
+export const SUBWAY_STATION_LABELS_SOURCE_ID = "sr-subway-station-labels";
+export const SUBWAY_STATION_ROUTE_BADGES_SOURCE_ID =
+  "sr-subway-station-route-badges";
+export const SUBWAY_GLOW_LAYER_ID = "sr-subway-glow";
+export const SUBWAY_CASING_LAYER_ID = "sr-subway-casing";
+export const SUBWAY_FILL_LAYER_ID = "sr-subway-fill";
+export const SUBWAY_HIGHLIGHT_LAYER_ID = "sr-subway-highlight";
+export const SUBWAY_STOP_DOT_LAYER_ID = "sr-subway-stop-dot";
+export const SUBWAY_STATION_SINGLE_DOTS_LAYER_ID =
+  "sr-subway-station-single-dots";
+export const SUBWAY_STATION_SHARED_DOTS_LAYER_ID =
+  "sr-subway-station-shared-dots";
+export const SUBWAY_STATION_SHARED_BAR_CASING_LAYER_ID =
+  "sr-subway-station-shared-bars-casing";
+export const SUBWAY_STATION_SHARED_BAR_FILL_LAYER_ID =
+  "sr-subway-station-shared-bars-fill";
+export const SUBWAY_STATION_LABELS_LAYER_ID = "sr-subway-station-labels";
+export const SUBWAY_STATION_ROUTE_BADGES_LAYER_ID =
+  "sr-subway-station-route-badges";
+// =====================================================================
+// Gate 2E — Visual network builder
+//
+// Consumes the Gate-2D-validated artifact subway-network.visual.geojson
+// (corridor features with `route_ids: string[]`) and emits one render
+// feature per distinct MTA color group per corridor.
+//
+// Same-color collapse: in a corridor whose route_ids include B/D/F/M, we
+// emit ONE orange feature with route_ids = ["B","D","F","M"]. We do NOT
+// emit four separate orange polylines that would visually stack on the
+// same lane.
+//
+// Different-color collapse: corridors with B/D + N/Q emit TWO features
+// (orange + yellow) with distinct lane_slots so they render as a
+// parallel pair under the existing line-offset paint expression.
+//
+// Lane slot is centered: K distinct colors → slots [- (K-1)/2 ... +(K-1)/2 ].
+// Z-order is by color rank (utility/shuttle colors lowest; prominent
+// trunk colors highest) so high-traffic routes paint over noise.
+// =====================================================================
+
+// Stable rank for visual_z_order / line-sort-key. Lower number draws
+// first (under). Utility/shuttle colors at the bottom; prominent route
+// families on top.
+const COLOR_VISUAL_Z_ORDER: Record<string, number> = {
+  "#808183": 0, // S/FS/H gray shuttles
+  "#A7A9AC": 1, // L gray
+  "#996633": 2, // J/Z brown
+  "#6CBE45": 3, // G light green
+  "#0078C6": 4, // SI blue
+  "#FCCC0A": 5, // N/Q/R/W yellow
+  "#B933AD": 6, // 7 purple
+  "#0A84FF": 7, // A/C/E Apple system blue
+  "#FF6319": 8, // B/D/F/M orange
+  "#00933C": 9, // 4/5/6 green
+  "#EE352E": 10, // 1/2/3 red
 };
 
-const LINE_WIDTH: Record<
-  SubwayVisualLayerRole,
-  {
-    idle: [number, number, number];
-    focused: [number, number, number];
-    muted: [number, number, number];
+function visualZOrderForColor(color: string): number {
+  return COLOR_VISUAL_Z_ORDER[color] ?? 100;
+}
+
+// Normalize segment direction so MapLibre's perpendicular line-offset is
+// stable. Heuristic: reverse if the segment trends westward or southward.
+// This gives every emitted feature a consistent "left side" so the
+// line-offset paint expression produces predictable parallel lanes.
+function normalizeVisualDirection(
+  coords: [number, number][],
+): [number, number][] {
+  if (coords.length < 2) return coords;
+  const first = coords[0];
+  const last = coords[coords.length - 1];
+  const dLng = last[0] - first[0];
+  const dLat = last[1] - first[1];
+  // If the segment is more horizontal than vertical, normalize to east.
+  // Otherwise normalize to north.
+  if (Math.abs(dLng) > Math.abs(dLat)) {
+    return dLng >= 0 ? coords : coords.slice().reverse();
   }
-> = {
-  shadow: {
-    idle: [3.8, 6.8, 10.8],
-    focused: [5.1, 8.8, 13],
-    muted: [2.8, 5.3, 8.2],
-  },
-  casing: {
-    idle: [2.3, 4.2, 6.6],
-    focused: [3.2, 5.5, 8.2],
-    muted: [1.7, 3.1, 4.9],
-  },
-  glow: {
-    idle: [2.8, 4.8, 7.2],
-    focused: [4.8, 7.8, 10.5],
-    muted: [1.6, 2.8, 4.4],
-  },
-  line: {
-    // ~13% thicker than the dusk-mode tuning. Pairs with the new opacity 0.92
-    // for an MTA-poster-bold read while still respecting the road grid.
-    idle: [1.85, 3.1, 5.05],
-    focused: [2.8, 4.4, 7.05],
-    muted: [1.25, 2.18, 3.65],
-  },
-};
-
-// Routes whose bullet SVGs differ from the lowercase route_id.
-const BULLET_OVERRIDES: Record<string, string> = {
-  "6X": "6d",
-  "7X": "7d",
-  FX: "fd",
-  FS: "sf",
-  SI: "sir",
-  SIR: "sir",
-  GS: "s",
-  H: "s",
-};
-
-const ALL_ROUTES = [
-  "1",
-  "2",
-  "3",
-  "4",
-  "5",
-  "6",
-  "6d",
-  "7",
-  "7d",
-  "a",
-  "b",
-  "c",
-  "d",
-  "e",
-  "f",
-  "fd",
-  "g",
-  "h",
-  "j",
-  "l",
-  "m",
-  "n",
-  "q",
-  "r",
-  "s",
-  "sf",
-  "sir",
-  "sr",
-  "t",
-  "w",
-  "z",
-];
-
-function addUniqueRouteId(routeIds: string[], seen: Set<string>, routeId: string) {
-  if (!routeId || seen.has(routeId)) return;
-  seen.add(routeId);
-  routeIds.push(routeId);
+  return dLat >= 0 ? coords : coords.slice().reverse();
 }
 
-function focusRouteAliases(routeId: string) {
-  switch (routeId) {
-    case "6X":
-      return ["6X", "6D"];
-    case "7X":
-      return ["7X", "7D"];
-    case "F":
-      return ["F", "FX", "FD"];
-    case "S":
-      return ["S", "FS", "GS", "H"];
-    case "SI":
-      return ["SI", "SIR"];
-    default:
-      return [routeId];
-  }
-}
-
-function iterableValues(value: Iterable<unknown> | unknown | null | undefined) {
-  if (value == null || typeof value === "boolean") return [];
-  if (typeof value === "string") return [value];
-  if (typeof value === "object" && Symbol.iterator in value) {
-    return Array.from(value as Iterable<unknown>);
-  }
-  return [value];
-}
-
-export function normalizeSubwayFocusRouteIds(
-  routeIds?: Iterable<unknown> | unknown | null,
-) {
-  const normalized: string[] = [];
-  const seen = new Set<string>();
-
-  for (const routeId of iterableValues(routeIds)) {
-    const canonicalRouteId = normalizeSubwayRouteId(routeId);
-    if (!canonicalRouteId) continue;
-    for (const alias of focusRouteAliases(canonicalRouteId)) {
-      addUniqueRouteId(normalized, seen, alias);
-    }
-  }
-
-  return normalized;
-}
-
-function isStructuredFocusInput(
-  input: SubwayNetworkFocusInput | null | undefined,
-): input is Exclude<SubwayNetworkFocusInput, Iterable<unknown> | boolean> {
-  if (!input || typeof input !== "object") return false;
-  return (
-    !Array.isArray(input) &&
-    !(Symbol.iterator in input) &&
-    (
-      "selectedRouteIds" in input ||
-      "incidentRouteIds" in input ||
-      "nearbyRouteIds" in input
-    )
-  );
-}
-
-function normalizedRouteSet(routeIds: readonly string[]) {
-  const set = new Set<string>();
-  for (const routeId of routeIds) {
-    const canonicalRouteId = normalizeSubwayRouteId(routeId);
-    if (canonicalRouteId) set.add(canonicalRouteId);
-  }
-  return set;
-}
-
-function selectedFamilySiblings(selectedRouteIds: readonly string[]) {
-  const selected = normalizedRouteSet(selectedRouteIds);
-  const families = new Set<string>();
-  for (const routeId of selected) {
-    const family = SUBWAY_ROUTE_FAMILY[routeId];
-    if (family) families.add(family);
-  }
-
-  const siblings: string[] = [];
-  const seen = new Set<string>();
-
-  for (const [routeId, family] of Object.entries(SUBWAY_ROUTE_FAMILY)) {
-    if (!families.has(family) || selected.has(routeId)) continue;
-    addUniqueRouteId(siblings, seen, routeId);
-  }
-
-  return siblings;
-}
-
-function addRouteBucket(
-  target: string[],
-  seen: Set<string>,
-  routeIds: readonly string[],
-) {
-  for (const routeId of routeIds) {
-    const canonicalRouteId = normalizeSubwayRouteId(routeId);
-    if (!canonicalRouteId || seen.has(canonicalRouteId)) continue;
-    seen.add(canonicalRouteId);
-    target.push(canonicalRouteId);
-  }
-}
-
-export function normalizeSubwayNetworkFocusState(
-  input: SubwayNetworkFocusInput | null | undefined = [],
-): SubwayNetworkFocusState {
-  if (typeof input === "boolean") return EMPTY_SUBWAY_FOCUS_STATE;
-
-  const selectedRouteIds = isStructuredFocusInput(input)
-    ? normalizeSubwayFocusRouteIds(input.selectedRouteIds)
-    : normalizeSubwayFocusRouteIds(input);
-  const incidentRouteIds = isStructuredFocusInput(input)
-    ? normalizeSubwayFocusRouteIds(input.incidentRouteIds)
-    : [];
-  // Auto-nearby (proximity-based) emphasis is intentionally disabled. Idle
-  // rendering must be uniform across the whole network — only manual focus
-  // (clicking a route, opening an incident) should change line styling.
-  // Callers may still pass `nearbyRouteIds`; the input is accepted for API
-  // shape compatibility but always normalized to an empty bucket here.
-  const nearbyRouteIds: string[] = [];
-  const sameFamilySiblingRouteIds = selectedFamilySiblings(selectedRouteIds);
-  const allEmphasisRouteIds: string[] = [];
-  const seen = new Set<string>();
-
-  addRouteBucket(allEmphasisRouteIds, seen, selectedRouteIds);
-  addRouteBucket(allEmphasisRouteIds, seen, incidentRouteIds);
-  // nearbyRouteIds is always empty (see above) — no bucket to add.
-
-  return {
-    selectedRouteIds,
-    incidentRouteIds,
-    nearbyRouteIds,
-    sameFamilySiblingRouteIds,
-    allEmphasisRouteIds,
-  };
-}
-
-function subwayRouteFocusCondition(routeIds: readonly string[]) {
-  const normalized = normalizeSubwayFocusRouteIds(routeIds);
-  if (normalized.length === 0) return false;
-  return ["match", ["get", "route_id"], normalized, true, false];
-}
-
-export function subwayRouteFocusFilter(
-  routeIds: readonly string[],
-): maplibregl.FilterSpecification {
-  const normalized = normalizeSubwayFocusRouteIds(routeIds);
-  if (normalized.length === 0) {
-    return [
-      "==",
-      ["get", "route_id"],
-      NO_FOCUSED_ROUTE_ID,
-    ] as maplibregl.FilterSpecification;
-  }
-  return [
-    "match",
-    ["get", "route_id"],
-    normalized,
-    true,
-    false,
-  ] as maplibregl.FilterSpecification;
-}
-
-function hasRouteFocus(focusState: SubwayNetworkFocusState) {
-  return (
-    focusState.selectedRouteIds.length > 0 ||
-    focusState.incidentRouteIds.length > 0 ||
-    focusState.nearbyRouteIds.length > 0
-  );
-}
-
-function relevancePaintValue(
-  focusInput: SubwayNetworkFocusInput,
-  values: {
-    idle: number;
-    selected: number;
-    incident: number;
-    nearby: number;
-    sibling: number;
-    background: number;
-  },
-) {
-  const focusState = normalizeSubwayNetworkFocusState(focusInput);
-  if (!hasRouteFocus(focusState)) return values.idle;
-
-  return [
-    "case",
-    subwayRouteFocusCondition(focusState.selectedRouteIds),
-    values.selected,
-    subwayRouteFocusCondition(focusState.incidentRouteIds),
-    values.incident,
-    subwayRouteFocusCondition(focusState.nearbyRouteIds),
-    values.nearby,
-    subwayRouteFocusCondition(focusState.sameFamilySiblingRouteIds),
-    values.sibling,
-    values.background,
-  ] as unknown as number;
-}
-
-export function subwayFocusedLineOpacityExpression(
-  routeIds: SubwayNetworkFocusInput,
-  role: SubwayVisualLayerRole,
-) {
-  const opacity = LINE_OPACITY[role];
-  return relevancePaintValue(routeIds, opacity);
-}
-
-export function subwayFocusedLineWidthExpression(
-  routeIds: SubwayNetworkFocusInput,
-  role: SubwayVisualLayerRole,
-) {
-  const widths = LINE_WIDTH[role];
-  const focusState = normalizeSubwayNetworkFocusState(routeIds);
-
-  if (!hasRouteFocus(focusState)) {
-    return [
-      "interpolate",
-      ["linear"],
-      ["zoom"],
-      9,
-      widths.idle[0],
-      12,
-      widths.idle[1],
-      16,
-      widths.idle[2],
-    ] as unknown as number;
-  }
-
-  const selectedCondition = subwayRouteFocusCondition(focusState.selectedRouteIds);
-  const incidentCondition = subwayRouteFocusCondition(focusState.incidentRouteIds);
-  const nearbyCondition = subwayRouteFocusCondition(focusState.nearbyRouteIds);
-  const siblingCondition = subwayRouteFocusCondition(
-    focusState.sameFamilySiblingRouteIds,
-  );
-
-  return [
-    "interpolate",
-    ["linear"],
-    ["zoom"],
-    9,
-    [
-      "case",
-      selectedCondition,
-      widths.focused[0],
-      incidentCondition,
-      widths.focused[0],
-      nearbyCondition,
-      widths.idle[0],
-      siblingCondition,
-      widths.idle[0],
-      widths.muted[0],
-    ],
-    12,
-    [
-      "case",
-      selectedCondition,
-      widths.focused[1],
-      incidentCondition,
-      widths.focused[1],
-      nearbyCondition,
-      widths.idle[1],
-      siblingCondition,
-      widths.idle[1],
-      widths.muted[1],
-    ],
-    16,
-    [
-      "case",
-      selectedCondition,
-      widths.focused[2],
-      incidentCondition,
-      widths.focused[2],
-      nearbyCondition,
-      widths.idle[2],
-      siblingCondition,
-      widths.idle[2],
-      widths.muted[2],
-    ],
-  ] as unknown as number;
-}
-
-export function subwayBulletOpacityExpression(routeIds: SubwayNetworkFocusInput) {
-  const focusState = normalizeSubwayNetworkFocusState(routeIds);
-  if (!hasRouteFocus(focusState)) {
-    return [
-      "interpolate",
-      ["linear"],
-      ["zoom"],
-      12.5,
-      0.18,
-      14,
-      0.38,
-      16,
-      0.54,
-    ] as unknown as number;
-  }
-
-  return [
-    "case",
-    subwayRouteFocusCondition(focusState.selectedRouteIds),
-    0.24,
-    subwayRouteFocusCondition(focusState.incidentRouteIds),
-    0.42,
-    subwayRouteFocusCondition(focusState.nearbyRouteIds),
-    0.32,
-    subwayRouteFocusCondition(focusState.sameFamilySiblingRouteIds),
-    0.22,
-    0.08,
-  ] as unknown as number;
-}
-
-function focusedBulletLayerOpacityExpression() {
-  return [
-    "interpolate",
-    ["linear"],
-    ["zoom"],
-    12.25,
-    0.82,
-    14,
-    0.95,
-    17,
-    1,
-  ] as unknown as number;
-}
-
-function firstSymbolLayerId(m: maplibregl.Map) {
-  return m.getStyle().layers?.find((layer) => layer.type === "symbol")?.id;
-}
-
-function networkDebugEnabled() {
-  if (process.env.NEXT_PUBLIC_NETWORK_DEBUG === "on") return true;
-  if (typeof window !== "undefined") {
-    return new URLSearchParams(window.location.search).get("network-debug") === "1";
-  }
-  return false;
+interface VisualLaneProps extends LaneSegmentProps {
+  /** Full set of routes that share this corridor (for click inspector) */
+  route_ids: string[];
+  /** Routes represented by this emitted color lane. */
+  color_route_ids: string[];
+  /** Stable color-rank z-order; used as line-sort-key */
+  visual_z_order: number;
+  /** Source corridor id from build-subway-visual-network.mjs */
+  corridor_id: string | null;
+  /** Source stop-pair label, e.g. "Atlantic Av-Barclays → Pacific St" */
+  stop_pair: string | null;
+  /** Original arc length in meters (from the longest member edge) */
+  length_m: number;
+  /** Source shape ids (for click inspector / debugging) */
+  source_shape_ids: string[];
+  /** Source visual edge ids from the Gate 2D artifact. */
+  source_edge_ids: string[];
+  representative_route_id: string;
+  lane_group_id: string | null;
+  lane_slot_source: "bundle" | "chain" | "local";
+  lane_order_basis: string[];
+  bundle_id?: string | null;
+  visual_feature_type?: string | null;
+  /**
+   * The original (semantic) lane slot computed by the visual builder
+   * before geometry baking. Preserved for click inspector / debugging.
+   */
+  lane_slot_semantic?: number;
+  /**
+   * True when the build script has baked the lane offset into the
+   * geometry coordinates. Runtime emits `lane_slot: 0` so the paint
+   * expression does not double-offset.
+   */
+  lane_offset_baked?: boolean;
 }
 
 /**
- * The build script bakes lane offsets into geometry coordinates as
- * perpendicular shifts in lat/lng (see frontend/scripts/build-corridor-groups.mjs
- * `bakeLaneOffsetIntoPolyline`). Runtime line-offset must therefore be 0 —
- * any non-zero value would double-shift the line, producing 2x the intended
- * spacing.
- *
- * The legacy zoom-interpolated expression remains in git history if a
- * fallback to runtime offsets is ever needed.
- *
- * `subwayLineSortKeyExpression()` below still uses `visual_z_order` so
- * cross-route stacking inside a bundle behaves correctly.
+ * Build lane render features from a Gate-2D-validated visual geojson.
+ * Emits one feature per (corridor, distinct MTA color group).
  */
-export function subwayLaneOffsetExpression(): number {
-  return 0;
+export function buildSubwayLaneFeaturesFromVisual(
+  visual: GeoJSON.FeatureCollection,
+): GeoJSON.FeatureCollection<GeoJSON.LineString, VisualLaneProps> {
+  const out: GeoJSON.Feature<GeoJSON.LineString, VisualLaneProps>[] = [];
+
+  for (const raw of visual.features) {
+    if (raw.geometry?.type !== "LineString") continue;
+    const coords = raw.geometry.coordinates as [number, number][];
+    if (coords.length < 2) continue;
+
+    const routeIds = Array.isArray(raw.properties?.route_ids)
+      ? (raw.properties!.route_ids as string[]).map((r) => String(r))
+      : [];
+    if (routeIds.length === 0) continue;
+
+    const rawProps = raw.properties ?? {};
+    if (rawProps.visual_feature_type === "bundle_lane") {
+      const color = String(rawProps.color ?? getLineColor(String(rawProps.route_id ?? routeIds[0])));
+      const colorRouteIds = Array.isArray(rawProps.color_route_ids)
+        ? (rawProps.color_route_ids as string[]).map((routeId) => String(routeId))
+        : routeIds.filter((routeId) => getLineColor(routeId) === color);
+      const representativeRouteId =
+        String(rawProps.representative_route_id ?? rawProps.route_id ?? colorRouteIds[0] ?? routeIds[0]);
+      const laneOrderBasis = Array.isArray(rawProps.lane_order_basis)
+        ? (rawProps.lane_order_basis as string[]).map((basis) => String(basis))
+        : [color];
+      // If the build script pre-baked the offset into the geometry, do
+      // NOT apply any MapLibre line-offset at runtime — pass lane_slot=0
+      // through to the paint expression. Also skip direction normalization
+      // because the baked geometry is already correctly directed.
+      const laneOffsetBaked = rawProps.lane_offset_baked === true;
+      const renderLaneSlot = laneOffsetBaked
+        ? 0
+        : Number(rawProps.lane_slot ?? 0);
+      const semanticLaneSlot = Number(
+        rawProps.lane_slot_semantic ?? rawProps.lane_slot ?? 0,
+      );
+      const renderCoords = laneOffsetBaked
+        ? coords
+        : normalizeVisualDirection(coords);
+      out.push({
+        type: "Feature",
+        properties: {
+          route_id: representativeRouteId,
+          representative_route_id: representativeRouteId,
+          color,
+          lane_slot: renderLaneSlot,
+          lane_slot_semantic: semanticLaneSlot,
+          lane_offset_baked: laneOffsetBaked,
+          corridor: null,
+          route_ids: routeIds,
+          color_route_ids: colorRouteIds,
+          visual_z_order: visualZOrderForColor(color),
+          corridor_id: String(rawProps.corridor_id ?? rawProps.bundle_id ?? "") || null,
+          stop_pair: rawProps.from_stop_name && rawProps.to_stop_name
+            ? `${rawProps.from_stop_name} â†’ ${rawProps.to_stop_name}`
+            : null,
+          length_m: Number(rawProps.length_m ?? 0),
+          source_shape_ids: Array.isArray(rawProps.source_shape_ids)
+            ? (rawProps.source_shape_ids as string[])
+            : [],
+          source_edge_ids: Array.isArray(rawProps.source_edge_ids)
+            ? (rawProps.source_edge_ids as string[])
+            : [],
+          lane_group_id: String(rawProps.lane_group_id ?? rawProps.bundle_id ?? "") || null,
+          lane_slot_source: "bundle",
+          lane_order_basis: laneOrderBasis,
+          bundle_id: String(rawProps.bundle_id ?? "") || null,
+          visual_feature_type: "bundle_lane",
+        },
+        geometry: { type: "LineString", coordinates: renderCoords },
+      });
+      continue;
+    }
+
+    // Group routes by their MTA color, preserving first-seen order
+    const colorBuckets = new Map<string, string[]>();
+    for (const rid of routeIds) {
+      const c = getLineColor(rid);
+      if (!colorBuckets.has(c)) colorBuckets.set(c, []);
+      colorBuckets.get(c)!.push(rid);
+    }
+    const distinctColors = [...colorBuckets.keys()];
+    const K = distinctColors.length;
+    // Sort the distinct colors by their visual_z_order so the lane-slot
+    // assignment is stable run-to-run and the parallel order on a bundle
+    // matches the global color hierarchy.
+    distinctColors.sort(
+      (a, b) => visualZOrderForColor(a) - visualZOrderForColor(b),
+    );
+
+    const normalized = normalizeVisualDirection(coords);
+
+    const laneColorSlots =
+      raw.properties?.lane_color_slots &&
+      typeof raw.properties.lane_color_slots === "object"
+        ? (raw.properties.lane_color_slots as Record<string, unknown>)
+        : null;
+    const laneOrderBasis = Array.isArray(raw.properties?.lane_order_basis)
+      ? (raw.properties!.lane_order_basis as string[]).map((color) => String(color))
+      : distinctColors;
+
+    distinctColors.forEach((color, idx) => {
+      const localSlot = idx - (K - 1) / 2;
+      const chainSlot = Number(laneColorSlots?.[color]);
+      const slot = Number.isFinite(chainSlot) ? chainSlot : localSlot;
+      const routesInColor = colorBuckets.get(color) ?? [];
+      const representativeRouteId = [...routesInColor].sort((a, b) =>
+        a.localeCompare(b, "en", { numeric: true }),
+      )[0] ?? "";
+      const props = raw.properties ?? {};
+      out.push({
+        type: "Feature",
+        properties: {
+          route_id: representativeRouteId,
+          representative_route_id: representativeRouteId,
+          color,
+          lane_slot: slot,
+          corridor: null,
+          route_ids: routeIds,
+          color_route_ids: routesInColor,
+          visual_z_order: visualZOrderForColor(color),
+          corridor_id: String(props.corridor_id ?? "") || null,
+          stop_pair: props.from_stop_name && props.to_stop_name
+            ? `${props.from_stop_name} → ${props.to_stop_name}`
+            : null,
+          length_m: Number(props.longest_member_length_m ?? props.length_m ?? 0),
+          source_shape_ids: Array.isArray(props.source_shape_ids)
+            ? (props.source_shape_ids as string[])
+            : [],
+          source_edge_ids: Array.isArray(props.source_edge_ids)
+            ? (props.source_edge_ids as string[])
+            : [],
+          lane_group_id: String(props.lane_group_id ?? "") || null,
+          lane_slot_source:
+            props.lane_slot_source === "chain" ? "chain" : "local",
+          lane_order_basis: laneOrderBasis,
+        },
+        geometry: { type: "LineString", coordinates: normalized },
+      });
+    });
+  }
+
+  // Stable paint order: by visual_z_order ascending, then by first route_id
+  out.sort((a, b) => {
+    if (a.properties.visual_z_order !== b.properties.visual_z_order) {
+      return a.properties.visual_z_order - b.properties.visual_z_order;
+    }
+    const aRid = a.properties.route_ids[0] ?? "";
+    const bRid = b.properties.route_ids[0] ?? "";
+    return aRid.localeCompare(bRid, "en", { numeric: true });
+  });
+
+  return { type: "FeatureCollection", features: out };
 }
 
-function subwayLineSortKeyExpression(): number {
-  if (!ENABLE_SUBWAY_LANE_SEPARATION) return 0;
-  return ["coalesce", ["get", "visual_z_order"], 0] as unknown as number;
-}
-
-function subwayLineLayout() {
+/**
+ * Summary statistics for the visual lane builder. For console logging.
+ */
+export function summarizeVisualLanes(
+  features: GeoJSON.FeatureCollection<GeoJSON.LineString, VisualLaneProps>,
+): {
+  renderFeatures: number;
+  distinctRoutes: number;
+  distinctColorGroups: number;
+  distinctColorLanes: number;
+  multiColorCorridors: number;
+  corridorsWithMultipleRoutes: number;
+} {
+  const routes = new Set<string>();
+  const colors = new Set<string>();
+  const corridorColorCounts = new Map<string, Set<string>>();
+  const routeCountsByCorridor = new Map<string, number>();
+  for (const f of features.features) {
+    for (const r of f.properties.route_ids) routes.add(r);
+    colors.add(f.properties.color);
+    const cid = f.properties.corridor_id ?? "";
+    if (!corridorColorCounts.has(cid)) corridorColorCounts.set(cid, new Set());
+    corridorColorCounts.get(cid)!.add(f.properties.color);
+    routeCountsByCorridor.set(
+      cid,
+      Math.max(routeCountsByCorridor.get(cid) ?? 0, f.properties.route_ids.length),
+    );
+  }
+  let multiColor = 0;
+  for (const s of corridorColorCounts.values()) {
+    if (s.size > 1) multiColor += 1;
+  }
+  let multiRoute = 0;
+  for (const routeCount of routeCountsByCorridor.values()) {
+    if (routeCount > 1) multiRoute += 1;
+  }
   return {
-    "line-cap": "round" as const,
-    "line-join": "round" as const,
-    "line-sort-key": subwayLineSortKeyExpression(),
+    renderFeatures: features.features.length,
+    distinctRoutes: routes.size,
+    distinctColorGroups: colors.size,
+    distinctColorLanes: features.features.length,
+    multiColorCorridors: multiColor,
+    corridorsWithMultipleRoutes: multiRoute,
   };
 }
 
-// Render an SVG into a raster the Mapbox icon atlas can consume.
-// Mapbox addImage cannot ingest SVG <img> directly in a portable way,
-// so we draw to canvas at 2× and register at pixelRatio 2.
-function loadBulletImage(
-  m: maplibregl.Map,
-  name: string,
-  src: string,
-  size = 64,
-) {
-  return new Promise<void>((resolve) => {
-    if (m.hasImage(name)) return resolve();
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.onload = () => {
+/**
+ * For each station feature in stations.geojson, emit one stop-dot
+ * Point feature per route_id at the station's coords. Dot color
+ * matches the route. Position is the un-offset station coord — at
+ * z14+ with small lane offsets the discrepancy is invisible.
+ */
+export function buildSubwayStopFeatures(
+  stations: GeoJSON.FeatureCollection,
+): GeoJSON.FeatureCollection<GeoJSON.Point, StopDotProps> {
+  const out: GeoJSON.Feature<GeoJSON.Point, StopDotProps>[] = [];
+  for (const raw of stations.features) {
+    if (raw.geometry?.type !== "Point") continue;
+    const s = raw as StationFeature;
+    const routeIds = Array.isArray(s.properties.route_ids)
+      ? s.properties.route_ids
+      : [];
+    const isTransfer = Boolean(s.properties.is_transfer);
+    const coord = s.geometry.coordinates as [number, number];
+    for (const rid of routeIds) {
+      out.push({
+        type: "Feature",
+        properties: {
+          station_id: s.properties.station_id,
+          route_id: rid,
+          color: getLineColor(rid),
+          is_transfer: isTransfer,
+        },
+        geometry: { type: "Point", coordinates: coord },
+      });
+    }
+  }
+  return { type: "FeatureCollection", features: out };
+}
+
+function emptyPointCollection(): GeoJSON.FeatureCollection<GeoJSON.Point, StationAnchorProps> {
+  return { type: "FeatureCollection", features: [] };
+}
+
+function emptySharedStopCollection(): GeoJSON.FeatureCollection<
+  GeoJSON.Point | GeoJSON.LineString,
+  StationAnchorProps
+> {
+  return { type: "FeatureCollection", features: [] };
+}
+
+export function splitStationAnchorFeatureCollections(
+  anchors: GeoJSON.FeatureCollection,
+): SubwayStationMarkerCollections {
+  const features = anchors.features.filter(
+    (feature): feature is GeoJSON.Feature<
+      GeoJSON.Point | GeoJSON.LineString,
+      StationAnchorProps
+    > => Boolean(feature.properties?.marker_type),
+  );
+
+  return {
+    dots: {
+      type: "FeatureCollection",
+      features: features.filter(
+        (feature): feature is GeoJSON.Feature<GeoJSON.Point, StationAnchorProps> =>
+          feature.geometry?.type === "Point" &&
+          feature.properties.marker_type === "single_stop_dot",
+      ),
+    },
+    sharedStops: {
+      type: "FeatureCollection",
+      features: features.filter((feature) =>
+        ["shared_stop_dot", "shared_stop_bar"].includes(
+          feature.properties.marker_type,
+        ),
+      ),
+    },
+    labels: {
+      type: "FeatureCollection",
+      features: features.filter(
+        (feature): feature is GeoJSON.Feature<GeoJSON.Point, StationAnchorProps> =>
+          feature.geometry?.type === "Point" &&
+          feature.properties.marker_type === "station_label",
+      ),
+    },
+    badges: {
+      type: "FeatureCollection",
+      features: features.filter(
+        (feature): feature is GeoJSON.Feature<GeoJSON.Point, StationAnchorProps> =>
+          feature.geometry?.type === "Point" &&
+          feature.properties.marker_type === "station_route_badge",
+      ),
+    },
+  };
+}
+
+export function emptySubwayStationMarkerCollections(): SubwayStationMarkerCollections {
+  return {
+    dots: emptyPointCollection(),
+    sharedStops: emptySharedStopCollection(),
+    labels: emptyPointCollection(),
+    badges: emptyPointCollection(),
+  };
+}
+
+export function stationMarkerRouteIds(
+  stationMarkers: SubwayStationMarkerCollections | null | undefined,
+): string[] {
+  if (!stationMarkers) return [];
+  const routeIds = new Set<string>();
+  for (const feature of stationMarkers.badges.features) {
+    const routeId = (feature.properties as StationAnchorProps & { route_id?: string }).route_id;
+    if (routeId) routeIds.add(routeId);
+    for (const value of feature.properties.route_ids ?? []) routeIds.add(value);
+  }
+  return [...routeIds];
+}
+
+export async function ensureMtaBulletImages(
+  map: maplibregl.Map,
+  routeIds: string[],
+): Promise<void> {
+  if (typeof window === "undefined" || typeof Image === "undefined") return;
+  const uniqueRouteIds = [...new Set(routeIds.filter(Boolean))];
+
+  await Promise.all(
+    uniqueRouteIds.map(async (routeId) => {
+      const imageId = subwayBulletName(routeId);
+      if (map.hasImage(imageId)) return;
+
       try {
+        const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => resolve(img);
+          img.onerror = () => reject(new Error(`Failed to load ${imageId}`));
+          img.src = subwayBulletSrc(routeId);
+        });
+        if (map.hasImage(imageId)) return;
+        const size = 48;
         const canvas = document.createElement("canvas");
         canvas.width = size;
         canvas.height = size;
         const ctx = canvas.getContext("2d");
-        if (ctx) {
-          ctx.drawImage(img, 0, 0, size, size);
-          const data = ctx.getImageData(0, 0, size, size);
-          if (!m.hasImage(name)) m.addImage(name, data, { pixelRatio: 2 });
+        if (!ctx) return;
+        ctx.drawImage(image, 0, 0, size, size);
+        const imageData = ctx.getImageData(0, 0, size, size);
+        map.addImage(imageId, imageData, { pixelRatio: 2 });
+      } catch (error) {
+        if (process.env.NODE_ENV !== "production") {
+          console.warn("[subway-station-badges] failed to register icon", {
+            routeId,
+            imageId,
+            error,
+          });
         }
-      } catch {
-        /* swallow — bullet just won't render for this route */
       }
-      resolve();
-    };
-    img.onerror = () => resolve();
-    img.src = src;
-  });
-}
-
-async function ensureBulletImages(m: maplibregl.Map) {
-  await Promise.all(
-    ALL_ROUTES.map((slug) =>
-      loadBulletImage(m, `mta-${slug}`, `/mta-bullets/${slug}.svg`),
-    ),
+    }),
   );
 }
 
-function routeIconImageExpression() {
-  return [
-    "match",
-    ["get", "route_id"],
-    ...Object.entries(BULLET_OVERRIDES).flatMap(([k, v]) => [
-      k,
-      `mta-${v}`,
-    ]),
-    ["concat", "mta-", ["downcase", ["get", "route_id"]]],
-  ];
-}
-
-function addRouteIdentityLayer(
-  m: maplibregl.Map,
+function setSubwayLayerVisibility(
+  map: maplibregl.Map,
   layerId: string,
-  anchorKindFilter: maplibregl.FilterSpecification,
-  minzoom: number,
-  beforeId?: string,
+  visibility: "visible" | "none",
 ) {
-  if (!m.getSource(IDENTITY_ANCHOR_SOURCE_ID) || m.getLayer(layerId)) return;
-
-  m.addLayer(
-    {
-      id: layerId,
-      type: "symbol",
-      source: IDENTITY_ANCHOR_SOURCE_ID,
-      // Bullets join the map only when the rider zooms in to borough-inspection
-      // range. Wider than this (city-wide) the colored polylines carry line
-      // identity on their own, and the live train markers already wear the
-      // route bullet — doubling up reads as clutter.
-      minzoom,
-      filter: anchorKindFilter,
-      layout: {
-        "symbol-placement": "point",
-        // Wide spacing so each bullet is a landmark along a route rather than a
-        // beaded chain. Mapbox's collision engine still thins overlapping
-        // placements on top of this baseline.
-        "icon-image": routeIconImageExpression(),
-        "icon-size": [
-          "interpolate",
-          ["linear"],
-          ["zoom"],
-          12.75,
-          0.28,
-          15,
-          0.39,
-          17,
-          0.48,
-        ],
-        "icon-allow-overlap": false,
-        "icon-ignore-placement": false,
-        "icon-padding": 10,
-        "icon-rotation-alignment": "viewport",
-        "icon-pitch-alignment": "viewport",
-        "symbol-sort-key": ["coalesce", ["get", "priority"], 3],
-      },
-      paint: {
-        "icon-opacity": subwayBulletOpacityExpression([]),
-        "icon-halo-color": "#0a0d13",
-        "icon-halo-width": 1.2,
-      },
-    } as unknown as maplibregl.AddLayerObject,
-    beforeId,
-  );
+  if (!map.getLayer(layerId)) return;
+  map.setLayoutProperty(layerId, "visibility", visibility);
 }
 
-function addFocusRouteIdentityLayer(m: maplibregl.Map, beforeId?: string) {
-  if (
-    !m.getSource(IDENTITY_ANCHOR_SOURCE_ID) ||
-    m.getLayer(FOCUS_IDENTITY_ANCHOR_LAYER_ID)
-  ) {
+function addOrUpdateGeoJsonSource(
+  map: maplibregl.Map,
+  sourceId: string,
+  data: GeoJSON.FeatureCollection,
+) {
+  const existing = map.getSource(sourceId) as maplibregl.GeoJSONSource | undefined;
+  if (existing) {
+    existing.setData(data);
     return;
   }
 
-  m.addLayer(
+  map.addSource(sourceId, {
+    type: "geojson",
+    data,
+  });
+}
+
+function addLayerIfMissing(
+  map: maplibregl.Map,
+  layer: maplibregl.AddLayerObject,
+  beforeId?: string,
+) {
+  if (map.getLayer(layer.id)) return;
+  if (beforeId && map.getLayer(beforeId)) {
+    map.addLayer(layer, beforeId);
+    return;
+  }
+  map.addLayer(layer);
+}
+
+// =====================================================================
+// MapLibre layer setup
+// =====================================================================
+
+// Lane separation is baked into the geometry at LANE_WIDTH_METERS (12m)
+// per slot. 12m is useful at high zoom, but it collapses to a fraction
+// of a screen pixel at neighborhood/borough zooms. When the color fill is
+// wider than the apparent inter-lane separation, the globally top-painted
+// color (red/orange/blue in busy trunks) visually overpowers its siblings.
+//
+// Apple-style transit maps preserve a small screen-space lane pitch at
+// those zooms. Baked lanes (lane_slot: 0, semantic slot preserved) get a
+// modest runtime top-up that keeps adjacent color lanes separated through
+// z11-z14, then fades out once the baked meter offset is large enough on its
+// own. Keep this top-up small: the artifact is emitted as many baked
+// LineStrings, and a large second screen-space offset pulls adjacent pieces
+// apart at seams, making trunks look visually broken at neighborhood zooms.
+// Sign convention matches the bake (right-hand normal == MapLibre positive
+// line-offset), so the top-up expands the bundle outward. Unbaked lanes keep
+// a full per-slot offset.
+function laneOffsetAt(
+  fullPerSlotPx: number,
+  bakedTopUpPx: number,
+): maplibregl.ExpressionSpecification {
+  return [
+    "+",
+    ["*", ["coalesce", ["get", "lane_slot"], 0], fullPerSlotPx],
+    [
+      "*",
+      [
+        "case",
+        ["==", ["get", "lane_offset_baked"], true],
+        ["coalesce", ["get", "lane_slot_semantic"], 0],
+        0,
+      ],
+      bakedTopUpPx,
+    ],
+  ] as unknown as maplibregl.ExpressionSpecification;
+}
+
+// The baked top-up (second arg) peaks across z12.5-14 -- the neighbourhood band
+// where a bundle is read up close but the baked 12 m offset is still only
+// ~1-1.7 screen px, so two adjacent colour fills would otherwise touch and the
+// top-painted one would swallow its sibling. Peaking the top-up here opens a
+// dark gutter between every bundled lane (so no colour overwhelms a neighbour)
+// while leaving z15+ mostly untouched (the baked offset alone is wide enough).
+// The top-up is capped at 2.6 px by subway-renderer.check.mjs -- beyond that
+// the independently emitted LineString pieces can pull apart at their seams.
+const LANE_OFFSET_EXPR: maplibregl.ExpressionSpecification = [
+  "interpolate",
+  ["linear"],
+  ["zoom"],
+  11,
+  laneOffsetAt(1.15, 1.55),
+  12.5,
+  laneOffsetAt(2.05, 2.35),
+  13,
+  laneOffsetAt(2.55, 2.45),
+  14,
+  laneOffsetAt(3.25, 2.3),
+  15,
+  laneOffsetAt(3.85, 0.45),
+  15.5,
+  laneOffsetAt(3.95, 0),
+  17,
+  laneOffsetAt(5.25, 0),
+];
+
+function ensureSubwayStationOverlayLayers(
+  map: maplibregl.Map,
+  beforeId: string | undefined,
+  stationMarkers: SubwayStationMarkerCollections | null | undefined,
+) {
+  const markers = stationMarkers ?? emptySubwayStationMarkerCollections();
+
+  addOrUpdateGeoJsonSource(map, SUBWAY_STATION_DOTS_SOURCE_ID, markers.dots);
+  addOrUpdateGeoJsonSource(
+    map,
+    SUBWAY_STATION_SHARED_STOPS_SOURCE_ID,
+    markers.sharedStops,
+  );
+  addOrUpdateGeoJsonSource(map, SUBWAY_STATION_LABELS_SOURCE_ID, markers.labels);
+  addOrUpdateGeoJsonSource(
+    map,
+    SUBWAY_STATION_ROUTE_BADGES_SOURCE_ID,
+    markers.badges,
+  );
+
+  addLayerIfMissing(
+    map,
     {
-      id: FOCUS_IDENTITY_ANCHOR_LAYER_ID,
-      type: "symbol",
-      source: IDENTITY_ANCHOR_SOURCE_ID,
-      minzoom: 12,
-      filter: subwayRouteFocusFilter(
-        (subwayFocusState.get(m) ?? EMPTY_SUBWAY_FOCUS_STATE).selectedRouteIds,
-      ),
+      id: SUBWAY_STATION_SHARED_BAR_CASING_LAYER_ID,
+      type: "line",
+      source: SUBWAY_STATION_SHARED_STOPS_SOURCE_ID,
+      filter: ["==", ["get", "marker_type"], "shared_stop_bar"],
       layout: {
-        "symbol-placement": "point",
-        "icon-image": routeIconImageExpression(),
+        "line-cap": "round",
+        "line-join": "round",
+      },
+      paint: {
+        // Apple interchange capsule: white pill with a soft gray rim (a
+        // near-black rim disappears against the dark basemap and leaves the
+        // pill looking like a floating white bar).
+        "line-color": "#8b939e",
+        "line-width": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          11,
+          2.8,
+          14,
+          4.0,
+          16,
+          4.8,
+        ],
+        "line-opacity": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          12.4,
+          0,
+          13.2,
+          0.65,
+          14.2,
+          0.9,
+          15.5,
+          0.85,
+        ],
+      },
+    },
+    beforeId,
+  );
+
+  addLayerIfMissing(
+    map,
+    {
+      id: SUBWAY_STATION_SHARED_BAR_FILL_LAYER_ID,
+      type: "line",
+      source: SUBWAY_STATION_SHARED_STOPS_SOURCE_ID,
+      filter: ["==", ["get", "marker_type"], "shared_stop_bar"],
+      layout: {
+        "line-cap": "round",
+        "line-join": "round",
+      },
+      paint: {
+        "line-color": "#f4f6f8",
+        "line-width": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          11,
+          1.8,
+          14,
+          2.8,
+          16,
+          3.6,
+        ],
+        "line-opacity": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          12.4,
+          0,
+          13.2,
+          0.75,
+          14.2,
+          0.96,
+          15.5,
+          0.9,
+        ],
+      },
+    },
+    beforeId,
+  );
+
+  addLayerIfMissing(
+    map,
+    {
+      id: SUBWAY_STATION_SINGLE_DOTS_LAYER_ID,
+      type: "circle",
+      source: SUBWAY_STATION_DOTS_SOURCE_ID,
+      paint: {
+        "circle-color": ["get", "color"],
+        "circle-radius": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          11,
+          1.1,
+          14,
+          2.3,
+          16,
+          3.5,
+        ],
+        // Apple bead: the rim is a darker shade of the line's own hue (baked
+        // as dot_color by the anchors builder), not a neutral black ring.
+        "circle-stroke-color": [
+          "coalesce",
+          ["get", "dot_color"],
+          ["get", "color"],
+        ],
+        "circle-stroke-width": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          12.8,
+          0.2,
+          14,
+          0.9,
+          16,
+          1.25,
+        ],
+        "circle-opacity": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          12.8,
+          0,
+          13.6,
+          0.7,
+          14.5,
+          0.95,
+          16.5,
+          0.9,
+        ],
+      },
+    },
+    beforeId,
+  );
+
+  addLayerIfMissing(
+    map,
+    {
+      id: SUBWAY_STATION_SHARED_DOTS_LAYER_ID,
+      type: "circle",
+      source: SUBWAY_STATION_SHARED_STOPS_SOURCE_ID,
+      filter: ["==", ["get", "marker_type"], "shared_stop_dot"],
+      paint: {
+        // Same-color multi-route stop -> the line's color (set in the builder),
+        // not a neutral white dot.
+        "circle-color": ["get", "color"],
+        "circle-radius": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          11,
+          1.6,
+          14,
+          2.8,
+          16,
+          4.2,
+        ],
+        // Apple bead rim: darker shade of the line's own hue (see builder).
+        "circle-stroke-color": [
+          "coalesce",
+          ["get", "dot_color"],
+          ["get", "color"],
+        ],
+        "circle-stroke-width": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          12.8,
+          0.25,
+          14,
+          1.1,
+          16,
+          1.5,
+        ],
+        "circle-opacity": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          12.8,
+          0,
+          13.6,
+          0.85,
+          15.5,
+          0.9,
+        ],
+      },
+    },
+    beforeId,
+  );
+
+  addLayerIfMissing(
+    map,
+    {
+      id: SUBWAY_STATION_LABELS_LAYER_ID,
+      type: "symbol",
+      source: SUBWAY_STATION_LABELS_SOURCE_ID,
+      minzoom: 14.2,
+      layout: {
+        "text-field": ["get", "name"],
+        "text-size": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          14,
+          10,
+          16,
+          12,
+          18,
+          14,
+        ],
+        "text-anchor": ["coalesce", ["get", "label_anchor"], "top"],
+        "text-offset": ["coalesce", ["get", "label_offset"], ["literal", [0, 1.0]]],
+        "symbol-sort-key": ["coalesce", ["get", "marker_priority"], 0],
+        "text-allow-overlap": false,
+        "text-ignore-placement": false,
+      },
+      paint: {
+        "text-color": "#f4f6f8",
+        "text-halo-color": "#111827",
+        "text-halo-width": 1.75,
+        "text-opacity": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          14.1,
+          0,
+          14.8,
+          0.95,
+        ],
+      },
+    },
+    beforeId,
+  );
+
+  addLayerIfMissing(
+    map,
+    {
+      id: SUBWAY_STATION_ROUTE_BADGES_LAYER_ID,
+      type: "symbol",
+      source: SUBWAY_STATION_ROUTE_BADGES_SOURCE_ID,
+      minzoom: 14.4,
+      layout: {
+        "icon-image": ["get", "icon_id"],
         "icon-size": [
           "interpolate",
           ["linear"],
           ["zoom"],
-          12,
-          0.4,
-          15,
-          0.6,
-          17,
-          0.72,
+          14,
+          0.45,
+          16,
+          0.62,
+          18,
+          0.74,
         ],
-        "icon-allow-overlap": false,
-        "icon-ignore-placement": false,
-        "icon-padding": 8,
+        "icon-offset": ["get", "icon_offset"],
+        "icon-allow-overlap": true,
+        "icon-ignore-placement": true,
         "icon-rotation-alignment": "viewport",
-        "icon-pitch-alignment": "viewport",
-        "symbol-sort-key": ["coalesce", ["get", "priority"], 3],
+        "symbol-sort-key": ["coalesce", ["get", "marker_priority"], 0],
       },
       paint: {
-        "icon-opacity": focusedBulletLayerOpacityExpression(),
-        "icon-halo-color": "#07090d",
-        "icon-halo-width": 1.6,
+        "icon-opacity": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          14.2,
+          0,
+          14.8,
+          1,
+        ],
       },
-    } as unknown as maplibregl.AddLayerObject,
+    },
     beforeId,
   );
 }
 
-// Apple Maps transit-mode-inspired stack tuned for the dusk basemap:
-//
-//   shadow   — wide, soft black puck beneath the line for lift/edge
-//              separation. Prevents the line from blending into roads.
-//   casing   — tight near-black outline that reads as a crisp boundary
-//              without the "doubled color" muddiness of a same-hue casing.
-//   line     — full MTA color at the original thickness, with a small
-//              line-emissive-strength so it stays legible without blowing
-//              out on dusk (full emissive looked neon on the lighter map).
-//   bullets  — precomputed point anchors, collision-pruned by Mapbox so
-//              labels stay attached to useful positions without beading every
-//              line segment.
-export function addSubwayNetwork(m: maplibregl.Map) {
-  if (m.getSource(SOURCE_ID)) return;
-
-  m.addSource(SOURCE_ID, {
-    type: "geojson",
-    data: "/subway-network.canonical.geojson",
-  });
-  m.addSource(IDENTITY_ANCHOR_SOURCE_ID, {
-    type: "geojson",
-    data: { type: "FeatureCollection", features: [] },
-  });
-  if (networkDebugEnabled()) {
-    m.addSource(GROUP_ENDPOINT_SOURCE_ID, {
+/**
+ * Add (or update) the subway-network polyline + stop-dot layers on the
+ * map. Idempotent — safe to call repeatedly. `beforeId` controls
+ * z-ordering: pass the basemap's first symbol layer id so labels render
+ * above polylines.
+ */
+export function ensureSubwayNetworkLayers(
+  map: maplibregl.Map,
+  beforeId: string | undefined,
+  lanes: GeoJSON.FeatureCollection,
+  stops: GeoJSON.FeatureCollection,
+  stationMarkers?: SubwayStationMarkerCollections | null,
+): void {
+  // --- Sources ---
+  if (!map.getSource(SUBWAY_NETWORK_SOURCE_ID)) {
+    map.addSource(SUBWAY_NETWORK_SOURCE_ID, {
       type: "geojson",
-      data: { type: "FeatureCollection", features: [] },
+      data: lanes,
     });
+  } else {
+    const src = map.getSource(
+      SUBWAY_NETWORK_SOURCE_ID,
+    ) as maplibregl.GeoJSONSource;
+    src.setData(lanes);
   }
 
-  const beforeId = firstSymbolLayerId(m);
+  if (!map.getSource(SUBWAY_STOP_SOURCE_ID)) {
+    map.addSource(SUBWAY_STOP_SOURCE_ID, {
+      type: "geojson",
+      data: stops,
+    });
+  } else {
+    const src = map.getSource(
+      SUBWAY_STOP_SOURCE_ID,
+    ) as maplibregl.GeoJSONSource;
+    src.setData(stops);
+  }
 
-  m.addLayer(
-    {
-      id: SHADOW_LAYER_ID,
-      type: "line",
-      source: SOURCE_ID,
-      paint: {
-        "line-color": "#000000",
-        "line-opacity": subwayFocusedLineOpacityExpression([], "shadow"),
-        "line-offset": subwayLaneOffsetExpression(),
-        "line-width": subwayFocusedLineWidthExpression([], "shadow"),
-        "line-blur": 3,
-      },
-      layout: subwayLineLayout(),
-    },
-    beforeId,
-  );
-
-  m.addLayer(
-    {
-      id: CASING_LAYER_ID,
-      type: "line",
-      source: SOURCE_ID,
-      paint: {
-        // Mid-grey neutral. Acts as the MTA poster's "white casing" tuned for
-        // the dark basemap: adjacent bundle members (N/Q/R/W, B/D/F/M, etc.)
-        // now show a clear lighter gutter between them.
-        "line-color": "#3a4350",
-        "line-opacity": subwayFocusedLineOpacityExpression([], "casing"),
-        "line-offset": subwayLaneOffsetExpression(),
-        "line-width": subwayFocusedLineWidthExpression([], "casing"),
-      },
-      layout: subwayLineLayout(),
-    },
-    beforeId,
-  );
-
-  m.addLayer(
-    {
-      id: GLOW_LAYER_ID,
-      type: "line",
-      source: SOURCE_ID,
-      paint: {
-        "line-color": ["get", "color"],
-        "line-opacity": subwayFocusedLineOpacityExpression([], "glow"),
-        "line-offset": subwayLaneOffsetExpression(),
-        "line-width": subwayFocusedLineWidthExpression([], "glow"),
-        "line-blur": 3,
-      },
-      layout: subwayLineLayout(),
-    },
-    beforeId,
-  );
-
-  m.addLayer(
-    {
-      id: LINE_LAYER_ID,
-      type: "line",
-      source: SOURCE_ID,
-      paint: {
-        "line-color": ["get", "color"],
-        "line-offset": subwayLaneOffsetExpression(),
-        "line-opacity": subwayFocusedLineOpacityExpression([], "line"),
-        "line-width": subwayFocusedLineWidthExpression([], "line"),
-      },
-      layout: subwayLineLayout(),
-    },
-    beforeId,
-  );
-
-  if (networkDebugEnabled() && m.getSource(GROUP_ENDPOINT_SOURCE_ID)) {
-    m.addLayer(
+  // --- Glow layer (subtle colored aura, drawn below casing) ---
+  if (!map.getLayer(SUBWAY_GLOW_LAYER_ID)) {
+    map.addLayer(
       {
-        id: GROUP_ENDPOINT_START_LAYER_ID,
-        type: "circle",
-        source: GROUP_ENDPOINT_SOURCE_ID,
-        minzoom: 14,
-        filter: ["==", ["get", "endpoint_kind"], "start"],
+        id: SUBWAY_GLOW_LAYER_ID,
+        type: "line",
+        source: SUBWAY_NETWORK_SOURCE_ID,
+        layout: {
+          "line-cap": "round",
+          "line-join": "round",
+          "line-sort-key": [
+            "coalesce",
+            ["get", "visual_z_order"],
+            0,
+          ],
+        },
         paint: {
-          "circle-radius": [
+          // A subtle DARK ground-shadow (not a colored aura) lifts the network
+          // off the dark 3D basemap and the lighter building extrusions. Kept
+          // TIGHT and low-blur on purpose: a wide, soft per-line bloom reads as
+          // "vibe-coded neon" and smears into a muddy haze where many lanes
+          // converge (Atlantic Av, DeKalb, Lower Manhattan). This hugs the
+          // casing -- it only peeks ~0.5-1px beyond it -- so the network gets
+          // Apple-style depth without a halo, and dense junctions ground into a
+          // crisp soft shadow rather than a rainbow smear.
+          "line-color": "#05070D",
+          "line-opacity": [
             "interpolate",
             ["linear"],
             ["zoom"],
+            10.8,
+            0.18,
+            12.5,
+            0.24,
             14,
-            2.2,
-            17,
-            4,
+            0.22,
+            16,
+            0.13,
           ],
-          "circle-color": "#37d67a",
-          "circle-stroke-color": "#07100b",
-          "circle-stroke-width": 1.2,
-          "circle-opacity": 0.86,
-        },
-      } as unknown as maplibregl.AddLayerObject,
-      beforeId,
-    );
-    m.addLayer(
-      {
-        id: GROUP_ENDPOINT_END_LAYER_ID,
-        type: "circle",
-        source: GROUP_ENDPOINT_SOURCE_ID,
-        minzoom: 14,
-        filter: ["==", ["get", "endpoint_kind"], "end"],
-        paint: {
-          "circle-radius": [
+          "line-width": [
             "interpolate",
             ["linear"],
             ["zoom"],
+            11,
+            3.2,
+            13,
+            4.6,
             14,
-            2.2,
+            5.6,
             17,
-            4,
+            6.8,
           ],
-          "circle-color": "#ffbc42",
-          "circle-stroke-color": "#140d04",
-          "circle-stroke-width": 1.2,
-          "circle-opacity": 0.86,
+          "line-blur": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            11,
+            0.35,
+            14,
+            0.5,
+            17,
+            0.7,
+          ],
+          "line-offset": LANE_OFFSET_EXPR,
         },
-      } as unknown as maplibregl.AddLayerObject,
+      },
       beforeId,
     );
   }
 
-  void ensureBulletImages(m).then(() => {
-    try {
-      addRouteIdentityLayer(
-        m,
-        IDENTITY_ANCHOR_LAYER_ID,
-        ["!=", ["get", "anchor_kind"], "interval"] as maplibregl.FilterSpecification,
-        12.75,
-        beforeId,
-      );
-      addRouteIdentityLayer(
-        m,
-        IDENTITY_ANCHOR_INTERVAL_LAYER_ID,
-        ["==", ["get", "anchor_kind"], "interval"] as maplibregl.FilterSpecification,
-        14.75,
-        beforeId,
-      );
-      addFocusRouteIdentityLayer(m, beforeId);
-      setSubwayNetworkFocus(
-        m,
-        subwayFocusState.get(m) ?? EMPTY_SUBWAY_FOCUS_STATE,
-      );
-    } catch (error) {
-      console.warn("[subway-network] failed to add route identity layer", error);
+  // --- Casing layer (dark outline, drawn below fill) ---
+  if (!map.getLayer(SUBWAY_CASING_LAYER_ID)) {
+    map.addLayer(
+      {
+        id: SUBWAY_CASING_LAYER_ID,
+        type: "line",
+        source: SUBWAY_NETWORK_SOURCE_ID,
+        layout: {
+          "line-cap": "round",
+          "line-join": "round",
+        },
+        paint: {
+          // Casing: dark outline framing the colored fill. The casing sits
+          // below ALL fills, so it darkens the inter-lane seam (Apple-style)
+          // without ever covering a neighbor's color. Pushed toward true black
+          // (a faint blue-black tint to match the palette) so the ~0.8px baked
+          // gutter between bundled colors reads as a crisp dark separator and no
+          // single bright route swallows its darker neighbours. A touch wider
+          // than before so each route is cleanly framed against the basemap;
+          // the colored core stays narrower than the casing on every side.
+          "line-color": "#04060C",
+          "line-opacity": 1.0,
+          "line-width": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            11,
+            2.75,
+            13,
+            3.9,
+            14,
+            4.5,
+            17,
+            5.8,
+          ],
+          "line-offset": LANE_OFFSET_EXPR,
+        },
+      },
+      beforeId,
+    );
+  }
+
+  // --- Color fill layer ---
+  if (!map.getLayer(SUBWAY_FILL_LAYER_ID)) {
+    map.addLayer(
+      {
+        id: SUBWAY_FILL_LAYER_ID,
+        type: "line",
+        source: SUBWAY_NETWORK_SOURCE_ID,
+        layout: {
+          "line-cap": "round",
+          "line-join": "round",
+          // Paint order for the COLORED fill only (visual, not geometry).
+          //
+          // Paint order follows the baked lane position, not route color. A
+          // previous override hard-coded green above red/yellow/orange, which
+          // made green visually dominate at borough zoom whenever neighboring
+          // lanes compressed toward the same screen pixels. Semantic slot order
+          // keeps the top stroke tied to geometry side, with visual_z_order only
+          // as a tiny deterministic fallback for exact ties.
+          "line-sort-key": [
+            "+",
+            [
+              "*",
+              ["coalesce", ["get", "lane_slot_semantic"], ["get", "lane_slot"], 0],
+              10,
+            ],
+            ["*", ["coalesce", ["get", "visual_z_order"], 0], 0.01],
+          ],
+        },
+        paint: {
+          // Fill: bright Apple-like colored stroke inside the casing. Widths
+          // are paired with LANE_OFFSET_EXPR so bundled colors keep a visible
+          // dark gutter at low/mid zoom; bumping one without the other
+          // re-smears bundles.
+          // On-dark display palette: the baked geojson keeps the exact MTA hex
+          // (bullets + the palette check read that, untouched), but the MAP FILL
+          // lifts the dark/cool hues to roughly equal perceptual weight on the
+          // dark ground -- so no single bright route (red, orange) overwhelms a
+          // bundle and its darker neighbours (navy A/C/E, forest 4/5/6, brown
+          // J/Z) hold their own. Unmapped colors fall through to the baked value.
+          "line-color": [
+            "match",
+            ["get", "color"],
+            "#0078C6", "#3DA0E8",
+            "#996633", "#C68A4E",
+            "#0A84FF", "#4DA3FF",
+            "#00933C", "#24A85B",
+            "#B933AD", "#D45FC9",
+            "#EE352E", "#FF5247",
+            "#808183", "#A2A4A7",
+            "#FF6319", "#FF7A33",
+            "#6CBE45", "#70BC4F",
+            "#A7A9AC", "#B3B5B8",
+            "#FCCC0A", "#FCCC0A",
+            ["get", "color"],
+          ],
+          "line-opacity": 1.0,
+          // Apple-weight bands. Keep z11-z14 lean enough that adjacent bundled
+          // colors stay readable before the baked meter offset becomes visually
+          // large. Close zoom can carry more weight because the lanes have
+          // already separated on screen.
+          "line-width": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            11,
+            1.2,
+            13,
+            2.05,
+            14,
+            2.45,
+            17,
+            3.65,
+          ],
+          "line-offset": LANE_OFFSET_EXPR,
+        },
+      },
+      beforeId,
+    );
+  }
+
+  // --- Highlight layer (premium inner sheen, drawn above the color fill) ---
+  if (!map.getLayer(SUBWAY_HIGHLIGHT_LAYER_ID)) {
+    map.addLayer(
+      {
+        id: SUBWAY_HIGHLIGHT_LAYER_ID,
+        type: "line",
+        source: SUBWAY_NETWORK_SOURCE_ID,
+        layout: {
+          "line-cap": "round",
+          "line-join": "round",
+          "line-sort-key": ["coalesce", ["get", "visual_z_order"], 0],
+        },
+        paint: {
+          // A hairline cool-white sheen down each lane's spine, faded in only at
+          // close zoom (z13.5+) where bands are wide enough to carry it. Very
+          // low opacity so it reads as a faint LIT ribbon, never gloss/neon.
+          // Because it adds luminance it lifts the darker route colors (navy
+          // A/C/E, forest G, the dim purple/brown) so a bright neighbour
+          // (orange, yellow, red) stops perceptually dominating the bundle.
+          // Narrow + centered (same LANE_OFFSET_EXPR) so it never reaches the
+          // inter-lane gutter and cannot smear bundles.
+          "line-color": "#EAF1FF",
+          "line-opacity": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            13.0,
+            0.0,
+            14.0,
+            0.04,
+            16.0,
+            0.055,
+            17.0,
+            0.06,
+          ],
+          "line-width": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            13,
+            0.5,
+            14,
+            0.8,
+            17,
+            1.25,
+          ],
+          "line-blur": 0.25,
+          "line-offset": LANE_OFFSET_EXPR,
+        },
+      },
+      beforeId,
+    );
+  }
+
+  ensureSubwayStationOverlayLayers(map, beforeId, stationMarkers);
+
+  // --- Stop dot layer ---
+  if (!map.getLayer(SUBWAY_STOP_DOT_LAYER_ID)) {
+    map.addLayer(
+      {
+        id: SUBWAY_STOP_DOT_LAYER_ID,
+        type: "circle",
+        source: SUBWAY_STOP_SOURCE_ID,
+        paint: {
+          "circle-color": ["get", "color"],
+          "circle-radius": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            11,
+            1.4,
+            14,
+            2.6,
+            17,
+            4.0,
+          ],
+          "circle-stroke-color": "#070A12",
+          "circle-stroke-width": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            11,
+            0.4,
+            14,
+            0.8,
+            17,
+            1.2,
+          ],
+          "circle-opacity": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            11,
+            0.0,
+            12.5,
+            1.0,
+          ],
+        },
+      },
+      beforeId,
+    );
+  }
+}
+
+// =====================================================================
+// Focus mode: hide the ambient network while a planned route is active
+// =====================================================================
+// The picked route (true polyline + its stops) is the hero; rendering the
+// citywide network underneath it overwhelmed the display, so the whole
+// ambient stack is toggled off via layout visibility (also skips its
+// render cost entirely) and restored on clear.
+
+const SUBWAY_AMBIENT_LAYER_IDS = [
+  SUBWAY_GLOW_LAYER_ID,
+  SUBWAY_CASING_LAYER_ID,
+  SUBWAY_FILL_LAYER_ID,
+  SUBWAY_HIGHLIGHT_LAYER_ID,
+  SUBWAY_STOP_DOT_LAYER_ID,
+  SUBWAY_STATION_SINGLE_DOTS_LAYER_ID,
+  SUBWAY_STATION_SHARED_DOTS_LAYER_ID,
+  SUBWAY_STATION_SHARED_BAR_CASING_LAYER_ID,
+  SUBWAY_STATION_SHARED_BAR_FILL_LAYER_ID,
+  SUBWAY_STATION_LABELS_LAYER_ID,
+  SUBWAY_STATION_ROUTE_BADGES_LAYER_ID,
+];
+
+export function setSubwayNetworkHidden(map: maplibregl.Map, hidden: boolean) {
+  const visibility = hidden ? "none" : "visible";
+  for (const layerId of SUBWAY_AMBIENT_LAYER_IDS) {
+    if (!map.getLayer(layerId)) continue;
+    if (map.getLayoutProperty(layerId, "visibility") !== visibility) {
+      map.setLayoutProperty(layerId, "visibility", visibility);
     }
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Stops layer — Apple-Maps-style station dots fed from the backend GTFS data.
-// Stops are added as a dedicated GeoJSON source so we can refresh independently
-// of the full network. Two layers: a circle for the dot and a symbol for the
-// station label that only kicks in at very close zoom.
-// ---------------------------------------------------------------------------
-
-export function addSubwayStops(m: maplibregl.Map) {
-  if (m.getSource(STOPS_SOURCE_ID)) return;
-
-  m.addSource(STOPS_SOURCE_ID, {
-    type: "geojson",
-    data: { type: "FeatureCollection", features: [] },
-  });
-
-  const beforeId = firstSymbolLayerId(m);
-
-  m.addLayer(
-    {
-      id: STOPS_DOT_LAYER_ID,
-      type: "circle",
-      source: STOPS_SOURCE_ID,
-      minzoom: 12.5,
-      paint: {
-        "circle-radius": [
-          "interpolate",
-          ["linear"],
-          ["zoom"],
-          12.5,
-          2.4,
-          14,
-          3.4,
-          16,
-          4.6,
-          18,
-          6.2,
-        ],
-        "circle-color": "#ffffff",
-        "circle-stroke-color": "#0a0d13",
-        "circle-stroke-width": [
-          "interpolate",
-          ["linear"],
-          ["zoom"],
-          12.5,
-          1.5,
-          16,
-          2.2,
-        ],      },
-    },
-    beforeId,
-  );
-
-  // Transfer hubs (3+ routes) get a second, larger puck drawn above the base
-  // dots. Stations like Fulton, Atlantic-Barclays, and Times Sq visibly
-  // outrank single-line stops at a glance without a separate data payload.
-  m.addLayer(
-    {
-      id: STOPS_HUB_LAYER_ID,
-      type: "circle",
-      source: STOPS_SOURCE_ID,
-      minzoom: 12.5,
-      filter: [">=", ["length", ["get", "route_ids"]], 3],
-      paint: {
-        "circle-radius": [
-          "interpolate",
-          ["linear"],
-          ["zoom"],
-          12.5,
-          3,
-          14,
-          4.1,
-          16,
-          5.6,
-          18,
-          7.4,
-        ],
-        "circle-color": "#ffffff",
-        "circle-stroke-color": "#0a0d13",
-        "circle-stroke-width": [
-          "interpolate",
-          ["linear"],
-          ["zoom"],
-          12.5,
-          2,
-          16,
-          2.8,
-        ],      },
-    },
-    beforeId,
-  );
-
-  // Two label layers, mirroring Apple Maps' progressive disclosure:
-  //   priority labels — major transfer hubs (3+ routes) start emerging at
-  //                     zoom 12.5 so the city view always names the big nodes
-  //                     riders use to orient.
-  //   all labels      — every remaining station name kicks in at zoom 13.5,
-  //                     letting Mapbox's collision detection thin the dense
-  //                     midtown cluster while keeping outer-borough names.
-  //
-  // text-variable-anchor lets each label flip to whichever side of its dot
-  // has space, which roughly doubles how many names survive collisions vs
-  // a fixed top anchor. symbol-sort-key (negated route count) is a hint to
-  // Mapbox to keep the busier station when two collide.
-
-  const sharedLabelLayout = {
-    "text-field": ["get", "name"],
-    "text-font": ["Open Sans Semibold", "Arial Unicode MS Bold"],
-    "text-variable-anchor": ["top", "bottom", "left", "right"],
-    "text-radial-offset": 0.85,
-    "text-justify": "auto",
-    "text-allow-overlap": false,
-    "text-optional": true,
-    "text-padding": 2,
-    "text-max-width": 9,
-    "symbol-sort-key": ["*", -1, ["length", ["get", "route_ids"]]],
-  };
-
-  const sharedLabelPaint = {
-    "text-color": "rgba(244,245,247,0.94)",
-    "text-halo-color": "rgba(7,9,13,0.95)",
-    "text-halo-width": 1.4,
-  };
-
-  m.addLayer({
-    id: `${STOPS_LABEL_LAYER_ID}-priority`,
-    type: "symbol",
-    source: STOPS_SOURCE_ID,
-    minzoom: 12.5,
-    filter: [">=", ["length", ["get", "route_ids"]], 3],
-    layout: {
-      ...sharedLabelLayout,
-      "text-size": [
-        "interpolate",
-        ["linear"],
-        ["zoom"],
-        12.5,
-        9.5,
-        14,
-        10.5,
-        16,
-        11.5,
-        18,
-        13,
-      ],
-    },
-    paint: sharedLabelPaint,
-  } as unknown as maplibregl.AddLayerObject);
-
-  m.addLayer({
-    id: STOPS_LABEL_LAYER_ID,
-    type: "symbol",
-    source: STOPS_SOURCE_ID,
-    minzoom: 13.5,
-    layout: {
-      ...sharedLabelLayout,
-      "text-size": [
-        "interpolate",
-        ["linear"],
-        ["zoom"],
-        13.5,
-        9,
-        15,
-        10.5,
-        17,
-        12,
-        19,
-        13.5,
-      ],
-    },
-    paint: sharedLabelPaint,
-  } as unknown as maplibregl.AddLayerObject);
-}
-
-export function setSubwayStopsData(
-  m: maplibregl.Map,
-  data: GeoJSON.FeatureCollection<
-    GeoJSON.Point,
-    { name: string; route_ids: string[] }
-  >,
-) {
-  const src = m.getSource(STOPS_SOURCE_ID) as
-    | maplibregl.GeoJSONSource
-    | undefined;
-  if (src) src.setData(data);
-}
-
-export function setSubwayNetworkData(
-  m: maplibregl.Map,
-  data: GeoJSON.FeatureCollection,
-  mode?: SubwayLaneRenderMode,
-) {
-  const src = m.getSource(SOURCE_ID) as
-    | maplibregl.GeoJSONSource
-    | undefined;
-  if (src) src.setData(prepareSubwayNetworkForLaneSeparation(data, { mode }));
-}
-
-export function setSubwayRouteIdentityData(
-  m: maplibregl.Map,
-  data: GeoJSON.FeatureCollection,
-) {
-  const src = m.getSource(IDENTITY_ANCHOR_SOURCE_ID) as
-    | maplibregl.GeoJSONSource
-    | undefined;
-  if (src) src.setData(data);
-}
-
-export function setSubwayGroupEndpointData(
-  m: maplibregl.Map,
-  data: GeoJSON.FeatureCollection,
-) {
-  const src = m.getSource(GROUP_ENDPOINT_SOURCE_ID) as
-    | maplibregl.GeoJSONSource
-    | undefined;
-  if (src) src.setData(data);
-}
-
-function setLinePaint(
-  m: maplibregl.Map,
-  layerId: string,
-  role: SubwayVisualLayerRole,
-  focusState: SubwayNetworkFocusState,
-) {
-  if (!m.getLayer(layerId)) return;
-  m.setPaintProperty(
-    layerId,
-    "line-opacity",
-    subwayFocusedLineOpacityExpression(focusState, role),
-  );
-  m.setPaintProperty(
-    layerId,
-    "line-width",
-    subwayFocusedLineWidthExpression(focusState, role),
-  );
-}
-
-export function setSubwayNetworkFocus(
-  m: maplibregl.Map,
-  routeIdsOrHasRoute: SubwayNetworkFocusInput = [],
-) {
-  const focusState = normalizeSubwayNetworkFocusState(routeIdsOrHasRoute);
-
-  subwayFocusState.set(m, focusState);
-
-  setLinePaint(m, SHADOW_LAYER_ID, "shadow", focusState);
-  setLinePaint(m, CASING_LAYER_ID, "casing", focusState);
-  setLinePaint(m, GLOW_LAYER_ID, "glow", focusState);
-  setLinePaint(m, LINE_LAYER_ID, "line", focusState);
-
-  for (const layerId of [IDENTITY_ANCHOR_LAYER_ID, IDENTITY_ANCHOR_INTERVAL_LAYER_ID]) {
-    if (!m.getLayer(layerId)) continue;
-    m.setPaintProperty(
-      layerId,
-      "icon-opacity",
-      subwayBulletOpacityExpression(focusState),
-    );
-  }
-
-  if (m.getLayer(FOCUS_IDENTITY_ANCHOR_LAYER_ID)) {
-    m.setFilter(
-      FOCUS_IDENTITY_ANCHOR_LAYER_ID,
-      subwayRouteFocusFilter(focusState.selectedRouteIds),
-    );
   }
 }
