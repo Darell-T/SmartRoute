@@ -1767,6 +1767,13 @@
 }
 
 @media (max-width: 720px) {
+  /* On phones the bottom-sheet rail owns the small viewport, so drop the
+     floating map key entirely -- the incident/user markers read clearly on
+     their own at this size and the chip otherwise crowds the map. */
+  .sr-disruption-legend[data-variant="map"] {
+    display: none;
+  }
+
   .sr-disruption-legend__types {
     display: none;
   }
