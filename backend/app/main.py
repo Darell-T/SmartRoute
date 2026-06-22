@@ -10,13 +10,18 @@ from dotenv import load_dotenv
 _backend_dir = Path(__file__).resolve().parent.parent
 _repo_root = _backend_dir.parent
 load_dotenv(_repo_root / ".env")
-load_dotenv(_backend_dir / ".env")
+load_dotenv(_backend_dir / ".env", override=True)
+
+# Fail fast on missing required auth config instead of discovering it per request.
+# An unset APP_KEY would let the API key check and WebSocket auth fall through.
+if not os.getenv("APP_KEY"):
+    raise RuntimeError("APP_KEY is not set; refusing to start.")
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security.api_key import APIKeyHeader
-from app.routers import thinking, trips, live_feed
-from app.utils.gtfs_static import GTFSStaticData
+from app.routers import thinking, trips, live_feed, subway, switch_narration
+from app.utils.gtfs_static import GTFSStaticData, close_pool, init_pool
 from app.models.migrate_gtfs import migrate
 
 
@@ -43,16 +48,43 @@ async def _gtfs_refresh_loop():
     while True:
         await asyncio.sleep(86400)
         try:
-            print("[gtfs] starting hourly refresh...")
+            print("[gtfs] starting daily refresh...")
             await asyncio.to_thread(migrate)
             print("[gtfs] refresh complete")
         except Exception as e:
             print(f"[gtfs] refresh error: {e}")
 
 
+async def _init_pool_bg():
+    # Bring up the (optional) DB pool WITHOUT blocking startup: a slow/unreachable
+    # Postgres takes connect_timeout x minconn seconds, which used to wedge the
+    # worker. Trip enrichment no longer needs it (Fix B), so do it in background.
+    try:
+        await asyncio.to_thread(init_pool)
+        print("[startup] DB pool ready (optional; trip enrichment is static)")
+    except Exception as exc:
+        print(f"[startup] DB pool init failed; continuing (enrichment is static): {exc!r}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.gtfs = GTFSStaticData()
+    # Fix B: trip enrichment resolves stop sequences from the in-memory static
+    # pattern index, NOT the remote Postgres. Startup must not depend on the DB.
+    gtfs = GTFSStaticData()
+    # Load the precomputed stop-pattern artifact once. On failure, enrichment
+    # degrades to empty stop lists rather than touching the remote DB.
+    try:
+        from app.utils.stop_patterns import StopPatternIndex
+        gtfs._pattern_index = StopPatternIndex.load()
+        print(
+            f"[startup] stop-pattern index loaded: {len(gtfs._pattern_index.patterns)} "
+            f"patterns, {len(gtfs._pattern_index.stops)} stops"
+        )
+    except Exception as exc:
+        print(f"[startup] stop-pattern index load FAILED (enrichment degraded): {exc!r}")
+    app.state.gtfs = gtfs
+    # Optional DB pool + daily GTFS refresh, both off the startup critical path.
+    app.state.pool_task = asyncio.create_task(_init_pool_bg())
     refresh_task = asyncio.create_task(_gtfs_refresh_loop())
     yield
     refresh_task.cancel()
@@ -60,6 +92,7 @@ async def lifespan(app: FastAPI):
         await refresh_task
     except asyncio.CancelledError:
         pass
+    close_pool()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -74,8 +107,12 @@ app.add_middleware(
 
 protected_api = APIRouter(dependencies=[Depends(_verify_api_key)])
 protected_api.include_router(thinking.router)
+protected_api.include_router(switch_narration.router)
 protected_api.include_router(trips.router)
+protected_api.include_router(live_feed.router)
+protected_api.include_router(subway.router)
 app.include_router(protected_api)
+app.include_router(live_feed.ws_router)
 
 @app.get("/health", dependencies=[])
 @app.head("/health", dependencies=[])

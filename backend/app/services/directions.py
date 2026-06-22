@@ -7,6 +7,13 @@ from zoneinfo import ZoneInfo
 
 ROUTES_URL = "https://routes.googleapis.com/directions/v2:computeRoutes"
 key = os.getenv("GOOGLE_ROUTES_API_KEY")
+GOOGLE_ROUTES_TIMEOUT_S = float(os.getenv("GOOGLE_ROUTES_TIMEOUT_S", "12.0"))
+GOOGLE_ROUTES_RETRIES = max(1, int(os.getenv("GOOGLE_ROUTES_RETRIES", "2")))
+GOOGLE_ROUTES_ALTERNATIVES = os.getenv("GOOGLE_ROUTES_ALTERNATIVES", "1").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+}
 
 FIELD_MASK = ",".join([
     "routes.legs.steps.transitDetails",
@@ -20,7 +27,32 @@ FIELD_MASK = ",".join([
     "routes.legs.steps.polyline.encodedPolyline",
 ])
 
-async def get_transit_route(origin: tuple, dest: str) -> dict:
+
+def _duration_to_minutes(value) -> int | None:
+    if not isinstance(value, str) or not value.endswith("s"):
+        return None
+    try:
+        seconds = float(value[:-1])
+    except ValueError:
+        return None
+    return max(1, round(seconds / 60))
+
+async def get_transit_route(origin: tuple, dest: str, dest_coords: tuple | None = None) -> dict:
+    if not key:
+        raise RuntimeError("Google Routes API is not configured")
+
+    destination = (
+        {
+            "location": {
+                "latLng": {
+                    "latitude": dest_coords[0],
+                    "longitude": dest_coords[1],
+                }
+            }
+        }
+        if dest_coords
+        else {"address": dest}
+    )
     request_body = {
         "origin": {
             "location": {
@@ -30,11 +62,9 @@ async def get_transit_route(origin: tuple, dest: str) -> dict:
                 }
             }
         },
-        "destination": {
-            "address": dest
-        },
+        "destination": destination,
         "travelMode": "TRANSIT",
-        "computeAlternativeRoutes": True,
+        "computeAlternativeRoutes": GOOGLE_ROUTES_ALTERNATIVES,
         "transitPreferences": {
             "allowedTravelModes": ["SUBWAY", "BUS"],
             "routingPreference": "FEWER_TRANSFERS"
@@ -47,23 +77,61 @@ async def get_transit_route(origin: tuple, dest: str) -> dict:
         "X-Goog-FieldMask": FIELD_MASK
     }
 
+    # Transit computeRoutes with alternatives can be slow. Keep the budget
+    # configurable so local route planning fails fast instead of exhausting
+    # the whole ATLAS interaction window before downstream fallbacks can run.
     async with httpx.AsyncClient() as client:
-        response = await client.post(
-            ROUTES_URL,
-            json = request_body,
-            headers = headers,
-            timeout = 10.0
-        )
-
-        return response.json()
+        last_exc: Exception | None = None
+        for attempt in range(1, GOOGLE_ROUTES_RETRIES + 1):
+            try:
+                response = await client.post(
+                    ROUTES_URL,
+                    json = request_body,
+                    headers = headers,
+                    timeout = GOOGLE_ROUTES_TIMEOUT_S,
+                )
+                response.raise_for_status()
+                try:
+                    return response.json()
+                except (ValueError, TypeError) as exc:
+                    print(f"[directions] Google Routes invalid JSON: {type(exc).__name__}")
+                    raise RuntimeError("Google Routes API returned invalid JSON") from exc
+            except httpx.TimeoutException as exc:
+                last_exc = exc
+                print(f"[directions] Google Routes timeout (attempt {attempt})")
+            except httpx.HTTPStatusError as exc:
+                # Non-2xx (bad/expired key, quota, provider outage). Do not retry;
+                # surface a clean upstream error and keep provider details out of
+                # the public response.
+                print(f"[directions] Google Routes HTTP {exc.response.status_code}")
+                raise RuntimeError(
+                    f"Google Routes API error {exc.response.status_code}"
+                ) from exc
+            except httpx.RequestError as exc:
+                print(f"[directions] Google Routes request failed: {type(exc).__name__}")
+                raise RuntimeError("Google Routes API request failed") from exc
+        raise RuntimeError("Google Routes API timed out") from last_exc
 
 def parse_response(response: dict) -> list:
+    # Defensive: a malformed/empty provider route (missing legs, partial transit
+    # details, bad timestamps) skips that one route rather than crashing the whole
+    # trip. An entirely empty/garbage response yields [].
     routes = []
+    for route in response.get("routes", []):
+        legs = route.get("legs") or []
+        if not legs:
+            continue
+        try:
+            routes.append(_parse_leg_steps(legs[0]))
+        except (KeyError, TypeError, ValueError, AttributeError) as exc:
+            print(f"[directions] skipping malformed route: {exc!r}")
+    return routes
 
 
-    for route in response["routes"]:
-        steps = []
-        for step in route["legs"][0]["steps"]:
+def _parse_leg_steps(leg: dict) -> list:
+    steps = []
+    route_total_minutes = _duration_to_minutes(leg.get("duration"))
+    for step in leg.get("steps", []):
 
             if step["travelMode"] == "TRANSIT":
                 route_id = step["transitDetails"]["transitLine"]["nameShort"].replace("Line", "").strip()
@@ -104,6 +172,7 @@ def parse_response(response: dict) -> list:
                     "arrival_coords": arrival_coords,
                     "minutes_until_train_arrives": minutes_until_train_arrives,
                     "minutes_until_arrival": arrival,
+                    "route_total_minutes": route_total_minutes,
                     "polyline": step["polyline"]
 
                 }
@@ -114,8 +183,7 @@ def parse_response(response: dict) -> list:
                     "type": step["travelMode"],
                     "start_point": step["startLocation"]["latLng"],
                     "end_point": step["endLocation"]["latLng"],
+                    "route_total_minutes": route_total_minutes,
                     "polyline": step["polyline"],
                 })
-        routes.append(steps)
-
-    return routes
+    return steps

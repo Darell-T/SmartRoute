@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  frontend:
+    name: Frontend (artifacts, typecheck, lint, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run build:transit-artifacts
+      - run: npm run typecheck
+      - run: npm run test:unit
+      - run: npm run lint
+      - run: npm run verify:transit-artifacts
+      - run: npm run build
+
+  backend:
+    name: Backend (pytest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      # Module import requires APP_KEY (fail-fast startup guard); a dummy value
+      # is fine for the test suite, which stubs the DB and external providers.
+      APP_KEY: ci-test-key
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt pytest
+      # The service-alerts protobuf tests require a full feed fixture and are
+      # excluded from the gate; everything else must pass.
+      - run: python -m pytest -q -k "not service_alerts"

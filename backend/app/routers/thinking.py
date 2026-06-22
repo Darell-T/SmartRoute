@@ -52,9 +52,14 @@ def _next_phrase() -> str:
     return _phrase_queue.pop()
 
 
+def _cached_phrase() -> str | None:
+    """Return an already generated phrase so repeated route starts avoid TTS."""
+    return next(iter(_audio_cache), None)
+
+
 @router.post("/api/thinking")
 async def thinking_audio():
-    phrase = _next_phrase()
+    phrase = _cached_phrase() or _next_phrase()
 
     if phrase in _audio_cache:
         return JSONResponse(content={"text": phrase, "audio": _audio_cache[phrase]})
