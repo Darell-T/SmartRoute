@@ -10,7 +10,7 @@
     "build:artifact-manifest": "node scripts/build-artifact-manifest.mjs",
     "build:transit-artifacts": "npm run build:network && npm run build:visual-network && npm run build:station-anchors && npm run build:artifact-manifest",
     "test:station-anchors": "node --test scripts/build/subway-station-anchors.test.mjs",
-    "test:unit": "node --experimental-strip-types --test lib/backend-proxy.test.mjs lib/use-service-alerts.test.mjs components/smart-route/left-rail/live-data.test.mjs scripts/build/subway-station-anchors.test.mjs",
+    "test:unit": "node --experimental-strip-types --test lib/backend-proxy.test.mjs lib/ws-ticket.test.mjs lib/use-service-alerts.test.mjs components/smart-route/left-rail/live-data.test.mjs components/smart-route/left-rail/hydration.test.mjs scripts/build/subway-station-anchors.test.mjs",
     "check:station-overlay": "node components/map/subway-station-overlay.check.mjs",
     "check:subway-palette": "node components/map/subway-palette.check.mjs",
     "check:subway-renderer": "node components/map/subway-renderer.check.mjs",

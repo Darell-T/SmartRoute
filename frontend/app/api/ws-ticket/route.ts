@@ -9,6 +9,28 @@ export const dynamic = "force-dynamic";
 // to cover a connect plus an immediate reconnect.
 const TICKET_TTL_S = 90;
 const ALLOWED_WS_PATHS = new Set(["/ws/live-feed", "/ws/service-alerts"]);
+const PROD_API_FALLBACK = "https://jarvis-mta-assistant.onrender.com";
+
+function isLocalBackendBase(base: string): boolean {
+  try {
+    const parsed = new URL(base);
+    return /^(localhost|127\.0\.0\.1|0\.0\.0\.0)$/.test(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function backendBaseUrl(): string {
+  const configured = process.env.API_URL ?? process.env.NEXT_PUBLIC_API_URL;
+  if (configured && !(process.env.VERCEL && isLocalBackendBase(configured))) {
+    return configured.replace(/\/+$/, "");
+  }
+  return process.env.VERCEL ? PROD_API_FALLBACK : "http://localhost:8000";
+}
+
+function websocketBaseUrl(): string {
+  return backendBaseUrl().replace(/^https:/, "wss:").replace(/^http:/, "ws:");
+}
 
 /**
  * Mints a short-lived HMAC ticket so the browser can open the FastAPI
@@ -41,7 +63,10 @@ export function GET(req: NextRequest) {
   const exp = Math.floor(Date.now() / 1000) + TICKET_TTL_S;
   const sig = createHmac("sha256", appKey).update(`${exp}.${path}`).digest("hex");
   return NextResponse.json(
-    { ticket: `${exp}.${sig}` },
+    {
+      ticket: `${exp}.${sig}`,
+      ws_base_url: websocketBaseUrl(),
+    },
     { headers: { "Cache-Control": "no-store" } },
   );
 }
