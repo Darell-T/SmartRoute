@@ -20,9 +20,31 @@ export async function fetchWsTicket(
   return data.ticket;
 }
 
-/** ws(s):// base for the FastAPI backend, derived from NEXT_PUBLIC_API_URL. */
+/**
+ * Prod backend used when NEXT_PUBLIC_API_URL is absent from the build (e.g. a
+ * Vercel deploy that didn't receive the env var). NEXT_PUBLIC_API_URL still wins
+ * when it is set, so this never overrides an explicit configuration.
+ */
+const PROD_API_FALLBACK = "https://jarvis-mta-assistant.onrender.com";
+
+/** http(s):// base for the FastAPI backend. */
+export function apiBaseUrl(): string {
+  const configured = process.env.NEXT_PUBLIC_API_URL;
+  if (configured) return configured;
+  // No build-time env var: choose by host so a deployed site reaches the prod
+  // backend instead of localhost, while local dev keeps using the local one.
+  if (
+    typeof window !== "undefined" &&
+    !/^(localhost|127\.0\.0\.1|0\.0\.0\.0)$/.test(window.location.hostname)
+  ) {
+    return PROD_API_FALLBACK;
+  }
+  return "http://localhost:8000";
+}
+
+/** ws(s):// base for the FastAPI backend. */
 export function wsBaseUrl(): string {
-  const base = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+  const base = apiBaseUrl();
   return base.replace(/^https:/, "wss:").replace(/^http:/, "ws:");
 }
 
