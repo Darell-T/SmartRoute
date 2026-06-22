@@ -2601,7 +2601,7 @@ body:has(.sr-app-shell) [data-nextjs-dev-tools-button] {
 
   .sr-app-shell[data-active-tab="livemap"] .sr-live-console__map {
     order: 1;
-    flex: 1 1 54dvh;
+    flex: 1 1 60dvh;
     min-height: 0;
   }
 
@@ -2610,9 +2610,11 @@ body:has(.sr-app-shell) [data-nextjs-dev-tools-button] {
     inset: auto !important;
     order: 2;
     width: 100% !important;
-    height: min(48dvh, 26rem);
-    min-height: 18rem;
-    max-height: 52dvh;
+    /* Trimmed a touch shorter so more of the map stays visible on phones; the
+       rail still scrolls internally for the full feed. */
+    height: min(42dvh, 23rem);
+    min-height: 16rem;
+    max-height: 46dvh;
     z-index: 40 !important;
     border-radius: 24px 24px 0 0 !important;
   }

@@ -94,7 +94,9 @@ def _log_fetch_summary(context: str, message: str):
     print(message)
 
 
-async def fetch_feeds_with_metadata(routes: list, log_context: str | None = None) -> list[dict]:
+async def fetch_feeds_with_metadata(
+    routes: list, log_context: str | None = None, force_refresh: bool = False
+) -> list[dict]:
     from app.utils.cache import cache_get, cache_set
 
     requested_routes = {str(route).upper() for route in routes}
@@ -119,7 +121,10 @@ async def fetch_feeds_with_metadata(routes: list, log_context: str | None = None
     urls_to_fetch = []
 
     for feed_request in feed_requests:
-        cached = cache_get(feed_request["url"])
+        # force_refresh (used by the background warm loop) bypasses the cache so
+        # the URL is always re-fetched and the TTL is renewed -- this keeps the
+        # cache warm for user-facing requests, which still take the cached path.
+        cached = None if force_refresh else cache_get(feed_request["url"])
         if cached:
             results.append({
                 **feed_request,
@@ -222,10 +227,10 @@ def parse_bytes(rawBytes: bytes) -> list:
 ALERTS_URL = "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/camsys%2Fsubway-alerts"
 
 
-async def fetch_service_alerts() -> bytes:
+async def fetch_service_alerts(force_refresh: bool = False) -> bytes:
     from app.utils.cache import cache_get, cache_set
 
-    cached = cache_get(ALERTS_URL)
+    cached = None if force_refresh else cache_get(ALERTS_URL)
     if cached:
         return cached
 
@@ -240,6 +245,26 @@ async def fetch_service_alerts() -> bytes:
     except Exception as exc:
         print(f"[mta_feed] alerts feed failed: {type(exc).__name__}: {exc!r}")
         return b""
+
+
+# Every subway route, used by the warm loop to refresh all 8 feed URLs at once.
+# The nyct GTFS-RT feeds carry both trip-updates AND vehicle positions, so
+# warming these URLs primes the cache for nearby arrivals, network vehicles,
+# and the live summary alike.
+ALL_SUBWAY_ROUTES = list(route_to_feed.keys())
+
+
+async def warm_realtime_caches() -> None:
+    """Force-refresh the realtime caches (all subway feed URLs + service
+    alerts) so live-feed / hub / alerts snapshots are served from a warm cache
+    instead of paying upstream MTA latency on each connection. Exceptions are
+    swallowed per-source via return_exceptions so one dead feed never stops the
+    others from warming."""
+    await asyncio.gather(
+        fetch_feeds_with_metadata(ALL_SUBWAY_ROUTES, "warm", force_refresh=True),
+        fetch_service_alerts(force_refresh=True),
+        return_exceptions=True,
+    )
 
 
 def _period_bounds(period) -> tuple[int | None, int | None]:

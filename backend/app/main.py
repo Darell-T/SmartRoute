@@ -21,8 +21,16 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security.api_key import APIKeyHeader
 from app.routers import thinking, trips, live_feed, subway, switch_narration
+from app.services import mta_feed
 from app.utils.gtfs_static import GTFSStaticData, close_pool, init_pool
 from app.models.migrate_gtfs import migrate
+
+# How often the background loop force-refreshes the realtime MTA caches. Shorter
+# than the feed TTL (30s) so user-facing snapshots always hit a warm, fresh
+# cache instead of paying upstream fetch latency. The instance only runs this
+# while it is awake (Render spins down idle free instances on no inbound
+# traffic), so it does not poll 24/7 when nobody is using the app.
+REALTIME_WARM_INTERVAL_S = 15
 
 
 api_key_header = APIKeyHeader(name = "X-App-Key")
@@ -53,6 +61,21 @@ async def _gtfs_refresh_loop():
             print("[gtfs] refresh complete")
         except Exception as e:
             print(f"[gtfs] refresh error: {e}")
+
+
+async def _realtime_warm_loop():
+    # Keep the MTA realtime caches warm so the live feed, hub, and alerts are
+    # served from cache (Transit-app style) instead of each fresh connection
+    # paying the full upstream fetch fan-out. First pass runs immediately.
+    while True:
+        try:
+            await mta_feed.warm_realtime_caches()
+        except Exception as exc:
+            print(f"[warm] realtime cache warm failed: {exc!r}")
+        # Wake every connected live-feed socket so it pushes the freshly warmed
+        # data immediately -- event-driven realtime push, not a per-client timer.
+        live_feed.signal_realtime_refresh()
+        await asyncio.sleep(REALTIME_WARM_INTERVAL_S)
 
 
 async def _init_pool_bg():
@@ -86,12 +109,15 @@ async def lifespan(app: FastAPI):
     # Optional DB pool + daily GTFS refresh, both off the startup critical path.
     app.state.pool_task = asyncio.create_task(_init_pool_bg())
     refresh_task = asyncio.create_task(_gtfs_refresh_loop())
+    warm_task = asyncio.create_task(_realtime_warm_loop())
     yield
     refresh_task.cancel()
-    try:
-        await refresh_task
-    except asyncio.CancelledError:
-        pass
+    warm_task.cancel()
+    for task in (refresh_task, warm_task):
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
     close_pool()
 
 

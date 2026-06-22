@@ -443,7 +443,12 @@ export default function JarvisPage() {
         clearTimeout(timeoutId);
         setUserLocation(DEFAULT_LOCATION);
       },
-      { enableHighAccuracy: true, timeout: 5_000, maximumAge: 30_000 },
+      // This first fix only gates the live feed (nearest stops), where
+      // city-block accuracy is plenty -- so use a fast NETWORK fix instead of
+      // waiting up to 5s for GPS. The precise dot is refined separately by the
+      // high-accuracy watchPosition in jarvis-map. A recent cached fix is
+      // accepted instantly (maximumAge) so arrivals can appear right away.
+      { enableHighAccuracy: false, timeout: 6_000, maximumAge: 60_000 },
     );
 
     return () => clearTimeout(timeoutId);

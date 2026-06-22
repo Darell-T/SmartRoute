@@ -19,6 +19,26 @@ router = APIRouter()
 ws_router = APIRouter()
 
 
+# Realtime push fan-out. The background warm loop (main.py) calls
+# signal_realtime_refresh() right after it refreshes the MTA caches; every
+# connected live-feed socket is awaiting the current event, so it wakes and
+# pushes a fresh snapshot the instant new upstream data lands -- event-driven
+# push, not a per-client timer. Swap-and-set so each waiter wakes exactly once
+# and any new waiter gets a fresh event (no clear/set race).
+_realtime_refresh_event: asyncio.Event = asyncio.Event()
+
+
+def get_realtime_refresh_event() -> asyncio.Event:
+    return _realtime_refresh_event
+
+
+def signal_realtime_refresh() -> None:
+    global _realtime_refresh_event
+    previous = _realtime_refresh_event
+    _realtime_refresh_event = asyncio.Event()
+    previous.set()
+
+
 def _verify_ws_ticket(ticket: str, path: str) -> bool:
     """Validate a short-lived ticket minted by the Next /api/ws-ticket route.
 
@@ -687,9 +707,10 @@ def _serve_nearby_incidents(enriched_stops: list, lat: float, lng: float) -> lis
 
 async def _build_live_snapshot(
     gtfs, lat: float, lng: float, selected_route_ids: set[str] | None = None,
-    atlas_scan: bool = False,
+    atlas_scan: bool = False, emit=None,
 ):
     global _LAST_EMPTY_VEHICLE_LOG
+    _t0 = time.monotonic()
 
     nearest_stops = find_nearest_stops(
         lat,
@@ -754,6 +775,32 @@ async def _build_live_snapshot(
         for key in [_arrival_lookup_key(arrival.get("trip_id"), arrival.get("stop_id"))]
         if key
     }
+
+    # Time-to-first-arrivals: everything above (nearest stops + the nearby
+    # subway feed, served from the warm cache) is all the rider waits on for the
+    # first paint. Measured here so production telemetry can report it.
+    arrivals_ms = round((time.monotonic() - _t0) * 1000)
+
+    # Progressive first paint: the nearby subway arrivals are ready now (and
+    # served from the warm feed cache), so push them immediately instead of
+    # making the rider wait on the slower network-wide vehicles/alerts/summary
+    # and bus fan-out below. Only the FIRST snapshot for a location passes an
+    # emit callback; periodic refreshes send the full snapshot in one message.
+    if emit is not None:
+        await emit({
+            "nearest_stop": nearest_stop,
+            "stops": enriched_stops,
+            "arrivals": sorted(arrivals, key=lambda a: a.get("arrival_time") or 0)[:40],
+            "alerts": [],
+            "vehicles": [],
+            "summary": None,
+            "signals": None,
+            "incidents": [],
+            "updated_at": now,
+            "degraded": False,
+            "debug": {"partial": True, "arrivals_ms": arrivals_ms},
+            "partial": True,
+        })
 
     vehicle_route_ids = _expand_vehicle_route_scope(set(route_ids) | selected_route_ids)
 
@@ -861,6 +908,8 @@ async def _build_live_snapshot(
             "vehicle_count": len(vehicles),
             "vehicle_scope": "nearest_plus_selected",
             "vehicle_parse": vehicle_debug,
+            "arrivals_ms": arrivals_ms,
+            "build_ms": round((time.monotonic() - _t0) * 1000),
         },
     }
 
@@ -980,17 +1029,42 @@ async def live_feed_socket(websocket: WebSocket):
     selected_route_ids: set[str] = set()
     atlas_scan = False
     last_sent = 0.0
-    stream_interval = 20
+    # Fallback cadence only: normal pushes are driven by signal_realtime_refresh()
+    # the moment fresh MTA data lands. This timeout is just the safety net if that
+    # signal ever stalls.
+    stream_interval = 30
+    recv_task: "asyncio.Task | None" = None
+
+    async def _emit_partial(partial: dict):
+        await _send_json_safe(websocket, {"type": "snapshot", "data": partial})
 
     try:
         while True:
             if location is None:
                 msg = await websocket.receive_json()
             else:
-                try:
-                    msg = await asyncio.wait_for(websocket.receive_json(), timeout=stream_interval)
-                except asyncio.TimeoutError:
-                    msg = None
+                # Push-driven: wake on whichever fires first -- a client message
+                # (location/scope change), a realtime data refresh, or the
+                # fallback timeout. The receive task is kept ALIVE across
+                # iterations (never cancelled) so receive_json() is never
+                # re-entered concurrently; only the cheap event wait is cancelled.
+                if recv_task is None:
+                    recv_task = asyncio.ensure_future(websocket.receive_json())
+                refresh_task = asyncio.ensure_future(get_realtime_refresh_event().wait())
+                done, _pending = await asyncio.wait(
+                    {recv_task, refresh_task},
+                    timeout=stream_interval,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if not refresh_task.done():
+                    refresh_task.cancel()
+                msg = None
+                if recv_task in done:
+                    finished, recv_task = recv_task, None
+                    try:
+                        msg = finished.result()
+                    except Exception:
+                        return
 
             if isinstance(msg, dict) and msg.get("type") == "location":
                 lat = msg.get("lat")
@@ -1024,8 +1098,12 @@ async def live_feed_socket(websocket: WebSocket):
                 continue
 
             try:
+                # First snapshot for a location streams arrivals first (a
+                # partial), then the full snapshot; periodic refreshes send the
+                # full snapshot only, so vehicles/alerts never flicker empty.
                 snapshot = await _build_live_snapshot(
                     gtfs, location[0], location[1], selected_route_ids, atlas_scan,
+                    emit=_emit_partial if last_sent == 0 else None,
                 )
                 sent = await _send_json_safe(websocket, {"type": "snapshot", "data": snapshot})
                 if not sent:
@@ -1067,3 +1145,7 @@ async def live_feed_socket(websocket: WebSocket):
     except WebSocketDisconnect:
         _vlog(f"[ws_live_feed:{connection_id}] disconnected")
         return
+    finally:
+        # Never leak the in-flight receive task when the socket closes.
+        if recv_task is not None and not recv_task.done():
+            recv_task.cancel()
