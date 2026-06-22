@@ -128,7 +128,11 @@ export function LeftRail({
 }: LeftRailProps) {
   const [tab, setTab] = useState<TabId>(initialTab);
   const [way, setWay] = useState<Direction>("uptown");
-  const [clock, setClock] = useState(() => formatClock(new Date()));
+  // Start empty so server and client render the same thing (a live clock seeded
+  // from new Date() during SSR renders the server's time, then hydrates with the
+  // client's -> React hydration mismatch, error #418). The mount effect below
+  // fills it in immediately on the client.
+  const [clock, setClock] = useState("");
   const [internalJarvis, setInternalJarvis] = useState<JarvisState>(jarvisState);
   const effectiveJarvis = onJarvisStateChange ? jarvisState : internalJarvis;
   const setJarvis = (next: JarvisState) => {
