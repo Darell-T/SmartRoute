@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Accordion,
   BlurFade,
@@ -391,6 +391,7 @@ function JarvisBlock({
   thinkingText?: string;
   onSelectAlternative?: (candidateId: string) => void;
 }) {
+  const clock = useClientClock();
   const tone: RailOrbTone = jarvisStateToOrbTone(state);
   const orbPhase: "idle" | "thinking" | "speaking" =
     state === "thinking" ? "thinking" : state === "result" ? "speaking" : "idle";
@@ -471,11 +472,7 @@ function JarvisBlock({
           </Meta>
         </div>
         <Meta>
-          Today ·{" "}
-          {new Date().toLocaleTimeString([], {
-            hour: "numeric",
-            minute: "2-digit",
-          })}
+          Today · {clock}
         </Meta>
       </div>
 
@@ -594,6 +591,26 @@ function JarvisBlock({
       )}
     </section>
   );
+}
+
+function useClientClock() {
+  const [clock, setClock] = useState("--:--");
+
+  useEffect(() => {
+    const tick = () => {
+      setClock(
+        new Date().toLocaleTimeString([], {
+          hour: "numeric",
+          minute: "2-digit",
+        }),
+      );
+    };
+    tick();
+    const id = window.setInterval(tick, 10_000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  return clock;
 }
 
 function ResultHead({ plan }: { plan: RoutePlan }) {
