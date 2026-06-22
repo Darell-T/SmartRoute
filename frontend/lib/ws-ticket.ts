@@ -15,8 +15,11 @@ export async function fetchWsTicket(
 ): Promise<string> {
   const res = await fetch(`/api/ws-ticket?path=${encodeURIComponent(path)}`, { cache: "no-store", signal });
   if (!res.ok) throw new Error(`ws-ticket request failed (${res.status})`);
-  const data = (await res.json()) as { ticket?: string };
+  const data = (await res.json()) as { ticket?: string; ws_base_url?: string };
   if (!data.ticket) throw new Error("ws-ticket response missing ticket");
+  if (data.ws_base_url) {
+    serverWsBaseUrl = data.ws_base_url.replace(/\/+$/, "");
+  }
   return data.ticket;
 }
 
@@ -26,17 +29,31 @@ export async function fetchWsTicket(
  * when it is set, so this never overrides an explicit configuration.
  */
 const PROD_API_FALLBACK = "https://jarvis-mta-assistant.onrender.com";
+let serverWsBaseUrl: string | null = null;
+
+function isLocalBrowserHost(): boolean {
+  if (typeof window === "undefined") return true;
+  return /^(localhost|127\.0\.0\.1|0\.0\.0\.0)$/.test(window.location.hostname);
+}
+
+function isLocalBackendBase(base: string): boolean {
+  try {
+    const parsed = new URL(base);
+    return /^(localhost|127\.0\.0\.1|0\.0\.0\.0)$/.test(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
 
 /** http(s):// base for the FastAPI backend. */
 export function apiBaseUrl(): string {
   const configured = process.env.NEXT_PUBLIC_API_URL;
-  if (configured) return configured;
+  if (configured && (isLocalBrowserHost() || !isLocalBackendBase(configured))) {
+    return configured.replace(/\/+$/, "");
+  }
   // No build-time env var: choose by host so a deployed site reaches the prod
   // backend instead of localhost, while local dev keeps using the local one.
-  if (
-    typeof window !== "undefined" &&
-    !/^(localhost|127\.0\.0\.1|0\.0\.0\.0)$/.test(window.location.hostname)
-  ) {
+  if (!isLocalBrowserHost()) {
     return PROD_API_FALLBACK;
   }
   return "http://localhost:8000";
@@ -44,6 +61,7 @@ export function apiBaseUrl(): string {
 
 /** ws(s):// base for the FastAPI backend. */
 export function wsBaseUrl(): string {
+  if (serverWsBaseUrl) return serverWsBaseUrl;
   const base = apiBaseUrl();
   return base.replace(/^https:/, "wss:").replace(/^http:/, "ws:");
 }
