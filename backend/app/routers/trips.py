@@ -1,15 +1,26 @@
 import base64
 import asyncio
+import importlib
 import os
 import re
 import time
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
-from app.services.directions import get_transit_route, parse_response
 from app.services.ai_advisor import stream_recommendation
 from app.services.mta_feed import fetch_service_alerts, get_stalled_buses, parse_service_alerts, filter_alerts_for_routes, get_stalled_trains
 from app.services.voice import generate_speech
 from app.services.trips import text, scoring, candidates, enrichment, incidents as trip_incidents
+
+directions_service = importlib.import_module("app.services.directions")
+get_transit_route = directions_service.get_transit_route
+parse_response = directions_service.parse_response
+
+
+class _UnavailableGoogleRoutesError(RuntimeError):
+    pass
+
+
+GoogleRoutesError = getattr(directions_service, "GoogleRoutesError", _UnavailableGoogleRoutesError)
 
 router = APIRouter()
 
@@ -55,6 +66,34 @@ async def plan_trip(request: Request, payload: TripRequest):
                 (payload.origin_lat, payload.origin_lng),
                 payload.destination,
                 dest_coords,
+            )
+        except GoogleRoutesError as exc:
+            print(
+                "[trip] routing provider failed "
+                f"code={exc.code} provider_status={exc.provider_status or 'none'}"
+            )
+            if exc.code == "timeout":
+                raise HTTPException(status_code=503, detail="Google Routes API timed out")
+            if exc.code == "not_configured":
+                raise HTTPException(status_code=500, detail="Routing provider is not configured")
+            if exc.code.startswith("http_"):
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Upstream routing provider error ({exc.code})",
+                )
+            if exc.code == "request_failed":
+                raise HTTPException(
+                    status_code=502,
+                    detail="Upstream routing provider network error",
+                )
+            if exc.code == "invalid_json":
+                raise HTTPException(
+                    status_code=502,
+                    detail="Upstream routing provider returned invalid data",
+                )
+            raise HTTPException(
+                status_code=502,
+                detail=f"Upstream routing provider error ({exc.code})",
             )
         except RuntimeError as exc:
             msg = str(exc)
