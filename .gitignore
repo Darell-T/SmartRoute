@@ -29,6 +29,9 @@ next.user-config.*
 
 # Environment variables
 .env*
+
+# Local ATLAS prompt override
+backend/app/services/ai_advisor_system_prompt.txt
 # Common ignores
 node_modules/
 .next/

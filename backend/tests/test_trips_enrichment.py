@@ -155,8 +155,12 @@ def _load_trips_module(bus_fetch):
             "app.services.bus_routes": fake_bus_routes,
         },
     ):
-        if "app.routers.trips" in sys.modules:
-            return importlib.reload(sys.modules["app.routers.trips"])
+        # Drop the trips router AND its services.trips submodules so they
+        # re-import fresh inside this stub context -- the submodules bind
+        # bus_routes/incident_monitor at import time, so a bare reload of the
+        # router alone would not pick up the stubbed dependencies.
+        for _m in [k for k in list(sys.modules) if k == "app.routers.trips" or k.startswith("app.services.trips")]:
+            sys.modules.pop(_m, None)
         return importlib.import_module("app.routers.trips")
 
 
@@ -295,7 +299,7 @@ class TripEnrichmentTests(unittest.IsolatedAsyncioTestCase):
             return {"canned": BUS_LOCATED}
 
         trips = _load_trips_module(bus_fetch)
-        trips.TRIP_GTFS_ENRICH_TIMEOUT_S = 0.01
+        trips.enrichment.TRIP_GTFS_ENRICH_TIMEOUT_S = 0.01
         started = time.monotonic()
         result = await trips.plan_trip(_request_with_slow_gtfs(), _payload(trips))
 
