@@ -82,8 +82,11 @@ def _load_live_feed_module():
             "app.services.incident_monitor": fake_incident_monitor,
         },
     ):
-        if "app.routers.live_feed" in sys.modules:
-            return importlib.reload(sys.modules["app.routers.live_feed"])
+        # Re-import the live_feed router AND its services.live_feed submodules
+        # fresh so the stubbed mta_feed/ai_advisor/incident_monitor/cache bind
+        # inside the submodules (summary/incidents import those at module load).
+        for _m in [k for k in list(sys.modules) if k == "app.routers.live_feed" or k.startswith("app.services.live_feed")]:
+            sys.modules.pop(_m, None)
         return importlib.import_module("app.routers.live_feed")
 
 

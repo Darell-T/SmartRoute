@@ -182,6 +182,12 @@ class TripsIncidentIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
         for name in [
             "app.routers.trips",
+            "app.services.trips",
+            "app.services.trips.text",
+            "app.services.trips.scoring",
+            "app.services.trips.enrichment",
+            "app.services.trips.candidates",
+            "app.services.trips.incidents",
             "app.services.directions",
             "app.services.ai_advisor",
             "app.services.incident_monitor",
@@ -337,12 +343,12 @@ class TripsIncidentIntegrationTests(unittest.IsolatedAsyncioTestCase):
         # subway and bus legs. (Intermediate subway stops would be added too when
         # a static pattern index is present; this DummyGtfs has none, so only the
         # endpoints are gathered.) The unwrapped incident list is then cached.
-        await asyncio.gather(*list(trips._INCIDENT_BG_TASKS))
+        await asyncio.gather(*list(trips.trip_incidents._INCIDENT_BG_TASKS))
         self.assertEqual(
             captured["route_stops"],
             ["Church Avenue", "Prospect Park", "Flatbush Ave"],
         )
-        self.assertEqual(len(trips._LAST_INCIDENTS), 1)
+        self.assertEqual(len(trips.trip_incidents._LAST_INCIDENTS), 1)
         self.assertEqual(result["route"][0]["route_id"], "Q")
 
 
