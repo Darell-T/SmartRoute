@@ -9,20 +9,22 @@
 // source's local tangent so the bow tracks the source curve, and the taper is a
 // smooth sine bump so the ends meet the source with matching tangents (no kink).
 
+import type { Position } from "./types.ts";
+
 const M_PER_DEG_LAT = 110574;
-function mPerDegLng(lat) {
+function mPerDegLng(lat: number): number {
   return 111320 * Math.cos((lat * Math.PI) / 180);
 }
 
-function haversineM([lon1, lat1], [lon2, lat2]) {
+function haversineM([lon1, lat1]: Position, [lon2, lat2]: Position): number {
   const r = Math.PI / 180;
   const dLat = (lat2 - lat1) * r, dLon = (lon2 - lon1) * r;
   const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * r) * Math.cos(lat2 * r) * Math.sin(dLon / 2) ** 2;
   return 2 * 6371000 * Math.asin(Math.sqrt(a));
 }
 
-function projAt(p, lat) { return [p[0] * mPerDegLng(lat), p[1] * M_PER_DEG_LAT]; }
-function unprojAt(p, lat) { return [p[0] / mPerDegLng(lat), p[1] / M_PER_DEG_LAT]; }
+function projAt(p: Position, lat: number): Position { return [p[0] * mPerDegLng(lat), p[1] * M_PER_DEG_LAT]; }
+function unprojAt(p: Position, lat: number): Position { return [p[0] / mPerDegLng(lat), p[1] / M_PER_DEG_LAT]; }
 
 /**
  * Tangent-matched cubic Hermite from `start` to `end`. Tangents are unit vectors
@@ -30,7 +32,13 @@ function unprojAt(p, lat) { return [p[0] / mPerDegLng(lat), p[1] / M_PER_DEG_LAT
  * points the way it ARRIVES at end).
  * @returns {Array<[number,number]>}
  */
-export function hermiteBetween(start, end, startTangent, endTangent, options = {}) {
+export function hermiteBetween(
+  start: Position,
+  end: Position,
+  startTangent: Position,
+  endTangent: Position,
+  options: { handleFrac?: number; sampleM?: number } = {},
+): Position[] {
   const { handleFrac = 0.5, sampleM = 6 } = options;
   const lat0 = (start[1] + end[1]) / 2;
   const p0 = projAt(start, lat0);
@@ -40,7 +48,7 @@ export function hermiteBetween(start, end, startTangent, endTangent, options = {
   const m0 = [startTangent[0] * h, startTangent[1] * h];
   const m1 = [endTangent[0] * h, endTangent[1] * h];
   const steps = Math.max(8, Math.ceil(dist / sampleM));
-  const out = [];
+  const out: Position[] = [];
   for (let i = 0; i <= steps; i += 1) {
     const t = i / steps, t2 = t * t, t3 = t2 * t;
     out.push(unprojAt([
@@ -71,7 +79,17 @@ export function hermiteBetween(start, end, startTangent, endTangent, options = {
  *   k => steeper Y and lower/later apex. Takes precedence over plateau/peakAt.
  * @returns {Array<[number,number]>} bow polyline, same vertex count as coords
  */
-export function offsetBow(coords, options = {}) {
+export function offsetBow(
+  coords: Position[],
+  options: {
+    maxOffsetM?: number;
+    side?: "left" | "right";
+    taperPow?: number;
+    peakAt?: number | null;
+    plateau?: Position | null;
+    teardropK?: number | null;
+  } = {},
+): Position[] {
   const { maxOffsetM = 80, side = "left", taperPow = 1, peakAt = null, plateau = null, teardropK = null } = options;
   if (!Array.isArray(coords) || coords.length < 2) return coords;
 
@@ -80,9 +98,9 @@ export function offsetBow(coords, options = {}) {
   for (let i = 1; i < coords.length; i += 1) arcs.push(arcs[i - 1] + haversineM(coords[i - 1], coords[i]));
   const total = arcs[arcs.length - 1] || 1;
   const sign = side === "right" ? -1 : 1;
-  const smoothstep = (u) => { const c = Math.max(0, Math.min(1, u)); return c * c * (3 - 2 * c); };
+  const smoothstep = (u: number): number => { const c = Math.max(0, Math.min(1, u)); return c * c * (3 - 2 * c); };
 
-  const out = [];
+  const out: Position[] = [];
   for (let i = 0; i < coords.length; i += 1) {
     const t = arcs[i] / total; // 0..1
     let taper;

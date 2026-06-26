@@ -6,10 +6,52 @@
 //
 // No fs, no globals. Imported by build-subway-visual-network.mjs.
 
+import type { Position, Feature, LineStringGeometry } from "./types.ts";
+
+// A bundle-lane Feature carries the same permissive property bag the build
+// attaches; the members read below are the ones this pass cares about.
+type BranchLaneProperties = {
+  color?: string;
+  bundle_id?: string;
+  from_anchor_id?: string | null;
+  to_anchor_id?: string | null;
+  materialized_bundle_id?: string | null;
+  [key: string]: unknown;
+};
+
+type BranchLane = Feature<LineStringGeometry, BranchLaneProperties>;
+
+type BranchEntry = {
+  lane: BranchLane;
+  endpoint: "from" | "to";
+  coord: Position;
+};
+
+type BranchTransitionProperties = {
+  visual_feature_type: "branch_transition";
+  color: string | undefined;
+  anchor_id: string;
+  bundle_id_from: string | undefined;
+  bundle_id_to: string | undefined;
+  length_m: number;
+};
+
+type BranchTransitionFeature = Feature<LineStringGeometry, BranchTransitionProperties>;
+
+type BuildBranchTransitionsOptions = {
+  maxBridgeM?: number;
+  minBridgeM?: number;
+};
+
+type BuildBranchTransitionsResult = {
+  transitions: BranchTransitionFeature[];
+  coincidentSkipped: number;
+};
+
 const EARTH_RADIUS_M = 6371000;
 
-function haversineM([lon1, lat1], [lon2, lat2]) {
-  const toRad = (d) => (d * Math.PI) / 180;
+function haversineM([lon1, lat1]: Position, [lon2, lat2]: Position): number {
+  const toRad = (d: number): number => (d * Math.PI) / 180;
   const dLat = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
   const a =
@@ -42,13 +84,13 @@ function haversineM([lon1, lat1], [lon2, lat2]) {
  *   These represent endpoints already touching; no visual connector is needed.
  */
 export function buildBranchTransitions(
-  bundleLanes,
-  { maxBridgeM = 90, minBridgeM = 0.5 } = {},
-) {
-  const out = [];
+  bundleLanes: BranchLane[],
+  { maxBridgeM = 90, minBridgeM = 0.5 }: BuildBranchTransitionsOptions = {},
+): BuildBranchTransitionsResult {
+  const out: BranchTransitionFeature[] = [];
   let coincidentSkipped = 0;
   // Group lane endpoints by (anchor_id, color).
-  const byAnchorColor = new Map();
+  const byAnchorColor = new Map<string, BranchEntry[]>();
   for (const lane of bundleLanes) {
     const p = lane.properties;
     const coords = lane.geometry?.coordinates ?? [];
@@ -58,11 +100,11 @@ export function buildBranchTransitions(
     for (const [anchorId, endpoint, coord] of [
       [p.from_anchor_id, "from", fromCoord],
       [p.to_anchor_id, "to", toCoord],
-    ]) {
+    ] as Array<[string | null | undefined, "from" | "to", Position]>) {
       if (!anchorId) continue;
       const key = `${anchorId}|${p.color}`;
       if (!byAnchorColor.has(key)) byAnchorColor.set(key, []);
-      byAnchorColor.get(key).push({ lane, endpoint, coord });
+      byAnchorColor.get(key)!.push({ lane, endpoint, coord });
     }
   }
 
@@ -96,7 +138,7 @@ export function buildBranchTransitions(
         // regardless of upstream iteration order.
         const idA = a.lane.properties.bundle_id;
         const idB = b.lane.properties.bundle_id;
-        const [fromEntry, toEntry] = idA <= idB ? [a, b] : [b, a];
+        const [fromEntry, toEntry] = idA! <= idB! ? [a, b] : [b, a];
         out.push({
           type: "Feature",
           geometry: {

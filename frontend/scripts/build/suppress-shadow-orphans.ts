@@ -9,9 +9,13 @@
 // and Transit suppress these. The route's primary geometry (carried by a different,
 // non-orphan feature) is untouched.
 
+import type { Position, Feature, LineStringGeometry, VisualFeatureProperties } from "./types.ts";
+
+type LineFeature = Feature<LineStringGeometry, VisualFeatureProperties>;
+
 const EARTH_RADIUS_M = 6371000;
 
-function haversineM([lon1, lat1], [lon2, lat2]) {
+function haversineM([lon1, lat1]: Position, [lon2, lat2]: Position): number {
   const r = Math.PI / 180;
   const dLat = (lat2 - lat1) * r;
   const dLon = (lon2 - lon1) * r;
@@ -21,7 +25,7 @@ function haversineM([lon1, lat1], [lon2, lat2]) {
   return 2 * EARTH_RADIUS_M * Math.asin(Math.sqrt(a));
 }
 
-function nearestM(p, coords) {
+function nearestM(p: Position, coords: Position[]): number {
   let best = Infinity;
   for (const q of coords) {
     const d = haversineM(p, q);
@@ -37,14 +41,17 @@ function nearestM(p, coords) {
  * @param {number} [options.shadowFracMin=0.7] drop only if >= this fraction of vertices shadow another color
  * @returns {{ features: Array, removedIds: string[] }}
  */
-export function suppressShadowOrphans(features, options = {}) {
+export function suppressShadowOrphans(
+  features: LineFeature[],
+  options: { shadowDistM?: number; shadowFracMin?: number } = {},
+): { features: LineFeature[]; removedIds: string[] } {
   const { shadowDistM = 18, shadowFracMin = 0.7 } = options;
   const lines = features.filter(
     (f) => f.geometry?.type === "LineString" && Array.isArray(f.geometry.coordinates) && f.geometry.coordinates.length >= 2,
   );
 
-  const removed = new Set();
-  const removedIds = [];
+  const removed = new Set<LineFeature>();
+  const removedIds: string[] = [];
 
   for (const f of lines) {
     const p = f.properties ?? {};

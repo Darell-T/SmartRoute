@@ -11,14 +11,16 @@
 // returned byte-identical, and BOTH endpoints are pinned so feature-to-feature
 // junctions never move (connectivity is GTFS-topology-based, not geometry-based).
 
+import type { Position } from "./types.ts";
+
 const EARTH_RADIUS_M = 6371000;
 const M_PER_DEG_LAT = 110574;
 
-function mPerDegLng(lat) {
+function mPerDegLng(lat: number): number {
   return 111320 * Math.cos((lat * Math.PI) / 180);
 }
 
-function haversineM([lon1, lat1], [lon2, lat2]) {
+function haversineM([lon1, lat1]: Position, [lon2, lat2]: Position): number {
   const r = Math.PI / 180;
   const dLat = (lat2 - lat1) * r;
   const dLon = (lon2 - lon1) * r;
@@ -28,19 +30,19 @@ function haversineM([lon1, lat1], [lon2, lat2]) {
   return 2 * EARTH_RADIUS_M * Math.asin(Math.sqrt(a));
 }
 
-function bearingDeg(a, b) {
+function bearingDeg(a: Position, b: Position): number {
   const k = mPerDegLng((a[1] + b[1]) / 2);
   return (Math.atan2((b[1] - a[1]) * M_PER_DEG_LAT, (b[0] - a[0]) * k) * 180) / Math.PI;
 }
 
-function turnAt(p, c, n) {
+function turnAt(p: Position, c: Position, n: Position): number {
   let t = bearingDeg(c, n) - bearingDeg(p, c);
   while (t > 180) t -= 360;
   while (t < -180) t += 360;
   return t;
 }
 
-function segLengths(coords) {
+function segLengths(coords: Position[]): number[] {
   const seg = new Array(coords.length - 1);
   for (let i = 0; i < coords.length - 1; i += 1) seg[i] = haversineM(coords[i], coords[i + 1]);
   return seg;
@@ -49,7 +51,7 @@ function segLengths(coords) {
 // Highest "turn density" (sum of |turn| in degrees per meter of arc) found in any
 // window of +/- windowM around an interior vertex. A sharp hairpin scores high;
 // a straight or gently curving line scores near zero.
-export function maxTurnDensityDegPerM(coords, windowM = 40) {
+export function maxTurnDensityDegPerM(coords: Position[], windowM = 40): number {
   if (!Array.isArray(coords) || coords.length < 3) return 0;
   const n = coords.length;
   const seg = segLengths(coords);
@@ -76,6 +78,14 @@ export function maxTurnDensityDegPerM(coords, windowM = 40) {
   return best;
 }
 
+type SimplifyTightCurvesOptions = {
+  tightTurnDeg?: number;
+  windowM?: number;
+  iterations?: number;
+  lambda?: number;
+  marginVerts?: number;
+};
+
 /**
  * Round tight hairpins into gentler arcs. Pure; returns the SAME array reference
  * when nothing qualifies (straight / gentle-only inputs).
@@ -89,7 +99,7 @@ export function maxTurnDensityDegPerM(coords, windowM = 40) {
  * @param {number} [options.marginVerts=1] how many vertices to extend each tight run by, for blending
  * @returns {Array<[number,number]>}
  */
-export function simplifyTightCurves(coords, options = {}) {
+export function simplifyTightCurves(coords: Position[], options: SimplifyTightCurvesOptions = {}): Position[] {
   const {
     tightTurnDeg = 70,
     windowM = 50,
@@ -142,9 +152,9 @@ export function simplifyTightCurves(coords, options = {}) {
 
   // Laplacian relaxation on marked vertices only; unmarked vertices stay pinned,
   // which anchors each tight run to the surrounding (untouched) geometry.
-  let pts = coords.map((p) => p.slice());
+  let pts = coords.map((p) => p.slice() as Position);
   for (let it = 0; it < iterations; it += 1) {
-    const next = pts.map((p) => p.slice());
+    const next = pts.map((p) => p.slice() as Position);
     for (let i = 1; i < n - 1; i += 1) {
       if (!mark[i]) continue;
       const midX = 0.5 * (pts[i - 1][0] + pts[i + 1][0]);
