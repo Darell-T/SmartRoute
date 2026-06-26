@@ -135,8 +135,12 @@ def _load_trips_module():
             "app.services.voice": fake_voice,
         },
     ):
-        if "app.routers.trips" in sys.modules:
-            return importlib.reload(sys.modules["app.routers.trips"])
+        # Re-import the trips router AND its services.trips submodules fresh so
+        # the incident-scan module globals (_LAST_INCIDENTS / _INCIDENT_SCAN_INFLIGHT,
+        # now in services/trips/incidents.py) reset between test classes -- a bare
+        # reload of the router alone would leave that submodule state stale.
+        for _m in [k for k in list(sys.modules) if k == "app.routers.trips" or k.startswith("app.services.trips")]:
+            sys.modules.pop(_m, None)
         return importlib.import_module("app.routers.trips")
 
 
@@ -188,8 +192,8 @@ class TripsIncidentPayloadTests(unittest.IsolatedAsyncioTestCase):
         )
 
         # Reset the module-level background-incident state for determinism.
-        self.trips._LAST_INCIDENTS = []
-        self.trips._INCIDENT_SCAN_INFLIGHT = False
+        self.trips.trip_incidents._LAST_INCIDENTS = []
+        self.trips.trip_incidents._INCIDENT_SCAN_INFLIGHT = False
 
         with patch.object(
             self.trips, "get_transit_route", AsyncMock(return_value={"routes": ["unused"]})
@@ -198,7 +202,7 @@ class TripsIncidentPayloadTests(unittest.IsolatedAsyncioTestCase):
         ), patch.object(
             self.trips, "fetch_service_alerts", AsyncMock(return_value=[])
         ), patch.object(
-            self.trips,
+            self.trips.trip_incidents,
             "get_incidents",
             AsyncMock(
                 return_value={
@@ -239,9 +243,9 @@ class TripsIncidentPayloadTests(unittest.IsolatedAsyncioTestCase):
 
         # The background scan unwraps the {"incidents": [...]} dict and caches the
         # list for subsequent trips to serve.
-        await asyncio.gather(*list(self.trips._INCIDENT_BG_TASKS))
+        await asyncio.gather(*list(self.trips.trip_incidents._INCIDENT_BG_TASKS))
         self.assertEqual(
-            self.trips._LAST_INCIDENTS,
+            self.trips.trip_incidents._LAST_INCIDENTS,
             [
                 {
                     "location": "Flatbush Avenue",
@@ -285,7 +289,7 @@ class TripsIncidentPayloadTests(unittest.IsolatedAsyncioTestCase):
         ), patch.object(
             self.trips, "fetch_service_alerts", AsyncMock(return_value=[])
         ), patch.object(
-            self.trips, "get_incidents", AsyncMock(return_value="bad-shape")
+            self.trips.trip_incidents, "get_incidents", AsyncMock(return_value="bad-shape")
         ), patch.object(
             self.trips, "get_stalled_trains", AsyncMock(return_value=[])
         ), patch.object(
@@ -335,7 +339,7 @@ class TripsIncidentPayloadTests(unittest.IsolatedAsyncioTestCase):
         ), patch.object(
             self.trips, "fetch_service_alerts", AsyncMock(return_value=[])
         ), patch.object(
-            self.trips,
+            self.trips.trip_incidents,
             "get_incidents",
             AsyncMock(return_value={"incidents": {"incidents": ["bad"]}}),
         ), patch.object(
