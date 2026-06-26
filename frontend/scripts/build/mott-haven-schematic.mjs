@@ -1,4 +1,4 @@
-import { hermiteBetween } from "./offset-bow.mjs";
+import { hermiteBetween } from "./offset-bow.ts";
 
 const M_PER_DEG_LAT = 110574;
 

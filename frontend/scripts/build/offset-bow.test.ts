@@ -1,13 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { offsetBow } from "./offset-bow.mjs";
+import { offsetBow } from "./offset-bow.ts";
+import type { Position } from "./types.ts";
 
 const DEG_LAT = 1 / 110574;
 const DEG_LON = 1 / (111320 * Math.cos((40.815 * Math.PI) / 180));
 const O = [-73.928, 40.818];
-const P = (dxM, dyM) => [O[0] + dxM * DEG_LON, O[1] + dyM * DEG_LAT];
+const P = (dxM: number, dyM: number): Position => [O[0] + dxM * DEG_LON, O[1] + dyM * DEG_LAT];
 const R = 6371000;
-function hav([a, b], [c, d]) {
+function hav([a, b]: Position, [c, d]: Position): number {
   const r = Math.PI / 180, dy = (d - b) * r, dx = (c - a) * r;
   return 2 * R * Math.asin(Math.sqrt(Math.sin(dy / 2) ** 2 + Math.cos(b * r) * Math.cos(d * r) * Math.sin(dx / 2) ** 2));
 }

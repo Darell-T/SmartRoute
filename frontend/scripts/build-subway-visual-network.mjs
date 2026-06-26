@@ -37,7 +37,7 @@ import {
   clipPolylineToExtent,
 } from "./build/physical-bundle.mjs";
 import { orderColorsForBundle, BUNDLE_COLOR_ORDER } from "./build/lane-order.ts";
-import { buildBranchTransitions } from "./build/branch-transitions.mjs";
+import { buildBranchTransitions } from "./build/branch-transitions.ts";
 import { filterBogusTransitions, markOrphanLanes, removeOrphanErrorLanes } from "./build/lane-continuity-filter.mjs";
 import { dedupeDuplicateCorridors } from "./build/dedupe-duplicate-corridors.ts";
 import { groupCorridorsByColorAndOverlap, mergeSameColorGroup } from "./build/same-color-merge.mjs";
@@ -53,14 +53,14 @@ import { bridgeRouteGaps } from "./build/bridge-route-gaps.mjs";
 import { taperBakedJointSteps } from "./build/joint-offset-taper.mjs";
 import { colocateSameColorStretches } from "./build/colocate-same-color.mjs";
 import { repairSameRouteEndpointCrossings } from "./build/same-route-junction-fabric.mjs";
-import { simplifyTightCurves } from "./build/simplify-tight-curves.mjs";
+import { simplifyTightCurves } from "./build/simplify-tight-curves.ts";
 import { snapDanglingSameColorEndpoints } from "./build/snap-dangling-same-color.mjs";
 import { snapOffRevenueToShape, maxOffShapeM } from "./build/snap-off-revenue-to-shape.mjs";
 import { replaceEndpointHairpin } from "./build/schematic-hairpin-arc.mjs";
-import { hermiteBetween } from "./build/offset-bow.mjs";
+import { hermiteBetween } from "./build/offset-bow.ts";
 import { collapseSameColorOverlaps } from "./build/collapse-same-color.mjs";
 import { parallelOffsetCrossColor } from "./build/parallel-offset-cross-color.mjs";
-import { suppressShadowOrphans } from "./build/suppress-shadow-orphans.mjs";
+import { suppressShadowOrphans } from "./build/suppress-shadow-orphans.ts";
 import { applyCartographicJunctionOverrides } from "./build/cartographic-junction-overrides.mjs";
 import {
   buildMottHavenFiveSchematicLens,

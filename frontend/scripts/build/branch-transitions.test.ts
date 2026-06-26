@@ -1,12 +1,22 @@
 // frontend/scripts/build/branch-transitions.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildBranchTransitions } from "./branch-transitions.mjs";
+import { buildBranchTransitions } from "./branch-transitions.ts";
+import type { Position } from "./types.ts";
 
-function lane({ bundle_id, color, from_anchor_id, to_anchor_id, coordinates, ...props }) {
+type LaneInput = {
+  bundle_id: string;
+  color: string;
+  from_anchor_id: string | null;
+  to_anchor_id: string | null;
+  coordinates: Position[];
+  [key: string]: unknown;
+};
+
+function lane({ bundle_id, color, from_anchor_id, to_anchor_id, coordinates, ...props }: LaneInput) {
   return {
-    type: "Feature",
-    geometry: { type: "LineString", coordinates },
+    type: "Feature" as const,
+    geometry: { type: "LineString" as const, coordinates },
     properties: {
       visual_feature_type: "bundle_lane",
       bundle_id,
