@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 
 ROUTES_URL = "https://routes.googleapis.com/directions/v2:computeRoutes"
-key = os.getenv("GOOGLE_ROUTES_API_KEY")
+key = (os.getenv("GOOGLE_ROUTES_API_KEY") or "").strip()
 GOOGLE_ROUTES_TIMEOUT_S = float(os.getenv("GOOGLE_ROUTES_TIMEOUT_S", "12.0"))
 GOOGLE_ROUTES_RETRIES = max(1, int(os.getenv("GOOGLE_ROUTES_RETRIES", "2")))
 GOOGLE_ROUTES_ALTERNATIVES = os.getenv("GOOGLE_ROUTES_ALTERNATIVES", "1").strip().lower() not in {
@@ -28,6 +28,38 @@ FIELD_MASK = ",".join([
 ])
 
 
+class GoogleRoutesError(RuntimeError):
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        provider_status: int | None = None,
+        provider_summary: str | None = None,
+    ):
+        super().__init__(message)
+        self.code = code
+        self.provider_status = provider_status
+        self.provider_summary = provider_summary
+
+
+def _provider_error_summary(response) -> str:
+    try:
+        data = response.json()
+    except Exception:
+        text = getattr(response, "text", "") or ""
+        return " ".join(text.split())[:300]
+
+    error = data.get("error") if isinstance(data, dict) else None
+    if isinstance(error, dict):
+        parts = [
+            str(error.get("status") or "").strip(),
+            str(error.get("message") or "").strip(),
+        ]
+        return " ".join(part for part in parts if part)[:300]
+    return ""
+
+
 def _duration_to_minutes(value) -> int | None:
     if not isinstance(value, str) or not value.endswith("s"):
         return None
@@ -39,7 +71,7 @@ def _duration_to_minutes(value) -> int | None:
 
 async def get_transit_route(origin: tuple, dest: str, dest_coords: tuple | None = None) -> dict:
     if not key:
-        raise RuntimeError("Google Routes API is not configured")
+        raise GoogleRoutesError("not_configured", "Google Routes API is not configured")
 
     destination = (
         {
@@ -95,7 +127,10 @@ async def get_transit_route(origin: tuple, dest: str, dest_coords: tuple | None 
                     return response.json()
                 except (ValueError, TypeError) as exc:
                     print(f"[directions] Google Routes invalid JSON: {type(exc).__name__}")
-                    raise RuntimeError("Google Routes API returned invalid JSON") from exc
+                    raise GoogleRoutesError(
+                        "invalid_json",
+                        "Google Routes API returned invalid JSON",
+                    ) from exc
             except httpx.TimeoutException as exc:
                 last_exc = exc
                 print(f"[directions] Google Routes timeout (attempt {attempt})")
@@ -103,14 +138,25 @@ async def get_transit_route(origin: tuple, dest: str, dest_coords: tuple | None 
                 # Non-2xx (bad/expired key, quota, provider outage). Do not retry;
                 # surface a clean upstream error and keep provider details out of
                 # the public response.
-                print(f"[directions] Google Routes HTTP {exc.response.status_code}")
-                raise RuntimeError(
-                    f"Google Routes API error {exc.response.status_code}"
+                status_code = exc.response.status_code
+                summary = _provider_error_summary(exc.response)
+                print(
+                    "[directions] Google Routes HTTP "
+                    f"{status_code} code=http_{status_code} summary={summary or 'none'}"
+                )
+                raise GoogleRoutesError(
+                    f"http_{status_code}",
+                    f"Google Routes API error {status_code}",
+                    provider_status=status_code,
+                    provider_summary=summary,
                 ) from exc
             except httpx.RequestError as exc:
                 print(f"[directions] Google Routes request failed: {type(exc).__name__}")
-                raise RuntimeError("Google Routes API request failed") from exc
-        raise RuntimeError("Google Routes API timed out") from last_exc
+                raise GoogleRoutesError(
+                    "request_failed",
+                    "Google Routes API request failed",
+                ) from exc
+        raise GoogleRoutesError("timeout", "Google Routes API timed out") from last_exc
 
 def parse_response(response: dict) -> list:
     # Defensive: a malformed/empty provider route (missing legs, partial transit
