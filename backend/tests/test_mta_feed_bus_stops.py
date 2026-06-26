@@ -7,7 +7,7 @@ yielded zero nearby bus stops everywhere, which killed the entire
 bus-arrivals pipeline.
 """
 
-from app.services.mta_feed import _stops_for_location_list, _bus_stop_record
+from app.services.mta.bus import _stops_for_location_list, _bus_stop_record
 
 
 MTA_SHAPE = {

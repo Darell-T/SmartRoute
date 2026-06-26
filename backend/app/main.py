@@ -21,7 +21,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security.api_key import APIKeyHeader
 from app.routers import thinking, trips, live_feed, subway, switch_narration
-from app.services import mta_feed
+from app.services.mta.warm import warm_realtime_caches
 from app.utils.gtfs_static import GTFSStaticData, close_pool, init_pool
 from app.models.migrate_gtfs import migrate
 
@@ -69,7 +69,7 @@ async def _realtime_warm_loop():
     # paying the full upstream fetch fan-out. First pass runs immediately.
     while True:
         try:
-            await mta_feed.warm_realtime_caches()
+            await warm_realtime_caches()
         except Exception as exc:
             print(f"[warm] realtime cache warm failed: {exc!r}")
         # Wake every connected live-feed socket so it pushes the freshly warmed

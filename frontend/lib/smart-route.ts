@@ -303,26 +303,3 @@ function buildFeeds(now = new Date()): FeedStatus[] {
   ];
 }
 
-export interface AgentLogEntry {
-  t: string;
-  level: "scan" | "detect" | "reason" | "decision";
-  text: string;
-}
-
-export const INITIAL_LOG: AgentLogEntry[] = [
-  { t: "--:--:--", level: "scan", text: "Idle — awaiting destination." },
-];
-
-export const THINKING_LOG_SEED: Omit<AgentLogEntry, "t">[] = [
-  { level: "scan", text: "Polling GTFS-realtime trip_updates · 14 feeds." },
-  { level: "scan", text: "Scanning incident feeds · @NYCTSubway, 311, ATLAS." },
-  { level: "detect", text: "Cross-referencing live vehicle positions." },
-  { level: "reason", text: "Evaluating candidate routes · weighting delays." },
-  { level: "reason", text: "Scoring by transfers, congestion, incidents." },
-];
-
-export function nowStamp(): string {
-  const d = new Date();
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-}
