@@ -4,13 +4,13 @@
   "private": true,
   "scripts": {
     "dev": "next dev --webpack",
-    "build:network": "node --experimental-strip-types scripts/regenerate-canonical-from-gtfs.mjs",
-    "build:visual-network": "node --experimental-strip-types scripts/build-subway-visual-network.mjs",
-    "build:station-anchors": "node --experimental-strip-types scripts/build-subway-station-anchors.ts",
-    "build:artifact-manifest": "node --experimental-strip-types scripts/build-artifact-manifest.ts",
+    "build:network": "tsx scripts/regenerate-canonical-from-gtfs.mjs",
+    "build:visual-network": "tsx scripts/build-subway-visual-network.mjs",
+    "build:station-anchors": "tsx scripts/build-subway-station-anchors.ts",
+    "build:artifact-manifest": "tsx scripts/build-artifact-manifest.ts",
     "build:transit-artifacts": "npm run build:network && npm run build:visual-network && npm run build:station-anchors && npm run build:artifact-manifest",
-    "test:station-anchors": "node --experimental-strip-types --test scripts/build/station-anchors/index.test.ts",
-    "test:unit": "node --experimental-strip-types --test lib/backend-proxy.test.mjs lib/ws-ticket.test.mjs lib/use-service-alerts.test.mjs components/smart-route/left-rail/live-data.test.mjs components/smart-route/left-rail/hydration.test.mjs scripts/build/station-anchors/index.test.ts",
+    "test:station-anchors": "tsx --test scripts/build/station-anchors/index.test.ts",
+    "test:unit": "tsx --test lib/backend-proxy.test.mjs lib/ws-ticket.test.mjs lib/use-service-alerts.test.mjs components/smart-route/left-rail/live-data.test.mjs components/smart-route/left-rail/hydration.test.mjs scripts/build/station-anchors/index.test.ts",
     "check:station-overlay": "node components/map/subway-station-overlay.check.mjs",
     "check:subway-palette": "node components/map/subway-palette.check.mjs",
     "check:subway-renderer": "node components/map/subway-renderer.check.mjs",
@@ -53,6 +53,7 @@
     "eslint-config-next": "^16.2.9",
     "postcss": "^8.5",
     "tailwindcss": "^4.2.0",
+    "tsx": "^4.22.4",
     "tw-animate-css": "1.3.3",
     "typescript": "5.7.3"
   }
