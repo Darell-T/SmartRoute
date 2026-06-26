@@ -78,9 +78,9 @@ import {
 } from "./build/opendata-subway-lines.mjs";
 import { MTA_ROUTE_COLORS } from "./build/mta-colors.ts";
 import { trimTerminalOverhang } from "./build/trim-terminal-overhang.mjs";
-import { addSixtyThirdStreetF } from "./build/sixty-third-street-f.mjs";
+import { addSixtyThirdStreetF } from "./build/sixty-third-street-f.ts";
 import { cleanStatenIslandLine } from "./build/staten-island-cleanup.mjs";
-import { connectRockawayWye } from "./build/rockaway-wye.mjs";
+import { connectRockawayWye } from "./build/rockaway-wye.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const frontendRoot = resolve(here, "..");
