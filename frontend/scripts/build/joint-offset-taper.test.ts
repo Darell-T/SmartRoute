@@ -1,27 +1,44 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { taperBakedJointSteps } from "./joint-offset-taper.mjs";
+import { taperBakedJointSteps } from "./joint-offset-taper.ts";
+import type { Feature, LineStringGeometry, Position } from "./types.ts";
 
 const M_PER_DEG_LAT = 110574;
 const LAT = 40.65;
 const M_PER_DEG_LNG = 111320 * Math.cos((LAT * Math.PI) / 180);
 
+type TestFeatureProperties = {
+  visual_feature_type: string;
+  route_ids: string[];
+  lane_slot_semantic: number;
+  lane_slot: number;
+  lane_offset_baked: boolean;
+  corridor_id: string;
+  joint_offset_taper_baked?: boolean;
+  joint_offset_taper_drop?: boolean;
+};
+
 // Horizontal west->east line between xStartM and xEndM, shifted northward
 // by lateralM, vertices every stepM. Simulates a BAKED lane.
-function bakedLine(xStartM, xEndM, lateralM, stepM = 25) {
-  const coords = [];
+function bakedLine(xStartM: number, xEndM: number, lateralM: number, stepM = 25): Position[] {
+  const coords: Position[] = [];
   for (let s = xStartM; s <= xEndM; s += stepM) {
     coords.push([s / M_PER_DEG_LNG, LAT + lateralM / M_PER_DEG_LAT]);
   }
   return coords;
 }
 
-function lateralM(point) {
+function lateralM(point: Position): number {
   return (point[1] - LAT) * M_PER_DEG_LAT;
 }
 
-function lane(coords, routeIds, slotSemantic, id) {
+function lane(
+  coords: Position[],
+  routeIds: string[],
+  slotSemantic: number,
+  id: string,
+): Feature<LineStringGeometry, TestFeatureProperties> {
   return {
     type: "Feature",
     geometry: { type: "LineString", coordinates: coords },
@@ -46,6 +63,7 @@ test("warps the offset lane's tail onto the neighbor endpoint", () => {
   assert.equal(result.count, 1, "exactly one joint repaired");
   const coords = south.geometry.coordinates;
   const end = coords[coords.length - 1];
+  assert.ok(end);
   // Mover endpoint now lands on the neighbor's start.
   assert.ok(Math.abs(lateralM(end)) < 0.01, `joint end at 0m, got ${lateralM(end)}`);
   // Far end untouched.
@@ -99,6 +117,7 @@ test("an endpoint warps once, onto the nearest target, even with several neighbo
 
   assert.equal(result.count, 1, "endpoint repaired exactly once");
   const end = mover.geometry.coordinates[mover.geometry.coordinates.length - 1];
+  assert.ok(end);
   assert.ok(Math.abs(lateralM(end)) < 0.01, `lands on the NEAREST target (0m), got ${lateralM(end)}`);
 });
 

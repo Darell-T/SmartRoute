@@ -1,16 +1,35 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { cleanStatenIslandLine } from "./staten-island-cleanup.mjs";
+import { cleanStatenIslandLine } from "./staten-island-cleanup.ts";
+import type { Feature, LineStringGeometry, Position } from "./types.ts";
 
 // Synthetic SIR along a horizontal line at lat 40.55.
 const LAT = 40.55;
 const M_PER_DEG_LON = 111320 * Math.cos((LAT * Math.PI) / 180);
-const lonAt = (m) => -74.25 + m / M_PER_DEG_LON;
+const lonAt = (m: number) => -74.25 + m / M_PER_DEG_LON;
 
-function si(id, fromM, toM, latOffsetM = 0, routes = ["SI"]) {
+type TestFeatureProperties = {
+  corridor_id: string;
+  route_ids: string[];
+  color: string;
+  visual_feature_type: string;
+  color_route_ids?: string[];
+  lane_slot?: number;
+  lane_offset_baked?: boolean;
+  si_stitch?: boolean;
+  length_m?: number;
+};
+
+function si(
+  id: string,
+  fromM: number,
+  toM: number,
+  latOffsetM = 0,
+  routes = ["SI"],
+): Feature<LineStringGeometry, TestFeatureProperties> {
   const y = LAT + latOffsetM / 111320;
-  const coordinates = [];
+  const coordinates: Position[] = [];
   for (let m = fromM; m < toM; m += 100) coordinates.push([lonAt(m), y]);
   coordinates.push([lonAt(toM), y]);
   return {
@@ -20,8 +39,8 @@ function si(id, fromM, toM, latOffsetM = 0, routes = ["SI"]) {
   };
 }
 
-const FROM = [lonAt(0), LAT]; // Tottenville side
-const TO = [lonAt(10000), LAT]; // St George side
+const FROM: Position = [lonAt(0), LAT]; // Tottenville side
+const TO: Position = [lonAt(10000), LAT]; // St George side
 
 test("keeps the stitched mainline chain and drops parallel slivers", () => {
   const features = [
@@ -53,6 +72,7 @@ test("stitches small seams between consecutive mainline fragments", () => {
   assert.equal(stitches.length, 1, "seam must be bridged");
   assert.ok((features[0].properties.route_ids || []).includes("SI"));
   const stitch = stitches[0];
+  assert.ok(stitch);
   assert.deepEqual(stitch.properties.route_ids, ["SI"]);
   assert.equal(stitch.properties.color, "#0078C6");
 });
