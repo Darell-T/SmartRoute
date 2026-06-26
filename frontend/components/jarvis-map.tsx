@@ -372,10 +372,11 @@ export function JarvisMap({
     map.current.on("style.load", () => {
       if (!map.current) return;
 
-      // Apple-style basemap mute. Push the CARTO Dark Matter ground WAY back so
-      // the colored transit lines are the only loud thing on the map: the gray
-      // street grid + building blocks were competing with the lines and
-      // collapsing dense bundles together. Pure paint overrides on the existing
+      // Gotham-noir basemap. Recolor the CARTO Dark Matter ground into a deep
+      // indigo night-city: charcoal-indigo land in shadow, a readable steel-blue
+      // harbour, noir-green parks, streets with a cold gleam -- all still quieter
+      // than the colored transit lines so they stay the loudest thing. Pure paint
+      // overrides on the existing
       // base layers (matched by type + id, since CARTO's ids live in the remote
       // style.json) -- delete this loop to restore stock Dark Matter. Each layer
       // is wrapped so a paint prop missing on a future CARTO revision can't throw.
@@ -387,18 +388,30 @@ export function JarvisMap({
             type === "line" &&
             /road|street|tunnel|bridge|motorway|trunk|primary|secondary|tertiary/i.test(id)
           ) {
-            map.current.setPaintProperty(id, "line-color", "#252C37");
-            map.current.setPaintProperty(id, "line-opacity", 0.5);
+            // Streets catch a cold steel-blue gleam -- visible, still quiet under
+            // the transit lines.
+            map.current.setPaintProperty(id, "line-color", "#2B3A4D");
+            map.current.setPaintProperty(id, "line-opacity", 0.55);
           } else if (type === "fill" && /water|ocean|river|bay/i.test(id)) {
-            map.current.setPaintProperty(id, "fill-color", "#0F1825");
+            // Gotham harbour: lifted from near-black to a readable deep steel-blue.
+            map.current.setPaintProperty(id, "fill-color", "#1B3A52");
           } else if (
             type === "fill" &&
-            /land|landuse|park|wood|grass|sand|cemetery/i.test(id)
+            /park|wood|grass|forest|cemetery/i.test(id)
           ) {
-            map.current.setPaintProperty(id, "fill-color", "#161B24");
-            map.current.setPaintProperty(id, "fill-opacity", 0.6);
+            // Parks + grass read as a clear dark forest green -- the Dark
+            // Knight's green lungs in the indigo city.
+            map.current.setPaintProperty(id, "fill-color", "#1C4327");
+            map.current.setPaintProperty(id, "fill-opacity", 0.72);
+          } else if (
+            type === "fill" &&
+            /land|landuse|sand/i.test(id)
+          ) {
+            // Charcoal-indigo land blocks: the city's deep shadow.
+            map.current.setPaintProperty(id, "fill-color", "#161E2E");
+            map.current.setPaintProperty(id, "fill-opacity", 0.66);
           } else if (type === "background") {
-            map.current.setPaintProperty(id, "background-color", "#141923");
+            map.current.setPaintProperty(id, "background-color", "#0D1220");
           } else if (type === "symbol") {
             if (/poi/i.test(id)) {
               map.current.setLayoutProperty(id, "visibility", "none");

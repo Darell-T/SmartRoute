@@ -2,7 +2,7 @@
 // Cross-corridor physical bundle grouping helpers for Phase 1.5.
 // Pure helpers -- no fs, no globals.
 
-import { computeBaseSpineHash } from "./spine.mjs";
+import { computeBaseSpineHash } from "./spine.ts";
 
 const EARTH_RADIUS_M = 6371000;
 
@@ -541,7 +541,7 @@ export function selectPhysicalBundleSpine(group, spinesById) {
 
 /**
  * Re-export computeBaseSpineHash under the Phase 1.5 name.
- * Reuses the same djb2-based hashing from spine.mjs.
+ * Reuses the same djb2-based hashing from spine.ts.
  */
 export function computePhysicalBundleSpineHash(coords) {
   return computeBaseSpineHash(coords);

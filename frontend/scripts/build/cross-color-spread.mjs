@@ -12,7 +12,7 @@ import {
   resamplePolyline,
   pointToPolylineMinDistM,
 } from "./physical-bundle.mjs";
-import { BUNDLE_COLOR_ORDER } from "./lane-order.mjs";
+import { BUNDLE_COLOR_ORDER } from "./lane-order.ts";
 
 const EARTH_RADIUS_M = 6371000;
 const M_PER_DEG_LAT = 111320;
@@ -36,9 +36,9 @@ function cumulativeArc(coords) {
   return arc;
 }
 
-// NOTE: this rank map mirrors the private `rank` in lane-order.mjs. Both derive
+// NOTE: this rank map mirrors the private `rank` in lane-order.ts. Both derive
 // from BUNDLE_COLOR_ORDER. If that list changes, both stay in sync only because
-// they import the same constant. Kept local (not exported from lane-order.mjs)
+// they import the same constant. Kept local (not exported from lane-order.ts)
 // to avoid widening that module's API for a single consumer.
 const RANK = new Map(BUNDLE_COLOR_ORDER.map((c, i) => [String(c).toUpperCase(), i]));
 function colorRank(color) {

@@ -4,6 +4,8 @@ import { INCIDENT_TYPES } from "@/components/map/incidents/incident-marker-types
 
 interface Props {
   variant?: "inline" | "map";
+  /** When provided, renders a close button that hides the legend. */
+  onHide?: () => void;
 }
 
 /**
@@ -22,7 +24,7 @@ interface Props {
  * The expanded section uses the same `IncidentMarkerSvg` component as the
  * compact preview, so the visual language stays consistent.
  */
-export function DisruptionLegend({ variant = "inline" }: Props) {
+export function DisruptionLegend({ variant = "inline", onHide }: Props) {
   return (
     <section
       className="sr-disruption-legend"
@@ -55,6 +57,18 @@ export function DisruptionLegend({ variant = "inline" }: Props) {
         </summary>
         <IncidentLegend showHeader />
       </details>
+
+      {onHide ? (
+        <button
+          type="button"
+          className="sr-disruption-legend__close"
+          onClick={onHide}
+          aria-label="Hide map key"
+          title="Hide map key"
+        >
+          ×
+        </button>
+      ) : null}
     </section>
   );
 }

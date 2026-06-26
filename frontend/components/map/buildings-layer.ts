@@ -73,24 +73,24 @@ export function ensureBuildingsLayer(map: maplibregl.Map, beforeId?: string) {
         "source-layer": "building",
         minzoom: BUILDINGS_MIN_ZOOM,
         paint: {
-          // Dimmed toward the muted basemap so building blocks read as a faint
-          // massing, not bright slabs competing with the transit lines (Apple's
-          // dark map shows almost no buildings). Matte (no vertical gradient) so
-          // tops don't catch light and pop.
-          "fill-extrusion-color": "rgb(24, 30, 39)",
+          // Gotham massing: dark slate-blue monoliths, clearly visible (the Dark
+          // Knight skyline) with a subtle vertical gradient so towers read as 3D.
+          // Still a notch under the transit lines, which draw above them.
+          "fill-extrusion-color": "#1F2A3C",
           "fill-extrusion-height": HEIGHT_EXPR,
           "fill-extrusion-base": BASE_EXPR,
-          "fill-extrusion-vertical-gradient": false,
-          // Slight grow-in across the appearance zoom so blocks rise rather
-          // than pop when crossing minzoom.
+          "fill-extrusion-vertical-gradient": true,
+          // Grow in across the appearance zoom so towers rise rather than pop.
           "fill-extrusion-opacity": [
             "interpolate",
             ["linear"],
             ["zoom"],
             12,
             0,
-            12.6,
-            0.3,
+            13,
+            0.55,
+            15,
+            0.78,
           ],
         },
       },

@@ -10,7 +10,7 @@ export function MapMiniControls({ onExpand, onRecenter }: Props) {
     <div className="sr-map-mini" aria-label="Map controls">
       <button
         type="button"
-        className="sr-map-mini__button"
+        className="sr-map-mini__button sr-map-mini__button--fullscreen"
         aria-label="Toggle fullscreen"
         onClick={onExpand}
       >

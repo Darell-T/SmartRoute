@@ -1519,6 +1519,65 @@
   z-index: 1;
 }
 
+/* Hide control on the map legend + the pill that brings it back. */
+.sr-disruption-legend__close {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  margin-left: 0.1rem;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(244, 239, 226, 0.7);
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.sr-disruption-legend__close:hover {
+  background: rgba(216, 155, 43, 0.16);
+  border-color: rgba(240, 185, 75, 0.5);
+  color: #f4efe2;
+}
+
+.sr-disruption-legend__restore {
+  position: absolute;
+  left: 50%;
+  bottom: 1.04rem;
+  z-index: 12;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  padding: 0.42rem 0.85rem;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 1.1rem;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.12) 0%, rgba(255, 255, 255, 0.03) 60%),
+    rgba(15, 13, 8, 0.5);
+  box-shadow:
+    0 18px 46px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(244, 239, 226, 0.24);
+  -webkit-backdrop-filter: blur(16px) saturate(1.3);
+  backdrop-filter: blur(16px) saturate(1.3);
+  color: rgba(244, 239, 226, 0.82);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.sr-disruption-legend__restore:hover {
+  border-color: rgba(240, 185, 75, 0.5);
+  color: #f4efe2;
+}
+
 .sr-shell__bottom-tray .sr-disruption-legend {
   min-height: 2.15rem;
   align-items: center;
@@ -1770,7 +1829,8 @@
   /* On phones the bottom-sheet rail owns the small viewport, so drop the
      floating map key entirely -- the incident/user markers read clearly on
      their own at this size and the chip otherwise crowds the map. */
-  .sr-disruption-legend[data-variant="map"] {
+  .sr-disruption-legend[data-variant="map"],
+  .sr-disruption-legend__restore {
     display: none;
   }
 
@@ -1800,7 +1860,7 @@
   z-index: 1;
   pointer-events: none;
   border-radius: inherit;
-  background: radial-gradient(ellipse at center, transparent 40%, rgba(8, 12, 22, 0.42) 100%);
+  background: radial-gradient(ellipse at center, transparent 66%, rgba(8, 12, 22, 0.16) 100%);
   mix-blend-mode: multiply;
 }
 
@@ -2123,6 +2183,19 @@
 
 .sr-map-mini__button:active {
   transform: scale(0.98);
+}
+
+@media (max-width: 720px) {
+  .sr-map-mini {
+    top: max(0.75rem, env(safe-area-inset-top));
+    right: 0.75rem;
+    padding: 0.18rem;
+    border-radius: 0.82rem;
+  }
+
+  .sr-map-mini__button--fullscreen {
+    display: none;
+  }
 }
 
 .sr-mission-brief {

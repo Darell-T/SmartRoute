@@ -37,14 +37,14 @@ assert.ok(tokens.SI, "mta-colors.json should define a single SI color");
 
 // 2. Every color consumer imports the shared source (no inline route map) and
 //    never carries the old navy blue.
-const SHARED_IMPORT = /mta-colors(\.mjs)?["']/;
+const SHARED_IMPORT = /mta-colors(\.(mjs|ts))?["']/;
 const consumers = [
   "components/map/route-layers.ts",
   "components/map/incidents/incident-popup.ts",
   "components/smart-route/left-rail/types.ts",
   "scripts/build-subway-visual-network.mjs",
   "scripts/build/opendata-subway-lines.mjs",
-  "scripts/build/subway-station-anchors.mjs",
+  "scripts/build/station-anchors/index.ts",
   "scripts/regenerate-canonical-from-gtfs.mjs",
 ];
 for (const relPath of consumers) {
@@ -61,7 +61,7 @@ for (const relPath of consumers) {
 }
 
 // 3. Color z-order tables (color -> rank) keep the Apple blue, not the old blue.
-const laneOrderSource = read("scripts/build/lane-order.mjs");
+const laneOrderSource = read("scripts/build/lane-order.ts");
 assert.match(
   laneOrderSource,
   new RegExp(`"${APPLE_BLUE}"`),

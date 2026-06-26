@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inflateRawSync } from "node:zlib";
 import { createHash } from "node:crypto";
-import { MTA_ROUTE_COLORS } from "./build/mta-colors.mjs";
+import { MTA_ROUTE_COLORS } from "./build/mta-colors.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const frontendRoot = resolve(here, "..");

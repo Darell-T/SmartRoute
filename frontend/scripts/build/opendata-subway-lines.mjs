@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { MTA_ROUTE_COLORS } from "./mta-colors.mjs";
+import { MTA_ROUTE_COLORS } from "./mta-colors.ts";
 
 export const OPEN_DATA_SOURCE_DATASET_ID = "s692-irgq";
 export const OPEN_DATA_SOURCE_NAME = "nyc_opendata_subway_service_lines";
