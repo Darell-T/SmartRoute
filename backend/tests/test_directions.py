@@ -49,7 +49,7 @@ class DirectionsTests(unittest.IsolatedAsyncioTestCase):
     async def test_google_route_budget_and_alternative_flag_are_configurable(self):
         directions = _load_directions(
             {
-                "GOOGLE_ROUTES_API_KEY": "key",
+                "GOOGLE_ROUTES_API_KEY": "  key  \n",
                 "GOOGLE_ROUTES_TIMEOUT_S": "7.5",
                 "GOOGLE_ROUTES_RETRIES": "1",
                 "GOOGLE_ROUTES_ALTERNATIVES": "0",
@@ -89,6 +89,7 @@ class DirectionsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, {"routes": []})
         request = _Client.requests[0]
         self.assertEqual(request["timeout"], 7.5)
+        self.assertEqual(request["headers"]["X-Goog-Api-Key"], "key")
         self.assertFalse(request["json"]["computeAlternativeRoutes"])
 
     async def test_google_route_timeout_retries_are_capped(self):
@@ -199,6 +200,47 @@ class DirectionsTests(unittest.IsolatedAsyncioTestCase):
                 await directions.get_transit_route((40.7, -73.9), "Atlantic Terminal")
 
         self.assertNotIn("bad provider json detail", str(raised.exception))
+
+    async def test_google_route_http_status_keeps_safe_diagnostic_code(self):
+        directions = _load_directions(
+            {
+                "GOOGLE_ROUTES_API_KEY": "key",
+                "GOOGLE_ROUTES_TIMEOUT_S": "7.5",
+                "GOOGLE_ROUTES_RETRIES": "1",
+            }
+        )
+
+        class _Response:
+            status_code = 403
+
+            def raise_for_status(self):
+                raise directions.httpx.HTTPStatusError(self)
+
+            def json(self):
+                return {
+                    "error": {
+                        "status": "PERMISSION_DENIED",
+                        "message": "API key not authorized for Routes API",
+                    }
+                }
+
+        class _Client:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return False
+
+            async def post(self, *_args, **_kwargs):
+                return _Response()
+
+        with patch.object(directions.httpx, "AsyncClient", _Client):
+            with self.assertRaises(directions.GoogleRoutesError) as raised:
+                await directions.get_transit_route((40.7, -73.9), "Atlantic Terminal")
+
+        self.assertEqual(raised.exception.code, "http_403")
+        self.assertEqual(raised.exception.provider_status, 403)
+        self.assertIn("PERMISSION_DENIED", raised.exception.provider_summary)
 
 
 if __name__ == "__main__":
