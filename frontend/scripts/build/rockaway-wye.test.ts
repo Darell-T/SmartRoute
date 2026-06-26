@@ -1,15 +1,28 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { connectRockawayWye } from "./rockaway-wye.mjs";
+import { connectRockawayWye } from "./rockaway-wye.ts";
+import type { Feature, LineStringGeometry, Position } from "./types.ts";
+
+type TestFeatureProperties = {
+  corridor_id: string | null;
+  route_ids: string[];
+  color: string;
+  length_m?: number;
+  rockaway_wye_connected?: boolean;
+};
 
 // Synthetic Hammels Wye matching the real defect: the east and west legs
 // share a junction node; the cross-bay leg stops ~46m short of it and two
 // degenerate stubs dangle at its end.
-const J = [-73.80935, 40.59291]; // junction node (east/west legs meet here)
-const SHORT = [-73.80952, 40.5933]; // cross-bay end, ~46m from J
+const J: Position = [-73.80935, 40.59291]; // junction node (east/west legs meet here)
+const SHORT: Position = [-73.80952, 40.5933]; // cross-bay end, ~46m from J
 
-function feature(id, coordinates, routes = ["A"]) {
+function feature(
+  id: string | null,
+  coordinates: Position[],
+  routes = ["A"],
+): Feature<LineStringGeometry, TestFeatureProperties> {
   return {
     type: "Feature",
     properties: { corridor_id: id, route_ids: routes, color: "#0A84FF" },
@@ -37,6 +50,7 @@ test("cross-bay leg is extended to the junction node", () => {
 
   assert.equal(summary.connected, true);
   const crossBay = features.find((f) => f.properties.corridor_id === "cross-bay");
+  assert.ok(crossBay);
   const end = crossBay.geometry.coordinates.at(-1);
   assert.deepEqual(end, J, "cross-bay must terminate at the junction node");
 });

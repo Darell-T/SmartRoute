@@ -1,10 +1,23 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { splitFeatureAtLongSegments } from "./line-geometry-cleanup.mjs";
+import { splitFeatureAtLongSegments } from "./line-geometry-cleanup.ts";
+import type { Feature, LineStringGeometry, Position } from "./types.ts";
 
 const DEG_PER_M_LAT = 1 / 111320;
 
-function feature(coords) {
+type TestFeatureProperties = {
+  bundle_id: string;
+  corridor_id: string;
+  route_ids: string[];
+  source_corridor_id?: string | null;
+  length_m?: number;
+  coordinate_count?: number;
+  max_segment_split?: boolean;
+  max_segment_split_part?: number;
+  max_segment_split_count?: number;
+};
+
+function feature(coords: Position[]): Feature<LineStringGeometry, TestFeatureProperties> {
   return {
     type: "Feature",
     geometry: { type: "LineString", coordinates: coords },
@@ -17,7 +30,7 @@ function feature(coords) {
 }
 
 test("splitFeatureAtLongSegments drops long artificial connector segments", () => {
-  const coords = [
+  const coords: Position[] = [
     [-73.99, 40.7],
     [-73.99, 40.7 + 20 * DEG_PER_M_LAT],
     [-73.99, 40.7 + 40 * DEG_PER_M_LAT],
@@ -40,7 +53,7 @@ test("splitFeatureAtLongSegments drops long artificial connector segments", () =
 });
 
 test("splitFeatureAtLongSegments preserves normal continuous features", () => {
-  const coords = [
+  const coords: Position[] = [
     [-73.99, 40.7],
     [-73.99, 40.7 + 20 * DEG_PER_M_LAT],
     [-73.99, 40.7 + 40 * DEG_PER_M_LAT],
@@ -56,7 +69,7 @@ test("splitFeatureAtLongSegments preserves normal continuous features", () => {
 });
 
 test("splitFeatureAtLongSegments removes a leading long connector even when one run survives", () => {
-  const coords = [
+  const coords: Position[] = [
     [-73.99, 40.7],
     [-73.99, 40.7 + 1000 * DEG_PER_M_LAT],
     [-73.99, 40.7 + 1020 * DEG_PER_M_LAT],
@@ -74,7 +87,7 @@ test("splitFeatureAtLongSegments removes a leading long connector even when one 
 });
 
 test("splitFeatureAtLongSegments can drop short split remnants", () => {
-  const coords = [
+  const coords: Position[] = [
     [-73.99, 40.7],
     [-73.99, 40.7 + 40 * DEG_PER_M_LAT],
     [-73.99, 40.7 + 1000 * DEG_PER_M_LAT],
@@ -89,6 +102,8 @@ test("splitFeatureAtLongSegments can drop short split remnants", () => {
 
   assert.equal(parts.length, 1);
   assert.deepEqual(parts[0].geometry.coordinates, coords.slice(2));
+  assert.ok(parts[0].properties.length_m !== undefined);
   assert.equal(parts[0].properties.length_m >= 35, true);
+  assert.ok(parts[0].properties.corridor_id);
   assert.match(parts[0].properties.corridor_id, /corr-test-split-0/);
 });

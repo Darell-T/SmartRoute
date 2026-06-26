@@ -1,7 +1,34 @@
 const EARTH_RADIUS_M = 6371000;
 
-function haversineM([lon1, lat1], [lon2, lat2]) {
-  const toRad = (d) => (d * Math.PI) / 180;
+import type { Feature, LineStringGeometry, Position } from "./types.ts";
+
+type LineCleanupProperties = {
+  bundle_id?: string;
+  corridor_id?: string;
+  source_corridor_id?: string | null;
+  length_m?: number;
+  coordinate_count?: number;
+  max_segment_split?: boolean;
+  max_segment_split_part?: number;
+  max_segment_split_count?: number;
+  [key: string]: unknown;
+};
+
+type LineCleanupFeature = Feature<LineStringGeometry, LineCleanupProperties>;
+
+type SplitFeatureOptions = {
+  maxSegmentM?: number;
+  minSplitPartLengthM?: number;
+};
+
+type SplitFeaturesResult = {
+  features: LineCleanupFeature[];
+  splitFeatureCount: number;
+  emittedPartCount: number;
+};
+
+function haversineM([lon1, lat1]: Position, [lon2, lat2]: Position): number {
+  const toRad = (d: number) => (d * Math.PI) / 180;
   const dLat = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
   const a =
@@ -10,7 +37,7 @@ function haversineM([lon1, lat1], [lon2, lat2]) {
   return 2 * EARTH_RADIUS_M * Math.asin(Math.sqrt(a));
 }
 
-function lengthM(coords) {
+function lengthM(coords: Position[]): number {
   let total = 0;
   for (let index = 1; index < coords.length; index += 1) {
     total += haversineM(coords[index - 1], coords[index]);
@@ -18,7 +45,12 @@ function lengthM(coords) {
   return total;
 }
 
-function cloneWithPart(feature, coordinates, partIndex, partCount) {
+function cloneWithPart(
+  feature: LineCleanupFeature,
+  coordinates: Position[],
+  partIndex: number,
+  partCount: number,
+): LineCleanupFeature {
   const sourceCorridorId = feature.properties?.corridor_id ?? feature.properties?.bundle_id ?? "feature";
   return {
     ...feature,
@@ -39,7 +71,10 @@ function cloneWithPart(feature, coordinates, partIndex, partCount) {
   };
 }
 
-export function splitFeatureAtLongSegments(feature, options = {}) {
+export function splitFeatureAtLongSegments(
+  feature: LineCleanupFeature,
+  options: SplitFeatureOptions = {},
+): LineCleanupFeature[] {
   const maxSegmentM = options.maxSegmentM ?? 250;
   const minSplitPartLengthM = options.minSplitPartLengthM ?? 0;
   const coords = feature?.geometry?.coordinates;
@@ -78,8 +113,11 @@ export function splitFeatureAtLongSegments(feature, options = {}) {
   return keptRuns.map((run, index) => cloneWithPart(feature, run, index, keptRuns.length));
 }
 
-export function splitFeaturesAtLongSegments(features, options = {}) {
-  const output = [];
+export function splitFeaturesAtLongSegments(
+  features: LineCleanupFeature[],
+  options: SplitFeatureOptions = {},
+): SplitFeaturesResult {
+  const output: LineCleanupFeature[] = [];
   let splitFeatureCount = 0;
   let emittedPartCount = 0;
 

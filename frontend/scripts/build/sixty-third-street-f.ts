@@ -12,6 +12,33 @@
 // it adds F to the route set of the orange features that traverse the tunnel
 // bbox. Geometry is never touched; the color stays #FF6319.
 
+import type { Feature, LineStringGeometry, Position } from "./types.ts";
+
+type TunnelBbox = {
+  minLon: number;
+  maxLon: number;
+  minLat: number;
+  maxLat: number;
+};
+
+type SixtyThirdStreetFeatureProperties = {
+  route_ids?: string[];
+  color_route_ids?: string[];
+  color?: string;
+  sixty_third_f_membership_added?: boolean;
+  [key: string]: unknown;
+};
+
+type SixtyThirdStreetFeature = Feature<LineStringGeometry, SixtyThirdStreetFeatureProperties>;
+
+type AddSixtyThirdStreetFOptions = {
+  bbox?: TunnelBbox;
+};
+
+type AddSixtyThirdStreetFSummary = {
+  updated: number;
+};
+
 // Lexington Av-63 St through 21 St-Queensbridge, with margin.
 const TUNNEL_BBOX = {
   minLon: -73.972,
@@ -25,7 +52,7 @@ const MIN_VERTICES_IN_BBOX = 2;
 
 const ORANGE = "#FF6319";
 
-function inBbox(coord, bbox) {
+function inBbox(coord: Position, bbox: TunnelBbox): boolean {
   return (
     coord[0] >= bbox.minLon &&
     coord[0] <= bbox.maxLon &&
@@ -34,7 +61,10 @@ function inBbox(coord, bbox) {
   );
 }
 
-export function addSixtyThirdStreetF(features, options = {}) {
+export function addSixtyThirdStreetF(
+  features: SixtyThirdStreetFeature[] | null | undefined,
+  options: AddSixtyThirdStreetFOptions = {},
+): AddSixtyThirdStreetFSummary {
   const bbox = options.bbox ?? TUNNEL_BBOX;
   let updated = 0;
 
