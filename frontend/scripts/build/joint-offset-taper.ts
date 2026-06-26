@@ -16,30 +16,74 @@
 // Already-flush joints (gap < snapMinM -- e.g. fanout ramps that taper to
 // slot 0 themselves) are left untouched.
 
+import type { Feature, LineStringGeometry, Position } from "./types.ts";
+
+type JointTaperProperties = {
+  visual_feature_type?: string;
+  route_ids?: string[];
+  lane_slot_semantic?: number;
+  lane_slot?: number;
+  lane_offset_baked?: boolean;
+  corridor_id?: string | null;
+  joint_offset_taper_drop?: boolean;
+  joint_offset_taper_baked?: boolean;
+  [key: string]: unknown;
+};
+
+type JointTaperFeature = Feature<LineStringGeometry, JointTaperProperties>;
+
+type TaperOptions = {
+  snapMinM?: number;
+  snapMaxM?: number;
+  blendM?: number;
+};
+
+type TaperEntry = {
+  feature: JointTaperFeature;
+  slot: number;
+  routeIds: string[];
+};
+
+type BestTarget = {
+  gap: number;
+  target: Position;
+};
+
+type TaperJoint = {
+  routes: string;
+  gapM: number;
+  at: Position;
+};
+
+type TaperResult = {
+  count: number;
+  joints: TaperJoint[];
+};
+
 const M_PER_DEG_LAT = 110574;
 
-function metersPerDegLng(lat) {
+function metersPerDegLng(lat: number): number {
   return 111320 * Math.cos((lat * Math.PI) / 180);
 }
 
-function distM(a, b) {
+function distM(a: Position, b: Position): number {
   const k = metersPerDegLng((a[1] + b[1]) / 2);
   return Math.hypot((a[0] - b[0]) * k, (a[1] - b[1]) * M_PER_DEG_LAT);
 }
 
-function sharedRoute(aRouteIds, bRouteIds) {
+function sharedRoute(aRouteIds: string[] | undefined, bRouteIds: string[] | undefined): boolean {
   const set = new Set(aRouteIds ?? []);
   return (bRouteIds ?? []).some((r) => set.has(r));
 }
 
-function semanticSlot(feature) {
+function semanticSlot(feature: JointTaperFeature): number {
   const props = feature.properties ?? {};
   const value = Number(props.lane_slot_semantic ?? props.lane_slot ?? 0);
   return Number.isFinite(value) ? value : 0;
 }
 
 // Smoothstep: continuous first derivative at both ends of the blend zone.
-function ease(t) {
+function ease(t: number): number {
   const clamped = Math.max(0, Math.min(1, t));
   return clamped * clamped * (3 - 2 * clamped);
 }
@@ -49,20 +93,25 @@ function ease(t) {
  * correction over the last `blendM` of arc length. Mutates nothing; returns
  * new coordinates.
  */
-function warpTailToTarget(coords, endpointIndex, target, blendM) {
+function warpTailToTarget(
+  coords: Position[],
+  endpointIndex: number,
+  target: Position,
+  blendM: number,
+): Position[] {
   const last = coords.length - 1;
-  const endpoint = endpointIndex === 0 ? coords[0] : coords[last];
-  const delta = [target[0] - endpoint[0], target[1] - endpoint[1]];
+  const endpoint = endpointIndex === 0 ? coords[0]! : coords[last]!;
+  const delta: Position = [target[0] - endpoint[0], target[1] - endpoint[1]];
 
   // Arc distance of each vertex from the warped endpoint.
   const fromEnd = new Array(coords.length).fill(0);
   if (endpointIndex === 0) {
     for (let i = 1; i < coords.length; i += 1) {
-      fromEnd[i] = fromEnd[i - 1] + distM(coords[i - 1], coords[i]);
+      fromEnd[i] = fromEnd[i - 1] + distM(coords[i - 1]!, coords[i]!);
     }
   } else {
     for (let i = last - 1; i >= 0; i -= 1) {
-      fromEnd[i] = fromEnd[i + 1] + distM(coords[i], coords[i + 1]);
+      fromEnd[i] = fromEnd[i + 1] + distM(coords[i]!, coords[i + 1]!);
     }
   }
   const total = endpointIndex === 0 ? fromEnd[last] : fromEnd[0];
@@ -89,7 +138,10 @@ function warpTailToTarget(coords, endpointIndex, target, blendM) {
  * @param {number} [options.blendM=100]    warp length along the mover's tail.
  * @returns {{count: number, joints: Array<{routes: string, gapM: number, at: [number, number]}>}}
  */
-export function taperBakedJointSteps(lanes, options = {}) {
+export function taperBakedJointSteps(
+  lanes: JointTaperFeature[],
+  options: TaperOptions = {},
+): TaperResult {
   const { snapMinM = 1.5, snapMaxM = 10, blendM = 100 } = options;
 
   const entries = lanes
@@ -101,17 +153,17 @@ export function taperBakedJointSteps(lanes, options = {}) {
     )
     .map((f) => ({ feature: f, slot: semanticSlot(f), routeIds: f.properties?.route_ids ?? [] }));
 
-  const joints = [];
+  const joints: TaperJoint[] = [];
 
   // One warp per mover endpoint, onto the NEAREST eligible target. Warping
   // greedily per pair re-stepped an already-flush endpoint whenever a joint
   // had more than one same-route neighbor in range.
   for (let i = 0; i < entries.length; i += 1) {
     const mover = entries[i];
-    for (const endpointEnd of ["start", "end"]) {
+    for (const endpointEnd of ["start", "end"] as const) {
       const mc = mover.feature.geometry.coordinates;
-      const endpoint = endpointEnd === "start" ? mc[0] : mc[mc.length - 1];
-      let best = null;
+      const endpoint = endpointEnd === "start" ? mc[0]! : mc[mc.length - 1]!;
+      let best: BestTarget | null = null;
       for (let j = 0; j < entries.length; j += 1) {
         if (i === j) continue;
         const still = entries[j];
@@ -120,7 +172,7 @@ export function taperBakedJointSteps(lanes, options = {}) {
         if (Math.abs(mover.slot) <= Math.abs(still.slot)) continue;
         if (!sharedRoute(mover.routeIds, still.routeIds)) continue;
         const sc = still.feature.geometry.coordinates;
-        for (const target of [sc[0], sc[sc.length - 1]]) {
+        for (const target of [sc[0]!, sc[sc.length - 1]!]) {
           const gap = distM(endpoint, target);
           if (gap < snapMinM || gap > snapMaxM) continue;
           if (!best || gap < best.gap) best = { gap, target };
@@ -136,8 +188,8 @@ export function taperBakedJointSteps(lanes, options = {}) {
         if (oc.length > 2) continue;
         if (!sharedRoute(mover.routeIds, other.routeIds)) continue;
         const matches =
-          (distM(oc[0], endpoint) <= 1 && distM(oc[oc.length - 1], best.target) <= 1) ||
-          (distM(oc[oc.length - 1], endpoint) <= 1 && distM(oc[0], best.target) <= 1);
+          (distM(oc[0]!, endpoint) <= 1 && distM(oc[oc.length - 1]!, best.target) <= 1) ||
+          (distM(oc[oc.length - 1]!, endpoint) <= 1 && distM(oc[0]!, best.target) <= 1);
         if (matches) {
           other.feature.properties = {
             ...other.feature.properties,

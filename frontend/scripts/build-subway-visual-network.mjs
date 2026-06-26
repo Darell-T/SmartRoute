@@ -50,7 +50,7 @@ import {
 } from "./build/cross-color-spread.mjs";
 import { smoothSharpCorners, countSharpCorners, densifyLongSegments } from "./build/smooth-polyline.ts";
 import { bridgeRouteGaps } from "./build/bridge-route-gaps.mjs";
-import { taperBakedJointSteps } from "./build/joint-offset-taper.mjs";
+import { taperBakedJointSteps } from "./build/joint-offset-taper.ts";
 import { colocateSameColorStretches } from "./build/colocate-same-color.ts";
 import { repairSameRouteEndpointCrossings } from "./build/same-route-junction-fabric.mjs";
 import { simplifyTightCurves } from "./build/simplify-tight-curves.ts";
@@ -79,7 +79,7 @@ import {
 import { MTA_ROUTE_COLORS } from "./build/mta-colors.ts";
 import { trimTerminalOverhang } from "./build/trim-terminal-overhang.mjs";
 import { addSixtyThirdStreetF } from "./build/sixty-third-street-f.ts";
-import { cleanStatenIslandLine } from "./build/staten-island-cleanup.mjs";
+import { cleanStatenIslandLine } from "./build/staten-island-cleanup.ts";
 import { connectRockawayWye } from "./build/rockaway-wye.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));

@@ -14,32 +14,73 @@
 //   3. Drop everything else that is a parallel shadow of the kept chain or a
 //      short dangling twig. Long genuinely-offset geometry survives.
 
+import type { Feature, LineStringGeometry, Position } from "./types.ts";
+
+type StatenIslandProperties = {
+  corridor_id?: string | null;
+  route_ids?: string[];
+  color_route_ids?: string[];
+  color?: string;
+  visual_feature_type?: string;
+  lane_slot?: number;
+  lane_offset_baked?: boolean;
+  si_stitch?: boolean;
+  length_m?: number;
+  [key: string]: unknown;
+};
+
+type StatenIslandFeature = Feature<LineStringGeometry, StatenIslandProperties>;
+
+type StatenIslandOptions = {
+  fromCoord?: Position;
+  toCoord?: Position;
+};
+
+type StatenIslandSummary = {
+  kept: number;
+  dropped: number;
+  stitches: number;
+  connected?: boolean;
+};
+
+type StatenEdge = {
+  idx: number;
+  a: number;
+  b: number;
+  len: number;
+};
+
+type PreviousStep = {
+  edge: StatenEdge;
+  from: number;
+};
+
 const DEG_LAT_M = 111320;
 const JOIN_M = 90; // endpoint cluster radius (largest observed seam: 82m)
 const STITCH_MAX_M = 100; // bridge seams up to this length
 const SHADOW_M = 45; // fragment entirely within this of the chain = shadow
 const TWIG_MAX_M = 250; // non-chain fragments shorter than this = twig
 
-const TOTTENVILLE = [-74.251, 40.5134];
-const ST_GEORGE = [-74.0734, 40.6437];
+const TOTTENVILLE: Position = [-74.251, 40.5134];
+const ST_GEORGE: Position = [-74.0734, 40.6437];
 
-function metersXY(coord, lat0) {
+function metersXY(coord: Position, lat0: number): Position {
   return [coord[0] * DEG_LAT_M * Math.cos((lat0 * Math.PI) / 180), coord[1] * DEG_LAT_M];
 }
 
-function distM(a, b, lat0) {
+function distM(a: Position, b: Position, lat0: number): number {
   const [ax, ay] = metersXY(a, lat0);
   const [bx, by] = metersXY(b, lat0);
   return Math.hypot(ax - bx, ay - by);
 }
 
-function lineLength(coords, lat0) {
+function lineLength(coords: Position[], lat0: number): number {
   let total = 0;
   for (let i = 1; i < coords.length; i += 1) total += distM(coords[i - 1], coords[i], lat0);
   return total;
 }
 
-function minDistToLine(point, coords, lat0) {
+function minDistToLine(point: Position, coords: Position[], lat0: number): number {
   const p = metersXY(point, lat0);
   let best = Infinity;
   for (let i = 1; i < coords.length; i += 1) {
@@ -55,11 +96,14 @@ function minDistToLine(point, coords, lat0) {
   return best;
 }
 
-export function cleanStatenIslandLine(features, options = {}) {
+export function cleanStatenIslandLine(
+  features: StatenIslandFeature[],
+  options: StatenIslandOptions = {},
+): StatenIslandSummary {
   const fromCoord = options.fromCoord ?? TOTTENVILLE;
   const toCoord = options.toCoord ?? ST_GEORGE;
 
-  const siIdx = [];
+  const siIdx: number[] = [];
   features.forEach((f, i) => {
     if (
       f?.geometry?.type === "LineString" &&
@@ -70,11 +114,11 @@ export function cleanStatenIslandLine(features, options = {}) {
     }
   });
   if (siIdx.length < 2) return { kept: siIdx.length, dropped: 0, stitches: 0 };
-  const lat0 = features[siIdx[0]].geometry.coordinates[0][1];
+  const lat0 = features[siIdx[0]!]!.geometry.coordinates[0]![1];
 
   // --- Endpoint nodes (clustered within JOIN_M) ---
-  const nodes = [];
-  const nodeOf = (coord) => {
+  const nodes: Position[] = [];
+  const nodeOf = (coord: Position): number => {
     for (let n = 0; n < nodes.length; n += 1) {
       if (distM(nodes[n], coord, lat0) <= JOIN_M) return n;
     }
@@ -85,14 +129,14 @@ export function cleanStatenIslandLine(features, options = {}) {
     const cs = features[idx].geometry.coordinates;
     return {
       idx,
-      a: nodeOf(cs[0]),
-      b: nodeOf(cs[cs.length - 1]),
+      a: nodeOf(cs[0]!),
+      b: nodeOf(cs[cs.length - 1]!),
       len: lineLength(cs, lat0),
     };
   });
 
   // --- Dijkstra from the node nearest fromCoord to the node nearest toCoord ---
-  const nearestNode = (coord) => {
+  const nearestNode = (coord: Position): number => {
     let best = 0;
     let bestD = Infinity;
     nodes.forEach((n, i) => {
@@ -104,9 +148,9 @@ export function cleanStatenIslandLine(features, options = {}) {
   const src = nearestNode(fromCoord);
   const dst = nearestNode(toCoord);
   const distArr = new Array(nodes.length).fill(Infinity);
-  const prevEdge = new Array(nodes.length).fill(null);
+  const prevEdge: Array<PreviousStep | null> = new Array(nodes.length).fill(null);
   distArr[src] = 0;
-  const visited = new Set();
+  const visited = new Set<number>();
   while (visited.size < nodes.length) {
     let u = -1;
     let uD = Infinity;
@@ -131,8 +175,8 @@ export function cleanStatenIslandLine(features, options = {}) {
     return { kept: siIdx.length, dropped: 0, stitches: 0, connected: false };
   }
 
-  const chain = new Set();
-  const chainOrder = [];
+  const chain = new Set<number>();
+  const chainOrder: StatenEdge[] = [];
   for (let n = dst; n !== src;) {
     const step = prevEdge[n];
     if (!step) break;
@@ -143,7 +187,7 @@ export function cleanStatenIslandLine(features, options = {}) {
 
   // --- Classify non-chain SI fragments ---
   const chainCoords = [...chain].map((idx) => features[idx].geometry.coordinates);
-  const toDrop = new Set();
+  const toDrop = new Set<number>();
   for (const e of edges) {
     if (chain.has(e.idx)) continue;
     const cs = features[e.idx].geometry.coordinates;
@@ -154,7 +198,7 @@ export function cleanStatenIslandLine(features, options = {}) {
   }
 
   // --- Stitch seams between consecutive chain fragments ---
-  const stitchFeatures = [];
+  const stitchFeatures: StatenIslandFeature[] = [];
   chainOrder.forEach((edge, i) => {
     const next = chainOrder[i + 1];
     if (!next) return;
@@ -163,9 +207,9 @@ export function cleanStatenIslandLine(features, options = {}) {
     // don't touch.
     const sharedNode = [edge.a, edge.b].find((n) => n === next.a || n === next.b);
     if (sharedNode == null) return;
-    const endNear = (e) => {
+    const endNear = (e: StatenEdge): Position => {
       const cs = features[e.idx].geometry.coordinates;
-      const candidates = [cs[0], cs[cs.length - 1]];
+      const candidates: Position[] = [cs[0]!, cs[cs.length - 1]!];
       return candidates.reduce((best, c) =>
         distM(c, nodes[sharedNode], lat0) < distM(best, nodes[sharedNode], lat0) ? c : best,
       );
