@@ -3,7 +3,7 @@
 // overlaps into a single trunk + clipped branches.
 //
 // Pure module -- no fs, process, globalThis, require.
-// Imports only from ./spine.mjs and ./physical-bundle.mjs.
+// Imports only from ./spine.ts and ./physical-bundle.mjs.
 
 import {
   computePairOverlap,

@@ -1,21 +1,21 @@
 "use client";
 
 import {
+  type CSSProperties,
+  type KeyboardEvent,
+  type PointerEvent,
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
-  type ReactNode,
 } from "react";
 import type {
   DestinationSelection,
   FocusedLiveDirection,
   LiveFeedIncident,
-  LiveVehicle,
   RouteCandidate,
   RouteStep,
-  ServiceAlert,
   TransitRouteData,
 } from "@/types";
 import { JarvisMap } from "@/components/jarvis-map";
@@ -37,60 +37,37 @@ import {
   deriveTransitRouteIds,
   normalizeTripCandidates,
 } from "@/lib/route-planning";
-import {
-  INITIAL_LOG,
-  nowStamp,
-  summarizeRoute,
-  THINKING_LOG_SEED,
-  type AgentLogEntry,
-} from "@/lib/smart-route";
-import {
-  SmartRouteShell,
-  type ShellMetric,
-  type TabId,
-} from "@/components/smart-route/shell";
-import { AgentLog } from "@/components/smart-route/agent-log";
-import {
-  RecommendationPanel,
-  type AgentState,
-} from "@/components/smart-route/recommendation-panel";
-import { ServiceAlertsCard } from "@/components/smart-route/service-alerts-card";
-import { ServiceAlertsBoard } from "@/components/smart-route/service-alerts-board";
-import { ReasonChips } from "@/components/smart-route/reason-chips";
+import { summarizeRoute } from "@/lib/smart-route";
 import {
   LeftRail,
   type JarvisState,
 } from "@/components/smart-route/left-rail";
 import { buildLeftRailData } from "@/components/smart-route/left-rail/live-data";
 
-// ── v2 components (behind ?v=2 flag) ────────────────────────────────────────
-import {
-  IntelligenceDivider,
-  IntelligenceHub,
-} from "@/components/smart-route/intelligence-hub";
-import { NetworkHealthBlock } from "@/components/smart-route/network-health-block";
-import { NextArrivalsBlock } from "@/components/smart-route/next-arrivals-block";
-import { LiveIncidentsList } from "@/components/smart-route/live-incidents-list";
 import { DisruptionLegend } from "@/components/smart-route/disruption-legend";
 import { MapMiniControls } from "@/components/smart-route/map-mini-controls";
-import {
-  RouteMissionBriefRail,
-  type RouteMode,
-} from "@/components/smart-route/route-mission-brief-rail";
-import { WeatherChip } from "@/components/smart-route/weather-chip";
-import { normalizeNetworkStatus } from "@/components/smart-route/network-orb-color";
 
-import {
-  ACCENT,
-  appendLog,
-  EmptyRailCard,
-  formatShellClock,
-  type MapActions,
-} from "./page-parts";
+import { type MapActions } from "./page-parts";
+
+type MobileRailSheetState = "hidden" | "peek" | "half" | "full";
+
+const MOBILE_RAIL_SHEET_HEIGHTS: Record<MobileRailSheetState, string> = {
+  hidden: "3.25rem",
+  peek: "min(42dvh, 23rem)",
+  half: "62dvh",
+  full: "calc(100dvh - max(0.75rem, env(safe-area-inset-top)))",
+};
+
+const MOBILE_RAIL_MIN_HEIGHT_PX = 52;
+const MOBILE_RAIL_FULL_MARGIN_PX = 10;
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
 
 export default function JarvisPage() {
-  const [tab, setTab] = useState<TabId>("livemap");
   const [inputValue, setInputValue] = useState("");
+  const [legendHidden, setLegendHidden] = useState(false);
   const [selectedDestination, setSelectedDestination] =
     useState<DestinationSelection | null>(null);
   const [userLocation, setUserLocation] = useState<{
@@ -98,7 +75,6 @@ export default function JarvisPage() {
     lat: number;
   } | null>(null);
   const [jarvisText, setJarvisText] = useState("");
-  const [displayedText, setDisplayedText] = useState("");
   const [thinkingText, setThinkingText] = useState("");
   // Canned ATLAS line after the user switches to an alternative route;
   // overrides the rail's plan headline until the next trip or clear.
@@ -114,14 +90,16 @@ export default function JarvisPage() {
   const [selectedRouteIndex, setSelectedRouteIndex] = useState<number | null>(
     null,
   );
-  const [alerts, setAlerts] = useState<ServiceAlert[]>([]);
   const [tripIncidents, setTripIncidents] = useState<LiveFeedIncident[]>([]);
-  const [logEntries, setLogEntries] = useState<AgentLogEntry[]>(INITIAL_LOG);
-  const [showDetails, setShowDetails] = useState(false);
-  const [refreshedAgo, setRefreshedAgo] = useState(0);
   const [focusedLiveDirection, setFocusedLiveDirection] =
     useState<FocusedLiveDirection | null>(null);
   const [liveRailActivityKey, setLiveRailActivityKey] = useState(0);
+  const [mobileRailSheet, setMobileRailSheet] =
+    useState<MobileRailSheetState>("peek");
+  const [mobileRailDragHeight, setMobileRailDragHeight] = useState<
+    number | null
+  >(null);
+  const [isMobileRailDragging, setIsMobileRailDragging] = useState(false);
   // ATLAS incident scan is OFF by default. It drives a slow, paid Grok + X-search
   // sweep of the half-mile radius, so the rider opts in: flipping it on starts the
   // backend scan and surfaces incidents in the rail and as map markers.
@@ -132,6 +110,11 @@ export default function JarvisPage() {
   const routePlanningRequestIdRef = useRef(0);
   const mapActionsRef = useRef<MapActions | null>(null);
   const liveMapFrameRef = useRef<HTMLElement | null>(null);
+  const mobileRailDragRef = useRef({
+    startY: 0,
+    startHeight: 0,
+    moved: false,
+  });
   const liveArrivalSignatureRef = useRef<string | null>(null);
   // Pre-warmed ATLAS "thinking" clip so the spoken phrase fires the instant
   // route planning starts, with no network/TTS wait on the critical path.
@@ -191,12 +174,6 @@ export default function JarvisPage() {
     atlasScanOn,
   );
   const serviceAlerts = useServiceAlerts();
-
-  const combinedAlerts = useMemo(
-    () => [...alerts, ...liveFeed.alerts],
-    [alerts, liveFeed.alerts],
-  );
-  const liveAlerts = liveFeed.alerts;
 
   // Convert backend `LiveFeedIncident` payloads to the marker-system
   // `MapIncident` shape once. This feeds the map marker bridge and the
@@ -368,43 +345,6 @@ export default function JarvisPage() {
     );
   }, [activeRouteCandidate, focusedLiveDirection, liveFeed.vehicles]);
 
-  const liveNetworkStatus = normalizeNetworkStatus(
-    liveFeed.signals?.network_status ??
-      liveFeed.summary?.status ??
-      (liveFeed.degraded ? "caution" : "healthy"),
-  );
-
-  const shellStatus: "nominal" | "warning" | "error" =
-    errorText || liveFeed.error
-      ? "error"
-      : isLoading || liveFeed.isLoading || liveFeed.degraded
-        ? "warning"
-        : "nominal";
-  const originLabel = useMemo(() => {
-    if (!userLocation) return "Locating...";
-    if (
-      Math.abs(userLocation.lat - DEFAULT_LOCATION.lat) < 0.001 &&
-      Math.abs(userLocation.lng - DEFAULT_LOCATION.lng) < 0.001
-    ) {
-      return "Empire State Building";
-    }
-    return "Current location";
-  }, [userLocation]);
-
-  const agentState: AgentState = isLoading
-    ? "thinking"
-    : isSpeaking
-      ? "speaking"
-      : "idle";
-  const recommendationConfidence = summary ? summary.confidence : 0;
-  const routeMode: RouteMode = isLoading
-    ? "loading"
-    : activeRouteCandidate
-      ? "active"
-      : errorText
-        ? "error"
-        : "idle";
-
   // ── SmartRoute Left Rail state machine ───────────────────────────────────
   // The new rail consumes a four-value ATLAS state. We derive it from the
   // existing app signals so the rail stays in lockstep with the recommendation
@@ -455,12 +395,6 @@ export default function JarvisPage() {
   }, []);
 
   useEffect(() => {
-    if (!summary) return;
-    const id = setInterval(() => setRefreshedAgo((value) => value + 1), 1_000);
-    return () => clearInterval(id);
-  }, [summary]);
-
-  useEffect(() => {
     if (!focusedLiveDirection) return;
     const stillExists = liveDirectionRows.some(
       (row) =>
@@ -505,6 +439,173 @@ export default function JarvisPage() {
     mapActionsRef.current = actions;
   }, []);
 
+  const getMobileRailSnapHeights = useCallback(() => {
+    if (typeof window === "undefined") {
+      return {
+        hidden: MOBILE_RAIL_MIN_HEIGHT_PX,
+        peek: 320,
+        half: 480,
+        full: 680,
+      };
+    }
+
+    const viewportHeight = window.innerHeight || 760;
+    const full = Math.max(
+      MOBILE_RAIL_MIN_HEIGHT_PX,
+      viewportHeight - MOBILE_RAIL_FULL_MARGIN_PX,
+    );
+    const peek = clamp(Math.round(viewportHeight * 0.42), 256, full);
+    const half = clamp(Math.round(viewportHeight * 0.62), peek, full);
+
+    return {
+      hidden: MOBILE_RAIL_MIN_HEIGHT_PX,
+      peek,
+      half,
+      full,
+    };
+  }, []);
+
+  const getMobileRailSheetHeight = useCallback(
+    (state: MobileRailSheetState) => getMobileRailSnapHeights()[state],
+    [getMobileRailSnapHeights],
+  );
+
+  const toggleMobileRailSheet = useCallback(() => {
+    setMobileRailSheet((current) => {
+      if (current === "hidden") return "peek";
+      if (current === "full") return "peek";
+      return "full";
+    });
+  }, []);
+
+  const settleMobileRailSheet = useCallback(
+    (height: number) => {
+      const snaps = getMobileRailSnapHeights();
+      const next = (
+        Object.entries(snaps) as Array<[MobileRailSheetState, number]>
+      ).reduce<[MobileRailSheetState, number]>(
+        (best, current) => {
+          const distance = Math.abs(height - current[1]);
+          return distance < best[1] ? [current[0], distance] : best;
+        },
+        ["peek", Number.POSITIVE_INFINITY],
+      )[0];
+
+      setMobileRailSheet(next);
+      setMobileRailDragHeight(null);
+      setIsMobileRailDragging(false);
+    },
+    [getMobileRailSnapHeights],
+  );
+
+  const handleMobileRailPointerDown = useCallback(
+    (event: PointerEvent<HTMLButtonElement>) => {
+      if (event.pointerType === "mouse" && event.button !== 0) return;
+
+      const startHeight =
+        mobileRailDragHeight ?? getMobileRailSheetHeight(mobileRailSheet);
+      mobileRailDragRef.current = {
+        startY: event.clientY,
+        startHeight,
+        moved: false,
+      };
+      event.currentTarget.setPointerCapture(event.pointerId);
+      setIsMobileRailDragging(true);
+      setMobileRailDragHeight(startHeight);
+    },
+    [getMobileRailSheetHeight, mobileRailDragHeight, mobileRailSheet],
+  );
+
+  const handleMobileRailPointerMove = useCallback(
+    (event: PointerEvent<HTMLButtonElement>) => {
+      if (!isMobileRailDragging) return;
+
+      const drag = mobileRailDragRef.current;
+      const deltaY = drag.startY - event.clientY;
+      if (Math.abs(deltaY) > 4) {
+        drag.moved = true;
+      }
+
+      const snaps = getMobileRailSnapHeights();
+      setMobileRailDragHeight(
+        clamp(drag.startHeight + deltaY, snaps.hidden, snaps.full),
+      );
+    },
+    [getMobileRailSnapHeights, isMobileRailDragging],
+  );
+
+  const handleMobileRailPointerUp = useCallback(
+    (event: PointerEvent<HTMLButtonElement>) => {
+      if (!isMobileRailDragging) return;
+
+      try {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      } catch {
+        // Pointer capture may already be gone after a cancelled gesture.
+      }
+
+      if (!mobileRailDragRef.current.moved) {
+        toggleMobileRailSheet();
+        setMobileRailDragHeight(null);
+        setIsMobileRailDragging(false);
+        return;
+      }
+
+      settleMobileRailSheet(
+        mobileRailDragHeight ?? getMobileRailSheetHeight(mobileRailSheet),
+      );
+    },
+    [
+      getMobileRailSheetHeight,
+      isMobileRailDragging,
+      mobileRailDragHeight,
+      mobileRailSheet,
+      settleMobileRailSheet,
+      toggleMobileRailSheet,
+    ],
+  );
+
+  const handleMobileRailPointerCancel = useCallback(
+    (event: PointerEvent<HTMLButtonElement>) => {
+      if (!isMobileRailDragging) return;
+
+      try {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      } catch {
+        // Pointer capture may already be gone after a cancelled gesture.
+      }
+
+      setMobileRailDragHeight(null);
+      setIsMobileRailDragging(false);
+    },
+    [isMobileRailDragging],
+  );
+
+  const handleMobileRailKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLButtonElement>) => {
+      const order: MobileRailSheetState[] = ["hidden", "peek", "half", "full"];
+      const currentIndex = order.indexOf(mobileRailSheet);
+
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setMobileRailSheet(order[Math.min(currentIndex + 1, order.length - 1)]);
+      } else if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setMobileRailSheet(order[Math.max(currentIndex - 1, 0)]);
+      } else if (event.key === "Home") {
+        event.preventDefault();
+        setMobileRailSheet("hidden");
+      } else if (event.key === "End") {
+        event.preventDefault();
+        setMobileRailSheet("full");
+      } else if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        toggleMobileRailSheet();
+      }
+    },
+    [mobileRailSheet, toggleMobileRailSheet],
+  );
+
   const handleSelectIncident = useCallback(
     (incident: LiveFeedIncident) => {
       const mapIncident = liveFeedIncidentToMapIncident(
@@ -512,7 +613,6 @@ export default function JarvisPage() {
         normalizeIncidentType,
       );
       setAtlasScanOn(true);
-      setTab("livemap");
       mapActionsRef.current?.focusIncident(mapIncident);
     },
     [],
@@ -584,20 +684,12 @@ export default function JarvisPage() {
       audioUrlRef.current = null;
     }
 
-    const seededLog = THINKING_LOG_SEED.map((entry) => ({
-      ...entry,
-      t: nowStamp(),
-    }));
-
     setErrorText(null);
     setIsLoading(true);
     setIsSpeaking(false);
-    setShowDetails(false);
     const initialThinkingText = "Scanning live feeds, alerts, and route options...";
     setThinkingText(initialThinkingText);
     setJarvisText(initialThinkingText);
-    setDisplayedText(initialThinkingText);
-    setLogEntries(seededLog);
     setRouteCandidates([]);
     setActiveRouteCandidateId(null);
     setSelectedRouteIndex(null);
@@ -615,7 +707,6 @@ export default function JarvisPage() {
       if (warmClip.text) {
         setThinkingText(warmClip.text);
         setJarvisText(warmClip.text);
-        setDisplayedText(warmClip.text);
       }
       playNarrationAudio(warmClip.audio);
       void prewarmThinking();
@@ -626,7 +717,6 @@ export default function JarvisPage() {
           if (thinking?.text) {
             setThinkingText(thinking.text);
             setJarvisText(thinking.text);
-            setDisplayedText(thinking.text);
           }
           if (thinking?.audio) {
             playNarrationAudio(thinking.audio);
@@ -652,32 +742,16 @@ export default function JarvisPage() {
         selectedIndex: nextSelectedIndex,
       } = normalizeTripCandidates(tripData);
       const selectedSteps = selectedCandidate?.steps ?? tripData.route;
-      const nextSummary = summarizeRoute(
-        selectedSteps,
-        new Date(),
-        selectedCandidate?.total_minutes,
-      );
       setRouteCandidates(nextCandidates);
       setActiveRouteCandidateId(selectedCandidate?.id ?? nextCandidates[0]?.id ?? null);
       setSelectedRouteIndex(nextSelectedIndex);
       setPlannedRouteSteps(selectedSteps);
-      setAlerts(tripData.alerts ?? []);
       setTripIncidents(tripData.incidents ?? []);
       setSwitchHeadline(null);
       setJarvisText(tripData.recommendation);
-      setDisplayedText(tripData.recommendation);
-      setRefreshedAgo(0);
-      setTab("livemap");
       if (destinationSelection) {
         setSelectedDestination(destinationSelection);
       }
-      setLogEntries(
-        appendLog(
-          seededLog,
-          "decision",
-          `Selected ${nextSummary.transitLines.join(" + ") || "walking route"} · ETA ${nextSummary.arriveLabel}.`,
-        ),
-      );
 
       if (tripData.audio) {
         playNarrationAudio(tripData.audio);
@@ -690,13 +764,6 @@ export default function JarvisPage() {
         message.includes("Failed to plan trip")
           ? "No route found. Try a more specific address."
           : "Connection error. Check your network and try again.",
-      );
-      setLogEntries(
-        appendLog(
-          seededLog,
-          "detect",
-          "Routing request failed. Awaiting a new destination.",
-        ),
       );
     } finally {
       if (routePlanningRequestIdRef.current === requestId) {
@@ -753,7 +820,6 @@ export default function JarvisPage() {
     setActiveRouteCandidateId(candidate.id);
     setSelectedRouteIndex(candidate.index);
     setPlannedRouteSteps(candidate.steps);
-    setRefreshedAgo(0);
     setFocusedLiveDirection(null);
     pulseLiveRail();
 
@@ -809,29 +875,14 @@ export default function JarvisPage() {
     setActiveRouteCandidateId(null);
     setSelectedRouteIndex(null);
     setPlannedRouteSteps([]);
-    setAlerts([]);
     setTripIncidents([]);
     setJarvisText("");
-    setDisplayedText("");
     setThinkingText("");
     setSwitchHeadline(null);
     setErrorText(null);
     setIsSpeaking(false);
-    setShowDetails(false);
-    setRefreshedAgo(0);
     setFocusedLiveDirection(null);
     pulseLiveRail();
-  }
-
-  function handlePlayVoice() {
-    if (!audioRef.current) return;
-    try {
-      audioRef.current.currentTime = 0;
-      audioRef.current.play().catch(() => {});
-      setIsSpeaking(true);
-    } catch {
-      setIsSpeaking(false);
-    }
   }
 
   async function toggleFullscreen(target: HTMLElement | null) {
@@ -847,40 +898,26 @@ export default function JarvisPage() {
     }
   }
 
-  function renderMapWorkspace(options: {
-    mode: "planner" | "liveFeed";
-    routeData?: TransitRouteData | null;
-    destCoords?: { lat: number; lng: number } | null;
-    vehicles?: LiveVehicle[];
-    liveVehicleScopeKey?: string;
-    focusedRouteIds?: string[];
-    topOverlay?: ReactNode;
-  }) {
-    return (
-      <section className="sr-shell-canvas sr-shell-canvas--map">
-        <div className="absolute inset-0">
-          <JarvisMap
-            onLocationUpdate={handleLocationUpdate}
-            mode={options.mode}
-            routeData={options.routeData}
-            isSpeaking={isSpeaking}
-            destCoords={options.destCoords}
-            vehicles={options.vehicles}
-            liveVehicleScopeKey={options.liveVehicleScopeKey}
-            focusedRouteIds={options.focusedRouteIds}
-            onMapReady={handleMapReady}
-          />
-        </div>
+  const mobileRailSheetHeight =
+    mobileRailDragHeight === null
+      ? MOBILE_RAIL_SHEET_HEIGHTS[mobileRailSheet]
+      : `${Math.round(mobileRailDragHeight)}px`;
 
-        <div className="sr-map-vignette" aria-hidden="true" />
-        {options.topOverlay}
-        <MapMiniControls
-          onExpand={() => mapActionsRef.current?.recenter()}
-          onRecenter={() => mapActionsRef.current?.recenter()}
-        />
-      </section>
-    );
-  }
+  const liveRailShellStyle = {
+    position: "absolute",
+    top: 14,
+    left: 14,
+    bottom: 14,
+    width: 400,
+    zIndex: 20,
+    padding: 0,
+    border: "none",
+    background: "transparent",
+    borderRadius: 26,
+    overflow: "hidden",
+    display: "flex",
+    "--sr-mobile-sheet-height": mobileRailSheetHeight,
+  } as CSSProperties;
 
   const liveWorkspace = (
     <div
@@ -897,49 +934,55 @@ export default function JarvisPage() {
           stays in lockstep with the rest of the app. */}
       <aside
         className="sr-live-left-rail-shell"
+        data-mobile-sheet-state={mobileRailSheet}
+        data-mobile-sheet-dragging={isMobileRailDragging ? "true" : undefined}
         aria-label="SmartRoute Left Rail"
-        style={{
-          position: "absolute",
-          top: 14,
-          left: 14,
-          bottom: 14,
-          width: 400,
-          zIndex: 20,
-          padding: 0,
-          border: "none",
-          background: "transparent",
-          borderRadius: 26,
-          overflow: "hidden",
-          display: "flex",
-        }}
+        style={liveRailShellStyle}
       >
-        <LeftRail
-          width={400}
-          jarvisState={jarvisState}
-          isSpeaking={isSpeaking}
-          thinkingText={thinkingText}
-          data={leftRailDisplayData}
-          atlasScanOn={atlasScanOn}
-          onAtlasScanToggle={() => setAtlasScanOn((value) => !value)}
-          onSelectIncident={handleSelectIncident}
-          onSelectAlternative={(candidateId) => {
-            const candidate = routeCandidates.find((c) => c.id === candidateId);
-            if (candidate) handleSelectRouteCandidate(candidate);
-          }}
-          search={{
-            inputValue,
-            isLoading,
-            isListening,
-            hasActiveRoute: Boolean(summary),
-            onInputChange: handleDestinationInputChange,
-            onSubmit: (destination, selection) => {
-              if (selection) setSelectedDestination(selection);
-              void handleSubmit(destination, selection);
-            },
-            onVoiceInput: handleVoiceInput,
-            onClear: handleClearRoute,
-          }}
-        />
+        <button
+          type="button"
+          className="sr-mobile-rail-grip"
+          aria-label="Resize route panel"
+          aria-expanded={mobileRailSheet !== "hidden"}
+          onPointerDown={handleMobileRailPointerDown}
+          onPointerMove={handleMobileRailPointerMove}
+          onPointerUp={handleMobileRailPointerUp}
+          onPointerCancel={handleMobileRailPointerCancel}
+          onKeyDown={handleMobileRailKeyDown}
+        >
+          <span aria-hidden="true" />
+        </button>
+        <div className="sr-mobile-rail-body">
+          <LeftRail
+            width={400}
+            jarvisState={jarvisState}
+            isSpeaking={isSpeaking}
+            thinkingText={thinkingText}
+            data={leftRailDisplayData}
+            atlasScanOn={atlasScanOn}
+            onAtlasScanToggle={() => setAtlasScanOn((value) => !value)}
+            onSelectIncident={handleSelectIncident}
+            onSelectAlternative={(candidateId) => {
+              const candidate = routeCandidates.find(
+                (c) => c.id === candidateId,
+              );
+              if (candidate) handleSelectRouteCandidate(candidate);
+            }}
+            search={{
+              inputValue,
+              isLoading,
+              isListening,
+              hasActiveRoute: Boolean(summary),
+              onInputChange: handleDestinationInputChange,
+              onSubmit: (destination, selection) => {
+                if (selection) setSelectedDestination(selection);
+                void handleSubmit(destination, selection);
+              },
+              onVoiceInput: handleVoiceInput,
+              onClear: handleClearRoute,
+            }}
+          />
+        </div>
       </aside>
 
       <section
@@ -975,7 +1018,21 @@ export default function JarvisPage() {
           onExpand={() => void toggleFullscreen(liveMapFrameRef.current)}
           onRecenter={() => mapActionsRef.current?.recenter()}
         />
-        <DisruptionLegend variant="map" />
+        {legendHidden ? (
+          <button
+            type="button"
+            className="sr-disruption-legend__restore"
+            onClick={() => setLegendHidden(false)}
+            aria-label="Show map key"
+          >
+            Map key
+          </button>
+        ) : (
+          <DisruptionLegend
+            variant="map"
+            onHide={() => setLegendHidden(true)}
+          />
+        )}
         {/* Hidden screen-reader mirror of the canvas-rendered incident
             markers. deck.gl IconLayer paints to <canvas> and so does not
             participate in the accessibility tree — this list bridges that
@@ -985,143 +1042,13 @@ export default function JarvisPage() {
     </div>
   );
 
-  const atlasWorkspace = renderMapWorkspace({
-    mode: routeData ? "planner" : "liveFeed",
-    routeData,
-    destCoords,
-  });
-
-  const atlasRail = (
-    <div className="sr-shell-rail-stack">
-      <RecommendationPanel
-        accent={ACCENT}
-        state={agentState}
-        summary={summary}
-        recommendationText={jarvisText}
-        displayedText={displayedText}
-        thinkingText={thinkingText}
-        voicePlaying={isSpeaking}
-        onPlayVoice={handlePlayVoice}
-        showDetails={showDetails}
-        onToggleDetails={() => setShowDetails((value) => !value)}
-        confidence={recommendationConfidence}
-        errorText={errorText}
-        onRetry={handleSubmit}
-      />
-      {summary ? (
-        <ReasonChips
-          chips={summary.reasonChips}
-          reasonLong={summary.reasonLong}
-          accent={ACCENT}
-          expanded={showDetails}
-          onToggle={() => setShowDetails((value) => !value)}
-        />
-      ) : (
-        <EmptyRailCard
-          label="WHY THIS ROUTE?"
-          body="Search from Live Feed to arm the full recommendation stack and supporting reasoning."
-        />
-      )}
-      <AgentLog accent={ACCENT} entries={logEntries} live={isLoading} />
-      <ServiceAlertsCard alerts={combinedAlerts} />
-    </div>
-  );
-
-  const alertsWorkspace = (
-    <ServiceAlertsBoard
-      alerts={serviceAlerts.alerts}
-      updatedAt={serviceAlerts.updatedAt}
-      activeCount={serviceAlerts.activeCount}
-      affectedRouteCount={serviceAlerts.affectedRouteCount}
-      isLoading={serviceAlerts.isLoading}
-      error={serviceAlerts.error}
-      connectionState={serviceAlerts.connectionState}
-      changedAlertIds={serviceAlerts.changedAlertIds}
-    />
-  );
-
-  const footerLeftByTab: Record<TabId, ShellMetric[]> = {
-    livemap: [
-      {
-        label: "Data Source",
-        value: "MTA GTFS-RT",
-        dot: "#2fd17b",
-        tone: "#e2f1ea",
-      },
-      { label: "Last Update", value: formatShellClock(liveFeed.updatedAt) },
-      { label: "Refresh", value: "Auto (15s)" },
-    ],
-    atlas: [
-      {
-        label: "Data Source",
-        value: "Reasoning Stack",
-        dot: "#d4a7ff",
-        tone: "#f1e5ff",
-      },
-      {
-        label: "Last Update",
-        value: summary ? `${refreshedAgo}s ago` : "Awaiting route",
-      },
-      { label: "Refresh", value: "Live-linked" },
-    ],
-    alerts: [
-      {
-        label: "Data Source",
-        value: "MTA Alerts",
-        dot: "#f0b04a",
-        tone: "#f8e3ba",
-      },
-      { label: "Last Update", value: formatShellClock(serviceAlerts.updatedAt) },
-      { label: "Refresh", value: "Continuous" },
-    ],
-  };
-
-  const footerRight: ShellMetric[] = [
-    {
-      label: "System Status",
-      value:
-        shellStatus === "nominal"
-          ? "Nominal"
-          : shellStatus === "warning"
-            ? "Monitoring"
-            : "Degraded",
-      dot:
-        shellStatus === "nominal"
-          ? "#2fd17b"
-          : shellStatus === "warning"
-            ? "#f0b04a"
-            : "#ff6868",
-      tone: "#dfe7f1",
-    },
-    { label: "Security", value: "Protected" },
-    { label: "Platform", value: "Command Shell" },
-  ];
-
-  // Per design feedback, the production UI is the SmartRoute Left Rail + the
-  // map only — no top navbar (brand + outer tabs + LIVE clock), no metrics
-  // footer, no bottom tray. The outer intelligence / Alerts tabs are subsumed by the
-  // rail's internal Route / Hub / Alerts tabs.
-  //
-  // The `atlasWorkspace`, `alertsWorkspace`, `atlasRail`, `footerLeftByTab`,
-  // and `footerRight` blocks above remain declared so their supporting
-  // hooks stay live (live feed, alerts SSE, route candidates, vehicles)
-  // and so the SmartRouteShell return can be restored cleanly if the team
-  // ever wants the outer chrome back. They are intentionally unused below.
-  void atlasWorkspace;
-  void alertsWorkspace;
-  void atlasRail;
-  void footerLeftByTab;
-  void footerRight;
-
   return (
     <div
       className="sr-app-shell"
       data-active-tab="livemap"
       style={{
-        // Replaces the SmartRouteShell column flex (header / main / footer)
-        // with a single full-viewport row: 400px LeftRail | 1fr Map. No
-        // chrome above or below — the rail's internal nav handles Route /
-        // Hub / Alerts, and the map carries its own search overlay.
+        // Single full-viewport row: 400px LeftRail | 1fr Map. The rail owns
+        // Route / Hub / Alerts, while the map carries its own overlays.
         height: "100dvh",
         width: "100vw",
         display: "flex",
@@ -1133,3 +1060,4 @@ export default function JarvisPage() {
     </div>
   );
 }
+

@@ -23,23 +23,23 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inflateRawSync } from "node:zlib";
-import { buildSpineFromCorridor } from "./build/spine.mjs";
+import { buildSpineFromCorridor } from "./build/spine.ts";
 import {
   assertSpineHashConsistency,
   assertNoBogusTransitions,
   assertQContinuousInBrooklyn,
   assertOriginsForRedGreenFlatbushEastern,
-} from "./build/spine-validation.mjs";
+} from "./build/spine-validation.ts";
 import {
   groupSpinesIntoPhysicalBundles,
   selectPhysicalBundleSpine,
   computePhysicalBundleSpineHash,
   clipPolylineToExtent,
 } from "./build/physical-bundle.mjs";
-import { orderColorsForBundle, BUNDLE_COLOR_ORDER } from "./build/lane-order.mjs";
+import { orderColorsForBundle, BUNDLE_COLOR_ORDER } from "./build/lane-order.ts";
 import { buildBranchTransitions } from "./build/branch-transitions.mjs";
 import { filterBogusTransitions, markOrphanLanes, removeOrphanErrorLanes } from "./build/lane-continuity-filter.mjs";
-import { dedupeDuplicateCorridors } from "./build/dedupe-duplicate-corridors.mjs";
+import { dedupeDuplicateCorridors } from "./build/dedupe-duplicate-corridors.ts";
 import { groupCorridorsByColorAndOverlap, mergeSameColorGroup } from "./build/same-color-merge.mjs";
 import { materializePhysicalBundles } from "./build/physical-bundle-materialization.mjs";
 import {
@@ -48,7 +48,7 @@ import {
   offsetPolylineBySlotRamp,
   offsetPolylineOverExtent,
 } from "./build/cross-color-spread.mjs";
-import { smoothSharpCorners, countSharpCorners, densifyLongSegments } from "./build/smooth-polyline.mjs";
+import { smoothSharpCorners, countSharpCorners, densifyLongSegments } from "./build/smooth-polyline.ts";
 import { bridgeRouteGaps } from "./build/bridge-route-gaps.mjs";
 import { taperBakedJointSteps } from "./build/joint-offset-taper.mjs";
 import { colocateSameColorStretches } from "./build/colocate-same-color.mjs";
@@ -76,7 +76,7 @@ import {
   OPEN_DATA_SOURCE_DATASET_ID,
   OPEN_DATA_SOURCE_NAME,
 } from "./build/opendata-subway-lines.mjs";
-import { MTA_ROUTE_COLORS } from "./build/mta-colors.mjs";
+import { MTA_ROUTE_COLORS } from "./build/mta-colors.ts";
 import { trimTerminalOverhang } from "./build/trim-terminal-overhang.mjs";
 import { addSixtyThirdStreetF } from "./build/sixty-third-street-f.mjs";
 import { cleanStatenIslandLine } from "./build/staten-island-cleanup.mjs";
@@ -268,7 +268,7 @@ const COLOR_VISUAL_ORDER = [
 // after visual QA flags specific junctions where the heuristic produces
 // visible crossings.
 //
-// Note: BUNDLE_COLOR_ORDER is imported from ./build/lane-order.mjs (single
+// Note: BUNDLE_COLOR_ORDER is imported from ./build/lane-order.ts (single
 // source of truth). The local copy was removed to prevent the rank table
 // from drifting from the canonical order used by orderColorsForBundle.
 const BUNDLE_ORDER_OVERRIDES = {};

@@ -22,9 +22,10 @@ except ZoneInfoNotFoundError:
     NYC_TZ = None
 
 if gtfs_realtime_pb2 is not None and NYC_TZ is not None:
-    from app.services import mta_feed
+    from app.services.mta import alerts as mta_alerts, bus as mta_bus
 else:
-    mta_feed = None
+    mta_alerts = None
+    mta_bus = None
 
 
 def _localized_timestamp(year: int, month: int, day: int, hour: int) -> int:
@@ -99,7 +100,7 @@ class MtaFeedServiceAlertParserTests(unittest.TestCase):
             header="Expired C notice",
         )
 
-        alerts = mta_feed._parse_service_alerts(
+        alerts = mta_alerts._parse_service_alerts(
             feed.SerializeToString(),
             include_same_day=False,
             now_timestamp=now,
@@ -145,7 +146,7 @@ class MtaFeedServiceAlertParserTests(unittest.TestCase):
             header="Expired C notice",
         )
 
-        alerts = mta_feed._parse_service_alerts(
+        alerts = mta_alerts._parse_service_alerts(
             feed.SerializeToString(),
             include_same_day=True,
             now_timestamp=now,
@@ -157,7 +158,7 @@ class MtaFeedServiceAlertParserTests(unittest.TestCase):
         )
 
 
-@unittest.skipIf(mta_feed is None, "GTFS realtime dependencies are unavailable")
+@unittest.skipIf(mta_bus is None, "GTFS realtime dependencies are unavailable")
 class BusTimeParsingTests(unittest.TestCase):
     def test_stop_monitoring_accepts_dict_delivery_and_departure_time(self):
         payload = {
@@ -191,7 +192,7 @@ class BusTimeParsingTests(unittest.TestCase):
             "stop_lon": -73.951,
         }
 
-        arrivals = mta_feed.parse_bus_stop_monitoring(payload, stop)
+        arrivals = mta_bus.parse_bus_stop_monitoring(payload, stop)
 
         self.assertEqual(len(arrivals), 1)
         self.assertEqual(arrivals[0]["route_id"], "B44")
@@ -233,7 +234,7 @@ class BusTimeParsingTests(unittest.TestCase):
             "stop_lon": -73.951,
             "stop_compass": "SW",
         }
-        arrivals = mta_feed.parse_bus_stop_monitoring(self._payload(), stop)
+        arrivals = mta_bus.parse_bus_stop_monitoring(self._payload(), stop)
         self.assertEqual(len(arrivals), 1)
         self.assertEqual(arrivals[0]["stop_compass"], "SW")
         # SIRI DirectionRef must remain untouched on the arrival.
@@ -247,7 +248,7 @@ class BusTimeParsingTests(unittest.TestCase):
             "stop_lat": 40.669,
             "stop_lon": -73.951,
         }
-        arrivals = mta_feed.parse_bus_stop_monitoring(self._payload(), stop)
+        arrivals = mta_bus.parse_bus_stop_monitoring(self._payload(), stop)
         self.assertEqual(arrivals[0]["stop_compass"], "")
 
 
