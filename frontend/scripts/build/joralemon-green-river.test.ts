@@ -1,11 +1,22 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { applyJoralemonGreenRiverSmoothing } from "./joralemon-green-river.mjs";
+import { applyJoralemonGreenRiverSmoothing } from "./joralemon-green-river.ts";
+import type { Feature, LineStringGeometry, Position } from "./types.ts";
 
 const GREEN = "#00933C";
 
-function feature(coords) {
+type TestFeatureProperties = {
+  corridor_id: string;
+  color: string;
+  route_ids: string[];
+  joralemon_green_river_smoothed?: boolean;
+  joralemon_green_river_start_arc_m?: number;
+  joralemon_green_river_end_arc_m?: number;
+  joralemon_green_river_replaced_length_m?: number;
+};
+
+function feature(coords: Position[]): Feature<LineStringGeometry, TestFeatureProperties> {
   return {
     type: "Feature",
     geometry: {
@@ -20,21 +31,21 @@ function feature(coords) {
   };
 }
 
-function bearingDeg(a, b) {
+function bearingDeg(a: Position, b: Position): number {
   const lat = ((a[1] + b[1]) / 2) * Math.PI / 180;
   const dx = (b[0] - a[0]) * 111320 * Math.cos(lat);
   const dy = (b[1] - a[1]) * 110574;
   return Math.atan2(dy, dx) * 180 / Math.PI;
 }
 
-function turnDeg(a, b, c) {
+function turnDeg(a: Position, b: Position, c: Position): number {
   let turn = bearingDeg(b, c) - bearingDeg(a, b);
   while (turn > 180) turn -= 360;
   while (turn < -180) turn += 360;
   return Math.abs(turn);
 }
 
-function maxTurn(coords) {
+function maxTurn(coords: Position[]): number {
   let max = 0;
   for (let index = 1; index < coords.length - 1; index += 1) {
     max = Math.max(max, turnDeg(coords[index - 1], coords[index], coords[index + 1]));
@@ -43,7 +54,7 @@ function maxTurn(coords) {
 }
 
 test("Joralemon green river smoothing removes the local water-crossing wiggle", () => {
-  const before = [
+  const before: Position[] = [
     [-73.9850, 40.6905],
     [-73.9940, 40.6935],
     [-74.0030, 40.6965],
@@ -68,6 +79,7 @@ test("Joralemon green river smoothing removes the local water-crossing wiggle", 
   });
 
   const after = features[0].geometry.coordinates;
+  assert.ok(features[0]);
   assert.equal(diagnostics.applied, true);
   assert.equal(features[0].properties.joralemon_green_river_smoothed, true);
   assert.deepEqual(after[0], before[0]);

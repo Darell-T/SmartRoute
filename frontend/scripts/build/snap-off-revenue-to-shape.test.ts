@@ -1,11 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { snapOffRevenueToShape, maxOffShapeM } from "./snap-off-revenue-to-shape.mjs";
+import { snapOffRevenueToShape, maxOffShapeM } from "./snap-off-revenue-to-shape.ts";
+import type { Position } from "./types.ts";
 
 const DEG_LAT = 1 / 110574;
 const DEG_LON = 1 / (111320 * Math.cos((40.81 * Math.PI) / 180));
-const O = [-73.928, 40.815];
-const P = (dxM, dyM) => [O[0] + dxM * DEG_LON, O[1] + dyM * DEG_LAT];
+const O: Position = [-73.928, 40.815];
+const P = (dxM: number, dyM: number): Position => [O[0] + dxM * DEG_LON, O[1] + dyM * DEG_LAT];
 
 // a straight N-S revenue shape at x=0
 const shape = Array.from({ length: 21 }, (_, i) => P(0, i * 30));
@@ -43,6 +44,7 @@ test("replacement follows a CURVED shape, not a straight chord", () => {
   assert.ok(maxOffShapeM(out, [curve]) <= 50, "result lies on the curve");
   // the replaced middle is on the arc, NOT on the straight chord between entry/exit
   const mid = out[Math.floor(out.length / 2)];
+  assert.ok(mid);
   // distance from chord endpoints to mid should reflect the arc bulge (curve), i.e. mid is on the arc
   assert.ok(maxOffShapeM([mid], [curve]) <= 50);
 });
