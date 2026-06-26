@@ -1,19 +1,32 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { addSixtyThirdStreetF } from "./sixty-third-street-f.mjs";
+import { addSixtyThirdStreetF } from "./sixty-third-street-f.ts";
+import type { Feature, LineStringGeometry, Position } from "./types.ts";
+
+type TestFeatureProperties = {
+  route_ids: string[];
+  color_route_ids: string[];
+  color: string;
+  visual_feature_type: string;
+  sixty_third_f_membership_added?: boolean;
+};
 
 // The 63 St tunnel corridor: Lexington Av-63 St -> Roosevelt Island ->
 // 21 St-Queensbridge. NYC OpenData draws this geometry as the M service line
 // only; in reality (and on Apple Maps) it is the F's crossing.
-const TUNNEL_PATH = [
+const TUNNEL_PATH: Position[] = [
   [-73.9662, 40.7646], // Lexington Av-63 St
   [-73.9533, 40.7591], // Roosevelt Island
   [-73.9428, 40.7544], // 21 St-Queensbridge
   [-73.9291, 40.7521], // 36 St junction approach
 ];
 
-function feature(routes, coordinates, color = "#FF6319") {
+function feature(
+  routes: string[],
+  coordinates: Position[],
+  color = "#FF6319",
+): Feature<LineStringGeometry, TestFeatureProperties> {
   return {
     type: "Feature",
     properties: {

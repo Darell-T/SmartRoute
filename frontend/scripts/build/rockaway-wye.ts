@@ -14,6 +14,31 @@
 
 const DEG_LAT_M = 111320;
 
+import type { Feature, LineStringGeometry, Position } from "./types.ts";
+
+type RockawayWyeProperties = {
+  corridor_id?: string | null;
+  route_ids?: string[];
+  color?: string;
+  length_m?: number;
+  rockaway_wye_connected?: boolean;
+  [key: string]: unknown;
+};
+
+type RockawayWyeFeature = Feature<LineStringGeometry, RockawayWyeProperties>;
+
+type RockawayEndpoint = {
+  f: RockawayWyeFeature;
+  pos: "start" | "end";
+  coord: Position;
+};
+
+type RockawayWyeSummary = {
+  connected: boolean;
+  stubsRemoved: number;
+  extended: number;
+};
+
 // Tight bbox around the wye throat.
 const WYE_BBOX = {
   minLon: -73.8135,
@@ -25,17 +50,17 @@ const STUB_MAX_M = 12; // degenerate artifacts
 const SNAP_MAX_M = 80; // endpoints within this of the node get connected
 const NODE_TOUCH_M = 8; // already at the node
 
-function metersXY(coord, lat0) {
+function metersXY(coord: Position, lat0: number): Position {
   return [coord[0] * DEG_LAT_M * Math.cos((lat0 * Math.PI) / 180), coord[1] * DEG_LAT_M];
 }
 
-function distM(a, b, lat0) {
+function distM(a: Position, b: Position, lat0: number): number {
   const [ax, ay] = metersXY(a, lat0);
   const [bx, by] = metersXY(b, lat0);
   return Math.hypot(ax - bx, ay - by);
 }
 
-function inBbox(coord) {
+function inBbox(coord: Position): boolean {
   return (
     coord[0] >= WYE_BBOX.minLon &&
     coord[0] <= WYE_BBOX.maxLon &&
@@ -44,18 +69,18 @@ function inBbox(coord) {
   );
 }
 
-function lineLength(coords, lat0) {
+function lineLength(coords: Position[], lat0: number): number {
   let total = 0;
   for (let i = 1; i < coords.length; i += 1) total += distM(coords[i - 1], coords[i], lat0);
   return total;
 }
 
-export function connectRockawayWye(features) {
+export function connectRockawayWye(features: RockawayWyeFeature[]): RockawayWyeSummary {
   const lat0 = (WYE_BBOX.minLat + WYE_BBOX.maxLat) / 2;
 
   // A-features with an endpoint inside the wye bbox.
-  const legs = [];
-  const stubs = [];
+  const legs: RockawayWyeFeature[] = [];
+  const stubs: number[] = [];
   features.forEach((f, idx) => {
     if (f?.geometry?.type !== "LineString") return;
     if (!(f.properties?.route_ids ?? []).includes("A")) return;
@@ -71,14 +96,18 @@ export function connectRockawayWye(features) {
   // Junction node: the endpoint shared by two of the legs (the east/west
   // pair touch). Pick the in-bbox endpoint that another leg's endpoint sits
   // closest to.
-  const endpoints = [];
+  const endpoints: RockawayEndpoint[] = [];
   for (const f of legs) {
     const cs = f.geometry.coordinates;
-    for (const [pos, coord] of [["start", cs[0]], ["end", cs[cs.length - 1]]]) {
+    const endpointPairs: Array<["start" | "end", Position]> = [
+      ["start", cs[0]],
+      ["end", cs[cs.length - 1]],
+    ];
+    for (const [pos, coord] of endpointPairs) {
       if (inBbox(coord)) endpoints.push({ f, pos, coord });
     }
   }
-  let node = null;
+  let node: Position | null = null;
   let bestPair = Infinity;
   for (let i = 0; i < endpoints.length; i += 1) {
     for (let j = i + 1; j < endpoints.length; j += 1) {
