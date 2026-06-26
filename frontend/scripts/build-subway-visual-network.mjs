@@ -51,11 +51,11 @@ import {
 import { smoothSharpCorners, countSharpCorners, densifyLongSegments } from "./build/smooth-polyline.ts";
 import { bridgeRouteGaps } from "./build/bridge-route-gaps.mjs";
 import { taperBakedJointSteps } from "./build/joint-offset-taper.mjs";
-import { colocateSameColorStretches } from "./build/colocate-same-color.mjs";
+import { colocateSameColorStretches } from "./build/colocate-same-color.ts";
 import { repairSameRouteEndpointCrossings } from "./build/same-route-junction-fabric.mjs";
 import { simplifyTightCurves } from "./build/simplify-tight-curves.ts";
 import { snapDanglingSameColorEndpoints } from "./build/snap-dangling-same-color.mjs";
-import { snapOffRevenueToShape, maxOffShapeM } from "./build/snap-off-revenue-to-shape.mjs";
+import { snapOffRevenueToShape, maxOffShapeM } from "./build/snap-off-revenue-to-shape.ts";
 import { replaceEndpointHairpin } from "./build/schematic-hairpin-arc.mjs";
 import { hermiteBetween } from "./build/offset-bow.ts";
 import { collapseSameColorOverlaps } from "./build/collapse-same-color.mjs";
@@ -69,7 +69,7 @@ import {
 import { applyNostrandEasternSchematic } from "./build/nostrand-eastern-schematic.mjs";
 import { applyBrightonBqChurchSpacing } from "./build/brighton-bq-church-spacing.mjs";
 import { applyCulverFgProspectSmoothing } from "./build/culver-fg-prospect-smoothing.mjs";
-import { applyJoralemonGreenRiverSmoothing } from "./build/joralemon-green-river.mjs";
+import { applyJoralemonGreenRiverSmoothing } from "./build/joralemon-green-river.ts";
 import { applyStNicholasBlueStraightening } from "./build/st-nicholas-blue-straightening.mjs";
 import {
   loadOpenDataSubwayLines,

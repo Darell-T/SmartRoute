@@ -1,3 +1,48 @@
+import type { Feature, LineStringGeometry, Position } from "./types.ts";
+
+type JoralemonBbox = {
+  minLon: number;
+  maxLon: number;
+  minLat: number;
+  maxLat: number;
+};
+
+type JoralemonFeatureProperties = {
+  corridor_id?: string;
+  color?: string;
+  route_ids?: string[];
+  joralemon_green_river_smoothed?: boolean;
+  joralemon_green_river_start_arc_m?: number;
+  joralemon_green_river_end_arc_m?: number;
+  joralemon_green_river_replaced_length_m?: number;
+  [key: string]: unknown;
+};
+
+type JoralemonFeature = Feature<LineStringGeometry, JoralemonFeatureProperties>;
+
+type ArcRange = {
+  arcs: number[];
+  startArc: number;
+  endArc: number;
+};
+
+type JoralemonOptions = {
+  bbox?: JoralemonBbox;
+  marginM?: number;
+  sampleM?: number;
+  tangentSampleM?: number;
+  handleFrac?: number;
+  maxHandleM?: number;
+};
+
+type JoralemonResult = {
+  features: JoralemonFeature[];
+  diagnostics: {
+    applied: boolean;
+    replaced_length_m: number;
+  };
+};
+
 const EARTH_RADIUS_M = 6371000;
 const M_PER_DEG_LAT = 110574;
 const GREEN = "#00933C";
@@ -9,12 +54,12 @@ const DEFAULT_BBOX = {
   maxLat: 40.7000,
 };
 
-function metersPerDegLng(lat) {
+function metersPerDegLng(lat: number): number {
   return 111320 * Math.cos((lat * Math.PI) / 180);
 }
 
-function haversineM([lon1, lat1], [lon2, lat2]) {
-  const toRad = (d) => (d * Math.PI) / 180;
+function haversineM([lon1, lat1]: Position, [lon2, lat2]: Position): number {
+  const toRad = (d: number) => (d * Math.PI) / 180;
   const dLat = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
   const a =
@@ -23,15 +68,15 @@ function haversineM([lon1, lat1], [lon2, lat2]) {
   return 2 * EARTH_RADIUS_M * Math.asin(Math.sqrt(a));
 }
 
-function projectAt(point, lat) {
+function projectAt(point: Position, lat: number): Position {
   return [point[0] * metersPerDegLng(lat), point[1] * M_PER_DEG_LAT];
 }
 
-function unprojectAt(point, lat) {
+function unprojectAt(point: Position, lat: number): Position {
   return [point[0] / metersPerDegLng(lat), point[1] / M_PER_DEG_LAT];
 }
 
-function inBBox(point, bbox) {
+function inBBox(point: Position, bbox: JoralemonBbox): boolean {
   return (
     point[0] >= bbox.minLon &&
     point[0] <= bbox.maxLon &&
@@ -40,7 +85,7 @@ function inBBox(point, bbox) {
   );
 }
 
-function isLineFeature(feature) {
+function isLineFeature(feature: JoralemonFeature): boolean {
   return (
     feature?.geometry?.type === "LineString" &&
     Array.isArray(feature.geometry.coordinates) &&
@@ -48,11 +93,11 @@ function isLineFeature(feature) {
   );
 }
 
-function routeIdsOf(feature) {
+function routeIdsOf(feature: JoralemonFeature): string[] {
   return (feature.properties?.route_ids ?? []).map(String);
 }
 
-function isTargetGreenFeature(feature, bbox) {
+function isTargetGreenFeature(feature: JoralemonFeature, bbox: JoralemonBbox): boolean {
   if (!isLineFeature(feature)) return false;
   const color = String(feature.properties?.color ?? "").toUpperCase();
   const routes = routeIdsOf(feature);
@@ -64,7 +109,7 @@ function isTargetGreenFeature(feature, bbox) {
   );
 }
 
-function cumulativeArcs(coords) {
+function cumulativeArcs(coords: Position[]): number[] {
   const arcs = [0];
   for (let index = 1; index < coords.length; index += 1) {
     arcs.push(arcs[index - 1] + haversineM(coords[index - 1], coords[index]));
@@ -72,10 +117,14 @@ function cumulativeArcs(coords) {
   return arcs;
 }
 
-function interpolateAtArc(coords, arcs, targetArc) {
-  if (targetArc <= 0) return coords[0].slice();
+function clonePosition(coord: Position): Position {
+  return [coord[0], coord[1]];
+}
+
+function interpolateAtArc(coords: Position[], arcs: number[], targetArc: number): Position {
+  if (targetArc <= 0) return clonePosition(coords[0]);
   const total = arcs[arcs.length - 1] ?? 0;
-  if (targetArc >= total) return coords[coords.length - 1].slice();
+  if (targetArc >= total) return clonePosition(coords[coords.length - 1]);
 
   for (let index = 1; index < arcs.length; index += 1) {
     if (arcs[index] >= targetArc) {
@@ -90,12 +139,12 @@ function interpolateAtArc(coords, arcs, targetArc) {
     }
   }
 
-  return coords[coords.length - 1].slice();
+  return clonePosition(coords[coords.length - 1]);
 }
 
-function arcRangeForBBox(coords, bbox, marginM) {
+function arcRangeForBBox(coords: Position[], bbox: JoralemonBbox, marginM: number): ArcRange | null {
   const arcs = cumulativeArcs(coords);
-  const inside = [];
+  const inside: number[] = [];
   for (let index = 0; index < coords.length; index += 1) {
     if (inBBox(coords[index], bbox)) inside.push(arcs[index]);
   }
@@ -109,7 +158,7 @@ function arcRangeForBBox(coords, bbox, marginM) {
   };
 }
 
-function unitVector(from, to) {
+function unitVector(from: Position, to: Position): Position {
   const refLat = (from[1] + to[1]) / 2;
   const a = projectAt(from, refLat);
   const b = projectAt(to, refLat);
@@ -120,7 +169,13 @@ function unitVector(from, to) {
   return [dx / length, dy / length];
 }
 
-function tangentAtArc(coords, arcs, arc, direction, sampleM) {
+function tangentAtArc(
+  coords: Position[],
+  arcs: number[],
+  arc: number,
+  direction: number,
+  sampleM: number,
+): Position {
   const total = arcs[arcs.length - 1] ?? 0;
   const fromArc = Math.max(0, Math.min(total, arc - direction * sampleM));
   const toArc = Math.max(0, Math.min(total, arc + direction * sampleM));
@@ -129,7 +184,15 @@ function tangentAtArc(coords, arcs, arc, direction, sampleM) {
   return direction >= 0 ? unitVector(from, to) : unitVector(to, from);
 }
 
-function hermiteCurve(start, end, startUnit, endUnit, sampleM, handleFrac, maxHandleM) {
+function hermiteCurve(
+  start: Position,
+  end: Position,
+  startUnit: Position,
+  endUnit: Position,
+  sampleM: number,
+  handleFrac: number,
+  maxHandleM: number,
+): Position[] {
   const refLat = (start[1] + end[1]) / 2;
   const p0 = projectAt(start, refLat);
   const p1 = projectAt(end, refLat);
@@ -138,7 +201,7 @@ function hermiteCurve(start, end, startUnit, endUnit, sampleM, handleFrac, maxHa
   const m0 = [startUnit[0] * handleM, startUnit[1] * handleM];
   const m1 = [endUnit[0] * handleM, endUnit[1] * handleM];
   const steps = Math.max(16, Math.ceil(chordM / sampleM));
-  const output = [];
+  const output: Position[] = [];
 
   for (let index = 0; index <= steps; index += 1) {
     const t = index / steps;
@@ -159,7 +222,11 @@ function hermiteCurve(start, end, startUnit, endUnit, sampleM, handleFrac, maxHa
   return output;
 }
 
-function replaceArc(coords, range, options) {
+function replaceArc(
+  coords: Position[],
+  range: ArcRange,
+  options: Required<Pick<JoralemonOptions, "sampleM" | "tangentSampleM" | "handleFrac" | "maxHandleM">>,
+): Position[] | null {
   const {
     sampleM,
     tangentSampleM,
@@ -175,7 +242,7 @@ function replaceArc(coords, range, options) {
   const endTangent = tangentAtArc(coords, arcs, endArc, 1, tangentSampleM);
   const curve = hermiteCurve(start, end, startTangent, endTangent, sampleM, handleFrac, maxHandleM);
 
-  const output = [];
+  const output: Position[] = [];
   for (let index = 0; index < coords.length; index += 1) {
     if (arcs[index] < startArc) output.push(coords[index]);
   }
@@ -192,7 +259,11 @@ function replaceArc(coords, range, options) {
   return output;
 }
 
-function featureWithCoordinates(feature, coordinates, diagnostics) {
+function featureWithCoordinates(
+  feature: JoralemonFeature,
+  coordinates: Position[],
+  diagnostics: ArcRange,
+): JoralemonFeature {
   return {
     ...feature,
     geometry: {
@@ -209,7 +280,10 @@ function featureWithCoordinates(feature, coordinates, diagnostics) {
   };
 }
 
-export function applyJoralemonGreenRiverSmoothing(features, options = {}) {
+export function applyJoralemonGreenRiverSmoothing(
+  features: JoralemonFeature[],
+  options: JoralemonOptions = {},
+): JoralemonResult {
   const bbox = options.bbox ?? DEFAULT_BBOX;
   const marginM = options.marginM ?? 260;
   const sampleM = options.sampleM ?? 6;

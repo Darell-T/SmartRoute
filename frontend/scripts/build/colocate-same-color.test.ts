@@ -1,28 +1,42 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { colocateSameColorStretches } from "./colocate-same-color.mjs";
+import { colocateSameColorStretches } from "./colocate-same-color.ts";
+import type { Feature, LineStringGeometry, Position } from "./types.ts";
 
 const M_PER_DEG_LAT = 110574;
 const LAT = 40.74;
 const M_PER_DEG_LNG = 111320 * Math.cos((LAT * Math.PI) / 180);
 
-function pt(xM, yM) {
+type TestFeatureProperties = {
+  visual_feature_type: string;
+  route_ids: string[];
+  color: string;
+  corridor_id: string;
+  same_color_colocated?: boolean;
+};
+
+function pt(xM: number, yM: number): Position {
   return [xM / M_PER_DEG_LNG, LAT + yM / M_PER_DEG_LAT];
 }
 
-function lateralM(point) {
+function lateralM(point: Position): number {
   return (point[1] - LAT) * M_PER_DEG_LAT;
 }
 
 // West->east line from x0..x1 at lateral yM, vertices every stepM.
-function line(x0, x1, yM, stepM = 50) {
-  const coords = [];
+function line(x0: number, x1: number, yM: number, stepM = 50): Position[] {
+  const coords: Position[] = [];
   for (let x = x0; x <= x1; x += stepM) coords.push(pt(x, yM));
   return coords;
 }
 
-function lane(coords, routeIds, color, id) {
+function lane(
+  coords: Position[],
+  routeIds: string[],
+  color: string,
+  id: string,
+): Feature<LineStringGeometry, TestFeatureProperties> {
   return {
     type: "Feature",
     geometry: { type: "LineString", coordinates: coords },
@@ -37,8 +51,8 @@ function lane(coords, routeIds, color, id) {
 
 // QB shape: express (F) runs 18m from the local (F+M) for 2km in the middle;
 // its ends swing far away (>30m) so the run is interior.
-function expressCoords() {
-  const coords = [];
+function expressCoords(): Position[] {
+  const coords: Position[] = [];
   for (let x = 0; x <= 4000; x += 50) {
     let y;
     if (x < 800) y = 18 + (800 - x) * 0.2; // swings out to ~178m at x=0
@@ -64,6 +78,7 @@ test("pulls the fewer-route lane onto its same-color neighbor over the parallel 
   const coords = express.geometry.coordinates;
   // Deep inside the stretch (x ~1800): on the local track.
   const mid = coords[Math.round(1800 / 50)];
+  assert.ok(mid);
   assert.ok(Math.abs(lateralM(mid)) < 0.1, `mid on local track, got ${lateralM(mid)}m`);
   // Far ends: unmoved.
   assert.ok(Math.abs(lateralM(coords[0]) - 178) < 2, "west end unmoved");
@@ -90,6 +105,7 @@ test("route-count tie: the longer overlay moves onto the shorter local alignment
 
   assert.equal(result.count, 1);
   const mid = express.geometry.coordinates[Math.round(1800 / 50)];
+  assert.ok(mid);
   assert.ok(Math.abs(lateralM(mid)) < 0.1, "long overlay pulled onto the local track");
   assert.ok(local.geometry.coordinates.every((p) => Math.abs(lateralM(p)) < 1e-9), "local never moves");
 });

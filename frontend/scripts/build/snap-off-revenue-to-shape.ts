@@ -12,13 +12,37 @@
 // sampling, real curves) is left untouched, and replacements follow the real
 // curve (never a straight chord), so nothing jumps.
 
+import type { Position } from "./types.ts";
+
+type NearestPoint = {
+  point: Position;
+  distM: number;
+  arcM: number;
+};
+
+type NearestShapePoint = NearestPoint & {
+  shapeIdx: number;
+};
+
+type ChosenShapeSpan = {
+  si: number;
+  ep: NearestPoint;
+  xp: NearestPoint;
+  span: number;
+};
+
+type SnapOffRevenueOptions = {
+  maxOffM?: number;
+  dedupeEpsM?: number;
+};
+
 const M_PER_DEG_LAT = 110574;
 
-function mPerDegLng(lat) {
+function mPerDegLng(lat: number): number {
   return 111320 * Math.cos((lat * Math.PI) / 180);
 }
 
-function haversineM([lon1, lat1], [lon2, lat2]) {
+function haversineM([lon1, lat1]: Position, [lon2, lat2]: Position): number {
   const r = Math.PI / 180;
   const dLat = (lat2 - lat1) * r;
   const dLon = (lon2 - lon1) * r;
@@ -27,17 +51,17 @@ function haversineM([lon1, lat1], [lon2, lat2]) {
   return 2 * 6371000 * Math.asin(Math.sqrt(a));
 }
 
-function cumulativeArcs(coords) {
+function cumulativeArcs(coords: Position[]): number[] {
   const arcs = [0];
   for (let i = 1; i < coords.length; i += 1) arcs.push(arcs[i - 1] + haversineM(coords[i - 1], coords[i]));
   return arcs;
 }
 
 // Nearest point on a polyline to p, with arc position. { point, distM, arcM }.
-function nearestWithArc(coords, arcs, p) {
+function nearestWithArc(coords: Position[], arcs: number[], p: Position): NearestPoint {
   const k = mPerDegLng(p[1]);
   const px = p[0] * k, py = p[1] * M_PER_DEG_LAT;
-  let best = null;
+  let best: NearestPoint | null = null;
   for (let i = 0; i < coords.length - 1; i += 1) {
     const a = coords[i], b = coords[i + 1];
     const ax = a[0] * k, ay = a[1] * M_PER_DEG_LAT;
@@ -46,29 +70,33 @@ function nearestWithArc(coords, arcs, p) {
     const len2 = dx * dx + dy * dy || 1e-12;
     let t = ((px - ax) * dx + (py - ay) * dy) / len2;
     t = Math.max(0, Math.min(1, t));
-    const point = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+    const point: Position = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
     const distM = Math.hypot(point[0] * k - px, point[1] * M_PER_DEG_LAT - py);
     if (!best || distM < best.distM) best = { point, distM, arcM: arcs[i] + (arcs[i + 1] - arcs[i]) * t };
   }
-  return best;
+  return best ?? { point: coords[0], distM: Infinity, arcM: 0 };
 }
 
-function interpAtArc(coords, arcs, arcM) {
+function clonePosition(coord: Position): Position {
+  return [coord[0], coord[1]];
+}
+
+function interpAtArc(coords: Position[], arcs: number[], arcM: number): Position {
   const total = arcs[arcs.length - 1];
-  if (arcM <= 0) return coords[0].slice();
-  if (arcM >= total) return coords[coords.length - 1].slice();
+  if (arcM <= 0) return clonePosition(coords[0]);
+  if (arcM >= total) return clonePosition(coords[coords.length - 1]);
   for (let i = 1; i < arcs.length; i += 1) {
     if (arcs[i] >= arcM) {
       const t = (arcM - arcs[i - 1]) / ((arcs[i] - arcs[i - 1]) || 1e-9);
       return [coords[i - 1][0] + (coords[i][0] - coords[i - 1][0]) * t, coords[i - 1][1] + (coords[i][1] - coords[i - 1][1]) * t];
     }
   }
-  return coords[coords.length - 1].slice();
+  return clonePosition(coords[coords.length - 1]);
 }
 
 // The shape's own vertices strictly between arcA and arcB, plus the two endpoints,
 // oriented from arcA to arcB (handles either direction).
-function subPath(coords, arcs, arcA, arcB) {
+function subPath(coords: Position[], arcs: number[], arcA: number, arcB: number): Position[] {
   const lo = Math.min(arcA, arcB);
   const hi = Math.max(arcA, arcB);
   const out = [interpAtArc(coords, arcs, lo)];
@@ -79,8 +107,12 @@ function subPath(coords, arcs, arcA, arcB) {
   return arcA <= arcB ? out : out.reverse();
 }
 
-function nearestAcrossShapes(shapes, shapeArcs, p) {
-  let best = null;
+function nearestAcrossShapes(
+  shapes: Position[][],
+  shapeArcs: number[][],
+  p: Position,
+): NearestShapePoint | null {
+  let best: NearestShapePoint | null = null;
   for (let si = 0; si < shapes.length; si += 1) {
     if (!Array.isArray(shapes[si]) || shapes[si].length < 2) continue;
     const n = nearestWithArc(shapes[si], shapeArcs[si], p);
@@ -89,7 +121,7 @@ function nearestAcrossShapes(shapes, shapeArcs, p) {
   return best;
 }
 
-export function maxOffShapeM(coords, shapes) {
+export function maxOffShapeM(coords: Position[], shapes: Position[][]): number {
   if (!Array.isArray(coords) || !shapes?.length) return 0;
   const shapeArcs = shapes.map(cumulativeArcs);
   let m = 0;
@@ -108,7 +140,11 @@ export function maxOffShapeM(coords, shapes) {
  * @param {number} [options.dedupeEpsM=0.5]
  * @returns {Array<[number,number]>} new coords, or the SAME ref if nothing changed
  */
-export function snapOffRevenueToShape(coords, shapes, options = {}) {
+export function snapOffRevenueToShape(
+  coords: Position[],
+  shapes: Position[][],
+  options: SnapOffRevenueOptions = {},
+): Position[] {
   const { maxOffM = 55, dedupeEpsM = 0.5 } = options;
   if (!Array.isArray(coords) || coords.length < 2 || !shapes?.length) return coords;
 
@@ -117,7 +153,7 @@ export function snapOffRevenueToShape(coords, shapes, options = {}) {
   const off = info.map((x) => !x || x.distM > maxOffM);
   if (!off.some(Boolean)) return coords;
 
-  const out = [];
+  const out: Position[] = [];
   let i = 0;
   let changed = false;
   while (i < coords.length) {
@@ -132,7 +168,7 @@ export function snapOffRevenueToShape(coords, shapes, options = {}) {
       // entry and exit. A route has many shape variants; pick the one that covers
       // BOTH flanks (within maxOffM) with the SHORTEST sub-path, so we follow the
       // local track and never a variant that detours.
-      let chosen = null;
+      let chosen: ChosenShapeSpan | null = null;
       for (let si = 0; si < shapes.length; si += 1) {
         if (!Array.isArray(shapes[si]) || shapes[si].length < 2) continue;
         const ep = nearestWithArc(shapes[si], shapeArcs[si], coords[entryIdx]);
@@ -162,7 +198,7 @@ export function snapOffRevenueToShape(coords, shapes, options = {}) {
   }
   if (!changed || out.length < 2) return coords;
 
-  const deduped = [out[0]];
+  const deduped: Position[] = [out[0]];
   for (let j = 1; j < out.length; j += 1) {
     const prev = deduped[deduped.length - 1];
     const cur = out[j];

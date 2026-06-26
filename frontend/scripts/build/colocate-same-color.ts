@@ -15,24 +15,66 @@
 // F joins it later), the LONGER feature moves, keeping the ribbon on the
 // short local alignment that owns the intermediate stations.
 
+import type { Feature, LineStringGeometry, Position } from "./types.ts";
+
+type ColocateFeatureProperties = {
+  visual_feature_type?: string;
+  route_ids?: string[];
+  color?: string;
+  corridor_id?: string;
+  same_color_colocated?: boolean;
+  [key: string]: unknown;
+};
+
+type ColocateFeature = Feature<LineStringGeometry, ColocateFeatureProperties>;
+
+type ColocateOptions = {
+  minGapM?: number;
+  maxGapM?: number;
+  minStretchM?: number;
+  blendM?: number;
+};
+
+type ColocateEntry = {
+  feature: ColocateFeature;
+  color: string;
+  routeCount: number;
+  lengthM: number;
+};
+
+type Projection = {
+  d: number;
+  point: Position;
+};
+
+type ColocateStretch = {
+  routes: string;
+  lengthM: number;
+};
+
+type ColocateResult = {
+  count: number;
+  stretches: ColocateStretch[];
+};
+
 const M_PER_DEG_LAT = 110574;
 
-function metersPerDegLng(lat) {
+function metersPerDegLng(lat: number): number {
   return 111320 * Math.cos((lat * Math.PI) / 180);
 }
 
-function distM(a, b) {
+function distM(a: Position, b: Position): number {
   const k = metersPerDegLng((a[1] + b[1]) / 2);
   return Math.hypot((a[0] - b[0]) * k, (a[1] - b[1]) * M_PER_DEG_LAT);
 }
 
 // Nearest point on polyline (projected per-segment in local meters).
-function nearestOnPolyline(point, coords) {
+function nearestOnPolyline(point: Position, coords: Position[]): Projection {
   const lat = point[1];
   const k = metersPerDegLng(lat);
   const px = point[0] * k;
   const py = point[1] * M_PER_DEG_LAT;
-  let best = null;
+  let best: Projection | null = null;
   for (let i = 0; i < coords.length - 1; i += 1) {
     const ax = coords[i][0] * k;
     const ay = coords[i][1] * M_PER_DEG_LAT;
@@ -42,22 +84,22 @@ function nearestOnPolyline(point, coords) {
     const dy = by - ay;
     const len2 = dx * dx + dy * dy || 1e-12;
     const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len2));
-    const candidate = [
+    const candidate: Position = [
       coords[i][0] + (coords[i + 1][0] - coords[i][0]) * t,
       coords[i][1] + (coords[i + 1][1] - coords[i][1]) * t,
     ];
     const d = distM(point, candidate);
     if (!best || d < best.d) best = { d, point: candidate };
   }
-  return best;
+  return best ?? { d: Infinity, point };
 }
 
-function ease(t) {
+function ease(t: number): number {
   const clamped = Math.max(0, Math.min(1, t));
   return clamped * clamped * (3 - 2 * clamped);
 }
 
-function median(values) {
+function median(values: number[]): number {
   if (!values.length) return NaN;
   const sorted = [...values].sort((a, b) => a - b);
   return sorted[Math.floor(sorted.length / 2)];
@@ -79,7 +121,10 @@ function median(values) {
  * @param {number} [options.blendM=100]   ease length at stretch boundaries.
  * @returns {{count: number, stretches: Array<{routes: string, lengthM: number}>}}
  */
-export function colocateSameColorStretches(lanes, options = {}) {
+export function colocateSameColorStretches(
+  lanes: ColocateFeature[],
+  options: ColocateOptions = {},
+): ColocateResult {
   const { minGapM = 10, maxGapM = 30, minStretchM = 500, blendM = 100 } = options;
 
   const entries = lanes
@@ -101,7 +146,7 @@ export function colocateSameColorStretches(lanes, options = {}) {
       };
     });
 
-  const stretches = [];
+  const stretches: ColocateStretch[] = [];
 
   for (let i = 0; i < entries.length; i += 1) {
     for (let j = 0; j < entries.length; j += 1) {
@@ -124,12 +169,12 @@ export function colocateSameColorStretches(lanes, options = {}) {
       const proj = mc.map((v) => nearestOnPolyline(v, cc));
 
       // Cumulative arc length along the mover.
-      const arc = [0];
+      const arc: number[] = [0];
       for (let v = 1; v < mc.length; v += 1) arc.push(arc[v - 1] + distM(mc[v - 1], mc[v]));
 
       // Maximal runs of vertices within maxGapM of the carrier.
-      let runStart = null;
-      const runs = [];
+      let runStart: number | null = null;
+      const runs: Array<[number, number]> = [];
       for (let v = 0; v <= mc.length; v += 1) {
         const inRun = v < mc.length && proj[v] && proj[v].d <= maxGapM;
         if (inRun && runStart === null) runStart = v;
@@ -142,7 +187,7 @@ export function colocateSameColorStretches(lanes, options = {}) {
       for (const [from, to] of runs) {
         const lengthM = arc[to] - arc[from];
         if (lengthM < minStretchM) continue;
-        const gaps = [];
+        const gaps: number[] = [];
         for (let v = from; v <= to; v += 1) gaps.push(proj[v].d);
         if (median(gaps) < minGapM) continue;
 
