@@ -1,4 +1,4 @@
-// frontend/scripts/build/cross-color-spread.mjs
+// frontend/scripts/build/cross-color-spread.ts
 // Pure helper -- no fs, no globals. Detects clusters of DIFFERENT-color
 // renderable features that run alongside each other on a shared physical
 // corridor, and assigns each color a centered lane slot by canonical color
@@ -7,20 +7,83 @@
 // Same-color overlaps are intentionally ignored: Phase 3d (same-color-merge)
 // already collapses those into one stroke.
 
-import {
-  computePairOverlap,
-  resamplePolyline,
-  pointToPolylineMinDistM,
-} from "./physical-bundle.mjs";
+// @ts-expect-error TS1479: physical-bundle remains .mjs until its own migration batch.
+import { computePairOverlap, resamplePolyline, pointToPolylineMinDistM } from "./physical-bundle.mjs";
 import { BUNDLE_COLOR_ORDER } from "./lane-order.ts";
+import type { Feature, LineStringGeometry, Position, RouteId } from "./types.ts";
 
 const EARTH_RADIUS_M = 6371000;
 const M_PER_DEG_LAT = 111320;
-function metersPerDegLng(lat) {
+
+type CrossColorFeatureProperties = {
+  bundle_id?: string;
+  color?: unknown;
+  route_ids?: RouteId[];
+  lane_slot_semantic?: unknown;
+  lane_slot?: unknown;
+  lane_slot_source?: unknown;
+  length_m?: number | null;
+  [key: string]: unknown;
+};
+
+export type CrossColorSpreadFeature = Feature<LineStringGeometry, CrossColorFeatureProperties>;
+
+type CrossColorSpine = {
+  spine_id: string;
+  geometry: LineStringGeometry;
+  length_m: number | null;
+  color: string;
+  feature: CrossColorSpreadFeature;
+};
+
+type CrossColorGroupMember = {
+  bundle_id: string | undefined;
+  color: string;
+  route_ids: RouteId[];
+  lane_slot: number | undefined;
+  _featureRef: CrossColorSpreadFeature;
+};
+
+export type CrossColorGroup = {
+  members: CrossColorGroupMember[];
+};
+
+export type DetectCrossColorAdjacencyOptions = {
+  sharedFractionMin?: number;
+  sharedLenMinM?: number;
+  avgDistMaxM?: number;
+  tangentMaxDeg?: number;
+  resampleM?: number;
+};
+
+export type DetectCrossColorAdjacencyResult = {
+  groups: CrossColorGroup[];
+};
+
+export type SharedArcExtent = {
+  aStartArc: number;
+  aEndArc: number;
+  bStartArc: number;
+  bEndArc: number;
+  sharedLenM: number;
+};
+
+type SharedArcExtentOptions = {
+  resampleM?: number;
+  distMaxM?: number;
+  minSharedLenM?: number;
+};
+
+type RunExtent = {
+  startIdx: number;
+  endIdx: number;
+};
+
+function metersPerDegLng(lat: number): number {
   return Math.cos((lat * Math.PI) / 180) * M_PER_DEG_LAT;
 }
-function haversineM([lon1, lat1], [lon2, lat2]) {
-  const toRad = (d) => (d * Math.PI) / 180;
+function haversineM([lon1, lat1]: Position, [lon2, lat2]: Position): number {
+  const toRad = (d: number): number => (d * Math.PI) / 180;
   const dLat = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
   const a =
@@ -28,7 +91,7 @@ function haversineM([lon1, lat1], [lon2, lat2]) {
     Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
   return 2 * EARTH_RADIUS_M * Math.asin(Math.sqrt(a));
 }
-function cumulativeArc(coords) {
+function cumulativeArc(coords: Position[]): number[] {
   const arc = [0];
   for (let i = 1; i < coords.length; i += 1) {
     arc.push(arc[i - 1] + haversineM(coords[i - 1], coords[i]));
@@ -36,12 +99,29 @@ function cumulativeArc(coords) {
   return arc;
 }
 
+function isPosition(value: unknown): value is Position {
+  return Array.isArray(value) && value.length >= 2 && typeof value[0] === "number" && typeof value[1] === "number";
+}
+
+function isCrossColorFeature(feature: unknown): feature is CrossColorSpreadFeature {
+  if (!feature || typeof feature !== "object") return false;
+  const maybeFeature = feature as { geometry?: { type?: unknown; coordinates?: unknown }; properties?: unknown };
+  return (
+    maybeFeature.geometry?.type === "LineString" &&
+    Array.isArray(maybeFeature.geometry.coordinates) &&
+    maybeFeature.geometry.coordinates.length >= 2 &&
+    maybeFeature.geometry.coordinates.every(isPosition) &&
+    maybeFeature.properties !== null &&
+    typeof maybeFeature.properties === "object"
+  );
+}
+
 // NOTE: this rank map mirrors the private `rank` in lane-order.ts. Both derive
 // from BUNDLE_COLOR_ORDER. If that list changes, both stay in sync only because
 // they import the same constant. Kept local (not exported from lane-order.ts)
 // to avoid widening that module's API for a single consumer.
-const RANK = new Map(BUNDLE_COLOR_ORDER.map((c, i) => [String(c).toUpperCase(), i]));
-function colorRank(color) {
+const RANK = new Map<string, number>(BUNDLE_COLOR_ORDER.map((c, i) => [String(c).toUpperCase(), i]));
+function colorRank(color: string): number {
   const r = RANK.get(String(color).toUpperCase());
   return r === undefined ? Number.POSITIVE_INFINITY : r;
 }
@@ -58,7 +138,10 @@ function colorRank(color) {
  * @param {number} [options.resampleM=25]
  * @returns {{ groups: Array<{ members: Array<{ bundle_id, color, route_ids, lane_slot, _featureRef }> }> }}
  */
-export function detectCrossColorAdjacency(features, options = {}) {
+export function detectCrossColorAdjacency(
+  features: CrossColorSpreadFeature[],
+  options: DetectCrossColorAdjacencyOptions = {},
+): DetectCrossColorAdjacencyResult {
   const {
     sharedFractionMin = 0.6,
     sharedLenMinM = 250,
@@ -67,21 +150,19 @@ export function detectCrossColorAdjacency(features, options = {}) {
     resampleM = 25,
   } = options;
 
-  const candidates = features.filter((f) => {
+  const candidates = features.filter((f): f is CrossColorSpreadFeature => {
+    if (!isCrossColorFeature(f)) return false;
     const slot = Number(f.properties?.lane_slot_semantic ?? f.properties?.lane_slot ?? 0);
     return (
       slot === 0 &&
       // Members already offset by the continuous materialization carry their lane
       // offset baked into geometry; re-spreading them would double-offset.
       f.properties?.lane_slot_source !== "physical_bundle_continuous" &&
-      f.properties?.color &&
-      f.geometry?.type === "LineString" &&
-      Array.isArray(f.geometry.coordinates) &&
-      f.geometry.coordinates.length >= 2
+      Boolean(f.properties?.color)
     );
   });
 
-  const spines = candidates.map((f, idx) => ({
+  const spines: CrossColorSpine[] = candidates.map((f, idx) => ({
     spine_id: String(idx),
     geometry: f.geometry,
     length_m: f.properties.length_m ?? null,
@@ -90,8 +171,8 @@ export function detectCrossColorAdjacency(features, options = {}) {
   }));
 
   const parent = spines.map((_, i) => i);
-  const find = (i) => (parent[i] === i ? i : (parent[i] = find(parent[i])));
-  const union = (i, j) => { parent[find(i)] = find(j); };
+  const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+  const union = (i: number, j: number): void => { parent[find(i)] = find(j); };
 
   for (let i = 0; i < spines.length; i++) {
     for (let j = i + 1; j < spines.length; j++) {
@@ -105,14 +186,18 @@ export function detectCrossColorAdjacency(features, options = {}) {
     }
   }
 
-  const byRoot = new Map();
+  const byRoot = new Map<number, CrossColorSpine[]>();
   for (let i = 0; i < spines.length; i++) {
     const r = find(i);
-    if (!byRoot.has(r)) byRoot.set(r, []);
-    byRoot.get(r).push(spines[i]);
+    let members = byRoot.get(r);
+    if (!members) {
+      members = [];
+      byRoot.set(r, members);
+    }
+    members.push(spines[i]);
   }
 
-  const groups = [];
+  const groups: CrossColorGroup[] = [];
   for (const members of byRoot.values()) {
     const distinctColors = [...new Set(members.map((m) => m.color))];
     if (distinctColors.length < 2) continue;
@@ -124,7 +209,7 @@ export function detectCrossColorAdjacency(features, options = {}) {
       (a, b) => (colorRank(a) - colorRank(b)) || String(a).localeCompare(String(b)),
     );
     const k = distinctColors.length;
-    const slotForColor = new Map(
+    const slotForColor = new Map<string, number>(
       distinctColors.map((c, idx) => [c, idx - (k - 1) / 2]),
     );
 
@@ -156,7 +241,11 @@ export function detectCrossColorAdjacency(features, options = {}) {
  *
  * @returns {{ aStartArc, aEndArc, bStartArc, bEndArc, sharedLenM } | null}
  */
-export function findSharedArcExtent(coordsA, coordsB, options = {}) {
+export function findSharedArcExtent(
+  coordsA: Position[],
+  coordsB: Position[],
+  options: SharedArcExtentOptions = {},
+): SharedArcExtent | null {
   const { resampleM = 25, distMaxM = 18, minSharedLenM = 250 } = options;
   if (!Array.isArray(coordsA) || coordsA.length < 2) return null;
   if (!Array.isArray(coordsB) || coordsB.length < 2) return null;
@@ -170,8 +259,8 @@ export function findSharedArcExtent(coordsA, coordsB, options = {}) {
 
   // Longest contiguous run of samples on `samples` that are within distMaxM of
   // `other`. Returns { startIdx, endIdx } (inclusive) or null.
-  function longestRun(samples, other) {
-    let best = null;
+  function longestRun(samples: Position[], other: Position[]): RunExtent | null {
+    let best: RunExtent | null = null;
     let curStart = -1;
     for (let i = 0; i < samples.length; i += 1) {
       const near = pointToPolylineMinDistM(samples[i], other) <= distMaxM;
@@ -217,7 +306,13 @@ export function findSharedArcExtent(coordsA, coordsB, options = {}) {
  * @param {number} [taperM=40]
  * @returns {Array} new coordinates
  */
-export function offsetPolylineOverExtent(coords, startArc, endArc, offsetMeters, taperM = 40) {
+export function offsetPolylineOverExtent(
+  coords: Position[],
+  startArc: number,
+  endArc: number,
+  offsetMeters: number,
+  taperM = 40,
+): Position[] {
   if (!Array.isArray(coords) || coords.length < 2) return coords;
   if (!Number.isFinite(offsetMeters) || offsetMeters === 0) return coords.map((c) => c);
 
@@ -225,10 +320,10 @@ export function offsetPolylineOverExtent(coords, startArc, endArc, offsetMeters,
 
   // Per-vertex meters-per-degree-lng (lat-dependent) + projected meters frame.
   const mPerLng = coords.map((c) => metersPerDegLng(c[1]));
-  const projected = coords.map((c, i) => [c[0] * mPerLng[i], c[1] * M_PER_DEG_LAT]);
+  const projected: Position[] = coords.map((c, i) => [c[0] * mPerLng[i], c[1] * M_PER_DEG_LAT]);
 
   // Per-segment right-hand unit normals.
-  const segNormals = [];
+  const segNormals: Position[] = [];
   for (let i = 0; i < projected.length - 1; i += 1) {
     const dx = projected[i + 1][0] - projected[i][0];
     const dy = projected[i + 1][1] - projected[i][1];
@@ -241,7 +336,7 @@ export function offsetPolylineOverExtent(coords, startArc, endArc, offsetMeters,
   }
 
   // Per-vertex averaged unit normal (no miter cap -- shared corridors are gentle).
-  function vertexNormal(i) {
+  function vertexNormal(i: number): Position {
     if (i === 0) return segNormals[0];
     if (i === projected.length - 1) return segNormals[segNormals.length - 1];
     const a = segNormals[i - 1];
@@ -254,7 +349,7 @@ export function offsetPolylineOverExtent(coords, startArc, endArc, offsetMeters,
   }
 
   // Ramp factor at arc position s.
-  function ramp(s) {
+  function ramp(s: number): number {
     if (taperM <= 0) return s >= startArc && s <= endArc ? 1 : 0;
     if (s <= startArc - taperM || s >= endArc + taperM) return 0;
     if (s >= startArc && s <= endArc) return 1;
@@ -284,7 +379,12 @@ export function offsetPolylineOverExtent(coords, startArc, endArc, offsetMeters,
  * @param {number} laneWidthM
  * @returns {Array}
  */
-export function offsetPolylineBySlotRamp(coords, fromSlot, toSlot, laneWidthM) {
+export function offsetPolylineBySlotRamp(
+  coords: Position[],
+  fromSlot: number,
+  toSlot: number,
+  laneWidthM: number,
+): Position[] {
   if (!Array.isArray(coords) || coords.length < 2) return coords;
   if (!Number.isFinite(fromSlot) || !Number.isFinite(toSlot)) return coords.map((c) => c);
   if (!Number.isFinite(laneWidthM) || laneWidthM === 0) return coords.map((c) => c);
@@ -293,9 +393,9 @@ export function offsetPolylineBySlotRamp(coords, fromSlot, toSlot, laneWidthM) {
   const arc = cumulativeArc(coords);
   const total = arc[arc.length - 1] || 1;
   const mPerLng = coords.map((c) => metersPerDegLng(c[1]));
-  const projected = coords.map((c, i) => [c[0] * mPerLng[i], c[1] * M_PER_DEG_LAT]);
+  const projected: Position[] = coords.map((c, i) => [c[0] * mPerLng[i], c[1] * M_PER_DEG_LAT]);
 
-  const segNormals = [];
+  const segNormals: Position[] = [];
   for (let i = 0; i < projected.length - 1; i += 1) {
     const dx = projected[i + 1][0] - projected[i][0];
     const dy = projected[i + 1][1] - projected[i][1];
@@ -303,7 +403,7 @@ export function offsetPolylineBySlotRamp(coords, fromSlot, toSlot, laneWidthM) {
     segNormals.push(len === 0 ? [0, 0] : [dy / len, -dx / len]);
   }
 
-  function vertexNormal(i) {
+  function vertexNormal(i: number): Position {
     if (i === 0) return segNormals[0];
     if (i === projected.length - 1) return segNormals[segNormals.length - 1];
     const a = segNormals[i - 1];
@@ -315,7 +415,7 @@ export function offsetPolylineBySlotRamp(coords, fromSlot, toSlot, laneWidthM) {
     return [sx / sl, sy / sl];
   }
 
-  const smoothstep = (t) => t * t * (3 - 2 * t);
+  const smoothstep = (t: number): number => t * t * (3 - 2 * t);
 
   return coords.map((c, i) => {
     const t = smoothstep(Math.max(0, Math.min(1, arc[i] / total)));

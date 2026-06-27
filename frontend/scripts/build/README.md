@@ -79,6 +79,7 @@ Already migrated transit build helpers include:
 - `st-nicholas-blue-straightening`
 - `brighton-bq-church-spacing`
 - `parallel-offset-cross-color`
+- `cross-color-spread`
 
 Pre-existing TypeScript helpers include station-anchor modules, spine helpers,
 lane ordering, artifact fingerprinting, smooth polyline utilities, and duplicate
@@ -132,7 +133,7 @@ Categories:
 | `frontend/scripts/build/opendata-subway-lines.ts` | 11.1 KB / 368 lines | visual orchestrator, palette check, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/cartographic-junction-overrides.ts` | 11.4 KB / 345 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/trim-terminal-overhang.ts` | 12.1 KB / 328 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
-| `frontend/scripts/build/cross-color-spread.mjs` | 12.6 KB / 331 lines | visual orchestrator, `parallel-offset-cross-color.ts`, `physical-bundle-materialization.mjs`, colocated test | yes | no | High-risk / migrate later | wait until dependent helpers are planned |
+| `frontend/scripts/build/cross-color-spread.ts` | 15.2 KB / 430 lines | visual orchestrator, `parallel-offset-cross-color.ts`, `physical-bundle-materialization.mjs`, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/snap-dangling-same-color.ts` | 14.8 KB / 394 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/nostrand-eastern-schematic.ts` | 18.0 KB / 547 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/culver-fg-prospect-smoothing.ts` | 18.5 KB / 544 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
@@ -143,12 +144,12 @@ Categories:
 | `frontend/scripts/build/st-nicholas-blue-straightening.ts` | 21.1 KB / 678 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/brighton-bq-church-spacing.ts` | 25.2 KB / 705 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/same-color-merge.mjs` | 22.4 KB / 609 lines | visual orchestrator, colocated test | yes | no | High-risk / migrate later | migrate after smaller corridor helpers |
-| `frontend/scripts/build/physical-bundle.mjs` | 24.3 KB / 679 lines | visual orchestrator, `cross-color-spread.mjs`, `same-color-merge.mjs`, colocated test | yes | no | High-risk / migrate later | wait for physical-bundle plan |
+| `frontend/scripts/build/physical-bundle.mjs` | 24.3 KB / 679 lines | visual orchestrator, `cross-color-spread.ts`, `same-color-merge.mjs`, colocated test | yes | no | High-risk / migrate later | wait for physical-bundle plan |
 | `frontend/scripts/build/bridge-route-gaps.test.ts` | 9.1 KB / 203 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/build/brighton-bq-church-spacing.test.ts` | 5.4 KB / 160 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/build/cartographic-junction-overrides.test.ts` | 5.3 KB / 154 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/build/collapse-same-color.test.ts` | 6.4 KB / 141 lines | none | n/a | no | Migrated test | done |
-| `frontend/scripts/build/cross-color-spread.test.mjs` | 10.1 KB / 210 lines | none | n/a | no | QA/check script | migrate with source |
+| `frontend/scripts/build/cross-color-spread.test.ts` | 10.6 KB / 226 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/build/culver-fg-prospect-smoothing.test.ts` | 4.9 KB / 158 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/build/lane-continuity-filter.test.ts` | 10.2 KB / 258 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/build/mott-haven-schematic.test.ts` | 7.0 KB / 258 lines | none | n/a | no | Migrated test | done |
@@ -191,13 +192,13 @@ Categories:
 
 ## Recommended Migration Batches
 
-Next batch:
+Next dedicated review batch:
 
-- `cross-color-spread` only after cross-color helper sequencing is planned
+- `physical-bundle-materialization` only after the physical-bundle plan is ready
 
 Following dedicated review batch:
 
-- `physical-bundle-materialization` only after the physical-bundle plan is ready
+- `physical-bundle` only after reviewing the shared declarations and dependent tests
 
 Later dedicated review batch:
 
@@ -207,7 +208,6 @@ Avoid for now:
 
 - `physical-bundle.mjs`
 - `physical-bundle-materialization.mjs`
-- `cross-color-spread.mjs`
 - `same-color-merge.mjs`
 - `build-subway-visual-network.mjs`
 
