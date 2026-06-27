@@ -75,6 +75,7 @@ Already migrated transit build helpers include:
 - `culver-fg-prospect-smoothing`
 - `mott-haven-schematic`
 - `bridge-route-gaps`
+- `collapse-same-color`
 
 Pre-existing TypeScript helpers include station-anchor modules, spine helpers,
 lane ordering, artifact fingerprinting, smooth polyline utilities, and duplicate
@@ -134,7 +135,7 @@ Categories:
 | `frontend/scripts/build/culver-fg-prospect-smoothing.ts` | 18.5 KB / 544 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/mott-haven-schematic.ts` | 18.6 KB / 525 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/bridge-route-gaps.ts` | 19.8 KB / 530 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
-| `frontend/scripts/build/collapse-same-color.mjs` | 17.9 KB / 547 lines | visual orchestrator, colocated test | yes | no | Medium-risk helper | migrate later |
+| `frontend/scripts/build/collapse-same-color.ts` | 21.0 KB / 658 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/physical-bundle-materialization.mjs` | 18.1 KB / 489 lines | visual orchestrator, colocated test | yes | no | High-risk / migrate later | wait for physical-bundle plan |
 | `frontend/scripts/build/st-nicholas-blue-straightening.mjs` | 18.4 KB / 565 lines | visual orchestrator, colocated test | yes | no | Medium-risk helper | migrate later |
 | `frontend/scripts/build/brighton-bq-church-spacing.mjs` | 22.3 KB / 607 lines | visual orchestrator, colocated test | yes | no | Medium-risk helper | migrate later |
@@ -143,7 +144,7 @@ Categories:
 | `frontend/scripts/build/bridge-route-gaps.test.ts` | 9.1 KB / 203 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/build/brighton-bq-church-spacing.test.mjs` | 3.8 KB / 112 lines | none | n/a | no | QA/check script | migrate with source |
 | `frontend/scripts/build/cartographic-junction-overrides.test.ts` | 5.3 KB / 154 lines | none | n/a | no | Migrated test | done |
-| `frontend/scripts/build/collapse-same-color.test.mjs` | 5.8 KB / 114 lines | none | n/a | no | QA/check script | migrate with source |
+| `frontend/scripts/build/collapse-same-color.test.ts` | 6.4 KB / 141 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/build/cross-color-spread.test.mjs` | 10.1 KB / 210 lines | none | n/a | no | QA/check script | migrate with source |
 | `frontend/scripts/build/culver-fg-prospect-smoothing.test.ts` | 4.9 KB / 158 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/build/lane-continuity-filter.test.ts` | 10.2 KB / 258 lines | none | n/a | no | Migrated test | done |
@@ -189,15 +190,14 @@ Categories:
 
 Next batch:
 
-- `collapse-same-color`
+- `st-nicholas-blue-straightening`
 
 Following batch:
 
-- `st-nicholas-blue-straightening`
-
-Later medium-risk batch:
-
 - `brighton-bq-church-spacing`
+
+Later dedicated review batch:
+
 - `parallel-offset-cross-color` only after cross-color offset review
 
 Avoid for now:
