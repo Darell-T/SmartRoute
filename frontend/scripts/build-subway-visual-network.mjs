@@ -70,7 +70,7 @@ import { applyNostrandEasternSchematic } from "./build/nostrand-eastern-schemati
 import { applyBrightonBqChurchSpacing } from "./build/brighton-bq-church-spacing.mjs";
 import { applyCulverFgProspectSmoothing } from "./build/culver-fg-prospect-smoothing.ts";
 import { applyJoralemonGreenRiverSmoothing } from "./build/joralemon-green-river.ts";
-import { applyStNicholasBlueStraightening } from "./build/st-nicholas-blue-straightening.mjs";
+import { applyStNicholasBlueStraightening } from "./build/st-nicholas-blue-straightening.ts";
 import {
   loadOpenDataSubwayLines,
   OPEN_DATA_SOURCE_DATASET_ID,
