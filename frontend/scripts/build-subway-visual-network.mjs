@@ -75,7 +75,7 @@ import {
   loadOpenDataSubwayLines,
   OPEN_DATA_SOURCE_DATASET_ID,
   OPEN_DATA_SOURCE_NAME,
-} from "./build/opendata-subway-lines.mjs";
+} from "./build/opendata-subway-lines.ts";
 import { MTA_ROUTE_COLORS } from "./build/mta-colors.ts";
 import { trimTerminalOverhang } from "./build/trim-terminal-overhang.ts";
 import { addSixtyThirdStreetF } from "./build/sixty-third-street-f.ts";

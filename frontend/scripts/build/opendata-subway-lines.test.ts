@@ -1,8 +1,41 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { normalizeOpenDataSubwayLines } from "./opendata-subway-lines.mjs";
+import { normalizeOpenDataSubwayLines } from "./opendata-subway-lines.ts";
+import type { Position } from "./types.ts";
 
-function feature(symbol, geometry = line()) {
+type TestLineStringGeometry = {
+  type: "LineString";
+  coordinates: Position[];
+};
+
+type TestMultiLineStringGeometry = {
+  type: "MultiLineString";
+  coordinates: Position[][];
+};
+
+type TestPointGeometry = {
+  type: "Point";
+  coordinates: Position;
+};
+
+type TestGeometry = TestLineStringGeometry | TestMultiLineStringGeometry | TestPointGeometry;
+
+type TestFeature = {
+  type: "Feature";
+  geometry: TestGeometry;
+  properties: {
+    objectid: string;
+    service: string;
+    service_name: string;
+  };
+};
+
+type TestCollection = {
+  type: "FeatureCollection";
+  features: TestFeature[];
+};
+
+function feature(symbol: string, geometry: TestGeometry = line()): TestFeature {
   return {
     type: "Feature",
     geometry,
@@ -14,7 +47,7 @@ function feature(symbol, geometry = line()) {
   };
 }
 
-function line() {
+function line(): TestLineStringGeometry {
   return {
     type: "LineString",
     coordinates: [
@@ -25,7 +58,7 @@ function line() {
   };
 }
 
-function collection(features) {
+function collection(features: TestFeature[]): TestCollection {
   return { type: "FeatureCollection", features };
 }
 
