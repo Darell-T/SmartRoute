@@ -49,7 +49,7 @@ import {
   offsetPolylineOverExtent,
 } from "./build/cross-color-spread.mjs";
 import { smoothSharpCorners, countSharpCorners, densifyLongSegments } from "./build/smooth-polyline.ts";
-import { bridgeRouteGaps } from "./build/bridge-route-gaps.mjs";
+import { bridgeRouteGaps } from "./build/bridge-route-gaps.ts";
 import { taperBakedJointSteps } from "./build/joint-offset-taper.ts";
 import { colocateSameColorStretches } from "./build/colocate-same-color.ts";
 import { repairSameRouteEndpointCrossings } from "./build/same-route-junction-fabric.ts";
