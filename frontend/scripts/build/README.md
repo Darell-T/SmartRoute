@@ -267,3 +267,47 @@ Recommended staging:
    literals and `void parallelOffsetCrossColor;` unchanged; update the
    `package.json` + `subway-palette.check.mjs` paths. Gate: `typecheck:scripts`
    + full artifact-identical visual build (timestamp-only) + `verify:transit-artifacts`.
+
+### Batch 26 conversion checklist
+
+Pre-flight:
+
+- Clean tree; baseline `tsx scripts/build-subway-visual-network.mjs` produces a
+  timestamp-only artifact diff.
+
+Convert (mechanical rename + erasable types only — no behavior change):
+
+- `git mv scripts/build-subway-visual-network.mjs scripts/build-subway-visual-network.ts`
+  to preserve history.
+- Keep all 21 `source: "build-subway-visual-network.mjs ..."` literals **verbatim**
+  (do not rewrite to `.ts`). They are output provenance only — never used in
+  control flow — and the `Gate 2A-2H` one is embedded in the public
+  `subway-network.visual.geojson` metadata, so rewriting them is real artifact drift.
+- Keep `void parallelOffsetCrossColor;` and its commented-out call disabled.
+- Types: import `Position`, `LineStringGeometry`, `Feature`, `FeatureCollection`,
+  `BBox`, `RouteId`, `VisualFeatureProperties` from `./build/types.ts` (covers all
+  GeoJSON feature/property shapes). Reuse `physical-bundle.ts` exports (`Spine`,
+  `PhysicalBundleGroup`) where bundles are handled.
+- Add narrow local types for: GTFS rows (`stops`/`trips`/`stop_times`/`routes.txt`
+  from `parseCsv`), the ZIP-entry map, gate-diagnostic records, and the
+  candidate/final metadata doc. Avoid broad `any`; permissive bags =
+  `VisualFeatureProperties` / `Record<string, unknown>`. Type the ~45 top-level
+  helper signatures; let internal vars infer.
+
+Active path updates (NOT `script-inventory.json` — it is generated metadata):
+
+- `package.json` `build:visual-network`: `...network.mjs` -> `...network.ts`.
+- `components/map/subway-palette.check.mjs` consumers array:
+  `scripts/build-subway-visual-network.mjs` -> `...network.ts`.
+
+Gate (stop on any real geometry/output drift):
+
+- `npm run typecheck:scripts` -> 0 errors.
+- `tsx scripts/build-subway-visual-network.ts` -> exit 0; artifact diff
+  timestamp-only (revert `generated_at`).
+- `npm run verify:transit-artifacts` green; `git diff --check`; do not commit.
+
+Optional later (separate batches, only after the rename is locked): extract
+cohesive seams to shrink the orchestrator — GTFS zip/csv ingest, the validation
+gates + diagnostic builders, route-family constants, station-anchor/junction
+helpers, and artifact write/promotion + metadata/hash generation.
