@@ -1,12 +1,67 @@
 import { hermiteBetween } from "./offset-bow.ts";
+import type { Position } from "./types.ts";
+
+type Vector = [number, number];
+
+type DistanceContext = {
+  point: Position;
+  segmentIndex: number;
+  t: number;
+};
+
+type ClosestPoint = {
+  point: Vector;
+  t: number;
+  distanceM: number;
+};
+
+type SegmentIntersection = {
+  point: Vector;
+  t: number;
+  u: number;
+};
+
+type ReferenceCrossing = {
+  trunkPoint: Position;
+  referencePoint: Position;
+  trunkSegmentIndex: number;
+  trunkT: number;
+  referenceDistanceM: number;
+  referenceTangentEast: Vector;
+};
+
+type FiveLensOptions = {
+  branchCoords?: Position[] | null;
+  trunkCoords?: Position[] | null;
+  parallelReferenceCoords?: Position[] | null;
+  parallelOffsetM?: number;
+  mergeDistanceM?: number;
+  sampleM?: number;
+  eastEntryM?: number;
+  westShoulderM?: number;
+  westOuterM?: number;
+  westLowerM?: number;
+  shoulderSouthM?: number;
+  outerSouthM?: number;
+  lowerSouthM?: number;
+};
+
+type SixMergeOptions = {
+  branchCoords?: Position[] | null;
+  mainlineCoords?: Position[] | null;
+  mergeDistanceM?: number;
+  entryEastM?: number;
+  entryNorthM?: number;
+  sampleM?: number;
+};
 
 const M_PER_DEG_LAT = 110574;
 
-function metersPerDegLng(lat) {
+function metersPerDegLng(lat: number): number {
   return 111320 * Math.cos((lat * Math.PI) / 180);
 }
 
-export function distanceMeters([lon1, lat1], [lon2, lat2]) {
+export function distanceMeters([lon1, lat1]: Position, [lon2, lat2]: Position): number {
   const r = Math.PI / 180;
   const dLat = (lat2 - lat1) * r;
   const dLon = (lon2 - lon1) * r;
@@ -16,34 +71,34 @@ export function distanceMeters([lon1, lat1], [lon2, lat2]) {
   return 2 * 6371000 * Math.asin(Math.sqrt(a));
 }
 
-function addMeters(point, eastM, northM) {
+function addMeters(point: Position, eastM: number, northM: number): Position {
   const k = metersPerDegLng(point[1]);
   return [point[0] + eastM / k, point[1] + northM / M_PER_DEG_LAT];
 }
 
-function addVectorMeters(point, [eastM, northM]) {
+function addVectorMeters(point: Position, [eastM, northM]: Vector): Position {
   return addMeters(point, eastM, northM);
 }
 
-function normalize([x, y], fallback = [1, 0]) {
+function normalize([x, y]: Vector, fallback: Vector = [1, 0]): Vector {
   const len = Math.hypot(x, y);
   return len > 1e-9 ? [x / len, y / len] : fallback;
 }
 
-function projectAtLat(point, lat0) {
+function projectAtLat(point: Position, lat0: number): Vector {
   return [point[0] * metersPerDegLng(lat0), point[1] * M_PER_DEG_LAT];
 }
 
-function unprojectAtLat(point, lat0) {
+function unprojectAtLat(point: Vector, lat0: number): Position {
   return [point[0] / metersPerDegLng(lat0), point[1] / M_PER_DEG_LAT];
 }
 
-function vectorMeters(a, b) {
+function vectorMeters(a: Position, b: Position): Vector {
   const k = metersPerDegLng((a[1] + b[1]) / 2);
   return [(b[0] - a[0]) * k, (b[1] - a[1]) * M_PER_DEG_LAT];
 }
 
-function tangentAt(coords, index, forward = true) {
+function tangentAt(coords: Position[], index: number, forward = true): Vector {
   if (!Array.isArray(coords) || coords.length < 2) return [0, -1];
   const a = coords[Math.max(0, Math.min(coords.length - 1, forward ? index : index - 1))];
   const b = coords[Math.max(0, Math.min(coords.length - 1, forward ? index + 1 : index))];
@@ -51,11 +106,11 @@ function tangentAt(coords, index, forward = true) {
   return normalize([(b[0] - a[0]) * k, (b[1] - a[1]) * M_PER_DEG_LAT], [0, -1]);
 }
 
-function pointAtDistance(coords, targetM) {
+function pointAtDistance(coords: Position[], targetM: number): Position | null {
   return pointAtDistanceWithContext(coords, targetM)?.point ?? null;
 }
 
-function pointAtDistanceWithContext(coords, targetM) {
+function pointAtDistanceWithContext(coords: Position[], targetM: number): DistanceContext | null {
   if (!Array.isArray(coords) || coords.length === 0) return null;
   if (targetM <= 0) return { point: coords[0], segmentIndex: 0, t: 0 };
   let acc = 0;
@@ -74,24 +129,24 @@ function pointAtDistanceWithContext(coords, targetM) {
     acc += seg;
   }
   return {
-    point: coords.at(-1),
+    point: coords[coords.length - 1],
     segmentIndex: Math.max(0, coords.length - 2),
     t: 1,
   };
 }
 
-function lineFromPointOnSegment(coords, segmentIndex, t) {
+function lineFromPointOnSegment(coords: Position[], segmentIndex: number, t: number): Position[] {
   const index = Math.max(0, Math.min(coords.length - 2, segmentIndex));
   const a = coords[index];
   const b = coords[index + 1];
-  const start = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+  const start: Position = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
   return [start, ...coords.slice(index + 1)];
 }
 
-function linearlySampleSegment(start, end, sampleM) {
+function linearlySampleSegment(start: Position, end: Position, sampleM: number): Position[] {
   const dist = distanceMeters(start, end);
   const steps = Math.max(1, Math.ceil(dist / Math.max(1, sampleM)));
-  const out = [];
+  const out: Position[] = [];
   for (let i = 0; i <= steps; i += 1) {
     const t = i / steps;
     out.push([start[0] + (end[0] - start[0]) * t, start[1] + (end[1] - start[1]) * t]);
@@ -99,13 +154,13 @@ function linearlySampleSegment(start, end, sampleM) {
   return out;
 }
 
-function cubicBezier(start, control1, control2, end, sampleM) {
+function cubicBezier(start: Position, control1: Position, control2: Position, end: Position, sampleM: number): Position[] {
   const roughLength =
     distanceMeters(start, control1) +
     distanceMeters(control1, control2) +
     distanceMeters(control2, end);
   const steps = Math.max(12, Math.ceil(roughLength / Math.max(1, sampleM)));
-  const out = [];
+  const out: Position[] = [];
   for (let i = 0; i <= steps; i += 1) {
     const t = i / steps;
     const u = 1 - t;
@@ -117,14 +172,14 @@ function cubicBezier(start, control1, control2, end, sampleM) {
   return out;
 }
 
-function append(out, coords) {
+function append(out: Position[], coords: Position[]): void {
   for (const coord of coords) {
-    if (out.length && distanceMeters(out.at(-1), coord) < 0.25) continue;
+    if (out.length && distanceMeters(out[out.length - 1], coord) < 0.25) continue;
     out.push(coord);
   }
 }
 
-function smoothWaypointPath(points, startTangent, endTangent, sampleM) {
+function smoothWaypointPath(points: Position[], startTangent: Vector, endTangent: Vector, sampleM: number): Position[] {
   if (points.length < 2) return points;
   const tangents = points.map((point, index) => {
     if (index === 0) return startTangent;
@@ -141,7 +196,7 @@ function smoothWaypointPath(points, startTangent, endTangent, sampleM) {
   return out;
 }
 
-function nearestIndex(coords, point) {
+function nearestIndex(coords: Position[], point: Position): { index: number; distanceM: number } {
   let best = 0;
   let bestDistance = Infinity;
   coords.forEach((coord, index) => {
@@ -154,7 +209,7 @@ function nearestIndex(coords, point) {
   return { index: best, distanceM: bestDistance };
 }
 
-function maxTurnDegrees(coords) {
+function maxTurnDegrees(coords: Position[]): number {
   let maxTurn = 0;
   for (let i = 1; i < coords.length - 1; i += 1) {
     const a = coords[i - 1];
@@ -171,7 +226,7 @@ function maxTurnDegrees(coords) {
   return maxTurn;
 }
 
-function distanceToPolylineM(point, coords) {
+function distanceToPolylineM(point: Position, coords: Position[]): number {
   let best = Infinity;
   for (let i = 1; i < coords.length; i += 1) {
     const a = coords[i - 1];
@@ -192,12 +247,12 @@ function distanceToPolylineM(point, coords) {
   return best;
 }
 
-function pointToSegmentClosestMeters(point, start, end) {
+function pointToSegmentClosestMeters(point: Vector, start: Vector, end: Vector): ClosestPoint {
   const dx = end[0] - start[0];
   const dy = end[1] - start[1];
   const len2 = dx * dx + dy * dy || 1e-9;
   const t = Math.max(0, Math.min(1, ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / len2));
-  const closest = [start[0] + dx * t, start[1] + dy * t];
+  const closest: Vector = [start[0] + dx * t, start[1] + dy * t];
   return {
     point: closest,
     t,
@@ -205,7 +260,7 @@ function pointToSegmentClosestMeters(point, start, end) {
   };
 }
 
-function segmentIntersectionMeters(a0, a1, b0, b1) {
+function segmentIntersectionMeters(a0: Vector, a1: Vector, b0: Vector, b1: Vector): SegmentIntersection | null {
   const den = (a0[0] - a1[0]) * (b0[1] - b1[1]) - (a0[1] - a1[1]) * (b0[0] - b1[0]);
   if (Math.abs(den) < 1e-9) return null;
   const t =
@@ -222,12 +277,12 @@ function segmentIntersectionMeters(a0, a1, b0, b1) {
   };
 }
 
-function findPolylineCrossingOrClosest(trunkCoords, referenceCoords) {
+function findPolylineCrossingOrClosest(trunkCoords: Position[], referenceCoords: Position[] | null | undefined): ReferenceCrossing | null {
   if (!Array.isArray(referenceCoords) || referenceCoords.length < 2) return null;
   const lat0 =
     [...trunkCoords, ...referenceCoords].reduce((sum, coord) => sum + coord[1], 0) /
     (trunkCoords.length + referenceCoords.length);
-  let best = null;
+  let best: ReferenceCrossing | null = null;
 
   for (let ti = 0; ti < trunkCoords.length - 1; ti += 1) {
     const ta = projectAtLat(trunkCoords[ti], lat0);
@@ -238,7 +293,7 @@ function findPolylineCrossingOrClosest(trunkCoords, referenceCoords) {
       const intersection = segmentIntersectionMeters(ta, tb, ra, rb);
       if (intersection) {
         const tangent = normalize([rb[0] - ra[0], rb[1] - ra[1]], [1, 0]);
-        const eastTangent = tangent[0] >= 0 ? tangent : [-tangent[0], -tangent[1]];
+        const eastTangent: Vector = tangent[0] >= 0 ? tangent : [-tangent[0], -tangent[1]];
         return {
           trunkPoint: unprojectAtLat(intersection.point, lat0),
           referencePoint: unprojectAtLat(intersection.point, lat0),
@@ -286,7 +341,7 @@ function findPolylineCrossingOrClosest(trunkCoords, referenceCoords) {
       for (const candidate of candidates) {
         if (!best || candidate.distanceM < best.referenceDistanceM) {
           const tangent = normalize([rb[0] - ra[0], rb[1] - ra[1]], [1, 0]);
-          const eastTangent = tangent[0] >= 0 ? tangent : [-tangent[0], -tangent[1]];
+          const eastTangent: Vector = tangent[0] >= 0 ? tangent : [-tangent[0], -tangent[1]];
           best = {
             trunkPoint: unprojectAtLat(candidate.trunkPoint, lat0),
             referencePoint: unprojectAtLat(candidate.referencePoint, lat0),
@@ -317,7 +372,7 @@ export function buildMottHavenFiveSchematicLens({
   shoulderSouthM = 18,
   outerSouthM = 128,
   lowerSouthM = 240,
-} = {}) {
+}: FiveLensOptions = {}) {
   if (!Array.isArray(branchCoords) || branchCoords.length < 2) {
     return { coordinates: branchCoords ?? [], diagnostics: { ok: false, reason: "missing_branch" } };
   }
@@ -326,26 +381,28 @@ export function buildMottHavenFiveSchematicLens({
   }
 
   const referenceCrossing = findPolylineCrossingOrClosest(trunkCoords, parallelReferenceCoords);
-  const hasReferenceCrossing = referenceCrossing && referenceCrossing.referenceDistanceM <= 90;
-  const referenceNormalRight = hasReferenceCrossing
-    ? [referenceCrossing.referenceTangentEast[1], -referenceCrossing.referenceTangentEast[0]]
+  const usableReferenceCrossing = referenceCrossing && referenceCrossing.referenceDistanceM <= 90
+    ? referenceCrossing
     : null;
-  const topBasePoint = hasReferenceCrossing ? referenceCrossing.referencePoint : trunkCoords[0];
-  const topPoint = hasReferenceCrossing
+  const referenceNormalRight: Vector | null = usableReferenceCrossing
+    ? [usableReferenceCrossing.referenceTangentEast[1], -usableReferenceCrossing.referenceTangentEast[0]]
+    : null;
+  const topBasePoint = usableReferenceCrossing ? usableReferenceCrossing.referencePoint : trunkCoords[0];
+  const topPoint = usableReferenceCrossing && referenceNormalRight
     ? addVectorMeters(topBasePoint, [referenceNormalRight[0] * parallelOffsetM, referenceNormalRight[1] * parallelOffsetM])
     : trunkCoords[0];
-  const trunkFromTop = hasReferenceCrossing
-    ? lineFromPointOnSegment(trunkCoords, referenceCrossing.trunkSegmentIndex, referenceCrossing.trunkT)
+  const trunkFromTop = usableReferenceCrossing
+    ? lineFromPointOnSegment(trunkCoords, usableReferenceCrossing.trunkSegmentIndex, usableReferenceCrossing.trunkT)
     : trunkCoords;
   const mergePoint = pointAtDistance(trunkFromTop, mergeDistanceM);
   if (!mergePoint) {
     return { coordinates: branchCoords, diagnostics: { ok: false, reason: "missing_merge" } };
   }
 
-  const entryPoint = hasReferenceCrossing
+  const entryPoint = usableReferenceCrossing
     ? addVectorMeters(topPoint, [
-        referenceCrossing.referenceTangentEast[0] * eastEntryM,
-        referenceCrossing.referenceTangentEast[1] * eastEntryM,
+        usableReferenceCrossing.referenceTangentEast[0] * eastEntryM,
+        usableReferenceCrossing.referenceTangentEast[1] * eastEntryM,
       ])
     : addMeters(topPoint, eastEntryM, 0);
   const westShoulder = addMeters(topPoint, -westShoulderM, -shoulderSouthM);
@@ -356,7 +413,7 @@ export function buildMottHavenFiveSchematicLens({
   const prefix = branchCoords.slice(0, cut.index + 1);
   const out = prefix.slice(0, -1);
 
-  const prefixEnd = prefix.at(-1);
+  const prefixEnd = prefix[prefix.length - 1];
   if (prefixEnd && distanceMeters(prefixEnd, entryPoint) > 2) {
     append(out, hermiteBetween(prefixEnd, entryPoint, tangentAt(branchCoords, cut.index, false), [-1, 0], {
       handleFrac: 0.18,
@@ -372,10 +429,10 @@ export function buildMottHavenFiveSchematicLens({
     M_PER_DEG_LAT;
   append(out, topRun.slice(1));
   const topPointOutputIndex = out.length - 1;
-  const topControl = hasReferenceCrossing
+  const topControl = usableReferenceCrossing
     ? addVectorMeters(topPoint, [
-        -referenceCrossing.referenceTangentEast[0] * 255,
-        -referenceCrossing.referenceTangentEast[1] * 255,
+        -usableReferenceCrossing.referenceTangentEast[0] * 255,
+        -usableReferenceCrossing.referenceTangentEast[1] * 255,
       ])
     : addMeters(topPoint, -255, -2);
   const mergeControl = addMeters(mergePoint, -235, 88);
@@ -384,7 +441,7 @@ export function buildMottHavenFiveSchematicLens({
   const bowCoords = out.slice(topPointOutputIndex);
   const schematicCoords = out.slice(Math.max(0, topPointOutputIndex - 2));
   const maxTrunkDistanceM = Math.max(...bowCoords.map((coord) => distanceToPolylineM(coord, trunkCoords)));
-  const mergeDistance = distanceMeters(out.at(-1), mergePoint);
+  const mergeDistance = distanceMeters(out[out.length - 1], mergePoint);
 
   return {
     coordinates: out,
@@ -406,7 +463,7 @@ export function buildMottHavenFiveSchematicLens({
       minLon: Math.min(...out.map((coord) => coord[0])),
       maxTurnDeg: maxTurnDegrees(schematicCoords),
       parallelReferenceDistanceM: referenceCrossing?.referenceDistanceM ?? null,
-      parallelReferenceUsed: Boolean(hasReferenceCrossing),
+      parallelReferenceUsed: Boolean(usableReferenceCrossing),
     },
   };
 }
@@ -418,7 +475,7 @@ export function buildMottHavenSixSchematicMerge({
   entryEastM = 430,
   entryNorthM = 120,
   sampleM = 6,
-} = {}) {
+}: SixMergeOptions = {}) {
   if (!Array.isArray(branchCoords) || branchCoords.length < 2) {
     return { coordinates: branchCoords ?? [], sharedMainlineCoords: [], diagnostics: { ok: false, reason: "missing_branch" } };
   }
@@ -436,7 +493,7 @@ export function buildMottHavenSixSchematicMerge({
   const cut = nearestIndex(branchCoords, entryTarget);
   const prefix = branchCoords.slice(0, cut.index + 1);
   const out = [...prefix];
-  const prefixEnd = out.at(-1);
+  const prefixEnd = out[out.length - 1];
   const sharedMainlineCoords = lineFromPointOnSegment(mainlineCoords, merge.segmentIndex, merge.t);
   const endTangent = tangentAt(sharedMainlineCoords, 0, true);
   const startTangent = tangentAt(branchCoords, cut.index, true);
@@ -460,7 +517,7 @@ export function buildMottHavenSixSchematicMerge({
       mergePoint,
       cutIndex: cut.index,
       prefixCutDistanceM: cut.distanceM,
-      mergeDistanceM: distanceMeters(out.at(-1), mergePoint),
+      mergeDistanceM: distanceMeters(out[out.length - 1], mergePoint),
       maxTurnDeg: maxTurnDegrees(out.slice(Math.max(0, cut.index - 2))),
       minLon: Math.min(...out.map((coord) => coord[0])),
     },

@@ -65,7 +65,7 @@ import { applyCartographicJunctionOverrides } from "./build/cartographic-junctio
 import {
   buildMottHavenFiveSchematicLens,
   buildMottHavenSixSchematicMerge,
-} from "./build/mott-haven-schematic.mjs";
+} from "./build/mott-haven-schematic.ts";
 import { applyNostrandEasternSchematic } from "./build/nostrand-eastern-schematic.ts";
 import { applyBrightonBqChurchSpacing } from "./build/brighton-bq-church-spacing.mjs";
 import { applyCulverFgProspectSmoothing } from "./build/culver-fg-prospect-smoothing.ts";
