@@ -219,3 +219,51 @@ Wait until after an orchestrator migration plan:
 - `build-subway-visual-network.mjs`
 - root artifact entrypoints and QA scripts that write screenshots or debug
   output
+
+## Orchestrator Migration Plan
+
+`build-subway-visual-network.mjs` (~4,700 lines) is the visual-network
+orchestrator. A Batch 24 review concluded that a direct `.mjs` -> `.ts`
+conversion is **not** mechanically contained and should be **deferred** to a
+dedicated, staged effort. Key findings:
+
+- **All sibling imports are already `.ts`** (36 build helpers) and there are
+  **no remaining `.mjs` imports**, so the conversion needs **no TS1479
+  suppressions** and **no declaration files**. Node built-ins used: `node:fs`
+  (`existsSync`/`mkdirSync`/`readFileSync`/`renameSync`/`writeFileSync`),
+  `node:path`, `node:url` (`fileURLToPath` + `import.meta.url`), `node:zlib`
+  (`inflateRawSync`).
+- **Top-level side-effect script**: no `main()`, no exports, no `process.argv`,
+  no `process.env`. The entire build runs on import, so a characterization test
+  **cannot import it** without running the full (~8 min) build. The only
+  behavioral gate is the artifact-identical visual build.
+- **Strict typing is the real cost**: under `scripts/tsconfig.json`
+  (`strict: true`, `include: ["**/*.ts"]`) the file would be typechecked, so
+  every untyped parameter/feature-bag needs annotation. This is a large,
+  signature-by-signature typing effort, not a rename.
+- **Artifact-drift trap**: the public `subway-network.visual.geojson` embeds
+  `metadata.source: "build-subway-visual-network.mjs Gate 2A-2H"`, and the
+  debug artifacts embed similar `source: "...mjs Gate 2X"` strings. These
+  self-referential literals **must be kept verbatim** (`.mjs`) through the
+  conversion, or the generated artifact changes (a real, non-timestamp diff).
+- **Must preserve exactly**: the 7 `process.exit(1)` validation gates, the
+  gated atomic `renameSync` promotion of `subway-network.visual.geojson`, the
+  artifact schema/ordering/hashing, and the disabled `void parallelOffsetCrossColor;`.
+- **Cross-file path updates required on conversion**: `package.json`
+  `build:visual-network` (`tsx scripts/build-subway-visual-network.mjs` ->
+  `.ts`) and `components/map/subway-palette.check.mjs` (which reads the
+  orchestrator source by path). `scripts/script-inventory.json` references are
+  stale metadata and are **not** updated.
+
+Recommended staging:
+
+1. **Prep batch** (still `.mjs`, behavior-preserving): freeze/verify the
+   self-referential provenance strings stay `.mjs`; confirm
+   `scripts/build/types.ts` covers the orchestrator's GeoJSON/feature shapes;
+   finalize this plan. Gate: artifact-identical build.
+2. **Conversion batch** (dedicated, large): rename `.mjs` -> `.ts`; type
+   function signatures against the shared types (let internal vars infer; use a
+   permissive feature-properties bag for dynamic fields); keep provenance
+   literals and `void parallelOffsetCrossColor;` unchanged; update the
+   `package.json` + `subway-palette.check.mjs` paths. Gate: `typecheck:scripts`
+   + full artifact-identical visual build (timestamp-only) + `verify:transit-artifacts`.
