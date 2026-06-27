@@ -1,18 +1,31 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { applyCulverFgProspectSmoothing } from "./culver-fg-prospect-smoothing.mjs";
+import { applyCulverFgProspectSmoothing } from "./culver-fg-prospect-smoothing.ts";
+import type { Feature, LineStringGeometry, Position } from "./types.ts";
+
+type TestProperties = {
+  visual_feature_type: "bundle_lane";
+  corridor_id: string;
+  color: string;
+  route_ids: string[];
+  color_route_ids: string[];
+  lane_offset_baked: boolean;
+  culver_fg_prospect_smoothing?: boolean;
+};
+
+type TestFeature = Feature<LineStringGeometry, TestProperties>;
 
 const LAT = 40.655;
 const LON = -73.977;
 const M_PER_DEG_LAT = 110574;
 const M_PER_DEG_LNG = 111320 * Math.cos((LAT * Math.PI) / 180);
 
-function P(xM, yM) {
+function P(xM: number, yM: number): Position {
   return [LON + xM / M_PER_DEG_LNG, LAT + yM / M_PER_DEG_LAT];
 }
 
-function line(id, color, routes, coords) {
+function line(id: string, color: string, routes: string[], coords: Position[]): TestFeature {
   return {
     type: "Feature",
     geometry: { type: "LineString", coordinates: coords },
@@ -27,19 +40,19 @@ function line(id, color, routes, coords) {
   };
 }
 
-function bearing(a, b) {
+function bearing(a: Position, b: Position): number {
   const x = (b[0] - a[0]) * M_PER_DEG_LNG;
   const y = (b[1] - a[1]) * M_PER_DEG_LAT;
   return Math.atan2(x, y);
 }
 
-function tangentDeltaDeg(a, b, c) {
+function tangentDeltaDeg(a: Position, b: Position, c: Position): number {
   let delta = Math.abs(bearing(a, b) - bearing(b, c)) * 180 / Math.PI;
   if (delta > 180) delta = 360 - delta;
   return delta;
 }
 
-function distPointToLineM(point, coords) {
+function distPointToLineM(point: Position, coords: Position[]): number {
   const px = (point[0] - LON) * M_PER_DEG_LNG;
   const py = (point[1] - LAT) * M_PER_DEG_LAT;
   let best = Infinity;
@@ -84,9 +97,9 @@ test("Culver F/G Prospect smoothing removes a connected-but-jagged G seam", () =
 
   assert.ok(
     tangentDeltaDeg(
-      greenSouth.geometry.coordinates.at(-2),
-      greenSouth.geometry.coordinates.at(-1),
-      greenNorth.geometry.coordinates.at(-2),
+      greenSouth.geometry.coordinates[greenSouth.geometry.coordinates.length - 2],
+      greenSouth.geometry.coordinates[greenSouth.geometry.coordinates.length - 1],
+      greenNorth.geometry.coordinates[greenNorth.geometry.coordinates.length - 2],
     ) > 10,
     "fixture starts with a visible seam kink",
   );
@@ -107,19 +120,39 @@ test("Culver F/G Prospect smoothing removes a connected-but-jagged G seam", () =
   assert.equal(diagnostics.applied, true);
   const south = features.find((feature) => feature.properties.corridor_id === "g-south");
   const north = features.find((feature) => feature.properties.corridor_id === "g-north");
-  const seam = south.geometry.coordinates.at(-1);
-  assert.deepEqual(seam, north.geometry.coordinates.at(-1));
+  assert.ok(south);
+  assert.ok(north);
+  const southCoords = south.geometry.coordinates;
+  const northCoords = north.geometry.coordinates;
+  const seam = southCoords[southCoords.length - 1];
+  assert.deepEqual(seam, northCoords[northCoords.length - 1]);
 
   const afterDelta = tangentDeltaDeg(
-    south.geometry.coordinates.at(-2),
+    southCoords[southCoords.length - 2],
     seam,
-    north.geometry.coordinates.at(-2),
+    northCoords[northCoords.length - 2],
   );
   assert.ok(afterDelta < 10, `expected a smooth seam, got ${afterDelta.toFixed(2)}deg`);
   assert.equal(south.properties.culver_fg_prospect_smoothing, true);
   assert.equal(north.properties.culver_fg_prospect_smoothing, true);
 
-  for (const point of south.geometry.coordinates.slice(-8)) {
+  for (const point of southCoords.slice(-8)) {
     assert.ok(distPointToLineM(point, orange.geometry.coordinates) >= 10);
   }
+});
+
+test("Culver F/G Prospect smoothing leaves features unchanged when required lines are missing", () => {
+  const orange = line("f", "#FF6319", ["F"], [
+    P(0, -260),
+    P(2, -160),
+    P(3, -60),
+    P(4, 60),
+  ]);
+  const features = [orange];
+
+  const result = applyCulverFgProspectSmoothing(features);
+
+  assert.equal(result.features, features);
+  assert.equal(result.diagnostics.applied, false);
+  assert.equal(result.diagnostics.reason, "missing_fg_features");
 });
