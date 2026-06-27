@@ -7,11 +7,11 @@
 // Plains Rd) end up coincident and cross instead of running as a parallel pair.
 //
 // This pass runs on the FINAL features: wherever a feature overlaps a LOWER-color-
-// rank different-color feature over a sustained run (i.e. they are currently
-// coincident/crossing), it shifts ONLY the higher-rank feature aside by one lane
-// width over that run (tapered), leaving the primary trunk in place. Pairs that are
-// already separated by more than overlapDistM are untouched (idempotent), so it
-// never disturbs lanes that are already parallel.
+// rank different-color feature over a sustained run and is either coincident with
+// it or crosses from one side of it to the other, it shifts ONLY the higher-rank
+// feature aside by one lane width over that run (tapered), leaving the primary
+// trunk in place. Pairs that are already sustained parallel lanes on one side are
+// untouched even when they are closer than overlapDistM.
 
 import { offsetPolylineOverExtent } from "./cross-color-spread.mjs";
 
@@ -38,8 +38,8 @@ function cumulativeArcs(coords) {
   return arcs;
 }
 
-function projectDist(coords, p) {
-  let best = Infinity;
+function projectToPolyline(coords, p) {
+  let best = null;
   const mPerLng = metersPerDegLng(p[1]);
   const px = p[0] * mPerLng;
   const py = p[1] * M_PER_DEG_LAT;
@@ -50,10 +50,16 @@ function projectDist(coords, p) {
     const bx = b[0] * mPerLng, by = b[1] * M_PER_DEG_LAT;
     const dx = bx - ax, dy = by - ay;
     const len2 = dx * dx + dy * dy || 1e-12;
+    const len = Math.sqrt(len2);
     const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len2));
     const proj = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
-    const d = haversineM(proj, p);
-    if (d < best) best = d;
+    const distM = haversineM(proj, p);
+    if (!best || distM < best.distM) {
+      best = {
+        distM,
+        signedSideM: (dx * (py - ay) - dy * (px - ax)) / len,
+      };
+    }
   }
   return best;
 }
@@ -63,18 +69,57 @@ function colorRank(color, colorOrder) {
   return i === -1 ? 999 : i;
 }
 
+function runHasSideFlipOrCoincidence(projections, start, end, sideEpsM) {
+  let hasPositiveSide = false;
+  let hasNegativeSide = false;
+  let coincidentCount = 0;
+  let sampleCount = 0;
+
+  for (let i = start; i <= end; i += 1) {
+    const side = projections[i]?.signedSideM;
+    if (!Number.isFinite(side)) continue;
+
+    sampleCount += 1;
+    if (side > sideEpsM) hasPositiveSide = true;
+    else if (side < -sideEpsM) hasNegativeSide = true;
+    else coincidentCount += 1;
+  }
+
+  if (hasPositiveSide && hasNegativeSide) return true;
+  return sampleCount > 0 && coincidentCount >= Math.max(2, Math.ceil(sampleCount * 0.8));
+}
+
+function mergeArcRanges(ranges) {
+  const sorted = ranges
+    .filter((range) => Number.isFinite(range.startArc) && Number.isFinite(range.endArc) && range.endArc > range.startArc)
+    .sort((a, b) => a.startArc - b.startArc || a.endArc - b.endArc);
+  const merged = [];
+
+  for (const range of sorted) {
+    const last = merged.at(-1);
+    if (last && range.startArc <= last.endArc) {
+      last.endArc = Math.max(last.endArc, range.endArc);
+    } else {
+      merged.push({ ...range });
+    }
+  }
+
+  return merged;
+}
+
 /**
  * @param {Array} features
  * @param {object} [options]
  * @param {string[]} [options.colorOrder=[]]  canonical color order (lower index = stays put)
  * @param {number} [options.overlapDistM=8]   vertices closer than this to a lower-rank other-color line are "coincident"
+ * @param {number} [options.sideEpsM=0.5]      side distances within this threshold count as coincident
  * @param {number} [options.minOverlapM=150]  only shift runs longer than this
  * @param {number} [options.laneWidthM=8]     shift distance
  * @param {number} [options.taperM=40]
  * @returns {{ features: Array, shiftedCount: number }}
  */
 export function parallelOffsetCrossColor(features, options = {}) {
-  const { colorOrder = [], overlapDistM = 8, minOverlapM = 150, laneWidthM = 8, taperM = 40 } = options;
+  const { colorOrder = [], overlapDistM = 8, sideEpsM = 0.5, minOverlapM = 150, laneWidthM = 8, taperM = 40 } = options;
   const lines = features.filter(
     (f) => f.geometry?.type === "LineString" && Array.isArray(f.geometry.coordinates) && f.geometry.coordinates.length >= 2,
   );
@@ -94,26 +139,35 @@ export function parallelOffsetCrossColor(features, options = {}) {
 
     const coords = f.geometry.coordinates;
     const arcs = cumulativeArcs(coords);
-    // per-vertex: is this vertex coincident with any lower-rank other-color line?
-    const covered = coords.map((p) => targets.some((t) => projectDist(t.geometry.coordinates, p) <= overlapDistM));
+    const rangesToOffset = [];
 
-    // sustained covered runs -> offset those arc ranges
-    let working = coords;
-    let didShift = false;
-    let i = 0;
-    while (i < covered.length) {
-      if (!covered[i]) { i += 1; continue; }
-      let j = i;
-      while (j + 1 < covered.length && covered[j + 1]) j += 1;
-      const runLen = arcs[j] - arcs[i];
-      if (runLen >= minOverlapM) {
-        working = offsetPolylineOverExtent(working, arcs[i], arcs[j], laneWidthM, taperM);
-        didShift = true;
+    for (const target of targets) {
+      const targetCoords = target.geometry.coordinates;
+      const projections = coords.map((p) => projectToPolyline(targetCoords, p));
+      const covered = projections.map((projection) => projection?.distM <= overlapDistM);
+
+      // sustained covered runs only qualify when they are coincident or swap sides
+      // of the same lower-rank line. Nearby same-side parallels stay unchanged.
+      let i = 0;
+      while (i < covered.length) {
+        if (!covered[i]) { i += 1; continue; }
+        let j = i;
+        while (j + 1 < covered.length && covered[j + 1]) j += 1;
+        const runLen = arcs[j] - arcs[i];
+        if (runLen >= minOverlapM && runHasSideFlipOrCoincidence(projections, i, j, sideEpsM)) {
+          rangesToOffset.push({ startArc: arcs[i], endArc: arcs[j] });
+        }
+        i = j + 1;
       }
-      i = j + 1;
     }
 
-    if (didShift) {
+    let working = coords;
+    const offsetRanges = mergeArcRanges(rangesToOffset);
+    for (const range of offsetRanges) {
+      working = offsetPolylineOverExtent(working, range.startArc, range.endArc, laneWidthM, taperM);
+    }
+
+    if (offsetRanges.length > 0) {
       replaced.set(f, {
         ...f,
         geometry: { type: "LineString", coordinates: working },
