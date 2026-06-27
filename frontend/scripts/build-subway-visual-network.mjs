@@ -67,7 +67,7 @@ import {
   buildMottHavenSixSchematicMerge,
 } from "./build/mott-haven-schematic.ts";
 import { applyNostrandEasternSchematic } from "./build/nostrand-eastern-schematic.ts";
-import { applyBrightonBqChurchSpacing } from "./build/brighton-bq-church-spacing.mjs";
+import { applyBrightonBqChurchSpacing } from "./build/brighton-bq-church-spacing.ts";
 import { applyCulverFgProspectSmoothing } from "./build/culver-fg-prospect-smoothing.ts";
 import { applyJoralemonGreenRiverSmoothing } from "./build/joralemon-green-river.ts";
 import { applyStNicholasBlueStraightening } from "./build/st-nicholas-blue-straightening.ts";
