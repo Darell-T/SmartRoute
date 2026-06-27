@@ -1,16 +1,36 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { trimTerminalOverhang } from "./trim-terminal-overhang.mjs";
+import { trimTerminalOverhang } from "./trim-terminal-overhang.ts";
+import type { Feature, FeatureCollection, LineStringGeometry, PointGeometry, Position } from "./types.ts";
 
 // Local helpers: build features along a horizontal line at lat 40.7 where
 // 0.001 deg lon ~= 84.5m. Distances below are approximate meters.
 const LAT = 40.7;
 const M_PER_DEG_LON = 111320 * Math.cos((LAT * Math.PI) / 180);
-const lonAt = (m) => -74 + m / M_PER_DEG_LON;
+const lonAt = (m: number): number => -74 + m / M_PER_DEG_LON;
 
-function lineFeature(routes, fromM, toM, step = 50) {
-  const coordinates = [];
+type TestLineProperties = {
+  route_ids: string[];
+  visual_feature_type: string;
+  length_m?: number;
+  [key: string]: unknown;
+};
+
+type TestStationProperties = {
+  station_id: string;
+  name: string;
+  route_ids: string[];
+  [key: string]: unknown;
+};
+
+type TestLineFeature = Feature<LineStringGeometry, TestLineProperties>;
+type TestStationFeature = Feature<PointGeometry, TestStationProperties>;
+type TestStationCollection = FeatureCollection<TestStationFeature>;
+type TestTerminal = { route: string; coord: Position };
+
+function lineFeature(routes: string[], fromM: number, toM: number, step = 50): TestLineFeature {
+  const coordinates: Position[] = [];
   for (let m = fromM; m < toM; m += step) coordinates.push([lonAt(m), LAT]);
   coordinates.push([lonAt(toM), LAT]);
   return {
@@ -20,7 +40,7 @@ function lineFeature(routes, fromM, toM, step = 50) {
   };
 }
 
-function station(name, routes, atM, latOffsetM = 0) {
+function station(name: string, routes: string[], atM: number, latOffsetM = 0): TestStationFeature {
   return {
     type: "Feature",
     properties: { station_id: name, name, route_ids: routes },
@@ -32,11 +52,11 @@ function station(name, routes, atM, latOffsetM = 0) {
 }
 
 // GTFS-terminal entry for the helper's terminal gate.
-function terminal(route, atM, latOffsetM = 0) {
+function terminal(route: string, atM: number, latOffsetM = 0): TestTerminal {
   return { route, coord: [lonAt(atM), LAT + latOffsetM / 111320] };
 }
 
-function lengthM(feature) {
+function lengthM(feature: TestLineFeature): number {
   const cs = feature.geometry.coordinates;
   let total = 0;
   for (let i = 1; i < cs.length; i += 1) {
@@ -47,7 +67,7 @@ function lengthM(feature) {
 
 test("free ends are trimmed back to the outermost station plus grace", () => {
   const features = [lineFeature(["A"], 0, 1000)];
-  const stations = {
+  const stations: TestStationCollection = {
     type: "FeatureCollection",
     features: [station("s1", ["A"], 100), station("s2", ["A"], 700)],
   };
@@ -69,7 +89,7 @@ test("endpoints continuing into another lane of the same route are left alone", 
     lineFeature(["A"], 0, 500),
     lineFeature(["A"], 500, 1000),
   ];
-  const stations = {
+  const stations: TestStationCollection = {
     type: "FeatureCollection",
     features: [station("s1", ["A"], 250), station("s2", ["A"], 750)],
   };
@@ -93,7 +113,7 @@ test("shared lane trims to the farthest route's terminal, not the nearest", () =
   // F,M share the lane; M ends at 400 but F runs to 900. The free end must
   // keep serving F to 900 (+grace), not cut at M's terminal.
   const features = [lineFeature(["F", "M"], 0, 1000)];
-  const stations = {
+  const stations: TestStationCollection = {
     type: "FeatureCollection",
     features: [
       station("m-end", ["M"], 400),
@@ -116,7 +136,7 @@ test("shared lane trims to the farthest route's terminal, not the nearest", () =
 
 test("features with no projecting stations are untouched", () => {
   const features = [lineFeature(["A"], 0, 1000)];
-  const stations = {
+  const stations: TestStationCollection = {
     type: "FeatureCollection",
     features: [station("far", ["A"], 500, 800)], // 800m lateral: ignored
   };
@@ -127,7 +147,7 @@ test("features with no projecting stations are untouched", () => {
 
 test("generic S shuttle stations anchor trims on FS/GS/H lanes", () => {
   const features = [lineFeature(["H"], 0, 1000)];
-  const stations = {
+  const stations: TestStationCollection = {
     type: "FeatureCollection",
     features: [station("rock", ["S"], 200), station("rock2", ["S"], 800)],
   };
@@ -148,7 +168,7 @@ test("mid-service geometry is never cut when the boundary is not a terminal", ()
   // the old logic ate the whole branch. The terminal gate must deny any cut
   // whose boundary station is not a true GTFS terminal of the lane's routes.
   const features = [lineFeature(["5"], 0, 5000)];
-  const stations = {
+  const stations: TestStationCollection = {
     type: "FeatureCollection",
     features: [
       station("president", ["2"], 500),
@@ -177,7 +197,7 @@ test("stationless spur features hanging off the network are dropped", () => {
   const main = lineFeature(["A"], 0, 1000);
   const spur = lineFeature(["A"], 1000, 2400);
   const features = [main, spur];
-  const stations = {
+  const stations: TestStationCollection = {
     type: "FeatureCollection",
     features: [station("s1", ["A"], 100), station("s2", ["A"], 950)],
   };
@@ -197,7 +217,7 @@ test("legs carrying other-route stations are never dropped as spurs", () => {
   const main = lineFeature(["A"], 0, 1000);
   const leg = lineFeature(["A"], 1000, 3900);
   const features = [main, leg];
-  const stations = {
+  const stations: TestStationCollection = {
     type: "FeatureCollection",
     features: [
       station("s1", ["A"], 500),
@@ -220,7 +240,7 @@ test("stationless connectors attached at both ends are kept", () => {
   const connector = lineFeature(["A"], 1000, 1400);
   const b = lineFeature(["A"], 1400, 2400);
   const features = [a, connector, b];
-  const stations = {
+  const stations: TestStationCollection = {
     type: "FeatureCollection",
     features: [
       station("s1", ["A"], 500),
@@ -239,7 +259,7 @@ test("merge ends touching a sparse-vertex trunk mid-segment are attached", () =>
   // MIDDLE of a long trunk segment whose vertices are hundreds of meters
   // apart. Vertex-distance says "free" and the stationless connector gets
   // dropped; segment-distance must say "attached" and keep it.
-  const trunk = {
+  const trunk: TestLineFeature = {
     type: "Feature",
     properties: { route_ids: ["B", "D", "F"], visual_feature_type: "bundle_lane" },
     geometry: {
@@ -251,7 +271,7 @@ test("merge ends touching a sparse-vertex trunk mid-segment are attached", () =>
   };
   // Stationless B/D merge connector: one end touches the trunk mid-segment
   // (at ~500m along it), the other end is genuinely free.
-  const connector = {
+  const connector: TestLineFeature = {
     type: "Feature",
     properties: { route_ids: ["B", "D"], visual_feature_type: "bundle_lane" },
     geometry: {
@@ -263,7 +283,7 @@ test("merge ends touching a sparse-vertex trunk mid-segment are attached", () =>
     },
   };
   const features = [trunk, connector];
-  const stations = {
+  const stations: TestStationCollection = {
     type: "FeatureCollection",
     features: [
       station("t1", ["F"], 100),
@@ -289,7 +309,7 @@ test("merge ends touching a sparse-vertex trunk mid-segment are attached", () =>
 
 test("small overhangs below the threshold are not trimmed", () => {
   const features = [lineFeature(["A"], 0, 1000)];
-  const stations = {
+  const stations: TestStationCollection = {
     type: "FeatureCollection",
     features: [station("s1", ["A"], 30), station("s2", ["A"], 980)],
   };

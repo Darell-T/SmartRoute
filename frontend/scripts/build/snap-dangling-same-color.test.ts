@@ -1,23 +1,38 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { snapDanglingSameColorEndpoints } from "./snap-dangling-same-color.mjs";
+import { snapDanglingSameColorEndpoints } from "./snap-dangling-same-color.ts";
+import type { Feature, LineStringGeometry, Position } from "./types.ts";
 
 const DEG_LAT = 1 / 110574;
 const DEG_LON = 1 / (111320 * Math.cos((40.76 * Math.PI) / 180));
-const O = [-73.98, 40.76];
-const P = (dxM, dyM) => [O[0] + dxM * DEG_LON, O[1] + dyM * DEG_LAT];
+const O: Position = [-73.98, 40.76];
+const P = (dxM: number, dyM: number): Position => [O[0] + dxM * DEG_LON, O[1] + dyM * DEG_LAT];
 const R = 6371000;
-function hav([a, b], [c, d]) {
+function hav([a, b]: Position, [c, d]: Position): number {
   const r = Math.PI / 180, dy = (d - b) * r, dx = (c - a) * r;
   return 2 * R * Math.asin(Math.sqrt(Math.sin(dy / 2) ** 2 + Math.cos(b * r) * Math.cos(d * r) * Math.sin(dx / 2) ** 2));
 }
-function feat(id, color, routes, coords) {
+
+type TestFeatureProperties = {
+  corridor_id: string;
+  color: string;
+  route_ids: string[];
+  same_color_endpoint_snapped?: boolean;
+  same_color_y_join_fabric?: boolean;
+  same_color_y_join_fabric_count?: number;
+  visual_feature_type?: string;
+  [key: string]: unknown;
+};
+
+type TestFeature = Feature<LineStringGeometry, TestFeatureProperties>;
+
+function feat(id: string, color: string, routes: string[], coords: Position[]): TestFeature {
   return { type: "Feature", geometry: { type: "LineString", coordinates: coords }, properties: { corridor_id: id, color, route_ids: routes } };
 }
-function metersFromOrigin(p) {
+function metersFromOrigin(p: Position): Position {
   return [(p[0] - O[0]) / DEG_LON, (p[1] - O[1]) / DEG_LAT];
 }
-function tangentAngleToHorizontal(a, b) {
+function tangentAngleToHorizontal(a: Position, b: Position): number {
   const [ax, ay] = metersFromOrigin(a);
   const [bx, by] = metersFromOrigin(b);
   const angle = Math.abs((Math.atan2(by - ay, bx - ax) * 180) / Math.PI);
@@ -31,6 +46,7 @@ test("snaps a converging dangling same-color endpoint onto the sibling trunk", (
   const { features, snappedCount } = snapDanglingSameColorEndpoints([trunk, branch], { snapDistM: 12 });
   assert.equal(snappedCount, 1);
   const out = features.find((f) => f.properties.corridor_id === "BD");
+  assert.ok(out);
   const dToTrunk = Math.min(...trunk.geometry.coordinates.map((p) => hav(p, out.geometry.coordinates[0])));
   assert.ok(hav(out.geometry.coordinates[0], P(48, 0)) < 1.5 || dToTrunk < 1.5, "start snapped onto the trunk line");
   assert.equal(out.properties.same_color_endpoint_snapped, true);
@@ -52,6 +68,7 @@ test("snaps a loose-end terminus that ends ~6m beside a same-color sibling (no o
   const { features, snappedCount } = snapDanglingSameColorEndpoints([trunk, branch], { looseSnapDistM: 7 });
   assert.equal(snappedCount, 1, "loose-end start should snap onto the trunk");
   const out = features.find((f) => f.properties.corridor_id === "BD");
+  assert.ok(out);
   assert.ok(hav(out.geometry.coordinates[0], P(40, 0)) < 1.5, "start moved onto the M trunk");
 });
 
@@ -65,6 +82,7 @@ test("snapped high-angle loose-end terminus leaves the trunk with a tangent-cont
 
   assert.equal(snappedCount, 1);
   const out = features.find((f) => f.properties.corridor_id === "BD");
+  assert.ok(out);
   assert.ok(hav(out.geometry.coordinates[0], P(40, 0)) < 1.5, "start moved onto the trunk");
   assert.ok(out.geometry.coordinates.length > branch.geometry.coordinates.length, "merge is sampled as a curve, not a single kink");
   assert.ok(

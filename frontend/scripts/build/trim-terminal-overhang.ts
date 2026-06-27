@@ -7,6 +7,8 @@
 //
 // Pure + in-place: mutates feature.geometry like the other late passes.
 
+import type { Feature, FeatureCollection, LineStringGeometry, PointGeometry, Position } from "./types.ts";
+
 const DEG_LAT_M = 111320;
 const GRACE_M = 20; // keep this much line past the outermost stop
 const MIN_TRIM_M = 40; // ignore smaller overhangs (not visually offensive)
@@ -20,20 +22,76 @@ const ROUTE_ALIASES = new Map([
   ["SIR", ["SIR", "SI"]],
 ]);
 
-function expandRouteIds(routeIds) {
-  const out = new Set();
+type TrimLineProperties = {
+  route_ids?: string[];
+  visual_feature_type?: string;
+  length_m?: number;
+  [key: string]: unknown;
+};
+
+type TrimLineFeature = Feature<LineStringGeometry, TrimLineProperties>;
+
+type StationProperties = {
+  station_id?: string;
+  name?: string;
+  route_ids?: string[];
+  [key: string]: unknown;
+};
+
+type StationFeature = Feature<PointGeometry, StationProperties>;
+type StationCollection = FeatureCollection<StationFeature>;
+
+type TerminalEntry = {
+  route: string;
+  coord: Position;
+};
+
+type TrimOptions = {
+  graceM?: number;
+  minTrimM?: number;
+};
+
+type TrimTerminalArgs = {
+  features: TrimLineFeature[];
+  stations?: StationCollection | null;
+  terminals?: TerminalEntry[];
+  options?: TrimOptions;
+};
+
+type Projection = {
+  t: number;
+  lateral: number;
+  total: number;
+};
+
+type TrimAction = {
+  action: "trim-start" | "trim-end" | "drop-spur";
+  routes: string;
+  at: number[];
+  removed_m: number;
+};
+
+type TrimTerminalSummary = {
+  trimmedEnds: number;
+  removedM: number;
+  droppedSpurs: number;
+  actions: TrimAction[];
+};
+
+function expandRouteIds(routeIds?: string[]): Set<string> {
+  const out = new Set<string>();
   for (const r of routeIds ?? []) {
     for (const alias of ROUTE_ALIASES.get(r) ?? [r]) out.add(alias);
   }
   return out;
 }
 
-function metersXY(coord, lat0) {
+function metersXY(coord: Position, lat0: number): Position {
   const mx = DEG_LAT_M * Math.cos((lat0 * Math.PI) / 180);
   return [coord[0] * mx, coord[1] * DEG_LAT_M];
 }
 
-function distM(a, b, lat0) {
+function distM(a: Position, b: Position, lat0: number): number {
   const [ax, ay] = metersXY(a, lat0);
   const [bx, by] = metersXY(b, lat0);
   return Math.hypot(ax - bx, ay - by);
@@ -41,10 +99,10 @@ function distM(a, b, lat0) {
 
 // Project a point onto a polyline. Returns { t: arc-length position (m),
 // lateral: perpendicular distance (m) } for the closest segment.
-function projectOntoLine(point, coords, lat0) {
+function projectOntoLine(point: Position, coords: Position[], lat0: number): Projection | null {
   const p = metersXY(point, lat0);
   let cum = 0;
-  let best = null;
+  let best: Omit<Projection, "total"> | null = null;
   for (let i = 1; i < coords.length; i += 1) {
     const a = metersXY(coords[i - 1], lat0);
     const b = metersXY(coords[i], lat0);
@@ -66,10 +124,10 @@ function projectOntoLine(point, coords, lat0) {
 
 // Cut a polyline to the arc-length window [fromT, toT], interpolating the
 // boundary vertices.
-function sliceByArc(coords, fromT, toT, lat0) {
-  const out = [];
+function sliceByArc(coords: Position[], fromT: number, toT: number, lat0: number): Position[] {
+  const out: Position[] = [];
   let cum = 0;
-  const pushInterpolated = (a, b, segLen, t) => {
+  const pushInterpolated = (a: Position, b: Position, segLen: number, t: number): void => {
     const u = segLen === 0 ? 0 : (t - cum) / segLen;
     out.push([a[0] + u * (b[0] - a[0]), a[1] + u * (b[1] - a[1])]);
   };
@@ -117,7 +175,7 @@ export function trimTerminalOverhang({
   stations,
   terminals = [],
   options = {},
-}) {
+}: TrimTerminalArgs): TrimTerminalSummary {
   const grace = options.graceM ?? GRACE_M;
   const minTrim = options.minTrimM ?? MIN_TRIM_M;
   const terminalEntries = (terminals ?? [])
@@ -152,7 +210,7 @@ export function trimTerminalOverhang({
       maxLat: maxLat + MARGIN_DEG,
     };
   });
-  const nearbySameRoute = (endpoint, selfIdx, routeSet, lat0) => {
+  const nearbySameRoute = (endpoint: Position, selfIdx: number, routeSet: Set<string>, lat0: number): boolean => {
     for (let idx = 0; idx < lines.length; idx += 1) {
       if (idx === selfIdx) continue;
       const meta = lineMeta[idx];
@@ -179,8 +237,8 @@ export function trimTerminalOverhang({
   let trimmedEnds = 0;
   let removedM = 0;
   let droppedSpurs = 0;
-  const spursToDrop = new Set();
-  const actions = [];
+  const spursToDrop = new Set<TrimLineFeature>();
+  const actions: TrimAction[] = [];
 
   lines.forEach((feature, idx) => {
     const coords = feature.geometry.coordinates;
@@ -239,7 +297,7 @@ export function trimTerminalOverhang({
         (s) => s.coord && distM(s.coord, freeEnd, lat0) <= SPUR_FREE_END_STATION_M,
       );
       const spurLen = coords.reduce(
-        (sum, c, i) => (i === 0 ? 0 : sum + distM(coords[i - 1], c, lat0)),
+        (sum: number, c: Position, i: number) => (i === 0 ? 0 : sum + distM(coords[i - 1], c, lat0)),
         0,
       );
       if (
@@ -263,7 +321,7 @@ export function trimTerminalOverhang({
     let fromT = 0;
     let toT = total ||
       coords.reduce(
-        (sum, c, i) => (i === 0 ? 0 : sum + distM(coords[i - 1], c, lat0)),
+        (sum: number, c: Position, i: number) => (i === 0 ? 0 : sum + distM(coords[i - 1], c, lat0)),
         0,
       );
     const fullLen = toT;
@@ -275,13 +333,13 @@ export function trimTerminalOverhang({
     // a true GTFS terminal of one of this feature's routes. Without that
     // evidence the "overhang" is mid-service geometry (merge approach, branch
     // with weekday-only station route lists, ...) and must not be touched.
-    const terminalTs = [];
+    const terminalTs: number[] = [];
     for (const term of terminalEntries) {
       if (![...routeSet].some((r) => term.routes.has(r))) continue;
       const proj = projectOntoLine(term.coord, coords, lat0);
       if (proj && proj.lateral <= TERMINAL_LATERAL_M) terminalTs.push(proj.t);
     }
-    const boundaryIsTerminal = (t) =>
+    const boundaryIsTerminal = (t: number): boolean =>
       terminalTs.some((tt) => Math.abs(tt - t) <= TERMINAL_BOUNDARY_TOLERANCE_M);
 
     if (startFree && minT - grace > minTrim && boundaryIsTerminal(minT)) {

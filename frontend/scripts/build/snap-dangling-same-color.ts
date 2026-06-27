@@ -12,14 +12,74 @@
 // is moved onto the sibling so the merge is clean. Parallel lanes, different
 // colors, already-touching ends, and far gaps are all left untouched.
 
+import type { Feature, LineStringGeometry, Position } from "./types.ts";
+
 const EARTH_RADIUS_M = 6371000;
 const M_PER_DEG_LAT = 110574;
 
-function mPerDegLng(lat) {
+type SnapFeatureProperties = {
+  corridor_id?: string;
+  color?: string;
+  route_ids?: string[];
+  same_color_endpoint_snapped?: boolean;
+  same_color_y_join_fabric?: boolean;
+  same_color_y_join_fabric_count?: number;
+  [key: string]: unknown;
+};
+
+type SnapFeature = Feature<LineStringGeometry, SnapFeatureProperties>;
+type EndpointSide = "start" | "end";
+type Vector = [number, number];
+
+type Projection = {
+  point: Position;
+  distM: number;
+  segmentIndex: number;
+  segmentStart: Position;
+  segmentEnd: Position;
+};
+
+type SplitAtArc = {
+  point: Position;
+  before: Position[];
+  after: Position[];
+};
+
+type HermiteOptions = {
+  sampleM: number;
+  handleM: number;
+};
+
+type MergeOptions = {
+  mergeCurveM: number;
+  curveSampleM: number;
+  curveHandleM: number;
+  maxDirectSnapTangentDeg: number;
+};
+
+type SnapDanglingOptions = {
+  snapDistM?: number;
+  touchingEpsM?: number;
+  convergeSampleM?: number;
+  convergeMarginM?: number;
+  looseSnapDistM?: number;
+  looseEndM?: number;
+  mergeCurveM?: number;
+  curveSampleM?: number;
+  curveHandleM?: number;
+  maxDirectSnapTangentDeg?: number;
+};
+
+type SnapDanglingResult = {
+  features: SnapFeature[];
+  snappedCount: number;
+};
+
+function mPerDegLng(lat: number): number {
   return 111320 * Math.cos((lat * Math.PI) / 180);
 }
 
-function haversineM([lon1, lat1], [lon2, lat2]) {
+function haversineM([lon1, lat1]: Position, [lon2, lat2]: Position): number {
   const r = Math.PI / 180;
   const dLat = (lat2 - lat1) * r;
   const dLon = (lon2 - lon1) * r;
@@ -29,11 +89,11 @@ function haversineM([lon1, lat1], [lon2, lat2]) {
   return 2 * EARTH_RADIUS_M * Math.asin(Math.sqrt(a));
 }
 
-function projectToPolyline(coords, p) {
+function projectToPolyline(coords: Position[], p: Position): Projection | null {
   const k = mPerDegLng(p[1]);
   const px = p[0] * k;
   const py = p[1] * M_PER_DEG_LAT;
-  let best = null;
+  let best: Projection | null = null;
   for (let i = 0; i < coords.length - 1; i += 1) {
     const a = coords[i];
     const b = coords[i + 1];
@@ -43,7 +103,7 @@ function projectToPolyline(coords, p) {
     const len2 = dx * dx + dy * dy || 1e-12;
     let t = ((px - ax) * dx + (py - ay) * dy) / len2;
     t = Math.max(0, Math.min(1, t));
-    const point = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+    const point: Position = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
     const ex = point[0] * k - px;
     const ey = point[1] * M_PER_DEG_LAT - py;
     const distM = Math.hypot(ex, ey);
@@ -60,28 +120,28 @@ function projectToPolyline(coords, p) {
   return best;
 }
 
-function sameColor(a, b) {
+function sameColor(a: SnapFeature, b: SnapFeature): boolean {
   const ac = a.properties?.color;
   const bc = b.properties?.color;
   return Boolean(ac && bc && String(ac).toUpperCase() === String(bc).toUpperCase());
 }
 
-function routeIds(f) {
+function routeIds(f: SnapFeature): string[] {
   return Array.isArray(f.properties?.route_ids) ? f.properties.route_ids.map(String) : [];
 }
 
-function sharesRoute(a, b) {
+function sharesRoute(a: SnapFeature, b: SnapFeature): boolean {
   const set = new Set(routeIds(a));
   return routeIds(b).some((r) => set.has(r));
 }
 
-function minDistToFeature(coords, p) {
+function minDistToFeature(coords: Position[], p: Position): number {
   const proj = projectToPolyline(coords, p);
   return proj ? proj.distM : Infinity;
 }
 
 // A point `sampleM` of arc length inward from the given side of a polyline.
-function pointInwardFrom(coords, side, sampleM) {
+function pointInwardFrom(coords: Position[], side: EndpointSide, sampleM: number): Position {
   const seq = side === "start" ? coords : coords.slice().reverse();
   let acc = 0;
   for (let i = 1; i < seq.length; i += 1) {
@@ -95,15 +155,15 @@ function pointInwardFrom(coords, side, sampleM) {
   return seq[seq.length - 1];
 }
 
-function projectAtLat(point, originLat) {
+function projectAtLat(point: Position, originLat: number): Vector {
   return [point[0] * mPerDegLng(originLat), point[1] * M_PER_DEG_LAT];
 }
 
-function unprojectAtLat(point, originLat) {
+function unprojectAtLat(point: Vector, originLat: number): Position {
   return [point[0] / mPerDegLng(originLat), point[1] / M_PER_DEG_LAT];
 }
 
-function unitVector(from, to, originLat) {
+function unitVector(from: Position, to: Position, originLat: number): Vector {
   const a = projectAtLat(from, originLat);
   const b = projectAtLat(to, originLat);
   const dx = b[0] - a[0];
@@ -113,13 +173,13 @@ function unitVector(from, to, originLat) {
   return [dx / len, dy / len];
 }
 
-function orientVectorToward(vector, fromPoint, toPoint, originLat) {
+function orientVectorToward(vector: Vector, fromPoint: Position, toPoint: Position, originLat: number): Vector {
   const toward = unitVector(fromPoint, toPoint, originLat);
   const dot = vector[0] * toward[0] + vector[1] * toward[1];
   return dot < 0 ? [-vector[0], -vector[1]] : vector;
 }
 
-function angleBetweenDeg(a, b) {
+function angleBetweenDeg(a: Vector, b: Vector): number {
   const al = Math.hypot(a[0], a[1]);
   const bl = Math.hypot(b[0], b[1]);
   if (al < 1e-9 || bl < 1e-9) return 0;
@@ -127,13 +187,13 @@ function angleBetweenDeg(a, b) {
   return (Math.acos(dot) * 180) / Math.PI;
 }
 
-function totalLengthM(coords) {
+function totalLengthM(coords: Position[]): number {
   let total = 0;
   for (let i = 1; i < coords.length; i += 1) total += haversineM(coords[i - 1], coords[i]);
   return total;
 }
 
-function splitAtArcFromStart(coords, arcM) {
+function splitAtArcFromStart(coords: Position[], arcM: number): SplitAtArc {
   if (coords.length < 2 || arcM <= 0) {
     return { point: coords[0], before: [coords[0]], after: coords.slice() };
   }
@@ -142,7 +202,7 @@ function splitAtArcFromStart(coords, arcM) {
     const seg = haversineM(coords[i - 1], coords[i]);
     if (acc + seg >= arcM) {
       const t = seg > 0 ? (arcM - acc) / seg : 0;
-      const point = [
+      const point: Position = [
         coords[i - 1][0] + (coords[i][0] - coords[i - 1][0]) * t,
         coords[i - 1][1] + (coords[i][1] - coords[i - 1][1]) * t,
       ];
@@ -161,7 +221,7 @@ function splitAtArcFromStart(coords, arcM) {
   };
 }
 
-function splitAtArcFromEnd(coords, arcM) {
+function splitAtArcFromEnd(coords: Position[], arcM: number): SplitAtArc {
   const reversed = coords.slice().reverse();
   const split = splitAtArcFromStart(reversed, arcM);
   return {
@@ -171,7 +231,13 @@ function splitAtArcFromEnd(coords, arcM) {
   };
 }
 
-function hermiteCurve(startCoord, endCoord, startTangent, endTangent, options) {
+function hermiteCurve(
+  startCoord: Position,
+  endCoord: Position,
+  startTangent: Vector,
+  endTangent: Vector,
+  options: HermiteOptions,
+): Position[] {
   const { sampleM, handleM } = options;
   const originLat = (startCoord[1] + endCoord[1]) / 2;
   const p0 = projectAtLat(startCoord, originLat);
@@ -181,7 +247,7 @@ function hermiteCurve(startCoord, endCoord, startTangent, endTangent, options) {
   const m0 = [startTangent[0] * h, startTangent[1] * h];
   const m1 = [endTangent[0] * h, endTangent[1] * h];
   const steps = Math.max(4, Math.ceil(distanceM / sampleM));
-  const out = [];
+  const out: Position[] = [];
   for (let i = 0; i <= steps; i += 1) {
     const t = i / steps;
     const t2 = t * t;
@@ -198,7 +264,13 @@ function hermiteCurve(startCoord, endCoord, startTangent, endTangent, options) {
   return out;
 }
 
-function tangentMatchedEndpointMerge(coords, side, targetPoint, projection, options) {
+function tangentMatchedEndpointMerge(
+  coords: Position[],
+  side: EndpointSide,
+  targetPoint: Position,
+  projection: Projection | null,
+  options: MergeOptions,
+): { coords: Position[]; curved: boolean } {
   const {
     mergeCurveM,
     curveSampleM,
@@ -206,9 +278,9 @@ function tangentMatchedEndpointMerge(coords, side, targetPoint, projection, opti
     maxDirectSnapTangentDeg,
   } = options;
   if (coords.length < 2 || !projection?.segmentStart || !projection?.segmentEnd) {
-    const next = coords.map((coord) => coord.slice());
-    if (side === "start") next[0] = targetPoint.slice();
-    else next[next.length - 1] = targetPoint.slice();
+    const next = coords.map((coord) => coord.slice() as Position);
+    if (side === "start") next[0] = targetPoint.slice() as Position;
+    else next[next.length - 1] = targetPoint.slice() as Position;
     return { coords: next, curved: false };
   }
 
@@ -226,17 +298,17 @@ function tangentMatchedEndpointMerge(coords, side, targetPoint, projection, opti
   const directAngle = angleBetweenDeg(directBranchTangent, directSiblingTangent);
 
   if (directAngle <= maxDirectSnapTangentDeg) {
-    const next = coords.map((coord) => coord.slice());
-    if (side === "start") next[0] = targetPoint.slice();
-    else next[next.length - 1] = targetPoint.slice();
+    const next = coords.map((coord) => coord.slice() as Position);
+    if (side === "start") next[0] = targetPoint.slice() as Position;
+    else next[next.length - 1] = targetPoint.slice() as Position;
     return { coords: next, curved: false };
   }
 
   const usableMergeM = Math.min(mergeCurveM, Math.max(8, totalLengthM(coords) - 1));
   if (usableMergeM < 8) {
-    const next = coords.map((coord) => coord.slice());
-    if (side === "start") next[0] = targetPoint.slice();
-    else next[next.length - 1] = targetPoint.slice();
+    const next = coords.map((coord) => coord.slice() as Position);
+    if (side === "start") next[0] = targetPoint.slice() as Position;
+    else next[next.length - 1] = targetPoint.slice() as Position;
     return { coords: next, curved: false };
   }
 
@@ -295,7 +367,10 @@ function tangentMatchedEndpointMerge(coords, side, targetPoint, projection, opti
  * @param {number} [options.maxDirectSnapTangentDeg=25] direct snap only when endpoint tangent is this close to sibling tangent
  * @returns {{ features: Array, snappedCount: number }}
  */
-export function snapDanglingSameColorEndpoints(features, options = {}) {
+export function snapDanglingSameColorEndpoints(
+  features: SnapFeature[],
+  options: SnapDanglingOptions = {},
+): SnapDanglingResult {
   const {
     snapDistM = 14,
     touchingEpsM = 1.5,
@@ -316,13 +391,13 @@ export function snapDanglingSameColorEndpoints(features, options = {}) {
   let snappedCount = 0;
 
   for (const { f, i } of lines) {
-    const coords = f.geometry.coordinates.map((p) => p.slice());
+    const coords = f.geometry.coordinates.map((p) => p.slice() as Position);
     let changed = false;
     let curvedCount = 0;
-    for (const side of ["start", "end"]) {
+    for (const side of ["start", "end"] as const) {
       const endpoint = side === "start" ? coords[0] : coords[coords.length - 1];
 
-      let best = null;
+      let best: (Projection & { sibling: SnapFeature }) | null = null;
       let touching = false;
       for (const { f: g } of lines) {
         if (g === f) continue;
