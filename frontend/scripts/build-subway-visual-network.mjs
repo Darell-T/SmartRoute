@@ -38,7 +38,7 @@ import {
 } from "./build/physical-bundle.mjs";
 import { orderColorsForBundle, BUNDLE_COLOR_ORDER } from "./build/lane-order.ts";
 import { buildBranchTransitions } from "./build/branch-transitions.ts";
-import { filterBogusTransitions, markOrphanLanes, removeOrphanErrorLanes } from "./build/lane-continuity-filter.mjs";
+import { filterBogusTransitions, markOrphanLanes, removeOrphanErrorLanes } from "./build/lane-continuity-filter.ts";
 import { dedupeDuplicateCorridors } from "./build/dedupe-duplicate-corridors.ts";
 import { groupCorridorsByColorAndOverlap, mergeSameColorGroup } from "./build/same-color-merge.mjs";
 import { materializePhysicalBundles } from "./build/physical-bundle-materialization.mjs";
@@ -52,7 +52,7 @@ import { smoothSharpCorners, countSharpCorners, densifyLongSegments } from "./bu
 import { bridgeRouteGaps } from "./build/bridge-route-gaps.mjs";
 import { taperBakedJointSteps } from "./build/joint-offset-taper.ts";
 import { colocateSameColorStretches } from "./build/colocate-same-color.ts";
-import { repairSameRouteEndpointCrossings } from "./build/same-route-junction-fabric.mjs";
+import { repairSameRouteEndpointCrossings } from "./build/same-route-junction-fabric.ts";
 import { simplifyTightCurves } from "./build/simplify-tight-curves.ts";
 import { snapDanglingSameColorEndpoints } from "./build/snap-dangling-same-color.mjs";
 import { snapOffRevenueToShape, maxOffShapeM } from "./build/snap-off-revenue-to-shape.ts";
@@ -61,7 +61,7 @@ import { hermiteBetween } from "./build/offset-bow.ts";
 import { collapseSameColorOverlaps } from "./build/collapse-same-color.mjs";
 import { parallelOffsetCrossColor } from "./build/parallel-offset-cross-color.mjs";
 import { suppressShadowOrphans } from "./build/suppress-shadow-orphans.ts";
-import { applyCartographicJunctionOverrides } from "./build/cartographic-junction-overrides.mjs";
+import { applyCartographicJunctionOverrides } from "./build/cartographic-junction-overrides.ts";
 import {
   buildMottHavenFiveSchematicLens,
   buildMottHavenSixSchematicMerge,
