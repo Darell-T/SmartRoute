@@ -69,6 +69,7 @@ Already migrated transit build helpers include:
 - `cartographic-junction-overrides`
 - `trim-terminal-overhang`
 - `snap-dangling-same-color`
+- `opendata-subway-lines`
 
 Pre-existing TypeScript helpers include station-anchor modules, spine helpers,
 lane ordering, artifact fingerprinting, smooth polyline utilities, and duplicate
@@ -119,7 +120,7 @@ Categories:
 | `frontend/scripts/build/parallel-offset-cross-color.mjs` | 4.9 KB / 128 lines | visual orchestrator, colocated test | yes | no | High-risk / migrate later | wait; cross-color offset pass |
 | `frontend/scripts/build/lane-continuity-filter.ts` | 7.3 KB / 187 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/same-route-junction-fabric.ts` | 9.1 KB / 270 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
-| `frontend/scripts/build/opendata-subway-lines.mjs` | 11.1 KB / 368 lines | visual orchestrator, palette check, colocated test | yes | no | Medium-risk helper | migrate later |
+| `frontend/scripts/build/opendata-subway-lines.ts` | 11.1 KB / 368 lines | visual orchestrator, palette check, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/cartographic-junction-overrides.ts` | 11.4 KB / 345 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/trim-terminal-overhang.ts` | 12.1 KB / 328 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/cross-color-spread.mjs` | 12.6 KB / 331 lines | visual orchestrator, `parallel-offset-cross-color.mjs`, `physical-bundle-materialization.mjs`, colocated test | yes | no | High-risk / migrate later | wait until dependent helpers are planned |
@@ -143,7 +144,7 @@ Categories:
 | `frontend/scripts/build/lane-continuity-filter.test.ts` | 10.2 KB / 258 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/build/mott-haven-schematic.test.mjs` | 6.7 KB / 254 lines | none | n/a | no | QA/check script | migrate with source |
 | `frontend/scripts/build/nostrand-eastern-schematic.test.mjs` | 3.8 KB / 133 lines | none | n/a | no | QA/check script | migrate with source |
-| `frontend/scripts/build/opendata-subway-lines.test.mjs` | 4.3 KB / 148 lines | none | n/a | no | QA/check script | migrate with source |
+| `frontend/scripts/build/opendata-subway-lines.test.ts` | 4.3 KB / 148 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/build/parallel-offset-cross-color.test.mjs` | 3.5 KB / 65 lines | none | n/a | no | QA/check script | migrate with source |
 | `frontend/scripts/build/physical-bundle-materialization.test.mjs` | 8.7 KB / 259 lines | none | n/a | no | QA/check script | migrate with source |
 | `frontend/scripts/build/physical-bundle.test.mjs` | 19.3 KB / 414 lines | none | n/a | no | QA/check script | migrate with source |
@@ -182,11 +183,11 @@ Categories:
 
 Next batch:
 
-- `opendata-subway-lines` as a solo or careful ingest-helper migration
+- `schematic-hairpin-arc` after characterization coverage
 
 Following batch:
 
-- `schematic-hairpin-arc` after characterization coverage
+- `nostrand-eastern-schematic`
 
 Later medium-risk batch:
 
