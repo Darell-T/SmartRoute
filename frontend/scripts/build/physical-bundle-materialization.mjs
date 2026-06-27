@@ -1,4 +1,4 @@
-import { offsetPolylineOverExtent } from "./cross-color-spread.mjs";
+import { offsetPolylineOverExtent } from "./cross-color-spread.ts";
 
 const EARTH_RADIUS_M = 6371000;
 

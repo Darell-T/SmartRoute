@@ -1,4 +1,4 @@
-// frontend/scripts/build/cross-color-spread.test.mjs
+// frontend/scripts/build/cross-color-spread.test.ts
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -6,20 +6,37 @@ import {
   findSharedArcExtent,
   offsetPolylineBySlotRamp,
   offsetPolylineOverExtent,
-} from "./cross-color-spread.mjs";
+  type CrossColorGroup,
+  type CrossColorSpreadFeature,
+} from "./cross-color-spread.ts";
+import type { Position, RouteId } from "./types.ts";
 
 const DEG_PER_M_LAT = 1 / 111320;
 const DEG_PER_M_LON = 1 / (111320 * Math.cos((40.69 * Math.PI) / 180));
 
-function ns(lon, lat, lengthM, steps = 20) {
-  return Array.from({ length: steps + 1 }, (_, i) => [lon, lat + (lengthM * DEG_PER_M_LAT * i) / steps]);
+function ns(lon: number, lat: number, lengthM: number, steps = 20): Position[] {
+  return Array.from({ length: steps + 1 }, (_, i): Position => [lon, lat + (lengthM * DEG_PER_M_LAT * i) / steps]);
 }
-function feat(id, color, routeIds, coords) {
+function feat(id: string, color: string, routeIds: RouteId[], coords: Position[]): CrossColorSpreadFeature {
   return {
     type: "Feature",
     geometry: { type: "LineString", coordinates: coords },
     properties: { bundle_id: id, color, route_ids: routeIds, lane_slot_semantic: 0 },
   };
+}
+
+function mustMember(group: CrossColorGroup, color: string) {
+  const member = group.members.find((m) => m.color === color);
+  assert.ok(member, `expected group member ${color}`);
+  return member;
+}
+
+function laneSlot(member: ReturnType<typeof mustMember>): number {
+  const slot = member.lane_slot;
+  if (typeof slot !== "number") {
+    assert.fail("expected numeric lane slot");
+  }
+  return slot;
 }
 
 test("detectCrossColorAdjacency groups two different colors sharing a corridor", () => {
@@ -32,10 +49,10 @@ test("detectCrossColorAdjacency groups two different colors sharing a corridor",
   assert.equal(groups.length, 1);
   const g = groups[0];
   assert.equal(g.members.length, 2);
-  const blueMember = g.members.find((m) => m.color === "#0A84FF");
-  const greenMember = g.members.find((m) => m.color === "#6CBE45");
-  assert.ok(blueMember.lane_slot < greenMember.lane_slot, "colors get distinct, ordered slots");
-  assert.deepEqual([blueMember.lane_slot, greenMember.lane_slot].sort((a,b)=>a-b), [-0.5, 0.5]);
+  const blueMember = mustMember(g, "#0A84FF");
+  const greenMember = mustMember(g, "#6CBE45");
+  assert.ok(laneSlot(blueMember) < laneSlot(greenMember), "colors get distinct, ordered slots");
+  assert.deepEqual([laneSlot(blueMember), laneSlot(greenMember)].sort((a, b) => a - b), [-0.5, 0.5]);
 });
 
 test("detectCrossColorAdjacency ignores SAME-color pairs (Phase 3d owns those)", () => {
@@ -80,7 +97,7 @@ test("detectCrossColorAdjacency centers a 3-color group around 0", () => {
     sharedFractionMin: 0.6, sharedLenMinM: 250, avgDistMaxM: 24, resampleM: 25,
   });
   assert.equal(groups.length, 1);
-  const slots = groups[0].members.map((m) => m.lane_slot).sort((a, b) => a - b);
+  const slots = groups[0].members.map((m) => laneSlot(m)).sort((a, b) => a - b);
   assert.deepEqual(slots, [-1, 0, 1]);
 });
 
@@ -105,7 +122,7 @@ test("detectCrossColorAdjacency assigns deterministic slots to unknown-rank colo
     const { groups } = detectCrossColorAdjacency([c1, c2], {
       sharedFractionMin: 0.6, sharedLenMinM: 250, avgDistMaxM: 18, resampleM: 25,
     });
-    const m = Object.fromEntries(groups[0].members.map((x) => [x.color, x.lane_slot]));
+    const m = Object.fromEntries(groups[0].members.map((x) => [x.color, laneSlot(x)])) as Record<string, number>;
     return m;
   };
   const a = run();
@@ -136,9 +153,9 @@ test("detectCrossColorAdjacency still groups two slot-0 features when a third pa
 
 test("findSharedArcExtent finds the overlapping stretch of two long lines that share a short segment", () => {
   const A = ns(-73.99, 40.70, 3000, 120); // straight N-S, 3km
-  const farE = (lon) => lon + 300 * DEG_PER_M_LON; // ~300m east
+  const farE = (lon: number): number => lon + 300 * DEG_PER_M_LON; // ~300m east
   const midLat = 40.70 + 1200 * DEG_PER_M_LAT; // ~1200m up A
-  const B = [
+  const B: Position[] = [
     [farE(-73.99), 40.70],
     [farE(-73.99), midLat - 50 * DEG_PER_M_LAT],
     [-73.99 + 6 * DEG_PER_M_LON, midLat], // join A (~6m east)
@@ -172,7 +189,7 @@ test("offsetPolylineOverExtent applies full offset in the middle of the extent",
   const coords = ns(-73.99, 40.70, 2000, 80);
   const out = offsetPolylineOverExtent(coords, 800, 1200, 8, 40);
   const R = 6371000;
-  const hav = ([lo1, la1], [lo2, la2]) => {
+  const hav = ([lo1, la1]: Position, [lo2, la2]: Position): number => {
     const r = Math.PI / 180;
     const dLat = (la2 - la1) * r;
     const dLon = (lo2 - lo1) * r;
@@ -194,7 +211,7 @@ test("offsetPolylineBySlotRamp tapers from inherited bundle slot to branch cente
   const coords = ns(-73.99, 40.70, 1000, 40);
   const out = offsetPolylineBySlotRamp(coords, 0.5, 0, 8);
   const R = 6371000;
-  const hav = ([lo1, la1], [lo2, la2]) => {
+  const hav = ([lo1, la1]: Position, [lo2, la2]: Position): number => {
     const r = Math.PI / 180;
     const dLat = (la2 - la1) * r;
     const dLon = (lo2 - lo1) * r;
