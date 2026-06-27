@@ -64,6 +64,11 @@ Already migrated transit build helpers include:
 - `colocate-same-color`
 - `joint-offset-taper`
 - `staten-island-cleanup`
+- `lane-continuity-filter`
+- `same-route-junction-fabric`
+- `cartographic-junction-overrides`
+- `trim-terminal-overhang`
+- `snap-dangling-same-color`
 
 Pre-existing TypeScript helpers include station-anchor modules, spine helpers,
 lane ordering, artifact fingerprinting, smooth polyline utilities, and duplicate
@@ -116,9 +121,9 @@ Categories:
 | `frontend/scripts/build/same-route-junction-fabric.ts` | 9.1 KB / 270 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/opendata-subway-lines.mjs` | 11.1 KB / 368 lines | visual orchestrator, palette check, colocated test | yes | no | Medium-risk helper | migrate later |
 | `frontend/scripts/build/cartographic-junction-overrides.ts` | 11.4 KB / 345 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
-| `frontend/scripts/build/trim-terminal-overhang.mjs` | 12.1 KB / 328 lines | visual orchestrator, colocated test | yes | no | Medium-risk helper | migrate later |
+| `frontend/scripts/build/trim-terminal-overhang.ts` | 12.1 KB / 328 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/cross-color-spread.mjs` | 12.6 KB / 331 lines | visual orchestrator, `parallel-offset-cross-color.mjs`, `physical-bundle-materialization.mjs`, colocated test | yes | no | High-risk / migrate later | wait until dependent helpers are planned |
-| `frontend/scripts/build/snap-dangling-same-color.mjs` | 14.8 KB / 394 lines | visual orchestrator, colocated test | yes | no | Medium-risk helper | migrate later |
+| `frontend/scripts/build/snap-dangling-same-color.ts` | 14.8 KB / 394 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/nostrand-eastern-schematic.mjs` | 15.2 KB / 467 lines | visual orchestrator, colocated test | yes | no | Medium-risk helper | migrate later |
 | `frontend/scripts/build/culver-fg-prospect-smoothing.mjs` | 15.7 KB / 462 lines | visual orchestrator, colocated test | yes | no | Medium-risk helper | migrate later |
 | `frontend/scripts/build/mott-haven-schematic.mjs` | 16.4 KB / 469 lines | visual orchestrator, colocated test | yes | no | Medium-risk helper | migrate later |
@@ -144,9 +149,9 @@ Categories:
 | `frontend/scripts/build/physical-bundle.test.mjs` | 19.3 KB / 414 lines | none | n/a | no | QA/check script | migrate with source |
 | `frontend/scripts/build/same-color-merge.test.mjs` | 23.5 KB / 529 lines | none | n/a | no | QA/check script | migrate with source |
 | `frontend/scripts/build/same-route-junction-fabric.test.ts` | 4.3 KB / 122 lines | none | n/a | no | Migrated test | done |
-| `frontend/scripts/build/snap-dangling-same-color.test.mjs` | 5.8 KB / 103 lines | none | n/a | no | QA/check script | migrate with source |
+| `frontend/scripts/build/snap-dangling-same-color.test.ts` | 5.8 KB / 103 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/build/st-nicholas-blue-straightening.test.mjs` | 10.6 KB / 307 lines | none | n/a | no | QA/check script | migrate with source |
-| `frontend/scripts/build/trim-terminal-overhang.test.mjs` | 10.5 KB / 305 lines | none | n/a | no | QA/check script | migrate with source |
+| `frontend/scripts/build/trim-terminal-overhang.test.ts` | 10.5 KB / 305 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/qa/analyze-route-coverage.mjs` | 18.4 KB / 470 lines | none | no | yes | QA/check script | document only |
 | `frontend/scripts/qa/audit-lane-continuity.mjs` | 40.0 KB / 960 lines | none | no | yes | QA/check script | document only |
 | `frontend/scripts/qa/capture-dekalb-compare.mjs` | 3.3 KB / 64 lines | none | no | yes | QA/check script | document only |
@@ -177,12 +182,10 @@ Categories:
 
 Next batch:
 
-- `trim-terminal-overhang`
-- `snap-dangling-same-color`
+- `opendata-subway-lines` as a solo or careful ingest-helper migration
 
 Following batch:
 
-- `opendata-subway-lines`
 - `schematic-hairpin-arc` after characterization coverage
 
 Later medium-risk batch:
