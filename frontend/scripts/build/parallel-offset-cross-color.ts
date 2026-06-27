@@ -13,8 +13,7 @@
 // trunk in place. Pairs that are already sustained parallel lanes on one side are
 // untouched even when they are closer than overlapDistM.
 
-// @ts-expect-error TS1479: this helper is .ts while cross-color-spread remains .mjs until its own migration batch.
-import { offsetPolylineOverExtent } from "./cross-color-spread.mjs";
+import { offsetPolylineOverExtent } from "./cross-color-spread.ts";
 import type { LineStringGeometry, Position } from "./types.ts";
 
 const EARTH_RADIUS_M = 6371000;

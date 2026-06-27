@@ -47,7 +47,7 @@ import {
   findSharedArcExtent,
   offsetPolylineBySlotRamp,
   offsetPolylineOverExtent,
-} from "./build/cross-color-spread.mjs";
+} from "./build/cross-color-spread.ts";
 import { smoothSharpCorners, countSharpCorners, densifyLongSegments } from "./build/smooth-polyline.ts";
 import { bridgeRouteGaps } from "./build/bridge-route-gaps.ts";
 import { taperBakedJointSteps } from "./build/joint-offset-taper.ts";
