@@ -7,8 +7,7 @@
 // Same-color overlaps are intentionally ignored: Phase 3d (same-color-merge)
 // already collapses those into one stroke.
 
-// @ts-expect-error TS1479: physical-bundle remains .mjs until its own migration batch.
-import { computePairOverlap, resamplePolyline, pointToPolylineMinDistM } from "./physical-bundle.mjs";
+import { computePairOverlap, resamplePolyline, pointToPolylineMinDistM } from "./physical-bundle.ts";
 import { BUNDLE_COLOR_ORDER } from "./lane-order.ts";
 import type { Feature, LineStringGeometry, Position, RouteId } from "./types.ts";
 
