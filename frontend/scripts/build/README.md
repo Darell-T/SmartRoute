@@ -77,6 +77,7 @@ Already migrated transit build helpers include:
 - `bridge-route-gaps`
 - `collapse-same-color`
 - `st-nicholas-blue-straightening`
+- `brighton-bq-church-spacing`
 
 Pre-existing TypeScript helpers include station-anchor modules, spine helpers,
 lane ordering, artifact fingerprinting, smooth polyline utilities, and duplicate
@@ -139,11 +140,11 @@ Categories:
 | `frontend/scripts/build/collapse-same-color.ts` | 21.0 KB / 658 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/physical-bundle-materialization.mjs` | 18.1 KB / 489 lines | visual orchestrator, colocated test | yes | no | High-risk / migrate later | wait for physical-bundle plan |
 | `frontend/scripts/build/st-nicholas-blue-straightening.ts` | 21.1 KB / 678 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
-| `frontend/scripts/build/brighton-bq-church-spacing.mjs` | 22.3 KB / 607 lines | visual orchestrator, colocated test | yes | no | Medium-risk helper | migrate later |
+| `frontend/scripts/build/brighton-bq-church-spacing.ts` | 25.2 KB / 705 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/same-color-merge.mjs` | 22.4 KB / 609 lines | visual orchestrator, colocated test | yes | no | High-risk / migrate later | migrate after smaller corridor helpers |
 | `frontend/scripts/build/physical-bundle.mjs` | 24.3 KB / 679 lines | visual orchestrator, `cross-color-spread.mjs`, `same-color-merge.mjs`, colocated test | yes | no | High-risk / migrate later | wait for physical-bundle plan |
 | `frontend/scripts/build/bridge-route-gaps.test.ts` | 9.1 KB / 203 lines | none | n/a | no | Migrated test | done |
-| `frontend/scripts/build/brighton-bq-church-spacing.test.mjs` | 3.8 KB / 112 lines | none | n/a | no | QA/check script | migrate with source |
+| `frontend/scripts/build/brighton-bq-church-spacing.test.ts` | 5.4 KB / 160 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/build/cartographic-junction-overrides.test.ts` | 5.3 KB / 154 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/build/collapse-same-color.test.ts` | 6.4 KB / 141 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/build/cross-color-spread.test.mjs` | 10.1 KB / 210 lines | none | n/a | no | QA/check script | migrate with source |
@@ -191,15 +192,15 @@ Categories:
 
 Next batch:
 
-- `brighton-bq-church-spacing`
+- `parallel-offset-cross-color` only after cross-color offset review
 
 Following batch:
 
-- `parallel-offset-cross-color` only after cross-color offset review
+- `cross-color-spread` only after cross-color helper sequencing is planned
 
 Later dedicated review batch:
 
-- `cross-color-spread` only after cross-color helper sequencing is planned
+- `physical-bundle-materialization` only after the physical-bundle plan is ready
 
 Avoid for now:
 
