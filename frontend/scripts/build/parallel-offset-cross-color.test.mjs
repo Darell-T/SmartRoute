@@ -48,6 +48,60 @@ test("leaves already-parallel different-color lines untouched (idempotent)", () 
   assert.equal(features.find((f) => f.properties.corridor_id === "grn"), green);
 });
 
+test("does not shift sustained nearby parallel different-color lines that never swap sides", () => {
+  const red = feat("red", RED, Array.from({ length: 36 }, (_, i) => P(...O, 0, i * 30)));
+  const green = feat("grn", GREEN, Array.from({ length: 36 }, (_, i) => P(...O, 6, i * 30))); // inside overlapDistM, but always same side
+  const originalGreen = green.geometry.coordinates.map((coord) => [...coord]);
+
+  const { shiftedCount, features } = parallelOffsetCrossColor([red, green], {
+    colorOrder: ORDER,
+    overlapDistM: 8,
+    minOverlapM: 150,
+    laneWidthM: 8,
+  });
+
+  assert.equal(shiftedCount, 0);
+  assert.equal(features.find((f) => f.properties.corridor_id === "grn"), green);
+  assert.deepEqual(green.geometry.coordinates, originalGreen, "source geometry remains unchanged");
+});
+
+test("shifts a sustained side-flip crossing only over the qualifying arc", () => {
+  const red = feat("red", RED, Array.from({ length: 50 }, (_, i) => P(...O, 0, i * 30)));
+  const crossingCoords = Array.from({ length: 50 }, (_, i) => P(...O, -12 + (24 * i) / 49, i * 30));
+  const green = {
+    ...feat("grn", GREEN, crossingCoords),
+    properties: { corridor_id: "grn", color: GREEN, custom_stage_marker: "keep-me" },
+  };
+  const unrelated = {
+    type: "Feature",
+    geometry: { type: "Point", coordinates: P(...O, 120, 120) },
+    properties: { corridor_id: "station-marker", marker_type: "qa" },
+  };
+  const originalGreen = green.geometry.coordinates.map((coord) => [...coord]);
+
+  const { shiftedCount, features } = parallelOffsetCrossColor([red, green, unrelated], {
+    colorOrder: ORDER,
+    overlapDistM: 8,
+    minOverlapM: 150,
+    laneWidthM: 8,
+    taperM: 0,
+  });
+
+  assert.equal(shiftedCount, 1);
+  assert.deepEqual(features.map((feature) => feature.properties.corridor_id), ["red", "grn", "station-marker"]);
+  assert.equal(features[0], red, "lower-rank target feature passes through by identity");
+  assert.equal(features[2], unrelated, "unrelated features pass through by identity");
+
+  const shifted = features[1];
+  assert.notEqual(shifted, green, "shifted feature is cloned instead of mutating the original");
+  assert.equal(shifted.properties.custom_stage_marker, "keep-me");
+  assert.equal(shifted.properties.cross_color_parallelized, true);
+  assert.deepEqual(green.geometry.coordinates, originalGreen, "source feature geometry remains unchanged");
+  assert.deepEqual(shifted.geometry.coordinates[0], originalGreen[0], "pre-crossing endpoint remains unchanged");
+  assert.deepEqual(shifted.geometry.coordinates.at(-1), originalGreen.at(-1), "post-crossing endpoint remains unchanged");
+  assert.notDeepEqual(shifted.geometry.coordinates[25], originalGreen[25], "interior crossing run is shifted");
+});
+
 test("does not shift same-color overlapping lines", () => {
   const a = feat("a", GREEN, Array.from({ length: 30 }, (_, i) => P(...O, 0, i * 30)));
   const b = feat("b", GREEN, Array.from({ length: 30 }, (_, i) => P(...O, 0, i * 30)));
