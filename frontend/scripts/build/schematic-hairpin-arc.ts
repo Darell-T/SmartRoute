@@ -10,39 +10,51 @@
 // section with a Hermite spline tangent-matched at both ends to the surviving
 // geometry. Endpoints of the polyline that are NOT in the hairpin are preserved.
 
-const M_PER_DEG_LAT = 110574;
-function mPerDegLng(lat) { return 111320 * Math.cos((lat * Math.PI) / 180); }
+import type { Position } from "./types.ts";
 
-function haversineM([lon1, lat1], [lon2, lat2]) {
+type Vector = [number, number];
+
+type HairpinOptions = {
+  minReversalDeg?: number;
+  maxArcM?: number;
+  handleFrac?: number;
+  sampleM?: number;
+  tangentSampleN?: number;
+};
+
+const M_PER_DEG_LAT = 110574;
+function mPerDegLng(lat: number): number { return 111320 * Math.cos((lat * Math.PI) / 180); }
+
+function haversineM([lon1, lat1]: Position, [lon2, lat2]: Position): number {
   const r = Math.PI / 180;
   const dLat = (lat2 - lat1) * r, dLon = (lon2 - lon1) * r;
   const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * r) * Math.cos(lat2 * r) * Math.sin(dLon / 2) ** 2;
   return 2 * 6371000 * Math.asin(Math.sqrt(a));
 }
 
-function bearingDeg(a, b) {
+function bearingDeg(a: Position, b: Position): number {
   const k = mPerDegLng((a[1] + b[1]) / 2);
   return (Math.atan2((b[1] - a[1]) * M_PER_DEG_LAT, (b[0] - a[0]) * k) * 180) / Math.PI;
 }
 
-function signedTurnDeg(p, c, n) {
+function signedTurnDeg(p: Position, c: Position, n: Position): number {
   let t = bearingDeg(c, n) - bearingDeg(p, c);
   while (t > 180) t -= 360;
   while (t < -180) t += 360;
   return t;
 }
 
-function projAt(p, lat) { return [p[0] * mPerDegLng(lat), p[1] * M_PER_DEG_LAT]; }
-function unprojAt(p, lat) { return [p[0] / mPerDegLng(lat), p[1] / M_PER_DEG_LAT]; }
+function projAt(p: Position, lat: number): Vector { return [p[0] * mPerDegLng(lat), p[1] * M_PER_DEG_LAT]; }
+function unprojAt(p: Vector, lat: number): Position { return [p[0] / mPerDegLng(lat), p[1] / M_PER_DEG_LAT]; }
 
-function unitVec(from, to) {
+function unitVec(from: Position, to: Position): Vector {
   const k = mPerDegLng((from[1] + to[1]) / 2);
   const dx = (to[0] - from[0]) * k, dy = (to[1] - from[1]) * M_PER_DEG_LAT;
   const l = Math.hypot(dx, dy);
   return l < 1e-9 ? [0, 0] : [dx / l, dy / l];
 }
 
-function hermiteCurve(start, end, startUnit, endUnit, handleFrac, sampleM) {
+function hermiteCurve(start: Position, end: Position, startUnit: Vector, endUnit: Vector, handleFrac: number, sampleM: number): Position[] {
   const lat0 = (start[1] + end[1]) / 2;
   const p0 = projAt(start, lat0), p1 = projAt(end, lat0);
   const dist = Math.hypot(p1[0] - p0[0], p1[1] - p0[1]);
@@ -50,7 +62,7 @@ function hermiteCurve(start, end, startUnit, endUnit, handleFrac, sampleM) {
   const m0 = [startUnit[0] * h, startUnit[1] * h];
   const m1 = [endUnit[0] * h, endUnit[1] * h];
   const steps = Math.max(12, Math.ceil(dist / sampleM));
-  const out = [];
+  const out: Position[] = [];
   for (let i = 0; i <= steps; i += 1) {
     const t = i / steps, t2 = t * t, t3 = t2 * t;
     out.push(unprojAt([
@@ -76,7 +88,12 @@ function hermiteCurve(start, end, startUnit, endUnit, handleFrac, sampleM) {
  * @param {number} [options.tangentSampleN=5] how many vertices to average for tangent
  * @returns {Array<[number,number]>}
  */
-export function replaceEndpointHairpin(coords, targetPoint, targetTangentUnit, options = {}) {
+export function replaceEndpointHairpin(
+  coords: Position[],
+  targetPoint?: Position,
+  targetTangentUnit?: Vector,
+  options: HairpinOptions = {},
+): Position[] {
   const {
     minReversalDeg = 120,
     maxArcM = 300,

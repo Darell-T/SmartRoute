@@ -56,7 +56,7 @@ import { repairSameRouteEndpointCrossings } from "./build/same-route-junction-fa
 import { simplifyTightCurves } from "./build/simplify-tight-curves.ts";
 import { snapDanglingSameColorEndpoints } from "./build/snap-dangling-same-color.ts";
 import { snapOffRevenueToShape, maxOffShapeM } from "./build/snap-off-revenue-to-shape.ts";
-import { replaceEndpointHairpin } from "./build/schematic-hairpin-arc.mjs";
+import { replaceEndpointHairpin } from "./build/schematic-hairpin-arc.ts";
 import { hermiteBetween } from "./build/offset-bow.ts";
 import { collapseSameColorOverlaps } from "./build/collapse-same-color.mjs";
 import { parallelOffsetCrossColor } from "./build/parallel-offset-cross-color.mjs";

@@ -70,6 +70,7 @@ Already migrated transit build helpers include:
 - `trim-terminal-overhang`
 - `snap-dangling-same-color`
 - `opendata-subway-lines`
+- `schematic-hairpin-arc`
 
 Pre-existing TypeScript helpers include station-anchor modules, spine helpers,
 lane ordering, artifact fingerprinting, smooth polyline utilities, and duplicate
@@ -116,7 +117,7 @@ Categories:
 | `frontend/eslint.config.mjs` | 1.0 KB / 37 lines | none | no | no | Keep as `.mjs` | keep `.mjs` |
 | `frontend/scripts/regenerate-canonical-from-gtfs.mjs` | 14.9 KB / 532 lines | `package.json`, visual orchestrator, palette check | no | yes | High-risk / migrate later | migrate later with artifact gate |
 | `frontend/scripts/build-subway-visual-network.mjs` | 201 KB / 4701 lines | `package.json`, renderer code, debug artifacts | no | yes | High-risk / migrate later | orchestrator migration plan first |
-| `frontend/scripts/build/schematic-hairpin-arc.mjs` | 4.8 KB / 113 lines | visual orchestrator | no | no | Medium-risk helper | add characterization test before conversion |
+| `frontend/scripts/build/schematic-hairpin-arc.ts` | 5.3 KB / 129 lines | visual orchestrator | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/parallel-offset-cross-color.mjs` | 4.9 KB / 128 lines | visual orchestrator, colocated test | yes | no | High-risk / migrate later | wait; cross-color offset pass |
 | `frontend/scripts/build/lane-continuity-filter.ts` | 7.3 KB / 187 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/same-route-junction-fabric.ts` | 9.1 KB / 270 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
@@ -150,6 +151,7 @@ Categories:
 | `frontend/scripts/build/physical-bundle.test.mjs` | 19.3 KB / 414 lines | none | n/a | no | QA/check script | migrate with source |
 | `frontend/scripts/build/same-color-merge.test.mjs` | 23.5 KB / 529 lines | none | n/a | no | QA/check script | migrate with source |
 | `frontend/scripts/build/same-route-junction-fabric.test.ts` | 4.3 KB / 122 lines | none | n/a | no | Migrated test | done |
+| `frontend/scripts/build/schematic-hairpin-arc.test.ts` | 3.1 KB / 95 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/build/snap-dangling-same-color.test.ts` | 5.8 KB / 103 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/build/st-nicholas-blue-straightening.test.mjs` | 10.6 KB / 307 lines | none | n/a | no | QA/check script | migrate with source |
 | `frontend/scripts/build/trim-terminal-overhang.test.ts` | 10.5 KB / 305 lines | none | n/a | no | Migrated test | done |
@@ -183,17 +185,17 @@ Categories:
 
 Next batch:
 
-- `schematic-hairpin-arc` after characterization coverage
+- `nostrand-eastern-schematic`
 
 Following batch:
 
-- `nostrand-eastern-schematic`
+- `culver-fg-prospect-smoothing`
 
 Later medium-risk batch:
 
-- `nostrand-eastern-schematic`
-- `culver-fg-prospect-smoothing`
 - `mott-haven-schematic`
+- `bridge-route-gaps`
+- `collapse-same-color`
 
 Avoid for now:
 
@@ -206,8 +208,6 @@ Avoid for now:
 
 Needs characterization before conversion:
 
-- `schematic-hairpin-arc.mjs` because it is small but currently has no
-  colocated test.
 - `regenerate-canonical-from-gtfs.mjs` because it writes generated canonical
   artifacts and should be handled as an entrypoint with artifact checks.
 
