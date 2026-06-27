@@ -71,6 +71,7 @@ Already migrated transit build helpers include:
 - `snap-dangling-same-color`
 - `opendata-subway-lines`
 - `schematic-hairpin-arc`
+- `nostrand-eastern-schematic`
 
 Pre-existing TypeScript helpers include station-anchor modules, spine helpers,
 lane ordering, artifact fingerprinting, smooth polyline utilities, and duplicate
@@ -126,7 +127,7 @@ Categories:
 | `frontend/scripts/build/trim-terminal-overhang.ts` | 12.1 KB / 328 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/cross-color-spread.mjs` | 12.6 KB / 331 lines | visual orchestrator, `parallel-offset-cross-color.mjs`, `physical-bundle-materialization.mjs`, colocated test | yes | no | High-risk / migrate later | wait until dependent helpers are planned |
 | `frontend/scripts/build/snap-dangling-same-color.ts` | 14.8 KB / 394 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
-| `frontend/scripts/build/nostrand-eastern-schematic.mjs` | 15.2 KB / 467 lines | visual orchestrator, colocated test | yes | no | Medium-risk helper | migrate later |
+| `frontend/scripts/build/nostrand-eastern-schematic.ts` | 18.0 KB / 547 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/culver-fg-prospect-smoothing.mjs` | 15.7 KB / 462 lines | visual orchestrator, colocated test | yes | no | Medium-risk helper | migrate later |
 | `frontend/scripts/build/mott-haven-schematic.mjs` | 16.4 KB / 469 lines | visual orchestrator, colocated test | yes | no | Medium-risk helper | migrate later |
 | `frontend/scripts/build/bridge-route-gaps.mjs` | 16.8 KB / 459 lines | visual orchestrator, colocated test | yes | no | Medium-risk helper | migrate later |
@@ -144,7 +145,7 @@ Categories:
 | `frontend/scripts/build/culver-fg-prospect-smoothing.test.mjs` | 3.7 KB / 126 lines | none | n/a | no | QA/check script | migrate with source |
 | `frontend/scripts/build/lane-continuity-filter.test.ts` | 10.2 KB / 258 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/build/mott-haven-schematic.test.mjs` | 6.7 KB / 254 lines | none | n/a | no | QA/check script | migrate with source |
-| `frontend/scripts/build/nostrand-eastern-schematic.test.mjs` | 3.8 KB / 133 lines | none | n/a | no | QA/check script | migrate with source |
+| `frontend/scripts/build/nostrand-eastern-schematic.test.ts` | 4.9 KB / 168 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/build/opendata-subway-lines.test.ts` | 4.3 KB / 148 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/build/parallel-offset-cross-color.test.mjs` | 3.5 KB / 65 lines | none | n/a | no | QA/check script | migrate with source |
 | `frontend/scripts/build/physical-bundle-materialization.test.mjs` | 8.7 KB / 259 lines | none | n/a | no | QA/check script | migrate with source |
@@ -185,17 +186,17 @@ Categories:
 
 Next batch:
 
-- `nostrand-eastern-schematic`
+- `culver-fg-prospect-smoothing`
 
 Following batch:
 
-- `culver-fg-prospect-smoothing`
+- `mott-haven-schematic`
 
 Later medium-risk batch:
 
-- `mott-haven-schematic`
 - `bridge-route-gaps`
 - `collapse-same-color`
+- `st-nicholas-blue-straightening`
 
 Avoid for now:
 
