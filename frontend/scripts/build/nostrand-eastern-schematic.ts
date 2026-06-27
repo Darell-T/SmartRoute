@@ -9,6 +9,76 @@
 // 2/5 branches can begin by backtracking. This helper owns only that local
 // split and replaces the branch starts with tangent-matched curves.
 
+import type { Feature, LineStringGeometry, Position } from "./types.ts";
+
+type Vector = [number, number];
+type Direction = "forward" | "backward";
+type EndpointSide = "start" | "end";
+
+type NostrandProperties = {
+  corridor_id?: string;
+  color?: unknown;
+  route_ids?: unknown;
+  color_route_ids?: unknown;
+  length_m?: number;
+  [key: string]: unknown;
+};
+
+type NostrandFeature = Feature<LineStringGeometry, NostrandProperties>;
+
+type BBox = {
+  minLon: number;
+  maxLon: number;
+  minLat: number;
+  maxLat: number;
+};
+
+type ArcOptions = {
+  branchTurnSpanM: number;
+  trunkBlendM: number;
+  sampleM: number;
+};
+
+type PartialArcOptions = Partial<ArcOptions>;
+
+type HermiteOptions = {
+  sampleM?: number;
+  handleFrac?: number;
+};
+
+type SegmentProjection = {
+  point: Position;
+  t: number;
+  distanceM: number;
+};
+
+type PolylineProjection = SegmentProjection & {
+  arcM: number;
+  segmentIndex: number;
+};
+
+type EndpointCandidate = {
+  side: EndpointSide;
+  point: Position;
+  projection: PolylineProjection;
+  distanceM: number;
+};
+
+type Diagnostics = {
+  applied: boolean;
+  reason: string | null;
+  red_branch_rebuilt: boolean;
+  green_tail_straightened: boolean;
+  green_branch_rebuilt: boolean;
+  green_split_point?: Position;
+  red_split_point?: Position;
+};
+
+type SchematicResult = {
+  features: NostrandFeature[];
+  diagnostics: Diagnostics;
+};
+
 const EARTH_RADIUS_M = 6371000;
 const M_PER_DEG_LAT = 110574;
 const GREEN = "#00933C";
@@ -21,11 +91,11 @@ const NOSTRAND_BBOX = {
   maxLat: 40.673,
 };
 
-function metersPerDegLng(lat) {
+function metersPerDegLng(lat: number): number {
   return 111320 * Math.cos((lat * Math.PI) / 180);
 }
 
-function haversineM([lon1, lat1], [lon2, lat2]) {
+function haversineM([lon1, lat1]: Position, [lon2, lat2]: Position): number {
   const r = Math.PI / 180;
   const dLat = (lat2 - lat1) * r;
   const dLon = (lon2 - lon1) * r;
@@ -35,15 +105,15 @@ function haversineM([lon1, lat1], [lon2, lat2]) {
   return 2 * EARTH_RADIUS_M * Math.asin(Math.sqrt(a));
 }
 
-function project(point, originLat) {
+function project(point: Position, originLat: number): Vector {
   return [point[0] * metersPerDegLng(originLat), point[1] * M_PER_DEG_LAT];
 }
 
-function unproject(point, originLat) {
+function unproject(point: Vector, originLat: number): Position {
   return [point[0] / metersPerDegLng(originLat), point[1] / M_PER_DEG_LAT];
 }
 
-function vectorMeters(from, to) {
+function vectorMeters(from: Position, to: Position): Vector {
   const lat = (from[1] + to[1]) / 2;
   return [
     (to[0] - from[0]) * metersPerDegLng(lat),
@@ -51,27 +121,27 @@ function vectorMeters(from, to) {
   ];
 }
 
-function unitVector(from, to) {
+function unitVector(from: Position, to: Position): Vector {
   const v = vectorMeters(from, to);
   const len = Math.hypot(v[0], v[1]);
   if (len < 1e-9) return [1, 0];
   return [v[0] / len, v[1] / len];
 }
 
-function normalizeVector(vector, fallback = [1, 0]) {
+function normalizeVector(vector: Vector, fallback: Vector = [1, 0]): Vector {
   const len = Math.hypot(vector[0], vector[1]);
   if (len < 1e-9) return fallback;
   return [vector[0] / len, vector[1] / len];
 }
 
-function orientToward(vector, from, to) {
+function orientToward(vector: Vector, from: Position, to: Position): Vector {
   const toward = vectorMeters(from, to);
   return vector[0] * toward[0] + vector[1] * toward[1] < 0
     ? [-vector[0], -vector[1]]
     : vector;
 }
 
-function inBBox(point, bbox = NOSTRAND_BBOX) {
+function inBBox(point: Position, bbox: BBox = NOSTRAND_BBOX): boolean {
   return (
     point[0] >= bbox.minLon &&
     point[0] <= bbox.maxLon &&
@@ -80,21 +150,21 @@ function inBBox(point, bbox = NOSTRAND_BBOX) {
   );
 }
 
-function routeIds(feature) {
+function routeIds(feature: NostrandFeature): string[] {
   return Array.isArray(feature.properties?.route_ids)
     ? feature.properties.route_ids.map(String)
     : [];
 }
 
-function hasRoute(feature, routeId) {
+function hasRoute(feature: NostrandFeature, routeId: string): boolean {
   return routeIds(feature).includes(routeId);
 }
 
-function color(feature) {
+function color(feature: NostrandFeature): string {
   return String(feature.properties?.color ?? "").toUpperCase();
 }
 
-function isLine(feature) {
+function isLine(feature: NostrandFeature): boolean {
   return (
     feature?.geometry?.type === "LineString" &&
     Array.isArray(feature.geometry.coordinates) &&
@@ -102,11 +172,11 @@ function isLine(feature) {
   );
 }
 
-function touchesNostrand(feature) {
+function touchesNostrand(feature: NostrandFeature): boolean {
   return isLine(feature) && feature.geometry.coordinates.some((point) => inBBox(point));
 }
 
-function cumulativeArcs(coords) {
+function cumulativeArcs(coords: Position[]): number[] {
   const arcs = [0];
   for (let index = 1; index < coords.length; index += 1) {
     arcs.push(arcs[index - 1] + haversineM(coords[index - 1], coords[index]));
@@ -114,10 +184,10 @@ function cumulativeArcs(coords) {
   return arcs;
 }
 
-function interpolateAtArc(coords, arcs, arcM) {
+function interpolateAtArc(coords: Position[], arcs: number[], arcM: number): Position {
   const total = arcs[arcs.length - 1] ?? 0;
-  if (arcM <= 0) return coords[0].slice();
-  if (arcM >= total) return coords[coords.length - 1].slice();
+  if (arcM <= 0) return [...coords[0]];
+  if (arcM >= total) return [...coords[coords.length - 1]];
   for (let index = 1; index < arcs.length; index += 1) {
     if (arcs[index] < arcM) continue;
     const prevArc = arcs[index - 1];
@@ -130,23 +200,23 @@ function interpolateAtArc(coords, arcs, arcM) {
       previous[1] + (next[1] - previous[1]) * t,
     ];
   }
-  return coords[coords.length - 1].slice();
+  return [...coords[coords.length - 1]];
 }
 
-function appendCoord(out, coord, epsM = 0.2) {
+function appendCoord(out: Position[], coord: Position | undefined, epsM = 0.2): void {
   if (!coord) return;
   const previous = out[out.length - 1];
   if (previous && haversineM(previous, coord) <= epsM) return;
-  out.push(coord.slice());
+  out.push([...coord]);
 }
 
-function sliceByArc(coords, startArc, endArc) {
+function sliceByArc(coords: Position[], startArc: number, endArc: number): Position[] {
   const arcs = cumulativeArcs(coords);
   const total = arcs[arcs.length - 1] ?? 0;
   const start = Math.max(0, Math.min(total, startArc));
   const end = Math.max(0, Math.min(total, endArc));
   if (end - start <= 0.5) return [];
-  const out = [];
+  const out: Position[] = [];
   appendCoord(out, interpolateAtArc(coords, arcs, start));
   for (let index = 1; index < coords.length - 1; index += 1) {
     if (arcs[index] > start + 0.2 && arcs[index] < end - 0.2) {
@@ -157,7 +227,7 @@ function sliceByArc(coords, startArc, endArc) {
   return out;
 }
 
-function tangentAtArc(coords, arcM, direction = "forward") {
+function tangentAtArc(coords: Position[], arcM: number, direction: Direction = "forward"): Vector {
   const arcs = cumulativeArcs(coords);
   const total = arcs[arcs.length - 1] ?? 0;
   const a = interpolateAtArc(coords, arcs, Math.max(0, Math.min(total, arcM - 18)));
@@ -166,7 +236,7 @@ function tangentAtArc(coords, arcM, direction = "forward") {
   return vector;
 }
 
-function projectPointToSegment(point, a, b) {
+function projectPointToSegment(point: Position, a: Position, b: Position): SegmentProjection {
   const lat = (point[1] + a[1] + b[1]) / 3;
   const [px, py] = project(point, lat);
   const [ax, ay] = project(a, lat);
@@ -179,9 +249,9 @@ function projectPointToSegment(point, a, b) {
   return { point: projected, t, distanceM: haversineM(point, projected) };
 }
 
-function projectPointToPolyline(point, coords) {
+function projectPointToPolyline(point: Position, coords: Position[]): PolylineProjection | null {
   const arcs = cumulativeArcs(coords);
-  let best = null;
+  let best: PolylineProjection | null = null;
   for (let index = 0; index < coords.length - 1; index += 1) {
     const projection = projectPointToSegment(point, coords[index], coords[index + 1]);
     const arcM = arcs[index] + (arcs[index + 1] - arcs[index]) * projection.t;
@@ -196,16 +266,16 @@ function projectPointToPolyline(point, coords) {
   return best;
 }
 
-function nearestIndex(coords, point) {
+function nearestIndex(coords: Position[], point: Position): { index: number; distanceM: number } {
   let best = { index: -1, distanceM: Infinity };
-  coords.forEach((coord, index) => {
+  coords.forEach((coord: Position, index: number) => {
     const distanceM = haversineM(coord, point);
     if (distanceM < best.distanceM) best = { index, distanceM };
   });
   return best;
 }
 
-function hermiteCurve(start, end, startTangent, endTangent, options = {}) {
+function hermiteCurve(start: Position, end: Position, startTangent: Vector, endTangent: Vector, options: HermiteOptions = {}): Position[] {
   const { sampleM = 6, handleFrac = 0.45 } = options;
   const originLat = (start[1] + end[1]) / 2;
   const p0 = project(start, originLat);
@@ -215,7 +285,7 @@ function hermiteCurve(start, end, startTangent, endTangent, options = {}) {
   const m0 = [startTangent[0] * handle, startTangent[1] * handle];
   const m1 = [endTangent[0] * handle, endTangent[1] * handle];
   const steps = Math.max(10, Math.ceil(dist / sampleM));
-  const out = [];
+  const out: Position[] = [];
   for (let index = 0; index <= steps; index += 1) {
     const t = index / steps;
     const t2 = t * t;
@@ -234,11 +304,11 @@ function hermiteCurve(start, end, startTangent, endTangent, options = {}) {
   return out;
 }
 
-function polylineLengthM(coords) {
+function polylineLengthM(coords: Position[]): number {
   return cumulativeArcs(coords).at(-1) ?? 0;
 }
 
-function cloneWithCoordinates(feature, coordinates, properties = {}) {
+function cloneWithCoordinates(feature: NostrandFeature, coordinates: Position[], properties: NostrandProperties = {}): NostrandFeature {
   return {
     ...feature,
     geometry: {
@@ -253,7 +323,7 @@ function cloneWithCoordinates(feature, coordinates, properties = {}) {
   };
 }
 
-function stableStraightTailEnd(coords, windowSize = 12) {
+function stableStraightTailEnd(coords: Position[], windowSize = 12): { index: number; point: Position } {
   const start = Math.max(0, coords.length - windowSize);
   let bestIndex = coords.length - 1;
   // The bad local bridge bends south. The intended Eastern Parkway tail is the
@@ -261,10 +331,16 @@ function stableStraightTailEnd(coords, windowSize = 12) {
   for (let index = start; index < coords.length; index += 1) {
     if (coords[index][1] >= coords[bestIndex][1]) bestIndex = index;
   }
-  return { index: bestIndex, point: coords[bestIndex].slice() };
+  return { index: bestIndex, point: [...coords[bestIndex]] };
 }
 
-function rebuildEndpointBranch(feature, endpointSide, splitPoint, startTangent, options) {
+function rebuildEndpointBranch(
+  feature: NostrandFeature,
+  endpointSide: EndpointSide,
+  splitPoint: Position,
+  startTangent: Vector,
+  options: Pick<ArcOptions, "branchTurnSpanM" | "sampleM">,
+): Position[] {
   const { branchTurnSpanM, sampleM } = options;
   const coords = feature.geometry.coordinates;
   const working = endpointSide === "start" ? coords : coords.slice().reverse();
@@ -283,7 +359,12 @@ function rebuildEndpointBranch(feature, endpointSide, splitPoint, startTangent, 
   return endpointSide === "start" ? next : next.reverse();
 }
 
-function rebuildInternalBranch(feature, splitPoint, horizontalTangent, options) {
+function rebuildInternalBranch(
+  feature: NostrandFeature,
+  splitPoint: Position,
+  horizontalTangent: Vector,
+  options: ArcOptions,
+): Position[] | null {
   const { branchTurnSpanM, trunkBlendM, sampleM } = options;
   const coords = feature.geometry.coordinates;
   const near = nearestIndex(coords, splitPoint);
@@ -327,13 +408,13 @@ function rebuildInternalBranch(feature, splitPoint, horizontalTangent, options) 
   ];
 }
 
-function endpointCandidate(feature, sibling) {
+function endpointCandidate(feature: NostrandFeature, sibling: NostrandFeature): EndpointCandidate | null {
   const coords = feature.geometry.coordinates;
-  const endpoints = [
+  const endpoints: Array<{ side: EndpointSide; point: Position }> = [
     { side: "start", point: coords[0] },
     { side: "end", point: coords[coords.length - 1] },
   ];
-  let best = null;
+  let best: EndpointCandidate | null = null;
   for (const endpoint of endpoints) {
     const projection = projectPointToPolyline(endpoint.point, sibling.geometry.coordinates);
     if (!projection) continue;
@@ -345,14 +426,14 @@ function endpointCandidate(feature, sibling) {
   return best;
 }
 
-function horizontalTangentAtProjection(feature, point) {
+function horizontalTangentAtProjection(feature: NostrandFeature, point: Position): Vector {
   const projection = projectPointToPolyline(point, feature.geometry.coordinates);
   if (!projection) return [1, 0];
   const tangent = tangentAtArc(feature.geometry.coordinates, projection.arcM, "forward");
   return tangent[0] < 0 ? [-tangent[0], -tangent[1]] : tangent;
 }
 
-function isExactRoute(feature, ids) {
+function isExactRoute(feature: NostrandFeature, ids: string[]): boolean {
   const actual = routeIds(feature).sort().join(",");
   return actual === [...ids].sort().join(",");
 }
@@ -361,7 +442,7 @@ function isExactRoute(feature, ids) {
  * @param {Array<GeoJSON.Feature>} features
  * @returns {{features:Array<GeoJSON.Feature>, diagnostics: object}}
  */
-export function applyNostrandEasternSchematic(features, options = {}) {
+export function applyNostrandEasternSchematic(features: NostrandFeature[], options: PartialArcOptions = {}): SchematicResult {
   const {
     branchTurnSpanM = 420,
     trunkBlendM = 170,
@@ -391,7 +472,7 @@ export function applyNostrandEasternSchematic(features, options = {}) {
     feature !== greenTail,
   );
 
-  const diagnostics = {
+  const diagnostics: Diagnostics = {
     applied: false,
     reason: null,
     red_branch_rebuilt: false,

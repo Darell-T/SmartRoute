@@ -1,16 +1,27 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { applyNostrandEasternSchematic } from "./nostrand-eastern-schematic.mjs";
+import { applyNostrandEasternSchematic } from "./nostrand-eastern-schematic.ts";
+import type { Feature, LineStringGeometry, Position } from "./types.ts";
+
+type TestProperties = {
+  corridor_id: string;
+  color: string;
+  route_ids: string[];
+  color_route_ids: string[];
+  length_m: number;
+};
+
+type TestFeature = Feature<LineStringGeometry, TestProperties>;
 
 const DEG_PER_M_LAT = 1 / 111320;
 const DEG_PER_M_LON = 1 / 84410;
 
-function ll(xM, yM) {
+function ll(xM: number, yM: number): Position {
   return [-73.951 + xM * DEG_PER_M_LON, 40.670 + yM * DEG_PER_M_LAT];
 }
 
-function feature(id, color, routeIds, coords) {
+function feature(id: string, color: string, routeIds: string[], coords: Position[]): TestFeature {
   return {
     type: "Feature",
     geometry: { type: "LineString", coordinates: coords },
@@ -24,7 +35,7 @@ function feature(id, color, routeIds, coords) {
   };
 }
 
-function meterDelta(a, b) {
+function meterDelta(a: Position, b: Position): Position {
   return [
     (b[0] - a[0]) / DEG_PER_M_LON,
     (b[1] - a[1]) / DEG_PER_M_LAT,
@@ -71,17 +82,20 @@ test("Nostrand schematic preserves straight 4 tail and removes terminal hook", (
   assert.equal(diagnostics.applied, true);
 
   const outTail = features.find((f) => f.properties.corridor_id === "green-4");
+  assert.ok(outTail);
   assert.ok(outTail.properties.nostrand_eastern_straight_tail);
-  assert.deepEqual(outTail.geometry.coordinates.at(-1), ll(0, 0));
+  const tailCoords = outTail.geometry.coordinates;
+  assert.deepEqual(tailCoords[tailCoords.length - 1], ll(0, 0));
 
   const lastSegment = meterDelta(
-    outTail.geometry.coordinates.at(-2),
-    outTail.geometry.coordinates.at(-1),
+    tailCoords[tailCoords.length - 2],
+    tailCoords[tailCoords.length - 1],
   );
   assert.ok(Math.abs(lastSegment[1]) < Math.abs(lastSegment[0]) * 0.08, "4 tail remains essentially straight");
 
   const outGreen = features.find((f) => f.properties.corridor_id === "green-5");
-  const splitPoint = outTail.geometry.coordinates.at(-1);
+  assert.ok(outGreen);
+  const splitPoint = tailCoords[tailCoords.length - 1];
   const splitInGreen = outGreen.geometry.coordinates.some((coord) => {
     const [dx, dy] = meterDelta(splitPoint, coord);
     return Math.hypot(dx, dy) < 0.5;
@@ -124,9 +138,31 @@ test("Nostrand schematic makes the red branch peel eastward before turning south
   assert.equal(diagnostics.applied, true);
 
   const outRed = features.find((f) => f.properties.corridor_id === "red-2");
+  assert.ok(outRed);
   assert.ok(outRed.properties.nostrand_eastern_branch_curve);
   const coords = outRed.geometry.coordinates;
   const firstStep = meterDelta(coords[0], coords[1]);
   assert.ok(firstStep[0] > 0, "branch should not begin by backtracking west");
   assert.ok(firstStep[1] < 1, "branch should begin flat-to-south, not upward");
+});
+
+test("Nostrand schematic leaves features unchanged when required route pieces are missing", () => {
+  const redTrunk = feature("red-3", "#EE352E", ["3"], [
+    ll(-600, 0),
+    ll(-200, 0),
+    ll(200, 0),
+    ll(600, 0),
+  ]);
+  const redBranch = feature("red-2", "#EE352E", ["2"], [
+    ll(0, 0),
+    ll(20, -120),
+    ll(40, -300),
+  ]);
+  const features = [redTrunk, redBranch];
+
+  const result = applyNostrandEasternSchematic(features);
+
+  assert.equal(result.features, features);
+  assert.equal(result.diagnostics.applied, false);
+  assert.equal(result.diagnostics.reason, "missing_required_features");
 });
