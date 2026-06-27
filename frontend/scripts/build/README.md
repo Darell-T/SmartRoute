@@ -80,6 +80,7 @@ Already migrated transit build helpers include:
 - `brighton-bq-church-spacing`
 - `parallel-offset-cross-color`
 - `cross-color-spread`
+- `physical-bundle-materialization`
 
 Pre-existing TypeScript helpers include station-anchor modules, spine helpers,
 lane ordering, artifact fingerprinting, smooth polyline utilities, and duplicate
@@ -133,14 +134,14 @@ Categories:
 | `frontend/scripts/build/opendata-subway-lines.ts` | 11.1 KB / 368 lines | visual orchestrator, palette check, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/cartographic-junction-overrides.ts` | 11.4 KB / 345 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/trim-terminal-overhang.ts` | 12.1 KB / 328 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
-| `frontend/scripts/build/cross-color-spread.ts` | 15.2 KB / 430 lines | visual orchestrator, `parallel-offset-cross-color.ts`, `physical-bundle-materialization.mjs`, colocated test | yes | no | Migrated TypeScript helper | done |
+| `frontend/scripts/build/cross-color-spread.ts` | 15.2 KB / 430 lines | visual orchestrator, `parallel-offset-cross-color.ts`, `physical-bundle-materialization.ts`, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/snap-dangling-same-color.ts` | 14.8 KB / 394 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/nostrand-eastern-schematic.ts` | 18.0 KB / 547 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/culver-fg-prospect-smoothing.ts` | 18.5 KB / 544 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/mott-haven-schematic.ts` | 18.6 KB / 525 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/bridge-route-gaps.ts` | 19.8 KB / 530 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/collapse-same-color.ts` | 21.0 KB / 658 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
-| `frontend/scripts/build/physical-bundle-materialization.mjs` | 18.1 KB / 489 lines | visual orchestrator, colocated test | yes | no | High-risk / migrate later | wait for physical-bundle plan |
+| `frontend/scripts/build/physical-bundle-materialization.ts` | 21.8 KB / 550 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/st-nicholas-blue-straightening.ts` | 21.1 KB / 678 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/brighton-bq-church-spacing.ts` | 25.2 KB / 705 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/same-color-merge.mjs` | 22.4 KB / 609 lines | visual orchestrator, colocated test | yes | no | High-risk / migrate later | migrate after smaller corridor helpers |
@@ -156,7 +157,7 @@ Categories:
 | `frontend/scripts/build/nostrand-eastern-schematic.test.ts` | 4.9 KB / 168 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/build/opendata-subway-lines.test.ts` | 4.3 KB / 148 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/build/parallel-offset-cross-color.test.ts` | 8.5 KB / 183 lines | none | n/a | no | Migrated test | done |
-| `frontend/scripts/build/physical-bundle-materialization.test.mjs` | 8.7 KB / 259 lines | none | n/a | no | QA/check script | migrate with source |
+| `frontend/scripts/build/physical-bundle-materialization.test.ts` | 8.9 KB / 238 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/build/physical-bundle.test.mjs` | 19.3 KB / 414 lines | none | n/a | no | QA/check script | migrate with source |
 | `frontend/scripts/build/same-color-merge.test.mjs` | 23.5 KB / 529 lines | none | n/a | no | QA/check script | migrate with source |
 | `frontend/scripts/build/same-route-junction-fabric.test.ts` | 4.3 KB / 122 lines | none | n/a | no | Migrated test | done |
@@ -194,20 +195,15 @@ Categories:
 
 Next dedicated review batch:
 
-- `physical-bundle-materialization` only after the physical-bundle plan is ready
-
-Following dedicated review batch:
-
 - `physical-bundle` only after reviewing the shared declarations and dependent tests
 
-Later dedicated review batch:
+Following dedicated review batch:
 
 - `same-color-merge` only after physical-bundle and cross-color sequencing is planned
 
 Avoid for now:
 
 - `physical-bundle.mjs`
-- `physical-bundle-materialization.mjs`
 - `same-color-merge.mjs`
 - `build-subway-visual-network.mjs`
 

@@ -1,25 +1,26 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { materializePhysicalBundles } from "./physical-bundle-materialization.mjs";
+import { materializePhysicalBundles, type CorridorFeature } from "./physical-bundle-materialization.ts";
+import type { Position } from "./types.ts";
 
 const DEG_PER_M_LAT = 1 / 111320;
 const DEG_PER_M_LON = 1 / (111320 * Math.cos((40.68 * Math.PI) / 180));
 
-const ROUTE_COLORS = {
+const ROUTE_COLORS: Record<string, string> = {
   B: "#FF6319",
   Q: "#FCCC0A",
   G: "#6CBE45",
 };
 
-function routeColorFor(routeId) {
+function routeColorFor(routeId: string): string {
   return ROUTE_COLORS[routeId] ?? "#808183";
 }
 
-function compareRouteIds(a, b) {
+function compareRouteIds(a: string, b: string): number {
   return a.localeCompare(b, "en", { numeric: true });
 }
 
-function orderColorsForBundle(colors) {
+function orderColorsForBundle(colors: string[]): { colors: string[]; overrideApplied: boolean } {
   const order = ["#FF6319", "#FCCC0A"];
   return {
     colors: [...colors].sort((a, b) => order.indexOf(a) - order.indexOf(b)),
@@ -27,21 +28,21 @@ function orderColorsForBundle(colors) {
   };
 }
 
-function verticalLine(lon, lat, lengthM, steps) {
-  return Array.from({ length: steps + 1 }, (_, index) => [
+function verticalLine(lon: number, lat: number, lengthM: number, steps: number): Position[] {
+  return Array.from({ length: steps + 1 }, (_, index): Position => [
     lon,
     lat + (lengthM * DEG_PER_M_LAT * index) / steps,
   ]);
 }
 
-function eastTail(from, lengthM, steps) {
-  return Array.from({ length: steps + 1 }, (_, index) => [
+function eastTail(from: Position, lengthM: number, steps: number): Position[] {
+  return Array.from({ length: steps + 1 }, (_, index): Position => [
     from[0] + (lengthM * DEG_PER_M_LON * index) / steps,
     from[1],
   ]);
 }
 
-function feature(corridorId, routeIds, coords) {
+function feature(corridorId: string, routeIds: string[], coords: Position[]): CorridorFeature {
   return {
     type: "Feature",
     geometry: { type: "LineString", coordinates: coords },
@@ -56,7 +57,7 @@ function feature(corridorId, routeIds, coords) {
   };
 }
 
-function spine(corridorId, coords, routeIds) {
+function spine(corridorId: string, coords: Position[], routeIds: string[]) {
   return {
     spine_id: `spine-${corridorId}`,
     geometry: { type: "LineString", coordinates: coords },
@@ -104,21 +105,21 @@ test("emits each member as ONE continuous offset lane (no spine/fanout/tail slic
 
   // No sliced roles anymore.
   assert.equal(
-    result.features.filter((f) => ["shared_spine", "fanout", "branch_tail"].includes(f.properties.bundle_materialization_role)).length,
+    result.features.filter((f) => ["shared_spine", "fanout", "branch_tail"].includes(f.properties.bundle_materialization_role!)).length,
     0,
   );
   // Exactly two continuous lanes, one per member, each ~full length.
   const lanes = result.features.filter((f) => f.properties.bundle_materialization_role === "continuous_lane");
   assert.equal(lanes.length, 2);
-  const bLane = lanes.find((f) => f.properties.route_ids.includes("B"));
-  const qLane = lanes.find((f) => f.properties.route_ids.includes("Q"));
-  assert.equal(bLane.geometry.coordinates.length, bCoords.length, "B stays continuous, same vertex count");
-  assert.equal(qLane.geometry.coordinates.length, qCoords.length, "Q stays continuous, same vertex count");
+  const bLane = lanes.find((f) => f.properties.route_ids!.includes("B"));
+  const qLane = lanes.find((f) => f.properties.route_ids!.includes("Q"));
+  assert.equal(bLane!.geometry.coordinates.length, bCoords.length, "B stays continuous, same vertex count");
+  assert.equal(qLane!.geometry.coordinates.length, qCoords.length, "Q stays continuous, same vertex count");
   // Offset to opposite sides over the shared stretch (not coincident, not crossed).
-  const sep = bLane.geometry.coordinates[20][0] - qLane.geometry.coordinates[20][0];
+  const sep = bLane!.geometry.coordinates[20][0] - qLane!.geometry.coordinates[20][0];
   assert.ok(Math.abs(sep) > 1e-6, "lanes separated over shared stretch");
-  assert.notEqual(bLane.properties.lane_slot, qLane.properties.lane_slot, "distinct slots");
-  assert.equal(bLane.properties.lane_slot_source, "physical_bundle_continuous");
+  assert.notEqual(bLane!.properties.lane_slot, qLane!.properties.lane_slot, "distinct slots");
+  assert.equal(bLane!.properties.lane_slot_source, "physical_bundle_continuous");
 });
 
 test("SAME-color members on one corridor collapse to ONE lane (same color -> same slot)", () => {
@@ -127,7 +128,7 @@ test("SAME-color members on one corridor collapse to ONE lane (same color -> sam
   const shared = verticalLine(-73.99, 40.68, 1000, 30);
   const corridors = [
     feature("n", ["N"], shared),
-    feature("w", ["W"], shared.map((c) => [...c])),
+    feature("w", ["W"], shared.map((c) => [...c] as Position)),
   ];
   const result = materializePhysicalBundles(
     corridors,
@@ -170,7 +171,7 @@ test("materializePhysicalBundles does not consume/drop a member that never meets
   // corridor; consuming it (the old consume-before-check bug) silently deleted it.
   const shared = verticalLine(-73.99, 40.68, 1000, 20);
   const bCoords = shared;
-  const qCoords = shared.map(([lon, lat]) => [lon + 4 * DEG_PER_M_LON, lat]);
+  const qCoords = shared.map(([lon, lat]): Position => [lon + 4 * DEG_PER_M_LON, lat]);
   const divergent = eastTail([-73.95, 40.66], 800, 16); // ~3km east + different lat: no overlap
 
   const corridors = [

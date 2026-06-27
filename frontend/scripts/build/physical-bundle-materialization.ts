@@ -1,9 +1,85 @@
 import { offsetPolylineOverExtent } from "./cross-color-spread.ts";
+import type { Feature, LineStringGeometry, Position } from "./types.ts";
 
 const EARTH_RADIUS_M = 6371000;
 
-function haversineM([lon1, lat1], [lon2, lat2]) {
-  const toRad = (d) => (d * Math.PI) / 180;
+// Properties carried by the corridor LineString features this pass consumes and
+// emits. Only the members read arithmetically/structurally below are named; the
+// pipeline attaches many more stage-specific fields, hence the index signature.
+type CorridorProperties = {
+  corridor_id: string;
+  route_ids?: string[];
+  color?: string;
+  length_m?: number | null;
+  from_anchor_id?: string | null;
+  to_anchor_id?: string | null;
+  physical_bundle_spine_hash?: string | null;
+  // Set on materialized output features (read by the renderer + tests).
+  bundle_materialization_role?: string;
+  lane_slot?: number;
+  lane_slot_source?: string;
+  [key: string]: unknown;
+};
+
+export type CorridorFeature = Feature<LineStringGeometry, CorridorProperties>;
+
+type ArcSample = { coordinate: Position; arc: number };
+
+type ArcRun = { startArc: number; endArc: number; sampleCount: number | null };
+
+type ColorOrdering = { colors: string[]; overrideApplied: boolean };
+
+type PhysicalBundleGroup = {
+  physical_bundle_id: string;
+  physical_bundle_spine_hash?: string | null;
+  spine_ids?: string[];
+  base_spine_id?: string | null;
+  base_corridor_id?: string | null;
+  confidence?: number;
+  shared_extent_start_m?: number;
+  shared_extent_end_m?: number;
+  [key: string]: unknown;
+};
+
+type MaterializeOptions = {
+  confidenceMin?: number;
+  overlapDistMaxM?: number;
+  sharedLenMinM?: number;
+  splitSampleM?: number;
+  fanoutBlendM?: number;
+  minTailLengthM?: number;
+  laneWidthM?: number;
+  taperM?: number;
+  compareRouteIds?: (a: string, b: string) => number;
+  routeColorFor?: (routeId: string) => string;
+  orderColorsForBundle?: (colors: string[]) => ColorOrdering;
+  spinesById?: Map<string, unknown>;
+};
+
+type ResolvedOptions = {
+  confidenceMin: number;
+  overlapDistMaxM: number;
+  sharedLenMinM: number;
+  splitSampleM: number;
+  fanoutBlendM: number;
+  minTailLengthM: number;
+  laneWidthM?: number;
+  taperM?: number;
+  compareRouteIds: (a: string, b: string) => number;
+  routeColorFor: (routeId: string) => string;
+  orderColorsForBundle: (colors: string[]) => ColorOrdering;
+  spinesById: Map<string, unknown>;
+};
+
+type MaterializeDebug = {
+  materializedBundleFeatures: CorridorFeature[];
+  fanoutFeatures: CorridorFeature[];
+  splitFeatures: CorridorFeature[];
+  defectFeatures: Feature<LineStringGeometry, Record<string, unknown>>[];
+};
+
+function haversineM([lon1, lat1]: Position, [lon2, lat2]: Position): number {
+  const toRad = (d: number) => (d * Math.PI) / 180;
   const dLat = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
   const a =
@@ -12,7 +88,7 @@ function haversineM([lon1, lat1], [lon2, lat2]) {
   return 2 * EARTH_RADIUS_M * Math.asin(Math.sqrt(a));
 }
 
-function polylineLengthM(coords) {
+function polylineLengthM(coords: Position[]): number {
   let total = 0;
   for (let index = 1; index < coords.length; index += 1) {
     total += haversineM(coords[index - 1], coords[index]);
@@ -20,7 +96,7 @@ function polylineLengthM(coords) {
   return total;
 }
 
-function cumulativeArcLengths(coords) {
+function cumulativeArcLengths(coords: Position[]): number[] {
   const arcs = [0];
   for (let index = 1; index < coords.length; index += 1) {
     arcs.push(arcs[index - 1] + haversineM(coords[index - 1], coords[index]));
@@ -28,7 +104,7 @@ function cumulativeArcLengths(coords) {
   return arcs;
 }
 
-function interpolateAtArc(coords, arcs, targetArc) {
+function interpolateAtArc(coords: Position[], arcs: number[], targetArc: number): Position {
   if (targetArc <= 0) return coords[0];
   const total = arcs[arcs.length - 1];
   if (targetArc >= total) return coords[coords.length - 1];
@@ -50,7 +126,7 @@ function interpolateAtArc(coords, arcs, targetArc) {
   return coords[coords.length - 1];
 }
 
-function slicePolylineByArc(coords, startArc, endArc) {
+function slicePolylineByArc(coords: Position[], startArc: number, endArc: number): Position[] {
   if (!Array.isArray(coords) || coords.length < 2) return [];
   const arcs = cumulativeArcLengths(coords);
   const total = arcs[arcs.length - 1];
@@ -68,11 +144,11 @@ function slicePolylineByArc(coords, startArc, endArc) {
   return out.length >= 2 ? out : [];
 }
 
-function resampleWithArc(coords, stepM) {
+function resampleWithArc(coords: Position[], stepM: number): ArcSample[] {
   if (!Array.isArray(coords) || coords.length < 2) return [];
   const arcs = cumulativeArcLengths(coords);
   const total = arcs[arcs.length - 1];
-  const out = [];
+  const out: ArcSample[] = [];
   for (let arc = 0; arc < total; arc += stepM) {
     out.push({ coordinate: interpolateAtArc(coords, arcs, arc), arc });
   }
@@ -80,23 +156,26 @@ function resampleWithArc(coords, stepM) {
   return out;
 }
 
-function densifyPolyline(coords, stepM) {
+function densifyPolyline(coords: Position[], stepM: number): Position[] {
   return resampleWithArc(coords, stepM).map((sample) => sample.coordinate);
 }
 
-function nearestSampleDistanceM(point, samples) {
+function nearestSampleDistanceM(point: Position, samples: ArcSample[]): number {
   let best = Infinity;
   for (const sample of samples) {
-    const coord = sample.coordinate ?? sample;
+    const coord = (sample.coordinate ?? sample) as Position;
     const distance = haversineM(point, coord);
     if (distance < best) best = distance;
   }
   return best;
 }
 
-function longestTrueRun(samples, predicate) {
-  let best = null;
-  let current = null;
+function longestTrueRun(
+  samples: ArcSample[],
+  predicate: (sample: ArcSample, index: number) => boolean,
+): ArcRun | null {
+  let best: { startIndex: number; endIndex: number } | null = null;
+  let current: { startIndex: number; endIndex: number } | null = null;
 
   for (let index = 0; index < samples.length; index += 1) {
     if (predicate(samples[index], index)) {
@@ -123,13 +202,19 @@ function longestTrueRun(samples, predicate) {
   };
 }
 
-function uniqueSortedRouteIds(features, compareRouteIds) {
+function uniqueSortedRouteIds(
+  features: CorridorFeature[],
+  compareRouteIds: (a: string, b: string) => number,
+): string[] {
   return [...new Set(features.flatMap((feature) => feature.properties.route_ids ?? []))]
     .sort(compareRouteIds);
 }
 
-function colorRouteIdsFor(routeIds, routeColorFor) {
-  const out = {};
+function colorRouteIdsFor(
+  routeIds: string[],
+  routeColorFor: (routeId: string) => string,
+): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
   for (const routeId of routeIds) {
     const color = routeColorFor(routeId);
     if (!out[color]) out[color] = [];
@@ -138,18 +223,26 @@ function colorRouteIdsFor(routeIds, routeColorFor) {
   return out;
 }
 
-function colorsForRoutes(routeIds, routeColorFor, orderColorsForBundle) {
+function colorsForRoutes(
+  routeIds: string[],
+  routeColorFor: (routeId: string) => string,
+  orderColorsForBundle: (colors: string[]) => ColorOrdering,
+): string[] {
   const colors = [...new Set(routeIds.map((routeId) => routeColorFor(routeId)))];
   return orderColorsForBundle(colors).colors;
 }
 
-function laneSlotsForColors(colors) {
+function laneSlotsForColors(colors: string[]): Record<string, number> {
   return Object.fromEntries(
     colors.map((color, index) => [color, index - (colors.length - 1) / 2]),
   );
 }
 
-function cloneFeatureWith(feature, geometry, properties) {
+function cloneFeatureWith(
+  feature: CorridorFeature,
+  geometry: LineStringGeometry,
+  properties: Record<string, unknown>,
+): CorridorFeature {
   return {
     type: "Feature",
     geometry,
@@ -160,13 +253,17 @@ function cloneFeatureWith(feature, geometry, properties) {
   };
 }
 
-function corridorIdFromSpineId(spineId) {
+function corridorIdFromSpineId(spineId: string): string {
   return String(spineId).startsWith("spine-")
     ? String(spineId).slice("spine-".length)
     : String(spineId);
 }
 
-function sharedRunOnBase(baseCoords, memberFeatures, options) {
+function sharedRunOnBase(
+  baseCoords: Position[],
+  memberFeatures: CorridorFeature[],
+  options: ResolvedOptions,
+): ArcRun | null {
   const baseSamples = resampleWithArc(baseCoords, options.splitSampleM);
   const memberSamples = memberFeatures.map((feature) =>
     resampleWithArc(feature.geometry.coordinates, options.splitSampleM),
@@ -183,7 +280,11 @@ function sharedRunOnBase(baseCoords, memberFeatures, options) {
   });
 }
 
-function sharedRunOnMember(memberCoords, sharedCoords, options) {
+function sharedRunOnMember(
+  memberCoords: Position[],
+  sharedCoords: Position[],
+  options: ResolvedOptions,
+): ArcRun | null {
   const memberSamples = resampleWithArc(memberCoords, options.splitSampleM);
   const sharedSamples = resampleWithArc(sharedCoords, options.splitSampleM);
   return longestTrueRun(
@@ -192,7 +293,7 @@ function sharedRunOnMember(memberCoords, sharedCoords, options) {
   );
 }
 
-function appendIfUseful(out, feature, minLengthM) {
+function appendIfUseful(out: CorridorFeature[], feature: CorridorFeature, minLengthM: number): boolean {
   const length = polylineLengthM(feature.geometry.coordinates);
   if (length < minLengthM) return false;
   feature.properties.length_m = Number(length.toFixed(2));
@@ -200,7 +301,7 @@ function appendIfUseful(out, feature, minLengthM) {
   return true;
 }
 
-function makeMaterializedFeatureId(bundleId, role, suffix) {
+function makeMaterializedFeatureId(bundleId: string, role: string, suffix: string): string {
   return `${bundleId}-${role}-${suffix}`.replace(/[^a-zA-Z0-9_-]/g, "-");
 }
 
@@ -217,7 +318,20 @@ function addTailAndFanout({
   endArc,
   memberTotal,
   options,
-}) {
+}: {
+  out: CorridorFeature[];
+  debug: MaterializeDebug;
+  member: CorridorFeature;
+  bundleId: string;
+  bundleSpineHash: string | null;
+  sharedAnchorId: string;
+  bundleLaneSlots: Record<string, number> | null | undefined;
+  side: string;
+  startArc: number;
+  endArc: number;
+  memberTotal: number;
+  options: ResolvedOptions;
+}): void {
   const memberCoords = member.geometry.coordinates;
   const routeIds = [...(member.properties.route_ids ?? [])].sort(options.compareRouteIds);
   const colorRouteIds = colorRouteIdsFor(routeIds, options.routeColorFor);
@@ -314,7 +428,11 @@ function addTailAndFanout({
   );
 }
 
-export function materializePhysicalBundles(corridorFeatures, physicalBundles, rawOptions = {}) {
+export function materializePhysicalBundles(
+  corridorFeatures: CorridorFeature[],
+  physicalBundles: PhysicalBundleGroup[],
+  rawOptions: MaterializeOptions = {},
+) {
   const options = {
     confidenceMin: 0.75,
     overlapDistMaxM: 15,
@@ -322,19 +440,19 @@ export function materializePhysicalBundles(corridorFeatures, physicalBundles, ra
     splitSampleM: 5,
     fanoutBlendM: 100,
     minTailLengthM: 15,
-    compareRouteIds: (a, b) => String(a).localeCompare(String(b), "en", { numeric: true }),
+    compareRouteIds: (a: string, b: string) => String(a).localeCompare(String(b), "en", { numeric: true }),
     routeColorFor: () => "#808183",
-    orderColorsForBundle: (colors) => ({ colors, overrideApplied: false }),
+    orderColorsForBundle: (colors: string[]) => ({ colors, overrideApplied: false }),
     spinesById: new Map(),
     ...rawOptions,
-  };
+  } as ResolvedOptions;
 
   const featureByCorridorId = new Map(
-    corridorFeatures.map((feature) => [feature.properties.corridor_id, feature]),
+    corridorFeatures.map((feature): [string, CorridorFeature] => [feature.properties.corridor_id, feature]),
   );
-  const consumedCorridorIds = new Set();
-  const materializedFeatures = [];
-  const debug = {
+  const consumedCorridorIds = new Set<string>();
+  const materializedFeatures: CorridorFeature[] = [];
+  const debug: MaterializeDebug = {
     materializedBundleFeatures: [],
     fanoutFeatures: [],
     splitFeatures: [],
@@ -346,7 +464,7 @@ export function materializePhysicalBundles(corridorFeatures, physicalBundles, ra
 
     const members = (group.spine_ids ?? [])
       .map((spineId) => featureByCorridorId.get(corridorIdFromSpineId(spineId)))
-      .filter(Boolean)
+      .filter((feature): feature is CorridorFeature => Boolean(feature))
       .filter((feature) => !consumedCorridorIds.has(feature.properties.corridor_id));
 
     if (members.length < 2) continue;
@@ -366,11 +484,11 @@ export function materializePhysicalBundles(corridorFeatures, physicalBundles, ra
       }
     }
 
-    const baseRun =
+    const baseRun: ArcRun | null =
       Number.isFinite(group.shared_extent_start_m) && Number.isFinite(group.shared_extent_end_m)
         ? {
-            startArc: group.shared_extent_start_m,
-            endArc: group.shared_extent_end_m,
+            startArc: group.shared_extent_start_m as number,
+            endArc: group.shared_extent_end_m as number,
             sampleCount: null,
           }
         : sharedRunOnBase(base.geometry.coordinates, members, options);
@@ -408,7 +526,9 @@ export function materializePhysicalBundles(corridorFeatures, physicalBundles, ra
       member,
       run: sharedRunOnMember(member.geometry.coordinates, sharedCoords, options),
     }));
-    const activeEntries = memberRuns.filter((entry) => entry.run);
+    const activeEntries = memberRuns.filter(
+      (entry): entry is { member: CorridorFeature; run: ArcRun } => Boolean(entry.run),
+    );
     if (activeEntries.length < 2) {
       debug.defectFeatures.push({
         type: "Feature",
@@ -444,7 +564,7 @@ export function materializePhysicalBundles(corridorFeatures, physicalBundles, ra
     for (const { member, run: memberRun } of activeEntries) {
       consumedCorridorIds.add(member.properties.corridor_id);
       const memberCoords = member.geometry.coordinates;
-      const slot = Number(laneSlots[member.properties.color] ?? 0);
+      const slot = Number(laneSlots[member.properties.color as string] ?? 0);
       const offsetCoords =
         slot === 0
           ? memberCoords.map((c) => c)
