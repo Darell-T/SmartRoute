@@ -1,14 +1,65 @@
+import type { Feature, LineStringGeometry, Position } from "./types.ts";
+
 const EARTH_RADIUS_M = 6371000;
 const M_PER_DEG_LAT = 110574;
 const GREEN = "#00933C";
-const MOTT_HAVEN_CENTER = [-73.92825, 40.8166];
-const MOTT_HAVEN_BBOX = {
+
+type Bounds = {
+  minLon: number;
+  maxLon: number;
+  minLat: number;
+  maxLat: number;
+};
+
+type CartographicFeatureProperties = {
+  route_ids?: string[];
+  color_route_ids?: string[];
+  color?: string;
+  length_m?: number;
+  corridor_id?: string;
+  cartographic_junction_override?: string;
+  cartographic_junction_override_applied?: boolean;
+  cartographic_junction_branch_cut_back_m?: number;
+  cartographic_junction_trunk_merge_downstream_m?: number;
+  visual_feature_type?: string;
+  branch_cut_back_m?: number;
+  trunk_merge_downstream_m?: number;
+  [key: string]: unknown;
+};
+
+type CartographicFeature = Feature<LineStringGeometry, CartographicFeatureProperties>;
+
+type SplitPoint = {
+  point: Position;
+  before: Position[];
+  after: Position[];
+  index: number;
+  t: number;
+};
+
+type CartographicJunctionOptions = {
+  branchCutBackM?: number;
+  trunkMergeDownstreamM?: number;
+  sampleM?: number;
+  maxEndpointGapM?: number;
+  schematicPoints?: Position[];
+  bbox?: Bounds;
+};
+
+type CartographicJunctionResult = {
+  features: CartographicFeature[];
+  appliedCount: number;
+  debugFeatures: CartographicFeature[];
+};
+
+const MOTT_HAVEN_CENTER: Position = [-73.92825, 40.8166];
+const MOTT_HAVEN_BBOX: Bounds = {
   minLon: -73.9335,
   maxLon: -73.9230,
   minLat: 40.8130,
   maxLat: 40.8230,
 };
-const MOTT_HAVEN_SCHEMATIC_POINTS = [
+const MOTT_HAVEN_SCHEMATIC_POINTS: Position[] = [
   // Apple/Transit-style local loop after the E 149 St approach reaches the
   // station area. The approach itself is handled separately as a straight
   // street-aligned run so the line does not become a giant neighborhood-scale
@@ -21,12 +72,12 @@ const MOTT_HAVEN_SCHEMATIC_POINTS = [
 const DEFAULT_BRANCH_CUT_BACK_M = 450;
 const DEFAULT_TRUNK_MERGE_DOWNSTREAM_M = 300;
 
-function metersPerDegLng(lat) {
+function metersPerDegLng(lat: number): number {
   return 111320 * Math.cos((lat * Math.PI) / 180);
 }
 
-function haversineM([lon1, lat1], [lon2, lat2]) {
-  const toRad = (d) => (d * Math.PI) / 180;
+function haversineM([lon1, lat1]: Position, [lon2, lat2]: Position): number {
+  const toRad = (d: number) => (d * Math.PI) / 180;
   const dLat = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
   const a =
@@ -35,31 +86,31 @@ function haversineM([lon1, lat1], [lon2, lat2]) {
   return 2 * EARTH_RADIUS_M * Math.asin(Math.sqrt(a));
 }
 
-function routeIdsOf(feature) {
+function routeIdsOf(feature: CartographicFeature): string[] {
   const p = feature.properties ?? {};
   if (Array.isArray(p.color_route_ids)) return p.color_route_ids;
   if (Array.isArray(p.route_ids)) return p.route_ids;
   return [];
 }
 
-function sameRouteSet(routeIds, expected) {
+function sameRouteSet(routeIds: string[], expected: string[]): boolean {
   const left = [...new Set(routeIds)].sort().join("|");
   const right = [...expected].sort().join("|");
   return left === right;
 }
 
-function includesRoutes(routeIds, expected) {
+function includesRoutes(routeIds: string[], expected: string[]): boolean {
   const set = new Set(routeIds);
   return expected.every((routeId) => set.has(routeId));
 }
 
-function polylineLengthM(coords) {
+function polylineLengthM(coords: Position[]): number {
   let total = 0;
   for (let i = 1; i < coords.length; i += 1) total += haversineM(coords[i - 1], coords[i]);
   return total;
 }
 
-function pointAlong(coords, distanceM) {
+function pointAlong(coords: Position[], distanceM: number): Omit<SplitPoint, "before" | "after"> {
   let walked = 0;
   for (let i = 1; i < coords.length; i += 1) {
     const seg = haversineM(coords[i - 1], coords[i]);
@@ -76,10 +127,10 @@ function pointAlong(coords, distanceM) {
     }
     walked += seg;
   }
-  return { index: Math.max(0, coords.length - 2), t: 1, point: coords.at(-1) };
+  return { index: Math.max(0, coords.length - 2), t: 1, point: coords[coords.length - 1] };
 }
 
-function splitAtDistance(coords, distanceM) {
+function splitAtDistance(coords: Position[], distanceM: number): SplitPoint {
   const split = pointAlong(coords, distanceM);
   return {
     point: split.point,
@@ -90,7 +141,7 @@ function splitAtDistance(coords, distanceM) {
   };
 }
 
-function reverseFeatureDirection(feature) {
+function reverseFeatureDirection(feature: CartographicFeature): CartographicFeature {
   return {
     ...feature,
     geometry: {
@@ -100,25 +151,25 @@ function reverseFeatureDirection(feature) {
   };
 }
 
-function closestEndpointIndex(coords, point) {
-  return haversineM(coords[0], point) <= haversineM(coords.at(-1), point) ? 0 : coords.length - 1;
+function closestEndpointIndex(coords: Position[], point: Position): number {
+  return haversineM(coords[0], point) <= haversineM(coords[coords.length - 1], point) ? 0 : coords.length - 1;
 }
 
-function orientedTowardMottHavenEndpoint(feature) {
+function orientedTowardMottHavenEndpoint(feature: CartographicFeature): CartographicFeature {
   const coords = feature.geometry.coordinates;
   return closestEndpointIndex(coords, MOTT_HAVEN_CENTER) === coords.length - 1
     ? feature
     : reverseFeatureDirection(feature);
 }
 
-function orientedFromMottHavenEndpoint(feature) {
+function orientedFromMottHavenEndpoint(feature: CartographicFeature): CartographicFeature {
   const coords = feature.geometry.coordinates;
   return closestEndpointIndex(coords, MOTT_HAVEN_CENTER) === 0
     ? feature
     : reverseFeatureDirection(feature);
 }
 
-function vectorMeters(from, to) {
+function vectorMeters(from: Position, to: Position): Position {
   const lat = (from[1] + to[1]) / 2;
   return [
     (to[0] - from[0]) * metersPerDegLng(lat),
@@ -126,20 +177,26 @@ function vectorMeters(from, to) {
   ];
 }
 
-function normalize(v) {
+function normalize(v: Position): Position {
   const len = Math.hypot(v[0], v[1]);
   return len < 1e-9 ? [0, 0] : [v[0] / len, v[1] / len];
 }
 
-function projectAtLat(point, originLat) {
+function projectAtLat(point: Position, originLat: number): Position {
   return [point[0] * metersPerDegLng(originLat), point[1] * M_PER_DEG_LAT];
 }
 
-function unprojectAtLat(point, originLat) {
+function unprojectAtLat(point: Position, originLat: number): Position {
   return [point[0] / metersPerDegLng(originLat), point[1] / M_PER_DEG_LAT];
 }
 
-function hermiteCurve(start, end, startTangent, endTangent, sampleM) {
+function hermiteCurve(
+  start: Position,
+  end: Position,
+  startTangent: Position,
+  endTangent: Position,
+  sampleM: number,
+): Position[] {
   const originLat = (start[1] + end[1]) / 2;
   const p0 = projectAtLat(start, originLat);
   const p1 = projectAtLat(end, originLat);
@@ -148,7 +205,7 @@ function hermiteCurve(start, end, startTangent, endTangent, sampleM) {
   const m0 = [startTangent[0] * handleM, startTangent[1] * handleM];
   const m1 = [endTangent[0] * handleM, endTangent[1] * handleM];
   const steps = Math.max(8, Math.ceil(distanceM / sampleM));
-  const out = [];
+  const out: Position[] = [];
   for (let i = 0; i <= steps; i += 1) {
     const t = i / steps;
     const t2 = t * t;
@@ -160,12 +217,12 @@ function hermiteCurve(start, end, startTangent, endTangent, sampleM) {
     out.push(unprojectAtLat([
       h00 * p0[0] + h10 * m0[0] + h01 * p1[0] + h11 * m1[0],
       h00 * p0[1] + h10 * m0[1] + h01 * p1[1] + h11 * m1[1],
-    ], originLat));
+    ] as Position, originLat));
   }
   return out;
 }
 
-function linearlySampleSegment(start, end, sampleM) {
+function linearlySampleSegment(start: Position, end: Position, sampleM: number): Position[] {
   const distanceM = haversineM(start, end);
   const steps = Math.max(2, Math.ceil(distanceM / sampleM));
   const out = [];
@@ -174,27 +231,32 @@ function linearlySampleSegment(start, end, sampleM) {
     out.push([
       start[0] + (end[0] - start[0]) * t,
       start[1] + (end[1] - start[1]) * t,
-    ]);
+    ] as Position);
   }
   return out;
 }
 
-function quadraticCurve(start, control, end, sampleM) {
+function quadraticCurve(start: Position, control: Position, end: Position, sampleM: number): Position[] {
   const distanceM = haversineM(start, control) + haversineM(control, end);
   const steps = Math.max(12, Math.ceil(distanceM / sampleM));
-  const out = [];
+  const out: Position[] = [];
   for (let i = 0; i <= steps; i += 1) {
     const t = i / steps;
     const u = 1 - t;
     out.push([
       u * u * start[0] + 2 * u * t * control[0] + t * t * end[0],
       u * u * start[1] + 2 * u * t * control[1] + t * t * end[1],
-    ]);
+    ] as Position);
   }
   return out;
 }
 
-function schematicCurveThrough(start, end, interiorPoints, sampleM) {
+function schematicCurveThrough(
+  start: Position,
+  end: Position,
+  interiorPoints: Position[],
+  sampleM: number,
+): Position[] {
   const points = [start, ...interiorPoints, end];
   if (points.length < 3) return linearlySampleSegment(start, end, sampleM);
 
@@ -203,19 +265,20 @@ function schematicCurveThrough(start, end, interiorPoints, sampleM) {
     const prev = points[i - 1];
     const current = points[i];
     const next = points[i + 1];
-    const segmentStart = i === 1
+    if (!prev || !current || !next) continue;
+    const segmentStart: Position = i === 1
       ? prev
-      : [(prev[0] + current[0]) / 2, (prev[1] + current[1]) / 2];
-    const segmentEnd = i === points.length - 2
+      : [(prev[0] + current[0]) / 2, (prev[1] + current[1]) / 2] as Position;
+    const segmentEnd: Position = i === points.length - 2
       ? next
-      : [(current[0] + next[0]) / 2, (current[1] + next[1]) / 2];
+      : [(current[0] + next[0]) / 2, (current[1] + next[1]) / 2] as Position;
     const segment = quadraticCurve(segmentStart, current, segmentEnd, sampleM);
     output.push(...segment.slice(1));
   }
   return output;
 }
 
-function inBBox(point, bbox) {
+function inBBox(point: Position, bbox: Bounds): boolean {
   return (
     point[0] >= bbox.minLon &&
     point[0] <= bbox.maxLon &&
@@ -224,11 +287,11 @@ function inBBox(point, bbox) {
   );
 }
 
-function firstIndexInBBox(coords, bbox) {
+function firstIndexInBBox(coords: Position[], bbox: Bounds): number {
   return coords.findIndex((coord) => inBBox(coord, bbox));
 }
 
-function findMottHavenBranch(features) {
+function findMottHavenBranch(features: CartographicFeature[]): CartographicFeature | undefined {
   return features.find((feature) => (
     feature.geometry?.type === "LineString" &&
     String(feature.properties?.color ?? "").toUpperCase() === GREEN &&
@@ -237,7 +300,7 @@ function findMottHavenBranch(features) {
   ));
 }
 
-function findMottHavenTrunk(features) {
+function findMottHavenTrunk(features: CartographicFeature[]): CartographicFeature | undefined {
   return features.find((feature) => (
     feature.geometry?.type === "LineString" &&
     String(feature.properties?.color ?? "").toUpperCase() === GREEN &&
@@ -246,10 +309,15 @@ function findMottHavenTrunk(features) {
   ));
 }
 
-function replaceFeaturePreservingOriginalDirection(originalFeature, orientedFeature, newOrientedCoordinates, properties) {
+function replaceFeaturePreservingOriginalDirection(
+  originalFeature: CartographicFeature,
+  orientedFeature: CartographicFeature,
+  newOrientedCoordinates: Position[],
+  properties: Partial<CartographicFeatureProperties>,
+): CartographicFeature {
   const originalStartsAtOrientedStart =
     haversineM(originalFeature.geometry.coordinates[0], orientedFeature.geometry.coordinates[0]) <=
-    haversineM(originalFeature.geometry.coordinates[0], orientedFeature.geometry.coordinates.at(-1));
+    haversineM(originalFeature.geometry.coordinates[0], orientedFeature.geometry.coordinates[orientedFeature.geometry.coordinates.length - 1]);
   const coordinates = originalStartsAtOrientedStart
     ? newOrientedCoordinates
     : newOrientedCoordinates.slice().reverse();
@@ -268,7 +336,10 @@ function replaceFeaturePreservingOriginalDirection(originalFeature, orientedFeat
   };
 }
 
-export function applyCartographicJunctionOverrides(features, options = {}) {
+export function applyCartographicJunctionOverrides(
+  features: CartographicFeature[],
+  options: CartographicJunctionOptions = {},
+): CartographicJunctionResult {
   const {
     branchCutBackM = DEFAULT_BRANCH_CUT_BACK_M,
     trunkMergeDownstreamM = DEFAULT_TRUNK_MERGE_DOWNSTREAM_M,
@@ -284,7 +355,7 @@ export function applyCartographicJunctionOverrides(features, options = {}) {
 
   const orientedBranch = orientedTowardMottHavenEndpoint(branch);
   const orientedTrunk = orientedFromMottHavenEndpoint(trunk);
-  const branchEndpoint = orientedBranch.geometry.coordinates.at(-1);
+  const branchEndpoint = orientedBranch.geometry.coordinates[orientedBranch.geometry.coordinates.length - 1];
   const trunkEndpoint = orientedTrunk.geometry.coordinates[0];
   if (haversineM(branchEndpoint, trunkEndpoint) > maxEndpointGapM) {
     return { features, appliedCount: 0, debugFeatures: [] };

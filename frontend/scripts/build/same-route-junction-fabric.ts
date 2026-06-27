@@ -6,15 +6,64 @@
 // point of the overshooting feature to the actual segment intersection, removing
 // the local overshoot so the two features share a split node.
 
+import type { Feature, LineStringGeometry, Position } from "./types.ts";
+
 const EARTH_RADIUS_M = 6371000;
 const M_PER_DEG_LAT = 110574;
 
-function metersPerDegLng(lat) {
+type JunctionFeatureProperties = {
+  color?: string;
+  color_route_ids?: string[] | Record<string, string[]>;
+  route_ids?: string[];
+  corridor_id?: string;
+  bundle_id?: string;
+  same_route_junction_fabric?: boolean;
+  same_route_junction_fabric_repair_count?: number;
+  same_route_junction_fabric_repairs?: Array<{ side: EndpointSide; distance_m: number }>;
+  [key: string]: unknown;
+};
+
+type JunctionFeature = Feature<LineStringGeometry, JunctionFeatureProperties>;
+type EndpointSide = "start" | "end";
+
+type SegmentIntersection = {
+  point: Position;
+  t: number;
+  u: number;
+};
+
+type EndpointCandidate = {
+  side: EndpointSide;
+  distanceM: number;
+  point: Position;
+  segmentIndex: number;
+};
+
+type IndexedEndpointCandidate = EndpointCandidate & {
+  index: number;
+  otherIndex: number;
+};
+
+type SameRouteJunctionOptions = {
+  maxEndpointOvershootM?: number;
+  minSegmentM?: number;
+  allowSameColorSiblingRoutes?: boolean;
+};
+
+type JunctionRepair = {
+  corridor_id: string | null;
+  side: EndpointSide;
+  distance_m: number;
+  point: Position;
+  other_index: number;
+};
+
+function metersPerDegLng(lat: number): number {
   return 111320 * Math.cos((lat * Math.PI) / 180);
 }
 
-function haversineM([lon1, lat1], [lon2, lat2]) {
-  const toRad = (d) => (d * Math.PI) / 180;
+function haversineM([lon1, lat1]: Position, [lon2, lat2]: Position): number {
+  const toRad = (d: number) => (d * Math.PI) / 180;
   const dLat = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
   const a =
@@ -23,7 +72,7 @@ function haversineM([lon1, lat1], [lon2, lat2]) {
   return 2 * EARTH_RADIUS_M * Math.asin(Math.sqrt(a));
 }
 
-function activeRouteIdsForFeature(feature) {
+function activeRouteIdsForFeature(feature: JunctionFeature): string[] {
   const properties = feature.properties ?? {};
   const colorRouteIds = properties.color_route_ids;
   if (Array.isArray(colorRouteIds)) return colorRouteIds.map(String);
@@ -35,32 +84,36 @@ function activeRouteIdsForFeature(feature) {
   return Array.isArray(properties.route_ids) ? properties.route_ids.map(String) : [];
 }
 
-function shareActiveRoute(a, b) {
+function shareActiveRoute(a: JunctionFeature, b: JunctionFeature): boolean {
   const routes = new Set(activeRouteIdsForFeature(a));
   return activeRouteIdsForFeature(b).some((routeId) => routes.has(routeId));
 }
 
-function sameColor(a, b) {
+function sameColor(a: JunctionFeature, b: JunctionFeature): boolean {
   const ac = a.properties?.color;
   const bc = b.properties?.color;
   return Boolean(ac && bc && String(ac).toUpperCase() === String(bc).toUpperCase());
 }
 
-function compatibleJunctionColor(a, b, allowSameColorSiblingRoutes) {
+function compatibleJunctionColor(
+  a: JunctionFeature,
+  b: JunctionFeature,
+  allowSameColorSiblingRoutes: boolean,
+): boolean {
   if (!sameColor(a, b)) return false;
   if (shareActiveRoute(a, b)) return true;
   return allowSameColorSiblingRoutes;
 }
 
-function projectMeters(point, originLat) {
+function projectMeters(point: Position, originLat: number): Position {
   return [point[0] * metersPerDegLng(originLat), point[1] * M_PER_DEG_LAT];
 }
 
-function unprojectMeters(point, originLat) {
+function unprojectMeters(point: Position, originLat: number): Position {
   return [point[0] / metersPerDegLng(originLat), point[1] / M_PER_DEG_LAT];
 }
 
-function segmentIntersection(a, b, c, d) {
+function segmentIntersection(a: Position, b: Position, c: Position, d: Position): SegmentIntersection | null {
   const originLat = (a[1] + b[1] + c[1] + d[1]) / 4;
   const [x1, y1] = projectMeters(a, originLat);
   const [x2, y2] = projectMeters(b, originLat);
@@ -82,7 +135,7 @@ function segmentIntersection(a, b, c, d) {
   };
 }
 
-function cumulativeArc(coords) {
+function cumulativeArc(coords: Position[]): number[] {
   const arcs = [0];
   for (let i = 1; i < coords.length; i += 1) {
     arcs.push(arcs[i - 1] + haversineM(coords[i - 1], coords[i]));
@@ -90,7 +143,7 @@ function cumulativeArc(coords) {
   return arcs;
 }
 
-function cloneFeatureWithCoordinates(feature, coordinates) {
+function cloneFeatureWithCoordinates(feature: JunctionFeature, coordinates: Position[]): JunctionFeature {
   return {
     ...feature,
     geometry: {
@@ -106,10 +159,16 @@ function cloneFeatureWithCoordinates(feature, coordinates) {
   };
 }
 
-function normalizeEndpoint(coordinates, side, point, minSegmentM, segmentIndex = null) {
-  const next = coordinates.map((coordinate) => coordinate.slice());
+function normalizeEndpoint(
+  coordinates: Position[],
+  side: EndpointSide,
+  point: Position,
+  minSegmentM: number,
+  segmentIndex: number | null = null,
+): Position[] {
+  const next = coordinates.map((coordinate) => coordinate.slice() as Position);
   if (side === "start") {
-    if (Number.isInteger(segmentIndex) && segmentIndex > 0) {
+    if (segmentIndex !== null && segmentIndex > 0) {
       next.splice(0, segmentIndex, point);
     } else {
       next[0] = point;
@@ -118,7 +177,7 @@ function normalizeEndpoint(coordinates, side, point, minSegmentM, segmentIndex =
       next.splice(1, 1);
     }
   } else {
-    if (Number.isInteger(segmentIndex) && segmentIndex < next.length - 2) {
+    if (segmentIndex !== null && segmentIndex < next.length - 2) {
       next.splice(segmentIndex + 1, next.length - segmentIndex - 1, point);
     } else {
       next[next.length - 1] = point;
@@ -130,7 +189,13 @@ function normalizeEndpoint(coordinates, side, point, minSegmentM, segmentIndex =
   return next;
 }
 
-function candidateForSegment(coords, arcs, segmentIndex, intersection, maxEndpointOvershootM) {
+function candidateForSegment(
+  coords: Position[],
+  arcs: number[],
+  segmentIndex: number,
+  intersection: SegmentIntersection,
+  maxEndpointOvershootM: number,
+): EndpointCandidate | null {
   const segmentStartArc = arcs[segmentIndex];
   const segmentLengthM = haversineM(coords[segmentIndex], coords[segmentIndex + 1]);
   const intersectionArc = segmentStartArc + segmentLengthM * intersection.t;
@@ -165,7 +230,10 @@ function candidateForSegment(coords, arcs, segmentIndex, intersection, maxEndpoi
  * @param {number} [options.minSegmentM=0.5]
  * @returns {{ features: Array, repairCount: number, repairs: Array }}
  */
-export function repairSameRouteEndpointCrossings(features, options = {}) {
+export function repairSameRouteEndpointCrossings(
+  features: JunctionFeature[],
+  options: SameRouteJunctionOptions = {},
+): { features: JunctionFeature[]; repairCount: number; repairs: JunctionRepair[] } {
   const {
     maxEndpointOvershootM = 70,
     minSegmentM = 0.5,
@@ -182,7 +250,7 @@ export function repairSameRouteEndpointCrossings(features, options = {}) {
 
   const bestByFeatureSide = new Map();
 
-  function consider(index, candidate, otherIndex) {
+  function consider(index: number, candidate: EndpointCandidate | null, otherIndex: number): void {
     if (!candidate) return;
     const key = `${index}:${candidate.side}`;
     const existing = bestByFeatureSide.get(key);
@@ -234,14 +302,14 @@ export function repairSameRouteEndpointCrossings(features, options = {}) {
     return { features, repairCount: 0, repairs: [] };
   }
 
-  const repairsByIndex = new Map();
+  const repairsByIndex = new Map<number, IndexedEndpointCandidate[]>();
   for (const candidate of bestByFeatureSide.values()) {
     if (!repairsByIndex.has(candidate.index)) repairsByIndex.set(candidate.index, []);
-    repairsByIndex.get(candidate.index).push(candidate);
+    repairsByIndex.get(candidate.index)?.push(candidate);
   }
 
   const nextFeatures = features.slice();
-  const repairs = [];
+  const repairs: JunctionRepair[] = [];
   for (const [index, candidates] of repairsByIndex.entries()) {
     let coords = features[index].geometry.coordinates;
     for (const candidate of candidates.sort((a, b) => a.side.localeCompare(b.side))) {
