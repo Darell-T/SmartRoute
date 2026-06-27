@@ -12,15 +12,85 @@
 // line. Connectors inherit the route's color and carry lane_slot 0 /
 // lane_offset_baked so the runtime draws them with no extra offset.
 
+import type { Feature, LineStringGeometry, Position } from "./types.ts";
+
+type Vector = [number, number];
+type RouteId = string;
+
+type BridgeProperties = {
+  color?: unknown;
+  route_ids?: unknown;
+  color_route_ids?: unknown;
+  qa_orphan_severity?: string;
+  route_gap_bridge?: boolean;
+  route_gap_bridge_subset_connector?: boolean;
+  route_gap_integrated?: boolean;
+  route_gap_integrated_count?: number;
+  route_gap_bridge_curved?: boolean;
+  bridge_gap_m?: number;
+  length_m?: number;
+  [key: string]: unknown;
+};
+
+type BridgeFeature = Feature<LineStringGeometry, BridgeProperties>;
+
+type BridgeOptions = {
+  minGapM?: number;
+  maxGapM?: number;
+  sampleM?: number;
+  maxJoinTurnDeg?: number;
+  curveSampleM?: number;
+  allowSubsetRouteConnectors?: boolean;
+  subsetConnectorMaxGapM?: number;
+  subsetConnectorEndpointSnapM?: number;
+};
+
+type ProximityCandidate = {
+  d: number;
+  point: Position;
+  index: number;
+};
+
+type ProjectedCandidate = ProximityCandidate & {
+  t: number;
+  coords: Position[];
+};
+
+type RepairTarget = ProximityCandidate & {
+  t?: number;
+  coords?: Position[];
+  fj: BridgeFeature;
+  samples: Position[];
+  sharedRoutes: RouteId[];
+  routeSubsetConnector: boolean;
+};
+
+type RepairCandidate = {
+  sourceIndex: number;
+  endpointIndex: number;
+  endpoint: Position;
+  targetPoint: Position;
+  routeKey: string;
+  midpoint: Position;
+  distanceM: number;
+  bridgeCoordinates: Position[];
+  bridgeLengthM: number;
+  shouldCurve: boolean;
+  sharedRoutes: RouteId[];
+  integrationMode: "append" | "integrate";
+  sourceIsOrphan: boolean;
+  debugFeature: BridgeFeature;
+};
+
 const EARTH_RADIUS_M = 6371000;
 const M_PER_DEG_LAT = 110574;
 
-function metersPerDegLng(lat) {
+function metersPerDegLng(lat: number): number {
   return 111320 * Math.cos((lat * Math.PI) / 180);
 }
 
-function haversineM([lon1, lat1], [lon2, lat2]) {
-  const toRad = (d) => (d * Math.PI) / 180;
+function haversineM([lon1, lat1]: Position, [lon2, lat2]: Position): number {
+  const toRad = (d: number): number => (d * Math.PI) / 180;
   const dLat = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
   const a =
@@ -29,48 +99,49 @@ function haversineM([lon1, lat1], [lon2, lat2]) {
   return 2 * EARTH_RADIUS_M * Math.asin(Math.sqrt(a));
 }
 
-function shareRoute(aRouteIds, bRouteIds) {
+function shareRoute(aRouteIds: RouteId[], bRouteIds: RouteId[]): boolean {
   const set = new Set(aRouteIds);
   return bRouteIds.some((r) => set.has(r));
 }
 
-function sharedRouteIds(aRouteIds, bRouteIds) {
+function sharedRouteIds(aRouteIds: RouteId[], bRouteIds: RouteId[]): RouteId[] {
   const bSet = new Set(bRouteIds);
   return [...new Set(aRouteIds.filter((routeId) => bSet.has(routeId)))];
 }
 
-function routeSetKey(routeIds) {
+function routeSetKey(routeIds: RouteId[]): string {
   return [...new Set(routeIds)].sort().join("|");
 }
 
-function sameRouteSet(left, right) {
+function sameRouteSet(left: RouteId[], right: RouteId[]): boolean {
   return routeSetKey(left) === routeSetKey(right);
 }
 
-function sameColor(left, right) {
+function sameColor(left: BridgeFeature, right: BridgeFeature): boolean {
   const leftColor = left.properties?.color;
   const rightColor = right.properties?.color;
   return Boolean(leftColor && rightColor && String(leftColor).toUpperCase() === String(rightColor).toUpperCase());
 }
 
-function midpoint(a, b) {
+function midpoint(a: Position, b: Position): Position {
   return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
 }
 
-function activeRouteIdsForFeature(feature) {
+function activeRouteIdsForFeature(feature: BridgeFeature): RouteId[] {
   const properties = feature.properties ?? {};
   const colorRouteIds = properties.color_route_ids;
-  if (Array.isArray(colorRouteIds)) return colorRouteIds;
+  if (Array.isArray(colorRouteIds)) return colorRouteIds as RouteId[];
   if (colorRouteIds && typeof colorRouteIds === "object") {
+    const colorRouteMap = colorRouteIds as Record<string, unknown>;
     const color = properties.color;
-    if (color && Array.isArray(colorRouteIds[color])) return colorRouteIds[color];
-    return [...new Set(Object.values(colorRouteIds).flat().filter(Boolean))];
+    if (color && Array.isArray(colorRouteMap[String(color)])) return colorRouteMap[String(color)] as RouteId[];
+    return [...new Set(Object.values(colorRouteMap).flat().filter(Boolean))] as RouteId[];
   }
-  return Array.isArray(properties.route_ids) ? properties.route_ids : [];
+  return Array.isArray(properties.route_ids) ? properties.route_ids as RouteId[] : [];
 }
 
 // Downsample a polyline to roughly one point per stepM for proximity tests.
-function sampleVertices(coords, stepM) {
+function sampleVertices(coords: Position[], stepM: number): Position[] {
   const out = [coords[0]];
   let acc = 0;
   for (let i = 1; i < coords.length; i += 1) {
@@ -83,8 +154,8 @@ function sampleVertices(coords, stepM) {
   return out;
 }
 
-function nearestVertex(point, coords) {
-  let best = null;
+function nearestVertex(point: Position, coords: Position[]): ProximityCandidate | null {
+  let best: ProximityCandidate | null = null;
   for (let index = 0; index < coords.length; index += 1) {
     const c = coords[index];
     const d = haversineM(point, c);
@@ -93,11 +164,11 @@ function nearestVertex(point, coords) {
   return best;
 }
 
-function nearestPointOnPolyline(point, coords) {
+function nearestPointOnPolyline(point: Position, coords: Position[]): ProjectedCandidate | null {
   const lat = point[1];
   const px = point[0] * metersPerDegLng(lat);
   const py = point[1] * M_PER_DEG_LAT;
-  let best = null;
+  let best: ProjectedCandidate | null = null;
   for (let index = 0; index < coords.length - 1; index += 1) {
     const a = coords[index];
     const b = coords[index + 1];
@@ -109,7 +180,7 @@ function nearestPointOnPolyline(point, coords) {
     const dy = by - ay;
     const len2 = dx * dx + dy * dy || 1e-12;
     const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len2));
-    const candidate = [
+    const candidate: Position = [
       a[0] + (b[0] - a[0]) * t,
       a[1] + (b[1] - a[1]) * t,
     ];
@@ -121,23 +192,23 @@ function nearestPointOnPolyline(point, coords) {
   return best;
 }
 
-function vectorMeters(from, to) {
+function vectorMeters(from: Position, to: Position): Vector {
   const lat = (from[1] + to[1]) / 2;
   return [(to[0] - from[0]) * metersPerDegLng(lat), (to[1] - from[1]) * M_PER_DEG_LAT];
 }
 
-function unitVector(from, to) {
+function unitVector(from: Position, to: Position): Vector {
   const v = vectorMeters(from, to);
   const len = Math.hypot(v[0], v[1]);
   return len < 1e-9 ? [0, 0] : [v[0] / len, v[1] / len];
 }
 
-function normalizeVector(v) {
+function normalizeVector(v: Vector): Vector {
   const len = Math.hypot(v[0], v[1]);
   return len < 1e-9 ? [0, 0] : [v[0] / len, v[1] / len];
 }
 
-function angleBetweenDeg(a, b) {
+function angleBetweenDeg(a: Vector, b: Vector): number {
   const aLen = Math.hypot(a[0], a[1]);
   const bLen = Math.hypot(b[0], b[1]);
   if (aLen === 0 || bLen === 0) return 180;
@@ -145,7 +216,7 @@ function angleBetweenDeg(a, b) {
   return (Math.acos(Math.max(-1, Math.min(1, dot))) * 180) / Math.PI;
 }
 
-function endpointContinuationVector(coords, endpointIndex) {
+function endpointContinuationVector(coords: Position[], endpointIndex: number): Vector {
   if (coords.length < 2) return [0, 0];
   if (endpointIndex === 0) {
     return vectorMeters(coords[1], coords[0]);
@@ -153,18 +224,18 @@ function endpointContinuationVector(coords, endpointIndex) {
   return vectorMeters(coords[coords.length - 2], coords[coords.length - 1]);
 }
 
-function vertexContinuationVectors(coords, index) {
+function vertexContinuationVectors(coords: Position[], index: number): Vector[] {
   if (coords.length < 2) return [[0, 0]];
   if (index <= 0) return [vectorMeters(coords[1], coords[0])];
   if (index >= coords.length - 1) return [vectorMeters(coords[coords.length - 2], coords[coords.length - 1])];
   return [vectorMeters(coords[index - 1], coords[index]), vectorMeters(coords[index + 1], coords[index])];
 }
 
-function minJoinAngleDeg(continuationVectors, connectorVector) {
+function minJoinAngleDeg(continuationVectors: Vector[], connectorVector: Vector): number {
   return Math.min(...continuationVectors.map((continuation) => angleBetweenDeg(continuation, connectorVector)));
 }
 
-function bestContinuationVector(continuationVectors, referenceVector) {
+function bestContinuationVector(continuationVectors: Vector[], referenceVector: Vector): Vector {
   let best = continuationVectors[0] ?? [0, 0];
   let bestAngle = Infinity;
   for (const continuation of continuationVectors) {
@@ -177,7 +248,7 @@ function bestContinuationVector(continuationVectors, referenceVector) {
   return best;
 }
 
-function projectedContinuationVectors(candidate) {
+function projectedContinuationVectors(candidate: ProjectedCandidate): Vector[] {
   const coords = candidate.coords;
   const index = candidate.index;
   if (!coords || coords.length < 2) return [[0, 0]];
@@ -193,7 +264,7 @@ function projectedContinuationVectors(candidate) {
   ];
 }
 
-function projectedPointIsNearEndpoint(candidate, coords, endpointSnapM) {
+function projectedPointIsNearEndpoint(candidate: ProximityCandidate | null, coords: Position[], endpointSnapM: number): boolean {
   if (!candidate || !Array.isArray(coords) || coords.length < 2) return false;
   return (
     haversineM(candidate.point, coords[0]) <= endpointSnapM ||
@@ -201,15 +272,15 @@ function projectedPointIsNearEndpoint(candidate, coords, endpointSnapM) {
   );
 }
 
-function projectAtLat(point, originLat) {
+function projectAtLat(point: Position, originLat: number): Vector {
   return [point[0] * metersPerDegLng(originLat), point[1] * M_PER_DEG_LAT];
 }
 
-function unprojectAtLat(point, originLat) {
+function unprojectAtLat(point: Vector, originLat: number): Position {
   return [point[0] / metersPerDegLng(originLat), point[1] / M_PER_DEG_LAT];
 }
 
-function hermiteConnector(start, end, startTangent, endTangent, sampleM = 5) {
+function hermiteConnector(start: Position, end: Position, startTangent: Vector, endTangent: Vector, sampleM = 5): Position[] {
   const originLat = (start[1] + end[1]) / 2;
   const p0 = projectAtLat(start, originLat);
   const p1 = projectAtLat(end, originLat);
@@ -218,7 +289,7 @@ function hermiteConnector(start, end, startTangent, endTangent, sampleM = 5) {
   const m0 = [startTangent[0] * handleM, startTangent[1] * handleM];
   const m1 = [endTangent[0] * handleM, endTangent[1] * handleM];
   const steps = Math.max(4, Math.ceil(distanceM / sampleM));
-  const out = [];
+  const out: Position[] = [];
   for (let i = 0; i <= steps; i += 1) {
     const t = i / steps;
     const t2 = t * t;
@@ -235,7 +306,7 @@ function hermiteConnector(start, end, startTangent, endTangent, sampleM = 5) {
   return out;
 }
 
-function polylineLengthM(coords) {
+function polylineLengthM(coords: Position[]): number {
   let total = 0;
   for (let i = 1; i < coords.length; i += 1) total += haversineM(coords[i - 1], coords[i]);
   return total;
@@ -255,7 +326,7 @@ function polylineLengthM(coords) {
  * @returns {{ features: Array, bridgeCount: number, bridges: Array }}
  *          features = original features + appended connectors
  */
-export function bridgeRouteGaps(features, options = {}) {
+export function bridgeRouteGaps(features: BridgeFeature[], options: BridgeOptions = {}) {
   const {
     minGapM = 6,
     maxGapM = 28,
@@ -273,19 +344,20 @@ export function bridgeRouteGaps(features, options = {}) {
   const samples = lines.map((f) => sampleVertices(f.geometry.coordinates, sampleM));
   const routeIdsOf = activeRouteIdsForFeature;
 
-  const repairCandidates = [];
+  const repairCandidates: RepairCandidate[] = [];
 
   for (let i = 0; i < lines.length; i += 1) {
     const fi = lines[i];
     const ci = fi.geometry.coordinates;
     const riRoutes = routeIdsOf(fi);
-    for (const [endpointIndex, endpoint] of [
+    const endpoints: Array<[number, Position]> = [
       [0, ci[0]],
       [ci.length - 1, ci[ci.length - 1]],
-    ]) {
+    ];
+    for (const [endpointIndex, endpoint] of endpoints) {
       // already connected to a same-route piece? then it is not a dangling seam.
       let connected = false;
-      let candidate = null; // {d, point, fj}
+      let candidate: RepairTarget | null = null; // {d, point, fj}
       for (let j = 0; j < lines.length; j += 1) {
         if (j === i) continue;
         if (lines[j].properties?.qa_orphan_severity === "error") continue;
@@ -314,8 +386,8 @@ export function bridgeRouteGaps(features, options = {}) {
       if (connected || !candidate) continue;
       const sourceContinuation = endpointContinuationVector(ci, endpointIndex);
       const connectorVector = vectorMeters(endpoint, candidate.point);
-      const candidateVectors = candidate.coords
-        ? projectedContinuationVectors(candidate)
+      const candidateVectors = candidate.coords && candidate.t != null
+        ? projectedContinuationVectors(candidate as ProjectedCandidate)
         : vertexContinuationVectors(candidate.samples, candidate.index);
       const sourceAngle = angleBetweenDeg(sourceContinuation, connectorVector);
       const candidateAngle = minJoinAngleDeg(candidateVectors, connectorVector);
@@ -375,7 +447,7 @@ export function bridgeRouteGaps(features, options = {}) {
     return a.distanceM - b.distanceM;
   });
 
-  const acceptedRepairs = [];
+  const acceptedRepairs: RepairCandidate[] = [];
   const usedEndpoints = new Set();
 
   for (const candidate of repairCandidates) {
@@ -392,7 +464,7 @@ export function bridgeRouteGaps(features, options = {}) {
     acceptedRepairs.push(candidate);
   }
 
-  const repairsByLine = new Map();
+  const repairsByLine = new Map<number, { start?: RepairCandidate; end?: RepairCandidate }>();
   for (const repair of acceptedRepairs) {
     if (repair.integrationMode === "append") continue;
     const current = repairsByLine.get(repair.sourceIndex) ?? {};
@@ -407,11 +479,11 @@ export function bridgeRouteGaps(features, options = {}) {
   const lineIndexByFeature = new Map(lines.map((feature, index) => [feature, index]));
   const repairedFeatures = features.map((feature) => {
     const lineIndex = lineIndexByFeature.get(feature);
-    const repairs = repairsByLine.get(lineIndex);
+    const repairs = lineIndex == null ? undefined : repairsByLine.get(lineIndex);
     if (!repairs) return feature;
 
     let coordinates = feature.geometry.coordinates;
-    const repairList = [repairs.start, repairs.end].filter(Boolean);
+    const repairList = [repairs.start, repairs.end].filter((repair): repair is RepairCandidate => Boolean(repair));
 
     if (repairs.start) {
       coordinates = [
@@ -443,7 +515,7 @@ export function bridgeRouteGaps(features, options = {}) {
     };
   });
 
-  const bridges = acceptedRepairs.map((repair, index) => ({
+  const bridges: BridgeFeature[] = acceptedRepairs.map((repair, index) => ({
     ...repair.debugFeature,
     properties: {
       ...repair.debugFeature.properties,
