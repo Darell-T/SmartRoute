@@ -4,23 +4,24 @@ import {
   buildMottHavenFiveSchematicLens,
   buildMottHavenSixSchematicMerge,
   distanceMeters,
-} from "./mott-haven-schematic.mjs";
+} from "./mott-haven-schematic.ts";
+import type { Position } from "./types.ts";
 
 const M_PER_DEG_LAT = 110574;
-const ORIGIN = [-73.928, 40.81725];
+const ORIGIN: Position = [-73.928, 40.81725];
 
-function metersPerDegLng(lat) {
+function metersPerDegLng(lat: number): number {
   return 111320 * Math.cos((lat * Math.PI) / 180);
 }
 
-function p(eastM, northM) {
+function p(eastM: number, northM: number): Position {
   return [
     ORIGIN[0] + eastM / metersPerDegLng(ORIGIN[1]),
     ORIGIN[1] + northM / M_PER_DEG_LAT,
   ];
 }
 
-function local(coord) {
+function local(coord: Position): Position {
   return [
     (coord[0] - ORIGIN[0]) * metersPerDegLng(ORIGIN[1]),
     (coord[1] - ORIGIN[1]) * M_PER_DEG_LAT,
@@ -53,10 +54,10 @@ test("Mott Haven schematic lens closes at the 4/5 trunk, bows west, and rejoins 
 
   assert.equal(result.diagnostics.ok, true);
   assert.ok(result.coordinates.length > branchCoords.length * 4);
-  assert.ok(result.diagnostics.topApproachLatSpreadM < 8);
-  assert.ok(result.diagnostics.maxTrunkDistanceM > 145);
-  assert.ok(result.diagnostics.mergeDistanceM < 1);
-  assert.ok(result.diagnostics.maxTurnDeg < 55);
+  assert.ok(result.diagnostics.topApproachLatSpreadM! < 8);
+  assert.ok(result.diagnostics.maxTrunkDistanceM! > 145);
+  assert.ok(result.diagnostics.mergeDistanceM! < 1);
+  assert.ok(result.diagnostics.maxTurnDeg! < 55);
 
   const topHit = Math.min(...result.coordinates.map((coord) => distanceMeters(coord, trunkCoords[0])));
   assert.ok(topHit < 1, `expected the 5 to meet the 4/5 trunk at the top split, got ${topHit.toFixed(1)}m`);
@@ -99,8 +100,8 @@ test("Mott Haven schematic lens preserves a street-aligned east approach before 
 
   assert.equal(result.diagnostics.ok, true);
   assert.ok(
-    result.diagnostics.topApproachLatSpreadM < 5,
-    `expected flat E 149 St entry, got ${result.diagnostics.topApproachLatSpreadM.toFixed(1)}m spread`,
+    result.diagnostics.topApproachLatSpreadM! < 5,
+    `expected flat E 149 St entry, got ${result.diagnostics.topApproachLatSpreadM!.toFixed(1)}m spread`,
   );
 
   const topRun = result.coordinates.filter((coord) => {
@@ -143,13 +144,13 @@ test("Mott Haven schematic lens follows the 2 line until the 4/5 trunk crossing"
   });
 
   assert.equal(result.diagnostics.ok, true);
-  const topLocal = local(result.diagnostics.topPoint);
+  const topLocal = local(result.diagnostics.topPoint!);
   assert.ok(
     Math.abs(topLocal[1] - 100) < 15,
     `expected the 5 peel to start at the 2/4 crossing latitude, got local y=${topLocal[1].toFixed(1)}m`,
   );
 
-  const entryLocal = local(result.diagnostics.entryPoint);
+  const entryLocal = local(result.diagnostics.entryPoint!);
   const slope = (76 - 110) / 440;
   const expectedEntryY = 110 + slope * entryLocal[0] - 10;
   assert.ok(
@@ -157,9 +158,11 @@ test("Mott Haven schematic lens follows the 2 line until the 4/5 trunk crossing"
     `expected the 5 entry to track the red 2 corridor, got y=${entryLocal[1].toFixed(1)} expected ${expectedEntryY.toFixed(1)}`,
   );
 
+  const parallelReferenceDistanceM = result.diagnostics.parallelReferenceDistanceM;
+  assert.ok(parallelReferenceDistanceM != null);
   assert.ok(
-    result.diagnostics.parallelReferenceDistanceM < 15,
-    `expected the crossing to be found on the 2 reference, got ${result.diagnostics.parallelReferenceDistanceM?.toFixed(1)}m`,
+    parallelReferenceDistanceM < 15,
+    `expected the crossing to be found on the 2 reference, got ${parallelReferenceDistanceM.toFixed(1)}m`,
   );
 });
 
@@ -200,8 +203,8 @@ test("Mott Haven schematic turn diagnostics ignore preserved upstream branch geo
 
   assert.equal(result.diagnostics.ok, true);
   assert.ok(
-    result.diagnostics.maxTurnDeg < 65,
-    `expected the junction diagnostic to ignore preserved upstream branch kinks, got ${result.diagnostics.maxTurnDeg.toFixed(1)}deg`,
+    result.diagnostics.maxTurnDeg! < 65,
+    `expected the junction diagnostic to ignore preserved upstream branch kinks, got ${result.diagnostics.maxTurnDeg!.toFixed(1)}deg`,
   );
 });
 
@@ -236,8 +239,8 @@ test("Mott Haven 6 schematic merge removes the lower teardrop and ends on the tr
   assert.ok(result.coordinates.length > 12);
   assert.ok(result.sharedMainlineCoords.length >= 2);
   assert.ok(
-    result.diagnostics.mergeDistanceM < 1,
-    `expected the 6 merge to terminate on the trunk, got ${result.diagnostics.mergeDistanceM.toFixed(1)}m`,
+    result.diagnostics.mergeDistanceM! < 1,
+    `expected the 6 merge to terminate on the trunk, got ${result.diagnostics.mergeDistanceM!.toFixed(1)}m`,
   );
 
   const localXs = result.coordinates.map((coord) => local(coord)[0]);
@@ -246,8 +249,10 @@ test("Mott Haven 6 schematic merge removes the lower teardrop and ends on the tr
     `expected the old lower teardrop west endpoint to be removed, got min x=${Math.min(...localXs).toFixed(1)}m`,
   );
 
+  const sharedStart = result.sharedMainlineCoords[0];
+  assert.ok(sharedStart);
   assert.ok(
-    distanceMeters(result.sharedMainlineCoords[0], result.diagnostics.mergePoint) < 1,
+    distanceMeters(sharedStart, result.diagnostics.mergePoint!) < 1,
     "shared 4/6 mainline should begin exactly where the 6 branch merges",
   );
 });
