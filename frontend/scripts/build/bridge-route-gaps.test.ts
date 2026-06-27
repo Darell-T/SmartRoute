@@ -1,12 +1,28 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { bridgeRouteGaps } from "./bridge-route-gaps.mjs";
+import { bridgeRouteGaps } from "./bridge-route-gaps.ts";
+import type { Feature, LineStringGeometry, Position } from "./types.ts";
+
+type TestProperties = {
+  route_ids: string[];
+  color: string;
+  color_route_ids?: string[] | Record<string, string[]>;
+  qa_orphan_severity?: string;
+  route_gap_bridge?: boolean;
+  route_gap_bridge_subset_connector?: boolean;
+  route_gap_integrated?: boolean;
+  route_gap_bridge_curved?: boolean;
+  length_m?: number;
+  [key: string]: unknown;
+};
+
+type TestFeature = Feature<LineStringGeometry, TestProperties>;
 
 const DEG_PER_M_LAT = 1 / 111320;
 const DEG_PER_M_LON = 1 / (111320 * Math.cos((40.68 * Math.PI) / 180));
-const P = (lon0, lat0, dxM, dyM) => [lon0 + dxM * DEG_PER_M_LON, lat0 + dyM * DEG_PER_M_LAT];
+const P = (lon0: number, lat0: number, dxM: number, dyM: number): Position => [lon0 + dxM * DEG_PER_M_LON, lat0 + dyM * DEG_PER_M_LAT];
 
-function line(routeIds, coords, extra = {}) {
+function line(routeIds: string[], coords: Position[], extra: Partial<TestProperties> = {}): TestFeature {
   return {
     type: "Feature",
     geometry: { type: "LineString", coordinates: coords },
@@ -14,7 +30,7 @@ function line(routeIds, coords, extra = {}) {
   };
 }
 
-const O = [-73.99, 40.68];
+const O: Position = [-73.99, 40.68];
 
 test("extends a dangling endpoint across a small same-route gap without adding a separate rendered connector", () => {
   const a = line(["G"], [P(...O, 0, 0), P(...O, 0, 100)]);
@@ -25,7 +41,7 @@ test("extends a dangling endpoint across a small same-route gap without adding a
   assert.equal(features.filter((f) => f.properties.route_gap_bridge).length, 0);
   assert.deepEqual(features[0].properties.route_ids, ["G"]);
   assert.ok(features[0].properties.route_gap_integrated);
-  assert.deepEqual(features[0].geometry.coordinates.at(-1), b.geometry.coordinates[0]);
+  assert.deepEqual(features[0].geometry.coordinates[features[0].geometry.coordinates.length - 1], b.geometry.coordinates[0]);
 });
 
 test("does NOT bridge a gap larger than maxGapM (avoids chord-cutting real gaps)", () => {
@@ -126,7 +142,7 @@ test("integrated repair updates length metadata to the repaired geometry", () =>
   const a = line(["G"], [P(...O, 0, 0), P(...O, 0, 100)], { length_m: 1000 });
   const b = line(["G"], [P(...O, 0, 116), P(...O, 0, 220)], { length_m: 1000 });
   const { features } = bridgeRouteGaps([a, b], { minGapM: 6, maxGapM: 28 });
-  assert.ok(features[0].properties.length_m > 100 && features[0].properties.length_m < 130);
+  assert.ok(features[0].properties.length_m! > 100 && features[0].properties.length_m! < 130);
 });
 
 test("adds a route-subset connector for same-color broad branch splits without extending either broad route set", () => {
@@ -159,8 +175,8 @@ test("adds a route-subset connector for same-color broad branch splits without e
   assert.deepEqual(connector.properties.route_ids, ["N"]);
   assert.deepEqual(connector.properties.color_route_ids, ["N"]);
   assert.equal(connector.properties.color, "#FCCC0A");
-  assert.deepEqual(connector.geometry.coordinates[0], astoriaBranch.geometry.coordinates.at(-1));
-  assert.deepEqual(connector.geometry.coordinates.at(-1), queensSharedRun.geometry.coordinates[0]);
+  assert.deepEqual(connector.geometry.coordinates[0], astoriaBranch.geometry.coordinates[astoriaBranch.geometry.coordinates.length - 1]);
+  assert.deepEqual(connector.geometry.coordinates[connector.geometry.coordinates.length - 1], queensSharedRun.geometry.coordinates[0]);
 });
 
 test("does not add a route-subset connector to the middle of another broad route feature", () => {

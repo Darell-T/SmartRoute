@@ -74,6 +74,7 @@ Already migrated transit build helpers include:
 - `nostrand-eastern-schematic`
 - `culver-fg-prospect-smoothing`
 - `mott-haven-schematic`
+- `bridge-route-gaps`
 
 Pre-existing TypeScript helpers include station-anchor modules, spine helpers,
 lane ordering, artifact fingerprinting, smooth polyline utilities, and duplicate
@@ -132,14 +133,14 @@ Categories:
 | `frontend/scripts/build/nostrand-eastern-schematic.ts` | 18.0 KB / 547 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/culver-fg-prospect-smoothing.ts` | 18.5 KB / 544 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/mott-haven-schematic.ts` | 18.6 KB / 525 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
-| `frontend/scripts/build/bridge-route-gaps.mjs` | 16.8 KB / 459 lines | visual orchestrator, colocated test | yes | no | Medium-risk helper | migrate later |
+| `frontend/scripts/build/bridge-route-gaps.ts` | 19.8 KB / 530 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/collapse-same-color.mjs` | 17.9 KB / 547 lines | visual orchestrator, colocated test | yes | no | Medium-risk helper | migrate later |
 | `frontend/scripts/build/physical-bundle-materialization.mjs` | 18.1 KB / 489 lines | visual orchestrator, colocated test | yes | no | High-risk / migrate later | wait for physical-bundle plan |
 | `frontend/scripts/build/st-nicholas-blue-straightening.mjs` | 18.4 KB / 565 lines | visual orchestrator, colocated test | yes | no | Medium-risk helper | migrate later |
 | `frontend/scripts/build/brighton-bq-church-spacing.mjs` | 22.3 KB / 607 lines | visual orchestrator, colocated test | yes | no | Medium-risk helper | migrate later |
 | `frontend/scripts/build/same-color-merge.mjs` | 22.4 KB / 609 lines | visual orchestrator, colocated test | yes | no | High-risk / migrate later | migrate after smaller corridor helpers |
 | `frontend/scripts/build/physical-bundle.mjs` | 24.3 KB / 679 lines | visual orchestrator, `cross-color-spread.mjs`, `same-color-merge.mjs`, colocated test | yes | no | High-risk / migrate later | wait for physical-bundle plan |
-| `frontend/scripts/build/bridge-route-gaps.test.mjs` | 8.3 KB / 188 lines | none | n/a | no | QA/check script | migrate with source |
+| `frontend/scripts/build/bridge-route-gaps.test.ts` | 9.1 KB / 203 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/build/brighton-bq-church-spacing.test.mjs` | 3.8 KB / 112 lines | none | n/a | no | QA/check script | migrate with source |
 | `frontend/scripts/build/cartographic-junction-overrides.test.ts` | 5.3 KB / 154 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/build/collapse-same-color.test.mjs` | 5.8 KB / 114 lines | none | n/a | no | QA/check script | migrate with source |
@@ -188,15 +189,14 @@ Categories:
 
 Next batch:
 
-- `bridge-route-gaps`
+- `collapse-same-color`
 
 Following batch:
 
-- `collapse-same-color`
+- `st-nicholas-blue-straightening`
 
 Later medium-risk batch:
 
-- `st-nicholas-blue-straightening`
 - `brighton-bq-church-spacing`
 - `parallel-offset-cross-color` only after cross-color offset review
 
