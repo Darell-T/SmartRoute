@@ -54,7 +54,7 @@ import { taperBakedJointSteps } from "./build/joint-offset-taper.ts";
 import { colocateSameColorStretches } from "./build/colocate-same-color.ts";
 import { repairSameRouteEndpointCrossings } from "./build/same-route-junction-fabric.ts";
 import { simplifyTightCurves } from "./build/simplify-tight-curves.ts";
-import { snapDanglingSameColorEndpoints } from "./build/snap-dangling-same-color.mjs";
+import { snapDanglingSameColorEndpoints } from "./build/snap-dangling-same-color.ts";
 import { snapOffRevenueToShape, maxOffShapeM } from "./build/snap-off-revenue-to-shape.ts";
 import { replaceEndpointHairpin } from "./build/schematic-hairpin-arc.mjs";
 import { hermiteBetween } from "./build/offset-bow.ts";
@@ -77,7 +77,7 @@ import {
   OPEN_DATA_SOURCE_NAME,
 } from "./build/opendata-subway-lines.mjs";
 import { MTA_ROUTE_COLORS } from "./build/mta-colors.ts";
-import { trimTerminalOverhang } from "./build/trim-terminal-overhang.mjs";
+import { trimTerminalOverhang } from "./build/trim-terminal-overhang.ts";
 import { addSixtyThirdStreetF } from "./build/sixty-third-street-f.ts";
 import { cleanStatenIslandLine } from "./build/staten-island-cleanup.ts";
 import { connectRockawayWye } from "./build/rockaway-wye.ts";
