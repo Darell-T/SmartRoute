@@ -82,6 +82,7 @@ Already migrated transit build helpers include:
 - `cross-color-spread`
 - `physical-bundle-materialization`
 - `physical-bundle`
+- `same-color-merge`
 
 Pre-existing TypeScript helpers include station-anchor modules, spine helpers,
 lane ordering, artifact fingerprinting, smooth polyline utilities, and duplicate
@@ -145,8 +146,8 @@ Categories:
 | `frontend/scripts/build/physical-bundle-materialization.ts` | 21.8 KB / 550 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/st-nicholas-blue-straightening.ts` | 21.1 KB / 678 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/brighton-bq-church-spacing.ts` | 25.2 KB / 705 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
-| `frontend/scripts/build/same-color-merge.mjs` | 22.4 KB / 609 lines | visual orchestrator, colocated test | yes | no | High-risk / migrate later | migrate after smaller corridor helpers |
-| `frontend/scripts/build/physical-bundle.ts` | 26.8 KB / 713 lines | visual orchestrator, `cross-color-spread.ts`, `same-color-merge.mjs`, colocated test | yes | no | Migrated TypeScript helper | done |
+| `frontend/scripts/build/same-color-merge.ts` | 25.8 KB / 737 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
+| `frontend/scripts/build/physical-bundle.ts` | 26.8 KB / 713 lines | visual orchestrator, `cross-color-spread.ts`, `same-color-merge.ts`, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/bridge-route-gaps.test.ts` | 9.1 KB / 203 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/build/brighton-bq-church-spacing.test.ts` | 5.4 KB / 160 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/build/cartographic-junction-overrides.test.ts` | 5.3 KB / 154 lines | none | n/a | no | Migrated test | done |
@@ -160,7 +161,7 @@ Categories:
 | `frontend/scripts/build/parallel-offset-cross-color.test.ts` | 8.5 KB / 183 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/build/physical-bundle-materialization.test.ts` | 8.9 KB / 238 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/build/physical-bundle.test.ts` | 19.2 KB / 372 lines | none | n/a | no | Migrated test | done |
-| `frontend/scripts/build/same-color-merge.test.mjs` | 23.5 KB / 529 lines | none | n/a | no | QA/check script | migrate with source |
+| `frontend/scripts/build/same-color-merge.test.ts` | 23.5 KB / 539 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/build/same-route-junction-fabric.test.ts` | 4.3 KB / 122 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/build/schematic-hairpin-arc.test.ts` | 3.1 KB / 95 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/build/snap-dangling-same-color.test.ts` | 5.8 KB / 103 lines | none | n/a | no | Migrated test | done |
@@ -196,15 +197,14 @@ Categories:
 
 Next dedicated review batch:
 
-- `same-color-merge` now that the `physical-bundle.ts` boundary is settled; review its colocated test first
+- `regenerate-canonical-from-gtfs` only with a canonical-artifact gate (it writes generated canonical geometry)
 
 Following dedicated review batch:
 
-- `regenerate-canonical-from-gtfs` only with a canonical-artifact gate (it writes generated canonical geometry)
+- `build-subway-visual-network.mjs` only after a dedicated orchestrator migration plan
 
 Avoid for now:
 
-- `same-color-merge.mjs`
 - `build-subway-visual-network.mjs`
 
 Needs characterization before conversion:
