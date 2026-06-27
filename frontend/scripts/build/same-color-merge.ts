@@ -1,4 +1,4 @@
-// frontend/scripts/build/same-color-merge.mjs
+// frontend/scripts/build/same-color-merge.ts
 // Phase 3d: color-scoped merge pass that unifies same-color OpenData polyline
 // overlaps into a single trunk + clipped branches.
 //
@@ -10,11 +10,123 @@ import {
   resamplePolyline,
   pointToPolylineMinDistM,
 } from "./physical-bundle.ts";
+import type { Spine } from "./physical-bundle.ts";
+import type { LineStringGeometry, Position, RouteId } from "./types.ts";
 
 const EARTH_RADIUS_M = 6371000;
 
-function haversineM([lon1, lat1], [lon2, lat2]) {
-  const toRad = (d) => (d * Math.PI) / 180;
+export type SameColorCorridor = {
+  corridor_id: string;
+  color?: string;
+  route_ids?: RouteId[];
+  geometry: LineStringGeometry;
+  length_m?: number | null;
+  [key: string]: unknown;
+};
+
+export type SameColorOverlapOptions = {
+  sharedFractionMin?: number;
+  sharedLenMinM?: number;
+  avgDistMaxM?: number;
+  tangentMaxDeg?: number;
+  resampleM?: number;
+};
+
+export type SameColorMergeGroup = {
+  color: string;
+  member_corridor_ids: string[];
+  trunk_corridor_id: string;
+  member_route_ids_union: RouteId[];
+};
+
+export type SameColorReject = {
+  color: string;
+  corridor_id_a: string;
+  corridor_id_b: string;
+  avgDistM: number;
+  sharedFractionShorter: number;
+  sharedLenM: number;
+  tangentDeltaAvgDeg: number;
+  reject_reason: string;
+};
+
+export type SameColorOverlapResult = {
+  groups: SameColorMergeGroup[];
+  rejects: SameColorReject[];
+};
+
+export type SameColorMergeOptions = {
+  minBranchLenM?: number;
+  resampleM?: number;
+  avgDistMaxM?: number;
+  routeCoverageMap?: Map<RouteId, number> | null;
+  connectorMaxM?: number;
+  maxTwoPointBranchLenM?: number;
+  longStraightBranchTangentMaxDeg?: number;
+};
+
+export type SameColorConnector = {
+  endpoint_kind: "start" | "end";
+  branch_coordinate: Position;
+  trunk_coordinate: Position;
+  distance_m: number;
+  coordinates: [Position, Position];
+  route_ids: RouteId[];
+  color: string;
+};
+
+export type SameColorTrunkUpdate = {
+  corridor_id: string;
+  route_ids: RouteId[];
+  color_route_ids: Record<string, RouteId[]>;
+  merged_from_corridor_ids: string[];
+};
+
+export type SameColorBranchUpdate =
+  | {
+      corridor_id: string;
+      drop: true;
+      reason: string;
+      newCoords?: never;
+      connector?: never;
+    }
+  | {
+      corridor_id: string;
+      newCoords: Position[];
+      connector: SameColorConnector | null;
+      drop?: undefined;
+      reason?: undefined;
+    };
+
+export type SameColorMergeSkippedResult = {
+  skipped: { reason: string };
+  trunkUpdates?: never;
+  branchUpdates?: never;
+};
+
+export type SameColorMergeAppliedResult = {
+  trunkUpdates: SameColorTrunkUpdate;
+  branchUpdates: SameColorBranchUpdate[];
+  skipped?: undefined;
+};
+
+export type SameColorMergeResult = SameColorMergeSkippedResult | SameColorMergeAppliedResult;
+
+type Vec2 = [number, number];
+
+type SegmentProjection = {
+  coordinate: Position;
+  distance_m: number;
+  t: number;
+};
+
+type PolylineProjection = SegmentProjection & {
+  segment_index: number;
+  arc_m: number;
+};
+
+function haversineM([lon1, lat1]: Position, [lon2, lat2]: Position): number {
+  const toRad = (d: number): number => (d * Math.PI) / 180;
   const dLat = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
   const a =
@@ -23,7 +135,7 @@ function haversineM([lon1, lat1], [lon2, lat2]) {
   return 2 * EARTH_RADIUS_M * Math.asin(Math.sqrt(a));
 }
 
-function haversinePolylineM(coords) {
+function haversinePolylineM(coords: Position[]): number {
   let total = 0;
   for (let i = 1; i < coords.length; i++) {
     total += haversineM(coords[i - 1], coords[i]);
@@ -31,7 +143,7 @@ function haversinePolylineM(coords) {
   return total;
 }
 
-function cumulativeArcLengths(coords) {
+function cumulativeArcLengths(coords: Position[]): number[] {
   const arcs = [0];
   for (let index = 1; index < coords.length; index += 1) {
     arcs.push(arcs[index - 1] + haversineM(coords[index - 1], coords[index]));
@@ -39,7 +151,7 @@ function cumulativeArcLengths(coords) {
   return arcs;
 }
 
-function interpolateAtArc(coords, arcs, targetArc) {
+function interpolateAtArc(coords: Position[], arcs: number[], targetArc: number): Position {
   if (targetArc <= 0) return coords[0];
   const total = arcs[arcs.length - 1];
   if (targetArc >= total) return coords[coords.length - 1];
@@ -59,7 +171,7 @@ function interpolateAtArc(coords, arcs, targetArc) {
   return coords[coords.length - 1];
 }
 
-function slicePolylineByArc(coords, startArc, endArc) {
+function slicePolylineByArc(coords: Position[], startArc: number, endArc: number): Position[] {
   const arcs = cumulativeArcLengths(coords);
   const total = arcs[arcs.length - 1];
   const start = Math.max(0, Math.min(total, startArc));
@@ -75,11 +187,11 @@ function slicePolylineByArc(coords, startArc, endArc) {
   return out.length >= 2 ? out : [];
 }
 
-function metersPerDegLng(lat) {
+function metersPerDegLng(lat: number): number {
   return 111320 * Math.cos((lat * Math.PI) / 180);
 }
 
-function projectPointToSegment(point, a, b) {
+function projectPointToSegment(point: Position, a: Position, b: Position): SegmentProjection {
   const meanLat = (point[1] + a[1] + b[1]) / 3;
   const mx = Math.max(1, metersPerDegLng(meanLat));
   const my = 111320;
@@ -93,7 +205,7 @@ function projectPointToSegment(point, a, b) {
   const dy = by - ay;
   const len2 = dx * dx + dy * dy;
   const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len2));
-  const projected = [(ax + t * dx) / mx, (ay + t * dy) / my];
+  const projected: Position = [(ax + t * dx) / mx, (ay + t * dy) / my];
   return {
     coordinate: projected,
     distance_m: haversineM(point, projected),
@@ -101,8 +213,8 @@ function projectPointToSegment(point, a, b) {
   };
 }
 
-function projectPointToPolyline(point, coords) {
-  let best = null;
+function projectPointToPolyline(point: Position, coords: Position[]): PolylineProjection | null {
+  let best: PolylineProjection | null = null;
   const arcs = cumulativeArcLengths(coords);
   for (let i = 1; i < coords.length; i += 1) {
     const projection = projectPointToSegment(point, coords[i - 1], coords[i]);
@@ -117,13 +229,13 @@ function projectPointToPolyline(point, coords) {
   return best;
 }
 
-function vectorMeters(from, to) {
+function vectorMeters(from: Position, to: Position): Vec2 {
   const meanLat = (from[1] + to[1]) / 2;
   const mx = Math.max(1, metersPerDegLng(meanLat));
   return [(to[0] - from[0]) * mx, (to[1] - from[1]) * 111320];
 }
 
-function angleBetweenDeg(a, b) {
+function angleBetweenDeg(a: Vec2, b: Vec2): number {
   const aLen = Math.hypot(a[0], a[1]);
   const bLen = Math.hypot(b[0], b[1]);
   if (aLen < 1e-9 || bLen < 1e-9) return 180;
@@ -131,27 +243,31 @@ function angleBetweenDeg(a, b) {
   return (Math.acos(Math.max(-1, Math.min(1, dot))) * 180) / Math.PI;
 }
 
-function minUndirectedAngleDeg(a, b) {
+function minUndirectedAngleDeg(a: Vec2, b: Vec2): number {
   return Math.min(angleBetweenDeg(a, b), angleBetweenDeg(a, [-b[0], -b[1]]));
 }
 
-function trunkTangentAtProjection(trunkCoords, projection) {
+function trunkTangentAtProjection(trunkCoords: Position[], projection: PolylineProjection | null): Vec2 | null {
   if (!projection || !Number.isFinite(projection.segment_index)) return null;
   const index = Math.max(1, Math.min(trunkCoords.length - 1, projection.segment_index));
   return vectorMeters(trunkCoords[index - 1], trunkCoords[index]);
 }
 
-function alignedLongStraightBranchIsSafe(clippedCoords, trunkCoords, {
-  connectorMaxM,
-  tangentMaxDeg,
-}) {
+function alignedLongStraightBranchIsSafe(
+  clippedCoords: Position[],
+  trunkCoords: Position[],
+  {
+    connectorMaxM,
+    tangentMaxDeg,
+  }: { connectorMaxM: number; tangentMaxDeg: number },
+): boolean {
   if (!Array.isArray(clippedCoords) || clippedCoords.length !== 2) return false;
   const endpoints = [
     { endpoint_kind: "start", coordinate: clippedCoords[0], tangent: vectorMeters(clippedCoords[1], clippedCoords[0]) },
     { endpoint_kind: "end", coordinate: clippedCoords[1], tangent: vectorMeters(clippedCoords[0], clippedCoords[1]) },
-  ];
+  ] satisfies Array<{ endpoint_kind: "start" | "end"; coordinate: Position; tangent: Vec2 }>;
 
-  let best = null;
+  let best: { projection: PolylineProjection; tangentDeltaDeg: number } | null = null;
   for (const endpoint of endpoints) {
     const projection = projectPointToPolyline(endpoint.coordinate, trunkCoords);
     if (!projection || projection.distance_m > connectorMaxM) continue;
@@ -172,14 +288,20 @@ function connectorForClippedBranch({
   branch,
   color,
   connectorMaxM,
-}) {
+}: {
+  clippedCoords: Position[];
+  trunkCoords: Position[];
+  branch: SameColorCorridor;
+  color: string;
+  connectorMaxM: number;
+}): SameColorConnector | null {
   if (!Array.isArray(clippedCoords) || clippedCoords.length < 2) return null;
   if (!Array.isArray(trunkCoords) || trunkCoords.length < 2) return null;
   const endpoints = [
     { endpoint_kind: "start", coordinate: clippedCoords[0] },
     { endpoint_kind: "end", coordinate: clippedCoords[clippedCoords.length - 1] },
-  ];
-  let best = null;
+  ] satisfies Array<{ endpoint_kind: "start" | "end"; coordinate: Position }>;
+  let best: Omit<SameColorConnector, "coordinates" | "route_ids" | "color"> | null = null;
   for (const endpoint of endpoints) {
     const projection = projectPointToPolyline(endpoint.coordinate, trunkCoords);
     if (!projection) continue;
@@ -216,7 +338,10 @@ function connectorForClippedBranch({
  * @returns {{ groups: Array, rejects: Array }}
  *   Each group: { color, member_corridor_ids, trunk_corridor_id, member_route_ids_union }
  */
-export function groupCorridorsByColorAndOverlap(corridors, options = {}) {
+export function groupCorridorsByColorAndOverlap(
+  corridors: SameColorCorridor[],
+  options: SameColorOverlapOptions = {},
+): SameColorOverlapResult {
   const {
     sharedFractionMin = 0.55,
     sharedLenMinM = 100,
@@ -226,23 +351,23 @@ export function groupCorridorsByColorAndOverlap(corridors, options = {}) {
   } = options;
 
   // Bucket corridors by color (skip corridors without a color).
-  const byColor = new Map();
+  const byColor = new Map<string, SameColorCorridor[]>();
   for (const corridor of corridors) {
     const color = corridor.color;
     if (!color) continue;
     if (!byColor.has(color)) byColor.set(color, []);
-    byColor.get(color).push(corridor);
+    byColor.get(color)!.push(corridor);
   }
 
-  const allGroups = [];
-  const allRejects = [];
+  const allGroups: SameColorMergeGroup[] = [];
+  const allRejects: SameColorReject[] = [];
 
   for (const [color, colorCorridors] of byColor) {
     if (colorCorridors.length < 2) continue;
 
     // Map corridors to spine-like input for computePairOverlap (which expects
     // { spine_id, geometry, length_m }). spine_id == corridor_id in our mapping.
-    const spines = colorCorridors.map((c) => ({
+    const spines: Spine[] = colorCorridors.map((c) => ({
       spine_id: c.corridor_id,
       geometry: c.geometry,
       length_m: c.length_m ?? haversinePolylineM(c.geometry.coordinates),
@@ -259,9 +384,9 @@ export function groupCorridorsByColorAndOverlap(corridors, options = {}) {
     // in-shared portion, so it correctly rejects perpendicular crossings.
     const n = spines.length;
     const parent = Array.from({ length: n }, (_, i) => i);
-    const rank = new Array(n).fill(0);
-    const find = (i) => (parent[i] === i ? i : (parent[i] = find(parent[i])));
-    const union = (i, j) => {
+    const rank = new Array<number>(n).fill(0);
+    const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+    const union = (i: number, j: number): void => {
       const ri = find(i), rj = find(j);
       if (ri === rj) return;
       if (rank[ri] < rank[rj]) parent[ri] = rj;
@@ -275,7 +400,7 @@ export function groupCorridorsByColorAndOverlap(corridors, options = {}) {
           resampleM,
           distMaxM: avgDistMaxM,
         });
-        let reason = null;
+        let reason: string | null = null;
         if (overlap.sharedFractionShorter < sharedFractionMin) reason = "shared_fraction_too_low";
         else if (overlap.sharedLenM < sharedLenMinM) reason = "shared_len_too_short";
         else if (overlap.tangentDeltaAvgDeg > tangentMaxDeg) reason = "tangent_delta_too_large";
@@ -298,11 +423,11 @@ export function groupCorridorsByColorAndOverlap(corridors, options = {}) {
     }
 
     // Collect groups by root.
-    const groupsByRoot = new Map();
+    const groupsByRoot = new Map<number, Spine[]>();
     for (let i = 0; i < n; i++) {
       const r = find(i);
       if (!groupsByRoot.has(r)) groupsByRoot.set(r, []);
-      groupsByRoot.get(r).push(spines[i]);
+      groupsByRoot.get(r)!.push(spines[i]);
     }
 
     for (const members of groupsByRoot.values()) {
@@ -317,7 +442,7 @@ export function groupCorridorsByColorAndOverlap(corridors, options = {}) {
       const memberCorridorIds = members.map((m) => m.spine_id);
 
       // Union of all route_ids across members.
-      const routeIdSet = new Set();
+      const routeIdSet = new Set<RouteId>();
       for (const m of members) {
         for (const rid of m.route_ids ?? []) routeIdSet.add(rid);
       }
@@ -352,7 +477,11 @@ export function groupCorridorsByColorAndOverlap(corridors, options = {}) {
  *   skipped?: { reason: string }
  * }}
  */
-export function mergeSameColorGroup(group, corridorsById, options = {}) {
+export function mergeSameColorGroup(
+  group: SameColorMergeGroup,
+  corridorsById: Map<string, SameColorCorridor>,
+  options: SameColorMergeOptions = {},
+): SameColorMergeResult {
   const {
     minBranchLenM = 30,
     resampleM = 25,
@@ -373,7 +502,7 @@ export function mergeSameColorGroup(group, corridorsById, options = {}) {
 
   // Resample trunk for distance checks.
   const trunkResampled = resamplePolyline(trunk.geometry.coordinates, resampleM);
-  const branchUpdates = [];
+  const branchUpdates: SameColorBranchUpdate[] = [];
 
   // Connectivity-preservation check: collect routes that would be fully consumed
   // by the merge if we drop/clip their branch features.
@@ -509,7 +638,7 @@ export function mergeSameColorGroup(group, corridorsById, options = {}) {
 
     // Extract original vertices between startArc and endArc.
     // Helper: interpolate point at arc length target on original coords.
-    function interpolateAtArc(arcTarget) {
+    function interpolateAtArc(arcTarget: number): Position {
       if (arcTarget <= origArcLen[0]) return branchCoords[0];
       if (arcTarget >= origArcLen[origArcLen.length - 1]) return branchCoords[branchCoords.length - 1];
       for (let i = 1; i < branchCoords.length; i++) {
@@ -525,7 +654,7 @@ export function mergeSameColorGroup(group, corridorsById, options = {}) {
       return branchCoords[branchCoords.length - 1];
     }
 
-    const clippedCoords = [];
+    const clippedCoords: Position[] = [];
     const startPt = interpolateAtArc(startArc);
     clippedCoords.push(startPt);
 
@@ -583,7 +712,7 @@ export function mergeSameColorGroup(group, corridorsById, options = {}) {
   }
 
   // Build trunk updates.
-  const trunkRouteIds = [...new Set(member_route_ids_union ?? trunk.route_ids ?? [])].sort();
+  const trunkRouteIds = [...new Set<RouteId>(member_route_ids_union ?? trunk.route_ids ?? [])].sort();
 
   // color_route_ids: filter union to just routes that match this color.
   // We do a simple lookup: include route if its color matches group.color.
@@ -595,7 +724,7 @@ export function mergeSameColorGroup(group, corridorsById, options = {}) {
   // but looking at how the build script uses it (tp.color_route_ids = routesForColor(...)),
   // it's just an array. We'll return an object { [color]: unionRouteIds } since
   // the spec says "{ [color]: union }".
-  const colorRouteIds = { [color]: trunkRouteIds };
+  const colorRouteIds: Record<string, RouteId[]> = { [color]: trunkRouteIds };
 
   const trunkUpdates = {
     corridor_id: trunk_corridor_id,

@@ -1,4 +1,4 @@
-// frontend/scripts/build/same-color-merge.test.mjs
+// frontend/scripts/build/same-color-merge.test.ts
 // Unit tests for Phase 3d same-color merge helpers.
 //
 // NYC-realistic coordinates: lat ~40.7, lon ~-73.99.
@@ -9,7 +9,11 @@ import assert from "node:assert/strict";
 import {
   groupCorridorsByColorAndOverlap,
   mergeSameColorGroup,
-} from "./same-color-merge.mjs";
+  type SameColorCorridor,
+  type SameColorMergeAppliedResult,
+  type SameColorMergeResult,
+} from "./same-color-merge.ts";
+import type { Position } from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // Geometry helpers
@@ -18,9 +22,9 @@ import {
 const DEG_PER_M_LAT = 1 / 111320;
 const DEG_PER_M_LON = 1 / 84410; // at NYC lat ~40.7
 
-function makePolylineNS(startLon, startLat, lengthM, segmentCount = 4) {
+function makePolylineNS(startLon: number, startLat: number, lengthM: number, segmentCount = 4): Position[] {
   // North-south line starting at (startLon, startLat), going lengthM north.
-  const coords = [];
+  const coords: Position[] = [];
   const stepLat = (lengthM * DEG_PER_M_LAT) / segmentCount;
   for (let i = 0; i <= segmentCount; i++) {
     coords.push([startLon, startLat + i * stepLat]);
@@ -28,9 +32,9 @@ function makePolylineNS(startLon, startLat, lengthM, segmentCount = 4) {
   return coords;
 }
 
-function makePolylineEW(startLon, startLat, lengthM, segmentCount = 4) {
+function makePolylineEW(startLon: number, startLat: number, lengthM: number, segmentCount = 4): Position[] {
   // East-west line starting at (startLon, startLat), going lengthM east.
-  const coords = [];
+  const coords: Position[] = [];
   const stepLon = (lengthM * DEG_PER_M_LON) / segmentCount;
   for (let i = 0; i <= segmentCount; i++) {
     coords.push([startLon + i * stepLon, startLat]);
@@ -38,10 +42,10 @@ function makePolylineEW(startLon, startLat, lengthM, segmentCount = 4) {
   return coords;
 }
 
-function haversinePolylineM(coords) {
+function haversinePolylineM(coords: Position[]): number {
   const EARTH_RADIUS_M = 6371000;
-  function haversineM([lon1, lat1], [lon2, lat2]) {
-    const toRad = (d) => (d * Math.PI) / 180;
+  function haversineM([lon1, lat1]: Position, [lon2, lat2]: Position): number {
+    const toRad = (d: number): number => (d * Math.PI) / 180;
     const dLat = toRad(lat2 - lat1);
     const dLon = toRad(lon2 - lon1);
     const a =
@@ -54,7 +58,7 @@ function haversinePolylineM(coords) {
   return total;
 }
 
-function makeCorridor(id, coords, color, routeIds) {
+function makeCorridor(id: string, coords: Position[], color: string, routeIds: string[]): SameColorCorridor {
   const length_m = haversinePolylineM(coords);
   return {
     corridor_id: id,
@@ -65,8 +69,12 @@ function makeCorridor(id, coords, color, routeIds) {
   };
 }
 
-function corridorMap(corridors) {
+function corridorMap(corridors: SameColorCorridor[]): Map<string, SameColorCorridor> {
   return new Map(corridors.map((c) => [c.corridor_id, c]));
+}
+
+function assertApplied(result: SameColorMergeResult): asserts result is SameColorMergeAppliedResult {
+  assert.ok(!result.skipped, `group should not be skipped, got: ${result.skipped?.reason}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -105,7 +113,7 @@ test("Test 1: same-color overlap — trunk union + branch clip", () => {
   const cmap = corridorMap(corridors);
   const result = mergeSameColorGroup(group, cmap, { minBranchLenM: 30, resampleM: 25, avgDistMaxM: 15 });
 
-  assert.ok(!result.skipped, `group should not be skipped, got: ${result.skipped?.reason}`);
+  assertApplied(result);
   assert.strictEqual(result.trunkUpdates.corridor_id, "trunk-1");
   assert.deepStrictEqual(result.trunkUpdates.route_ids.sort(), ["1", "2"]);
   assert.deepStrictEqual(result.trunkUpdates.merged_from_corridor_ids.sort(), ["branch-1", "trunk-1"]);
@@ -156,7 +164,7 @@ test("Test 3: different-color polylines on shared track => no merge", () => {
   // Two lines physically on the same track (< 5m apart) but different colors.
   const coordsA = makePolylineNS(-73.990, 40.700, 1200, 6);
   const offsetM = 5; // ~5 m offset (well within merge threshold)
-  const coordsB = coordsA.map(([lon, lat]) => [lon, lat + offsetM * DEG_PER_M_LAT]);
+  const coordsB: Position[] = coordsA.map(([lon, lat]): Position => [lon, lat + offsetM * DEG_PER_M_LAT]);
 
   const orange = makeCorridor("orange-B", coordsA, "#FF6319", ["B"]);
   const yellow = makeCorridor("yellow-Q", coordsB, "#FCCC0A", ["Q"]);
@@ -200,7 +208,7 @@ test("Test 4: branch entirely contained in trunk => branch dropped, trunk gets r
   const cmap = corridorMap(corridors);
   const result = mergeSameColorGroup(group, cmap, { minBranchLenM: 30, resampleM: 25, avgDistMaxM: 15 });
 
-  assert.ok(!result.skipped);
+  assertApplied(result);
   assert.deepStrictEqual(result.trunkUpdates.route_ids.sort(), ["1", "2"]);
 
   const branchUpdate = result.branchUpdates.find((u) => u.corridor_id === "branch-sub");
@@ -253,7 +261,7 @@ test("Test 5: three same-color polylines on shared trunk => union route_ids", ()
   const cmap = corridorMap(corridors);
   const result = mergeSameColorGroup(group, cmap, { minBranchLenM: 30, resampleM: 25, avgDistMaxM: 15 });
 
-  assert.ok(!result.skipped);
+  assertApplied(result);
   assert.deepStrictEqual(result.trunkUpdates.route_ids.sort(), ["1", "2", "3"]);
 
   // Both branches should either be clipped (with newCoords) or dropped.
@@ -350,14 +358,14 @@ test("Test 8: middle-floater branch is dropped (not emitted as a free-floating s
   const branchPart1 = makePolylineNS(-73.990, 40.700, 400, 4);
   const lastPart1 = branchPart1[branchPart1.length - 1];
   const offsetLon = 50 * DEG_PER_M_LON;
-  const branchPart2 = [
+  const branchPart2: Position[] = [
     [lastPart1[0] + offsetLon, lastPart1[1]],
     [lastPart1[0] + offsetLon, lastPart1[1] + (200 * DEG_PER_M_LAT) / 2],
     [lastPart1[0] + offsetLon, lastPart1[1] + 200 * DEG_PER_M_LAT],
   ];
   const reconvergeStartLat = lastPart1[1] + 200 * DEG_PER_M_LAT;
   const branchPart3 = makePolylineNS(-73.990, reconvergeStartLat, 400, 4);
-  const branchCoords = [...branchPart1, ...branchPart2.slice(1), ...branchPart3.slice(1)];
+  const branchCoords: Position[] = [...branchPart1, ...branchPart2.slice(1), ...branchPart3.slice(1)];
 
   const trunk = makeCorridor("trunk-mf", trunkCoords, "#EE352E", ["1"]);
   const branch = makeCorridor("branch-mf", branchCoords, "#EE352E", ["2"]);
@@ -395,7 +403,7 @@ test("Test 8: middle-floater branch is dropped (not emitted as a free-floating s
     routeCoverageMap,
   });
 
-  assert.ok(!result.skipped, `group should not be skipped, got: ${result.skipped?.reason}`);
+  assertApplied(result);
   const branchUpdate = result.branchUpdates.find((u) => u.corridor_id === "branch-mf");
   assert.ok(branchUpdate, "branch update should exist");
   assert.strictEqual(branchUpdate.drop, true, "middle-floater branch should be dropped");
@@ -436,6 +444,7 @@ test("Test 9: clipped same-color branch emits connector back to trunk", () => {
     avgDistMaxM: 15,
     connectorMaxM: 35,
   });
+  assertApplied(result);
 
   const branchUpdate = result.branchUpdates.find(
     (u) => u.corridor_id === "branch-connector",
@@ -455,7 +464,7 @@ test("Test 9: clipped same-color branch emits connector back to trunk", () => {
 // ---------------------------------------------------------------------------
 test("Test 10: low-detail long clipped branch is dropped as a chord", () => {
   const trunkCoords = makePolylineEW(-73.990, 40.700, 2500, 10);
-  const branchCoords = [
+  const branchCoords: Position[] = [
     ...makePolylineEW(-73.990, 40.700, 600, 4).slice(0, -1),
     [-73.990 + 600 * DEG_PER_M_LON, 40.700],
     [-73.990 + 600 * DEG_PER_M_LON, 40.714],
@@ -478,6 +487,7 @@ test("Test 10: low-detail long clipped branch is dropped as a chord", () => {
     avgDistMaxM: 15,
     maxTwoPointBranchLenM: 250,
   });
+  assertApplied(result);
 
   const branchUpdate = result.branchUpdates.find((u) => u.corridor_id === "branch-chord");
   assert.equal(branchUpdate?.drop, true);
@@ -492,7 +502,7 @@ test("Test 10: low-detail long clipped branch is dropped as a chord", () => {
 // ---------------------------------------------------------------------------
 test("Test 11: aligned long straight branch is preserved, not treated as a chord", () => {
   const trunkCoords = makePolylineEW(-73.990, 40.700, 5000, 20);
-  const branchCoords = [
+  const branchCoords: Position[] = [
     [-73.990 - 1500 * DEG_PER_M_LON, 40.700],
     [-73.990, 40.700],
     ...trunkCoords.slice(1, 11),
@@ -516,6 +526,7 @@ test("Test 11: aligned long straight branch is preserved, not treated as a chord
     maxTwoPointBranchLenM: 250,
     connectorMaxM: 35,
   });
+  assertApplied(result);
 
   const branchUpdate = result.branchUpdates.find((u) => u.corridor_id === "branch-aligned");
   assert.ok(branchUpdate, "branch update should exist");

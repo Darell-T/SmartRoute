@@ -40,7 +40,7 @@ import { orderColorsForBundle, BUNDLE_COLOR_ORDER } from "./build/lane-order.ts"
 import { buildBranchTransitions } from "./build/branch-transitions.ts";
 import { filterBogusTransitions, markOrphanLanes, removeOrphanErrorLanes } from "./build/lane-continuity-filter.ts";
 import { dedupeDuplicateCorridors } from "./build/dedupe-duplicate-corridors.ts";
-import { groupCorridorsByColorAndOverlap, mergeSameColorGroup } from "./build/same-color-merge.mjs";
+import { groupCorridorsByColorAndOverlap, mergeSameColorGroup } from "./build/same-color-merge.ts";
 import { materializePhysicalBundles } from "./build/physical-bundle-materialization.ts";
 import {
   detectCrossColorAdjacency,
