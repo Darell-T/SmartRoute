@@ -35,7 +35,7 @@ import {
   selectPhysicalBundleSpine,
   computePhysicalBundleSpineHash,
   clipPolylineToExtent,
-} from "./build/physical-bundle.mjs";
+} from "./build/physical-bundle.ts";
 import { orderColorsForBundle, BUNDLE_COLOR_ORDER } from "./build/lane-order.ts";
 import { buildBranchTransitions } from "./build/branch-transitions.ts";
 import { filterBogusTransitions, markOrphanLanes, removeOrphanErrorLanes } from "./build/lane-continuity-filter.ts";

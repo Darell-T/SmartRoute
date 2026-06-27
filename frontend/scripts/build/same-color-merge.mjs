@@ -3,13 +3,13 @@
 // overlaps into a single trunk + clipped branches.
 //
 // Pure module -- no fs, process, globalThis, require.
-// Imports only from ./spine.ts and ./physical-bundle.mjs.
+// Imports only from ./spine.ts and ./physical-bundle.ts.
 
 import {
   computePairOverlap,
   resamplePolyline,
   pointToPolylineMinDistM,
-} from "./physical-bundle.mjs";
+} from "./physical-bundle.ts";
 
 const EARTH_RADIUS_M = 6371000;
 

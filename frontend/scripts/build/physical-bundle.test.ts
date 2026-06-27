@@ -1,4 +1,4 @@
-// frontend/scripts/build/physical-bundle.test.mjs
+// frontend/scripts/build/physical-bundle.test.ts
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -8,7 +8,9 @@ import {
   clipPolylineToExtent,
   resamplePolyline,
   computePhysicalBundleSpineHash,
-} from "./physical-bundle.mjs";
+  type Spine,
+} from "./physical-bundle.ts";
+import type { Position } from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -18,15 +20,15 @@ import {
  * Offset a polyline by ~offsetM meters latitude (roughly, for NYC lat).
  * 1 degree lat ~= 111320 m; the offset in degrees is offsetM / 111320.
  */
-function offsetLatPolyline(coords, offsetM) {
+function offsetLatPolyline(coords: Position[], offsetM: number): Position[] {
   const degPerM = 1 / 111320;
-  return coords.map(([lon, lat]) => [lon, lat + offsetM * degPerM]);
+  return coords.map(([lon, lat]): Position => [lon, lat + offsetM * degPerM]);
 }
 
 /**
  * Build a spine object with geometry derived from coords and an explicit length_m.
  */
-function makeSpine(id, coords, length_m, route_ids = []) {
+function makeSpine(id: string, coords: Position[], length_m: number, route_ids: string[] = []): Spine {
   return {
     spine_id: id,
     geometry: { type: "LineString", coordinates: coords },
@@ -36,7 +38,7 @@ function makeSpine(id, coords, length_m, route_ids = []) {
 }
 
 // A simple 1 km straight line along constant longitude (NYC-ish coords).
-const BASE_COORDS = [
+const BASE_COORDS: Position[] = [
   [-73.99, 40.700],
   [-73.99, 40.705],  // ~555 m
   [-73.99, 40.710],  // ~555 m -- total ~1110 m
@@ -67,7 +69,7 @@ test("computePairOverlap: parallel polylines 5m apart => high share, low dist, l
 test("computePairOverlap: disjoint polylines => large avgDistM, low sharedFraction", () => {
   const spineA = makeSpine("a", BASE_COORDS, BASE_LEN_M);
   // Put spine B ~5000m to the east (about 0.05 degrees longitude at NYC lat).
-  const farCoords = BASE_COORDS.map(([lon, lat]) => [lon + 0.05, lat]);
+  const farCoords = BASE_COORDS.map(([lon, lat]): Position => [lon + 0.05, lat]);
   const spineB = makeSpine("b", farCoords, BASE_LEN_M);
 
   const result = computePairOverlap(spineA, spineB, { resampleM: 25, distMaxM: 15 });
@@ -82,7 +84,7 @@ test("computePairOverlap: disjoint polylines => large avgDistM, low sharedFracti
 // ---------------------------------------------------------------------------
 test("computePairOverlap: T intersection => low sharedFractionShorter", () => {
   // Spine A: horizontal line (constant lat, varying lon), 1km
-  const horizCoords = [
+  const horizCoords: Position[] = [
     [-74.00, 40.705],
     [-73.99, 40.705],
     [-73.98, 40.705],
@@ -91,7 +93,7 @@ test("computePairOverlap: T intersection => low sharedFractionShorter", () => {
 
   // Spine B: short vertical line crossing the midpoint of A perpendicularly
   // (constant lon at midpoint, varying lat), 500m long.
-  const vertCoords = [
+  const vertCoords: Position[] = [
     [-73.99, 40.702],
     [-73.99, 40.705],  // midpoint of A
     [-73.99, 40.708],
@@ -117,7 +119,7 @@ test("groupSpinesIntoPhysicalBundles: A near B, C far => 1 group {A, B}", () => 
   const spineB = makeSpine("spine-b", nearB, BASE_LEN_M, ["Q"]);
 
   // C is far away.
-  const farCoords = BASE_COORDS.map(([lon, lat]) => [lon + 1.0, lat]);
+  const farCoords = BASE_COORDS.map(([lon, lat]): Position => [lon + 1.0, lat]);
   const spineC = makeSpine("spine-c", farCoords, BASE_LEN_M, ["R"]);
 
   const { groups, rejects } = groupSpinesIntoPhysicalBundles([spineA, spineB, spineC], {
@@ -164,16 +166,16 @@ test("groupSpinesIntoPhysicalBundles: A near B, C far => 1 group {A, B}", () => 
 // ---------------------------------------------------------------------------
 test("groupSpinesIntoPhysicalBundles: disjoint A-B and B-C overlaps do not become one A-B-C bundle", () => {
   // A: 30 points at lat 40.700..40.7029, lon -73.99
-  const aCoords = [];
+  const aCoords: Position[] = [];
   for (let i = 0; i < 30; i++) aCoords.push([-73.99, 40.700 + i * 0.0001]);
 
   // C: 30 points at lat 40.706..40.7089, lon -73.99 (disjoint from A's lat range)
-  const cCoords = [];
+  const cCoords: Position[] = [];
   for (let i = 0; i < 30; i++) cCoords.push([-73.99, 40.706 + i * 0.0001]);
 
   // B: 90 points at lat 40.700..40.7089, lon -73.99 + 0.00006 (~5m east).
   // Spans BOTH A and C's latitude ranges.
-  const bCoords = [];
+  const bCoords: Position[] = [];
   for (let i = 0; i < 90; i++) bCoords.push([-73.99 + 0.00006, 40.700 + i * 0.0001]);
 
   // length_m: ~11.1m per 0.0001 lat * 30 points = ~330m for A/C; ~990m for B.
@@ -210,7 +212,7 @@ test("groupSpinesIntoPhysicalBundles: disjoint A-B and B-C overlaps do not becom
 // ---------------------------------------------------------------------------
 test("clipPolylineToExtent: returns slice between fromCoord and toCoord", () => {
   // A spine with 8 coords (indices 0..7).
-  const coords = [
+  const coords: Position[] = [
     [-73.99, 40.700],  // 0
     [-73.99, 40.701],  // 1
     [-73.99, 40.702],  // 2
@@ -222,22 +224,22 @@ test("clipPolylineToExtent: returns slice between fromCoord and toCoord", () => 
   ];
 
   // fromCoord near coords[2], toCoord near coords[5].
-  const fromCoord = [-73.99, 40.7021]; // very close to index 2
-  const toCoord   = [-73.99, 40.7049]; // very close to index 5
+  const fromCoord: Position = [-73.99, 40.7021]; // very close to index 2
+  const toCoord: Position = [-73.99, 40.7049]; // very close to index 5
 
   const result = clipPolylineToExtent(coords, fromCoord, toCoord, { resampleM: 10 });
 
   assert.ok(Array.isArray(result), "result should be an array");
-  assert.ok(result.length >= 2, `result should have at least 2 points, got ${result.length}`);
+  assert.ok(result!.length >= 2, `result should have at least 2 points, got ${result!.length}`);
 
   // First and last should be near fromCoord and toCoord respectively.
-  const firstLat = result[0][1];
-  const lastLat = result[result.length - 1][1];
+  const firstLat = result![0][1];
+  const lastLat = result![result!.length - 1][1];
   assert.ok(Math.abs(firstLat - 40.702) < 0.001, `first lat ${firstLat} should be near 40.702`);
   assert.ok(Math.abs(lastLat - 40.705) < 0.001, `last lat ${lastLat} should be near 40.705`);
 
   // Should include intermediate vertices 3 and 4.
-  const lats = result.map((c) => c[1]);
+  const lats = result!.map((c) => c[1]);
   const has703 = lats.some((lat) => Math.abs(lat - 40.703) < 0.0005);
   const has704 = lats.some((lat) => Math.abs(lat - 40.704) < 0.0005);
   assert.ok(has703, "intermediate vertex near 40.703 should be present");
@@ -277,7 +279,7 @@ test("groupSpinesIntoPhysicalBundles: rejects contains bbox-overlapping but gate
   // perpendicular (latitude) offset of 50m actually gives ~50m nearest-vertex
   // distance rather than sliding along the line direction.
   // ~1800m long horizontal line at NYC lat.
-  const horizCoords = [
+  const horizCoords: Position[] = [
     [-74.00, 40.705],
     [-73.99, 40.705],  // ~800m
     [-73.98, 40.705],  // ~800m -- total ~1600m
@@ -289,7 +291,7 @@ test("groupSpinesIntoPhysicalBundles: rejects contains bbox-overlapping but gate
   // Offset spine B by 50m north (perpendicular to the horizontal line direction).
   // 50m in latitude degrees = 50 / 111320.
   const latOffset50m = 50 / 111320;
-  const coordsFar = horizCoords.map(([lon, lat]) => [lon, lat + latOffset50m]);
+  const coordsFar = horizCoords.map(([lon, lat]): Position => [lon, lat + latOffset50m]);
   const spineB = makeSpine("spine-b", coordsFar, HORIZ_LEN, ["Q"]);
 
   const { groups, rejects } = groupSpinesIntoPhysicalBundles([spineA, spineB], {
@@ -326,7 +328,7 @@ test("groupSpinesIntoPhysicalBundles: rejects contains bbox-overlapping but gate
 // ---------------------------------------------------------------------------
 test("clipPolylineToExtent: preserves corridor direction when corridor runs opposite to bundle spine", () => {
   // Bundle spine goes east-to-west (decreasing longitude).
-  const spine = [
+  const spine: Position[] = [
     [-73.99, 40.70],
     [-73.985, 40.70],
     [-73.98, 40.70],
@@ -334,14 +336,14 @@ test("clipPolylineToExtent: preserves corridor direction when corridor runs oppo
     [-73.97, 40.70],
   ];
   // Corridor "from" is at the east end, "to" is at the west end (opposite direction from the spine).
-  const fromCoord = [-73.971, 40.70];  // near east end of spine (spine's last vertex)
-  const toCoord   = [-73.989, 40.70];  // near west end of spine (spine's first vertex)
+  const fromCoord: Position = [-73.971, 40.70];  // near east end of spine (spine's last vertex)
+  const toCoord: Position = [-73.989, 40.70];  // near west end of spine (spine's first vertex)
   const result = clipPolylineToExtent(spine, fromCoord, toCoord, { resampleM: 25 });
   assert.ok(Array.isArray(result), "result should be an array");
-  assert.ok(result.length >= 2, "result should have at least 2 points");
+  assert.ok(result!.length >= 2, "result should have at least 2 points");
 
-  const firstP = result[0];
-  const lastP = result[result.length - 1];
+  const firstP = result![0];
+  const lastP = result![result!.length - 1];
   const dFirstFrom = Math.hypot(firstP[0] - fromCoord[0], firstP[1] - fromCoord[1]);
   const dFirstTo   = Math.hypot(firstP[0] - toCoord[0],   firstP[1] - toCoord[1]);
   const dLastFrom  = Math.hypot(lastP[0] - fromCoord[0],  lastP[1] - fromCoord[1]);
@@ -366,13 +368,13 @@ test("groupSpinesIntoPhysicalBundles: confidence is the minimum pair shared-frac
   //   C is shifted half-up (lat 40.705..40.710 only, 50 points): shared with A or B = ~0.5
   // Use lenient gates to allow C to join the group, then assert that the
   // group's confidence reflects the WORST pair (~0.5 ish), not the mean.
-  const aCoords = [];
+  const aCoords: Position[] = [];
   for (let i = 0; i < 100; i++) aCoords.push([-73.99, 40.700 + i * 0.0001]);
-  const bCoords = aCoords.map(([lon, lat]) => [lon + 0.00005, lat]); // ~4m east of A
+  const bCoords = aCoords.map(([lon, lat]): Position => [lon + 0.00005, lat]); // ~4m east of A
   // C: same length range as A, but its first half is far away and only the
   // second half is parallel to A and B. The shorter-spine sample loop will
   // see ~50% in-shared.
-  const cCoords = [];
+  const cCoords: Position[] = [];
   // First half of C: way off to the east (not near A/B at all)
   for (let i = 0; i < 50; i++) cCoords.push([-73.99 + 0.001, 40.700 + i * 0.0001]);
   // Second half: aligned with A/B (~4m east of A)
