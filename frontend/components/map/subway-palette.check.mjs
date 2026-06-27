@@ -43,9 +43,9 @@ const consumers = [
   "components/map/incidents/incident-popup.ts",
   "components/smart-route/left-rail/types.ts",
   "scripts/build-subway-visual-network.mjs",
-  "scripts/build/opendata-subway-lines.mjs",
+  "scripts/build/opendata-subway-lines.ts",
   "scripts/build/station-anchors/index.ts",
-  "scripts/regenerate-canonical-from-gtfs.mjs",
+  "scripts/regenerate-canonical-from-gtfs.ts",
 ];
 for (const relPath of consumers) {
   const source = read(relPath);

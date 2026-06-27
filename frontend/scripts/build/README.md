@@ -83,6 +83,7 @@ Already migrated transit build helpers include:
 - `physical-bundle-materialization`
 - `physical-bundle`
 - `same-color-merge`
+- `regenerate-canonical-from-gtfs`
 
 Pre-existing TypeScript helpers include station-anchor modules, spine helpers,
 lane ordering, artifact fingerprinting, smooth polyline utilities, and duplicate
@@ -127,7 +128,8 @@ Categories:
 | `frontend/next.config.mjs` | 772 B / 28 lines | none | no | no | Keep as `.mjs` | keep `.mjs` |
 | `frontend/postcss.config.mjs` | 144 B / 9 lines | none | no | no | Keep as `.mjs` | keep `.mjs` |
 | `frontend/eslint.config.mjs` | 1.0 KB / 37 lines | none | no | no | Keep as `.mjs` | keep `.mjs` |
-| `frontend/scripts/regenerate-canonical-from-gtfs.mjs` | 14.9 KB / 532 lines | `package.json`, visual orchestrator, palette check | no | yes | High-risk / migrate later | migrate later with artifact gate |
+| `frontend/scripts/regenerate-canonical-from-gtfs.ts` | 14.9 KB / 532 lines | `package.json`, visual orchestrator, palette check, characterization test | yes | yes | Migrated TypeScript entrypoint | done |
+| `frontend/scripts/regenerate-canonical-from-gtfs.test.ts` | 4.0 KB / 100 lines | none | n/a | no | Migrated characterization test | done |
 | `frontend/scripts/build-subway-visual-network.mjs` | 201 KB / 4701 lines | `package.json`, renderer code, debug artifacts | no | yes | High-risk / migrate later | orchestrator migration plan first |
 | `frontend/scripts/build/schematic-hairpin-arc.ts` | 5.3 KB / 129 lines | visual orchestrator | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/parallel-offset-cross-color.ts` | 8.1 KB / 240 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
@@ -197,11 +199,11 @@ Categories:
 
 Next dedicated review batch:
 
-- `regenerate-canonical-from-gtfs` only with a canonical-artifact gate (it writes generated canonical geometry)
+- `build-subway-visual-network.mjs` only after a dedicated orchestrator migration plan
 
 Following dedicated review batch:
 
-- `build-subway-visual-network.mjs` only after a dedicated orchestrator migration plan
+- QA/check scripts only if that scope is explicitly approved
 
 Avoid for now:
 
@@ -209,8 +211,8 @@ Avoid for now:
 
 Needs characterization before conversion:
 
-- `regenerate-canonical-from-gtfs.mjs` because it writes generated canonical
-  artifacts and should be handled as an entrypoint with artifact checks.
+- none in the core transit artifact source path; remaining `.mjs` files are
+  config, QA/check scripts, or the visual-network orchestrator.
 
 Wait until after an orchestrator migration plan:
 

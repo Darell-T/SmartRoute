@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import { inflateRawSync } from "node:zlib";
 import { createHash } from "node:crypto";
 import { MTA_ROUTE_COLORS } from "./build/mta-colors.ts";
+import type { Feature, FeatureCollection, LineStringGeometry, Position, RouteId } from "./build/types.ts";
 
-const here = dirname(fileURLToPath(import.meta.url));
+const here = __dirname;
 const frontendRoot = resolve(here, "..");
 const publicDir = resolve(frontendRoot, "public");
 const cacheDir = resolve(frontendRoot, ".gtfs-cache");
@@ -53,12 +53,67 @@ const EXPECTED_ROUTES = [
   "SI",
   "W",
   "Z",
-];
+] as const;
+
+type CsvRow = Record<string, string>;
+
+type GtfsRoute = {
+  rawRouteId: string;
+  routeId: RouteId;
+  displayRoute: RouteId;
+  color: string;
+};
+
+type ShapeRoute = {
+  shapeId: string;
+  route: GtfsRoute;
+};
+
+type ShapePoint = {
+  lat: number;
+  lng: number;
+  sequence: number;
+};
+
+type CanonicalProperties = {
+  route_id: RouteId;
+  display_route: RouteId;
+  shape_id: string;
+  color: string;
+};
+
+type CanonicalFeature = Feature<LineStringGeometry, CanonicalProperties>;
+
+type CanonicalFeatureCollection = FeatureCollection<CanonicalFeature> & {
+  metadata: {
+    source: string;
+    generated_at: string;
+    canonical_hash_basis: string;
+    phase: string;
+    dedupe: {
+      strategy: string;
+      input_features: number;
+      dropped_features: number;
+    };
+    gtfs_zip_sha256?: string;
+  };
+};
+
+type RouteStats = {
+  count: number;
+  km: number;
+};
+
+type BuildCanonicalInput = {
+  routesRows: CsvRow[];
+  tripsRows: CsvRow[];
+  shapesRows: CsvRow[];
+};
 
 // Single source of truth lives in lib/mta-colors.json.
 const ROUTE_COLOR_FALLBACKS = MTA_ROUTE_COLORS;
 
-function normalizeRouteId(value) {
+export function normalizeRouteId(value: unknown): RouteId {
   const route = String(value || "").trim().toUpperCase();
   if (route === "6D") return "6X";
   if (route === "7D") return "7X";
@@ -68,23 +123,23 @@ function normalizeRouteId(value) {
   return route;
 }
 
-function normalizeColor(value, routeId) {
+export function normalizeColor(value: unknown, routeId: RouteId): string {
   const raw = String(value || "").trim().replace(/^#/, "");
   if (/^[0-9a-fA-F]{6}$/.test(raw)) return `#${raw.toUpperCase()}`;
   return ROUTE_COLOR_FALLBACKS[routeId] || "#A7A9AC";
 }
 
-function readUInt16(buffer, offset) {
+function readUInt16(buffer: Buffer, offset: number): number {
   return buffer.readUInt16LE(offset);
 }
 
-function readUInt32(buffer, offset) {
+function readUInt32(buffer: Buffer, offset: number): number {
   return buffer.readUInt32LE(offset);
 }
 
-function parseZipEntries(zipBuffer, wantedNames) {
+export function parseZipEntries(zipBuffer: Buffer, wantedNames: string[]): Map<string, string> {
   const wanted = new Set(wantedNames);
-  const entries = new Map();
+  const entries = new Map<string, string>();
   let eocdOffset = -1;
 
   for (let i = zipBuffer.length - 22; i >= 0; i--) {
@@ -159,9 +214,9 @@ function parseZipEntries(zipBuffer, wantedNames) {
   return entries;
 }
 
-function parseCsv(text) {
-  const rows = [];
-  let row = [];
+export function parseCsv(text: string): CsvRow[] {
+  const rows: string[][] = [];
+  let row: string[] = [];
   let field = "";
   let quoted = false;
 
@@ -207,7 +262,7 @@ function parseCsv(text) {
   if (!header) return [];
 
   return body.map((values) => {
-    const record = {};
+    const record: CsvRow = {};
     header.forEach((key, index) => {
       record[key] = values[index] ?? "";
     });
@@ -215,7 +270,7 @@ function parseCsv(text) {
   });
 }
 
-async function ensureGtfsZip() {
+async function ensureGtfsZip(): Promise<Buffer> {
   mkdirSync(cacheDir, { recursive: true });
   if (existsSync(ZIP_PATH)) {
     return readFileSync(ZIP_PATH);
@@ -231,8 +286,8 @@ async function ensureGtfsZip() {
   return buffer;
 }
 
-function buildRoutesById(routesRows) {
-  const routes = new Map();
+function buildRoutesById(routesRows: CsvRow[]): Map<string, GtfsRoute> {
+  const routes = new Map<string, GtfsRoute>();
   for (const row of routesRows) {
     const rawRouteId = String(row.route_id || "").trim();
     const routeId = normalizeRouteId(rawRouteId);
@@ -247,8 +302,8 @@ function buildRoutesById(routesRows) {
   return routes;
 }
 
-function buildShapeRoutes(tripsRows, routesByRawId) {
-  const shapeRoutes = new Map();
+function buildShapeRoutes(tripsRows: CsvRow[], routesByRawId: Map<string, GtfsRoute>): ShapeRoute[] {
+  const shapeRoutes = new Map<string, ShapeRoute>();
 
   for (const row of tripsRows) {
     const shapeId = String(row.shape_id || "").trim();
@@ -270,8 +325,8 @@ function buildShapeRoutes(tripsRows, routesByRawId) {
   return [...shapeRoutes.values()];
 }
 
-function groupShapePoints(shapesRows) {
-  const shapes = new Map();
+function groupShapePoints(shapesRows: CsvRow[]): Map<string, ShapePoint[]> {
+  const shapes = new Map<string, ShapePoint[]>();
 
   for (const row of shapesRows) {
     const shapeId = String(row.shape_id || "").trim();
@@ -288,7 +343,7 @@ function groupShapePoints(shapesRows) {
       continue;
     }
     if (!shapes.has(shapeId)) shapes.set(shapeId, []);
-    shapes.get(shapeId).push({ lat, lng, sequence });
+    shapes.get(shapeId)!.push({ lat, lng, sequence });
   }
 
   for (const points of shapes.values()) {
@@ -298,17 +353,21 @@ function groupShapePoints(shapesRows) {
   return shapes;
 }
 
-function buildCanonicalFeatureCollection({ routesRows, tripsRows, shapesRows }) {
+export function buildCanonicalFeatureCollection({
+  routesRows,
+  tripsRows,
+  shapesRows,
+}: BuildCanonicalInput): CanonicalFeatureCollection {
   const routesByRawId = buildRoutesById(routesRows);
   const shapeRoutes = buildShapeRoutes(tripsRows, routesByRawId);
   const shapes = groupShapePoints(shapesRows);
-  const features = [];
+  const features: CanonicalFeature[] = [];
 
   for (const { shapeId, route } of shapeRoutes) {
     const points = shapes.get(shapeId);
     if (!points || points.length < 2) continue;
 
-    const coordinates = points.map((point) => [point.lng, point.lat]);
+    const coordinates: Position[] = points.map((point): Position => [point.lng, point.lat]);
     features.push({
       type: "Feature",
       properties: {
@@ -355,15 +414,15 @@ function buildCanonicalFeatureCollection({ routesRows, tripsRows, shapesRows }) 
   };
 }
 
-function geometrySignature(coordinates) {
+function geometrySignature(coordinates: Position[]): string {
   return coordinates
     .map(([lng, lat]) => `${lng.toFixed(5)},${lat.toFixed(5)}`)
     .join(";");
 }
 
-function dedupeFeaturesByRouteAndGeometry(features) {
-  const seen = new Set();
-  const deduped = [];
+function dedupeFeaturesByRouteAndGeometry(features: CanonicalFeature[]): CanonicalFeature[] {
+  const seen = new Set<string>();
+  const deduped: CanonicalFeature[] = [];
 
   for (const feature of features) {
     const key = `${feature.properties.route_id}|${geometrySignature(
@@ -377,7 +436,7 @@ function dedupeFeaturesByRouteAndGeometry(features) {
   return deduped;
 }
 
-function featureLengthKm(feature) {
+function featureLengthKm(feature: CanonicalFeature): number {
   let meters = 0;
   const coordinates = feature.geometry.coordinates;
   for (let i = 0; i < coordinates.length - 1; i++) {
@@ -386,7 +445,7 @@ function featureLengthKm(feature) {
   return meters / 1000;
 }
 
-function distanceMeters(a, b) {
+function distanceMeters(a: Position, b: Position): number {
   const radius = 6371000;
   const lat1 = (a[1] * Math.PI) / 180;
   const lat2 = (b[1] * Math.PI) / 180;
@@ -398,7 +457,7 @@ function distanceMeters(a, b) {
   return 2 * radius * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
 }
 
-function validateFeatureCollection(collection) {
+export function validateFeatureCollection(collection: CanonicalFeatureCollection): Map<RouteId, RouteStats> {
   if (collection.type !== "FeatureCollection") {
     throw new Error("Canonical output is not a FeatureCollection.");
   }
@@ -406,7 +465,7 @@ function validateFeatureCollection(collection) {
     throw new Error("Canonical output has no features.");
   }
 
-  const byRoute = new Map();
+  const byRoute = new Map<RouteId, RouteStats>();
   let minLng = Infinity;
   let maxLng = -Infinity;
   let minLat = Infinity;
@@ -468,7 +527,7 @@ function validateFeatureCollection(collection) {
   }
 
   if (existsSync(CURRENT_NETWORK_PATH)) {
-    const current = JSON.parse(readFileSync(CURRENT_NETWORK_PATH, "utf8"));
+    const current = JSON.parse(readFileSync(CURRENT_NETWORK_PATH, "utf8")) as { features?: unknown[] };
     const currentCount = current.features?.length ?? 0;
     const nextCount = collection.features.length;
     const min = Math.floor(currentCount * 0.8);
@@ -483,11 +542,11 @@ function validateFeatureCollection(collection) {
   return byRoute;
 }
 
-function sha256(buffer) {
+export function sha256(buffer: Buffer): string {
   return createHash("sha256").update(buffer).digest("hex");
 }
 
-function printRouteSummary(byRoute) {
+function printRouteSummary(byRoute: Map<RouteId, RouteStats>): void {
   console.log(`[gtfs] canonical routes: ${byRoute.size}`);
   for (const [route, stats] of [...byRoute.entries()].sort((a, b) =>
     a[0].localeCompare(b[0], "en", { numeric: true }),
@@ -501,7 +560,7 @@ function printRouteSummary(byRoute) {
   }
 }
 
-async function main() {
+async function main(): Promise<void> {
   mkdirSync(publicDir, { recursive: true });
   const zipBuffer = await ensureGtfsZip();
   const files = parseZipEntries(zipBuffer, [
@@ -511,9 +570,9 @@ async function main() {
   ]);
 
   const collection = buildCanonicalFeatureCollection({
-    routesRows: parseCsv(files.get("routes.txt")),
-    tripsRows: parseCsv(files.get("trips.txt")),
-    shapesRows: parseCsv(files.get("shapes.txt")),
+    routesRows: parseCsv(files.get("routes.txt")!),
+    tripsRows: parseCsv(files.get("trips.txt")!),
+    shapesRows: parseCsv(files.get("shapes.txt")!),
   });
   collection.metadata.gtfs_zip_sha256 = sha256(zipBuffer);
 
@@ -525,7 +584,9 @@ async function main() {
   printRouteSummary(byRoute);
 }
 
-main().catch((error) => {
-  console.error(`[gtfs] ${error instanceof Error ? error.message : String(error)}`);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(`[gtfs] ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+  });
+}
