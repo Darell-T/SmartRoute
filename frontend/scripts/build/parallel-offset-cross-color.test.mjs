@@ -62,3 +62,41 @@ test("does not shift a brief crossing (run shorter than minOverlapM)", () => {
   const { shiftedCount } = parallelOffsetCrossColor([red, green], { colorOrder: ORDER, overlapDistM: 8, minOverlapM: 150 });
   assert.equal(shiftedCount, 0, "a brief crossing is not a shared run");
 });
+
+test("preserves input order, unrelated features, and shifted feature properties", () => {
+  const straight = Array.from({ length: 40 }, (_, i) => P(...O, 0, i * 30));
+  const red = feat("red", RED, straight);
+  const green = {
+    ...feat("grn", GREEN, straight.map((c) => [...c])),
+    properties: {
+      corridor_id: "grn",
+      color: GREEN,
+      route_ids: ["5"],
+      custom_stage_marker: "keep-me",
+    },
+  };
+  const unrelated = {
+    type: "Feature",
+    geometry: { type: "Point", coordinates: P(...O, 300, 300) },
+    properties: { corridor_id: "station-marker", marker_type: "qa" },
+  };
+
+  const { features, shiftedCount } = parallelOffsetCrossColor([unrelated, red, green], {
+    colorOrder: ORDER,
+    overlapDistM: 8,
+    minOverlapM: 150,
+    laneWidthM: 8,
+  });
+
+  assert.equal(shiftedCount, 1);
+  assert.deepEqual(features.map((feature) => feature.properties.corridor_id), ["station-marker", "red", "grn"]);
+  assert.equal(features[0], unrelated, "unrelated non-LineString features pass through by identity");
+  assert.equal(features[1], red, "lower-rank target feature passes through by identity");
+
+  const shifted = features[2];
+  assert.notEqual(shifted, green, "shifted feature is cloned instead of mutating the original");
+  assert.equal(shifted.properties.custom_stage_marker, "keep-me");
+  assert.deepEqual(shifted.properties.route_ids, ["5"]);
+  assert.equal(shifted.properties.cross_color_parallelized, true);
+  assert.deepEqual(green.geometry.coordinates, straight, "source feature geometry remains unchanged");
+});
