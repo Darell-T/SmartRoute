@@ -1,13 +1,39 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { collapseSameColorOverlaps } from "./collapse-same-color.mjs";
+import { collapseSameColorOverlaps } from "./collapse-same-color.ts";
+import type { Feature, LineStringGeometry, Position } from "./types.ts";
+
+type TestProperties = {
+  corridor_id: string;
+  route_ids: string[];
+  color: string;
+  qa_orphan_origin?: boolean;
+  qa_orphan_from_is_terminal?: boolean;
+  qa_orphan_to_is_terminal?: boolean;
+  qa_orphan_severity?: string;
+  same_color_shared_run?: boolean;
+  same_color_tail?: boolean;
+  same_color_target_tail?: boolean;
+  [key: string]: unknown;
+};
+
+type TestFeature = Feature<LineStringGeometry, TestProperties>;
 
 const M_LAT = 1 / 110574;
 const M_LON = 1 / (111320 * Math.cos((40.75 * Math.PI) / 180));
-const P = (lon0, lat0, dxM, dyM) => [lon0 + dxM * M_LON, lat0 + dyM * M_LAT];
-const O = [-73.94, 40.75];
+const P = (lon0: number, lat0: number, dxM: number, dyM: number): Position => [
+  lon0 + dxM * M_LON,
+  lat0 + dyM * M_LAT,
+];
+const O: Position = [-73.94, 40.75];
 
-function feat(cid, routeIds, coords, color = "#FCCC0A", extra = {}) {
+function feat(
+  cid: string,
+  routeIds: string[],
+  coords: Position[],
+  color = "#FCCC0A",
+  extra: Partial<TestProperties> = {},
+): TestFeature {
   return {
     type: "Feature",
     geometry: { type: "LineString", coordinates: coords },
@@ -16,7 +42,7 @@ function feat(cid, routeIds, coords, color = "#FCCC0A", extra = {}) {
 }
 
 const R = 6371000;
-const hav = (a, b) => {
+const hav = (a: Position, b: Position): number => {
   const r = Math.PI / 180, dy = (b[1] - a[1]) * r, dx = (b[0] - a[0]) * r;
   return 2 * R * Math.asin(Math.sqrt(Math.sin(dy / 2) ** 2 + Math.cos(a[1] * r) * Math.cos(b[1] * r) * Math.sin(dx / 2) ** 2));
 };
@@ -29,7 +55,9 @@ test("N/W/R same-color overlapping lines collapse onto one (render as one yellow
   const { features, collapsedCount } = collapseSameColorOverlaps([n, w, r], { collapseDistM: 12, minOverlapM: 120 });
   assert.equal(collapsedCount, 2, "W and R collapse onto N");
   assert.equal(features.length, 1, "full same-track overlap becomes one visual feature");
-  const repRoutes = features.find((f) => f.properties.corridor_id === "n").properties.route_ids.sort();
+  const representative = features.find((f) => f.properties.corridor_id === "n");
+  assert.ok(representative);
+  const repRoutes = [...(representative.properties.route_ids ?? [])].sort();
   assert.deepEqual(repRoutes, ["N", "R", "W"]);
 });
 
@@ -49,7 +77,7 @@ test("partial same-color overlap creates a shared run and keeps divergent tail r
 
   const shared = features.find((f) => f.properties.same_color_shared_run === true);
   assert.ok(shared, "shared overlap is represented as its own route-unioned run");
-  assert.deepEqual([...shared.properties.route_ids].sort(), ["N", "W"]);
+  assert.deepEqual([...(shared.properties.route_ids ?? [])].sort(), ["N", "W"]);
 
   const trunkTail = features.find((f) => String(f.properties.corridor_id).startsWith("trunk-tail-"));
   assert.ok(trunkTail, "target trunk tail remains visible after the shared run");
