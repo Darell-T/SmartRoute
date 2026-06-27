@@ -13,16 +13,67 @@
 // trunk in place. Pairs that are already sustained parallel lanes on one side are
 // untouched even when they are closer than overlapDistM.
 
+// @ts-expect-error TS1479: this helper is .ts while cross-color-spread remains .mjs until its own migration batch.
 import { offsetPolylineOverExtent } from "./cross-color-spread.mjs";
+import type { LineStringGeometry, Position } from "./types.ts";
 
 const EARTH_RADIUS_M = 6371000;
 const M_PER_DEG_LAT = 110574;
 
-function metersPerDegLng(lat) {
+type GeometryLike = {
+  type?: unknown;
+  coordinates?: unknown;
+  [key: string]: unknown;
+};
+
+type CrossColorProperties = {
+  color?: string;
+  cross_color_parallelized?: boolean;
+  [key: string]: unknown;
+};
+
+export type CrossColorFeature = {
+  type?: unknown;
+  id?: string | number;
+  geometry?: GeometryLike | null;
+  properties?: CrossColorProperties | null;
+  [key: string]: unknown;
+};
+
+type CrossColorLineFeature = CrossColorFeature & {
+  geometry: LineStringGeometry;
+  properties: CrossColorProperties;
+};
+
+type Projection = {
+  distM: number;
+  signedSideM: number;
+};
+
+type ArcRange = {
+  startArc: number;
+  endArc: number;
+};
+
+export type ParallelOffsetCrossColorOptions = {
+  colorOrder?: string[];
+  overlapDistM?: number;
+  sideEpsM?: number;
+  minOverlapM?: number;
+  laneWidthM?: number;
+  taperM?: number;
+};
+
+export type ParallelOffsetCrossColorResult = {
+  features: CrossColorFeature[];
+  shiftedCount: number;
+};
+
+function metersPerDegLng(lat: number): number {
   return 111320 * Math.cos((lat * Math.PI) / 180);
 }
 
-function haversineM([lon1, lat1], [lon2, lat2]) {
+function haversineM([lon1, lat1]: Position, [lon2, lat2]: Position): number {
   const r = Math.PI / 180;
   const dLat = (lat2 - lat1) * r;
   const dLon = (lon2 - lon1) * r;
@@ -32,14 +83,29 @@ function haversineM([lon1, lat1], [lon2, lat2]) {
   return 2 * EARTH_RADIUS_M * Math.asin(Math.sqrt(a));
 }
 
-function cumulativeArcs(coords) {
+function cumulativeArcs(coords: Position[]): number[] {
   const arcs = [0];
   for (let i = 1; i < coords.length; i += 1) arcs.push(arcs[i - 1] + haversineM(coords[i - 1], coords[i]));
   return arcs;
 }
 
-function projectToPolyline(coords, p) {
-  let best = null;
+function isPosition(value: unknown): value is Position {
+  return Array.isArray(value) && value.length >= 2 && typeof value[0] === "number" && typeof value[1] === "number";
+}
+
+function isLineFeature(feature: CrossColorFeature): feature is CrossColorLineFeature {
+  return (
+    feature.geometry?.type === "LineString" &&
+    Array.isArray(feature.geometry.coordinates) &&
+    feature.geometry.coordinates.length >= 2 &&
+    feature.geometry.coordinates.every(isPosition) &&
+    feature.properties !== null &&
+    typeof feature.properties === "object"
+  );
+}
+
+function projectToPolyline(coords: Position[], p: Position): Projection | null {
+  let best: Projection | null = null;
   const mPerLng = metersPerDegLng(p[1]);
   const px = p[0] * mPerLng;
   const py = p[1] * M_PER_DEG_LAT;
@@ -52,7 +118,7 @@ function projectToPolyline(coords, p) {
     const len2 = dx * dx + dy * dy || 1e-12;
     const len = Math.sqrt(len2);
     const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len2));
-    const proj = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+    const proj: Position = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
     const distM = haversineM(proj, p);
     if (!best || distM < best.distM) {
       best = {
@@ -64,12 +130,12 @@ function projectToPolyline(coords, p) {
   return best;
 }
 
-function colorRank(color, colorOrder) {
+function colorRank(color: string, colorOrder: string[]): number {
   const i = colorOrder.indexOf(color);
   return i === -1 ? 999 : i;
 }
 
-function runHasSideFlipOrCoincidence(projections, start, end, sideEpsM) {
+function runHasSideFlipOrCoincidence(projections: Array<Projection | null>, start: number, end: number, sideEpsM: number): boolean {
   let hasPositiveSide = false;
   let hasNegativeSide = false;
   let coincidentCount = 0;
@@ -77,7 +143,7 @@ function runHasSideFlipOrCoincidence(projections, start, end, sideEpsM) {
 
   for (let i = start; i <= end; i += 1) {
     const side = projections[i]?.signedSideM;
-    if (!Number.isFinite(side)) continue;
+    if (typeof side !== "number" || !Number.isFinite(side)) continue;
 
     sampleCount += 1;
     if (side > sideEpsM) hasPositiveSide = true;
@@ -89,11 +155,11 @@ function runHasSideFlipOrCoincidence(projections, start, end, sideEpsM) {
   return sampleCount > 0 && coincidentCount >= Math.max(2, Math.ceil(sampleCount * 0.8));
 }
 
-function mergeArcRanges(ranges) {
+function mergeArcRanges(ranges: ArcRange[]): ArcRange[] {
   const sorted = ranges
     .filter((range) => Number.isFinite(range.startArc) && Number.isFinite(range.endArc) && range.endArc > range.startArc)
     .sort((a, b) => a.startArc - b.startArc || a.endArc - b.endArc);
-  const merged = [];
+  const merged: ArcRange[] = [];
 
   for (const range of sorted) {
     const last = merged.at(-1);
@@ -108,23 +174,16 @@ function mergeArcRanges(ranges) {
 }
 
 /**
- * @param {Array} features
- * @param {object} [options]
- * @param {string[]} [options.colorOrder=[]]  canonical color order (lower index = stays put)
- * @param {number} [options.overlapDistM=8]   vertices closer than this to a lower-rank other-color line are "coincident"
- * @param {number} [options.sideEpsM=0.5]      side distances within this threshold count as coincident
- * @param {number} [options.minOverlapM=150]  only shift runs longer than this
- * @param {number} [options.laneWidthM=8]     shift distance
- * @param {number} [options.taperM=40]
- * @returns {{ features: Array, shiftedCount: number }}
+ * The canonical color order uses lower indices for lines that stay put.
  */
-export function parallelOffsetCrossColor(features, options = {}) {
+export function parallelOffsetCrossColor(
+  features: CrossColorFeature[],
+  options: ParallelOffsetCrossColorOptions = {},
+): ParallelOffsetCrossColorResult {
   const { colorOrder = [], overlapDistM = 8, sideEpsM = 0.5, minOverlapM = 150, laneWidthM = 8, taperM = 40 } = options;
-  const lines = features.filter(
-    (f) => f.geometry?.type === "LineString" && Array.isArray(f.geometry.coordinates) && f.geometry.coordinates.length >= 2,
-  );
+  const lines = features.filter(isLineFeature);
 
-  const replaced = new Map();
+  const replaced = new Map<CrossColorFeature, CrossColorFeature>();
   let shiftedCount = 0;
 
   for (const f of lines) {
@@ -139,12 +198,12 @@ export function parallelOffsetCrossColor(features, options = {}) {
 
     const coords = f.geometry.coordinates;
     const arcs = cumulativeArcs(coords);
-    const rangesToOffset = [];
+    const rangesToOffset: ArcRange[] = [];
 
     for (const target of targets) {
       const targetCoords = target.geometry.coordinates;
       const projections = coords.map((p) => projectToPolyline(targetCoords, p));
-      const covered = projections.map((projection) => projection?.distM <= overlapDistM);
+      const covered = projections.map((projection) => projection !== null && projection.distM <= overlapDistM);
 
       // sustained covered runs only qualify when they are coincident or swap sides
       // of the same lower-rank line. Nearby same-side parallels stay unchanged.

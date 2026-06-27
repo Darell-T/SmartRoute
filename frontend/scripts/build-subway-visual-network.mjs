@@ -59,7 +59,7 @@ import { snapOffRevenueToShape, maxOffShapeM } from "./build/snap-off-revenue-to
 import { replaceEndpointHairpin } from "./build/schematic-hairpin-arc.ts";
 import { hermiteBetween } from "./build/offset-bow.ts";
 import { collapseSameColorOverlaps } from "./build/collapse-same-color.ts";
-import { parallelOffsetCrossColor } from "./build/parallel-offset-cross-color.mjs";
+import { parallelOffsetCrossColor } from "./build/parallel-offset-cross-color.ts";
 import { suppressShadowOrphans } from "./build/suppress-shadow-orphans.ts";
 import { applyCartographicJunctionOverrides } from "./build/cartographic-junction-overrides.ts";
 import {
