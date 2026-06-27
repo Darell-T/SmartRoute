@@ -1,13 +1,37 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import path from "node:path";
 import test from "node:test";
 
-import { applyStNicholasBlueStraightening } from "./st-nicholas-blue-straightening.mjs";
+import { applyStNicholasBlueStraightening } from "./st-nicholas-blue-straightening.ts";
+import type { Feature, LineStringGeometry, Position } from "./types.ts";
+
+type Vector = [number, number];
+
+type TestProperties = {
+  bundle_id?: unknown;
+  corridor_id?: unknown;
+  color?: unknown;
+  route_id?: unknown;
+  route_ids?: unknown;
+  color_route_ids?: unknown;
+  st_nicholas_blue_straightened?: boolean;
+  [key: string]: unknown;
+};
+
+type TestFeature = Feature<LineStringGeometry, TestProperties>;
+
+type BBox = {
+  minLon: number;
+  maxLon: number;
+  minLat: number;
+  maxLat: number;
+};
 
 const BLUE = "#0A84FF";
 const ORANGE = "#FF6319";
 
-function lineFeature(id, color, routes, coordinates) {
+function lineFeature(id: string, color: string, routes: string[], coordinates: Position[]): TestFeature {
   return {
     type: "Feature",
     geometry: {
@@ -23,20 +47,20 @@ function lineFeature(id, color, routes, coordinates) {
   };
 }
 
-function xy(point, lat = 40.825) {
+function xy(point: Position, lat = 40.825): Vector {
   return [
     point[0] * 111320 * Math.cos((lat * Math.PI) / 180),
     point[1] * 110574,
   ];
 }
 
-function distanceM(a, b) {
+function distanceM(a: Position, b: Position): number {
   const pa = xy(a);
   const pb = xy(b);
   return Math.hypot(pb[0] - pa[0], pb[1] - pa[1]);
 }
 
-function perpendicularDistanceM(point, lineA, lineB) {
+function perpendicularDistanceM(point: Position, lineA: Position, lineB: Position): number {
   const p = xy(point);
   const a = xy(lineA);
   const b = xy(lineB);
@@ -49,7 +73,7 @@ function perpendicularDistanceM(point, lineA, lineB) {
   return Math.hypot(p[0] - (a[0] + vx * t), p[1] - (a[1] + vy * t));
 }
 
-function polylineDistanceM(point, line) {
+function polylineDistanceM(point: Position, line: Position[]): number {
   let best = Infinity;
   for (let index = 0; index < line.length - 1; index += 1) {
     best = Math.min(best, perpendicularDistanceM(point, line[index], line[index + 1]));
@@ -57,7 +81,7 @@ function polylineDistanceM(point, line) {
   return best;
 }
 
-function inBBox(point, bbox) {
+function inBBox(point: Position, bbox: BBox): boolean {
   return (
     point[0] >= bbox.minLon &&
     point[0] <= bbox.maxLon &&
@@ -66,7 +90,7 @@ function inBBox(point, bbox) {
   );
 }
 
-function routeIdsOf(feature) {
+function routeIdsOf(feature: TestFeature): string[] {
   const props = feature.properties ?? {};
   return Array.from(new Set([
     ...(Array.isArray(props.route_ids) ? props.route_ids : []),
@@ -75,13 +99,13 @@ function routeIdsOf(feature) {
   ].filter(Boolean).map(String)));
 }
 
-function bearingDeg(a, b) {
+function bearingDeg(a: Position, b: Position): number {
   const pa = xy(a);
   const pb = xy(b);
   return (Math.atan2(pb[1] - pa[1], pb[0] - pa[0]) * 180) / Math.PI;
 }
 
-function turnDeg(previous, point, next) {
+function turnDeg(previous: Position, point: Position, next: Position): number {
   let delta = Math.abs(bearingDeg(previous, point) - bearingDeg(point, next));
   while (delta > 180) delta = Math.abs(delta - 360);
   return delta;
@@ -121,23 +145,33 @@ test("St Nicholas blue straightening aligns A/C seam pieces onto one straight ax
   const outNorth = features.find((feature) => feature.properties.bundle_id === "north");
   const outSouth = features.find((feature) => feature.properties.bundle_id === "south");
   const outOrange = features.find((feature) => feature.properties.bundle_id === "orange");
+  assert.ok(outNorth);
+  assert.ok(outSouth);
+  assert.ok(outOrange);
   assert.equal(outNorth.properties.st_nicholas_blue_straightened, true);
   assert.equal(outSouth.properties.st_nicholas_blue_straightened, true);
   assert.deepEqual(outOrange.geometry.coordinates, orange.geometry.coordinates);
 
   const northEnd = outNorth.geometry.coordinates.at(-1);
   const southStart = outSouth.geometry.coordinates[0];
+  assert.ok(northEnd);
   assert.ok(distanceM(northEnd, southStart) < 0.2, "seam endpoints should be snapped together");
 
   const axisStart = outNorth.geometry.coordinates[0];
   const axisEnd = outSouth.geometry.coordinates.at(-1);
+  assert.ok(axisEnd);
   const maxDistance = Math.max(
     ...outNorth.geometry.coordinates.map((point) => perpendicularDistanceM(point, axisStart, axisEnd)),
     ...outSouth.geometry.coordinates.map((point) => perpendicularDistanceM(point, axisStart, axisEnd)),
   );
   assert.ok(maxDistance < 1.0, `expected straightened blue points to be on one axis, max=${maxDistance}`);
+  const maxAfter = diagnostics.max_perpendicular_after_m;
+  const maxBefore = diagnostics.max_perpendicular_before_m;
+  if (typeof maxAfter !== "number" || typeof maxBefore !== "number") {
+    throw new TypeError("expected numeric St Nicholas drift diagnostics");
+  }
   assert.ok(
-    diagnostics.max_perpendicular_after_m < diagnostics.max_perpendicular_before_m * 0.25,
+    maxAfter < maxBefore * 0.25,
     "straightening should materially reduce lateral drift",
   );
 });
@@ -163,7 +197,9 @@ test("default St Nicholas scope snaps the visible 145-163 St run to the A/C stat
 
   const outNorth = features.find((feature) => feature.properties.bundle_id === "north");
   const outSouth = features.find((feature) => feature.properties.bundle_id === "south");
-  const stationSpine = [
+  assert.ok(outNorth);
+  assert.ok(outSouth);
+  const stationSpine: Position[] = [
     [-73.944216, 40.824783],
     [-73.941514, 40.830518],
     [-73.939892, 40.836013],
@@ -208,8 +244,11 @@ test("straightening extends to nearby endpoint vertices so bbox boundaries do no
 
   const outNorth = features.find((feature) => feature.properties.bundle_id === "north");
   const outSouth = features.find((feature) => feature.properties.bundle_id === "south");
+  assert.ok(outNorth);
+  assert.ok(outSouth);
   const axisStart = outNorth.geometry.coordinates[0];
   const axisEnd = outSouth.geometry.coordinates.at(-1);
+  assert.ok(axisEnd);
   const maxDistance = Math.max(
     ...outNorth.geometry.coordinates.map((point) => perpendicularDistanceM(point, axisStart, axisEnd)),
     ...outSouth.geometry.coordinates.map((point) => perpendicularDistanceM(point, axisStart, axisEnd)),
@@ -222,8 +261,8 @@ test("straightening extends to nearby endpoint vertices so bbox boundaries do no
 });
 
 test("real St Nicholas A/C corridor has no straightening handoff doglegs", () => {
-  const artifactUrl = new URL("../../public/subway-network.visual.geojson", import.meta.url);
-  const artifact = JSON.parse(fs.readFileSync(artifactUrl, "utf8"));
+  const artifactPath = path.join(process.cwd(), "public", "subway-network.visual.geojson");
+  const artifact = JSON.parse(fs.readFileSync(artifactPath, "utf8")) as { features?: TestFeature[] };
   const { features, diagnostics } = applyStNicholasBlueStraightening(artifact.features ?? []);
   assert.equal(diagnostics.applied, true);
 
@@ -233,7 +272,16 @@ test("real St Nicholas A/C corridor has no straightening handoff doglegs", () =>
     minLat: 40.8200,
     maxLat: 40.8395,
   };
-  const offenders = [];
+  const offenders: Array<{
+    featureIndex: number;
+    bundle_id: unknown;
+    corridor_id: unknown;
+    index: number;
+    turn: number;
+    inLength: number;
+    outLength: number;
+    point: Position;
+  }> = [];
   for (const [featureIndex, feature] of features.entries()) {
     if (String(feature.properties?.color ?? "").toUpperCase() !== BLUE) continue;
     const routes = routeIdsOf(feature);
@@ -268,12 +316,12 @@ test("real St Nicholas A/C corridor has no straightening handoff doglegs", () =>
 });
 
 test("real St Nicholas A/C corridor follows the A/C station spine, not the B/D branch", () => {
-  const artifactUrl = new URL("../../public/subway-network.visual.geojson", import.meta.url);
-  const artifact = JSON.parse(fs.readFileSync(artifactUrl, "utf8"));
+  const artifactPath = path.join(process.cwd(), "public", "subway-network.visual.geojson");
+  const artifact = JSON.parse(fs.readFileSync(artifactPath, "utf8")) as { features?: TestFeature[] };
   const { features, diagnostics } = applyStNicholasBlueStraightening(artifact.features ?? []);
   assert.equal(diagnostics.applied, true);
 
-  const stationSpine = [
+  const stationSpine: Position[] = [
     [-73.944216, 40.824783], // 145 St A/C/B/D
     [-73.941514, 40.830518], // 155 St A/C
     [-73.939892, 40.836013], // 163 St-Amsterdam Av A/C
@@ -285,7 +333,7 @@ test("real St Nicholas A/C corridor follows the A/C station spine, not the B/D b
     maxLat: 40.8395,
   };
 
-  const distances = [];
+  const distances: number[] = [];
   for (const feature of features) {
     if (String(feature.properties?.color ?? "").toUpperCase() !== BLUE) continue;
     const routes = routeIdsOf(feature);
