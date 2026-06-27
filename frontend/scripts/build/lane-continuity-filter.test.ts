@@ -1,12 +1,42 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { filterBogusTransitions, markOrphanLanes, removeOrphanErrorLanes } from "./lane-continuity-filter.mjs";
+import { filterBogusTransitions, markOrphanLanes, removeOrphanErrorLanes } from "./lane-continuity-filter.ts";
+import type { Feature, LineStringGeometry, Position } from "./types.ts";
+
+type TestFeatureProperties = {
+  visual_feature_type?: string;
+  feature_type?: string;
+  lane_slot_source?: string;
+  bundle_id?: string;
+  bundle_id_from?: string;
+  bundle_id_to?: string;
+  corridor_id?: string;
+  anchor_id?: string;
+  from_anchor_id?: string | null;
+  to_anchor_id?: string | null;
+  from_stop_id?: string | null;
+  to_stop_id?: string | null;
+  route_ids?: string[];
+  color_route_ids?: string[];
+  color?: string;
+  spine_id?: string;
+  base_spine_hash?: string;
+  transition_classification?: string;
+  length_m?: number;
+  qa_orphan_origin?: boolean;
+  qa_orphan_from_is_terminal?: boolean;
+  qa_orphan_to_is_terminal?: boolean;
+  qa_orphan_severity?: string;
+  [key: string]: unknown;
+};
+
+type TestFeature = Feature<LineStringGeometry, TestFeatureProperties>;
 
 test("removeOrphanErrorLanes drops only both-ends-dangling error orphans", () => {
-  const stray = { type: "Feature", geometry: { type: "LineString", coordinates: [[0, 0], [0, 1]] }, properties: { qa_orphan_origin: true, qa_orphan_severity: "error", qa_orphan_from_is_terminal: false, qa_orphan_to_is_terminal: false } };
-  const terminalAnchored = { type: "Feature", geometry: { type: "LineString", coordinates: [[1, 0], [1, 1]] }, properties: { qa_orphan_origin: true, qa_orphan_severity: "error", qa_orphan_from_is_terminal: true, qa_orphan_to_is_terminal: false } };
-  const warn = { type: "Feature", geometry: { type: "LineString", coordinates: [[2, 0], [2, 1]] }, properties: { qa_orphan_origin: true, qa_orphan_severity: "warn", qa_orphan_from_is_terminal: true, qa_orphan_to_is_terminal: true } };
-  const normal = { type: "Feature", geometry: { type: "LineString", coordinates: [[3, 0], [3, 1]] }, properties: {} };
+  const stray: TestFeature = { type: "Feature", geometry: { type: "LineString", coordinates: [[0, 0], [0, 1]] }, properties: { qa_orphan_origin: true, qa_orphan_severity: "error", qa_orphan_from_is_terminal: false, qa_orphan_to_is_terminal: false } };
+  const terminalAnchored: TestFeature = { type: "Feature", geometry: { type: "LineString", coordinates: [[1, 0], [1, 1]] }, properties: { qa_orphan_origin: true, qa_orphan_severity: "error", qa_orphan_from_is_terminal: true, qa_orphan_to_is_terminal: false } };
+  const warn: TestFeature = { type: "Feature", geometry: { type: "LineString", coordinates: [[2, 0], [2, 1]] }, properties: { qa_orphan_origin: true, qa_orphan_severity: "warn", qa_orphan_from_is_terminal: true, qa_orphan_to_is_terminal: true } };
+  const normal: TestFeature = { type: "Feature", geometry: { type: "LineString", coordinates: [[3, 0], [3, 1]] }, properties: {} };
   const { features, removedCount } = removeOrphanErrorLanes([stray, terminalAnchored, warn, normal]);
   assert.equal(removedCount, 1);
   assert.ok(!features.includes(stray));
@@ -17,7 +47,7 @@ test("removeOrphanErrorLanes drops only both-ends-dangling error orphans", () =>
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeLine(coords, props) {
+function makeLine(coords: Position[], props: TestFeatureProperties): TestFeature {
   return {
     type: "Feature",
     geometry: { type: "LineString", coordinates: coords },
@@ -25,7 +55,14 @@ function makeLine(coords, props) {
   };
 }
 
-function makeBundle(bundleId, corridorId, routeIds, color, fromAnchor, toAnchor) {
+function makeBundle(
+  bundleId: string,
+  corridorId: string,
+  routeIds: string[],
+  color: string,
+  fromAnchor: string | null,
+  toAnchor: string | null,
+): TestFeature {
   return makeLine(
     [[0, 0], [0, 1]],
     {
@@ -47,7 +84,16 @@ function makeBundle(bundleId, corridorId, routeIds, color, fromAnchor, toAnchor)
   );
 }
 
-function makeTransition(fromBid, toBid, anchorId, color, routeIds, colorRouteIds, classification, lengthM) {
+function makeTransition(
+  fromBid: string,
+  toBid: string,
+  anchorId: string,
+  color: string,
+  routeIds: string[],
+  colorRouteIds: string[],
+  classification: string,
+  lengthM: number,
+): TestFeature {
   return makeLine(
     [[0, 0], [0.0001, 0.0001]],
     {

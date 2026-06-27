@@ -112,10 +112,10 @@ Categories:
 | `frontend/scripts/build-subway-visual-network.mjs` | 201 KB / 4701 lines | `package.json`, renderer code, debug artifacts | no | yes | High-risk / migrate later | orchestrator migration plan first |
 | `frontend/scripts/build/schematic-hairpin-arc.mjs` | 4.8 KB / 113 lines | visual orchestrator | no | no | Medium-risk helper | add characterization test before conversion |
 | `frontend/scripts/build/parallel-offset-cross-color.mjs` | 4.9 KB / 128 lines | visual orchestrator, colocated test | yes | no | High-risk / migrate later | wait; cross-color offset pass |
-| `frontend/scripts/build/lane-continuity-filter.mjs` | 7.3 KB / 187 lines | visual orchestrator, colocated test | yes | no | Safe leaf helper | migrate now |
-| `frontend/scripts/build/same-route-junction-fabric.mjs` | 9.1 KB / 270 lines | visual orchestrator, colocated test | yes | no | Safe leaf helper | migrate now |
+| `frontend/scripts/build/lane-continuity-filter.ts` | 7.3 KB / 187 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
+| `frontend/scripts/build/same-route-junction-fabric.ts` | 9.1 KB / 270 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/opendata-subway-lines.mjs` | 11.1 KB / 368 lines | visual orchestrator, palette check, colocated test | yes | no | Medium-risk helper | migrate later |
-| `frontend/scripts/build/cartographic-junction-overrides.mjs` | 11.4 KB / 345 lines | visual orchestrator, colocated test | yes | no | Safe leaf helper | migrate now |
+| `frontend/scripts/build/cartographic-junction-overrides.ts` | 11.4 KB / 345 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/trim-terminal-overhang.mjs` | 12.1 KB / 328 lines | visual orchestrator, colocated test | yes | no | Medium-risk helper | migrate later |
 | `frontend/scripts/build/cross-color-spread.mjs` | 12.6 KB / 331 lines | visual orchestrator, `parallel-offset-cross-color.mjs`, `physical-bundle-materialization.mjs`, colocated test | yes | no | High-risk / migrate later | wait until dependent helpers are planned |
 | `frontend/scripts/build/snap-dangling-same-color.mjs` | 14.8 KB / 394 lines | visual orchestrator, colocated test | yes | no | Medium-risk helper | migrate later |
@@ -131,11 +131,11 @@ Categories:
 | `frontend/scripts/build/physical-bundle.mjs` | 24.3 KB / 679 lines | visual orchestrator, `cross-color-spread.mjs`, `same-color-merge.mjs`, colocated test | yes | no | High-risk / migrate later | wait for physical-bundle plan |
 | `frontend/scripts/build/bridge-route-gaps.test.mjs` | 8.3 KB / 188 lines | none | n/a | no | QA/check script | migrate with source |
 | `frontend/scripts/build/brighton-bq-church-spacing.test.mjs` | 3.8 KB / 112 lines | none | n/a | no | QA/check script | migrate with source |
-| `frontend/scripts/build/cartographic-junction-overrides.test.mjs` | 5.3 KB / 154 lines | none | n/a | no | QA/check script | migrate with source |
+| `frontend/scripts/build/cartographic-junction-overrides.test.ts` | 5.3 KB / 154 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/build/collapse-same-color.test.mjs` | 5.8 KB / 114 lines | none | n/a | no | QA/check script | migrate with source |
 | `frontend/scripts/build/cross-color-spread.test.mjs` | 10.1 KB / 210 lines | none | n/a | no | QA/check script | migrate with source |
 | `frontend/scripts/build/culver-fg-prospect-smoothing.test.mjs` | 3.7 KB / 126 lines | none | n/a | no | QA/check script | migrate with source |
-| `frontend/scripts/build/lane-continuity-filter.test.mjs` | 10.2 KB / 258 lines | none | n/a | no | QA/check script | migrate with source |
+| `frontend/scripts/build/lane-continuity-filter.test.ts` | 10.2 KB / 258 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/build/mott-haven-schematic.test.mjs` | 6.7 KB / 254 lines | none | n/a | no | QA/check script | migrate with source |
 | `frontend/scripts/build/nostrand-eastern-schematic.test.mjs` | 3.8 KB / 133 lines | none | n/a | no | QA/check script | migrate with source |
 | `frontend/scripts/build/opendata-subway-lines.test.mjs` | 4.3 KB / 148 lines | none | n/a | no | QA/check script | migrate with source |
@@ -143,7 +143,7 @@ Categories:
 | `frontend/scripts/build/physical-bundle-materialization.test.mjs` | 8.7 KB / 259 lines | none | n/a | no | QA/check script | migrate with source |
 | `frontend/scripts/build/physical-bundle.test.mjs` | 19.3 KB / 414 lines | none | n/a | no | QA/check script | migrate with source |
 | `frontend/scripts/build/same-color-merge.test.mjs` | 23.5 KB / 529 lines | none | n/a | no | QA/check script | migrate with source |
-| `frontend/scripts/build/same-route-junction-fabric.test.mjs` | 4.3 KB / 122 lines | none | n/a | no | QA/check script | migrate with source |
+| `frontend/scripts/build/same-route-junction-fabric.test.ts` | 4.3 KB / 122 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/build/snap-dangling-same-color.test.mjs` | 5.8 KB / 103 lines | none | n/a | no | QA/check script | migrate with source |
 | `frontend/scripts/build/st-nicholas-blue-straightening.test.mjs` | 10.6 KB / 307 lines | none | n/a | no | QA/check script | migrate with source |
 | `frontend/scripts/build/trim-terminal-overhang.test.mjs` | 10.5 KB / 305 lines | none | n/a | no | QA/check script | migrate with source |
@@ -177,15 +177,13 @@ Categories:
 
 Next batch:
 
-- `lane-continuity-filter`
-- `same-route-junction-fabric`
-- `cartographic-junction-overrides`
+- `trim-terminal-overhang`
+- `snap-dangling-same-color`
 
 Following batch:
 
 - `opendata-subway-lines`
-- `trim-terminal-overhang`
-- `snap-dangling-same-color`
+- `schematic-hairpin-arc` after characterization coverage
 
 Later medium-risk batch:
 

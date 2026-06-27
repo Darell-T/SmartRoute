@@ -1,13 +1,31 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { repairSameRouteEndpointCrossings } from "./same-route-junction-fabric.mjs";
+import { repairSameRouteEndpointCrossings } from "./same-route-junction-fabric.ts";
+import type { Feature, LineStringGeometry, Position } from "./types.ts";
 
 const DEG_PER_M_LAT = 1 / 111320;
 const DEG_PER_M_LON = 1 / (111320 * Math.cos((40.84 * Math.PI) / 180));
-const O = [-73.87, 40.84];
-const P = (xM, yM) => [O[0] + xM * DEG_PER_M_LON, O[1] + yM * DEG_PER_M_LAT];
+const O: Position = [-73.87, 40.84];
+const P = (xM: number, yM: number): Position => [O[0] + xM * DEG_PER_M_LON, O[1] + yM * DEG_PER_M_LAT];
 
-function line(id, routeIds, coords, extra = {}) {
+type TestFeatureProperties = {
+  corridor_id: string;
+  bundle_id: string;
+  route_ids: string[];
+  color_route_ids: string[];
+  color: string;
+  [key: string]: unknown;
+};
+
+type TestFeature = Feature<LineStringGeometry, TestFeatureProperties>;
+type LineFeature = Feature<LineStringGeometry, { [key: string]: unknown }>;
+
+function line(
+  id: string,
+  routeIds: string[],
+  coords: Position[],
+  extra: Partial<TestFeatureProperties> = {},
+): TestFeature {
   return {
     type: "Feature",
     geometry: { type: "LineString", coordinates: coords },
@@ -22,14 +40,14 @@ function line(id, routeIds, coords, extra = {}) {
   };
 }
 
-function mxy(p) {
+function mxy(p: Position): Position {
   return [
     (p[0] - O[0]) / DEG_PER_M_LON,
     (p[1] - O[1]) / DEG_PER_M_LAT,
   ];
 }
 
-function segmentIntersection(a, b, c, d) {
+function segmentIntersection(a: Position, b: Position, c: Position, d: Position): { t: number; u: number } | null {
   const [x1, y1] = mxy(a);
   const [x2, y2] = mxy(b);
   const [x3, y3] = mxy(c);
@@ -44,7 +62,7 @@ function segmentIntersection(a, b, c, d) {
   return null;
 }
 
-function hasInteriorIntersection(a, b) {
+function hasInteriorIntersection(a: LineFeature, b: LineFeature): boolean {
   const ac = a.geometry.coordinates;
   const bc = b.geometry.coordinates;
   for (let i = 1; i < ac.length; i += 1) {
@@ -67,6 +85,7 @@ test("snaps a same-route endpoint overshoot back to the sibling trunk split", ()
 
   assert.equal(result.repairCount, 1);
   const fixedBranch = result.features.find((feature) => feature.properties.corridor_id === "branch");
+  assert.ok(fixedBranch);
   assert.notEqual(fixedBranch, branch, "repaired feature is cloned");
   assert.equal(fixedBranch.properties.same_route_junction_fabric, true);
   assert.equal(hasInteriorIntersection(fixedBranch, trunk), false, "the X crossing is removed");
@@ -104,9 +123,12 @@ test("clips same-color sibling endpoint overshoot even when the crossing is seve
 
   assert.equal(result.repairCount, 1);
   const fixedBranch = result.features.find((feature) => feature.properties.corridor_id === "branch");
+  assert.ok(fixedBranch);
   assert.equal(hasInteriorIntersection(fixedBranch, trunk), false);
   assert.ok(fixedBranch.geometry.coordinates.length < branch.geometry.coordinates.length);
-  assert.ok(Math.abs(mxy(fixedBranch.geometry.coordinates.at(-1))[0]) < 0.1, "branch ends on trunk x");
+  const fixedBranchEnd = fixedBranch.geometry.coordinates.at(-1);
+  assert.ok(fixedBranchEnd);
+  assert.ok(Math.abs(mxy(fixedBranchEnd)[0]) < 0.1, "branch ends on trunk x");
 });
 
 test("does not clip an interior crossing that is not an endpoint overshoot", () => {

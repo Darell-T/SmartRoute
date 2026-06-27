@@ -1,13 +1,36 @@
-// frontend/scripts/build/lane-continuity-filter.mjs
+// frontend/scripts/build/lane-continuity-filter.ts
 // Phase 3c: Build-pipeline helper for filtering bogus branch transitions
 // and marking orphan lane features before artifact promotion.
 //
 // No fs, no globals. Pure functions only.
 
+import type { Feature, LineStringGeometry, Position } from "./types.ts";
+
 const EARTH_RADIUS_M = 6371000;
 
-function haversineM([lon1, lat1], [lon2, lat2]) {
-  const toRad = (d) => (d * Math.PI) / 180;
+type LaneFeatureProperties = {
+  lane_slot_source?: string;
+  bundle_id_from?: string;
+  bundle_id_to?: string;
+  color_route_ids?: string[];
+  route_ids?: string[];
+  transition_classification?: string;
+  length_m?: number;
+  from_anchor_id?: string | null;
+  to_anchor_id?: string | null;
+  from_stop_id?: string | number | null;
+  to_stop_id?: string | number | null;
+  qa_orphan_origin?: boolean;
+  qa_orphan_from_is_terminal?: boolean;
+  qa_orphan_to_is_terminal?: boolean;
+  qa_orphan_severity?: string;
+  [key: string]: unknown;
+};
+
+type LaneFeature = Feature<LineStringGeometry, LaneFeatureProperties>;
+
+function haversineM([lon1, lat1]: Position, [lon2, lat2]: Position): number {
+  const toRad = (d: number) => (d * Math.PI) / 180;
   const dLat = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
   const a =
@@ -31,9 +54,12 @@ function haversineM([lon1, lat1], [lon2, lat2]) {
  *   Map from bundle_id (or corridor_id) to Set of route_ids served.
  * @returns {{ kept: GeoJSON.Feature[], dropped: Array<{ feature: GeoJSON.Feature, reason: string }> }}
  */
-export function filterBogusTransitions(bundleLaneFeatures, corridorRouteIndex) {
-  const kept = [];
-  const dropped = [];
+export function filterBogusTransitions(
+  bundleLaneFeatures: LaneFeature[],
+  corridorRouteIndex: Map<string, Set<string>>,
+): { kept: LaneFeature[]; dropped: Array<{ feature: LaneFeature; reason: string }> } {
+  const kept: LaneFeature[] = [];
+  const dropped: Array<{ feature: LaneFeature; reason: string }> = [];
 
   for (const feature of bundleLaneFeatures) {
     const p = feature.properties;
@@ -44,8 +70,8 @@ export function filterBogusTransitions(bundleLaneFeatures, corridorRouteIndex) {
       continue;
     }
 
-    const fromRoutes = corridorRouteIndex.get(p.bundle_id_from) ?? new Set();
-    const toRoutes = corridorRouteIndex.get(p.bundle_id_to) ?? new Set();
+    const fromRoutes = p.bundle_id_from ? corridorRouteIndex.get(p.bundle_id_from) ?? new Set<string>() : new Set<string>();
+    const toRoutes = p.bundle_id_to ? corridorRouteIndex.get(p.bundle_id_to) ?? new Set<string>() : new Set<string>();
     const colorRouteIds = p.color_route_ids ?? [];
     const routeIds = p.route_ids ?? [];
     const classification = p.transition_classification ?? "";
@@ -55,7 +81,7 @@ export function filterBogusTransitions(bundleLaneFeatures, corridorRouteIndex) {
     const colorInFrom = colorRouteIds.some((r) => fromRoutes.has(r));
     const colorInTo = colorRouteIds.some((r) => toRoutes.has(r));
 
-    let bogusReason = null;
+    let bogusReason: string | null = null;
 
     if (!colorInFrom && !colorInTo) {
       bogusReason = "bogus_route_mismatch:color_absent_from_both_endpoints";
@@ -91,16 +117,16 @@ export function filterBogusTransitions(bundleLaneFeatures, corridorRouteIndex) {
  * @param {Set<string>} terminalStationIds  Stop IDs of known route terminals.
  * @returns {GeoJSON.Feature[]}  Same array reference, with some features mutated.
  */
-export function markOrphanLanes(bundleLaneFeatures, terminalStationIds) {
+export function markOrphanLanes(bundleLaneFeatures: LaneFeature[], terminalStationIds: Set<string>): LaneFeature[] {
   // Build per-route endpoint adjacency map
   // routeEndpoints: route_id -> Map<endpointKey -> feature[]>
-  const routeEndpoints = new Map();
+  const routeEndpoints = new Map<string, Map<string, LaneFeature[]>>();
 
-  function coordKey(coord) {
+  function coordKey(coord: Position): string {
     return `${coord[0].toFixed(5)},${coord[1].toFixed(5)}`;
   }
 
-  function getEndpointKeys(f) {
+  function getEndpointKeys(f: LaneFeature): { fromKey: string; toKey: string } | null {
     const p = f.properties;
     const coords = f.geometry?.coordinates;
     if (!coords || coords.length < 2) return null;
@@ -114,11 +140,12 @@ export function markOrphanLanes(bundleLaneFeatures, terminalStationIds) {
     const keys = getEndpointKeys(f);
     if (!keys) continue;
     for (const r of routeIds) {
-      if (!routeEndpoints.has(r)) routeEndpoints.set(r, new Map());
+      if (!routeEndpoints.has(r)) routeEndpoints.set(r, new Map<string, LaneFeature[]>());
       const epMap = routeEndpoints.get(r);
+      if (!epMap) continue;
       for (const key of [keys.fromKey, keys.toKey]) {
         if (!epMap.has(key)) epMap.set(key, []);
-        epMap.get(key).push(f);
+        epMap.get(key)?.push(f);
       }
     }
   }
@@ -172,7 +199,7 @@ export function markOrphanLanes(bundleLaneFeatures, terminalStationIds) {
 // (e.g. the solo-E opendata-00028 stub that parallels the A/C/E spine), not real
 // network. Everything else (terminal-anchored, single-end, or warn) is kept.
 // Returns { features, removedCount }.
-export function removeOrphanErrorLanes(features) {
+export function removeOrphanErrorLanes(features: LaneFeature[]): { features: LaneFeature[]; removedCount: number } {
   const kept = features.filter((f) => {
     const p = f.properties ?? {};
     const strayOrphan =

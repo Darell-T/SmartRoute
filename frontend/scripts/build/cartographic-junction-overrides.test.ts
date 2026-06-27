@@ -1,15 +1,29 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { applyCartographicJunctionOverrides } from "./cartographic-junction-overrides.mjs";
+import { applyCartographicJunctionOverrides } from "./cartographic-junction-overrides.ts";
+import type { Feature, LineStringGeometry, Position } from "./types.ts";
 
 const DEG_PER_M_LAT = 1 / 110574;
 const DEG_PER_M_LON = 1 / (111320 * Math.cos((40.815 * Math.PI) / 180));
-const O = [-73.93, 40.815];
-const P = (dxM, dyM) => [O[0] + dxM * DEG_PER_M_LON, O[1] + dyM * DEG_PER_M_LAT];
+const O: Position = [-73.93, 40.815];
+const P = (dxM: number, dyM: number): Position => [O[0] + dxM * DEG_PER_M_LON, O[1] + dyM * DEG_PER_M_LAT];
 const EARTH_RADIUS_M = 6371000;
 
-function hav([lon1, lat1], [lon2, lat2]) {
-  const toRad = (d) => (d * Math.PI) / 180;
+type TestFeatureProperties = {
+  route_ids: string[];
+  color_route_ids: string[];
+  color: string;
+  length_m: number;
+  corridor_id?: string;
+  cartographic_junction_override?: string;
+  [key: string]: unknown;
+};
+
+type TestFeature = Feature<LineStringGeometry, TestFeatureProperties>;
+type LineFeature = Feature<LineStringGeometry, { [key: string]: unknown }>;
+
+function hav([lon1, lat1]: Position, [lon2, lat2]: Position): number {
+  const toRad = (d: number) => (d * Math.PI) / 180;
   const dLat = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
   const a =
@@ -18,7 +32,11 @@ function hav([lon1, lat1], [lon2, lat2]) {
   return 2 * EARTH_RADIUS_M * Math.asin(Math.sqrt(a));
 }
 
-function feature(routeIds, coords, extra = {}) {
+function feature(
+  routeIds: string[],
+  coords: Position[],
+  extra: Partial<TestFeatureProperties> = {},
+): TestFeature {
   return {
     type: "Feature",
     geometry: { type: "LineString", coordinates: coords },
@@ -32,18 +50,18 @@ function feature(routeIds, coords, extra = {}) {
   };
 }
 
-function bearing(a, b) {
+function bearing(a: Position, b: Position): number {
   return Math.atan2((b[1] - a[1]) * 110574, (b[0] - a[0]) * (1 / DEG_PER_M_LON)) * 180 / Math.PI;
 }
 
-function turnAt(coords, i) {
+function turnAt(coords: Position[], i: number): number {
   let turn = bearing(coords[i], coords[i + 1]) - bearing(coords[i - 1], coords[i]);
   while (turn > 180) turn -= 360;
   while (turn < -180) turn += 360;
   return Math.abs(turn);
 }
 
-function pointLineDistanceM(point, start, end) {
+function pointLineDistanceM(point: Position, start: Position, end: Position): number {
   const ax = (start[0] - O[0]) / DEG_PER_M_LON;
   const ay = (start[1] - O[1]) / DEG_PER_M_LAT;
   const bx = (end[0] - O[0]) / DEG_PER_M_LON;
@@ -91,10 +109,12 @@ test("Mott Haven route-5 override creates an Apple-style lower schematic join in
   assert.equal(result.features.length, 2);
 
   const repaired = result.features[0];
+  assert.ok(repaired);
   assert.equal(repaired.properties.cartographic_junction_override, "mott_haven_5");
   assert.ok(repaired.geometry.coordinates.length > badBranch.geometry.coordinates.length);
 
   const end = repaired.geometry.coordinates.at(-1);
+  assert.ok(end);
   assert.ok(
     hav(end, trunk.geometry.coordinates[0]) > 180,
     "branch should join lower on the 4/5 stem instead of at the station node",
@@ -111,7 +131,9 @@ test("Mott Haven route-5 override creates an Apple-style lower schematic join in
     "branch should not arc north above the E 149 St approach",
   );
 
-  const curve = result.debugFeatures[0].geometry.coordinates;
+  const debugFeature = result.debugFeatures[0];
+  assert.ok(debugFeature);
+  const curve = debugFeature.geometry.coordinates;
   const westSidePeel = P(-175, 95);
   assert.ok(
     Math.min(...curve.map((coord) => hav(coord, westSidePeel))) < 45,
