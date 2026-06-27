@@ -76,6 +76,7 @@ Already migrated transit build helpers include:
 - `mott-haven-schematic`
 - `bridge-route-gaps`
 - `collapse-same-color`
+- `st-nicholas-blue-straightening`
 
 Pre-existing TypeScript helpers include station-anchor modules, spine helpers,
 lane ordering, artifact fingerprinting, smooth polyline utilities, and duplicate
@@ -137,7 +138,7 @@ Categories:
 | `frontend/scripts/build/bridge-route-gaps.ts` | 19.8 KB / 530 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/collapse-same-color.ts` | 21.0 KB / 658 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/physical-bundle-materialization.mjs` | 18.1 KB / 489 lines | visual orchestrator, colocated test | yes | no | High-risk / migrate later | wait for physical-bundle plan |
-| `frontend/scripts/build/st-nicholas-blue-straightening.mjs` | 18.4 KB / 565 lines | visual orchestrator, colocated test | yes | no | Medium-risk helper | migrate later |
+| `frontend/scripts/build/st-nicholas-blue-straightening.ts` | 21.1 KB / 678 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/brighton-bq-church-spacing.mjs` | 22.3 KB / 607 lines | visual orchestrator, colocated test | yes | no | Medium-risk helper | migrate later |
 | `frontend/scripts/build/same-color-merge.mjs` | 22.4 KB / 609 lines | visual orchestrator, colocated test | yes | no | High-risk / migrate later | migrate after smaller corridor helpers |
 | `frontend/scripts/build/physical-bundle.mjs` | 24.3 KB / 679 lines | visual orchestrator, `cross-color-spread.mjs`, `same-color-merge.mjs`, colocated test | yes | no | High-risk / migrate later | wait for physical-bundle plan |
@@ -158,7 +159,7 @@ Categories:
 | `frontend/scripts/build/same-route-junction-fabric.test.ts` | 4.3 KB / 122 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/build/schematic-hairpin-arc.test.ts` | 3.1 KB / 95 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/build/snap-dangling-same-color.test.ts` | 5.8 KB / 103 lines | none | n/a | no | Migrated test | done |
-| `frontend/scripts/build/st-nicholas-blue-straightening.test.mjs` | 10.6 KB / 307 lines | none | n/a | no | QA/check script | migrate with source |
+| `frontend/scripts/build/st-nicholas-blue-straightening.test.ts` | 11.9 KB / 354 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/build/trim-terminal-overhang.test.ts` | 10.5 KB / 305 lines | none | n/a | no | Migrated test | done |
 | `frontend/scripts/qa/analyze-route-coverage.mjs` | 18.4 KB / 470 lines | none | no | yes | QA/check script | document only |
 | `frontend/scripts/qa/audit-lane-continuity.mjs` | 40.0 KB / 960 lines | none | no | yes | QA/check script | document only |
@@ -190,15 +191,15 @@ Categories:
 
 Next batch:
 
-- `st-nicholas-blue-straightening`
+- `brighton-bq-church-spacing`
 
 Following batch:
 
-- `brighton-bq-church-spacing`
+- `parallel-offset-cross-color` only after cross-color offset review
 
 Later dedicated review batch:
 
-- `parallel-offset-cross-color` only after cross-color offset review
+- `cross-color-spread` only after cross-color helper sequencing is planned
 
 Avoid for now:
 

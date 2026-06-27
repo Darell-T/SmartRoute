@@ -1,40 +1,124 @@
+import type { Feature, LineStringGeometry, Position } from "./types.ts";
+
+type Vector = [number, number];
+
+type BBox = {
+  minLon: number;
+  maxLon: number;
+  minLat: number;
+  maxLat: number;
+};
+
+type StNicholasProperties = {
+  bundle_id?: unknown;
+  corridor_id?: unknown;
+  color?: unknown;
+  route_id?: unknown;
+  route_ids?: unknown;
+  color_route_ids?: unknown;
+  st_nicholas_blue_straightened?: boolean;
+  st_nicholas_blue_endpoint_clusters?: number;
+  st_nicholas_blue_max_perp_before_m?: number;
+  st_nicholas_blue_max_perp_after_m?: number;
+  [key: string]: unknown;
+};
+
+type StNicholasFeature = Feature<LineStringGeometry, StNicholasProperties>;
+
+type Axis = {
+  centroid: Vector;
+  direction: Vector;
+};
+
+type AxisSelection = {
+  axis: Axis;
+  selectedOffsetCount: number;
+};
+
+type ProjectionRange = {
+  start: number;
+  end: number;
+};
+
+type PolylineSpine = {
+  coordinates: Position[];
+  points: Vector[];
+  cumulative: number[];
+  length: number;
+};
+
+type PolylineProjection = {
+  distance: number;
+  along: number;
+  point: Vector;
+  coord: Position;
+};
+
+type StNicholasOptions = {
+  bbox?: BBox;
+  marginM?: number;
+  endpointSnapM?: number;
+  rangeExtensionM?: number;
+  sampleSpacingM?: number;
+  maxReferenceDistanceM?: number;
+  spineCoordinates?: Position[] | null;
+};
+
+type StNicholasDiagnostics = {
+  applied: boolean;
+  target_feature_count: number;
+  projected_point_count: number;
+  snapped_endpoint_clusters: number;
+  reason?: string;
+  reference_feature_point_count?: number;
+  reference_axis_source?: "station_spine" | "orange_bd" | "blue_fit";
+  reference_offset_point_count?: number;
+  max_perpendicular_before_m?: number;
+  max_perpendicular_after_m?: number;
+};
+
+type StNicholasResult = {
+  features: StNicholasFeature[];
+  diagnostics: StNicholasDiagnostics;
+};
+
 const M_PER_DEG_LAT = 110574;
 const BLUE = "#0A84FF";
 const ORANGE = "#FF6319";
 
-const DEFAULT_BBOX = {
+const DEFAULT_BBOX: BBox = {
   minLon: -73.9495,
   maxLon: -73.9325,
   minLat: 40.8180,
   maxLat: 40.8395,
 };
 
-const DEFAULT_ST_NICHOLAS_BLUE_SPINE = [
+const DEFAULT_ST_NICHOLAS_BLUE_SPINE: Position[] = [
   [-73.944216, 40.824783], // 145 St A/C/B/D
   [-73.941514, 40.830518], // 155 St A/C
   [-73.939892, 40.836013], // 163 St-Amsterdam Av A/C
 ];
 
-function metersPerDegLng(lat) {
+function metersPerDegLng(lat: number): number {
   return 111320 * Math.cos((lat * Math.PI) / 180);
 }
 
-function projectAt(point, lat) {
+function projectAt(point: Position, lat: number): Vector {
   return [point[0] * metersPerDegLng(lat), point[1] * M_PER_DEG_LAT];
 }
 
-function unprojectAt(point, lat) {
+function unprojectAt(point: Vector, lat: number): Position {
   return [point[0] / metersPerDegLng(lat), point[1] / M_PER_DEG_LAT];
 }
 
-function distanceM(a, b) {
+function distanceM(a: Position, b: Position): number {
   const lat = (a[1] + b[1]) / 2;
   const pa = projectAt(a, lat);
   const pb = projectAt(b, lat);
   return Math.hypot(pb[0] - pa[0], pb[1] - pa[1]);
 }
 
-function expandBBox(bbox, marginM) {
+function expandBBox(bbox: BBox, marginM: number): BBox {
   const lat = (bbox.minLat + bbox.maxLat) / 2;
   const lonMargin = marginM / metersPerDegLng(lat);
   const latMargin = marginM / M_PER_DEG_LAT;
@@ -46,7 +130,7 @@ function expandBBox(bbox, marginM) {
   };
 }
 
-function inBBox(point, bbox) {
+function inBBox(point: Position, bbox: BBox): boolean {
   return (
     point[0] >= bbox.minLon &&
     point[0] <= bbox.maxLon &&
@@ -55,7 +139,7 @@ function inBBox(point, bbox) {
   );
 }
 
-function isLineFeature(feature) {
+function isLineFeature(feature: StNicholasFeature): boolean {
   return (
     feature?.geometry?.type === "LineString" &&
     Array.isArray(feature.geometry.coordinates) &&
@@ -63,7 +147,7 @@ function isLineFeature(feature) {
   );
 }
 
-function routeIdsOf(feature) {
+function routeIdsOf(feature: StNicholasFeature): string[] {
   const props = feature.properties ?? {};
   return Array.from(new Set([
     ...(Array.isArray(props.route_ids) ? props.route_ids : []),
@@ -72,7 +156,7 @@ function routeIdsOf(feature) {
   ].filter(Boolean).map(String)));
 }
 
-function isTargetBlueFeature(feature, bbox) {
+function isTargetBlueFeature(feature: StNicholasFeature, bbox: BBox): boolean {
   if (!isLineFeature(feature)) return false;
   const color = String(feature.properties?.color ?? "").toUpperCase();
   const routes = routeIdsOf(feature);
@@ -83,7 +167,7 @@ function isTargetBlueFeature(feature, bbox) {
   );
 }
 
-function isReferenceOrangeFeature(feature, bbox) {
+function isReferenceOrangeFeature(feature: StNicholasFeature, bbox: BBox): boolean {
   if (!isLineFeature(feature)) return false;
   const color = String(feature.properties?.color ?? "").toUpperCase();
   const routes = routeIdsOf(feature);
@@ -94,12 +178,17 @@ function isReferenceOrangeFeature(feature, bbox) {
   );
 }
 
-function fitAxis(points, refLat) {
-  const projected = points.map((point) => projectAt(point, refLat));
-  const centroid = projected.reduce(
-    (sum, point) => [sum[0] + point[0], sum[1] + point[1]],
+function averageProjected(points: Vector[]): Vector {
+  const sum = points.reduce<Vector>(
+    (total, point) => [total[0] + point[0], total[1] + point[1]],
     [0, 0],
-  ).map((value) => value / projected.length);
+  );
+  return [sum[0] / points.length, sum[1] / points.length];
+}
+
+function fitAxis(points: Position[], refLat: number): Axis {
+  const projected = points.map((point) => projectAt(point, refLat));
+  const centroid = averageProjected(projected);
 
   let xx = 0;
   let xy = 0;
@@ -113,7 +202,7 @@ function fitAxis(points, refLat) {
   }
 
   const angle = 0.5 * Math.atan2(2 * xy, xx - yy);
-  let direction = [Math.cos(angle), Math.sin(angle)];
+  let direction: Vector = [Math.cos(angle), Math.sin(angle)];
   // Keep the axis roughly north/south for stable diagnostics and output.
   if (Math.abs(direction[1]) < Math.abs(direction[0])) {
     direction = [-direction[1], direction[0]];
@@ -123,25 +212,27 @@ function fitAxis(points, refLat) {
   return { centroid, direction };
 }
 
-function axisWithDirectionThroughPoints(direction, points, refLat) {
+function axisWithDirectionThroughPoints(direction: Vector, points: Position[], refLat: number): Axis {
   const projected = points.map((point) => projectAt(point, refLat));
-  const centroid = projected.reduce(
-    (sum, point) => [sum[0] + point[0], sum[1] + point[1]],
-    [0, 0],
-  ).map((value) => value / projected.length);
+  const centroid = averageProjected(projected);
   return { centroid, direction };
 }
 
-function median(values) {
+function median(values: number[]): number | null {
   if (values.length === 0) return null;
   const sorted = values.slice().sort((left, right) => left - right);
   const mid = Math.floor(sorted.length / 2);
   return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
 }
 
-function axisParallelToReference(referenceAxis, points, refLat, maxReferenceDistanceM) {
-  const normal = [-referenceAxis.direction[1], referenceAxis.direction[0]];
-  const offsets = [];
+function axisParallelToReference(
+  referenceAxis: Axis,
+  points: Position[],
+  refLat: number,
+  maxReferenceDistanceM: number,
+): AxisSelection {
+  const normal: Vector = [-referenceAxis.direction[1], referenceAxis.direction[0]];
+  const offsets: number[] = [];
   for (const point of points) {
     const p = projectAt(point, refLat);
     const dx = p[0] - referenceAxis.centroid[0];
@@ -170,7 +261,7 @@ function axisParallelToReference(referenceAxis, points, refLat, maxReferenceDist
   };
 }
 
-function projectPointToAxis(point, axis, refLat) {
+function projectPointToAxis(point: Position, axis: Axis, refLat: number): Position {
   const p = projectAt(point, refLat);
   const dx = p[0] - axis.centroid[0];
   const dy = p[1] - axis.centroid[1];
@@ -181,7 +272,7 @@ function projectPointToAxis(point, axis, refLat) {
   ], refLat);
 }
 
-function distanceToAxisM(point, axis, refLat) {
+function distanceToAxisM(point: Position, axis: Axis, refLat: number): number {
   const p = projectAt(point, refLat);
   const dx = p[0] - axis.centroid[0];
   const dy = p[1] - axis.centroid[1];
@@ -193,8 +284,8 @@ function distanceToAxisM(point, axis, refLat) {
   return Math.hypot(p[0] - projected[0], p[1] - projected[1]);
 }
 
-function removeAdjacentDuplicates(coords) {
-  const output = [];
+function removeAdjacentDuplicates(coords: Position[]): Position[] {
+  const output: Position[] = [];
   for (const coord of coords) {
     if (output.length === 0 || distanceM(output[output.length - 1], coord) > 0.02) {
       output.push(coord);
@@ -203,10 +294,10 @@ function removeAdjacentDuplicates(coords) {
   return output;
 }
 
-function sampleLine(start, end, spacingM) {
+function sampleLine(start: Position, end: Position, spacingM: number): Position[] {
   const length = distanceM(start, end);
   const steps = Math.max(1, Math.ceil(length / spacingM));
-  const output = [];
+  const output: Position[] = [];
   for (let index = 0; index <= steps; index += 1) {
     const t = index / steps;
     output.push([
@@ -217,7 +308,7 @@ function sampleLine(start, end, spacingM) {
   return output;
 }
 
-function buildPolylineSpine(coordinates, refLat) {
+function buildPolylineSpine(coordinates: Position[] | null | undefined, refLat: number): PolylineSpine | null {
   if (!Array.isArray(coordinates) || coordinates.length < 2) return null;
   const points = coordinates.map((coord) => projectAt(coord, refLat));
   const cumulative = [0];
@@ -237,7 +328,7 @@ function buildPolylineSpine(coordinates, refLat) {
   };
 }
 
-function projectPointToPolyline(point, spine, refLat) {
+function projectPointToPolyline(point: Position, spine: PolylineSpine, refLat: number): PolylineProjection {
   const p = projectAt(point, refLat);
   let best = {
     distance: Infinity,
@@ -252,7 +343,7 @@ function projectPointToPolyline(point, spine, refLat) {
     const vy = b[1] - a[1];
     const denom = vx * vx + vy * vy || 1;
     const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * vx + (p[1] - a[1]) * vy) / denom));
-    const projected = [a[0] + vx * t, a[1] + vy * t];
+    const projected: Vector = [a[0] + vx * t, a[1] + vy * t];
     const distance = Math.hypot(p[0] - projected[0], p[1] - projected[1]);
     if (distance < best.distance) {
       best = {
@@ -269,7 +360,7 @@ function projectPointToPolyline(point, spine, refLat) {
   };
 }
 
-function samplePolylineAt(spine, along) {
+function samplePolylineAt(spine: PolylineSpine, along: number): Vector {
   const clamped = Math.max(0, Math.min(spine.length, along));
   for (let index = 0; index < spine.points.length - 1; index += 1) {
     const startAlong = spine.cumulative[index];
@@ -288,10 +379,16 @@ function samplePolylineAt(spine, along) {
   return spine.points[spine.points.length - 1];
 }
 
-function samplePolylineBetween(spine, startAlong, endAlong, refLat, spacingM) {
+function samplePolylineBetween(
+  spine: PolylineSpine,
+  startAlong: number,
+  endAlong: number,
+  refLat: number,
+  spacingM: number,
+): Position[] {
   const distance = Math.abs(endAlong - startAlong);
   const steps = Math.max(1, Math.ceil(distance / spacingM));
-  const output = [];
+  const output: Position[] = [];
   for (let index = 0; index <= steps; index += 1) {
     const t = index / steps;
     const along = startAlong + (endAlong - startAlong) * t;
@@ -300,7 +397,7 @@ function samplePolylineBetween(spine, startAlong, endAlong, refLat, spacingM) {
   return output;
 }
 
-function pushCoords(output, coords) {
+function pushCoords(output: Position[], coords: Position[]): void {
   for (const coord of coords) {
     if (output.length === 0 || distanceM(output[output.length - 1], coord) > 0.02) {
       output.push(coord);
@@ -308,8 +405,14 @@ function pushCoords(output, coords) {
   }
 }
 
-function replaceRangesWithStraightSegments(coords, ranges, axis, refLat, sampleSpacingM) {
-  const output = [];
+function replaceRangesWithStraightSegments(
+  coords: Position[],
+  ranges: ProjectionRange[],
+  axis: Axis,
+  refLat: number,
+  sampleSpacingM: number,
+): Position[] {
+  const output: Position[] = [];
   let cursor = 0;
   for (const range of ranges) {
     pushCoords(output, coords.slice(cursor, range.start));
@@ -322,8 +425,14 @@ function replaceRangesWithStraightSegments(coords, ranges, axis, refLat, sampleS
   return output;
 }
 
-function replaceRangesWithPolylineSegments(coords, ranges, spine, refLat, sampleSpacingM) {
-  const output = [];
+function replaceRangesWithPolylineSegments(
+  coords: Position[],
+  ranges: ProjectionRange[],
+  spine: PolylineSpine,
+  refLat: number,
+  sampleSpacingM: number,
+): Position[] {
+  const output: Position[] = [];
   let cursor = 0;
   for (const range of ranges) {
     pushCoords(output, coords.slice(cursor, range.start));
@@ -336,9 +445,9 @@ function replaceRangesWithPolylineSegments(coords, ranges, spine, refLat, sample
   return output;
 }
 
-function findProjectionRanges(coords, bbox, rangeExtensionM) {
-  const ranges = [];
-  let rangeStart = null;
+function findProjectionRanges(coords: Position[], bbox: BBox, rangeExtensionM: number): ProjectionRange[] {
+  const ranges: ProjectionRange[] = [];
+  let rangeStart: number | null = null;
   for (let index = 0; index < coords.length; index += 1) {
     if (inBBox(coords[index], bbox)) {
       if (rangeStart === null) rangeStart = index;
@@ -373,7 +482,7 @@ function findProjectionRanges(coords, bbox, rangeExtensionM) {
     return { start, end };
   });
 
-  const merged = [];
+  const merged: ProjectionRange[] = [];
   for (const range of extended) {
     const previous = merged[merged.length - 1];
     if (previous && range.start <= previous.end + 1) {
@@ -385,12 +494,17 @@ function findProjectionRanges(coords, bbox, rangeExtensionM) {
   return merged;
 }
 
-function isIndexInRanges(index, ranges) {
+function isIndexInRanges(index: number, ranges: ProjectionRange[]): boolean {
   return ranges.some((range) => index >= range.start && index <= range.end);
 }
 
-function snapEndpointClusters(features, targetIndexes, bbox, endpointSnapM) {
-  const endpoints = [];
+function snapEndpointClusters(
+  features: StNicholasFeature[],
+  targetIndexes: number[],
+  bbox: BBox,
+  endpointSnapM: number,
+): number {
+  const endpoints: Array<{ featureIndex: number; coordIndex: number; point: Position }> = [];
   for (const featureIndex of targetIndexes) {
     const coords = features[featureIndex].geometry.coordinates;
     const specs = [
@@ -404,11 +518,11 @@ function snapEndpointClusters(features, targetIndexes, bbox, endpointSnapM) {
     }
   }
 
-  const seen = new Set();
+  const seen = new Set<number>();
   let snappedClusters = 0;
   for (let i = 0; i < endpoints.length; i += 1) {
     if (seen.has(i)) continue;
-    const cluster = [i];
+    const cluster: number[] = [i];
     seen.add(i);
     for (let j = i + 1; j < endpoints.length; j += 1) {
       if (seen.has(j)) continue;
@@ -424,14 +538,11 @@ function snapEndpointClusters(features, targetIndexes, bbox, endpointSnapM) {
 
     const refLat = cluster.reduce((sum, index) => sum + endpoints[index].point[1], 0) / cluster.length;
     const projected = cluster.map((index) => projectAt(endpoints[index].point, refLat));
-    const average = projected.reduce(
-      (sum, point) => [sum[0] + point[0], sum[1] + point[1]],
-      [0, 0],
-    ).map((value) => value / projected.length);
+    const average = averageProjected(projected);
     const snappedPoint = unprojectAt(average, refLat);
     for (const index of cluster) {
       const endpoint = endpoints[index];
-      features[endpoint.featureIndex].geometry.coordinates[endpoint.coordIndex] = snappedPoint.slice();
+      features[endpoint.featureIndex].geometry.coordinates[endpoint.coordIndex] = [...snappedPoint];
     }
     snappedClusters += 1;
   }
@@ -439,7 +550,10 @@ function snapEndpointClusters(features, targetIndexes, bbox, endpointSnapM) {
   return snappedClusters;
 }
 
-export function applyStNicholasBlueStraightening(features, options = {}) {
+export function applyStNicholasBlueStraightening(
+  features: StNicholasFeature[],
+  options: StNicholasOptions = {},
+): StNicholasResult {
   const bbox = options.bbox ?? DEFAULT_BBOX;
   const marginM = options.marginM ?? 25;
   const endpointSnapM = options.endpointSnapM ?? 18;
@@ -449,10 +563,10 @@ export function applyStNicholasBlueStraightening(features, options = {}) {
   const spineCoordinates = options.spineCoordinates
     ?? (options.bbox ? null : DEFAULT_ST_NICHOLAS_BLUE_SPINE);
   const effectiveBBox = expandBBox(bbox, marginM);
-  const targetIndexes = [];
-  const points = [];
-  const referencePoints = [];
-  const projectionRangesByIndex = new Map();
+  const targetIndexes: number[] = [];
+  const points: Position[] = [];
+  const referencePoints: Position[] = [];
+  const projectionRangesByIndex = new Map<number, ProjectionRange[]>();
 
   for (let index = 0; index < features.length; index += 1) {
     const feature = features[index];
@@ -527,7 +641,7 @@ export function applyStNicholasBlueStraightening(features, options = {}) {
   }
 
   const snappedEndpointClusters = snapEndpointClusters(output, targetIndexes, effectiveBBox, endpointSnapM);
-  const afterPoints = [];
+  const afterPoints: Position[] = [];
   for (const featureIndex of targetIndexes) {
     for (const coord of output[featureIndex].geometry.coordinates) {
       if (inBBox(coord, effectiveBBox)) afterPoints.push(coord);
