@@ -1,7 +1,7 @@
 # Transit Build Helpers
 
 This folder contains offline helper modules for the SmartRoute transit artifact
-pipeline. The helpers are used by `frontend/scripts/build-subway-visual-network.mjs`
+pipeline. The helpers are used by `frontend/scripts/build-subway-visual-network.ts`
 to turn canonical transit data and NYC OpenData line geometry into renderable
 subway network artifacts.
 
@@ -25,7 +25,7 @@ subway network artifacts.
 
 ## Architecture Notes
 
-- `frontend/scripts/build-subway-visual-network.mjs` is the visual-network
+- `frontend/scripts/build-subway-visual-network.ts` is the visual-network
   orchestrator. It wires the helper passes together, runs validation gates, and
   writes generated artifacts.
 - Helper files either implement reusable geometry operations or encode
@@ -100,7 +100,7 @@ For each migration batch:
 3. Run the converted tests with local `tsx --test`.
 4. Run the visual artifact build. If `npm` is unavailable, use the underlying
    package command:
-   `.\node_modules\.bin\tsx.cmd scripts\build-subway-visual-network.mjs`.
+   `.\node_modules\.bin\tsx.cmd scripts\build-subway-visual-network.ts`.
 5. Inspect `git diff` for generated artifacts.
 6. Revert timestamp-only generated metadata diffs before commit.
 7. Stop and report if real geometry or output drift appears.
@@ -130,7 +130,7 @@ Categories:
 | `frontend/eslint.config.mjs` | 1.0 KB / 37 lines | none | no | no | Keep as `.mjs` | keep `.mjs` |
 | `frontend/scripts/regenerate-canonical-from-gtfs.ts` | 14.9 KB / 532 lines | `package.json`, visual orchestrator, palette check, characterization test | yes | yes | Migrated TypeScript entrypoint | done |
 | `frontend/scripts/regenerate-canonical-from-gtfs.test.ts` | 4.0 KB / 100 lines | none | n/a | no | Migrated characterization test | done |
-| `frontend/scripts/build-subway-visual-network.mjs` | 201 KB / 4701 lines | `package.json`, renderer code, debug artifacts | no | yes | High-risk / migrate later | orchestrator migration plan first |
+| `frontend/scripts/build-subway-visual-network.ts` | 201 KB / 4701 lines | `package.json`, renderer code, debug artifacts | no | yes | Migrated TypeScript entrypoint | done |
 | `frontend/scripts/build/schematic-hairpin-arc.ts` | 5.3 KB / 129 lines | visual orchestrator | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/parallel-offset-cross-color.ts` | 8.1 KB / 240 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/lane-continuity-filter.ts` | 7.3 KB / 187 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
@@ -199,15 +199,15 @@ Categories:
 
 Next dedicated review batch:
 
-- `build-subway-visual-network.mjs` only after a dedicated orchestrator migration plan
+- QA/check scripts only if that scope is explicitly approved
 
 Following dedicated review batch:
 
-- QA/check scripts only if that scope is explicitly approved
+- no remaining core transit artifact `.mjs` helpers
 
 Avoid for now:
 
-- `build-subway-visual-network.mjs`
+- visual QA/check scripts that write screenshots or debug output
 
 Needs characterization before conversion:
 
@@ -216,9 +216,9 @@ Needs characterization before conversion:
 
 Wait until after an orchestrator migration plan:
 
-- `build-subway-visual-network.mjs`
-- root artifact entrypoints and QA scripts that write screenshots or debug
-  output
+- no remaining core transit artifact `.mjs` helpers
+- QA scripts that write screenshots or debug output should remain document-only
+  unless explicitly approved
 
 ## Orchestrator Migration Plan
 

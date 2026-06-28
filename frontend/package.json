@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev --webpack",
     "build:network": "tsx scripts/regenerate-canonical-from-gtfs.ts",
-    "build:visual-network": "tsx scripts/build-subway-visual-network.mjs",
+    "build:visual-network": "tsx scripts/build-subway-visual-network.ts",
     "build:station-anchors": "tsx scripts/build-subway-station-anchors.ts",
     "build:artifact-manifest": "tsx scripts/build-artifact-manifest.ts",
     "build:transit-artifacts": "npm run build:network && npm run build:visual-network && npm run build:station-anchors && npm run build:artifact-manifest",

@@ -21,7 +21,7 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import type { Position, LineStringGeometry, PointGeometry } from "./build/types.ts";
 import { inflateRawSync } from "node:zlib";
 import { buildSpineFromCorridor } from "./build/spine.ts";
 import {
@@ -82,7 +82,16 @@ import { addSixtyThirdStreetF } from "./build/sixty-third-street-f.ts";
 import { cleanStatenIslandLine } from "./build/staten-island-cleanup.ts";
 import { connectRockawayWye } from "./build/rockaway-wye.ts";
 
-const here = dirname(fileURLToPath(import.meta.url));
+// --- Local types for the mechanical Batch 26 .ts conversion ---
+// Parsed CSV/GTFS rows are string-keyed string maps.
+type CsvRow = Record<string, string>;
+// The pipeline attaches many phase-specific fields to feature property bags as it
+// runs, so model the bags permissively (per the README orchestrator conversion plan).
+type FeatureProps = Record<string, any>;
+type LineFeature = { type: "Feature"; id?: string | number; geometry: LineStringGeometry; properties: FeatureProps };
+type PointFeat = { type: "Feature"; id?: string | number; geometry: PointGeometry; properties: FeatureProps };
+
+const here = __dirname;
 const frontendRoot = resolve(here, "..");
 const publicDir = resolve(frontendRoot, "public");
 // Engineering-only debug artifacts go OUTSIDE public/ so they are never served
@@ -232,7 +241,7 @@ const FANOUT_BLEND_M = 100;
 // distinct route_ids (e.g., "6X" for express 6, "FX" for F express); these
 // need to share the user-facing color but stay separate in topology since
 // they have different stop sequences and shapes.
-function normalizeRouteId(value) {
+function normalizeRouteId(value: string) {
   const r = String(value || "").trim().toUpperCase();
   if (r === "6D") return "6X";
   if (r === "7D") return "7X";
@@ -273,21 +282,21 @@ const COLOR_VISUAL_ORDER = [
 // from drifting from the canonical order used by orderColorsForBundle.
 const BUNDLE_ORDER_OVERRIDES = {};
 
-function routeColorFor(routeId) {
+function routeColorFor(routeId: string) {
   return ROUTE_COLORS[routeId] ?? "#808183";
 }
 
-function colorRank(color) {
+function colorRank(color: string) {
   const index = COLOR_VISUAL_ORDER.indexOf(color);
   return index === -1 ? 999 : index;
 }
 
-function bundleColorRank(color) {
+function bundleColorRank(color: string) {
   const index = BUNDLE_COLOR_ORDER.indexOf(color);
   return index === -1 ? 999 : index;
 }
 
-function compareRouteIds(a, b) {
+function compareRouteIds(a: string, b: string) {
   return a.localeCompare(b, "en", { numeric: true });
 }
 
@@ -295,12 +304,12 @@ function compareRouteIds(a, b) {
 // Mini-ZIP reader (no external deps; mirrors regenerate-canonical-from-gtfs.mjs)
 // =====================================================================
 
-function readUInt16(buf, off) { return buf.readUInt16LE(off); }
-function readUInt32(buf, off) { return buf.readUInt32LE(off); }
+function readUInt16(buf: Buffer, off: number) { return buf.readUInt16LE(off); }
+function readUInt32(buf: Buffer, off: number) { return buf.readUInt32LE(off); }
 
-function parseZipEntries(zipBuffer, wantedNames) {
+function parseZipEntries(zipBuffer: Buffer, wantedNames: string[]) {
   const wanted = new Set(wantedNames);
-  const entries = new Map();
+  const entries = new Map<string, string>();
 
   let eocd = -1;
   for (let i = zipBuffer.length - 22; i >= 0; i -= 1) {
@@ -347,8 +356,8 @@ function parseZipEntries(zipBuffer, wantedNames) {
 // CSV reader (handles quoted fields and CR/LF)
 // =====================================================================
 
-function parseCsv(text) {
-  const rows = [];
+function parseCsv(text: string): CsvRow[] {
+  const rows: string[][] = [];
   let row = [];
   let field = "";
   let quoted = false;
@@ -372,7 +381,7 @@ function parseCsv(text) {
   if (filtered.length === 0) return [];
   const headers = filtered[0];
   return filtered.slice(1).map((cols) => {
-    const obj = {};
+    const obj: CsvRow = {};
     headers.forEach((h, j) => { obj[h] = cols[j] ?? ""; });
     return obj;
   });
@@ -398,13 +407,13 @@ const gtfs = parseZipEntries(zipBuffer, [
 ]);
 
 console.log("[visual-network] parsing stops.txt");
-const stopRows = parseCsv(gtfs.get("stops.txt"));
+const stopRows = parseCsv(gtfs.get("stops.txt")!);
 console.log("[visual-network] parsing trips.txt");
-const tripRows = parseCsv(gtfs.get("trips.txt"));
+const tripRows = parseCsv(gtfs.get("trips.txt")!);
 console.log("[visual-network] parsing stop_times.txt");
-const stopTimeRows = parseCsv(gtfs.get("stop_times.txt"));
+const stopTimeRows = parseCsv(gtfs.get("stop_times.txt")!);
 console.log("[visual-network] parsing routes.txt");
-const routeRows = parseCsv(gtfs.get("routes.txt"));
+const routeRows = parseCsv(gtfs.get("routes.txt")!);
 console.log(
   `[visual-network] gtfs sizes: stops=${stopRows.length}, ` +
   `trips=${tripRows.length}, stop_times=${stopTimeRows.length}, ` +
@@ -429,7 +438,7 @@ for (const r of stopRows) {
 
 // Station-level stop resolver: returns the parent_station id when present,
 // otherwise the platform's own stop_id. Used to collapse 101N/101S → 101.
-function stationIdOf(stopId) {
+function stationIdOf(stopId: string) {
   const s = stopsById.get(stopId);
   if (!s) return stopId;
   if (s.parent_station && stopsById.has(s.parent_station)) {
@@ -488,7 +497,7 @@ for (const r of stopTimeRows) {
 
 const tripStations = new Map(); // trip_id → ordered [stationId, ...]
 for (const [tid, list] of stopTimesByTrip) {
-  list.sort((a, b) => a.seq - b.seq);
+  list.sort((a: { seq: number }, b: { seq: number }) => a.seq - b.seq);
   const seen = new Set();
   const sequence = [];
   for (const item of list) {
@@ -574,7 +583,7 @@ for (const [, branch] of branchAccum) {
 
 // Sort branches per route by total_trips desc (most common service first)
 for (const arr of branchesByRoute.values()) {
-  arr.sort((a, b) => b.total_trips_in_branch - a.total_trips_in_branch);
+  arr.sort((a: { total_trips_in_branch: number }, b: { total_trips_in_branch: number }) => b.total_trips_in_branch - a.total_trips_in_branch);
 }
 
 // =====================================================================
@@ -607,7 +616,7 @@ const topologyDoc = {
         route_id: routeId,
         branch_count: branches.length,
         distinct_stations: allStations.size,
-        branches: branches.map((b) => ({
+        branches: branches.map((b: any) => ({
           branch_id: b.branch_id,
           direction_id: b.direction_id,
           terminal_start: b.terminal_start,
@@ -643,10 +652,10 @@ console.log(`[visual-network] wrote ${OUT_TOPOLOGY_JSON}`);
 console.log("[visual-network] Gate 2B - loading NYC OpenData subway line geometry");
 
 const M_PER_DEG_LAT = 111_320;
-function metersPerDegLng(lat) {
+function metersPerDegLng(lat: number) {
   return 111_320 * Math.cos((lat * Math.PI) / 180);
 }
-function distanceMeters(a, b) {
+function distanceMeters(a: Position, b: Position) {
   const midLat = (a[1] + b[1]) / 2;
   const mPerLng = metersPerDegLng(midLat);
   const dx = (a[0] - b[0]) * mPerLng;
@@ -654,7 +663,7 @@ function distanceMeters(a, b) {
   return Math.hypot(dx, dy);
 }
 
-function lineLengthMeters(coords) {
+function lineLengthMeters(coords: Position[]) {
   let total = 0;
   for (let i = 1; i < coords.length; i += 1) {
     total += distanceMeters(coords[i - 1], coords[i]);
@@ -662,7 +671,7 @@ function lineLengthMeters(coords) {
   return total;
 }
 
-function vectorMeters(from, to) {
+function vectorMeters(from: Position, to: Position): Position {
   const midLat = (from[1] + to[1]) / 2;
   const mPerLng = metersPerDegLng(midLat);
   return [
@@ -671,7 +680,7 @@ function vectorMeters(from, to) {
   ];
 }
 
-function angleDeltaDegrees(a, b) {
+function angleDeltaDegrees(a: Position, b: Position) {
   const dot = a[0] * b[0] + a[1] * b[1];
   const aLen = Math.hypot(a[0], a[1]);
   const bLen = Math.hypot(b[0], b[1]);
@@ -679,7 +688,7 @@ function angleDeltaDegrees(a, b) {
   return Math.acos(Math.max(-1, Math.min(1, dot / (aLen * bLen)))) * 180 / Math.PI;
 }
 
-function geometryStats(coords) {
+function geometryStats(coords: Position[]) {
   let lengthM = 0;
   let maxSegmentLengthM = 0;
   let sharpAngleCount = 0;
@@ -735,7 +744,7 @@ for (const r of topologyDoc.per_route) {
         topologyEdgeDiagnostics.topology_edges_dropped_missing_stop += 1;
         continue;
       }
-      const topologyGeometry = [[p1.lon, p1.lat], [p2.lon, p2.lat]];
+      const topologyGeometry: Position[] = [[p1.lon, p1.lat], [p2.lon, p2.lat]];
       const stats = geometryStats(topologyGeometry);
 
       edgeFeatures.push({
@@ -826,7 +835,7 @@ console.log(
 
 const expectedEdges = topologyDoc.per_route.reduce(
   (acc, r) =>
-    acc + r.branches.reduce((br, b) => br + Math.max(0, b.stop_count - 1), 0),
+    acc + r.branches.reduce((br: number, b: any) => br + Math.max(0, b.stop_count - 1), 0),
   0,
 );
 console.log(
@@ -916,7 +925,7 @@ const ROUTE_FAMILY_GROUPS = [
   ["G"],
 ];
 
-function routeFamilyKey(routeId) {
+function routeFamilyKey(routeId: string) {
   for (const group of ROUTE_FAMILY_GROUPS) {
     if (group.includes(routeId)) return group.join("/");
   }
@@ -925,11 +934,11 @@ function routeFamilyKey(routeId) {
 
 const REF_LAT = 40.73;
 const M_PER_DEG_LNG = metersPerDegLng(REF_LAT);
-function toMeters(coord) {
+function toMeters(coord: Position): Position {
   return [coord[0] * M_PER_DEG_LNG, coord[1] * M_PER_DEG_LAT];
 }
 
-function resampleEdgeAt5m(coordsLngLat) {
+function resampleEdgeAt5m(coordsLngLat: Position[]) {
   const coordsM = coordsLngLat.map(toMeters);
   const arc = [0];
   for (let i = 1; i < coordsM.length; i += 1) {
@@ -969,7 +978,10 @@ function resampleEdgeAt5m(coordsLngLat) {
   return samples;
 }
 
-function bidirectionalHausdorff(samplesA, samplesB) {
+function bidirectionalHausdorff(
+  samplesA: Array<{ x: number; y: number; tx: number; ty: number }>,
+  samplesB: Array<{ x: number; y: number; tx: number; ty: number }>,
+) {
   let maxA = 0;
   let withinA = 0;
   let distanceSumA = 0;
@@ -1024,16 +1036,16 @@ function bidirectionalHausdorff(samplesA, samplesB) {
   };
 }
 
-function routeSetsIntersect(left, right) {
+function routeSetsIntersect(left: string[], right: string[]) {
   const rightSet = new Set(right);
   return left.some((routeId) => rightSet.has(routeId));
 }
 
 const pairsConsidered = 0;
 const pairsMatched = 0;
-const matchedPairs = [];
-const corridorFeatures = [];
-const corridorRows = [];
+const matchedPairs: any[] = [];
+const corridorFeatures: LineFeature[] = [];
+const corridorRows: any[] = [];
 
 for (let index = 0; index < opendataLineFeatures.length; index += 1) {
   const feature = opendataLineFeatures[index];
@@ -1141,18 +1153,18 @@ console.log(`[visual-network] wrote ${OUT_OPENDATA_OVERLAPS_GEOJSON}`);
 console.log(`[visual-network] OpenData overlap warnings: ${opendataOverlapWarnings.length}`);
 const JUNCTION_SNAP_MAX_M = 25;
 
-function endpointClusterKey(stopId, index) {
+function endpointClusterKey(stopId: string, index: number) {
   return `${stopId}#${index}`;
 }
 
-function clusterEndpointEntries(entries) {
-  const clusters = [];
+function clusterEndpointEntries(entries: any[]) {
+  const clusters: any[] = [];
   for (const entry of entries) {
     let target = null;
     for (const cluster of clusters) {
       if (
         cluster.entries.some(
-          (existing) =>
+          (existing: any) =>
             distanceMeters(existing.coordinate, entry.coordinate) <=
             JUNCTION_SNAP_MAX_M,
         )
@@ -1167,17 +1179,17 @@ function clusterEndpointEntries(entries) {
     }
     target.entries.push(entry);
     const lng =
-      target.entries.reduce((sum, item) => sum + item.coordinate[0], 0) /
+      target.entries.reduce((sum: number, item: any) => sum + item.coordinate[0], 0) /
       target.entries.length;
     const lat =
-      target.entries.reduce((sum, item) => sum + item.coordinate[1], 0) /
+      target.entries.reduce((sum: number, item: any) => sum + item.coordinate[1], 0) /
       target.entries.length;
     target.coordinate = [lng, lat];
   }
   return clusters;
 }
 
-function applyJunctionAnchorSnaps(features) {
+function applyJunctionAnchorSnaps(features: LineFeature[]) {
   const entriesByStop = new Map();
   const geometryEndpointKey = "__opendata_geometry_endpoints__";
   for (const feature of features) {
@@ -1204,8 +1216,8 @@ function applyJunctionAnchorSnaps(features) {
     }
   }
 
-  const anchorFeatures = [];
-  const snapFeatures = [];
+  const anchorFeatures: PointFeat[] = [];
+  const snapFeatures: LineFeature[] = [];
   const anchorByFeatureEndpoint = new Map();
 
   for (const [stopId, entries] of entriesByStop) {
@@ -1276,13 +1288,13 @@ function applyJunctionAnchorSnaps(features) {
   };
 }
 
-function colorGroupsForRoutes(routeIds) {
+function colorGroupsForRoutes(routeIds: string[]) {
   return [
     ...new Set(routeIds.map((routeId) => routeColorFor(routeId))),
   ].sort((a, b) => colorRank(a) - colorRank(b));
 }
 
-function applyLaneChainMetadata(features) {
+function applyLaneChainMetadata(features: LineFeature[]) {
   const featureIndexByAnchor = new Map();
   features.forEach((feature, index) => {
     for (const anchorId of feature.properties.junction_anchor_ids ?? []) {
@@ -1293,7 +1305,7 @@ function applyLaneChainMetadata(features) {
 
   const parent = new Int32Array(features.length);
   for (let i = 0; i < parent.length; i += 1) parent[i] = i;
-  const find = (x) => {
+  const find = (x: number) => {
     let r = x;
     while (parent[r] !== r) r = parent[r];
     while (parent[x] !== r) {
@@ -1303,7 +1315,7 @@ function applyLaneChainMetadata(features) {
     }
     return r;
   };
-  const union = (a, b) => {
+  const union = (a: number, b: number) => {
     const ra = find(a);
     const rb = find(b);
     if (ra !== rb) parent[ra] = rb;
@@ -1335,8 +1347,8 @@ function applyLaneChainMetadata(features) {
   let groupId = 1;
   for (const indices of groups.values()) {
     const groupColors = [
-      ...new Set(
-        indices.flatMap((index) => colorGroupsForRoutes(features[index].properties.route_ids ?? [])),
+      ...new Set<string>(
+        indices.flatMap((index: any) => colorGroupsForRoutes(features[index].properties.route_ids ?? [])),
       ),
     ].sort((a, b) => colorRank(a) - colorRank(b));
     const laneGroupId = `lane-group-${String(groupId++).padStart(4, "0")}`;
@@ -1413,13 +1425,13 @@ const edgeById = new Map(
   );
 
   // Helper: recompute path length in meters (haversine sum).
-  function recomputeLengthM(coords) {
+  function recomputeLengthM(coords: Position[]) {
     const EARTH_M = 6371000;
     let total = 0;
     for (let i = 1; i < coords.length; i++) {
       const [lon1, lat1] = coords[i - 1];
       const [lon2, lat2] = coords[i];
-      const toRad = (d) => (d * Math.PI) / 180;
+      const toRad = (d: number) => (d * Math.PI) / 180;
       const dLat = toRad(lat2 - lat1);
       const dLon = toRad(lon2 - lon1);
       const a =
@@ -1488,7 +1500,7 @@ const edgeById = new Map(
           bf.properties.junction_anchor_ids = [];
           branchesClipped++;
         }
-        if (bu.connector?.coordinates?.length >= 2) {
+        if (bu.connector && (bu.connector.coordinates?.length ?? 0) >= 2) {
           const connectorId = `same-color-connector-${String(sameColorConnectorNumber++).padStart(5, "0")}`;
           const connectorRouteIds = [...new Set(bu.connector.route_ids ?? [])].sort(compareRouteIds);
           const connectorColor = bu.connector.color ?? group.color;
@@ -1544,8 +1556,8 @@ const edgeById = new Map(
           .filter((b) => b.connector)
           .map((b) => ({
             corridor_id: b.corridor_id,
-            distance_m: b.connector.distance_m,
-            endpoint_kind: b.connector.endpoint_kind,
+            distance_m: b.connector!.distance_m,
+            endpoint_kind: b.connector!.endpoint_kind,
           })),
         route_ids_union: result.trunkUpdates.route_ids,
       },
@@ -1587,7 +1599,7 @@ console.log(
   const dedup = dedupeDuplicateCorridors(corridorFeatures, { parallelDistM: 25, overlapRatioMin: 0.8 });
   if (dedup.removedIds.length) {
     corridorFeatures.length = 0;
-    corridorFeatures.push(...dedup.features);
+    corridorFeatures.push(...(dedup.features as LineFeature[]));
     console.log(`[visual-network] duplicate corridors deduped:           ${dedup.removedIds.length}`);
   }
 }
@@ -1612,7 +1624,7 @@ console.log(
 // derived from this corridor. Hard validation downstream asserts that all
 // lanes sharing a spine_id share an identical hash.
 const spinesByCorridorId = new Map();
-const spineFeatures = [];
+const spineFeatures: any[] = [];
 
 function rebuildSpineArtifactsForCurrentCorridors() {
   spinesByCorridorId.clear();
@@ -1730,7 +1742,7 @@ let bundlesSubstituted = 0;
 for (const group of physicalBundles) {
   const bundleSpine = selectPhysicalBundleSpine(group, spinesById);
   const bundleHash = computePhysicalBundleSpineHash(bundleSpine.geometry.coordinates);
-  group.physical_bundle_spine_hash = bundleHash;
+  (group as any).physical_bundle_spine_hash = bundleHash;
   const shouldSubstitute = false;
   if (shouldSubstitute) bundlesSubstituted++;
 
@@ -1801,7 +1813,7 @@ for (const group of physicalBundles) {
 }
 
 const physicalBundleMaterialization = materializePhysicalBundles(
-  corridorFeatures,
+  corridorFeatures as any,
   physicalBundles,
   {
     spinesById,
@@ -1816,7 +1828,7 @@ const physicalBundleMaterialization = materializePhysicalBundles(
     routeColorFor,
     compareRouteIds,
     orderColorsForBundle,
-  },
+  } as any,
 );
 
 if (physicalBundleMaterialization.consumed_corridor_count > 0) {
@@ -1973,7 +1985,7 @@ const bundleArtifacts = buildBundleArtifacts(corridorFeatures, spinesByCorridorI
 // re-baking is required. Do not add lanes with non-zero lane_slot in this
 // block without re-running the baking loop on them.
 {
-  const bundleLaneFeatures = bundleArtifacts.bundleLaneFeatures ?? bundleArtifacts.bundle_lane_features ?? [];
+  const bundleLaneFeatures: any[] = bundleArtifacts.bundleLaneFeatures ?? (bundleArtifacts as any).bundle_lane_features ?? [];
 
   // Build a quick lookup: bundle_id -> route_ids (any of its lanes is fine).
   const bundleRouteIds = new Map();
@@ -1998,11 +2010,11 @@ const bundleArtifacts = buildBundleArtifacts(corridorFeatures, spinesByCorridorI
   // Enrich and promote each transition into bundleLaneFeatures.
   let promoted = 0;
   for (const t of transitions) {
-    const tp = t.properties;
+    const tp: any = t.properties;
     const routesFrom = bundleRouteIds.get(tp.bundle_id_from) ?? [];
     const routesTo = bundleRouteIds.get(tp.bundle_id_to) ?? [];
     const routeIdsUnion = [...new Set([...routesFrom, ...routesTo])].sort(compareRouteIds);
-    const intersect = routesFrom.filter((r) => routesTo.includes(r));
+    const intersect = routesFrom.filter((r: string) => routesTo.includes(r));
     const colorRouteIds = routesForColor(routeIdsUnion, tp.color);
 
     // Classification: intersect non-empty => safe; else => likely_branch_exit.
@@ -2074,8 +2086,8 @@ const bundleArtifacts = buildBundleArtifacts(corridorFeatures, spinesByCorridorI
   })}\n`);
 
   // Count classifications for the log.
-  const safeCount = transitions.filter((t) => t.properties.transition_classification === "safe_same_route_continuation").length;
-  const branchExitCount = transitions.filter((t) => t.properties.transition_classification === "likely_branch_exit").length;
+  const safeCount = transitions.filter((t) => (t.properties as any).transition_classification === "safe_same_route_continuation").length;
+  const branchExitCount = transitions.filter((t) => (t.properties as any).transition_classification === "likely_branch_exit").length;
 
   // Mirror the promoted transitions into bundleArtifacts.visualFeatures (the
   // sorted array that's actually serialized into subway-network.visual.geojson
@@ -2117,7 +2129,7 @@ const bundleArtifacts = buildBundleArtifacts(corridorFeatures, spinesByCorridorI
 // both bundleLaneFeatures and visualFeatures. Orphan features are flagged
 // but NOT removed (debug overlay can hide them; runtime ignores the flag).
 {
-  const bundleLaneFeatures = bundleArtifacts.bundleLaneFeatures ?? bundleArtifacts.bundle_lane_features ?? [];
+  const bundleLaneFeatures: any[] = bundleArtifacts.bundleLaneFeatures ?? (bundleArtifacts as any).bundle_lane_features ?? [];
 
   // Build corridor route index from non-transition lanes.
   const corridorRouteIndex = new Map();
@@ -2167,7 +2179,7 @@ const bundleArtifacts = buildBundleArtifacts(corridorFeatures, spinesByCorridorI
   }
 
   // Mark orphan lanes (flag only, no removal).
-  const terminalStopIds = new Set();
+  const terminalStopIds = new Set<string>();
   // Collect all from_stop_id and to_stop_id that appear at the "edge" of a route.
   // Simple heuristic: any stop that appears in a single-endpoint position in per-route graphs.
   // We use the stations geojson if available (already loaded in Gate 2A stopsById).
@@ -2256,7 +2268,7 @@ const bundleArtifacts = buildBundleArtifacts(corridorFeatures, spinesByCorridorI
       if (member.lane_slot === 0) continue; // centered middle lane stays put
       const f = member._featureRef;
       if (!f?.geometry?.coordinates) continue;
-      const baked = offsetPolylineByLaneSlot(f.geometry.coordinates, member.lane_slot);
+      const baked = offsetPolylineByLaneSlot(f.geometry.coordinates, member.lane_slot!);
       f.geometry = { type: "LineString", coordinates: baked };
       f.properties.cross_color_spread_slot = member.lane_slot;
       f.properties.lane_offset_baked = true;
@@ -2327,9 +2339,9 @@ const bundleArtifacts = buildBundleArtifacts(corridorFeatures, spinesByCorridorI
     const lonPad = DIST_MAX_M / Math.max(1, Math.cos(((mny + mxy) / 2) * Math.PI / 180) * 111320);
     return [mnx - lonPad, mny - latPad, mxx + lonPad, mxy + latPad];
   });
-  const bboxOverlap = (a, b) => !(a[2] < b[0] || b[2] < a[0] || a[3] < b[1] || b[3] < a[1]);
+  const bboxOverlap = (a: number[], b: number[]) => !(a[2] < b[0] || b[2] < a[0] || a[3] < b[1] || b[3] < a[1]);
 
-  const rankOf = (color) => {
+  const rankOf = (color: string) => {
     const i = BUNDLE_COLOR_ORDER.indexOf(color);
     return i === -1 ? 999 : i;
   };
@@ -2366,13 +2378,13 @@ const bundleArtifacts = buildBundleArtifacts(corridorFeatures, spinesByCorridorI
   pairs.sort((p, q) => q.ext.sharedLenM - p.ext.sharedLenM);
 
   const claimedRanges = new Map(); // featureRef -> [[startArc, endArc], ...]
-  const rangeBlocked = (feature, s, e) => {
+  const rangeBlocked = (feature: any, s: number, e: number) => {
     const ranges = claimedRanges.get(feature);
     if (!ranges) return false;
     // Block if [s,e] expanded by TAPER_M overlaps any existing claimed range.
-    return ranges.some(([rs, re]) => !(e + TAPER_M < rs || s - TAPER_M > re));
+    return ranges.some(([rs, re]: number[]) => !(e + TAPER_M < rs || s - TAPER_M > re));
   };
-  const claimRange = (feature, s, e) => {
+  const claimRange = (feature: any, s: number, e: number) => {
     if (!claimedRanges.has(feature)) claimedRanges.set(feature, []);
     claimedRanges.get(feature).push([s, e]);
   };
@@ -2435,8 +2447,8 @@ const bundleArtifacts = buildBundleArtifacts(corridorFeatures, spinesByCorridorI
 
 // ----- Phase 2: lane order debug summary -----
 {
-  const laneOrderSummary = {};
-  const allLanes = bundleArtifacts.bundleLaneFeatures ?? bundleArtifacts.bundle_lane_features ?? [];
+  const laneOrderSummary: Record<string, any> = {};
+  const allLanes = bundleArtifacts.bundleLaneFeatures ?? (bundleArtifacts as any).bundle_lane_features ?? [];
   for (const lane of allLanes) {
     const bid = lane.properties.bundle_id;
     if (!bid || laneOrderSummary[bid]) continue;
@@ -2627,7 +2639,7 @@ console.log(
 // (falls back to the segment normal — bevel). All math is in projected
 // meters; final result is converted back to [lng, lat] using local
 // per-vertex meters-per-degree.
-function offsetPolylineByLaneSlot(coords, laneSlot) {
+function offsetPolylineByLaneSlot(coords: Position[], laneSlot: number) {
   if (!Array.isArray(coords) || coords.length < 2) return coords;
   if (!Number.isFinite(laneSlot) || laneSlot === 0) return coords;
   const offsetMeters = laneSlot * LANE_WIDTH_METERS;
@@ -2691,7 +2703,7 @@ function offsetPolylineByLaneSlot(coords, laneSlot) {
   }
 
   // Apply offset in projected meter space; convert back to lng/lat.
-  const out = [];
+  const out: Position[] = [];
   for (let i = 0; i < projected.length; i += 1) {
     const n = vertexNormals[i];
     const nx = n[0] * offsetMeters;
@@ -2703,36 +2715,36 @@ function offsetPolylineByLaneSlot(coords, laneSlot) {
   return out;
 }
 
-function sortedBundleColors(routeIds) {
+function sortedBundleColors(routeIds: string[]) {
   return [
     ...new Set(routeIds.map((routeId) => routeColorFor(routeId))),
   ].sort((a, b) => bundleColorRank(a) - bundleColorRank(b));
 }
 
-function bundleLaneSlotsForColors(colors) {
+function bundleLaneSlotsForColors(colors: string[]) {
   return Object.fromEntries(
     colors.map((color, index) => [color, index - (colors.length - 1) / 2]),
   );
 }
 
-function routesForColor(routeIds, color) {
+function routesForColor(routeIds: string[], color: string) {
   return routeIds
     .filter((routeId) => routeColorFor(routeId) === color)
     .sort(compareRouteIds);
 }
 
-function unionRouteIds(features) {
+function unionRouteIds(features: LineFeature[]) {
   return [
-    ...new Set(features.flatMap((feature) => feature.properties.route_ids ?? [])),
+    ...new Set<string>(features.flatMap((feature) => feature.properties.route_ids ?? [])),
   ].sort(compareRouteIds);
 }
 
-function routeDiff(left, right) {
+function routeDiff(left: string[], right: string[]) {
   const rightSet = new Set(right);
   return left.filter((routeId) => !rightSet.has(routeId));
 }
 
-function buildAnchorFeatureIndex(features) {
+function buildAnchorFeatureIndex(features: LineFeature[]) {
   const byAnchor = new Map();
   features.forEach((feature, index) => {
     for (const anchorId of feature.properties.junction_anchor_ids ?? []) {
@@ -2743,17 +2755,17 @@ function buildAnchorFeatureIndex(features) {
   return byAnchor;
 }
 
-function adjacentRouteIdsAtAnchor(anchorFeatureIndex, anchorId, ownCorridorId) {
+function adjacentRouteIdsAtAnchor(anchorFeatureIndex: Map<any, any>, anchorId: string, ownCorridorId: string) {
   if (!anchorId) return [];
   const adjacent = (anchorFeatureIndex.get(anchorId) ?? [])
-    .filter(({ feature }) => feature.properties.corridor_id !== ownCorridorId)
-    .map(({ feature }) => feature);
+    .filter(({ feature }: any) => feature.properties.corridor_id !== ownCorridorId)
+    .map(({ feature }: any) => feature);
   return unionRouteIds(adjacent);
 }
 
 // Gap bridging (Fix 1) — constant moved up.
 
-function buildJunctionBridges(bundleLaneFeatures, bundleGapFeatures) {
+function buildJunctionBridges(bundleLaneFeatures: any[], bundleGapFeatures: any[]) {
   // Spatial-grid index of bundle_lane endpoints by color so we can find
   // bridge candidates by GEOMETRIC PROXIMITY (anchor identity is not
   // enough — bundle gaps exist precisely because no adjacent feature
@@ -2764,7 +2776,7 @@ function buildJunctionBridges(bundleLaneFeatures, bundleGapFeatures) {
   // captures every candidate within snap distance.
   const cellDeg = JUNCTION_BRIDGE_MAX_M / M_PER_DEG_LAT;
   const endpointIndex = new Map();
-  function endpointIndexInsert(coord, color, feature, endpointKind) {
+  function endpointIndexInsert(coord: Position, color: string, feature: any, endpointKind: string) {
     const cx = Math.floor(coord[0] / cellDeg);
     const cy = Math.floor(coord[1] / cellDeg);
     const k = cx + "|" + cy + "|" + color;
@@ -2780,7 +2792,7 @@ function buildJunctionBridges(bundleLaneFeatures, bundleGapFeatures) {
     endpointIndexInsert(coords[0], color, lane, "from");
     endpointIndexInsert(coords[coords.length - 1], color, lane, "to");
   }
-  function endpointIndexLookup(coord, color) {
+  function endpointIndexLookup(coord: Position, color: string) {
     const cx = Math.floor(coord[0] / cellDeg);
     const cy = Math.floor(coord[1] / cellDeg);
     const out = [];
@@ -2807,12 +2819,12 @@ function buildJunctionBridges(bundleLaneFeatures, bundleGapFeatures) {
 
     // Find the closest same-color bundle_lane endpoint that's NOT one of
     // the gap's own corridor endpoints.
-    const candidates = endpointIndexLookup(gapCoord, color);
+    const candidates = endpointIndexLookup(gapCoord as Position, color);
     let bestEndpoint = null;
     let bestDist = Infinity;
     for (const cand of candidates) {
       if (cand.feature.properties.corridor_id === p.corridor_id) continue;
-      const d = distanceMeters(gapCoord, cand.coord);
+      const d = distanceMeters(gapCoord as Position, cand.coord);
       if (d > JUNCTION_BRIDGE_MAX_M) continue;
       if (d < bestDist) { bestDist = d; bestEndpoint = cand; }
     }
@@ -2886,12 +2898,12 @@ function buildJunctionBridges(bundleLaneFeatures, bundleGapFeatures) {
   return bridges;
 }
 
-function buildBundleArtifacts(features, spinesByCorridorId) {
+function buildBundleArtifacts(features: LineFeature[], spinesByCorridorId: Map<any, any>) {
   const anchorFeatureIndex = buildAnchorFeatureIndex(features);
-  const bundleFeatures = [];
-  const bundleLaneFeatures = [];
-  const unbundledFeatures = [];
-  const bundleGapFeatures = [];
+  const bundleFeatures: any[] = [];
+  const bundleLaneFeatures: any[] = [];
+  const unbundledFeatures: any[] = [];
+  const bundleGapFeatures: any[] = [];
   let bundleNumber = 1;
   let soloNumber = 1;
 
@@ -3298,9 +3310,9 @@ for (const trunk of REQUIRED_TRUNKS) {
 
 console.log("[visual-network] Gate 2G — render-lane continuity diagnostics");
 
-function buildRouteIncidentCounts(features, useSourceEdges = false) {
+function buildRouteIncidentCounts(features: LineFeature[], useSourceEdges = false) {
   const counts = new Map();
-  const add = (stopId, stopName, routeId, corridorId) => {
+  const add = (stopId: any, stopName: any, routeId: any, corridorId: any) => {
     const key = `${stopId}|${routeId}`;
     if (!counts.has(key)) {
       counts.set(key, {
@@ -3330,9 +3342,9 @@ function buildRouteIncidentCounts(features, useSourceEdges = false) {
   return counts;
 }
 
-function buildVisualRouteIncidentCounts(features) {
+function buildVisualRouteIncidentCounts(features: LineFeature[]) {
   const counts = new Map();
-  const add = (stopId, stopName, routeId, corridorId) => {
+  const add = (stopId: any, stopName: any, routeId: any, corridorId: any) => {
     const key = `${stopId}|${routeId}`;
     if (!counts.has(key)) {
       counts.set(key, {
@@ -3352,7 +3364,7 @@ function buildVisualRouteIncidentCounts(features) {
     const props = feature.properties;
     const routeIds = new Set(props.route_ids ?? []);
     const sourceEdges = (props.source_edge_ids ?? [])
-      .map((edgeId) => edgeById.get(edgeId))
+      .map((edgeId: any) => edgeById.get(edgeId))
       .filter(Boolean);
 
     if (sourceEdges.length > 0) {
@@ -3384,7 +3396,7 @@ function buildVisualRouteIncidentCounts(features) {
   return counts;
 }
 
-const expectedRouteIncidents = buildRouteIncidentCounts(edgeFeatures, true);
+const expectedRouteIncidents = buildRouteIncidentCounts(edgeFeatures as any, true);
 const visualRouteIncidents = buildVisualRouteIncidentCounts(corridorFeatures);
 const missingRouteLaneFeatures = [];
 
@@ -3483,18 +3495,18 @@ console.log(
 
 console.log("[visual-network] Gate 2F — visual-geometry anomaly diagnostics");
 
-function hasUnrelatedRouteFamilyMix(routeIds) {
+function hasUnrelatedRouteFamilyMix(routeIds: string[]) {
   if (routeIds.length <= 1) return false;
   return new Set(routeIds.map(routeFamilyKey)).size > 2;
 }
 
-function anomalyReasonsForFeature(feature) {
+function anomalyReasonsForFeature(feature: LineFeature) {
   const props = feature.properties;
   const stats = geometryStats(feature.geometry.coordinates);
   const sourceEdges = (props.source_edge_ids ?? [])
-    .map((edgeId) => edgeById.get(edgeId))
+    .map((edgeId: any) => edgeById.get(edgeId))
     .filter(Boolean);
-  const maxProjectionDistanceM = sourceEdges.reduce((max, edge) => {
+  const maxProjectionDistanceM = sourceEdges.reduce((max: number, edge: any) => {
     return Math.max(
       max,
       Number(edge.properties.from_projection_dist_m ?? 0),
@@ -3544,7 +3556,7 @@ function anomalyReasonsForFeature(feature) {
   };
 }
 
-function buildVisualAnomalyRecords(features) {
+function buildVisualAnomalyRecords(features: LineFeature[]): any[] {
   return features.map((feature) => {
     const result = anomalyReasonsForFeature(feature);
     if (result.reasons.length === 0) return null;
@@ -3556,19 +3568,19 @@ function buildVisualAnomalyRecords(features) {
       stats: result.stats,
       max_projection_distance_m: result.max_projection_distance_m,
       shape_ids: [
-        ...new Set(result.source_edges.map((edge) => edge.properties.shape_id)),
+        ...new Set<string>(result.source_edges.map((edge: any) => edge.properties.shape_id)),
       ].sort((a, b) => a.localeCompare(b, "en", { numeric: true })),
       stop_pairs: result.source_edges
         .slice(0, 12)
         .map(
-          (edge) =>
+          (edge: any) =>
             `${edge.properties.from_stop_name} → ${edge.properties.to_stop_name}`,
         ),
       source_edge_ids: props.source_edge_ids ?? [],
     };
   })
   .filter(Boolean)
-  .sort((a, b) => b.severity - a.severity);
+  .sort((a: any, b: any) => b.severity - a.severity);
 }
 
 const visualAnomalies = buildVisualAnomalyRecords(corridorFeatures);
@@ -3722,14 +3734,15 @@ for (let i = 0; i < edgeFeatures.length; i += 1) {
 }
 
 class RouteUF {
+  parent: Map<any, any>;
   constructor() { this.parent = new Map(); }
-  find(x) {
+  find(x: any) {
     if (!this.parent.has(x)) this.parent.set(x, x);
     let r = this.parent.get(x);
     while (r !== x) { x = r; r = this.parent.get(x); }
     return r;
   }
-  union(a, b) {
+  union(a: any, b: any) {
     const ra = this.find(a), rb = this.find(b);
     if (ra !== rb) this.parent.set(ra, rb);
   }
@@ -3838,9 +3851,9 @@ const DEKALB_REDUNDANT_DIST_M = 22;   // a vertex this close to the kept same-co
 const DEKALB_TRUNK_RADIUS_M = 1300;   // only treat kept-trunk geometry within this of the zone as the local trunk
 const DEKALB_SNAP_M = 50;             // connect a clipped cut-end (divergence point) to the trunk within this
 const DEKALB_MIN_CLIPPED_RUN_M = 250;
-const _dkHav = (a, b) => { const R = 6371000, r = Math.PI / 180, dy = (b[1] - a[1]) * r, dx = (b[0] - a[0]) * r; return 2 * R * Math.asin(Math.sqrt(Math.sin(dy / 2) ** 2 + Math.cos(a[1] * r) * Math.cos(b[1] * r) * Math.sin(dx / 2) ** 2)); };
-const inDekalbZone = (p) => p[0] >= DEKALB_ZONE.minLon && p[0] <= DEKALB_ZONE.maxLon && p[1] >= DEKALB_ZONE.minLat && p[1] <= DEKALB_ZONE.maxLat;
-function isDekalbRedundant(f) {
+const _dkHav = (a: Position, b: Position) => { const R = 6371000, r = Math.PI / 180, dy = (b[1] - a[1]) * r, dx = (b[0] - a[0]) * r; return 2 * R * Math.asin(Math.sqrt(Math.sin(dy / 2) ** 2 + Math.cos(a[1] * r) * Math.cos(b[1] * r) * Math.sin(dx / 2) ** 2)); };
+const inDekalbZone = (p: Position) => p[0] >= DEKALB_ZONE.minLon && p[0] <= DEKALB_ZONE.maxLon && p[1] >= DEKALB_ZONE.minLat && p[1] <= DEKALB_ZONE.maxLat;
+function isDekalbRedundant(f: any) {
   // KEEP the materialized continuous-lane members (each route is its own continuous,
   // consistently-offset lane on the bundle alignment) as the DeKalb trunk; clip the other
   // parallel same-color SOLO/legacy corridors into it.
@@ -3859,20 +3872,20 @@ if (bundleArtifacts.visualFeatures) {
   const keptNearByColor = new Map();
   for (const f of feats) {
     if (f.geometry?.type !== "LineString" || isDekalbRedundant(f)) continue;
-    const near = f.geometry.coordinates.filter((p) => _dkHav(p, DEKALB_ZONE_CENTER) < DEKALB_TRUNK_RADIUS_M);
+    const near = f.geometry.coordinates.filter((p: Position) => _dkHav(p, DEKALB_ZONE_CENTER as Position) < DEKALB_TRUNK_RADIUS_M);
     if (near.length) { const c = f.properties.color; if (!keptNearByColor.has(c)) keptNearByColor.set(c, []); keptNearByColor.get(c).push(...near); }
   }
-  const nearestKept = (p, color) => { let bd = Infinity, bp = null; for (const q of (keptNearByColor.get(color) || [])) { const d = _dkHav(p, q); if (d < bd) { bd = d; bp = q; } } return { d: bd, p: bp }; };
+  const nearestKept = (p: Position, color: any) => { let bd = Infinity, bp = null; for (const q of (keptNearByColor.get(color) || [])) { const d = _dkHav(p, q); if (d < bd) { bd = d; bp = q; } } return { d: bd, p: bp }; };
   // A vertex is redundant where it runs within DEKALB_REDUNDANT_DIST_M of the kept same-color trunk
   // near DeKalb (i.e. they have merged). Distance-only -- NOT the raw bbox -- so the cut lands exactly
   // at the divergence point (and the snap below connects it), instead of dangling at the box edge.
-  const vertexRedundant = (p, color) => nearestKept(p, color).d < DEKALB_REDUNDANT_DIST_M;
+  const vertexRedundant = (p: Position, color: any) => nearestKept(p, color).d < DEKALB_REDUNDANT_DIST_M;
   void inDekalbZone;
   const out = [];
   let clippedCount = 0, snapped = 0;
   for (const f of feats) {
     const color = f.properties?.color;
-    if (!(f.geometry?.type === "LineString" && isDekalbRedundant(f) && f.geometry.coordinates.some((p) => vertexRedundant(p, color)))) { out.push(f); continue; }
+    if (!(f.geometry?.type === "LineString" && isDekalbRedundant(f) && f.geometry.coordinates.some((p: Position) => vertexRedundant(p, color)))) { out.push(f); continue; }
     // keep contiguous runs of vertices that have truly diverged from the kept trunk AND are outside the zone
     const runs = []; let cur = [];
     for (const p of f.geometry.coordinates) { if (vertexRedundant(p, color)) { if (cur.length >= 2) runs.push(cur); cur = []; } else cur.push(p); }
@@ -3971,7 +3984,7 @@ if (bundleArtifacts.visualFeatures) {
     });
     if (after === before) continue;
     // Endpoint-preservation invariant: junctions must not move.
-    const eqPt = (p, q) => p[0] === q[0] && p[1] === q[1];
+    const eqPt = (p: Position, q: Position) => p[0] === q[0] && p[1] === q[1];
     if (!eqPt(after[0], before[0]) || !eqPt(after[after.length - 1], before[before.length - 1])) {
       console.error(
         `[visual-network] *** smoothing moved an endpoint on ${f.properties?.bundle_id ?? "?"} -- refusing. ***`,
@@ -4008,7 +4021,7 @@ if (bundleArtifacts.visualFeatures) {
       lambda: TIGHT_CURVE_LAMBDA,
     });
     if (after === before) continue;
-    const eqPt = (p, q) => p[0] === q[0] && p[1] === q[1];
+    const eqPt = (p: Position, q: Position) => p[0] === q[0] && p[1] === q[1];
     if (!eqPt(after[0], before[0]) || !eqPt(after[after.length - 1], before[before.length - 1])) {
       console.error(
         `[visual-network] *** tight-curve simplify moved an endpoint on ${f.properties?.bundle_id ?? "?"} -- refusing. ***`,
@@ -4161,7 +4174,7 @@ if (bundleArtifacts.visualFeatures) {
     const before = f.geometry.coordinates;
     if (!Array.isArray(before) || before.length < 3) continue;
     const routes = Array.isArray(f.properties?.route_ids) ? f.properties.route_ids : [];
-    const shapes = routes.flatMap((r) => shapesByRoute.get(String(r)) ?? []);
+    const shapes = routes.flatMap((r: any) => shapesByRoute.get(String(r)) ?? []);
     if (!shapes.length) continue;
     let coords = before;
     let moved = false;
@@ -4308,7 +4321,7 @@ if (bundleArtifacts.visualFeatures) {
   // straight down Grand Concourse and push that curve off-screen. Lower = curve pushed
   // further down but larger divergence from the true track.
   const LENS_STRAIGHTEN_TO_LAT = 40.806;
-  const inBBox = (p) =>
+  const inBBox = (p: Position) =>
     p[0] >= MOTT_HAVEN_5_QA_BBOX.minLon && p[0] <= MOTT_HAVEN_5_QA_BBOX.maxLon &&
     p[1] >= MOTT_HAVEN_5_QA_BBOX.minLat && p[1] <= MOTT_HAVEN_5_QA_BBOX.maxLat;
   const lensTrunk = bundleArtifacts.visualFeatures.find((f) => (
@@ -4399,7 +4412,7 @@ if (bundleArtifacts.visualFeatures) {
         const b2 = tc[Math.min(tc.length - 1, blendIdx + 8)];
         const eT = [(b2[0] - B[0]) * kB, (b2[1] - B[1]) * M_PER_DEG_LAT];
         const eL = Math.hypot(eT[0], eT[1]) || 1;
-        const blendSeg = hermiteBetween(rEnd, B, avenueDir, [eT[0] / eL, eT[1] / eL], { handleFrac: 0.5, sampleM: 8 });
+        const blendSeg = hermiteBetween(rEnd as Position, B as Position, avenueDir as Position, [eT[0] / eL, eT[1] / eL], { handleFrac: 0.5, sampleM: 8 });
         let merged = [...ray, ...blendSeg.slice(1), ...tc.slice(blendIdx + 1)];
         merged = smoothSharpCorners(merged, { angleThresholdDeg: 22, iterations: 3, ratio: 0.2, maxFilletM: 18 });
         tc = merged;
@@ -4458,18 +4471,18 @@ if (bundleArtifacts.visualFeatures) {
       lensBranch.properties.mott_haven_lens_entry_point = lens.diagnostics.entryPoint;
       lensBranch.properties.mott_haven_lens_top_point = lens.diagnostics.topPoint;
       lensBranch.properties.mott_haven_lens_merge_point = lens.diagnostics.mergePoint;
-      lensBranch.properties.mott_haven_lens_top_spread_m = Number(lens.diagnostics.topApproachLatSpreadM.toFixed(2));
-      lensBranch.properties.mott_haven_lens_max_turn_deg = Number(lens.diagnostics.maxTurnDeg.toFixed(2));
+      lensBranch.properties.mott_haven_lens_top_spread_m = Number(lens.diagnostics.topApproachLatSpreadM!.toFixed(2));
+      lensBranch.properties.mott_haven_lens_max_turn_deg = Number(lens.diagnostics.maxTurnDeg!.toFixed(2));
       lensBranch.properties.mott_haven_parallel_reference_used = lens.diagnostics.parallelReferenceUsed;
       lensBranch.properties.mott_haven_parallel_reference_distance_m =
         lens.diagnostics.parallelReferenceDistanceM == null
           ? null
           : Number(lens.diagnostics.parallelReferenceDistanceM.toFixed(2));
       lensApplied = true;
-      lensBowWidthM = lens.diagnostics.maxTrunkDistanceM;
-      lensRejoinM = lens.diagnostics.mergeDistanceM;
-      lensTopApproachLatSpreadM = lens.diagnostics.topApproachLatSpreadM;
-      lensMaxTurnDeg = lens.diagnostics.maxTurnDeg;
+      lensBowWidthM = lens.diagnostics.maxTrunkDistanceM!;
+      lensRejoinM = lens.diagnostics.mergeDistanceM!;
+      lensTopApproachLatSpreadM = lens.diagnostics.topApproachLatSpreadM!;
+      lensMaxTurnDeg = lens.diagnostics.maxTurnDeg!;
       lensParallelReferenceUsed = Boolean(lens.diagnostics.parallelReferenceUsed);
       lensParallelReferenceDistanceM = lens.diagnostics.parallelReferenceDistanceM ?? Infinity;
     }
@@ -4492,16 +4505,16 @@ if (bundleArtifacts.visualFeatures) {
         sixBranch.properties.mott_haven_six_merge = true;
         sixBranch.properties.mott_haven_six_merge_point = sixMerge.diagnostics.mergePoint;
         sixBranch.properties.mott_haven_six_merge_max_turn_deg =
-          Number(sixMerge.diagnostics.maxTurnDeg.toFixed(2));
+          Number(sixMerge.diagnostics.maxTurnDeg!.toFixed(2));
         sixBranch.properties.mott_haven_six_merge_rejoin_m =
-          Number(sixMerge.diagnostics.mergeDistanceM.toFixed(2));
+          Number(sixMerge.diagnostics.mergeDistanceM!.toFixed(2));
 
         sixShared.geometry.coordinates = sixMerge.sharedMainlineCoords;
         sixShared.properties.mott_haven_six_shared_mainline = true;
         sixShared.properties.mott_haven_six_merge_point = sixMerge.diagnostics.mergePoint;
         sixMergeApplied = true;
-        sixMergeRejoinM = sixMerge.diagnostics.mergeDistanceM;
-        sixMergeMaxTurnDeg = sixMerge.diagnostics.maxTurnDeg;
+        sixMergeRejoinM = sixMerge.diagnostics.mergeDistanceM!;
+        sixMergeMaxTurnDeg = sixMerge.diagnostics.maxTurnDeg!;
       }
     }
   }
@@ -4593,7 +4606,7 @@ if (bundleArtifacts.visualFeatures) {
     const trimSummary = trimTerminalOverhang({
       features: bundleArtifacts.visualFeatures,
       stations: stationsDoc,
-      terminals: routeTerminals,
+      terminals: routeTerminals as any,
     });
     console.log(
       `[visual-network] terminal overhang pass ${pass}: ${trimSummary.trimmedEnds} free ends trimmed, ${trimSummary.removedM}m removed, ${trimSummary.droppedSpurs} spurs dropped`,
@@ -4687,7 +4700,7 @@ console.log(`[visual-network]   route  branches  stations  branch terminals`);
 for (const r of topologyDoc.per_route) {
   const terminals = r.branches
     .slice(0, 4)
-    .map((b) =>
+    .map((b: any) =>
       `${(b.direction_id || "?")}:${(stopsById.get(b.terminal_start)?.name ?? b.terminal_start)} → ${(stopsById.get(b.terminal_end)?.name ?? b.terminal_end)} (${b.total_trips_in_branch}tr)`,
     )
     .join("; ");
