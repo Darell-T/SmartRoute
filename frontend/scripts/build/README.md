@@ -132,10 +132,11 @@ Categories:
 | `frontend/eslint.config.mjs` | 1.0 KB / 37 lines | none | no | no | Keep as `.mjs` | keep `.mjs` |
 | `frontend/scripts/regenerate-canonical-from-gtfs.ts` | 14.9 KB / 532 lines | `package.json`, visual orchestrator, palette check, characterization test | yes | yes | Migrated TypeScript entrypoint | done |
 | `frontend/scripts/regenerate-canonical-from-gtfs.test.ts` | 4.0 KB / 100 lines | none | n/a | no | Migrated characterization test | done |
-| `frontend/scripts/build-subway-visual-network.ts` | 196 KB / 4504 lines | `package.json`, renderer code, debug artifacts | no | yes | Migrated TypeScript entrypoint | decompose gradually |
+| `frontend/scripts/build-subway-visual-network.ts` | 193 KB / 4438 lines | `package.json`, renderer code, debug artifacts | no | yes | Migrated TypeScript entrypoint | decompose gradually |
 | `frontend/scripts/build/visual-network/route-config.ts` | 2.0 KB / 61 lines | visual orchestrator | no | no | Extracted TypeScript helper | done |
 | `frontend/scripts/build/visual-network/gtfs-ingest.ts` | 3.0 KB / 91 lines | visual orchestrator | no | no | Extracted TypeScript helper | done |
 | `frontend/scripts/build/visual-network/gtfs-topology.ts` | 4.4 KB / 146 lines | visual orchestrator | no | no | Extracted TypeScript helper | done |
+| `frontend/scripts/build/visual-network/branch-selection.ts` | 4.0 KB / 119 lines | visual orchestrator | no | no | Extracted TypeScript helper | done |
 | `frontend/scripts/build/schematic-hairpin-arc.ts` | 5.3 KB / 129 lines | visual orchestrator | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/parallel-offset-cross-color.ts` | 8.1 KB / 240 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/lane-continuity-filter.ts` | 7.3 KB / 187 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
@@ -233,7 +234,9 @@ small extraction batches. Batch 27 extracted pure route/color configuration into
 pure GTFS ZIP/CSV parsing into
 `frontend/scripts/build/visual-network/gtfs-ingest.ts`. Batch 29 extracted
 pure GTFS row-to-map topology builders into
-`frontend/scripts/build/visual-network/gtfs-topology.ts`.
+`frontend/scripts/build/visual-network/gtfs-topology.ts`. Batch 30 extracted
+pure branch aggregation and canonical branch selection into
+`frontend/scripts/build/visual-network/branch-selection.ts`.
 
 ## Historical Orchestrator Migration Plan
 
