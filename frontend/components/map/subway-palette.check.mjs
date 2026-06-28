@@ -42,7 +42,7 @@ const consumers = [
   "components/map/route-layers.ts",
   "components/map/incidents/incident-popup.ts",
   "components/smart-route/left-rail/types.ts",
-  "scripts/build-subway-visual-network.mjs",
+  "scripts/build-subway-visual-network.ts",
   "scripts/build/opendata-subway-lines.ts",
   "scripts/build/station-anchors/index.ts",
   "scripts/regenerate-canonical-from-gtfs.ts",
