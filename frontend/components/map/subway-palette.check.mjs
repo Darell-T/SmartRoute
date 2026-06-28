@@ -35,24 +35,43 @@ assert.equal(
 );
 assert.ok(tokens.SI, "mta-colors.json should define a single SI color");
 
-// 2. Every color consumer imports the shared source (no inline route map) and
-//    never carries the old navy blue.
+// 2. Every color consumer imports the shared source directly or through a
+//    focused build helper, and never carries the old navy blue.
 const SHARED_IMPORT = /mta-colors(\.(mjs|ts))?["']/;
-const consumers = [
+const directConsumers = [
   "components/map/route-layers.ts",
   "components/map/incidents/incident-popup.ts",
   "components/smart-route/left-rail/types.ts",
-  "scripts/build-subway-visual-network.ts",
   "scripts/build/opendata-subway-lines.ts",
+  "scripts/build/visual-network/route-config.ts",
   "scripts/build/station-anchors/index.ts",
   "scripts/regenerate-canonical-from-gtfs.ts",
 ];
-for (const relPath of consumers) {
+for (const relPath of directConsumers) {
   const source = read(relPath);
   assert.match(
     source,
     SHARED_IMPORT,
     `${relPath} should import the shared mta-colors source`,
+  );
+  assert.ok(
+    !source.toUpperCase().includes(OLD_BLUE),
+    `${relPath} should not contain ${OLD_BLUE}`,
+  );
+}
+
+const indirectConsumers = [
+  {
+    relPath: "scripts/build-subway-visual-network.ts",
+    boundary: /visual-network\/route-config\.ts["']/,
+  },
+];
+for (const { relPath, boundary } of indirectConsumers) {
+  const source = read(relPath);
+  assert.match(
+    source,
+    boundary,
+    `${relPath} should import the route config helper that owns mta-colors access`,
   );
   assert.ok(
     !source.toUpperCase().includes(OLD_BLUE),

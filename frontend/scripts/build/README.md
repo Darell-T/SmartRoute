@@ -28,6 +28,8 @@ subway network artifacts.
 - `frontend/scripts/build-subway-visual-network.ts` is the visual-network
   orchestrator. It wires the helper passes together, runs validation gates, and
   writes generated artifacts.
+- `frontend/scripts/build/visual-network/` contains focused modules extracted
+  from the large orchestrator. Keep extractions small and behavior-preserving.
 - Helper files either implement reusable geometry operations or encode
   location-specific map fixes. Many helpers intentionally contain local subway
   knowledge that should not be erased during cleanup.
@@ -130,7 +132,8 @@ Categories:
 | `frontend/eslint.config.mjs` | 1.0 KB / 37 lines | none | no | no | Keep as `.mjs` | keep `.mjs` |
 | `frontend/scripts/regenerate-canonical-from-gtfs.ts` | 14.9 KB / 532 lines | `package.json`, visual orchestrator, palette check, characterization test | yes | yes | Migrated TypeScript entrypoint | done |
 | `frontend/scripts/regenerate-canonical-from-gtfs.test.ts` | 4.0 KB / 100 lines | none | n/a | no | Migrated characterization test | done |
-| `frontend/scripts/build-subway-visual-network.ts` | 201 KB / 4701 lines | `package.json`, renderer code, debug artifacts | no | yes | Migrated TypeScript entrypoint | done |
+| `frontend/scripts/build-subway-visual-network.ts` | 197 KB / 4660 lines | `package.json`, renderer code, debug artifacts | no | yes | Migrated TypeScript entrypoint | decompose gradually |
+| `frontend/scripts/build/visual-network/route-config.ts` | 2.0 KB / 61 lines | visual orchestrator | no | no | Extracted TypeScript helper | done |
 | `frontend/scripts/build/schematic-hairpin-arc.ts` | 5.3 KB / 129 lines | visual orchestrator | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/parallel-offset-cross-color.ts` | 8.1 KB / 240 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/lane-continuity-filter.ts` | 7.3 KB / 187 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
@@ -212,7 +215,7 @@ Avoid for now:
 Needs characterization before conversion:
 
 - none in the core transit artifact source path; remaining `.mjs` files are
-  config, QA/check scripts, or the visual-network orchestrator.
+  config or QA/check scripts.
 
 Wait until after an orchestrator migration plan:
 
@@ -220,7 +223,13 @@ Wait until after an orchestrator migration plan:
 - QA scripts that write screenshots or debug output should remain document-only
   unless explicitly approved
 
-## Orchestrator Migration Plan
+## Orchestrator Decomposition Status
+
+The visual-network orchestrator is now TypeScript and should be reduced through
+small extraction batches. Batch 27 extracted pure route/color configuration into
+`frontend/scripts/build/visual-network/route-config.ts`.
+
+## Historical Orchestrator Migration Plan
 
 `build-subway-visual-network.mjs` (~4,700 lines) is the visual-network
 orchestrator. A Batch 24 review concluded that a direct `.mjs` -> `.ts`
