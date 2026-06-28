@@ -86,15 +86,8 @@ import {
   normalizeRouteId,
   routeColorFor,
 } from "./build/visual-network/route-config.ts";
-import { parseCsv, parseZipEntries } from "./build/visual-network/gtfs-ingest.ts";
-import {
-  buildRoutesByRawId,
-  buildStopsById,
-  buildTripsById,
-  buildTripStations,
-} from "./build/visual-network/gtfs-topology.ts";
-import { buildBranchesByRoute } from "./build/visual-network/branch-selection.ts";
-import { buildTopologyEdges } from "./build/visual-network/topology-edges.ts";
+import { parseZipEntries } from "./build/visual-network/gtfs-ingest.ts";
+import { buildGtfsTopologyStage } from "./build/visual-network/gtfs-topology-stage.ts";
 
 // --- Local types for the mechanical Batch 26 .ts conversion ---
 // The pipeline attaches many phase-specific fields to feature property bags as it
@@ -253,130 +246,6 @@ function compareRouteIds(a: string, b: string) {
   return a.localeCompare(b, "en", { numeric: true });
 }
 
-// =====================================================================
-// Phase 2A — GTFS topology + per-route branches
-// =====================================================================
-
-console.log("[visual-network] reading GTFS zip:", ZIP_PATH);
-if (!existsSync(ZIP_PATH)) {
-  throw new Error(
-    `GTFS cache missing at ${ZIP_PATH}. Run "npm run build:network" first ` +
-    `to populate the cache (regenerate-canonical-from-gtfs.mjs downloads it).`,
-  );
-}
-const zipBuffer = readFileSync(ZIP_PATH);
-const gtfs = parseZipEntries(zipBuffer, [
-  "stops.txt",
-  "trips.txt",
-  "stop_times.txt",
-  "routes.txt",
-]);
-
-console.log("[visual-network] parsing stops.txt");
-const stopRows = parseCsv(gtfs.get("stops.txt")!);
-console.log("[visual-network] parsing trips.txt");
-const tripRows = parseCsv(gtfs.get("trips.txt")!);
-console.log("[visual-network] parsing stop_times.txt");
-const stopTimeRows = parseCsv(gtfs.get("stop_times.txt")!);
-console.log("[visual-network] parsing routes.txt");
-const routeRows = parseCsv(gtfs.get("routes.txt")!);
-console.log(
-  `[visual-network] gtfs sizes: stops=${stopRows.length}, ` +
-  `trips=${tripRows.length}, stop_times=${stopTimeRows.length}, ` +
-  `routes=${routeRows.length}`,
-);
-
-// --- Build stops map. Resolve parent_station so platform-level stop_ids
-//     collapse to station-level (e.g., "101N" + "101S" → "101"). ---
-const stopsById = buildStopsById(stopRows);
-
-// --- Build routes map ---
-const routesByRawId = buildRoutesByRawId(routeRows, normalizeRouteId);
-
-// --- Build trips map ---
-const tripsById = buildTripsById(tripRows, routesByRawId);
-
-// --- Group stop_times by trip_id, sort by stop_sequence numeric.
-//     Collapse to station-level. Build per-trip ordered station sequence. ---
-console.log("[visual-network] building per-trip station sequences");
-
-const tripStations = buildTripStations(stopTimeRows, stopsById);
-
-// --- Group trips by (route_id, direction_id, terminal_pair).
-//     The terminal_pair is (first station, last station) of the sequence.
-//     This makes "A to Far Rockaway" a distinct group from "A to Lefferts". ---
-console.log("[visual-network] grouping trips into branches");
-const { branchesByRoute, droppedLowFreqBranches } = buildBranchesByRoute(
-  tripsById,
-  tripStations,
-  MIN_TRIPS_PER_BRANCH,
-);
-
-// =====================================================================
-// Phase 2A diagnostics
-// =====================================================================
-
-const topologyDoc = {
-  generated_at: new Date().toISOString(),
-  source: "build-subway-visual-network.mjs Gate 2A",
-  parameters: {
-    min_trips_per_branch: MIN_TRIPS_PER_BRANCH,
-  },
-  gtfs_input: {
-    stops: stopRows.length,
-    trips: tripRows.length,
-    stop_times: stopTimeRows.length,
-    routes: routeRows.length,
-  },
-  topology: {
-    distinct_routes: branchesByRoute.size,
-    total_branches: [...branchesByRoute.values()].reduce((a, b) => a + b.length, 0),
-    dropped_low_freq_branches: droppedLowFreqBranches,
-  },
-  per_route: [...branchesByRoute.entries()]
-    .sort((a, b) => a[0].localeCompare(b[0], "en", { numeric: true }))
-    .map(([routeId, branches]) => {
-      const allStations = new Set();
-      for (const b of branches) for (const s of b.stop_sequence) allStations.add(s);
-      return {
-        route_id: routeId,
-        branch_count: branches.length,
-        distinct_stations: allStations.size,
-        branches: branches.map((b: any) => ({
-          branch_id: b.branch_id,
-          direction_id: b.direction_id,
-          terminal_start: b.terminal_start,
-          terminal_start_name: stopsById.get(b.terminal_start)?.name ?? b.terminal_start,
-          terminal_end: b.terminal_end,
-          terminal_end_name: stopsById.get(b.terminal_end)?.name ?? b.terminal_end,
-          stop_count: b.stop_sequence.length,
-          total_trips_in_branch: b.total_trips_in_branch,
-          canonical_pattern_trips: b.canonical_pattern_trips,
-          canonical_pattern_share: b.canonical_pattern_share,
-          distinct_patterns: b.distinct_patterns,
-          sample_shape_ids: b.sample_shape_ids,
-          sample_headsigns: b.sample_headsigns,
-          stop_sequence: b.stop_sequence,
-        })),
-      };
-    }),
-};
-
-mkdirSync(dirname(OUT_TOPOLOGY_JSON), { recursive: true });
-writeFileSync(OUT_TOPOLOGY_JSON, `${JSON.stringify(topologyDoc, null, 2)}\n`);
-console.log(`[visual-network] wrote ${OUT_TOPOLOGY_JSON}`);
-
-// =====================================================================
-// Phase 2B - OpenData visual line geometry + GTFS topology edges
-// =====================================================================
-//
-// GTFS remains the topology source: branch stop sequences drive connectivity
-// validation, station markers, and route coverage. Visual line geometry no
-// longer comes from stop-pair slices of GTFS shapes.txt. The State of NY / MTA
-// OpenData Subway Service Lines GeoJSON provides full visual polylines, which
-// become render corridors directly.
-console.log("[visual-network] Gate 2B - loading NYC OpenData subway line geometry");
-
 const M_PER_DEG_LAT = 111_320;
 function metersPerDegLng(lat: number) {
   return 111_320 * Math.cos((lat * Math.PI) / 180);
@@ -449,17 +318,62 @@ function geometryStats(coords: Position[]) {
   };
 }
 
+// =====================================================================
+// Phase 2A — GTFS topology + per-route branches
+// =====================================================================
+
+console.log("[visual-network] reading GTFS zip:", ZIP_PATH);
+if (!existsSync(ZIP_PATH)) {
+  throw new Error(
+    `GTFS cache missing at ${ZIP_PATH}. Run "npm run build:network" first ` +
+    `to populate the cache (regenerate-canonical-from-gtfs.mjs downloads it).`,
+  );
+}
+const zipBuffer = readFileSync(ZIP_PATH);
+const gtfs = parseZipEntries(zipBuffer, [
+  "stops.txt",
+  "trips.txt",
+  "stop_times.txt",
+  "routes.txt",
+]);
+
+// --- Build GTFS-derived topology stage outputs. ---
+const {
+  stopsById,
+  branchesByRoute,
+  droppedLowFreqBranches,
+  topologyDoc,
+  edgeFeatures,
+  topologyEdgeDiagnostics,
+  expectedOpenDataRouteIds,
+  expectedEdges,
+} = buildGtfsTopologyStage({
+  gtfs,
+  minTripsPerBranch: MIN_TRIPS_PER_BRANCH,
+  normalizeRouteId,
+  geometryStats,
+  log: (message) => console.log(message),
+});
+
+mkdirSync(dirname(OUT_TOPOLOGY_JSON), { recursive: true });
+writeFileSync(OUT_TOPOLOGY_JSON, `${JSON.stringify(topologyDoc, null, 2)}\n`);
+console.log(`[visual-network] wrote ${OUT_TOPOLOGY_JSON}`);
+
+// =====================================================================
+// Phase 2B - OpenData visual line geometry + GTFS topology edges
+// =====================================================================
+//
+// GTFS remains the topology source: branch stop sequences drive connectivity
+// validation, station markers, and route coverage. Visual line geometry no
+// longer comes from stop-pair slices of GTFS shapes.txt. The State of NY / MTA
+// OpenData Subway Service Lines GeoJSON provides full visual polylines, which
+// become render corridors directly.
+console.log("[visual-network] Gate 2B - loading NYC OpenData subway line geometry");
+
 const SPARSE_LONG_SLICE_M = 300;
 const MAX_SEGMENT_ANOMALY_M = 250;
 const PROJECTION_ANOMALY_M = 125;
 
-const { edgeFeatures, topologyEdgeDiagnostics } = buildTopologyEdges(
-  topologyDoc.per_route,
-  stopsById,
-  geometryStats,
-);
-
-const expectedOpenDataRouteIds = topologyDoc.per_route.map((route) => route.route_id);
 const openDataLines = loadOpenDataSubwayLines(OPEN_DATA_LINES_PATH, {
   expectedRouteIds: expectedOpenDataRouteIds,
   minFragmentLengthM: OPEN_DATA_MIN_FRAGMENT_LENGTH_M,
@@ -513,11 +427,6 @@ console.log(
   `[visual-network] GTFS topology edges for validation: ${topologyEdgeDiagnostics.topology_edges_emitted}`,
 );
 
-const expectedEdges = topologyDoc.per_route.reduce(
-  (acc, r) =>
-    acc + r.branches.reduce((br: number, b: any) => br + Math.max(0, b.stop_count - 1), 0),
-  0,
-);
 console.log(
   `[visual-network] expected topology edges: ${expectedEdges} (emitted: ${topologyEdgeDiagnostics.topology_edges_emitted}, retention ${(topologyEdgeDiagnostics.topology_edges_emitted / Math.max(1, expectedEdges) * 100).toFixed(1)}%)`,
 );
