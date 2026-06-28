@@ -87,6 +87,12 @@ import {
   routeColorFor,
 } from "./build/visual-network/route-config.ts";
 import { parseCsv, parseZipEntries } from "./build/visual-network/gtfs-ingest.ts";
+import {
+  buildRoutesByRawId,
+  buildStopsById,
+  buildTripsById,
+  buildTripStations,
+} from "./build/visual-network/gtfs-topology.ts";
 
 // --- Local types for the mechanical Batch 26 .ts conversion ---
 // The pipeline attaches many phase-specific fields to feature property bags as it
@@ -280,92 +286,19 @@ console.log(
 
 // --- Build stops map. Resolve parent_station so platform-level stop_ids
 //     collapse to station-level (e.g., "101N" + "101S" → "101"). ---
-const stopsById = new Map();
-for (const r of stopRows) {
-  const id = String(r.stop_id || "").trim();
-  if (!id) continue;
-  stopsById.set(id, {
-    stop_id: id,
-    name: String(r.stop_name || "").trim(),
-    lat: Number(r.stop_lat),
-    lon: Number(r.stop_lon),
-    parent_station: String(r.parent_station || "").trim() || null,
-    location_type: Number(r.location_type || 0),
-  });
-}
-
-// Station-level stop resolver: returns the parent_station id when present,
-// otherwise the platform's own stop_id. Used to collapse 101N/101S → 101.
-function stationIdOf(stopId: string) {
-  const s = stopsById.get(stopId);
-  if (!s) return stopId;
-  if (s.parent_station && stopsById.has(s.parent_station)) {
-    return s.parent_station;
-  }
-  return stopId;
-}
+const stopsById = buildStopsById(stopRows);
 
 // --- Build routes map ---
-const routesByRawId = new Map();
-for (const r of routeRows) {
-  const rawId = String(r.route_id || "").trim();
-  if (!rawId) continue;
-  routesByRawId.set(rawId, {
-    raw_route_id: rawId,
-    route_id: normalizeRouteId(rawId),
-    short_name: String(r.route_short_name || rawId).trim(),
-    long_name: String(r.route_long_name || "").trim(),
-    color: String(r.route_color || "").trim() || null,
-  });
-}
+const routesByRawId = buildRoutesByRawId(routeRows, normalizeRouteId);
 
 // --- Build trips map ---
-const tripsById = new Map();
-for (const r of tripRows) {
-  const tid = String(r.trip_id || "").trim();
-  if (!tid) continue;
-  const rawRouteId = String(r.route_id || "").trim();
-  const route = routesByRawId.get(rawRouteId);
-  if (!route) continue;
-  tripsById.set(tid, {
-    trip_id: tid,
-    raw_route_id: rawRouteId,
-    route_id: route.route_id,
-    direction_id: String(r.direction_id || "").trim(),
-    shape_id: String(r.shape_id || "").trim() || null,
-    service_id: String(r.service_id || "").trim(),
-    headsign: String(r.trip_headsign || "").trim(),
-  });
-}
+const tripsById = buildTripsById(tripRows, routesByRawId);
 
 // --- Group stop_times by trip_id, sort by stop_sequence numeric.
 //     Collapse to station-level. Build per-trip ordered station sequence. ---
 console.log("[visual-network] building per-trip station sequences");
 
-const stopTimesByTrip = new Map();
-for (const r of stopTimeRows) {
-  const tid = String(r.trip_id || "").trim();
-  if (!tid) continue;
-  const seq = Number(r.stop_sequence);
-  const stopId = String(r.stop_id || "").trim();
-  if (!Number.isFinite(seq) || !stopId) continue;
-  if (!stopTimesByTrip.has(tid)) stopTimesByTrip.set(tid, []);
-  stopTimesByTrip.get(tid).push({ seq, stopId });
-}
-
-const tripStations = new Map(); // trip_id → ordered [stationId, ...]
-for (const [tid, list] of stopTimesByTrip) {
-  list.sort((a: { seq: number }, b: { seq: number }) => a.seq - b.seq);
-  const seen = new Set();
-  const sequence = [];
-  for (const item of list) {
-    const sid = stationIdOf(item.stopId);
-    if (seen.has(sid)) continue; // collapse adjacent duplicates (rare but defensive)
-    seen.add(sid);
-    sequence.push(sid);
-  }
-  if (sequence.length >= 2) tripStations.set(tid, sequence);
-}
+const tripStations = buildTripStations(stopTimeRows, stopsById);
 
 // --- Group trips by (route_id, direction_id, terminal_pair).
 //     The terminal_pair is (first station, last station) of the sequence.
