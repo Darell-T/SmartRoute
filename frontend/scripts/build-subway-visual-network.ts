@@ -21,7 +21,6 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import type { Position, LineStringGeometry, PointGeometry } from "./build/types.ts";
 import { buildSpineFromCorridor } from "./build/spine.ts";
 import {
   assertSpineHashConsistency,
@@ -88,13 +87,26 @@ import {
 } from "./build/visual-network/route-config.ts";
 import { parseZipEntries } from "./build/visual-network/gtfs-ingest.ts";
 import { buildGtfsTopologyStage } from "./build/visual-network/gtfs-topology-stage.ts";
+import type { LineFeature, PointFeat, Position } from "./build/visual-network/types.ts";
+import {
+  HAUSDORFF_MAX_M,
+  LANE_WIDTH_METERS,
+  M_PER_DEG_LAT,
+  RESAMPLE_INTERVAL_M,
+  distanceMeters,
+  geometryStats,
+  metersPerDegLng,
+  offsetPolylineByLaneSlot,
+} from "./build/visual-network/geometry-utils.ts";
+import {
+  buildRouteIncidentCounts,
+  buildVisualAnomalyRecords,
+  buildVisualRouteIncidentCounts,
+} from "./build/visual-network/diagnostics.ts";
+import { buildOpenDataInputsStage } from "./build/visual-network/opendata-inputs.ts";
 
-// --- Local types for the mechanical Batch 26 .ts conversion ---
-// The pipeline attaches many phase-specific fields to feature property bags as it
-// runs, so model the bags permissively (per the README orchestrator conversion plan).
-type FeatureProps = Record<string, any>;
-type LineFeature = { type: "Feature"; id?: string | number; geometry: LineStringGeometry; properties: FeatureProps };
-type PointFeat = { type: "Feature"; id?: string | number; geometry: PointGeometry; properties: FeatureProps };
+// --- Pragmatic feature-bag types from the mechanical Batch 26 .ts conversion
+// live in visual-network/types.ts and remain intentionally permissive. ---
 
 const here = __dirname;
 const frontendRoot = resolve(here, "..");
@@ -224,7 +236,8 @@ const JUNCTION_BRIDGE_MAX_M = 90;
 // plus a long-tail outlier at 42.85m (G at Fulton St) that we drop for now.
 // 35m gives ample headroom for legitimate transitions while excluding outliers.
 const BRANCH_TRANSITION_MAX_M = 35;
-// Fix 3: per-slot lane width baked into geometry at build time. Pushed 12->18m
+// Fix 3: per-slot lane width baked into geometry at build time. The constants
+// are owned by visual-network/geometry-utils.ts and imported here. Pushed 12->18m
 // (user-authorized) for Apple-Maps parallel-lane clarity: at the old pitch
 // bundled colors collapsed behind the strongest one. 18m is the practical
 // ceiling -- the widest shared-stop bar scales with pitch and the 60m cap
@@ -234,8 +247,6 @@ const BRANCH_TRANSITION_MAX_M = 35;
 // is the +50% regime that historically tore trunks, so the build's endpoint
 // tripwires (exit(1) on any moved junction endpoint) gate it -- if the build
 // fails or the bar cap trips, fall back 18 -> 17 -> 16.
-const LANE_WIDTH_METERS = 18;
-const MITER_LENGTH_CAP_RATIO = 2; // fall back to bevel above this miter length
 const PHYSICAL_BUNDLE_SUBSTITUTE_CONFIDENCE_MIN = 0.75;
 const BUNDLE_OVERLAP_DIST_MAX_M = 15;
 const BUNDLE_SHARED_LEN_MIN_M = 250;
@@ -244,78 +255,6 @@ const FANOUT_BLEND_M = 100;
 
 function compareRouteIds(a: string, b: string) {
   return a.localeCompare(b, "en", { numeric: true });
-}
-
-const M_PER_DEG_LAT = 111_320;
-function metersPerDegLng(lat: number) {
-  return 111_320 * Math.cos((lat * Math.PI) / 180);
-}
-function distanceMeters(a: Position, b: Position) {
-  const midLat = (a[1] + b[1]) / 2;
-  const mPerLng = metersPerDegLng(midLat);
-  const dx = (a[0] - b[0]) * mPerLng;
-  const dy = (a[1] - b[1]) * M_PER_DEG_LAT;
-  return Math.hypot(dx, dy);
-}
-
-function lineLengthMeters(coords: Position[]) {
-  let total = 0;
-  for (let i = 1; i < coords.length; i += 1) {
-    total += distanceMeters(coords[i - 1], coords[i]);
-  }
-  return total;
-}
-
-function vectorMeters(from: Position, to: Position): Position {
-  const midLat = (from[1] + to[1]) / 2;
-  const mPerLng = metersPerDegLng(midLat);
-  return [
-    (to[0] - from[0]) * mPerLng,
-    (to[1] - from[1]) * M_PER_DEG_LAT,
-  ];
-}
-
-function angleDeltaDegrees(a: Position, b: Position) {
-  const dot = a[0] * b[0] + a[1] * b[1];
-  const aLen = Math.hypot(a[0], a[1]);
-  const bLen = Math.hypot(b[0], b[1]);
-  if (aLen === 0 || bLen === 0) return 0;
-  return Math.acos(Math.max(-1, Math.min(1, dot / (aLen * bLen)))) * 180 / Math.PI;
-}
-
-function geometryStats(coords: Position[]) {
-  let lengthM = 0;
-  let maxSegmentLengthM = 0;
-  let sharpAngleCount = 0;
-  let maxBearingChangeDegrees = 0;
-
-  for (let i = 1; i < coords.length; i += 1) {
-    const segmentLength = distanceMeters(coords[i - 1], coords[i]);
-    lengthM += segmentLength;
-    maxSegmentLengthM = Math.max(maxSegmentLengthM, segmentLength);
-  }
-
-  for (let i = 2; i < coords.length; i += 1) {
-    const incoming = vectorMeters(coords[i - 2], coords[i - 1]);
-    const outgoing = vectorMeters(coords[i - 1], coords[i]);
-    const delta = angleDeltaDegrees(incoming, outgoing);
-    maxBearingChangeDegrees = Math.max(maxBearingChangeDegrees, delta);
-    if (delta > 120) sharpAngleCount += 1;
-  }
-
-  const directDistanceM =
-    coords.length >= 2 ? distanceMeters(coords[0], coords[coords.length - 1]) : 0;
-  const sinuosity = directDistanceM > 1 ? lengthM / directDistanceM : 1;
-
-  return {
-    length_m: Number(lengthM.toFixed(2)),
-    direct_distance_m: Number(directDistanceM.toFixed(2)),
-    sinuosity: Number(sinuosity.toFixed(4)),
-    max_segment_length_m: Number(maxSegmentLengthM.toFixed(2)),
-    coordinate_count: coords.length,
-    sharp_angle_count: sharpAngleCount,
-    max_bearing_change_degrees: Number(maxBearingChangeDegrees.toFixed(2)),
-  };
 }
 
 // =====================================================================
@@ -441,8 +380,6 @@ console.log(
 // ids.
 console.log("[visual-network] Gate 2C - OpenData corridor normalization");
 
-const RESAMPLE_INTERVAL_M = 25;
-const HAUSDORFF_MAX_M = 15;
 const OVERLAP_MIN_RATIO = 0.6;
 const TANGENT_MAX_DIFF_DEG = 30;
 const GRID_CELL_M = 50;
@@ -497,226 +434,21 @@ const SAME_COLOR_COLLAPSE_DIST_M = 12;
 const DENSIFY_MAX_SEGMENT_M = 250;
 const DENSIFY_STEP_M = 40;
 
-const ROUTE_FAMILY_GROUPS = [
-  ["1", "2", "3"],
-  ["4", "5", "6", "6X"],
-  ["A", "C", "E"],
-  ["B", "D", "F", "FX", "M"],
-  ["N", "Q", "R", "W"],
-  ["J", "Z", "M"],
-  ["7", "7X"],
-  ["S"],
-  ["FS"],
-  ["GS"],
-  ["H"],
-  ["SI"],
-  ["L"],
-  ["G"],
-];
-
-function routeFamilyKey(routeId: string) {
-  for (const group of ROUTE_FAMILY_GROUPS) {
-    if (group.includes(routeId)) return group.join("/");
-  }
-  return routeId;
-}
-
-const REF_LAT = 40.73;
-const M_PER_DEG_LNG = metersPerDegLng(REF_LAT);
-function toMeters(coord: Position): Position {
-  return [coord[0] * M_PER_DEG_LNG, coord[1] * M_PER_DEG_LAT];
-}
-
-function resampleEdgeAt5m(coordsLngLat: Position[]) {
-  const coordsM = coordsLngLat.map(toMeters);
-  const arc = [0];
-  for (let i = 1; i < coordsM.length; i += 1) {
-    const dx = coordsM[i][0] - coordsM[i - 1][0];
-    const dy = coordsM[i][1] - coordsM[i - 1][1];
-    arc.push(arc[i - 1] + Math.hypot(dx, dy));
-  }
-  const total = arc[arc.length - 1];
-  if (total < RESAMPLE_INTERVAL_M * 2) {
-    return [
-      { x: coordsM[0][0], y: coordsM[0][1], t: 0 },
-      { x: coordsM[coordsM.length - 1][0], y: coordsM[coordsM.length - 1][1], t: total },
-    ].map((p, i, arr) => {
-      const next = arr[Math.min(i + 1, arr.length - 1)];
-      const prev = arr[Math.max(i - 1, 0)];
-      const dx = next.x - prev.x;
-      const dy = next.y - prev.y;
-      const len = Math.hypot(dx, dy) || 1;
-      return { ...p, tx: dx / len, ty: dy / len };
-    });
-  }
-  const samples = [];
-  let segIdx = 0;
-  for (let s = 0; s <= total; s += RESAMPLE_INTERVAL_M) {
-    while (segIdx < arc.length - 2 && arc[segIdx + 1] < s) segIdx += 1;
-    const segStart = arc[segIdx];
-    const segEnd = arc[segIdx + 1];
-    const segLen = segEnd - segStart;
-    const t = segLen > 0 ? (s - segStart) / segLen : 0;
-    const x = coordsM[segIdx][0] + t * (coordsM[segIdx + 1][0] - coordsM[segIdx][0]);
-    const y = coordsM[segIdx][1] + t * (coordsM[segIdx + 1][1] - coordsM[segIdx][1]);
-    const dx = coordsM[segIdx + 1][0] - coordsM[segIdx][0];
-    const dy = coordsM[segIdx + 1][1] - coordsM[segIdx][1];
-    const len = Math.hypot(dx, dy) || 1;
-    samples.push({ x, y, t: s, tx: dx / len, ty: dy / len });
-  }
-  return samples;
-}
-
-function bidirectionalHausdorff(
-  samplesA: Array<{ x: number; y: number; tx: number; ty: number }>,
-  samplesB: Array<{ x: number; y: number; tx: number; ty: number }>,
-) {
-  let maxA = 0;
-  let withinA = 0;
-  let distanceSumA = 0;
-  let tanSumA = 0;
-  let tanCountA = 0;
-  for (const a of samplesA) {
-    let best = Infinity;
-    let bestB = null;
-    for (const b of samplesB) {
-      const dx = a.x - b.x;
-      const dy = a.y - b.y;
-      const d2 = dx * dx + dy * dy;
-      if (d2 < best) { best = d2; bestB = b; }
-    }
-    const d = Math.sqrt(best);
-    distanceSumA += d;
-    if (d > maxA) maxA = d;
-    if (d <= HAUSDORFF_MAX_M) withinA += 1;
-    if (bestB) {
-      const dot = Math.abs(a.tx * bestB.tx + a.ty * bestB.ty);
-      const angleDeg = Math.acos(Math.min(1, Math.max(-1, dot))) * 180 / Math.PI;
-      tanSumA += angleDeg;
-      tanCountA += 1;
-    }
-  }
-  let maxB = 0;
-  let withinB = 0;
-  let distanceSumB = 0;
-  for (const b of samplesB) {
-    let best = Infinity;
-    for (const a of samplesA) {
-      const dx = a.x - b.x;
-      const dy = a.y - b.y;
-      const d2 = dx * dx + dy * dy;
-      if (d2 < best) best = d2;
-    }
-    const d = Math.sqrt(best);
-    distanceSumB += d;
-    if (d > maxB) maxB = d;
-    if (d <= HAUSDORFF_MAX_M) withinB += 1;
-  }
-  const overlapA = samplesA.length > 0 ? withinA / samplesA.length : 0;
-  const overlapB = samplesB.length > 0 ? withinB / samplesB.length : 0;
-  return {
-    hausdorff: Math.max(maxA, maxB),
-    overlap: Math.min(overlapA, overlapB),
-    overlapA,
-    overlapB,
-    avgDistanceA: samplesA.length > 0 ? distanceSumA / samplesA.length : Infinity,
-    avgDistanceB: samplesB.length > 0 ? distanceSumB / samplesB.length : Infinity,
-    avgTangentDeg: tanCountA > 0 ? tanSumA / tanCountA : 180,
-  };
-}
-
-function routeSetsIntersect(left: string[], right: string[]) {
-  const rightSet = new Set(right);
-  return left.some((routeId) => rightSet.has(routeId));
-}
-
-const pairsConsidered = 0;
-const pairsMatched = 0;
-const matchedPairs: any[] = [];
-const corridorFeatures: LineFeature[] = [];
-const corridorRows: any[] = [];
-
-for (let index = 0; index < opendataLineFeatures.length; index += 1) {
-  const feature = opendataLineFeatures[index];
-  const stats = geometryStats(feature.geometry.coordinates);
-  const corridorId = feature.properties.opendata_line_id;
-  corridorFeatures.push({
-    type: "Feature",
-    geometry: feature.geometry,
-    properties: {
-      ...feature.properties,
-      corridor_id: corridorId,
-      branch_ids: [],
-      member_edge_count: 0,
-      base_member_edge_id: null,
-      longest_member_edge_id: null,
-      longest_member_length_m: stats.length_m,
-      base_geometry_selection: "nyc_opendata_full_line",
-      from_stop_id: null,
-      to_stop_id: null,
-      from_stop_name: null,
-      to_stop_name: null,
-      source_edge_ids: [],
-      source_shape_ids: [],
-      length_m: stats.length_m,
-      direct_distance_m: stats.direct_distance_m,
-      sinuosity: stats.sinuosity,
-      max_segment_length_m: stats.max_segment_length_m,
-      coordinate_count: stats.coordinate_count,
-      sharp_angle_count: stats.sharp_angle_count,
-    },
-  });
-  corridorRows.push({
-    corridor_id: corridorId,
-    route_ids: feature.properties.route_ids,
-    member_edge_count: 1,
-    longest_length_m: stats.length_m,
-    is_shared: feature.properties.route_ids.length > 1,
-    geometry_source: OPEN_DATA_SOURCE_NAME,
-  });
-}
-
-const opendataSamples = opendataLineFeatures.map((feature) => resampleEdgeAt5m(feature.geometry.coordinates));
-const opendataOverlapWarnings = [];
-for (let i = 0; i < opendataLineFeatures.length; i += 1) {
-  for (let j = i + 1; j < opendataLineFeatures.length; j += 1) {
-    const left = opendataLineFeatures[i];
-    const right = opendataLineFeatures[j];
-    const leftRoutes = left.properties.route_ids ?? [];
-    const rightRoutes = right.properties.route_ids ?? [];
-    if (routeSetsIntersect(leftRoutes, rightRoutes)) continue;
-    const metrics = bidirectionalHausdorff(opendataSamples[i], opendataSamples[j]);
-    const shorterLenM = Math.min(left.properties.length_m ?? 0, right.properties.length_m ?? 0);
-    const sharedLenM = shorterLenM * metrics.overlap;
-    if (
-      metrics.overlap >= OVERLAP_MIN_RATIO &&
-      sharedLenM >= OVERLAP_SHARED_LEN_MIN_M &&
-      Math.max(metrics.avgDistanceA, metrics.avgDistanceB) <= CONTAINMENT_AVG_DISTANCE_MAX_M &&
-      metrics.avgTangentDeg <= TANGENT_MAX_DIFF_DEG
-    ) {
-      opendataOverlapWarnings.push({
-        type: "Feature",
-        geometry: left.geometry,
-        properties: {
-          marker_type: "opendata_overlap_warning",
-          reason: "overlap_without_shared_route_ids",
-          left_corridor_id: left.properties.opendata_line_id,
-          right_corridor_id: right.properties.opendata_line_id,
-          left_route_ids: leftRoutes,
-          right_route_ids: rightRoutes,
-          hausdorff_m: Number(metrics.hausdorff.toFixed(2)),
-          overlap: Number(metrics.overlap.toFixed(3)),
-          overlap_a: Number(metrics.overlapA.toFixed(3)),
-          overlap_b: Number(metrics.overlapB.toFixed(3)),
-          shared_length_m: Number(sharedLenM.toFixed(2)),
-          avg_distance_a_m: Number(metrics.avgDistanceA.toFixed(2)),
-          avg_distance_b_m: Number(metrics.avgDistanceB.toFixed(2)),
-          avg_tangent_deg: Number(metrics.avgTangentDeg.toFixed(2)),
-        },
-      });
-    }
-  }
-}
+const {
+  pairsConsidered,
+  pairsMatched,
+  matchedPairs,
+  corridorFeatures,
+  corridorRows,
+  opendataOverlapWarnings,
+} = buildOpenDataInputsStage({
+  opendataLineFeatures,
+  geometrySourceName: OPEN_DATA_SOURCE_NAME,
+  overlapMinRatio: OVERLAP_MIN_RATIO,
+  overlapSharedLenMinM: OVERLAP_SHARED_LEN_MIN_M,
+  containmentAvgDistanceMaxM: CONTAINMENT_AVG_DISTANCE_MAX_M,
+  tangentMaxDiffDeg: TANGENT_MAX_DIFF_DEG,
+});
 
 writeFileSync(
   OUT_OPENDATA_OVERLAPS_GEOJSON,
@@ -2218,92 +1950,6 @@ console.log(
   `[visual-network] bundles: ${bundleArtifacts.bundleFeatures.length}, bundle lanes: ${bundleArtifacts.bundleLaneFeatures.length}, unbundled corridors: ${bundleArtifacts.unbundledFeatures.length}, bundle gaps: ${bundleArtifacts.bundleGapFeatures.length}`,
 );
 
-// Lane offset baking (Fix 3) — constants moved to the top tunables
-// block so they are available at module-load time when
-// buildBundleArtifacts is invoked at top-level.
-
-// Compute pre-baked offset geometry. Walks the polyline vertex by vertex,
-// computes the average of adjacent segment normals (miter join), caps to
-// MITER_LENGTH_CAP_RATIO × lane width to avoid spikes at sharp corners
-// (falls back to the segment normal — bevel). All math is in projected
-// meters; final result is converted back to [lng, lat] using local
-// per-vertex meters-per-degree.
-function offsetPolylineByLaneSlot(coords: Position[], laneSlot: number) {
-  if (!Array.isArray(coords) || coords.length < 2) return coords;
-  if (!Number.isFinite(laneSlot) || laneSlot === 0) return coords;
-  const offsetMeters = laneSlot * LANE_WIDTH_METERS;
-  const miterCap = LANE_WIDTH_METERS * MITER_LENGTH_CAP_RATIO;
-
-  // Pre-compute per-vertex meters-per-degree-longitude (varies with lat).
-  const mPerLngAt = coords.map((c) => metersPerDegLng(c[1]));
-
-  // Project to meters using each vertex's lat-corrected scale.
-  const projected = coords.map((c, i) => [c[0] * mPerLngAt[i], c[1] * M_PER_DEG_LAT]);
-
-  // Per-segment unit normal (right-hand perpendicular to segment direction).
-  const segNormals = [];
-  for (let i = 0; i < projected.length - 1; i += 1) {
-    const dx = projected[i + 1][0] - projected[i][0];
-    const dy = projected[i + 1][1] - projected[i][1];
-    const len = Math.hypot(dx, dy);
-    if (len === 0) {
-      segNormals.push([0, 0]);
-      continue;
-    }
-    // Right-hand normal: rotate +90° clockwise (dx, dy) → (dy, -dx)
-    segNormals.push([dy / len, -dx / len]);
-  }
-
-  // Per-vertex normal (averaged miter join) with bevel fallback.
-  const vertexNormals = [];
-  for (let i = 0; i < projected.length; i += 1) {
-    if (i === 0) {
-      vertexNormals.push(segNormals[0]);
-      continue;
-    }
-    if (i === projected.length - 1) {
-      vertexNormals.push(segNormals[segNormals.length - 1]);
-      continue;
-    }
-    const a = segNormals[i - 1];
-    const b = segNormals[i];
-    const sumX = a[0] + b[0];
-    const sumY = a[1] + b[1];
-    const sumLen = Math.hypot(sumX, sumY);
-    if (sumLen < 1e-9) {
-      vertexNormals.push(b);
-      continue;
-    }
-    const nx = sumX / sumLen;
-    const ny = sumY / sumLen;
-    // Miter scale: the offset along the miter axis must be (offset / cos(half-angle)).
-    // cos(half-angle) = dot(a, miter) which equals (a·miter). Equivalently, the
-    // miter length factor is 1 / (a · n) where n is the average unit normal.
-    const cosHalf = a[0] * nx + a[1] * ny;
-    const miterLen = Math.abs(offsetMeters) / Math.max(0.05, Math.abs(cosHalf));
-    if (miterLen > miterCap) {
-      // Sharp corner — fall back to the segment that's about to start
-      vertexNormals.push(b);
-    } else {
-      // Scale the unit normal so projection onto a yields offsetMeters
-      const scale = 1 / cosHalf;
-      vertexNormals.push([nx * scale, ny * scale]);
-    }
-  }
-
-  // Apply offset in projected meter space; convert back to lng/lat.
-  const out: Position[] = [];
-  for (let i = 0; i < projected.length; i += 1) {
-    const n = vertexNormals[i];
-    const nx = n[0] * offsetMeters;
-    const ny = n[1] * offsetMeters;
-    const x = projected[i][0] + nx;
-    const y = projected[i][1] + ny;
-    out.push([x / mPerLngAt[i], y / M_PER_DEG_LAT]);
-  }
-  return out;
-}
-
 function sortedBundleColors(routeIds: string[]) {
   return [
     ...new Set(routeIds.map((routeId) => routeColorFor(routeId))),
@@ -2899,94 +2545,8 @@ for (const trunk of REQUIRED_TRUNKS) {
 
 console.log("[visual-network] Gate 2G — render-lane continuity diagnostics");
 
-function buildRouteIncidentCounts(features: LineFeature[], useSourceEdges = false) {
-  const counts = new Map();
-  const add = (stopId: any, stopName: any, routeId: any, corridorId: any) => {
-    const key = `${stopId}|${routeId}`;
-    if (!counts.has(key)) {
-      counts.set(key, {
-        stop_id: stopId,
-        stop_name: stopName,
-        route_id: routeId,
-        corridor_ids: new Set(),
-        count: 0,
-      });
-    }
-    const row = counts.get(key);
-    row.count += 1;
-    if (corridorId) row.corridor_ids.add(corridorId);
-  };
-
-  for (const feature of features) {
-    const props = feature.properties;
-    const routeIds = useSourceEdges
-      ? [props.route_id]
-      : props.route_ids ?? [];
-    for (const routeId of routeIds) {
-      add(props.from_stop_id, props.from_stop_name, routeId, props.corridor_id);
-      add(props.to_stop_id, props.to_stop_name, routeId, props.corridor_id);
-    }
-  }
-
-  return counts;
-}
-
-function buildVisualRouteIncidentCounts(features: LineFeature[]) {
-  const counts = new Map();
-  const add = (stopId: any, stopName: any, routeId: any, corridorId: any) => {
-    const key = `${stopId}|${routeId}`;
-    if (!counts.has(key)) {
-      counts.set(key, {
-        stop_id: stopId,
-        stop_name: stopName,
-        route_id: routeId,
-        corridor_ids: new Set(),
-        count: 0,
-      });
-    }
-    const row = counts.get(key);
-    row.count += 1;
-    if (corridorId) row.corridor_ids.add(corridorId);
-  };
-
-  for (const feature of features) {
-    const props = feature.properties;
-    const routeIds = new Set(props.route_ids ?? []);
-    const sourceEdges = (props.source_edge_ids ?? [])
-      .map((edgeId: any) => edgeById.get(edgeId))
-      .filter(Boolean);
-
-    if (sourceEdges.length > 0) {
-      for (const edge of sourceEdges) {
-        const routeId = edge.properties.route_id;
-        if (!routeIds.has(routeId)) continue;
-        add(
-          edge.properties.from_stop_id,
-          edge.properties.from_stop_name,
-          routeId,
-          props.corridor_id,
-        );
-        add(
-          edge.properties.to_stop_id,
-          edge.properties.to_stop_name,
-          routeId,
-          props.corridor_id,
-        );
-      }
-      continue;
-    }
-
-    for (const routeId of routeIds) {
-      add(props.from_stop_id, props.from_stop_name, routeId, props.corridor_id);
-      add(props.to_stop_id, props.to_stop_name, routeId, props.corridor_id);
-    }
-  }
-
-  return counts;
-}
-
 const expectedRouteIncidents = buildRouteIncidentCounts(edgeFeatures as any, true);
-const visualRouteIncidents = buildVisualRouteIncidentCounts(corridorFeatures);
+const visualRouteIncidents = buildVisualRouteIncidentCounts(corridorFeatures, edgeById);
 const missingRouteLaneFeatures = [];
 
 for (const [key, expected] of expectedRouteIncidents) {
@@ -3084,95 +2644,11 @@ console.log(
 
 console.log("[visual-network] Gate 2F — visual-geometry anomaly diagnostics");
 
-function hasUnrelatedRouteFamilyMix(routeIds: string[]) {
-  if (routeIds.length <= 1) return false;
-  return new Set(routeIds.map(routeFamilyKey)).size > 2;
-}
-
-function anomalyReasonsForFeature(feature: LineFeature) {
-  const props = feature.properties;
-  const stats = geometryStats(feature.geometry.coordinates);
-  const sourceEdges = (props.source_edge_ids ?? [])
-    .map((edgeId: any) => edgeById.get(edgeId))
-    .filter(Boolean);
-  const maxProjectionDistanceM = sourceEdges.reduce((max: number, edge: any) => {
-    return Math.max(
-      max,
-      Number(edge.properties.from_projection_dist_m ?? 0),
-      Number(edge.properties.to_projection_dist_m ?? 0),
-    );
-  }, 0);
-  const reasons = [];
-
-  if (stats.max_segment_length_m > MAX_SEGMENT_ANOMALY_M) {
-    reasons.push("max_segment_gt_250m");
-  }
-  if (stats.coordinate_count <= 2 && stats.length_m > SPARSE_LONG_SLICE_M) {
-    reasons.push("sparse_long_slice");
-  }
-  if (maxProjectionDistanceM > PROJECTION_ANOMALY_M) {
-    reasons.push("projection_gt_125m");
-  }
-  if (stats.sharp_angle_count > 0) {
-    reasons.push("sharp_angle_gt_120deg");
-  }
-  if (
-    stats.coordinate_count <= 3 &&
-    stats.length_m > 600 &&
-    stats.sinuosity < 1.03
-  ) {
-    reasons.push("low_detail_straight_long_slice");
-  }
-  if (hasUnrelatedRouteFamilyMix(props.route_ids ?? [])) {
-    reasons.push("unrelated_route_family_mix");
-  }
-
-  const severity =
-    Math.max(0, stats.max_segment_length_m - MAX_SEGMENT_ANOMALY_M) / 25 +
-    Math.max(0, maxProjectionDistanceM - PROJECTION_ANOMALY_M) / 10 +
-    stats.sharp_angle_count * 3 +
-    (stats.coordinate_count <= 2 && stats.length_m > SPARSE_LONG_SLICE_M
-      ? 20
-      : 0) +
-    (hasUnrelatedRouteFamilyMix(props.route_ids ?? []) ? 5 : 0);
-
-  return {
-    reasons,
-    severity: Number(severity.toFixed(2)),
-    stats,
-    max_projection_distance_m: Number(maxProjectionDistanceM.toFixed(2)),
-    source_edges: sourceEdges,
-  };
-}
-
-function buildVisualAnomalyRecords(features: LineFeature[]): any[] {
-  return features.map((feature) => {
-    const result = anomalyReasonsForFeature(feature);
-    if (result.reasons.length === 0) return null;
-    const props = feature.properties;
-    return {
-      feature,
-      reasons: result.reasons,
-      severity: result.severity,
-      stats: result.stats,
-      max_projection_distance_m: result.max_projection_distance_m,
-      shape_ids: [
-        ...new Set<string>(result.source_edges.map((edge: any) => edge.properties.shape_id)),
-      ].sort((a, b) => a.localeCompare(b, "en", { numeric: true })),
-      stop_pairs: result.source_edges
-        .slice(0, 12)
-        .map(
-          (edge: any) =>
-            `${edge.properties.from_stop_name} → ${edge.properties.to_stop_name}`,
-        ),
-      source_edge_ids: props.source_edge_ids ?? [],
-    };
-  })
-  .filter(Boolean)
-  .sort((a: any, b: any) => b.severity - a.severity);
-}
-
-const visualAnomalies = buildVisualAnomalyRecords(corridorFeatures);
+const visualAnomalies = buildVisualAnomalyRecords(corridorFeatures, edgeById, {
+  maxSegmentAnomalyM: MAX_SEGMENT_ANOMALY_M,
+  sparseLongSliceM: SPARSE_LONG_SLICE_M,
+  projectionAnomalyM: PROJECTION_ANOMALY_M,
+});
 
 const anomalyGeoJson = {
   type: "FeatureCollection",
