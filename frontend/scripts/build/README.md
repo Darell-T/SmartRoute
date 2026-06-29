@@ -132,7 +132,7 @@ Categories:
 | `frontend/eslint.config.mjs` | 1.0 KB / 37 lines | none | no | no | Keep as `.mjs` | keep `.mjs` |
 | `frontend/scripts/regenerate-canonical-from-gtfs.ts` | 14.9 KB / 532 lines | `package.json`, visual orchestrator, palette check, characterization test | yes | yes | Migrated TypeScript entrypoint | done |
 | `frontend/scripts/regenerate-canonical-from-gtfs.test.ts` | 4.0 KB / 100 lines | none | n/a | no | Migrated characterization test | done |
-| `frontend/scripts/build-subway-visual-network.ts` | 169 KB / 3778 lines | `package.json`, renderer code, debug artifacts | no | yes | Migrated TypeScript entrypoint | decompose gradually |
+| `frontend/scripts/build-subway-visual-network.ts` | 140 KB / 3159 lines | `package.json`, renderer code, debug artifacts | no | yes | Migrated TypeScript entrypoint | decompose gradually |
 | `frontend/scripts/build/visual-network/route-config.ts` | 2.0 KB / 61 lines | visual orchestrator | no | no | Extracted TypeScript helper | done |
 | `frontend/scripts/build/visual-network/gtfs-ingest.ts` | 3.0 KB / 91 lines | visual orchestrator | no | no | Extracted TypeScript helper | done |
 | `frontend/scripts/build/visual-network/types.ts` | 446 B / 19 lines | visual orchestrator, visual-network helpers | no | no | Extracted shared TypeScript types | done |
@@ -143,6 +143,9 @@ Categories:
 | `frontend/scripts/build/visual-network/gtfs-topology-stage.ts` | 5.6 KB / 192 lines | visual orchestrator | no | no | Extracted TypeScript stage | done |
 | `frontend/scripts/build/visual-network/diagnostics.ts` | 6.1 KB / 219 lines | visual orchestrator | no | no | Extracted TypeScript helper | done |
 | `frontend/scripts/build/visual-network/opendata-inputs.ts` | 4.5 KB / 133 lines | visual orchestrator | no | no | Extracted TypeScript stage | done |
+| `frontend/scripts/build/visual-network/bundle-stage.ts` | 24.7 KB / 594 lines | visual orchestrator | no | no | Extracted TypeScript stage | done |
+| `frontend/scripts/build/visual-network/artifact-metadata.ts` | 3.0 KB / 86 lines | visual orchestrator | no | no | Extracted TypeScript helper | done |
+| `frontend/scripts/build/visual-network/geometry-smoothing-pass.ts` | 1.8 KB / 58 lines | visual orchestrator | no | no | Extracted Tier 3 TypeScript pass | done |
 | `frontend/scripts/build/schematic-hairpin-arc.ts` | 5.3 KB / 129 lines | visual orchestrator | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/parallel-offset-cross-color.ts` | 8.1 KB / 240 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/lane-continuity-filter.ts` | 7.3 KB / 187 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
@@ -250,9 +253,11 @@ the coordinated GTFS topology stage into
 autonomous decomposition pass extracted shared visual-network feature types,
 pure geometry utilities, pure diagnostics helpers, and the OpenData corridor
 input stage into `types.ts`, `geometry-utils.ts`, `diagnostics.ts`, and
-`opendata-inputs.ts`. Remaining medium-risk seams include bundle construction,
-artifact writing/metadata, and validation gates. The ordered location patch
-chain remains high-risk and should wait for a separate Tier 3 pass.
+`opendata-inputs.ts`. Follow-up decomposition extracted bundle construction
+into `bundle-stage.ts`, candidate artifact metadata into `artifact-metadata.ts`,
+and the first Tier 3 mutate-in-place geometry smoothing pass into
+`geometry-smoothing-pass.ts`. Remaining high-risk ordered location patch passes
+should continue one gated sub-stage at a time.
 
 ## Historical Orchestrator Migration Plan
 
