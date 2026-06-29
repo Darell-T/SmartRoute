@@ -92,6 +92,7 @@ import { applyMottHavenStage } from "./build/visual-network/mott-haven-stage.ts"
 import { applyPostMottLocalFixesStage } from "./build/visual-network/post-mott-local-fixes-stage.ts";
 import { applyTerminalOverhangTrimStage } from "./build/visual-network/terminal-overhang-trim-stage.ts";
 import { writeVisualArtifactStage } from "./build/visual-network/artifact-writer-stage.ts";
+import { reportFinalTopologySummaryStage } from "./build/visual-network/final-reporting-stage.ts";
 
 // --- Pragmatic feature-bag types from the mechanical Batch 26 .ts conversion
 // live in visual-network/types.ts and remain intentionally permissive. ---
@@ -2526,30 +2527,9 @@ writeVisualArtifactStage({
   },
 });
 
-// Summary log
-console.log(`[visual-network] === Gate 2A topology summary ===`);
-console.log(
-  `[visual-network] distinct routes: ${topologyDoc.topology.distinct_routes}`,
-);
-console.log(
-  `[visual-network] total branches (>= ${MIN_TRIPS_PER_BRANCH} trips): ${topologyDoc.topology.total_branches}`,
-);
-console.log(
-  `[visual-network] dropped low-frequency branches: ${droppedLowFreqBranches}`,
-);
-console.log(`[visual-network] --- per-route branch summary ---`);
-console.log(`[visual-network]   route  branches  stations  branch terminals`);
-for (const r of topologyDoc.per_route) {
-  const terminals = r.branches
-    .slice(0, 4)
-    .map((b: any) =>
-      `${(b.direction_id || "?")}:${(stopsById.get(b.terminal_start)?.name ?? b.terminal_start)} → ${(stopsById.get(b.terminal_end)?.name ?? b.terminal_end)} (${b.total_trips_in_branch}tr)`,
-    )
-    .join("; ");
-  console.log(
-    `[visual-network]   ${r.route_id.padEnd(5)} ${String(r.branch_count).padStart(8)} ${String(r.distinct_stations).padStart(9)}  ${terminals}`,
-  );
-}
-
-console.log("[visual-network] Gate 2A complete. Topology written to debug JSON.");
-console.log("[visual-network] Gate 2B used NYC OpenData full-line geometry; GTFS shapes.txt was not used for visual rendering.");
+reportFinalTopologySummaryStage({
+  topologyDoc,
+  minTripsPerBranch: MIN_TRIPS_PER_BRANCH,
+  droppedLowFreqBranches,
+  stopsById,
+});
