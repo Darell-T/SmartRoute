@@ -59,3 +59,7 @@ export function bundleColorRank(color: string) {
   const index = BUNDLE_COLOR_ORDER.indexOf(color);
   return index === -1 ? 999 : index;
 }
+
+export function compareRouteIds(a: string, b: string) {
+  return a.localeCompare(b, "en", { numeric: true });
+}
