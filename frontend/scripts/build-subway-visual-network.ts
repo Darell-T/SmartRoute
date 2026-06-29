@@ -45,7 +45,7 @@ import {
   findSharedArcExtent,
   offsetPolylineOverExtent,
 } from "./build/cross-color-spread.ts";
-import { smoothSharpCorners, countSharpCorners, densifyLongSegments } from "./build/smooth-polyline.ts";
+import { smoothSharpCorners, densifyLongSegments } from "./build/smooth-polyline.ts";
 import { bridgeRouteGaps } from "./build/bridge-route-gaps.ts";
 import { taperBakedJointSteps } from "./build/joint-offset-taper.ts";
 import { colocateSameColorStretches } from "./build/colocate-same-color.ts";
@@ -108,6 +108,7 @@ import {
   routesForColor,
 } from "./build/visual-network/bundle-stage.ts";
 import { buildCandidateDoc } from "./build/visual-network/artifact-metadata.ts";
+import { applyGeometrySmoothingPass } from "./build/visual-network/geometry-smoothing-pass.ts";
 
 // --- Pragmatic feature-bag types from the mechanical Batch 26 .ts conversion
 // live in visual-network/types.ts and remain intentionally permissive. ---
@@ -2458,35 +2459,13 @@ void suppressShadowOrphans;
 // untouched. Endpoints stay byte-identical so feature-to-feature junctions
 // remain coincident (Gate 2D connectivity is GTFS-topology-based, not geometry-
 // based, so it is unaffected either way -- endpoint-pinning is the real guard).
-let smoothedFeatureCount = 0;
-let smoothedCornerCount = 0;
-if (bundleArtifacts.visualFeatures) {
-  for (const f of bundleArtifacts.visualFeatures) {
-    if (f.geometry?.type !== "LineString") continue;
-    const before = f.geometry.coordinates;
-    if (!Array.isArray(before) || before.length < 3) continue;
-    const sharpBefore = countSharpCorners(before, SMOOTH_ANGLE_THRESHOLD_DEG);
-    if (sharpBefore === 0) continue;
-    const after = smoothSharpCorners(before, {
-      angleThresholdDeg: SMOOTH_ANGLE_THRESHOLD_DEG,
-      iterations: SMOOTH_ITERATIONS,
-      ratio: SMOOTH_RATIO,
-      maxFilletM: SMOOTH_MAX_FILLET_M,
-    });
-    if (after === before) continue;
-    // Endpoint-preservation invariant: junctions must not move.
-    const eqPt = (p: Position, q: Position) => p[0] === q[0] && p[1] === q[1];
-    if (!eqPt(after[0], before[0]) || !eqPt(after[after.length - 1], before[before.length - 1])) {
-      console.error(
-        `[visual-network] *** smoothing moved an endpoint on ${f.properties?.bundle_id ?? "?"} -- refusing. ***`,
-      );
-      process.exit(1);
-    }
-    f.geometry.coordinates = after;
-    smoothedFeatureCount += 1;
-    smoothedCornerCount += sharpBefore;
-  }
-}
+const { smoothedFeatureCount, smoothedCornerCount } = applyGeometrySmoothingPass({
+  features: bundleArtifacts.visualFeatures,
+  angleThresholdDeg: SMOOTH_ANGLE_THRESHOLD_DEG,
+  iterations: SMOOTH_ITERATIONS,
+  ratio: SMOOTH_RATIO,
+  maxFilletM: SMOOTH_MAX_FILLET_M,
+});
 console.log(
   `[visual-network] geometry smoothing:          features=${smoothedFeatureCount} sharp_corners=${smoothedCornerCount}`,
 );
