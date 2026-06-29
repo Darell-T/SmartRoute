@@ -49,7 +49,6 @@ import { smoothSharpCorners, densifyLongSegments } from "./build/smooth-polyline
 import { bridgeRouteGaps } from "./build/bridge-route-gaps.ts";
 import { taperBakedJointSteps } from "./build/joint-offset-taper.ts";
 import { colocateSameColorStretches } from "./build/colocate-same-color.ts";
-import { repairSameRouteEndpointCrossings } from "./build/same-route-junction-fabric.ts";
 import { simplifyTightCurves } from "./build/simplify-tight-curves.ts";
 import { snapDanglingSameColorEndpoints } from "./build/snap-dangling-same-color.ts";
 import { snapOffRevenueToShape, maxOffShapeM } from "./build/snap-off-revenue-to-shape.ts";
@@ -110,6 +109,7 @@ import {
 import { buildCandidateDoc } from "./build/visual-network/artifact-metadata.ts";
 import { applyGeometrySmoothingPass } from "./build/visual-network/geometry-smoothing-pass.ts";
 import { applyTightCurveSimplificationPass } from "./build/visual-network/tight-curve-simplification-pass.ts";
+import { applySameRouteEndpointCrossingPass } from "./build/visual-network/same-route-endpoint-crossing-pass.ts";
 
 // --- Pragmatic feature-bag types from the mechanical Batch 26 .ts conversion
 // live in visual-network/types.ts and remain intentionally permissive. ---
@@ -2496,15 +2496,13 @@ console.log(
 // connector: it only snaps that overshooting endpoint back to the actual
 // intersection, so the two features share a split node and the crossing segment
 // disappears. Interior crossings are left untouched for a fuller junction model.
-if (bundleArtifacts.visualFeatures) {
-  const repair = repairSameRouteEndpointCrossings(bundleArtifacts.visualFeatures, {
-    maxEndpointOvershootM: 180,
-  });
-  bundleArtifacts.visualFeatures = repair.features;
-  console.log(
-    `[visual-network] same-route junction fabric: endpoint_repairs=${repair.repairCount}`,
-  );
-}
+const { sameRouteEndpointRepairCount } = applySameRouteEndpointCrossingPass({
+  bundleArtifacts,
+  maxEndpointOvershootM: 180,
+});
+console.log(
+  `[visual-network] same-route junction fabric: endpoint_repairs=${sameRouteEndpointRepairCount}`,
+);
 
 // ----- Same-color convergence snap -----
 // At junctions where several routes of one color merge onto a trunk (B/D + F + M
