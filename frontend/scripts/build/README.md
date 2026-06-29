@@ -132,7 +132,7 @@ Categories:
 | `frontend/eslint.config.mjs` | 1.0 KB / 37 lines | none | no | no | Keep as `.mjs` | keep `.mjs` |
 | `frontend/scripts/regenerate-canonical-from-gtfs.ts` | 14.9 KB / 532 lines | `package.json`, visual orchestrator, palette check, characterization test | yes | yes | Migrated TypeScript entrypoint | done |
 | `frontend/scripts/regenerate-canonical-from-gtfs.test.ts` | 4.0 KB / 100 lines | none | n/a | no | Migrated characterization test | done |
-| `frontend/scripts/build-subway-visual-network.ts` | 77.4 KB / 1851 lines | `package.json`, renderer code, debug artifacts | no | yes | Migrated TypeScript entrypoint | decompose gradually |
+| `frontend/scripts/build-subway-visual-network.ts` | 69.4 KB / 1624 lines | `package.json`, renderer code, debug artifacts | no | yes | Migrated TypeScript entrypoint | decompose gradually |
 | `frontend/scripts/build/visual-network/route-config.ts` | 2.0 KB / 61 lines | visual orchestrator | no | no | Extracted TypeScript helper | done |
 | `frontend/scripts/build/visual-network/gtfs-ingest.ts` | 3.0 KB / 91 lines | visual orchestrator | no | no | Extracted TypeScript helper | done |
 | `frontend/scripts/build/visual-network/types.ts` | 446 B / 19 lines | visual orchestrator, visual-network helpers | no | no | Extracted shared TypeScript types | done |
@@ -162,6 +162,7 @@ Categories:
 | `frontend/scripts/build/visual-network/validation-reporting-types.ts` | 1.6 KB / 54 lines | validation reporting stage | no | no | Extracted TypeScript validation/reporting types | done |
 | `frontend/scripts/build/visual-network/dekalb-same-color-collapse-stage.ts` | 13.0 KB / 216 lines | visual repair pipeline stage | no | no | Extracted Tier 3 TypeScript local geometry stage | done |
 | `frontend/scripts/build/visual-network/visual-repair-pipeline-stage.ts` | 2.7 KB / 95 lines | visual orchestrator | no | no | Extracted Tier 3 TypeScript repair pipeline facade | done |
+| `frontend/scripts/build/visual-network/lane-offset-finalization-stage.ts` | 11.2 KB / 261 lines | visual orchestrator | no | yes | Extracted TypeScript lane offset finalization stage | done |
 | `frontend/scripts/build/schematic-hairpin-arc.ts` | 5.3 KB / 129 lines | visual orchestrator | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/parallel-offset-cross-color.ts` | 8.1 KB / 240 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/lane-continuity-filter.ts` | 7.3 KB / 187 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
@@ -277,6 +278,8 @@ Gate 2C/2D/2F/2G validation and debug reporting into
 `validation-reporting-stage.ts`,
 DeKalb/same-color collapse and adjacent local geometry repairs into
 `dekalb-same-color-collapse-stage.ts`,
+cross-color whole-feature and segment-level offset finalization plus lane-order
+debug output into `lane-offset-finalization-stage.ts`,
 and the first Tier 3 mutate-in-place geometry smoothing, tight-curve,
 same-route endpoint-crossing, same-color junction, route-continuity repair,
 authored location patch, Mott Haven, post-Mott local fix, and terminal overhang
