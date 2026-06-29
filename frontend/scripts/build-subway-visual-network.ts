@@ -107,6 +107,7 @@ import {
   buildBundleArtifacts,
   routesForColor,
 } from "./build/visual-network/bundle-stage.ts";
+import { buildCandidateDoc } from "./build/visual-network/artifact-metadata.ts";
 
 // --- Pragmatic feature-bag types from the mechanical Batch 26 .ts conversion
 // live in visual-network/types.ts and remain intentionally permissive. ---
@@ -3114,47 +3115,23 @@ if (bundleArtifacts.visualFeatures) {
 
 // The candidate artifact is the OpenData-derived visual geojson with extra
 // metadata. Always written so debug/inspection works even on failure.
-const candidateDoc = {
-  type: "FeatureCollection",
-  metadata: {
-    generated_at: new Date().toISOString(),
-    source: "build-subway-visual-network.mjs Gate 2A-2H",
-    gates: {
-      "2A": "topology",
-      "2B": "opendata-full-lines",
-      "2C": "opendata-corridor-normalization",
-      "2D": "connectivity",
-      "2H": "bundle-lane-render-geometry",
-    },
-    visual_geometry_source: OPEN_DATA_SOURCE_NAME,
-    visual_geometry_source_dataset_id: OPEN_DATA_SOURCE_DATASET_ID,
-    validation: {
-      total_routes: perRouteStats.length,
-      routes_passed: perRouteStats.length - validationFailures.length,
-      routes_failed: validationFailures.length,
-      passed: validationFailures.length === 0,
-    },
-    bundle_summary: {
-      bundle_count: bundleArtifacts.bundleFeatures.length,
-      bundled_render_lane_count: bundleArtifacts.bundleLaneFeatures.length,
-      corridors_converted_to_bundle_geometry:
-        bundleArtifacts.bundleFeatures.length,
-      remaining_unbundled_corridors: bundleArtifacts.unbundledFeatures.length,
-      bundle_gap_count: bundleArtifacts.bundleGapFeatures.length,
-    },
-    parameters: {
-      min_trips_per_branch: MIN_TRIPS_PER_BRANCH,
-      resample_interval_m: RESAMPLE_INTERVAL_M,
-      hausdorff_max_m: HAUSDORFF_MAX_M,
-      overlap_min_ratio: OVERLAP_MIN_RATIO,
-      tangent_max_diff_deg: TANGENT_MAX_DIFF_DEG,
-      containment_avg_distance_max_m: CONTAINMENT_AVG_DISTANCE_MAX_M,
-      containment_overlap_min_ratio: CONTAINMENT_OVERLAP_MIN_RATIO,
-      open_data_path: "frontend/public/subway-lines-nyc-opendata.geojson",
-    },
+const candidateDoc = buildCandidateDoc({
+  generatedAt: new Date().toISOString(),
+  openDataSourceName: OPEN_DATA_SOURCE_NAME,
+  openDataSourceDatasetId: OPEN_DATA_SOURCE_DATASET_ID,
+  perRouteStats,
+  validationFailures,
+  bundleArtifacts,
+  parameters: {
+    minTripsPerBranch: MIN_TRIPS_PER_BRANCH,
+    resampleIntervalM: RESAMPLE_INTERVAL_M,
+    hausdorffMaxM: HAUSDORFF_MAX_M,
+    overlapMinRatio: OVERLAP_MIN_RATIO,
+    tangentMaxDiffDeg: TANGENT_MAX_DIFF_DEG,
+    containmentAvgDistanceMaxM: CONTAINMENT_AVG_DISTANCE_MAX_M,
+    containmentOverlapMinRatio: CONTAINMENT_OVERLAP_MIN_RATIO,
   },
-  features: bundleArtifacts.visualFeatures,
-};
+});
 writeFileSync(OUT_VISUAL_CANDIDATE, `${JSON.stringify(candidateDoc)}\n`);
 console.log(`[visual-network] wrote candidate: ${OUT_VISUAL_CANDIDATE}`);
 
