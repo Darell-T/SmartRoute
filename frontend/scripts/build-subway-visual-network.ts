@@ -74,12 +74,7 @@ import {
   buildBundleArtifacts,
   routesForColor,
 } from "./build/visual-network/bundle-stage.ts";
-import { applyDekalbSameColorCollapseStage } from "./build/visual-network/dekalb-same-color-collapse-stage.ts";
-import { applyRouteContinuityRepairStage } from "./build/visual-network/route-continuity-repair-stage.ts";
-import { applyAuthoredLocationPatchesStage } from "./build/visual-network/authored-location-patches-stage.ts";
-import { applyMottHavenStage } from "./build/visual-network/mott-haven-stage.ts";
-import { applyPostMottLocalFixesStage } from "./build/visual-network/post-mott-local-fixes-stage.ts";
-import { applyTerminalOverhangTrimStage } from "./build/visual-network/terminal-overhang-trim-stage.ts";
+import { applyVisualRepairPipelineStage } from "./build/visual-network/visual-repair-pipeline-stage.ts";
 import { writeVisualArtifactStage } from "./build/visual-network/artifact-writer-stage.ts";
 import { reportFinalTopologySummaryStage } from "./build/visual-network/final-reporting-stage.ts";
 import { runValidationReportingStage } from "./build/visual-network/validation-reporting-stage.ts";
@@ -1805,8 +1800,12 @@ const { perRouteStats, validationFailures } = runValidationReportingStage({
   },
 });
 
-applyDekalbSameColorCollapseStage({
+applyVisualRepairPipelineStage({
   bundleArtifacts,
+  canonicalGeoJsonPath: resolve(publicDir, "subway-network.canonical.geojson"),
+  stationsGeoJsonPath: STATIONS_GEOJSON_PATH,
+  branchesByRoute,
+  stopsById,
   sameColorCollapseDistM: SAME_COLOR_COLLAPSE_DIST_M,
   smoothAngleThresholdDeg: SMOOTH_ANGLE_THRESHOLD_DEG,
   smoothIterations: SMOOTH_ITERATIONS,
@@ -1818,27 +1817,10 @@ applyDekalbSameColorCollapseStage({
   tightCurveLambda: TIGHT_CURVE_LAMBDA,
   sameColorSnapDistM: SAME_COLOR_SNAP_DIST_M,
   fanoutBlendM: FANOUT_BLEND_M,
-});
-applyRouteContinuityRepairStage({
-  bundleArtifacts,
-  canonicalGeoJsonPath: resolve(publicDir, "subway-network.canonical.geojson"),
   bridgeMinGapM: BRIDGE_MIN_GAP_M,
   bridgeMaxGapM: BRIDGE_MAX_GAP_M,
   bridgeSubsetConnectorMaxGapM: BRIDGE_SUBSET_CONNECTOR_MAX_GAP_M,
   offRevenueMaxM: OFF_REVENUE_MAX_M,
-});
-
-applyAuthoredLocationPatchesStage({ bundleArtifacts });
-
-applyMottHavenStage({ bundleArtifacts });
-
-applyPostMottLocalFixesStage({ bundleArtifacts });
-
-applyTerminalOverhangTrimStage({
-  bundleArtifacts,
-  stationsGeoJsonPath: STATIONS_GEOJSON_PATH,
-  branchesByRoute,
-  stopsById,
 });
 
 writeVisualArtifactStage({

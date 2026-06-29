@@ -132,7 +132,7 @@ Categories:
 | `frontend/eslint.config.mjs` | 1.0 KB / 37 lines | none | no | no | Keep as `.mjs` | keep `.mjs` |
 | `frontend/scripts/regenerate-canonical-from-gtfs.ts` | 14.9 KB / 532 lines | `package.json`, visual orchestrator, palette check, characterization test | yes | yes | Migrated TypeScript entrypoint | done |
 | `frontend/scripts/regenerate-canonical-from-gtfs.test.ts` | 4.0 KB / 100 lines | none | n/a | no | Migrated characterization test | done |
-| `frontend/scripts/build-subway-visual-network.ts` | 87 KB / 1737 lines | `package.json`, renderer code, debug artifacts | no | yes | Migrated TypeScript entrypoint | decompose gradually |
+| `frontend/scripts/build-subway-visual-network.ts` | 77.4 KB / 1851 lines | `package.json`, renderer code, debug artifacts | no | yes | Migrated TypeScript entrypoint | decompose gradually |
 | `frontend/scripts/build/visual-network/route-config.ts` | 2.0 KB / 61 lines | visual orchestrator | no | no | Extracted TypeScript helper | done |
 | `frontend/scripts/build/visual-network/gtfs-ingest.ts` | 3.0 KB / 91 lines | visual orchestrator | no | no | Extracted TypeScript helper | done |
 | `frontend/scripts/build/visual-network/types.ts` | 446 B / 19 lines | visual orchestrator, visual-network helpers | no | no | Extracted shared TypeScript types | done |
@@ -151,16 +151,17 @@ Categories:
 | `frontend/scripts/build/visual-network/same-color-junction-types.ts` | 289 B / 9 lines | same-color junction stage | no | no | Extracted TypeScript types | done |
 | `frontend/scripts/build/visual-network/same-color-junction-stage.ts` | 4.0 KB / 76 lines | visual orchestrator | no | no | Extracted Tier 3 TypeScript stage | done |
 | `frontend/scripts/build/visual-network/route-continuity-repair-types.ts` | 395 B / 12 lines | route-continuity repair stage | no | no | Extracted TypeScript types | done |
-| `frontend/scripts/build/visual-network/route-continuity-repair-stage.ts` | 4.8 KB / 97 lines | visual orchestrator | no | no | Extracted Tier 3 TypeScript stage | done |
-| `frontend/scripts/build/visual-network/authored-location-patches-stage.ts` | 6.1 KB / 106 lines | visual orchestrator | no | no | Extracted Tier 3 TypeScript stage | done |
-| `frontend/scripts/build/visual-network/mott-haven-stage.ts` | 16.2 KB / 278 lines | visual orchestrator | no | no | Extracted Tier 3 TypeScript stage | done |
-| `frontend/scripts/build/visual-network/post-mott-local-fixes-stage.ts` | 2.6 KB / 50 lines | visual orchestrator | no | no | Extracted Tier 3 TypeScript stage | done |
-| `frontend/scripts/build/visual-network/terminal-overhang-trim-stage.ts` | 2.8 KB / 68 lines | visual orchestrator | no | no | Extracted Tier 3 TypeScript stage | done |
+| `frontend/scripts/build/visual-network/route-continuity-repair-stage.ts` | 4.8 KB / 97 lines | visual repair pipeline stage | no | no | Extracted Tier 3 TypeScript stage | done |
+| `frontend/scripts/build/visual-network/authored-location-patches-stage.ts` | 6.1 KB / 106 lines | visual repair pipeline stage | no | no | Extracted Tier 3 TypeScript stage | done |
+| `frontend/scripts/build/visual-network/mott-haven-stage.ts` | 16.2 KB / 278 lines | visual repair pipeline stage | no | no | Extracted Tier 3 TypeScript stage | done |
+| `frontend/scripts/build/visual-network/post-mott-local-fixes-stage.ts` | 2.6 KB / 50 lines | visual repair pipeline stage | no | no | Extracted Tier 3 TypeScript stage | done |
+| `frontend/scripts/build/visual-network/terminal-overhang-trim-stage.ts` | 2.8 KB / 68 lines | visual repair pipeline stage | no | no | Extracted Tier 3 TypeScript stage | done |
 | `frontend/scripts/build/visual-network/artifact-writer-stage.ts` | 2.2 KB / 66 lines | visual orchestrator | no | yes | Extracted TypeScript artifact writer stage | done |
 | `frontend/scripts/build/visual-network/final-reporting-stage.ts` | 1.7 KB / 41 lines | visual orchestrator | no | no | Extracted TypeScript reporting stage | done |
 | `frontend/scripts/build/visual-network/validation-reporting-stage.ts` | 22.7 KB / 574 lines | visual orchestrator | no | yes | Extracted TypeScript validation/reporting stage | done |
 | `frontend/scripts/build/visual-network/validation-reporting-types.ts` | 1.6 KB / 54 lines | validation reporting stage | no | no | Extracted TypeScript validation/reporting types | done |
-| `frontend/scripts/build/visual-network/dekalb-same-color-collapse-stage.ts` | 13.0 KB / 216 lines | visual orchestrator | no | no | Extracted Tier 3 TypeScript local geometry stage | done |
+| `frontend/scripts/build/visual-network/dekalb-same-color-collapse-stage.ts` | 13.0 KB / 216 lines | visual repair pipeline stage | no | no | Extracted Tier 3 TypeScript local geometry stage | done |
+| `frontend/scripts/build/visual-network/visual-repair-pipeline-stage.ts` | 2.7 KB / 95 lines | visual orchestrator | no | no | Extracted Tier 3 TypeScript repair pipeline facade | done |
 | `frontend/scripts/build/schematic-hairpin-arc.ts` | 5.3 KB / 129 lines | visual orchestrator | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/parallel-offset-cross-color.ts` | 8.1 KB / 240 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/lane-continuity-filter.ts` | 7.3 KB / 187 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
@@ -284,8 +285,11 @@ trim passes into
 `same-route-endpoint-crossing-pass.ts`, `same-color-junction-stage.ts`,
 `route-continuity-repair-stage.ts`, `authored-location-patches-stage.ts`, and
 `mott-haven-stage.ts`, `post-mott-local-fixes-stage.ts`, and
-`terminal-overhang-trim-stage.ts`. Remaining high-risk ordered location patch
-passes should continue one gated sub-stage at a time.
+`terminal-overhang-trim-stage.ts`. The current visual repair stage sequence is
+composed by `visual-repair-pipeline-stage.ts`, keeping the orchestrator focused
+on high-level build flow while leaving each algorithm in its focused module.
+Remaining high-risk ordered location patch passes should continue one gated
+sub-stage at a time.
 
 ## Historical Orchestrator Migration Plan
 
