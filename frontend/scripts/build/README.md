@@ -132,7 +132,7 @@ Categories:
 | `frontend/eslint.config.mjs` | 1.0 KB / 37 lines | none | no | no | Keep as `.mjs` | keep `.mjs` |
 | `frontend/scripts/regenerate-canonical-from-gtfs.ts` | 14.9 KB / 532 lines | `package.json`, visual orchestrator, palette check, characterization test | yes | yes | Migrated TypeScript entrypoint | done |
 | `frontend/scripts/regenerate-canonical-from-gtfs.test.ts` | 4.0 KB / 100 lines | none | n/a | no | Migrated characterization test | done |
-| `frontend/scripts/build-subway-visual-network.ts` | 112 KB / 2481 lines | `package.json`, renderer code, debug artifacts | no | yes | Migrated TypeScript entrypoint | decompose gradually |
+| `frontend/scripts/build-subway-visual-network.ts` | 110 KB / 2444 lines | `package.json`, renderer code, debug artifacts | no | yes | Migrated TypeScript entrypoint | decompose gradually |
 | `frontend/scripts/build/visual-network/route-config.ts` | 2.0 KB / 61 lines | visual orchestrator | no | no | Extracted TypeScript helper | done |
 | `frontend/scripts/build/visual-network/gtfs-ingest.ts` | 3.0 KB / 91 lines | visual orchestrator | no | no | Extracted TypeScript helper | done |
 | `frontend/scripts/build/visual-network/types.ts` | 446 B / 19 lines | visual orchestrator, visual-network helpers | no | no | Extracted shared TypeScript types | done |
@@ -154,6 +154,7 @@ Categories:
 | `frontend/scripts/build/visual-network/route-continuity-repair-stage.ts` | 4.8 KB / 97 lines | visual orchestrator | no | no | Extracted Tier 3 TypeScript stage | done |
 | `frontend/scripts/build/visual-network/authored-location-patches-stage.ts` | 6.1 KB / 106 lines | visual orchestrator | no | no | Extracted Tier 3 TypeScript stage | done |
 | `frontend/scripts/build/visual-network/mott-haven-stage.ts` | 16.2 KB / 278 lines | visual orchestrator | no | no | Extracted Tier 3 TypeScript stage | done |
+| `frontend/scripts/build/visual-network/post-mott-local-fixes-stage.ts` | 2.6 KB / 50 lines | visual orchestrator | no | no | Extracted Tier 3 TypeScript stage | done |
 | `frontend/scripts/build/schematic-hairpin-arc.ts` | 5.3 KB / 129 lines | visual orchestrator | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/parallel-offset-cross-color.ts` | 8.1 KB / 240 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/lane-continuity-filter.ts` | 7.3 KB / 187 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
@@ -265,12 +266,12 @@ input stage into `types.ts`, `geometry-utils.ts`, `diagnostics.ts`, and
 into `bundle-stage.ts`, candidate artifact metadata into `artifact-metadata.ts`,
 and the first Tier 3 mutate-in-place geometry smoothing, tight-curve,
 same-route endpoint-crossing, same-color junction, route-continuity repair,
-authored location patch, and Mott Haven passes into
+authored location patch, Mott Haven, and post-Mott local fix passes into
 `geometry-smoothing-pass.ts`, `tight-curve-simplification-pass.ts`,
 `same-route-endpoint-crossing-pass.ts`, `same-color-junction-stage.ts`,
 `route-continuity-repair-stage.ts`, `authored-location-patches-stage.ts`, and
-`mott-haven-stage.ts`. Remaining high-risk ordered location patch passes should
-continue one gated sub-stage at a time.
+`mott-haven-stage.ts`, and `post-mott-local-fixes-stage.ts`. Remaining high-risk
+ordered location patch passes should continue one gated sub-stage at a time.
 
 ## Historical Orchestrator Migration Plan
 
