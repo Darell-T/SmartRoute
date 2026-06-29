@@ -50,7 +50,6 @@ import { bridgeRouteGaps } from "./build/bridge-route-gaps.ts";
 import { taperBakedJointSteps } from "./build/joint-offset-taper.ts";
 import { colocateSameColorStretches } from "./build/colocate-same-color.ts";
 import { simplifyTightCurves } from "./build/simplify-tight-curves.ts";
-import { snapDanglingSameColorEndpoints } from "./build/snap-dangling-same-color.ts";
 import { snapOffRevenueToShape, maxOffShapeM } from "./build/snap-off-revenue-to-shape.ts";
 import { replaceEndpointHairpin } from "./build/schematic-hairpin-arc.ts";
 import { hermiteBetween } from "./build/offset-bow.ts";
@@ -110,6 +109,7 @@ import { buildCandidateDoc } from "./build/visual-network/artifact-metadata.ts";
 import { applyGeometrySmoothingPass } from "./build/visual-network/geometry-smoothing-pass.ts";
 import { applyTightCurveSimplificationPass } from "./build/visual-network/tight-curve-simplification-pass.ts";
 import { applySameRouteEndpointCrossingPass } from "./build/visual-network/same-route-endpoint-crossing-pass.ts";
+import { applySameColorConvergenceSnapPass } from "./build/visual-network/same-color-convergence-snap-pass.ts";
 
 // --- Pragmatic feature-bag types from the mechanical Batch 26 .ts conversion
 // live in visual-network/types.ts and remain intentionally permissive. ---
@@ -2511,15 +2511,13 @@ console.log(
 // touch". This snaps such a dangling endpoint onto the same-color sibling it is
 // converging into (distance-decreasing test, so genuine parallel lanes like the
 // SI double-track are left alone).
-if (bundleArtifacts.visualFeatures) {
-  const snap = snapDanglingSameColorEndpoints(bundleArtifacts.visualFeatures, {
-    snapDistM: SAME_COLOR_SNAP_DIST_M,
-  });
-  bundleArtifacts.visualFeatures = snap.features;
-  console.log(
-    `[visual-network] same-color convergence snap: endpoints=${snap.snappedCount} (<=${SAME_COLOR_SNAP_DIST_M}m, converging)`,
-  );
-}
+const { sameColorConvergenceSnappedCount } = applySameColorConvergenceSnapPass({
+  bundleArtifacts,
+  snapDistM: SAME_COLOR_SNAP_DIST_M,
+});
+console.log(
+  `[visual-network] same-color convergence snap: endpoints=${sameColorConvergenceSnappedCount} (<=${SAME_COLOR_SNAP_DIST_M}m, converging)`,
+);
 
 // ----- Same-color co-location: one ribbon per color, Apple-style -----
 // On Queens Blvd the F express track runs ~18m from the F+M local track for
