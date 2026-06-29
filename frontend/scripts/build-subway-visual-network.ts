@@ -109,6 +109,7 @@ import {
 } from "./build/visual-network/bundle-stage.ts";
 import { buildCandidateDoc } from "./build/visual-network/artifact-metadata.ts";
 import { applyGeometrySmoothingPass } from "./build/visual-network/geometry-smoothing-pass.ts";
+import { applyTightCurveSimplificationPass } from "./build/visual-network/tight-curve-simplification-pass.ts";
 
 // --- Pragmatic feature-bag types from the mechanical Batch 26 .ts conversion
 // live in visual-network/types.ts and remain intentionally permissive. ---
@@ -2478,30 +2479,13 @@ console.log(
 // (a lot of total turning packed into a short arc) toward a gentler arc, leaving
 // straight runs and gentle curves byte-identical. Endpoints are pinned, so
 // junctions never move (Gate 2D connectivity is GTFS-topology-based).
-let tightCurveFeatureCount = 0;
-if (bundleArtifacts.visualFeatures) {
-  for (const f of bundleArtifacts.visualFeatures) {
-    if (f.geometry?.type !== "LineString") continue;
-    const before = f.geometry.coordinates;
-    if (!Array.isArray(before) || before.length < 5) continue;
-    const after = simplifyTightCurves(before, {
-      tightTurnDeg: TIGHT_CURVE_TURN_DEG,
-      windowM: TIGHT_CURVE_WINDOW_M,
-      iterations: TIGHT_CURVE_ITERATIONS,
-      lambda: TIGHT_CURVE_LAMBDA,
-    });
-    if (after === before) continue;
-    const eqPt = (p: Position, q: Position) => p[0] === q[0] && p[1] === q[1];
-    if (!eqPt(after[0], before[0]) || !eqPt(after[after.length - 1], before[before.length - 1])) {
-      console.error(
-        `[visual-network] *** tight-curve simplify moved an endpoint on ${f.properties?.bundle_id ?? "?"} -- refusing. ***`,
-      );
-      process.exit(1);
-    }
-    f.geometry.coordinates = after;
-    tightCurveFeatureCount += 1;
-  }
-}
+const { tightCurveFeatureCount } = applyTightCurveSimplificationPass({
+  features: bundleArtifacts.visualFeatures,
+  tightTurnDeg: TIGHT_CURVE_TURN_DEG,
+  windowM: TIGHT_CURVE_WINDOW_M,
+  iterations: TIGHT_CURVE_ITERATIONS,
+  lambda: TIGHT_CURVE_LAMBDA,
+});
 console.log(
   `[visual-network] tight-curve simplification:   features=${tightCurveFeatureCount} (turn>=${TIGHT_CURVE_TURN_DEG}deg/${TIGHT_CURVE_WINDOW_M}m)`,
 );
