@@ -132,7 +132,7 @@ Categories:
 | `frontend/eslint.config.mjs` | 1.0 KB / 37 lines | none | no | no | Keep as `.mjs` | keep `.mjs` |
 | `frontend/scripts/regenerate-canonical-from-gtfs.ts` | 14.9 KB / 532 lines | `package.json`, visual orchestrator, palette check, characterization test | yes | yes | Migrated TypeScript entrypoint | done |
 | `frontend/scripts/regenerate-canonical-from-gtfs.test.ts` | 4.0 KB / 100 lines | none | n/a | no | Migrated characterization test | done |
-| `frontend/scripts/build-subway-visual-network.ts` | 108 KB / 2409 lines | `package.json`, renderer code, debug artifacts | no | yes | Migrated TypeScript entrypoint | decompose gradually |
+| `frontend/scripts/build-subway-visual-network.ts` | 107 KB / 2389 lines | `package.json`, renderer code, debug artifacts | no | yes | Migrated TypeScript entrypoint | decompose gradually |
 | `frontend/scripts/build/visual-network/route-config.ts` | 2.0 KB / 61 lines | visual orchestrator | no | no | Extracted TypeScript helper | done |
 | `frontend/scripts/build/visual-network/gtfs-ingest.ts` | 3.0 KB / 91 lines | visual orchestrator | no | no | Extracted TypeScript helper | done |
 | `frontend/scripts/build/visual-network/types.ts` | 446 B / 19 lines | visual orchestrator, visual-network helpers | no | no | Extracted shared TypeScript types | done |
@@ -156,6 +156,7 @@ Categories:
 | `frontend/scripts/build/visual-network/mott-haven-stage.ts` | 16.2 KB / 278 lines | visual orchestrator | no | no | Extracted Tier 3 TypeScript stage | done |
 | `frontend/scripts/build/visual-network/post-mott-local-fixes-stage.ts` | 2.6 KB / 50 lines | visual orchestrator | no | no | Extracted Tier 3 TypeScript stage | done |
 | `frontend/scripts/build/visual-network/terminal-overhang-trim-stage.ts` | 2.8 KB / 68 lines | visual orchestrator | no | no | Extracted Tier 3 TypeScript stage | done |
+| `frontend/scripts/build/visual-network/artifact-writer-stage.ts` | 2.2 KB / 66 lines | visual orchestrator | no | yes | Extracted TypeScript artifact writer stage | done |
 | `frontend/scripts/build/schematic-hairpin-arc.ts` | 5.3 KB / 129 lines | visual orchestrator | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/parallel-offset-cross-color.ts` | 8.1 KB / 240 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/lane-continuity-filter.ts` | 7.3 KB / 187 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
@@ -265,6 +266,7 @@ pure geometry utilities, pure diagnostics helpers, and the OpenData corridor
 input stage into `types.ts`, `geometry-utils.ts`, `diagnostics.ts`, and
 `opendata-inputs.ts`. Follow-up decomposition extracted bundle construction
 into `bundle-stage.ts`, candidate artifact metadata into `artifact-metadata.ts`,
+final artifact writing/promotion into `artifact-writer-stage.ts`,
 and the first Tier 3 mutate-in-place geometry smoothing, tight-curve,
 same-route endpoint-crossing, same-color junction, route-continuity repair,
 authored location patch, Mott Haven, post-Mott local fix, and terminal overhang

@@ -82,7 +82,6 @@ import {
   buildBundleArtifacts,
   routesForColor,
 } from "./build/visual-network/bundle-stage.ts";
-import { buildCandidateDoc } from "./build/visual-network/artifact-metadata.ts";
 import { applyGeometrySmoothingPass } from "./build/visual-network/geometry-smoothing-pass.ts";
 import { applyTightCurveSimplificationPass } from "./build/visual-network/tight-curve-simplification-pass.ts";
 import { applySameRouteEndpointCrossingPass } from "./build/visual-network/same-route-endpoint-crossing-pass.ts";
@@ -92,6 +91,7 @@ import { applyAuthoredLocationPatchesStage } from "./build/visual-network/author
 import { applyMottHavenStage } from "./build/visual-network/mott-haven-stage.ts";
 import { applyPostMottLocalFixesStage } from "./build/visual-network/post-mott-local-fixes-stage.ts";
 import { applyTerminalOverhangTrimStage } from "./build/visual-network/terminal-overhang-trim-stage.ts";
+import { writeVisualArtifactStage } from "./build/visual-network/artifact-writer-stage.ts";
 
 // --- Pragmatic feature-bag types from the mechanical Batch 26 .ts conversion
 // live in visual-network/types.ts and remain intentionally permissive. ---
@@ -2506,19 +2506,15 @@ applyTerminalOverhangTrimStage({
   stopsById,
 });
 
-// =====================================================================
-// Final artifact emission
-// =====================================================================
-
-// The candidate artifact is the OpenData-derived visual geojson with extra
-// metadata. Always written so debug/inspection works even on failure.
-const candidateDoc = buildCandidateDoc({
+writeVisualArtifactStage({
   generatedAt: new Date().toISOString(),
   openDataSourceName: OPEN_DATA_SOURCE_NAME,
   openDataSourceDatasetId: OPEN_DATA_SOURCE_DATASET_ID,
   perRouteStats,
   validationFailures,
   bundleArtifacts,
+  candidatePath: OUT_VISUAL_CANDIDATE,
+  finalPath: OUT_VISUAL_FINAL,
   parameters: {
     minTripsPerBranch: MIN_TRIPS_PER_BRANCH,
     resampleIntervalM: RESAMPLE_INTERVAL_M,
@@ -2529,24 +2525,6 @@ const candidateDoc = buildCandidateDoc({
     containmentOverlapMinRatio: CONTAINMENT_OVERLAP_MIN_RATIO,
   },
 });
-writeFileSync(OUT_VISUAL_CANDIDATE, `${JSON.stringify(candidateDoc)}\n`);
-console.log(`[visual-network] wrote candidate: ${OUT_VISUAL_CANDIDATE}`);
-
-if (validationFailures.length === 0) {
-  // Promote candidate → final. Preserve the last-known-good by atomic
-  // rename pattern (write candidate first, then move).
-  writeFileSync(OUT_VISUAL_FINAL, `${JSON.stringify(candidateDoc)}\n`);
-  console.log(`[visual-network] *** PROMOTED *** to ${OUT_VISUAL_FINAL}`);
-  console.log(`[visual-network] All gates passed. Visual network artifact is ready for Gate 2E (runtime opt-in).`);
-} else {
-  console.error(
-    `[visual-network] HARD GATE FAILED: ${validationFailures.length} route(s) failed connectivity validation.`,
-  );
-  console.error(
-    `[visual-network] Refusing to promote candidate to ${OUT_VISUAL_FINAL}. The last-known-good (if any) is preserved.`,
-  );
-  process.exit(1);
-}
 
 // Summary log
 console.log(`[visual-network] === Gate 2A topology summary ===`);
