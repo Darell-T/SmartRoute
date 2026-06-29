@@ -54,7 +54,6 @@ import {
   OPEN_DATA_SOURCE_DATASET_ID,
   OPEN_DATA_SOURCE_NAME,
 } from "./build/opendata-subway-lines.ts";
-import { trimTerminalOverhang } from "./build/trim-terminal-overhang.ts";
 import {
   colorRank,
   compareRouteIds,
@@ -92,6 +91,7 @@ import { applyRouteContinuityRepairStage } from "./build/visual-network/route-co
 import { applyAuthoredLocationPatchesStage } from "./build/visual-network/authored-location-patches-stage.ts";
 import { applyMottHavenStage } from "./build/visual-network/mott-haven-stage.ts";
 import { applyPostMottLocalFixesStage } from "./build/visual-network/post-mott-local-fixes-stage.ts";
+import { applyTerminalOverhangTrimStage } from "./build/visual-network/terminal-overhang-trim-stage.ts";
 
 // --- Pragmatic feature-bag types from the mechanical Batch 26 .ts conversion
 // live in visual-network/types.ts and remain intentionally permissive. ---
@@ -2499,47 +2499,12 @@ applyMottHavenStage({ bundleArtifacts });
 
 applyPostMottLocalFixesStage({ bundleArtifacts });
 
-// =====================================================================
-// Terminal overhang trim
-// =====================================================================
-// Lanes are sliced from full OpenData line geometry, which keeps running past
-// the last passenger station into yards / non-revenue track. Trim every free
-// lane end back to the outermost station that projects onto it (+ grace).
-{
-  const stationsDoc = JSON.parse(
-    readFileSync(STATIONS_GEOJSON_PATH, "utf8"),
-  );
-  // True service terminals from the Gate 2A GTFS branch sequences. Cuts are
-  // only allowed where the boundary coincides with one of these -- station
-  // route lists alone are weekday-pattern and misclassify branch geometry.
-  const routeTerminals = [];
-  for (const [routeId, branches] of branchesByRoute) {
-    for (const branch of branches) {
-      for (const stopId of [branch.terminal_start, branch.terminal_end]) {
-        const stop = stopsById.get(stopId);
-        if (!stop || !Number.isFinite(stop.lon) || !Number.isFinite(stop.lat)) continue;
-        routeTerminals.push({ route: routeId, coord: [stop.lon, stop.lat] });
-      }
-    }
-  }
-  // Two passes: dropping a spur can expose the end it was attached to (the
-  // attachment snapshot is taken before splicing), so a second pass reaches
-  // the fixpoint (e.g. the SI tail past Tottenville chained to a yard spur).
-  for (let pass = 1; pass <= 2; pass += 1) {
-    const trimSummary = trimTerminalOverhang({
-      features: bundleArtifacts.visualFeatures,
-      stations: stationsDoc,
-      terminals: routeTerminals as any,
-    });
-    console.log(
-      `[visual-network] terminal overhang pass ${pass}: ${trimSummary.trimmedEnds} free ends trimmed, ${trimSummary.removedM}m removed, ${trimSummary.droppedSpurs} spurs dropped`,
-    );
-    for (const action of trimSummary.actions ?? []) {
-      console.log(`[visual-network]   trim ${JSON.stringify(action)}`);
-    }
-    if (trimSummary.trimmedEnds === 0 && trimSummary.droppedSpurs === 0) break;
-  }
-}
+applyTerminalOverhangTrimStage({
+  bundleArtifacts,
+  stationsGeoJsonPath: STATIONS_GEOJSON_PATH,
+  branchesByRoute,
+  stopsById,
+});
 
 // =====================================================================
 // Final artifact emission
