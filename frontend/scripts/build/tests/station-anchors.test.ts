@@ -5,7 +5,7 @@ import {
   buildStationAnchors,
   splitStationAnchorCollections,
   stripRuntimeStationAnchorDebugProperties,
-} from "./index.ts";
+} from "../station-anchors/index.ts";
 import { darkenHexColor } from "../mta-colors.ts";
 
 type Position = [number, number];
