@@ -9,11 +9,8 @@ import {
   useState,
 } from "react";
 import type {
-  DestinationSelection,
   FocusedLiveDirection,
   LiveFeedIncident,
-  RouteCandidate,
-  RouteStep,
   TransitRouteData,
 } from "@/types";
 import { JarvisMap } from "@/components/jarvis-map";
@@ -23,7 +20,7 @@ import {
   type MapIncident,
 } from "@/components/map/incidents/incident-marker-types";
 import { normalizeIncidentType } from "@/components/map/incidents/incident-marker-tokens";
-import { DEFAULT_LOCATION, enrichRoute, getSwitchNarration, getThinking, planTrip } from "@/lib/api";
+import { DEFAULT_LOCATION } from "@/lib/api";
 import {
   buildLiveDirectionRows,
   directionFromVehicle,
@@ -31,10 +28,7 @@ import {
 } from "@/lib/live-directions";
 import { useLiveFeed } from "@/lib/use-live-feed";
 import { useServiceAlerts } from "@/lib/use-service-alerts";
-import {
-  deriveTransitRouteIds,
-  normalizeTripCandidates,
-} from "@/lib/route-planning";
+import { deriveTransitRouteIds } from "@/lib/route-planning";
 import { summarizeRoute } from "@/lib/smart-route";
 import {
   LeftRail,
@@ -45,35 +39,16 @@ import { buildLeftRailData } from "@/components/smart-route/left-rail/live-data"
 import { DisruptionLegend } from "@/components/smart-route/disruption-legend";
 import { MapMiniControls } from "@/components/smart-route/map-mini-controls";
 import { useMobileRailSheet } from "@/components/smart-route/page/use-mobile-rail-sheet";
+import { useRoutePlanningController } from "@/components/smart-route/page/use-route-planning-controller";
 
 import { type MapActions } from "./page-parts";
 
 export default function JarvisPage() {
-  const [inputValue, setInputValue] = useState("");
   const [legendHidden, setLegendHidden] = useState(false);
-  const [selectedDestination, setSelectedDestination] =
-    useState<DestinationSelection | null>(null);
   const [userLocation, setUserLocation] = useState<{
     lng: number;
     lat: number;
   } | null>(null);
-  const [jarvisText, setJarvisText] = useState("");
-  const [thinkingText, setThinkingText] = useState("");
-  // Canned ATLAS line after the user switches to an alternative route;
-  // overrides the rail's plan headline until the next trip or clear.
-  const [switchHeadline, setSwitchHeadline] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [isSpeaking, setIsSpeaking] = useState(false);
-  const [errorText, setErrorText] = useState<string | null>(null);
-  const [isListening, setIsListening] = useState(false);
-  const [plannedRouteSteps, setPlannedRouteSteps] = useState<RouteStep[]>([]);
-  const [routeCandidates, setRouteCandidates] = useState<RouteCandidate[]>([]);
-  const [activeRouteCandidateId, setActiveRouteCandidateId] =
-    useState<string | null>(null);
-  const [selectedRouteIndex, setSelectedRouteIndex] = useState<number | null>(
-    null,
-  );
-  const [tripIncidents, setTripIncidents] = useState<LiveFeedIncident[]>([]);
   const [focusedLiveDirection, setFocusedLiveDirection] =
     useState<FocusedLiveDirection | null>(null);
   const [liveRailActivityKey, setLiveRailActivityKey] = useState(0);
@@ -82,15 +57,9 @@ export default function JarvisPage() {
   // backend scan and surfaces incidents in the rail and as map markers.
   const [atlasScanOn, setAtlasScanOn] = useState(false);
 
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const audioUrlRef = useRef<string | null>(null);
-  const routePlanningRequestIdRef = useRef(0);
   const mapActionsRef = useRef<MapActions | null>(null);
   const liveMapFrameRef = useRef<HTMLElement | null>(null);
   const liveArrivalSignatureRef = useRef<string | null>(null);
-  // Pre-warmed ATLAS "thinking" clip so the spoken phrase fires the instant
-  // route planning starts, with no network/TTS wait on the critical path.
-  const thinkingClipRef = useRef<{ text: string; audio: string } | null>(null);
   const {
     mobileRailSheet,
     mobileRailSheetHeight,
@@ -101,6 +70,39 @@ export default function JarvisPage() {
     handleMobileRailPointerCancel,
     handleMobileRailKeyDown,
   } = useMobileRailSheet();
+
+  const pulseLiveRail = useCallback(() => {
+    setLiveRailActivityKey((key) => key + 1);
+  }, []);
+
+  const clearFocusedLiveDirection = useCallback(() => {
+    setFocusedLiveDirection(null);
+  }, []);
+
+  const {
+    inputValue,
+    selectedDestination,
+    jarvisText,
+    thinkingText,
+    switchHeadline,
+    isLoading,
+    isSpeaking,
+    errorText,
+    isListening,
+    plannedRouteSteps,
+    routeCandidates,
+    activeRouteCandidateId,
+    tripIncidents,
+    handleDestinationInputChange,
+    handleVoiceInput,
+    handleSearchSubmit,
+    handleSelectAlternative,
+    handleClearRoute,
+  } = useRoutePlanningController({
+    userLocation,
+    onClearFocusedLiveDirection: clearFocusedLiveDirection,
+    onPulseLiveRail: pulseLiveRail,
+  });
 
   const activeRouteCandidate = useMemo(
     () =>
@@ -289,10 +291,6 @@ export default function JarvisPage() {
     [liveDirectionRows],
   );
 
-  const pulseLiveRail = useCallback(() => {
-    setLiveRailActivityKey((key) => key + 1);
-  }, []);
-
   useEffect(() => {
     if (!liveArrivalSignature) return;
     if (liveArrivalSignatureRef.current === null) {
@@ -387,35 +385,12 @@ export default function JarvisPage() {
     if (!stillExists) setFocusedLiveDirection(null);
   }, [focusedLiveDirection, liveDirectionRows]);
 
-  // Warm the first thinking clip on load so the very first plan plays its
-  // spoken phrase immediately rather than after a cold TTS round-trip.
-  useEffect(() => {
-    void prewarmThinking();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (audioRef.current) {
-        audioRef.current.pause();
-      }
-      if (audioUrlRef.current) {
-        URL.revokeObjectURL(audioUrlRef.current);
-      }
-    };
-  }, []);
-
   const handleLocationUpdate = useCallback(
     (coords: { lng: number; lat: number }) => {
       setUserLocation(coords);
     },
     [],
   );
-
-  const handleDestinationInputChange = useCallback((value: string) => {
-    setInputValue(value);
-    setSelectedDestination(null);
-  }, []);
 
   const handleMapReady = useCallback((actions: MapActions) => {
     mapActionsRef.current = actions;
@@ -432,273 +407,6 @@ export default function JarvisPage() {
     },
     [],
   );
-
-  function handleVoiceInput() {
-    const win = window as unknown as {
-      SpeechRecognition?: new () => {
-        lang: string;
-        onstart: () => void;
-        onresult: (event: {
-          results: {
-            [index: number]: { [index: number]: { transcript: string } };
-          };
-        }) => void;
-        onend: () => void;
-        onerror: () => void;
-        start: () => void;
-      };
-      webkitSpeechRecognition?: new () => {
-        lang: string;
-        onstart: () => void;
-        onresult: (event: {
-          results: {
-            [index: number]: { [index: number]: { transcript: string } };
-          };
-        }) => void;
-        onend: () => void;
-        onerror: () => void;
-        start: () => void;
-      };
-    };
-    const RecognitionCtor =
-      win.SpeechRecognition || win.webkitSpeechRecognition;
-    if (!RecognitionCtor) return;
-    const recognition = new RecognitionCtor();
-    recognition.lang = "en-US";
-    recognition.onstart = () => setIsListening(true);
-    recognition.onresult = (event) => {
-      setInputValue(event.results[0][0].transcript);
-      setSelectedDestination(null);
-    };
-    recognition.onend = () => setIsListening(false);
-    recognition.onerror = () => setIsListening(false);
-    recognition.start();
-  }
-
-  async function handleSubmit(
-    destinationOverride?: string,
-    selectionOverride?: DestinationSelection | null,
-  ) {
-    const destination = (destinationOverride ?? inputValue).trim();
-    if (!destination) return;
-    if (!userLocation) {
-      setErrorText("Waiting for GPS location...");
-      return;
-    }
-    const destinationSelection =
-      selectionOverride === undefined ? selectedDestination : selectionOverride;
-    const requestId = routePlanningRequestIdRef.current + 1;
-    routePlanningRequestIdRef.current = requestId;
-
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current = null;
-    }
-    if (audioUrlRef.current) {
-      URL.revokeObjectURL(audioUrlRef.current);
-      audioUrlRef.current = null;
-    }
-
-    setErrorText(null);
-    setIsLoading(true);
-    setIsSpeaking(false);
-    const initialThinkingText = "Scanning live feeds, alerts, and route options...";
-    setThinkingText(initialThinkingText);
-    setJarvisText(initialThinkingText);
-    setRouteCandidates([]);
-    setActiveRouteCandidateId(null);
-    setSelectedRouteIndex(null);
-    setPlannedRouteSteps([]);
-    setTripIncidents([]);
-
-    let tripSettled = false;
-    // Play ATLAS's thinking line the instant the state flips to "thinking".
-    // The clip is pre-warmed (on mount and after each plan), so there is no
-    // network wait on the critical path. Cold start (ref not yet filled)
-    // falls back to fetching on demand.
-    const warmClip = thinkingClipRef.current;
-    if (warmClip?.audio) {
-      thinkingClipRef.current = null;
-      if (warmClip.text) {
-        setThinkingText(warmClip.text);
-        setJarvisText(warmClip.text);
-      }
-      playNarrationAudio(warmClip.audio);
-      void prewarmThinking();
-    } else {
-      getThinking()
-        .then((thinking) => {
-          if (routePlanningRequestIdRef.current !== requestId || tripSettled) return;
-          if (thinking?.text) {
-            setThinkingText(thinking.text);
-            setJarvisText(thinking.text);
-          }
-          if (thinking?.audio) {
-            playNarrationAudio(thinking.audio);
-          }
-        })
-        .catch(() => {});
-      void prewarmThinking();
-    }
-
-    try {
-      const tripData = await planTrip(
-        userLocation.lat,
-        userLocation.lng,
-        destination,
-        destinationSelection,
-      );
-      tripSettled = true;
-      if (routePlanningRequestIdRef.current !== requestId) return;
-
-      const {
-        candidates: nextCandidates,
-        selected: selectedCandidate,
-        selectedIndex: nextSelectedIndex,
-      } = normalizeTripCandidates(tripData);
-      const selectedSteps = selectedCandidate?.steps ?? tripData.route;
-      setRouteCandidates(nextCandidates);
-      setActiveRouteCandidateId(selectedCandidate?.id ?? nextCandidates[0]?.id ?? null);
-      setSelectedRouteIndex(nextSelectedIndex);
-      setPlannedRouteSteps(selectedSteps);
-      setTripIncidents(tripData.incidents ?? []);
-      setSwitchHeadline(null);
-      setJarvisText(tripData.recommendation);
-      if (destinationSelection) {
-        setSelectedDestination(destinationSelection);
-      }
-
-      if (tripData.audio) {
-        playNarrationAudio(tripData.audio);
-      }
-    } catch (error) {
-      tripSettled = true;
-      if (routePlanningRequestIdRef.current !== requestId) return;
-      const message = error instanceof Error ? error.message : "Unknown error";
-      setErrorText(
-        message.includes("Failed to plan trip")
-          ? "No route found. Try a more specific address."
-          : "Connection error. Check your network and try again.",
-      );
-    } finally {
-      if (routePlanningRequestIdRef.current === requestId) {
-        setIsLoading(false);
-      }
-    }
-  }
-
-  /** Fetch one ATLAS thinking clip (text + cached audio) into the ref so the
-   *  next plan can play it immediately. Fire-and-forget; silent on failure. */
-  function prewarmThinking() {
-    return getThinking()
-      .then((thinking) => {
-        if (thinking?.audio) {
-          thinkingClipRef.current = { text: thinking.text ?? "", audio: thinking.audio };
-        }
-      })
-      .catch(() => {});
-  }
-
-  /** Decode base64 MP3 and play it through the shared audio ref, driving
-   *  isSpeaking. Pauses/revokes any narration already playing. */
-  function playNarrationAudio(audioB64: string) {
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current = null;
-    }
-    if (audioUrlRef.current) {
-      URL.revokeObjectURL(audioUrlRef.current);
-      audioUrlRef.current = null;
-    }
-    const bytes = Uint8Array.from(atob(audioB64), (char) => char.charCodeAt(0));
-    const nextAudioUrl = URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" }));
-    const routeAudio = new Audio(nextAudioUrl);
-    audioUrlRef.current = nextAudioUrl;
-    audioRef.current = routeAudio;
-    setIsSpeaking(true);
-    routeAudio.onended = () => {
-      setIsSpeaking(false);
-      audioRef.current = null;
-    };
-    routeAudio.onerror = () => {
-      setIsSpeaking(false);
-      audioRef.current = null;
-    };
-    routeAudio.play().catch(() => {
-      setIsSpeaking(false);
-    });
-  }
-
-  function handleSelectRouteCandidate(candidate: RouteCandidate) {
-    const isSwitch =
-      activeRouteCandidateId !== null && candidate.id !== activeRouteCandidateId;
-    setActiveRouteCandidateId(candidate.id);
-    setSelectedRouteIndex(candidate.index);
-    setPlannedRouteSteps(candidate.steps);
-    setFocusedLiveDirection(null);
-    pulseLiveRail();
-
-    // Lazily enrich an alternate's intermediate stops the first time it's
-    // selected -- the initial trip only enriched the chosen route. Updating the
-    // candidate in state re-renders the map via the activeRouteCandidate memo.
-    if (candidate.enriched === false && candidate.can_enrich_on_select) {
-      enrichRoute(candidate.steps)
-        .then((result) => {
-          if (!result?.steps?.length) return;
-          setRouteCandidates((prev) =>
-            prev.map((c) =>
-              c.id === candidate.id
-                ? { ...c, steps: result.steps, enriched: true, can_enrich_on_select: false }
-                : c,
-            ),
-          );
-        })
-        .catch(() => {
-          // Keep the un-enriched route shown; stop dots simply won't appear.
-        });
-    }
-
-    if (!isSwitch) return;
-    const line = deriveTransitRouteIds(candidate.steps)[0];
-    if (!line) return;
-    // Show the local line immediately; the server's canned phrase (cached
-    // per line) replaces it and brings audio when TTS is available.
-    setSwitchHeadline(`Rerouting via the ${line}, sir.`);
-    getSwitchNarration(line)
-      .then((narration) => {
-        setSwitchHeadline(narration.text);
-        if (narration.audio) playNarrationAudio(narration.audio);
-      })
-      .catch(() => {
-        // Local text already showing.
-      });
-  }
-
-  function handleClearRoute() {
-    routePlanningRequestIdRef.current += 1;
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current = null;
-    }
-    if (audioUrlRef.current) {
-      URL.revokeObjectURL(audioUrlRef.current);
-      audioUrlRef.current = null;
-    }
-    setInputValue("");
-    setSelectedDestination(null);
-    setRouteCandidates([]);
-    setActiveRouteCandidateId(null);
-    setSelectedRouteIndex(null);
-    setPlannedRouteSteps([]);
-    setTripIncidents([]);
-    setJarvisText("");
-    setThinkingText("");
-    setSwitchHeadline(null);
-    setErrorText(null);
-    setIsSpeaking(false);
-    setFocusedLiveDirection(null);
-    pulseLiveRail();
-  }
 
   async function toggleFullscreen(target: HTMLElement | null) {
     if (!target || typeof document === "undefined") return;
@@ -772,22 +480,14 @@ export default function JarvisPage() {
             atlasScanOn={atlasScanOn}
             onAtlasScanToggle={() => setAtlasScanOn((value) => !value)}
             onSelectIncident={handleSelectIncident}
-            onSelectAlternative={(candidateId) => {
-              const candidate = routeCandidates.find(
-                (c) => c.id === candidateId,
-              );
-              if (candidate) handleSelectRouteCandidate(candidate);
-            }}
+            onSelectAlternative={handleSelectAlternative}
             search={{
               inputValue,
               isLoading,
               isListening,
               hasActiveRoute: Boolean(summary),
               onInputChange: handleDestinationInputChange,
-              onSubmit: (destination, selection) => {
-                if (selection) setSelectedDestination(selection);
-                void handleSubmit(destination, selection);
-              },
+              onSubmit: handleSearchSubmit,
               onVoiceInput: handleVoiceInput,
               onClear: handleClearRoute,
             }}
