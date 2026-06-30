@@ -28,29 +28,29 @@ import {
 import {
   compareRouteIds,
   normalizeRouteId,
-} from "./build/visual-network/route-config.ts";
-import { parseZipEntries } from "./build/visual-network/gtfs-ingest.ts";
-import { buildGtfsTopologyStage } from "./build/visual-network/gtfs-topology-stage.ts";
+} from "./build/visual-network/shared/route-config.ts";
+import { parseZipEntries } from "./build/visual-network/inputs/gtfs-ingest.ts";
+import { buildGtfsTopologyStage } from "./build/visual-network/inputs/gtfs-topology-stage.ts";
 import {
   HAUSDORFF_MAX_M,
   JUNCTION_BRIDGE_MAX_M,
   LANE_WIDTH_METERS,
   RESAMPLE_INTERVAL_M,
   geometryStats,
-} from "./build/visual-network/geometry-utils.ts";
-import { buildOpenDataVisualInputStage } from "./build/visual-network/opendata-visual-input-stage.ts";
-import { buildCorridorMetadataStage } from "./build/visual-network/corridor-metadata-stage.ts";
-import { applyPhase3dSameColorMergeStage } from "./build/visual-network/phase-3d-same-color-merge-stage.ts";
-import { buildStageDSpinePrepStage } from "./build/visual-network/stage-d-spine-prep-stage.ts";
-import { applyPhase3cLaneContinuityStage } from "./build/visual-network/phase-3c-lane-continuity-stage.ts";
-import { applyLaneOffsetFinalizationStage } from "./build/visual-network/lane-offset-finalization-stage.ts";
-import { applyVisualRepairPipelineStage } from "./build/visual-network/visual-repair-pipeline-stage.ts";
-import { writeVisualArtifactStage } from "./build/visual-network/artifact-writer-stage.ts";
-import { reportFinalTopologySummaryStage } from "./build/visual-network/final-reporting-stage.ts";
-import { runValidationReportingStage } from "./build/visual-network/validation-reporting-stage.ts";
+} from "./build/visual-network/shared/geometry-utils.ts";
+import { buildOpenDataVisualInputStage } from "./build/visual-network/inputs/opendata-visual-input-stage.ts";
+import { buildCorridorMetadataStage } from "./build/visual-network/core/corridor-metadata-stage.ts";
+import { applyPhase3dSameColorMergeStage } from "./build/visual-network/core/phase-3d-same-color-merge-stage.ts";
+import { buildStageDSpinePrepStage } from "./build/visual-network/core/stage-d-spine-prep-stage.ts";
+import { applyPhase3cLaneContinuityStage } from "./build/visual-network/core/phase-3c-lane-continuity-stage.ts";
+import { applyLaneOffsetFinalizationStage } from "./build/visual-network/core/lane-offset-finalization-stage.ts";
+import { applyVisualRepairPipelineStage } from "./build/visual-network/core/visual-repair-pipeline-stage.ts";
+import { writeVisualArtifactStage } from "./build/visual-network/output/artifact-writer-stage.ts";
+import { reportFinalTopologySummaryStage } from "./build/visual-network/validation/final-reporting-stage.ts";
+import { runValidationReportingStage } from "./build/visual-network/validation/validation-reporting-stage.ts";
 
 // --- Pragmatic feature-bag types from the mechanical Batch 26 .ts conversion
-// live in visual-network/types.ts and remain intentionally permissive. ---
+// live in visual-network/shared/types.ts and remain intentionally permissive. ---
 
 const here = __dirname;
 const frontendRoot = resolve(here, "..");
@@ -171,7 +171,7 @@ if (!existsSync(STATIONS_GEOJSON_PATH)) {
 const MIN_TRIPS_PER_BRANCH = 5;
 const OPEN_DATA_MIN_FRAGMENT_LENGTH_M = 15;
 // JUNCTION_BRIDGE_MAX_M (legacy buildJunctionBridges gap-bridge max, 90m) is
-// owned by visual-network/geometry-utils.ts and imported above.
+// owned by visual-network/shared/geometry-utils.ts and imported above.
 // Max distance for promoting a branch_transition. Distinct from
 // JUNCTION_BRIDGE_MAX_M (legacy buildJunctionBridges). The audit in Phase 3a
 // showed all production-quality transitions are <= ~5m at junction stations,
@@ -179,7 +179,7 @@ const OPEN_DATA_MIN_FRAGMENT_LENGTH_M = 15;
 // 35m gives ample headroom for legitimate transitions while excluding outliers.
 const BRANCH_TRANSITION_MAX_M = 35;
 // Fix 3: per-slot lane width baked into geometry at build time. The constants
-// are owned by visual-network/geometry-utils.ts and imported here. Pushed 12->18m
+// are owned by visual-network/shared/geometry-utils.ts and imported here. Pushed 12->18m
 // (user-authorized) for Apple-Maps parallel-lane clarity: at the old pitch
 // bundled colors collapsed behind the strongest one. 18m is the practical
 // ceiling -- the widest shared-stop bar scales with pitch and the 60m cap

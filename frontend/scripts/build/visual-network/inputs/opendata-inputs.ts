@@ -1,10 +1,10 @@
-import type { LineFeature } from "./types.ts";
+import type { LineFeature } from "../shared/types.ts";
 import {
   bidirectionalHausdorff,
   geometryStats,
   resampleEdgeAt5m,
   routeSetsIntersect,
-} from "./geometry-utils.ts";
+} from "../shared/geometry-utils.ts";
 
 export type OpenDataInputsStageInput = {
   opendataLineFeatures: any[];

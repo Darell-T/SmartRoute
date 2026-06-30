@@ -1,5 +1,5 @@
-import type { StopsById } from "./gtfs-topology.ts";
-import type { TopologyDoc } from "./gtfs-topology-stage.ts";
+import type { StopsById } from "../inputs/gtfs-topology.ts";
+import type { TopologyDoc } from "../inputs/gtfs-topology-stage.ts";
 
 type FinalTopologySummaryStageInput = {
   topologyDoc: TopologyDoc;

@@ -1,6 +1,6 @@
-import { distanceMeters } from "./geometry-utils.ts";
-import { colorRank, routeColorFor } from "./route-config.ts";
-import type { LineFeature, PointFeat } from "./types.ts";
+import { distanceMeters } from "../shared/geometry-utils.ts";
+import { colorRank, routeColorFor } from "../shared/route-config.ts";
+import type { LineFeature, PointFeat } from "../shared/types.ts";
 
 type CorridorMetadataStageInput = {
   corridorFeatures: LineFeature[];

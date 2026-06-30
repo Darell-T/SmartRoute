@@ -43,7 +43,7 @@ const directConsumers = [
   "components/map/incidents/incident-popup.ts",
   "components/smart-route/left-rail/types.ts",
   "scripts/build/opendata-subway-lines.ts",
-  "scripts/build/visual-network/route-config.ts",
+  "scripts/build/visual-network/shared/route-config.ts",
   "scripts/build/station-anchors/index.ts",
   "scripts/regenerate-canonical-from-gtfs.ts",
 ];
@@ -63,7 +63,7 @@ for (const relPath of directConsumers) {
 const indirectConsumers = [
   {
     relPath: "scripts/build-subway-visual-network.ts",
-    boundary: /visual-network\/route-config\.ts["']/,
+    boundary: /visual-network\/shared\/route-config\.ts["']/,
   },
 ];
 for (const { relPath, boundary } of indirectConsumers) {
