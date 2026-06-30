@@ -132,7 +132,7 @@ Categories:
 | `frontend/eslint.config.mjs` | 1.0 KB / 37 lines | none | no | no | Keep as `.mjs` | keep `.mjs` |
 | `frontend/scripts/regenerate-canonical-from-gtfs.ts` | 14.9 KB / 532 lines | `package.json`, visual orchestrator, palette check, characterization test | yes | yes | Migrated TypeScript entrypoint | done |
 | `frontend/scripts/regenerate-canonical-from-gtfs.test.ts` | 4.0 KB / 100 lines | none | n/a | no | Migrated characterization test | done |
-| `frontend/scripts/build-subway-visual-network.ts` | 32.1 KB / 780 lines | `package.json`, renderer code, debug artifacts | no | yes | Migrated TypeScript entrypoint | decompose gradually |
+| `frontend/scripts/build-subway-visual-network.ts` | 24.0 KB / 555 lines | `package.json`, renderer code, debug artifacts | no | yes | Migrated TypeScript entrypoint | decompose gradually |
 | `frontend/scripts/build/visual-network/route-config.ts` | 2.0 KB / 61 lines | visual orchestrator | no | no | Extracted TypeScript helper | done |
 | `frontend/scripts/build/visual-network/gtfs-ingest.ts` | 3.0 KB / 91 lines | visual orchestrator | no | no | Extracted TypeScript helper | done |
 | `frontend/scripts/build/visual-network/types.ts` | 446 B / 19 lines | visual orchestrator, visual-network helpers | no | no | Extracted shared TypeScript types | done |
@@ -165,6 +165,7 @@ Categories:
 | `frontend/scripts/build/visual-network/phase-3c-lane-continuity-stage.ts` | 14.8 KB / 304 lines | visual orchestrator | no | yes | Extracted TypeScript lane-continuity promotion/cleanup stage | done |
 | `frontend/scripts/build/visual-network/phase-3d-same-color-merge-stage.ts` | 8.3 KB / 207 lines | visual orchestrator | no | yes | Extracted TypeScript same-color merge stage | done |
 | `frontend/scripts/build/visual-network/stage-d-spine-prep-stage.ts` | 19.0 KB / 435 lines | visual orchestrator | no | yes | Extracted TypeScript spine/physical-bundle prep stage | done |
+| `frontend/scripts/build/visual-network/corridor-metadata-stage.ts` | 8.6 KB / 241 lines | visual orchestrator | no | no | Extracted TypeScript junction/lane metadata stage | done |
 | `frontend/scripts/build/visual-network/lane-offset-finalization-stage.ts` | 11.2 KB / 261 lines | visual orchestrator | no | yes | Extracted TypeScript lane offset finalization stage | done |
 | `frontend/scripts/build/schematic-hairpin-arc.ts` | 5.3 KB / 129 lines | visual orchestrator | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/parallel-offset-cross-color.ts` | 8.1 KB / 240 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
