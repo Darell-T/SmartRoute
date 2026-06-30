@@ -3,22 +3,22 @@
 // slots, bakes per-lane offset geometry, and emits bundle / bundle_lane /
 // unbundled / bundle_gap features. This is a behavior-preserving extraction:
 // the function bodies are byte-identical to the orchestrator originals.
-import type { LineFeature, Position } from "./types.ts";
-import { orderColorsForBundle } from "../lane-order.ts";
-import { offsetPolylineBySlotRamp } from "../cross-color-spread.ts";
+import type { LineFeature, Position } from "../shared/types.ts";
+import { orderColorsForBundle } from "../../lane-order.ts";
+import { offsetPolylineBySlotRamp } from "../../cross-color-spread.ts";
 import {
   JUNCTION_BRIDGE_MAX_M,
   LANE_WIDTH_METERS,
   M_PER_DEG_LAT,
   distanceMeters,
   offsetPolylineByLaneSlot,
-} from "./geometry-utils.ts";
+} from "../shared/geometry-utils.ts";
 import {
   BUNDLE_ORDER_OVERRIDES,
   bundleColorRank,
   compareRouteIds,
   routeColorFor,
-} from "./route-config.ts";
+} from "../shared/route-config.ts";
 
 function sortedBundleColors(routeIds: string[]) {
   return [

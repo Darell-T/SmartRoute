@@ -1,5 +1,5 @@
-import { repairSameRouteEndpointCrossings } from "../same-route-junction-fabric.ts";
-import type { LineFeature } from "./types.ts";
+import { repairSameRouteEndpointCrossings } from "../../same-route-junction-fabric.ts";
+import type { LineFeature } from "../shared/types.ts";
 
 export type SameRouteEndpointCrossingPassInput = {
   bundleArtifacts: {

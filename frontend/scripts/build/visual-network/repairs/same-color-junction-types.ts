@@ -1,4 +1,4 @@
-import type { LineFeature } from "./types.ts";
+import type { LineFeature } from "../shared/types.ts";
 
 export type SameColorJunctionBundleArtifacts = {
   visualFeatures?: LineFeature[];

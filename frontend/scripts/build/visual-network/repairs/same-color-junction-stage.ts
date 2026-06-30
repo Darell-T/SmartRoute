@@ -1,6 +1,6 @@
-import { colocateSameColorStretches } from "../colocate-same-color.ts";
-import { taperBakedJointSteps } from "../joint-offset-taper.ts";
-import { snapDanglingSameColorEndpoints } from "../snap-dangling-same-color.ts";
+import { colocateSameColorStretches } from "../../colocate-same-color.ts";
+import { taperBakedJointSteps } from "../../joint-offset-taper.ts";
+import { snapDanglingSameColorEndpoints } from "../../snap-dangling-same-color.ts";
 import type { SameColorJunctionStageInput } from "./same-color-junction-types.ts";
 
 export function applySameColorJunctionStage({

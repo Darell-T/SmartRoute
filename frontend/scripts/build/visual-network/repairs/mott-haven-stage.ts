@@ -1,17 +1,17 @@
-import { applyCartographicJunctionOverrides } from "../cartographic-junction-overrides.ts";
+import { applyCartographicJunctionOverrides } from "../../cartographic-junction-overrides.ts";
 import {
   buildMottHavenFiveSchematicLens,
   buildMottHavenSixSchematicMerge,
-} from "../mott-haven-schematic.ts";
-import { hermiteBetween } from "../offset-bow.ts";
-import { replaceEndpointHairpin } from "../schematic-hairpin-arc.ts";
-import { smoothSharpCorners } from "../smooth-polyline.ts";
-import type { LineFeature, Position } from "./types.ts";
+} from "../../mott-haven-schematic.ts";
+import { hermiteBetween } from "../../offset-bow.ts";
+import { replaceEndpointHairpin } from "../../schematic-hairpin-arc.ts";
+import { smoothSharpCorners } from "../../smooth-polyline.ts";
+import type { LineFeature, Position } from "../shared/types.ts";
 import {
   M_PER_DEG_LAT,
   distanceMeters,
   metersPerDegLng,
-} from "./geometry-utils.ts";
+} from "../shared/geometry-utils.ts";
 
 type MottHavenBundleArtifacts = {
   visualFeatures?: LineFeature[];

@@ -1,5 +1,5 @@
-import { BUNDLE_COLOR_ORDER } from "../lane-order.ts";
-import { MTA_ROUTE_COLORS } from "../mta-colors.ts";
+import { BUNDLE_COLOR_ORDER } from "../../lane-order.ts";
+import { MTA_ROUTE_COLORS } from "../../mta-colors.ts";
 
 // Route ID normalization. The MTA publishes some service variants as
 // distinct route_ids (e.g., "6X" for express 6, "FX" for F express); these
@@ -41,7 +41,7 @@ const COLOR_VISUAL_ORDER = [
 // after visual QA flags specific junctions where the heuristic produces
 // visible crossings.
 //
-// Note: BUNDLE_COLOR_ORDER is imported from ../lane-order.ts (single
+// Note: BUNDLE_COLOR_ORDER is imported from ../../lane-order.ts (single
 // source of truth). The local copy was removed to prevent the rank table
 // from drifting from the canonical order used by orderColorsForBundle.
 export const BUNDLE_ORDER_OVERRIDES = {};

@@ -1,5 +1,5 @@
-import { countSharpCorners, smoothSharpCorners } from "../smooth-polyline.ts";
-import type { LineFeature, Position } from "./types.ts";
+import { countSharpCorners, smoothSharpCorners } from "../../smooth-polyline.ts";
+import type { LineFeature, Position } from "../shared/types.ts";
 
 export type GeometrySmoothingPassInput = {
   features: LineFeature[] | undefined;

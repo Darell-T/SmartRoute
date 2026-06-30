@@ -1,4 +1,4 @@
-import type { LineStringGeometry, PointGeometry, Position as BasePosition } from "../types.ts";
+import type { LineStringGeometry, PointGeometry, Position as BasePosition } from "../../types.ts";
 
 export type Position = BasePosition;
 

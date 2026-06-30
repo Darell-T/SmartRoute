@@ -1,9 +1,9 @@
-import { applyBrightonBqChurchSpacing } from "../brighton-bq-church-spacing.ts";
-import { applyCulverFgProspectSmoothing } from "../culver-fg-prospect-smoothing.ts";
-import { applyJoralemonGreenRiverSmoothing } from "../joralemon-green-river.ts";
-import { applyNostrandEasternSchematic } from "../nostrand-eastern-schematic.ts";
-import { applyStNicholasBlueStraightening } from "../st-nicholas-blue-straightening.ts";
-import type { LineFeature } from "./types.ts";
+import { applyBrightonBqChurchSpacing } from "../../brighton-bq-church-spacing.ts";
+import { applyCulverFgProspectSmoothing } from "../../culver-fg-prospect-smoothing.ts";
+import { applyJoralemonGreenRiverSmoothing } from "../../joralemon-green-river.ts";
+import { applyNostrandEasternSchematic } from "../../nostrand-eastern-schematic.ts";
+import { applyStNicholasBlueStraightening } from "../../st-nicholas-blue-straightening.ts";
+import type { LineFeature } from "../shared/types.ts";
 
 type AuthoredLocationPatchesBundleArtifacts = {
   visualFeatures?: LineFeature[];
