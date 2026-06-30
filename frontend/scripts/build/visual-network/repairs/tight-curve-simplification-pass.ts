@@ -1,5 +1,5 @@
-import { simplifyTightCurves } from "../simplify-tight-curves.ts";
-import type { LineFeature, Position } from "./types.ts";
+import { simplifyTightCurves } from "../../simplify-tight-curves.ts";
+import type { LineFeature, Position } from "../shared/types.ts";
 
 export type TightCurveSimplificationPassInput = {
   features: LineFeature[] | undefined;

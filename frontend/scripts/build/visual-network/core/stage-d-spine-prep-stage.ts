@@ -1,15 +1,15 @@
 import { writeFileSync } from "node:fs";
-import { buildSpineFromCorridor } from "../spine.ts";
-import { groupSpinesIntoPhysicalBundles, selectPhysicalBundleSpine, computePhysicalBundleSpineHash, clipPolylineToExtent } from "../physical-bundle.ts";
-import { orderColorsForBundle, BUNDLE_COLOR_ORDER } from "../lane-order.ts";
-import { dedupeDuplicateCorridors } from "../dedupe-duplicate-corridors.ts";
-import { materializePhysicalBundles } from "../physical-bundle-materialization.ts";
-import { densifyLongSegments } from "../smooth-polyline.ts";
-import { assertSpineHashConsistency } from "../spine-validation.ts";
+import { buildSpineFromCorridor } from "../../spine.ts";
+import { groupSpinesIntoPhysicalBundles, selectPhysicalBundleSpine, computePhysicalBundleSpineHash, clipPolylineToExtent } from "../../physical-bundle.ts";
+import { orderColorsForBundle, BUNDLE_COLOR_ORDER } from "../../lane-order.ts";
+import { dedupeDuplicateCorridors } from "../../dedupe-duplicate-corridors.ts";
+import { materializePhysicalBundles } from "../../physical-bundle-materialization.ts";
+import { densifyLongSegments } from "../../smooth-polyline.ts";
+import { assertSpineHashConsistency } from "../../spine-validation.ts";
 import { buildBundleArtifacts } from "./bundle-stage.ts";
-import { geometryStats } from "./geometry-utils.ts";
-import { compareRouteIds, routeColorFor } from "./route-config.ts";
-import type { LineFeature } from "./types.ts";
+import { geometryStats } from "../shared/geometry-utils.ts";
+import { compareRouteIds, routeColorFor } from "../shared/route-config.ts";
+import type { LineFeature } from "../shared/types.ts";
 type StageDSpinePrepStageInput = {
   corridorFeatures: LineFeature[];
   paths: {

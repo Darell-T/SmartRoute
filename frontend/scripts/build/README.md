@@ -29,7 +29,11 @@ subway network artifacts.
   orchestrator. It wires the helper passes together, runs validation gates, and
   writes generated artifacts.
 - `frontend/scripts/build/visual-network/` contains focused modules extracted
-  from the large orchestrator. Keep extractions small and behavior-preserving.
+  from the large orchestrator. It is grouped by pipeline role:
+  `inputs/` for GTFS/OpenData preparation, `shared/` for cross-stage utilities,
+  `core/` for main build stages, `repairs/` for local geometry repair passes,
+  `validation/` for reporting/gates, and `output/` for final artifact assembly.
+  Keep extractions small and behavior-preserving.
 - Helper files either implement reusable geometry operations or encode
   location-specific map fixes. Many helpers intentionally contain local subway
   knowledge that should not be erased during cleanup.
@@ -133,41 +137,41 @@ Categories:
 | `frontend/scripts/regenerate-canonical-from-gtfs.ts` | 14.9 KB / 532 lines | `package.json`, visual orchestrator, palette check, characterization test | yes | yes | Migrated TypeScript entrypoint | done |
 | `frontend/scripts/regenerate-canonical-from-gtfs.test.ts` | 4.0 KB / 100 lines | none | n/a | no | Migrated characterization test | done |
 | `frontend/scripts/build-subway-visual-network.ts` | 19.3 KB / 462 lines | `package.json`, renderer code, debug artifacts | no | yes | Migrated TypeScript entrypoint | decompose gradually |
-| `frontend/scripts/build/visual-network/route-config.ts` | 2.0 KB / 61 lines | visual orchestrator | no | no | Extracted TypeScript helper | done |
-| `frontend/scripts/build/visual-network/gtfs-ingest.ts` | 3.0 KB / 91 lines | visual orchestrator | no | no | Extracted TypeScript helper | done |
-| `frontend/scripts/build/visual-network/types.ts` | 446 B / 19 lines | visual orchestrator, visual-network helpers | no | no | Extracted shared TypeScript types | done |
-| `frontend/scripts/build/visual-network/geometry-utils.ts` | 9.5 KB / 271 lines | visual orchestrator, visual-network stages | no | no | Extracted TypeScript helper | done |
-| `frontend/scripts/build/visual-network/gtfs-topology.ts` | 4.4 KB / 146 lines | visual orchestrator | no | no | Extracted TypeScript helper | done |
-| `frontend/scripts/build/visual-network/branch-selection.ts` | 4.0 KB / 119 lines | visual orchestrator | no | no | Extracted TypeScript helper | done |
-| `frontend/scripts/build/visual-network/topology-edges.ts` | 3.5 KB / 118 lines | visual orchestrator | no | no | Extracted TypeScript helper | done |
-| `frontend/scripts/build/visual-network/gtfs-topology-stage.ts` | 5.6 KB / 192 lines | visual orchestrator | no | no | Extracted TypeScript stage | done |
-| `frontend/scripts/build/visual-network/diagnostics.ts` | 6.1 KB / 219 lines | visual orchestrator | no | no | Extracted TypeScript helper | done |
-| `frontend/scripts/build/visual-network/opendata-inputs.ts` | 4.5 KB / 133 lines | visual orchestrator | no | no | Extracted TypeScript stage | done |
-| `frontend/scripts/build/visual-network/opendata-visual-input-stage.ts` | 4.8 KB / 131 lines | visual orchestrator | no | yes | Extracted TypeScript OpenData visual input/debug stage | done |
-| `frontend/scripts/build/visual-network/bundle-stage.ts` | 24.7 KB / 594 lines | visual orchestrator | no | no | Extracted TypeScript stage | done |
-| `frontend/scripts/build/visual-network/artifact-metadata.ts` | 3.0 KB / 86 lines | visual orchestrator | no | no | Extracted TypeScript helper | done |
-| `frontend/scripts/build/visual-network/geometry-smoothing-pass.ts` | 1.8 KB / 58 lines | visual orchestrator | no | no | Extracted Tier 3 TypeScript pass | done |
-| `frontend/scripts/build/visual-network/tight-curve-simplification-pass.ts` | 1.5 KB / 47 lines | visual orchestrator | no | no | Extracted Tier 3 TypeScript pass | done |
-| `frontend/scripts/build/visual-network/same-route-endpoint-crossing-pass.ts` | 923 B / 27 lines | visual orchestrator | no | no | Extracted Tier 3 TypeScript pass | done |
-| `frontend/scripts/build/visual-network/same-color-junction-types.ts` | 289 B / 9 lines | same-color junction stage | no | no | Extracted TypeScript types | done |
-| `frontend/scripts/build/visual-network/same-color-junction-stage.ts` | 4.0 KB / 76 lines | visual orchestrator | no | no | Extracted Tier 3 TypeScript stage | done |
-| `frontend/scripts/build/visual-network/route-continuity-repair-types.ts` | 395 B / 12 lines | route-continuity repair stage | no | no | Extracted TypeScript types | done |
-| `frontend/scripts/build/visual-network/route-continuity-repair-stage.ts` | 4.8 KB / 97 lines | visual repair pipeline stage | no | no | Extracted Tier 3 TypeScript stage | done |
-| `frontend/scripts/build/visual-network/authored-location-patches-stage.ts` | 6.1 KB / 106 lines | visual repair pipeline stage | no | no | Extracted Tier 3 TypeScript stage | done |
-| `frontend/scripts/build/visual-network/mott-haven-stage.ts` | 16.2 KB / 278 lines | visual repair pipeline stage | no | no | Extracted Tier 3 TypeScript stage | done |
-| `frontend/scripts/build/visual-network/post-mott-local-fixes-stage.ts` | 2.6 KB / 50 lines | visual repair pipeline stage | no | no | Extracted Tier 3 TypeScript stage | done |
-| `frontend/scripts/build/visual-network/terminal-overhang-trim-stage.ts` | 2.8 KB / 68 lines | visual repair pipeline stage | no | no | Extracted Tier 3 TypeScript stage | done |
-| `frontend/scripts/build/visual-network/artifact-writer-stage.ts` | 2.2 KB / 66 lines | visual orchestrator | no | yes | Extracted TypeScript artifact writer stage | done |
-| `frontend/scripts/build/visual-network/final-reporting-stage.ts` | 1.7 KB / 41 lines | visual orchestrator | no | no | Extracted TypeScript reporting stage | done |
-| `frontend/scripts/build/visual-network/validation-reporting-stage.ts` | 22.7 KB / 574 lines | visual orchestrator | no | yes | Extracted TypeScript validation/reporting stage | done |
-| `frontend/scripts/build/visual-network/validation-reporting-types.ts` | 1.6 KB / 54 lines | validation reporting stage | no | no | Extracted TypeScript validation/reporting types | done |
-| `frontend/scripts/build/visual-network/dekalb-same-color-collapse-stage.ts` | 13.0 KB / 216 lines | visual repair pipeline stage | no | no | Extracted Tier 3 TypeScript local geometry stage | done |
-| `frontend/scripts/build/visual-network/visual-repair-pipeline-stage.ts` | 2.7 KB / 95 lines | visual orchestrator | no | no | Extracted Tier 3 TypeScript repair pipeline facade | done |
-| `frontend/scripts/build/visual-network/phase-3c-lane-continuity-stage.ts` | 14.8 KB / 304 lines | visual orchestrator | no | yes | Extracted TypeScript lane-continuity promotion/cleanup stage | done |
-| `frontend/scripts/build/visual-network/phase-3d-same-color-merge-stage.ts` | 8.3 KB / 207 lines | visual orchestrator | no | yes | Extracted TypeScript same-color merge stage | done |
-| `frontend/scripts/build/visual-network/stage-d-spine-prep-stage.ts` | 19.0 KB / 435 lines | visual orchestrator | no | yes | Extracted TypeScript spine/physical-bundle prep stage | done |
-| `frontend/scripts/build/visual-network/corridor-metadata-stage.ts` | 8.6 KB / 241 lines | visual orchestrator | no | no | Extracted TypeScript junction/lane metadata stage | done |
-| `frontend/scripts/build/visual-network/lane-offset-finalization-stage.ts` | 11.2 KB / 261 lines | visual orchestrator | no | yes | Extracted TypeScript lane offset finalization stage | done |
+| `frontend/scripts/build/visual-network/shared/route-config.ts` | 2.0 KB / 61 lines | visual orchestrator | no | no | Extracted TypeScript helper | done |
+| `frontend/scripts/build/visual-network/inputs/gtfs-ingest.ts` | 3.0 KB / 91 lines | visual orchestrator | no | no | Extracted TypeScript helper | done |
+| `frontend/scripts/build/visual-network/shared/types.ts` | 446 B / 19 lines | visual orchestrator, visual-network helpers | no | no | Extracted shared TypeScript types | done |
+| `frontend/scripts/build/visual-network/shared/geometry-utils.ts` | 9.5 KB / 271 lines | visual orchestrator, visual-network stages | no | no | Extracted TypeScript helper | done |
+| `frontend/scripts/build/visual-network/inputs/gtfs-topology.ts` | 4.4 KB / 146 lines | visual orchestrator | no | no | Extracted TypeScript helper | done |
+| `frontend/scripts/build/visual-network/inputs/branch-selection.ts` | 4.0 KB / 119 lines | visual orchestrator | no | no | Extracted TypeScript helper | done |
+| `frontend/scripts/build/visual-network/inputs/topology-edges.ts` | 3.5 KB / 118 lines | visual orchestrator | no | no | Extracted TypeScript helper | done |
+| `frontend/scripts/build/visual-network/inputs/gtfs-topology-stage.ts` | 5.6 KB / 192 lines | visual orchestrator | no | no | Extracted TypeScript stage | done |
+| `frontend/scripts/build/visual-network/shared/diagnostics.ts` | 6.1 KB / 219 lines | visual orchestrator | no | no | Extracted TypeScript helper | done |
+| `frontend/scripts/build/visual-network/inputs/opendata-inputs.ts` | 4.5 KB / 133 lines | visual orchestrator | no | no | Extracted TypeScript stage | done |
+| `frontend/scripts/build/visual-network/inputs/opendata-visual-input-stage.ts` | 4.8 KB / 131 lines | visual orchestrator | no | yes | Extracted TypeScript OpenData visual input/debug stage | done |
+| `frontend/scripts/build/visual-network/core/bundle-stage.ts` | 24.7 KB / 594 lines | visual orchestrator | no | no | Extracted TypeScript stage | done |
+| `frontend/scripts/build/visual-network/output/artifact-metadata.ts` | 3.0 KB / 86 lines | visual orchestrator | no | no | Extracted TypeScript helper | done |
+| `frontend/scripts/build/visual-network/repairs/geometry-smoothing-pass.ts` | 1.8 KB / 58 lines | visual orchestrator | no | no | Extracted Tier 3 TypeScript pass | done |
+| `frontend/scripts/build/visual-network/repairs/tight-curve-simplification-pass.ts` | 1.5 KB / 47 lines | visual orchestrator | no | no | Extracted Tier 3 TypeScript pass | done |
+| `frontend/scripts/build/visual-network/repairs/same-route-endpoint-crossing-pass.ts` | 923 B / 27 lines | visual orchestrator | no | no | Extracted Tier 3 TypeScript pass | done |
+| `frontend/scripts/build/visual-network/repairs/same-color-junction-types.ts` | 289 B / 9 lines | same-color junction stage | no | no | Extracted TypeScript types | done |
+| `frontend/scripts/build/visual-network/repairs/same-color-junction-stage.ts` | 4.0 KB / 76 lines | visual orchestrator | no | no | Extracted Tier 3 TypeScript stage | done |
+| `frontend/scripts/build/visual-network/repairs/route-continuity-repair-types.ts` | 395 B / 12 lines | route-continuity repair stage | no | no | Extracted TypeScript types | done |
+| `frontend/scripts/build/visual-network/repairs/route-continuity-repair-stage.ts` | 4.8 KB / 97 lines | visual repair pipeline stage | no | no | Extracted Tier 3 TypeScript stage | done |
+| `frontend/scripts/build/visual-network/repairs/authored-location-patches-stage.ts` | 6.1 KB / 106 lines | visual repair pipeline stage | no | no | Extracted Tier 3 TypeScript stage | done |
+| `frontend/scripts/build/visual-network/repairs/mott-haven-stage.ts` | 16.2 KB / 278 lines | visual repair pipeline stage | no | no | Extracted Tier 3 TypeScript stage | done |
+| `frontend/scripts/build/visual-network/repairs/post-mott-local-fixes-stage.ts` | 2.6 KB / 50 lines | visual repair pipeline stage | no | no | Extracted Tier 3 TypeScript stage | done |
+| `frontend/scripts/build/visual-network/repairs/terminal-overhang-trim-stage.ts` | 2.8 KB / 68 lines | visual repair pipeline stage | no | no | Extracted Tier 3 TypeScript stage | done |
+| `frontend/scripts/build/visual-network/output/artifact-writer-stage.ts` | 2.2 KB / 66 lines | visual orchestrator | no | yes | Extracted TypeScript artifact writer stage | done |
+| `frontend/scripts/build/visual-network/validation/final-reporting-stage.ts` | 1.7 KB / 41 lines | visual orchestrator | no | no | Extracted TypeScript reporting stage | done |
+| `frontend/scripts/build/visual-network/validation/validation-reporting-stage.ts` | 22.7 KB / 574 lines | visual orchestrator | no | yes | Extracted TypeScript validation/reporting stage | done |
+| `frontend/scripts/build/visual-network/validation/validation-reporting-types.ts` | 1.6 KB / 54 lines | validation reporting stage | no | no | Extracted TypeScript validation/reporting types | done |
+| `frontend/scripts/build/visual-network/repairs/dekalb-same-color-collapse-stage.ts` | 13.0 KB / 216 lines | visual repair pipeline stage | no | no | Extracted Tier 3 TypeScript local geometry stage | done |
+| `frontend/scripts/build/visual-network/core/visual-repair-pipeline-stage.ts` | 2.7 KB / 95 lines | visual orchestrator | no | no | Extracted Tier 3 TypeScript repair pipeline facade | done |
+| `frontend/scripts/build/visual-network/core/phase-3c-lane-continuity-stage.ts` | 14.8 KB / 304 lines | visual orchestrator | no | yes | Extracted TypeScript lane-continuity promotion/cleanup stage | done |
+| `frontend/scripts/build/visual-network/core/phase-3d-same-color-merge-stage.ts` | 8.3 KB / 207 lines | visual orchestrator | no | yes | Extracted TypeScript same-color merge stage | done |
+| `frontend/scripts/build/visual-network/core/stage-d-spine-prep-stage.ts` | 19.0 KB / 435 lines | visual orchestrator | no | yes | Extracted TypeScript spine/physical-bundle prep stage | done |
+| `frontend/scripts/build/visual-network/core/corridor-metadata-stage.ts` | 8.6 KB / 241 lines | visual orchestrator | no | no | Extracted TypeScript junction/lane metadata stage | done |
+| `frontend/scripts/build/visual-network/core/lane-offset-finalization-stage.ts` | 11.2 KB / 261 lines | visual orchestrator | no | yes | Extracted TypeScript lane offset finalization stage | done |
 | `frontend/scripts/build/schematic-hairpin-arc.ts` | 5.3 KB / 129 lines | visual orchestrator | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/parallel-offset-cross-color.ts` | 8.1 KB / 240 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
 | `frontend/scripts/build/lane-continuity-filter.ts` | 7.3 KB / 187 lines | visual orchestrator, colocated test | yes | no | Migrated TypeScript helper | done |
@@ -261,17 +265,17 @@ Wait until after an orchestrator migration plan:
 
 The visual-network orchestrator is now TypeScript and should be reduced through
 small extraction batches. Batch 27 extracted pure route/color configuration into
-`frontend/scripts/build/visual-network/route-config.ts`. Batch 28 extracted
+`frontend/scripts/build/visual-network/shared/route-config.ts`. Batch 28 extracted
 pure GTFS ZIP/CSV parsing into
-`frontend/scripts/build/visual-network/gtfs-ingest.ts`. Batch 29 extracted
+`frontend/scripts/build/visual-network/inputs/gtfs-ingest.ts`. Batch 29 extracted
 pure GTFS row-to-map topology builders into
-`frontend/scripts/build/visual-network/gtfs-topology.ts`. Batch 30 extracted
+`frontend/scripts/build/visual-network/inputs/gtfs-topology.ts`. Batch 30 extracted
 pure branch aggregation and canonical branch selection into
-`frontend/scripts/build/visual-network/branch-selection.ts`. Batch 31 extracted
+`frontend/scripts/build/visual-network/inputs/branch-selection.ts`. Batch 31 extracted
 pure topology edge feature construction into
-`frontend/scripts/build/visual-network/topology-edges.ts`. Batch 32 extracted
+`frontend/scripts/build/visual-network/inputs/topology-edges.ts`. Batch 32 extracted
 the coordinated GTFS topology stage into
-`frontend/scripts/build/visual-network/gtfs-topology-stage.ts`. The next
+`frontend/scripts/build/visual-network/inputs/gtfs-topology-stage.ts`. The next
 autonomous decomposition pass extracted shared visual-network feature types,
 pure geometry utilities, pure diagnostics helpers, and the OpenData corridor
 input stage into `types.ts`, `geometry-utils.ts`, `diagnostics.ts`, and

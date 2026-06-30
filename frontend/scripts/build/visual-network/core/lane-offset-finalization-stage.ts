@@ -3,13 +3,13 @@ import {
   detectCrossColorAdjacency,
   findSharedArcExtent,
   offsetPolylineOverExtent,
-} from "../cross-color-spread.ts";
-import { BUNDLE_COLOR_ORDER } from "../lane-order.ts";
+} from "../../cross-color-spread.ts";
+import { BUNDLE_COLOR_ORDER } from "../../lane-order.ts";
 import {
   LANE_WIDTH_METERS,
   offsetPolylineByLaneSlot,
-} from "./geometry-utils.ts";
-import type { LineFeature } from "./types.ts";
+} from "../shared/geometry-utils.ts";
+import type { LineFeature } from "../shared/types.ts";
 
 type LaneOffsetFinalizationBundleArtifacts = {
   visualFeatures: LineFeature[];

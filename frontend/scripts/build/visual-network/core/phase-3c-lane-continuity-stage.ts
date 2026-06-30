@@ -1,15 +1,15 @@
 import { writeFileSync } from "node:fs";
-import { buildBranchTransitions } from "../branch-transitions.ts";
-import { filterBogusTransitions, markOrphanLanes, removeOrphanErrorLanes } from "../lane-continuity-filter.ts";
+import { buildBranchTransitions } from "../../branch-transitions.ts";
+import { filterBogusTransitions, markOrphanLanes, removeOrphanErrorLanes } from "../../lane-continuity-filter.ts";
 import {
   assertNoBogusTransitions,
   assertQContinuousInBrooklyn,
   assertOriginsForRedGreenFlatbushEastern,
-} from "../spine-validation.ts";
-import { LANE_WIDTH_METERS } from "./geometry-utils.ts";
-import type { StopsById } from "./gtfs-topology.ts";
-import { compareRouteIds } from "./route-config.ts";
-import type { LineFeature } from "./types.ts";
+} from "../../spine-validation.ts";
+import { LANE_WIDTH_METERS } from "../shared/geometry-utils.ts";
+import type { StopsById } from "../inputs/gtfs-topology.ts";
+import { compareRouteIds } from "../shared/route-config.ts";
+import type { LineFeature } from "../shared/types.ts";
 import { routesForColor } from "./bundle-stage.ts";
 
 type Phase3cLaneContinuityBundleArtifacts = {

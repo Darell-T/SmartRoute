@@ -1,5 +1,5 @@
 import { writeFileSync } from "node:fs";
-import { loadOpenDataSubwayLines, OPEN_DATA_SOURCE_DATASET_ID, OPEN_DATA_SOURCE_NAME } from "../opendata-subway-lines.ts";
+import { loadOpenDataSubwayLines, OPEN_DATA_SOURCE_DATASET_ID, OPEN_DATA_SOURCE_NAME } from "../../opendata-subway-lines.ts";
 import { buildOpenDataInputsStage } from "./opendata-inputs.ts";
 
 type OpenDataVisualInputStageInput = {

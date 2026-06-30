@@ -1,4 +1,4 @@
-import type { Feature, LineStringGeometry, Position } from "../types.ts";
+import type { Feature, LineStringGeometry, Position } from "../../types.ts";
 import type { StopsById } from "./gtfs-topology.ts";
 
 type GeometryStats = {

@@ -1,13 +1,13 @@
-import { collapseSameColorOverlaps } from "../collapse-same-color.ts";
-import { parallelOffsetCrossColor } from "../parallel-offset-cross-color.ts";
-import { smoothSharpCorners } from "../smooth-polyline.ts";
-import { suppressShadowOrphans } from "../suppress-shadow-orphans.ts";
+import { collapseSameColorOverlaps } from "../../collapse-same-color.ts";
+import { parallelOffsetCrossColor } from "../../parallel-offset-cross-color.ts";
+import { smoothSharpCorners } from "../../smooth-polyline.ts";
+import { suppressShadowOrphans } from "../../suppress-shadow-orphans.ts";
 import { applyGeometrySmoothingPass } from "./geometry-smoothing-pass.ts";
-import { geometryStats } from "./geometry-utils.ts";
+import { geometryStats } from "../shared/geometry-utils.ts";
 import { applySameColorJunctionStage } from "./same-color-junction-stage.ts";
 import { applySameRouteEndpointCrossingPass } from "./same-route-endpoint-crossing-pass.ts";
 import { applyTightCurveSimplificationPass } from "./tight-curve-simplification-pass.ts";
-import type { LineFeature, Position } from "./types.ts";
+import type { LineFeature, Position } from "../shared/types.ts";
 
 type DekalbSameColorCollapseStageInput = {
   bundleArtifacts: {

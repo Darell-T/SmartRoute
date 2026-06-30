@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
-import { bridgeRouteGaps } from "../bridge-route-gaps.ts";
-import { simplifyTightCurves } from "../simplify-tight-curves.ts";
-import { smoothSharpCorners } from "../smooth-polyline.ts";
-import { snapOffRevenueToShape } from "../snap-off-revenue-to-shape.ts";
+import { bridgeRouteGaps } from "../../bridge-route-gaps.ts";
+import { simplifyTightCurves } from "../../simplify-tight-curves.ts";
+import { smoothSharpCorners } from "../../smooth-polyline.ts";
+import { snapOffRevenueToShape } from "../../snap-off-revenue-to-shape.ts";
 import type { RouteContinuityRepairStageInput } from "./route-continuity-repair-types.ts";
 
 export function applyRouteContinuityRepairStage({

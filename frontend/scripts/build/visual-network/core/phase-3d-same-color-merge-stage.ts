@@ -1,7 +1,7 @@
 import { writeFileSync } from "node:fs";
-import { groupCorridorsByColorAndOverlap, mergeSameColorGroup } from "../same-color-merge.ts";
-import { compareRouteIds, routeColorFor } from "./route-config.ts";
-import type { LineFeature, Position } from "./types.ts";
+import { groupCorridorsByColorAndOverlap, mergeSameColorGroup } from "../../same-color-merge.ts";
+import { compareRouteIds, routeColorFor } from "../shared/route-config.ts";
+import type { LineFeature, Position } from "../shared/types.ts";
 
 type Phase3dSameColorMergeStageInput = {
   corridorFeatures: LineFeature[];

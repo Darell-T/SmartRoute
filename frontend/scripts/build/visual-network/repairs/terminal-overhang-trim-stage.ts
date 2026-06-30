@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
-import { trimTerminalOverhang } from "../trim-terminal-overhang.ts";
-import type { LineFeature } from "./types.ts";
+import { trimTerminalOverhang } from "../../trim-terminal-overhang.ts";
+import type { LineFeature } from "../shared/types.ts";
 
 type TerminalOverhangTrimBundleArtifacts = {
   visualFeatures: LineFeature[];

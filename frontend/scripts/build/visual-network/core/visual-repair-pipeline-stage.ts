@@ -1,12 +1,12 @@
-import { applyAuthoredLocationPatchesStage } from "./authored-location-patches-stage.ts";
-import { applyDekalbSameColorCollapseStage } from "./dekalb-same-color-collapse-stage.ts";
-import { applyMottHavenStage } from "./mott-haven-stage.ts";
-import { applyPostMottLocalFixesStage } from "./post-mott-local-fixes-stage.ts";
-import { applyRouteContinuityRepairStage } from "./route-continuity-repair-stage.ts";
-import { applyTerminalOverhangTrimStage } from "./terminal-overhang-trim-stage.ts";
-import type { BranchesByRoute } from "./branch-selection.ts";
-import type { StopsById } from "./gtfs-topology.ts";
-import type { LineFeature } from "./types.ts";
+import { applyAuthoredLocationPatchesStage } from "../repairs/authored-location-patches-stage.ts";
+import { applyDekalbSameColorCollapseStage } from "../repairs/dekalb-same-color-collapse-stage.ts";
+import { applyMottHavenStage } from "../repairs/mott-haven-stage.ts";
+import { applyPostMottLocalFixesStage } from "../repairs/post-mott-local-fixes-stage.ts";
+import { applyRouteContinuityRepairStage } from "../repairs/route-continuity-repair-stage.ts";
+import { applyTerminalOverhangTrimStage } from "../repairs/terminal-overhang-trim-stage.ts";
+import type { BranchesByRoute } from "../inputs/branch-selection.ts";
+import type { StopsById } from "../inputs/gtfs-topology.ts";
+import type { LineFeature } from "../shared/types.ts";
 
 type VisualRepairPipelineBundleArtifacts = {
   visualFeatures: LineFeature[];

@@ -3,9 +3,9 @@ import {
   buildRouteIncidentCounts,
   buildVisualAnomalyRecords,
   buildVisualRouteIncidentCounts,
-} from "./diagnostics.ts";
-import { geometryStats } from "./geometry-utils.ts";
-import type { LineFeature } from "./types.ts";
+} from "../shared/diagnostics.ts";
+import { geometryStats } from "../shared/geometry-utils.ts";
+import type { LineFeature } from "../shared/types.ts";
 import type {
   RouteConnectivityFailure,
   RouteConnectivityStat,

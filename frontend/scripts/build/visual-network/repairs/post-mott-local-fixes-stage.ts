@@ -1,7 +1,7 @@
-import { connectRockawayWye } from "../rockaway-wye.ts";
-import { addSixtyThirdStreetF } from "../sixty-third-street-f.ts";
-import { cleanStatenIslandLine } from "../staten-island-cleanup.ts";
-import type { LineFeature } from "./types.ts";
+import { connectRockawayWye } from "../../rockaway-wye.ts";
+import { addSixtyThirdStreetF } from "../../sixty-third-street-f.ts";
+import { cleanStatenIslandLine } from "../../staten-island-cleanup.ts";
+import type { LineFeature } from "../shared/types.ts";
 
 type PostMottLocalFixesBundleArtifacts = {
   visualFeatures: LineFeature[];
