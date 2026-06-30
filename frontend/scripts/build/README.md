@@ -132,7 +132,7 @@ Categories:
 | `frontend/eslint.config.mjs` | 1.0 KB / 37 lines | none | no | no | Keep as `.mjs` | keep `.mjs` |
 | `frontend/scripts/regenerate-canonical-from-gtfs.ts` | 14.9 KB / 532 lines | `package.json`, visual orchestrator, palette check, characterization test | yes | yes | Migrated TypeScript entrypoint | done |
 | `frontend/scripts/regenerate-canonical-from-gtfs.test.ts` | 4.0 KB / 100 lines | none | n/a | no | Migrated characterization test | done |
-| `frontend/scripts/build-subway-visual-network.ts` | 24.0 KB / 555 lines | `package.json`, renderer code, debug artifacts | no | yes | Migrated TypeScript entrypoint | decompose gradually |
+| `frontend/scripts/build-subway-visual-network.ts` | 19.3 KB / 462 lines | `package.json`, renderer code, debug artifacts | no | yes | Migrated TypeScript entrypoint | decompose gradually |
 | `frontend/scripts/build/visual-network/route-config.ts` | 2.0 KB / 61 lines | visual orchestrator | no | no | Extracted TypeScript helper | done |
 | `frontend/scripts/build/visual-network/gtfs-ingest.ts` | 3.0 KB / 91 lines | visual orchestrator | no | no | Extracted TypeScript helper | done |
 | `frontend/scripts/build/visual-network/types.ts` | 446 B / 19 lines | visual orchestrator, visual-network helpers | no | no | Extracted shared TypeScript types | done |
@@ -143,6 +143,7 @@ Categories:
 | `frontend/scripts/build/visual-network/gtfs-topology-stage.ts` | 5.6 KB / 192 lines | visual orchestrator | no | no | Extracted TypeScript stage | done |
 | `frontend/scripts/build/visual-network/diagnostics.ts` | 6.1 KB / 219 lines | visual orchestrator | no | no | Extracted TypeScript helper | done |
 | `frontend/scripts/build/visual-network/opendata-inputs.ts` | 4.5 KB / 133 lines | visual orchestrator | no | no | Extracted TypeScript stage | done |
+| `frontend/scripts/build/visual-network/opendata-visual-input-stage.ts` | 4.8 KB / 131 lines | visual orchestrator | no | yes | Extracted TypeScript OpenData visual input/debug stage | done |
 | `frontend/scripts/build/visual-network/bundle-stage.ts` | 24.7 KB / 594 lines | visual orchestrator | no | no | Extracted TypeScript stage | done |
 | `frontend/scripts/build/visual-network/artifact-metadata.ts` | 3.0 KB / 86 lines | visual orchestrator | no | no | Extracted TypeScript helper | done |
 | `frontend/scripts/build/visual-network/geometry-smoothing-pass.ts` | 1.8 KB / 58 lines | visual orchestrator | no | no | Extracted Tier 3 TypeScript pass | done |

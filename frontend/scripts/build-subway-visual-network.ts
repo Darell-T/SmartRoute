@@ -22,7 +22,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import {
-  loadOpenDataSubwayLines,
   OPEN_DATA_SOURCE_DATASET_ID,
   OPEN_DATA_SOURCE_NAME,
 } from "./build/opendata-subway-lines.ts";
@@ -39,7 +38,7 @@ import {
   RESAMPLE_INTERVAL_M,
   geometryStats,
 } from "./build/visual-network/geometry-utils.ts";
-import { buildOpenDataInputsStage } from "./build/visual-network/opendata-inputs.ts";
+import { buildOpenDataVisualInputStage } from "./build/visual-network/opendata-visual-input-stage.ts";
 import { buildCorridorMetadataStage } from "./build/visual-network/corridor-metadata-stage.ts";
 import { applyPhase3dSameColorMergeStage } from "./build/visual-network/phase-3d-same-color-merge-stage.ts";
 import { buildStageDSpinePrepStage } from "./build/visual-network/stage-d-spine-prep-stage.ts";
@@ -237,87 +236,9 @@ mkdirSync(dirname(OUT_TOPOLOGY_JSON), { recursive: true });
 writeFileSync(OUT_TOPOLOGY_JSON, `${JSON.stringify(topologyDoc, null, 2)}\n`);
 console.log(`[visual-network] wrote ${OUT_TOPOLOGY_JSON}`);
 
-// =====================================================================
-// Phase 2B - OpenData visual line geometry + GTFS topology edges
-// =====================================================================
-//
-// GTFS remains the topology source: branch stop sequences drive connectivity
-// validation, station markers, and route coverage. Visual line geometry no
-// longer comes from stop-pair slices of GTFS shapes.txt. The State of NY / MTA
-// OpenData Subway Service Lines GeoJSON provides full visual polylines, which
-// become render corridors directly.
-console.log("[visual-network] Gate 2B - loading NYC OpenData subway line geometry");
-
 const SPARSE_LONG_SLICE_M = 300;
 const MAX_SEGMENT_ANOMALY_M = 250;
 const PROJECTION_ANOMALY_M = 125;
-
-const openDataLines = loadOpenDataSubwayLines(OPEN_DATA_LINES_PATH, {
-  expectedRouteIds: expectedOpenDataRouteIds,
-  minFragmentLengthM: OPEN_DATA_MIN_FRAGMENT_LENGTH_M,
-});
-const opendataLineFeatures = openDataLines.features.map((feature, index) => ({
-  ...feature,
-  properties: {
-    ...feature.properties,
-    opendata_line_id: `opendata-${String(index + 1).padStart(5, "0")}`,
-  },
-}));
-
-const edgesDoc = {
-  type: "FeatureCollection",
-  metadata: {
-    generated_at: new Date().toISOString(),
-    source: "build-subway-visual-network.mjs Gate 2B OpenData normalized lines",
-    parameters: {
-      visual_geometry_source: OPEN_DATA_SOURCE_NAME,
-      visual_geometry_source_dataset_id: OPEN_DATA_SOURCE_DATASET_ID,
-      raw_opendata_path: "frontend/public/subway-lines-nyc-opendata.geojson",
-      shape_selection_strategy: "nyc_opendata_full_lines",
-    },
-    diagnostics: {
-      ...openDataLines.diagnostics,
-      ...topologyEdgeDiagnostics,
-    },
-  },
-  features: opendataLineFeatures,
-};
-writeFileSync(OUT_OPENDATA_LINES_GEOJSON, `${JSON.stringify(edgesDoc)}\n`);
-writeFileSync(OUT_EDGES_GEOJSON, `${JSON.stringify(edgesDoc)}\n`);
-console.log(`[visual-network] wrote ${OUT_OPENDATA_LINES_GEOJSON}`);
-console.log(`[visual-network] wrote ${OUT_EDGES_GEOJSON}`);
-console.log(
-  `[visual-network] OpenData source features: ${openDataLines.diagnostics.source_feature_count}`,
-);
-console.log(
-  `[visual-network] OpenData normalized line features: ${openDataLines.diagnostics.normalized_feature_count}`,
-);
-console.log(
-  `[visual-network] OpenData represented routes: ${openDataLines.diagnostics.represented_route_ids.join(",")}`,
-);
-console.log(
-  `[visual-network] OpenData missing expected routes: ${openDataLines.diagnostics.missing_expected_route_ids.join(",") || "none"}`,
-);
-console.log(
-  `[visual-network] OpenData alias applications: ${JSON.stringify(openDataLines.diagnostics.alias_applications)}`,
-);
-console.log(
-  `[visual-network] GTFS topology edges for validation: ${topologyEdgeDiagnostics.topology_edges_emitted}`,
-);
-
-console.log(
-  `[visual-network] expected topology edges: ${expectedEdges} (emitted: ${topologyEdgeDiagnostics.topology_edges_emitted}, retention ${(topologyEdgeDiagnostics.topology_edges_emitted / Math.max(1, expectedEdges) * 100).toFixed(1)}%)`,
-);
-// =====================================================================
-// Phase 2C - OpenData corridors + overlap sanity diagnostics
-// =====================================================================
-//
-// NYC OpenData already carries route membership on full visual line geometry.
-// Gate 2C is therefore no longer a merge step. It converts normalized OpenData
-// lines into corridor features and writes diagnostics for suspicious overlaps
-// where separate OpenData features appear to share track without sharing route
-// ids.
-console.log("[visual-network] Gate 2C - OpenData corridor normalization");
 
 const OVERLAP_MIN_RATIO = 0.6;
 const TANGENT_MAX_DIFF_DEG = 30;
@@ -371,38 +292,24 @@ const {
   matchedPairs,
   corridorFeatures,
   corridorRows,
-  opendataOverlapWarnings,
-} = buildOpenDataInputsStage({
-  opendataLineFeatures,
-  geometrySourceName: OPEN_DATA_SOURCE_NAME,
-  overlapMinRatio: OVERLAP_MIN_RATIO,
-  overlapSharedLenMinM: OVERLAP_SHARED_LEN_MIN_M,
-  containmentAvgDistanceMaxM: CONTAINMENT_AVG_DISTANCE_MAX_M,
-  tangentMaxDiffDeg: TANGENT_MAX_DIFF_DEG,
+} = buildOpenDataVisualInputStage({
+  openDataLinesPath: OPEN_DATA_LINES_PATH,
+  expectedOpenDataRouteIds,
+  expectedEdges,
+  topologyEdgeDiagnostics,
+  openDataMinFragmentLengthM: OPEN_DATA_MIN_FRAGMENT_LENGTH_M,
+  paths: {
+    opendataLinesGeoJson: OUT_OPENDATA_LINES_GEOJSON,
+    edgesGeoJson: OUT_EDGES_GEOJSON,
+    opendataOverlapsGeoJson: OUT_OPENDATA_OVERLAPS_GEOJSON,
+  },
+  parameters: {
+    overlapMinRatio: OVERLAP_MIN_RATIO,
+    overlapSharedLenMinM: OVERLAP_SHARED_LEN_MIN_M,
+    containmentAvgDistanceMaxM: CONTAINMENT_AVG_DISTANCE_MAX_M,
+    tangentMaxDiffDeg: TANGENT_MAX_DIFF_DEG,
+  },
 });
-
-writeFileSync(
-  OUT_OPENDATA_OVERLAPS_GEOJSON,
-  `${JSON.stringify({
-    type: "FeatureCollection",
-    metadata: {
-      generated_at: new Date().toISOString(),
-      source: "build-subway-visual-network.mjs Gate 2C OpenData overlap sanity check",
-      parameters: {
-        overlap_min_ratio: OVERLAP_MIN_RATIO,
-        shared_length_min_m: OVERLAP_SHARED_LEN_MIN_M,
-        avg_distance_max_m: CONTAINMENT_AVG_DISTANCE_MAX_M,
-        tangent_max_diff_deg: TANGENT_MAX_DIFF_DEG,
-      },
-      summary: {
-        warning_count: opendataOverlapWarnings.length,
-      },
-    },
-    features: opendataOverlapWarnings,
-  })}\n`,
-);
-console.log(`[visual-network] wrote ${OUT_OPENDATA_OVERLAPS_GEOJSON}`);
-console.log(`[visual-network] OpenData overlap warnings: ${opendataOverlapWarnings.length}`);
 const JUNCTION_SNAP_MAX_M = 25;
 
 const { junctionSnapDiagnostics, laneChainDiagnostics } = buildCorridorMetadataStage({
