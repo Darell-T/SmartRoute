@@ -8,9 +8,9 @@ import {
   useState,
 } from "react";
 
-type MobileRailSheetState = "hidden" | "peek" | "half" | "full";
+export type MobileRailSheetState = "hidden" | "peek" | "half" | "full";
 
-type MobileRailSheetController = {
+export type MobileRailSheetController = {
   mobileRailSheet: MobileRailSheetState;
   mobileRailSheetHeight: string;
   isMobileRailDragging: boolean;

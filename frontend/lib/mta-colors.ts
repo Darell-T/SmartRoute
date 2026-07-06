@@ -2,7 +2,7 @@ import tokens from "./mta-colors.json";
 
 // Single source of truth for MTA route -> line color (NYCT lettered/numbered
 // services + the Staten Island Railway). Shared by the runtime renderer, the
-// incident popups, and the build scripts (via scripts/build/mta-colors.mjs,
+// route bullets, and the build scripts (via scripts/build/mta-colors.mjs,
 // which reads the same JSON).
 //
 // Key conventions match the build pipeline's normalizeRouteId():

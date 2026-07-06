@@ -4,9 +4,8 @@
    Dev story page — SmartRoute Left Rail
 
    A standalone preview of the rail with a tweaks panel that mirrors the
-   prototype's. Visit `/dev/left-rail` to interact with all four ATLAS
-   states (standby / thinking / result / error) and all three tabs (Route /
-   Hub / Alerts).
+   prototype's. Visit `/dev/left-rail` to interact with all four route states
+   (standby / thinking / result / error) and both tabs (Route / Alerts).
 
    This page is dev-only — not linked from the production site. It exists
    so design + engineering can A/B against the prototype HTML mockup.
@@ -16,14 +15,14 @@ import { notFound } from "next/navigation";
 import { useState } from "react";
 import {
   LeftRail,
-  type JarvisState,
+  type RouteRailStatus,
 } from "@/components/smart-route/left-rail";
 import { DEMO_RAIL_DATA } from "@/components/smart-route/left-rail/demo-data";
 
-const STATES: JarvisState[] = ["standby", "thinking", "result", "error"];
+const STATES: RouteRailStatus[] = ["standby", "thinking", "result", "error"];
 
 export default function LeftRailStoryPage() {
-  const [jarvis, setJarvis] = useState<JarvisState>("result");
+  const [routeStatus, setRouteStatus] = useState<RouteRailStatus>("result");
   const [width, setWidth] = useState(400);
 
   // Dev-only route: hide it from production builds so the demo fixtures are
@@ -41,9 +40,13 @@ export default function LeftRailStoryPage() {
     >
       <LeftRail
         width={width}
-        jarvisState={jarvis}
-        onJarvisStateChange={setJarvis}
+        routeStatus={routeStatus}
+        onRouteStatusChange={setRouteStatus}
         data={DEMO_RAIL_DATA}
+        onSelectAlternative={() => {
+          // Story-only: the production handler promotes the candidate via
+          // useRoutePlanningController without replanning.
+        }}
       />
 
       {/* Tweaks panel — mirrors the prototype's design-time controls. */}
@@ -94,9 +97,8 @@ export default function LeftRailStoryPage() {
             marginBottom: 28,
           }}
         >
-          High-fidelity TSX port of the design handoff prototype. The orb is
-          the real three.js `AgentOrb`; line bullets are authentic MTA SVGs.
-          Switch ATLAS state and width to A/B against the original mockup.
+          High-fidelity TSX preview of the production rail. Line bullets are
+          authentic MTA SVGs; switch route status and width to inspect states.
         </p>
 
         <section style={{ marginBottom: 28 }}>
@@ -111,15 +113,15 @@ export default function LeftRailStoryPage() {
               marginBottom: 12,
             }}
           >
-            ATLAS state
+            Route status
           </h2>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             {STATES.map((s) => {
-              const active = jarvis === s;
+              const active = routeStatus === s;
               return (
                 <button
                   key={s}
-                  onClick={() => setJarvis(s)}
+                  onClick={() => setRouteStatus(s)}
                   style={{
                     background: active ? "#5FE3EA" : "#131A28",
                     color: active ? "#0A0E18" : "#ECEEF6",

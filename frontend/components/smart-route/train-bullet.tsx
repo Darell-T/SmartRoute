@@ -12,7 +12,7 @@ const BULLET_NAME_BY_ROUTE: Record<string, string> = {
   S: "s",
 };
 
-const SUBWAY_BULLET_ROUTES = new Set([
+export const SUBWAY_BULLET_ROUTES = new Set([
   "1", "2", "3", "4", "5", "6", "6X", "7", "7X",
   "A", "B", "C", "D", "E", "F", "FX", "G", "J", "L", "M",
   "N", "Q", "R", "W", "Z", "FS", "GS", "H", "S", "SI", "SIR",

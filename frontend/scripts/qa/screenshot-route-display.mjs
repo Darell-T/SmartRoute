@@ -30,7 +30,7 @@ await page.goto("http://localhost:3000/?subway-visual=1&qa-map=1", {
   waitUntil: "domcontentloaded",
   timeout: 60000,
 });
-await page.waitForFunction(() => typeof window.__jarvisMap !== "undefined", {
+await page.waitForFunction(() => typeof window.__smartRouteMap !== "undefined", {
   timeout: 60000,
   polling: 500,
 });
@@ -49,7 +49,7 @@ console.log("[qa] plan visible");
 // 3. Wait for narration to end (static display takes over).
 await page.waitForFunction(
   () => {
-    const map = window.__jarvisMap;
+    const map = window.__smartRouteMap;
     if (!map || !map.getLayer || !map.getLayer("sr-route-stop-dot")) return false;
     const feats = map.querySourceFeatures("sr-route-stops");
     return feats && feats.length > 0;
@@ -59,7 +59,7 @@ await page.waitForFunction(
 console.log("[qa] route stop features present");
 
 const ambientHidden = await page.evaluate(() => {
-  const map = window.__jarvisMap;
+  const map = window.__smartRouteMap;
   return map.getLayoutProperty("sr-subway-fill", "visibility");
 });
 console.log("[qa] ambient network visibility (expect none):", ambientHidden);
@@ -90,7 +90,7 @@ if (await clearBtn.count()) {
   await clearBtn.click();
   await page.waitForTimeout(2500);
   const restored = await page.evaluate(() => {
-    const map = window.__jarvisMap;
+    const map = window.__smartRouteMap;
     const visibility = map.getLayoutProperty("sr-subway-fill", "visibility");
     const feats = map.querySourceFeatures("sr-route-stops");
     return JSON.stringify({ visibility, routeStopCount: feats.length });
