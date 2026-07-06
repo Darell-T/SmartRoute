@@ -88,4 +88,7 @@ frontend/scripts/qa/screenshots/
 
 # Internal design/planning docs + agent session data (not for the deployed repo)
 docs/
+!docs/
+!docs/assets/
+!docs/assets/*.png
 .claude/
