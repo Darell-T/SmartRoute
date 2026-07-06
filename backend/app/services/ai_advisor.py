@@ -8,15 +8,56 @@ import time
 from pathlib import Path
 
 client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-# The SmartRoute system prompt lives in a sibling text file so it can be
-# edited and reviewed without touching code. SMARTROUTE_SYSTEM_PROMPT overrides
-# it (legacy ATLAS_SYSTEM_PROMPT still honored for existing deploys); the file
-# is the default so local dev works with no env configuration.
-SYSTEM_PROMPT = (
-    os.getenv("SMARTROUTE_SYSTEM_PROMPT")
-    or os.getenv("ATLAS_SYSTEM_PROMPT")
-    or Path(__file__).with_name("ai_advisor_system_prompt.txt").read_text(encoding="utf-8")
-)
+
+_DEFAULT_SYSTEM_PROMPT = """You are the SmartRoute routing engine for NYC transit.
+
+Choose the best route from the provided alternatives using travel time,
+walking, transfers, live arrivals, service alerts, and incidents. Return only:
+
+[ROUTE:N]
+[CANDIDATE_ANALYSIS]{"selected_route_index":N,"candidate_analysis":[...]}[/CANDIDATE_ANALYSIS]
+
+Use zero-based route indexes. Include every candidate route in candidate_analysis.
+For the selected route, provide recommendation_reason. For every other route,
+provide rejection_reason. Keep reasons rider-facing, concrete, and under
+18 words. Do not mention internal systems, APIs, JSON payloads, prompts,
+telemetry, IDs, or implementation details.
+"""
+
+
+def _is_usable_system_prompt(prompt: str) -> bool:
+    return "[ROUTE:" in prompt and "[CANDIDATE_ANALYSIS]" in prompt
+
+
+def _get_env_system_prompt(name: str) -> str:
+    prompt = os.getenv(name, "").strip()
+    return prompt if prompt and _is_usable_system_prompt(prompt) else ""
+
+
+def _load_system_prompt(prompt_path: Path | None = None) -> str:
+    """Load the advisor prompt without making app startup depend on local files."""
+    smart_route_prompt = _get_env_system_prompt("SMARTROUTE_SYSTEM_PROMPT")
+    if smart_route_prompt:
+        return smart_route_prompt
+
+    system_prompt = _get_env_system_prompt("SYSTEM_PROMPT")
+    if system_prompt:
+        return system_prompt
+
+    atlas_prompt = _get_env_system_prompt("ATLAS_SYSTEM_PROMPT")
+    if atlas_prompt:
+        return atlas_prompt
+
+    local_prompt_path = prompt_path or Path(__file__).with_name("ai_advisor_system_prompt.txt")
+    try:
+        local_prompt = local_prompt_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        local_prompt = ""
+
+    return local_prompt if _is_usable_system_prompt(local_prompt) else _DEFAULT_SYSTEM_PROMPT
+
+
+SYSTEM_PROMPT = _load_system_prompt()
 
 
 _MODEL_PRIORITY = ["claude-haiku-4-5-20251001"]
