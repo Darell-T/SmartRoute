@@ -1,137 +1,168 @@
 # SmartRoute
 
-SmartRoute is a real-time NYC transit assistant that combines live MTA data, AI route reasoning, and voice narration into a single interface. You tell it where you want to go. It pulls routes from Google, enriches every one of them with live train positions, service alerts, stalled vehicle detection, and breaking incidents near stations — then hands the full picture to Claude, which picks the absolute best route and explains why. Out loud, with a synchronized 3D map animation.
+Real-time NYC transit routing with live alerts, vehicle context, and incident-aware recommendations.
 
-It is not a wrapper around Google Maps. Google provides the route candidates. JARVIS layers on real-time intelligence that Google doesn't have — a train that hasn't moved in six minutes, a partial suspension on the D between 36 St and Atlantic, a fire near the Canal St station entrance that @NYCrimeNow tweeted about ten minutes before the MTA posts an alert — and Claude makes the final call with all of that context.
+![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=nextdotjs)
+![React](https://img.shields.io/badge/React-19-61dafb?logo=react&logoColor=111827)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178c6?logo=typescript&logoColor=white)
+![JavaScript](https://img.shields.io/badge/JavaScript-ESM-f7df1e?logo=javascript&logoColor=111827)
+![Python](https://img.shields.io/badge/Python-3.12-3776ab?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.129-009688?logo=fastapi&logoColor=white)
+![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-4-06b6d4?logo=tailwindcss&logoColor=white)
+![MapLibre](https://img.shields.io/badge/MapLibre_GL-5-396cb2?logo=maplibre&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-optional-4169e1?logo=postgresql&logoColor=white)
+![Redis](https://img.shields.io/badge/Redis-optional-dc382d?logo=redis&logoColor=white)
+![Vercel](https://img.shields.io/badge/Vercel-frontend-black?logo=vercel)
+![Render](https://img.shields.io/badge/Render-backend-46e3b7?logo=render&logoColor=111827)
 
-## What It Does
+![SmartRoute route planning dashboard](docs/assets/route_found.png)
 
-**Route selection with real-time intelligence.** Enter a destination in natural language ("Atlantic Terminal," "JFK," "774 Grand St"). JARVIS geocodes it, pulls transit route alternatives from Google Routes, then enriches every route with live MTA data. All routes — along with service alerts, stalled trains, stalled buses, and nearby incidents — are packaged together and sent to Claude. Claude evaluates the full picture and selects the best route. The response is three short sentences, specific enough to act on: "Take the Q from DeKalb. It's 4 minutes out, heading uptown. 16-minute ride, no alerts on the line."
+> SmartRoute combines scheduled transit data, MTA realtime feeds, service alerts, incidents, and vehicle context to recommend subway routes with passenger-facing explanations.
 
-**Voice narration.** Every recommendation is converted to speech via ElevenLabs. Audio plays automatically while the text reveals word-by-word in sync. Abbreviations are expanded before TTS so "Pkwy" becomes "Parkway" and "Av" becomes "Avenue."
+## Overview
 
-**Live incident intelligence.** A background job runs every ten minutes, using Grok to scan X accounts like @NYCrimeNow and @CitizenAppNYC for breaking incidents — fires, police activity, medical emergencies, water main breaks — within roughly 0.3 miles of any subway station. These incidents are included in the package sent to Claude, so route decisions account for ground-level conditions before the MTA officially reports them.
+SmartRoute is a real-time NYC transit planning app built around live transit context.
 
-**Real-time feed integration.** The backend consumes MTA GTFS-RT feeds (train positions, trip updates, arrival predictions), MTA service alerts (planned work, suspensions, delays with affected segments), and MTA BusTIME SIRI data (live bus positions and progress). Feed data is cached with 30–60 second TTL to balance freshness against rate limits.
+Instead of only showing a static shortest path, SmartRoute compares route options against scheduled GTFS data, GTFS-RT arrivals and vehicle feeds, MTA service alerts, nearby incidents, and generated subway map artifacts. The result is a route recommendation that explains why a trip is better right now, not just why it is shortest on paper.
 
-**Stalled vehicle detection.** If a train hasn't reported a new position in over five minutes, or a bus is stuck mid-route (not at a layover), JARVIS flags it. Claude sees this alongside service alerts and can steer you away from a line that looks fine on paper but has a train sitting dead between stations.
+The app is intentionally product-first: a dark NYC map, a compact left rail, station-grouped arrivals, issue-first service alerts, and route details that are designed to feel like a serious transit app rather than a generic chatbot.
 
-**Partial suspension awareness.** When the MTA suspends service on part of a line, JARVIS doesn't discard the entire line. It understands which segment is affected and Claude can route you through the working portion with a transfer or shuttle bus connection.
+## At a Glance
 
-**Apple-Maps-style subway map.** The full NYC subway system is rendered natively from GTFS and NYC OpenData geometry as a precomputed artifact. Shared trunks are split into parallel colored lanes with consistent baked offsets, then drawn with a four-layer stroke — dark ground shadow, near-black casing, bright color fill, and a faint inner sheen — plus zoom-interpolated widths and a dark gutter between adjacent colors, so bundled corridors read as distinct lines at every zoom instead of a tangle of overlapping strokes.
+| Area | Details |
+|---|---|
+| Product | NYC subway route planning, nearby transit, and service alert dashboard |
+| Frontend | Next.js, React, TypeScript, Tailwind CSS, MapLibre GL, deck.gl |
+| Backend | FastAPI, Python, PostgreSQL, WebSockets |
+| Transit Data | GTFS, GTFS-RT, MTA service alerts, MTA BusTime SIRI |
+| Route Intelligence | Live arrivals, service alerts, incidents, stalled vehicles, route ranking |
+| Map Pipeline | Generated subway network, station anchors, validation checks |
+| Deployment Shape | Frontend on Vercel, backend on Render-compatible FastAPI runtime |
 
-## What It Looks Like
+## Features
 
-The frontend is a full-screen MapLibre GL map on a premium dark basemap (muted CARTO Dark Matter) with native 3D buildings. The entire subway network is drawn in the Apple-Maps style described above — baked parallel lanes, casings, and round caps — so the map reads cleanly before any route is even requested.
+- **Real-time subway route planning:** Compare transit routes using live arrivals, route details, walking legs, and transfer context.
+- **Incident-aware recommendations:** Fold nearby incident scans, service alerts, and stalled vehicle context into route ranking.
+- **Station-grouped nearby transit:** Show nearby stations as parent groups with route bullets, destinations, and grouped arrival times.
+- **Compact bus support:** Keep bus rows visually distinct from subway bullets while preserving nearby transit context.
+- **Issue-first service alerts:** Surface important nearby disruptions first, then group broader alerts by line family.
+- **Interactive transit map:** Render the NYC subway network on a dark MapLibre map with route overlays, station labels, and endpoint markers.
+- **Generated map artifacts:** Build subway visual network and station-anchor artifacts from deterministic scripts instead of hand-editing shipped geometry.
+- **Secure live updates:** Mint short-lived, path-bound WebSocket tickets server-side so browser clients never receive the backend app key.
 
-A left rail (ATLAS) overlays the map with three views: a route brief with synchronized spoken narration, live next-arrivals (train and bus) for the nearest stations, and a service-alerts board. Live train positions stream over a WebSocket and animate as markers on the map.
+## Screenshots
 
-When a route loads:
+### Route Planning
 
-1. The camera flies to fit the full route, your location, and the destination
-2. Route segments draw in context — dashed for walking legs, MTA-colored lines for subway, distinct styling for bus
-3. Intermediate stops appear as labeled dots along the route
-4. Your position pulses as a cyan orb; the destination pulses red
+![Route planning to L'Industrie Pizzeria](docs/assets/route_found.png)
 
-On mobile, the rail collapses to keep the map visible and expands for full route detail.
+Planning a pizza run to L'Industrie Pizzeria with live route context, arrival timing, route alternatives, and a map preview.
+
+### Route Details
+
+![Detailed SmartRoute trip steps](docs/assets/route_steps.png)
+
+Step-by-step route details pair official subway route bullets with walking, boarding, ride, and arrival steps.
+
+### Alternate Routes
+
+![SmartRoute alternate route comparison](docs/assets/alt_routes.png)
+
+Alternates stay compact: riders can compare timing, reliability, transfers, and later departures without reading a wall of text.
+
+### Nearby Transit
+
+![Station-grouped nearby subway arrivals](docs/assets/nearby_arrivals.png)
+
+Nearby transit is grouped by station, with passenger-facing destinations, service patterns, walk distance, and live arrival times.
+
+### Service Alerts
+
+![SmartRoute service alerts](docs/assets/nearby_alerts.png)
+
+Service alerts are grouped around current issues and line families so riders can understand disruptions before opening details.
+
+## Engineering Highlights
+
+- **Static trip enrichment hot path:** Backend trip enrichment loads a precomputed stop-pattern index at startup, so route stop sequences do not depend on remote database lookups during the trip request path.
+- **Async startup and feed handling:** Slow database initialization, GTFS refresh work, realtime cache warming, and GTFS-RT protobuf parsing are kept off the request-critical path with background tasks and thread offloading.
+- **Route intelligence contract:** Route candidates, alerts, incidents, stalled trains, and stalled buses are normalized into a prompt contract that returns a selected route plus machine-readable candidate analysis.
+- **Live feed architecture:** FastAPI serves nearby arrivals, vehicles, service alerts, and incident context over REST and WebSocket endpoints.
+- **Path-bound WebSocket auth:** Next.js mints short-lived HMAC tickets tied to a specific WebSocket path; FastAPI verifies expiry, signature, and path before accepting a connection.
+- **Display adapters:** The left rail renders normalized display models for nearby arrivals, service alerts, planning status, and route details instead of parsing raw backend fields inline.
+- **Generated map pipeline:** Subway visual network, station anchors, route colors, and artifact manifests are generated and checked with TypeScript build scripts and runtime map checks.
+- **Guard tests:** Focused tests protect passenger-facing invariants such as no fake nearby rows, no legacy public copy, grouped arrivals, alert grouping, and route detail text.
+
+## Architecture
+
+```text
+MTA GTFS / GTFS-RT / Service Alerts / BusTime
+                  |
+                  v
+          FastAPI Backend
+  trips | live feed | alerts | vehicles | incidents
+                  |
+          REST + WebSocket APIs
+                  |
+                  v
+          Next.js Frontend
+  left rail | route planning | nearby transit | alerts
+                  |
+                  v
+          MapLibre Transit Map
+
+Offline Build Pipeline
+  GTFS + OpenData geometry
+        -> visual subway network
+        -> station anchors
+        -> artifact manifest
+        -> validation checks
+```
+
+Route planning starts with transit candidates, enriches each option with static stop patterns and live context, then ranks the candidates into a recommended route and compact alternatives. The frontend renders the result as route cards, map overlays, endpoint markers, and detail steps.
 
 ## Tech Stack
 
-| Layer | Technologies |
-|---|---|
-| Frontend | Next.js 16, React, TypeScript, MapLibre GL, deck.gl, MapTiler (3D buildings), Three.js |
-| Backend | FastAPI, Python, Uvicorn, PostgreSQL |
-| Data | Google Routes API, MTA GTFS / GTFS-RT, MTA BusTime SIRI, NYC OpenData (subway geometry) |
-| Realtime | WebSocket live feed with short-lived HMAC ticket auth |
-| AI | Anthropic Claude (route reasoning), xAI Grok (incident intelligence) |
-| Voice | ElevenLabs (text-to-speech) |
-| Cache | Redis (optional, in-memory fallback) |
-| Hosting | Vercel (frontend), Render (backend + PostgreSQL) |
+**Frontend:** Next.js 16, React 19, TypeScript, Tailwind CSS, MapLibre GL, deck.gl, Motion
 
-## Repository Structure
+**Backend:** FastAPI, Python, Uvicorn, PostgreSQL, Redis-compatible cache fallback
 
-```text
-.
-├─ frontend/                  # Next.js web app
-│  ├─ app/                    # App Router pages, layout, global CSS
-│  ├─ components/             # Map, route layers, station badges, orbs
-│  ├─ lib/api.ts              # Frontend API client
-│  └─ next.config.mjs         # Loads root + frontend env files
-├─ backend/                   # FastAPI service
-│  ├─ app/main.py             # App startup, CORS, GTFS lifecycle
-│  ├─ app/routers/            # API routes (/api/trip, /api/thinking)
-│  ├─ app/services/           # Directions, AI advisor, feeds, TTS, incidents
-│  ├─ app/utils/              # GTFS loader, cache wrapper, helpers
-│  └─ requirements.txt
-└─ README.md
-```
+**Transit Data:** MTA static GTFS, GTFS-RT feeds, MTA service alerts, MTA BusTime SIRI
 
-## Core Flow
+**Route Intelligence:** Google Routes candidates, live transit context, incident scanning, route ranking, recommendation reasoning
 
-1. Frontend sends `POST /api/trip` with the user's GPS coordinates and a destination string.
-2. Backend requests transit route alternatives from Google Routes (subway and bus only, preferring fewer transfers).
-3. For every route, the backend enriches each transit step with GTFS static data — intermediate stop sequences, line identification, station coordinates.
-4. In parallel, the backend fetches:
-   - MTA service alerts — suspensions, delays, planned work with affected route segments
-   - Stalled trains — vehicles on relevant lines that haven't reported a new position in 5+ minutes
-   - Stalled buses — buses stuck mid-route, not at layovers
-   - Incidents — breaking events near any station along the routes, sourced from social media via Grok
-5. Everything is packaged together — all route alternatives, service alerts, stalled vehicles, and incidents — and streamed to Claude.
-6. Claude evaluates the full context, selects the best route, and returns a three-sentence recommendation tagged with the chosen route index.
-7. ElevenLabs generates speech audio from the recommendation (with abbreviation expansion).
-8. Frontend receives the chosen route, recommendation text, audio, and alerts. It plays the audio, reveals text word-by-word, and animates the route on the 3D map.
+**Build Tooling:** TypeScript build scripts, generated GeoJSON artifacts, station anchors, validation checks
 
-## Environment Variables
+**Testing:** TypeScript typecheck, ESLint, Node/tsx tests, Python unittest/pytest-compatible backend tests
 
-Set these in your local `.env` and hosting providers.
+## Running Locally
 
-### Frontend (Vercel)
-
-| Variable | Required | Purpose |
-|---|---|---|
-| `NEXT_PUBLIC_API_URL` | Yes | Backend base URL used by the browser |
-| `NEXT_PUBLIC_MAPTILER_API_KEY` | Yes | Basemap tiles and 3D building tiles |
-| `NEXT_PUBLIC_MAPBOX_TOKEN` | Yes | Destination geocoding / search |
-| `APP_KEY` | Yes | Shared secret; the frontend signs short-lived WebSocket tickets with it |
-
-### Backend (Render / local backend process)
-
-| Variable | Required | Purpose |
-|---|---|---|
-| `APP_KEY` | Yes | Shared secret; the backend refuses to start without it. Gates the API and verifies WebSocket tickets |
-| `GOOGLE_ROUTES_API_KEY` | Yes | Google Directions v2 computeRoutes |
-| `ANTHROPIC_API_KEY` | Yes | Route recommendation text generation |
-| `ELEVENLABS_API_KEY` | Yes (for audio) | Text-to-speech audio generation |
-| `XAI_API_KEY` | Optional | Incident intelligence via Grok |
-| `MTA_BUS_API_KEY` | Yes (bus monitoring) | MTA Bus SIRI API access |
-| `DATABASE_URL` | Optional | PostgreSQL used for GTFS enrichment; without it the GTFS query path is skipped (`GTFS_DB_FALLBACK=1` enables a local fallback) |
-| `REDIS_URL` | Optional | Shared caching; fallback is in-memory |
-| `CORS_ORIGINS` | Yes in production | Allowed frontend origins |
-| `CORS_ORIGIN_REGEX` | Optional | Preview domain support |
-
-## Local Development
-
-### 1. Backend
+### Backend
 
 ```bash
 cd backend
 python -m venv .venv
-# Windows
-.venv\Scripts\activate
-# macOS/Linux
-source .venv/bin/activate
+```
 
+Windows PowerShell:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Backend health check:
+macOS/Linux:
 
 ```bash
-curl http://localhost:8000/health
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-### 2. Frontend
+The backend requires `APP_KEY` before startup. Add it to a local `.env` at the repository root or `backend/.env`.
+
+### Frontend
 
 ```bash
 cd frontend
@@ -139,118 +170,127 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:3000`.
+Open `http://localhost:3000`. The frontend proxies API calls to `http://localhost:8000` when `API_URL` / `NEXT_PUBLIC_API_URL` are not configured.
 
-## API Endpoints
+## Environment Variables
 
-### `POST /api/trip`
+Do not commit real secrets. Use local `.env` files and hosting provider environment settings.
 
-Request:
+| Variable | Used by | Required | Description |
+|---|---|---:|---|
+| `APP_KEY` | Frontend server routes + backend | Yes | Shared server-side secret for API proxy auth and signed WebSocket tickets. Never expose as `NEXT_PUBLIC_*`. |
+| `API_URL` | Frontend server routes | Production | Server-side FastAPI base URL used by Next.js route handlers. |
+| `NEXT_PUBLIC_API_URL` | Browser + frontend server fallback | Production | Public backend base URL when browser-visible clients need it. |
+| `NEXT_PUBLIC_MAPTILER_API_KEY` | Frontend map | Yes for basemap | MapTiler key for map tiles and 3D building layers. |
+| `NEXT_PUBLIC_MAPBOX_TOKEN` | Frontend search | Yes for destination search | Mapbox token for destination autocomplete and retrieval. |
+| `GOOGLE_ROUTES_API_KEY` | Backend | Yes for trip planning | Google Routes API key for transit route candidates. |
+| `ANTHROPIC_API_KEY` | Backend | Yes for hosted recommendation reasoning | Provider key used by the route recommendation service. |
+| `SMARTROUTE_SYSTEM_PROMPT` | Backend | Optional | Preferred environment override for the route-ranking system prompt. |
+| `SYSTEM_PROMPT` | Backend | Optional | Supported prompt override alias. |
+| `ELEVENLABS_API_KEY` | Backend | Optional | Required only if text-to-speech is enabled. |
+| `ENABLE_TTS` | Backend | Optional | Enables text-to-speech when set to `1`, `true`, or `yes`. |
+| `DISABLE_TTS` | Backend | Optional | Legacy local toggle for disabling text-to-speech. |
+| `XAI_API_KEY` | Backend | Optional | Enables external incident scanning when configured. |
+| `MTA_BUS_API_KEY` | Backend | Optional for buses | MTA BusTime SIRI key for bus monitoring. |
+| `DATABASE_URL` | Backend | Optional | PostgreSQL connection string for GTFS-related background/database paths. |
+| `REDIS_URL` | Backend | Optional | Shared cache URL; backend falls back to in-memory cache when absent. |
+| `CORS_ORIGIN_REGEX` | Backend | Optional | Regex for allowed preview origins. Production origin is configured in backend code. |
+| `GTFS_DB_FALLBACK` | Backend | Optional | Enables a local GTFS fallback path when set to `1`. |
+| `BACKEND_VERBOSE_LOGS` | Backend | Optional | Enables extra backend feed logs when set to `1`. |
 
-```json
-{
-  "origin_lat": 40.7412,
-  "origin_lng": -73.9896,
-  "destination": "Atlantic Terminal"
-}
+Advanced tuning variables also exist for provider and trip-stage timeouts, including `GOOGLE_ROUTES_TIMEOUT_S`, `GOOGLE_ROUTES_RETRIES`, `GOOGLE_ROUTES_ALTERNATIVES`, `TRIP_CONTEXT_TIMEOUT_S`, `TRIP_ADVISOR_TIMEOUT_S`, `TRIP_TTS_TIMEOUT_S`, `TRIP_GTFS_ENRICH_TIMEOUT_S`, `TRIP_INCIDENT_SCAN_TIMEOUT_S`, and `DATABASE_STATEMENT_TIMEOUT_MS`.
+
+## Project Structure
+
+```text
+backend/
+  app/
+    main.py              FastAPI app, CORS, startup lifecycle, API auth
+    routers/             trip planning, live feed, service alerts, websocket routes
+    services/            directions, route ranking, MTA feeds, incidents, buses, voice
+    services/trips/      route candidate parsing, enrichment, incidents, scoring, text
+    services/live_feed/  arrival, alert, vehicle, and incident feed shaping
+    utils/               cache, GTFS static helpers, stop-pattern index
+    data/                small checked-in runtime artifacts
+  scripts/               backend GTFS artifact builders
+  tests/                 backend unit and integration-style tests
+
+frontend/
+  app/                   Next.js routes, page shell, API proxy handlers
+  components/map/        subway renderer, station overlays, route/map checks
+  components/smart-route/
+    left-rail/           route, nearby transit, and alert display adapters + views
+    map/                 route preview map helpers and marker contracts
+  lib/                   API clients, live-feed hooks, WebSocket ticket helpers
+  scripts/build/         transit artifact generation and validation pipeline
+  public/                generated runtime map artifacts
+
+docs/
+  assets/                checked-in product screenshots used by this README
 ```
 
-Response (shape):
+Generated transit artifacts are sensitive. Do not hand-edit `frontend/public/subway-network.*.geojson`; regenerate them through the build scripts and review the diff.
 
-```json
-{
-  "recommendation": "Take the Q from DeKalb...",
-  "audio": "<base64-mp3>",
-  "route": [
-    {
-      "type": "WALK",
-      "start_point": { "latitude": 40.7412, "longitude": -73.9896 },
-      "end_point": { "latitude": 40.7390, "longitude": -73.9901 },
-      "polyline": { "encodedPolyline": "..." }
-    },
-    {
-      "type": "SUBWAY",
-      "train_line": "Q",
-      "direction": "Uptown & The Bronx",
-      "departure_stop": "DeKalb Ave",
-      "arrival_stop": "Atlantic Av-Barclays Ctr",
-      "minutes_until_train_arrives": 4,
-      "minutes_until_arrival": 16,
-      "stop_count": 3,
-      "intermediate_stops": ["7 Av", "Atlantic Av-Barclays Ctr"]
-    }
-  ],
-  "alerts": []
-}
-```
+## Validation
 
-### `POST /api/thinking`
-
-Returns a short thinking phrase and optional base64 audio, played while the trip request is processing.
-
-### `GET /health`
-
-Reports service status and GTFS data readiness.
-
-## Deployment
-
-### Frontend (Vercel)
-
-Project settings:
-
-- Framework Preset: `Next.js`
-- Root Directory: `frontend`
-- Build Command: `npm run build`
-- Output Directory: empty/default
-- Production Branch: `main`
-
-Environment:
-
-- `NEXT_PUBLIC_API_URL=https://jarvis-mta-assistant.onrender.com`
-- `NEXT_PUBLIC_MAPBOX_TOKEN=<token>`
-
-### Backend (Render)
-
-Build/start:
-
-- Build: install from `backend/requirements.txt`
-- Start command: `uvicorn app.main:app --host 0.0.0.0 --port 10000`
-
-Environment:
-
-- Add backend keys listed above.
-- Set `CORS_ORIGINS` to your production frontend domain exactly, no trailing slash.
-
-## Troubleshooting
-
-### CORS errors from frontend
-
-- Confirm `CORS_ORIGINS` includes the exact frontend origin.
-- No trailing slash.
-- Redeploy backend after env changes.
-
-Quick preflight test:
+Primary frontend checks:
 
 ```bash
-curl -i -X OPTIONS "https://jarvis-mta-assistant.onrender.com/api/trip" \
-  -H "Origin: https://jarvis-mta-assistant.vercel.app" \
-  -H "Access-Control-Request-Method: POST" \
-  -H "Access-Control-Request-Headers: content-type"
+cd frontend
+npm run typecheck
+npm run test:unit
+npm run lint
+npm run verify:transit-artifacts
+npm run build
 ```
 
-Expected:
+Equivalent Windows-local binary commands used during development:
 
-- `200 OK`
-- `access-control-allow-origin: https://jarvis-mta-assistant.vercel.app`
+```powershell
+cd frontend
+.\node_modules\.bin\tsc.cmd --noEmit
+.\node_modules\.bin\tsx.cmd --test lib/backend-proxy.test.mjs lib/ws-ticket.test.mjs lib/use-service-alerts.test.mjs components/smart-route/left-rail/alert-feed.test.mjs components/smart-route/left-rail/live-data.test.mjs components/smart-route/left-rail/hydration.test.mjs scripts/build/tests/station-anchors.test.ts
+node components/map/subway-station-overlay.check.mjs
+node components/map/subway-palette.check.mjs
+node components/map/subway-renderer.check.mjs
+```
 
-### No open ports detected on Render
+Backend checks:
 
-This usually means startup work blocked port binding. Current backend startup defers heavy GTFS loading to a background task so the port opens first.
+```bash
+cd backend
+python -m pytest -q
+```
 
-### `500` during `/api/trip`
+CI runs frontend artifact generation, typecheck, unit tests, lint, transit artifact verification, build, and backend pytest. Some local machines may need project dependencies installed before the full suite can run.
 
-Check response `detail` in browser and corresponding Render logs:
+## Data Sources
 
-- `quota_exceeded` responses from upstream AI/TTS providers indicate account credit limits.
-- Missing API keys produce upstream 401/403 errors.
-- Invalid Google Routes configuration typically fails in directions stage.
+SmartRoute uses public transit data and third-party routing/context providers:
+
+- MTA static GTFS for scheduled subway structure.
+- MTA GTFS-RT feeds for trip updates, vehicle positions, and service alerts.
+- MTA BusTime SIRI for bus monitoring.
+- NYC OpenData subway geometry for generated visual map artifacts.
+- Google Routes for transit route candidates.
+- External incident scanning when configured.
+
+SmartRoute is not affiliated with or endorsed by the MTA.
+
+## Known Limitations
+
+- Realtime transit feeds can be incomplete, delayed, or temporarily unavailable.
+- Route recommendations are advisory and should be checked against official MTA updates for high-stakes trips.
+- Incident scanning depends on external provider availability and may miss or delay local events.
+- Some map artifacts are optimized for readable display rather than canonical track geometry.
+- Hosted AI, routing, search, and tile providers introduce quota and latency constraints.
+- Full live rerouting would require more aggressive polling, push infrastructure, and provider cost management.
+
+## Roadmap
+
+- Mobile-first route planning flow with native-app-quality gestures.
+- More precise live rerouting when service conditions change mid-trip.
+- Better incident confidence scoring and source attribution.
+- Expanded accessibility testing for map controls, rail navigation, and alert states.
+- End-to-end route planning and service alert tests.
+- Automated screenshot and demo capture for release reviews.
