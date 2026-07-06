@@ -8,12 +8,28 @@
    are pure-presentation; no data fetching, no global state.
    ════════════════════════════════════════════════════════════════════════ */
 
+import {
+  FontAwesomeIcon,
+  type FontAwesomeIconProps,
+} from "@fortawesome/react-fontawesome";
+import {
+  faArrowRightArrowLeft,
+  faBusSimple,
+  faMapPin,
+  faPersonWalking,
+  faRightFromBracket,
+} from "@fortawesome/free-solid-svg-icons";
+import MdiIcon from "@mdi/react";
+import { mdiTrain } from "@mdi/js";
 import type { CSSProperties, ReactNode } from "react";
 import {
   RAIL_TONE_COLORS,
   type RailToneKey,
 } from "./types";
-import { TrainBullet } from "@/components/smart-route/train-bullet";
+import {
+  SUBWAY_BULLET_ROUTES,
+  TrainBullet,
+} from "@/components/smart-route/train-bullet";
 
 /* ── Meta ─────────────────────────────────────────────────────
    All-caps mono label used throughout the rail (section heads, status
@@ -99,10 +115,60 @@ export function LineBullet({ line, size = 22, title }: LineBulletProps) {
   return <TrainBullet line={line} size={size} title={title} />;
 }
 
+export function RouteBullet({ line, size = 24, title }: LineBulletProps) {
+  return <LineBullet line={line} size={size} title={title} />;
+}
+
+export function RouteBulletGroup({
+  lines,
+  size = 24,
+  limit,
+}: {
+  lines: string[];
+  size?: number;
+  limit?: number;
+}) {
+  const visible = limit ? lines.slice(0, limit) : lines;
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+        minWidth: 0,
+      }}
+    >
+      {visible.map((line) => (
+        <RouteBullet key={line} line={line} size={size} />
+      ))}
+      {limit && lines.length > limit && (
+        <span
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            minWidth: size,
+            height: size,
+            padding: "0 5px",
+            borderRadius: 999,
+            border: "1px solid var(--sr-rule)",
+            color: "var(--sr-fg-3)",
+            fontFamily: "var(--sr-mono)",
+            fontSize: Math.max(9, size * 0.42),
+            fontWeight: 700,
+          }}
+        >
+          +{lines.length - limit}
+        </span>
+      )}
+    </span>
+  );
+}
+
 /* ── BusChip ─────────────────────────────────────────────────
    MTA buses use rectangular route badges (M34-SBS, B41…), not circular
-   bullets. Rendered in MTA bus blue with the rail's mono face so bus rows
-   read instantly distinct from subway rows in the arrivals board. */
+   bullets. Muted blue-gray fill so route-true color stays reserved for
+   subway bullets, while bus rows still read instantly distinct. */
 export function BusChip({ route, title }: { route: string; title?: string }) {
   const label = title || `${route} bus`;
   return (
@@ -117,9 +183,9 @@ export function BusChip({ route, title }: { route: string; title?: string }) {
         height: 18,
         padding: "0 5px",
         borderRadius: 3,
-        background: "#0039A6",
-        color: "#ffffff",
-        fontFamily: "var(--sr-mono)",
+        background: "#1d4ed8",
+        color: "rgba(255, 255, 255, 0.92)",
+        fontFamily: "var(--sr-display)",
         fontSize: route.length > 4 ? 8.5 : 10,
         fontWeight: 700,
         letterSpacing: "0.02em",
@@ -132,175 +198,182 @@ export function BusChip({ route, title }: { route: string; title?: string }) {
   );
 }
 
+/* ── TransitText ─────────────────────────────────────────────
+   MTA alert copy references lines in brackets — "[N][W] trains are
+   delayed", "No [7][7X] between…", "[B35] detour". Render those tokens as
+   the real bullet or bus badge instead of raw bracket text. Unrecognized
+   tokens pass through untouched. */
+const TRANSIT_TOKEN = /\[([A-Za-z0-9+-]{1,8})\]/g;
+const BUS_ROUTE_TOKEN = /^(?:B|BM|BX|M|Q|QM|SIM|S|X)\d{1,3}[A-Z]?(?:-?SBS)?$/;
+
+export function TransitText({
+  text,
+  bulletSize = 15,
+}: {
+  text: string;
+  bulletSize?: number;
+}) {
+  const nodes: ReactNode[] = [];
+  const pattern = new RegExp(TRANSIT_TOKEN.source, "g");
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+  let key = 0;
+
+  while ((match = pattern.exec(text)) !== null) {
+    const token = match[1].toUpperCase();
+    const badge = SUBWAY_BULLET_ROUTES.has(token) ? (
+      <span key={key++} className="sr-line-token">
+        <RouteBullet line={token} size={bulletSize} />
+      </span>
+    ) : BUS_ROUTE_TOKEN.test(token) ? (
+      <span key={key++} className="sr-line-token">
+        <BusChip route={token} />
+      </span>
+    ) : null;
+    if (!badge) continue;
+    if (match.index > cursor) nodes.push(text.slice(cursor, match.index));
+    nodes.push(badge);
+    cursor = match.index + match[0].length;
+  }
+
+  if (cursor === 0) return <>{text}</>;
+  if (cursor < text.length) nodes.push(text.slice(cursor));
+  return <>{nodes}</>;
+}
+
 /* ── StepIcon ────────────────────────────────────────────────
-   Apple-Maps-style stepper pictographs. The shapes are the prototype's
-   originals — silhouetted walker, subway car with twin windows + door +
-   track marks, exit doorway with arrow, map pin. The icon color is driven
-   by the parent so the active step (cyan node) reads as filled white-ink
-   while mid-route steps invert to cyan-on-surface. */
-type StepType = "walk" | "board" | "ride" | "exit" | "destination" | "arrive";
+   Apple-Maps-style stepper pictographs. Route identity stays on MTA bullets,
+   bus pills, and ride connectors; these small mode glyphs are neutral except
+   for the red/pink start/arrive pins. */
+type StepType =
+  | "walk"
+  | "board"
+  | "ride"
+  | "bus"
+  | "transfer"
+  | "exit"
+  | "destination"
+  | "arrive";
+
+const STEP_ICON_COLORS = {
+  primary: "rgba(255,255,255,.92)",
+  secondary: "rgba(255,255,255,.68)",
+  neutral: "rgba(255,255,255,.86)",
+  marker: "#ef3b5d",
+} as const;
 
 export function StepIcon({
   type,
-  color = "currentColor",
+  color,
+  size: sizeOverride,
 }: {
   type: StepType;
   color?: string;
+  size?: number;
 }) {
+  const size =
+    sizeOverride ?? (type === "destination" || type === "arrive" ? 16 : 15);
+  const iconStyle = (iconColor: string): FontAwesomeIconProps["style"] => ({
+    display: "block",
+    width: size,
+    height: size,
+    color: iconColor,
+    flexShrink: 0,
+  });
+
   switch (type) {
     case "walk":
       return (
-        <svg
-          viewBox="0 0 20 20"
-          width="14"
-          height="14"
-          style={{ display: "block" }}
+        <FontAwesomeIcon
+          icon={faPersonWalking}
+          data-step-icon="walk"
+          style={iconStyle(color ?? STEP_ICON_COLORS.primary)}
           aria-hidden="true"
-        >
-          <circle cx="11.5" cy="3.2" r="1.8" fill={color} />
-          <path
-            d="M11.5 5.5 L9 11 M9 11 L7 16 M9 11 L11.5 14.5 L11 18 M11.5 6.5 L13.5 10 M11.5 6.5 L9 8.5"
-            stroke={color}
-            strokeWidth="1.6"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            fill="none"
-          />
-        </svg>
+        />
       );
     case "board":
     case "ride":
       return (
-        <svg
-          viewBox="0 0 20 20"
-          width="14"
-          height="14"
-          style={{ display: "block" }}
+        <MdiIcon
+          path={mdiTrain}
+          size={`${size}px`}
+          color={color ?? STEP_ICON_COLORS.secondary}
+          data-step-icon="train"
+          style={{ display: "block", flexShrink: 0 }}
           aria-hidden="true"
-        >
-          {/* subway car silhouette */}
-          <path
-            d="M5 4 Q5 2.5 6.5 2.5 L13.5 2.5 Q15 2.5 15 4 L15 14.5 Q15 15.5 14 15.5 L6 15.5 Q5 15.5 5 14.5 Z"
-            fill={color}
-          />
-          {/* twin windows */}
-          <rect x="6.5" y="4.5" width="2.5" height="2" fill="var(--sr-surface)" />
-          <rect x="11" y="4.5" width="2.5" height="2" fill="var(--sr-surface)" />
-          {/* door */}
-          <line
-            x1="10"
-            y1="7.5"
-            x2="10"
-            y2="13"
-            stroke="var(--sr-surface)"
-            strokeWidth="0.8"
-          />
-          {/* headlights */}
-          <circle cx="7.2" cy="13.5" r="0.7" fill="var(--sr-surface)" />
-          <circle cx="12.8" cy="13.5" r="0.7" fill="var(--sr-surface)" />
-          {/* track marks */}
-          <line
-            x1="4"
-            y1="17.5"
-            x2="7.5"
-            y2="17.5"
-            stroke={color}
-            strokeWidth="1"
-            strokeLinecap="round"
-          />
-          <line
-            x1="12.5"
-            y1="17.5"
-            x2="16"
-            y2="17.5"
-            stroke={color}
-            strokeWidth="1"
-            strokeLinecap="round"
-          />
-        </svg>
+        />
+      );
+    case "bus":
+      return (
+        <FontAwesomeIcon
+          icon={faBusSimple}
+          data-step-icon="bus"
+          style={iconStyle(color ?? STEP_ICON_COLORS.secondary)}
+          aria-hidden="true"
+        />
+      );
+    case "transfer":
+      return (
+        <FontAwesomeIcon
+          icon={faArrowRightArrowLeft}
+          data-step-icon="transfer"
+          style={iconStyle(color ?? STEP_ICON_COLORS.neutral)}
+          aria-hidden="true"
+        />
       );
     case "exit":
       return (
-        <svg
-          viewBox="0 0 20 20"
-          width="14"
-          height="14"
-          style={{ display: "block" }}
+        <FontAwesomeIcon
+          icon={faRightFromBracket}
+          data-step-icon="exit"
+          style={iconStyle(color ?? STEP_ICON_COLORS.neutral)}
           aria-hidden="true"
-        >
-          {/* doorway */}
-          <path
-            d="M11 4 L16 4 L16 16 L11 16"
-            fill="none"
-            stroke={color}
-            strokeWidth="1.6"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-          {/* arrow exiting */}
-          <path
-            d="M3 10 L12 10"
-            fill="none"
-            stroke={color}
-            strokeWidth="1.6"
-            strokeLinecap="round"
-          />
-          <path
-            d="M9 7 L12 10 L9 13"
-            fill="none"
-            stroke={color}
-            strokeWidth="1.6"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
+        />
       );
     case "destination":
-      return (
-        <svg
-          viewBox="0 0 20 20"
-          width="14"
-          height="14"
-          style={{ display: "block" }}
-          aria-hidden="true"
-        >
-          <path
-            d="M10 2 C6.7 2 4 4.6 4 7.8 C4 12 10 17.5 10 17.5 S16 12 16 7.8 C16 4.6 13.3 2 10 2 Z"
-            fill={color}
-          />
-          <circle cx="10" cy="7.8" r="1.8" fill="var(--sr-surface)" />
-        </svg>
-      );
     case "arrive":
-      // Checkered finish flag -- the three filled cells form a 3x2 checker
-      // against the (empty) node background, so it reads correctly on any
-      // node color. A little celebratory flourish for the destination.
       return (
-        <svg
-          viewBox="0 0 20 20"
-          width="14"
-          height="14"
-          style={{ display: "block" }}
+        <FontAwesomeIcon
+          icon={faMapPin}
+          data-step-icon={type}
+          style={iconStyle(color ?? STEP_ICON_COLORS.marker)}
           aria-hidden="true"
-        >
-          <line
-            x1="5"
-            y1="2.5"
-            x2="5"
-            y2="17.5"
-            stroke={color}
-            strokeWidth="1.5"
-            strokeLinecap="round"
-          />
-          <path d="M5.8 3 H15 V9 H5.8 Z" fill="none" stroke={color} strokeWidth="1" />
-          <rect x="5.8" y="3" width="3.07" height="3" fill={color} />
-          <rect x="11.94" y="3" width="3.06" height="3" fill={color} />
-          <rect x="8.87" y="6" width="3.07" height="3" fill={color} />
-        </svg>
+        />
       );
     default:
       return null;
   }
+}
+
+/* ── LocationPin ─────────────────────────────────────────────
+   Custom teardrop endpoint marker for the details chain: filled body with a
+   punched-out center dot, sized to sit alongside route bullets. Cyan for the
+   trip start (current location), coral for the arrival. Deliberately more
+   substantial than a stock pin, but never large enough to dominate. */
+export function LocationPin({
+  tone = "arrive",
+  size = 20,
+}: {
+  tone?: "start" | "arrive";
+  size?: number;
+}) {
+  const color = tone === "start" ? "#5aa2ff" : "#fb5a7d";
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden="true"
+      style={{ display: "block", flexShrink: 0 }}
+    >
+      <path
+        d="M12 2.4c-3.93 0-7.1 3.06-7.1 6.85 0 4.7 5.75 11.05 6.5 11.85a.82.82 0 0 0 1.2 0c.75-.8 6.5-7.15 6.5-11.85 0-3.79-3.17-6.85-7.1-6.85Z"
+        fill={color}
+      />
+      <circle cx="12" cy="9.1" r="2.5" fill="#0d1117" />
+    </svg>
+  );
 }
 
 /* ── Button primitives ───────────────────────────────────────

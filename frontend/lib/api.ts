@@ -19,7 +19,7 @@ export async function getThinking(): Promise<ThinkingResponse> {
   return res.json();
 }
 
-/** Short cached ATLAS line for switching to an alternative route. */
+/** Short cached route line for switching to an alternative route. */
 export async function getSwitchNarration(routeId: string): Promise<SwitchNarrationResponse> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 12_000);

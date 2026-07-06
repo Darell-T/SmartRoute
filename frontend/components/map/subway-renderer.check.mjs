@@ -3,36 +3,45 @@ import fs from "node:fs";
 import path from "node:path";
 
 // Guards the single-renderer invariant after the cleanup: the visual.geojson
-// network is the only subway renderer, canonical geometry is still loaded for
-// live-train snapping, and no production code re-introduces a renderer branch
-// keyed on ?subway-visual / ?subway-recon or the deleted legacy bbox builder.
+// network is the only subway renderer, live train markers stay removed, and no
+// production code re-introduces a renderer branch keyed on ?subway-visual /
+// ?subway-recon or the deleted legacy bbox builder.
 const ROOT = path.resolve(import.meta.dirname, "../..");
 
 function read(relPath) {
   return fs.readFileSync(path.join(ROOT, relPath), "utf8");
 }
 
-const mapSource = read("components/jarvis-map.tsx");
-const mapHelpersSource = read("components/jarvis-map-helpers.tsx");
+const mapSource = read("components/smart-route/map/smart-route-map.tsx");
+const mapHelpersSource = read("components/smart-route/map/smart-route-map-helpers.ts");
 
 // 1. The visual renderer is wired in and reads the visual artifact. The map
 // owns the runtime call; the helper owns the content-hashed artifact URL.
 for (const needle of ["loadVisualSubwayNetworkOrNull", "buildSubwayLaneFeaturesFromVisual"]) {
   assert.ok(
     mapSource.includes(needle),
-    `jarvis-map.tsx should use the visual renderer (${needle})`,
+    `smart-route-map.tsx should use the visual renderer (${needle})`,
   );
 }
 assert.ok(
   mapHelpersSource.includes('artifactUrl("subway-network.visual.geojson")'),
-  "jarvis-map-helpers.tsx should load the visual subway artifact",
+  "smart-route-map-helpers.ts should load the visual subway artifact",
 );
 
-// 2. Canonical geometry is still loaded + indexed for live-train snapping.
-for (const needle of ["loadCanonicalSubwayNetwork", "buildSubwayNetworkIndex"]) {
-  assert.ok(
-    mapSource.includes(needle),
-    `jarvis-map.tsx must keep ${needle} for live-train snapping`,
+// 2. Live train vehicle markers are not part of the current map direction.
+for (const pattern of [
+  /ensureLiveTrainLayers/,
+  /LIVE_TRAIN/,
+  /VehicleMarker/,
+  /SmartTrainMarker/,
+  /sr-train-marker/,
+  /loadCanonicalSubwayNetwork/,
+  /buildSubwayNetworkIndex/,
+]) {
+  assert.doesNotMatch(
+    mapSource + mapHelpersSource,
+    pattern,
+    `SmartRoute map must not reintroduce live train marker plumbing (${pattern})`,
   );
 }
 
@@ -50,7 +59,7 @@ for (const pattern of forbiddenInMap) {
   assert.doesNotMatch(
     mapSource,
     pattern,
-    `jarvis-map.tsx must not reintroduce ${pattern}`,
+    `smart-route-map.tsx must not reintroduce ${pattern}`,
   );
 }
 

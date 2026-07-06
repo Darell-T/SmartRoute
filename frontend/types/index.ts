@@ -1,10 +1,8 @@
 export type {
   Coordinates,
   DestinationSelection,
-  FocusedLiveDirection,
   LiveFeedResponse,
   LiveNetworkSummary,
-  LiveDirectionSummaryRow,
   LiveVehicle,
   LiveFeedIncident,
   RouteCandidate,

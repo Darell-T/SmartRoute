@@ -53,7 +53,7 @@ export function BrandLogo({
           <span className="sr-brand-logo__eyebrow" aria-hidden="true">
             <span className="sr-brand-logo__dot" />
             <span className="sr-brand-logo__eyebrow-text">
-              AI Transit Intelligence
+              Always The Best Route
             </span>
             <span className="sr-brand-logo__dot" />
           </span>

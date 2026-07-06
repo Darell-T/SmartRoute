@@ -1,7 +1,5 @@
 @import "tailwindcss";
 @import "tw-animate-css";
-@import "./styles/smart-route-live-feed.css";
-@import "./styles/smart-route-service-alerts.css";
 @import "./styles/smart-route-left-rail.css";
 
 @custom-variant dark (&:is(.dark *));
@@ -238,30 +236,6 @@
   }
 }
 
-@keyframes srTrainGlow {
-  0%, 100% {
-    opacity: 0.35;
-  }
-  50% {
-    opacity: 0.72;
-  }
-}
-
-@keyframes srTrainAlert {
-  0% {
-    transform: scale(0.95);
-    opacity: 0.8;
-  }
-  70% {
-    transform: scale(1.35);
-    opacity: 0;
-  }
-  100% {
-    transform: scale(1.35);
-    opacity: 0;
-  }
-}
-
 /* ── Focus-ring utility ── */
 .focus-ring {
   outline: none;
@@ -395,124 +369,6 @@
   left: 0.75rem;
   right: 0.75rem;
   z-index: 5;
-}
-
-.sr-train-marker {
-  position: relative;
-  width: 2.75rem;
-  height: 2.75rem;
-  display: grid;
-  place-items: center;
-  cursor: pointer;
-  pointer-events: auto;
-  overflow: visible;
-}
-
-/* ── Live train life animations ── */
-.sr-train-glow {
-  width: 30px;
-  height: 11px;
-  border-radius: 999px;
-  filter: blur(6px);
-  will-change: opacity;
-  animation: srTrainGlow 3.2s ease-in-out infinite;
-}
-
-.sr-train-alert-ping {
-  width: 28px;
-  height: 28px;
-  border-radius: 999px;
-  border: 1px solid rgba(248, 113, 113, 0.38);
-  background: radial-gradient(
-    circle,
-    rgba(248, 113, 113, 0.18),
-    rgba(248, 113, 113, 0)
-  );
-  will-change: transform, opacity;
-  animation: srTrainAlert 1.8s ease-out infinite;
-}
-
-.sr-headlight {
-  width: 1px;
-  height: 1px;
-  border-radius: 9999px;
-  background: white;
-  will-change: box-shadow;
-  animation: srHeadlight 2.4s ease-in-out infinite;
-}
-
-.sr-dest-sign {
-  animation: srDestSign 3s ease-in-out infinite;
-}
-
-@keyframes srTrainGlow {
-  0%,
-  100% {
-    opacity: 0.16;
-  }
-  50% {
-    opacity: 0.42;
-  }
-}
-
-@keyframes srTrainAlert {
-  0% {
-    opacity: 0.42;
-    transform: scale(0.82);
-  }
-  70% {
-    opacity: 0.12;
-    transform: scale(1.12);
-  }
-  100% {
-    opacity: 0;
-    transform: scale(1.22);
-  }
-}
-
-@keyframes srHeadlight {
-  0%,
-  100% {
-    box-shadow:
-      0 0 3px 1.5px #fff,
-      0 0 6px 2px rgba(255, 220, 130, 0.5);
-  }
-  50% {
-    box-shadow:
-      0 0 2px 0.5px rgba(255, 255, 255, 0.7),
-      0 0 3px 1px rgba(255, 200, 100, 0.2);
-  }
-}
-
-@keyframes srDestSign {
-  0%,
-  100% {
-    box-shadow: none;
-    opacity: 0.85;
-  }
-  50% {
-    box-shadow: 0 0 3px 0.5px rgba(255, 153, 0, 0.7);
-    opacity: 1;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .sr-train-glow,
-  .sr-train-alert-ping,
-  .sr-headlight,
-  .sr-dest-sign {
-    animation: none;
-  }
-  .sr-headlight {
-    box-shadow: 0 0 2px 1px white;
-  }
-  .sr-train-glow {
-    opacity: 0.2;
-  }
-  .sr-train-alert-ping {
-    opacity: 0.22;
-    transform: none;
-  }
 }
 
 @media (min-width: 900px) {
@@ -1297,54 +1153,7 @@ body:has(.sr-app-shell) [data-nextjs-dev-tools-button] {
   padding-bottom: 0.72rem;
 }
 
-.sr-live-brief {
-  display: grid;
-  grid-template-columns: 88px minmax(0, 1fr);
-  gap: 0.72rem;
-  align-items: center;
-}
 
-.sr-live-brief__orb {
-  position: relative;
-  width: 88px;
-  height: 88px;
-}
-
-.sr-live-brief__copy {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 0.38rem;
-}
-
-.sr-live-brief__chip {
-  display: inline-flex;
-  align-items: center;
-  align-self: flex-start;
-  gap: 0.32rem;
-  padding: 3px 9px;
-  border: 1px solid;
-  border-radius: 999px;
-  font-family: var(--font-jetbrains-mono), monospace;
-  font-size: 9.5px;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
-.sr-live-brief__chip-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 999px;
-}
-
-.sr-intel-section--summary .sr-live-brief__headline {
-  -webkit-line-clamp: 2;
-}
-
-.sr-intel-section--summary .sr-live-brief__body {
-  -webkit-line-clamp: 3;
-}
 
 .sr-nearest-stop__station {
   display: grid;
@@ -1679,29 +1488,6 @@ body:has(.sr-app-shell) [data-nextjs-dev-tools-button] {
   color: rgba(148, 163, 184, 0.45);
 }
 
-.sr-live-brief__headline,
-.sr-live-brief__body {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-.sr-live-brief__headline {
-  margin: 0;
-  font: 600 13.75px/1.25 var(--font-geist), "SF Pro Display", system-ui, sans-serif;
-  -webkit-line-clamp: 2;
-  color: #eef1f6;
-  letter-spacing: -0.018em;
-  text-wrap: balance;
-}
-
-.sr-live-brief__body {
-  margin: 0;
-  font-size: 11.25px;
-  line-height: 1.5;
-  -webkit-line-clamp: 4;
-  color: rgba(170, 181, 196, 0.8);
-}
 
 .sr-live-stop-card__helper {
   margin-top: 0.52rem;
@@ -2221,166 +2007,6 @@ body:has(.sr-app-shell) [data-nextjs-dev-tools-button] {
   -webkit-line-clamp: 2;
 }
 
-.sr-map-legend {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.sr-map-legend::-webkit-scrollbar {
-  display: none;
-}
-
-.sr-map-legend__inline {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.9rem;
-  min-width: max-content;
-  padding-right: 0.4rem;
-}
-
-.sr-map-legend__label {
-  font-family: var(--font-jetbrains-mono), monospace;
-  font-size: 0.55rem;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-  color: rgba(148, 163, 184, 0.7);
-  padding-right: 0.35rem;
-  border-right: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.sr-map-legend__inline-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-family: var(--font-geist), sans-serif;
-  font-size: 0.62rem;
-  letter-spacing: 0.02em;
-  color: rgba(148, 163, 184, 0.82);
-  white-space: nowrap;
-}
-
-.sr-map-legend__swatch {
-  position: relative;
-  display: inline-block;
-  flex-shrink: 0;
-}
-
-.sr-map-legend__swatch[data-tone="nominal"] {
-  width: 0.45rem;
-  height: 0.45rem;
-  border-radius: 999px;
-  background: #10b981;
-  box-shadow: 0 0 10px rgba(16, 185, 129, 0.32);
-}
-
-.sr-map-legend__swatch[data-tone="planned"] {
-  width: 1rem;
-  height: 0;
-  border-top: 2px dashed #f59e0b;
-}
-
-.sr-map-legend__swatch[data-tone="disruption"] {
-  width: 0.45rem;
-  height: 0.45rem;
-  border-radius: 999px;
-  background: #ef4444;
-  box-shadow: 0 0 10px rgba(239, 68, 68, 0.32);
-}
-
-.sr-map-legend__swatch[data-tone="disruption"]::after {
-  content: "";
-  position: absolute;
-  inset: -5px;
-  border-radius: 999px;
-  border: 1px solid rgba(239, 68, 68, 0.26);
-}
-
-.sr-map-legend__swatch[data-tone="selected"] {
-  width: 0.45rem;
-  height: 0.45rem;
-  border-radius: 999px;
-  background: #06b6d4;
-  box-shadow: 0 0 10px rgba(6, 182, 212, 0.32);
-}
-
-.sr-map-marker-shell {
-  position: relative;
-  display: grid;
-  place-items: center;
-}
-
-.sr-legend-vehicle__glow {
-  position: absolute;
-  inset: 50% auto auto 50%;
-  width: 24px;
-  height: 10px;
-  transform: translate(-50%, -50%);
-  border-radius: 999px;
-  filter: blur(8px);
-}
-
-.sr-legend-vehicle__body,
-.sr-legend-service-alert__core,
-.sr-legend-incident__core,
-.sr-legend-station__outer {
-  position: relative;
-  display: grid;
-  place-items: center;
-}
-
-.sr-legend-vehicle__body {
-  width: 28px;
-  height: 18px;
-  border-radius: 11px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-}
-
-.sr-legend-vehicle__window-row {
-  position: absolute;
-  top: 4px;
-  display: flex;
-  gap: 3px;
-}
-
-.sr-legend-vehicle__window {
-  width: 6px;
-  height: 4px;
-  border-radius: 2px;
-}
-
-.sr-legend-incident__radius {
-  position: absolute;
-  inset: 50% auto auto 50%;
-  transform: translate(-50%, -50%);
-  border-radius: 999px;
-  border: 1px dashed rgba(255, 255, 255, 0.28);
-}
-
-.sr-legend-incident__core,
-.sr-legend-service-alert__core {
-  width: 28px;
-  height: 28px;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-}
-
-.sr-legend-station__outer {
-  width: 24px;
-  height: 24px;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-}
-
-.sr-legend-station__inner {
-  width: 10px;
-  height: 10px;
-  border-radius: 999px;
-  border: 2px solid rgba(255, 255, 255, 0.9);
-}
-
 .sr-shell__tab:focus-visible,
 .sr-map-pill--action:focus-visible,
 .sr-map-util:focus-visible,
@@ -2533,26 +2159,6 @@ body:has(.sr-app-shell) [data-nextjs-dev-tools-button] {
   .sr-live-intel-rail {
     overflow: visible;
   }
-
-  .sr-live-brief {
-    grid-template-columns: minmax(0, 1fr);
-    justify-items: center;
-    text-align: center;
-  }
-
-  .sr-live-brief__orb {
-    width: 72px;
-    height: 72px;
-  }
-
-  .sr-live-brief__copy {
-    align-items: center;
-  }
-
-  .sr-live-brief__chip {
-    align-self: center;
-  }
-
   .sr-shell__main {
     padding: 0.7rem;
   }
@@ -2635,18 +2241,17 @@ body:has(.sr-app-shell) [data-nextjs-dev-tools-button] {
     display: flex !important;
     flex-direction: column;
     border-radius: 26px 26px 0 0 !important;
-    border-top: 1px solid rgba(255, 212, 118, 0.23) !important;
+    border-top: 1px solid rgba(255, 255, 255, 0.12) !important;
     border-right: 1px solid rgba(255, 255, 255, 0.075) !important;
     border-left: 1px solid rgba(255, 255, 255, 0.075) !important;
     background:
-      linear-gradient(135deg, rgba(255, 193, 88, 0.18), transparent 34%),
-      linear-gradient(180deg, rgba(30, 24, 15, 0.86), rgba(8, 9, 12, 0.92)) !important;
+      radial-gradient(120% 72% at 18% 0%, rgba(96, 165, 250, 0.12), transparent 48%),
+      linear-gradient(180deg, rgba(11, 16, 24, 0.92), rgba(6, 9, 14, 0.96)) !important;
     box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.24),
+      inset 0 1px 0 rgba(255, 255, 255, 0.16),
       inset 0 -1px 0 rgba(255, 255, 255, 0.05),
-      0 -28px 78px rgba(0, 0, 0, 0.48),
-      0 -1px 0 rgba(255, 176, 47, 0.14) !important;
-    backdrop-filter: blur(26px) saturate(1.35);
+      0 -28px 78px rgba(0, 0, 0, 0.48) !important;
+    backdrop-filter: blur(24px) saturate(1.2);
     transition:
       height 280ms cubic-bezier(0.2, 0.8, 0.2, 1),
       box-shadow 220ms ease,
@@ -2673,7 +2278,7 @@ body:has(.sr-app-shell) [data-nextjs-dev-tools-button] {
     justify-content: center;
     border: 0;
     background:
-      radial-gradient(circle at 50% 0%, rgba(255, 214, 138, 0.18), transparent 54%),
+      radial-gradient(circle at 50% 0%, rgba(255, 255, 255, 0.08), transparent 54%),
       transparent;
     cursor: grab;
     touch-action: none;
@@ -2694,7 +2299,7 @@ body:has(.sr-app-shell) [data-nextjs-dev-tools-button] {
       105deg,
       transparent 6%,
       rgba(255, 255, 255, 0.16) 34%,
-      rgba(255, 198, 97, 0.11) 49%,
+      rgba(96, 165, 250, 0.08) 49%,
       transparent 72%
     );
     opacity: 0.38;
@@ -2709,12 +2314,12 @@ body:has(.sr-app-shell) [data-nextjs-dev-tools-button] {
     background: rgba(255, 255, 255, 0.66);
     box-shadow:
       0 0 0 1px rgba(0, 0, 0, 0.18),
-      0 7px 22px rgba(255, 191, 80, 0.24),
+      0 7px 22px rgba(0, 0, 0, 0.24),
       inset 0 1px 0 rgba(255, 255, 255, 0.52);
   }
 
   .sr-app-shell[data-active-tab="livemap"] .sr-mobile-rail-grip:focus-visible {
-    outline: 2px solid rgba(255, 196, 74, 0.82);
+    outline: 2px solid rgba(96, 165, 250, 0.82);
     outline-offset: -0.7rem;
   }
 

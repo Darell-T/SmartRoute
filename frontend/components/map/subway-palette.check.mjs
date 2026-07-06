@@ -40,7 +40,6 @@ assert.ok(tokens.SI, "mta-colors.json should define a single SI color");
 const SHARED_IMPORT = /mta-colors(\.(mjs|ts))?["']/;
 const directConsumers = [
   "components/map/route-layers.ts",
-  "components/map/incidents/incident-popup.ts",
   "components/smart-route/left-rail/types.ts",
   "scripts/build/opendata-subway-lines.ts",
   "scripts/build/visual-network/shared/route-config.ts",

@@ -3,9 +3,13 @@
 // browser context with FAKE GEOLOCATION at the target station — the app's own
 // intro camera frames the scene for us, flat.
 import { chromium } from "playwright";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { mkdirSync } from "node:fs";
 
-const outDir = "C:/Users/19293/jarvis/jarvis-design/frontend/screenshots";
+const here = dirname(fileURLToPath(import.meta.url));
+const frontendRoot = resolve(here, "../..");
+const outDir = resolve(frontendRoot, "screenshots");
 mkdirSync(outDir, { recursive: true });
 
 const SCENES = [
@@ -38,7 +42,7 @@ for (const scene of SCENES) {
   await page.waitForTimeout(14000);
 
   await page.screenshot({
-    path: `${outDir}/${scene.name}.png`,
+    path: resolve(outDir, `${scene.name}.png`),
     clip: { x: 430, y: 120, width: 740, height: 660 },
     timeout: 90000,
     animations: "disabled",

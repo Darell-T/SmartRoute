@@ -2,12 +2,16 @@ export { LeftRail } from "./left-rail";
 export type { LeftRailProps } from "./left-rail";
 export type {
   Alternative,
+  AlertFeedDetail,
+  AlertFeedItem,
+  AlertFeedSeverity,
+  AlertFeedSource,
   Arrival,
   Direction,
   FeedEvent,
   IssueItem,
-  JarvisState,
   NetworkHealth,
+  RouteRailStatus,
   RouteNote,
   RoutePlan,
   RouteStep,
@@ -16,4 +20,3 @@ export type {
   Station,
   TabId,
 } from "./types";
-export { RailOrb, jarvisStateToOrbTone, type RailOrbTone } from "./rail-orb";

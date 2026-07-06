@@ -2,7 +2,7 @@
  * screenshot-real-app-routes.mjs
  *
  * Playwright-driven route-by-route visual QA for SmartRoute subway layer.
- * Uses window.__jarvisMap (exposed by jarvis-map.tsx when ?qa-map=1 in dev).
+ * Uses window.__smartRouteMap (exposed by smart-route-map.tsx when ?qa-map=1 in dev).
  *
  * Usage:
  *   node frontend/scripts/qa/screenshot-real-app-routes.mjs
@@ -137,13 +137,13 @@ page.on("console", (m) => {
 console.log("[qa-routes] navigating to", BASE_URL);
 await page.goto(BASE_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
 
-// Wait for window.__jarvisMap to be exposed
-console.log("[qa-routes] waiting for window.__jarvisMap (timeout 60s)...");
-await page.waitForFunction(() => typeof window.__jarvisMap !== "undefined", {
+// Wait for window.__smartRouteMap to be exposed
+console.log("[qa-routes] waiting for window.__smartRouteMap (timeout 60s)...");
+await page.waitForFunction(() => typeof window.__smartRouteMap !== "undefined", {
   timeout: 60000,
   polling: 500,
 });
-console.log("[qa-routes] window.__jarvisMap is set");
+console.log("[qa-routes] window.__smartRouteMap is set");
 
 // Wait for subway visual layer to load
 console.log("[qa-routes] waiting 6s for subway visual layer to settle...");
@@ -162,10 +162,10 @@ let errorCount = 0;
 
 for (const scene of SCENES) {
   try {
-    // Use jumpTo via window.__jarvisMap
+    // Use jumpTo via window.__smartRouteMap
     await page.evaluate(
       ({ lng, lat, zoom }) => {
-        window.__jarvisMap.jumpTo({
+        window.__smartRouteMap.jumpTo({
           center: [lng, lat],
           zoom,
           pitch: 0,
@@ -182,7 +182,7 @@ for (const scene of SCENES) {
     await page.screenshot({ path: screenshotPath, fullPage: false });
 
     const sourceFeatures = await page.evaluate(() => {
-      const map = window.__jarvisMap;
+      const map = window.__smartRouteMap;
       const sourceId = "sr-subway-network";
       const features = map.querySourceFeatures(sourceId, {
         sourceLayer: undefined,

@@ -1,5 +1,10 @@
 import maplibregl from "maplibre-gl";
 
+const DESKTOP_RAIL_WIDTH = 420;
+const DESKTOP_PADDING = 96;
+const MOBILE_PADDING = 48;
+const MOBILE_BOTTOM_PADDING = 180;
+
 /** Calculate bearing in degrees from point A to point B */
 function calculateBearing(
   from: [number, number],
@@ -18,11 +23,57 @@ function calculateBearing(
 }
 
 /** Fly camera to fit route bounds — flat 2D view to match custom style */
-export function flyToRoute(m: maplibregl.Map, allCoords: [number, number][]) {
+export function flyToRoute(
+  m: maplibregl.Map,
+  allCoords: [number, number][],
+  options: {
+    duration?: number;
+    maxZoom?: number;
+  } = {},
+) {
   if (allCoords.length === 0) return;
   const bounds = new maplibregl.LngLatBounds();
   allCoords.forEach((c) => bounds.extend(c as maplibregl.LngLatLike));
-  m.fitBounds(bounds, { padding: 96, duration: 1500, pitch: 0, bearing: 0 });
+  const reducedMotion =
+    typeof window !== "undefined" &&
+    window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  m.fitBounds(bounds, {
+    padding: routePreviewPadding(m),
+    duration: reducedMotion ? 0 : options.duration ?? 850,
+    maxZoom: options.maxZoom ?? 15.8,
+    pitch: 0,
+    bearing: 0,
+    easing: easeOutCubic,
+  });
+}
+
+function routePreviewPadding(m: maplibregl.Map): maplibregl.PaddingOptions {
+  const width =
+    m.getContainer().clientWidth ||
+    (typeof window !== "undefined" ? window.innerWidth : 1440);
+
+  if (width < 760) {
+    return {
+      top: 76,
+      bottom: MOBILE_BOTTOM_PADDING,
+      left: MOBILE_PADDING,
+      right: MOBILE_PADDING,
+    };
+  }
+
+  return {
+    top: DESKTOP_PADDING,
+    bottom: DESKTOP_PADDING,
+    left: Math.min(
+      DESKTOP_RAIL_WIDTH + DESKTOP_PADDING,
+      Math.floor(width * 0.46),
+    ),
+    right: DESKTOP_PADDING,
+  };
+}
+
+function easeOutCubic(t: number) {
+  return 1 - Math.pow(1 - t, 3);
 }
 
 /** Fly to destination and hold — gentle 2D settle, no rotation */
