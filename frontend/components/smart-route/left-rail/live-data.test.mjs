@@ -610,7 +610,7 @@ test("route candidates become clickable alternatives; active one excluded", () =
   assert.equal(alts[1].reason, "1 extra transfer");
 });
 
-test("plan rationale is derived transit copy, never model narration", () => {
+test("plan rationale surfaces sanitized model route reasoning with fallback", () => {
   const nowMs = 1_700_000_000_000;
   const steps = [
     { type: "WALK", arrival_stop: "Church Av", minutes_until_arrival: 3 },
@@ -634,33 +634,61 @@ test("plan rationale is derived transit copy, never model narration", () => {
     index: 0,
     steps,
     is_recommended: true,
-    recommendation_reason: "Fastest option.",
+    recommendation_reason:
+      "Take the Q because it avoids the delayed B and keeps the trip direct.",
     score_breakdown: { duration_minutes: 20, transfers: 0, active_alerts: 0 },
+  };
+  const alternate = {
+    id: "c1",
+    index: 1,
+    steps: [
+      { type: "WALK", arrival_stop: "Church Av", minutes_until_arrival: 3 },
+      {
+        type: "SUBWAY",
+        route_id: "B",
+        train_line: "B",
+        departure_stop: "Church Av",
+        arrival_stop: "Avenue M",
+        minutes_until_arrival: 33,
+      },
+    ],
+    is_recommended: false,
+    rejection_reason: "Slower by about 13 minutes under current service conditions",
   };
   const data = buildLeftRailData({
     nowMs,
     routeSteps: steps,
-    routeCandidates: [candidate],
+    routeCandidates: [candidate, alternate],
     activeRouteCandidate: candidate,
     recommendationText:
       "# Transit Route Analysis\n\n## Route Comparison\n\n| Route | Time |\nBased on the provided transit data, take the Q, sir.",
     routeEta: "12:58 PM",
     routeTotalTime: "36 min",
   });
-  assert.equal(
+  assert.match(
     data.plan.rationale,
-    "Fastest available option · live arrival in 6 min · no service alerts.",
-    "rationale is derived from route data",
+    /Take the Q because it avoids the delayed B and keeps the trip direct\./,
+    "rationale uses the compact recommendation reason from candidate_analysis",
+  );
+  assert.match(
+    data.plan.rationale,
+    /I did not pick the B because it is slower by 13 min/,
+    "rationale explains why the leading alternate was not selected",
   );
   assert.doesNotMatch(
     data.plan.rationale,
     /analysis|comparison|based on|sir|[#|]/i,
-    "model narration and markdown never reach the rail",
+    "raw narration and markdown never reach the rail",
   );
   assert.equal(data.plan.headsign, "Avenue M", "card title is the passenger-facing headsign");
   // Real ETA replaces the "Live · Calculated" placeholder.
   assert.equal(data.plan.eta, "12:58 PM");
   assert.equal(data.plan.totalTime, "36 min");
+  assert.equal(
+    data.plan.nextDepartureMinutes,
+    6,
+    "recommended card countdown uses the real first vehicle arrival prediction",
+  );
 
   // The transit leg carries the live departure note for the timeline.
   const transit = data.plan.steps.find((step) => step.line === "Q");
@@ -669,16 +697,21 @@ test("plan rationale is derived transit copy, never model narration", () => {
   const last = data.plan.steps[data.plan.steps.length - 1];
   assert.equal(last.detail, "Arrive at destination");
 
-  // Without narration the rationale is identical — it never depended on it.
+  // Without candidate_analysis text, the card falls back to real route facts.
+  const fallbackCandidate = { ...candidate, recommendation_reason: "" };
   const fallback = buildLeftRailData({
     nowMs,
     routeSteps: steps,
-    routeCandidates: [candidate],
-    activeRouteCandidate: candidate,
+    routeCandidates: [fallbackCandidate],
+    activeRouteCandidate: fallbackCandidate,
   });
-  assert.equal(
+  assert.match(
     fallback.plan.rationale,
-    "Fastest available option · live arrival in 6 min · no service alerts.",
+    /Fastest available option/,
+  );
+  assert.match(
+    fallback.plan.rationale,
+    /live arrival in 6 min/,
   );
 });
 
@@ -740,6 +773,11 @@ test("plan carries strip, detail steps, leave-by, and correct transfer count", (
     typeof data.plan.leaveByLabel,
     "string",
     "leave-by derives from transit departure minus the approach walk",
+  );
+  assert.equal(
+    data.plan.nextDepartureMinutes,
+    7,
+    "route plan exposes the selected route's next vehicle countdown",
   );
 
   assert.deepEqual(
@@ -950,6 +988,20 @@ test("alternate reason copy normalizes long backend rejection strings", () => {
         is_recommended: false,
         rejection_reason: "More walking than the recommended route.",
       },
+      {
+        id: "c4",
+        index: 4,
+        steps: steps("A", 21),
+        is_recommended: false,
+        rejection_reason: "Slower by 8 minutes and affected by Signal problem near DeKalb Av.",
+      },
+      {
+        id: "c5",
+        index: 5,
+        steps: steps("C", 11),
+        is_recommended: false,
+        rejection_reason: "Faster by 2 minutes, but affected by Stalled vehicle at 34 St.",
+      },
     ],
     activeRouteCandidate: { id: "c0", index: 0, steps: steps("Q", 13), is_recommended: true },
   });
@@ -960,7 +1012,43 @@ test("alternate reason copy normalizes long backend rejection strings", () => {
       "Slower by 13 min · service conditions",
       "1 extra transfer",
       "More walking",
+      "Slower by 8 min · Signal problem near DeKalb Av",
+      "Faster by 2 min · Stalled vehicle at 34 St",
     ],
+  );
+});
+
+test("plan rationale explains faster disrupted alternates as reliability tradeoffs", () => {
+  const nowMs = 1_700_000_000_000;
+  const steps = (line, minutes) => [
+    { type: "SUBWAY", route_id: line, train_line: line, minutes_until_arrival: minutes },
+  ];
+
+  const active = {
+    id: "c0",
+    index: 0,
+    steps: steps("Q", 13),
+    is_recommended: true,
+    recommendation_reason: "Fastest clear route with no reported delays.",
+  };
+  const disrupted = {
+    id: "c1",
+    index: 1,
+    steps: steps("C", 11),
+    is_recommended: false,
+    rejection_reason: "Faster by 2 minutes, but affected by Stalled vehicle at 34 St.",
+  };
+
+  const data = buildLeftRailData({
+    nowMs,
+    routeSteps: active.steps,
+    routeCandidates: [active, disrupted],
+    activeRouteCandidate: active,
+  });
+
+  assert.match(
+    data.plan.rationale,
+    /I did not pick the C because it is affected by Stalled vehicle at 34 St despite being 2 min faster\./,
   );
 });
 

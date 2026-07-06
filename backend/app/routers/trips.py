@@ -261,6 +261,7 @@ async def plan_trip(request: Request, payload: TripRequest):
             parsed_response,
             chosen_index,
             candidate_analysis,
+            scoring._score_routes(parsed_response, relevant_alerts),
         )
         route_incidents = trip_incidents._build_route_incident_markers(incidents, chosen_route)
         elapsed = time.monotonic() - t0

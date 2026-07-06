@@ -664,7 +664,7 @@ export function SmartRouteMap({
     destMarker.current = new maplibregl.Marker({
       element: el,
       anchor: "bottom",
-      offset: [0, 4],
+      offset: [0, 0],
     })
       .setLngLat([destLng, destLat])
       .addTo(map.current);
