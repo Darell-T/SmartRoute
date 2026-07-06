@@ -19,8 +19,8 @@ assert.match(
 );
 assert.match(
   markerSource,
-  /srCurrentLocationFill/,
-  "current-location marker should animate the blue fill within the white ring",
+  /sr-current-location-marker__fill/,
+  "current-location marker should keep the blue fill within the white ring",
 );
 assert.match(
   markerSource,
@@ -46,4 +46,24 @@ assert.doesNotMatch(
   markerSource,
   /rgba\(56,\s*189,\s*248,\s*0\.18\)/,
   "current-location marker should not regress to the old static cyan halo",
+);
+assert.match(
+  markerSource,
+  /height:31px/,
+  "destination pin element should end at the visual pin tip for stable map anchoring",
+);
+assert.match(
+  markerSource,
+  /<svg width="34" height="31" viewBox="0 0 34 31"/,
+  "destination pin SVG should not include visual space below the geographic tip",
+);
+assert.doesNotMatch(
+  markerSource,
+  /<ellipse/,
+  "destination pin should not carry a below-tip ellipse that shifts the perceived anchor",
+);
+assert.match(
+  mapSource,
+  /anchor:\s*"bottom"[\s\S]*offset:\s*\[0,\s*0\]/,
+  "MapLibre should anchor the destination pin bottom directly on the destination coordinate",
 );

@@ -66,6 +66,24 @@ test("left rail uses restrained transit product surfaces", () => {
   );
   assert.match(
     routeView,
+    /LayoutGroup/,
+    "recommended and alternate route cards should share a Motion layout group",
+  );
+  assert.match(
+    routeView,
+    /ArrivalCountdown/,
+    "nearby arrival countdown numbers should render through the countdown component",
+  );
+  assert.match(
+    fs.readFileSync(
+      path.join(ROOT, "components/smart-route/left-rail/arrival-countdown.tsx"),
+      "utf8",
+    ),
+    /NumberFlow[\s\S]*trend=\{-1\}/,
+    "arrival countdown values should use NumberFlow with countdown direction",
+  );
+  assert.match(
+    routeView,
     /function PredictionSignalIcon/,
     "arrival rows should use a meaningful signal-bars prediction icon",
   );
@@ -123,6 +141,16 @@ test("left rail uses restrained transit product surfaces", () => {
     atoms,
     /Footprints|TrainFront|BusFront|from "lucide-react"/,
     "compact strip pictograms should not regress to generic Lucide icons",
+  );
+  assert.match(
+    atoms,
+    /SHUTTLE_BUS_TOKEN/,
+    "alert text should recognize plain shuttle-bus phrases, not just bracketed route tokens",
+  );
+  assert.match(
+    atoms,
+    /BusChip route="BUS" title="Shuttle bus"/,
+    "plain shuttle-bus phrases should render with the bus pill used elsewhere in the rail",
   );
   assert.doesNotMatch(
     alertsView,

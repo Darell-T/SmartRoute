@@ -251,7 +251,7 @@ export interface RouteNote {
 
 export interface RoutePlan {
   headline: string;
-  // Short, derived, passenger-facing reason line — never raw model output.
+  // Short, sanitized, passenger-facing reason shown in the recommendation card.
   rationale: string;
   // Passenger-facing headsign for the recommended route's main leg
   // ("Coney Island-Stillwell Av"); the card title.
@@ -263,6 +263,9 @@ export interface RoutePlan {
   totalTime: string;
   // "Leave by 4:37 PM" — transit departure minus the approach walk.
   leaveByLabel?: string;
+  // Live countdown to the first vehicle boarding, when the backend supplies
+  // an actual vehicle arrival prediction.
+  nextDepartureMinutes?: number;
   // Transit-vehicle boardings minus one; walking never counts.
   transferCount?: number;
   strip?: RouteStripSegment[];
