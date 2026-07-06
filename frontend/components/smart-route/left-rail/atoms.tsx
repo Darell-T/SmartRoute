@@ -203,7 +203,12 @@ export function BusChip({ route, title }: { route: string; title?: string }) {
    delayed", "No [7][7X] between…", "[B35] detour". Render those tokens as
    the real bullet or bus badge instead of raw bracket text. Unrecognized
    tokens pass through untouched. */
-const TRANSIT_TOKEN = /\[([A-Za-z0-9+-]{1,8})\]/g;
+const TRANSIT_TOKEN = /\[([A-Za-z0-9+-]{1,8})\]/;
+const SHUTTLE_BUS_TOKEN = /\b((?:free\s+)?shuttle\s+buses?)\b/i;
+const TRANSIT_TEXT_TOKEN = new RegExp(
+  `${TRANSIT_TOKEN.source}|${SHUTTLE_BUS_TOKEN.source}`,
+  "gi",
+);
 const BUS_ROUTE_TOKEN = /^(?:B|BM|BX|M|Q|QM|SIM|S|X)\d{1,3}[A-Z]?(?:-?SBS)?$/;
 
 export function TransitText({
@@ -214,25 +219,46 @@ export function TransitText({
   bulletSize?: number;
 }) {
   const nodes: ReactNode[] = [];
-  const pattern = new RegExp(TRANSIT_TOKEN.source, "g");
+  const pattern = new RegExp(TRANSIT_TEXT_TOKEN.source, "gi");
   let cursor = 0;
   let match: RegExpExecArray | null;
   let key = 0;
 
   while ((match = pattern.exec(text)) !== null) {
-    const token = match[1].toUpperCase();
-    const badge = SUBWAY_BULLET_ROUTES.has(token) ? (
-      <span key={key++} className="sr-line-token">
-        <RouteBullet line={token} size={bulletSize} />
-      </span>
-    ) : BUS_ROUTE_TOKEN.test(token) ? (
-      <span key={key++} className="sr-line-token">
-        <BusChip route={token} />
-      </span>
-    ) : null;
+    const routeToken = match[1]?.toUpperCase();
+    const shuttlePhrase = match[2];
+    let badge: ReactNode | null = null;
+
+    if (routeToken && SUBWAY_BULLET_ROUTES.has(routeToken)) {
+      badge = (
+        <span key={key++} className="sr-line-token">
+          <RouteBullet line={routeToken} size={bulletSize} />
+        </span>
+      );
+    } else if (routeToken && BUS_ROUTE_TOKEN.test(routeToken)) {
+      badge = (
+        <span key={key++} className="sr-line-token">
+          <BusChip route={routeToken} />
+        </span>
+      );
+    } else if (shuttlePhrase) {
+      badge = (
+        <span key={key++} className="sr-line-token">
+          <BusChip route="BUS" title="Shuttle bus" />
+        </span>
+      );
+    }
+
     if (!badge) continue;
     if (match.index > cursor) nodes.push(text.slice(cursor, match.index));
-    nodes.push(badge);
+    if (shuttlePhrase) {
+      const freePrefix = shuttlePhrase.match(/^free\s+/i)?.[0] ?? "";
+      const shuttleLabel = shuttlePhrase.slice(freePrefix.length);
+      if (freePrefix) nodes.push(freePrefix);
+      nodes.push(badge, ` ${shuttleLabel}`);
+    } else {
+      nodes.push(badge);
+    }
     cursor = match.index + match[0].length;
   }
 

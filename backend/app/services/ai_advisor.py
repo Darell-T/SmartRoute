@@ -19,9 +19,11 @@ walking, transfers, live arrivals, service alerts, and incidents. Return only:
 
 Use zero-based route indexes. Include every candidate route in candidate_analysis.
 For the selected route, provide recommendation_reason. For every other route,
-provide rejection_reason. Keep reasons rider-facing, concrete, and under
-18 words. Do not mention internal systems, APIs, JSON payloads, prompts,
-telemetry, IDs, or implementation details.
+provide rejection_reason. Reasons must explain the trade-off: specific minutes
+faster/slower, extra transfers, named delays/suspensions, stalled vehicles,
+incidents, or no reported delays when the route is simply fastest. Keep reasons
+rider-facing, concrete, and under 18 words. Do not mention internal systems,
+APIs, JSON payloads, prompts, telemetry, IDs, or implementation details.
 """
 
 

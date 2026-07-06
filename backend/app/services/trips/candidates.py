@@ -78,29 +78,52 @@ def _build_fallback_candidate_reason(
 ) -> str:
     route_score = route_score or scoring._route_score(route, [])
     chosen_score = chosen_score or scoring._route_score(chosen_route, [])
+    route_alerts = route_score.get("alerts") or []
+    chosen_alerts = chosen_score.get("alerts") or []
+    route_alert = text._safe_text(route_alerts[0], 72) if route_alerts else ""
+    chosen_alert = text._safe_text(chosen_alerts[0], 72) if chosen_alerts else ""
     if is_recommended:
-        alert_phrase = (
-            " with no active alert penalty"
-            if route_score.get("alert_count", 0) == 0
-            else f" despite {route_score['alert_count']} alert(s) on its lines"
-        )
-        return (
-            f"Best overall score: {route_score['total_minutes']} min, "
-            f"{route_score['transfers']} transfer(s){alert_phrase}."
-        )
+        if route_score.get("alert_count", 0) == 0:
+            return (
+                f"Fastest route at {route_score['total_minutes']} min with "
+                "no reported service alerts."
+            )
+        if route_alert:
+            return (
+                f"Fastest route despite an alert: {route_alert}."
+            )
+        return "Fastest route despite active service alerts."
 
     route_minutes = int(route_score["total_minutes"])
     chosen_minutes = int(chosen_score["total_minutes"])
     delay = route_minutes - chosen_minutes
     transfer_delta = int(route_score["transfers"]) - int(chosen_score["transfers"])
     alert_delta = int(route_score["alert_count"]) - int(chosen_score["alert_count"])
+    if delay <= -2 and alert_delta > 0:
+        if route_alert:
+            return f"Faster by {abs(delay)} min, but affected by {route_alert}."
+        return f"Faster by {abs(delay)} min, but affected by service alerts."
+    if delay <= -2 and transfer_delta > 0:
+        return f"Faster by {abs(delay)} min, but adds an extra transfer."
+    if delay >= 3 and alert_delta > 0:
+        if route_alert:
+            return f"Slower by {delay} min and affected by {route_alert}."
+        return f"Slower by {delay} min and affected by service alerts."
     if delay >= 3:
-        return f"Slower by about {delay} minutes under current service conditions."
+        return f"Slower by {delay} min."
     if transfer_delta > 0:
-        return "Adds an extra transfer, which weakens reliability right now."
+        return (
+            "Adds an extra transfer."
+            if transfer_delta == 1
+            else f"Adds {transfer_delta} extra transfers."
+        )
     if alert_delta > 0:
-        return "Touches more active service alerts than the selected route."
-    return "Available, but less reliable than the recommended route right now."
+        if route_alert:
+            return f"Affected by {route_alert}."
+        return "Affected by service alerts."
+    if chosen_alert and delay <= 2:
+        return f"Similar time, but {chosen_alert} is already accounted for."
+    return "Similar time, but less reliable than the selected route."
 
 def _build_route_candidates(
     routes: list[list[dict]],

@@ -7,7 +7,12 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { AnimatePresence, motion } from "motion/react";
+import {
+  AnimatePresence,
+  LayoutGroup,
+  motion,
+  useReducedMotion,
+} from "motion/react";
 import {
   AlertTriangle,
   ChevronDown,
@@ -34,6 +39,10 @@ import {
   RouteBulletGroup,
   StepIcon,
 } from "./atoms";
+import {
+  ArrivalCountdown,
+  InlineArrivalCountdown,
+} from "./arrival-countdown";
 import { LINE_COLORS } from "./types";
 import type {
   Alternative,
@@ -99,6 +108,7 @@ export function RouteView({
     () => (isReady ? recommendedCandidateFromPlan(plan) : null),
     [isReady, plan],
   );
+  const shouldReduceMotion = useReducedMotion();
   // Public evaluation insights for the planning state, derived from the
   // live facts the rail already holds (station access, live arrivals,
   // official alerts, reported incidents). No fact → no line.
@@ -149,19 +159,33 @@ export function RouteView({
 
         {isReady && recommended && (
           <motion.div key="results" {...CONTENT_PHASE}>
-            <section className="sr-rail-section">
-              <RecommendedRouteCard
-                candidate={recommended}
-                plan={plan}
-                destination={search?.inputValue}
-              />
-              {plan.alternatives.length > 0 && (
-                <AlternateRoutesCollapsible
-                  alternatives={plan.alternatives}
-                  onSelectAlternative={onSelectAlternative}
-                />
-              )}
-            </section>
+            <LayoutGroup id="sr-route-results">
+              <section className="sr-rail-section">
+                <motion.div
+                  key={routeResultKey(plan)}
+                  layout
+                  initial={
+                    shouldReduceMotion ? { opacity: 0 } : { opacity: 0, y: 6 }
+                  }
+                  animate={
+                    shouldReduceMotion ? { opacity: 1 } : { opacity: 1, y: 0 }
+                  }
+                  transition={{ duration: 0.22, ease: "easeOut" }}
+                >
+                  <RecommendedRouteCard
+                    candidate={recommended}
+                    plan={plan}
+                    destination={search?.inputValue}
+                  />
+                </motion.div>
+                {plan.alternatives.length > 0 && (
+                  <AlternateRoutesCollapsible
+                    alternatives={plan.alternatives}
+                    onSelectAlternative={onSelectAlternative}
+                  />
+                )}
+              </section>
+            </LayoutGroup>
           </motion.div>
         )}
 
@@ -486,6 +510,9 @@ function RecommendedRouteCard({
   ]
     .filter(Boolean)
     .join(" · ");
+  const hasNextDeparture =
+    typeof plan.nextDepartureMinutes === "number"
+    && Number.isFinite(plan.nextDepartureMinutes);
   const meta = [
     `${transfers} transfer${transfers === 1 ? "" : "s"}`,
     typeof candidate.walkMinutes === "number"
@@ -511,10 +538,16 @@ function RecommendedRouteCard({
       {timing && (
         <span className="sr-recommended-route__timing">{timing}</span>
       )}
+      {hasNextDeparture && (
+        <RecommendedNextDeparture
+          routeId={plan.pickedLine}
+          minutes={plan.nextDepartureMinutes}
+        />
+      )}
       {plan.strip && plan.strip.length > 0 && (
         <RouteStepStrip segments={plan.strip} />
       )}
-      <p>{plan.rationale || "Best available route."}</p>
+      <TypedRouteReasoning text={plan.rationale || "Best available route."} />
       <div className="sr-recommended-route__footer">
         <span>{meta}</span>
         {hasDetails && (
@@ -540,6 +573,93 @@ function RecommendedRouteCard({
         </div>
       )}
     </article>
+  );
+}
+
+function RecommendedNextDeparture({
+  routeId,
+  minutes,
+}: {
+  routeId: string;
+  minutes: number | undefined;
+}) {
+  if (typeof minutes !== "number" || !Number.isFinite(minutes)) return null;
+
+  const line = routeId ? routeId.toUpperCase() : "train";
+  const value = Math.max(0, Math.round(minutes));
+
+  return (
+    <span className="sr-recommended-route__next">
+      Next {line}
+      {value <= 0 ? (
+        " now"
+      ) : (
+        <>
+          {" in "}
+          <InlineArrivalCountdown minutes={value} />
+        </>
+      )}
+    </span>
+  );
+}
+
+function TypedRouteReasoning({ text }: { text: string }) {
+  const [visibleText, setVisibleText] = useState("");
+  const cleaned = text.trim();
+
+  useEffect(() => {
+    let animationFrame = 0;
+    let timer: number | undefined;
+
+    if (!cleaned) {
+      animationFrame = window.requestAnimationFrame(() => {
+        setVisibleText("");
+      });
+      return () => window.cancelAnimationFrame(animationFrame);
+    }
+
+    const motionQuery = window.matchMedia?.(
+      "(prefers-reduced-motion: reduce)",
+    );
+    const prefersReducedMotion = Boolean(motionQuery?.matches);
+    if (prefersReducedMotion || cleaned.length <= 8) {
+      animationFrame = window.requestAnimationFrame(() => {
+        setVisibleText(cleaned);
+      });
+      return () => window.cancelAnimationFrame(animationFrame);
+    }
+
+    let index = 0;
+    const charactersPerTick = cleaned.length > 150 ? 2 : 1;
+    const typingDelayMs = cleaned.length > 150 ? 42 : 34;
+    animationFrame = window.requestAnimationFrame(() => {
+      setVisibleText("");
+      timer = window.setInterval(() => {
+        index = Math.min(cleaned.length, index + charactersPerTick);
+        setVisibleText(cleaned.slice(0, index));
+        if (index >= cleaned.length && typeof timer === "number") {
+          window.clearInterval(timer);
+        }
+      }, typingDelayMs);
+    });
+
+    return () => {
+      window.cancelAnimationFrame(animationFrame);
+      if (typeof timer === "number") {
+        window.clearInterval(timer);
+      }
+    };
+  }, [cleaned]);
+
+  const isTyping = visibleText.length < cleaned.length;
+
+  return (
+    <p className="sr-ai-reasoning" aria-live="polite">
+      <span>{visibleText}</span>
+      {isTyping && (
+        <span className="sr-ai-reasoning__cursor" aria-hidden="true" />
+      )}
+    </p>
   );
 }
 
@@ -715,9 +835,16 @@ function AlternateRoutesCollapsible({
   onSelectAlternative?: (candidateId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const shouldReduceMotion = useReducedMotion();
+  const hiddenState = shouldReduceMotion
+    ? { opacity: 0 }
+    : { opacity: 0, height: 0 };
+  const visibleState = shouldReduceMotion
+    ? { opacity: 1 }
+    : { opacity: 1, height: "auto" };
 
   return (
-    <div className="sr-alternates">
+    <motion.div className="sr-alternates" layout>
       <button
         type="button"
         className="sr-alternates__trigger"
@@ -730,20 +857,34 @@ function AlternateRoutesCollapsible({
         </span>
         <ChevronDown size={17} strokeWidth={1.8} aria-hidden="true" />
       </button>
-      <div className="sr-alternates__content" data-open={open ? "true" : "false"}>
-        <div>
-          <ul className="sr-alt-list" aria-label="Alternate routes">
-            {alternatives.map((alternative, index) => (
-              <AlternateRouteCard
-                key={alternative.id ?? `${alternative.line}-${index}`}
-                alternative={alternative}
-                onSelectAlternative={onSelectAlternative}
-              />
-            ))}
-          </ul>
-        </div>
-      </div>
-    </div>
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            className="sr-alternates__content"
+            layout
+            initial={hiddenState}
+            animate={visibleState}
+            exit={hiddenState}
+            transition={{
+              duration: shouldReduceMotion ? 0.01 : 0.24,
+              ease: "easeOut",
+            }}
+          >
+            <ul className="sr-alt-list" aria-label="Alternate routes">
+              <AnimatePresence initial={false}>
+                {alternatives.map((alternative, index) => (
+                  <AlternateRouteCard
+                    key={alternative.id ?? `${alternative.line}-${index}`}
+                    alternative={alternative}
+                    onSelectAlternative={onSelectAlternative}
+                  />
+                ))}
+              </AnimatePresence>
+            </ul>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
   );
 }
 
@@ -758,6 +899,7 @@ function AlternateRouteCard({
   alternative: Alternative;
   onSelectAlternative?: (candidateId: string) => void;
 }) {
+  const shouldReduceMotion = useReducedMotion();
   const canUse = Boolean(alternative.id && onSelectAlternative);
   const reason = alternative.reason?.trim();
   const path =
@@ -771,7 +913,14 @@ function AlternateRouteCard({
       : null;
 
   return (
-    <li className="sr-alt-card smart-route-liquid-card smart-route-liquid-card--secondary">
+    <motion.li
+      className="sr-alt-card smart-route-liquid-card smart-route-liquid-card--secondary"
+      layout
+      initial={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, y: 4 }}
+      animate={shouldReduceMotion ? { opacity: 1 } : { opacity: 1, y: 0 }}
+      exit={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, y: -4 }}
+      transition={{ duration: 0.2, ease: "easeOut" }}
+    >
       <div className="sr-alt-card__body">
         <div className="sr-alt-card__head">
           <strong className="sr-alt-card__duration">
@@ -798,7 +947,7 @@ function AlternateRouteCard({
           Use
         </button>
       )}
-    </li>
+    </motion.li>
   );
 }
 
@@ -988,7 +1137,13 @@ function StationArrivalRow({
         {details.length > 0 && <small>{details.join(" · ")}</small>}
       </span>
       <span className="sr-station-arrival-row__time">
-        <strong>{formatArrivalMinutes(arrival.arrivalMinutes, "Soon")}</strong>
+        <strong>
+          <ArrivalCountdown
+            minutes={arrival.arrivalMinutes}
+            fallback="Soon"
+            className="sr-arrival-countdown"
+          />
+        </strong>
         <PredictionStatus
           predictionType={arrival.predictionType}
           predictionFreshness={arrival.predictionFreshness}
@@ -1034,7 +1189,13 @@ function ArrivalRow({
         {details.length > 0 && <small>{details.join(" · ")}</small>}
       </span>
       <span className="sr-arrival-row__time">
-        <strong>{formatArrivalMinutes(arrival.arrivalMinutes, arrival.label)}</strong>
+        <strong>
+          <ArrivalCountdown
+            minutes={arrival.arrivalMinutes}
+            fallback={arrival.label}
+            className="sr-arrival-countdown"
+          />
+        </strong>
         <PredictionStatus
           predictionType={arrival.predictionType}
           predictionFreshness={arrival.predictionFreshness}
@@ -1177,6 +1338,15 @@ function recommendedCandidateFromPlan(plan: RoutePlan): RecommendedRouteDisplay 
   };
 }
 
+function routeResultKey(plan: RoutePlan) {
+  return [
+    plan.isAlternativeRoute ? "selected" : "recommended",
+    plan.pickedLine || "walk",
+    plan.headsign || "",
+    plan.totalTime || "",
+  ].join(":");
+}
+
 function timingFromSteps(steps: RouteStep[]) {
   let walkMinutes = 0;
   let boardCount = 0;
@@ -1201,18 +1371,4 @@ function parseMinutes(value: string | undefined) {
   const match = value.match(/-?\d+/);
   if (!match) return undefined;
   return Math.max(0, Number(match[0]));
-}
-
-function formatArrivalMinutes(minutes: number[], fallback: string) {
-  if (minutes.length === 0) return fallback;
-  if (minutes.length === 1) {
-    const only = minutes[0];
-    if (only <= 0) return "Now";
-    if (only === 1) return "1 min";
-    return `${only} min`;
-  }
-  const rendered = minutes
-    .slice(0, 3)
-    .map((mins) => (mins <= 0 ? "Now" : String(mins)));
-  return `${rendered.join(", ")} min`.replace("Now min", "Now");
 }

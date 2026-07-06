@@ -170,14 +170,14 @@ export function createDestinationPin(): HTMLDivElement {
   const el = document.createElement("div");
   el.style.cssText = [
     "width:34px",
-    "height:38px",
+    "height:31px",
     "position:relative",
     "overflow:visible",
     "pointer-events:none",
     "filter:drop-shadow(0 5px 10px rgba(0,0,0,0.42))",
   ].join(";");
   el.innerHTML = `
-    <svg width="34" height="38" viewBox="0 0 34 38" fill="none" aria-hidden="true" style="display:block">
+    <svg width="34" height="31" viewBox="0 0 34 31" fill="none" aria-hidden="true" style="display:block">
       <path
         d="M17 3.8c-5.6 0-10.12 4.34-10.12 9.72 0 6.68 8.18 15.7 9.25 16.84a1.16 1.16 0 0 0 1.74 0c1.07-1.14 9.25-10.16 9.25-16.84C27.12 8.14 22.6 3.8 17 3.8Z"
         fill="#ef3b5d"
@@ -189,7 +189,6 @@ export function createDestinationPin(): HTMLDivElement {
       />
       <circle cx="17" cy="13.3" r="3.4" fill="#0d1117" />
       <circle cx="17" cy="13.3" r="1.35" fill="rgba(255,255,255,0.9)" />
-      <ellipse cx="17" cy="32.2" rx="5.8" ry="2.1" fill="rgba(0,0,0,0.26)" />
     </svg>
   `;
   return el;

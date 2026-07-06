@@ -33,6 +33,7 @@
     "@mapbox/polyline": "^1.2.1",
     "@mdi/js": "^7.4.47",
     "@mdi/react": "^1.6.1",
+    "@number-flow/react": "^0.6.1",
     "@radix-ui/react-collapsible": "^1.1.15",
     "@types/three": "^0.183.1",
     "@vercel/analytics": "1.6.1",
