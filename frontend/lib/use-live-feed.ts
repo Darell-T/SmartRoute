@@ -63,7 +63,7 @@ function shouldSendLocation(
 export function useLiveFeed(
   location: { lng: number; lat: number } | null,
   selectedRouteIds: string[] = [],
-  atlasScan = false,
+  includeIncidentScan = false,
 ): LiveFeedState {
   const [state, setState] = useState<LiveFeedState>(INITIAL);
   const wsRef = useRef<WebSocket | null>(null);
@@ -71,12 +71,12 @@ export function useLiveFeed(
   const backoffRef = useRef(1000);
   const locationRef = useRef(location);
   const selectedRouteIdsRef = useRef(selectedRouteIds);
-  const atlasScanRef = useRef(atlasScan);
+  const includeIncidentScanRef = useRef(includeIncidentScan);
   const sentLocationRef = useRef<{ lng: number; lat: number } | null>(null);
 
   locationRef.current = location;
   selectedRouteIdsRef.current = selectedRouteIds;
-  atlasScanRef.current = atlasScan;
+  includeIncidentScanRef.current = includeIncidentScan;
 
   useEffect(() => {
     if (!location) return;
@@ -101,7 +101,7 @@ export function useLiveFeed(
         lat: loc.lat,
         lng: loc.lng,
         selected_route_ids: selectedRouteIdsRef.current,
-        atlas_scan: atlasScanRef.current,
+        atlas_scan: includeIncidentScanRef.current,
       }));
       sentLocationRef.current = loc;
     }
@@ -262,15 +262,15 @@ export function useLiveFeed(
         lat: location.lat,
         lng: location.lng,
         selected_route_ids: selectedRouteIdsRef.current,
-        atlas_scan: atlasScanRef.current,
+        atlas_scan: includeIncidentScanRef.current,
       }));
       sentLocationRef.current = location;
     }
   }, [location?.lat, location?.lng]);
 
   useEffect(() => {
-    // Re-announce when the ATLAS scan toggle flips so the backend starts/stops
-    // the half-mile incident scan immediately, without waiting for movement.
+    // Re-announce when the incident-scan flag flips so the backend starts or
+    // stops the half-mile incident feed without waiting for movement.
     const ws = wsRef.current;
     const loc = locationRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN || !loc) return;
@@ -279,9 +279,9 @@ export function useLiveFeed(
       lat: loc.lat,
       lng: loc.lng,
       selected_route_ids: selectedRouteIdsRef.current,
-      atlas_scan: atlasScan,
+      atlas_scan: includeIncidentScan,
     }));
-  }, [atlasScan]);
+  }, [includeIncidentScan]);
 
   useEffect(() => {
     const ws = wsRef.current;

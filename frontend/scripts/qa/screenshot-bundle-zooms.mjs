@@ -29,7 +29,7 @@ await page.goto("http://localhost:3000/?subway-visual=1&qa-map=1", {
   waitUntil: "domcontentloaded",
   timeout: 60000,
 });
-await page.waitForFunction(() => typeof window.__jarvisMap !== "undefined", {
+await page.waitForFunction(() => typeof window.__smartRouteMap !== "undefined", {
   timeout: 60000,
   polling: 500,
 });
@@ -38,7 +38,7 @@ await page.waitForTimeout(6000);
 for (const scene of SCENES) {
   await page.evaluate(
     ({ lng, lat, zoom }) => {
-      window.__jarvisMap.jumpTo({ center: [lng, lat], zoom, pitch: 0, bearing: 0 });
+      window.__smartRouteMap.jumpTo({ center: [lng, lat], zoom, pitch: 0, bearing: 0 });
     },
     scene,
   );

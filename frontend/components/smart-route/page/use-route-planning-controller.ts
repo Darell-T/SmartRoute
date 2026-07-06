@@ -22,27 +22,20 @@ type UserLocation = { lng: number; lat: number } | null;
 
 type RoutePlanningControllerInput = {
   userLocation: UserLocation;
-  onClearFocusedLiveDirection: () => void;
-  onPulseLiveRail: () => void;
 };
 
 export function useRoutePlanningController({
   userLocation,
-  onClearFocusedLiveDirection,
-  onPulseLiveRail,
 }: RoutePlanningControllerInput) {
   const [inputValue, setInputValue] = useState("");
   const [selectedDestination, setSelectedDestination] =
     useState<DestinationSelection | null>(null);
-  const [jarvisText, setJarvisText] = useState("");
-  const [thinkingText, setThinkingText] = useState("");
-  // Canned ATLAS line after the user switches to an alternative route;
+  const [recommendationText, setRecommendationText] = useState("");
+  // Canned line after the user switches to an alternative route;
   // overrides the rail's plan headline until the next trip or clear.
   const [switchHeadline, setSwitchHeadline] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [isSpeaking, setIsSpeaking] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
-  const [isListening, setIsListening] = useState(false);
   const [plannedRouteSteps, setPlannedRouteSteps] = useState<RouteStep[]>([]);
   const [routeCandidates, setRouteCandidates] = useState<RouteCandidate[]>([]);
   const [activeRouteCandidateId, setActiveRouteCandidateId] =
@@ -53,7 +46,7 @@ export function useRoutePlanningController({
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioUrlRef = useRef<string | null>(null);
   const routePlanningRequestIdRef = useRef(0);
-  // Pre-warmed ATLAS "thinking" clip so the spoken phrase fires the instant
+  // Pre-warmed route-planning clip so the spoken phrase fires the instant
   // route planning starts, with no network/TTS wait on the critical path.
   const thinkingClipRef = useRef<{ text: string; audio: string } | null>(null);
 
@@ -78,32 +71,11 @@ export function useRoutePlanningController({
 
   function stopNarration() {
     releaseNarrationAudio();
-    setIsSpeaking(false);
   }
 
   function handleDestinationInputChange(value: string) {
     setInputValue(value);
     setSelectedDestination(null);
-  }
-
-  function handleVoiceInput() {
-    const win = window as unknown as {
-      SpeechRecognition?: new () => SpeechRecognitionLike;
-      webkitSpeechRecognition?: new () => SpeechRecognitionLike;
-    };
-    const RecognitionCtor =
-      win.SpeechRecognition || win.webkitSpeechRecognition;
-    if (!RecognitionCtor) return;
-    const recognition = new RecognitionCtor();
-    recognition.lang = "en-US";
-    recognition.onstart = () => setIsListening(true);
-    recognition.onresult = (event) => {
-      setInputValue(event.results[0][0].transcript);
-      setSelectedDestination(null);
-    };
-    recognition.onend = () => setIsListening(false);
-    recognition.onerror = () => setIsListening(false);
-    recognition.start();
   }
 
   async function handleSubmit(
@@ -125,11 +97,9 @@ export function useRoutePlanningController({
     stopNarration();
     setErrorText(null);
     setIsLoading(true);
-    setIsSpeaking(false);
     const initialThinkingText =
-      "Scanning live feeds, alerts, and route options...";
-    setThinkingText(initialThinkingText);
-    setJarvisText(initialThinkingText);
+      "Checking live arrivals, service alerts, walking time, and transfers.";
+    setRecommendationText(initialThinkingText);
     setRouteCandidates([]);
     setActiveRouteCandidateId(null);
     setSelectedRouteIndex(null);
@@ -137,7 +107,7 @@ export function useRoutePlanningController({
     setTripIncidents([]);
 
     let tripSettled = false;
-    // Play ATLAS's thinking line the instant the state flips to "thinking".
+    // Play the route-planning line the instant the state flips to "thinking".
     // The clip is pre-warmed (on mount and after each plan), so there is no
     // network wait on the critical path. Cold start (ref not yet filled)
     // falls back to fetching on demand.
@@ -145,8 +115,7 @@ export function useRoutePlanningController({
     if (warmClip?.audio) {
       thinkingClipRef.current = null;
       if (warmClip.text) {
-        setThinkingText(warmClip.text);
-        setJarvisText(warmClip.text);
+        setRecommendationText(warmClip.text);
       }
       playNarrationAudio(warmClip.audio);
       void prewarmThinking();
@@ -156,8 +125,7 @@ export function useRoutePlanningController({
           if (routePlanningRequestIdRef.current !== requestId || tripSettled)
             return;
           if (thinking?.text) {
-            setThinkingText(thinking.text);
-            setJarvisText(thinking.text);
+            setRecommendationText(thinking.text);
           }
           if (thinking?.audio) playNarrationAudio(thinking.audio);
         })
@@ -189,7 +157,7 @@ export function useRoutePlanningController({
       setPlannedRouteSteps(selectedSteps);
       setTripIncidents(tripData.incidents ?? []);
       setSwitchHeadline(null);
-      setJarvisText(tripData.recommendation);
+      setRecommendationText(tripData.recommendation);
       if (destinationSelection) setSelectedDestination(destinationSelection);
       if (tripData.audio) playNarrationAudio(tripData.audio);
     } catch (error) {
@@ -214,7 +182,7 @@ export function useRoutePlanningController({
     void handleSubmit(destinationOverride, selectionOverride);
   }
 
-  /** Fetch one ATLAS thinking clip (text + cached audio) into the ref so the
+  /** Fetch one route-planning clip (text + cached audio) into the ref so the
    *  next plan can play it immediately. Fire-and-forget; silent on failure. */
   function prewarmThinking() {
     return getThinking()
@@ -229,8 +197,7 @@ export function useRoutePlanningController({
       .catch(() => {});
   }
 
-  /** Decode base64 MP3 and play it through the shared audio ref, driving
-   *  isSpeaking. Pauses/revokes any narration already playing. */
+  /** Decode base64 MP3 and play it through the shared audio ref. */
   function playNarrationAudio(audioB64: string) {
     releaseNarrationAudio();
     const bytes = Uint8Array.from(atob(audioB64), (char) =>
@@ -242,16 +209,21 @@ export function useRoutePlanningController({
     const routeAudio = new Audio(nextAudioUrl);
     audioUrlRef.current = nextAudioUrl;
     audioRef.current = routeAudio;
-    setIsSpeaking(true);
     routeAudio.onended = () => {
-      setIsSpeaking(false);
+      URL.revokeObjectURL(nextAudioUrl);
+      if (audioUrlRef.current === nextAudioUrl) audioUrlRef.current = null;
       audioRef.current = null;
     };
     routeAudio.onerror = () => {
-      setIsSpeaking(false);
+      URL.revokeObjectURL(nextAudioUrl);
+      if (audioUrlRef.current === nextAudioUrl) audioUrlRef.current = null;
       audioRef.current = null;
     };
-    routeAudio.play().catch(() => setIsSpeaking(false));
+    routeAudio.play().catch(() => {
+      URL.revokeObjectURL(nextAudioUrl);
+      if (audioUrlRef.current === nextAudioUrl) audioUrlRef.current = null;
+      audioRef.current = null;
+    });
   }
 
   function handleSelectAlternative(candidateId: string) {
@@ -264,8 +236,6 @@ export function useRoutePlanningController({
     setActiveRouteCandidateId(candidate.id);
     setSelectedRouteIndex(candidate.index);
     setPlannedRouteSteps(candidate.steps);
-    onClearFocusedLiveDirection();
-    onPulseLiveRail();
 
     // Lazily enrich an alternate's intermediate stops the first time it's
     // selected -- the initial trip only enriched the chosen route. Updating the
@@ -297,10 +267,10 @@ export function useRoutePlanningController({
     if (!line) return;
     // Show the local line immediately; the server's canned phrase (cached
     // per line) replaces it and brings audio when TTS is available.
-    setSwitchHeadline(`Rerouting via the ${line}, sir.`);
+    setSwitchHeadline(`Rerouting via the ${line}.`);
     getSwitchNarration(line)
       .then((narration) => {
-        setSwitchHeadline(narration.text);
+        setSwitchHeadline(publicRouteNarration(narration.text));
         if (narration.audio) playNarrationAudio(narration.audio);
       })
       .catch(() => {
@@ -318,32 +288,27 @@ export function useRoutePlanningController({
     setSelectedRouteIndex(null);
     setPlannedRouteSteps([]);
     setTripIncidents([]);
-    setJarvisText("");
-    setThinkingText("");
+    setRecommendationText("");
     setSwitchHeadline(null);
     setErrorText(null);
-    onClearFocusedLiveDirection();
-    onPulseLiveRail();
   }
 
   return {
-    inputValue, selectedDestination, jarvisText, thinkingText, switchHeadline,
-    isLoading, isSpeaking, errorText, isListening, plannedRouteSteps,
+    inputValue, selectedDestination, recommendationText, switchHeadline,
+    isLoading, errorText, plannedRouteSteps,
     routeCandidates, activeRouteCandidateId, tripIncidents,
-    handleDestinationInputChange, handleVoiceInput, handleSearchSubmit,
+    handleDestinationInputChange, handleSearchSubmit,
     handleSelectAlternative, handleClearRoute,
   };
 }
 
-type SpeechRecognitionLike = {
-  lang: string;
-  onstart: () => void;
-  onresult: (event: {
-    results: {
-      [index: number]: { [index: number]: { transcript: string } };
-    };
-  }) => void;
-  onend: () => void;
-  onerror: () => void;
-  start: () => void;
-};
+function publicRouteNarration(text: string) {
+  return text
+    .replace(/\bATLAS\b/gi, "SmartRoute")
+    .replace(/\bVery well,\s*/i, "")
+    .replace(/,\s*sir\.?/i, ".")
+    .replace(/\bsir\.?\s*/i, "")
+    .trim();
+}
+
+export type RoutePlanningController = ReturnType<typeof useRoutePlanningController>;

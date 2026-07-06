@@ -8,17 +8,20 @@ import time
 from pathlib import Path
 
 client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-# The ATLAS system prompt lives in a sibling text file so it can be edited
-# and reviewed without touching code. ATLAS_SYSTEM_PROMPT overrides it; the
-# file is the default so local dev works with no env configuration.
-SYSTEM_PROMPT = os.getenv("ATLAS_SYSTEM_PROMPT") or (
-    Path(__file__).with_name("ai_advisor_system_prompt.txt").read_text(encoding="utf-8")
+# The SmartRoute system prompt lives in a sibling text file so it can be
+# edited and reviewed without touching code. SMARTROUTE_SYSTEM_PROMPT overrides
+# it (legacy ATLAS_SYSTEM_PROMPT still honored for existing deploys); the file
+# is the default so local dev works with no env configuration.
+SYSTEM_PROMPT = (
+    os.getenv("SMARTROUTE_SYSTEM_PROMPT")
+    or os.getenv("ATLAS_SYSTEM_PROMPT")
+    or Path(__file__).with_name("ai_advisor_system_prompt.txt").read_text(encoding="utf-8")
 )
 
 
 _MODEL_PRIORITY = ["claude-haiku-4-5-20251001"]
 
-LIVE_SUMMARY_PROMPT = """You are ATLAS, delivering a short operational briefing about the NYC subway network.
+LIVE_SUMMARY_PROMPT = """Produce a short operational briefing about the NYC subway network.
 
 Return JSON only, with exactly these keys:
 {"headline":"...","body":"..."}
@@ -30,7 +33,7 @@ Rules:
 - Do not mention incidents, riders, boarding advice, destinations, or route indices.
 - Do not mention implementation details like GTFS, payloads, APIs, servers, telemetry, parse failures, or internal tooling.
 - Rider-facing subway line names like Q or A are allowed when useful.
-- Keep the tone calm, precise, and slightly witty in an ATLAS way.
+- Keep the tone calm, precise, and factual. No persona, no jokes.
 """
 
 _SUMMARY_INTERNAL_LEAK_PATTERN = re.compile(

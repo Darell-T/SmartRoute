@@ -1,246 +1,89 @@
-/* ════════════════════════════════════════════════════════════════════════
-   SmartRoute — Left Rail tokens, keyframes, primitives
-
-   A flat, dark, agent-first aesthetic. ATLAS is the only visible brand
-   presence — the orb appears exclusively in conversational contexts. All
-   selectors are namespaced under `.sr-rail` (or its descendants) so this
-   stylesheet never bleeds into the rest of the app.
-
-   Token nomenclature mirrors the prototype's `--sr-*` namespace; everything
-   feeds the three views (Route / Hub / Alerts) and is shared with the FX
-   primitives in `LeftRail/fx.tsx`. Spacing, motion, and color decisions are
-   pinned to the design handoff (`design_handoff_left_rail/README.md`).
-   ════════════════════════════════════════════════════════════════════════ */
-
 .sr-rail {
-  --rail-bg: rgba(13, 11, 7, 0.82);
-  --rail-surface: rgba(216, 155, 43, 0.08);
-  --rail-surface-strong: rgba(216, 155, 43, 0.13);
-  --rail-border: rgba(216, 155, 43, 0.32);
-  --rail-border-strong: rgba(240, 185, 75, 0.48);
-  --rail-accent: #d89b2b;
-  --rail-accent-strong: #f0b94b;
-  --rail-accent-deep: #6e4a12;
-  --rail-text-muted: #b88a3a;
-  --rail-text-soft: #f4efe2;
-  --rail-glow: rgba(216, 155, 43, 0.36);
-  --rail-hover: rgba(216, 155, 43, 0.1);
+  --rail-bg: rgba(13, 17, 23, 0.94);
+  --rail-surface: rgba(255, 255, 255, 0.035);
+  --rail-surface-strong: rgba(255, 255, 255, 0.065);
+  --rail-border: rgba(255, 255, 255, 0.1);
+  /* Transit-green accent for selected/system state (tab underline, toggle
+     pill, focus). Emerald-leaning so it reads as UI accent, cohesive with the
+     green Use action and Signal Green without impersonating a route bullet. */
+  --rail-border-strong: rgba(52, 211, 153, 0.5);
+  --rail-accent: #34d399;
+  --rail-accent-strong: #10b981;
+  --rail-hover: rgba(255, 255, 255, 0.075);
+  --rail-text-primary: rgba(255, 255, 255, 0.92);
+  --rail-text-secondary: rgba(255, 255, 255, 0.62);
+  --rail-text-muted: rgba(255, 255, 255, 0.42);
 
-  /* ── surfaces (liquid glass) ─────────────────────────────────
-     The rail floats over the live map; surfaces are translucent so
-     the basemap glows through the backdrop blur. Nested cards and
-     inputs are lighter glass chips, not solid panels. The recipe is
-     calibrated against the bubbbly glass reference (blur 22 /
-     saturate / white-alpha fill + 1px specular inset + deep drop
-     shadow), re-tuned for a dark basemap. */
-  --sr-bg: rgba(13, 11, 7, 0.42);
-  --sr-surface: var(--rail-bg); /* rail panel fill (under blur) */
-  --sr-surface-2: var(--rail-surface); /* nested cards, inputs */
+  --sr-bg: var(--rail-bg);
+  --sr-surface: var(--rail-bg);
+  --sr-surface-2: var(--rail-surface);
   --sr-surface-3: var(--rail-surface-strong);
-  --sr-surface-edge: rgba(17, 16, 11, 0.72);
-  /* Blur radius drives backdrop-filter cost (the rail floats over the live
-     map, so the strip behind it is re-blurred every pan frame). 16px keeps
-     the frosted-glass read at a fraction of the 28px cost; the contrast()
-     pass is dropped (extra filter = extra GPU work) and saturation eased. */
-  --sr-glass-blur: blur(16px) saturate(1.3);
-  --sr-glass-border: var(--rail-border);
-  --sr-glass-specular: rgba(244, 239, 226, 0.28);
-  --sr-glass-rim: var(--rail-border-strong);
-  --sr-glass-refract-accent: rgba(216, 155, 43, 0.13);
-  --sr-glass-refract-warm: rgba(240, 185, 75, 0.13);
-  --sr-glass-shadow: 0 34px 80px rgba(0, 0, 0, 0.54);
-
-  /* ── foreground ──────────────────────────────────────────────── */
-  --sr-fg: var(--rail-text-soft);
-  --sr-fg-2: rgba(244, 239, 226, 0.78);
-  --sr-fg-3: rgba(215, 202, 175, 0.66);
+  --sr-fg: var(--rail-text-primary);
+  --sr-fg-2: var(--rail-text-secondary);
+  --sr-fg-3: var(--rail-text-muted);
   --sr-muted: var(--rail-text-muted);
+  --sr-rule: rgba(255, 255, 255, 0.1);
+  --sr-rule-bright: rgba(255, 255, 255, 0.16);
+  --sr-cyan: var(--rail-accent);
+  --sr-cyan-deep: rgba(16, 185, 129, 0.18);
+  --sr-amber: #fbbf24;
+  --sr-coral: #fb7185;
+  --sr-sage: #34d399;
+  --sr-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --sr-dur-1: 150ms;
+  --sr-dur-2: 240ms;
+  --sr-dur-3: 360ms;
+  /* One grotesk for the whole rail, weight-differentiated only — the NYCTA
+     convention. Archivo is the loaded webfont; a licensed Helvetica Now can
+     be slotted in front later without touching any component. */
+  --sr-display: var(--font-archivo), "Helvetica Now", Helvetica, Arial, sans-serif;
+  --sr-mono: var(--font-archivo), "Helvetica Now", Helvetica, Arial, sans-serif;
 
-  /* ── rules / borders ────────────────────────────────────────── */
-  --sr-rule: rgba(216, 155, 43, 0.18);
-  --sr-rule-bright: rgba(240, 185, 75, 0.34);
-
-  /* ── accents ────────────────────────────────────────────────── */
-  --sr-cyan: var(--rail-accent); /* rail active/live accent */
-  --sr-cyan-deep: var(--rail-accent-deep);
-  --sr-amber: var(--rail-accent-strong); /* warnings, stale, planned */
-  --sr-coral: #f87171; /* errors, major incidents */
-  --sr-sage: #86c29a;
-
-  /* ── motion ─────────────────────────────────────────────────── */
-  --sr-ease: cubic-bezier(0.4, 0, 0.2, 1);
-  --sr-dur-1: 150ms; /* hover transitions */
-  --sr-dur-2: 220ms; /* small state changes */
-  --sr-dur-3: 360ms; /* tab/section enter */
-  --sr-dur-4: 600ms; /* number ticker */
-
-  /* ── type ───────────────────────────────────────────────────── */
-  --sr-display: var(--font-space-grotesk), "Space Grotesk", ui-sans-serif,
-    system-ui, sans-serif;
-  --sr-mono: var(--font-jetbrains-mono), "JetBrains Mono", "IBM Plex Mono",
-    ui-monospace, monospace;
-
-  /* Liquid glass panel: translucent fill + heavy backdrop blur with a
-     saturation lift so the map's line colors bloom through, a hairline
-     glass border, a 1px specular top inset, and a deep soft drop shadow
-     that floats the panel off the map. */
-  background:
-    radial-gradient(circle at 14% 3%, var(--sr-glass-refract-accent), transparent 34%),
-    radial-gradient(circle at 92% 12%, var(--sr-glass-refract-warm), transparent 36%),
-    linear-gradient(
-      135deg,
-      rgba(255, 255, 255, 0.13) 0%,
-      rgba(255, 255, 255, 0.035) 34%,
-      rgba(255, 255, 255, 0) 62%
-    ),
-    var(--sr-surface);
-  -webkit-backdrop-filter: var(--sr-glass-blur);
-  backdrop-filter: var(--sr-glass-blur);
-  border: 1px solid var(--sr-glass-border);
-  border-radius: 30px;
-  box-shadow:
-    var(--sr-glass-shadow),
-    0 0 0 0.5px rgba(255, 255, 255, 0.08),
-    0 24px 60px rgba(0, 0, 0, 0.45),
-    0 2px 10px rgba(0, 0, 0, 0.3),
-    inset 0 1px 0 var(--sr-glass-specular),
-    inset 1px 0 0 rgba(255, 255, 255, 0.08),
-    inset -1px 0 0 rgba(240, 185, 75, 0.1),
-    inset 0 -1px 0 rgba(255, 255, 255, 0.05);
+  background: var(--rail-bg);
+  border: 1px solid var(--rail-border);
+  border-radius: 6px;
   color: var(--sr-fg);
   font-family: var(--sr-display);
-  -webkit-font-smoothing: antialiased;
-  isolation: isolate;
-}
-
-/* Conic-gradient angle property — drives the ATLAS thinking beam. The
-   `@property` declaration must live OUTSIDE the .sr-rail nest because the
-   spec requires it at the top level of the stylesheet. */
-@property --sr-beam-angle {
-  syntax: "<angle>";
-  initial-value: 0deg;
-  inherits: false;
-}
-
-/* ── keyframes ────────────────────────────────────────────────── */
-@keyframes srBeamRotate {
-  to {
-    --sr-beam-angle: 360deg;
-  }
-}
-
-@keyframes srPulse {
-  0% {
-    box-shadow: 0 0 0 0 currentColor;
-  }
-  70% {
-    box-shadow: 0 0 0 6px rgba(216, 155, 43, 0);
-  }
-  100% {
-    box-shadow: 0 0 0 0 rgba(216, 155, 43, 0);
-  }
-}
-
-@keyframes srBlurIn {
-  from {
-    opacity: 0;
-    filter: blur(6px);
-    transform: translateY(6px);
-  }
-  to {
-    opacity: 1;
-    filter: blur(0);
-    transform: translateY(0);
-  }
-}
-
-@keyframes srSlideIn {
-  from {
-    opacity: 0;
-    transform: translateY(-4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes srWave {
-  from {
-    transform: scaleY(0.4);
-  }
-  to {
-    transform: scaleY(1.4);
-  }
-}
-
-@keyframes srOrbBreath {
-  from {
-    opacity: 0.55;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-/* ── accordion (grid-rows trick — smooth height to unknown content) ── */
-.sr-rail .sr-accordion {
-  display: grid;
-  grid-template-rows: 0fr;
-  transition: grid-template-rows 350ms var(--sr-ease);
-}
-.sr-rail .sr-accordion[data-open="true"] {
-  grid-template-rows: 1fr;
-}
-.sr-rail .sr-accordion > .sr-accordion-inner {
-  overflow: hidden;
+  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
+  display: flex;
+  flex-direction: column;
   min-height: 0;
+  -webkit-font-smoothing: antialiased;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
 }
 
-/* ── entry animations ────────────────────────────────────────── */
-.sr-rail .sr-fade-in {
-  animation: srBlurIn 360ms var(--sr-ease) both;
-}
-.sr-rail .sr-slide-in {
-  animation: srSlideIn 220ms var(--sr-ease) both;
+.sr-rail *,
+.sr-rail *::before,
+.sr-rail *::after {
+  box-sizing: border-box;
 }
 
-/* ── scrollbar (accent-tinted, unobtrusive) ───────────────────── */
+.sr-rail button,
+.sr-rail input {
+  font: inherit;
+}
+
+.sr-rail button {
+  color: inherit;
+}
+
+.sr-rail input::placeholder {
+  color: var(--sr-muted);
+}
+
 .sr-rail::-webkit-scrollbar {
-  width: 8px;
+  width: 6px;
 }
+
 .sr-rail::-webkit-scrollbar-track {
   background: transparent;
 }
-.sr-rail::-webkit-scrollbar-thumb {
-  background: rgba(216, 155, 43, 0.18);
-  border-radius: 8px;
-}
-.sr-rail::-webkit-scrollbar-thumb:hover {
-  background: rgba(240, 185, 75, 0.35);
-}
 
-/* ── glass specular sheen ──────────────────────────────────────
-   The film-grain ::before was removed: a mix-blend-mode layer over a
-   backdrop-blurred panel that floats over the moving map forces a
-   compositor readback every pan frame for negligible visual gain. The
-   ::after specular highlight is kept but uses NORMAL compositing (no
-   mix-blend-mode: screen) so it doesn't re-sample the moving backdrop. */
-.sr-rail-grain::after {
-  content: "";
-  position: absolute;
-  inset: 1px;
-  z-index: 0;
-  pointer-events: none;
-  border-radius: inherit;
-  background:
-    linear-gradient(118deg, transparent 0 16%, rgba(255, 255, 255, 0.1) 17%, transparent 28%),
-    radial-gradient(520px 260px at 18% 0%, rgba(255, 255, 255, 0.1), transparent 62%),
-    radial-gradient(320px 240px at 94% 18%, rgba(255, 199, 142, 0.085), transparent 68%),
-    radial-gradient(260px 180px at 58% 4%, rgba(216, 155, 43, 0.095), transparent 70%);
-  opacity: 0.85;
-  -webkit-mask-image: linear-gradient(#000, rgba(0, 0, 0, 0.72) 58%, transparent 100%);
-  mask-image: linear-gradient(#000, rgba(0, 0, 0, 0.72) 58%, transparent 100%);
+.sr-rail::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
 }
 
 .sr-rail > * {
@@ -248,276 +91,2171 @@
   z-index: 1;
 }
 
-.sr-rail .sr-liquid-card,
-.sr-rail .sr-liquid-control,
-.sr-rail .sr-arrival-card {
-  position: relative;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.115), rgba(255, 255, 255, 0.035) 44%, rgba(255, 255, 255, 0.02)),
-    rgba(255, 255, 255, 0.052);
-  -webkit-backdrop-filter: blur(18px) saturate(1.35);
-  backdrop-filter: blur(18px) saturate(1.35);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.22),
-    inset 0 -1px 0 rgba(255, 255, 255, 0.045),
-    0 14px 36px rgba(0, 0, 0, 0.24);
+.sr-fade-in {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  flex-direction: column;
+  animation: srFadeIn 260ms var(--sr-ease) both;
 }
 
-.sr-rail .sr-liquid-card::before,
-.sr-rail .sr-liquid-control::before,
-.sr-rail .sr-arrival-card::before {
+.sr-rail-header {
+  flex: 0 0 auto;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--sr-rule);
+}
+
+/* Left-aligned, content-hugging tabs — editorial rather than app-chrome.
+   The underline hugs the label width instead of a stretched half-rail cell. */
+.sr-rail-tabs {
+  display: flex;
+  gap: 26px;
+  height: 54px;
+}
+
+.sr-rail-tabs button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.55);
+  cursor: pointer;
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  transition: color var(--sr-dur-1) var(--sr-ease);
+}
+
+.sr-rail-tabs button[data-active="true"] {
+  color: var(--sr-fg);
+}
+
+/* Shared-layout underline: one element glides between tabs via layoutId,
+   sitting on the header hairline for a sharp seam. */
+.sr-tab-underline {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--rail-accent);
+}
+
+.sr-rail-tabs button:hover {
+  color: var(--sr-fg);
+}
+
+.sr-rail-tabs button:focus-visible,
+.sr-icon-button:focus-visible,
+.sr-toggle-group button:focus-visible,
+.sr-alternates__trigger:focus-visible,
+.sr-alert-row__header:focus-visible,
+.sr-alert-line-row__summary:focus-visible,
+.sr-reasoning__trigger:focus-visible,
+.sr-error-actions button:focus-visible {
+  outline: 2px solid rgba(52, 211, 153, 0.6);
+  outline-offset: 2px;
+}
+
+.sr-rail-section {
+  padding: 18px 20px;
+}
+
+.sr-route-search,
+.sr-alerts-header {
+  padding-top: 22px;
+}
+
+/* Alerts header: large title, then a quiet freshness row (green dot +
+   "Updated just now") — no search or filters below it. */
+.sr-alerts-header {
+  padding-bottom: 6px;
+}
+
+.sr-alerts-header .sr-rail-title {
+  margin: 0;
+}
+
+.sr-alerts-updated {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 9px 0 0;
+  color: var(--sr-fg-2);
+  font-size: 12px;
+}
+
+/* Green location/direction arrow (paper-airplane), tilted up-right like the
+   iOS location glyph. */
+.sr-alerts-updated__icon {
+  flex-shrink: 0;
+  color: #22c55e;
+  transform: rotate(-8deg);
+}
+
+.sr-rail-title {
+  margin: 0 0 12px;
+  color: var(--sr-fg);
+  font-size: 22px;
+  line-height: 1.15;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.sr-input-group {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  min-height: 48px;
+  gap: 10px;
+  width: 100%;
+  padding: 0 14px;
+  border: 1px solid var(--sr-rule-bright);
+  border-radius: 10px;
+  background: var(--sr-surface-2);
+  color: var(--sr-fg-3);
+  transition:
+    border-color var(--sr-dur-1) var(--sr-ease),
+    background var(--sr-dur-1) var(--sr-ease);
+}
+
+.sr-input-group:hover {
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+.sr-input-group:focus-within {
+  border-color: var(--rail-border-strong);
+  background: rgba(255, 255, 255, 0.055);
+  color: var(--sr-fg-2);
+  outline: 3px solid rgba(52, 211, 153, 0.12);
+  outline-offset: 0;
+}
+
+.sr-input-group input {
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  overflow: hidden;
+  background: transparent;
+  color: var(--sr-fg);
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sr-icon-button {
+  display: inline-grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--sr-fg-2);
+  cursor: pointer;
+}
+
+.sr-icon-button:hover {
+  background: var(--rail-hover);
+  color: var(--sr-fg);
+}
+
+.sr-input-spinner {
+  color: var(--rail-accent);
+  animation: srSpin 1s linear infinite;
+}
+
+.sr-search-popover {
+  position: absolute;
+  left: 20px;
+  right: 20px;
+  z-index: 30;
+  margin-top: 8px;
+  overflow: hidden;
+  border: 1px solid var(--sr-rule-bright);
+  border-radius: 6px;
+  background: rgba(13, 17, 23, 0.96);
+}
+
+.sr-search-popover button {
+  display: block;
+  width: 100%;
+  padding: 11px 13px;
+  border: 0;
+  border-top: 1px solid var(--sr-rule);
+  background: transparent;
+  color: var(--sr-fg);
+  text-align: left;
+  cursor: pointer;
+}
+
+.sr-search-popover button:first-child {
+  border-top: 0;
+}
+
+.sr-search-popover button[aria-selected="true"],
+.sr-search-popover button:hover {
+  background: var(--rail-hover);
+}
+
+.sr-search-popover span,
+.sr-search-popover small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sr-search-popover span {
+  font-size: 13px;
+  font-weight: 620;
+}
+
+.sr-search-popover small {
+  margin-top: 3px;
+  color: var(--sr-muted);
+  font-size: 12px;
+}
+
+.sr-section-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.sr-section-header h2 {
+  margin: 0;
+  color: var(--sr-fg);
+  font-size: 16px;
+  line-height: 1.2;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+.sr-section-header > span,
+.sr-inline-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--sr-fg-3);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.sr-toggle-group {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--sr-rule);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.sr-toggle-group {
+  position: relative;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-flow: initial;
+  grid-auto-columns: initial;
+  gap: 0;
+  overflow: hidden;
+}
+
+.sr-toggle-group button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 560;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  transition:
+    color var(--sr-dur-1) var(--sr-ease),
+    font-weight var(--sr-dur-1) var(--sr-ease);
+}
+
+.sr-toggle-group button {
+  position: relative;
+  z-index: 1;
+}
+
+.sr-toggle-group button > span {
+  position: relative;
+  z-index: 1;
+}
+
+.sr-toggle-group button:hover:not([data-active="true"]) {
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.86);
+}
+
+.sr-toggle-group button[data-active="true"] {
+  color: rgba(255, 255, 255, 0.96);
+  font-weight: 600;
+}
+
+/* Fixed active pill: no shared-layout marker, no bounce, no text-cursor line. */
+.sr-toggle-pill {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 4px;
+  width: calc((100% - 8px) / 2);
+  border: 1px solid rgba(52, 211, 153, 0.45);
+  border-radius: 999px;
+  background: rgba(16, 185, 129, 0.22);
+  pointer-events: none;
+  transform: translateX(0);
+  transition: transform 180ms var(--sr-ease);
+}
+
+.sr-toggle-group[data-way="downtown"] .sr-toggle-pill {
+  transform: translateX(100%);
+}
+
+.sr-arrival-list,
+.sr-alert-list,
+.sr-feed-list {
+  display: grid;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sr-arrival-list {
+  max-height: min(54vh, 440px);
+  overflow-y: auto;
+  padding-bottom: 2px;
+  mask-image: linear-gradient(#000 calc(100% - 18px), transparent);
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+}
+
+/* Nearby transit groups scroll in one region: subway stations first, then
+   nearby buses. */
+.sr-nearby-scroll {
+  display: grid;
+  margin-top: 12px;
+  max-height: min(58vh, 520px);
+  overflow-y: auto;
+  padding-bottom: 2px;
+  mask-image: linear-gradient(#000 calc(100% - 18px), transparent);
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+}
+
+/* Station groups render as quiet card surfaces — one intentional container
+   per physical station, Citymapper grouping preserved inside. Depth stays
+   restrained: low-alpha fill + hairline, no shadow, no glass. */
+.sr-station-group-list {
+  display: grid;
+  gap: 8px;
+}
+
+.sr-station-group {
+  padding: 2px 13px 4px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.028);
+  transition:
+    border-color var(--sr-dur-1) var(--sr-ease),
+    background var(--sr-dur-1) var(--sr-ease),
+    box-shadow var(--sr-dur-1) var(--sr-ease);
+}
+
+/* Finished hover: the whole card lifts — brighter hairline, a touch more
+   fill, and a soft top-edge highlight so it reads as raised, not just
+   outlined. */
+.sr-station-group:hover {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.045);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.sr-station-header {
+  display: grid;
+  gap: 6px;
+  padding: 10px 0 8px;
+}
+
+.sr-station-header__title {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.sr-station-header__title strong {
+  overflow: hidden;
+  color: var(--sr-fg);
+  font-size: 15.5px;
+  font-weight: 720;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sr-station-header__walk {
+  color: var(--sr-fg-3);
+  font-family: var(--sr-mono);
+  font-size: 11px;
+  font-weight: 650;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-station-arrival-list {
+  display: grid;
+  margin: 0;
+  padding: 0 0 5px;
+  list-style: none;
+}
+
+.sr-station-arrival-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 45px;
+  margin: 0 -9px;
+  padding: 6px 9px;
+  border-top: 1px solid rgba(255, 255, 255, 0.045);
+  border-radius: 9px;
+  transition:
+    background var(--sr-dur-1) var(--sr-ease),
+    color var(--sr-dur-1) var(--sr-ease);
+}
+
+/* The hairline separator is drawn by the row's own border-top; the rounded
+   inset hover would otherwise leave the rule floating, so hide it on hover
+   and for the hovered row's successor. */
+.sr-station-arrival-row:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-top-color: transparent;
+}
+
+.sr-station-arrival-row:hover + .sr-station-arrival-row {
+  border-top-color: transparent;
+}
+
+.sr-station-arrival-row:hover .sr-station-arrival-row__copy strong {
+  color: #fff;
+}
+
+.sr-station-arrival-row__media {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+}
+
+.sr-station-arrival-row__copy {
+  min-width: 0;
+}
+
+.sr-station-arrival-row__copy strong,
+.sr-station-arrival-row__copy small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sr-station-arrival-row__copy strong {
+  color: var(--sr-fg);
+  font-size: 14px;
+  font-weight: 620;
+  line-height: 1.2;
+}
+
+.sr-station-arrival-row__copy small {
+  margin-top: 4px;
+  color: var(--sr-fg-2);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.sr-station-arrival-row__time {
+  display: grid;
+  justify-items: end;
+  gap: 5px;
+}
+
+.sr-station-arrival-row__time strong {
+  color: var(--sr-fg);
+  font-family: var(--sr-mono);
+  font-size: 13px;
+  font-weight: 680;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-nearby-buses {
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid var(--sr-rule);
+}
+
+.sr-nearby-subhead {
+  margin: 0;
+  padding: 0 0 4px;
+  color: var(--sr-fg-2);
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0;
+  line-height: 1.2;
+}
+
+.sr-arrival-list--buses {
+  max-height: none;
+  overflow: visible;
+  margin-top: 0;
+  padding-bottom: 4px;
+  mask-image: none;
+}
+
+/* Contained scroll, matching Nearby Transit: the "Service alerts" title stays
+   fixed and only this region scrolls, bounded with a bottom fade — the whole
+   rail never scrolls as one page. */
+.sr-alerts-panel {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  flex-direction: column;
+}
+
+.sr-alert-feed {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sr-alerts-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+  padding-bottom: 2px;
+  mask-image: linear-gradient(#000 calc(100% - 18px), transparent);
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+}
+
+/* The list itself no longer scrolls — the wrapper above does. Cards are
+   separated by gap, not hairlines. */
+.sr-alert-list {
+  gap: 8px;
+  max-height: none;
+  overflow: visible;
+  padding-bottom: 2px;
+  mask-image: none;
+}
+
+/* Personalized sections: "Near you" featured cards lead; "Other alerts"
+   sits below, slightly quieter, so it never competes for the same attention. */
+.sr-alert-group + .sr-alert-group {
+  margin-top: 18px;
+  padding-top: 6px;
+  border-top: 1px solid var(--sr-rule);
+}
+
+.sr-alert-line-group-list {
+  display: grid;
+  gap: 8px;
+}
+
+.sr-alert-line-group {
+  min-width: 0;
+}
+
+/* One quiet line: trunk name left, alert count right. The rows below carry
+   the specific route bullets, so the header never repeats them. */
+.sr-alert-line-header {
+  padding-bottom: 4px;
+}
+
+.sr-alert-line-list {
+  display: grid;
+  margin: 0;
+  padding: 0 0 5px;
+  list-style: none;
+}
+
+.sr-alert-line-row {
+  min-width: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.045);
+  transition: border-color var(--sr-dur-1) var(--sr-ease);
+}
+
+/* Hide the hairline above the hovered/open row and its successor so the
+   rounded inset hover never leaves a rule cutting across it. */
+.sr-alert-line-row:hover,
+.sr-alert-line-row:hover + .sr-alert-line-row,
+.sr-alert-line-row[data-open="true"],
+.sr-alert-line-row[data-open="true"] + .sr-alert-line-row {
+  border-top-color: transparent;
+}
+
+.sr-alert-line-row[data-lifecycle="resolved"] .sr-alert-line-row__summary {
+  opacity: 0.62;
+}
+
+.sr-alert-line-row[data-lifecycle="resolved"] .sr-alert-line-row__summary:hover {
+  opacity: 0.82;
+}
+
+.sr-alert-line-row__summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 45px;
+  padding: 6px 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background var(--sr-dur-1) var(--sr-ease),
+    opacity var(--sr-dur-1) var(--sr-ease);
+}
+
+/* Rounded inset hover: the fill is pulled in from the card edges (negative
+   margin + matching padding) so it reads as a contained row highlight, not a
+   square band bleeding into the card corners. */
+.sr-alert-line-row__summary:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.sr-alert-line-row__summary:not([data-static="true"]) {
+  margin: 0 -9px;
+  padding-left: 9px;
+  padding-right: 9px;
+  border-radius: 9px;
+}
+
+.sr-alert-line-row__summary:hover .sr-alert-line-row__title {
+  color: #fff;
+}
+
+.sr-alert-line-row__summary:hover .sr-alert-line-row__chevron {
+  color: var(--sr-fg-2);
+  transform: translateX(2px);
+}
+
+.sr-alert-line-row__summary[aria-expanded="true"]:hover .sr-alert-line-row__chevron {
+  transform: rotate(90deg);
+}
+
+.sr-alert-line-row__summary[data-static="true"] {
+  cursor: default;
+}
+
+.sr-alert-line-row__summary[data-static="true"]:hover {
+  background: transparent;
+}
+
+.sr-alert-line-row__media {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+}
+
+.sr-alert-line-row__copy {
+  min-width: 0;
+}
+
+.sr-alert-line-row__copy strong,
+.sr-alert-line-row__copy small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sr-alert-line-row__copy strong {
+  color: var(--sr-fg);
+  font-size: 13.5px;
+  font-weight: 620;
+  line-height: 1.2;
+}
+
+.sr-alert-line-row__copy small {
+  margin-top: 4px;
+  color: var(--sr-fg-2);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.sr-alert-line-row__meta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 46px;
+  color: var(--sr-fg-3);
+}
+
+.sr-alert-line-row__meta time {
+  color: var(--sr-fg-3);
+  font-family: var(--sr-mono);
+  font-size: 11px;
+  font-weight: 650;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-alert-line-row__chevron {
+  flex-shrink: 0;
+  color: var(--sr-fg-3);
+  transition: transform var(--sr-dur-2) var(--sr-ease);
+}
+
+.sr-alert-line-row__summary[aria-expanded="true"] .sr-alert-line-row__chevron {
+  transform: rotate(90deg);
+}
+
+.sr-alert-line-detail-wrap {
+  margin: 0;
+  padding-bottom: 8px;
+}
+
+.sr-alert-line-detail-wrap .sr-alert-detail {
+  margin-top: 0;
+  padding-top: 0;
+  border-top-color: rgba(255, 255, 255, 0.055);
+}
+
+.sr-alert-group--secondary {
+  opacity: 0.85;
+}
+
+.sr-alert-group--secondary:hover,
+.sr-alert-group--secondary:focus-within {
+  opacity: 1;
+}
+
+/* Systemwide notices: a compact label instead of an overflowing bullet group
+   with a "+20" badge. */
+.sr-alert-systemwide {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border: 1px solid var(--sr-rule-bright);
+  border-radius: 6px;
+  background: var(--sr-surface-2);
+  color: var(--sr-fg-2);
+  font-size: 10px;
+  font-weight: 640;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* ── Featured "Near you" alert cards ────────────────────────────────────
+   The route-result card language applied to alerts: quiet raised surface,
+   a real route/severity accent stripe down the left edge, headline over
+   bounded supporting copy, then footer metadata. */
+.sr-alert-card-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The card surface itself is the RecommendedRouteCard liquid glass
+   (.smart-route-liquid-card supplies radius, gradient lift, reflections);
+   only layout concerns live here. */
+.sr-alert-card {
+  min-width: 0;
+  --sr-alert-stripe-color: var(--rail-accent);
+}
+
+.sr-alert-card[data-lifecycle="resolved"] {
+  opacity: 0.68;
+}
+
+/* Accent stripe: a clean flush-left edge bar in the route's own color — no
+   glow, no white mixing, no border-left doubling. The card's overflow:hidden
+   + border-radius round its ends into the glass corners. */
+.sr-alert-card__stripe {
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  border-radius: 0;
+  background: var(--sr-alert-stripe-color);
+}
+
+/* Load-bearing: .smart-route-liquid-card > * forces position:relative on
+   children (content-above-reflection lift) and wins by order — the stripe
+   must re-assert absolute here (higher specificity) or it collapses to an
+   invisible zero-size relative span, taking the whole accent with it. */
+.sr-alert-card.smart-route-liquid-card > .sr-alert-card__stripe {
+  position: absolute;
+  z-index: 3;
+}
+
+.sr-alert-card__header {
+  display: grid;
+  gap: 7px;
+  width: 100%;
+  padding: 14px 15px 13px 19px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sr-alert-card__header[data-static="true"] {
+  cursor: default;
+}
+
+.sr-alert-card__toprow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.sr-alert-card__identity {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.sr-alert-card__service {
+  overflow: hidden;
+  color: var(--sr-fg);
+  font-size: 13px;
+  font-weight: 630;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sr-alert-card__headline {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  color: var(--sr-fg);
+  font-size: 18px;
+  font-weight: 670;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+}
+
+.sr-alert-card__headline--full {
+  display: block;
+  overflow: visible;
+  -webkit-line-clamp: unset;
+}
+
+.sr-alert-card__summary {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  color: var(--sr-fg-2);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.sr-alert-card__summary--full {
+  display: block;
+  max-width: none;
+  overflow: visible;
+  color: rgba(255, 255, 255, 0.76);
+  font-size: 13.5px;
+  line-height: 1.5;
+  -webkit-line-clamp: unset;
+}
+
+/* Guidance line ("Take the [A][C][D][Q] instead") sits behind a hairline so
+   the card reads headline → what's happening → what to do. */
+.sr-alert-card__advice {
+  display: block;
+  max-width: none;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--sr-rule);
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.sr-alert-card__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 3px;
+}
+
+.sr-alert-card__footer time {
+  color: var(--sr-fg-3);
+  font-size: 11.5px;
+}
+
+.sr-alert-card__cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  color: var(--sr-fg-2);
+  font-size: 12px;
+  font-weight: 620;
+  transition: color var(--sr-dur-1) var(--sr-ease);
+}
+
+.sr-alert-card__header:hover .sr-alert-card__cta {
+  color: var(--sr-fg);
+}
+
+.sr-alert-card__cta svg {
+  transition: transform var(--sr-dur-2) var(--sr-ease);
+}
+
+.sr-alert-card__header[aria-expanded="true"] .sr-alert-card__cta svg {
+  transform: rotate(180deg);
+}
+
+/* Status metadata: severity dot + one quiet word — replaces the old pill. */
+.sr-alert-status {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+  color: var(--sr-fg-2);
+  font-size: 11.5px;
+  font-weight: 620;
+  white-space: nowrap;
+}
+
+.sr-alert-feed-shell {
+  margin-top: 12px;
+  padding: 0;
+  border-top: 1px solid var(--sr-rule);
+}
+
+.sr-alert-feed-shell .sr-alert-list {
+  margin: 0;
+}
+
+.sr-arrival-row,
+.sr-feed-row {
+  display: grid;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+  border-top: 1px solid var(--sr-rule);
+}
+
+/* Alert rows share the station-group card language: one quiet surface per
+   incident, expandable in place. */
+.sr-alert-row {
+  min-width: 0;
+  padding: 0 13px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.028);
+  transition: border-color var(--sr-dur-1) var(--sr-ease);
+}
+
+.sr-alert-row:hover {
+  border-color: rgba(255, 255, 255, 0.11);
+}
+
+.sr-arrival-row {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  min-height: 52px;
+  padding: 7px 0;
+  transition: background var(--sr-dur-1) var(--sr-ease);
+}
+
+/* Passive rows brighten slightly on hover but never pretend to be buttons —
+   no cursor change, no lift. */
+.sr-arrival-row:hover {
+  background: rgba(255, 255, 255, 0.035);
+}
+
+/* Micro-label for the unclassified-direction bus group. All-caps tracking is
+   reserved for tiny system labels like this one, never destinations. */
+.sr-list-caption {
+  padding: 12px 0 4px;
+  border-top: 1px solid var(--sr-rule);
+  color: var(--sr-fg-3);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.sr-feed-row {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  min-height: 76px;
+  padding: 12px 0;
+}
+
+/* Alert rows disclose their full text inline; the whole header is the
+   trigger, so the chevron is an honest affordance. */
+.sr-alert-row__header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+  width: 100%;
+  min-height: 56px;
+  padding: 12px 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--sr-dur-1) var(--sr-ease);
+}
+
+/* Resolved alerts drop to the bottom of the day and read muted, so the active
+   condition never competes with settled history. */
+.sr-alert-row[data-lifecycle="resolved"] .sr-alert-row__header {
+  opacity: 0.62;
+}
+
+.sr-alert-row[data-lifecycle="resolved"] .sr-alert-row__header:hover {
+  opacity: 0.82;
+}
+
+/* First line: severity dot + the sanitized "what's happening" title. */
+.sr-alert-row__copy .sr-alert-row__headline {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  margin: 0;
+  overflow: visible;
+  color: var(--sr-fg);
+}
+
+.sr-alert-row__copy .sr-alert-row__headline .sr-alert-severity-dot {
+  flex-shrink: 0;
+}
+
+.sr-alert-row__copy .sr-alert-row__title {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--sr-fg);
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+/* Right column of a compact row: timestamp over the disclosure chevron. */
+.sr-alert-row__meta {
+  display: grid;
+  justify-items: end;
+  align-content: start;
+  gap: 6px;
+}
+
+.sr-alert-row__header:hover {
+  background: rgba(255, 255, 255, 0.035);
+}
+
+/* Rows with no extra detail render the same layout as a plain div — no
+   pointer, no hover, no chevron. Passive rows don't pretend to be buttons. */
+.sr-alert-row__header[data-static="true"] {
+  cursor: default;
+}
+
+.sr-alert-row__header[data-static="true"]:hover {
+  background: transparent;
+}
+
+.sr-alert-row__chevron {
+  color: var(--sr-fg-3);
+  transition: transform var(--sr-dur-2) var(--sr-ease);
+}
+
+.sr-alert-row__header[aria-expanded="true"] .sr-alert-row__chevron {
+  transform: rotate(90deg);
+}
+
+.sr-alert-row__detail {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--sr-dur-3) var(--sr-ease);
+}
+
+.sr-alert-row__detail[data-open="true"] {
+  grid-template-rows: 1fr;
+}
+
+.sr-alert-row__detail > div {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.sr-alert-row__stops {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+}
+
+.sr-alert-row__stops span,
+.sr-alert-row__stops li {
+  padding: 3px 8px;
+  border: 1px solid var(--sr-rule);
+  border-radius: 5px;
+  background: var(--sr-surface-2);
+  color: var(--sr-fg-2);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.sr-arrival-row:first-child,
+.sr-feed-row:first-child {
+  border-top: 0;
+}
+
+.sr-arrival-row__media,
+.sr-alert-row__media,
+.sr-feed-row__media {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  min-width: 32px;
+}
+
+.sr-alert-row__media {
+  min-width: 42px;
+  max-width: 88px;
+}
+
+.sr-arrival-row__copy,
+.sr-alert-row__copy,
+.sr-feed-row__copy {
+  min-width: 0;
+}
+
+.sr-arrival-row__copy strong,
+.sr-alert-row__copy strong,
+.sr-feed-row__copy strong,
+.sr-arrival-row__copy small,
+.sr-alert-row__copy small,
+.sr-alert-row__copy span,
+.sr-feed-row__copy span,
+.sr-feed-row__copy small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sr-arrival-row__copy strong,
+.sr-alert-row__copy strong,
+.sr-feed-row__copy strong {
+  color: var(--sr-fg);
+  font-size: 14px;
+  font-weight: 620;
+  line-height: 1.2;
+}
+
+.sr-arrival-row__copy small,
+.sr-alert-row__copy small,
+.sr-alert-row__copy span,
+.sr-feed-row__copy span {
+  margin-top: 4px;
+  color: var(--sr-fg-2);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.sr-alert-row__copy span {
+  color: var(--sr-fg-3);
+}
+
+/* Inline route tokens inside row copy MUST stay inline — the generic block
+   span rule above would otherwise split a title like "no [4] service" into
+   stacked fragments (one bullet per line). */
+.sr-alert-row__copy .sr-line-token,
+.sr-alert-row__copy .sr-line-token span {
+  display: inline-flex;
+  margin-top: 0;
+  overflow: visible;
+  vertical-align: -3px;
+}
+
+.sr-feed-row__copy small,
+.sr-alert-row__severity {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 5px;
+  color: var(--sr-fg-3);
+  font-size: 11px;
+}
+
+.sr-alert-row__copy .sr-alert-row__severity {
+  display: inline-flex;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+.sr-alert-row__copy .sr-alert-severity-dot {
+  display: inline-block;
+  margin-top: 0;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.sr-arrival-row__time {
+  display: grid;
+  justify-items: end;
+  gap: 5px;
+}
+
+.sr-arrival-row__time strong,
+.sr-alert-row time,
+.sr-feed-row time {
+  color: var(--sr-fg);
+  font-family: var(--sr-mono);
+  font-size: 13px;
+  font-weight: 680;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-alert-row time,
+.sr-feed-row time {
+  color: var(--sr-fg-2);
+  font-size: 12px;
+}
+
+.sr-alert-severity-dot,
+.sr-feed-row__dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+}
+
+.sr-prediction-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  width: 18px;
+  height: 16px;
+  white-space: nowrap;
+}
+
+/* Broadcast-arc prediction signal. Neutral ink for live/scheduled tiers so
+   the only colored state is a real service problem — functional color only. */
+.sr-signal-icon {
+  display: block;
+}
+
+.sr-prediction-status[data-state="fresh"] {
+  color: var(--sr-fg-2);
+}
+
+.sr-prediction-status[data-state="stale"],
+.sr-prediction-status[data-state="scheduled"] {
+  color: var(--sr-fg-3);
+}
+
+.sr-prediction-status[data-state="warning"] {
+  color: var(--sr-amber);
+}
+
+/* Signal tiers — Red major / Orange planned / Amber delay / Green resolved.
+   No blue info dot. */
+.sr-alert-severity-dot[data-tone="red"] {
+  background: #ef4444;
+}
+
+.sr-alert-severity-dot[data-tone="orange"] {
+  background: #f97316;
+}
+
+.sr-alert-severity-dot[data-tone="amber"] {
+  background: #f59e0b;
+}
+
+.sr-alert-severity-dot[data-tone="green"] {
+  background: #22c55e;
+}
+
+/* Inline route tokens: bracketed line references in alert copy render as the
+   real bullet/badge instead of raw "[N]" text. */
+.sr-line-token {
+  display: inline-flex;
+  vertical-align: -3px;
+  margin: 0 1px;
+}
+
+/* Route-planning status (AI Elements Reasoning): a hairline-separated rail
+   section like any other — no card box. The trigger row is a real
+   collapsible control, so the chevron is an honest affordance. */
+.sr-reasoning {
+  border-top: 1px solid var(--sr-rule);
+}
+
+.sr-reasoning__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Continuous gentle pulse for a genuinely ongoing check (route planning) —
+   distinct from the one-off "just updated" pulse used elsewhere. */
+.sr-prediction-status[data-pulse="true"] {
+  animation: srSignalPulse 2s var(--sr-ease) infinite;
+}
+
+.sr-reasoning__trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--sr-fg);
+  cursor: pointer;
+  text-align: left;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+/* The disclosure chevron is the trigger's direct-child svg. Scoping matters:
+   the PredictionSignalIcon nested inside the status span owns its own
+   orientation and must never inherit this rotation. */
+.sr-reasoning__trigger > svg {
+  color: var(--sr-fg-3);
+  transition: transform var(--sr-dur-2) var(--sr-ease);
+}
+
+.sr-reasoning__trigger[data-state="open"] > svg {
+  transform: rotate(180deg);
+}
+
+.sr-reasoning__content {
+  overflow: hidden;
+}
+
+.sr-reasoning__content[data-state="open"] {
+  animation: srCollapseDown var(--sr-dur-2) var(--sr-ease);
+}
+
+.sr-reasoning__content[data-state="closed"] {
+  animation: srCollapseUp var(--sr-dur-2) var(--sr-ease);
+}
+
+.sr-reasoning__content > div {
+  padding-bottom: 13px;
+  color: var(--sr-fg-2);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.sr-reasoning-destination {
+  display: block;
+  margin-bottom: 4px;
+  overflow: hidden;
+  color: var(--sr-fg);
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sr-reasoning-summary {
+  display: block;
+}
+
+.sr-reasoning-lines {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sr-reasoning-lines li {
+  color: var(--sr-fg-2);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.sr-reasoning-lines li[data-age="older"] {
+  color: var(--sr-fg-3);
+}
+
+/* ── Liquid-glass route-result surface ────────────────────────────────
+   A restrained dark inner card: gradient that lifts toward the top, a
+   hairline edge brighter along the upper border, a soft top-left reflection
+   (::before), a faint inner rim (::after), and a gentle drop shadow. Scoped
+   to route-result content only — the outer rail stays flat and grounded, and
+   no blur filter is used (the near-opaque rail makes it pointless). */
+.smart-route-liquid-card {
+  position: relative;
+  overflow: hidden;
+  border-radius: 14px;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.1) 0%,
+    rgba(255, 255, 255, 0.042) 42%,
+    rgba(255, 255, 255, 0.022) 100%
+  );
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.04),
+    0 14px 30px rgba(0, 0, 0, 0.3);
+}
+
+.smart-route-liquid-card::before {
   content: "";
   position: absolute;
   inset: 0;
   pointer-events: none;
+  background: radial-gradient(
+    120% 78% at 16% -10%,
+    rgba(255, 255, 255, 0.16),
+    transparent 44%
+  );
+}
+
+.smart-route-liquid-card::after {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  pointer-events: none;
   border-radius: inherit;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.12), transparent 34%),
-    radial-gradient(220px 80px at 12% 0%, rgba(216, 155, 43, 0.14), transparent 80%);
-  opacity: 0.75;
+  border: 1px solid rgba(255, 255, 255, 0.04);
 }
 
-.sr-rail .sr-liquid-card {
-  border-radius: 22px;
-  overflow: hidden;
+/* Card content sits above the reflection layers. */
+.smart-route-liquid-card > * {
+  position: relative;
+  z-index: 1;
 }
 
-.sr-rail .sr-liquid-control {
-  border-radius: 18px;
-}
-
-.sr-rail .sr-search-glass {
-  min-height: 48px;
-}
-
-.sr-rail .sr-search-glass:focus-within {
-  border-color: rgba(240, 185, 75, 0.46);
+/* Alternates are polished but secondary — a dimmer lift than the winner. */
+.smart-route-liquid-card--secondary {
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.07) 0%,
+    rgba(255, 255, 255, 0.03) 46%,
+    rgba(255, 255, 255, 0.018) 100%
+  );
+  border-color: rgba(255, 255, 255, 0.11);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.26),
-    0 0 0 1px rgba(216, 155, 43, 0.18),
-    0 16px 42px rgba(216, 155, 43, 0.14);
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 10px 24px rgba(0, 0, 0, 0.24);
 }
 
-.sr-rail .sr-jarvis-panel {
-  margin: 14px 14px 8px;
+.smart-route-liquid-card--secondary::before {
+  opacity: 0.7;
 }
 
-.sr-rail .sr-direction-frame {
-  border-radius: 20px;
-  padding: 3px;
+/* Apple Maps-inspired alternate option cards, at rail scale: big time,
+   departure/ETA line, compact step strip, one reason line, and a compact
+   Use action — each a lifted liquid card, not a hairline row. */
+.sr-alt-list {
+  display: grid;
+  gap: 10px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
 }
 
-.sr-rail .sr-direction-option {
-  border-radius: 16px;
+.sr-alt-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+  padding: 13px 14px;
 }
 
-.sr-rail .sr-direction-option[aria-pressed="true"] {
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.45),
-    0 8px 22px rgba(216, 155, 43, 0.24);
+/* Keep the action anchored to the first line even when the step strip
+   wraps to multiple rows — no floating mid-card button. */
+.sr-alt-card .sr-use-button {
+  margin-top: 2px;
 }
 
-.sr-rail .sr-arrivals-list {
+.sr-alt-card__body {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.sr-alt-card__head {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
 }
 
-.sr-rail .sr-arrival-shell {
-  border-top: 0 !important;
+.sr-alt-card__duration {
+  color: var(--sr-fg);
+  font-size: 17px;
+  font-weight: 680;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
-.sr-rail .sr-arrival-card {
-  margin: 0 14px;
-  border-radius: 18px;
+.sr-alt-card__leaves {
+  color: var(--sr-fg-2);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.sr-alt-card__path,
+.sr-alt-card__reason {
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.sr-alt-card__path {
+  color: var(--sr-fg-2);
+}
+
+.sr-alt-card__reason {
+  color: var(--sr-fg-3);
+}
+
+/* Compact route-selection action — a labeled pill, deliberately unlike the
+   tiny signal glyph that shares its green meaning elsewhere. */
+.sr-use-button {
+  min-height: 30px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 999px;
+  background: #22c55e;
+  color: #0d1117;
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 700;
+  white-space: nowrap;
   transition:
-    border-color var(--sr-dur-2) var(--sr-ease),
-    background var(--sr-dur-2) var(--sr-ease),
+    background var(--sr-dur-1) var(--sr-ease),
     transform var(--sr-dur-1) var(--sr-ease);
 }
 
-.sr-rail .sr-arrival-card:hover {
-  border-color: rgba(255, 255, 255, 0.22);
-  background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.05) 48%, rgba(255, 255, 255, 0.025)),
-    rgba(255, 255, 255, 0.064);
+.sr-use-button:hover {
+  background: #34d76e;
 }
 
-.sr-rail .sr-arrival-card:active {
+.sr-use-button:active {
   transform: translateY(1px);
 }
 
-.sr-rail .sr-suggestion-popover {
-  border-radius: 18px !important;
-  border-color: rgba(255, 255, 255, 0.2) !important;
-  background:
-    radial-gradient(circle at 18% 0%, rgba(216, 155, 43, 0.13), transparent 48%),
-    rgba(13, 19, 31, 0.82) !important;
-  box-shadow:
-    0 18px 42px rgba(0, 0, 0, 0.46),
-    inset 0 1px 0 rgba(255, 255, 255, 0.22) !important;
+.sr-use-button:focus-visible {
+  outline: 2px solid rgba(34, 197, 94, 0.65);
+  outline-offset: 2px;
 }
 
-/* ── line chip (Network Pulse filter) ─────────────────────────────
-   A fixed square grid cell so the selection ring is a perfect circle —
-   an inline button wrapping an inline-flex bullet picks up baseline
-   descender space and renders the ring as an oval. Selection reads as a
-   double ring (surface gap + ink ring); line status is a small badge dot
-   anchored bottom-right, so the two vocabularies never compete. */
-.sr-rail .sr-line-chip {
-  position: relative;
-  display: grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  cursor: pointer;
-  transition:
-    box-shadow var(--sr-dur-1) var(--sr-ease),
-    opacity var(--sr-dur-2) var(--sr-ease),
-    transform var(--sr-dur-1) var(--sr-ease);
-}
-.sr-rail .sr-line-chip:hover {
-  box-shadow: 0 0 0 1.5px var(--sr-rule-bright);
-}
-.sr-rail .sr-line-chip:active {
-  transform: scale(0.94);
-}
-.sr-rail .sr-line-chip:focus-visible {
-  outline: none;
-  box-shadow:
-    0 0 0 2px var(--sr-surface),
-    0 0 0 3.5px var(--sr-cyan);
-}
-.sr-rail .sr-line-chip[aria-pressed="true"] {
-  box-shadow:
-    0 0 0 2px var(--sr-surface),
-    0 0 0 3.5px var(--sr-fg);
-}
-/* status badge dot (major / minor / planned) */
-.sr-rail .sr-line-chip[data-status]::after {
-  content: "";
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  border: 2px solid var(--sr-surface);
-}
-.sr-rail .sr-line-chip[data-status="major"]::after {
-  background: var(--sr-coral);
-}
-.sr-rail .sr-line-chip[data-status="minor"]::after {
-  background: var(--sr-amber);
-}
-.sr-rail .sr-line-chip[data-status="planned"]::after {
-  background: var(--sr-cyan);
-}
-/* when a filter is active, unselected chips recede; hover restores them */
-.sr-rail .sr-pulse-grid[data-filtered="true"] .sr-line-chip:not([aria-pressed="true"]) {
-  opacity: 0.3;
-}
-.sr-rail .sr-pulse-grid[data-filtered="true"] .sr-line-chip:not([aria-pressed="true"]):hover {
-  opacity: 0.85;
-}
-
-/* ── switch (Grok scan) ───────────────────────────────────────────
-   Standard pill toggle: products shouldn't reinvent this affordance. */
-.sr-rail .sr-switch {
-  position: relative;
-  width: 32px;
-  height: 18px;
-  padding: 0;
-  border: 1px solid var(--sr-rule-bright);
+/* "Recommended"/"Selected" as a micro-caps pill — small, tracked, quiet. */
+.sr-status-badge {
+  display: inline-flex;
+  max-width: 132px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 1px solid rgba(255, 255, 255, 0.09);
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.06);
-  cursor: pointer;
-  transition:
-    background var(--sr-dur-2) var(--sr-ease),
-    border-color var(--sr-dur-2) var(--sr-ease);
-}
-.sr-rail .sr-switch[aria-pressed="true"] {
-  background: var(--sr-cyan);
-  border-color: var(--sr-cyan);
-}
-.sr-rail .sr-switch::after {
-  content: "";
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: var(--sr-fg-3);
-  transition:
-    transform var(--sr-dur-2) var(--sr-ease),
-    background var(--sr-dur-2) var(--sr-ease);
-}
-.sr-rail .sr-switch[aria-pressed="true"]::after {
-  transform: translateX(14px);
-  background: #241704; /* warm ink to read on the amber-filled track */
-}
-.sr-rail .sr-switch:focus-visible {
-  outline: none;
-  box-shadow:
-    0 0 0 2px var(--sr-surface),
-    0 0 0 3.5px var(--sr-cyan);
-}
-
-/* ── small ghost button (Refresh, Clear filter) ──────────────────── */
-.sr-rail .sr-ghost-btn {
-  background: transparent;
-  border: 1px solid var(--sr-rule-bright);
+  padding: 3px 9px;
   color: var(--sr-fg-2);
-  padding: 5px 10px;
-  cursor: pointer;
-  font-family: var(--sr-mono);
-  font-size: 10px;
-  letter-spacing: 0.16em;
+  font-size: 9.5px;
+  font-weight: 650;
+  letter-spacing: 0.09em;
   text-transform: uppercase;
-  transition:
-    color var(--sr-dur-1) var(--sr-ease),
-    border-color var(--sr-dur-1) var(--sr-ease),
-    background var(--sr-dur-1) var(--sr-ease);
 }
-.sr-rail .sr-ghost-btn:hover {
+
+/* Recommended route: duration is the hero, followed by leave/ETA, the
+   compact step strip, and a one-line reason. No card box — separation from
+   the alternates disclosure is a hairline on .sr-alternates. */
+.sr-recommended-route {
+  padding: 15px 16px 14px;
+}
+
+.sr-recommended-route__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.sr-recommended-route__duration {
+  display: block;
+  margin-top: 12px;
   color: var(--sr-fg);
-  border-color: rgba(255, 255, 255, 0.24);
-  background: rgba(255, 255, 255, 0.03);
-}
-.sr-rail .sr-ghost-btn:active {
-  background: rgba(255, 255, 255, 0.06);
-}
-.sr-rail .sr-ghost-btn:focus-visible {
-  outline: none;
-  box-shadow:
-    0 0 0 2px var(--sr-surface),
-    0 0 0 3.5px var(--sr-cyan);
+  font-size: 24px;
+  line-height: 1.1;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
-/* ── reset for atoms inside the rail ──────────────────────────── */
-.sr-rail *,
-.sr-rail *::before,
-.sr-rail *::after {
-  box-sizing: border-box;
+.sr-recommended-route__timing {
+  display: block;
+  margin-top: 4px;
+  color: var(--sr-fg-2);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
 }
 
-.sr-rail button {
-  font-family: inherit;
+.sr-recommended-route p {
+  margin: 10px 0 0;
+  color: var(--sr-fg-2);
+  font-size: 13px;
+  line-height: 1.45;
 }
 
-.sr-rail input,
-.sr-rail textarea {
-  font-family: inherit;
-  color: inherit;
+.sr-recommended-route__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 12px;
+  color: var(--sr-fg-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
-.sr-rail input::placeholder {
-  color: var(--sr-muted);
+.sr-details-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--sr-rule);
+  border-radius: 8px;
+  background: var(--sr-surface-2);
+  color: var(--sr-fg);
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition:
+    background var(--sr-dur-1) var(--sr-ease),
+    border-color var(--sr-dur-1) var(--sr-ease);
+}
+
+.sr-details-toggle:hover {
+  border-color: var(--sr-rule-bright);
+  background: var(--rail-hover);
+}
+
+.sr-details-toggle:focus-visible {
+  outline: 2px solid rgba(52, 211, 153, 0.6);
+  outline-offset: 2px;
+}
+
+.sr-details-toggle svg {
+  transition: transform var(--sr-dur-2) var(--sr-ease);
+}
+
+.sr-details-toggle[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+.sr-details {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--sr-dur-3) var(--sr-ease);
+}
+
+.sr-details[data-open="true"] {
+  grid-template-rows: 1fr;
+}
+
+.sr-details > div {
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ── Compact route step strip ─────────────────────────────────────────
+   [walk] › [Q][car] › [5][car] › [walk] — icon chips joined by pointers.
+   Each chip is its own small glass surface, echoing the card treatment. */
+.sr-route-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  margin-top: 13px;
+}
+
+.sr-route-strip__sep {
+  flex-shrink: 0;
+  color: var(--sr-fg-3);
+}
+
+.sr-route-strip__walk,
+.sr-route-strip__ride {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.1),
+    rgba(255, 255, 255, 0.03)
+  );
+}
+
+.sr-route-strip__walk {
+  width: 30px;
+}
+
+.sr-route-strip__walk svg {
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.sr-route-strip__ride {
+  gap: 5px;
+  padding: 0 9px 0 7px;
+}
+
+.sr-route-strip__ride svg {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+/* ── Apple Maps-style details chain ───────────────────────────────────
+   Explicit walk / board / ride rows; ride segments carry a route-colored
+   connector between boarding and alighting stops. */
+.sr-detail-chain {
+  display: grid;
+  margin: 14px 0 4px;
+  padding: 0;
+  list-style: none;
+}
+
+.sr-detail-step {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--sr-rule);
+}
+
+.sr-detail-step:first-child {
+  border-top: 0;
+}
+
+.sr-detail-step__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 22px;
+}
+
+.sr-detail-step__icon svg {
+  color: rgba(255, 255, 255, 0.86);
+}
+
+.sr-detail-step__vehicle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 42px;
+}
+
+.sr-detail-step__copy {
+  min-width: 0;
+}
+
+.sr-detail-step__copy strong {
+  display: block;
+  color: var(--sr-fg);
+  font-size: 13.5px;
+  font-weight: 650;
+}
+
+.sr-detail-step__copy small {
+  display: block;
+  margin-top: 3px;
+  color: var(--sr-fg-2);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.sr-detail-step__copy .sr-detail-step__note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-detail-ride {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 12px;
+  padding: 0 0 12px;
+}
+
+.sr-detail-ride__line {
+  justify-self: center;
+  width: 4px;
+  border-radius: 2px;
+}
+
+.sr-detail-ride__copy {
+  min-width: 0;
+  padding-top: 2px;
+}
+
+.sr-detail-ride__copy strong {
+  display: block;
+  color: var(--sr-fg);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.sr-detail-ride__meta {
+  display: block;
+  margin: 7px 0;
+  color: var(--sr-fg-2);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-detail-ride__transfer {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 6px;
+  color: var(--sr-fg-3);
+  font-size: 12px;
+}
+
+.sr-alternates {
+  margin-top: 14px;
+}
+
+.sr-alternates__trigger {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid var(--sr-rule);
+  border-radius: 8px;
+  background: var(--sr-surface-2);
+  color: var(--sr-fg);
+  padding: 0 12px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.sr-alternates__trigger[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+.sr-alternates__trigger svg {
+  transition: transform var(--sr-dur-2) var(--sr-ease);
+}
+
+.sr-alternates__content {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--sr-dur-3) var(--sr-ease);
+}
+
+.sr-alternates__content[data-open="true"] {
+  grid-template-rows: 1fr;
+}
+
+.sr-alternates__content > div {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.sr-error-panel {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  border: 1px solid rgba(251, 113, 133, 0.24);
+  border-radius: 10px;
+  background: rgba(251, 113, 133, 0.08);
+  padding: 14px;
+}
+
+.sr-error-panel svg {
+  color: var(--sr-coral);
+}
+
+.sr-error-panel strong,
+.sr-error-panel p {
+  margin: 0;
+}
+
+.sr-error-panel strong {
+  color: var(--sr-fg);
+  font-size: 14px;
+}
+
+.sr-error-panel p {
+  margin-top: 4px;
+  color: var(--sr-fg-2);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.sr-error-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.sr-error-actions button {
+  min-height: 34px;
+  border: 1px solid var(--sr-rule);
+  border-radius: 8px;
+  background: var(--sr-surface-2);
+  color: var(--sr-fg);
+  padding: 0 12px;
+  cursor: pointer;
+}
+
+.sr-alert-route-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+}
+
+.sr-alert-route-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 20px;
+  padding: 0 5px;
+  border: 1px solid var(--sr-rule);
+  border-radius: 999px;
+  color: var(--sr-fg-3);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+/* Expanded alert detail. Compact rows mount this only while open; featured
+   cards can keep it visible so nearby alerts show their full passenger detail. */
+.sr-alert-detail-wrap {
+  margin: 0 0 12px;
+}
+
+/* Inside a featured card the header carries its own padding, so the inline
+   detail needs matching side margins — same card, no detached panel. */
+.sr-alert-detail-wrap--card {
+  margin: 0 15px 14px 19px;
+}
+
+/* Inline expanded detail — divider below the summary area, then icon-keyed
+   rows (Impact / Affected service / Travel alternatives / Current status /
+   Affected stop): labels left, short values right, hairline dividers.
+   Every row is backed by a real alert field. */
+.sr-alert-detail {
+  display: grid;
+  margin-top: 2px;
+  padding-top: 3px;
+  border-top: 1px solid var(--sr-rule);
+}
+
+.sr-alert-detail__row {
+  display: grid;
+  grid-template-columns: 15px 108px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 11px 0;
+}
+
+.sr-alert-detail__row:last-child {
+  padding-bottom: 4px;
+}
+
+.sr-alert-detail__row + .sr-alert-detail__row {
+  border-top: 1px solid var(--sr-rule);
+}
+
+.sr-alert-detail__icon {
+  display: inline-flex;
+  margin-top: 1px;
+  color: var(--sr-fg-3);
+}
+
+.sr-alert-detail__key {
+  padding-top: 1px;
+  color: var(--sr-fg-3);
+  font-size: 11.5px;
+  font-weight: 620;
+}
+
+.sr-alert-detail__value {
+  min-width: 0;
+  color: var(--sr-fg-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.sr-alert-detail__routes {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.sr-alert-detail__routes > span:last-child {
+  color: var(--sr-fg-2);
+  font-size: 12px;
+}
+
+.sr-empty-copy,
+.sr-empty-row {
+  margin: 0;
+  color: var(--sr-fg-2);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.sr-empty-row {
+  padding: 18px 0;
+  border-top: 1px solid var(--sr-rule);
+}
+
+.sr-empty-row strong,
+.sr-empty-row small {
+  display: block;
+}
+
+.sr-empty-row strong {
+  color: var(--sr-fg);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.sr-empty-row small {
+  margin-top: 4px;
+  color: var(--sr-fg-2);
+}
+
+@keyframes srFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes srSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes srCollapseDown {
+  from {
+    height: 0;
+  }
+  to {
+    height: var(--radix-collapsible-content-height);
+  }
+}
+
+@keyframes srCollapseUp {
+  from {
+    height: var(--radix-collapsible-content-height);
+  }
+  to {
+    height: 0;
+  }
+}
+
+@keyframes srSignalPulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@media (max-width: 720px) {
+  .sr-rail {
+    border-radius: 6px 6px 0 0;
+  }
+
+  .sr-rail-section {
+    padding-inline: 16px;
+  }
+
+  .sr-rail-header {
+    padding-inline: 14px;
+  }
+
+  .sr-arrival-row,
+  .sr-station-arrival-row,
+  .sr-alert-row,
+  .sr-feed-row {
+    gap: 9px;
+  }
+
+  .sr-alert-detail__row {
+    grid-template-columns: 15px 88px minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sr-rail *,
+  .sr-rail *::before,
+  .sr-rail *::after {
+    animation-duration: 1ms !important;
+    transition-duration: 1ms !important;
+  }
 }

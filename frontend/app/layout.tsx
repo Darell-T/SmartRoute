@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import {
+  Archivo,
   Geist,
   Instrument_Serif,
   JetBrains_Mono,
@@ -36,6 +37,15 @@ const spaceGrotesk = Space_Grotesk({
   variable: "--font-space-grotesk",
 });
 
+// The left rail's single grotesk family. Variable font so the rail's
+// fractional weights (560/620/650) interpolate instead of snapping to Arial.
+// Stands in for Helvetica, the mandated NYCTA signage face — swap a licensed
+// Helvetica Now in front of it in --sr-display without touching components.
+const archivo = Archivo({
+  subsets: ["latin"],
+  variable: "--font-archivo",
+});
+
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
@@ -43,8 +53,8 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
-  title: "ATLAS",
-  description: "Personal Transit Intelligence",
+  title: "SmartRoute",
+  description: "Real-time NYC transit intelligence",
   icons: {
     icon: "/smart-route-mark.png",
     shortcut: "/smart-route-mark.png",
@@ -60,7 +70,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body
-        className={`${geist.variable} ${instrumentSerif.variable} ${jetbrainsMono.variable} ${spaceGrotesk.variable} antialiased`}
+        className={`${geist.variable} ${instrumentSerif.variable} ${jetbrainsMono.variable} ${spaceGrotesk.variable} ${archivo.variable} antialiased`}
         style={{
           fontFamily: "var(--font-geist), system-ui, -apple-system, sans-serif",
         }}

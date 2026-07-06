@@ -27,20 +27,24 @@ export function addStationBadge(
     align-items: center;
     gap: 5px;
     background:
-      radial-gradient(circle at 16% 0%, rgba(240, 185, 75, 0.13), transparent 60%),
-      rgba(15, 13, 8, 0.5);
-    border: 1px solid rgba(255, 255, 255, 0.12);
+      radial-gradient(120% 80% at 16% -10%, rgba(255, 255, 255, 0.13), transparent 44%),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.028)),
+      rgba(10, 14, 22, 0.74);
+    border: 1px solid rgba(255, 255, 255, 0.14);
     border-radius: 999px;
-    padding: 2px 8px 2px 3px;
+    padding: 3px 9px 3px 4px;
     font-size: 10px;
-    font-weight: 500;
+    font-weight: 620;
     letter-spacing: 0.02em;
     white-space: nowrap;
     pointer-events: none;
-    font-family: var(--font-geist), system-ui, sans-serif;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(244, 239, 226, 0.28);
-    backdrop-filter: blur(16px) saturate(1.3);
-    -webkit-backdrop-filter: blur(16px) saturate(1.3);
+    font-family: var(--font-archivo), "Helvetica Now", Helvetica, Arial, sans-serif;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.2),
+      inset 0 -1px 0 rgba(255, 255, 255, 0.035),
+      0 8px 18px rgba(0, 0, 0, 0.28);
+    backdrop-filter: blur(10px) saturate(1.15);
+    -webkit-backdrop-filter: blur(10px) saturate(1.15);
   `;
   // Subway: official MTA bullet SVG. Bus: a compact colored route chip.
   const bullet = isSubway

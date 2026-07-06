@@ -1,7 +1,13 @@
 from elevenlabs.client import ElevenLabs
 import os
 
-TTS_DISABLED = os.getenv("DISABLE_TTS", "").lower() in ("1", "true", "yes")
+# TTS is OFF by default — SmartRoute is a visual, map-first product with no
+# spoken narration. Set ENABLE_TTS=1 (or legacy DISABLE_TTS=0) to turn the
+# ElevenLabs voice back on. When disabled, generate_speech returns empty bytes,
+# which flow through as audio="" and the frontend simply plays nothing.
+_enable_tts = os.getenv("ENABLE_TTS", "").lower() in ("1", "true", "yes")
+_legacy_disable = os.getenv("DISABLE_TTS", "").lower()
+TTS_DISABLED = not _enable_tts and _legacy_disable != "0"
 
 client = ElevenLabs(
     api_key = os.getenv("ELEVENLABS_API_KEY")

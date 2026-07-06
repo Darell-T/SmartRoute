@@ -4,7 +4,8 @@ import { fileURLToPath } from "node:url";
 import { mkdirSync } from "node:fs";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const outDir = "C:/Users/19293/jarvis/jarvis-design/frontend/screenshots";
+const frontendRoot = resolve(here, "../..");
+const outDir = resolve(frontendRoot, "screenshots");
 mkdirSync(outDir, { recursive: true });
 
 const browser = await chromium.launch({ headless: true });
@@ -27,7 +28,7 @@ console.log("[qa-real] canvas present, waiting for tiles/layers to settle (8s)..
 await page.waitForTimeout(8000);
 
 // Default view (Midtown-ish per the app's initial centre)
-await page.screenshot({ path: outDir + "/qa-real-default.png", fullPage: false });
+await page.screenshot({ path: resolve(outDir, "qa-real-default.png"), fullPage: false });
 console.log("[qa-real] wrote qa-real-default.png");
 
 // Use mouse-drag to pan to specific scenes.
@@ -51,11 +52,11 @@ async function panTo(deltaLonDeg, deltaLatDeg, name) {
   await page.mouse.move(cx + dragDx, cy + dragDy, { steps: 20 });
   await page.mouse.up();
   await page.waitForTimeout(2500);
-  await page.screenshot({ path: outDir + "/qa-real-" + name + ".png", fullPage: false });
+  await page.screenshot({ path: resolve(outDir, `qa-real-${name}.png`), fullPage: false });
   console.log("[qa-real]   wrote qa-real-" + name + ".png");
 }
 
-// Default centre per components/jarvis-map.tsx: looks like roughly Midtown.
+// Default centre per components/smart-route/map/smart-route-map.tsx: roughly Midtown.
 // Scene targets:
 const DEFAULT_LON = -73.9857;
 const DEFAULT_LAT = 40.7484;

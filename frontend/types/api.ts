@@ -154,23 +154,6 @@ export interface LiveVehicle {
   };
 }
 
-export interface FocusedLiveDirection {
-  routeId: string;
-  direction: string;
-  terminalKey: string;
-}
-
-export interface LiveDirectionSummaryRow {
-  key: string;
-  routeId: string;
-  direction: string;
-  terminalKey: string;
-  terminalLabel: string;
-  destinationLabel: string;
-  nextArrivalTime: number;
-  arrivals: Array<LiveArrival & { arrival_time: number }>;
-}
-
 export interface LiveNetworkSummary {
   status: "healthy" | "caution" | "disrupted";
   headline: string;
