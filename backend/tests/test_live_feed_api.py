@@ -56,18 +56,8 @@ def _load_live_feed_module():
     fake_geo = types.ModuleType("app.utils.geo")
     fake_geo.find_nearest_stops = lambda *_args, **_kwargs: []
 
-    fake_cache = types.ModuleType("app.utils.cache")
-    fake_cache.cache_get = lambda *_args, **_kwargs: None
-    fake_cache.cache_set = lambda *_args, **_kwargs: None
-
     fake_mta_feed = types.ModuleType("app.services.mta_feed")
     fake_mta_feed.get_all_subway_vehicle_positions = AsyncMock(return_value=[])
-
-    fake_ai_advisor = types.ModuleType("app.services.ai_advisor")
-    fake_ai_advisor.generate_live_network_summary = AsyncMock(return_value={})
-
-    fake_incident_monitor = types.ModuleType("app.services.incident_monitor")
-    fake_incident_monitor.get_incidents = AsyncMock(return_value={"incidents": []})
 
     with patch.dict(
         sys.modules,
@@ -76,15 +66,11 @@ def _load_live_feed_module():
             "fastapi.responses": fake_responses,
             "pydantic": fake_pydantic,
             "app.utils.geo": fake_geo,
-            "app.utils.cache": fake_cache,
             "app.services.mta_feed": fake_mta_feed,
-            "app.services.ai_advisor": fake_ai_advisor,
-            "app.services.incident_monitor": fake_incident_monitor,
         },
     ):
-        # Re-import the live_feed router AND its services.live_feed submodules
-        # fresh so the stubbed mta_feed/ai_advisor/incident_monitor/cache bind
-        # inside the submodules (summary/incidents import those at module load).
+        # Re-import the live_feed router and helpers fresh so the stubbed
+        # realtime dependencies bind at module load.
         for _m in [k for k in list(sys.modules) if k == "app.routers.live_feed" or k.startswith("app.services.live_feed")]:
             sys.modules.pop(_m, None)
         return importlib.import_module("app.routers.live_feed")

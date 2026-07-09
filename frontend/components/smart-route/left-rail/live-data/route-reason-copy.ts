@@ -34,6 +34,7 @@ function derivePublicRationale(
 
 function normalizeRecommendationReason(
   reason: string | null | undefined,
+  routeCandidates?: RouteCandidate[],
 ): string {
   const cleaned = trimReason(publicRecommendationText(reason))
     .replace(/^recommend(?:ed|ation)?\s*:\s*/i, "")
@@ -60,21 +61,101 @@ function normalizeRecommendationReason(
     withoutMarkdown.length > 120
       ? `${withoutMarkdown.slice(0, 119).trim()}...`
       : withoutMarkdown;
-  return /[.!?]$/.test(clipped) ? clipped : `${clipped}.`;
+  const riderFacing = sanitizeIndexedRouteReferences(
+    collapseRepeatedLineReferences(clipped),
+    routeCandidates,
+  );
+  if (!riderFacing || /\b(?:route|candidate|option)\s+#?\d+\b/i.test(riderFacing)) {
+    return "";
+  }
+  const cased = riderFacing.charAt(0).toUpperCase() + riderFacing.slice(1);
+  return /[.!?]$/.test(cased) ? cased : `${cased}.`;
 }
 
-function candidateLineLabel(candidate: RouteCandidate | null | undefined): string {
-  const transit = firstTransitStep(candidate?.steps);
-  const line =
-    transit?.route_id
-    || transit?.train_line
-    || transitRouteIdsFromSteps(candidate?.steps ?? [])[0]
-    || "";
-  return line ? `the ${line.toUpperCase()}` : "another route";
+function cleanStopLabel(value: string | undefined): string {
+  return (value ?? "")
+    .replace(/\s+/g, " ")
+    .replace(/\s+-\s+/g, "-")
+    .trim();
 }
 
-function whyNotPhrase(candidate: RouteCandidate, reason: string): string {
-  const line = candidateLineLabel(candidate);
+function transitSteps(candidate: RouteCandidate | null | undefined): ApiRouteStep[] {
+  return (candidate?.steps ?? []).filter(
+    (step) => step.type === "SUBWAY" || step.type === "BUS",
+  );
+}
+
+function routeIdsKey(candidate: RouteCandidate | null | undefined): string {
+  return transitRouteIdsFromSteps(candidate?.steps ?? []).join("/");
+}
+
+function candidateDisplayLabel(
+  candidate: RouteCandidate | null | undefined,
+  routeCandidates?: RouteCandidate[],
+): string {
+  const transit = transitSteps(candidate);
+  const routeIds = transitRouteIdsFromSteps(candidate?.steps ?? []);
+  if (routeIds.length === 0) return "another route";
+
+  const modes = new Set(transit.map((step) => step.type));
+  const first = transit[0];
+  const primaryKey = routeIdsKey(candidate);
+  const duplicates =
+    routeCandidates?.filter((row) => routeIdsKey(row) === primaryKey).length ?? 0;
+  const routeLabel = routeIds.join("/");
+  const base =
+    modes.size === 1 && modes.has("BUS")
+      ? `${routeLabel} bus option`
+      : routeIds.length === 1
+        ? `${routeLabel} route`
+        : `${routeLabel} subway option`;
+  const transferStop = cleanStopLabel(transit[1]?.departure_stop);
+  const boardStop = cleanStopLabel(first?.departure_stop);
+
+  if (routeIds.length > 1 && transferStop) {
+    return `the ${base} via ${transferStop}`;
+  }
+  if (duplicates > 1 && boardStop) {
+    return `the ${base} from ${boardStop}`;
+  }
+  return `the ${base}`;
+}
+
+function indexedCandidateLabel(
+  index: number,
+  routeCandidates?: RouteCandidate[],
+): string {
+  const candidate =
+    routeCandidates?.find((row) => row.index === index) ?? routeCandidates?.[index];
+  return candidate ? candidateDisplayLabel(candidate, routeCandidates) : "that option";
+}
+
+function sanitizeIndexedRouteReferences(
+  value: string,
+  routeCandidates?: RouteCandidate[],
+): string {
+  return value
+    .replace(/\b(?:route|candidate|option)\s+#?(\d+)\b/gi, (_match, rawIndex: string) =>
+      indexedCandidateLabel(Number(rawIndex), routeCandidates),
+    )
+    .replace(/\broute\s+index\b/gi, "route")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function collapseRepeatedLineReferences(value: string): string {
+  return value.replace(
+    /\bthe\s+([A-Z0-9]{1,4})(?:\s+(?:train|route))?\s+and\s+the\s+\1(?:\s+(?:train|route))?\b/g,
+    "the $1 alternatives",
+  );
+}
+
+function whyNotPhrase(
+  candidate: RouteCandidate,
+  reason: string,
+  routeCandidates?: RouteCandidate[],
+): string {
+  const line = candidateDisplayLabel(candidate, routeCandidates);
   const lower = reason.charAt(0).toLowerCase() + reason.slice(1);
   if (/^\d+ extra transfer/.test(lower)) {
     return `${line} because it adds ${lower}`;
@@ -121,7 +202,7 @@ function buildWhyNotSentence(
       delta,
     );
     if (!reason || /similar time/i.test(reason)) continue;
-    reasons.push(whyNotPhrase(candidate, reason));
+    reasons.push(whyNotPhrase(candidate, reason, routeCandidates));
     if (reasons.length >= 2) break;
   }
 
@@ -139,6 +220,7 @@ export function buildVisibleRouteReason(
     candidate.is_recommended === false
       ? candidate.rejection_reason || candidate.recommendation_reason
       : candidate.recommendation_reason,
+    routeCandidates,
   );
   const primary = modelReason || derivePublicRationale(candidate, steps);
   const whyNot =

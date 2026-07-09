@@ -1,8 +1,4 @@
-"""Shared verbose telemetry logger for the live-feed router + its services.
-
-Pulled into its own leaf module so both the router (WebSocket lifecycle logs)
-and the nearby-incident scan can use it without a circular import.
-"""
+"""Shared verbose telemetry logger for the live-feed router + its helpers."""
 
 import os
 

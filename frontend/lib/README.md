@@ -17,9 +17,3 @@ Server-side Next routes use `APP_KEY` to authenticate requests to FastAPI and
 to mint short-lived WebSocket tickets. Never expose it as a `NEXT_PUBLIC_*`
 value. Browser code should request `/api/ws-ticket` and use the returned ticket
 instead.
-
-## atlas_scan
-
-`atlas_scan` is a backend request field used by live-feed calls in
-`use-live-feed.ts`. Keep the field name until the backend contract changes, even
-though public product copy should continue to say SmartRoute.

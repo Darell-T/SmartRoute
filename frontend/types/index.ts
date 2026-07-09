@@ -2,7 +2,6 @@ export type {
   Coordinates,
   DestinationSelection,
   LiveFeedResponse,
-  LiveNetworkSummary,
   LiveVehicle,
   LiveFeedIncident,
   RouteCandidate,
@@ -15,8 +14,6 @@ export type {
   LiveArrival,
   ServiceAlertDetail,
   Incident,
-  ThinkingResponse,
-  SwitchNarrationResponse,
   IntermediateStopLocation,
   TripResponse,
 } from "./api";

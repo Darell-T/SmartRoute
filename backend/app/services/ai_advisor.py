@@ -1,10 +1,7 @@
-
 import anthropic
 import asyncio
 import json
 import os
-import re
-import time
 from pathlib import Path
 
 client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
@@ -12,18 +9,20 @@ client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 _DEFAULT_SYSTEM_PROMPT = """You are the SmartRoute routing engine for NYC transit.
 
 Choose the best route from the provided alternatives using travel time,
-walking, transfers, live arrivals, service alerts, and incidents. Return only:
+walking, transfers, live arrivals, service alerts, incidents, and stalled vehicles. Return only:
 
 [ROUTE:N]
 [CANDIDATE_ANALYSIS]{"selected_route_index":N,"candidate_analysis":[...]}[/CANDIDATE_ANALYSIS]
 
 Use zero-based route indexes. Include every candidate route in candidate_analysis.
+The input includes route_candidate_labels mapping each index to a passenger
+label; use those labels when writing reason strings, never the raw index.
 For the selected route, provide recommendation_reason. For every other route,
 provide rejection_reason. Reasons must explain the trade-off: specific minutes
-faster/slower, extra transfers, named delays/suspensions, stalled vehicles,
-incidents, or no reported delays when the route is simply fastest. Keep reasons
+faster/slower, extra transfers, named delays/suspensions, incidents,
+stalled vehicles, or no reported delays when the route is simply fastest. Keep reasons
 rider-facing, concrete, and under 18 words. Do not mention internal systems,
-APIs, JSON payloads, prompts, telemetry, IDs, or implementation details.
+APIs, JSON payloads, prompts, telemetry, IDs, route indexes, or implementation details.
 """
 
 
@@ -64,164 +63,6 @@ SYSTEM_PROMPT = _load_system_prompt()
 
 _MODEL_PRIORITY = ["claude-haiku-4-5-20251001"]
 
-LIVE_SUMMARY_PROMPT = """Produce a short operational briefing about the NYC subway network.
-
-Return JSON only, with exactly these keys:
-{"headline":"...","body":"..."}
-
-Rules:
-- headline must be 3 to 7 words.
-- body must be 2 or 3 short sentences total.
-- Speak about overall subway network health, not trip planning.
-- Do not mention incidents, riders, boarding advice, destinations, or route indices.
-- Do not mention implementation details like GTFS, payloads, APIs, servers, telemetry, parse failures, or internal tooling.
-- Rider-facing subway line names like Q or A are allowed when useful.
-- Keep the tone calm, precise, and factual. No persona, no jokes.
-"""
-
-_SUMMARY_INTERNAL_LEAK_PATTERN = re.compile(
-    r"\b(backend|frontend|api|json|payload|database|sql|gtfs|server|model|prompt|telemetry|parse)\b",
-    re.IGNORECASE,
-)
-_SUMMARY_TELEMETRY_LEAK_PATTERN = re.compile(
-    r"\b(route index|route_ids?|stop_ids?|vehicle_entities|feed_failures|raw_positions|stop_only_candidates)\b",
-    re.IGNORECASE,
-)
-
-
-def _extract_json_object(text: str) -> dict | None:
-    text = (text or "").strip()
-    if not text:
-        return None
-    try:
-        parsed = json.loads(text)
-        return parsed if isinstance(parsed, dict) else None
-    except json.JSONDecodeError:
-        start = text.find("{")
-        end = text.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            return None
-        try:
-            parsed = json.loads(text[start : end + 1])
-            return parsed if isinstance(parsed, dict) else None
-        except json.JSONDecodeError:
-            return None
-
-
-def _clean_summary_field(value: str | None) -> str:
-    text = " ".join(str(value or "").split()).strip()
-    return text
-
-
-def _summary_has_internal_leak(text: str) -> bool:
-    return bool(
-        _SUMMARY_INTERNAL_LEAK_PATTERN.search(text)
-        or _SUMMARY_TELEMETRY_LEAK_PATTERN.search(text)
-    )
-
-
-def _fallback_live_network_summary(payload: dict, status: str) -> dict:
-    alerts = payload.get("alerts", {}) if isinstance(payload, dict) else {}
-    vehicles = payload.get("vehicles", {}) if isinstance(payload, dict) else {}
-    active_count = int(alerts.get("active_count") or 0)
-    affected_route_count = int(alerts.get("affected_route_count") or 0)
-    stale_count = int(vehicles.get("stale_count") or 0)
-    feed_failures = int(vehicles.get("feed_failures") or 0)
-
-    if status == "disrupted":
-        headline = "Network under active strain"
-        if feed_failures > 0:
-            body = (
-                f"{active_count} subway alerts are active across {affected_route_count} lines. "
-                "Live train reporting is patchy as well, so service rhythm may feel uneven."
-            )
-        else:
-            body = (
-                f"{active_count} subway alerts are active across {affected_route_count} lines. "
-                f"{stale_count} trains are reporting stale positions, so headways may wobble a bit."
-            )
-    elif status == "healthy":
-        headline = "Network looks steady"
-        body = (
-            "Subway service is broadly behaving itself right now. "
-            "Alerts are light, and train reporting looks stable across the system."
-        )
-    else:
-        headline = "Network requires mild caution"
-        if active_count > 0:
-            body = (
-                f"{active_count} active subway alerts are keeping parts of the network honest. "
-                "Most lines are still moving, though a few gaps may feel wider than ideal."
-            )
-        else:
-            body = (
-                "The subway is mostly steady, with only light operational noise. "
-                "Nothing catastrophic, which by MTA standards qualifies as a small miracle."
-            )
-
-    return {
-        "status": status,
-        "headline": headline,
-        "body": body,
-        "updated_at": int(time.time()),
-        "source": "fallback",
-    }
-
-
-async def generate_live_network_summary(payload: dict) -> dict:
-    status = str(payload.get("network_status") or "caution").strip().lower() or "caution"
-    fallback = _fallback_live_network_summary(payload, status)
-
-    if not os.getenv("ANTHROPIC_API_KEY"):
-        return fallback
-
-    messages = [{"role": "user", "content": json.dumps(payload)}]
-
-    for model in _MODEL_PRIORITY:
-        for attempt in range(3):
-            try:
-                response = await client.messages.create(
-                    model=model,
-                    max_tokens=220,
-                    system=LIVE_SUMMARY_PROMPT,
-                    messages=messages,
-                )
-                text = "".join(
-                    block.text
-                    for block in response.content
-                    if getattr(block, "type", None) == "text"
-                )
-                parsed = _extract_json_object(text)
-                if not parsed:
-                    raise RuntimeError("Live summary response was not valid JSON")
-
-                headline = _clean_summary_field(parsed.get("headline"))
-                body = _clean_summary_field(parsed.get("body"))
-                if not headline or not body:
-                    raise RuntimeError("Live summary response was missing headline or body")
-                if _summary_has_internal_leak(headline) or _summary_has_internal_leak(body):
-                    raise RuntimeError("Live summary response leaked internal terms")
-
-                return {
-                    "status": status,
-                    "headline": headline,
-                    "body": body,
-                    "updated_at": int(time.time()),
-                    "source": "fresh",
-                }
-            except anthropic.APIStatusError as exc:
-                if exc.status_code == 529:
-                    wait = 2 ** attempt
-                    print(f"[claude] {model} overloaded for live summary (attempt {attempt+1}), waiting {wait}s")
-                    await asyncio.sleep(wait)
-                    continue
-                print(f"[claude] live summary failed with {model}: {type(exc).__name__}: {exc}")
-                return fallback
-            except Exception as exc:
-                print(f"[claude] live summary failed with {model}: {type(exc).__name__}: {exc}")
-                return fallback
-
-    return fallback
 
 def _route_eta_minutes(route: list) -> float | None:
     """Largest relative arrival figure across a route's steps = trip ETA."""
@@ -244,7 +85,7 @@ def _route_lines(route: list) -> list:
 
 
 def build_mock_recommendation(payload: dict) -> str:
-    """Deterministic JARVIS-shaped recommendation for JARVIS_MOCK_ADVISOR=1.
+    """Deterministic advisor-shaped recommendation for JARVIS_MOCK_ADVISOR=1.
 
     Emits the exact control blocks Claude is prompted to produce
     ([ROUTE:N] + [CANDIDATE_ANALYSIS]) so the parsing/sanitization path in
@@ -257,6 +98,7 @@ def build_mock_recommendation(payload: dict) -> str:
     lines = _route_lines(chosen)
     line_label = " then the ".join(lines) if lines else "a short walk"
     alert_count = len(payload.get("service_alerts") or [])
+    incident_count = len(payload.get("incidents") or [])
     chosen_transfers = max(0, len(lines) - 1)
 
     # The concrete margin over the next-best alternative is what makes the
@@ -321,9 +163,14 @@ def build_mock_recommendation(payload: dict) -> str:
         if alert_count
         else ""
     )
+    incident_clause = (
+        f" I found {incident_count} incident report(s), none changing the recommendation."
+        if incident_count
+        else ""
+    )
     prose = (
         f"Very well, sir. Take the {line_label}."
-        f"{eta_clause}{why}{alert_clause}"
+        f"{eta_clause}{why}{alert_clause}{incident_clause}"
     )
     analysis_block = json.dumps(
         {"selected_route_index": chosen_index, "candidate_analysis": analysis}
@@ -335,7 +182,8 @@ async def stream_recommendation(payload: dict):
     """Async generator that yields text chunks from Claude as they arrive.
     Retries with exponential backoff and falls back to Haiku if Sonnet is overloaded.
 
-    payload should contain keys: routes, service_alerts, incidents.
+    payload should contain keys: routes, service_alerts, incidents,
+    stalled_trains, and stalled_buses.
 
     Set JARVIS_MOCK_ADVISOR=1 to bypass Claude entirely (e.g. no API
     credits): routes/stops/alerts stay real, only this narration is

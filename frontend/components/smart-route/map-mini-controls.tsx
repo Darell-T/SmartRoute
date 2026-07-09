@@ -1,4 +1,5 @@
 import { Expand, LocateFixed } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 interface Props {
   onExpand?: () => void;
@@ -11,12 +12,12 @@ export function MapMiniControls({ onExpand, onRecenter }: Props) {
 
   return (
     <div
-      className="absolute right-4 top-4 z-10 flex flex-col gap-2"
+      className="sr-map-mini-controls absolute right-4 top-4 z-10 flex flex-col gap-2"
       aria-label="Map controls"
     >
       <button
         type="button"
-        className={buttonClassName}
+        className={cn(buttonClassName, "sr-map-mini-control--fullscreen")}
         aria-label="Toggle fullscreen"
         onClick={onExpand}
       >
@@ -24,7 +25,7 @@ export function MapMiniControls({ onExpand, onRecenter }: Props) {
       </button>
       <button
         type="button"
-        className={buttonClassName}
+        className={cn(buttonClassName, "sr-map-mini-control--recenter")}
         aria-label="Recenter map"
         onClick={onRecenter}
       >

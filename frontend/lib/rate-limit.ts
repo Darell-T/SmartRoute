@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 
 // Best-effort in-memory sliding-window limiter for the public proxy routes. It
-// protects the paid/provider-backed endpoints (route planning, narration, TTS)
-// from a single abusive client. NOTE: this is per-instance memory; a multi-
+// protects paid/provider-backed endpoints like route planning from a single
+// abusive client. NOTE: this is per-instance memory; a multi-
 // instance/serverless deployment that needs a hard global limit should back this
 // with a shared store (e.g. Upstash/Redis). For a single backend it is effective.
 interface Bucket {

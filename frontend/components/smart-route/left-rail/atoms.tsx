@@ -204,20 +204,33 @@ export function BusChip({ route, title }: { route: string; title?: string }) {
    the real bullet or bus badge instead of raw bracket text. Unrecognized
    tokens pass through untouched. */
 const TRANSIT_TOKEN = /\[([A-Za-z0-9+-]{1,8})\]/;
-const SHUTTLE_BUS_TOKEN = /\b((?:free\s+)?shuttle\s+buses?)\b/i;
-const TRANSIT_TEXT_TOKEN = new RegExp(
-  `${TRANSIT_TOKEN.source}|${SHUTTLE_BUS_TOKEN.source}`,
-  "gi",
-);
+const TRANSIT_TEXT_TOKEN = new RegExp(TRANSIT_TOKEN.source, "gi");
 const BUS_ROUTE_TOKEN = /^(?:B|BM|BX|M|Q|QM|SIM|S|X)\d{1,3}[A-Z]?(?:-?SBS)?$/;
+const INLINE_ICON_PLACEHOLDER =
+  /\[(?:free\s+)?(?:shuttle\s+bus|bus|subway|train|shuttle)\s+icon\]|\[(?:shuttle\s+bus|bus|subway|train|shuttle)\]/gi;
+
+export function cleanTransitParagraphText(text: string): string {
+  return text
+    .replace(INLINE_ICON_PLACEHOLDER, " ")
+    .replace(TRANSIT_TEXT_TOKEN, "$1")
+    .replace(/\s+/g, " ")
+    .replace(/\s+([.,;:!?])/g, "$1")
+    .trim();
+}
 
 export function TransitText({
   text,
   bulletSize = 15,
+  mode = "identity",
 }: {
   text: string;
   bulletSize?: number;
+  mode?: "identity" | "paragraph";
 }) {
+  if (mode === "paragraph") {
+    return <>{cleanTransitParagraphText(text)}</>;
+  }
+
   const nodes: ReactNode[] = [];
   const pattern = new RegExp(TRANSIT_TEXT_TOKEN.source, "gi");
   let cursor = 0;
@@ -226,7 +239,6 @@ export function TransitText({
 
   while ((match = pattern.exec(text)) !== null) {
     const routeToken = match[1]?.toUpperCase();
-    const shuttlePhrase = match[2];
     let badge: ReactNode | null = null;
 
     if (routeToken && SUBWAY_BULLET_ROUTES.has(routeToken)) {
@@ -241,24 +253,11 @@ export function TransitText({
           <BusChip route={routeToken} />
         </span>
       );
-    } else if (shuttlePhrase) {
-      badge = (
-        <span key={key++} className="sr-line-token">
-          <BusChip route="BUS" title="Shuttle bus" />
-        </span>
-      );
     }
 
     if (!badge) continue;
     if (match.index > cursor) nodes.push(text.slice(cursor, match.index));
-    if (shuttlePhrase) {
-      const freePrefix = shuttlePhrase.match(/^free\s+/i)?.[0] ?? "";
-      const shuttleLabel = shuttlePhrase.slice(freePrefix.length);
-      if (freePrefix) nodes.push(freePrefix);
-      nodes.push(badge, ` ${shuttleLabel}`);
-    } else {
-      nodes.push(badge);
-    }
+    nodes.push(badge);
     cursor = match.index + match[0].length;
   }
 
