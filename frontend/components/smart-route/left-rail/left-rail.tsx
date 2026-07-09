@@ -42,19 +42,25 @@ export interface LeftRailProps {
   };
   onSelectAlternative?: (candidateId: string) => void;
   search?: RailSearchProps;
+  onRouteSearchFocusChange?: (focused: boolean) => void;
+  onRailInteraction?: () => void;
 }
 
 export interface RailSearchProps {
   inputValue: string;
   isLoading: boolean;
+  planningPhase: RailPlanningPhase;
   hasActiveRoute: boolean;
   onInputChange: (value: string) => void;
   onSubmit: (
     destination?: string,
     selection?: DestinationSelection | null,
   ) => void;
+  onCancelPlanning: () => void;
   onClear: () => void;
 }
+
+export type RailPlanningPhase = "idle" | "cancellable" | "finalizing";
 
 const TAB_ORDER = [
   { id: "route" as const, label: "Route", icon: RouteTabIcon },
@@ -69,6 +75,8 @@ export function LeftRail({
   data,
   onSelectAlternative,
   search,
+  onRouteSearchFocusChange,
+  onRailInteraction,
 }: LeftRailProps) {
   const [tab, setTab] = useState<TabId>(initialTab);
   const [preferredWay, setPreferredWay] = useState<ArrivalFilter>("uptown");
@@ -110,7 +118,11 @@ export function LeftRail({
           height: "100%",
         }}
       >
-        <RailHeader tab={tab} onTabChange={setTab} />
+        <RailHeader
+          tab={tab}
+          onTabChange={setTab}
+          onInteraction={onRailInteraction}
+        />
         <div key={tab} className="sr-fade-in">
           {tab === "route" && (
             <RouteView
@@ -128,6 +140,8 @@ export function LeftRail({
               onRouteStatusChange={setRouteState}
               onSelectAlternative={onSelectAlternative}
               search={search}
+              onSearchFocusChange={onRouteSearchFocusChange}
+              onRequestRailExpand={onRailInteraction}
             />
           )}
           {tab === "alerts" && (
@@ -146,9 +160,11 @@ export function LeftRail({
 function RailHeader({
   tab,
   onTabChange,
+  onInteraction,
 }: {
   tab: TabId;
   onTabChange: (next: TabId) => void;
+  onInteraction?: () => void;
 }) {
   return (
     <header className="sr-rail-header">
@@ -160,7 +176,10 @@ function RailHeader({
             <button
               key={item.id}
               type="button"
-              onClick={() => onTabChange(item.id)}
+              onClick={() => {
+                onInteraction?.();
+                onTabChange(item.id);
+              }}
               aria-current={active ? "page" : undefined}
               data-active={active ? "true" : "false"}
             >

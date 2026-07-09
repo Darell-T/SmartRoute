@@ -18,8 +18,8 @@ const backendBase =
   process.env.NEXT_PUBLIC_API_URL ??
   (process.env.VERCEL ? PROD_API_FALLBACK : "http://localhost:8000");
 
-// Trip planning is the slowest backend call (real-time providers + advisor +
-// TTS), so the default proxy budget is generous; faster routes can override.
+// Trip planning is the slowest backend call (real-time providers + advisor),
+// so the default proxy budget is generous; faster routes can override.
 const DEFAULT_TIMEOUT_MS = 65_000;
 
 interface ProxyOptions {
@@ -92,8 +92,7 @@ interface PostProxyOptions<T> {
   /** Rate-limit bucket key and per-minute ceiling for this route. */
   key: string;
   limit: number;
-  /** Validates and narrows the JSON body before it reaches the backend. Omit for
-   *  body-less POSTs (e.g. /api/thinking). */
+  /** Validates and narrows the JSON body before it reaches the backend. */
   schema?: ZodType<T>;
   cache?: RequestCache;
   /** Message returned on a 400; defaults to a generic one. */

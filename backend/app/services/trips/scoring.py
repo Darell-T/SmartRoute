@@ -1,8 +1,8 @@
 """Route scoring + route-step accessors.
 
 Pure functions over Google-parsed route step dicts. Depends only on ``text``
-(for ``_safe_text``). ``_step_route_id`` lives here (its primary consumer is
-``_route_lines``); ``incidents`` imports it from here rather than duplicating it.
+(for ``_safe_text``). ``_step_route_id`` lives here for route scoring and
+shared candidate display helpers.
 """
 
 from app.services.trips import text

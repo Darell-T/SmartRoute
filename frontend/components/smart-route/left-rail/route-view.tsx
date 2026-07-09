@@ -4,6 +4,7 @@ import {
   Fragment,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -15,11 +16,11 @@ import {
 } from "motion/react";
 import {
   AlertTriangle,
+  ArrowUp,
   ChevronDown,
   ChevronRight,
-  Loader2,
+  Mic,
   RefreshCw,
-  Search,
   X,
 } from "lucide-react";
 import type { MapboxSearchSuggestion } from "@/lib/mapbox-search";
@@ -38,11 +39,11 @@ import {
   RouteBullet,
   RouteBulletGroup,
   StepIcon,
+  TransitText,
 } from "./atoms";
-import {
-  ArrivalCountdown,
-  InlineArrivalCountdown,
-} from "./arrival-countdown";
+import { ArrivalCountdown, InlineArrivalCountdown } from "./arrival-countdown";
+import { SpiralFillLoader } from "@/components/smart-route/ui/spiral-fill-loader";
+import { SUBWAY_BULLET_ROUTES } from "@/components/smart-route/train-bullet";
 import { LINE_COLORS } from "./types";
 import type {
   Alternative,
@@ -84,6 +85,8 @@ export function RouteView({
   onRouteStatusChange,
   onSelectAlternative,
   search,
+  onSearchFocusChange,
+  onRequestRailExpand,
 }: {
   station: Station;
   health: NetworkHealth;
@@ -99,6 +102,8 @@ export function RouteView({
   onRouteStatusChange: (s: RouteRailStatus) => void;
   onSelectAlternative?: (candidateId: string) => void;
   search?: RailSearchProps;
+  onSearchFocusChange?: (focused: boolean) => void;
+  onRequestRailExpand?: () => void;
 }) {
   const isPlanning = routeStatus === "thinking";
   const isReady = routeStatus === "result";
@@ -130,6 +135,7 @@ export function RouteView({
       <DestinationInput
         search={search}
         onDemoSubmit={() => onRouteStatusChange("thinking")}
+        onFocusChange={onSearchFocusChange}
       />
 
       <AnimatePresence mode="wait" initial={false}>
@@ -142,6 +148,7 @@ export function RouteView({
               nearbyBusArrivals={nearbyBusArrivals}
               way={way}
               onWayChange={onWayChange}
+              onRequestRailExpand={onRequestRailExpand}
             />
           </motion.div>
         )}
@@ -233,15 +240,80 @@ function cleanDestinationSubmit(value: string) {
   return cleanDestinationDraft(value).trim();
 }
 
+type DestinationInputActionState =
+  | "empty"
+  | "submit"
+  | "stop"
+  | "finalizing"
+  | "clear";
+
+type SpeechRecognitionAlternativeLike = {
+  transcript: string;
+};
+
+type SpeechRecognitionResultLike = {
+  readonly length: number;
+  readonly isFinal: boolean;
+  item(index: number): SpeechRecognitionAlternativeLike;
+  [index: number]: SpeechRecognitionAlternativeLike;
+};
+
+type SpeechRecognitionResultListLike = {
+  readonly length: number;
+  item(index: number): SpeechRecognitionResultLike;
+  [index: number]: SpeechRecognitionResultLike;
+};
+
+type SpeechRecognitionEventLike = Event & {
+  results: SpeechRecognitionResultListLike;
+};
+
+type SpeechRecognitionLike = {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  maxAlternatives: number;
+  start: () => void;
+  stop: () => void;
+  abort: () => void;
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
+  onerror: (() => void) | null;
+  onend: (() => void) | null;
+};
+
+type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
+
+type SpeechRecognitionWindow = Window &
+  typeof globalThis & {
+    SpeechRecognition?: SpeechRecognitionConstructor;
+    webkitSpeechRecognition?: SpeechRecognitionConstructor;
+  };
+
+function getSpeechRecognitionConstructor(): SpeechRecognitionConstructor | null {
+  if (typeof window === "undefined") return null;
+  const speechWindow = window as SpeechRecognitionWindow;
+  return (
+    speechWindow.SpeechRecognition ??
+    speechWindow.webkitSpeechRecognition ??
+    null
+  );
+}
+
 function DestinationInput({
   search,
   onDemoSubmit,
+  onFocusChange,
 }: {
   search?: RailSearchProps;
   onDemoSubmit: (query: string) => void;
+  onFocusChange?: (focused: boolean) => void;
 }) {
   const [localValue, setLocalValue] = useState("");
   const [focused, setFocused] = useState(false);
+  const [speechRecognitionCtor, setSpeechRecognitionCtor] =
+    useState<SpeechRecognitionConstructor | null>(null);
+  const [isListening, setIsListening] = useState(false);
+  const speechRecognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const controlledSearch = search ?? null;
   const wired = controlledSearch !== null;
   const value = controlledSearch ? controlledSearch.inputValue : localValue;
@@ -264,6 +336,18 @@ function DestinationInput({
     resetSession,
   } = destinationSearch;
 
+  useEffect(() => {
+    const supportCheck = window.setTimeout(() => {
+      const recognitionCtor = getSpeechRecognitionConstructor();
+      setSpeechRecognitionCtor(() => recognitionCtor);
+    }, 0);
+    return () => {
+      window.clearTimeout(supportCheck);
+      speechRecognitionRef.current?.abort();
+      speechRecognitionRef.current = null;
+    };
+  }, []);
+
   function setValue(next: string) {
     const cleaned = cleanDestinationDraft(next);
     if (controlledSearch) {
@@ -281,6 +365,7 @@ function DestinationInput({
     clearSuggestions();
     resetSession();
     setFocused(false);
+    onFocusChange?.(false);
     search?.onSubmit(label, selection ?? null);
   }
 
@@ -290,6 +375,7 @@ function DestinationInput({
     clearSuggestions();
     resetSession();
     setFocused(false);
+    onFocusChange?.(false);
     markSelectedLabel(query);
     if (document.activeElement instanceof HTMLElement) {
       document.activeElement.blur();
@@ -302,31 +388,121 @@ function DestinationInput({
     clearSuggestions();
     resetSession();
     if (controlledSearch) {
-      if (controlledSearch.hasActiveRoute) controlledSearch.onClear();
-      else controlledSearch.onInputChange("");
+      controlledSearch.onClear();
       return;
     }
     setLocalValue("");
   }
 
-  const busy = Boolean(search?.isLoading || isResolving);
+  function stopRoutePlanning() {
+    clearSuggestions();
+    resetSession();
+    setFocused(false);
+    onFocusChange?.(false);
+    controlledSearch?.onCancelPlanning();
+  }
+
+  function startVoiceInput() {
+    if (!speechRecognitionCtor || isListening) {
+      speechRecognitionRef.current?.stop();
+      return;
+    }
+
+    const recognition = new speechRecognitionCtor();
+    recognition.lang = "en-US";
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+    recognition.onresult = (event) => {
+      const transcriptParts: string[] = [];
+      for (let index = 0; index < event.results.length; index += 1) {
+        const result = event.results[index] ?? event.results.item(index);
+        const alternative = result[0] ?? result.item(0);
+        if (alternative?.transcript)
+          transcriptParts.push(alternative.transcript);
+      }
+      const transcript = cleanDestinationDraft(transcriptParts.join(" "));
+      if (!transcript) return;
+      setValue(transcript);
+      setFocused(true);
+      onFocusChange?.(true);
+    };
+    recognition.onerror = () => {
+      setIsListening(false);
+      speechRecognitionRef.current = null;
+    };
+    recognition.onend = () => {
+      setIsListening(false);
+      speechRecognitionRef.current = null;
+    };
+
+    speechRecognitionRef.current = recognition;
+    setIsListening(true);
+    try {
+      recognition.start();
+    } catch {
+      setIsListening(false);
+      speechRecognitionRef.current = null;
+    }
+  }
+
+  const planningPhase = search?.planningPhase ?? "idle";
+  const isPlanning = planningPhase !== "idle" || Boolean(search?.isLoading);
+  const busy = Boolean(isPlanning || isResolving);
+  const hasSearchContent = cleanDestinationSubmit(value).length > 0;
+  const showClearAction = Boolean(controlledSearch?.hasActiveRoute && !busy);
+  const actionState: DestinationInputActionState = showClearAction
+    ? "clear"
+    : planningPhase === "cancellable"
+      ? "stop"
+      : planningPhase === "finalizing" || isResolving || search?.isLoading
+        ? "finalizing"
+        : hasSearchContent
+          ? "submit"
+          : "empty";
+  const canUseVoice =
+    speechRecognitionCtor !== null &&
+    !busy &&
+    !showClearAction &&
+    actionState !== "clear";
+  const actionDisabled =
+    actionState === "empty" || actionState === "finalizing";
+  const actionLabel =
+    actionState === "clear"
+      ? "Clear route"
+      : actionState === "stop"
+        ? "Stop route planning"
+        : actionState === "finalizing"
+          ? "Finalizing route"
+          : "Search route";
+  const actionFilled =
+    actionState === "submit" ||
+    actionState === "stop" ||
+    actionState === "clear";
 
   return (
     <section className="sr-rail-section sr-route-search">
-      <h1 className="sr-rail-title">Where to?</h1>
       <form
         className="sr-input-group"
         onSubmit={(event) => {
           event.preventDefault();
-          submitSearch();
+          if (actionState === "submit") submitSearch();
         }}
       >
-        <Search size={18} strokeWidth={1.8} aria-hidden="true" />
         <input
+          aria-label="Search destination or address"
           value={displayValue}
           onChange={(event) => setValue(event.target.value)}
-          onFocus={() => setFocused(true)}
-          onBlur={() => window.setTimeout(() => setFocused(false), 140)}
+          onFocus={() => {
+            setFocused(true);
+            onFocusChange?.(true);
+          }}
+          onBlur={() =>
+            window.setTimeout(() => {
+              setFocused(false);
+              onFocusChange?.(false);
+            }, 140)
+          }
           onKeyDown={(event) => {
             if (!wired || suggestions.length === 0) return;
             if (event.key === "ArrowDown") {
@@ -346,29 +522,57 @@ function DestinationInput({
               clearSuggestions();
             }
           }}
-          placeholder="Search destination or address"
+          placeholder="Where are we headed?"
           autoComplete="off"
           disabled={busy}
           title={displayValue || undefined}
         />
-        {busy && (
-          <Loader2
-            className="sr-input-spinner"
-            size={16}
-            strokeWidth={1.9}
-            aria-hidden="true"
-          />
-        )}
-        {!busy && value && (
+        {canUseVoice && (
           <button
             type="button"
-            className="sr-icon-button"
-            onClick={clearSearch}
-            aria-label="Clear destination"
+            className="sr-input-voice"
+            aria-label={
+              isListening ? "Listening for destination" : "Use voice input"
+            }
+            data-listening={isListening ? "true" : "false"}
+            onClick={startVoiceInput}
           >
-            <X size={18} strokeWidth={1.8} aria-hidden="true" />
+            <Mic size={20} strokeWidth={1.9} aria-hidden="true" />
           </button>
         )}
+        <motion.button
+          type={actionState === "submit" ? "submit" : "button"}
+          className="sr-input-submit"
+          aria-label={actionLabel}
+          disabled={actionDisabled}
+          data-filled={actionFilled ? "true" : "false"}
+          data-action-state={actionState}
+          onClick={() => {
+            if (actionState === "clear") {
+              clearSearch();
+            } else if (actionState === "stop") {
+              stopRoutePlanning();
+            }
+          }}
+          animate={{
+            backgroundColor: actionFilled
+              ? "rgba(255,255,255,0.96)"
+              : "rgba(255,255,255,0.12)",
+            color: actionFilled
+              ? "rgba(8,12,18,0.96)"
+              : "rgba(255,255,255,0.72)",
+          }}
+          transition={{ duration: 0.2, ease: "easeOut" }}
+          whileTap={!actionDisabled ? { scale: 0.96 } : undefined}
+        >
+          {actionState === "clear" ? (
+            <X size={20} strokeWidth={2.1} aria-hidden="true" />
+          ) : actionState === "stop" || actionState === "finalizing" ? (
+            <span className="sr-input-stop-icon" aria-hidden="true" />
+          ) : (
+            <ArrowUp size={21} strokeWidth={2.25} aria-hidden="true" />
+          )}
+        </motion.button>
       </form>
 
       {wired && focused && suggestions.length > 0 && (
@@ -383,7 +587,9 @@ function DestinationInput({
               onMouseEnter={() => setHighlightedIndex(index)}
               onClick={() => void chooseSuggestion(suggestion)}
             >
-              <span>{suggestion.label.split(",")[0]?.trim() || suggestion.label}</span>
+              <span>
+                {suggestion.label.split(",")[0]?.trim() || suggestion.label}
+              </span>
               <small>{suggestion.label}</small>
             </button>
           ))}
@@ -425,16 +631,7 @@ function RoutePlanningReasoning({
       <Reasoning className="sr-reasoning" isStreaming>
         <ReasoningTrigger className="sr-reasoning__trigger">
           <span className="sr-reasoning__status">
-            {/* The rail's own "checking live status" glyph — the same icon
-               arrival rows use — pulsing while planning genuinely runs. */}
-            <span
-              className="sr-prediction-status"
-              data-state="fresh"
-              data-pulse="true"
-              aria-hidden="true"
-            >
-              <PredictionSignalIcon state="fresh" />
-            </span>
+            <SpiralFillLoader className="shrink-0" />
             <Shimmer as="span" duration={2.2}>
               Finding routes...
             </Shimmer>
@@ -442,7 +639,10 @@ function RoutePlanningReasoning({
         </ReasoningTrigger>
         <ReasoningContent className="sr-reasoning__content">
           {cleanedDestination ? (
-            <span className="sr-reasoning-destination" title={cleanedDestination}>
+            <span
+              className="sr-reasoning-destination"
+              title={cleanedDestination}
+            >
               {cleanedDestination}
             </span>
           ) : null}
@@ -477,11 +677,7 @@ function RoutePlanningReasoning({
   );
 }
 
-function CandidateStatusBadge({
-  status,
-}: {
-  status: "winner" | "selected";
-}) {
+function CandidateStatusBadge({ status }: { status: "winner" | "selected" }) {
   const label = status === "winner" ? "Recommended" : "Selected";
 
   return <span className="sr-status-badge">{label}</span>;
@@ -511,8 +707,8 @@ function RecommendedRouteCard({
     .filter(Boolean)
     .join(" · ");
   const hasNextDeparture =
-    typeof plan.nextDepartureMinutes === "number"
-    && Number.isFinite(plan.nextDepartureMinutes);
+    typeof plan.nextDepartureMinutes === "number" &&
+    Number.isFinite(plan.nextDepartureMinutes);
   const meta = [
     `${transfers} transfer${transfers === 1 ? "" : "s"}`,
     typeof candidate.walkMinutes === "number"
@@ -535,9 +731,7 @@ function RecommendedRouteCard({
       <strong className="sr-recommended-route__duration">
         {formatDurationLabel(plan.totalTime)}
       </strong>
-      {timing && (
-        <span className="sr-recommended-route__timing">{timing}</span>
-      )}
+      {timing && <span className="sr-recommended-route__timing">{timing}</span>}
       {hasNextDeparture && (
         <RecommendedNextDeparture
           routeId={plan.pickedLine}
@@ -618,9 +812,7 @@ function TypedRouteReasoning({ text }: { text: string }) {
       return () => window.cancelAnimationFrame(animationFrame);
     }
 
-    const motionQuery = window.matchMedia?.(
-      "(prefers-reduced-motion: reduce)",
-    );
+    const motionQuery = window.matchMedia?.("(prefers-reduced-motion: reduce)");
     const prefersReducedMotion = Boolean(motionQuery?.matches);
     if (prefersReducedMotion || cleaned.length <= 8) {
       animationFrame = window.requestAnimationFrame(() => {
@@ -655,11 +847,36 @@ function TypedRouteReasoning({ text }: { text: string }) {
 
   return (
     <p className="sr-ai-reasoning" aria-live="polite">
-      <span>{visibleText}</span>
+      <span>
+        <TransitText
+          text={markRouteTokensForTransitText(visibleText)}
+          bulletSize={15}
+        />
+      </span>
       {isTyping && (
         <span className="sr-ai-reasoning__cursor" aria-hidden="true" />
       )}
     </p>
+  );
+}
+
+const ROUTE_REASON_TOKEN = /\b(6X|7X|SIR|SI|FS|GS|FX|[1-7]|[A-Z])\b/g;
+
+function markRouteTokensForTransitText(text: string) {
+  return text.replace(ROUTE_REASON_TOKEN, (token, _match, offset: number) => {
+    const routeId = token.toUpperCase();
+    if (!SUBWAY_BULLET_ROUTES.has(routeId)) return token;
+    if (routeId === "A" && !isAContextTransitLine(text, offset)) return token;
+    return `[${routeId}]`;
+  });
+}
+
+function isAContextTransitLine(text: string, offset: number) {
+  const before = text.slice(Math.max(0, offset - 16), offset).toLowerCase();
+  const after = text.slice(offset + 1, offset + 18).toLowerCase();
+  return (
+    /\b(the|take|via|next|board)\s+$/.test(before) ||
+    /^\s+(train|line|service|express|local)\b/.test(after)
   );
 }
 
@@ -696,7 +913,10 @@ function RouteStepStrip({ segments }: { segments: RouteStripSegment[] }) {
               ) : (
                 <RouteBullet line={segment.routeId} size={20} />
               )}
-              <StepIcon type={segment.mode === "bus" ? "bus" : "ride"} size={16} />
+              <StepIcon
+                type={segment.mode === "bus" ? "bus" : "ride"}
+                size={16}
+              />
             </span>
           )}
         </Fragment>
@@ -958,6 +1178,7 @@ function NearbyTransitPanel({
   nearbyBusArrivals,
   way,
   onWayChange,
+  onRequestRailExpand,
 }: {
   station: Station;
   arrivals: Arrival[];
@@ -965,6 +1186,7 @@ function NearbyTransitPanel({
   nearbyBusArrivals: Arrival[];
   way: ArrivalFilter;
   onWayChange: (next: ArrivalFilter) => void;
+  onRequestRailExpand?: () => void;
 }) {
   const groups = useMemo(
     () =>
@@ -1012,7 +1234,10 @@ function NearbyTransitPanel({
             role="radio"
             aria-checked={way === value}
             data-active={way === value ? "true" : "false"}
-            onClick={() => onWayChange(value as ArrivalFilter)}
+            onClick={() => {
+              onRequestRailExpand?.();
+              onWayChange(value as ArrivalFilter);
+            }}
           >
             <span>{label}</span>
           </button>
@@ -1035,7 +1260,10 @@ function NearbyTransitPanel({
         {isEmpty && (
           <div className="sr-empty-row">
             <strong>No {way} subway arrivals nearby</strong>
-            <small>Try {way === "uptown" ? "Downtown" : "Uptown"} or refresh live data.</small>
+            <small>
+              Try {way === "uptown" ? "Downtown" : "Uptown"} or refresh live
+              data.
+            </small>
           </div>
         )}
       </div>
@@ -1043,11 +1271,7 @@ function NearbyTransitPanel({
   );
 }
 
-function NearbyStationGroupList({
-  groups,
-}: {
-  groups: NearbyTransitGroup[];
-}) {
+function NearbyStationGroupList({ groups }: { groups: NearbyTransitGroup[] }) {
   return (
     <div className="sr-station-group-list">
       <AnimatePresence initial={false}>
@@ -1059,11 +1283,7 @@ function NearbyStationGroupList({
   );
 }
 
-function NearbyStationGroup({
-  group,
-}: {
-  group: NearbyTransitGroup;
-}) {
+function NearbyStationGroup({ group }: { group: NearbyTransitGroup }) {
   return (
     <motion.article
       className="sr-station-group"
@@ -1085,11 +1305,7 @@ function NearbyStationGroup({
   );
 }
 
-function StationGroupHeader({
-  group,
-}: {
-  group: NearbyTransitGroup;
-}) {
+function StationGroupHeader({ group }: { group: NearbyTransitGroup }) {
   const meta = [
     typeof group.walkMinutes === "number"
       ? `${group.walkMinutes} min walk`
@@ -1112,11 +1328,7 @@ function StationGroupHeader({
   );
 }
 
-function StationArrivalRow({
-  arrival,
-}: {
-  arrival: NearbyGroupedArrival;
-}) {
+function StationArrivalRow({ arrival }: { arrival: NearbyGroupedArrival }) {
   const routeId = arrival.routeIds[0] ?? "";
   const details = [arrival.servicePattern, arrival.via].filter(Boolean);
 
@@ -1154,11 +1366,7 @@ function StationArrivalRow({
   );
 }
 
-function ArrivalRow({
-  arrival,
-}: {
-  arrival: Arrival;
-}) {
+function ArrivalRow({ arrival }: { arrival: Arrival }) {
   const routeId = arrival.routeIds[0] ?? arrival.line;
   const details = [
     arrival.servicePattern,
@@ -1315,13 +1523,7 @@ function RouteErrorPanel({
   );
 }
 
-function SectionHeader({
-  title,
-  meta,
-}: {
-  title: string;
-  meta?: ReactNode;
-}) {
+function SectionHeader({ title, meta }: { title: string; meta?: ReactNode }) {
   return (
     <div className="sr-section-header">
       <h2>{title}</h2>
@@ -1330,7 +1532,9 @@ function SectionHeader({
   );
 }
 
-function recommendedCandidateFromPlan(plan: RoutePlan): RecommendedRouteDisplay {
+function recommendedCandidateFromPlan(
+  plan: RoutePlan,
+): RecommendedRouteDisplay {
   const timing = timingFromSteps(plan.steps);
   return {
     walkMinutes: timing.walkMinutes,
@@ -1352,7 +1556,11 @@ function timingFromSteps(steps: RouteStep[]) {
   let boardCount = 0;
   for (const step of steps) {
     const mins = parseMinutes(step.duration) ?? 0;
-    if (step.type === "walk" || step.type === "exit" || step.type === "destination") {
+    if (
+      step.type === "walk" ||
+      step.type === "exit" ||
+      step.type === "destination"
+    ) {
       walkMinutes += mins;
     } else {
       // A transfer is a vehicle change: count every transit boarding (each

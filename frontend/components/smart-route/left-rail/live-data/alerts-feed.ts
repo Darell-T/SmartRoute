@@ -36,9 +36,7 @@ export function buildHealth(liveFeed: Partial<LiveFeedResponse> | null | undefin
     lines: signals?.affected_route_count ?? affected.length,
     major: signals?.major_alert_count ?? 0,
     stale: signals?.stale_vehicle_count ?? 0,
-    summary:
-      liveFeed?.summary?.body
-      ?? `${affected.length || "Nearby"} subway routes are being monitored inside a half-mile radius.`,
+    summary: `${affected.length || "Nearby"} subway routes are being monitored inside a half-mile radius.`,
     affected: affected.slice(0, 12),
   };
 }

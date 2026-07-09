@@ -1,10 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type {
-  LiveFeedIncident,
-  TransitRouteData,
-} from "@/types";
+import type { TransitRouteData } from "@/types";
 import { DEFAULT_LOCATION } from "@/lib/api";
 import { useLiveFeed } from "@/lib/use-live-feed";
 import { useServiceAlerts } from "@/lib/use-service-alerts";
@@ -40,7 +37,6 @@ export default function SmartRoutePage() {
     plannedRouteSteps,
     routeCandidates,
     activeRouteCandidateId,
-    tripIncidents,
   } = routePlanning;
 
   const activeRouteCandidate = useMemo(
@@ -84,21 +80,8 @@ export default function SmartRoutePage() {
   const liveFeed = useLiveFeed(
     userLocation,
     activeRouteCandidate ? activeRouteIds : [],
-    false,
   );
   const serviceAlerts = useServiceAlerts();
-
-  // Merge live-feed and route-planning incidents for rail alert context.
-  const routeAwareIncidents = useMemo<LiveFeedIncident[]>(() => {
-    const byId = new Map<string, LiveFeedIncident>();
-    for (const incident of liveFeed.incidents ?? []) {
-      byId.set(incident.id, incident);
-    }
-    for (const incident of tripIncidents) {
-      byId.set(incident.id, incident);
-    }
-    return Array.from(byId.values());
-  }, [liveFeed.incidents, tripIncidents]);
 
   const [clientNowMs, setClientNowMs] = useState(0);
 
@@ -113,9 +96,7 @@ export default function SmartRoutePage() {
       arrivals: liveFeed.arrivals,
       alerts: liveFeed.alerts,
       vehicles: liveFeed.vehicles,
-      summary: liveFeed.summary,
       signals: liveFeed.signals,
-      incidents: routeAwareIncidents,
       updated_at: liveFeed.updatedAt ?? undefined,
       degraded: liveFeed.degraded,
       debug: liveFeed.debug ?? undefined,
@@ -126,9 +107,7 @@ export default function SmartRoutePage() {
       liveFeed.arrivals,
       liveFeed.alerts,
       liveFeed.vehicles,
-      liveFeed.summary,
       liveFeed.signals,
-      routeAwareIncidents,
       liveFeed.updatedAt,
       liveFeed.degraded,
       liveFeed.debug,
@@ -147,7 +126,7 @@ export default function SmartRoutePage() {
         routeEta: summary?.arriveLabel ?? null,
         routeTotalTime: summary ? `${summary.totalMin} min` : null,
         serviceAlerts: serviceAlerts.alerts,
-        incidents: routeAwareIncidents,
+        incidents: [],
         nowMs: clientNowMs || 0,
       }),
     [
@@ -159,17 +138,8 @@ export default function SmartRoutePage() {
       recommendationText,
       summary,
       serviceAlerts.alerts,
-      routeAwareIncidents,
       clientNowMs,
     ],
-  );
-
-  const leftRailDisplayData = useMemo(
-    () => ({
-      ...leftRailData,
-      incidents: routeAwareIncidents,
-    }),
-    [leftRailData, routeAwareIncidents],
   );
 
   // ── SmartRoute Left Rail status ──────────────────────────────────────────
@@ -262,7 +232,7 @@ export default function SmartRoutePage() {
       <LiveWorkspace
         mobileRail={mobileRail}
         routePlanning={routePlanning}
-        leftRailData={leftRailDisplayData}
+        leftRailData={leftRailData}
         routeStatus={routeStatus}
         hasActiveRoute={Boolean(summary)}
         liveMap={{

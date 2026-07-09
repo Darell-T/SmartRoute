@@ -40,7 +40,10 @@ class AiAdvisorPromptTests(unittest.TestCase):
         self.assertIn("[ROUTE:N]", prompt)
         self.assertIn("[CANDIDATE_ANALYSIS]", prompt)
         self.assertIn("stalled vehicles", prompt)
+        self.assertIn("incidents", prompt)
         self.assertIn("no reported delays", prompt)
+        self.assertIn("route_candidate_labels", prompt)
+        self.assertIn("route indexes", prompt)
 
     def test_smart_route_prompt_overrides_local_prompt(self):
         prompt_value = "custom prompt [ROUTE:N] [CANDIDATE_ANALYSIS]"

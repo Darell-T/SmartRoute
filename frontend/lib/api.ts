@@ -1,41 +1,11 @@
 import type {
   DestinationSelection,
   RouteStep,
-  SwitchNarrationResponse,
-  ThinkingResponse,
   TripResponse,
 } from "@/types";
 
 /** Empire State Building — demo fallback when GPS is unavailable */
 export const DEFAULT_LOCATION = { lng: -73.9857, lat: 40.7484 } as const;
-
-export async function getThinking(): Promise<ThinkingResponse> {
-  const res = await fetch(`/api/thinking`, {
-    method: "POST",
-  });
-
-  if (!res.ok) throw new Error("Failed to get thinking audio");
-
-  return res.json();
-}
-
-/** Short cached route line for switching to an alternative route. */
-export async function getSwitchNarration(routeId: string): Promise<SwitchNarrationResponse> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 12_000);
-  try {
-    const res = await fetch("/api/switch-narration", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ route_id: routeId }),
-      signal: controller.signal,
-    });
-    if (!res.ok) throw new Error("Failed to get switch narration");
-    return res.json();
-  } finally {
-    clearTimeout(timeout);
-  }
-}
 
 /** Lazily enrich an alternate route's intermediate stops when it is selected.
  *  The initial trip response only enriches the chosen route; alternates carry
@@ -59,15 +29,47 @@ export async function enrichRoute(
   }
 }
 
+type PlanTripOptions = {
+  signal?: AbortSignal;
+};
+
+function signalWithTimeout(
+  timeoutMs: number,
+  externalSignal?: AbortSignal,
+): { signal: AbortSignal; cleanup: () => void } {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  const abortFromExternal = () => {
+    controller.abort(externalSignal?.reason);
+  };
+
+  if (externalSignal?.aborted) {
+    abortFromExternal();
+  } else {
+    externalSignal?.addEventListener("abort", abortFromExternal, {
+      once: true,
+    });
+  }
+
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timeout);
+      externalSignal?.removeEventListener("abort", abortFromExternal);
+    },
+  };
+}
+
 export async function planTrip(
   originLat: number,
   originLng: number,
   destination: string,
   selection?: DestinationSelection | null,
+  options: PlanTripOptions = {},
 ): Promise<TripResponse> {
   async function attempt(): Promise<TripResponse> {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 60_000);
+    const abort = signalWithTimeout(60_000, options.signal);
     try {
       const res = await fetch("/api/trip", {
         method: "POST",
@@ -79,7 +81,7 @@ export async function planTrip(
           destination_lat: selection?.coordinates.lat,
           destination_lng: selection?.coordinates.lng,
         }),
-        signal: controller.signal,
+        signal: abort.signal,
       });
 
       if (!res.ok) {
@@ -89,13 +91,14 @@ export async function planTrip(
       }
       return res.json();
     } finally {
-      clearTimeout(timeout);
+      abort.cleanup();
     }
   }
 
   try {
     return await attempt();
   } catch (err) {
+    if (options.signal?.aborted) throw err;
     const msg = err instanceof Error ? err.message : "";
     const isRetryable = msg === "Service unavailable" || msg.includes("abort") || msg === "Failed to fetch";
     if (isRetryable) {

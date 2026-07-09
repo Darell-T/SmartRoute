@@ -59,6 +59,7 @@ interface SmartRouteMapProps {
   onLocationUpdate?: (coords: { lng: number; lat: number }) => void;
   routeData?: TransitRouteData | null;
   destCoords?: { lat: number; lng: number } | null;
+  mobileSheetState?: string;
   onMapReady?: (actions: {
     recenter: () => void;
     zoomIn: () => void;
@@ -71,6 +72,7 @@ export function SmartRouteMap({
   onLocationUpdate,
   routeData,
   destCoords,
+  mobileSheetState,
   onMapReady,
 }: SmartRouteMapProps) {
   const mapContainer = useRef<HTMLDivElement>(null);
@@ -604,7 +606,7 @@ export function SmartRouteMap({
     }
 
     return stopAll;
-  }, [routeData, destCoords, setRouteDeckLayers]);
+  }, [routeData, destCoords, mobileSheetState, setRouteDeckLayers]);
 
   // Focus mode: hide the ambient subway network while a route is displayed
   // so the picked path reads as the hero. subwayLayerDataVersion re-applies
@@ -645,7 +647,7 @@ export function SmartRouteMap({
       duration: 760,
       maxZoom: 15.4,
     });
-  }, [routeData, destLng, destLat]);
+  }, [routeData, destLng, destLat, mobileSheetState]);
 
   useEffect(() => {
     if (!map.current || !mapReadyRef.current) return;
