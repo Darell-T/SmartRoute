@@ -1,7 +1,7 @@
 """plan_trip step enrichment: intermediate stop locations.
 
-Loads app.routers.trips with faked dependencies (same harness pattern as
-test_trips_incidents) and asserts that subway steps get coordinate-bearing
+Loads app.routers.trips with faked dependencies and asserts that subway steps
+get coordinate-bearing
 intermediate stops from GTFS, bus steps get sliced OneBusAway stops, OBA
 failures degrade to empty lists without breaking the trip, and the
 enrichment lands on EVERY candidate (alternatives render identically when
@@ -120,9 +120,6 @@ def _load_trips_module(bus_fetch):
     fake_mta_feed.parse_service_alerts = lambda *a, **k: []
     fake_mta_feed.filter_alerts_for_routes = lambda *a, **k: []
 
-    fake_voice = types.ModuleType("app.services.voice")
-    fake_voice.generate_speech = lambda *a, **k: b""
-
     fake_bus_routes = types.ModuleType("app.services.bus_routes")
     fake_bus_routes.fetch_bus_route_stop_groups = bus_fetch
 
@@ -134,31 +131,22 @@ def _load_trips_module(bus_fetch):
     fake_anthropic = types.ModuleType("anthropic")
     fake_anthropic.AsyncAnthropic = lambda api_key=None: SimpleNamespace(api_key=api_key)
 
-    fake_elevenlabs = types.ModuleType("elevenlabs")
-    fake_elevenlabs_client = types.ModuleType("elevenlabs.client")
-    fake_elevenlabs_client.ElevenLabs = lambda api_key=None: SimpleNamespace(api_key=api_key)
-    fake_elevenlabs.client = fake_elevenlabs_client
-
     with patch.dict(
         sys.modules,
         {
             "fastapi": fake_fastapi,
             "pydantic": fake_pydantic,
             "anthropic": fake_anthropic,
-            "elevenlabs": fake_elevenlabs,
-            "elevenlabs.client": fake_elevenlabs_client,
             "app.services.directions": fake_directions,
             "app.services.ai_advisor": fake_ai_advisor,
             "app.services.incident_monitor": fake_incident_monitor,
             "app.services.mta_feed": fake_mta_feed,
-            "app.services.voice": fake_voice,
             "app.services.bus_routes": fake_bus_routes,
         },
     ):
         # Drop the trips router AND its services.trips submodules so they
-        # re-import fresh inside this stub context -- the submodules bind
-        # bus_routes/incident_monitor at import time, so a bare reload of the
-        # router alone would not pick up the stubbed dependencies.
+        # re-import fresh inside this stub context so the bus-route dependency
+        # binds at module load.
         for _m in [k for k in list(sys.modules) if k == "app.routers.trips" or k.startswith("app.services.trips")]:
             sys.modules.pop(_m, None)
         return importlib.import_module("app.routers.trips")
@@ -321,7 +309,6 @@ class TripEnrichmentTests(unittest.IsolatedAsyncioTestCase):
             return []
 
         trips.fetch_service_alerts = _slow_context
-        trips.get_incidents = _slow_context
         trips.get_stalled_trains = _slow_context
         trips.get_stalled_buses = _slow_context
         started = time.monotonic()
@@ -329,7 +316,7 @@ class TripEnrichmentTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertLess(time.monotonic() - started, 0.08)
         self.assertEqual(result["alerts"], [])
-        self.assertEqual(result["incidents"], [])
+        self.assertNotIn("incidents", result)
         self.assertIn("recommendation", result)
 
 

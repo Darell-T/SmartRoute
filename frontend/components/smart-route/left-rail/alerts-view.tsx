@@ -20,6 +20,7 @@ import { BusChip, RouteBullet, RouteBulletGroup, TransitText } from "./atoms";
 import type {
   AlertFeedItem,
   AlertFeedSeverity,
+  AlertUpdateEntry,
   FeedEvent,
   ServiceAlert,
 } from "./types";
@@ -174,12 +175,12 @@ function AlertCard({ item }: { item: AlertFeedItem }) {
       </span>
       {bodyText && (
         <span className="sr-alert-card__summary sr-alert-card__summary--full">
-          <TransitText text={bodyText} bulletSize={13} />
+          <TransitText text={bodyText} bulletSize={13} mode="paragraph" />
         </span>
       )}
       {adviceText && (
         <span className="sr-alert-card__advice">
-          <TransitText text={adviceText} bulletSize={12} />
+          <TransitText text={adviceText} bulletSize={12} mode="paragraph" />
         </span>
       )}
       {updated && (
@@ -292,7 +293,7 @@ function AlertLineRow({ item }: { item: AlertFeedItem }) {
         </strong>
         {subtitle && (
           <small>
-            <TransitText text={subtitle} bulletSize={12} />
+            <TransitText text={subtitle} bulletSize={12} mode="paragraph" />
           </small>
         )}
       </span>
@@ -512,6 +513,7 @@ type AlertDetailView = {
   alternatives?: string;
   statusText?: string;
   stops: string[];
+  updates: AlertUpdateEntry[];
 };
 
 function AlertDetailPanel({
@@ -528,7 +530,7 @@ function AlertDetailPanel({
           icon={<TriangleAlert size={14} strokeWidth={1.8} />}
           label="Impact"
         >
-          <TransitText text={detail.impact} bulletSize={13} />
+          <TransitText text={detail.impact} bulletSize={13} mode="paragraph" />
         </DetailRow>
       )}
       {!isSystemwide(item) && item.routeIds.length > 0 && (
@@ -547,7 +549,7 @@ function AlertDetailPanel({
           icon={<ArrowLeftRight size={14} strokeWidth={1.8} />}
           label="Travel alternatives"
         >
-          <TransitText text={detail.alternatives} bulletSize={13} />
+          <TransitText text={detail.alternatives} bulletSize={13} mode="paragraph" />
         </DetailRow>
       )}
       {detail.statusText && (
@@ -555,7 +557,7 @@ function AlertDetailPanel({
           icon={<Activity size={14} strokeWidth={1.8} />}
           label="Current status"
         >
-          <TransitText text={detail.statusText} bulletSize={13} />
+          <TransitText text={detail.statusText} bulletSize={13} mode="paragraph" />
         </DetailRow>
       )}
       {detail.stops.length > 0 && (
@@ -569,6 +571,9 @@ function AlertDetailPanel({
             ))}
           </span>
         </DetailRow>
+      )}
+      {detail.updates.length > 0 && (
+        <AlertUpdateTimeline entries={detail.updates} />
       )}
     </div>
   );
@@ -637,21 +642,58 @@ function DetailRow({
   );
 }
 
+function AlertUpdateTimeline({
+  entries,
+}: {
+  entries: AlertUpdateEntry[];
+}) {
+  return (
+    <div className="sr-alert-detail__timeline" aria-label="Earlier alert updates">
+      {entries.slice(0, 4).map((update, index) => (
+        <span
+          key={`${update.time}-${update.title}-${index}`}
+          className="sr-alert-detail__update"
+          data-tone={update.tone ?? "muted"}
+        >
+          <span className="sr-alert-detail__update-dot" aria-hidden="true" />
+          <span className="sr-alert-detail__update-copy">
+            <strong>{update.title}</strong>
+            {update.summary && (
+              <small>
+                <TransitText
+                  text={update.summary}
+                  bulletSize={12}
+                  mode="paragraph"
+                />
+              </small>
+            )}
+          </span>
+          {update.time && <time>{shortTimeLabel(update.time) ?? update.time}</time>}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function buildAlertDetailView(item: AlertFeedItem): AlertDetailView | null {
   const detail = item.details;
-  if (!detail || !item.expandable) return null;
+  if (!detail) return null;
   const summary = detailSummary(item);
   const { impact, alternatives } = disruptionAndGuidance(item, summary);
   const statusText = distinctStatus(item, summary);
   const stops = detail.affectedStops ?? [];
+  const updates = (detail.updates ?? []).filter((update) =>
+    Boolean(update.title?.trim() || update.summary?.trim()),
+  );
   const hasDetail = Boolean(
     impact ||
       alternatives ||
       statusText ||
-      stops.length > 0,
+      stops.length > 0 ||
+      updates.length > 0,
   );
   if (!hasDetail) return null;
-  return { impact, alternatives, statusText, stops };
+  return { impact, alternatives, statusText, stops, updates };
 }
 
 function featuredAlertBody(item: AlertFeedItem): string | undefined {

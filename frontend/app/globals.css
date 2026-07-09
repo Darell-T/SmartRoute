@@ -132,6 +132,150 @@
   --color-sr-text-muted: rgba(255, 255, 255, 0.42);
   --shadow-sr-card: 0 18px 42px -12px rgba(167, 131, 255, 0.18), 0 2px 6px -2px rgba(0, 0, 0, 0.35);
   --shadow-sr-glow: 0 0 0 1px rgba(212, 167, 255, 0.12), 0 8px 24px -4px rgba(167, 131, 255, 0.22);
+  --animate-spiral-dot-pos-1: spiral-dot-pos-1 2.2s ease-in-out infinite;
+  --animate-spiral-dot-pos-2: spiral-dot-pos-2 2.2s ease-in-out infinite;
+  --animate-spiral-dot-pos-3: spiral-dot-pos-3 2.2s ease-in-out infinite;
+  --animate-spiral-dot-pos-4: spiral-dot-pos-4 2.2s ease-in-out infinite;
+  --animate-spiral-dot-pos-5: spiral-dot-pos-5 2.2s ease-in-out infinite;
+  --animate-spiral-dot-pos-6: spiral-dot-pos-6 2.2s ease-in-out infinite;
+  --animate-spiral-dot-pos-7: spiral-dot-pos-7 2.2s ease-in-out infinite;
+  --animate-spiral-dot-pos-8: spiral-dot-pos-8 2.2s ease-in-out infinite;
+  --animate-spiral-dot-pos-9: spiral-dot-pos-9 2.2s ease-in-out infinite;
+
+  @keyframes spiral-dot-pos-3 {
+    0%, 1% {
+      background-color: rgba(255, 255, 255, 0.22);
+      box-shadow: none;
+    }
+    6%, 90% {
+      background-color: #e5e5e5;
+      box-shadow: 0 0 2px rgba(255, 255, 255, 0.35);
+    }
+    100% {
+      background-color: rgba(255, 255, 255, 0.22);
+      box-shadow: none;
+    }
+  }
+
+  @keyframes spiral-dot-pos-2 {
+    0%, 10% {
+      background-color: rgba(255, 255, 255, 0.22);
+      box-shadow: none;
+    }
+    15%, 90% {
+      background-color: #e5e5e5;
+      box-shadow: 0 0 2px rgba(255, 255, 255, 0.35);
+    }
+    100% {
+      background-color: rgba(255, 255, 255, 0.22);
+      box-shadow: none;
+    }
+  }
+
+  @keyframes spiral-dot-pos-1 {
+    0%, 19% {
+      background-color: rgba(255, 255, 255, 0.22);
+      box-shadow: none;
+    }
+    24%, 90% {
+      background-color: #e5e5e5;
+      box-shadow: 0 0 2px rgba(255, 255, 255, 0.35);
+    }
+    100% {
+      background-color: rgba(255, 255, 255, 0.22);
+      box-shadow: none;
+    }
+  }
+
+  @keyframes spiral-dot-pos-4 {
+    0%, 28% {
+      background-color: rgba(255, 255, 255, 0.22);
+      box-shadow: none;
+    }
+    33%, 90% {
+      background-color: #e5e5e5;
+      box-shadow: 0 0 2px rgba(255, 255, 255, 0.35);
+    }
+    100% {
+      background-color: rgba(255, 255, 255, 0.22);
+      box-shadow: none;
+    }
+  }
+
+  @keyframes spiral-dot-pos-7 {
+    0%, 37% {
+      background-color: rgba(255, 255, 255, 0.22);
+      box-shadow: none;
+    }
+    42%, 90% {
+      background-color: #e5e5e5;
+      box-shadow: 0 0 2px rgba(255, 255, 255, 0.35);
+    }
+    100% {
+      background-color: rgba(255, 255, 255, 0.22);
+      box-shadow: none;
+    }
+  }
+
+  @keyframes spiral-dot-pos-8 {
+    0%, 46% {
+      background-color: rgba(255, 255, 255, 0.22);
+      box-shadow: none;
+    }
+    51%, 90% {
+      background-color: #e5e5e5;
+      box-shadow: 0 0 2px rgba(255, 255, 255, 0.35);
+    }
+    100% {
+      background-color: rgba(255, 255, 255, 0.22);
+      box-shadow: none;
+    }
+  }
+
+  @keyframes spiral-dot-pos-9 {
+    0%, 55% {
+      background-color: rgba(255, 255, 255, 0.22);
+      box-shadow: none;
+    }
+    60%, 90% {
+      background-color: #e5e5e5;
+      box-shadow: 0 0 2px rgba(255, 255, 255, 0.35);
+    }
+    100% {
+      background-color: rgba(255, 255, 255, 0.22);
+      box-shadow: none;
+    }
+  }
+
+  @keyframes spiral-dot-pos-6 {
+    0%, 64% {
+      background-color: rgba(255, 255, 255, 0.22);
+      box-shadow: none;
+    }
+    69%, 90% {
+      background-color: #e5e5e5;
+      box-shadow: 0 0 2px rgba(255, 255, 255, 0.35);
+    }
+    100% {
+      background-color: rgba(255, 255, 255, 0.22);
+      box-shadow: none;
+    }
+  }
+
+  @keyframes spiral-dot-pos-5 {
+    0%, 73% {
+      background-color: rgba(255, 255, 255, 0.22);
+      box-shadow: none;
+    }
+    78%, 90% {
+      background-color: #e5e5e5;
+      box-shadow: 0 0 2px rgba(255, 255, 255, 0.35);
+    }
+    100% {
+      background-color: rgba(255, 255, 255, 0.22);
+      box-shadow: none;
+    }
+  }
 }
 
 @layer base {
@@ -2234,9 +2378,12 @@ body:has(.sr-app-shell) [data-nextjs-dev-tools-button] {
     bottom: 0 !important;
     left: 0 !important;
     width: 100% !important;
-    height: var(--sr-mobile-sheet-height, min(42dvh, 23rem));
-    min-height: 3.25rem;
-    max-height: calc(100dvh - max(0.75rem, env(safe-area-inset-top)));
+    height: var(--sr-mobile-sheet-height, calc(var(--visual-viewport-height, 100dvh) * 0.5));
+    min-height: 6.5rem;
+    max-height: min(
+      calc(var(--visual-viewport-height, 100dvh) * 0.9),
+      calc(100dvh - max(0.75rem, env(safe-area-inset-top)))
+    );
     z-index: 40 !important;
     display: flex !important;
     flex-direction: column;
@@ -2253,7 +2400,7 @@ body:has(.sr-app-shell) [data-nextjs-dev-tools-button] {
       0 -28px 78px rgba(0, 0, 0, 0.48) !important;
     backdrop-filter: blur(24px) saturate(1.2);
     transition:
-      height 280ms cubic-bezier(0.2, 0.8, 0.2, 1),
+      height 260ms cubic-bezier(0.22, 1, 0.36, 1),
       box-shadow 220ms ease,
       border-color 220ms ease;
     will-change: height;
@@ -2268,18 +2415,24 @@ body:has(.sr-app-shell) [data-nextjs-dev-tools-button] {
     transition: none;
   }
 
+  .sr-app-shell[data-active-tab="livemap"]
+    .sr-live-left-rail-shell[data-mobile-sheet-state="small"] {
+    border-color: transparent !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    backdrop-filter: none;
+  }
+
   .sr-app-shell[data-active-tab="livemap"] .sr-mobile-rail-grip {
     position: relative;
     display: flex;
-    flex: 0 0 3.25rem;
+    flex: 0 0 2.25rem;
     width: 100%;
-    min-height: 3.25rem;
+    min-height: 2.25rem;
     align-items: center;
     justify-content: center;
     border: 0;
-    background:
-      radial-gradient(circle at 50% 0%, rgba(255, 255, 255, 0.08), transparent 54%),
-      transparent;
+    background: transparent;
     cursor: grab;
     touch-action: none;
   }
@@ -2291,25 +2444,13 @@ body:has(.sr-app-shell) [data-nextjs-dev-tools-button] {
   }
 
   .sr-app-shell[data-active-tab="livemap"] .sr-mobile-rail-grip::before {
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-    content: "";
-    background: linear-gradient(
-      105deg,
-      transparent 6%,
-      rgba(255, 255, 255, 0.16) 34%,
-      rgba(96, 165, 250, 0.08) 49%,
-      transparent 72%
-    );
-    opacity: 0.38;
-    mix-blend-mode: screen;
+    content: none;
   }
 
   .sr-app-shell[data-active-tab="livemap"] .sr-mobile-rail-grip span {
     position: relative;
-    width: 3.25rem;
-    height: 0.28rem;
+    width: 2.7rem;
+    height: 0.24rem;
     border-radius: 999px;
     background: rgba(255, 255, 255, 0.66);
     box-shadow:
@@ -2320,7 +2461,7 @@ body:has(.sr-app-shell) [data-nextjs-dev-tools-button] {
 
   .sr-app-shell[data-active-tab="livemap"] .sr-mobile-rail-grip:focus-visible {
     outline: 2px solid rgba(96, 165, 250, 0.82);
-    outline-offset: -0.7rem;
+    outline-offset: -0.42rem;
   }
 
   .sr-app-shell[data-active-tab="livemap"] .sr-mobile-rail-body {
@@ -2337,6 +2478,86 @@ body:has(.sr-app-shell) [data-nextjs-dev-tools-button] {
     border-radius: 0 !important;
     background: transparent;
     box-shadow: none;
+  }
+
+  .sr-app-shell[data-active-tab="livemap"]
+    .sr-live-left-rail-shell[data-mobile-sheet-state="small"]
+    .sr-mobile-rail-grip {
+    flex-basis: 1.75rem;
+    min-height: 1.75rem;
+  }
+
+  .sr-app-shell[data-active-tab="livemap"]
+    .sr-live-left-rail-shell[data-mobile-sheet-state="small"]
+    .sr-mobile-rail-grip span {
+    width: 2.25rem;
+    height: 0.2rem;
+    background: rgba(255, 255, 255, 0.7);
+  }
+
+  .sr-app-shell[data-active-tab="livemap"]
+    .sr-live-left-rail-shell[data-mobile-sheet-state="small"]
+    .sr-mobile-rail-body {
+    overflow: visible;
+  }
+
+  .sr-app-shell[data-active-tab="livemap"]
+    .sr-live-left-rail-shell[data-mobile-sheet-state="small"]
+    .sr-rail:has(.sr-route-panel)
+    .sr-rail-header {
+    display: none;
+  }
+
+  .sr-app-shell[data-active-tab="livemap"]
+    .sr-live-left-rail-shell[data-mobile-sheet-state="small"]
+    .sr-rail:has(.sr-route-panel)
+    .sr-fade-in {
+    min-height: auto;
+    animation: none;
+  }
+
+  .sr-app-shell[data-active-tab="livemap"]
+    .sr-live-left-rail-shell[data-mobile-sheet-state="small"]
+    .sr-route-panel
+    > :not(.sr-route-search) {
+    display: none;
+  }
+
+  .sr-app-shell[data-active-tab="livemap"]
+    .sr-live-left-rail-shell[data-mobile-sheet-state="small"]
+    .sr-route-search {
+    padding-top: 2px;
+    padding-bottom: calc(10px + env(safe-area-inset-bottom));
+  }
+
+  .sr-app-shell[data-active-tab="livemap"]
+    .sr-live-left-rail-shell[data-mobile-sheet-state="small"]
+    .sr-input-group {
+    min-height: 56px;
+    border-color: rgba(255, 255, 255, 0.16);
+    background: rgba(0, 0, 0, 0.84);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.06),
+      0 14px 34px rgba(0, 0, 0, 0.34);
+  }
+
+  .sr-app-shell[data-active-tab="livemap"]
+    .sr-live-console[data-mobile-sheet-state="small"]
+    .sr-map-mini-controls {
+    top: auto !important;
+    right: 1rem !important;
+    bottom: calc(var(--sr-mobile-sheet-px, 124px) + 1rem) !important;
+  }
+
+  .sr-app-shell[data-active-tab="livemap"]
+    .sr-live-console[data-mobile-sheet-state="small"]
+    .sr-map-mini-control--recenter {
+    border-radius: 999px;
+    background: rgba(7, 16, 27, 0.88);
+  }
+
+  .sr-map-mini-control--fullscreen {
+    display: none !important;
   }
 
   @media (prefers-reduced-motion: reduce) {

@@ -6,7 +6,6 @@ import type {
   LiveArrival,
   LiveFeedResponse,
   LiveFeedIncident,
-  LiveNetworkSummary,
   LiveSystemSignals,
   LiveVehicle,
   NearestStop,
@@ -19,7 +18,6 @@ interface LiveFeedState {
   arrivals: LiveArrival[];
   alerts: ServiceAlertDetail[];
   vehicles: LiveVehicle[];
-  summary: LiveNetworkSummary | null;
   signals: LiveSystemSignals | null;
   incidents: LiveFeedIncident[];
   updatedAt: number | null;
@@ -36,7 +34,6 @@ const INITIAL: LiveFeedState = {
   arrivals: [],
   alerts: [],
   vehicles: [],
-  summary: null,
   signals: null,
   incidents: [],
   updatedAt: null,
@@ -63,7 +60,6 @@ function shouldSendLocation(
 export function useLiveFeed(
   location: { lng: number; lat: number } | null,
   selectedRouteIds: string[] = [],
-  includeIncidentScan = false,
 ): LiveFeedState {
   const [state, setState] = useState<LiveFeedState>(INITIAL);
   const wsRef = useRef<WebSocket | null>(null);
@@ -71,12 +67,10 @@ export function useLiveFeed(
   const backoffRef = useRef(1000);
   const locationRef = useRef(location);
   const selectedRouteIdsRef = useRef(selectedRouteIds);
-  const includeIncidentScanRef = useRef(includeIncidentScan);
   const sentLocationRef = useRef<{ lng: number; lat: number } | null>(null);
 
   locationRef.current = location;
   selectedRouteIdsRef.current = selectedRouteIds;
-  includeIncidentScanRef.current = includeIncidentScan;
 
   useEffect(() => {
     if (!location) return;
@@ -101,7 +95,6 @@ export function useLiveFeed(
         lat: loc.lat,
         lng: loc.lng,
         selected_route_ids: selectedRouteIdsRef.current,
-        atlas_scan: includeIncidentScanRef.current,
       }));
       sentLocationRef.current = loc;
     }
@@ -163,13 +156,6 @@ export function useLiveFeed(
               console.info("[live-feed/ws] snapshot", JSON.stringify({
                 arrivals: data.arrivals?.length ?? 0,
                 vehicles: data.vehicles?.length ?? 0,
-                summary: data.summary
-                  ? {
-                      status: data.summary.status,
-                      headline: data.summary.headline,
-                      source: data.summary.source,
-                    }
-                  : null,
                 updated_at: data.updated_at,
                 degraded: data.degraded,
                 debug: data.debug,
@@ -192,7 +178,6 @@ export function useLiveFeed(
               arrivals: data.arrivals ?? [],
               alerts: data.alerts ?? [],
               vehicles: data.vehicles ?? [],
-              summary: data.summary ?? null,
               signals: data.signals ?? null,
               incidents: data.incidents ?? [],
               updatedAt: data.updated_at ?? Math.floor(Date.now() / 1000),
@@ -262,26 +247,10 @@ export function useLiveFeed(
         lat: location.lat,
         lng: location.lng,
         selected_route_ids: selectedRouteIdsRef.current,
-        atlas_scan: includeIncidentScanRef.current,
       }));
       sentLocationRef.current = location;
     }
   }, [location?.lat, location?.lng]);
-
-  useEffect(() => {
-    // Re-announce when the incident-scan flag flips so the backend starts or
-    // stops the half-mile incident feed without waiting for movement.
-    const ws = wsRef.current;
-    const loc = locationRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN || !loc) return;
-    ws.send(JSON.stringify({
-      type: "location",
-      lat: loc.lat,
-      lng: loc.lng,
-      selected_route_ids: selectedRouteIdsRef.current,
-      atlas_scan: includeIncidentScan,
-    }));
-  }, [includeIncidentScan]);
 
   useEffect(() => {
     const ws = wsRef.current;

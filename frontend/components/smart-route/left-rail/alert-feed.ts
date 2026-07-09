@@ -13,6 +13,8 @@ import { ALL_LINES } from "./types";
 const SUBWAY_ORDER = new Map(ALL_LINES.map((line, index) => [line, index]));
 const BUS_ROUTE_PATTERN = /^(?:BXM|BM|BX|B|QM|Q|SIM|S|M|X)\d{1,3}[A-Z]?(?:-?SBS)?$/;
 const ROUTE_TOKEN_PATTERN = /\[([A-Za-z0-9+-]{1,8})\]/g;
+const INLINE_ICON_PLACEHOLDER_PATTERN =
+  /\[(?:free\s+)?(?:shuttle\s+bus|bus|subway|train|shuttle)\s+icon\]|\[(?:shuttle\s+bus|bus|subway|train|shuttle)\]/gi;
 
 /* Static NYCTA line-family and trunk/service names. These are display
    identities, not per-alert inference, so alerts and the UI share one table
@@ -781,6 +783,7 @@ function titleWithAt(text: string): string {
 function cleanPassengerText(value: string | undefined): string {
   return (
     String(value ?? "")
+      .replace(INLINE_ICON_PLACEHOLDER_PATTERN, " ")
       .replace(/[·•]/g, " - ")
       .replace(/[→↔]/g, " and ")
       .replace(/–|—/g, "-")

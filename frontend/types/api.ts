@@ -73,27 +73,12 @@ export interface ServiceAlert {
   description?: string;
 }
 
-export interface ThinkingResponse {
-  text: string;
-  audio: string;
-}
-
-export interface SwitchNarrationResponse {
-  text: string;
-  audio: string;
-}
-
 export interface TripResponse {
   recommendation: string;
-  audio: string;
   route: RouteStep[];
   selected_route_index?: number;
   route_candidates?: RouteCandidate[];
   alerts: ServiceAlert[];
-  incidents?: LiveFeedIncident[];
-  // Incidents are scanned off the trip hot path (background, best-effort). When
-  // true, a scan is in flight and incident markers may appear on a later trip.
-  incidents_pending?: boolean;
 }
 
 export interface NearestStop {
@@ -154,14 +139,6 @@ export interface LiveVehicle {
   };
 }
 
-export interface LiveNetworkSummary {
-  status: "healthy" | "caution" | "disrupted";
-  headline: string;
-  body: string;
-  updated_at: number;
-  source: "fresh" | "cached" | "fallback";
-}
-
 export interface LiveSystemSignals {
   network_status: "healthy" | "caution" | "disrupted";
   active_alert_count: number;
@@ -206,7 +183,6 @@ export interface LiveFeedResponse {
   arrivals: LiveArrival[];
   alerts: ServiceAlertDetail[];
   vehicles?: LiveVehicle[];
-  summary?: LiveNetworkSummary | null;
   signals?: LiveSystemSignals | null;
   incidents?: LiveFeedIncident[];
   updated_at: number;

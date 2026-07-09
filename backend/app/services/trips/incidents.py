@@ -1,170 +1,82 @@
-"""Off-hot-path incident scanning + route incident markers.
+"""On-demand route incident scanning for route-advisor context.
 
-The background scan (`_launch_incident_scan` / `_refresh_incidents_bg`) is
-single-flight and fire-and-forget: a trip never awaits Grok, it serves the most
-recent cached result from `_LAST_INCIDENTS` and kicks off a refresh for next
-time. The marker builders turn cached incidents into map markers anchored on the
-chosen route's stops. Depends on ``scoring`` (`_step_route_id`) and ``text``.
+Trip planning uses Grok/X search to check every station the rider could pass
+through across all Google route candidates. The result is sent to the route
+advisor before it chooses a route. This module intentionally does not run a
+detached background scan; if the scan times out or fails, trip planning simply
+continues with an empty incident list.
 """
 
 import asyncio
 import os
 import re
+from typing import Any
 
 from app.services.incident_monitor import get_incidents
-from app.services.trips import scoring, text
+from app.services.trips import text
 
-# Incident scan (Grok + X-search) is far slower than any trip budget, so it runs
-# OFF the hot path: a single-flight background task with its own generous
-# timeout, caching its last result for trips to read instantly.
+
 TRIP_INCIDENT_SCAN_TIMEOUT_S = float(os.getenv("TRIP_INCIDENT_SCAN_TIMEOUT_S", "25.0"))
-
-_LAST_INCIDENTS: list[dict] = []
-_INCIDENT_SCAN_INFLIGHT = False
-_INCIDENT_BG_TASKS: set = set()
+_ALLOWED_SEVERITIES = {"low", "medium", "high", "critical"}
 
 
-async def _refresh_incidents_bg(stops: list[str]):
-    """Best-effort background incident scan. Never blocks a trip response; caches
-    its result in _LAST_INCIDENTS for subsequent trips to serve."""
-    global _INCIDENT_SCAN_INFLIGHT, _LAST_INCIDENTS
+async def _scan_route_incidents(stops: list[str]) -> list[dict]:
+    if not stops:
+        return []
+
     try:
         result = await asyncio.wait_for(
-            get_incidents(stops), timeout=TRIP_INCIDENT_SCAN_TIMEOUT_S
+            get_incidents(stops),
+            timeout=TRIP_INCIDENT_SCAN_TIMEOUT_S,
         )
-        incidents = result.get("incidents", []) if isinstance(result, dict) else []
-        _LAST_INCIDENTS = incidents if isinstance(incidents, list) else []
-        print(f"[trip] background incident scan: {len(_LAST_INCIDENTS)} incident(s)")
     except asyncio.TimeoutError:
-        print(f"[trip] background incident scan timed out ({TRIP_INCIDENT_SCAN_TIMEOUT_S:.0f}s)")
+        print(f"[trip] incident scan timed out ({TRIP_INCIDENT_SCAN_TIMEOUT_S:.0f}s)")
+        return []
     except Exception as exc:
-        print(f"[trip] background incident scan failed: {exc!r}")
-    finally:
-        _INCIDENT_SCAN_INFLIGHT = False
+        print(f"[trip] incident scan failed: {exc!r}")
+        return []
 
-
-def _launch_incident_scan(stops: list[str]) -> bool:
-    """Fire-and-forget, single-flight incident refresh. Returns True when a scan
-    is in progress, so the trip response can flag incidents as pending."""
-    global _INCIDENT_SCAN_INFLIGHT
-    if not stops:
-        return False
-    if _INCIDENT_SCAN_INFLIGHT:
-        return True
-    _INCIDENT_SCAN_INFLIGHT = True
-    try:
-        task = asyncio.create_task(_refresh_incidents_bg(stops))
-    except Exception:
-        _INCIDENT_SCAN_INFLIGHT = False
-        return False
-    # Keep a strong reference so the task is not garbage-collected mid-flight.
-    _INCIDENT_BG_TASKS.add(task)
-    task.add_done_callback(_INCIDENT_BG_TASKS.discard)
-    return True
+    incidents = result.get("incidents", []) if isinstance(result, dict) else []
+    if not isinstance(incidents, list):
+        return []
+    return [_normalize_advisor_incident(incident) for incident in incidents if isinstance(incident, dict)]
 
 
 def _station_key(value: object) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
 
-def _coords_from_stop(value: object) -> tuple[float, float] | None:
-    if not isinstance(value, dict):
-        return None
-    lat = value.get("lat", value.get("latitude"))
-    lng = value.get("lng", value.get("longitude"))
-    if not isinstance(lat, (int, float)) or not isinstance(lng, (int, float)):
-        return None
-    return float(lat), float(lng)
 
-def _route_stop_index(route: list[dict]) -> dict[str, dict]:
-    stops: dict[str, dict] = {}
+def _normalize_advisor_incident(incident: dict) -> dict:
+    severity = str(incident.get("severity") or "medium").strip().lower()
+    if severity not in _ALLOWED_SEVERITIES:
+        severity = "medium"
 
-    def add_stop(name: object, coords: tuple[float, float] | None, route_id: str) -> None:
-        key = _station_key(name)
-        if not key:
-            return
-        row = stops.setdefault(
-            key,
-            {
-                "name": text._safe_text(name, 80),
-                "lat": None,
-                "lng": None,
-                "route_ids": set(),
-            },
-        )
-        if coords and row["lat"] is None and row["lng"] is None:
-            row["lat"], row["lng"] = coords
-        if route_id:
-            row["route_ids"].add(route_id)
-
-    for step in route or []:
-        route_id = scoring._step_route_id(step)
-        if step.get("type") not in ("SUBWAY", "BUS"):
-            continue
-        add_stop(step.get("departure_stop"), _coords_from_stop(step.get("departure_coords")), route_id)
-        add_stop(step.get("arrival_stop"), _coords_from_stop(step.get("arrival_coords")), route_id)
-        for stop in step.get("intermediate_stop_locations") or []:
-            if not isinstance(stop, dict):
-                continue
-            add_stop(stop.get("name"), _coords_from_stop(stop), route_id)
-
-    return stops
-
-def _build_route_incident_markers(incidents: list[dict], chosen_route: list[dict]) -> list[dict]:
-    stop_index = _route_stop_index(chosen_route)
-    markers: list[dict] = []
-    allowed_severities = {"low", "medium", "high", "critical"}
-
-    for incident in incidents or []:
-        if not isinstance(incident, dict):
-            continue
-        station_name = (
+    return {
+        "location": text._safe_text(incident.get("location"), 100),
+        "nearby_station": text._safe_text(
             incident.get("nearby_station")
             or incident.get("station")
-            or incident.get("stop_name")
-        )
-        stop = stop_index.get(_station_key(station_name))
-        if not stop or stop.get("lat") is None or stop.get("lng") is None:
-            continue
+            or incident.get("stop_name"),
+            80,
+        ),
+        "severity": severity,
+        "description": text._safe_text(incident.get("description"), 220),
+        "source": text._safe_text(incident.get("source"), 60),
+    }
 
-        severity = str(incident.get("severity") or "medium").strip().lower()
-        if severity not in allowed_severities:
-            severity = "medium"
-        detail_parts = [
-            text._safe_text(incident.get("location"), 80),
-            text._safe_text(incident.get("source"), 40),
-        ]
-        detail = " · ".join(part for part in detail_parts if part)
-        description = text._safe_text(incident.get("description"), 180)
 
-        markers.append(
-            {
-                "id": f"route-incident-{len(markers)}",
-                "type": "incident",
-                "lat": stop["lat"],
-                "lng": stop["lng"],
-                "title": description or "Incident reported near this route.",
-                "detail": detail,
-                "severity": severity,
-                "source": text._safe_text(incident.get("source"), 40),
-                "station": stop["name"],
-                "routeIds": sorted(stop["route_ids"]),
-                "active": severity in ("high", "critical"),
-            }
-        )
+def _scan_station_names(gtfs: Any, routes: list[list[dict]]) -> list[str]:
+    """Return every station across all candidate routes.
 
-    return markers
-
-def _scan_station_names(gtfs, routes) -> list[str]:
-    """Every station the rider could encounter across all candidate routes --
-    board, alight, AND intermediate stops -- deduped by normalized name. This is
-    the full set ATLAS scans for incidents, so it watches the whole journey, not
-    just the endpoints. Intermediate stops resolve straight from the in-memory
-    static pattern index (always instant); if that index is absent we fall back
-    to endpoints only rather than ever touching the remote DB on this path."""
+    Board, alight, and intermediate stops are included. Intermediate stops
+    resolve from the static pattern index when available; otherwise the scan
+    falls back to endpoints so trip planning never touches the remote GTFS DB
+    on this path.
+    """
     seen: set[str] = set()
     names: list[str] = []
 
-    def add(value):
+    def add(value: object) -> None:
         key = _station_key(value)
         if key and key not in seen:
             seen.add(key)

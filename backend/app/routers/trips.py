@@ -1,4 +1,3 @@
-import base64
 import asyncio
 import importlib
 import os
@@ -8,7 +7,6 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from app.services.ai_advisor import stream_recommendation
 from app.services.mta_feed import fetch_service_alerts, get_stalled_buses, parse_service_alerts, filter_alerts_for_routes, get_stalled_trains
-from app.services.voice import generate_speech
 from app.services.trips import text, scoring, candidates, enrichment, incidents as trip_incidents
 
 directions_service = importlib.import_module("app.services.directions")
@@ -31,7 +29,6 @@ TRIP_CONTEXT_TIMEOUT_S = float(os.getenv("TRIP_CONTEXT_TIMEOUT_S", "2.0"))
 # route 0 (selection is lost on timeout). 8s is ~2x the median: room to finish,
 # still bounded.
 TRIP_ADVISOR_TIMEOUT_S = float(os.getenv("TRIP_ADVISOR_TIMEOUT_S", "8.0"))
-TRIP_TTS_TIMEOUT_S = float(os.getenv("TRIP_TTS_TIMEOUT_S", "4.0"))
 
 
 async def _collect_recommendation(payload: dict) -> str:
@@ -127,13 +124,8 @@ async def plan_trip(request: Request, payload: TripRequest):
                 if step_type == "BUS":
                     bus_route_ids.add(step["route_id"])
 
-        # 4. Fetch the FAST live context (alerts + stalled vehicles) in parallel.
-        # Incidents are deliberately EXCLUDED here: the Grok + X-search scan is
-        # far slower than any trip budget and used to poison this gather -- one
-        # slow call hitting the timeout discarded the alerts/stalled results too,
-        # costing a guaranteed ~2s every trip for nothing. Incidents now run off
-        # the hot path (block 4b). return_exceptions keeps one slow upstream from
-        # 500-ing the whole trip.
+        # 4. Fetch the fast live context (alerts + stalled vehicles) in parallel.
+        # return_exceptions keeps one slow upstream from 500-ing the whole trip.
         try:
             raw_alerts, stalled, stalled_buses = await asyncio.wait_for(
                 asyncio.gather(
@@ -162,29 +154,28 @@ async def plan_trip(request: Request, payload: TripRequest):
             stalled_buses = []
         marks["gather"] = time.monotonic() - t0
 
-        # 4b. Incidents are best-effort and OFF the hot path. Serve the most
-        # recent background scan (possibly empty) and kick off a single-flight
-        # refresh for next time -- the trip never awaits Grok.
-        incidents = list(trip_incidents._LAST_INCIDENTS)
-        # Scan EVERY station on every candidate route (board, alight, and all
-        # intermediate stops), not just the endpoints -- ATLAS watches the whole
-        # journey for incidents. The list resolves from the static index, so this
-        # stays off the DB and off the hot path.
-        incidents_pending = trip_incidents._launch_incident_scan(trip_incidents._scan_station_names(gtfs, parsed_response))
+        # 4b. Incident intelligence is an on-demand route-selection signal.
+        # Grok scans every station on every candidate route (board, alight, and
+        # intermediate stops) so Claude can account for incidents when choosing
+        # between candidates. This is intentionally not a detached background
+        # scan: if it times out or fails, the trip continues with [].
+        incident_station_names = trip_incidents._scan_station_names(gtfs, parsed_response)
+        incidents = await trip_incidents._scan_route_incidents(incident_station_names)
         marks["incidents"] = time.monotonic() - t0
 
         # 5. Filter alerts for relevant routes
         parsed_alerts = parse_service_alerts(raw_alerts) if raw_alerts else []
         relevant_alerts = filter_alerts_for_routes(parsed_alerts, route_ids)
 
-        # 6. Build payload for ATLAS (routes + alerts + incidents + stalled trains + stalled buses).
+        # 6. Build payload for ATLAS (routes + alerts + incidents + stalled vehicles).
         # ATLAS makes the route decision itself from these raw signals -- there is
         # deliberately no precomputed "best route" score in the payload, so the
         # model reasons over the full data rather than deferring to a number.
-        jarvis_payload = {
+        route_advisor_payload = {
             "routes": parsed_response,
+            "route_candidate_labels": candidates._build_route_candidate_labels(parsed_response),
             "service_alerts": relevant_alerts,
-            "incidents": incidents if incidents else [],
+            "incidents": incidents,
             "stalled_trains": stalled if stalled else [],
             "stalled_buses": stalled_buses if stalled_buses else [],
         }
@@ -196,7 +187,7 @@ async def plan_trip(request: Request, payload: TripRequest):
         raw_recommendation = ""
         try:
             raw_recommendation = await asyncio.wait_for(
-                _collect_recommendation(jarvis_payload),
+                _collect_recommendation(route_advisor_payload),
                 timeout=TRIP_ADVISOR_TIMEOUT_S,
             )
         except asyncio.TimeoutError:
@@ -205,13 +196,13 @@ async def plan_trip(request: Request, payload: TripRequest):
                 "using text-only fallback"
             )
             raw_recommendation = (
-                "[ROUTE:0] ATLAS could not complete live reasoning, but the route shown "
+                "[ROUTE:0] SmartRoute could not complete live reasoning, but the route shown "
                 "is still built from real-time transit data."
             )
         except Exception as exc:
             print(f"[trip] advisor unavailable, using text-only fallback: {exc!r}")
             raw_recommendation = (
-                "[ROUTE:0] ATLAS could not complete live reasoning, but the route shown "
+                "[ROUTE:0] SmartRoute could not complete live reasoning, but the route shown "
                 "is still built from real-time transit data."
             )
         marks["advisor"] = time.monotonic() - t0
@@ -237,23 +228,7 @@ async def plan_trip(request: Request, payload: TripRequest):
         await enrichment._enrich_route(gtfs, chosen_route)
         marks["enrich"] = time.monotonic() - t0
 
-        # 9. Generate speech (with tag stripped, abbreviations expanded for TTS)
-        tts_text = text._expand_abbreviations(recommendation)
-        try:
-            audio_bytes = await asyncio.wait_for(
-                asyncio.to_thread(generate_speech, tts_text),
-                timeout=TRIP_TTS_TIMEOUT_S,
-            )
-            audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
-        except asyncio.TimeoutError:
-            print(f"[trip] TTS timed out ({TRIP_TTS_TIMEOUT_S:.2f}s), returning text-only response")
-            audio_b64 = ""
-        except Exception as exc:
-            print(f"[trip] TTS unavailable, returning text-only response: {exc}")
-            audio_b64 = ""
-        marks["tts"] = time.monotonic() - t0
-
-        # 10. Return response — only the chosen route goes to the frontend.
+        # 10. Return response - only the chosen route goes to the frontend.
         # Candidate REASON text (why each alternate wasn't picked) still falls
         # back to a time/transfer/alert comparison when ATLAS doesn't supply its
         # own reason; that is display copy only and never changes the selection.
@@ -263,7 +238,6 @@ async def plan_trip(request: Request, payload: TripRequest):
             candidate_analysis,
             scoring._score_routes(parsed_response, relevant_alerts),
         )
-        route_incidents = trip_incidents._build_route_incident_markers(incidents, chosen_route)
         elapsed = time.monotonic() - t0
         # Single per-trip log line: time taken for each pipeline step + total.
         _d = lambda cur, prev: max(0.0, marks.get(cur, 0.0) - marks.get(prev, 0.0))
@@ -273,20 +247,14 @@ async def plan_trip(request: Request, payload: TripRequest):
             f"incidents={_d('incidents', 'gather'):.2f}s "
             f"advisor={_d('advisor', 'incidents'):.2f}s "
             f"enrich={_d('enrich', 'advisor'):.2f}s "
-            f"tts={_d('tts', 'enrich'):.2f}s "
             f"total={elapsed:.2f}s"
         )
         return {
             "recommendation": recommendation,
-            "audio": audio_b64,
             "route": chosen_route,
             "selected_route_index": chosen_index,
             "route_candidates": route_candidates,
             "alerts": relevant_alerts,
-            "incidents": route_incidents,
-            # Incidents are scanned off the hot path (background, best-effort).
-            # True => a scan is in flight and markers may appear on a later trip.
-            "incidents_pending": incidents_pending,
         }
 
     except HTTPException:

@@ -43,6 +43,22 @@ test("left rail uses restrained transit product surfaces", () => {
     path.join(ROOT, "app/styles/smart-route-left-rail.css"),
     "utf8",
   );
+  const spiralLoader = fs.readFileSync(
+    path.join(ROOT, "components/smart-route/ui/spiral-fill-loader.tsx"),
+    "utf8",
+  );
+  const mobileSheet = fs.readFileSync(
+    path.join(ROOT, "components/smart-route/page/use-mobile-rail-sheet.ts"),
+    "utf8",
+  );
+  const liveWorkspace = fs.readFileSync(
+    path.join(ROOT, "components/smart-route/page/live-workspace.tsx"),
+    "utf8",
+  );
+  const globalCss = fs.readFileSync(
+    path.join(ROOT, "app/globals.css"),
+    "utf8",
+  );
 
   assert.match(
     routeView,
@@ -81,6 +97,106 @@ test("left rail uses restrained transit product surfaces", () => {
     ),
     /NumberFlow[\s\S]*trend=\{-1\}/,
     "arrival countdown values should use NumberFlow with countdown direction",
+  );
+  assert.match(
+    routeView,
+    /import \{ SpiralFillLoader \} from "@\/components\/smart-route\/ui\/spiral-fill-loader"/,
+    "route planning should use the custom SmartRoute spiral loader",
+  );
+  assert.match(
+    routeView,
+    /<SpiralFillLoader className="shrink-0" \/>/,
+    "the Finding routes status should render the inline spiral loader",
+  );
+  assert.doesNotMatch(
+    routeView,
+    /Mosaic|react-loading-indicators|sr-route-planning-loader/,
+    "route planning should not render Mosaic or keep the old loader selector",
+  );
+  assert.match(
+    spiralLoader,
+    /size-\[3\.5px\]/,
+    "the route-planning spiral loader should stay at Grok-scale dot sizing",
+  );
+  assert.match(
+    spiralLoader,
+    /gap-\[3px\]/,
+    "the route-planning spiral loader should use a compact dot gap",
+  );
+  assert.doesNotMatch(
+    routeView,
+    /Where to\?|<Search|Loader2|sr-input-spinner/,
+    "the destination command input should not render the old heading, search icon, or green spinner",
+  );
+  assert.match(
+    routeView,
+    /SpeechRecognition|webkitSpeechRecognition/,
+    "destination input should feature-detect browser-native dictation",
+  );
+  assert.match(
+    routeView,
+    /setSpeechRecognitionCtor\(\(\) => recognitionCtor\)/,
+    "SpeechRecognition constructor values must be wrapped when stored in React state",
+  );
+  assert.doesNotMatch(
+    routeView,
+    /setSpeechRecognitionCtor\(getSpeechRecognitionConstructor\(\)\)/,
+    "React must not receive the SpeechRecognition constructor as a direct state setter value",
+  );
+  assert.match(
+    routeView,
+    /data-action-state=\{actionState\}/,
+    "destination input should expose one action slot for submit, stop, finalizing, and clear states",
+  );
+  assert.match(
+    leftRail,
+    /planningPhase: RailPlanningPhase/,
+    "left rail search props should expose the route-planning action phase",
+  );
+  assert.match(
+    mobileSheet,
+    /useState<MobileRailSheetState>\("small"\)/,
+    "mobile route sheet should default to the closed/peek state",
+  );
+  assert.match(
+    mobileSheet,
+    /if \(state === "idle"\) return;/,
+    "idle sync should preserve the current sheet height instead of collapsing user interactions",
+  );
+  assert.match(
+    liveWorkspace,
+    /onRailInteraction=\{mobileRail\.expandMobileRailSheet\}/,
+    "rail interactions should be able to expand the compact mobile sheet",
+  );
+  assert.match(
+    routeView,
+    /onRequestRailExpand\?\.\(\);\s+onWayChange\(value as ArrivalFilter\);/,
+    "nearby transit direction changes should expand the mobile sheet before filtering rows",
+  );
+  assert.doesNotMatch(
+    liveWorkspace,
+    /"--sr-mobile-sheet-px"/,
+    "viewport-derived mobile sheet pixels should not be in SSR inline styles",
+  );
+  assert.match(
+    mobileSheet,
+    /"--sr-mobile-sheet-px"/,
+    "mobile sheet pixels should be written after hydration for map camera padding",
+  );
+  assert.match(
+    railCss,
+    /\.sr-input-voice\s*\{[\s\S]*background: transparent;/,
+    "the microphone action should render as a small bare icon, not a filled circular button",
+  );
+  assert.match(
+    globalCss,
+    /data-mobile-sheet-state="small"[\s\S]*background: transparent !important;/,
+    "the compact mobile sheet should not draw a full panel behind the search shelf",
+  );
+  assert.match(
+    globalCss,
+    /sr-live-console\[data-mobile-sheet-state="small"\][\s\S]*\.sr-map-mini-controls[\s\S]*bottom: calc\(var\(--sr-mobile-sheet-px, 124px\) \+ 1rem\)/,
+    "the recenter control should move above the compact mobile search shelf",
   );
   assert.match(
     routeView,
@@ -144,13 +260,18 @@ test("left rail uses restrained transit product surfaces", () => {
   );
   assert.match(
     atoms,
-    /SHUTTLE_BUS_TOKEN/,
-    "alert text should recognize plain shuttle-bus phrases, not just bracketed route tokens",
+    /cleanTransitParagraphText/,
+    "alert paragraph copy should have a plain-text sanitizer",
   );
-  assert.match(
+  assert.doesNotMatch(
     atoms,
     /BusChip route="BUS" title="Shuttle bus"/,
-    "plain shuttle-bus phrases should render with the bus pill used elsewhere in the rail",
+    "alert paragraph copy should not insert a generic BUS pill for shuttle-bus prose",
+  );
+  assert.match(
+    alertsView,
+    /mode="paragraph"/,
+    "alert bodies and detail rows should render as readable prose, not inline badge soup",
   );
   assert.doesNotMatch(
     alertsView,

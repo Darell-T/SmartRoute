@@ -1,6 +1,6 @@
 "use client";
 
-import type { CSSProperties, RefObject } from "react";
+import { useEffect, useState, type CSSProperties, type RefObject } from "react";
 import { SmartRouteMap } from "@/components/smart-route/map/smart-route-map";
 import {
   LeftRail,
@@ -36,9 +36,25 @@ export function LiveWorkspace({
   mobileRail, routePlanning, leftRailData, routeStatus, hasActiveRoute,
   liveMap,
 }: LiveWorkspaceProps) {
+  const [routeSearchFocused, setRouteSearchFocused] = useState(false);
   const {
     frameRef, routeData, destCoords, onLocationUpdate, onMapReady, onExpand, onRecenter,
   } = liveMap;
+  const { syncMobileRailAppState } = mobileRail;
+
+  const mobileRailAppState = routeSearchFocused
+    ? "search"
+    : routeStatus === "thinking"
+      ? "loading"
+      : routeStatus === "result"
+        ? "result"
+        : routeStatus === "error"
+          ? "error"
+          : "idle";
+
+  useEffect(() => {
+    syncMobileRailAppState(mobileRailAppState);
+  }, [mobileRailAppState, syncMobileRailAppState]);
 
   const liveRailShellStyle = {
     position: "absolute",
@@ -59,6 +75,7 @@ export function LiveWorkspace({
   return (
     <div
       className="sr-live-console"
+      data-mobile-sheet-state={mobileRail.mobileRailSheet}
       style={{ gridTemplateColumns: "minmax(0, 1fr)", position: "relative" }}
     >
       <aside
@@ -74,7 +91,7 @@ export function LiveWorkspace({
           type="button"
           className="sr-mobile-rail-grip"
           aria-label="Resize route panel"
-          aria-expanded={mobileRail.mobileRailSheet !== "hidden"}
+          aria-expanded={mobileRail.mobileRailSheet !== "small"}
           onPointerDown={mobileRail.handleMobileRailPointerDown}
           onPointerMove={mobileRail.handleMobileRailPointerMove}
           onPointerUp={mobileRail.handleMobileRailPointerUp}
@@ -92,11 +109,15 @@ export function LiveWorkspace({
             search={{
               inputValue: routePlanning.inputValue,
               isLoading: routePlanning.isLoading,
+              planningPhase: routePlanning.planningPhase,
               hasActiveRoute,
               onInputChange: routePlanning.handleDestinationInputChange,
               onSubmit: routePlanning.handleSearchSubmit,
+              onCancelPlanning: routePlanning.handleCancelRoutePlanning,
               onClear: routePlanning.handleClearRoute,
             }}
+            onRouteSearchFocusChange={setRouteSearchFocused}
+            onRailInteraction={mobileRail.expandMobileRailSheet}
           />
         </div>
       </aside>
@@ -110,6 +131,7 @@ export function LiveWorkspace({
             onLocationUpdate={onLocationUpdate}
             routeData={routeData}
             destCoords={destCoords}
+            mobileSheetState={mobileRail.mobileRailSheet}
             onMapReady={onMapReady}
           />
         </div>

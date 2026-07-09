@@ -4,7 +4,7 @@ from pydantic import BaseModel
 
 from app.utils.geo import find_nearest_stops
 from app.services import mta_feed
-from app.services.live_feed import vehicle_enrichment, summary as live_summary, incidents as nearby_incidents
+from app.services.live_feed import vehicle_enrichment
 from app.services.live_feed.log import _vlog
 import asyncio
 import hashlib
@@ -70,6 +70,24 @@ _LAST_EMPTY_VEHICLE_LOG = 0.0
 _WS_CONNECTION_COUNTER = 0
 NEARBY_ARRIVAL_RADIUS_M = 804.672
 NEARBY_ARRIVAL_STOP_LIMIT = 32
+_SIGNAL_DISRUPTION_KEYWORDS = (
+    "SUSPEND",
+    "NO ",
+    "SKIP",
+    "BYPASS",
+    "REROUT",
+    "SLOW SPEED",
+    "MAJOR DELAY",
+    "PART SUSPEND",
+)
+_SIGNAL_CAUTION_KEYWORDS = (
+    "DELAY",
+    "SERVICE CHANGE",
+    "PLANNED WORK",
+    "LOCAL TO EXPRESS",
+    "EXPRESS TO LOCAL",
+    "SHUTTLE",
+)
 
 
 async def _send_json_safe(websocket: WebSocket, payload: dict) -> bool:
@@ -104,7 +122,6 @@ async def live_feed(request: Request, payload: LiveFeedRequest):
                 "arrivals": [],
                 "alerts": [],
                 "signals": None,
-                "incidents": [],
                 "updated_at": int(time.time()),
                 "error": "live feed temporarily unavailable",
             },
@@ -204,11 +221,9 @@ async def _live_feed_impl(gtfs, payload: LiveFeedRequest):
             "alerts": snapshot["alerts"],
             "vehicles": snapshot["vehicles"],
             "signals": snapshot["signals"],
-            "incidents": snapshot["incidents"],
             "updated_at": snapshot["updated_at"],
             "degraded": snapshot["degraded"],
             "debug": snapshot["debug"],
-            "summary": snapshot["summary"],
         }
     )
 
@@ -272,11 +287,97 @@ async def _safe_nearby_bus_arrivals(lat: float, lng: float) -> tuple[list[dict],
         }
 
 
+def _signal_text(value: object) -> str:
+    return " ".join(str(value or "").split()).strip()
+
+
+def _alert_signal_severity(alert: dict) -> str:
+    alert_text = f"{_signal_text(alert.get('header'))} {_signal_text(alert.get('description'))}".upper()
+    if any(keyword in alert_text for keyword in _SIGNAL_DISRUPTION_KEYWORDS):
+        return "disrupted"
+    if any(keyword in alert_text for keyword in _SIGNAL_CAUTION_KEYWORDS):
+        return "caution"
+    return "caution"
+
+
+def _derive_live_network_status(
+    active_alert_count: int,
+    major_alert_count: int,
+    stale_count: int,
+    feed_failures: int,
+    vehicle_entities: int,
+    vehicles_without_position: int,
+) -> str:
+    no_position_ratio = (
+        vehicles_without_position / vehicle_entities if vehicle_entities > 0 else 0
+    )
+    if (
+        major_alert_count >= 2
+        or active_alert_count >= 8
+        or stale_count >= 20
+        or (feed_failures > 0 and no_position_ratio >= 0.5)
+        or no_position_ratio >= 0.85
+    ):
+        return "disrupted"
+    if (
+        active_alert_count > 0
+        or stale_count > 0
+        or feed_failures > 0
+        or no_position_ratio >= 0.35
+    ):
+        return "caution"
+    return "healthy"
+
+
+def _build_live_signals(
+    parsed_alerts: list[dict],
+    vehicles: list[dict],
+    vehicle_debug: dict,
+    updated_at: int,
+) -> dict:
+    affected_routes = {
+        str(route_id).strip().upper()
+        for alert in parsed_alerts
+        for route_id in (alert.get("route_ids") or [])
+        if str(route_id).strip()
+    }
+    major_alert_count = sum(
+        1 for alert in parsed_alerts if _alert_signal_severity(alert) == "disrupted"
+    )
+    stale_vehicles = [vehicle for vehicle in vehicles if vehicle.get("stale")]
+    vehicle_entities = int(vehicle_debug.get("vehicle_entities") or len(vehicles))
+    vehicles_without_position = int(vehicle_debug.get("vehicles_without_position") or 0)
+    feed_failures = int(vehicle_debug.get("feed_failures") or 0)
+
+    return {
+        "network_status": _derive_live_network_status(
+            active_alert_count=len(parsed_alerts),
+            major_alert_count=major_alert_count,
+            stale_count=len(stale_vehicles),
+            feed_failures=feed_failures,
+            vehicle_entities=vehicle_entities,
+            vehicles_without_position=vehicles_without_position,
+        ),
+        "active_alert_count": len(parsed_alerts),
+        "major_alert_count": major_alert_count,
+        "affected_route_count": len(affected_routes),
+        "tracked_vehicle_count": len(vehicles),
+        "stale_vehicle_count": len(stale_vehicles),
+        "routes_reporting_count": len({
+            str(vehicle.get("route_id") or "").upper()
+            for vehicle in vehicles
+            if vehicle.get("route_id")
+        }),
+        "feed_failures": feed_failures,
+        "vehicles_with_position": int(vehicle_debug.get("vehicles_with_position") or 0),
+        "vehicles_without_position": vehicles_without_position,
+        "updated_at": updated_at,
+    }
 
 
 async def _build_live_snapshot(
     gtfs, lat: float, lng: float, selected_route_ids: set[str] | None = None,
-    atlas_scan: bool = False, emit=None,
+    emit=None,
 ):
     global _LAST_EMPTY_VEHICLE_LOG
     _t0 = time.monotonic()
@@ -352,8 +453,8 @@ async def _build_live_snapshot(
 
     # Progressive first paint: the nearby subway arrivals are ready now (and
     # served from the warm feed cache), so push them immediately instead of
-    # making the rider wait on the slower network-wide vehicles/alerts/summary
-    # and bus fan-out below. Only the FIRST snapshot for a location passes an
+    # making the rider wait on the slower vehicles/alerts/bus fan-out below.
+    # Only the FIRST snapshot for a location passes an
     # emit callback; periodic refreshes send the full snapshot in one message.
     if emit is not None:
         await emit({
@@ -362,9 +463,7 @@ async def _build_live_snapshot(
             "arrivals": sorted(arrivals, key=lambda a: a.get("arrival_time") or 0)[:40],
             "alerts": [],
             "vehicles": [],
-            "summary": None,
             "signals": None,
-            "incidents": [],
             "updated_at": now,
             "degraded": False,
             "debug": {"partial": True, "arrivals_ms": arrivals_ms},
@@ -384,7 +483,6 @@ async def _build_live_snapshot(
     vehicles, vehicle_debug = vehicle_result
     parsed_alerts = mta_feed.parse_service_alerts(raw_alerts) if raw_alerts else []
     filtered_alerts = mta_feed.filter_alerts_for_routes(parsed_alerts, set(route_ids))
-    summary, signals = await live_summary._build_live_network_summary_bundle(parsed_alerts, now)
 
     stop_ids = [v.get("stop_id") for v in vehicles if v.get("stop_id")]
     stop_locations = gtfs.get_stop_locations(stop_ids)
@@ -434,6 +532,7 @@ async def _build_live_snapshot(
     vehicle_debug["segment_estimates"] = segment_estimate_count
     vehicle_debug["missing_stop_coordinates"] = missing_stop_coord_count
     vehicle_debug["final_markers_after_stop_fallback"] = len(vehicles)
+    signals = _build_live_signals(parsed_alerts, vehicles, vehicle_debug, now)
 
     if feeds and not vehicles:
         log_now = time.monotonic()
@@ -452,11 +551,7 @@ async def _build_live_snapshot(
         "arrivals": arrivals[:40],
         "alerts": filtered_alerts,
         "vehicles": vehicles,
-        "summary": summary,
         "signals": signals,
-        # ATLAS scans the same half-mile radius as nearby transit, but only when
-        # the rider has the scan toggled on (it is a slow, paid Grok call).
-        "incidents": nearby_incidents._serve_nearby_incidents(enriched_stops, lat, lng) if atlas_scan else [],
         "updated_at": now,
         "degraded": len(feeds) == 0 and len(route_ids) > 0,
         "debug": {
@@ -596,7 +691,6 @@ async def live_feed_socket(websocket: WebSocket):
 
     location: tuple[float, float] | None = None
     selected_route_ids: set[str] = set()
-    atlas_scan = False
     last_sent = 0.0
     # Fallback cadence only: normal pushes are driven by signal_realtime_refresh()
     # the moment fresh MTA data lands. This timeout is just the safety net if that
@@ -640,9 +734,6 @@ async def live_feed_socket(websocket: WebSocket):
                 lng = msg.get("lng")
                 if isinstance(msg.get("selected_route_ids"), list):
                     selected_route_ids = _normalize_route_ids(msg.get("selected_route_ids"))
-                if "atlas_scan" in msg:
-                    atlas_scan = bool(msg.get("atlas_scan"))
-                    last_sent = 0
                 if isinstance(lat, (int, float)) and isinstance(lng, (int, float)):
                     location = (float(lat), float(lng))
                     last_sent = 0
@@ -671,7 +762,7 @@ async def live_feed_socket(websocket: WebSocket):
                 # partial), then the full snapshot; periodic refreshes send the
                 # full snapshot only, so vehicles/alerts never flicker empty.
                 snapshot = await _build_live_snapshot(
-                    gtfs, location[0], location[1], selected_route_ids, atlas_scan,
+                    gtfs, location[0], location[1], selected_route_ids,
                     emit=_emit_partial if last_sent == 0 else None,
                 )
                 sent = await _send_json_safe(websocket, {"type": "snapshot", "data": snapshot})

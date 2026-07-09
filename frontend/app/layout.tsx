@@ -50,11 +50,19 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
+  themeColor: "#0d1117",
 };
 
 export const metadata: Metadata = {
+  applicationName: "SmartRoute",
   title: "SmartRoute",
   description: "Real-time NYC transit intelligence",
+  manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "SmartRoute",
+  },
   icons: {
     icon: "/smart-route-mark.png",
     shortcut: "/smart-route-mark.png",

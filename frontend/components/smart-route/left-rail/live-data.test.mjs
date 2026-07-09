@@ -672,7 +672,7 @@ test("plan rationale surfaces sanitized model route reasoning with fallback", ()
   );
   assert.match(
     data.plan.rationale,
-    /I did not pick the B because it is slower by 13 min/,
+    /I did not pick the B route because it is slower by 13 min/,
     "rationale explains why the leading alternate was not selected",
   );
   assert.doesNotMatch(
@@ -1048,8 +1048,101 @@ test("plan rationale explains faster disrupted alternates as reliability tradeof
 
   assert.match(
     data.plan.rationale,
-    /I did not pick the C because it is affected by Stalled vehicle at 34 St despite being 2 min faster\./,
+    /I did not pick the C route because it is affected by Stalled vehicle at 34 St despite being 2 min faster\./,
   );
+});
+
+test("plan rationale replaces internal route indexes with display labels", () => {
+  const nowMs = 1_700_000_000_000;
+  const steps = (line, departureStop, minutes) => [
+    {
+      type: "SUBWAY",
+      route_id: line,
+      train_line: line,
+      departure_stop: departureStop,
+      arrival_stop: "34 St-Herald Sq",
+      minutes_until_arrival: minutes,
+    },
+  ];
+  const active = {
+    id: "candidate-0",
+    index: 0,
+    steps: steps("Q", "Church Av", 30),
+    is_recommended: true,
+    recommendation_reason:
+      "Route 0 is best because route 1 is slower and route 2 has a delay.",
+  };
+  const altB = {
+    id: "candidate-1",
+    index: 1,
+    steps: steps("B", "Church Av", 39),
+    is_recommended: false,
+    rejection_reason: "Slower by 9 minutes.",
+  };
+  const altD = {
+    id: "candidate-2",
+    index: 2,
+    steps: steps("D", "Prospect Park", 34),
+    is_recommended: false,
+    rejection_reason: "Affected by delays.",
+  };
+
+  const data = buildLeftRailData({
+    nowMs,
+    routeSteps: active.steps,
+    routeCandidates: [active, altB, altD],
+    activeRouteCandidate: active,
+  });
+
+  assert.match(data.plan.rationale, /Q route/);
+  assert.match(data.plan.rationale, /B route/);
+  assert.match(data.plan.rationale, /D route/);
+  assert.doesNotMatch(data.plan.rationale, /\b(?:route|candidate|option)\s+\d+\b/i);
+});
+
+test("plan rationale distinguishes duplicate same-line alternatives", () => {
+  const nowMs = 1_700_000_000_000;
+  const subway = (line, stop, minutes) => [
+    {
+      type: "SUBWAY",
+      route_id: line,
+      train_line: line,
+      departure_stop: stop,
+      arrival_stop: "34 St-Herald Sq",
+      minutes_until_arrival: minutes,
+    },
+  ];
+  const active = {
+    id: "candidate-0",
+    index: 0,
+    steps: subway("Q", "Church Av", 30),
+    is_recommended: true,
+    recommendation_reason: "Fastest clear route.",
+  };
+  const bChurch = {
+    id: "candidate-1",
+    index: 1,
+    steps: subway("B", "Church Av", 43),
+    is_recommended: false,
+    rejection_reason: "Slower by 13 minutes.",
+  };
+  const bBeverley = {
+    id: "candidate-2",
+    index: 2,
+    steps: subway("B", "Beverley Rd", 45),
+    is_recommended: false,
+    rejection_reason: "Slower by 15 minutes.",
+  };
+
+  const data = buildLeftRailData({
+    nowMs,
+    routeSteps: active.steps,
+    routeCandidates: [active, bChurch, bBeverley],
+    activeRouteCandidate: active,
+  });
+
+  assert.doesNotMatch(data.plan.rationale, /the B(?: train| route)? and the B\b/);
+  assert.match(data.plan.rationale, /B route from Church Av|B route from Beverley Rd/);
 });
 
 test("bus arrivals split tabs by stop compass; crosstown and unknown remain all-directions rows", () => {

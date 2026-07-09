@@ -96,6 +96,56 @@ class TripCandidateReasonTests(unittest.TestCase):
             "Fastest route despite an alert: Planned work on Q.",
         )
 
+    def test_candidate_labels_are_passenger_facing_context(self):
+        routes = [
+            _subway_route("Q", 20),
+            [
+                {"type": "WALK", "minutes_until_arrival": 3},
+                {
+                    "type": "BUS",
+                    "route_id": "B41",
+                    "train_line": "B41",
+                    "departure_stop": "Flatbush Av/Church Av",
+                    "arrival_stop": "Downtown Brooklyn",
+                    "minutes_until_arrival": 22,
+                    "route_total_minutes": 22,
+                },
+            ],
+            [
+                {"type": "WALK", "minutes_until_arrival": 2},
+                {
+                    "type": "SUBWAY",
+                    "route_id": "D",
+                    "train_line": "D",
+                    "departure_stop": "Church Av",
+                    "arrival_stop": "Atlantic Av-Barclays Ctr",
+                    "minutes_until_arrival": 12,
+                },
+                {
+                    "type": "SUBWAY",
+                    "route_id": "Q",
+                    "train_line": "Q",
+                    "departure_stop": "Atlantic Av-Barclays Ctr",
+                    "arrival_stop": "96 St",
+                    "minutes_until_arrival": 30,
+                    "route_total_minutes": 30,
+                },
+            ],
+        ]
+
+        labels = candidates._build_route_candidate_labels(routes)
+
+        self.assertEqual(labels[0]["displayLabel"], "Q route from A St")
+        self.assertEqual(
+            labels[1]["displayLabel"],
+            "B41 bus option from Flatbush Av/Church Av",
+        )
+        self.assertEqual(
+            labels[2]["displayLabel"],
+            "D/Q subway option via Atlantic Av-Barclays Ctr",
+        )
+        self.assertEqual(labels[2]["routeIds"], ["D", "Q"])
+
 
 if __name__ == "__main__":
     unittest.main()

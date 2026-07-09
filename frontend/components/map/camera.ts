@@ -2,8 +2,7 @@ import maplibregl from "maplibre-gl";
 
 const DESKTOP_RAIL_WIDTH = 420;
 const DESKTOP_PADDING = 96;
-const MOBILE_PADDING = 48;
-const MOBILE_BOTTOM_PADDING = 180;
+const MOBILE_DEFAULT_SHEET_PADDING = 212;
 
 /** Calculate bearing in degrees from point A to point B */
 function calculateBearing(
@@ -53,11 +52,12 @@ function routePreviewPadding(m: maplibregl.Map): maplibregl.PaddingOptions {
     (typeof window !== "undefined" ? window.innerWidth : 1440);
 
   if (width < 760) {
+    const sheetHeight = readMobileSheetHeight();
     return {
       top: 76,
-      bottom: MOBILE_BOTTOM_PADDING,
-      left: MOBILE_PADDING,
-      right: MOBILE_PADDING,
+      bottom: sheetHeight + 32,
+      left: 24,
+      right: 24,
     };
   }
 
@@ -70,6 +70,21 @@ function routePreviewPadding(m: maplibregl.Map): maplibregl.PaddingOptions {
     ),
     right: DESKTOP_PADDING,
   };
+}
+
+function readMobileSheetHeight() {
+  if (typeof window === "undefined") return MOBILE_DEFAULT_SHEET_PADDING;
+
+  const raw = window
+    .getComputedStyle(document.documentElement)
+    .getPropertyValue("--sr-mobile-sheet-px");
+  const value = Number.parseFloat(raw);
+
+  if (Number.isFinite(value) && value > 0) {
+    return Math.round(value);
+  }
+
+  return MOBILE_DEFAULT_SHEET_PADDING;
 }
 
 function easeOutCubic(t: number) {

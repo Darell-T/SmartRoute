@@ -147,3 +147,57 @@ test("alert adapter recognizes NYC bus prefixes and express subway aliases", () 
   assert.equal(serviceNameForRoutes(["6X"]), "Lexington Av Express");
   assert.equal(ALERT_ROUTE_TO_FAMILY.get("6X")?.name, "Lexington Avenue");
 });
+
+test("alert copy strips bracketed icon placeholders but keeps shuttle bus instructions", () => {
+  const items = normalizeAlertFeedItems(
+    [
+      {
+        sev: "major",
+        kind: "train",
+        lines: ["6"],
+        title: "No 6 between Westchester Sq and Pelham Bay Park",
+        sub: "[shuttle bus icon] Free Bx91 shuttle buses run between Westchester Sq and Pelham Bay Park.",
+        aiContext:
+          "The last stop for Bronx-bound trains is 3 Av-138 St. [bus icon] Free Bx91 shuttle buses make local stops.",
+        startedAgo: "12m ago",
+        lastUpdate: "7m ago",
+      },
+    ],
+    [],
+  );
+
+  const alert = items[0];
+  const visibleText = [
+    alert.title,
+    alert.summary,
+    alert.details?.impact,
+    alert.details?.alternatives,
+  ].join(" ");
+
+  assert.doesNotMatch(visibleText, /\[(?:shuttle\s+bus|bus)\s+icon\]/i);
+  assert.match(visibleText, /Free Bx91 shuttle buses/);
+  assert.match(visibleText, /3 Av-138 St/);
+});
+
+test("activity-only alert details remain expandable", () => {
+  const items = normalizeAlertFeedItems(
+    [
+      {
+        sev: "minor",
+        kind: "train",
+        lines: ["N"],
+        title: "Skipping stations",
+        sub: "Active service notice",
+        startedAgo: "20m ago",
+        lastUpdate: "10m ago",
+        activity: [
+          { t: "12m ago", e: "Trains started bypassing City Hall." },
+        ],
+      },
+    ],
+    [],
+  );
+
+  assert.equal(items[0].expandable, true);
+  assert.equal(items[0].details.updates.length, 1);
+});

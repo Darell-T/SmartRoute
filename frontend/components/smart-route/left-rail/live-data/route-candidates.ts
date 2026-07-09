@@ -263,6 +263,10 @@ function trimCause(value: string): string {
     .trim();
 }
 
+function mentionsInternalCandidate(value: string): boolean {
+  return /\b(?:route|candidate|option)\s+#?\d+\b/i.test(value);
+}
+
 function disruptionCause(value: string): string | null {
   const match = value.match(
     /\b(?:and|but)?\s*(?:affected by|due to|because of)\s+(.+)$/i,
@@ -280,6 +284,7 @@ export function normalizeAlternateReason(
 ): string {
   const cleaned = trimReason(reason ?? fallbackAlternateReason(delta));
   if (!cleaned) return fallbackAlternateReason(delta);
+  if (mentionsInternalCandidate(cleaned)) return fallbackAlternateReason(delta);
   const lower = cleaned.toLowerCase();
 
   if (/same route.*depart|departing later|later departure/.test(lower)) {

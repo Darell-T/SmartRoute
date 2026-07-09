@@ -179,3 +179,59 @@ def _build_route_candidates(
             }
         )
     return candidates
+
+
+def _transit_steps(route: list[dict]) -> list[dict]:
+    return [
+        step
+        for step in route
+        if step.get("type") in ("SUBWAY", "BUS")
+    ]
+
+
+def _route_ids(route: list[dict]) -> list[str]:
+    route_ids: list[str] = []
+    for step in _transit_steps(route):
+        route_id = str(step.get("route_id") or step.get("train_line") or "").strip().upper()
+        if route_id and route_id not in route_ids:
+            route_ids.append(route_id)
+    return route_ids
+
+
+def _display_stop(value: object) -> str:
+    return text._safe_text(str(value or ""), 44).strip()
+
+
+def _candidate_display_label(route: list[dict]) -> str:
+    steps = _transit_steps(route)
+    route_ids = _route_ids(route)
+    if not route_ids:
+        return "walk-only option"
+
+    modes = {str(step.get("type") or "").upper() for step in steps}
+    route_label = "/".join(route_ids)
+    if modes == {"BUS"}:
+        base = f"{route_label} bus option"
+    elif len(route_ids) == 1:
+        base = f"{route_label} route"
+    else:
+        base = f"{route_label} subway option"
+
+    if len(steps) > 1:
+        transfer_stop = _display_stop(steps[1].get("departure_stop"))
+        if transfer_stop:
+            return f"{base} via {transfer_stop}"
+
+    board_stop = _display_stop(steps[0].get("departure_stop"))
+    return f"{base} from {board_stop}" if board_stop else base
+
+
+def _build_route_candidate_labels(routes: list[list[dict]]) -> list[dict]:
+    return [
+        {
+            "index": index,
+            "displayLabel": _candidate_display_label(route),
+            "routeIds": _route_ids(route),
+        }
+        for index, route in enumerate(routes)
+    ]
