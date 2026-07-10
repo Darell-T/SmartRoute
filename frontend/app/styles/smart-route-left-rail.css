@@ -1829,19 +1829,6 @@
   gap: 10px;
 }
 
-/* Live indicator: pulsing 6px emerald dot + "Live" — one of the four
-   places --sr-accent is allowed to appear. */
-.sr-recommended-route__live {
-  display: inline-flex;
-  flex-shrink: 0;
-  align-items: center;
-  gap: 6px;
-  color: var(--sr-text-2);
-  font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
 /* Hero row: LargeTitle duration + Subheadline arrival time share one
    baseline, Apple Maps-style ("24 min · 3:42 PM arrival"). */
 .sr-recommended-route__hero {
