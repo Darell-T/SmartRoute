@@ -462,13 +462,13 @@ test("left rail uses restrained transit product surfaces", () => {
   );
   assert.match(
     railCss,
-    /background:\s*rgba\(99,\s*99,\s*102,\s*0\.55\)/,
-    "active direction pill uses a neutral elevated fill, matching the segmented tabs — --sr-accent is reserved for the Recommended pill, live dots, Use buttons, and focus rings",
+    /background:\s*rgba\(16,\s*185,\s*129,\s*0\.22\)/,
+    "active direction pill uses the transit-green fill",
   );
-  assert.doesNotMatch(
+  assert.match(
     railCss,
-    /\.sr-toggle-pill\s*\{[\s\S]*?rgba\(16,\s*185,\s*129,\s*0\.22\)/,
-    "the direction toggle's active pill should not keep the old emerald tint",
+    /border:\s*1px solid rgba\(52,\s*211,\s*153,\s*0\.45\)/,
+    "active direction pill uses the transit-green border",
   );
   assert.match(
     railCss,

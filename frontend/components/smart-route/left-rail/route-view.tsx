@@ -327,16 +327,22 @@ function scrollRecommendedCardIntoView(
 
   // getBoundingClientRect delta + current scrollTop, rather than
   // offsetTop, since offsetParent chains through positioned ancestors
-  // (the sticky search block, LayoutGroup wrappers) here.
+  // (LayoutGroup wrappers, the popover-anchoring search block) here.
   const cardRect = card.getBoundingClientRect();
   const scrollerRect = scroller.getBoundingClientRect();
   const cardOffsetTopWithinScroller =
     cardRect.top - scrollerRect.top + scroller.scrollTop;
 
+  // Only reserve room for the search block if it actually pins to the top
+  // of the scroller. When it scrolls away with the content (the current
+  // behavior — sticky broke the suggestions popover and keyboard-focused
+  // layout on real iOS), the card can sit flush at the top, breathing
+  // room aside.
   const searchBlock = scroller.querySelector<HTMLElement>(".sr-route-search");
-  const stickySearchHeight = searchBlock
-    ? searchBlock.getBoundingClientRect().height
-    : 0;
+  const stickySearchHeight =
+    searchBlock && getComputedStyle(searchBlock).position === "sticky"
+      ? searchBlock.getBoundingClientRect().height
+      : 0;
 
   const top = Math.max(
     0,
