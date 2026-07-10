@@ -3,6 +3,7 @@
 import {
   Fragment,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -26,6 +27,10 @@ import {
 import type { MapboxSearchSuggestion } from "@/lib/mapbox-search";
 import type { LiveFeedIncident } from "@/types/api";
 import { useDestinationSearch } from "@/lib/use-destination-search";
+import {
+  DestinationSuggestions,
+  destinationSuggestionOptionId,
+} from "./destination-suggestions";
 import { buildRouteReasoningInsights } from "./live-data";
 import {
   Reasoning,
@@ -314,6 +319,7 @@ function DestinationInput({
     useState<SpeechRecognitionConstructor | null>(null);
   const [isListening, setIsListening] = useState(false);
   const speechRecognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const suggestionsId = useId();
   const controlledSearch = search ?? null;
   const wired = controlledSearch !== null;
   const value = controlledSearch ? controlledSearch.inputValue : localValue;
@@ -479,6 +485,7 @@ function DestinationInput({
     actionState === "submit" ||
     actionState === "stop" ||
     actionState === "clear";
+  const suggestionsOpen = wired && focused && suggestions.length > 0;
 
   return (
     <section className="sr-rail-section sr-route-search">
@@ -491,6 +498,15 @@ function DestinationInput({
       >
         <input
           aria-label="Search destination or address"
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded={suggestionsOpen}
+          aria-controls={suggestionsOpen ? suggestionsId : undefined}
+          aria-activedescendant={
+            suggestionsOpen
+              ? destinationSuggestionOptionId(suggestionsId, highlightedIndex)
+              : undefined
+          }
           value={displayValue}
           onChange={(event) => setValue(event.target.value)}
           onFocus={() => {
@@ -575,26 +591,14 @@ function DestinationInput({
         </motion.button>
       </form>
 
-      {wired && focused && suggestions.length > 0 && (
-        <div className="sr-search-popover" role="listbox">
-          {suggestions.map((suggestion, index) => (
-            <button
-              key={suggestion.id}
-              type="button"
-              role="option"
-              aria-selected={index === highlightedIndex}
-              onMouseDown={(event) => event.preventDefault()}
-              onMouseEnter={() => setHighlightedIndex(index)}
-              onClick={() => void chooseSuggestion(suggestion)}
-            >
-              <span>
-                {suggestion.label.split(",")[0]?.trim() || suggestion.label}
-              </span>
-              <small>{suggestion.label}</small>
-            </button>
-          ))}
-        </div>
-      )}
+      <DestinationSuggestions
+        id={suggestionsId}
+        open={suggestionsOpen}
+        suggestions={suggestions}
+        highlightedIndex={highlightedIndex}
+        onHighlight={setHighlightedIndex}
+        onSelect={(suggestion) => void chooseSuggestion(suggestion)}
+      />
     </section>
   );
 }

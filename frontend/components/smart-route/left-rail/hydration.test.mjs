@@ -27,6 +27,13 @@ test("left rail uses restrained transit product surfaces", () => {
     path.join(ROOT, "components/smart-route/left-rail/alerts-view.tsx"),
     "utf8",
   );
+  const destinationSuggestions = fs.readFileSync(
+    path.join(
+      ROOT,
+      "components/smart-route/left-rail/destination-suggestions.tsx",
+    ),
+    "utf8",
+  );
   const leftRail = fs.readFileSync(
     path.join(ROOT, "components/smart-route/left-rail/left-rail.tsx"),
     "utf8",
@@ -69,6 +76,16 @@ test("left rail uses restrained transit product surfaces", () => {
     routeView,
     /buildRouteReasoningInsights/,
     "planning lines must be derived from real route-evaluation facts, not a hardcoded script",
+  );
+  assert.match(
+    routeView,
+    /role="combobox"[\s\S]*aria-autocomplete="list"[\s\S]*aria-activedescendant/,
+    "destination search exposes a complete combobox relationship to its suggestions",
+  );
+  assert.match(
+    destinationSuggestions,
+    /role="listbox"[\s\S]*role="option"[\s\S]*aria-selected/,
+    "destination predictions render as an accessible listbox with selected options",
   );
   assert.doesNotMatch(
     routeView,
@@ -240,7 +257,7 @@ test("left rail uses restrained transit product surfaces", () => {
   );
   assert.doesNotMatch(
     routeView,
-    /sr-direction-pill|layoutId=\{`sr-direction-pill|useId/,
+    /sr-direction-pill|layoutId=\{`sr-direction-pill/,
     "direction toggle should not render a shared-layout pipe marker",
   );
   assert.match(
@@ -325,10 +342,10 @@ test("left rail uses restrained transit product surfaces", () => {
     /sr-alerts-scroll/,
     "alerts use a contained scroll (fixed title, bounded list region), not whole-rail scroll",
   );
-  assert.match(
+  assert.doesNotMatch(
     alertsView,
-    /function alertDotTone/,
-    "alerts use the three-tier signal severity model (red/amber/green)",
+    /alertDotTone|AlertSeverityDot/,
+    "alert priority should not depend on decorative severity dots",
   );
   assert.match(
     alertsView,
@@ -347,8 +364,13 @@ test("left rail uses restrained transit product surfaces", () => {
   );
   assert.match(
     alertsView,
+    /className="sr-alert-card"/,
+    "featured alert cards use their own flat passenger-notice surface",
+  );
+  assert.doesNotMatch(
+    alertsView,
     /sr-alert-card smart-route-liquid-card/,
-    "featured alert cards share the RecommendedRouteCard liquid-glass surface",
+    "featured alert cards must not reuse the route-result liquid-glass material",
   );
   assert.match(
     alertsView,
@@ -358,7 +380,7 @@ test("left rail uses restrained transit product surfaces", () => {
   assert.doesNotMatch(
     alertsView,
     /sr-alert-detail[^"]*smart-route-liquid-card|sr-alert-timeline/,
-    "the glass lives on the card itself — no separate glass detail panel, no update-timeline block",
+    "expanded alert detail stays inline without a detached glass panel or duplicate timeline component",
   );
   assert.match(
     alertsView,
@@ -368,12 +390,12 @@ test("left rail uses restrained transit product surfaces", () => {
   assert.match(
     alertsView,
     /sr-alert-status\b/,
-    "alert status renders as quiet dot + word metadata",
+    "alert status renders as quiet textual metadata",
   );
   assert.doesNotMatch(
     alertsView,
     /sr-status-pill|AlertStatusPill/,
-    "status pills are gone — severity dot + one word only",
+    "status pills are gone in favor of quiet text metadata",
   );
   assert.doesNotMatch(
     alertsView,
@@ -483,10 +505,10 @@ test("left rail uses restrained transit product surfaces", () => {
     /\.sr-status-pill/,
     "alerts should not keep the retired lifecycle status-pill styling",
   );
-  assert.match(
+  assert.doesNotMatch(
     railCss,
-    /\.sr-alert-card__stripe/,
-    "featured alert cards carry a route/severity accent stripe",
+    /\.sr-alert-card__stripe|\.sr-alert-severity-dot/,
+    "featured alerts should not restore colored stripes or severity dots",
   );
   assert.doesNotMatch(
     railCss,
