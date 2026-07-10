@@ -870,14 +870,20 @@ function markRouteTokensForTransitText(text: string) {
   return text.replace(ROUTE_REASON_TOKEN, (token, _match, offset: number) => {
     const routeId = token.toUpperCase();
     if (!SUBWAY_BULLET_ROUTES.has(routeId)) return token;
-    if (routeId === "A" && !isAContextTransitLine(text, offset)) return token;
+    if (!isTransitLineContext(text, offset, token.length)) return token;
     return `[${routeId}]`;
   });
 }
 
-function isAContextTransitLine(text: string, offset: number) {
+// Bare digits/letters (e.g. "2" in "2 minutes") are far more common in AI
+// reasoning prose than genuine subway line references, so a token is only
+// treated as a line reference when nearby words actually talk about a
+// train/line — never on the strength of the token alone.
+function isTransitLineContext(text: string, offset: number, length: number) {
   const before = text.slice(Math.max(0, offset - 16), offset).toLowerCase();
-  const after = text.slice(offset + 1, offset + 18).toLowerCase();
+  const after = text
+    .slice(offset + length, offset + length + 18)
+    .toLowerCase();
   return (
     /\b(the|take|via|next|board)\s+$/.test(before) ||
     /^\s+(train|line|service|express|local)\b/.test(after)
