@@ -112,7 +112,7 @@
 }
 
 .sr-rail input::placeholder {
-  color: var(--sr-text-2);
+  color: var(--sr-muted);
 }
 
 .sr-rail::-webkit-scrollbar {
@@ -231,22 +231,12 @@
   padding-top: 18px;
 }
 
-/* Pinned search — sticks to the top of the rail scroller (aside.sr-rail) so
-   the destination field stays reachable while Nearby Transit / route
-   results scroll underneath. Carries its own material so scrolled content
-   is legible through it, and a quiet hairline marks the seam. An always-on
-   low-alpha hairline is used instead of a scroll-driven one: it reads as
-   "settled" immediately under the field and avoids a scroll-listener for a
-   foundation-level pass. */
+/* NOT sticky and NO backdrop-filter: a backdrop-filter here creates a new
+   containing block that breaks the suggestions popover and the keyboard-
+   focused layout on real iOS. The search scrolls with the rail content. */
 .sr-route-search {
-  position: sticky;
-  top: 0;
   z-index: 20;
   overflow: visible;
-  background: var(--sr-material);
-  -webkit-backdrop-filter: blur(50px) saturate(1.8);
-  backdrop-filter: blur(50px) saturate(1.8);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 /* Alerts header: large title, then a quiet freshness row (green dot +
@@ -285,35 +275,34 @@
   letter-spacing: -0.015em;
 }
 
-/* iOS filled search bar: --sr-fill body, radius 10, height 38 desktop
-   (44 on mobile, see the max-width:720px block below). Behavior (voice,
-   clear, submit states) is untouched — restyle only. */
 .sr-input-group {
   position: relative;
   display: flex;
   align-items: center;
-  min-height: 38px;
-  gap: 6px;
+  min-height: 54px;
+  gap: 8px;
   width: 100%;
-  padding: 3px 3px 3px 12px;
-  border: 1px solid transparent;
-  border-radius: var(--sr-radius-input);
-  background: var(--sr-fill);
-  box-shadow: none;
-  color: var(--sr-text-2);
+  padding: 7px 8px 7px 18px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.72);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 10px 28px rgba(0, 0, 0, 0.2);
+  color: rgba(255, 255, 255, 0.74);
   transition:
-    border-color 200ms var(--sr-motion-ease),
-    background 200ms var(--sr-motion-ease);
+    border-color var(--sr-dur-1) var(--sr-ease),
+    background var(--sr-dur-1) var(--sr-ease);
 }
 
 .sr-input-group:hover {
-  border-color: var(--sr-hairline-bright);
+  border-color: rgba(255, 255, 255, 0.22);
 }
 
 .sr-input-group:focus-within {
-  border-color: var(--sr-accent);
-  background: var(--sr-fill);
-  color: var(--sr-text-1);
+  border-color: rgba(255, 255, 255, 0.24);
+  background: rgba(0, 0, 0, 0.8);
+  color: var(--sr-fg-2);
   outline: none;
 }
 
@@ -324,9 +313,9 @@
   outline: 0;
   overflow: hidden;
   background: transparent;
-  color: var(--sr-text-1);
+  color: var(--sr-fg);
   font-size: 15px;
-  line-height: 20px;
+  line-height: 22px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -351,9 +340,9 @@
 .sr-input-voice,
 .sr-input-submit {
   display: grid;
-  width: 32px;
-  height: 32px;
-  flex: 0 0 32px;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
   place-items: center;
   border: 0;
   border-radius: 999px;
@@ -368,8 +357,8 @@
 }
 
 .sr-input-voice {
-  width: 28px;
-  flex-basis: 28px;
+  width: 30px;
+  flex-basis: 30px;
   background: transparent;
   color: rgba(255, 255, 255, 0.72);
 }
@@ -604,22 +593,18 @@
 }
 
 /* Fixed active pill: no shared-layout marker, no bounce, no text-cursor
-   line. Neutral elevated fill — matches the segmented tabs' active
-   segment. --sr-accent is reserved for the Recommended pill, live-status
-   dots, Use/primary buttons, and focus rings; a direction toggle isn't
-   one of those four, so it stays monochrome. */
+   line. Emerald capsule — deliberately unlike the neutral Route/Alerts
+   segmented control above it, so top-level navigation and a data filter
+   never read as twins. */
 .sr-toggle-pill {
   position: absolute;
   top: 4px;
   bottom: 4px;
   left: 4px;
   width: calc((100% - 8px) / 2);
-  border: 1px solid var(--sr-hairline-bright);
+  border: 1px solid rgba(52, 211, 153, 0.45);
   border-radius: 999px;
-  background: rgba(99, 99, 102, 0.55);
-  box-shadow:
-    0 1px 1px rgba(0, 0, 0, 0.2),
-    0 1px 3px rgba(0, 0, 0, 0.35);
+  background: rgba(16, 185, 129, 0.22);
   pointer-events: none;
   transform: translateX(0);
   transition: transform 180ms var(--sr-ease);
@@ -2563,19 +2548,21 @@
 
   .sr-input-group {
     display: flex;
-    min-height: 44px;
-    gap: 6px;
-    padding: 0 4px 0 14px;
-    border-color: transparent;
-    border-radius: var(--sr-radius-input);
-    background: var(--sr-fill);
-    box-shadow: none;
-    color: var(--sr-text-2);
+    min-height: 58px;
+    gap: 8px;
+    padding: 8px 8px 8px 18px;
+    border-color: rgba(255, 255, 255, 0.15);
+    border-radius: 28px;
+    background: rgba(0, 0, 0, 0.8);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.05),
+      0 10px 28px rgba(0, 0, 0, 0.28);
+    color: rgba(255, 255, 255, 0.74);
   }
 
   .sr-input-group:focus-within {
-    border-color: var(--sr-accent);
-    background: var(--sr-fill);
+    border-color: rgba(255, 255, 255, 0.24);
+    background: rgba(0, 0, 0, 0.84);
     outline: none;
   }
 
@@ -2586,17 +2573,15 @@
   }
 
   .sr-input-group input::placeholder {
-    color: var(--sr-text-2);
+    color: rgba(255, 255, 255, 0.38);
   }
 
-  /* Both action buttons fill the 44px row so the tap target itself is
-     ≥44px, not just the visible glyph. */
   .sr-input-voice,
   .sr-input-submit {
     display: grid;
-    width: 44px;
-    height: 44px;
-    flex: 0 0 44px;
+    width: 40px;
+    height: 40px;
+    flex: 0 0 40px;
     place-items: center;
     border: 0;
     border-radius: 999px;
@@ -2611,9 +2596,9 @@
   }
 
   .sr-input-voice {
-    width: 44px;
-    height: 44px;
-    flex: 0 0 44px;
+    width: 32px;
+    height: 40px;
+    flex: 0 0 32px;
     background: transparent;
     color: rgba(255, 255, 255, 0.76);
   }
