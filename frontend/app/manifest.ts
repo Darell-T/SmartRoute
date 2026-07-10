@@ -12,21 +12,28 @@ export default function manifest(): MetadataRoute.Manifest {
     theme_color: "#0d1117",
     icons: [
       {
-        src: "/smart-route-mark.png",
-        sizes: "512x512",
+        src: "/smart-route-app-icon-192.png",
+        sizes: "192x192",
         type: "image/png",
-        purpose: "maskable",
+        purpose: "any",
       },
       {
-        src: "/smart-route-mark.png",
+        src: "/smart-route-app-icon-512.png",
         sizes: "512x512",
         type: "image/png",
         purpose: "any",
       },
       {
-        src: "/apple-icon.png",
+        src: "/smart-route-app-icon-maskable-512.png",
+        sizes: "512x512",
+        type: "image/png",
+        purpose: "maskable",
+      },
+      {
+        src: "/smart-route-app-icon-180.png",
         sizes: "180x180",
         type: "image/png",
+        purpose: "any",
       },
     ],
   };
