@@ -41,7 +41,6 @@ import {
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import {
   BusChip,
-  Dot,
   LocationPin,
   RouteBullet,
   RouteBulletGroup,
@@ -824,7 +823,6 @@ function RecommendedRouteCard({
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const transfers = plan.transferCount ?? candidate.transfers ?? 0;
-  const hasLiveDeparture = Boolean(plan.detailSteps?.some((step) => step.live));
   const hasDetails = (plan.detailSteps?.length ?? 0) > 0;
   // Hero line: duration is the LargeTitle, arrival time rides the same
   // baseline row ("24 min · 3:42 PM arrival"), Apple Maps-style. Leave-by
@@ -858,12 +856,6 @@ function RecommendedRouteCard({
         <CandidateStatusBadge
           status={plan.isAlternativeRoute ? "selected" : "winner"}
         />
-        {hasLiveDeparture && (
-          <span className="sr-recommended-route__live">
-            <Dot color="var(--sr-accent)" size={6} pulse />
-            Live
-          </span>
-        )}
       </div>
       <div className="sr-recommended-route__hero">
         <strong className="sr-recommended-route__duration">
