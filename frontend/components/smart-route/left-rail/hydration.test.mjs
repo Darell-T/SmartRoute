@@ -492,8 +492,22 @@ test("left rail uses restrained transit product surfaces", () => {
   );
   assert.doesNotMatch(
     railCss,
-    /backdrop-filter|--sr-glass|font-geist|Geist|system-ui/,
-    "rail styling should avoid backdrop blur and generic AI-dashboard typography (a restrained box-shadow is allowed on the route-result liquid card)",
+    /--sr-glass|font-geist|Geist/,
+    "rail styling should not keep the old command-center glass token or Geist typography",
+  );
+  // The "Cupertino" redesign (see design brief) intentionally introduces a
+  // translucent backdrop-filter material and the system SF font stack
+  // (which ends in ui-sans-serif/system-ui) — the reverse of the prior
+  // command-center aesthetic this file used to guard against.
+  assert.match(
+    railCss,
+    /backdrop-filter:\s*blur\(50px\)\s*saturate\(1\.8\)/,
+    "the rail should use the Cupertino translucent material recipe",
+  );
+  assert.match(
+    railCss,
+    /--sr-font:[\s\S]*system-ui/,
+    "the rail should use the system SF font stack",
   );
   assert.match(
     railCss,

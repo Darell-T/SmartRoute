@@ -1,18 +1,56 @@
 .sr-rail {
-  --rail-bg: rgba(11, 15, 22, 0.91);
-  --rail-surface: rgba(255, 255, 255, 0.026);
-  --rail-surface-strong: rgba(255, 255, 255, 0.052);
-  --rail-border: rgba(255, 255, 255, 0.115);
-  /* Transit-green accent for selected/system state (tab underline, toggle
-     pill, focus). Emerald-leaning so it reads as UI accent, cohesive with the
-     green Use action and Signal Green without impersonating a route bullet. */
-  --rail-border-strong: rgba(52, 211, 153, 0.5);
+  /* ════════════════════════════════════════════════════════════════════
+     "Cupertino" design tokens — foundation for the rail chrome and route
+     cards. North star: the Apple Maps route sheet. MTA line bullets carry
+     all the saturated color; every piece of chrome here is monochrome
+     translucent material. --sr-accent is reserved for exactly four things:
+     the Recommended pill, live-status dots, Use/primary buttons, and focus
+     rings.
+     ════════════════════════════════════════════════════════════════════ */
+
+  /* Type — system SF stack, applied to the whole rail. */
+  --sr-font:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+    "Helvetica Neue", ui-sans-serif, system-ui, sans-serif;
+
+  /* Color / material (dark only — the rail is dark-on-map). */
+  --sr-material: rgba(16, 19, 26, 0.72);
+  --sr-text-1: rgba(255, 255, 255, 0.96);
+  --sr-text-2: rgba(255, 255, 255, 0.6);
+  --sr-text-3: rgba(255, 255, 255, 0.38);
+  --sr-hairline: rgba(255, 255, 255, 0.08);
+  --sr-hairline-bright: rgba(255, 255, 255, 0.14);
+  --sr-fill: rgba(120, 120, 128, 0.24); /* iOS tertiarySystemFill: inputs, segmented track */
+  --sr-fill-2: rgba(120, 120, 128, 0.16); /* nested/inset surfaces */
+  --sr-card: rgba(255, 255, 255, 0.055); /* grouped-cell surface */
+  --sr-card-hairline: rgba(255, 255, 255, 0.075);
+  --sr-accent: #34d399;
+  --sr-accent-tint: rgba(52, 211, 153, 0.16); /* pill backgrounds */
+  --sr-accent-text: #6ee7b7; /* text on tinted pills */
+  --sr-on-accent: #052e22; /* text on filled accent buttons */
+
+  /* Radii: 18 card / 12 nested inset / 10 input field / 999 pills. */
+  --sr-radius-card: 18px;
+  --sr-radius-inset: 12px;
+  --sr-radius-input: 10px;
+  --sr-radius-pill: 999px;
+
+  /* Apple's sheet curve, for CSS-driven chrome transitions (200–400ms). */
+  --sr-motion-ease: cubic-bezier(0.32, 0.72, 0, 1);
+
+  /* ── Legacy rail tokens — aliased to the values above so existing
+     consumers (Alerts tab, map chrome, etc.) keep working unchanged. ──── */
+  --rail-bg: var(--sr-material);
+  --rail-surface: var(--sr-fill-2);
+  --rail-surface-strong: var(--sr-fill);
+  --rail-border: var(--sr-hairline-bright);
+  --rail-border-strong: var(--sr-accent-tint);
   --rail-accent: #34d399;
   --rail-accent-strong: #10b981;
-  --rail-hover: rgba(255, 255, 255, 0.058);
-  --rail-text-primary: rgba(255, 255, 255, 0.92);
-  --rail-text-secondary: rgba(255, 255, 255, 0.62);
-  --rail-text-muted: rgba(255, 255, 255, 0.42);
+  --rail-hover: var(--sr-fill-2);
+  --rail-text-primary: var(--sr-text-1);
+  --rail-text-secondary: var(--sr-text-2);
+  --rail-text-muted: var(--sr-text-3);
 
   --sr-bg: var(--rail-bg);
   --sr-surface: var(--rail-bg);
@@ -21,9 +59,10 @@
   --sr-fg: var(--rail-text-primary);
   --sr-fg-2: var(--rail-text-secondary);
   --sr-fg-3: var(--rail-text-muted);
+  --sr-fg-4: var(--sr-text-3);
   --sr-muted: var(--rail-text-muted);
-  --sr-rule: rgba(255, 255, 255, 0.085);
-  --sr-rule-bright: rgba(255, 255, 255, 0.145);
+  --sr-rule: var(--sr-hairline);
+  --sr-rule-bright: var(--sr-hairline-bright);
   --sr-cyan: var(--rail-accent);
   --sr-cyan-deep: rgba(16, 185, 129, 0.18);
   --sr-amber: #fbbf24;
@@ -33,20 +72,20 @@
   --sr-dur-1: 150ms;
   --sr-dur-2: 240ms;
   --sr-dur-3: 360ms;
-  /* One grotesk for the whole rail, weight-differentiated only — the NYCTA
-     convention. Archivo is the loaded webfont; a licensed Helvetica Now can
-     be slotted in front later without touching any component. */
-  --sr-display: var(--font-archivo), "Helvetica Now", Helvetica, Arial, sans-serif;
-  --sr-mono: var(--font-archivo), "Helvetica Now", Helvetica, Arial, sans-serif;
+  /* System SF stack for the whole rail (legacy names retained; both now
+     point at the same --sr-font since the rail no longer differentiates
+     a "display" vs "mono" family). */
+  --sr-display: var(--sr-font);
+  --sr-mono: var(--sr-font);
 
-  background: var(--rail-bg);
-  border: 1px solid var(--rail-border);
-  border-radius: 18px;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.075),
-    0 18px 46px rgba(0, 0, 0, 0.28);
-  color: var(--sr-fg);
-  font-family: var(--sr-display);
+  background: var(--sr-material);
+  -webkit-backdrop-filter: blur(50px) saturate(1.8);
+  backdrop-filter: blur(50px) saturate(1.8);
+  border: 1px solid var(--sr-hairline-bright);
+  border-radius: var(--sr-radius-card);
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.28);
+  color: var(--sr-text-1);
+  font-family: var(--sr-font);
   font-feature-settings: "tnum";
   font-variant-numeric: tabular-nums;
   display: flex;
@@ -73,7 +112,7 @@
 }
 
 .sr-rail input::placeholder {
-  color: var(--sr-muted);
+  color: var(--sr-text-2);
 }
 
 .sr-rail::-webkit-scrollbar {
@@ -105,52 +144,68 @@
 
 .sr-rail-header {
   flex: 0 0 auto;
-  padding: 0 18px;
+  padding: 10px 18px;
   border-bottom: 1px solid var(--sr-rule);
 }
 
-/* Left-aligned, content-hugging tabs — editorial rather than app-chrome.
-   The underline hugs the label width instead of a stretched half-rail cell. */
+/* iOS segmented control: full-width 2-segment track, active segment is an
+   elevated pill that slides via the shared motion layoutId. */
 .sr-rail-tabs {
-  display: flex;
-  gap: 24px;
-  height: 56px;
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px;
+  padding: 2px;
+  border-radius: 9px;
+  background: var(--sr-fill);
 }
 
 .sr-rail-tabs button {
   position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 2px;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 10px;
   border: 0;
+  border-radius: 7px;
   background: transparent;
-  color: rgba(255, 255, 255, 0.55);
+  color: var(--sr-text-2);
   cursor: pointer;
   font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.01em;
-  transition: color var(--sr-dur-1) var(--sr-ease);
+  letter-spacing: 0;
+  transition: color 200ms var(--sr-motion-ease);
 }
 
 .sr-rail-tabs button[data-active="true"] {
-  color: var(--sr-fg);
+  color: var(--sr-text-1);
 }
 
-/* Shared-layout underline: one element glides between tabs via layoutId,
-   sitting on the header hairline for a sharp seam. */
+/* Icon + label sit above the sliding pill (painted below at z-index 0). */
+.sr-rail-tabs button svg,
+.sr-rail-tabs button span:not(.sr-tab-underline) {
+  position: relative;
+  z-index: 1;
+}
+
+/* Shared-layout active segment: one element glides between tabs via
+   layoutId, filling the active button as an elevated pill. */
 .sr-tab-underline {
   position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -1px;
-  height: 2px;
-  border-radius: 2px;
-  background: var(--rail-accent);
+  inset: 0;
+  z-index: 0;
+  border-radius: 7px;
+  background: rgba(99, 99, 102, 0.55);
+  border: 1px solid var(--sr-hairline-bright);
+  box-shadow:
+    0 1px 1px rgba(0, 0, 0, 0.2),
+    0 1px 3px rgba(0, 0, 0, 0.35);
 }
 
 .sr-rail-tabs button:hover {
-  color: var(--sr-fg);
+  color: var(--sr-text-1);
 }
 
 .sr-rail-tabs button:focus-visible,
@@ -176,9 +231,22 @@
   padding-top: 18px;
 }
 
+/* Pinned search — sticks to the top of the rail scroller (aside.sr-rail) so
+   the destination field stays reachable while Nearby Transit / route
+   results scroll underneath. Carries its own material so scrolled content
+   is legible through it, and a quiet hairline marks the seam. An always-on
+   low-alpha hairline is used instead of a scroll-driven one: it reads as
+   "settled" immediately under the field and avoids a scroll-listener for a
+   foundation-level pass. */
 .sr-route-search {
+  position: sticky;
+  top: 0;
   z-index: 20;
   overflow: visible;
+  background: var(--sr-material);
+  -webkit-backdrop-filter: blur(50px) saturate(1.8);
+  backdrop-filter: blur(50px) saturate(1.8);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 /* Alerts header: large title, then a quiet freshness row (green dot +
@@ -217,34 +285,35 @@
   letter-spacing: -0.015em;
 }
 
+/* iOS filled search bar: --sr-fill body, radius 10, height 38 desktop
+   (44 on mobile, see the max-width:720px block below). Behavior (voice,
+   clear, submit states) is untouched — restyle only. */
 .sr-input-group {
   position: relative;
   display: flex;
   align-items: center;
-  min-height: 54px;
-  gap: 8px;
+  min-height: 38px;
+  gap: 6px;
   width: 100%;
-  padding: 7px 8px 7px 18px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  border-radius: 999px;
-  background: rgba(0, 0, 0, 0.72);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.05),
-    0 10px 28px rgba(0, 0, 0, 0.2);
-  color: rgba(255, 255, 255, 0.74);
+  padding: 3px 3px 3px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--sr-radius-input);
+  background: var(--sr-fill);
+  box-shadow: none;
+  color: var(--sr-text-2);
   transition:
-    border-color var(--sr-dur-1) var(--sr-ease),
-    background var(--sr-dur-1) var(--sr-ease);
+    border-color 200ms var(--sr-motion-ease),
+    background 200ms var(--sr-motion-ease);
 }
 
 .sr-input-group:hover {
-  border-color: rgba(255, 255, 255, 0.22);
+  border-color: var(--sr-hairline-bright);
 }
 
 .sr-input-group:focus-within {
-  border-color: rgba(255, 255, 255, 0.24);
-  background: rgba(0, 0, 0, 0.8);
-  color: var(--sr-fg-2);
+  border-color: var(--sr-accent);
+  background: var(--sr-fill);
+  color: var(--sr-text-1);
   outline: none;
 }
 
@@ -255,9 +324,9 @@
   outline: 0;
   overflow: hidden;
   background: transparent;
-  color: var(--sr-fg);
+  color: var(--sr-text-1);
   font-size: 15px;
-  line-height: 22px;
+  line-height: 20px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -282,9 +351,9 @@
 .sr-input-voice,
 .sr-input-submit {
   display: grid;
-  width: 38px;
-  height: 38px;
-  flex: 0 0 38px;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
   place-items: center;
   border: 0;
   border-radius: 999px;
@@ -299,8 +368,8 @@
 }
 
 .sr-input-voice {
-  width: 30px;
-  flex-basis: 30px;
+  width: 28px;
+  flex-basis: 28px;
   background: transparent;
   color: rgba(255, 255, 255, 0.72);
 }
@@ -453,22 +522,25 @@
   margin-bottom: 10px;
 }
 
+/* iOS Title3 — section headers ("Other routes", "Nearby transit"). */
 .sr-section-header h2 {
   margin: 0;
-  color: var(--sr-fg);
-  font-size: 15px;
-  line-height: 1.2;
-  font-weight: 680;
-  letter-spacing: 0;
+  color: var(--sr-text-1);
+  font-size: 20px;
+  line-height: 1.15;
+  font-weight: 700;
+  letter-spacing: -0.012em;
 }
 
+/* iOS Footnote — meta text sits quiet on the right of a section header. */
 .sr-section-header > span,
 .sr-inline-meta {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  color: var(--sr-fg-3);
-  font-size: 11.5px;
+  color: var(--sr-text-3);
+  font-size: 13px;
+  font-weight: 400;
   white-space: nowrap;
 }
 
@@ -1591,72 +1663,21 @@
   color: var(--sr-fg-3);
 }
 
-/* ── Liquid-glass route-result surface ────────────────────────────────
-   A restrained dark inner card: gradient that lifts toward the top, a
-   hairline edge brighter along the upper border, a soft top-left reflection
-   (::before), a faint inner rim (::after), and a gentle drop shadow. Scoped
-   to route-result content only — the outer rail stays flat and grounded, and
-   no blur filter is used (the near-opaque rail makes it pointless). */
+/* ── Flat Cupertino card surface ──────────────────────────────────────
+   Apple surfaces are flat color on blurred material, not a gradient +
+   radial-shine + double-border stack. Grouped-cell fill, one hairline
+   border, 18px radius. Only the primary (recommended) card gets a soft
+   ambient shadow; secondary (alternate) cards sit flush with no lift. */
 .smart-route-liquid-card {
   position: relative;
-  overflow: hidden;
-  border-radius: 14px;
-  background: linear-gradient(
-    180deg,
-    rgba(255, 255, 255, 0.1) 0%,
-    rgba(255, 255, 255, 0.042) 42%,
-    rgba(255, 255, 255, 0.022) 100%
-  );
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.2),
-    inset 0 -1px 0 rgba(255, 255, 255, 0.04),
-    0 14px 30px rgba(0, 0, 0, 0.3);
+  border-radius: var(--sr-radius-card);
+  background: var(--sr-card);
+  border: 1px solid var(--sr-card-hairline);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
 }
 
-.smart-route-liquid-card::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background: radial-gradient(
-    120% 78% at 16% -10%,
-    rgba(255, 255, 255, 0.16),
-    transparent 44%
-  );
-}
-
-.smart-route-liquid-card::after {
-  content: "";
-  position: absolute;
-  inset: 1px;
-  pointer-events: none;
-  border-radius: inherit;
-  border: 1px solid rgba(255, 255, 255, 0.04);
-}
-
-/* Card content sits above the reflection layers. */
-.smart-route-liquid-card > * {
-  position: relative;
-  z-index: 1;
-}
-
-/* Alternates are polished but secondary — a dimmer lift than the winner. */
 .smart-route-liquid-card--secondary {
-  background: linear-gradient(
-    180deg,
-    rgba(255, 255, 255, 0.07) 0%,
-    rgba(255, 255, 255, 0.03) 46%,
-    rgba(255, 255, 255, 0.018) 100%
-  );
-  border-color: rgba(255, 255, 255, 0.11);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.14),
-    0 10px 24px rgba(0, 0, 0, 0.24);
-}
-
-.smart-route-liquid-card--secondary::before {
-  opacity: 0.7;
+  box-shadow: none;
 }
 
 /* Apple Maps-inspired alternate option cards, at rail scale: big time,
@@ -2409,21 +2430,19 @@
 
   .sr-input-group {
     display: flex;
-    min-height: 58px;
-    gap: 8px;
-    padding: 8px 8px 8px 18px;
-    border-color: rgba(255, 255, 255, 0.15);
-    border-radius: 28px;
-    background: rgba(0, 0, 0, 0.8);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.05),
-      0 10px 28px rgba(0, 0, 0, 0.28);
-    color: rgba(255, 255, 255, 0.74);
+    min-height: 44px;
+    gap: 6px;
+    padding: 0 4px 0 14px;
+    border-color: transparent;
+    border-radius: var(--sr-radius-input);
+    background: var(--sr-fill);
+    box-shadow: none;
+    color: var(--sr-text-2);
   }
 
   .sr-input-group:focus-within {
-    border-color: rgba(255, 255, 255, 0.24);
-    background: rgba(0, 0, 0, 0.84);
+    border-color: var(--sr-accent);
+    background: var(--sr-fill);
     outline: none;
   }
 
@@ -2434,15 +2453,17 @@
   }
 
   .sr-input-group input::placeholder {
-    color: rgba(255, 255, 255, 0.38);
+    color: var(--sr-text-2);
   }
 
+  /* Both action buttons fill the 44px row so the tap target itself is
+     ≥44px, not just the visible glyph. */
   .sr-input-voice,
   .sr-input-submit {
     display: grid;
-    width: 40px;
-    height: 40px;
-    flex: 0 0 40px;
+    width: 44px;
+    height: 44px;
+    flex: 0 0 44px;
     place-items: center;
     border: 0;
     border-radius: 999px;
@@ -2457,9 +2478,9 @@
   }
 
   .sr-input-voice {
-    width: 32px;
-    height: 40px;
-    flex: 0 0 32px;
+    width: 44px;
+    height: 44px;
+    flex: 0 0 44px;
     background: transparent;
     color: rgba(255, 255, 255, 0.76);
   }

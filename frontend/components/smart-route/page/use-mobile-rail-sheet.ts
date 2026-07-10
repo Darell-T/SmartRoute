@@ -44,8 +44,48 @@ const MOBILE_RAIL_SHEET_HEIGHTS: Record<MobileRailSheetState, string> = {
 const MOBILE_RAIL_MIN_HEIGHT_PX = 104;
 const MOBILE_RAIL_COMPACT_HEIGHT_PX = 124;
 
+// Detent order (collapsed → expanded), shared by keyboard stepping and the
+// velocity-aware flick logic below.
+const MOBILE_RAIL_DETENT_ORDER: MobileRailSheetState[] = [
+  "small",
+  "medium",
+  "full",
+];
+
+// A flick advances one detent in the flick direction regardless of which
+// detent is nearest — this is what makes the sheet feel like an iOS sheet
+// rather than a web slider. Below this speed, release settles to nearest.
+const MOBILE_RAIL_FLICK_VELOCITY_THRESHOLD_PX_MS = 0.5;
+// Velocity is measured over a short trailing window of recent pointer
+// samples so a fast flick reads correctly even if the pointer decelerated
+// earlier in a longer drag.
+const MOBILE_RAIL_FLICK_WINDOW_MS = 90;
+// Samples older than this are dropped on each move so the buffer can't
+// grow unbounded over a long, slow drag.
+const MOBILE_RAIL_SAMPLE_RETENTION_MS = 250;
+
+type MobileRailPointerSample = { time: number; y: number };
+
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
+}
+
+// Signed px/ms velocity over the trailing window, using the same sign
+// convention as the drag delta (startY - currentY): positive means the
+// pointer moved up (toward expanding the sheet), negative means down.
+function computeMobileRailFlickVelocity(
+  samples: MobileRailPointerSample[],
+  finalY: number,
+  finalTime: number,
+): number {
+  if (samples.length === 0) return 0;
+  const cutoff = finalTime - MOBILE_RAIL_FLICK_WINDOW_MS;
+  const reference =
+    samples.find((sample) => sample.time >= cutoff) ??
+    samples[samples.length - 1];
+  const elapsed = finalTime - reference.time;
+  if (elapsed <= 0) return 0;
+  return (reference.y - finalY) / elapsed;
 }
 
 export function useMobileRailSheet(): MobileRailSheetController {
@@ -61,6 +101,9 @@ export function useMobileRailSheet(): MobileRailSheetController {
     moved: false,
   });
   const mobileRailAppStateRef = useRef<MobileRailAppState>("idle");
+  // Recent (timestamp, y) pointer samples for the current drag — used to
+  // compute release velocity for flick-to-advance settling.
+  const mobileRailPointerSamplesRef = useRef<MobileRailPointerSample[]>([]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -171,6 +214,9 @@ export function useMobileRailSheet(): MobileRailSheetController {
         startHeight,
         moved: false,
       };
+      mobileRailPointerSamplesRef.current = [
+        { time: Date.now(), y: event.clientY },
+      ];
       event.currentTarget.setPointerCapture(event.pointerId);
       setIsMobileRailDragging(true);
       setMobileRailDragHeight(startHeight);
@@ -186,6 +232,14 @@ export function useMobileRailSheet(): MobileRailSheetController {
       const deltaY = drag.startY - event.clientY;
       if (Math.abs(deltaY) > 4) {
         drag.moved = true;
+      }
+
+      const now = Date.now();
+      const samples = mobileRailPointerSamplesRef.current;
+      samples.push({ time: now, y: event.clientY });
+      const retainAfter = now - MOBILE_RAIL_SAMPLE_RETENTION_MS;
+      while (samples.length > 1 && samples[0].time < retainAfter) {
+        samples.shift();
       }
 
       const snaps = getMobileRailSnapHeights();
@@ -207,7 +261,33 @@ export function useMobileRailSheet(): MobileRailSheetController {
       }
 
       if (!mobileRailDragRef.current.moved) {
+        mobileRailPointerSamplesRef.current = [];
         toggleMobileRailSheet();
+        setMobileRailDragHeight(null);
+        setIsMobileRailDragging(false);
+        return;
+      }
+
+      const velocity = computeMobileRailFlickVelocity(
+        mobileRailPointerSamplesRef.current,
+        event.clientY,
+        Date.now(),
+      );
+      mobileRailPointerSamplesRef.current = [];
+
+      // A fast flick advances one detent from wherever the sheet currently
+      // is, in the flick direction — regardless of which detent the drag
+      // ended up nearest to. Anything slower falls back to nearest-detent
+      // settling, same as before.
+      if (Math.abs(velocity) > MOBILE_RAIL_FLICK_VELOCITY_THRESHOLD_PX_MS) {
+        const direction = velocity > 0 ? 1 : -1;
+        const currentIndex = MOBILE_RAIL_DETENT_ORDER.indexOf(mobileRailSheet);
+        const nextIndex = clamp(
+          currentIndex + direction,
+          0,
+          MOBILE_RAIL_DETENT_ORDER.length - 1,
+        );
+        setMobileRailSheet(MOBILE_RAIL_DETENT_ORDER[nextIndex]);
         setMobileRailDragHeight(null);
         setIsMobileRailDragging(false);
         return;
@@ -237,6 +317,7 @@ export function useMobileRailSheet(): MobileRailSheetController {
         // Pointer capture may already be gone after a cancelled gesture.
       }
 
+      mobileRailPointerSamplesRef.current = [];
       setMobileRailDragHeight(null);
       setIsMobileRailDragging(false);
     },
@@ -245,7 +326,7 @@ export function useMobileRailSheet(): MobileRailSheetController {
 
   const handleMobileRailKeyDown = useCallback(
     (event: KeyboardEvent<HTMLButtonElement>) => {
-      const order: MobileRailSheetState[] = ["small", "medium", "full"];
+      const order = MOBILE_RAIL_DETENT_ORDER;
       const currentIndex = order.indexOf(mobileRailSheet);
 
       if (event.key === "ArrowUp") {
