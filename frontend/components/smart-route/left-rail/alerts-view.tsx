@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   Activity,
@@ -24,7 +24,6 @@ import type {
   FeedEvent,
   ServiceAlert,
 } from "./types";
-import { LINE_COLORS } from "./types";
 import { SUBWAY_BULLET_ROUTES } from "@/components/smart-route/train-bullet";
 
 const SYSTEMWIDE_ROUTE_THRESHOLD = 8;
@@ -150,10 +149,6 @@ function AlertCard({ item }: { item: AlertFeedItem }) {
   const updated = updatedLabelFor(item);
   const bodyText = featuredAlertBody(item);
   const adviceText = featuredAlertAdvice(item, bodyText);
-  const stripe = stripeColor(item);
-  const stripeStyle = {
-    "--sr-alert-stripe-color": stripe,
-  } as CSSProperties;
 
   const body = (
     <>
@@ -193,11 +188,9 @@ function AlertCard({ item }: { item: AlertFeedItem }) {
 
   return (
     <li
-      className="sr-alert-card smart-route-liquid-card"
+      className="sr-alert-card"
       data-lifecycle={item.lifecycle}
-      style={stripeStyle}
     >
-      <span className="sr-alert-card__stripe" aria-hidden="true" />
       <div className="sr-alert-card__header" data-static="true">
         {body}
       </div>
@@ -281,7 +274,9 @@ function AlertLineRow({ item }: { item: AlertFeedItem }) {
         {item.routeIds.length > 0 ? (
           <RouteBadgeGroup routeIds={item.routeIds} limit={3} size={20} />
         ) : (
-          <AlertSeverityDot tone={alertDotTone(item)} />
+          <span className="sr-alert-line-row__fallback" aria-hidden="true">
+            Service
+          </span>
         )}
       </span>
       <span className="sr-alert-line-row__copy">
@@ -780,50 +775,10 @@ function distinctStatus(
   return visible.includes(status.toLowerCase()) ? undefined : status;
 }
 
-function alertDotTone(item: AlertFeedItem): "red" | "orange" | "amber" | "green" {
-  if (item.lifecycle === "resolved") return "green";
-  if (item.severity === "major" || item.severity === "suspension") return "red";
-  if (item.severity === "planned") return "orange";
-  return "amber";
-}
-
-const TONE_COLORS: Record<"red" | "orange" | "amber" | "green", string> = {
-  red: "#ef4444",
-  orange: "#f97316",
-  amber: "#f59e0b",
-  green: "#22c55e",
-};
-
-function stripeColor(item: AlertFeedItem): string {
-  const routeColor = item.routeIds
-    .map((route) => LINE_COLORS[route])
-    .find((color): color is string => Boolean(color));
-  if (routeColor) return routeColor;
-  return TONE_COLORS[alertDotTone(item)];
-}
-
 function StatusMeta({ item }: { item: AlertFeedItem }) {
   if (!item.statusLabel) return null;
-  const tone = alertDotTone(item);
   return (
-    <span className="sr-alert-status" data-tone={tone}>
-      <AlertSeverityDot tone={tone} />
-      {item.statusLabel}
-    </span>
-  );
-}
-
-function AlertSeverityDot({
-  tone,
-}: {
-  tone: "red" | "orange" | "amber" | "green";
-}) {
-  return (
-    <span
-      className="sr-alert-severity-dot"
-      data-tone={tone}
-      aria-hidden="true"
-    />
+    <span className="sr-alert-status">{item.statusLabel}</span>
   );
 }
 

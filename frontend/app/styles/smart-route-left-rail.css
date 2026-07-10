@@ -1,15 +1,15 @@
 .sr-rail {
-  --rail-bg: rgba(13, 17, 23, 0.94);
-  --rail-surface: rgba(255, 255, 255, 0.035);
-  --rail-surface-strong: rgba(255, 255, 255, 0.065);
-  --rail-border: rgba(255, 255, 255, 0.1);
+  --rail-bg: rgba(11, 15, 22, 0.91);
+  --rail-surface: rgba(255, 255, 255, 0.026);
+  --rail-surface-strong: rgba(255, 255, 255, 0.052);
+  --rail-border: rgba(255, 255, 255, 0.115);
   /* Transit-green accent for selected/system state (tab underline, toggle
      pill, focus). Emerald-leaning so it reads as UI accent, cohesive with the
      green Use action and Signal Green without impersonating a route bullet. */
   --rail-border-strong: rgba(52, 211, 153, 0.5);
   --rail-accent: #34d399;
   --rail-accent-strong: #10b981;
-  --rail-hover: rgba(255, 255, 255, 0.075);
+  --rail-hover: rgba(255, 255, 255, 0.058);
   --rail-text-primary: rgba(255, 255, 255, 0.92);
   --rail-text-secondary: rgba(255, 255, 255, 0.62);
   --rail-text-muted: rgba(255, 255, 255, 0.42);
@@ -22,8 +22,8 @@
   --sr-fg-2: var(--rail-text-secondary);
   --sr-fg-3: var(--rail-text-muted);
   --sr-muted: var(--rail-text-muted);
-  --sr-rule: rgba(255, 255, 255, 0.1);
-  --sr-rule-bright: rgba(255, 255, 255, 0.16);
+  --sr-rule: rgba(255, 255, 255, 0.085);
+  --sr-rule-bright: rgba(255, 255, 255, 0.145);
   --sr-cyan: var(--rail-accent);
   --sr-cyan-deep: rgba(16, 185, 129, 0.18);
   --sr-amber: #fbbf24;
@@ -41,7 +41,10 @@
 
   background: var(--rail-bg);
   border: 1px solid var(--rail-border);
-  border-radius: 6px;
+  border-radius: 18px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.075),
+    0 18px 46px rgba(0, 0, 0, 0.28);
   color: var(--sr-fg);
   font-family: var(--sr-display);
   font-feature-settings: "tnum";
@@ -102,7 +105,7 @@
 
 .sr-rail-header {
   flex: 0 0 auto;
-  padding: 0 20px;
+  padding: 0 18px;
   border-bottom: 1px solid var(--sr-rule);
 }
 
@@ -110,8 +113,8 @@
    The underline hugs the label width instead of a stretched half-rail cell. */
 .sr-rail-tabs {
   display: flex;
-  gap: 26px;
-  height: 54px;
+  gap: 24px;
+  height: 56px;
 }
 
 .sr-rail-tabs button {
@@ -124,7 +127,7 @@
   background: transparent;
   color: rgba(255, 255, 255, 0.55);
   cursor: pointer;
-  font-size: 13.5px;
+  font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.01em;
   transition: color var(--sr-dur-1) var(--sr-ease);
@@ -165,12 +168,17 @@
 }
 
 .sr-rail-section {
-  padding: 18px 20px;
+  padding: 18px;
 }
 
 .sr-route-search,
 .sr-alerts-header {
-  padding-top: 22px;
+  padding-top: 18px;
+}
+
+.sr-route-search {
+  z-index: 20;
+  overflow: visible;
 }
 
 /* Alerts header: large title, then a quiet freshness row (green dot +
@@ -201,12 +209,12 @@
 }
 
 .sr-rail-title {
-  margin: 0 0 12px;
+  margin: 0 0 10px;
   color: var(--sr-fg);
-  font-size: 22px;
-  line-height: 1.15;
-  font-weight: 700;
-  letter-spacing: -0.01em;
+  font-size: 21px;
+  line-height: 1.12;
+  font-weight: 720;
+  letter-spacing: -0.015em;
 }
 
 .sr-input-group {
@@ -330,54 +338,111 @@
 
 .sr-search-popover {
   position: absolute;
-  left: 20px;
-  right: 20px;
+  top: calc(100% - 10px);
+  left: 18px;
+  right: 18px;
   z-index: 30;
-  margin-top: 8px;
+  max-height: min(44vh, 360px);
   overflow: hidden;
   border: 1px solid var(--sr-rule-bright);
-  border-radius: 6px;
-  background: rgba(13, 17, 23, 0.96);
+  border-radius: 14px;
+  background: rgba(11, 15, 22, 0.985);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.055),
+    0 18px 42px rgba(0, 0, 0, 0.38);
+  transform-origin: top center;
 }
 
-.sr-search-popover button {
-  display: block;
+.sr-search-option {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
   width: 100%;
-  padding: 11px 13px;
+  min-height: 58px;
+  padding: 9px 12px;
   border: 0;
   border-top: 1px solid var(--sr-rule);
   background: transparent;
   color: var(--sr-fg);
   text-align: left;
   cursor: pointer;
+  touch-action: manipulation;
+  transition:
+    background var(--sr-dur-1) var(--sr-ease),
+    color var(--sr-dur-1) var(--sr-ease);
 }
 
-.sr-search-popover button:first-child {
+.sr-search-option:first-child {
   border-top: 0;
 }
 
-.sr-search-popover button[aria-selected="true"],
-.sr-search-popover button:hover {
-  background: var(--rail-hover);
+.sr-search-option[aria-selected="true"],
+.sr-search-option:hover {
+  background: rgba(255, 255, 255, 0.055);
 }
 
-.sr-search-popover span,
-.sr-search-popover small {
-  display: block;
+.sr-search-option:active {
+  background: rgba(255, 255, 255, 0.075);
+}
+
+.sr-search-option:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: 2px solid rgba(52, 211, 153, 0.62);
+  outline-offset: -2px;
+}
+
+.sr-search-option__icon {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.028);
+  color: var(--sr-fg-2);
+}
+
+.sr-search-option__copy {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.sr-search-option__copy strong,
+.sr-search-option__copy small {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.sr-search-popover span {
-  font-size: 13px;
-  font-weight: 620;
+.sr-search-option__copy strong {
+  color: var(--sr-fg);
+  font-size: 13.5px;
+  font-weight: 650;
+  line-height: 1.2;
 }
 
-.sr-search-popover small {
-  margin-top: 3px;
-  color: var(--sr-muted);
+.sr-search-option__copy small {
+  color: var(--sr-fg-3);
   font-size: 12px;
+  line-height: 1.25;
+}
+
+.sr-search-option__chevron {
+  flex-shrink: 0;
+  color: var(--sr-fg-3);
+  transition:
+    color var(--sr-dur-1) var(--sr-ease),
+    transform var(--sr-dur-1) var(--sr-ease);
+}
+
+.sr-search-option[aria-selected="true"] .sr-search-option__chevron,
+.sr-search-option:hover .sr-search-option__chevron {
+  color: var(--sr-fg-2);
+  transform: translateX(2px);
 }
 
 .sr-section-header {
@@ -385,15 +450,15 @@
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .sr-section-header h2 {
   margin: 0;
   color: var(--sr-fg);
-  font-size: 16px;
+  font-size: 15px;
   line-height: 1.2;
-  font-weight: 650;
+  font-weight: 680;
   letter-spacing: 0;
 }
 
@@ -403,7 +468,7 @@
   align-items: center;
   gap: 6px;
   color: var(--sr-fg-3);
-  font-size: 12px;
+  font-size: 11.5px;
   white-space: nowrap;
 }
 
@@ -507,7 +572,7 @@
    nearby buses. */
 .sr-nearby-scroll {
   display: grid;
-  margin-top: 12px;
+  margin-top: 10px;
   max-height: min(58vh, 520px);
   overflow-y: auto;
   padding-bottom: 2px;
@@ -516,38 +581,41 @@
   scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
 }
 
-/* Station groups render as quiet card surfaces — one intentional container
-   per physical station, Citymapper grouping preserved inside. Depth stays
-   restrained: low-alpha fill + hairline, no shadow, no glass. */
+/* The list owns the material and rules, so station groups read as a calm,
+   continuous passenger feed rather than a stack of interchangeable cards. */
 .sr-station-group-list {
   display: grid;
-  gap: 8px;
+  gap: 0;
+  overflow: hidden;
+  border-top: 1px solid var(--sr-rule);
+  border-bottom: 1px solid var(--sr-rule);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.018);
 }
 
 .sr-station-group {
-  padding: 2px 13px 4px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.028);
+  padding: 0 12px;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+  border-radius: 0;
+  background: transparent;
   transition:
-    border-color var(--sr-dur-1) var(--sr-ease),
     background var(--sr-dur-1) var(--sr-ease),
-    box-shadow var(--sr-dur-1) var(--sr-ease);
+    color var(--sr-dur-1) var(--sr-ease);
 }
 
-/* Finished hover: the whole card lifts — brighter hairline, a touch more
-   fill, and a soft top-edge highlight so it reads as raised, not just
-   outlined. */
+.sr-station-group:last-child {
+  border-bottom: 0;
+}
+
 .sr-station-group:hover {
-  border-color: rgba(255, 255, 255, 0.14);
-  background: rgba(255, 255, 255, 0.045);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.034);
 }
 
 .sr-station-header {
   display: grid;
-  gap: 6px;
-  padding: 10px 0 8px;
+  gap: 5px;
+  padding: 12px 0 8px;
 }
 
 .sr-station-header__title {
@@ -561,8 +629,8 @@
 .sr-station-header__title strong {
   overflow: hidden;
   color: var(--sr-fg);
-  font-size: 15.5px;
-  font-weight: 720;
+  font-size: 15px;
+  font-weight: 700;
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -571,7 +639,7 @@
 .sr-station-header__walk {
   color: var(--sr-fg-3);
   font-family: var(--sr-mono);
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 650;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
@@ -589,9 +657,9 @@
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
-  min-height: 45px;
-  margin: 0 -9px;
-  padding: 6px 9px;
+  min-height: 46px;
+  margin: 0 -8px;
+  padding: 7px 8px;
   border-top: 1px solid rgba(255, 255, 255, 0.045);
   border-radius: 9px;
   transition:
@@ -664,8 +732,8 @@
 }
 
 .sr-nearby-buses {
-  margin-top: 10px;
-  padding-top: 9px;
+  margin-top: 14px;
+  padding-top: 12px;
   border-top: 1px solid var(--sr-rule);
 }
 
@@ -730,14 +798,19 @@
 /* Personalized sections: "Near you" featured cards lead; "Other alerts"
    sits below, slightly quieter, so it never competes for the same attention. */
 .sr-alert-group + .sr-alert-group {
-  margin-top: 18px;
-  padding-top: 6px;
+  margin-top: 16px;
+  padding-top: 8px;
   border-top: 1px solid var(--sr-rule);
 }
 
 .sr-alert-line-group-list {
   display: grid;
-  gap: 8px;
+  gap: 0;
+  overflow: hidden;
+  border-top: 1px solid var(--sr-rule);
+  border-bottom: 1px solid var(--sr-rule);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.018);
 }
 
 .sr-alert-line-group {
@@ -841,6 +914,14 @@
   min-width: 32px;
 }
 
+.sr-alert-line-row__fallback {
+  color: var(--sr-fg-3);
+  font-size: 9px;
+  font-weight: 680;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 .sr-alert-line-row__copy {
   min-width: 0;
 }
@@ -932,10 +1013,9 @@
   white-space: nowrap;
 }
 
-/* ── Featured "Near you" alert cards ────────────────────────────────────
-   The route-result card language applied to alerts: quiet raised surface,
-   a real route/severity accent stripe down the left edge, headline over
-   bounded supporting copy, then footer metadata. */
+/* Nearby alerts are complete passenger notices, not interactive route cards.
+   A quiet flat surface separates each notice without glass reflections,
+   route-colored rails, or severity decoration. */
 .sr-alert-card-list {
   display: grid;
   gap: 10px;
@@ -944,44 +1024,24 @@
   list-style: none;
 }
 
-/* The card surface itself is the RecommendedRouteCard liquid glass
-   (.smart-route-liquid-card supplies radius, gradient lift, reflections);
-   only layout concerns live here. */
 .sr-alert-card {
   min-width: 0;
-  --sr-alert-stripe-color: var(--rail-accent);
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.095);
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.032);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045);
 }
 
 .sr-alert-card[data-lifecycle="resolved"] {
   opacity: 0.68;
 }
 
-/* Accent stripe: a clean flush-left edge bar in the route's own color — no
-   glow, no white mixing, no border-left doubling. The card's overflow:hidden
-   + border-radius round its ends into the glass corners. */
-.sr-alert-card__stripe {
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 3px;
-  border-radius: 0;
-  background: var(--sr-alert-stripe-color);
-}
-
-/* Load-bearing: .smart-route-liquid-card > * forces position:relative on
-   children (content-above-reflection lift) and wins by order — the stripe
-   must re-assert absolute here (higher specificity) or it collapses to an
-   invisible zero-size relative span, taking the whole accent with it. */
-.sr-alert-card.smart-route-liquid-card > .sr-alert-card__stripe {
-  position: absolute;
-  z-index: 3;
-}
-
 .sr-alert-card__header {
   display: grid;
   gap: 7px;
   width: 100%;
-  padding: 14px 15px 13px 19px;
+  padding: 15px;
   border: 0;
   background: transparent;
   text-align: left;
@@ -1010,8 +1070,8 @@
 .sr-alert-card__service {
   overflow: hidden;
   color: var(--sr-fg);
-  font-size: 13px;
-  font-weight: 630;
+  font-size: 13.5px;
+  font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1022,8 +1082,8 @@
   -webkit-line-clamp: 2;
   overflow: hidden;
   color: var(--sr-fg);
-  font-size: 18px;
-  font-weight: 670;
+  font-size: 17px;
+  font-weight: 680;
   letter-spacing: -0.01em;
   line-height: 1.3;
 }
@@ -1080,38 +1140,16 @@
   font-size: 11.5px;
 }
 
-.sr-alert-card__cta {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  margin-left: auto;
-  color: var(--sr-fg-2);
-  font-size: 12px;
-  font-weight: 620;
-  transition: color var(--sr-dur-1) var(--sr-ease);
-}
-
-.sr-alert-card__header:hover .sr-alert-card__cta {
-  color: var(--sr-fg);
-}
-
-.sr-alert-card__cta svg {
-  transition: transform var(--sr-dur-2) var(--sr-ease);
-}
-
-.sr-alert-card__header[aria-expanded="true"] .sr-alert-card__cta svg {
-  transform: rotate(180deg);
-}
-
-/* Status metadata: severity dot + one quiet word — replaces the old pill. */
+/* Status stays textual so route bullets, not decorative dots, carry alert
+   identity. */
 .sr-alert-status {
   display: inline-flex;
   flex-shrink: 0;
   align-items: center;
-  gap: 6px;
-  color: var(--sr-fg-2);
+  color: var(--sr-fg-3);
   font-size: 11.5px;
   font-weight: 620;
+  letter-spacing: 0;
   white-space: nowrap;
 }
 
@@ -1219,9 +1257,6 @@
   color: var(--sr-fg);
 }
 
-.sr-alert-row__copy .sr-alert-row__headline .sr-alert-severity-dot {
-  flex-shrink: 0;
-}
 
 .sr-alert-row__copy .sr-alert-row__title {
   display: block;
@@ -1390,12 +1425,6 @@
   white-space: nowrap;
 }
 
-.sr-alert-row__copy .sr-alert-severity-dot {
-  display: inline-block;
-  margin-top: 0;
-  overflow: visible;
-  text-overflow: clip;
-}
 
 .sr-arrival-row__time {
   display: grid;
@@ -1420,7 +1449,6 @@
   font-size: 12px;
 }
 
-.sr-alert-severity-dot,
 .sr-feed-row__dot {
   display: inline-block;
   width: 7px;
@@ -1454,24 +1482,6 @@
 
 .sr-prediction-status[data-state="warning"] {
   color: var(--sr-amber);
-}
-
-/* Signal tiers — Red major / Orange planned / Amber delay / Green resolved.
-   No blue info dot. */
-.sr-alert-severity-dot[data-tone="red"] {
-  background: #ef4444;
-}
-
-.sr-alert-severity-dot[data-tone="orange"] {
-  background: #f97316;
-}
-
-.sr-alert-severity-dot[data-tone="amber"] {
-  background: #f59e0b;
-}
-
-.sr-alert-severity-dot[data-tone="green"] {
-  background: #22c55e;
 }
 
 /* Inline route tokens: bracketed line references in alert copy render as the
@@ -2199,7 +2209,7 @@
   grid-template-columns: 15px 108px minmax(0, 1fr);
   gap: 10px;
   align-items: start;
-  padding: 11px 0;
+  padding: 12px 0;
 }
 
 .sr-alert-detail__row:last-child {
@@ -2219,8 +2229,9 @@
 .sr-alert-detail__key {
   padding-top: 1px;
   color: var(--sr-fg-3);
-  font-size: 11.5px;
-  font-weight: 620;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
 }
 
 .sr-alert-detail__value {
@@ -2469,8 +2480,22 @@
   }
 
   .sr-search-popover {
-    left: 16px;
-    right: 16px;
+    position: relative;
+    top: auto;
+    left: auto;
+    right: auto;
+    z-index: auto;
+    max-height: min(48dvh, 390px);
+    margin-top: 10px;
+    overflow-y: auto;
+    border-radius: 13px;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+    overscroll-behavior: contain;
+  }
+
+  .sr-search-option {
+    min-height: 60px;
+    padding: 10px 12px;
   }
 
   .sr-rail-header {
@@ -2499,7 +2524,21 @@
   }
 
   .sr-alert-detail__row {
-    grid-template-columns: 15px 88px minmax(0, 1fr);
+    grid-template-columns: 16px minmax(0, 1fr);
+    gap: 5px 9px;
+  }
+
+  .sr-alert-detail__icon {
+    grid-row: 1 / span 2;
+  }
+
+  .sr-alert-detail__key,
+  .sr-alert-detail__value {
+    grid-column: 2;
+  }
+
+  .sr-alert-detail__value {
+    font-size: 13px;
   }
 }
 
@@ -2509,5 +2548,13 @@
   .sr-rail *::after {
     animation-duration: 1ms !important;
     transition-duration: 1ms !important;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .sr-rail,
+  .sr-station-group-list,
+  .sr-alert-line-group-list {
+    border-color: rgba(255, 255, 255, 0.28);
   }
 }
