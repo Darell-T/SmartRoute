@@ -603,16 +603,23 @@
   font-weight: 600;
 }
 
-/* Fixed active pill: no shared-layout marker, no bounce, no text-cursor line. */
+/* Fixed active pill: no shared-layout marker, no bounce, no text-cursor
+   line. Neutral elevated fill — matches the segmented tabs' active
+   segment. --sr-accent is reserved for the Recommended pill, live-status
+   dots, Use/primary buttons, and focus rings; a direction toggle isn't
+   one of those four, so it stays monochrome. */
 .sr-toggle-pill {
   position: absolute;
   top: 4px;
   bottom: 4px;
   left: 4px;
   width: calc((100% - 8px) / 2);
-  border: 1px solid rgba(52, 211, 153, 0.45);
+  border: 1px solid var(--sr-hairline-bright);
   border-radius: 999px;
-  background: rgba(16, 185, 129, 0.22);
+  background: rgba(99, 99, 102, 0.55);
+  box-shadow:
+    0 1px 1px rgba(0, 0, 0, 0.2),
+    0 1px 3px rgba(0, 0, 0, 0.35);
   pointer-events: none;
   transform: translateX(0);
   transition: transform 180ms var(--sr-ease);
@@ -1676,91 +1683,90 @@
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
 }
 
-.smart-route-liquid-card--secondary {
-  box-shadow: none;
-}
-
-/* Apple Maps-inspired alternate option cards, at rail scale: big time,
-   departure/ETA line, compact step strip, one reason line, and a compact
-   Use action — each a lifted liquid card, not a hairline row. */
+/* "Other routes": one grouped inset container (single --sr-card surface,
+   radius 18) — rows, not individual floating cards. Hairline separators
+   between rows do the work the old per-row shadow/border used to. */
 .sr-alt-list {
   display: grid;
-  gap: 10px;
-  margin: 4px 0 0;
+  gap: 0;
+  margin: 12px 0 0;
   padding: 0;
   list-style: none;
+  overflow: hidden;
+  border-radius: var(--sr-radius-card);
+  background: var(--sr-card);
+  border: 1px solid var(--sr-card-hairline);
 }
 
-.sr-alt-card {
+.sr-alt-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
+  align-items: center;
   gap: 12px;
-  padding: 13px 14px;
+  padding: 14px 16px;
+  border-top: 1px solid var(--sr-hairline);
 }
 
-/* Keep the action anchored to the first line even when the step strip
-   wraps to multiple rows — no floating mid-card button. */
-.sr-alt-card .sr-use-button {
-  margin-top: 2px;
+.sr-alt-row:first-child {
+  border-top: 0;
 }
 
-.sr-alt-card__body {
+.sr-alt-row__body {
   display: grid;
-  gap: 3px;
+  gap: 4px;
   min-width: 0;
 }
 
-.sr-alt-card__head {
+.sr-alt-row__head {
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
-.sr-alt-card__duration {
-  color: var(--sr-fg);
-  font-size: 17px;
-  font-weight: 680;
+/* Title3/600 tabular — alt-route durations use the 600 weight variant of
+   Title3 rather than its default 700. */
+.sr-alt-row__duration {
+  color: var(--sr-text-1);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.012em;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
-.sr-alt-card__leaves {
-  color: var(--sr-fg-2);
-  font-size: 12.5px;
+.sr-alt-row__leaves {
+  color: var(--sr-text-2);
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
-.sr-alt-card__path,
-.sr-alt-card__reason {
+.sr-alt-row__path,
+.sr-alt-row__reason {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: 13px;
+  color: var(--sr-text-2);
 }
 
-.sr-alt-card__path {
-  color: var(--sr-fg-2);
-}
-
-.sr-alt-card__reason {
-  color: var(--sr-fg-3);
-}
-
-/* Compact route-selection action — a labeled pill, deliberately unlike the
-   tiny signal glyph that shares its green meaning elsewhere. */
+/* Compact route-selection action — filled accent pill, one of the four
+   places --sr-accent is allowed to appear. */
 .sr-use-button {
-  min-height: 30px;
-  padding: 0 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 20px;
   border: 0;
   border-radius: 999px;
-  background: #22c55e;
-  color: #0d1117;
+  background: var(--sr-accent);
+  color: var(--sr-on-accent);
   cursor: pointer;
-  font-size: 12.5px;
-  font-weight: 700;
+  font-size: 15px;
+  font-weight: 600;
   white-space: nowrap;
   transition:
     background var(--sr-dur-1) var(--sr-ease),
@@ -1768,34 +1774,45 @@
 }
 
 .sr-use-button:hover {
-  background: #34d76e;
+  background: #4ce3ab;
 }
 
 .sr-use-button:active {
-  transform: translateY(1px);
+  transform: scale(0.97);
 }
 
 .sr-use-button:focus-visible {
-  outline: 2px solid rgba(34, 197, 94, 0.65);
+  outline: 2px solid rgba(52, 211, 153, 0.65);
   outline-offset: 2px;
 }
 
-/* "Recommended"/"Selected" as a micro-caps pill — small, tracked, quiet. */
+/* "Recommended"/"Selected" pill — sentence case, 12/600. "Recommended" is
+   one of the four places --sr-accent is allowed to appear; "Selected"
+   (a rider-chosen alternative, not the top pick) stays monochrome. */
 .sr-status-badge {
   display: inline-flex;
-  max-width: 132px;
+  max-width: 160px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  border: 1px solid rgba(255, 255, 255, 0.09);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
-  padding: 3px 9px;
-  color: var(--sr-fg-2);
-  font-size: 9.5px;
-  font-weight: 650;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
+  border-radius: var(--sr-radius-pill);
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.sr-status-badge[data-tone="recommended"] {
+  border: 1px solid transparent;
+  background: var(--sr-accent-tint);
+  color: var(--sr-accent-text);
+}
+
+.sr-status-badge[data-tone="selected"] {
+  border: 1px solid var(--sr-hairline-bright);
+  background: var(--sr-fill);
+  color: var(--sr-text-1);
 }
 
 /* Recommended route: duration is the hero, followed by leave/ETA, the
@@ -1812,33 +1829,71 @@
   gap: 10px;
 }
 
+/* Live indicator: pulsing 6px emerald dot + "Live" — one of the four
+   places --sr-accent is allowed to appear. */
+.sr-recommended-route__live {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+  color: var(--sr-text-2);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Hero row: LargeTitle duration + Subheadline arrival time share one
+   baseline, Apple Maps-style ("24 min · 3:42 PM arrival"). */
+.sr-recommended-route__hero {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 14px;
+}
+
 .sr-recommended-route__duration {
-  display: block;
-  margin-top: 12px;
-  color: var(--sr-fg);
-  font-size: 24px;
-  line-height: 1.1;
+  color: var(--sr-text-1);
+  font-size: 34px;
+  line-height: 1.05;
   font-weight: 700;
+  letter-spacing: -0.022em;
   font-variant-numeric: tabular-nums;
 }
 
-.sr-recommended-route__timing {
+.sr-recommended-route__eta {
+  color: var(--sr-text-2);
+  font-size: 15px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Leave-by gets its own Subheadline line below the hero, only when the
+   backend supplies a departure to plan around. */
+.sr-recommended-route__leaveby {
   display: block;
   margin-top: 4px;
-  color: var(--sr-fg-2);
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
+  color: var(--sr-text-2);
+  font-size: 15px;
+  font-weight: 400;
 }
 
 .sr-recommended-route__next {
   display: inline-flex;
   align-items: baseline;
-  gap: 3px;
-  margin-top: 7px;
-  color: var(--sr-fg-2);
-  font-size: 12.5px;
-  font-weight: 580;
+  gap: 4px;
+  margin-top: 8px;
+  color: var(--sr-text-2);
+  font-size: 13px;
+  font-weight: 400;
   font-variant-numeric: tabular-nums;
+}
+
+/* Countdown numerals are the one emphasized part of the Footnote line. */
+.sr-recommended-route__next .sr-arrival-countdown {
+  color: var(--sr-text-1);
+  font-weight: 600;
 }
 
 .sr-recommended-route p {
@@ -1848,8 +1903,74 @@
   line-height: 1.45;
 }
 
+/* ── Reasoning — the signature element ────────────────────────────────
+   A nested inset container around the typed AI rationale. While typing,
+   its 1px border runs a slow emerald→cyan shimmer; once settled it's a
+   static hairline. The shimmer is a masked gradient ring layered in
+   ::before (not a glow blob) so it reads as a genuine animated border. */
+.sr-reasoning-inset {
+  position: relative;
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: var(--sr-radius-inset);
+  background: var(--sr-fill-2);
+  border: 1px solid var(--sr-hairline);
+}
+
+.sr-reasoning-inset::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(
+    100deg,
+    var(--sr-accent) 0%,
+    #22d3ee 35%,
+    var(--sr-accent) 70%,
+    #22d3ee 100%
+  );
+  background-size: 260% 100%;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0;
+  transition: opacity 420ms var(--sr-motion-ease);
+  pointer-events: none;
+}
+
+.sr-reasoning-inset[data-typing="true"]::before {
+  opacity: 1;
+  animation: srReasoningShimmer 2.4s linear infinite;
+}
+
+@keyframes srReasoningShimmer {
+  from {
+    background-position: 0% 0;
+  }
+  to {
+    background-position: -260% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sr-reasoning-inset::before {
+    opacity: 0 !important;
+    animation: none !important;
+  }
+}
+
+.sr-reasoning-inset .sr-ai-reasoning {
+  margin: 0;
+  color: var(--sr-text-1);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
 .sr-ai-reasoning {
-  min-height: 38px;
+  min-height: 24px;
 }
 
 .sr-ai-reasoning__cursor {
@@ -1875,33 +1996,32 @@
   justify-content: space-between;
   gap: 10px;
   margin-top: 12px;
-  color: var(--sr-fg-3);
-  font-size: 12px;
+  color: var(--sr-text-3);
+  font-size: 13px;
+  font-weight: 400;
   font-variant-numeric: tabular-nums;
 }
 
+/* "Details" disclosure — Headline weight, chevron rotates 180° when open. */
 .sr-details-toggle {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   min-height: 32px;
-  padding: 0 12px;
-  border: 1px solid var(--sr-rule);
+  padding: 0 4px;
+  border: 0;
   border-radius: 8px;
-  background: var(--sr-surface-2);
-  color: var(--sr-fg);
+  background: transparent;
+  color: var(--sr-text-1);
   cursor: pointer;
-  font-size: 12.5px;
+  font-size: 15px;
   font-weight: 600;
   white-space: nowrap;
-  transition:
-    background var(--sr-dur-1) var(--sr-ease),
-    border-color var(--sr-dur-1) var(--sr-ease);
+  transition: opacity var(--sr-dur-1) var(--sr-ease);
 }
 
 .sr-details-toggle:hover {
-  border-color: var(--sr-rule-bright);
-  background: var(--rail-hover);
+  opacity: 0.82;
 }
 
 .sr-details-toggle:focus-visible {
@@ -1981,12 +2101,15 @@
 }
 
 /* ── Apple Maps-style details chain ───────────────────────────────────
-   Explicit walk / board / ride rows; ride segments carry a route-colored
-   connector between boarding and alighting stops. */
+   Grouped inset list (nested surface, hairline-separated rows) — explicit
+   walk / board / ride rows; ride segments carry a route-colored connector
+   between boarding and alighting stops. */
 .sr-detail-chain {
   display: grid;
-  margin: 14px 0 4px;
-  padding: 0;
+  margin: 12px 0 4px;
+  padding: 2px 12px;
+  border-radius: var(--sr-radius-inset);
+  background: var(--sr-fill-2);
   list-style: none;
 }
 
@@ -1996,7 +2119,7 @@
   align-items: start;
   gap: 12px;
   padding: 12px 0;
-  border-top: 1px solid var(--sr-rule);
+  border-top: 1px solid var(--sr-hairline);
 }
 
 .sr-detail-step:first-child {
@@ -2052,7 +2175,8 @@
   display: grid;
   grid-template-columns: 44px minmax(0, 1fr);
   gap: 12px;
-  padding: 0 0 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--sr-hairline);
 }
 
 .sr-detail-ride__line {
@@ -2091,30 +2215,52 @@
 }
 
 .sr-alternates {
-  margin-top: 14px;
+  margin-top: 20px;
 }
 
+/* Section header row, matching .sr-section-header: Title3 "Other routes"
+   left, count as Footnote --sr-text-3 + rotating chevron on the right. */
 .sr-alternates__trigger {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   width: 100%;
   min-height: 44px;
-  border: 1px solid var(--sr-rule);
-  border-radius: 8px;
-  background: var(--sr-surface-2);
-  color: var(--sr-fg);
-  padding: 0 12px;
+  border: 0;
+  background: transparent;
+  color: var(--sr-text-1);
+  padding: 4px 0;
   cursor: pointer;
   text-align: left;
 }
 
-.sr-alternates__trigger[aria-expanded="true"] svg {
-  transform: rotate(180deg);
+.sr-alternates__title {
+  color: var(--sr-text-1);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.012em;
+  line-height: 1.15;
 }
 
-.sr-alternates__trigger svg {
+.sr-alternates__meta {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+  color: var(--sr-text-3);
+  font-size: 13px;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.sr-alternates__meta svg {
+  color: var(--sr-text-3);
   transition: transform var(--sr-dur-2) var(--sr-ease);
+}
+
+.sr-alternates__trigger[aria-expanded="true"] .sr-alternates__meta svg {
+  transform: rotate(180deg);
 }
 
 .sr-alternates__content {
@@ -2535,6 +2681,16 @@
 
   .sr-nearby-scroll {
     max-height: none;
+  }
+
+  /* Direction toggle: bump the tap target to 44px on mobile without
+     changing the segmented control's visual weight. */
+  .sr-toggle-group button {
+    min-height: 44px;
+  }
+
+  .sr-details-toggle {
+    min-height: 44px;
   }
 
   .sr-arrival-row,

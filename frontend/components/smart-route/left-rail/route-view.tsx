@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
   type ReactNode,
+  type RefObject,
 } from "react";
 import {
   AnimatePresence,
@@ -40,6 +41,7 @@ import {
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import {
   BusChip,
+  Dot,
   LocationPin,
   RouteBullet,
   RouteBulletGroup,
@@ -119,6 +121,13 @@ export function RouteView({
     [isReady, plan],
   );
   const shouldReduceMotion = useReducedMotion();
+  const recommendedCardRef = useRef<HTMLElement | null>(null);
+  useScrollToRecommendedCard({
+    cardRef: recommendedCardRef,
+    routeStatus,
+    plan,
+    shouldReduceMotion,
+  });
   // Public evaluation insights for the planning state, derived from the
   // live facts the rail already holds (station access, live arrivals,
   // official alerts, reported incidents). No fact → no line.
@@ -188,6 +197,7 @@ export function RouteView({
                     candidate={recommended}
                     plan={plan}
                     destination={search?.inputValue}
+                    cardRef={recommendedCardRef}
                   />
                 </motion.div>
                 {plan.alternatives.length > 0 && (
@@ -232,6 +242,113 @@ const CONTENT_PHASE = {
   exit: { opacity: 0, y: -4 },
   transition: { duration: 0.2, ease: "easeOut" as const },
 };
+
+/* ── Scroll choreography ──────────────────────────────────────────────
+   The rail scrolls so the recommended card sits at the top, just under
+   the pinned search, whenever (a) route status transitions into "result"
+   (a recommendation lands) or (b) the active plan changes while already
+   in "result" (the rider tapped "Use" on an alternative). It must never
+   fire just because the component re-rendered, or because the rider
+   expanded/collapsed alternates or details — so the trigger is a
+   usePrevious-style ref comparison, not a plain effect dependency. */
+const SCROLL_BREATHING_ROOM = 8;
+const SCROLL_MOUNT_POLL_LIMIT = 90; // ~1.5s at 60fps, then silently give up
+
+function useScrollToRecommendedCard({
+  cardRef,
+  routeStatus,
+  plan,
+  shouldReduceMotion,
+}: {
+  cardRef: RefObject<HTMLElement | null>;
+  routeStatus: RouteRailStatus;
+  plan: RoutePlan;
+  shouldReduceMotion: boolean | null;
+}) {
+  const resultKey = routeStatus === "result" ? routeResultKey(plan) : null;
+  const previousRef = useRef<{ status: RouteRailStatus; key: string | null }>({
+    status: routeStatus,
+    key: resultKey,
+  });
+
+  useEffect(() => {
+    const previous = previousRef.current;
+    const enteredResult =
+      routeStatus === "result" && previous.status !== "result";
+    const planChangedInResult =
+      routeStatus === "result" &&
+      previous.status === "result" &&
+      resultKey !== previous.key;
+    previousRef.current = { status: routeStatus, key: resultKey };
+
+    if (!enteredResult && !planChangedInResult) return;
+
+    // The idle/planning/results/error switch above uses
+    // `mode="wait"`, so on the "entered result" trigger the card can
+    // mount a beat after this effect fires (once the previous phase's
+    // exit animation finishes) — poll a few frames for the ref instead
+    // of assuming it is already attached, the way the "plan changed"
+    // trigger safely can. Once found, hold the two requestAnimationFrames
+    // the design calls for so AnimatePresence/layout have settled before
+    // measuring.
+    let frame = 0;
+    let attempts = 0;
+
+    const settleThenScroll = () => {
+      frame = window.requestAnimationFrame(() => {
+        frame = window.requestAnimationFrame(() => {
+          scrollRecommendedCardIntoView(cardRef.current, shouldReduceMotion);
+        });
+      });
+    };
+
+    const waitForCard = () => {
+      attempts += 1;
+      if (cardRef.current) {
+        settleThenScroll();
+        return;
+      }
+      if (attempts >= SCROLL_MOUNT_POLL_LIMIT) return;
+      frame = window.requestAnimationFrame(waitForCard);
+    };
+
+    frame = window.requestAnimationFrame(waitForCard);
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [routeStatus, resultKey, cardRef, shouldReduceMotion]);
+}
+
+function scrollRecommendedCardIntoView(
+  card: HTMLElement | null,
+  shouldReduceMotion: boolean | null,
+) {
+  if (!card) return;
+  const scroller = card.closest<HTMLElement>(".sr-rail");
+  if (!scroller) return;
+
+  // getBoundingClientRect delta + current scrollTop, rather than
+  // offsetTop, since offsetParent chains through positioned ancestors
+  // (the sticky search block, LayoutGroup wrappers) here.
+  const cardRect = card.getBoundingClientRect();
+  const scrollerRect = scroller.getBoundingClientRect();
+  const cardOffsetTopWithinScroller =
+    cardRect.top - scrollerRect.top + scroller.scrollTop;
+
+  const searchBlock = scroller.querySelector<HTMLElement>(".sr-route-search");
+  const stickySearchHeight = searchBlock
+    ? searchBlock.getBoundingClientRect().height
+    : 0;
+
+  const top = Math.max(
+    0,
+    cardOffsetTopWithinScroller - (stickySearchHeight + SCROLL_BREATHING_ROOM),
+  );
+
+  scroller.scrollTo({
+    top,
+    behavior: shouldReduceMotion ? "auto" : "smooth",
+  });
+}
 
 function cleanDestinationDraft(value: string) {
   return value
@@ -684,32 +801,42 @@ function RoutePlanningReasoning({
 function CandidateStatusBadge({ status }: { status: "winner" | "selected" }) {
   const label = status === "winner" ? "Recommended" : "Selected";
 
-  return <span className="sr-status-badge">{label}</span>;
+  return (
+    <span
+      className="sr-status-badge"
+      data-tone={status === "winner" ? "recommended" : "selected"}
+    >
+      {label}
+    </span>
+  );
 }
 
 function RecommendedRouteCard({
   candidate,
   plan,
   destination,
+  cardRef,
 }: {
   candidate: RecommendedRouteDisplay;
   plan: RoutePlan;
   destination?: string;
+  cardRef?: RefObject<HTMLElement | null>;
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const transfers = plan.transferCount ?? candidate.transfers ?? 0;
   const hasLiveDeparture = Boolean(plan.detailSteps?.some((step) => step.live));
   const hasDetails = (plan.detailSteps?.length ?? 0) > 0;
-  const timing = [
-    plan.leaveByLabel
-      ? plan.leaveByLabel === "now"
-        ? "Leave now"
-        : `Leave by ${plan.leaveByLabel}`
-      : null,
-    plan.eta && plan.eta !== "Live" ? `${plan.eta} ETA` : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  // Hero line: duration is the LargeTitle, arrival time rides the same
+  // baseline row ("24 min · 3:42 PM arrival"), Apple Maps-style. Leave-by
+  // gets its own Subheadline line below, only when the backend supplies a
+  // departure to plan around.
+  const etaLabel =
+    plan.eta && plan.eta !== "Live" ? `${plan.eta} arrival` : null;
+  const leaveByLabel = plan.leaveByLabel
+    ? plan.leaveByLabel === "now"
+      ? "Leave now"
+      : `Leave by ${plan.leaveByLabel}`
+    : null;
   const hasNextDeparture =
     typeof plan.nextDepartureMinutes === "number" &&
     Number.isFinite(plan.nextDepartureMinutes);
@@ -723,19 +850,32 @@ function RecommendedRouteCard({
     .join(" · ");
 
   return (
-    <article className="sr-recommended-route smart-route-liquid-card">
+    <article
+      ref={cardRef}
+      className="sr-recommended-route smart-route-liquid-card"
+    >
       <div className="sr-recommended-route__top">
         <CandidateStatusBadge
           status={plan.isAlternativeRoute ? "selected" : "winner"}
         />
         {hasLiveDeparture && (
-          <PredictionStatus predictionType="live" predictionFreshness="fresh" />
+          <span className="sr-recommended-route__live">
+            <Dot color="var(--sr-accent)" size={6} pulse />
+            Live
+          </span>
         )}
       </div>
-      <strong className="sr-recommended-route__duration">
-        {formatDurationLabel(plan.totalTime)}
-      </strong>
-      {timing && <span className="sr-recommended-route__timing">{timing}</span>}
+      <div className="sr-recommended-route__hero">
+        <strong className="sr-recommended-route__duration">
+          {formatDurationLabel(plan.totalTime)}
+        </strong>
+        {etaLabel && (
+          <span className="sr-recommended-route__eta">{etaLabel}</span>
+        )}
+      </div>
+      {leaveByLabel && (
+        <span className="sr-recommended-route__leaveby">{leaveByLabel}</span>
+      )}
       {hasNextDeparture && (
         <RecommendedNextDeparture
           routeId={plan.pickedLine}
@@ -755,7 +895,7 @@ function RecommendedRouteCard({
             aria-expanded={detailsOpen}
             onClick={() => setDetailsOpen((value) => !value)}
           >
-            See details
+            Details
             <ChevronDown size={15} strokeWidth={1.8} aria-hidden="true" />
           </button>
         )}
@@ -850,17 +990,22 @@ function TypedRouteReasoning({ text }: { text: string }) {
   const isTyping = visibleText.length < cleaned.length;
 
   return (
-    <p className="sr-ai-reasoning" aria-live="polite">
-      <span>
-        <TransitText
-          text={markRouteTokensForTransitText(visibleText)}
-          bulletSize={15}
-        />
-      </span>
-      {isTyping && (
-        <span className="sr-ai-reasoning__cursor" aria-hidden="true" />
-      )}
-    </p>
+    <div
+      className="sr-reasoning-inset"
+      data-typing={isTyping ? "true" : "false"}
+    >
+      <p className="sr-ai-reasoning" aria-live="polite">
+        <span>
+          <TransitText
+            text={markRouteTokensForTransitText(visibleText)}
+            bulletSize={15}
+          />
+        </span>
+        {isTyping && (
+          <span className="sr-ai-reasoning__cursor" aria-hidden="true" />
+        )}
+      </p>
+    </div>
   );
 }
 
@@ -921,7 +1066,7 @@ function RouteStepStrip({ segments }: { segments: RouteStripSegment[] }) {
               {segment.mode === "bus" ? (
                 <BusChip route={segment.routeId} />
               ) : (
-                <RouteBullet line={segment.routeId} size={20} />
+                <RouteBullet line={segment.routeId} size={22} />
               )}
               <StepIcon
                 type={segment.mode === "bus" ? "bus" : "ride"}
@@ -1064,7 +1209,11 @@ function AlternateRoutesCollapsible({
   alternatives: Alternative[];
   onSelectAlternative?: (candidateId: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  // Open by default: Apple Maps stacks route options immediately, and the
+  // scroll choreography guarantees the recommended card owns the first
+  // viewport — open alternates cost nothing above the fold and invite
+  // comparison below it. The header row still collapses the section.
+  const [open, setOpen] = useState(true);
   const shouldReduceMotion = useReducedMotion();
   const hiddenState = shouldReduceMotion
     ? { opacity: 0 }
@@ -1081,11 +1230,11 @@ function AlternateRoutesCollapsible({
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
       >
-        <span>
-          See {alternatives.length} alternate route
-          {alternatives.length === 1 ? "" : "s"}
+        <span className="sr-alternates__title">Other routes</span>
+        <span className="sr-alternates__meta">
+          {alternatives.length} route{alternatives.length === 1 ? "" : "s"}
+          <ChevronDown size={17} strokeWidth={1.8} aria-hidden="true" />
         </span>
-        <ChevronDown size={17} strokeWidth={1.8} aria-hidden="true" />
       </button>
       <AnimatePresence initial={false}>
         {open && (
@@ -1144,28 +1293,28 @@ function AlternateRouteCard({
 
   return (
     <motion.li
-      className="sr-alt-card smart-route-liquid-card smart-route-liquid-card--secondary"
+      className="sr-alt-row"
       layout
       initial={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, y: 4 }}
       animate={shouldReduceMotion ? { opacity: 1 } : { opacity: 1, y: 0 }}
       exit={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, y: -4 }}
       transition={{ duration: 0.2, ease: "easeOut" }}
     >
-      <div className="sr-alt-card__body">
-        <div className="sr-alt-card__head">
-          <strong className="sr-alt-card__duration">
+      <div className="sr-alt-row__body">
+        <div className="sr-alt-row__head">
+          <strong className="sr-alt-row__duration">
             {typeof alternative.totalMinutes === "number"
               ? formatDurationLabel(`${alternative.totalMinutes} min`)
               : "Live"}
           </strong>
-          {leaves && <span className="sr-alt-card__leaves">{leaves}</span>}
+          {leaves && <span className="sr-alt-row__leaves">{leaves}</span>}
         </div>
         {alternative.strip && alternative.strip.length > 0 ? (
           <RouteStepStrip segments={alternative.strip} />
         ) : (
-          path && <span className="sr-alt-card__path">{path}</span>
+          path && <span className="sr-alt-row__path">{path}</span>
         )}
-        {reason && <span className="sr-alt-card__reason">{reason}</span>}
+        {reason && <span className="sr-alt-row__reason">{reason}</span>}
       </div>
       {canUse && (
         <button
