@@ -2391,15 +2391,15 @@ body:has(.sr-app-shell) [data-nextjs-dev-tools-button] {
     border-top: 1px solid rgba(255, 255, 255, 0.12) !important;
     border-right: 1px solid rgba(255, 255, 255, 0.075) !important;
     border-left: 1px solid rgba(255, 255, 255, 0.075) !important;
-    background: rgba(8, 12, 18, 0.78) !important;
+    background: rgba(16, 19, 26, 0.72) !important;
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.14),
       inset 0 -1px 0 rgba(255, 255, 255, 0.05),
       0 -22px 58px rgba(0, 0, 0, 0.38) !important;
-    -webkit-backdrop-filter: blur(28px) saturate(1.12);
-    backdrop-filter: blur(28px) saturate(1.12);
+    -webkit-backdrop-filter: blur(50px) saturate(1.8);
+    backdrop-filter: blur(50px) saturate(1.8);
     transition:
-      height 260ms cubic-bezier(0.22, 1, 0.36, 1),
+      height 380ms cubic-bezier(0.32, 0.72, 0, 1),
       box-shadow 220ms ease,
       border-color 220ms ease;
     will-change: height;
@@ -2422,12 +2422,14 @@ body:has(.sr-app-shell) [data-nextjs-dev-tools-button] {
     backdrop-filter: none;
   }
 
+  /* 44px hit area (WCAG touch-target minimum) around a much quieter 36×5
+     visual handle — the grip is a hint, not a decoration. */
   .sr-app-shell[data-active-tab="livemap"] .sr-mobile-rail-grip {
     position: relative;
     display: flex;
-    flex: 0 0 1.9rem;
+    flex: 0 0 2.75rem;
     width: 100%;
-    min-height: 1.9rem;
+    min-height: 2.75rem;
     align-items: center;
     justify-content: center;
     border: 0;
@@ -2448,14 +2450,10 @@ body:has(.sr-app-shell) [data-nextjs-dev-tools-button] {
 
   .sr-app-shell[data-active-tab="livemap"] .sr-mobile-rail-grip span {
     position: relative;
-    width: 2.7rem;
-    height: 0.24rem;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.66);
-    box-shadow:
-      0 0 0 1px rgba(0, 0, 0, 0.18),
-      0 7px 22px rgba(0, 0, 0, 0.24),
-      inset 0 1px 0 rgba(255, 255, 255, 0.52);
+    width: 36px;
+    height: 5px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.28);
   }
 
   .sr-app-shell[data-active-tab="livemap"] .sr-mobile-rail-grip:focus-visible {
@@ -2477,21 +2475,10 @@ body:has(.sr-app-shell) [data-nextjs-dev-tools-button] {
     border-radius: 0 !important;
     background: transparent;
     box-shadow: none;
-  }
-
-  .sr-app-shell[data-active-tab="livemap"]
-    .sr-live-left-rail-shell[data-mobile-sheet-state="small"]
-    .sr-mobile-rail-grip {
-    flex-basis: 1.6rem;
-    min-height: 1.6rem;
-  }
-
-  .sr-app-shell[data-active-tab="livemap"]
-    .sr-live-left-rail-shell[data-mobile-sheet-state="small"]
-    .sr-mobile-rail-grip span {
-    width: 2.25rem;
-    height: 0.2rem;
-    background: rgba(255, 255, 255, 0.7);
+    /* The shell above already supplies the material; avoid stacking a
+       second 50px blur on top of it. */
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
   }
 
   .sr-app-shell[data-active-tab="livemap"]
