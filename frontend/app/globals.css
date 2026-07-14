@@ -2513,7 +2513,7 @@ body:has(.sr-app-shell) [data-nextjs-dev-tools-button] {
     .sr-live-left-rail-shell[data-mobile-sheet-state="small"]
     .sr-route-search {
     padding-top: 2px;
-    padding-bottom: calc(10px + env(safe-area-inset-bottom));
+    padding-bottom: calc(18px + env(safe-area-inset-bottom));
   }
 
   .sr-app-shell[data-active-tab="livemap"]
