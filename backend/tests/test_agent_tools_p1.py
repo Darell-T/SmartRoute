@@ -416,9 +416,12 @@ class FixtureReplayTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RegistryTests(unittest.TestCase):
-    def test_all_five_tools_present_with_strict_schemas(self):
+    def test_p1_tools_present_with_strict_schemas(self):
+        # The exact full-registry set (now 7 tools with P2's accessibility_status
+        # and lookup_facts) is asserted once in test_agent_tools_p2.py's
+        # RegistryP2Tests -- this only checks the P1 tools are still there.
         expected = {"plan_trip", "transit_snapshot", "event_lookup", "poi_search", "venue_crowd_window"}
-        self.assertEqual(set(agent_tools.TOOL_REGISTRY.keys()), expected)
+        self.assertTrue(expected.issubset(agent_tools.TOOL_REGISTRY.keys()))
         for name, spec in agent_tools.TOOL_REGISTRY.items():
             self.assertTrue(spec.schema.get("strict"), name)
             self.assertFalse(spec.schema["input_schema"].get("additionalProperties", True), name)

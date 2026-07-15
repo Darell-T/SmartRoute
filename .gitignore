@@ -15,6 +15,10 @@ backend/data/
 # server (loaded into memory at startup), so re-include it past the data/ rule.
 !backend/app/data/
 !backend/app/data/stop_patterns.json
+# Fix C: the agent's curated static facts file is source, not runtime data --
+# re-include it past the data/ rule the same way as stop_patterns.json above.
+!backend/app/services/agent/data/
+!backend/app/services/agent/data/transit_facts.md
 .gtfs-cache/
 .worktrees/
 

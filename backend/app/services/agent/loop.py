@@ -189,11 +189,13 @@ async def _stream_turn(
     stop_reason_out = "end_turn"
     input_tokens = 0
     output_tokens = 0
+    model_ms_total = 0.0
+    tools_ms_total = 0.0
+    round_num = 0
     text_parts: list[str] = []
     tool_calls_this_turn: list[tuple[str, dict]] = []
 
     try:
-        round_num = 0
         needs_wrapup = False
 
         while True:
@@ -208,6 +210,7 @@ async def _stream_turn(
                 break
 
             stream_kwargs = _build_stream_kwargs(force_final=False, messages=messages, system_blocks=system_blocks)
+            model_call_start = time.monotonic()
             try:
                 async with client.messages.stream(**stream_kwargs) as stream:
                     async for delta in stream.text_stream:
@@ -215,6 +218,7 @@ async def _stream_turn(
                         yield agent_events.TokenEvent(text=delta)
                     final_message = await stream.get_final_message()
             except Exception as exc:
+                model_ms_total += (time.monotonic() - model_call_start) * 1000
                 print(f"[agent-loop] model call failed: {type(exc).__name__}: {exc!r}")
                 yield agent_events.ErrorEvent(
                     code="upstream_error",
@@ -223,6 +227,7 @@ async def _stream_turn(
                 )
                 stop_reason_out = "error"
                 break
+            model_ms_total += (time.monotonic() - model_call_start) * 1000
 
             usage = getattr(final_message, "usage", None)
             input_tokens += int(getattr(usage, "input_tokens", 0) or 0)
@@ -234,12 +239,14 @@ async def _stream_turn(
                 stop_reason_out = "end_turn"
                 break
 
+            tool_round_start = time.monotonic()
             tool_result_message = None
             async for item in _execute_tool_round(tool_use_blocks, ctx, session, tool_calls_this_turn):
                 if isinstance(item, dict) and "__tool_result_message__" in item:
                     tool_result_message = item["__tool_result_message__"]
                 else:
                     yield item
+            tools_ms_total += (time.monotonic() - tool_round_start) * 1000
             messages.append(tool_result_message)
 
             if time.monotonic() - turn_start > AGENT_TURN_DEADLINE_S:
@@ -250,17 +257,20 @@ async def _stream_turn(
         if needs_wrapup:
             messages.append({"role": "user", "content": WRAP_UP_INSTRUCTION})
             stream_kwargs = _build_stream_kwargs(force_final=True, messages=messages, system_blocks=system_blocks)
+            model_call_start = time.monotonic()
             try:
                 async with client.messages.stream(**stream_kwargs) as stream:
                     async for delta in stream.text_stream:
                         text_parts.append(delta)
                         yield agent_events.TokenEvent(text=delta)
                     final_message = await stream.get_final_message()
+                model_ms_total += (time.monotonic() - model_call_start) * 1000
                 usage = getattr(final_message, "usage", None)
                 input_tokens += int(getattr(usage, "input_tokens", 0) or 0)
                 output_tokens += int(getattr(usage, "output_tokens", 0) or 0)
                 messages.append({"role": "assistant", "content": final_message.content})
             except Exception as exc:
+                model_ms_total += (time.monotonic() - model_call_start) * 1000
                 print(f"[agent-loop] wrap-up model call failed: {type(exc).__name__}: {exc!r}")
                 yield agent_events.ErrorEvent(
                     code="upstream_error",
@@ -283,6 +293,17 @@ async def _stream_turn(
             trace.tool_calls = list(tool_calls_this_turn)
             trace.final_text = final_text
         budget.record_usage_cost(input_tokens, output_tokens)
+
+    total_ms = (time.monotonic() - turn_start) * 1000
+    # Single per-turn timing/spend log line, mirroring trips.py's `[trip]`
+    # line -- no message text, session id truncated to 6 chars per the
+    # existing sess[:6] logging convention (session.py, routers/agent_chat.py).
+    print(
+        f"[agent] turn={turn_id} sess={session_id[:6]} rounds={round_num} "
+        f"tools={len(tool_calls_this_turn)} model_ms={model_ms_total:.0f} "
+        f"tools_ms={tools_ms_total:.0f} total_ms={total_ms:.0f} "
+        f"in_tok={input_tokens} out_tok={output_tokens} stop={stop_reason_out}"
+    )
 
     yield agent_events.DoneEvent(
         session_id=session_id,

@@ -1,6 +1,6 @@
 """Tool registry for the conversational transit agent (plan_trip,
 transit_snapshot from P0; event_lookup, poi_search, venue_crowd_window from
-P1).
+P1; accessibility_status, lookup_facts from P2).
 
 `TOOL_REGISTRY` maps a tool name to its schema, async executor, SSE
 `tool_start` label function, and per-tool timeout. `TOOLS` is the plain list
@@ -16,7 +16,15 @@ import os
 from pathlib import Path
 from typing import Awaitable, Callable
 
-from app.services.agent.tools import event_lookup, plan_trip, poi_search, transit_snapshot, venue_crowd_window
+from app.services.agent.tools import (
+    accessibility_status,
+    event_lookup,
+    lookup_facts,
+    plan_trip,
+    poi_search,
+    transit_snapshot,
+    venue_crowd_window,
+)
 from app.services.agent.tools._types import ToolContext, ToolResult
 
 ToolExecutor = Callable[[dict, ToolContext], Awaitable[ToolResult]]
@@ -59,6 +67,16 @@ def _poi_search_label(tool_input: dict) -> str:
 
 def _venue_crowd_window_label(tool_input: dict) -> str:
     return "Estimating post-event crowds…"
+
+
+def _accessibility_status_label(tool_input: dict) -> str:
+    station = str(tool_input.get("station") or "that station").strip()
+    return f"Checking elevators at {station}…"
+
+
+def _lookup_facts_label(tool_input: dict) -> str:
+    topic = str(tool_input.get("topic") or "that").strip()
+    return f"Looking up {topic}…"
 
 
 # ---- Fixture replay (eval harness hook -- plan doc section 7 Layer 2) ----
@@ -132,6 +150,13 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
     "venue_crowd_window": _spec(
         venue_crowd_window.VENUE_CROWD_WINDOW_SCHEMA, venue_crowd_window.execute, _venue_crowd_window_label, 2.0
     ),
+    "accessibility_status": _spec(
+        accessibility_status.ACCESSIBILITY_STATUS_SCHEMA,
+        accessibility_status.execute,
+        _accessibility_status_label,
+        8.0,
+    ),
+    "lookup_facts": _spec(lookup_facts.LOOKUP_FACTS_SCHEMA, lookup_facts.execute, _lookup_facts_label, 2.0),
 }
 
 TOOLS: list[dict] = [spec.schema for spec in TOOL_REGISTRY.values()]

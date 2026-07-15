@@ -41,6 +41,12 @@ class SystemPromptGuardTests(unittest.TestCase):
         self.assertIn("venue_crowd_window", agent_prompt.SYSTEM_PROMPT)
         self.assertIn("heuristic", agent_prompt.SYSTEM_PROMPT.lower())
 
+    def test_factual_grounding_clause_present_with_new_tool_names(self):
+        self.assertIn("FACTUAL GROUNDING", agent_prompt.SYSTEM_PROMPT)
+        self.assertIn("lookup_facts", agent_prompt.SYSTEM_PROMPT)
+        self.assertIn("accessibility_status", agent_prompt.SYSTEM_PROMPT)
+        self.assertIn("wheelchair", agent_prompt.SYSTEM_PROMPT.lower())
+
     def test_card_referencing_clause_present(self):
         self.assertIn("CARD REFERENCING", agent_prompt.SYSTEM_PROMPT)
         self.assertIn("second option", agent_prompt.SYSTEM_PROMPT.lower())
