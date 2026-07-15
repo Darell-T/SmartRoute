@@ -1,0 +1,22 @@
+{
+  "data": {
+    "candidates": [
+      {
+        "alert_headlines": [],
+        "arrives_iso": "2026-07-15T15:03:00-04:00",
+        "card_id": "rc_t5fp002",
+        "departs_iso": "2026-07-15T14:45:00-04:00",
+        "eta_minutes": 18,
+        "lines": [
+          "1"
+        ],
+        "reason": "Direct ride to Penn Station for the NJ Transit connection -- MetLife Stadium is in NJ.",
+        "transfers": 0,
+        "walk_minutes": 4.0
+      }
+    ]
+  },
+  "error": null,
+  "ok": true,
+  "summary": "found 1 route(s) to Penn Station (NJ Transit connection); recommended 1"
+}

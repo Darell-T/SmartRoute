@@ -1,0 +1,16 @@
+{
+  "data": {
+    "results": [
+      {
+        "address": "1 Rockefeller Plaza, New York, NY",
+        "lat": 40.7587,
+        "lng": -73.9787,
+        "name": "Blue Bottle Coffee",
+        "open_now": true
+      }
+    ]
+  },
+  "error": null,
+  "ok": true,
+  "summary": "found 1 place(s) for 'coffee'"
+}

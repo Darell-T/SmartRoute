@@ -1,0 +1,22 @@
+{
+  "data": {
+    "candidates": [
+      {
+        "alert_headlines": [],
+        "arrives_iso": "2026-07-16T23:20:00-04:00",
+        "card_id": "rc_t4knk01",
+        "departs_iso": "2026-07-16T22:55:00-04:00",
+        "eta_minutes": 25,
+        "lines": [
+          "1"
+        ],
+        "reason": "Direct ride, timed after the estimated crowd surge tapers.",
+        "transfers": 0,
+        "walk_minutes": 5.0
+      }
+    ]
+  },
+  "error": null,
+  "ok": true,
+  "summary": "found 1 route(s) to your destination; recommended 1"
+}

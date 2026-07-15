@@ -92,3 +92,6 @@ docs/
 !docs/assets/
 !docs/assets/*.png
 .claude/
+
+# Generated per-run by the eval harness fixture router (debug manifest)
+backend/evals/fixtures/*/index.json

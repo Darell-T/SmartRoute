@@ -14,3 +14,6 @@ xai-sdk==1.7.0
 python-dotenv==1.2.1
 geopy==2.4.1
 psycopg2-binary==2.9.11
+# Dev-only: parses backend/evals/golden_queries.yaml for the manual Layer-2
+# eval harness (backend/evals/). Not imported by the running API server.
+PyYAML==6.0.1
