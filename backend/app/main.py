@@ -20,7 +20,7 @@ if not os.getenv("APP_KEY"):
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security.api_key import APIKeyHeader
-from app.routers import trips, live_feed, subway
+from app.routers import trips, live_feed, subway, agent_chat
 from app.services.mta.warm import warm_realtime_caches
 from app.utils.gtfs_static import GTFSStaticData, close_pool, init_pool
 from app.models.migrate_gtfs import migrate
@@ -135,6 +135,7 @@ protected_api = APIRouter(dependencies=[Depends(_verify_api_key)])
 protected_api.include_router(trips.router)
 protected_api.include_router(live_feed.router)
 protected_api.include_router(subway.router)
+protected_api.include_router(agent_chat.router)
 app.include_router(protected_api)
 app.include_router(live_feed.ws_router)
 
