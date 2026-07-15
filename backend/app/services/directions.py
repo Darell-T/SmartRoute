@@ -1,6 +1,6 @@
 import os
 import httpx
-from datetime import datetime
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 
@@ -14,6 +14,9 @@ GOOGLE_ROUTES_ALTERNATIVES = os.getenv("GOOGLE_ROUTES_ALTERNATIVES", "1").strip(
     "false",
     "no",
 }
+
+ALLOWED_TRAVEL_MODES = {"SUBWAY", "BUS", "RAIL", "TRAIN", "LIGHT_RAIL"}
+ALLOWED_ROUTING_PREFERENCES = {"FEWER_TRANSFERS", "LESS_WALKING"}
 
 FIELD_MASK = ",".join([
     "routes.legs.steps.transitDetails",
@@ -69,9 +72,63 @@ def _duration_to_minutes(value) -> int | None:
         return None
     return max(1, round(seconds / 60))
 
-async def get_transit_route(origin: tuple, dest: str, dest_coords: tuple | None = None) -> dict:
+def _serialize_departure_time(value: str | datetime) -> str:
+    if isinstance(value, datetime):
+        dt = value
+    elif isinstance(value, str):
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise GoogleRoutesError(
+                "invalid_departure_time",
+                f"unparseable departure_time: {value!r}",
+            ) from exc
+    else:
+        raise GoogleRoutesError(
+            "invalid_departure_time",
+            f"unsupported departure_time type: {type(value).__name__}",
+        )
+
+    if dt.tzinfo is None or dt.utcoffset() is None:
+        raise GoogleRoutesError(
+            "invalid_departure_time",
+            "departure_time must be timezone-aware (RFC3339 with offset)",
+        )
+
+    return dt.astimezone(timezone.utc).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+async def get_transit_route(
+    origin: tuple,
+    dest: str,
+    dest_coords: tuple | None = None,
+    *,
+    allowed_travel_modes: list[str] | None = None,
+    routing_preference: str = "FEWER_TRANSFERS",
+    departure_time: str | datetime | None = None,
+) -> dict:
     if not key:
         raise GoogleRoutesError("not_configured", "Google Routes API is not configured")
+
+    if allowed_travel_modes is None:
+        allowed_travel_modes = ["SUBWAY", "BUS"]
+    if not allowed_travel_modes or any(
+        mode not in ALLOWED_TRAVEL_MODES for mode in allowed_travel_modes
+    ):
+        raise GoogleRoutesError(
+            "invalid_modes",
+            f"invalid allowed_travel_modes: {allowed_travel_modes!r}",
+        )
+
+    if routing_preference not in ALLOWED_ROUTING_PREFERENCES:
+        raise GoogleRoutesError(
+            "invalid_preference",
+            f"invalid routing_preference: {routing_preference!r}",
+        )
+
+    departure_time_str = (
+        _serialize_departure_time(departure_time) if departure_time is not None else None
+    )
 
     destination = (
         {
@@ -98,11 +155,13 @@ async def get_transit_route(origin: tuple, dest: str, dest_coords: tuple | None 
         "travelMode": "TRANSIT",
         "computeAlternativeRoutes": GOOGLE_ROUTES_ALTERNATIVES,
         "transitPreferences": {
-            "allowedTravelModes": ["SUBWAY", "BUS"],
-            "routingPreference": "FEWER_TRANSFERS"
+            "allowedTravelModes": allowed_travel_modes,
+            "routingPreference": routing_preference
         },
         "languageCode": "en-US"
     }
+    if departure_time_str is not None:
+        request_body["departureTime"] = departure_time_str
     headers = {
         "Content-type": "application/json",
         "X-Goog-Api-Key": key,
@@ -218,6 +277,8 @@ def _parse_leg_steps(leg: dict) -> list:
                     "arrival_coords": arrival_coords,
                     "minutes_until_train_arrives": minutes_until_train_arrives,
                     "minutes_until_arrival": arrival,
+                    "departure_time_iso": departure_est.isoformat(),
+                    "arrival_time_iso": arrival_est.isoformat(),
                     "route_total_minutes": route_total_minutes,
                     "polyline": step["polyline"]
 
