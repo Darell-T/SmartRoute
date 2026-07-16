@@ -23,8 +23,6 @@ registers -- see that file's comment for the full rationale), and reload
 
 from __future__ import annotations
 
-import importlib
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -33,7 +31,7 @@ from types import SimpleNamespace
 from app.utils import cache
 from evals import assertions
 from evals import run_agent_evals
-from tests._fake_anthropic import make_fake_anthropic_module
+from tests._fake_anthropic import reload_agent_loop_module
 
 FIXTURES_ROOT = Path(__file__).resolve().parent.parent / "evals" / "fixtures"
 QUERIES_PATH = Path(__file__).resolve().parent.parent / "evals" / "golden_queries.yaml"
@@ -44,18 +42,9 @@ def _trace(tool_calls, final_text: str = "") -> SimpleNamespace:
 
 
 def _reload_agent_loop_with_fake(rounds: list[dict]):
-    fake_anthropic_module = make_fake_anthropic_module(rounds=rounds)
-    previous_anthropic = sys.modules.get("anthropic")
-    sys.modules["anthropic"] = fake_anthropic_module
-    try:
-        if "app.services.agent.loop" in sys.modules:
-            return importlib.reload(sys.modules["app.services.agent.loop"])
-        return importlib.import_module("app.services.agent.loop")
-    finally:
-        if previous_anthropic is not None:
-            sys.modules["anthropic"] = previous_anthropic
-        else:
-            sys.modules.pop("anthropic", None)
+    # See _fake_anthropic.reload_agent_loop_module's docstring for why this
+    # is a manual sys.modules swap rather than patch.dict(sys.modules, ...).
+    return reload_agent_loop_module(rounds=rounds)
 
 
 # ------------------------------------------------------- assertion engine --

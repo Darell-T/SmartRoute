@@ -16,9 +16,8 @@ import os
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-import httpx
-
 from app.services.agent import venues
+from app.services.agent.tools._http import fetch_json
 from app.services.agent.tools._types import ToolContext, ToolResult
 from app.services.trips import text
 from app.utils import cache
@@ -187,23 +186,16 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
             return ToolResult(ok=False, error="date must be YYYY-MM-DD")
         params["startDateTime"], params["endDateTime"] = bounds
 
-    try:
-        async with httpx.AsyncClient(timeout=EVENT_LOOKUP_TIMEOUT_S) as client:
-            response = await client.get(TICKETMASTER_EVENTS_URL, params=params)
-            response.raise_for_status()
-            payload = response.json()
-    except httpx.TimeoutException:
-        print("[agent-event_lookup] Ticketmaster timed out")
-        return ToolResult(ok=False, error="event lookup timed out")
-    except httpx.HTTPStatusError as exc:
-        print(f"[agent-event_lookup] Ticketmaster HTTP {exc.response.status_code}")
-        return ToolResult(ok=False, error="event lookup failed")
-    except httpx.RequestError as exc:
-        print(f"[agent-event_lookup] Ticketmaster request failed: {type(exc).__name__}")
-        return ToolResult(ok=False, error="event lookup failed")
-    except (ValueError, TypeError) as exc:
-        print(f"[agent-event_lookup] Ticketmaster invalid JSON: {exc!r}")
-        return ToolResult(ok=False, error="event lookup returned an unexpected response")
+    payload, error = await fetch_json(
+        "GET",
+        TICKETMASTER_EVENTS_URL,
+        timeout_s=EVENT_LOOKUP_TIMEOUT_S,
+        log_tag="agent-event_lookup",
+        what="event lookup",
+        params=params,
+    )
+    if error:
+        return ToolResult(ok=False, error=error)
 
     try:
         raw_events = ((payload or {}).get("_embedded") or {}).get("events") or []

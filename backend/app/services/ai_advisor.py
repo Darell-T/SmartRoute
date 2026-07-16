@@ -215,3 +215,13 @@ async def stream_recommendation(payload: dict):
                     raise
         print(f"[claude] {model} still overloaded after retries, trying next model")
     raise RuntimeError("All Claude models are currently overloaded. Please try again.")
+
+
+async def collect_recommendation(payload: dict) -> str:
+    """Drains `stream_recommendation` into a single string. Shared by
+    routers/trips.py's /api/trip and the plan_trip agent tool, which both
+    otherwise defined this identical loop themselves."""
+    raw = ""
+    async for chunk in stream_recommendation(payload):
+        raw += chunk
+    return raw

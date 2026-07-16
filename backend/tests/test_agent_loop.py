@@ -23,30 +23,13 @@ from app.services.agent import session as session_module
 from app.services.agent.tools import ToolResult, ToolSpec
 from app.services.agent import events as agent_events
 from app.utils import cache
-from tests._fake_anthropic import make_fake_anthropic_module
+from tests._fake_anthropic import reload_agent_loop_module
 
 
 def _load_agent_loop(env: dict | None = None):
-    # NOTE: deliberately not `with patch.dict(sys.modules, {...}):` here --
-    # patch.dict on sys.modules snapshots and restores the *entire* dict on
-    # exit, which would also undo every submodule loop.py's own import graph
-    # newly registers during this call (app.services.agent.budget/events/...,
-    # anthropic's own submodules), leaving them absent from sys.modules even
-    # though the loaded objects are still reachable and reload() then fails
-    # to find them by name. Swap just the "anthropic" key by hand instead.
-    fake_anthropic_module = make_fake_anthropic_module(rounds=[])
-    previous_anthropic = sys.modules.get("anthropic")
-    sys.modules["anthropic"] = fake_anthropic_module
-    try:
-        with patch.dict(os.environ, env or {}, clear=False):
-            if "app.services.agent.loop" in sys.modules:
-                return importlib.reload(sys.modules["app.services.agent.loop"])
-            return importlib.import_module("app.services.agent.loop")
-    finally:
-        if previous_anthropic is not None:
-            sys.modules["anthropic"] = previous_anthropic
-        else:
-            sys.modules.pop("anthropic", None)
+    # See _fake_anthropic.reload_agent_loop_module's docstring for why this
+    # is a manual sys.modules swap rather than patch.dict(sys.modules, ...).
+    return reload_agent_loop_module(env=env)
 
 
 def _reload_budget(env: dict):

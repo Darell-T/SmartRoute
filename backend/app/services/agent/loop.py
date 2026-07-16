@@ -90,6 +90,34 @@ def _build_stream_kwargs(*, force_final: bool, messages: list[dict], system_bloc
     return kwargs
 
 
+async def _call_model(
+    *, stream_kwargs: dict, log_tag: str
+) -> tuple[object | None, list[agent_events.TokenEvent], agent_events.ErrorEvent | None]:
+    """Runs one `messages.stream()` call to completion, collecting its text
+    deltas as `TokenEvent`s. Returns `(final_message, token_events, None)` on
+    success or `(None, token_events, ErrorEvent)` on failure -- callers
+    re-yield the token events as they stream and, on failure, the error
+    event, then decide their own next step (break the round loop vs. give up
+    on the wrap-up call). Shared by both the per-round model call and the
+    forced wrap-up call, which otherwise duplicated this stream/collect/
+    error-handle sequence verbatim."""
+    token_events: list[agent_events.TokenEvent] = []
+    try:
+        async with client.messages.stream(**stream_kwargs) as stream:
+            async for delta in stream.text_stream:
+                token_events.append(agent_events.TokenEvent(text=delta))
+            final_message = await stream.get_final_message()
+    except Exception as exc:
+        print(f"[agent-loop] {log_tag} failed: {type(exc).__name__}: {exc!r}")
+        error_event = agent_events.ErrorEvent(
+            code="upstream_error",
+            message="The routing assistant is temporarily unavailable.",
+            retryable=True,
+        )
+        return None, token_events, error_event
+    return final_message, token_events, None
+
+
 async def _run_one_tool(name: str, tool_input: dict, ctx: ToolContext) -> ToolResult:
     """Always returns a ToolResult -- timeouts and exceptions are captured
     as ToolResult(ok=False, error=<short reason>), never raised."""
@@ -211,23 +239,15 @@ async def _stream_turn(
 
             stream_kwargs = _build_stream_kwargs(force_final=False, messages=messages, system_blocks=system_blocks)
             model_call_start = time.monotonic()
-            try:
-                async with client.messages.stream(**stream_kwargs) as stream:
-                    async for delta in stream.text_stream:
-                        text_parts.append(delta)
-                        yield agent_events.TokenEvent(text=delta)
-                    final_message = await stream.get_final_message()
-            except Exception as exc:
-                model_ms_total += (time.monotonic() - model_call_start) * 1000
-                print(f"[agent-loop] model call failed: {type(exc).__name__}: {exc!r}")
-                yield agent_events.ErrorEvent(
-                    code="upstream_error",
-                    message="The routing assistant is temporarily unavailable.",
-                    retryable=True,
-                )
+            final_message, token_events, error_event = await _call_model(stream_kwargs=stream_kwargs, log_tag="model call")
+            model_ms_total += (time.monotonic() - model_call_start) * 1000
+            for token_event in token_events:
+                text_parts.append(token_event.text)
+                yield token_event
+            if error_event is not None:
+                yield error_event
                 stop_reason_out = "error"
                 break
-            model_ms_total += (time.monotonic() - model_call_start) * 1000
 
             usage = getattr(final_message, "usage", None)
             input_tokens += int(getattr(usage, "input_tokens", 0) or 0)
@@ -258,26 +278,21 @@ async def _stream_turn(
             messages.append({"role": "user", "content": WRAP_UP_INSTRUCTION})
             stream_kwargs = _build_stream_kwargs(force_final=True, messages=messages, system_blocks=system_blocks)
             model_call_start = time.monotonic()
-            try:
-                async with client.messages.stream(**stream_kwargs) as stream:
-                    async for delta in stream.text_stream:
-                        text_parts.append(delta)
-                        yield agent_events.TokenEvent(text=delta)
-                    final_message = await stream.get_final_message()
-                model_ms_total += (time.monotonic() - model_call_start) * 1000
+            final_message, token_events, error_event = await _call_model(
+                stream_kwargs=stream_kwargs, log_tag="wrap-up model call"
+            )
+            model_ms_total += (time.monotonic() - model_call_start) * 1000
+            for token_event in token_events:
+                text_parts.append(token_event.text)
+                yield token_event
+            if error_event is not None:
+                yield error_event
+                stop_reason_out = "error"
+            else:
                 usage = getattr(final_message, "usage", None)
                 input_tokens += int(getattr(usage, "input_tokens", 0) or 0)
                 output_tokens += int(getattr(usage, "output_tokens", 0) or 0)
                 messages.append({"role": "assistant", "content": final_message.content})
-            except Exception as exc:
-                model_ms_total += (time.monotonic() - model_call_start) * 1000
-                print(f"[agent-loop] wrap-up model call failed: {type(exc).__name__}: {exc!r}")
-                yield agent_events.ErrorEvent(
-                    code="upstream_error",
-                    message="The routing assistant is temporarily unavailable.",
-                    retryable=True,
-                )
-                stop_reason_out = "error"
     except Exception as exc:
         print(f"[agent-loop] turn failed unexpectedly: {type(exc).__name__}: {exc!r}")
         yield agent_events.ErrorEvent(
@@ -334,36 +349,33 @@ async def run_agent_turn(
     """
     yield agent_events.MetaEvent(session_id=session_id, turn_id=turn_id)
 
-    def _reject(code: str, text: str, retryable: bool) -> agent_events.ErrorEvent:
-        return agent_events.ErrorEvent(code=code, message=text, retryable=retryable)
+    def _reject(code: str, text: str, retryable: bool) -> tuple[agent_events.ErrorEvent, agent_events.DoneEvent]:
+        return (
+            agent_events.ErrorEvent(code=code, message=text, retryable=retryable),
+            agent_events.DoneEvent(
+                session_id=session_id, turn_id=turn_id, stop_reason="error", usage={"input_tokens": 0, "output_tokens": 0}
+            ),
+        )
 
     if not budget.agent_enabled():
-        yield _reject("budget_exceeded", "The conversational agent is temporarily disabled.", True)
-        yield agent_events.DoneEvent(
-            session_id=session_id, turn_id=turn_id, stop_reason="error", usage={"input_tokens": 0, "output_tokens": 0}
-        )
+        for event in _reject("budget_exceeded", "The conversational agent is temporarily disabled.", True):
+            yield event
         return
 
     if not budget.check_session_rate_limit(session_id):
-        yield _reject("rate_limited", "Too many messages in the last minute -- try again shortly.", True)
-        yield agent_events.DoneEvent(
-            session_id=session_id, turn_id=turn_id, stop_reason="error", usage={"input_tokens": 0, "output_tokens": 0}
-        )
+        for event in _reject("rate_limited", "Too many messages in the last minute -- try again shortly.", True):
+            yield event
         return
 
     if budget.daily_spend_exceeded():
-        yield _reject("budget_exceeded", "Today's usage budget is reached -- please try again tomorrow.", False)
-        yield agent_events.DoneEvent(
-            session_id=session_id, turn_id=turn_id, stop_reason="error", usage={"input_tokens": 0, "output_tokens": 0}
-        )
+        for event in _reject("budget_exceeded", "Today's usage budget is reached -- please try again tomorrow.", False):
+            yield event
         return
 
     sem = budget.concurrency_semaphore()
     if sem.locked():
-        yield _reject("rate_limited", "The agent is busy helping other riders -- try again shortly.", True)
-        yield agent_events.DoneEvent(
-            session_id=session_id, turn_id=turn_id, stop_reason="error", usage={"input_tokens": 0, "output_tokens": 0}
-        )
+        for event in _reject("rate_limited", "The agent is busy helping other riders -- try again shortly.", True):
+            yield event
         return
 
     ctx = ToolContext(gtfs=gtfs, session=session, turn_id=turn_id, now_et=now_et, origin=origin)

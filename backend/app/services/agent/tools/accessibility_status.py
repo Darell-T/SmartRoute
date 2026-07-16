@@ -21,8 +21,7 @@ from __future__ import annotations
 import json
 import os
 
-import httpx
-
+from app.services.agent.tools._http import fetch_json
 from app.services.agent.tools._types import ToolContext, ToolResult
 from app.services.trips import text
 from app.utils import cache
@@ -133,22 +132,14 @@ async def _fetch_feed() -> list[dict] | None:
     if cached is not None:
         return cached
 
-    try:
-        async with httpx.AsyncClient(timeout=ACCESSIBILITY_STATUS_TIMEOUT_S) as client:
-            response = await client.get(MTA_ENE_URL)
-            response.raise_for_status()
-            payload = response.json()
-    except httpx.TimeoutException:
-        print("[agent-accessibility_status] MTA ENE feed timed out")
-        return None
-    except httpx.HTTPStatusError as exc:
-        print(f"[agent-accessibility_status] MTA ENE feed HTTP {exc.response.status_code}")
-        return None
-    except httpx.RequestError as exc:
-        print(f"[agent-accessibility_status] MTA ENE feed request failed: {type(exc).__name__}")
-        return None
-    except (ValueError, TypeError) as exc:
-        print(f"[agent-accessibility_status] MTA ENE feed invalid JSON: {exc!r}")
+    payload, error = await fetch_json(
+        "GET",
+        MTA_ENE_URL,
+        timeout_s=ACCESSIBILITY_STATUS_TIMEOUT_S,
+        log_tag="agent-accessibility_status",
+        what="MTA ENE feed",
+    )
+    if error:
         return None
 
     records = _extract_outage_records(payload)
@@ -156,17 +147,8 @@ async def _fetch_feed() -> list[dict] | None:
     return records
 
 
-def _parse_record(raw: dict) -> dict:
-    equipment_type = str(raw.get("equipmenttype") or "").strip().upper()
-    return {
-        "station": text._safe_text(raw.get("station"), 80),
-        "borough": text._safe_text(raw.get("borough"), 40),
-        "equipment": text._safe_text(raw.get("equipment") or raw.get("equipmentno"), 20),
-        "equipmenttype": equipment_type,
-        "serving": text._safe_text(raw.get("serving"), 120),
-        "outagedate": text._safe_text(raw.get("outagedate"), 40),
-        "estimatedreturntoservice": text._safe_text(raw.get("estimatedreturntoservice"), 40),
-    }
+def _equipment_type(raw: dict) -> str:
+    return str(raw.get("equipmenttype") or "").strip().upper()
 
 
 async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
@@ -188,25 +170,24 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
         if _station_matches(_normalize_station(raw.get("station")), query_norm)
         and (not borough_norm or borough_norm in _normalize_station(raw.get("borough")))
     ]
-    parsed = [_parse_record(raw) for raw in matched_raw]
-
-    elevator = [p for p in parsed if p["equipmenttype"] == "EL"]
-    escalator = [p for p in parsed if p["equipmenttype"] == "ES"]
-
+    # Only elevator outages carry detail into the digest; escalators are a
+    # bare count, so there is no need to fully parse those records.
     elevator_outages = [
         {
-            "equipment": p["equipment"],
-            "serving": p["serving"],
-            "estimated_return": p["estimatedreturntoservice"],
+            "equipment": text._safe_text(raw.get("equipment") or raw.get("equipmentno"), 20),
+            "serving": text._safe_text(raw.get("serving"), 120),
+            "estimated_return": text._safe_text(raw.get("estimatedreturntoservice"), 40),
         }
-        for p in elevator
+        for raw in matched_raw
+        if _equipment_type(raw) == "EL"
     ]
+    escalator_count = sum(1 for raw in matched_raw if _equipment_type(raw) == "ES")
 
     station_matched = text._safe_text(station_raw, 80)
     data = {
         "station_matched": station_matched,
         "elevator_outages": elevator_outages,
-        "escalator_outages_count": len(escalator),
+        "escalator_outages_count": escalator_count,
         "checked_at_note": "reflects current MTA-reported elevator/escalator outages, not real-time equipment status",
     }
 
@@ -214,7 +195,7 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
         summary = f"{len(elevator_outages)} elevator outage(s) reported at {station_matched}"
     else:
         summary = f"no elevator outages reported at {station_matched}"
-    if escalator:
-        summary += f"; {len(escalator)} escalator outage(s) also reported"
+    if escalator_count:
+        summary += f"; {escalator_count} escalator outage(s) also reported"
 
     return ToolResult(ok=True, data=data, summary=summary)

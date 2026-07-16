@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 from app.services.agent.tools import plan_trip, transit_snapshot
-from app.services.agent.tools._types import ToolContext
+from tests._fake_http_tools import make_tool_ctx
 
 
 def _iso(dt: datetime) -> str:
@@ -80,7 +80,7 @@ class PlanTripToolTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(patch.stopall)
 
     def _ctx(self, origin=None, gtfs=None):
-        return ToolContext(gtfs=gtfs, session={}, turn_id="t1", now_et="2026-07-15T21:00:00-04:00", origin=origin)
+        return make_tool_ctx(origin, gtfs=gtfs)
 
     async def test_destination_required(self):
         result = await plan_trip.execute({"origin": "user", "destination": ""}, self._ctx())
@@ -201,7 +201,7 @@ class PlanTripToolTests(unittest.IsolatedAsyncioTestCase):
 
 class TransitSnapshotToolTests(unittest.IsolatedAsyncioTestCase):
     def _ctx(self, origin=None, gtfs="fake-gtfs"):
-        return ToolContext(gtfs=gtfs, session={}, turn_id="t1", now_et="2026-07-15T21:00:00-04:00", origin=origin)
+        return make_tool_ctx(origin, gtfs=gtfs)
 
     async def test_near_user_without_gps_asks_for_location(self):
         result = await transit_snapshot.execute({"near": "user"}, self._ctx(origin=None))

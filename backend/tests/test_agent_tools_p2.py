@@ -4,6 +4,8 @@ line in loop.py, and the full 7-tool registry.
 
 Follows test_agent_tools_p1.py's conventions: real imports, only the actual
 I/O boundary each tool touches (httpx) is mocked -- never the whole module.
+The fake client classes live in tests/_fake_http_tools.py, shared with
+test_agent_tools_p1.py.
 """
 
 from __future__ import annotations
@@ -15,51 +17,12 @@ from unittest.mock import patch
 
 from app.services.agent import prompt as agent_prompt
 from app.services.agent import tools as agent_tools
-from app.services.agent.tools import accessibility_status, lookup_facts
-from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools import _http, accessibility_status, lookup_facts
 from app.utils import cache
+from tests._fake_http_tools import make_tool_ctx as _ctx
+from tests._fake_http_tools import recording_get_client as _recording_get_client
 
 from tests.test_agent_loop import _AgentLoopHelpers, _load_agent_loop, _test_registry
-
-
-def _ctx(origin=None) -> ToolContext:
-    return ToolContext(gtfs=None, session={}, turn_id="t1", now_et="2026-07-15T21:00:00-04:00", origin=origin)
-
-
-class _FakeResponse:
-    def __init__(self, payload, status_code: int = 200):
-        self._payload = payload
-        self.status_code = status_code
-
-    def raise_for_status(self):
-        if self.status_code >= 400:
-            import httpx
-
-            raise httpx.HTTPStatusError("bad status", request=object(), response=self)  # type: ignore[arg-type]
-
-    def json(self):
-        return self._payload
-
-
-def _recording_get_client(payload, status_code: int = 200):
-    class _Client:
-        requests: list[dict] = []
-
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *_args):
-            return False
-
-        async def get(self, url, params=None):
-            type(self).requests.append({"url": url, "params": params})
-            return _FakeResponse(payload, status_code)
-
-    _Client.requests = []
-    return _Client
 
 
 def _outage(
@@ -94,7 +57,7 @@ class AccessibilityStatusTests(unittest.IsolatedAsyncioTestCase):
     async def test_parses_realistic_feed_and_matches_station(self):
         payload = {"outages": [_outage(), _outage(station="Atlantic Av-Barclays Ctr", equipmenttype="ES")]}
         client_class = _recording_get_client(payload)
-        with patch.object(accessibility_status.httpx, "AsyncClient", client_class):
+        with patch.object(_http.httpx, "AsyncClient", client_class):
             result = await accessibility_status.execute({"station": "34 St-Penn Station"}, _ctx())
         self.assertTrue(result.ok)
         self.assertEqual(result.data["station_matched"], "34 St-Penn Station")
@@ -106,7 +69,7 @@ class AccessibilityStatusTests(unittest.IsolatedAsyncioTestCase):
     async def test_loose_matching_on_partial_station_name(self):
         payload = {"outages": [_outage(station="34 St-Penn Station")]}
         client_class = _recording_get_client(payload)
-        with patch.object(accessibility_status.httpx, "AsyncClient", client_class):
+        with patch.object(_http.httpx, "AsyncClient", client_class):
             result = await accessibility_status.execute({"station": "Penn Station"}, _ctx())
         self.assertTrue(result.ok)
         self.assertEqual(len(result.data["elevator_outages"]), 1)
@@ -114,7 +77,7 @@ class AccessibilityStatusTests(unittest.IsolatedAsyncioTestCase):
     async def test_no_match_is_a_positive_signal_not_an_error(self):
         payload = {"outages": [_outage(station="34 St-Penn Station")]}
         client_class = _recording_get_client(payload)
-        with patch.object(accessibility_status.httpx, "AsyncClient", client_class):
+        with patch.object(_http.httpx, "AsyncClient", client_class):
             result = await accessibility_status.execute({"station": "Coney Island-Stillwell Av"}, _ctx())
         self.assertTrue(result.ok)
         self.assertEqual(result.data["elevator_outages"], [])
@@ -129,7 +92,7 @@ class AccessibilityStatusTests(unittest.IsolatedAsyncioTestCase):
             ]
         }
         client_class = _recording_get_client(payload)
-        with patch.object(accessibility_status.httpx, "AsyncClient", client_class):
+        with patch.object(_http.httpx, "AsyncClient", client_class):
             result = await accessibility_status.execute({"station": "34 St-Penn Station"}, _ctx())
         self.assertEqual(len(result.data["elevator_outages"]), 1)
         self.assertEqual(result.data["escalator_outages_count"], 2)
@@ -142,7 +105,7 @@ class AccessibilityStatusTests(unittest.IsolatedAsyncioTestCase):
             ]
         }
         client_class = _recording_get_client(payload)
-        with patch.object(accessibility_status.httpx, "AsyncClient", client_class):
+        with patch.object(_http.httpx, "AsyncClient", client_class):
             result = await accessibility_status.execute(
                 {"station": "Broadway Junction", "borough": "Brooklyn"}, _ctx()
             )
@@ -152,7 +115,7 @@ class AccessibilityStatusTests(unittest.IsolatedAsyncioTestCase):
     async def test_cache_hit_skips_second_http_call(self):
         payload = {"outages": [_outage()]}
         client_class = _recording_get_client(payload)
-        with patch.object(accessibility_status.httpx, "AsyncClient", client_class):
+        with patch.object(_http.httpx, "AsyncClient", client_class):
             first = await accessibility_status.execute({"station": "34 St-Penn Station"}, _ctx())
             second = await accessibility_status.execute({"station": "34 St-Penn Station"}, _ctx())
         self.assertTrue(first.ok)
@@ -161,7 +124,7 @@ class AccessibilityStatusTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_fetch_failure_is_fail_open_not_a_crash(self):
         client_class = _recording_get_client({}, status_code=404)
-        with patch.object(accessibility_status.httpx, "AsyncClient", client_class):
+        with patch.object(_http.httpx, "AsyncClient", client_class):
             result = await accessibility_status.execute({"station": "34 St-Penn Station"}, _ctx())
         self.assertFalse(result.ok)
         self.assertEqual(result.error, "elevator status is temporarily unavailable")
@@ -182,14 +145,14 @@ class AccessibilityStatusTests(unittest.IsolatedAsyncioTestCase):
             async def get(self, url, params=None):
                 raise httpx.ConnectError("boom", request=None)
 
-        with patch.object(accessibility_status.httpx, "AsyncClient", _RaisingClient):
+        with patch.object(_http.httpx, "AsyncClient", _RaisingClient):
             result = await accessibility_status.execute({"station": "34 St-Penn Station"}, _ctx())
         self.assertFalse(result.ok)
         self.assertEqual(result.error, "elevator status is temporarily unavailable")
 
     async def test_malformed_payload_shape_yields_no_outages_not_a_crash(self):
         client_class = _recording_get_client({"unexpected": "shape"})
-        with patch.object(accessibility_status.httpx, "AsyncClient", client_class):
+        with patch.object(_http.httpx, "AsyncClient", client_class):
             result = await accessibility_status.execute({"station": "34 St-Penn Station"}, _ctx())
         self.assertTrue(result.ok)
         self.assertEqual(result.data["elevator_outages"], [])

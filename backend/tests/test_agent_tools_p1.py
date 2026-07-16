@@ -5,8 +5,11 @@ dispatch hook in tools/__init__.py.
 Follows test_agent_tools.py's convention: real imports work in this
 environment, so only the actual I/O boundary each tool touches (httpx) is
 mocked -- never the whole module. httpx itself is mocked the same way
-tests/test_directions.py does it: `patch.object(<module>.httpx, "AsyncClient",
-<fake client class>)`, never a live network call.
+tests/test_directions.py does it: `patch.object(_http.httpx, "AsyncClient",
+<fake client class>)` (both tools' fetches go through the shared
+`app.services.agent.tools._http.fetch_json`, so patching `AsyncClient` there
+covers either one), never a live network call. The fake client classes
+themselves live in tests/_fake_http_tools.py, shared with test_agent_tools_p2.py.
 """
 
 from __future__ import annotations
@@ -20,67 +23,12 @@ from unittest.mock import patch
 
 from app.services.agent import tools as agent_tools
 from app.services.agent import venues
-from app.services.agent.tools import event_lookup, poi_search, venue_crowd_window
-from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools import _http, event_lookup, poi_search, venue_crowd_window
+from app.services.agent.tools._types import ToolResult
 from app.utils import cache
-
-
-def _ctx(origin=None) -> ToolContext:
-    return ToolContext(gtfs=None, session={}, turn_id="t1", now_et="2026-07-15T21:00:00-04:00", origin=origin)
-
-
-class _FakeResponse:
-    def __init__(self, payload, status_code: int = 200):
-        self._payload = payload
-        self.status_code = status_code
-
-    def raise_for_status(self):
-        return None
-
-    def json(self):
-        return self._payload
-
-
-def _recording_get_client(payload, status_code: int = 200):
-    class _Client:
-        requests: list[dict] = []
-
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *_args):
-            return False
-
-        async def get(self, url, params=None):
-            type(self).requests.append({"url": url, "params": params})
-            return _FakeResponse(payload, status_code)
-
-    _Client.requests = []
-    return _Client
-
-
-def _recording_post_client(payload, status_code: int = 200):
-    class _Client:
-        requests: list[dict] = []
-
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *_args):
-            return False
-
-        async def post(self, url, json=None, headers=None):
-            type(self).requests.append({"url": url, "json": json, "headers": headers})
-            return _FakeResponse(payload, status_code)
-
-    _Client.requests = []
-    return _Client
+from tests._fake_http_tools import make_tool_ctx as _ctx
+from tests._fake_http_tools import recording_get_client as _recording_get_client
+from tests._fake_http_tools import recording_post_client as _recording_post_client
 
 
 def _ticketmaster_event(
@@ -125,7 +73,7 @@ class EventLookupTests(unittest.IsolatedAsyncioTestCase):
     async def test_successful_parse_and_duration_heuristic(self):
         payload = {"_embedded": {"events": [_ticketmaster_event()]}}
         client_class = _recording_get_client(payload)
-        with patch.object(event_lookup.httpx, "AsyncClient", client_class):
+        with patch.object(_http.httpx, "AsyncClient", client_class):
             result = await event_lookup.execute({"query": "Knicks"}, _ctx())
         self.assertTrue(result.ok)
         event = result.data["events"][0]
@@ -141,14 +89,14 @@ class EventLookupTests(unittest.IsolatedAsyncioTestCase):
     async def test_venue_key_normalization_unknown_venue_is_none(self):
         payload = {"_embedded": {"events": [_ticketmaster_event(venue_name="Some Random Bar")]}}
         client_class = _recording_get_client(payload)
-        with patch.object(event_lookup.httpx, "AsyncClient", client_class):
+        with patch.object(_http.httpx, "AsyncClient", client_class):
             result = await event_lookup.execute({"query": "local show"}, _ctx())
         self.assertIsNone(result.data["events"][0]["venue_key"])
 
     async def test_date_maps_to_utc_day_bounds_params(self):
         payload = {"_embedded": {"events": []}}
         client_class = _recording_get_client(payload)
-        with patch.object(event_lookup.httpx, "AsyncClient", client_class):
+        with patch.object(_http.httpx, "AsyncClient", client_class):
             await event_lookup.execute({"query": "Knicks", "date": "2026-07-16"}, _ctx())
         params = client_class.requests[0]["params"]
         self.assertIn("startDateTime", params)
@@ -159,7 +107,7 @@ class EventLookupTests(unittest.IsolatedAsyncioTestCase):
     async def test_cache_hit_skips_second_http_call(self):
         payload = {"_embedded": {"events": [_ticketmaster_event()]}}
         client_class = _recording_get_client(payload)
-        with patch.object(event_lookup.httpx, "AsyncClient", client_class):
+        with patch.object(_http.httpx, "AsyncClient", client_class):
             first = await event_lookup.execute({"query": "Knicks"}, _ctx())
             second = await event_lookup.execute({"query": "Knicks"}, _ctx())
         self.assertTrue(first.ok)
@@ -169,14 +117,14 @@ class EventLookupTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_malformed_response_is_reported_without_traceback(self):
         client_class = _recording_get_client({"_embedded": {"events": "not-a-list"}})
-        with patch.object(event_lookup.httpx, "AsyncClient", client_class):
+        with patch.object(_http.httpx, "AsyncClient", client_class):
             result = await event_lookup.execute({"query": "Knicks"}, _ctx())
         self.assertFalse(result.ok)
         self.assertNotIn("Traceback", result.error or "")
 
     async def test_non_dict_events_payload_is_reported(self):
         client_class = _recording_get_client({"_embedded": {"events": [None]}})
-        with patch.object(event_lookup.httpx, "AsyncClient", client_class):
+        with patch.object(_http.httpx, "AsyncClient", client_class):
             result = await event_lookup.execute({"query": "Knicks"}, _ctx())
         self.assertFalse(result.ok)
 
@@ -209,7 +157,7 @@ class PoiSearchTests(unittest.IsolatedAsyncioTestCase):
         payload = {"places": [self._place()]}
         client_class = _recording_post_client(payload)
         with patch.dict(os.environ, {"GOOGLE_PLACES_API_KEY": "", "GOOGLE_ROUTES_API_KEY": "routes-key"}, clear=False):
-            with patch.object(poi_search.httpx, "AsyncClient", client_class):
+            with patch.object(_http.httpx, "AsyncClient", client_class):
                 result = await poi_search.execute({"query": "pizza"}, _ctx(origin={"lat": 40.7, "lng": -73.9}))
         self.assertTrue(result.ok)
         self.assertEqual(client_class.requests[0]["headers"]["X-Goog-Api-Key"], "routes-key")
@@ -218,7 +166,7 @@ class PoiSearchTests(unittest.IsolatedAsyncioTestCase):
         payload = {"places": [self._place()]}
         client_class = _recording_post_client(payload)
         with patch.dict(os.environ, {"GOOGLE_ROUTES_API_KEY": "routes-key"}, clear=False):
-            with patch.object(poi_search.httpx, "AsyncClient", client_class):
+            with patch.object(_http.httpx, "AsyncClient", client_class):
                 await poi_search.execute({"query": "pizza"}, _ctx(origin={"lat": 40.7, "lng": -73.9}))
         self.assertEqual(client_class.requests[0]["headers"]["X-Goog-Api-Key"], "places-key")
 
@@ -230,7 +178,7 @@ class PoiSearchTests(unittest.IsolatedAsyncioTestCase):
             ]
         }
         client_class = _recording_post_client(payload)
-        with patch.object(poi_search.httpx, "AsyncClient", client_class):
+        with patch.object(_http.httpx, "AsyncClient", client_class):
             result = await poi_search.execute({"query": "pizza"}, _ctx(origin={"lat": 40.7, "lng": -73.9}))
         self.assertTrue(result.ok)
         names = [r["name"] for r in result.data["results"]]
@@ -239,7 +187,7 @@ class PoiSearchTests(unittest.IsolatedAsyncioTestCase):
     async def test_max_results_is_clamped(self):
         payload = {"places": [self._place(name=f"Place {i}") for i in range(10)]}
         client_class = _recording_post_client(payload)
-        with patch.object(poi_search.httpx, "AsyncClient", client_class):
+        with patch.object(_http.httpx, "AsyncClient", client_class):
             result = await poi_search.execute(
                 {"query": "pizza", "max_results": 999}, _ctx(origin={"lat": 40.7, "lng": -73.9})
             )
@@ -249,7 +197,7 @@ class PoiSearchTests(unittest.IsolatedAsyncioTestCase):
     async def test_open_now_is_none_when_absent(self):
         payload = {"places": [self._place(open_now=None)]}
         client_class = _recording_post_client(payload)
-        with patch.object(poi_search.httpx, "AsyncClient", client_class):
+        with patch.object(_http.httpx, "AsyncClient", client_class):
             result = await poi_search.execute({"query": "pizza"}, _ctx(origin={"lat": 40.7, "lng": -73.9}))
         self.assertIsNone(result.data["results"][0]["open_now"])
 

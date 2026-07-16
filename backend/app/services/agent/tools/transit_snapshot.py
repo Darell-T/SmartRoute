@@ -9,13 +9,11 @@ untrusted per the system prompt's injection-defense clause.
 
 from __future__ import annotations
 
-import asyncio
-
 from app.routers.live_feed import _build_live_snapshot
 from app.services import mta_feed
+from app.services.agent.tools._location import resolve_named_point
 from app.services.agent.tools._types import ToolContext, ToolResult
 from app.services.trips import text
-from app.utils import geo
 
 ARRIVAL_LIMIT = 8
 ALERT_LIMIT = 5
@@ -51,17 +49,6 @@ TRANSIT_SNAPSHOT_SCHEMA = {
 }
 
 
-async def _resolve_near(near_raw: str, ctx: ToolContext) -> tuple[tuple[float, float] | None, str | None]:
-    value = (near_raw or "").strip()
-    if value.lower() == "user":
-        origin = ctx.origin or {}
-        lat, lng = origin.get("lat"), origin.get("lng")
-        if lat is not None and lng is not None:
-            return (float(lat), float(lng)), None
-        return None, "I need your location to check nearby conditions -- share GPS or give me a station name."
-    return await asyncio.to_thread(geo.geocode_address_with_reason, value)
-
-
 def _safe_alert(alert: dict) -> dict:
     return {
         "header": text._safe_text(alert.get("header"), 200),
@@ -91,7 +78,11 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
     lines = [str(line).strip().upper() for line in (tool_input.get("lines") or []) if str(line).strip()]
 
     if near_raw:
-        coords, error = await _resolve_near(near_raw, ctx)
+        coords, error = await resolve_named_point(
+            near_raw,
+            ctx,
+            missing_location_message="I need your location to check nearby conditions -- share GPS or give me a station name.",
+        )
         if coords is None:
             return ToolResult(ok=False, error=error or "could not resolve that location")
         if ctx.gtfs is None:

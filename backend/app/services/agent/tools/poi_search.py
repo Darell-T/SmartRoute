@@ -10,12 +10,11 @@ restriction on textQuery search the way the legacy API did.
 
 from __future__ import annotations
 
-import asyncio
 import os
 import re
 
-import httpx
-
+from app.services.agent.tools._http import fetch_json
+from app.services.agent.tools._location import resolve_named_point
 from app.services.agent.tools._types import ToolContext, ToolResult
 from app.services.trips import text
 from app.utils import geo
@@ -87,18 +86,18 @@ async def _resolve_bias(near_raw: str, ctx: ToolContext) -> tuple[tuple[float, f
     value = (near_raw or "").strip()
     if not value:
         return (_NYC_CENTER_LAT, _NYC_CENTER_LNG, _NYC_WIDE_RADIUS_M), None
-    if value.lower() == "user":
-        origin = ctx.origin or {}
-        lat, lng = origin.get("lat"), origin.get("lng")
-        if lat is not None and lng is not None:
-            return (float(lat), float(lng), _POI_RADIUS_M), None
-        return None, "I need your location to search nearby -- share GPS or give me a place name instead."
+    # Raw coordinates skip geo.py's NYC-bounds check deliberately -- a
+    # rider-supplied 'near' point only biases the search radius, it is never
+    # itself validated as an NYC destination the way plan_trip's origin/
+    # destination are.
     if _COORD_RE.match(value):
         lat_str, lng_str = value.split(",")
         return (float(lat_str.strip()), float(lng_str.strip()), _POI_RADIUS_M), None
-    coords, reason = await asyncio.to_thread(geo.geocode_address_with_reason, value)
+    coords, error = await resolve_named_point(
+        value, ctx, missing_location_message="I need your location to search nearby -- share GPS or give me a place name instead."
+    )
     if coords is None:
-        return None, reason or "could not resolve that location"
+        return None, error or "could not resolve that location"
     return (coords[0], coords[1], _POI_RADIUS_M), None
 
 
@@ -136,23 +135,17 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
         "X-Goog-FieldMask": PLACES_FIELD_MASK,
     }
 
-    try:
-        async with httpx.AsyncClient(timeout=POI_SEARCH_TIMEOUT_S) as client:
-            response = await client.post(PLACES_SEARCH_URL, json=body, headers=headers)
-            response.raise_for_status()
-            payload = response.json()
-    except httpx.TimeoutException:
-        print("[agent-poi_search] Places timed out")
-        return ToolResult(ok=False, error="place search timed out")
-    except httpx.HTTPStatusError as exc:
-        print(f"[agent-poi_search] Places HTTP {exc.response.status_code}")
-        return ToolResult(ok=False, error="place search failed")
-    except httpx.RequestError as exc:
-        print(f"[agent-poi_search] Places request failed: {type(exc).__name__}")
-        return ToolResult(ok=False, error="place search failed")
-    except (ValueError, TypeError) as exc:
-        print(f"[agent-poi_search] Places invalid JSON: {exc!r}")
-        return ToolResult(ok=False, error="place search returned an unexpected response")
+    payload, error = await fetch_json(
+        "POST",
+        PLACES_SEARCH_URL,
+        timeout_s=POI_SEARCH_TIMEOUT_S,
+        log_tag="agent-poi_search",
+        what="place search",
+        json_body=body,
+        headers=headers,
+    )
+    if error:
+        return ToolResult(ok=False, error=error)
 
     try:
         results = []

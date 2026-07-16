@@ -110,19 +110,7 @@ async def plan_trip(request: Request, payload: TripRequest):
         # it, below). Enriching every Google candidate's legs against the remote
         # GTFS DB was the dominant request latency; alternates are now enriched
         # lazily when the rider selects them (POST /api/trip/enrich-route).
-        route_ids = set()
-        bus_route_ids = set()
-        for route in parsed_response:
-            for step in route:
-                step_type = step["type"]
-                if step_type in ("SUBWAY", "BUS"):
-                    route_ids.add(step["route_id"])
-                    # Stable response shape: every transit step always carries
-                    # these keys, empty until (and unless) its route is enriched.
-                    step["intermediate_stops"] = []
-                    step["intermediate_stop_locations"] = []
-                if step_type == "BUS":
-                    bus_route_ids.add(step["route_id"])
+        route_ids, bus_route_ids = candidates._collect_route_and_bus_ids(parsed_response)
 
         # 4. Fetch the fast live context (alerts + stalled vehicles) in parallel.
         # return_exceptions keeps one slow upstream from 500-ing the whole trip.

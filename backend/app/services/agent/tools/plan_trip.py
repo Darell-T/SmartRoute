@@ -23,6 +23,7 @@ import secrets
 
 from app.services import ai_advisor
 from app.services.agent import events as agent_events
+from app.services.agent.tools._location import resolve_named_point
 from app.services.agent.tools._types import ToolContext, ToolResult
 from app.services.mta_feed import (
     fetch_service_alerts,
@@ -106,24 +107,6 @@ PLAN_TRIP_SCHEMA = {
 }
 
 
-async def _collect_recommendation(payload: dict) -> str:
-    raw = ""
-    async for chunk in ai_advisor.stream_recommendation(payload):
-        raw += chunk
-    return raw
-
-
-async def _resolve_point(raw_value: str, ctx: ToolContext, *, what: str) -> tuple[tuple[float, float] | None, str | None]:
-    value = (raw_value or "").strip()
-    if not value or value.lower() == "user":
-        origin = ctx.origin or {}
-        lat, lng = origin.get("lat"), origin.get("lng")
-        if lat is not None and lng is not None:
-            return (float(lat), float(lng)), None
-        return None, f"I need your current location to plan from '{what}' -- share GPS or give me an address instead."
-    return await asyncio.to_thread(geo.geocode_address_with_reason, value)
-
-
 def _point_label(raw_value: str) -> str:
     value = (raw_value or "").strip()
     if not value or value.lower() == "user":
@@ -162,11 +145,21 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
     if not allowed_modes:
         return ToolResult(ok=False, error="no transit modes left after excluding all of them")
 
-    origin_coords, origin_error = await _resolve_point(origin_raw, ctx, what="origin")
+    origin_coords, origin_error = await resolve_named_point(
+        origin_raw,
+        ctx,
+        missing_location_message="I need your current location to plan from 'origin' -- share GPS or give me an address instead.",
+    )
     if origin_coords is None:
         return ToolResult(ok=False, error=origin_error or "could not resolve the origin")
 
-    dest_coords, dest_error = await _resolve_point(destination_raw, ctx, what="destination")
+    dest_coords, dest_error = await resolve_named_point(
+        destination_raw,
+        ctx,
+        missing_location_message=(
+            "I need your current location to plan from 'destination' -- share GPS or give me an address instead."
+        ),
+    )
     if dest_coords is None:
         return ToolResult(ok=False, error=dest_error or "could not find that destination in NYC")
 
@@ -190,16 +183,7 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
     if not parsed_routes:
         return ToolResult(ok=False, error="no transit route found between those points")
 
-    route_ids: set[str] = set()
-    bus_route_ids: set[str] = set()
-    for route in parsed_routes:
-        for step in route:
-            if step["type"] in ("SUBWAY", "BUS"):
-                route_ids.add(step["route_id"])
-                step.setdefault("intermediate_stops", [])
-                step.setdefault("intermediate_stop_locations", [])
-            if step["type"] == "BUS":
-                bus_route_ids.add(step["route_id"])
+    route_ids, bus_route_ids = candidates._collect_route_and_bus_ids(parsed_routes)
 
     try:
         raw_alerts, stalled, stalled_buses = await asyncio.wait_for(
@@ -243,7 +227,7 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
 
     try:
         raw_recommendation = await asyncio.wait_for(
-            _collect_recommendation(judge_payload), timeout=TRIP_ADVISOR_TIMEOUT_S
+            ai_advisor.collect_recommendation(judge_payload), timeout=TRIP_ADVISOR_TIMEOUT_S
         )
     except asyncio.TimeoutError:
         print(f"[agent-plan_trip] advisor timed out ({TRIP_ADVISOR_TIMEOUT_S:.2f}s)")

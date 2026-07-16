@@ -18,7 +18,11 @@ A round spec is a dict:
 
 from __future__ import annotations
 
+import importlib
+import os
+import sys
 import types
+from unittest.mock import patch
 
 
 class FakeContentBlock:
@@ -125,3 +129,37 @@ def make_fake_anthropic_module(rounds: list[dict] | None = None, client_holder: 
     fake_anthropic.AsyncAnthropic = _async_anthropic
     fake_anthropic.APIStatusError = _FakeAPIStatusError
     return fake_anthropic
+
+
+def reload_agent_loop_module(*, rounds: list[dict] | None = None, env: dict | None = None):
+    """Swaps `sys.modules["anthropic"]` for a scripted fake, (re)loads
+    `app.services.agent.loop` against it, then restores the real module.
+
+    NOTE: deliberately not `with patch.dict(sys.modules, {...}):` here --
+    patch.dict on sys.modules snapshots and restores the *entire* dict on
+    exit, which would also undo every submodule loop.py's own import graph
+    newly registers during this call (app.services.agent.budget/events/...,
+    anthropic's own submodules), leaving them absent from sys.modules even
+    though the loaded objects are still reachable and reload() then fails to
+    find them by name. Swap just the "anthropic" key by hand instead.
+
+    `env`, if given, patches `os.environ` for the duration of the reload so
+    env-driven module constants (AGENT_MODEL, AGENT_MAX_ROUNDS, ...) pick up
+    the patched values; omit it for a plain reload against real env vars.
+    Each TestCase class should call this exactly once in setUpClass, never
+    per-test -- see test_agent_loop.py's module docstring for the reload-
+    churn/zoneinfo lesson that convention exists to avoid.
+    """
+    fake_anthropic_module = make_fake_anthropic_module(rounds=rounds or [])
+    previous_anthropic = sys.modules.get("anthropic")
+    sys.modules["anthropic"] = fake_anthropic_module
+    try:
+        with patch.dict(os.environ, env or {}, clear=False):
+            if "app.services.agent.loop" in sys.modules:
+                return importlib.reload(sys.modules["app.services.agent.loop"])
+            return importlib.import_module("app.services.agent.loop")
+    finally:
+        if previous_anthropic is not None:
+            sys.modules["anthropic"] = previous_anthropic
+        else:
+            sys.modules.pop("anthropic", None)
