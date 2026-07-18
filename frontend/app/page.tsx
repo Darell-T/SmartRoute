@@ -11,6 +11,7 @@ import { summarizeRoute } from "@/lib/smart-route";
 import { useAgentChat } from "@/lib/use-agent-chat";
 import { useChatTheme } from "@/lib/use-chat-theme";
 import type { RouteCard } from "@/lib/agent-chat-stream";
+import { agentRouteFromCard, type AgentRouteSelection } from "@/lib/agent-route-selection";
 import { type RouteRailStatus } from "@/components/smart-route/left-rail";
 import { buildLeftRailData } from "@/components/smart-route/left-rail/live-data";
 import { ChatPanel } from "@/components/smart-route/chat/chat-panel";
@@ -56,10 +57,17 @@ export default function SmartRoutePage() {
 
   const activeRouteSteps = activeRouteCandidate?.steps ?? plannedRouteSteps;
 
-  const routeData = useMemo<TransitRouteData | null>(
-    () => (activeRouteSteps.length > 0 ? { steps: activeRouteSteps } : null),
-    [activeRouteSteps],
-  );
+  // The agent-selected route (a tapped chat route card) never enters the
+  // rail's own state -- the rail must stay in standby for agent routes so
+  // rail and map never disagree about what's "the" active route (see the
+  // build plan's "Card->map wiring" section). It only ever overrides what
+  // the map itself renders, below.
+  const [agentRoute, setAgentRoute] = useState<AgentRouteSelection | null>(null);
+
+  const routeData = useMemo<TransitRouteData | null>(() => {
+    if (agentRoute) return { steps: agentRoute.steps };
+    return activeRouteSteps.length > 0 ? { steps: activeRouteSteps } : null;
+  }, [agentRoute, activeRouteSteps]);
 
   const summary = useMemo(
     () =>
@@ -70,6 +78,7 @@ export default function SmartRoutePage() {
   );
 
   const destCoords = useMemo(() => {
+    if (agentRoute) return agentRoute.destCoords;
     const lastStep = activeRouteSteps[activeRouteSteps.length - 1];
     const rawDest =
       lastStep?.type === "WALK" ? lastStep.end_point : lastStep?.arrival_coords;
@@ -77,7 +86,7 @@ export default function SmartRoutePage() {
       return { lat: rawDest.latitude, lng: rawDest.longitude };
     }
     return selectedDestination?.coordinates ?? null;
-  }, [activeRouteSteps, selectedDestination]);
+  }, [agentRoute, activeRouteSteps, selectedDestination]);
 
   const activeRouteIds = useMemo(
     () => deriveTransitRouteIds(activeRouteSteps),
@@ -227,13 +236,47 @@ export default function SmartRoutePage() {
 
   const openLiveMap = useCallback(() => setActiveTab("livemap"), []);
 
-  // Card tap -> map handoff (encodedPolyline/coords/camera flight) is W-B's
-  // wiring (see the build plan's Phasing section); this stub keeps the
-  // interaction visible and testable without it.
-  const handleSelectRouteCard = useCallback((card: RouteCard) => {
-    // eslint-disable-next-line no-console
-    console.log("[chat] route card selected (map handoff not wired yet)", card.card_id);
-  }, []);
+  // Card tap -> map handoff. Clearing the rail's route FIRST (before setting
+  // agentRoute) guarantees the rail drops to standby the instant an agent
+  // route takes over the map, so the two never show conflicting routes.
+  const handleSelectRouteCard = useCallback(
+    (card: RouteCard) => {
+      const selection = agentRouteFromCard(card);
+      if (!selection) return;
+      routePlanning.handleClearRoute();
+      setAgentRoute(selection);
+      setActiveTab("livemap");
+    },
+    [routePlanning],
+  );
+
+  // Thin wrappers around the rail's three manual route entry points so a
+  // manual search / alternative pick / clear always drops any agent route
+  // first -- rail and map must never disagree about which route is "the"
+  // active one. The controller itself (use-route-planning-controller.ts) is
+  // untouched; this only intercepts what page.tsx hands down to LiveWorkspace.
+  const manualRoutePlanning = useMemo(
+    () => ({
+      ...routePlanning,
+      handleSearchSubmit: (
+        ...args: Parameters<typeof routePlanning.handleSearchSubmit>
+      ) => {
+        setAgentRoute(null);
+        routePlanning.handleSearchSubmit(...args);
+      },
+      handleSelectAlternative: (
+        ...args: Parameters<typeof routePlanning.handleSelectAlternative>
+      ) => {
+        setAgentRoute(null);
+        routePlanning.handleSelectAlternative(...args);
+      },
+      handleClearRoute: () => {
+        setAgentRoute(null);
+        routePlanning.handleClearRoute();
+      },
+    }),
+    [routePlanning],
+  );
 
   const isLivemapTab = activeTab === "livemap";
 
@@ -256,7 +299,7 @@ export default function SmartRoutePage() {
         >
           <LiveWorkspace
             mobileRail={mobileRail}
-            routePlanning={routePlanning}
+            routePlanning={manualRoutePlanning}
             leftRailData={leftRailData}
             routeStatus={routeStatus}
             hasActiveRoute={Boolean(summary)}
