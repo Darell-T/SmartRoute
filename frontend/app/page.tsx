@@ -1,26 +1,33 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { MotionConfig } from "motion/react";
 import type { TransitRouteData } from "@/types";
 import { DEFAULT_LOCATION } from "@/lib/api";
 import { useLiveFeed } from "@/lib/use-live-feed";
 import { useServiceAlerts } from "@/lib/use-service-alerts";
 import { deriveTransitRouteIds } from "@/lib/route-planning";
 import { summarizeRoute } from "@/lib/smart-route";
+import { useAgentChat } from "@/lib/use-agent-chat";
+import { useChatTheme } from "@/lib/use-chat-theme";
+import type { RouteCard } from "@/lib/agent-chat-stream";
 import { type RouteRailStatus } from "@/components/smart-route/left-rail";
 import { buildLeftRailData } from "@/components/smart-route/left-rail/live-data";
+import { ChatPanel } from "@/components/smart-route/chat/chat-panel";
+import { TabToggle } from "@/components/smart-route/chat/tab-toggle";
 
 import { LiveWorkspace } from "@/components/smart-route/page/live-workspace";
 import { useMobileRailSheet } from "@/components/smart-route/page/use-mobile-rail-sheet";
 import { useRoutePlanningController } from "@/components/smart-route/page/use-route-planning-controller";
 
-import { type MapActions } from "./page-parts";
+import { type AppTab, type MapActions } from "./page-parts";
 
 export default function SmartRoutePage() {
   const [userLocation, setUserLocation] = useState<{
     lng: number;
     lat: number;
   } | null>(null);
+  const [activeTab, setActiveTab] = useState<AppTab>("chat");
   const mapActionsRef = useRef<MapActions | null>(null);
   const liveMapFrameRef = useRef<HTMLElement | null>(null);
   const mobileRail = useMobileRailSheet();
@@ -215,37 +222,79 @@ export default function SmartRoutePage() {
     }
   }
 
+  const chat = useAgentChat({ getOrigin: () => userLocation });
+  const { theme, toggleTheme } = useChatTheme();
+
+  const openLiveMap = useCallback(() => setActiveTab("livemap"), []);
+
+  // Card tap -> map handoff (encodedPolyline/coords/camera flight) is W-B's
+  // wiring (see the build plan's Phasing section); this stub keeps the
+  // interaction visible and testable without it.
+  const handleSelectRouteCard = useCallback((card: RouteCard) => {
+    // eslint-disable-next-line no-console
+    console.log("[chat] route card selected (map handoff not wired yet)", card.card_id);
+  }, []);
+
+  const isLivemapTab = activeTab === "livemap";
+
   return (
-    <div
-      className="sr-app-shell"
-      data-active-tab="livemap"
-      style={{
-        // Single full-viewport row: 400px LeftRail | 1fr Map. The rail owns
-        // Route / Alerts, while the map carries its own overlays.
-        height: "100dvh",
-        width: "100vw",
-        display: "flex",
-        flexDirection: "row",
-        overflow: "hidden",
-      }}
-    >
-      <LiveWorkspace
-        mobileRail={mobileRail}
-        routePlanning={routePlanning}
-        leftRailData={leftRailData}
-        routeStatus={routeStatus}
-        hasActiveRoute={Boolean(summary)}
-        liveMap={{
-          frameRef: liveMapFrameRef,
-          routeData,
-          destCoords,
-          onLocationUpdate: handleLocationUpdate,
-          onMapReady: handleMapReady,
-          onExpand: () => void toggleFullscreen(liveMapFrameRef.current),
-          onRecenter: () => mapActionsRef.current?.recenter(),
-        }}
-      />
-    </div>
+    <MotionConfig reducedMotion="user">
+      <div className="sr-tab-shell" data-tab={activeTab}>
+        <div
+          className={`sr-app-shell sr-tab-shell__panel sr-tab-shell__panel--livemap${
+            isLivemapTab ? "" : " sr-tab-shell__panel--hidden"
+          }`}
+          data-active-tab="livemap"
+          inert={isLivemapTab ? undefined : true}
+          style={{
+            // Single full-viewport row: 400px LeftRail | 1fr Map. The rail owns
+            // Route / Alerts, while the map carries its own overlays.
+            display: "flex",
+            flexDirection: "row",
+            overflow: "hidden",
+          }}
+        >
+          <LiveWorkspace
+            mobileRail={mobileRail}
+            routePlanning={routePlanning}
+            leftRailData={leftRailData}
+            routeStatus={routeStatus}
+            hasActiveRoute={Boolean(summary)}
+            liveMap={{
+              frameRef: liveMapFrameRef,
+              routeData,
+              destCoords,
+              onLocationUpdate: handleLocationUpdate,
+              onMapReady: handleMapReady,
+              onExpand: () => void toggleFullscreen(liveMapFrameRef.current),
+              onRecenter: () => mapActionsRef.current?.recenter(),
+            }}
+          />
+        </div>
+
+        <div
+          className={`sr-chat-tab sr-tab-shell__panel sr-tab-shell__panel--chat${
+            isLivemapTab ? " sr-tab-shell__panel--hidden" : ""
+          }`}
+          data-sr-theme={theme}
+          inert={isLivemapTab ? true : undefined}
+        >
+          <ChatPanel
+            chat={chat}
+            theme={theme}
+            onToggleTheme={toggleTheme}
+            nearbyTransitGroups={leftRailData.nearbyTransitGroups ?? []}
+            nearbyArrivals={leftRailData.arrivals}
+            nearbyBusArrivals={leftRailData.nearbyBusArrivals ?? []}
+            nearestStopName={leftRailData.station.name}
+            onOpenLiveMap={openLiveMap}
+            onSelectRouteCard={handleSelectRouteCard}
+          />
+        </div>
+
+        <TabToggle activeTab={activeTab} onChange={setActiveTab} />
+      </div>
+    </MotionConfig>
   );
 }
 

@@ -51,9 +51,34 @@ export interface AssistantTurn {
    *  (the rider hit stop) and `dropped` (the connection died first). */
   stopReason?: "end_turn" | "max_rounds" | "deadline" | "error" | "cancelled" | "dropped";
   error?: { code: string; message: string; retryable: boolean };
+  /** True only for turns appended by `appendLocalTurn` (the Near You bullet
+   *  tap flow) — rendered from data already in memory, never sent to or
+   *  received from the backend, and never included in a future `send()`. */
+  local?: boolean;
+  /** Present only on a local turn; renders as an `ArrivalsCard` instead of
+   *  streamed prose. */
+  arrivals?: ArrivalsTurnPayload;
 }
 
 export type ChatTurn = UserTurn | AssistantTurn;
+
+/** One direction's arrivals for a single route, as shown on an
+ *  `ArrivalsCard` — "Uptown · 2, 7, 12 min". Minutes are already sorted
+ *  ascending by the caller (mirrors the left rail's own arrival grouping). */
+export interface ArrivalsTurnDirectionGroup {
+  direction: "uptown" | "downtown";
+  /** Passenger-facing direction label ("Uptown", "To Coney Island"). */
+  label: string;
+  minutes: number[];
+}
+
+/** Payload for a local (display-only) arrivals turn — the "tap a Near You
+ *  bullet" flow. Never sent to the backend; rendered by `ChatArrivalsCard`. */
+export interface ArrivalsTurnPayload {
+  routeId: string;
+  stationName: string;
+  groups: ArrivalsTurnDirectionGroup[];
+}
 
 export interface ChatState {
   messages: ChatTurn[];
@@ -72,7 +97,8 @@ export type ChatReducerAction =
   | AgentEvent
   | { type: "turn_started"; text: string }
   | { type: "stream_error"; message: string }
-  | { type: "stream_cancelled" };
+  | { type: "stream_cancelled" }
+  | { type: "local_turn_appended"; turnId: string; text: string; arrivals: ArrivalsTurnPayload };
 
 function lastAssistantTurn(messages: ChatTurn[]): AssistantTurn | null {
   const last = messages[messages.length - 1];
@@ -207,6 +233,23 @@ export function applyAgentEvent(state: ChatState, action: ChatReducerAction): Ch
         error: action.message,
       };
     }
+    case "local_turn_appended": {
+      // Display-only: appended straight to `messages`, independent of
+      // `isStreaming`/`turn_started` bookkeeping — a local turn never has a
+      // network request behind it to start, stream, or finish.
+      const turn: AssistantTurn = {
+        role: "assistant",
+        turnId: action.turnId,
+        text: action.text,
+        toolChips: [],
+        routeCards: [],
+        isStreaming: false,
+        stopReason: "end_turn",
+        local: true,
+        arrivals: action.arrivals,
+      };
+      return { ...state, messages: [...state.messages, turn] };
+    }
     default:
       return state;
   }
@@ -330,12 +373,17 @@ export interface UseAgentChatResult {
   sessionId: string | null;
   selectCard: (cardId: string) => void;
   selectedCardId: string | null;
+  /** Appends a display-only assistant-style turn carrying an arrivals
+   *  payload instead of streamed text — the "tap a Near You bullet" flow.
+   *  Never touches the network or the session; the backend never sees it. */
+  appendLocalTurn: (content: { text: string; arrivals: ArrivalsTurnPayload }) => void;
 }
 
 export function useAgentChat(options: UseAgentChatOptions = {}): UseAgentChatResult {
   const { getOrigin, transport = fetchAgentChatEvents } = options;
   const [state, dispatch] = useReducer(applyAgentEvent, undefined, initChatState);
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
+  const localTurnSeqRef = useRef(0);
 
   // A plain (non-React-state) guard: `send` is a fresh closure every render,
   // so two calls issued in the same tick (before React re-renders) would
@@ -380,6 +428,16 @@ export function useAgentChat(options: UseAgentChatOptions = {}): UseAgentChatRes
     setSelectedCardId(cardId);
   }
 
+  function appendLocalTurn(content: { text: string; arrivals: ArrivalsTurnPayload }): void {
+    localTurnSeqRef.current += 1;
+    dispatch({
+      type: "local_turn_appended",
+      turnId: `local-${localTurnSeqRef.current}`,
+      text: content.text,
+      arrivals: content.arrivals,
+    });
+  }
+
   return {
     messages: state.messages,
     send,
@@ -389,6 +447,7 @@ export function useAgentChat(options: UseAgentChatOptions = {}): UseAgentChatRes
     sessionId: state.sessionId,
     selectCard,
     selectedCardId,
+    appendLocalTurn,
   };
 }
 

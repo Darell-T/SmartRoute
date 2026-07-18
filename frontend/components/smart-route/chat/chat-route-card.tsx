@@ -3,18 +3,17 @@
 /* ════════════════════════════════════════════════════════════════════════
    SmartRoute chat — route card
 
-   Renders one `route_card` SSE event: line bullets, ETA, transfers, and the
-   model's one-line reason, in the same Cupertino card language as the left
-   rail's recommended-route card (route-view.tsx). The whole card is a
-   button — tapping it is "tap-to-view-on-map" (the note at the end of the
-   plan says this replaces today's "Use" button); it also calls
-   `chat.selectCard(card.card_id)` so a follow-up like "actually the second
-   one" resolves against the right card server-side.
+   Renders one `route_card` SSE event: line bullets, hero ETA, meta line,
+   and the model's one-line reason, in the chat tab's own token surface
+   (`--sr-chat-surface`, `--sr-radius-card`). The whole card is a button —
+   tapping it selects the card (`chat.selectCard`, for a follow-up like
+   "actually the second one" to resolve server-side) and hands off to the
+   caller for the card→map jump (stubbed here; wired by W-B).
    ════════════════════════════════════════════════════════════════════════ */
 
-import { RouteBullet, BusChip } from "@/components/smart-route/left-rail/atoms";
-import { SUBWAY_BULLET_ROUTES } from "@/components/smart-route/train-bullet";
+import { ChevronRight } from "lucide-react";
 import type { RouteCard as RouteCardData } from "@/lib/agent-chat-stream";
+import { LineBadge } from "./line-badge";
 
 function formatClockTime(iso: string): string | null {
   const date = new Date(iso);
@@ -23,9 +22,8 @@ function formatClockTime(iso: string): string | null {
 }
 
 /** First departure / last arrival timestamp found on the card's steps, for
- *  turns that plan a future departure (design correction #1 in the plan:
- *  cards render absolute times when a `departure_time` was set). Falls back
- *  to the card-level `depart_iso` for the departure side. */
+ *  turns that plan a future departure. Falls back to the card-level
+ *  `depart_iso` for the departure side. */
 function findLegTimes(card: RouteCardData): { departs: string | null; arrives: string | null } {
   let departs: string | null = card.depart_iso ? formatClockTime(card.depart_iso) : null;
   let arrives: string | null = null;
@@ -40,24 +38,26 @@ function findLegTimes(card: RouteCardData): { departs: string | null; arrives: s
   return { departs, arrives };
 }
 
-function LineBadge({ line }: { line: string }) {
-  const routeId = line.toUpperCase();
-  return SUBWAY_BULLET_ROUTES.has(routeId) ? (
-    <RouteBullet key={routeId} line={routeId} size={22} />
-  ) : (
-    <BusChip key={routeId} route={routeId} />
-  );
+function legTimeLabel(departs: string | null, arrives: string | null): string | null {
+  if (departs && arrives) return `${departs} to ${arrives}`;
+  return departs ?? arrives;
 }
 
 export function ChatRouteCard({
   card,
+  isSelected = false,
+  landDelayMs = 0,
   onSelect,
 }: {
   card: RouteCardData;
+  isSelected?: boolean;
+  /** Stagger offset for the "cards land" entrance (60ms per card, once). */
+  landDelayMs?: number;
   onSelect?: (card: RouteCardData) => void;
 }) {
   const isRecommended = card.role === "recommended";
   const { departs, arrives } = findLegTimes(card);
+  const timeLabel = legTimeLabel(departs, arrives);
   const transfers = card.summary.transfers;
 
   return (
@@ -65,13 +65,25 @@ export function ChatRouteCard({
       type="button"
       className="sr-chat-route-card"
       data-role={card.role}
+      data-selected={isSelected ? "true" : "false"}
+      style={{ animationDelay: `${landDelayMs}ms` }}
       onClick={() => onSelect?.(card)}
       aria-label={`${isRecommended ? "Recommended route" : "Alternative route"}: ${card.summary.eta_minutes} minutes, ${card.destination.label}`}
     >
       <div className="sr-chat-route-card__top">
         <span className="sr-chat-route-card__lines">
-          {card.summary.lines.map((line) => (
-            <LineBadge key={line} line={line} />
+          {card.summary.lines.map((line, index) => (
+            <span key={line} className="sr-chat-route-card__line-item">
+              {index > 0 && (
+                <ChevronRight
+                  size={12}
+                  strokeWidth={2}
+                  className="sr-chat-route-card__leg-chevron"
+                  aria-hidden="true"
+                />
+              )}
+              <LineBadge line={line} size={22} />
+            </span>
           ))}
         </span>
         {isRecommended && <span className="sr-chat-route-card__pill">Recommended</span>}
@@ -87,20 +99,26 @@ export function ChatRouteCard({
         <span>
           {transfers} transfer{transfers === 1 ? "" : "s"}
         </span>
-        {departs && <span>Departs {departs}</span>}
-        {arrives && <span>Arrives {arrives}</span>}
+        {timeLabel && <span>{timeLabel}</span>}
       </div>
 
       {card.summary.reason && <p className="sr-chat-route-card__reason">{card.summary.reason}</p>}
+
+      <span className="sr-chat-route-card__view-on-map">
+        View on map
+        <ChevronRight size={13} strokeWidth={2} aria-hidden="true" />
+      </span>
     </button>
   );
 }
 
 export function ChatRouteCardList({
   cards,
+  selectedCardId,
   onSelect,
 }: {
   cards: RouteCardData[];
+  selectedCardId?: string | null;
   onSelect?: (card: RouteCardData) => void;
 }) {
   if (cards.length === 0) return null;
@@ -109,13 +127,25 @@ export function ChatRouteCardList({
 
   return (
     <div className="sr-chat-route-cards">
-      {recommended.map((card) => (
-        <ChatRouteCard key={card.card_id} card={card} onSelect={onSelect} />
+      {recommended.map((card, index) => (
+        <ChatRouteCard
+          key={card.card_id}
+          card={card}
+          isSelected={card.card_id === selectedCardId}
+          onSelect={onSelect}
+          landDelayMs={index * 60}
+        />
       ))}
       {alternatives.length > 0 && (
         <div className="sr-chat-route-cards__alternatives">
-          {alternatives.map((card) => (
-            <ChatRouteCard key={card.card_id} card={card} onSelect={onSelect} />
+          {alternatives.map((card, index) => (
+            <ChatRouteCard
+              key={card.card_id}
+              card={card}
+              isSelected={card.card_id === selectedCardId}
+              onSelect={onSelect}
+              landDelayMs={(recommended.length + index) * 60}
+            />
           ))}
         </div>
       )}

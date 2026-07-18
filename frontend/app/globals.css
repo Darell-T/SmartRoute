@@ -2,6 +2,7 @@
 @import "tw-animate-css";
 @import "./styles/smart-route-left-rail.css";
 @import "./styles/smart-route-chat.css";
+@import "./styles/smart-route-tab-shell.css";
 
 @custom-variant dark (&:is(.dark *));
 

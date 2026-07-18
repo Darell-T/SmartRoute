@@ -177,6 +177,59 @@ test("session id persistence: reads a stored id and treats missing storage as no
   assert.equal(readPersistedSessionId(empty), null);
 });
 
+test("local_turn_appended appends a display-only assistant turn without touching isStreaming", () => {
+  let state = initialState();
+  state = applyAgentEvent(state, {
+    type: "local_turn_appended",
+    turnId: "local-1",
+    text: "Next A trains near you:",
+    arrivals: {
+      routeId: "A",
+      stationName: "125 St",
+      groups: [
+        { direction: "uptown", label: "Uptown", minutes: [2, 7, 12] },
+        { direction: "downtown", label: "Downtown", minutes: [4, 9] },
+      ],
+    },
+  });
+
+  assert.equal(state.messages.length, 1);
+  const turn = state.messages[0];
+  assert.equal(turn.role, "assistant");
+  assert.equal(turn.local, true);
+  assert.equal(turn.isStreaming, false);
+  assert.equal(turn.text, "Next A trains near you:");
+  assert.deepEqual(turn.arrivals, {
+    routeId: "A",
+    stationName: "125 St",
+    groups: [
+      { direction: "uptown", label: "Uptown", minutes: [2, 7, 12] },
+      { direction: "downtown", label: "Downtown", minutes: [4, 9] },
+    ],
+  });
+  // A local turn must never flip the hook's top-level streaming/error state
+  // — it has no network request behind it.
+  assert.equal(state.isStreaming, false);
+  assert.equal(state.error, null);
+});
+
+test("local_turn_appended after an in-progress streaming turn leaves that turn untouched", () => {
+  let state = applyAgentEvent(initialState(), { type: "turn_started", text: "heading to Costco" });
+  state = applyAgentEvent(state, {
+    type: "local_turn_appended",
+    turnId: "local-1",
+    text: "Next A trains near you:",
+    arrivals: { routeId: "A", stationName: "125 St", groups: [] },
+  });
+
+  assert.equal(state.messages.length, 3);
+  assert.equal(state.messages[1].isStreaming, true); // the real streaming turn, untouched
+  assert.equal(state.messages[1].local, undefined);
+  assert.equal(state.messages[2].local, true);
+  // The top-level isStreaming flag still reflects the real (non-local) turn.
+  assert.equal(state.isStreaming, true);
+});
+
 test("session id persistence: writes only a non-null id, and tolerates a throwing storage", () => {
   const writes = [];
   const storage = {
