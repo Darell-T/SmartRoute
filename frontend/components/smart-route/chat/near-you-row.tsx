@@ -11,7 +11,10 @@
 
 import { LineBadge } from "./line-badge";
 
-const MAX_VISIBLE_BULLETS = 6;
+/* Five nearest lines, not everything in range: at hub stations (34 St-Penn,
+   Atlantic Av-Barclays) the full list would crowd the bar; the inputs are
+   proximity-sorted, so the cap keeps the closest options. */
+const MAX_VISIBLE_BULLETS = 5;
 
 export function NearYouRow({
   routeIds,

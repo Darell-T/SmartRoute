@@ -45,13 +45,16 @@
      dispersion = chromatic edge fringe strength, specular = droplet
      catchlight. The surface must stay translucent for the lens to have
      anything to bend. */
-  --sr-glass-surface: rgba(23, 25, 29, 0.5);
-  --sr-glass-surface-hover: rgba(30, 33, 38, 0.56);
-  --sr-glass-frost: 14px;
-  --sr-glass-dispersion: 0.3;
-  --sr-glass-specular: rgba(255, 255, 255, 0.12);
-  --sr-glass-wash-a: rgba(62, 209, 52, 0.05);
-  --sr-glass-wash-b: rgba(96, 150, 255, 0.05);
+  --sr-glass-surface: rgba(23, 25, 29, 0.42);
+  --sr-glass-surface-hover: rgba(30, 33, 38, 0.5);
+  --sr-glass-frost: 7px;
+  --sr-glass-rim-frost: 3px;
+  --sr-glass-dispersion: 0.26;
+  --sr-glass-specular: rgba(255, 255, 255, 0.16);
+  --sr-glass-specular-counter: rgba(255, 255, 255, 0.05);
+  --sr-glass-wash-a: rgba(62, 209, 52, 0.065);
+  --sr-glass-wash-b: rgba(96, 150, 255, 0.06);
+  --sr-glass-wash-c: rgba(255, 176, 120, 0.035);
 }
 
 .sr-chat-tab[data-sr-theme="light"] {
@@ -69,13 +72,16 @@
   --sr-chat-danger-hairline: rgba(199, 67, 87, 0.22);
   --sr-chat-raised-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
 
-  --sr-glass-surface: rgba(255, 255, 255, 0.5);
-  --sr-glass-surface-hover: rgba(255, 255, 255, 0.62);
-  --sr-glass-frost: 16px;
-  --sr-glass-dispersion: 0.22;
-  --sr-glass-specular: rgba(255, 255, 255, 0.5);
-  --sr-glass-wash-a: rgba(30, 143, 42, 0.045);
-  --sr-glass-wash-b: rgba(70, 120, 235, 0.045);
+  --sr-glass-surface: rgba(255, 255, 255, 0.42);
+  --sr-glass-surface-hover: rgba(255, 255, 255, 0.55);
+  --sr-glass-frost: 9px;
+  --sr-glass-rim-frost: 4px;
+  --sr-glass-dispersion: 0.2;
+  --sr-glass-specular: rgba(255, 255, 255, 0.55);
+  --sr-glass-specular-counter: rgba(255, 255, 255, 0.25);
+  --sr-glass-wash-a: rgba(30, 143, 42, 0.055);
+  --sr-glass-wash-b: rgba(70, 120, 235, 0.055);
+  --sr-glass-wash-c: rgba(235, 150, 90, 0.035);
 }
 
 /* ── shadcn variable bridge ──────────────────────────────────────────── */
@@ -192,7 +198,9 @@
 .sr-chat-near-you {
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
+  /* Label ranges left so "Near you" starts exactly above the first
+     bullet; the whole cluster still sits on the bar's right side. */
+  align-items: flex-start;
   gap: 3px;
   min-width: 0;
 }
@@ -210,7 +218,8 @@
 .sr-chat-near-you__bullets {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
+  flex-wrap: nowrap;
 }
 
 .sr-chat-near-you__bullet,
@@ -239,6 +248,26 @@
   font-weight: 700;
   background: var(--sr-chat-hover-fill);
   border-radius: 999px;
+}
+
+/* Near You lives in the bar on wide screens and in a slim strip under
+   the bar on phones, where the floating toggle's center reservation
+   leaves the bar's side columns too narrow for a bullet row. Exactly one
+   of the two slots is visible at any width. */
+.sr-chat-near-you-slot--strip {
+  display: none;
+}
+
+@media (max-width: 560px) {
+  .sr-chat-near-you-slot--bar {
+    display: none;
+  }
+  .sr-chat-near-you-slot--strip {
+    display: flex;
+    justify-content: flex-end;
+    padding: 8px 16px 2px;
+    flex: 0 0 auto;
+  }
 }
 
 .sr-chat-theme-toggle {
@@ -275,7 +304,8 @@
      fixed glows, so the refraction visibly shifts as cards move. */
   background:
     radial-gradient(560px 380px at 82% 10%, var(--sr-glass-wash-a), transparent 62%),
-    radial-gradient(640px 440px at 6% 82%, var(--sr-glass-wash-b), transparent 65%);
+    radial-gradient(640px 440px at 6% 82%, var(--sr-glass-wash-b), transparent 65%),
+    radial-gradient(480px 340px at 30% 38%, var(--sr-glass-wash-c), transparent 60%);
 }
 
 .sr-chat-thread__content {
@@ -531,18 +561,25 @@
   min-height: 44px;
   text-align: left;
   cursor: pointer;
-  background: var(--sr-glass-surface);
-  -webkit-backdrop-filter: blur(var(--sr-glass-frost)) saturate(1.45);
-  backdrop-filter: blur(var(--sr-glass-frost)) saturate(1.45);
+  /* Surface tint + the droplet's specular catchlights painted as
+     background layers (a bright arc top-left, a faint counter-light
+     bottom-right — a droplet has two, from refracted spill light). */
+  background:
+    radial-gradient(120% 70% at 16% -6%, var(--sr-glass-specular), transparent 46%),
+    radial-gradient(90% 60% at 88% 108%, var(--sr-glass-specular-counter), transparent 42%),
+    var(--sr-glass-surface);
+  -webkit-backdrop-filter: blur(var(--sr-glass-frost)) saturate(1.5);
+  backdrop-filter: blur(var(--sr-glass-frost)) saturate(1.5);
   border: 1px solid var(--sr-chat-hairline);
   border-radius: var(--sr-radius-card);
   padding: 13px 14px 12px;
   color: inherit;
-  /* Inset hairlines fake the meniscus: light catches the top edge, the
-     bottom edge falls into shadow. */
+  /* Meniscus: light catches the top edge, the bottom edge rolls into
+     shadow, and the whole droplet lifts slightly off the canvas. */
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.09),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.14),
+    inset 0 1.5px 0 rgba(255, 255, 255, 0.12),
+    inset 0 -2px 3px rgba(0, 0, 0, 0.16),
+    0 10px 28px rgba(0, 0, 0, 0.16),
     var(--sr-chat-raised-shadow);
   animation: srChatCardLand 220ms var(--sr-motion-ease) both;
   transition:
@@ -562,18 +599,20 @@
   }
 }
 
-/* Specular catchlight — the droplet's bright spot, biased to the top. */
+/* Rim band — the ring where a droplet bends light hardest. A masked ring
+   with its OWN backdrop treatment (extra blur + brightness + saturation)
+   makes the border optically different from the center in every engine,
+   including ones without SVG backdrop filters. */
 .sr-chat-route-card::before {
   content: "";
   position: absolute;
   inset: 0;
   z-index: -1;
   border-radius: inherit;
-  background: radial-gradient(
-    130% 85% at 14% -4%,
-    var(--sr-glass-specular),
-    transparent 52%
-  );
+  -webkit-backdrop-filter: blur(var(--sr-glass-rim-frost)) saturate(1.7) brightness(1.08);
+  backdrop-filter: blur(var(--sr-glass-rim-frost)) saturate(1.7) brightness(1.08);
+  -webkit-mask: radial-gradient(120% 130% at 50% 50%, transparent 58%, #000 89%);
+  mask: radial-gradient(120% 130% at 50% 50%, transparent 58%, #000 89%);
   pointer-events: none;
 }
 
@@ -613,8 +652,9 @@
 .sr-chat-route-card[data-selected="true"] {
   border-color: var(--sr-chat-accent);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.09),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.14),
+    inset 0 1.5px 0 rgba(255, 255, 255, 0.12),
+    inset 0 -2px 3px rgba(0, 0, 0, 0.16),
+    0 10px 28px rgba(0, 0, 0, 0.16),
     0 0 0 2px var(--sr-chat-accent-tint);
 }
 
