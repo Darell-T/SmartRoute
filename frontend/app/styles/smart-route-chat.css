@@ -145,10 +145,31 @@
   align-items: center;
   gap: 12px;
   min-height: 56px;
-  max-height: 64px;
   padding: max(10px, env(safe-area-inset-top)) 16px 10px;
   border-bottom: 1px solid var(--sr-chat-hairline);
   flex: 0 0 auto;
+}
+
+/* Second bar row (phones only): Near You inside the SAME container as the
+   brand and theme toggle — one border, one surface, the bar just grows.
+   Exists because the floating toggle's center reservation leaves the
+   first row's side columns too narrow for a bullet row on small screens. */
+.sr-chat-top-bar__row2 {
+  display: none;
+  grid-column: 1 / -1;
+  justify-content: flex-end;
+}
+
+@media (max-width: 560px) {
+  .sr-chat-top-bar {
+    row-gap: 8px;
+  }
+  .sr-chat-top-bar__row2 {
+    display: flex;
+  }
+  .sr-chat-near-you-slot--bar {
+    display: none;
+  }
 }
 
 .sr-chat-top-bar__brand {
@@ -248,26 +269,6 @@
   font-weight: 700;
   background: var(--sr-chat-hover-fill);
   border-radius: 999px;
-}
-
-/* Near You lives in the bar on wide screens and in a slim strip under
-   the bar on phones, where the floating toggle's center reservation
-   leaves the bar's side columns too narrow for a bullet row. Exactly one
-   of the two slots is visible at any width. */
-.sr-chat-near-you-slot--strip {
-  display: none;
-}
-
-@media (max-width: 560px) {
-  .sr-chat-near-you-slot--bar {
-    display: none;
-  }
-  .sr-chat-near-you-slot--strip {
-    display: flex;
-    justify-content: flex-end;
-    padding: 8px 16px 2px;
-    flex: 0 0 auto;
-  }
 }
 
 .sr-chat-theme-toggle {

@@ -37,35 +37,35 @@ export function ChatTopBar({
   );
 
   return (
-    <>
-      <header className="sr-chat-top-bar">
-        <div className="sr-chat-top-bar__brand">
-          <img src="/smart-route-mark-512.png" width={28} height={28} alt="" />
-          <span className="sr-chat-top-bar__wordmark">SmartRoute</span>
-        </div>
+    <header className="sr-chat-top-bar">
+      <div className="sr-chat-top-bar__brand">
+        <img src="/smart-route-mark-512.png" width={28} height={28} alt="" />
+        <span className="sr-chat-top-bar__wordmark">SmartRoute</span>
+      </div>
 
-        <div className="sr-chat-top-bar__toggle-slot" aria-hidden="true" />
+      <div className="sr-chat-top-bar__toggle-slot" aria-hidden="true" />
 
-        <div className="sr-chat-top-bar__right">
-          {/* In-bar Near You: desktop only. On phones the center toggle
-              reservation leaves the side columns too narrow for a bullet
-              row, so the strip below the bar takes over (CSS swaps them). */}
-          <div className="sr-chat-near-you-slot--bar">{nearYou}</div>
-          <button
-            type="button"
-            className="sr-chat-theme-toggle"
-            aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-            onClick={onToggleTheme}
-          >
-            {theme === "dark" ? (
-              <Sun size={16} strokeWidth={1.8} aria-hidden="true" />
-            ) : (
-              <Moon size={16} strokeWidth={1.8} aria-hidden="true" />
-            )}
-          </button>
-        </div>
-      </header>
-      <div className="sr-chat-near-you-slot--strip">{nearYou}</div>
-    </>
+      <div className="sr-chat-top-bar__right">
+        {/* Inline Near You: wide screens only. On phones the floating
+            toggle's center reservation leaves this column too narrow for a
+            bullet row, so the bar grows a second row instead (below) —
+            same container, same border, just taller. */}
+        <div className="sr-chat-near-you-slot--bar">{nearYou}</div>
+        <button
+          type="button"
+          className="sr-chat-theme-toggle"
+          aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+          onClick={onToggleTheme}
+        >
+          {theme === "dark" ? (
+            <Sun size={16} strokeWidth={1.8} aria-hidden="true" />
+          ) : (
+            <Moon size={16} strokeWidth={1.8} aria-hidden="true" />
+          )}
+        </button>
+      </div>
+
+      <div className="sr-chat-top-bar__row2">{nearYou}</div>
+    </header>
   );
 }
