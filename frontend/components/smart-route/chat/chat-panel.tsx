@@ -84,6 +84,29 @@ export function ChatPanel({
 
   return (
     <div className="sr-chat-tab-inner">
+      {/* Displacement lens for the route cards' liquid-glass backdrop
+          (backdrop-filter: url(#sr-liquid-lens) in smart-route-chat.css).
+          Gentle low-frequency turbulence bends the backdrop like a water
+          droplet; engines without SVG backdrop filters never reference it
+          and fall back to the frost-only branch. */}
+      <svg className="sr-chat-lens-defs" aria-hidden="true" focusable="false" width={0} height={0}>
+        <filter id="sr-liquid-lens" x="-20%" y="-20%" width="140%" height="140%">
+          <feTurbulence
+            type="fractalNoise"
+            baseFrequency="0.007 0.011"
+            numOctaves="2"
+            seed="7"
+            result="ripple"
+          />
+          <feDisplacementMap
+            in="SourceGraphic"
+            in2="ripple"
+            scale="18"
+            xChannelSelector="R"
+            yChannelSelector="G"
+          />
+        </filter>
+      </svg>
       <ChatTopBar
         nearbyRouteIds={nearbyRouteIds}
         onSelectNearbyRoute={handleSelectNearbyRoute}

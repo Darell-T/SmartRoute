@@ -27,12 +27,6 @@ export function ChatArrivalsCard({
       <div className="sr-chat-arrivals-card__header">
         <LineBadge line={arrivals.routeId} size={22} />
         <span className="sr-chat-arrivals-card__station">{arrivals.stationName}</span>
-        {hasArrivals && (
-          <span className="sr-chat-arrivals-card__live" aria-hidden="true">
-            <span className="sr-chat-arrivals-card__live-dot" />
-            live
-          </span>
-        )}
       </div>
 
       <div className="sr-chat-arrivals-card__body">

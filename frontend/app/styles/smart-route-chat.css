@@ -40,6 +40,18 @@
   --sr-chat-danger-tint: rgba(251, 113, 133, 0.12);
   --sr-chat-danger-hairline: rgba(251, 113, 133, 0.28);
   --sr-chat-raised-shadow: none;
+
+  /* Liquid-glass material (route cards). Frost = backdrop blur amount,
+     dispersion = chromatic edge fringe strength, specular = droplet
+     catchlight. The surface must stay translucent for the lens to have
+     anything to bend. */
+  --sr-glass-surface: rgba(23, 25, 29, 0.5);
+  --sr-glass-surface-hover: rgba(30, 33, 38, 0.56);
+  --sr-glass-frost: 14px;
+  --sr-glass-dispersion: 0.3;
+  --sr-glass-specular: rgba(255, 255, 255, 0.12);
+  --sr-glass-wash-a: rgba(62, 209, 52, 0.05);
+  --sr-glass-wash-b: rgba(96, 150, 255, 0.05);
 }
 
 .sr-chat-tab[data-sr-theme="light"] {
@@ -56,6 +68,14 @@
   --sr-chat-danger-tint: rgba(199, 67, 87, 0.1);
   --sr-chat-danger-hairline: rgba(199, 67, 87, 0.22);
   --sr-chat-raised-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+
+  --sr-glass-surface: rgba(255, 255, 255, 0.5);
+  --sr-glass-surface-hover: rgba(255, 255, 255, 0.62);
+  --sr-glass-frost: 16px;
+  --sr-glass-dispersion: 0.22;
+  --sr-glass-specular: rgba(255, 255, 255, 0.5);
+  --sr-glass-wash-a: rgba(30, 143, 42, 0.045);
+  --sr-glass-wash-b: rgba(70, 120, 235, 0.045);
 }
 
 /* ── shadcn variable bridge ──────────────────────────────────────────── */
@@ -249,6 +269,13 @@
   flex: 1 1 auto;
   min-height: 0;
   position: relative;
+  /* Barely-there ambient wash. It exists for one reason: the liquid-glass
+     route cards refract whatever sits behind them, and a perfectly flat
+     canvas gives the lens nothing to bend. Content scrolls over these
+     fixed glows, so the refraction visibly shifts as cards move. */
+  background:
+    radial-gradient(560px 380px at 82% 10%, var(--sr-glass-wash-a), transparent 62%),
+    radial-gradient(640px 440px at 6% 82%, var(--sr-glass-wash-b), transparent 65%);
 }
 
 .sr-chat-thread__content {
@@ -487,7 +514,16 @@
   gap: 8px;
 }
 
+/* Liquid-glass material: the card refracts and warps what sits behind it
+   like a water droplet — bend and color shift strongest at the borders,
+   subtle in the center, not just blur. Chromium gets true backdrop
+   refraction via the SVG displacement filter (#sr-liquid-lens, mounted by
+   ChatPanel); everywhere else the frost + specular + dispersion layers
+   carry the droplet read on their own. */
 .sr-chat-route-card {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -495,12 +531,19 @@
   min-height: 44px;
   text-align: left;
   cursor: pointer;
-  background: var(--sr-chat-surface);
-  box-shadow: var(--sr-chat-raised-shadow);
+  background: var(--sr-glass-surface);
+  -webkit-backdrop-filter: blur(var(--sr-glass-frost)) saturate(1.45);
+  backdrop-filter: blur(var(--sr-glass-frost)) saturate(1.45);
   border: 1px solid var(--sr-chat-hairline);
   border-radius: var(--sr-radius-card);
   padding: 13px 14px 12px;
   color: inherit;
+  /* Inset hairlines fake the meniscus: light catches the top edge, the
+     bottom edge falls into shadow. */
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.09),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.14),
+    var(--sr-chat-raised-shadow);
   animation: srChatCardLand 220ms var(--sr-motion-ease) both;
   transition:
     background 150ms var(--sr-motion-ease),
@@ -509,8 +552,58 @@
     transform 150ms var(--sr-motion-ease);
 }
 
+/* True lens: displacement of the backdrop itself (feTurbulence +
+   feDisplacementMap in #sr-liquid-lens). Supported by Chromium's
+   backdrop-filter: url(); other engines keep the plain-frost branch. */
+@supports (backdrop-filter: url(#sr-liquid-lens)) {
+  .sr-chat-route-card {
+    -webkit-backdrop-filter: url(#sr-liquid-lens) blur(var(--sr-glass-frost)) saturate(1.45);
+    backdrop-filter: url(#sr-liquid-lens) blur(var(--sr-glass-frost)) saturate(1.45);
+  }
+}
+
+/* Specular catchlight — the droplet's bright spot, biased to the top. */
+.sr-chat-route-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: radial-gradient(
+    130% 85% at 14% -4%,
+    var(--sr-glass-specular),
+    transparent 52%
+  );
+  pointer-events: none;
+}
+
+/* Chromatic dispersion fringe — a 1px RGB-split ring that only lives at
+   the border, where a real droplet bends light hardest. */
+.sr-chat-route-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(
+    115deg,
+    rgba(255, 118, 118, var(--sr-glass-dispersion)),
+    rgba(132, 255, 190, calc(var(--sr-glass-dispersion) * 0.65)) 46%,
+    rgba(126, 158, 255, var(--sr-glass-dispersion))
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
 .sr-chat-route-card:hover {
-  background: var(--sr-chat-hover-fill);
+  background: var(--sr-glass-surface-hover);
 }
 
 .sr-chat-route-card:active {
@@ -519,7 +612,27 @@
 
 .sr-chat-route-card[data-selected="true"] {
   border-color: var(--sr-chat-accent);
-  box-shadow: 0 0 0 2px var(--sr-chat-accent-tint);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.09),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.14),
+    0 0 0 2px var(--sr-chat-accent-tint);
+}
+
+/* The glass reads as decoration to anyone who asked the OS for less
+   transparency — give them the previous solid card instead. */
+@media (prefers-reduced-transparency: reduce) {
+  .sr-chat-route-card {
+    background: var(--sr-chat-surface);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  .sr-chat-route-card::before,
+  .sr-chat-route-card::after {
+    content: none;
+  }
+  .sr-chat-thread {
+    background: none;
+  }
 }
 
 .sr-chat-route-card[data-role="alternative"] {
@@ -672,25 +785,6 @@
   min-width: 0;
 }
 
-.sr-chat-arrivals-card__live {
-  /* Sentence case (no caps eyebrow) — the dot is the signal, "live" is
-     just a label for it, same treatment as the "Recommended" pill. */
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  margin-left: auto;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--sr-chat-accent);
-}
-
-.sr-chat-arrivals-card__live-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--sr-chat-accent);
-}
-
 .sr-chat-arrivals-card__body {
   display: flex;
   flex-direction: column;
@@ -743,10 +837,19 @@
      bg-background rounded-3xl border p-2 shadow-xs) live in Tailwind's
      `@layer utilities`; this file is unlayered, so these plain declarations
      win the cascade without needing `!important` — same rule the rest of
-     this stylesheet relies on. */
+     this stylesheet relies on.
+
+     Single compact row (textarea beside the actions, like the rail's
+     search pill) instead of the vendored two-row stack: the input should
+     not eat a large slice of the screen. It still grows when the text
+     wraps, up to the textarea's max height. */
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
   max-width: 720px;
   width: calc(100% - 32px);
   margin: 0 auto calc(12px + env(safe-area-inset-bottom));
+  padding: 5px 5px 5px 16px;
   border-radius: 24px;
   background: var(--sr-chat-surface);
   border-color: var(--sr-chat-hairline);
@@ -755,10 +858,12 @@
 }
 
 .sr-chat-composer__textarea {
+  flex: 1 1 auto;
+  min-width: 0;
   font-size: 15px;
   line-height: 1.5;
   color: var(--sr-chat-ink);
-  padding: 8px 6px;
+  padding: 7px 0;
 }
 
 .sr-chat-composer__textarea::placeholder {
@@ -767,7 +872,9 @@
 
 .sr-chat-composer__actions {
   justify-content: flex-end;
-  padding: 2px 2px 2px 0;
+  align-self: flex-end;
+  flex: 0 0 auto;
+  padding: 1px 0;
 }
 
 .sr-chat-mic-button,
@@ -862,4 +969,12 @@
   .sr-chat-error-banner {
     width: calc(100% - 24px);
   }
+}
+
+/* Zero-footprint SVG defs holder for the liquid-glass lens filter. */
+.sr-chat-lens-defs {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
 }
