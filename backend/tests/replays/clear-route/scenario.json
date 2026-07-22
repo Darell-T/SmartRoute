@@ -4,7 +4,16 @@
   "frozen_time": "2026-07-22T17:30:00-04:00",
   "origin": {"latitude": 40.7505, "longitude": -73.9934},
   "destination": {"latitude": 40.7614, "longitude": -73.9776},
-  "enabled_sources": ["mta", "vehicle_detection", "grok_x", "grok_web", "511ny", "ticketmaster"],
+  "enabled_sources": ["mta", "subway_vehicle_detection", "bus_vehicle_detection", "grok_x", "grok_web", "511ny", "ticketmaster"],
+  "source_status": {
+    "mta": {"status": "complete", "errors": []},
+    "subway_vehicle_detection": {"status": "complete", "errors": []},
+    "bus_vehicle_detection": {"status": "complete", "errors": []},
+    "grok_x": {"status": "complete", "errors": []},
+    "grok_web": {"status": "complete", "errors": []},
+    "511ny": {"status": "complete", "errors": []},
+    "ticketmaster": {"status": "complete", "errors": []}
+  },
   "fixtures": {
     "route_candidates": "route_candidates.json",
     "mta_alerts": "mta_alerts.pb64",
@@ -20,6 +29,11 @@
   "expected": {
     "baseline_route_id": "candidate-0",
     "intelligence_route_id": "candidate-0",
-    "route_should_change": false
+    "route_should_change": false,
+    "scan_status": "complete",
+    "ny511_snapshot_status": "fresh",
+    "known_relevant_disruption": false,
+    "expected_incident_count": 0,
+    "empty_scan_correct": true
   }
 }

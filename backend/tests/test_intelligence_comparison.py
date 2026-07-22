@@ -193,6 +193,8 @@ class ComparisonTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(replay_route_intelligence.main(), 0)
             machine = json.loads(json_out.read_text(encoding="utf-8"))
             self.assertTrue(machine["all_expectations_matched"])
+            self.assertEqual(machine["validation"]["evidence_scope"], "deterministic_fixture")
+            self.assertEqual(len(machine["ablations"]), 1)
             self.assertIn("Result: PASS", text_out.read_text(encoding="utf-8"))
 
     def test_cli_returns_nonzero_when_a_comparison_fails(self):

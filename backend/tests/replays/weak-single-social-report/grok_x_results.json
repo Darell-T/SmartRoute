@@ -1,0 +1,11 @@
+[
+  {
+    "source": "grok_x",
+    "source_id": "weak-x-1",
+    "location": "Herald Square",
+    "nearby_station": "34 St-Herald Sq",
+    "severity": "low",
+    "description": "One rider wonders whether the Q is slow.",
+    "observed_at": "2026-07-22T21:25:00Z"
+  }
+]

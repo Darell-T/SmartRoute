@@ -21,16 +21,24 @@ from app.services import ai_advisor
 from app.services.agent.tools import venue_crowd_window
 from app.services.agent.tools._types import ToolContext
 from app.services.trips import advisor_context, scoring
-from app.services.trips.incident_merge import merge_incident_evidence
+from app.services.trips.incident_association import (
+    attach_verified_match_association,
+    normalize_matcher_association,
+)
+from app.services.trips.incident_merge import filter_current_incidents, merge_incident_evidence
 from app.services.trips.incidents import _normalize_advisor_incident
 
 from .replay import (
+    CANONICAL_SOURCE_NAMES,
     ReplayFixtureAdapters,
     ReplayScenario,
     ScenarioValidationError,
+    SourceStatus,
+    canonical_sources,
     load_all_scenarios,
     load_scenario,
     network_disabled,
+    source_status_for,
 )
 
 
@@ -58,30 +66,88 @@ def _source_tokens(row: Mapping[str, Any]) -> set[str]:
     return {str(value).strip().casefold() for value in values if str(value).strip()}
 
 
-def _grok_incidents_for_sources(rows: Iterable[Mapping[str, Any]], enabled: frozenset[str]) -> list[dict[str, Any]]:
+def _grok_incidents_for_sources(rows: Iterable[Mapping[str, Any]], available: frozenset[str]) -> list[dict[str, Any]]:
     allowed: set[str] = set()
-    if "grok_x" in enabled:
+    if "grok_x" in available:
         allowed.update({"grok_x", "x", "x_search"})
-    if "grok_web" in enabled:
+    if "grok_web" in available:
         allowed.update({"grok_web", "web", "web_search"})
     if not allowed:
         return []
     return [dict(row) for row in rows if _source_tokens(row) & allowed]
 
 
-def _matched_511_as_incident(row: Mapping[str, Any]) -> dict[str, Any]:
-    """Project the production matcher result into the existing advisor contract."""
-    nearest = row.get("nearest_stop") if isinstance(row.get("nearest_stop"), Mapping) else {}
-    return {
+_OFFICIAL_511_LIFECYCLE_FIELDS = (
+    "latitude",
+    "longitude",
+    "reported_at",
+    "updated_at",
+    "starts_at",
+    "expected_end_at",
+    "event_type",
+    "event_subtype",
+    "roadway_name",
+    "status",
+    "status_text",
+)
+
+
+def _snapshot_rows_by_source_id(snapshot: object) -> dict[str, Mapping[str, Any]]:
+    """Index normalized snapshot rows; matcher rows alone lack lifecycle data."""
+
+    incidents = getattr(snapshot, "incidents", [])
+    result: dict[str, Mapping[str, Any]] = {}
+    for incident in incidents if isinstance(incidents, list) else []:
+        if isinstance(incident, Mapping):
+            row = incident
+        else:
+            dump = getattr(incident, "model_dump", None)
+            row = dump() if callable(dump) else None
+        if not isinstance(row, Mapping):
+            continue
+        source_id = _safe_text(row.get("source_id"), 100)
+        if source_id:
+            result[source_id] = row
+    return result
+
+
+def _matched_511_as_incident(
+    match: Mapping[str, Any], authoritative_row: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Join an exact matcher result to its normalized 511NY lifecycle row.
+
+    ``MatchedIncident`` intentionally contains only display and candidate-link
+    information.  Keeping lifecycle fields from the normalized snapshot here
+    ensures the production merger can reject resolved and expired official
+    evidence before it reaches an advisor payload.
+    """
+
+    nearest = match.get("nearest_stop") if isinstance(match.get("nearest_stop"), Mapping) else {}
+    authoritative = {
         "source": "511ny",
-        "location": _safe_text(row.get("roadway_name") or nearest.get("stop_name"), 100),
+        "location": _safe_text(authoritative_row.get("roadway_name") or match.get("roadway_name") or nearest.get("stop_name"), 100),
         "nearby_station": _safe_text(nearest.get("stop_name"), 80),
-        "severity": _safe_text(row.get("severity"), 24).lower() or "medium",
-        "description": _safe_text(row.get("description"), 220),
-        # Used only during deterministic merge; it never appears in reports.
-        "source_id": _safe_text(row.get("source_id"), 100),
-        "impact_scope": _safe_text(row.get("impact_scope"), 48),
+        "severity": _safe_text(
+            authoritative_row.get("severity_normalized")
+            or authoritative_row.get("severity_raw")
+            or match.get("severity"),
+            24,
+        ).lower() or "medium",
+        "description": _safe_text(
+            authoritative_row.get("description")
+            or authoritative_row.get("comment")
+            or match.get("description"),
+            220,
+        ),
+        "source_id": _safe_text(authoritative_row.get("source_id") or match.get("source_id"), 100),
     }
+    for key in _OFFICIAL_511_LIFECYCLE_FIELDS:
+        if authoritative_row.get(key) is not None:
+            authoritative[key] = authoritative_row[key]
+    # The matcher, not the replay fixture or a model transcript, owns route,
+    # mode, and scope association.  The shared adapter adds provenance only
+    # after this authoritative row has been formed.
+    return attach_verified_match_association(authoritative, match)
 
 
 def _inside_window(now: datetime, start: object, end: object) -> bool:
@@ -148,6 +214,95 @@ async def ticketmaster_impacts_for_replay(
     return impacts
 
 
+def _effective_source_statuses(
+    scenario: ReplayScenario, enabled_sources: Iterable[str]
+) -> dict[str, SourceStatus]:
+    """Resolve manifest status metadata after a comparison-mode override."""
+
+    return {
+        source: source_status_for(scenario, enabled_sources, source)
+        for source in sorted(CANONICAL_SOURCE_NAMES)
+    }
+
+
+def _source_is_available(statuses: Mapping[str, SourceStatus], source: str) -> bool:
+    """Only complete/partial fixtures may contribute recorded evidence."""
+
+    return statuses[source].status in {"complete", "partial"}
+
+
+def _snapshot_adjusted_status(status: SourceStatus, snapshot_status: str) -> SourceStatus:
+    """A stale cache is partial; an unavailable cache is a failed source.
+
+    The actual snapshot freshness remains visible separately in reports.  This
+    conversion prevents an enabled 511NY source with no usable snapshot from
+    being mislabeled as a complete scan.
+    """
+
+    if status.status in {"disabled", "failed"}:
+        return status
+    if snapshot_status == "fresh":
+        return status
+    if snapshot_status == "stale":
+        return SourceStatus("partial", status.errors or ("511NY snapshot is stale",))
+    return SourceStatus("failed", status.errors or ("511NY snapshot is unavailable",))
+
+
+def _aggregate_scan_status(statuses: Mapping[str, SourceStatus]) -> str:
+    """Aggregate Grok X/web and cached-511NY availability conservatively."""
+
+    scan_statuses = [statuses[source].status for source in ("grok_x", "grok_web", "511ny")]
+    active = [status for status in scan_statuses if status != "disabled"]
+    if not active:
+        return "disabled"
+    if all(status == "complete" for status in active):
+        return "complete"
+    if all(status == "failed" for status in active):
+        return "failed"
+    # This includes a deliberately incomplete fixture, a mix of available and
+    # failed providers, and a stale 511NY cache. Never call those all-clear.
+    return "partial"
+
+
+def _ablation_source(
+    scenario: ReplayScenario, enabled_sources: Iterable[str]
+) -> str | None:
+    """Return the one real source disabled relative to a scenario's default.
+
+    Legacy ``vehicle_detection`` expands to two sources before comparison, so
+    disabling only subway or bus detection is still a single-source ablation.
+    Supplying additional sources is not an ablation and intentionally uses the
+    primary intelligence transcript instead.
+    """
+
+    default = canonical_sources(scenario.enabled_sources)
+    actual = canonical_sources(enabled_sources)
+    removed = default - actual
+    added = actual - default
+    return next(iter(removed)) if len(removed) == 1 and not added else None
+
+
+def _intelligence_transcript(
+    scenario: ReplayScenario, inputs: Any, enabled_sources: Iterable[str]
+) -> tuple[str, str]:
+    """Select the recorded advisor variant for an exact one-source ablation."""
+
+    source = _ablation_source(scenario, enabled_sources)
+    if source is None:
+        return inputs.advisor_outputs["intelligence"], "intelligence"
+    variants = inputs.advisor_ablation_outputs
+    if variants:
+        if source not in variants:
+            raise ScenarioValidationError(
+                f"advisor_outputs.ablations is missing the requested {source} variant"
+            )
+        return variants[source], f"ablation:{source}"
+    # Older scenarios have no ablation recordings. They remain valid for the
+    # ordinary comparison runner, but source-ablation reports flag them as not
+    # recorded rather than treating this fallback as fresh evidence.
+    return inputs.advisor_outputs["intelligence"], "intelligence"
+
+
 def _expectation(scenario: ReplayScenario) -> dict[str, Any]:
     expected = scenario.expected
     required = {"baseline_route_id", "intelligence_route_id", "route_should_change"}
@@ -211,8 +366,25 @@ def _source_summary(
         if isinstance(row, Mapping):
             for source in _source_tokens(row):
                 source_counts[source] = source_counts.get(source, 0) + 1
+    association_diagnostics: list[dict[str, Any]] = []
+    for row in associations:
+        source_id = _safe_text(row.get("source_id"), 100)
+        if not source_id:
+            continue
+        normalized = normalize_matcher_association(row)
+        association_diagnostics.append(
+            {
+                "source_id": source_id,
+                "source": _safe_text(row.get("source"), 32),
+                "candidate_route_ids": list(normalized.get("affected_candidate_route_ids") or ()),
+                "modes": list(normalized.get("affected_modes") or ()),
+                "relevance_by_mode": dict(normalized.get("relevance_by_mode") or {}),
+                "impact_scope": _safe_text(normalized.get("impact_scope"), 48),
+            }
+        )
     return {
         "incident_count": len(incidents),
+        "mta_alert_count": len(payload.get("service_alerts") or []),
         "incident_ids": [item for item in dict.fromkeys(_safe_text(value, 100) for value in evidence_ids) if item],
         "source_counts": source_counts,
         "stalled_train_count": len(payload.get("stalled_trains") or []),
@@ -222,19 +394,7 @@ def _source_summary(
             if isinstance(row, Mapping)
         ],
         "ny511_snapshot_status": snapshot_status,
-        "association_diagnostics": [
-            {
-                "source_id": _safe_text(row.get("source_id"), 100),
-                "source": _safe_text(row.get("source"), 32),
-                "candidate_route_ids": [
-                    _safe_text(value, 80) for value in row.get("affected_candidate_route_ids", [])
-                    if _safe_text(value, 80)
-                ],
-                "impact_scope": _safe_text(row.get("impact_scope"), 48),
-            }
-            for row in associations
-            if _safe_text(row.get("source_id"), 100)
-        ],
+        "association_diagnostics": association_diagnostics,
     }
 
 
@@ -242,14 +402,12 @@ async def compare_scenario(
     scenario: ReplayScenario | str | Path,
     *,
     enabled_sources: Iterable[str] | None = None,
+    check_expected: bool = True,
 ) -> dict[str, Any]:
     """Compare recorded baseline and intelligence decisions for one scenario."""
     parsed = scenario if isinstance(scenario, ReplayScenario) else load_scenario(scenario)
     sources = frozenset(enabled_sources) if enabled_sources is not None else parsed.enabled_sources
-    unknown = sources - {
-        "mta", "vehicle_detection", "subway_vehicle_detection", "bus_vehicle_detection",
-        "grok_x", "grok_web", "511ny", "ticketmaster",
-    }
+    unknown = sources - {"vehicle_detection", *CANONICAL_SOURCE_NAMES}
     if unknown:
         raise ScenarioValidationError(f"unknown enabled sources: {sorted(unknown)}")
     expected = _expectation(parsed)
@@ -258,7 +416,15 @@ async def compare_scenario(
         fixture_started = time.perf_counter()
         inputs = await ReplayFixtureAdapters(parsed).load()
         fixture_normalization_ms = (time.perf_counter() - fixture_started) * 1000
-        service_alerts = inputs.mta_alerts if "mta" in sources else []
+        source_statuses = _effective_source_statuses(parsed, sources)
+        fixture_snapshot_status = str(getattr(inputs.ny511_snapshot, "status", "unavailable"))
+        source_statuses["511ny"] = _snapshot_adjusted_status(
+            source_statuses["511ny"], fixture_snapshot_status
+        )
+        available_sources = frozenset(
+            source for source, status in source_statuses.items() if _source_is_available(source_statuses, source)
+        )
+        service_alerts = inputs.mta_alerts if "mta" in available_sources else []
         baseline_started = time.perf_counter()
         baseline_payload = advisor_context.build_advisor_payload(
             routes=inputs.route_candidates,
@@ -271,66 +437,99 @@ async def compare_scenario(
         baseline_processing_ms = (time.perf_counter() - baseline_started) * 1000
 
         intelligence_started = time.perf_counter()
-        raw_incidents = _grok_incidents_for_sources(inputs.grok_incidents, sources)
+        raw_incidents = _grok_incidents_for_sources(inputs.grok_incidents, available_sources)
         associations: list[Mapping[str, Any]] = []
-        fixture_snapshot_status = str(getattr(inputs.ny511_snapshot, "status", "unavailable"))
-        snapshot_status = fixture_snapshot_status if "511ny" in sources else "disabled"
+        snapshot_status = (
+            fixture_snapshot_status
+            if "511ny" in canonical_sources(sources)
+            else "disabled"
+        )
         # A stale or unavailable snapshot is diagnostic information, not
         # actionable evidence. It must never influence a replay decision.
-        if "511ny" in sources and fixture_snapshot_status == "fresh":
-            associations = [dict(row) for row in inputs.ny511_matches if isinstance(row, Mapping)]
-            raw_incidents.extend(_matched_511_as_incident(row) for row in associations)
-        evidence_ids = [
-            _safe_text(row.get("source_id") or row.get("id"), 100)
-            for row in raw_incidents
-        ]
+        if "511ny" in available_sources and fixture_snapshot_status == "fresh":
+            snapshot_rows = _snapshot_rows_by_source_id(inputs.ny511_snapshot)
+            matched_pairs = [
+                (dict(match), _matched_511_as_incident(match, snapshot_rows[source_id]))
+                for match in inputs.ny511_matches
+                if isinstance(match, Mapping)
+                if (source_id := _safe_text(match.get("source_id"), 100)) in snapshot_rows
+            ]
+            # Apply the production lifecycle filter before retaining matching
+            # diagnostics as well as before the final evidence merge. A match
+            # cannot revive a resolved/expired official snapshot record.
+            current_matches = filter_current_incidents(
+                [incident for _match, incident in matched_pairs], now=parsed.clock.now()
+            )
+            current_match_ids = {
+                _safe_text(incident.get("source_id"), 100)
+                for incident in current_matches
+                if _safe_text(incident.get("source_id"), 100)
+            }
+            associations = [
+                match for match, incident in matched_pairs
+                if _safe_text(incident.get("source_id"), 100) in current_match_ids
+            ]
+            raw_incidents.extend(current_matches)
         # This invokes the same conservative current/deduplication logic used
         # before advisor normalization, not a replay-only merger.
+        merged_incidents = merge_incident_evidence(raw_incidents, now=parsed.clock.now())
+        evidence_ids = [
+            _safe_text(row.get("source_id") or row.get("id"), 100)
+            for row in merged_incidents
+            if isinstance(row, Mapping)
+        ]
         intelligence_incidents = [
             _normalize_advisor_incident(row)
-            for row in merge_incident_evidence(raw_incidents, now=parsed.clock.now())
+            for row in merged_incidents
             if isinstance(row, Mapping)
         ]
         ticketmaster_impacts = await ticketmaster_impacts_for_replay(
             inputs.ticketmaster_events,
             frozen_time=parsed.clock.now(),
-            enabled="ticketmaster" in sources,
+            enabled="ticketmaster" in available_sources,
         )
         intelligence_payload = advisor_context.build_advisor_payload(
             routes=inputs.route_candidates,
             service_alerts=service_alerts,
             incidents=intelligence_incidents,
-            stalled_trains=inputs.stalled_trains if {"vehicle_detection", "subway_vehicle_detection"} & sources else [],
-            stalled_buses=inputs.stalled_buses if {"vehicle_detection", "bus_vehicle_detection"} & sources else [],
+            stalled_trains=inputs.stalled_trains if "subway_vehicle_detection" in available_sources else [],
+            stalled_buses=inputs.stalled_buses if "bus_vehicle_detection" in available_sources else [],
             ticketmaster_event_impacts=ticketmaster_impacts,
             mode=advisor_context.PlanningMode.INTELLIGENCE,
         )
+        intelligence_transcript, advisor_variant = _intelligence_transcript(parsed, inputs, sources)
         intelligence = _summarize_selection(
-            transcript=inputs.advisor_outputs["intelligence"], payload=intelligence_payload, mode="intelligence"
+            transcript=intelligence_transcript, payload=intelligence_payload, mode="intelligence"
         )
         intelligence_processing_ms = (time.perf_counter() - intelligence_started) * 1000
     latency_ms = max(0, round((time.perf_counter() - total_started) * 1000, 3))
     route_changed = baseline["selected_route_id"] != intelligence["selected_route_id"]
-    scan_sources = {"grok_x", "grok_web", "511ny"} & sources
-    if not scan_sources:
-        scan_status = "disabled"
-    elif "511ny" in sources and snapshot_status != "fresh":
-        scan_status = "partial"
-    else:
-        scan_status = "complete"
-    matched = (
+    scan_status = _aggregate_scan_status(source_statuses)
+    expectation_matches = (
         baseline["selected_route_id"] == expected["baseline_route_id"]
         and intelligence["selected_route_id"] == expected["intelligence_route_id"]
         and route_changed is expected["route_should_change"]
         and ("scan_status" not in expected or scan_status == expected["scan_status"])
         and ("ny511_snapshot_status" not in expected or snapshot_status == expected["ny511_snapshot_status"])
     )
+    matched = expectation_matches if check_expected else None
     return {
         "scenario_id": parsed.scenario_id,
         "description": _safe_text(parsed.description, 220),
         "frozen_time": parsed.clock.now().isoformat(),
         "advisor_identity": ai_advisor.advisor_identity(),
         "enabled_sources": sorted(sources),
+        "source_status": {
+            source: status.as_dict() for source, status in sorted(source_statuses.items())
+        },
+        "advisor_variant": advisor_variant,
+        # Recorded transcripts intentionally isolate live-model nondeterminism.
+        # This proves payload/parser contract conformance to an authored
+        # expectation, not autonomous model accuracy or causal improvement.
+        "decision_basis": "recorded_advisor_transcript",
+        # Names only: enough for ablation orchestration to verify coverage
+        # without re-normalizing fixtures or exposing model transcripts.
+        "recorded_ablation_sources": sorted(inputs.advisor_ablation_outputs),
         "baseline": baseline,
         "intelligence": intelligence,
         "evidence": _source_summary(

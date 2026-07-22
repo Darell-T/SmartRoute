@@ -76,6 +76,15 @@ class ReplayScenarioTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inputs.ny511_snapshot.fetched_at, scenario.clock.now())
         self.assertEqual(scenario.clock.now().isoformat(), "2026-07-22T21:30:00+00:00")
 
+    async def test_partial_failure_uses_production_unavailable_snapshot_lifecycle(self):
+        scenario = load_scenario("partial-source-failure")
+        inputs = await ReplayFixtureAdapters(scenario).load()
+
+        self.assertIsNotNone(scenario.ny511_snapshot_fetched_at)
+        self.assertLess(scenario.ny511_snapshot_fetched_at, scenario.clock.now())
+        self.assertEqual(inputs.ny511_snapshot.status, "unavailable")
+        self.assertEqual(inputs.ny511_snapshot.incidents, [])
+
     async def test_malformed_provider_fixture_fails_before_comparison(self):
         scenario = load_scenario("clear-route")
         with tempfile.TemporaryDirectory() as temp:
@@ -120,7 +129,25 @@ class ReplayScenarioTests(unittest.IsolatedAsyncioTestCase):
 
     def test_all_scenarios_are_loaded_in_stable_order(self):
         scenarios = load_all_scenarios()
-        self.assertEqual([item.scenario_id for item in scenarios], ["clear-route"])
+        self.assertEqual(
+            [item.scenario_id for item in scenarios],
+            sorted(
+                {
+                    "clear-route",
+                    "stalled-subway",
+                    "stalled-bus",
+                    "bus-corridor-road-closure",
+                    "nearby-roadway-unrelated-subway",
+                    "station-access-incident",
+                    "ticketmaster-crowd-window",
+                    "multiple-source-corroboration",
+                    "weak-single-social-report",
+                    "stale-or-resolved-incident",
+                    "radius-boundary",
+                    "partial-source-failure",
+                }
+            ),
+        )
 
     def test_missing_or_path_traversal_fixture_fails(self):
         with tempfile.TemporaryDirectory() as temp:
