@@ -206,10 +206,10 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
 
     incidents: list = []
     if tool_input.get("include_incident_scan"):
-        station_names = trip_incidents._scan_station_names(ctx.gtfs, parsed_routes)
+        incident_context = trip_incidents.build_candidate_stop_context(ctx.gtfs, parsed_routes)
         try:
             incidents = await asyncio.wait_for(
-                trip_incidents._scan_route_incidents(station_names),
+                trip_incidents._scan_route_incidents(incident_context),
                 timeout=AGENT_GROK_BUDGET_S,
             )
         except asyncio.TimeoutError:

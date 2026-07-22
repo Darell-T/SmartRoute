@@ -24,6 +24,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security.api_key import APIKeyHeader
 from app.routers import trips, live_feed, subway, agent_chat
 from app.services.mta.warm import warm_realtime_caches
+from app.services.ny511 import NY511Poller, NY511Settings
+from app.services.incident_monitor import configure_snapshot_store
 from app.utils.gtfs_static import GTFSStaticData, close_pool, init_pool
 from app.models.migrate_gtfs import migrate
 
@@ -108,6 +110,16 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         print(f"[startup] stop-pattern index load FAILED (enrichment degraded): {exc!r}")
     app.state.gtfs = gtfs
+    # 511NY snapshots are process-local. This deployment currently runs one
+    # application process; with multiple workers, each would poll separately,
+    # so move the snapshot to shared storage before enabling multi-worker use.
+    ny511_settings = NY511Settings.from_env()
+    ny511_poller = NY511Poller(ny511_settings) if ny511_settings.enabled else None
+    app.state.ny511_poller = ny511_poller
+    app.state.ny511_snapshot_store = ny511_poller.store if ny511_poller else None
+    configure_snapshot_store(app.state.ny511_snapshot_store)
+    if ny511_poller:
+        ny511_poller.start()
     # Optional DB pool + daily GTFS refresh, both off the startup critical path.
     app.state.pool_task = asyncio.create_task(_init_pool_bg())
     refresh_task = asyncio.create_task(_gtfs_refresh_loop())
@@ -120,6 +132,9 @@ async def lifespan(app: FastAPI):
             await task
         except asyncio.CancelledError:
             pass
+    if ny511_poller:
+        await ny511_poller.stop()
+    configure_snapshot_store(None)
     close_pool()
 
 

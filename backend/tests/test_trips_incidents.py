@@ -215,3 +215,59 @@ class TripsIncidentPayloadTests(unittest.IsolatedAsyncioTestCase):
             incidents = await self.trips.trip_incidents._scan_route_incidents(["Church Avenue"])
 
         self.assertEqual(incidents, [])
+
+    async def test_scan_merges_only_related_evidence_before_advisor_normalization(self):
+        related = {
+            "source": "511ny",
+            "source_id": "event-1",
+            "latitude": 40.65,
+            "longitude": -73.96,
+            "location": "Church Avenue",
+            "nearby_station": "Church Avenue",
+            "severity": "high",
+            "description": "Road closure near the station.",
+        }
+        duplicate = {**related, "description": "Same official road closure."}
+        separate = {
+            **related,
+            "source_id": "event-2",
+            "latitude": 40.69,
+            "location": "Atlantic Avenue",
+            "nearby_station": "Atlantic Avenue",
+            "description": "Separate incident.",
+        }
+        with patch.object(
+            self.trips.trip_incidents,
+            "get_incidents",
+            AsyncMock(return_value={
+                "incidents": [related, duplicate, separate],
+                "scan_metadata": {"status": "complete", "snapshot_status": "fresh"},
+            }),
+        ):
+            result = await self.trips.trip_incidents._scan_route_incidents_with_metadata(["Church Avenue"])
+
+        self.assertEqual(result["scan_metadata"]["merge"]["before_count"], 3)
+        self.assertEqual(result["scan_metadata"]["merge"]["after_count"], 2)
+        self.assertEqual(len(result["incidents"]), 2)
+        self.assertEqual(set(result["incidents"][0]), {"location", "nearby_station", "severity", "description", "source"})
+
+    async def test_cross_source_merge_preserves_attribution_in_metadata_and_advisor_source(self):
+        official = {
+            "source": "511ny", "source_id": "event-1", "latitude": 40.65, "longitude": -73.96,
+            "location": "Church Avenue", "nearby_station": "Church Avenue", "severity": "high",
+            "description": "Road closure on Church Avenue.",
+        }
+        corroboration = {
+            "source": "@NYScanner", "source_id": "social-1", "latitude": 40.6501, "longitude": -73.9601,
+            "location": "Church Avenue", "nearby_station": "Church Avenue", "severity": "high",
+            "description": "Road closure on Church Avenue reported by responders.",
+        }
+        with patch.object(self.trips.trip_incidents, "get_incidents", AsyncMock(return_value={
+            "incidents": [official, corroboration], "scan_metadata": {"status": "complete", "snapshot_status": "fresh"},
+        })):
+            result = await self.trips.trip_incidents._scan_route_incidents_with_metadata(["Church Avenue"])
+        self.assertEqual(result["scan_metadata"]["merge"]["sources"], {"511ny": 1, "@NYScanner": 1})
+        self.assertEqual(len(result["incidents"]), 1)
+        self.assertIn("511ny", result["incidents"][0]["source"])
+        self.assertIn("@NYScanner", result["incidents"][0]["source"])
+        self.assertEqual(set(result["incidents"][0]), {"location", "nearby_station", "severity", "description", "source"})

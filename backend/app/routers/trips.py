@@ -147,8 +147,14 @@ async def plan_trip(request: Request, payload: TripRequest):
         # intermediate stops) so Claude can account for incidents when choosing
         # between candidates. This is intentionally not a detached background
         # scan: if it times out or fails, the trip continues with [].
-        incident_station_names = trip_incidents._scan_station_names(gtfs, parsed_response)
-        incidents = await trip_incidents._scan_route_incidents(incident_station_names)
+        incident_context = trip_incidents.build_candidate_stop_context(gtfs, parsed_response)
+        # The lifecycle-owned store is a snapshot reader only.  No request path
+        # can construct a NY511 client or fetch the provider directly.
+        incident_scan = await trip_incidents._scan_route_incidents_with_metadata(
+            incident_context,
+            snapshot_store=getattr(request.app.state, "ny511_snapshot_store", None),
+        )
+        incidents = incident_scan["incidents"]
         marks["incidents"] = time.monotonic() - t0
 
         # 5. Filter alerts for relevant routes
