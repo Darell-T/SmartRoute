@@ -14,6 +14,7 @@ from typing import Any, Iterable
 
 from app.services.incident_monitor import get_incidents
 from app.services.trips import text
+from app.services.trips.incident_association import verified_match_association
 from app.services.trips.incident_context import CandidateStopContext, extract_candidate_stop_context
 from app.services.trips.incident_merge import merge_incident_evidence
 
@@ -94,7 +95,7 @@ def _normalize_advisor_incident(incident: dict) -> dict:
     contributing = incident.get("sources")
     values = contributing if isinstance(contributing, (list, tuple, set)) else [incident.get("source")]
     source = ", ".join(dict.fromkeys(text._safe_text(value, 60) for value in values if text._safe_text(value, 60)))
-    return {
+    normalized = {
         "location": text._safe_text(incident.get("location"), 100),
         "nearby_station": text._safe_text(
             incident.get("nearby_station")
@@ -106,6 +107,8 @@ def _normalize_advisor_incident(incident: dict) -> dict:
         "description": text._safe_text(incident.get("description"), 220),
         "source": text._safe_text(source, 60),
     }
+    normalized.update(verified_match_association(incident))
+    return normalized
 
 
 def _scan_station_names(gtfs: Any, routes: list[list[dict]]) -> list[str]:

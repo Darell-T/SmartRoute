@@ -24,6 +24,10 @@ except Exception:  # Optional integration: trip planning must remain available.
     get_tool_call_type = web_search = x_search = None
 
 from app.services.trips.incident_context import CandidateStopContext
+from app.services.trips.incident_association import (
+    attach_verified_match_association,
+    normalize_matcher_association,
+)
 from app.services.trips.incident_matching import Cached511NYSearchTool
 
 
@@ -37,6 +41,19 @@ _MAX_TOTAL_TOOL_CALLS = 6
 _MAX_LOCAL_STOPS = 500
 _MAX_LOCAL_SNAPSHOT_INCIDENTS = 500
 _MAX_PROMPT_STOPS = 80
+_OFFICIAL_RAW_FIELDS = (
+    "latitude",
+    "longitude",
+    "reported_at",
+    "updated_at",
+    "starts_at",
+    "expected_end_at",
+    "event_type",
+    "event_subtype",
+    "roadway_name",
+    "status",
+    "status_text",
+)
 _STATION_TOKEN_MAP = {
     "av": "avenue", "ave": "avenue", "blvd": "boulevard", "bklyn": "brooklyn",
     "ctr": "center", "ct": "center", "hwy": "highway", "pkwy": "parkway",
@@ -194,6 +211,26 @@ def _normalize_incident(item: Any) -> dict[str, str] | None:
     return result if all(result.values()) and result["severity"] in _ALLOWED_SEVERITIES else None
 
 
+def _selected_511_evidence(raw: Mapping[str, Any], match: Mapping[str, Any]) -> dict[str, Any]:
+    """Join raw normalized 511NY fields to its exact local matcher result.
+
+    The raw row remains authoritative for provider values (coordinates and
+    lifecycle timestamps).  Candidate linkage is taken exclusively from the
+    local match result, which was scoped to current candidate stops.
+    """
+    selected: dict[str, Any] = {}
+    source_id = _normalize_text_field(raw.get("source_id") or match.get("source_id"))
+    if source_id:
+        selected["source_id"] = source_id[:120]
+    source = _normalize_text_field(raw.get("source") or match.get("source"))
+    if source:
+        selected["source"] = source[:60]
+    for key in _OFFICIAL_RAW_FIELDS:
+        if raw.get(key) is not None:
+            selected[key] = raw[key]
+    return attach_verified_match_association(selected, match)
+
+
 def _normalize_incident_payload(
     payload: Any,
     allowed_stations: list[str] | None = None,
@@ -204,7 +241,7 @@ def _normalize_incident_payload(
     if not isinstance(incidents, list):
         return {"incidents": []}
     station_map = {_station_key(station): station for station in allowed_stations or [] if station}
-    normalized: list[dict[str, str]] = []
+    normalized: list[dict[str, Any]] = []
     for item in incidents:
         incident = _normalize_incident(item)
         if incident is None:
@@ -219,9 +256,17 @@ def _normalize_incident_payload(
         if official:
             incident["source_id"] = str(official.get("source_id") or source_ref)
             incident["sources"] = list(dict.fromkeys([incident["source"], str(official.get("source") or "511ny")]))
-            for key in ("latitude", "longitude", "reported_at", "updated_at", "starts_at", "expected_end_at", "event_type", "event_subtype", "roadway_name"):
+            for key in _OFFICIAL_RAW_FIELDS:
                 if official.get(key) is not None:
                     incident[key] = official[key]
+            # These values are copied only from an exact local-tool match
+            # keyed by source_ref. Model-provided association keys were
+            # discarded by _normalize_incident above and cannot reach this
+            # branch. A raw snapshot row alone is not enough to assert route
+            # relevance: it must be paired with the matcher provenance bit.
+            if official.get("_verified_511ny_match") is True:
+                incident.update(normalize_matcher_association(official))
+                incident["_verified_511ny_match"] = True
         normalized.append(incident)
     return {"incidents": normalized}
 
@@ -411,7 +456,7 @@ def _run_incident_agent(
                 for match in result.get("incidents", []) if isinstance(result.get("incidents"), list) else []:
                     source_id = match.get("source_id") if isinstance(match, Mapping) else None
                     if isinstance(source_id, str) and source_id in snapshot_evidence:
-                        selected_511_evidence[source_id] = snapshot_evidence[source_id]
+                        selected_511_evidence[source_id] = _selected_511_evidence(snapshot_evidence[source_id], match)
             if not valid_call_id:
                 continue
             chat.append(tool_result(json.dumps(result, separators=(",", ":")), tool_call_id=call_id))

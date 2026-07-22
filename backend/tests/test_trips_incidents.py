@@ -207,6 +207,93 @@ class TripsIncidentPayloadTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("incidents", response)
         self.assertNotIn("incidents_pending", response)
 
+    async def test_advisor_incident_keeps_verified_bus_and_station_access_scope(self):
+        base = {
+            "location": "Ocean Avenue",
+            "nearby_station": "Church Av",
+            "severity": "high",
+            "description": "A verified local incident.",
+            "source": "511ny",
+            "_verified_511ny_match": True,
+            "affected_candidate_route_ids": ["candidate-0"],
+            "nearest_stop": {
+                "stop_id": "D24",
+                "stop_name": "Church Av",
+                "distance_meters": 24.678,
+                "match_source": "point",
+                "candidate_route_ids": ["candidate-0"],
+                "modes": ["bus", "subway"],
+            },
+        }
+        cases = [
+            (
+                "bus corridor remains bus-only",
+                {
+                    "affected_modes": ["bus", "walk"],
+                    "relevance_by_mode": {
+                        "bus": "potential_bus_corridor",
+                        "subway": "nearby_unconfirmed",
+                    },
+                    "impact_scope": "roadway",
+                },
+                {"bus", "walk"},
+                "roadway",
+                "nearby_unconfirmed",
+            ),
+            (
+                "station access remains transfer and walk",
+                {
+                    "affected_modes": ["transfer", "walk"],
+                    "relevance_by_mode": {"subway": "station_access_only"},
+                    "impact_scope": "station_access",
+                },
+                {"transfer", "walk"},
+                "station_access",
+                "station_access_only",
+            ),
+        ]
+        for label, fields, expected_modes, expected_scope, subway_relevance in cases:
+            with self.subTest(label=label):
+                normalized = self.trips.trip_incidents._normalize_advisor_incident({**base, **fields})
+                self.assertEqual(set(normalized["affected_modes"]), expected_modes)
+                self.assertEqual(normalized["impact_scope"], expected_scope)
+                self.assertEqual(normalized["relevance_by_mode"].get("subway"), subway_relevance)
+                self.assertNotIn("subway", normalized["affected_modes"])
+                self.assertEqual(normalized["nearest_stop"]["distance_meters"], 24.7)
+
+    async def test_advisor_incident_rejects_unverified_or_out_of_bounds_associations(self):
+        incident = {
+            "location": "Ocean Avenue",
+            "nearby_station": "Church Av",
+            "severity": "high",
+            "description": "A model-only claim.",
+            "source": "@unverified",
+            "affected_candidate_route_ids": [f"candidate-{index}" for index in range(20)],
+            "affected_modes": ["subway"],
+            "relevance_by_mode": {"subway": "service_disruption"},
+            "impact_scope": "subway_operations",
+            "nearest_stop": {"stop_name": "X" * 200, "distance_meters": float("inf")},
+        }
+        self.assertEqual(
+            self.trips.trip_incidents._normalize_advisor_incident(incident),
+            {
+                "location": "Ocean Avenue",
+                "nearby_station": "Church Av",
+                "severity": "high",
+                "description": "A model-only claim.",
+                "source": "@unverified",
+            },
+        )
+
+        verified = {**incident, "_verified_511ny_match": True}
+        normalized = self.trips.trip_incidents._normalize_advisor_incident(verified)
+        self.assertEqual(len(normalized["affected_candidate_route_ids"]), 12)
+        self.assertEqual(normalized["affected_modes"], ["subway"])
+        self.assertNotIn("relevance_by_mode", normalized)
+        self.assertNotIn("impact_scope", normalized)
+        self.assertLessEqual(len(normalized["nearest_stop"]["stop_name"]), 80)
+        self.assertNotIn("distance_meters", normalized["nearest_stop"])
+
     async def test_scan_route_incidents_returns_empty_for_bad_shape(self):
         with patch.object(
             self.trips.trip_incidents,
@@ -251,6 +338,43 @@ class TripsIncidentPayloadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["scan_metadata"]["merge"]["after_count"], 2)
         self.assertEqual(len(result["incidents"]), 2)
         self.assertEqual(set(result["incidents"][0]), {"location", "nearby_station", "severity", "description", "source"})
+
+    async def test_scan_keeps_exact_match_association_after_cross_source_merge(self):
+        social = {
+            "source": "@NYScanner", "source_id": "post-1",
+            "latitude": 40.6502, "longitude": -73.9631,
+            "location": "Ocean Avenue", "nearby_station": "Church Av",
+            "severity": "high", "description": "Road closure on Ocean Avenue.",
+        }
+        selected_official = {
+            "source": "@NYScanner", "source_id": "official-1",
+            "sources": ["@NYScanner", "511ny"],
+            "latitude": 40.6502, "longitude": -73.9631,
+            "location": "Ocean Avenue", "nearby_station": "Church Av",
+            "severity": "high", "description": "Road closure on Ocean Avenue.",
+            "_verified_511ny_match": True,
+            "affected_candidate_route_ids": ["candidate-1"],
+            "affected_modes": ["bus", "walk"],
+            "relevance_by_mode": {
+                "bus": "potential_bus_corridor",
+                "subway": "nearby_unconfirmed",
+            },
+            "impact_scope": "roadway",
+            "nearest_stop": {"stop_name": "Church Av", "distance_meters": 28.2, "match_source": "point"},
+        }
+        with patch.object(self.trips.trip_incidents, "get_incidents", AsyncMock(return_value={
+            "incidents": [social, selected_official],
+            "scan_metadata": {"status": "complete", "snapshot_status": "fresh"},
+        })):
+            result = await self.trips.trip_incidents._scan_route_incidents_with_metadata(["Church Av"])
+
+        self.assertEqual(len(result["incidents"]), 1)
+        outgoing = result["incidents"][0]
+        self.assertEqual(outgoing["affected_candidate_route_ids"], ["candidate-1"])
+        self.assertEqual(outgoing["affected_modes"], ["bus", "walk"])
+        self.assertEqual(outgoing["relevance_by_mode"]["subway"], "nearby_unconfirmed")
+        self.assertEqual(outgoing["impact_scope"], "roadway")
+        self.assertEqual(outgoing["nearest_stop"]["stop_name"], "Church Av")
 
     async def test_cross_source_merge_preserves_attribution_in_metadata_and_advisor_source(self):
         official = {

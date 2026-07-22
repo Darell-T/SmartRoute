@@ -240,6 +240,125 @@ class IncidentMonitorHelperTests(unittest.TestCase):
             {"incidents": []},
         )
 
+    def test_exact_source_ref_preserves_only_official_matcher_associations(self):
+        raw = {
+            "source_id": "official-1",
+            "source": "511ny",
+            "latitude": 40.6502,
+            "longitude": -73.9631,
+            "reported_at": "2026-07-22T12:00:00Z",
+            "roadway_name": "Ocean Avenue",
+        }
+        match = {
+            "source_id": "official-1",
+            "affected_candidate_route_ids": ["candidate-0", "not-a-candidate", "candidate-secret"],
+            "affected_modes": ["bus", "walk"],
+            "relevance_by_mode": {
+                "bus": "potential_bus_corridor",
+                "subway": "nearby_unconfirmed",
+            },
+            "impact_scope": "roadway",
+            "nearest_stop": {
+                "stop_id": "D24",
+                "stop_name": "Church Av",
+                "distance_meters": 32.126,
+                "match_source": "point",
+                "candidate_route_ids": ["candidate-0", "request-abc"],
+                "modes": ["bus", "subway"],
+            },
+        }
+        selected = incident_monitor._selected_511_evidence(raw, match)
+        payload = {
+            "incidents": [{
+                "location": "Ocean Avenue",
+                "nearby_station": "Church Av",
+                "severity": "high",
+                "description": "Road closure affects the bus corridor.",
+                "source": "@NYScanner",
+                "source_ref": "official-1",
+                # Model-provided association data must not replace local data.
+                "affected_modes": ["subway"],
+                "impact_scope": "subway_operations",
+            }]
+        }
+
+        incident = incident_monitor._normalize_incident_payload(
+            payload, ["Church Av"], selected_511_evidence={"official-1": selected}
+        )["incidents"][0]
+
+        self.assertEqual(incident["latitude"], 40.6502)
+        self.assertEqual(incident["reported_at"], "2026-07-22T12:00:00Z")
+        self.assertEqual(incident["affected_candidate_route_ids"], ["candidate-0"])
+        self.assertEqual(incident["affected_modes"], ["bus", "walk"])
+        self.assertEqual(incident["relevance_by_mode"]["subway"], "nearby_unconfirmed")
+        self.assertNotIn("subway", incident["affected_modes"])
+        self.assertEqual(incident["impact_scope"], "roadway")
+        self.assertEqual(incident["nearest_stop"]["stop_name"], "Church Av")
+        self.assertEqual(incident["nearest_stop"]["candidate_route_ids"], ["candidate-0"])
+        self.assertTrue(incident["_verified_511ny_match"])
+
+    def test_invalid_or_invented_source_ref_cannot_add_association_fields(self):
+        payload = {
+            "incidents": [{
+                "location": "Ocean Avenue",
+                "nearby_station": "Church Av",
+                "severity": "high",
+                "description": "Unverified closure.",
+                "source": "@NYScanner",
+                "source_ref": "invented-id",
+                "affected_candidate_route_ids": ["candidate-0"],
+                "affected_modes": ["subway"],
+                "relevance_by_mode": {"subway": "service_disruption"},
+                "impact_scope": "subway_operations",
+                "nearest_stop": {"stop_name": "made up"},
+                "_verified_511ny_match": True,
+            }]
+        }
+
+        self.assertEqual(
+            incident_monitor._normalize_incident_payload(
+                payload,
+                ["Church Av"],
+                selected_511_evidence={"official-1": {"source_id": "official-1"}},
+            ),
+            {"incidents": [{
+                "location": "Ocean Avenue",
+                "nearby_station": "Church Av",
+                "severity": "high",
+                "description": "Unverified closure.",
+                "source": "@NYScanner",
+            }]},
+        )
+
+    def test_source_ref_without_matcher_provenance_cannot_add_association_fields(self):
+        payload = {
+            "incidents": [{
+                "location": "Ocean Avenue",
+                "nearby_station": "Church Av",
+                "severity": "high",
+                "description": "Unverified closure.",
+                "source": "@NYScanner",
+                "source_ref": "official-1",
+            }]
+        }
+        raw_without_match = {
+            "source_id": "official-1",
+            "source": "511ny",
+            # A snapshot row must not be mistaken for a candidate-scoped
+            # matcher output, even if an internal caller supplied these keys.
+            "affected_candidate_route_ids": ["candidate-0"],
+            "affected_modes": ["subway"],
+            "impact_scope": "subway_operations",
+        }
+        incident = incident_monitor._normalize_incident_payload(
+            payload, ["Church Av"], selected_511_evidence={"official-1": raw_without_match}
+        )["incidents"][0]
+        self.assertEqual(incident["source_id"], "official-1")
+        self.assertNotIn("affected_candidate_route_ids", incident)
+        self.assertNotIn("affected_modes", incident)
+        self.assertNotIn("impact_scope", incident)
+        self.assertNotIn("_verified_511ny_match", incident)
+
 
 class IncidentMonitorAgentTests(unittest.TestCase):
     def test_candidate_context_exposes_real_ids_and_only_selected_511_evidence_reaches_final_result(self):
@@ -272,6 +391,9 @@ class IncidentMonitorAgentTests(unittest.TestCase):
         self.assertEqual(result["incidents"][0]["source_id"], "official-1")
         self.assertEqual(result["incidents"][0]["latitude"], 40.6501)
         self.assertEqual(set(result["incidents"][0]["sources"]), {"511ny", "@NYScanner"})
+        self.assertEqual(result["incidents"][0]["impact_scope"], "roadway")
+        self.assertEqual(result["incidents"][0]["relevance_by_mode"]["subway"], "nearby_unconfirmed")
+        self.assertNotIn("subway", result["incidents"][0]["affected_modes"])
     def test_fresh_snapshot_requires_x_web_and_local_evidence_for_complete_empty_result(self):
         x_call = _call("x_search", "{}", "x1", "x_search_tool")
         web_call = _call("web_search", "{}", "w1", "web_search_tool")
