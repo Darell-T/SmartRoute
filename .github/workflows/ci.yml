@@ -42,7 +42,5 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -r requirements.txt pytest
-      # The service-alerts protobuf tests require a full feed fixture and are
-      # excluded from the gate; everything else must pass.
-      - run: python -m pytest -q -k "not service_alerts"
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - run: python -m pytest -q

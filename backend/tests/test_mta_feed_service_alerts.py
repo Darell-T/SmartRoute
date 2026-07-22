@@ -66,6 +66,14 @@ def _add_alert(
     description_text.text = f"{header} detail"
 
 
+def _new_feed() -> gtfs_realtime_pb2.FeedMessage:
+    """Build a schema-valid GTFS-RT feed, including its required header."""
+    feed = gtfs_realtime_pb2.FeedMessage()
+    feed.header.gtfs_realtime_version = "2.0"
+    feed.header.timestamp = 1_778_595_600
+    return feed
+
+
 @unittest.skipIf(
     gtfs_realtime_pb2 is None or NYC_TZ is None,
     "gtfs-realtime-bindings or timezone data is not installed",
@@ -73,7 +81,7 @@ def _add_alert(
 class MtaFeedServiceAlertParserTests(unittest.TestCase):
     def test_default_parser_keeps_currently_active_alerts_only(self):
         now = _localized_timestamp(2026, 5, 12, 10)
-        feed = gtfs_realtime_pb2.FeedMessage()
+        feed = _new_feed()
 
         _add_alert(
             feed,
@@ -111,7 +119,7 @@ class MtaFeedServiceAlertParserTests(unittest.TestCase):
     def test_service_board_parser_includes_same_day_future_until_expired(self):
         now = _localized_timestamp(2026, 5, 12, 10)
         tomorrow = _localized_timestamp(2026, 5, 13, 9)
-        feed = gtfs_realtime_pb2.FeedMessage()
+        feed = _new_feed()
 
         _add_alert(
             feed,
@@ -156,6 +164,25 @@ class MtaFeedServiceAlertParserTests(unittest.TestCase):
             [alert["alert_id"] for alert in alerts],
             ["active", "future-today"],
         )
+
+    def test_partial_feed_without_header_is_tolerated_as_empty(self):
+        """Keep the current parser's defensive handling explicit.
+
+        `ParseFromString` accepts provider bytes that omit the proto2-required
+        header. Production parsing intentionally returns no alerts from such an
+        empty partial feed rather than failing the whole route request. Valid
+        test fixtures must still use `_new_feed` so setup errors are not
+        mistaken for parser behavior.
+        """
+        partial_feed = gtfs_realtime_pb2.FeedMessage()
+
+        alerts = mta_alerts._parse_service_alerts(
+            partial_feed.SerializePartialToString(),
+            include_same_day=False,
+            now_timestamp=_localized_timestamp(2026, 5, 12, 10),
+        )
+
+        self.assertEqual(alerts, [])
 
 
 @unittest.skipIf(mta_bus is None, "GTFS realtime dependencies are unavailable")

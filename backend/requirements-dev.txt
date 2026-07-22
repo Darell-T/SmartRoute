@@ -1,0 +1,3 @@
+# Test-only dependencies. Install alongside requirements.txt for local development
+# and CI: python -m pip install -r requirements.txt -r requirements-dev.txt
+pytest==8.3.5

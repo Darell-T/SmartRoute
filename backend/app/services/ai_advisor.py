@@ -61,7 +61,22 @@ def _load_system_prompt(prompt_path: Path | None = None) -> str:
 SYSTEM_PROMPT = _load_system_prompt()
 
 
+# The production route advisor is intentionally pinned to Haiku. This module
+# has no Sonnet fallback; a configuration or documentation mention of Sonnet
+# belongs to a different agent loop, not route selection.
+ADVISOR_PROVIDER = "anthropic"
 _MODEL_PRIORITY = ["claude-haiku-4-5-20251001"]
+
+
+def advisor_identity() -> dict[str, str]:
+    """Return safe route-advisor metadata for diagnostics and validation.
+
+    Deliberately excludes prompts, request payloads, and provider credentials.
+    """
+    return {
+        "advisor_provider": ADVISOR_PROVIDER,
+        "advisor_model": _MODEL_PRIORITY[0],
+    }
 
 
 def _route_eta_minutes(route: list) -> float | None:
@@ -180,7 +195,7 @@ def build_mock_recommendation(payload: dict) -> str:
 
 async def stream_recommendation(payload: dict):
     """Async generator that yields text chunks from Claude as they arrive.
-    Retries with exponential backoff and falls back to Haiku if Sonnet is overloaded.
+    Retries the configured Haiku route-advisor model with exponential backoff.
 
     payload should contain keys: routes, service_alerts, incidents,
     stalled_trains, and stalled_buses.

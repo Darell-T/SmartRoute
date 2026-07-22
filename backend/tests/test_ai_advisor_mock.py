@@ -67,6 +67,15 @@ class MockAdvisorTests(unittest.IsolatedAsyncioTestCase):
             ["claude-haiku-4-5-20251001"],
         )
 
+    def test_advisor_identity_reports_the_pinned_production_model(self):
+        self.assertEqual(
+            self.advisor.advisor_identity(),
+            {
+                "advisor_provider": "anthropic",
+                "advisor_model": "claude-haiku-4-5-20251001",
+            },
+        )
+
     def test_mock_recommendation_carries_control_blocks(self):
         text = self.advisor.build_mock_recommendation(_payload())
 
