@@ -22,10 +22,11 @@ except ZoneInfoNotFoundError:
     NYC_TZ = None
 
 if gtfs_realtime_pb2 is not None and NYC_TZ is not None:
-    from app.services.mta import alerts as mta_alerts, bus as mta_bus
+    from app.services.mta import alerts as mta_alerts, bus as mta_bus, subway as mta_subway
 else:
     mta_alerts = None
     mta_bus = None
+    mta_subway = None
 
 
 def _localized_timestamp(year: int, month: int, day: int, hour: int) -> int:
@@ -187,6 +188,68 @@ class MtaFeedServiceAlertParserTests(unittest.TestCase):
 
 @unittest.skipIf(mta_bus is None, "GTFS realtime dependencies are unavailable")
 class BusTimeParsingTests(unittest.TestCase):
+    def test_stalled_bus_parser_keeps_only_actionable_no_progress_vehicles(self):
+        payload = {
+            "Siri": {
+                "ServiceDelivery": {
+                    "VehicleMonitoringDelivery": [{
+                        "VehicleActivity": [
+                            {
+                                "RecordedAtTime": "2026-07-22T21:30:00Z",
+                                "MonitoredVehicleJourney": {
+                                    "LineRef": "MTA NYCT_B44",
+                                    "ProgressRate": "noProgress",
+                                    "ProgressStatus": [],
+                                    "VehicleLocation": {"Latitude": 40.669, "Longitude": -73.951},
+                                },
+                            },
+                            {
+                                "MonitoredVehicleJourney": {
+                                    "LineRef": "MTA NYCT_B46",
+                                    "ProgressRate": "noProgress",
+                                    "ProgressStatus": ["layover"],
+                                    "VehicleLocation": {"Latitude": 40.67, "Longitude": -73.95},
+                                },
+                            },
+                            {
+                                "MonitoredVehicleJourney": {
+                                    "ProgressRate": "noProgress",
+                                    "VehicleLocation": {"Latitude": 40.67, "Longitude": -73.95},
+                                },
+                            },
+                            {
+                                "MonitoredVehicleJourney": {
+                                    "LineRef": "MTA NYCT_B12",
+                                    "ProgressRate": "noProgress",
+                                },
+                            },
+                        ],
+                    }],
+                },
+            },
+        }
+
+        stalled = mta_bus.parse_stalled_bus_positions(payload)
+
+        self.assertEqual(stalled, [{
+            "route_id": "B44",
+            "location": {"Latitude": 40.669, "Longitude": -73.951},
+            "time_recorded": "2026-07-22T21:30:00Z",
+        }])
+
+    def test_stalled_train_detector_uses_route_and_staleness_not_direction_text(self):
+        positions = [
+            {"route_id": "Q", "stop_id": "D24N", "status": "STOPPED", "timestamp": 900, "direction": "northbound"},
+            {"route_id": "Q", "stop_id": "D25N", "status": "IN_TRANSIT", "timestamp": 1_000, "direction": "southbound"},
+            {"route_id": "R", "stop_id": "R20S", "status": "STOPPED", "timestamp": 800, "direction": "Q"},
+        ]
+
+        stalled = mta_subway.detect_stalled_trains(positions, {"Q"}, now_timestamp=1_300)
+
+        self.assertEqual(stalled, [{
+            "route_id": "Q", "stop_id": "D24N", "status": "STOPPED", "stalled_minutes": 7,
+        }])
+
     def test_stop_monitoring_accepts_dict_delivery_and_departure_time(self):
         payload = {
             "Siri": {

@@ -1,0 +1,4 @@
+{
+  "baseline": "Take the N train. It is the fastest available option with no active service alerts on this trip. [ROUTE:0][CANDIDATE_ANALYSIS]{\"selected_route_index\":0,\"candidate_analysis\":[{\"index\":0,\"is_recommended\":true,\"recommendation_reason\":\"Fastest route with no reported service alerts.\"},{\"index\":1,\"is_recommended\":false,\"rejection_reason\":\"About 7 min slower than the recommended route.\"}]}[/CANDIDATE_ANALYSIS]",
+  "intelligence": "Take the N train. Recorded city-intelligence sources found no relevant disruption on this trip. [ROUTE:0][CANDIDATE_ANALYSIS]{\"selected_route_index\":0,\"candidate_analysis\":[{\"index\":0,\"is_recommended\":true,\"recommendation_reason\":\"Fastest route with no relevant recorded disruption.\"},{\"index\":1,\"is_recommended\":false,\"rejection_reason\":\"About 7 min slower than the recommended route.\"}]}[/CANDIDATE_ANALYSIS]"
+}
