@@ -215,6 +215,8 @@ class VenueCrowdWindowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.ok)
         self.assertEqual(result.data["surge_start_iso"], "2026-07-16T21:45:00-04:00")
         self.assertEqual(result.data["surge_end_iso"], "2026-07-16T22:50:00-04:00")
+        self.assertIsNone(result.data["pre_event_start_iso"])
+        self.assertIsNone(result.data["pre_event_end_iso"])
 
     async def test_all_six_venues_have_stations_and_lines(self):
         expected = {"msg", "barclays", "yankee_stadium", "citi_field", "penn_station", "port_authority"}

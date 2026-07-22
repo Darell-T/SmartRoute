@@ -20,10 +20,13 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-# Post-event subway surge window, relative to the event's (estimated) end
-# time -- crowds build a bit before the final whistle/encore and taper off
+# Pre-event window is deliberately conservative: arrivals usually build during
+# the hour before doors/opening time and can linger shortly after the listed
+# start. Post-event crowds build before the final whistle/encore and taper off
 # over the following ~50 minutes as platforms clear. Same offsets for every
 # venue in the table; only the affected stations/lines differ.
+PRE_EVENT_START_OFFSET_MIN = -60
+PRE_EVENT_END_OFFSET_MIN = 15
 SURGE_START_OFFSET_MIN = -15
 SURGE_END_OFFSET_MIN = 50
 
