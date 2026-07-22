@@ -1,13 +1,12 @@
 import asyncio
 import importlib
 import os
-import re
 import time
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from app.services.ai_advisor import stream_recommendation
 from app.services.mta_feed import fetch_service_alerts, get_stalled_buses, parse_service_alerts, filter_alerts_for_routes, get_stalled_trains
-from app.services.trips import text, scoring, candidates, enrichment, incidents as trip_incidents
+from app.services.trips import text, scoring, candidates, enrichment, incidents as trip_incidents, advisor_context
 
 directions_service = importlib.import_module("app.services.directions")
 get_transit_route = directions_service.get_transit_route
@@ -165,14 +164,14 @@ async def plan_trip(request: Request, payload: TripRequest):
         # ATLAS makes the route decision itself from these raw signals -- there is
         # deliberately no precomputed "best route" score in the payload, so the
         # model reasons over the full data rather than deferring to a number.
-        route_advisor_payload = {
-            "routes": parsed_response,
-            "route_candidate_labels": candidates._build_route_candidate_labels(parsed_response),
-            "service_alerts": relevant_alerts,
-            "incidents": incidents,
-            "stalled_trains": stalled if stalled else [],
-            "stalled_buses": stalled_buses if stalled_buses else [],
-        }
+        route_advisor_payload = advisor_context.build_advisor_payload(
+            routes=parsed_response,
+            service_alerts=relevant_alerts,
+            incidents=incidents,
+            stalled_trains=stalled,
+            stalled_buses=stalled_buses,
+            mode=advisor_context.PlanningMode.INTELLIGENCE,
+        )
 
         # 7. Stream to Claude. The advisor is non-essential to DISPLAYING a
         # route: if it times out or errors (no credits, overload, network), an
@@ -202,17 +201,10 @@ async def plan_trip(request: Request, payload: TripRequest):
         marks["advisor"] = time.monotonic() - t0
 
         # 8. Parse chosen route index from ATLAS tag, then strip it
-        chosen_index = 0
-        route_tag_match = re.search(r"\[ROUTE:(\d+)\]", raw_recommendation)
-        if route_tag_match:
-            chosen_index = int(route_tag_match.group(1))
-            if chosen_index >= len(parsed_response):
-                chosen_index = 0
-        analysis_selected_index, candidate_analysis = candidates._parse_candidate_analysis(raw_recommendation)
-        if not route_tag_match and analysis_selected_index is not None:
-            chosen_index = analysis_selected_index
-            if chosen_index >= len(parsed_response):
-                chosen_index = 0
+        chosen_index, candidate_analysis = advisor_context.parse_advisor_selection(
+            raw_recommendation,
+            len(parsed_response),
+        )
         recommendation = candidates._strip_model_control_blocks(raw_recommendation)
         recommendation = text._sanitize_recommendation(recommendation)
 

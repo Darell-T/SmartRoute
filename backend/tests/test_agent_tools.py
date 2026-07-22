@@ -198,6 +198,23 @@ class PlanTripToolTests(unittest.IsolatedAsyncioTestCase):
             scan.assert_awaited_once()
         self.assertTrue(result.ok)
 
+    async def test_plan_trip_always_uses_shared_intelligence_advisor_mode(self):
+        captured = {}
+
+        async def capture_advisor(payload):
+            captured["payload"] = payload
+            return "[ROUTE:0] Take the Q."
+
+        with patch.object(plan_trip.ai_advisor, "collect_recommendation", new=capture_advisor):
+            result = await plan_trip.execute(
+                {"origin": "user", "destination": "Costco"},
+                self._ctx(origin={"lat": 40.7, "lng": -73.9}),
+            )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(captured["payload"]["planning_mode"], "intelligence")
+        self.assertIn("route_candidate_labels", captured["payload"])
+
 
 class TransitSnapshotToolTests(unittest.IsolatedAsyncioTestCase):
     def _ctx(self, origin=None, gtfs="fake-gtfs"):

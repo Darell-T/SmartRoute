@@ -18,7 +18,6 @@ from __future__ import annotations
 import asyncio
 import importlib
 import os
-import re
 import secrets
 
 from app.services import ai_advisor
@@ -32,7 +31,7 @@ from app.services.mta_feed import (
     get_stalled_trains,
     parse_service_alerts,
 )
-from app.services.trips import candidates, enrichment, scoring, text
+from app.services.trips import advisor_context, candidates, enrichment, scoring, text
 from app.services.trips import incidents as trip_incidents
 from app.utils import geo
 
@@ -47,7 +46,6 @@ TRIP_ADVISOR_TIMEOUT_S = float(os.getenv("TRIP_ADVISOR_TIMEOUT_S", "8.0"))
 # turn has a much tighter overall deadline than a one-shot /api/trip call.
 AGENT_GROK_BUDGET_S = float(os.getenv("AGENT_GROK_BUDGET_S", "6.0"))
 
-_ROUTE_TAG_RE = re.compile(r"\[ROUTE:(\d+)\]")
 _ALL_MODES = ("SUBWAY", "BUS")
 
 PLAN_TRIP_SCHEMA = {
@@ -216,14 +214,14 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
             print(f"[agent-plan_trip] incident scan timed out ({AGENT_GROK_BUDGET_S:.0f}s)")
             incidents = []
 
-    judge_payload = {
-        "routes": parsed_routes,
-        "route_candidate_labels": candidates._build_route_candidate_labels(parsed_routes),
-        "service_alerts": relevant_alerts,
-        "incidents": incidents,
-        "stalled_trains": stalled or [],
-        "stalled_buses": stalled_buses or [],
-    }
+    judge_payload = advisor_context.build_advisor_payload(
+        routes=parsed_routes,
+        service_alerts=relevant_alerts,
+        incidents=incidents,
+        stalled_trains=stalled,
+        stalled_buses=stalled_buses,
+        mode=advisor_context.PlanningMode.INTELLIGENCE,
+    )
 
     try:
         raw_recommendation = await asyncio.wait_for(
@@ -236,17 +234,10 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
         print(f"[agent-plan_trip] advisor unavailable: {exc!r}")
         raw_recommendation = "[ROUTE:0] Live reasoning was unavailable; showing the fastest option."
 
-    chosen_index = 0
-    route_tag_match = _ROUTE_TAG_RE.search(raw_recommendation)
-    if route_tag_match:
-        chosen_index = int(route_tag_match.group(1))
-        if chosen_index >= len(parsed_routes):
-            chosen_index = 0
-    analysis_selected_index, candidate_analysis = candidates._parse_candidate_analysis(raw_recommendation)
-    if not route_tag_match and analysis_selected_index is not None:
-        chosen_index = analysis_selected_index
-        if chosen_index >= len(parsed_routes):
-            chosen_index = 0
+    chosen_index, candidate_analysis = advisor_context.parse_advisor_selection(
+        raw_recommendation,
+        len(parsed_routes),
+    )
 
     chosen_route = parsed_routes[chosen_index]
     await enrichment._enrich_route(ctx.gtfs, chosen_route)

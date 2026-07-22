@@ -201,6 +201,7 @@ class TripsIncidentPayloadTests(unittest.IsolatedAsyncioTestCase):
             response = await self.trips.plan_trip(request, payload)
 
         self.assertEqual(captured["payload"]["incidents"], [incident])
+        self.assertEqual(captured["payload"]["planning_mode"], "intelligence")
         self.assertEqual(response["recommendation"], "Take the Q.")
         self.assertNotIn("audio", response)
         self.assertNotIn("incidents", response)
