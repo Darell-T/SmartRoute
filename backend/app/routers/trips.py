@@ -7,6 +7,8 @@ from pydantic import BaseModel
 from app.services.ai_advisor import stream_recommendation
 from app.services.mta_feed import fetch_service_alerts, get_stalled_buses, parse_service_alerts, filter_alerts_for_routes, get_stalled_trains
 from app.services.trips import text, scoring, candidates, enrichment, incidents as trip_incidents, advisor_context
+from app.services.validation import production_shadow
+from app.services.validation.shadow import ShadowEvaluationStatus
 
 directions_service = importlib.import_module("app.services.directions")
 get_transit_route = directions_service.get_transit_route
@@ -160,8 +162,8 @@ async def plan_trip(request: Request, payload: TripRequest):
         parsed_alerts = parse_service_alerts(raw_alerts) if raw_alerts else []
         relevant_alerts = filter_alerts_for_routes(parsed_alerts, route_ids)
 
-        # 6. Build payload for ATLAS (routes + alerts + incidents + stalled vehicles).
-        # ATLAS makes the route decision itself from these raw signals -- there is
+        # 6. Build the SmartRoute advisor payload (routes + alerts + incidents + stalled vehicles).
+        # The route advisor makes the decision itself from these raw signals -- there is
         # deliberately no precomputed "best route" score in the payload, so the
         # model reasons over the full data rather than deferring to a number.
         route_advisor_payload = advisor_context.build_advisor_payload(
@@ -178,12 +180,14 @@ async def plan_trip(request: Request, payload: TripRequest):
         # unhandled exception here would 500 the whole trip. Fall back to a
         # plain non-mock rider-facing line so the real route still ships.
         raw_recommendation = ""
+        advisor_status = ShadowEvaluationStatus.COMPLETE
         try:
             raw_recommendation = await asyncio.wait_for(
                 _collect_recommendation(route_advisor_payload),
                 timeout=TRIP_ADVISOR_TIMEOUT_S,
             )
         except asyncio.TimeoutError:
+            advisor_status = ShadowEvaluationStatus.FALLBACK
             print(
                 f"[trip] advisor timed out ({TRIP_ADVISOR_TIMEOUT_S:.2f}s), "
                 "using text-only fallback"
@@ -193,6 +197,7 @@ async def plan_trip(request: Request, payload: TripRequest):
                 "is still built from real-time transit data."
             )
         except Exception as exc:
+            advisor_status = ShadowEvaluationStatus.FALLBACK
             print(f"[trip] advisor unavailable, using text-only fallback: {exc!r}")
             raw_recommendation = (
                 "[ROUTE:0] SmartRoute could not complete live reasoning, but the route shown "
@@ -200,7 +205,7 @@ async def plan_trip(request: Request, payload: TripRequest):
             )
         marks["advisor"] = time.monotonic() - t0
 
-        # 8. Parse chosen route index from ATLAS tag, then strip it
+        # 8. Parse the chosen route index from the advisor tag, then strip it.
         chosen_index, candidate_analysis = advisor_context.parse_advisor_selection(
             raw_recommendation,
             len(parsed_response),
@@ -235,13 +240,48 @@ async def plan_trip(request: Request, payload: TripRequest):
             f"enrich={_d('enrich', 'advisor'):.2f}s "
             f"total={elapsed:.2f}s"
         )
-        return {
+        displayed_result = {
             "recommendation": recommendation,
             "route": chosen_route,
             "selected_route_index": chosen_index,
             "route_candidates": route_candidates,
             "alerts": relevant_alerts,
         }
+        baseline_payload = advisor_context.build_advisor_payload(
+            routes=parsed_response,
+            service_alerts=relevant_alerts,
+            mode=advisor_context.PlanningMode.BASELINE,
+        )
+
+        async def _evaluate_shadow_baseline():
+            raw = await _collect_recommendation(baseline_payload)
+            return production_shadow.parse_counterfactual_baseline(
+                raw, len(parsed_response)
+            )
+
+        return await production_shadow.run_trip_shadow(
+            displayed_result,
+            baseline_evaluator=_evaluate_shadow_baseline,
+            production_route_id=f"candidate-{chosen_index}",
+            production_status=advisor_status,
+            candidate_summaries=production_shadow.safe_candidate_summaries(
+                route_candidates
+            ),
+            source_counts=production_shadow.safe_source_counts(
+                incidents=incidents,
+                alert_count=len(relevant_alerts),
+                stalled_train_count=len(stalled),
+                stalled_bus_count=len(stalled_buses),
+            ),
+            incident_count=len(incidents),
+            scan_status=str(incident_scan["scan_metadata"].get("status") or "failed"),
+            snapshot_status=str(
+                incident_scan["scan_metadata"].get("snapshot_status") or "unavailable"
+            ),
+            intelligence_latency_ms=round(
+                _d("advisor", "incidents") * 1000
+            ),
+        )
 
     except HTTPException:
         raise

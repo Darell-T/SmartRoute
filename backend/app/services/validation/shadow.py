@@ -33,6 +33,7 @@ class ShadowEvaluationStatus(str, Enum):
     """Safe status codes; raw provider/model errors never enter a record."""
 
     COMPLETE = "complete"
+    PARTIAL = "partial"
     DISABLED = "disabled"
     TIMEOUT = "timeout"
     FAILED = "failed"
@@ -361,8 +362,8 @@ def build_shadow_record(
     route_changed = (
         production_route != baseline_route
         if production_route is not None and baseline_route is not None
-        and production_status in {ShadowEvaluationStatus.COMPLETE, ShadowEvaluationStatus.FALLBACK}
-        and baseline_status in {ShadowEvaluationStatus.COMPLETE, ShadowEvaluationStatus.FALLBACK}
+        and production_status is ShadowEvaluationStatus.COMPLETE
+        and baseline_status is ShadowEvaluationStatus.COMPLETE
         else None
     )
     parsed_scenario = str(scenario_id or "").strip()
