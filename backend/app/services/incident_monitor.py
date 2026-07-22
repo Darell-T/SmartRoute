@@ -36,6 +36,7 @@ _MAX_LOCAL_TOOL_CALLS = 3
 _MAX_TOTAL_TOOL_CALLS = 6
 _MAX_LOCAL_STOPS = 500
 _MAX_LOCAL_SNAPSHOT_INCIDENTS = 500
+_MAX_PROMPT_STOPS = 80
 _STATION_TOKEN_MAP = {
     "av": "avenue", "ave": "avenue", "blvd": "boulevard", "bklyn": "brooklyn",
     "ctr": "center", "ct": "center", "hwy": "highway", "pkwy": "parkway",
@@ -59,6 +60,8 @@ current route candidates listed below, using current evidence from X and the web
 the supplied cached official 511NY search tool.
 
 Candidate stations: {stations}
+Candidate route context (use only these candidate_route_ids in the local tool):
+{candidate_context}
 
 Classify evidence precisely:
 - Roadway incidents may affect a bus corridor, walking approach, station access, or
@@ -68,11 +71,14 @@ Classify evidence precisely:
 - Subway operational impact requires evidence about service, stations, tracks, or trains.
 
 Before concluding there are no incidents, call X search and web search. When the
-cached 511NY tool is available, call it once as well. Only include specific,
+cached 511NY tool is available, call it once as well. For every selected 511NY
+result, include its exact `source_ref` from the local tool in that incident; do
+not invent source_ref values. Do not suppress a relevant selected 511NY result
+merely because social search is empty. Only include specific,
 current, NYC incidents relevant to a listed station/candidate.
 Do not invent links, keys, URLs, neighborhoods, or geography. If evidence is unclear,
 omit it. Return ONLY this JSON object (no markdown):
-{{"incidents":[{{"location":"address or cross-street","nearby_station":"exact listed station name","severity":"low|medium|high","description":"one concise, evidence-grounded sentence","source":"source name or @handle"}}]}}
+{{"incidents":[{{"location":"address or cross-street","nearby_station":"exact listed station name","severity":"low|medium|high","description":"one concise, evidence-grounded sentence","source":"source name or @handle","source_ref":"optional exact selected 511NY source_id"}}]}}
 Use {{"incidents":[]}} when no report is supported."""
 
 
@@ -120,6 +126,32 @@ def _stop_contexts(route_context: Iterable[Any]) -> list[CandidateStopContext]:
     return [item for item in route_context or [] if isinstance(item, CandidateStopContext)]
 
 
+def _compact_candidate_context(stops: Iterable[CandidateStopContext]) -> str:
+    """Bounded IDs/associations only; coordinates and arbitrary input stay local."""
+    stop_list = list(stops)
+    candidate_route_ids = list(dict.fromkeys(
+        candidate_id
+        for stop in stop_list
+        for candidate_id in stop.candidate_route_ids
+    ))[:12]
+    rows = []
+    for stop in stop_list[:_MAX_PROMPT_STOPS]:
+        associations = [
+            {
+                "candidate_route_id": association.candidate_route_id,
+                "mode": association.mode,
+                "route_id": association.route_id,
+            }
+            for association in stop.associations[:8]
+        ]
+        rows.append({
+            "stop": _normalize_text_field(stop.stop_name)[:80],
+            "candidate_route_ids": stop.candidate_route_ids[:12],
+            "associations": associations,
+        })
+    return json.dumps({"candidate_route_ids": candidate_route_ids, "stops": rows}, separators=(",", ":"))
+
+
 def _strip_code_fences(content: str) -> str:
     text = (content or "").strip()
     if text.startswith("```json"):
@@ -162,7 +194,12 @@ def _normalize_incident(item: Any) -> dict[str, str] | None:
     return result if all(result.values()) and result["severity"] in _ALLOWED_SEVERITIES else None
 
 
-def _normalize_incident_payload(payload: Any, allowed_stations: list[str] | None = None) -> dict[str, list[dict[str, str]]]:
+def _normalize_incident_payload(
+    payload: Any,
+    allowed_stations: list[str] | None = None,
+    *,
+    selected_511_evidence: Mapping[str, Mapping[str, Any]] | None = None,
+) -> dict[str, list[dict[str, Any]]]:
     incidents = payload.get("incidents") if isinstance(payload, Mapping) else None
     if not isinstance(incidents, list):
         return {"incidents": []}
@@ -177,6 +214,14 @@ def _normalize_incident_payload(payload: Any, allowed_stations: list[str] | None
             if not canonical:
                 continue
             incident["nearby_station"] = canonical
+        source_ref = item.get("source_ref")
+        official = selected_511_evidence.get(source_ref) if isinstance(source_ref, str) and selected_511_evidence else None
+        if official:
+            incident["source_id"] = str(official.get("source_id") or source_ref)
+            incident["sources"] = list(dict.fromkeys([incident["source"], str(official.get("source") or "511ny")]))
+            for key in ("latitude", "longitude", "reported_at", "updated_at", "starts_at", "expected_end_at", "event_type", "event_subtype", "roadway_name"):
+                if official.get(key) is not None:
+                    incident[key] = official[key]
         normalized.append(incident)
     return {"incidents": normalized}
 
@@ -242,6 +287,17 @@ def _bounded_local_snapshot(snapshot: Any) -> tuple[Any, bool]:
     return bounded, True
 
 
+def _snapshot_evidence_by_id(snapshot: Any) -> dict[str, Mapping[str, Any]]:
+    mapping = snapshot.model_dump() if hasattr(snapshot, "model_dump") else snapshot if isinstance(snapshot, Mapping) else {}
+    records = mapping.get("incidents", []) if isinstance(mapping, Mapping) else []
+    evidence: dict[str, Mapping[str, Any]] = {}
+    for record in records if isinstance(records, list) else []:
+        row = record.model_dump() if hasattr(record, "model_dump") else record
+        if isinstance(row, Mapping) and isinstance(row.get("source_id"), str):
+            evidence[row["source_id"]] = dict(row)
+    return evidence
+
+
 def _run_incident_agent(
     station_names: str,
     station_list: list[str],
@@ -260,6 +316,9 @@ def _run_incident_agent(
     if snapshot_capped or len(all_stops) > _MAX_LOCAL_STOPS:
         metadata["sources"]["errors"].append("cached 511NY matching input was capped")
     local_search = Cached511NYSearchTool(lambda: bounded_snapshot, bounded_stops)
+    snapshot_evidence = _snapshot_evidence_by_id(bounded_snapshot)
+    selected_511_evidence: dict[str, Mapping[str, Any]] = {}
+    candidate_context = _compact_candidate_context(bounded_stops)
     try:
         chat = client.chat.create(
             model=_MODEL_NAME,
@@ -270,9 +329,10 @@ def _run_incident_agent(
             ],
             temperature=0.0,
             parallel_tool_calls=False,
+            max_turns=_MAX_TOOL_ROUNDS,
         )
-        chat.append(system(GROK_INCIDENT_PROMPT.format(stations=station_names)))
-        chat.append(user(f"Check current evidence only for these route stations: {station_names}"))
+        chat.append(system(GROK_INCIDENT_PROMPT.format(stations=station_names, candidate_context=candidate_context)))
+        chat.append(user(f"Check current evidence only for these route stations and candidate IDs: {candidate_context}"))
     except Exception:
         metadata["status"] = "failed"
         metadata["sources"]["errors"].append("xAI scan initialization failed")
@@ -294,18 +354,18 @@ def _run_incident_agent(
                 metadata["status"] = "failed"
                 metadata["sources"]["errors"].append("xAI returned malformed incident JSON")
                 return {"incidents": [], "scan_metadata": metadata}
-            result = _normalize_incident_payload(payload, station_list)
+            result = _normalize_incident_payload(payload, station_list, selected_511_evidence=selected_511_evidence)
             _finalize_metadata(metadata, has_final_json=True)
             return {**result, "scan_metadata": metadata}
 
         metadata["tool_rounds"] += 1
+        if metadata["total_tool_calls"] + len(calls) > _MAX_TOTAL_TOOL_CALLS:
+            metadata["sources"]["errors"].append("tool call batch exceeds total limit")
+            _finalize_metadata(metadata)
+            return {"incidents": [], "scan_metadata": metadata}
         chat.append(response)
         for call in calls:
             metadata["total_tool_calls"] += 1
-            if metadata["total_tool_calls"] > _MAX_TOTAL_TOOL_CALLS:
-                metadata["sources"]["errors"].append("total tool call limit reached")
-                _finalize_metadata(metadata)
-                return {"incidents": [], "scan_metadata": metadata}
             try:
                 call_type = get_tool_call_type(call)
             except Exception:
@@ -348,6 +408,10 @@ def _run_incident_agent(
                     metadata["sources"]["errors"].append("cached 511NY search was unavailable or invalid")
                 elif "cached_511ny" not in metadata["sources"]["completed"]:
                     metadata["sources"]["completed"].append("cached_511ny")
+                for match in result.get("incidents", []) if isinstance(result.get("incidents"), list) else []:
+                    source_id = match.get("source_id") if isinstance(match, Mapping) else None
+                    if isinstance(source_id, str) and source_id in snapshot_evidence:
+                        selected_511_evidence[source_id] = snapshot_evidence[source_id]
             if not valid_call_id:
                 continue
             chat.append(tool_result(json.dumps(result, separators=(",", ":")), tool_call_id=call_id))

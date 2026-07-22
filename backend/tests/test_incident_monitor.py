@@ -4,6 +4,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from app.services import incident_monitor
+from app.services.trips import incidents as trip_incidents
+from app.services.trips.incident_context import CandidateStopAssociation, CandidateStopContext
+from app.services.trips.incident_matching import Cached511NYSearchTool
 
 
 class _FakeResponse:
@@ -59,6 +62,34 @@ class _FakeClient:
 
 
 class IncidentMonitorHelperTests(unittest.TestCase):
+    def test_compact_context_keeps_late_candidate_ids_after_stop_cap(self):
+        first_candidate_stops = [
+            CandidateStopContext(
+                f"stop-{index}", f"Stop {index}", 40.65, -73.96,
+                [CandidateStopAssociation("candidate-0", mode="subway", route_id="Q")],
+            )
+            for index in range(81)
+        ]
+        late_candidate = CandidateStopContext(
+            "late", "Late Stop", 40.66, -73.97,
+            [CandidateStopAssociation("candidate-1", mode="bus", route_id="B68")],
+        )
+        contexts = [*first_candidate_stops, late_candidate]
+        prompt_context = incident_monitor._compact_candidate_context(contexts)
+        self.assertIn('"candidate_route_ids":["candidate-0","candidate-1"]', prompt_context)
+        tool = Cached511NYSearchTool(lambda: {
+            "status": "fresh",
+            "incidents": [
+                {"source_id": "q", "latitude": 40.65, "longitude": -73.96},
+                {"source_id": "b", "latitude": 40.66, "longitude": -73.97},
+            ],
+        }, contexts)
+        first_result = tool.execute({"candidate_route_ids": ["candidate-0"]})
+        late_result = tool.execute({"candidate_route_ids": ["candidate-1"]})
+        self.assertEqual(first_result["status"], "complete")
+        self.assertEqual(late_result["status"], "complete")
+        self.assertEqual({row["source_id"] for row in first_result["incidents"]}, {"q"})
+        self.assertEqual({row["source_id"] for row in late_result["incidents"]}, {"b"})
     def test_xai_timeout_is_sanitized(self):
         with patch.dict(os.environ, {"XAI_INCIDENT_TIMEOUT_S": "bad"}):
             self.assertEqual(incident_monitor._bounded_timeout_seconds(), 12.0)
@@ -211,6 +242,36 @@ class IncidentMonitorHelperTests(unittest.TestCase):
 
 
 class IncidentMonitorAgentTests(unittest.TestCase):
+    def test_candidate_context_exposes_real_ids_and_only_selected_511_evidence_reaches_final_result(self):
+        routes = [[{
+            "type": "SUBWAY", "route_id": "Q", "departure_stop": "Church Avenue", "arrival_stop": "Prospect Park",
+            "departure_coords": {"latitude": 40.6500, "longitude": -73.9630},
+            "arrival_coords": {"latitude": 40.6610, "longitude": -73.9620},
+        }]]
+        gtfs = SimpleNamespace(_pattern_index=SimpleNamespace(get_intermediate_stops_with_coords=lambda *args: ([
+            {"id": "D24", "name": "Church Avenue", "lat": 40.6500, "lng": -73.9630},
+        ], {})))
+        contexts = trip_incidents.build_candidate_stop_context(gtfs, routes)
+        snapshot = {"status": "fresh", "incidents": [
+            {"source_id": "official-1", "source": "511ny", "latitude": 40.6501, "longitude": -73.9631, "reported_at": "2026-07-22T12:00:00Z", "description": "Road closure on Church Avenue."},
+            {"source_id": "nearby-unselected", "source": "511ny", "latitude": 40.6502, "longitude": -73.9632, "description": "Separate nearby incident."},
+        ]}
+        local_tool = Cached511NYSearchTool(lambda: snapshot, contexts)
+        self.assertEqual(local_tool.execute({"candidate_route_ids": ["not-a-candidate"]})["incidents"], [])
+        self.assertEqual({row["source_id"] for row in local_tool.execute({"candidate_route_ids": ["candidate-0"]})["incidents"]}, {"official-1", "nearby-unselected"})
+        local_call = _call("search_cached_511ny_incidents", '{"candidate_route_ids":["candidate-0"]}', "local-1", "client_side_tool")
+        fake_client = _FakeClient([
+            _FakeResponse("", "tool_calls", [local_call]),
+            _FakeResponse('{"incidents":[{"location":"Church Avenue","nearby_station":"Church Avenue","severity":"high","description":"Road closure reported by @NYScanner.","source":"@NYScanner","source_ref":"official-1"}]}', "stop"),
+        ])
+        with patch.object(incident_monitor, "client", fake_client), patch.object(incident_monitor, "system", lambda value: value), patch.object(incident_monitor, "user", lambda value: value), patch.object(incident_monitor, "x_search", lambda: "x"), patch.object(incident_monitor, "web_search", lambda: "web"), patch.object(incident_monitor, "tool", lambda *args: "local"), patch.object(incident_monitor, "get_tool_call_type", lambda value: value.call_type), patch.object(incident_monitor, "tool_result", lambda *args, **kwargs: "tool-result"), patch.object(incident_monitor, "_XAI_API_KEY", "test-key"):
+            result = incident_monitor._run_incident_agent("Church Avenue, Prospect Park", ["Church Avenue", "Prospect Park"], snapshot, contexts)
+        self.assertIn("candidate-0", fake_client.chat.session.appended[0])
+        self.assertIn('"route_id":"Q"', fake_client.chat.session.appended[0])
+        self.assertEqual(len(result["incidents"]), 1)
+        self.assertEqual(result["incidents"][0]["source_id"], "official-1")
+        self.assertEqual(result["incidents"][0]["latitude"], 40.6501)
+        self.assertEqual(set(result["incidents"][0]["sources"]), {"511ny", "@NYScanner"})
     def test_fresh_snapshot_requires_x_web_and_local_evidence_for_complete_empty_result(self):
         x_call = _call("x_search", "{}", "x1", "x_search_tool")
         web_call = _call("web_search", "{}", "w1", "web_search_tool")
@@ -257,8 +318,8 @@ class IncidentMonitorAgentTests(unittest.TestCase):
         fake_client = _FakeClient([_FakeResponse("", "tool_calls", calls)])
         with patch.object(incident_monitor, "client", fake_client), patch.object(incident_monitor, "system", lambda value: value), patch.object(incident_monitor, "user", lambda value: value), patch.object(incident_monitor, "x_search", lambda: "x"), patch.object(incident_monitor, "web_search", lambda: "web"), patch.object(incident_monitor, "tool", lambda *args: "local"), patch.object(incident_monitor, "get_tool_call_type", lambda value: value.call_type), patch.object(incident_monitor, "_XAI_API_KEY", "test-key"):
             result = incident_monitor._run_incident_agent("Church Avenue", ["Church Avenue"], {"incidents": [], "status": "fresh"})
-        self.assertEqual(result["scan_metadata"]["total_tool_calls"], incident_monitor._MAX_TOTAL_TOOL_CALLS + 1)
-        self.assertIn("total tool call limit reached", result["scan_metadata"]["sources"]["errors"])
+        self.assertLessEqual(result["scan_metadata"]["total_tool_calls"], incident_monitor._MAX_TOTAL_TOOL_CALLS)
+        self.assertIn("tool call batch exceeds total limit", result["scan_metadata"]["sources"]["errors"])
 
     def test_round_cap_without_completed_sources_is_failed(self):
         unknown = [_call("unknown", "{}", f"u{index}", "mcp_tool") for index in range(incident_monitor._MAX_TOOL_ROUNDS)]
@@ -274,7 +335,7 @@ class IncidentMonitorAgentTests(unittest.TestCase):
         with patch.object(incident_monitor, "client", fake_client), patch.object(incident_monitor, "system", lambda value: value), patch.object(incident_monitor, "user", lambda value: value), patch.object(incident_monitor, "x_search", lambda: "x"), patch.object(incident_monitor, "web_search", lambda: "web"), patch.object(incident_monitor, "tool", lambda *args: "local"), patch.object(incident_monitor, "get_tool_call_type", lambda value: value.call_type), patch.object(incident_monitor, "_XAI_API_KEY", "test-key"):
             result = incident_monitor._run_incident_agent("Church Avenue", ["Church Avenue"], {"incidents": [], "status": "fresh"})
         self.assertEqual(result["scan_metadata"]["status"], "failed")
-        self.assertIn("total tool call limit reached", result["scan_metadata"]["sources"]["errors"])
+        self.assertIn("tool call batch exceeds total limit", result["scan_metadata"]["sources"]["errors"])
 
     def test_sampling_exception_is_failed_without_exception_text(self):
         fake_client = _FakeClient([])
