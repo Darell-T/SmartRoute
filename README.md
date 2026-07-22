@@ -193,6 +193,21 @@ Do not commit real secrets. Use local `.env` files and hosting provider environm
 | `ENABLE_TTS` | Backend | Optional | Enables text-to-speech when set to `1`, `true`, or `yes`. |
 | `DISABLE_TTS` | Backend | Optional | Legacy local toggle for disabling text-to-speech. |
 | `XAI_API_KEY` | Backend | Optional | Enables external incident scanning when configured. |
+| `XAI_INCIDENT_TIMEOUT_S` | Backend | Optional | Bounded xAI incident-request timeout; defaults to `12` seconds and is clamped from `1` to `30`. |
+| `NY511_API_KEY` | Backend | Optional | Server-side 511NY v2 event-feed key. When omitted, only the official 511NY source is disabled. |
+| `NY511_ENABLED` | Backend | Optional | Enables scheduled 511NY snapshots; defaults to `true` but still requires `NY511_API_KEY`. |
+| `NY511_API_BASE_URL` | Backend | Optional | Official 511NY v2 event URL. Must remain an HTTPS `511ny.org` URL with no credentials or query string. |
+| `NY511_POLL_INTERVAL_SECONDS` | Backend | Optional | Scheduled snapshot refresh interval; defaults to `300` seconds and is clamped to at least `60`. |
+| `NY511_REQUEST_TIMEOUT_SECONDS` | Backend | Optional | Per-attempt 511NY request timeout; defaults to `10` seconds. |
+| `NY511_STALE_AFTER_SECONDS` | Backend | Optional | Age after which the last successful 511NY snapshot is marked `stale`; defaults to `900` seconds. |
+| `NY511_MAX_STALE_SECONDS` | Backend | Optional | Age after which a 511NY snapshot is no longer used and becomes `unavailable`; defaults to `3600` seconds. |
+| `NY511_NYC_BUFFER_DEGREES` | Backend | Optional | Small NYC-envelope buffer for bridge, tunnel, and border-corridor events; defaults to `0.05` and is capped at `0.25`. |
+| `TRIP_INCIDENT_SCAN_TIMEOUT_S` | Backend | Optional | End-to-end regular trip incident-scan budget; defaults to `25` seconds. |
+| `AGENT_GROK_BUDGET_S` | Backend | Optional | Incident-scan budget used only by the agent `plan_trip` tool; defaults to `6` seconds. |
+| `TICKETMASTER_API_KEY` | Backend | Optional | Server-side Ticketmaster Discovery v2 key. Without it, only event lookup is unavailable. |
+| `TICKETMASTER_ENABLED` | Backend | Optional | Enables Ticketmaster event lookup when a key is configured; defaults to `true`. |
+| `TICKETMASTER_SEARCH_RADIUS_MILES` | Backend | Optional | NYC event-search radius; defaults to `25` miles and is capped at `30`. |
+| `EVENT_LOOKUP_TIMEOUT_S` | Backend | Optional | Ticketmaster request timeout; defaults to `6` seconds and is capped at `15`. |
 | `MTA_BUS_API_KEY` | Backend | Optional for buses | MTA BusTime SIRI key for bus monitoring. |
 | `DATABASE_URL` | Backend | Optional | PostgreSQL connection string for GTFS-related background/database paths. |
 | `REDIS_URL` | Backend | Optional | Shared cache URL; backend falls back to in-memory cache when absent. |
@@ -200,7 +215,83 @@ Do not commit real secrets. Use local `.env` files and hosting provider environm
 | `GTFS_DB_FALLBACK` | Backend | Optional | Enables a local GTFS fallback path when set to `1`. |
 | `BACKEND_VERBOSE_LOGS` | Backend | Optional | Enables extra backend feed logs when set to `1`. |
 
-Advanced tuning variables also exist for provider and trip-stage timeouts, including `GOOGLE_ROUTES_TIMEOUT_S`, `GOOGLE_ROUTES_RETRIES`, `GOOGLE_ROUTES_ALTERNATIVES`, `TRIP_CONTEXT_TIMEOUT_S`, `TRIP_ADVISOR_TIMEOUT_S`, `TRIP_TTS_TIMEOUT_S`, `TRIP_GTFS_ENRICH_TIMEOUT_S`, `TRIP_INCIDENT_SCAN_TIMEOUT_S`, and `DATABASE_STATEMENT_TIMEOUT_MS`.
+Advanced tuning variables also exist for provider and trip-stage timeouts, including `GOOGLE_ROUTES_TIMEOUT_S`, `GOOGLE_ROUTES_RETRIES`, `GOOGLE_ROUTES_ALTERNATIVES`, `TRIP_CONTEXT_TIMEOUT_S`, `TRIP_ADVISOR_TIMEOUT_S`, `TRIP_TTS_TIMEOUT_S`, `TRIP_GTFS_ENRICH_TIMEOUT_S`, and `DATABASE_STATEMENT_TIMEOUT_MS`.
+
+## City incident intelligence
+
+SmartRoute enriches a route choice with independent incident signals while keeping
+the normal route request path bounded. The official 511NY v2 event feed is fetched
+by a lifecycle-owned backend poller, not once per rider or per stop. Its default
+cadence is five minutes. Each successful response is normalized, de-duplicated by
+official event ID, and reduced to NYC: the five borough counties are retained, known
+non-NYC counties are excluded, and an intentionally small configured geographic
+buffer permits nearby bridge, tunnel, and border-corridor events.
+
+The latest successful snapshot is process-local. A failed refresh never replaces a
+good snapshot. It is `fresh` through `NY511_STALE_AFTER_SECONDS`, remains available
+but marked `stale` through `NY511_MAX_STALE_SECONDS`, and becomes `unavailable` after
+that maximum age. A valid empty upstream response is still a fresh, successful
+snapshot. Missing keys, invalid 511NY configuration, a disabled source, or an
+unavailable snapshot do not block routing, MTA context, vehicle detection, X/web
+investigation, or Ticketmaster lookup.
+
+For a route request, SmartRoute derives a de-duplicated stop context only from the
+candidate routes. The controlled local Grok tool,
+`search_cached_511ny_incidents`, can inspect only that context and its candidate
+route IDs. Backend code calculates geometry-aware proximity and enforces a maximum
+radius of **0.5 miles**; the tool accepts no URL, credential, arbitrary location, or
+larger radius. It returns concise matched evidence and snapshot metadata. A nearby
+roadway event is labeled as possible bus/walking or station-access context rather
+than automatically being treated as a subway disruption.
+
+Grok keeps both X and web search available alongside the cached official-source tool.
+The bounded scan distinguishes its internal result status from the advisor-facing
+incident list:
+
+| Scan status | Meaning |
+|---|---|
+| `complete` | A valid structured incident response was produced from a fresh snapshot, with no recorded scan error, after X search, web search, and the cached 511NY tool all completed. `{"incidents": []}` here is a successful clear result. |
+| `partial` | The expected evidence set was incomplete (including a stale or unavailable 511NY snapshot), an input was capped, or a source/tool recorded an error. A total-tool or tool-round limit is also `partial` when it ends the scan after at least one source completed. It is not an all-clear. |
+| `failed` | The investigation could not initialize, could not produce valid structured output, or the enclosing route-scan budget expired. A total-tool or tool-round limit with no completed source is also `failed`. The route continues without treating the empty list as proof of no incidents. |
+| `disabled` | The optional xAI integration is not configured or unavailable. The route continues using its other context. |
+
+Only the pre-existing, normalized bare incident list is given to the route advisor,
+so the 511NY/Grok scan metadata does not alter its compatibility contract. Request
+metadata is used only for bounded scan handling and server logging; the system never
+sends raw 511NY payloads, hidden model reasoning, or API keys to the client or
+advisor.
+
+Before that five-field advisor list is produced, SmartRoute conservatively removes
+resolved or stale evidence and de-duplicates only incident reports it can establish
+as related through source IDs, compatible times, proximity or shared corridor/stop
+context, and meaningful description overlap. Joined source attribution remains
+bounded in the final `source` field. Existing MTA service alerts and stalled
+subway/bus-vehicle observations are intentionally kept as separate advisor signals;
+this incident merge does not collapse those arrays into the Grok/511NY incident list.
+
+### Deployment note: 511NY poller ownership
+
+The supported configuration for this process-local snapshot integration is one backend
+application worker, which owns one poller and one snapshot. No deployment manifest in
+this repository proves the current production worker topology. Multiple worker
+processes would each start a poller and hold different snapshots; before enabling
+multi-worker deployment, move snapshot and poller coordination to shared
+storage/locking. Do not compensate by calling 511NY from route requests.
+
+### Ticketmaster Discovery v2
+
+The optional `event_lookup` agent tool uses Ticketmaster's Discovery v2 events
+endpoint with a server-side key, an explicit NYC `latlong`, miles radius, bounded
+pagination, local distance filtering, event ID de-duplication, and bounded timeout.
+It does not invent start times for date-only/TBA/TBD events, excludes cancelled
+events from crowd predictions, and withholds crowd windows for postponed or
+rescheduled entries. Adding `TICKETMASTER_API_KEY` is the only deployment action
+needed to enable this integration; no frontend key is used.
+
+An opt-in live smoke test makes one small request only when both
+`TICKETMASTER_API_KEY` and `TICKETMASTER_LIVE_SMOKE_TEST=1` are present. It emits a
+sanitized event-count summary and never prints the key. Do not enable that flag in a
+normal service process.
 
 ## Project Structure
 
@@ -262,6 +353,32 @@ Backend checks:
 ```bash
 cd backend
 python -m pytest -q
+```
+
+Focused city-intelligence checks (the repository test suite uses `unittest`; use the
+project virtual environment if your shell does not resolve the installed packages):
+
+```bash
+cd backend
+python -m unittest -v tests.test_ny511
+python -m unittest -v tests.test_incident_context_matching tests.test_incident_monitor tests.test_trips_incidents
+python -m unittest -v tests.test_ticketmaster_event_lookup tests.test_agent_tools_p1 tests.test_agent_tools_p2 tests.test_agent_prompt
+python -m unittest discover -s tests -v
+```
+
+To run the optional Ticketmaster smoke test deliberately (never in CI by default):
+
+```bash
+cd backend
+TICKETMASTER_LIVE_SMOKE_TEST=1 python -m unittest -v tests.test_ticketmaster_event_lookup.TicketmasterLiveSmokeTest
+```
+
+On Windows PowerShell, set the temporary variable in the current session before the
+same command:
+
+```powershell
+$env:TICKETMASTER_LIVE_SMOKE_TEST = "1"
+python -m unittest -v tests.test_ticketmaster_event_lookup.TicketmasterLiveSmokeTest
 ```
 
 CI runs frontend artifact generation, typecheck, unit tests, lint, transit artifact verification, build, and backend pytest. Some local machines may need project dependencies installed before the full suite can run.

@@ -33,6 +33,7 @@ next.user-config.*
 
 # Environment variables
 .env*
+!.env.example
 
 # Local ATLAS prompt override
 backend/app/services/ai_advisor_system_prompt.txt
