@@ -213,6 +213,9 @@ def _snapshot_metadata(snapshot: Mapping[str, Any] | None) -> dict[str, Any]:
         "source_record_count": snapshot.get("source_record_count"),
         "nyc_record_count": snapshot.get("nyc_record_count"),
     }
+    source_origin = snapshot.get("source_origin")
+    if source_origin in {"live", "fixture"}:
+        metadata["source_origin"] = source_origin
     for key in ("fetched_at", "last_successful_fetch_at"):
         value = snapshot.get(key)
         if value is None:

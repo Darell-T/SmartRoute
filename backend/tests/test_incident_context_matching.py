@@ -30,6 +30,7 @@ class _SnapshotModel(BaseModel):
     last_successful_fetch_at: datetime | None = None
     source_record_count: int = 0
     nyc_record_count: int = 0
+    source_origin: str | None = None
 
 
 def _routes():
@@ -239,12 +240,13 @@ class IncidentMatchingTests(unittest.TestCase):
         stale = _SnapshotModel(
             incidents=[{"source_id": "near", "latitude": 40.6502, "longitude": -73.9630}],
             status="stale", fetched_at=now, last_successful_fetch_at=now - timedelta(minutes=20),
-            source_record_count=4, nyc_record_count=2,
+            source_record_count=4, nyc_record_count=2, source_origin="fixture",
         )
         result = Cached511NYSearchTool(lambda: stale, self.stops).execute({"candidate_route_ids": ["candidate-0"]})
         self.assertEqual(result["status"], "complete")
         self.assertEqual(result["snapshot"]["status"], "stale")
         self.assertEqual(result["snapshot"]["nyc_record_count"], 2)
+        self.assertEqual(result["snapshot"]["source_origin"], "fixture")
         unavailable = _SnapshotModel(incidents=[], status="unavailable")
         result = Cached511NYSearchTool(lambda: unavailable, self.stops).execute({"candidate_route_ids": ["candidate-0"]})
         self.assertEqual(result, {"incidents": [], "status": "unavailable", "snapshot": {"status": "unavailable", "source_record_count": 0, "nyc_record_count": 0}})

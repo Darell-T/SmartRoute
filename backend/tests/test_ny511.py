@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import tempfile
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from unittest import IsolatedAsyncioTestCase, TestCase
 from unittest.mock import AsyncMock, patch
 
@@ -150,6 +153,41 @@ class NormalizationTests(TestCase):
         self.assertFalse(settings.enabled)
         self.assertEqual(settings.diagnostic, "invalid API base URL")
 
+    def test_fixture_mode_is_explicit_development_only_and_needs_no_key(self):
+        with patch.dict(
+            "os.environ",
+            {"NY511_FIXTURE_PATH": "C:/fixtures/ny511.json", "SMARTROUTE_ENV": "development"},
+            clear=True,
+        ):
+            settings = NY511Settings.from_env()
+        self.assertTrue(settings.enabled)
+        self.assertEqual(settings.fixture_path, "C:/fixtures/ny511.json")
+        self.assertEqual(settings.diagnostic, "using development 511NY fixture")
+        self.assertIsNone(settings.api_key)
+
+    def test_fixture_mode_is_rejected_in_production_without_falling_back_to_live(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "NY511_FIXTURE_PATH": "C:/fixtures/ny511.json",
+                "NY511_API_KEY": "live-key",
+                "SMARTROUTE_ENV": "production",
+            },
+            clear=True,
+        ):
+            settings = NY511Settings.from_env()
+        self.assertFalse(settings.enabled)
+        self.assertIsNone(settings.fixture_path)
+        self.assertEqual(settings.diagnostic, "511NY fixture mode requires a development or test environment")
+        self.assertNotIn("live-key", settings.diagnostic or "")
+
+    def test_fixture_mode_is_rejected_when_environment_is_unset(self):
+        with patch.dict("os.environ", {"NY511_FIXTURE_PATH": "C:/fixtures/ny511.json"}, clear=True):
+            settings = NY511Settings.from_env()
+        self.assertFalse(settings.enabled)
+        self.assertIsNone(settings.fixture_path)
+        self.assertEqual(settings.diagnostic, "511NY fixture mode requires a development or test environment")
+
 
 class ClientTests(IsolatedAsyncioTestCase):
     async def test_success_uses_v2_endpoint_and_safe_query_params(self):
@@ -251,6 +289,23 @@ class ClientTests(IsolatedAsyncioTestCase):
         self.assertEqual(Client.calls, 3)
         self.assertEqual(sleep.await_count, 2)
 
+    async def test_one_attempt_client_never_retries_for_live_certification(self):
+        class Client:
+            calls = 0
+            def __init__(self, **_kwargs): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *_args): return False
+            async def get(self, *_args, **_kwargs):
+                type(self).calls += 1
+                raise httpx.ReadTimeout("slow", request=httpx.Request("GET", "https://example.test"))
+        with patch("app.services.ny511.httpx.AsyncClient", Client), patch(
+            "app.services.ny511.asyncio.sleep", new=AsyncMock()
+        ) as sleep:
+            with self.assertRaisesRegex(NY511FetchError, "timed out"):
+                await NY511Client(_settings(), max_attempts=1).fetch_events()
+        self.assertEqual(Client.calls, 1)
+        sleep.assert_not_awaited()
+
     async def test_connection_error_retries_and_is_sanitized(self):
         class Client:
             calls = 0
@@ -303,6 +358,56 @@ class StoreAndPollerTests(IsolatedAsyncioTestCase):
         self.assertEqual(snapshot.incidents, [])
         self.assertEqual(snapshot.source_record_count, 0)
         self.assertEqual(snapshot.invalid_record_count, 0)
+
+    async def test_never_fetched_snapshot_has_no_source_origin(self):
+        snapshot = await SnapshotStore(_settings()).get_snapshot()
+        self.assertEqual(snapshot.status, "unavailable")
+        self.assertIsNone(snapshot.source_origin)
+
+    async def test_fixture_refresh_uses_normal_snapshot_path_and_marks_origin(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "events.json"
+            path.write_text(json.dumps([_event(), _event(ID="outside", Latitude=42.0)]), encoding="utf-8")
+            settings = _settings(api_key=None, fixture_path=str(path))
+            client = AsyncMock()
+            poller = NY511Poller(settings, client=client)
+
+            self.assertTrue(await poller.refresh())
+            snapshot = await poller.store.get_snapshot()
+
+        self.assertEqual(client.fetch_events.await_count, 0)
+        self.assertEqual(snapshot.source_origin, "fixture")
+        self.assertEqual(snapshot.source_record_count, 2)
+        self.assertEqual(snapshot.nyc_record_count, 1)
+        self.assertEqual(snapshot.invalid_record_count, 0)
+        self.assertEqual(snapshot.status, "fresh")
+
+    async def test_empty_fixture_is_a_fresh_complete_snapshot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "events.json"
+            path.write_text("[]", encoding="utf-8")
+            poller = NY511Poller(_settings(api_key=None, fixture_path=str(path)))
+            self.assertTrue(await poller.refresh())
+            snapshot = await poller.store.get_snapshot()
+        self.assertEqual(snapshot.status, "fresh")
+        self.assertEqual(snapshot.source_origin, "fixture")
+        self.assertEqual(snapshot.incidents, [])
+
+    async def test_malformed_fixture_preserves_a_good_snapshot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "events.json"
+            path.write_text("{not-json", encoding="utf-8")
+            settings = _settings(api_key=None, fixture_path=str(path))
+            store = SnapshotStore(settings)
+            await store.record_success([_event()])
+            poller = NY511Poller(settings, store=store)
+
+            self.assertFalse(await poller.refresh())
+            snapshot = await store.get_snapshot()
+
+        self.assertEqual(snapshot.source_origin, "live")
+        self.assertEqual(len(snapshot.incidents), 1)
+        self.assertEqual(snapshot.last_error, "511NY fixture is malformed or unreadable")
 
     async def test_mixed_valid_records_track_invalid_count(self):
         snapshot = await SnapshotStore(_settings()).record_success([_event(), {}])

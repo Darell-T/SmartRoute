@@ -10,6 +10,7 @@ only; they never need the upstream API key or make a live request.
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import os
 from dataclasses import dataclass
@@ -83,6 +84,9 @@ class IncidentSnapshot(BaseModel):
     source_record_count: int = 0
     nyc_record_count: int = 0
     invalid_record_count: int = 0
+    # Fixture snapshots follow the exact live normalization path, but callers
+    # and diagnostics still need to know that they did not come from 511NY.
+    source_origin: Literal["live", "fixture"] | None = None
     status: Literal["fresh", "stale", "unavailable"]
     last_error: str | None = None
 
@@ -105,6 +109,7 @@ class NY511Settings:
     max_stale_seconds: float = DEFAULT_MAX_STALE_SECONDS
     nyc_buffer_degrees: float = DEFAULT_NYC_BUFFER_DEGREES
     diagnostic: str | None = None
+    fixture_path: str | None = None
 
     @classmethod
     def from_env(cls) -> "NY511Settings":
@@ -112,6 +117,17 @@ class NY511Settings:
         key = (os.getenv("NY511_API_KEY") or "").strip() or None
         raw_enabled = (os.getenv("NY511_ENABLED") or "true").strip().lower()
         enabled = raw_enabled not in {"0", "false", "no", "off"}
+        fixture_path = (os.getenv("NY511_FIXTURE_PATH") or "").strip() or None
+        # This project previously had no runtime-environment setting.  Fixture
+        # loading therefore requires an explicit non-production declaration;
+        # an unset environment is not enough to accidentally replace live
+        # provider data in a deployment.
+        runtime_environment = (
+            os.getenv("SMARTROUTE_ENV")
+            or os.getenv("APP_ENV")
+            or os.getenv("ENVIRONMENT")
+            or ""
+        ).strip().casefold()
         api_url = (os.getenv("NY511_API_BASE_URL") or DEFAULT_API_URL).strip()
         parsed_url = urlsplit(api_url)
         if (
@@ -163,6 +179,34 @@ class NY511Settings:
 
         if not enabled:
             return cls(key, False, api_url, poll_interval, timeout, stale_after, max_stale, buffer, "source disabled")
+        if fixture_path:
+            if runtime_environment not in {"development", "dev", "test", "testing"}:
+                return cls(
+                    key,
+                    False,
+                    api_url,
+                    poll_interval,
+                    timeout,
+                    stale_after,
+                    max_stale,
+                    buffer,
+                    "511NY fixture mode requires a development or test environment",
+                )
+            # A fixture is intentionally a development/test substitute for the
+            # upstream source.  It needs no key and is loaded by the poller
+            # into the normal process-local SnapshotStore.
+            return cls(
+                key,
+                True,
+                api_url,
+                poll_interval,
+                timeout,
+                stale_after,
+                max_stale,
+                buffer,
+                "using development 511NY fixture",
+                fixture_path,
+            )
         if not key:
             return cls(key, False, api_url, poll_interval, timeout, stale_after, max_stale, buffer, "API key not configured")
         return cls(key, True, api_url, poll_interval, timeout, stale_after, max_stale, buffer)
@@ -321,14 +365,18 @@ def _normalize_events(
 
 
 class NY511Client:
-    def __init__(self, settings: NY511Settings) -> None:
+    def __init__(self, settings: NY511Settings, *, max_attempts: int = MAX_ATTEMPTS) -> None:
         self._settings = settings
+        # Production retains the bounded retry policy.  Opt-in certification
+        # can request exactly one upstream attempt without duplicating this
+        # client or weakening normal refresh behavior.
+        self._max_attempts = max(1, min(MAX_ATTEMPTS, int(max_attempts)))
 
     async def fetch_events(self) -> list[Any]:
         if not self._settings.enabled or not self._settings.api_key:
             raise NY511FetchError("511NY source is disabled", retryable=False)
         last_error: NY511FetchError | None = None
-        for attempt in range(MAX_ATTEMPTS):
+        for attempt in range(self._max_attempts):
             try:
                 async with httpx.AsyncClient(timeout=self._settings.request_timeout_seconds) as client:
                     response = await client.get(
@@ -360,7 +408,7 @@ class NY511Client:
             except httpx.RequestError:
                 last_error = NY511FetchError("511NY connection failed", retryable=True)
 
-            if last_error is None or not last_error.retryable or attempt == MAX_ATTEMPTS - 1:
+            if last_error is None or not last_error.retryable or attempt == self._max_attempts - 1:
                 break
             # A 429 receives the provider delay when supplied, never shorter
             # than the 6 seconds implied by its 10-calls-per-minute budget.
@@ -384,7 +432,13 @@ class SnapshotStore:
         self._snapshot: IncidentSnapshot | None = None
         self._last_error: str | None = None
 
-    async def record_success(self, records: list[Any], *, fetched_at: datetime | None = None) -> IncidentSnapshot:
+    async def record_success(
+        self,
+        records: list[Any],
+        *,
+        fetched_at: datetime | None = None,
+        source_origin: Literal["live", "fixture"] = "live",
+    ) -> IncidentSnapshot:
         fetched_at = fetched_at or datetime.now(UTC)
         incidents, invalid_record_count = _normalize_events(
             records, nyc_buffer_degrees=self._settings.nyc_buffer_degrees
@@ -400,6 +454,7 @@ class SnapshotStore:
             source_record_count=len(records),
             nyc_record_count=len(incidents),
             invalid_record_count=invalid_record_count,
+            source_origin=source_origin,
             status="fresh",
         )
         async with self._lock:
@@ -445,6 +500,25 @@ class NY511Poller:
         self._stop_event = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
 
+    async def _fixture_records(self) -> list[Any]:
+        """Read one raw provider-shaped development fixture without network I/O."""
+
+        fixture_path = self.settings.fixture_path
+        if not fixture_path:
+            raise NY511FetchError("511NY fixture path is not configured", retryable=False)
+
+        def _read() -> list[Any]:
+            try:
+                with open(fixture_path, "r", encoding="utf-8") as handle:
+                    payload = json.load(handle)
+            except (OSError, ValueError, TypeError) as exc:
+                raise NY511FetchError("511NY fixture is malformed or unreadable", retryable=False) from exc
+            if not isinstance(payload, list):
+                raise NY511FetchError("511NY fixture has an unexpected event schema", retryable=False)
+            return payload
+
+        return await asyncio.to_thread(_read)
+
     async def refresh(self) -> bool:
         """Fetch once, returning false when another refresh is already running."""
         if self._refresh_lock.locked():
@@ -454,8 +528,12 @@ class NY511Poller:
                 await self.store.record_failure(self.settings.diagnostic or "511NY source is disabled")
                 return False
             try:
-                records = await self.client.fetch_events()
-                await self.store.record_success(records)
+                if self.settings.fixture_path:
+                    records = await self._fixture_records()
+                    await self.store.record_success(records, source_origin="fixture")
+                else:
+                    records = await self.client.fetch_events()
+                    await self.store.record_success(records, source_origin="live")
                 return True
             except NY511FetchError as exc:
                 await self.store.record_failure(str(exc))
