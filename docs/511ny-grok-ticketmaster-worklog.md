@@ -17,7 +17,7 @@
 | Grok orchestration | Lifecycle wiring, candidate contexts, bounded local-tool loop, X/web coexistence, scan metadata, and route regressions | Accepted | Three correction cycles reviewed; corrected suite discovers/passes 82 focused tests plus 17 agent regressions independently |
 | Ticketmaster QA | Harden Discovery v2 integration and fixture tests without touching 511NY/Grok files | Accepted | Corrected contribution reviewed; 91 tests passed independently with one opt-in smoke skip; committed as `5f1af04` |
 | Documentation/config | README architecture/configuration and placeholder-only `.env.example` | Accepted | Two review revisions; deployment constraint, exact status semantics, timeout, merge behavior, and test commands verified |
-| Independent validation | Integrated implementation only | Not started | — |
+| Independent validation | Integrated implementation only | Accepted after revalidation | First audit found four material issues; correction commits `72f38ac` and `8c3f928` passed revalidation with 103 targeted tests and one opt-in smoke skip |
 
 ## Sol review log
 
@@ -101,13 +101,34 @@
   agent-tool tests, compiled every changed production module, imported
   `app.main`, checked scoped diffs, and verified request-path modules contain no
   511NY client, provider URL, or upstream fetch.
+- 2026-07-22: Reviewed the independent validator's first audit. Confirmed four
+  findings: prompts omitted the candidate IDs required by the local tool, the
+  total-call counter encoded an off-by-one, selected official tool evidence did
+  not reach deterministic merge, and non-finite 511NY numeric configuration was
+  accepted. Reopened the owning workers with exact corrections.
+- 2026-07-22: Reviewed the non-finite configuration correction and independently
+  ran 26/26 511NY tests plus compilation/diff checks. Accepted and committed as
+  `72f38ac`.
+- 2026-07-22: Reviewed the candidate-binding/evidence correction and required
+  two further test-quality revisions: candidate IDs after the 80-row prompt cap
+  had to remain available, and tests had to assert actual candidate-scoped
+  matches rather than only a generic `complete` status. Independently ran 85/85
+  focused tests and 17/17 agent-tool tests, compilation, main import, diff checks,
+  request-path static checks, and a duplicate-test AST audit. Accepted and
+  committed as `8c3f928`.
+- 2026-07-22: Reviewed the independent revalidation report. All four findings
+  are resolved; 103 targeted tests passed with one intentional live-smoke skip,
+  compile/diff checks passed, and no new security or schema blocker was found.
 
 ## Test and commit log
 
 - UI checkpoint verification was completed before commit: frontend typecheck,
   lint, 94 frontend tests, 157 backend agent tests, production build, and mock
   harness visual review.
-- Full backend implementation suite: pending final integrated run.
+- Final full backend discovery run: 328 tests discovered; 325 passed, one
+  opt-in Ticketmaster smoke test skipped, and two unchanged MTA protobuf fixture
+  tests error before application code because their `FeedMessage` omits the
+  required header. Neither failing file changed in this branch.
 - `backend/.venv/Scripts/python.exe -m unittest -v tests.test_ny511`:
   19/19 passed during the initial review; 25/25 passed after correction.
 - `backend/.venv/Scripts/python.exe -m unittest -v
@@ -120,6 +141,15 @@
   all Grok/lifecycle corrections.
 - `backend/.venv/Scripts/python.exe -m unittest -q tests.test_agent_tools`:
   17/17 passed after Grok/lifecycle integration.
+- Final corrected focused run: 85/85 incident/poller tests and 17/17 agent-tool
+  tests passed independently.
+- Independent revalidation: 103 targeted tests passed; one intentional
+  Ticketmaster live smoke test skipped.
+- `backend/.venv/Scripts/python.exe -m unittest discover -s tests -q`:
+  328 discovered, 325 passed, one skipped, two unchanged MTA protobuf-fixture
+  errors (`FeedMessage` missing required `header`).
+- `backend/.venv/Scripts/python.exe -m pytest -q` and `python -m pytest -q`:
+  unavailable because neither environment has the `pytest` module installed.
 - `backend/.venv/Scripts/python.exe -m unittest -v
   tests.test_ticketmaster_event_lookup tests.test_agent_tools_p1
   tests.test_agent_tools_p2 tests.test_agent_prompt`: 91 passed, one optional
@@ -127,7 +157,10 @@
 - Commits: `ca20fb4` (`feat: add scheduled 511ny incident snapshots`),
   `5f1af04` (`fix: harden ticketmaster discovery integration`), `1c7d05f`
   (`feat: add candidate-aware local incident matching`), `e200eee`
-  (`feat: expose cached 511ny incidents through grok tools`).
+  (`feat: expose cached 511ny incidents through grok tools`), `685aa14`
+  (`docs: document city incident intelligence`), `72f38ac`
+  (`fix: reject non-finite 511ny settings`), `8c3f928`
+  (`fix: bind grok tools to route candidates`).
 
 ## Known constraints
 
@@ -136,3 +169,8 @@
   gates.
 - Subway-exit guidance, unrelated transit feeds, and canonical GTFS/artifact
   changes are explicitly out of scope.
+- Process-local 511NY snapshots support one backend worker. Shared poller
+  coordination/storage is required before multi-worker deployment.
+- Existing MTA alert and stalled-vehicle arrays remain separate advisor inputs;
+  final Grok/511NY incidents are conservatively merged without flattening those
+  established contracts.
