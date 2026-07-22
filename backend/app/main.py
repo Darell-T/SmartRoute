@@ -6,10 +6,12 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Load env before routers/services import (they read os.getenv at module load).
-# Repo root .env, then optional backend/.env overrides.
+# Repo root .env, then optional backend/.env overrides. The root file is the
+# local project configuration, so it must replace values inherited from a
+# shell that may have been started before the file was corrected.
 _backend_dir = Path(__file__).resolve().parent.parent
 _repo_root = _backend_dir.parent
-load_dotenv(_repo_root / ".env")
+load_dotenv(_repo_root / ".env", override=True)
 load_dotenv(_backend_dir / ".env", override=True)
 
 # Fail fast on missing required auth config instead of discovering it per request.

@@ -61,6 +61,11 @@ export function buildArrivalsPayloadForRoute(
   routeId: string,
   arrivals: Arrival[],
   stationName: string,
+  station?: {
+    walkMinutes?: number;
+    distanceMiles?: number;
+    coordinates?: { lat: number; lng: number };
+  },
 ): ArrivalsTurnPayload {
   const normalized = routeId.toUpperCase();
   const minutesByDirection = new Map<"uptown" | "downtown", number[]>();
@@ -81,5 +86,19 @@ export function buildArrivalsPayloadForRoute(
     groups.push({ direction, label: DIRECTION_LABEL[direction], minutes: sorted });
   }
 
-  return { routeId: normalized, stationName, groups };
+  const guidanceParts: string[] = [];
+  if (station?.walkMinutes !== undefined) {
+    guidanceParts.push(`${station.walkMinutes} min walk`);
+  }
+  if (station?.distanceMiles !== undefined) {
+    guidanceParts.push(`${station.distanceMiles.toFixed(1)} mi away`);
+  }
+
+  return {
+    routeId: normalized,
+    stationName,
+    stationGuidance: guidanceParts.length > 0 ? guidanceParts.join(" · ") : undefined,
+    stationCoordinates: station?.coordinates,
+    groups,
+  };
 }

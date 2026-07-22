@@ -30,6 +30,25 @@ test("turn_started clears a previous turn's error", () => {
   assert.equal(state.error, null);
 });
 
+test("chat_reset clears the active conversation and session", () => {
+  const state = applyAgentEvent(
+    initialState({
+      messages: [{ role: "user", text: "old trip" }],
+      sessionId: "sess-old",
+      isStreaming: true,
+      error: "old error",
+    }),
+    { type: "chat_reset" },
+  );
+
+  assert.deepEqual(state, {
+    messages: [],
+    sessionId: null,
+    isStreaming: false,
+    error: null,
+  });
+});
+
 test("a full happy-path event sequence assembles the expected final turn state", () => {
   let state = initialState();
   const events = [

@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { agentRouteFromCard } from "./agent-route-selection.ts";
+import {
+  agentRouteFromCard,
+  agentRoutePlanFromCards,
+} from "./agent-route-selection.ts";
 
 const ORIGIN = { label: "Your location", lat: 40.7484, lng: -73.9857 };
 const DESTINATION = { label: "Costco Sunset Park", lat: 40.6559, lng: -74.0089 };
@@ -91,4 +94,44 @@ test("destCoords falls back to the card's destination when the trailing WALK ste
   const selection = agentRouteFromCard(card);
 
   assert.deepEqual(selection?.destCoords, { lat: DESTINATION.lat, lng: DESTINATION.lng });
+});
+
+test("destCoords accepts the compact lat/lng coordinate shape from agent route steps", () => {
+  const card = baseCard({
+    route: [{ type: "WALK", end_point: { lat: 40.6559, lng: -74.0089 } }],
+  });
+
+  assert.deepEqual(agentRouteFromCard(card)?.destCoords, {
+    lat: 40.6559,
+    lng: -74.0089,
+  });
+});
+
+test("returns null instead of handing invalid destination coordinates to the map", () => {
+  const card = baseCard({
+    destination: { label: "Unknown destination" },
+    route: [{ type: "WALK", end_point: {} }],
+  });
+
+  assert.equal(agentRouteFromCard(card), null);
+});
+
+test("converts a turn's route cards into the shared rail candidate model", () => {
+  const recommended = baseCard({
+    route: [{ type: "WALK", end_point: { latitude: 40.6559, longitude: -74.0089 } }],
+  });
+  const alternative = baseCard({
+    card_id: "rc_2",
+    role: "alternative",
+    summary: { eta_minutes: 39, transfers: 1, lines: ["Q", "D"], reason: "More walking." },
+    route: [{ type: "WALK", end_point: { latitude: 40.6559, longitude: -74.0089 } }],
+  });
+
+  const plan = agentRoutePlanFromCards([recommended, alternative], "rc_2");
+
+  assert.equal(plan?.activeCandidateId, "rc_2");
+  assert.equal(plan?.candidates.length, 2);
+  assert.equal(plan?.candidates[0].is_recommended, true);
+  assert.equal(plan?.candidates[1].is_recommended, false);
+  assert.deepEqual(plan?.destination.coordinates, { lat: 40.6559, lng: -74.0089 });
 });

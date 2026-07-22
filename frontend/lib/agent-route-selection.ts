@@ -11,12 +11,41 @@
  */
 
 import type { RouteCard } from "@/lib/agent-chat-stream";
-import type { RouteStep } from "@/types/api";
+import type { DestinationSelection, RouteCandidate, RouteStep } from "@/types/api";
 
 export interface AgentRouteSelection {
   cardId: string;
   steps: RouteStep[];
   destCoords: { lat: number; lng: number };
+}
+
+export function normalizeRouteCoordinate(
+  value: unknown,
+): { lat: number; lng: number } | null {
+  if (!value || typeof value !== "object") return null;
+
+  const coordinate = value as {
+    latitude?: unknown;
+    longitude?: unknown;
+    lat?: unknown;
+    lng?: unknown;
+  };
+  const lat = coordinate.latitude ?? coordinate.lat;
+  const lng = coordinate.longitude ?? coordinate.lng;
+
+  return typeof lat === "number" &&
+    Number.isFinite(lat) &&
+    typeof lng === "number" &&
+    Number.isFinite(lng)
+    ? { lat, lng }
+    : null;
+}
+
+export interface AgentRoutePlan {
+  destination: DestinationSelection;
+  candidates: RouteCandidate[];
+  activeCandidateId: string;
+  recommendationText: string;
 }
 
 /**
@@ -39,13 +68,61 @@ export function agentRouteFromCard(card: RouteCard): AgentRouteSelection | null 
   const lastStep = steps[steps.length - 1];
   const rawDest =
     lastStep?.type === "WALK" ? lastStep.end_point : lastStep?.arrival_coords;
-  const destCoords = rawDest
-    ? { lat: rawDest.latitude, lng: rawDest.longitude }
-    : { lat: card.destination.lat, lng: card.destination.lng };
+  const destCoords =
+    normalizeRouteCoordinate(rawDest) ?? normalizeRouteCoordinate(card.destination);
+  if (!destCoords) return null;
 
   return {
     cardId: card.card_id,
     steps,
     destCoords,
+  };
+}
+
+/** Convert every geometry-complete card from one assistant turn into the
+ *  standard route-planning model consumed by the existing rail and map. */
+export function agentRoutePlanFromCards(
+  cards: RouteCard[],
+  selectedCardId: string,
+): AgentRoutePlan | null {
+  const selectedCard = cards.find((card) => card.card_id === selectedCardId);
+  if (!selectedCard) return null;
+  const selectedRoute = agentRouteFromCard(selectedCard);
+  if (!selectedRoute) return null;
+
+  const candidates = cards.flatMap((card, index): RouteCandidate[] => {
+    const route = agentRouteFromCard(card);
+    if (!route) return [];
+    const isRecommended = card.role === "recommended";
+    return [
+      {
+        id: card.card_id,
+        index,
+        steps: route.steps,
+        is_recommended: isRecommended,
+        total_minutes: card.summary.eta_minutes,
+        score_breakdown: {
+          duration_minutes: card.summary.eta_minutes,
+          transfers: card.summary.transfers,
+          active_alerts: card.alerts.length,
+          transit_lines: card.summary.lines,
+        },
+        enriched: true,
+        can_enrich_on_select: false,
+        recommendation_reason: isRecommended ? card.summary.reason : undefined,
+        rejection_reason: isRecommended ? undefined : card.summary.reason,
+      },
+    ];
+  });
+  if (!candidates.some((candidate) => candidate.id === selectedCardId)) return null;
+
+  return {
+    destination: {
+      label: selectedCard.destination.label,
+      coordinates: selectedRoute.destCoords,
+    },
+    candidates,
+    activeCandidateId: selectedCardId,
+    recommendationText: selectedCard.summary.reason,
   };
 }

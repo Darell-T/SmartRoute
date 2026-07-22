@@ -136,10 +136,7 @@ export function LiveWorkspace({
           />
         </div>
 
-        <div
-          className="pointer-events-none absolute inset-0 z-[1] rounded-[inherit] bg-[radial-gradient(ellipse_at_center,transparent_66%,rgba(8,12,22,0.16)_100%)] mix-blend-multiply"
-          aria-hidden="true"
-        />
+        <div className="sr-live-map-vignette" aria-hidden="true" />
         <MapMiniControls onExpand={onExpand} onRecenter={onRecenter} />
       </section>
     </div>

@@ -22,16 +22,21 @@
 import { notFound, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState } from "react";
 import polyline from "@mapbox/polyline";
-import { useAgentChat, type AgentChatRequestBody } from "@/lib/use-agent-chat";
+import {
+  useAgentChat,
+  type AgentChatRequestBody,
+  type ArrivalsTurnPayload,
+} from "@/lib/use-agent-chat";
 import type { AgentEvent, RouteCardEndpoint } from "@/lib/agent-chat-stream";
 import type { ChatTheme } from "@/lib/use-chat-theme";
 import { ChatPanel } from "@/components/smart-route/chat/chat-panel";
-import { DEMO_RAIL_DATA } from "@/components/smart-route/left-rail/demo-data";
+import { ChatSidebar } from "@/components/smart-route/chat/chat-sidebar";
 
 const FIRST_DEMO_QUERY = "Heading to Costco, no bus, I've got a cart";
 
 const ORIGIN: RouteCardEndpoint = { label: "Your location", lat: 40.7484, lng: -73.9857 };
 const DESTINATION: RouteCardEndpoint = { label: "Costco Sunset Park", lat: 40.6559, lng: -74.0089 };
+const MOCK_NEARBY_LINES = ["A", "C", "E", "N", "Q", "R", "1", "2"];
 
 function encodedLine(points: [number, number][]): { encodedPolyline: string } {
   return { encodedPolyline: polyline.encode(points) };
@@ -122,8 +127,8 @@ async function* successTurn(turnId: string, signal: AbortSignal): AsyncGenerator
   };
 
   const prose =
-    "Here's the best way to Costco without a bus. The A train gets you closest, " +
-    "and it's a short walk from there with your cart.";
+    "I'd take the A train to Costco. It is the best fit because it avoids the bus, " +
+    "uses no transfers, and keeps the final walk short with your cart.";
   for (const chunk of tokenChunks(prose)) {
     await wait(55, signal);
     yield { type: "token", text: chunk };
@@ -295,7 +300,7 @@ function ThemeSwitchControl({ theme, onChange }: { theme: ChatTheme; onChange: (
         // A genuine document-flow strip above the real chat surface, not an
         // overlay — this is dev-harness chrome only, so it must never sit on
         // top of (and risk intercepting clicks on, or visually colliding
-        // with) the real top bar/Near You row/TabToggle under review.
+        // with) the real chat panel under review.
         flex: "0 0 auto",
         display: "flex",
         alignItems: "center",
@@ -338,7 +343,9 @@ function AgentChatStoryInner() {
   // the true empty state (title/subtitle/suggestion pills, zero messages) —
   // used by the W-A screenshot gate's "empty state" requirement.
   const skipAutoSend = searchParams.get("empty") === "1";
+  const showSidebar = searchParams.get("sidebar") === "1";
   const [theme, setTheme] = useState<ChatTheme>(initialTheme);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const turnCountRef = useRef(0);
 
   const chat = useAgentChat({
@@ -364,6 +371,57 @@ function AgentChatStoryInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  function showMockArrivals(routeId: string) {
+    const arrivals: ArrivalsTurnPayload = {
+      routeId,
+      stationName: "34 St–Penn Station",
+      stationGuidance: "4 min walk · 0.2 mi away",
+      stationCoordinates: { lat: 40.7506, lng: -73.9935 },
+      groups: [
+        { direction: "uptown", label: "Uptown · Inwood–207 St", minutes: [2, 8, 14] },
+        { direction: "downtown", label: "Downtown · Far Rockaway", minutes: [4, 11, 18] },
+      ],
+    };
+    chat.appendLocalTurn({
+      text: `Here are the next ${routeId} trains at ${arrivals.stationName}.`,
+      arrivals,
+    });
+  }
+
+  if (showSidebar) {
+    return (
+      <div
+        className="sr-tab-shell"
+        data-tab="chat"
+        data-sidebar-collapsed={sidebarCollapsed ? "true" : "false"}
+      >
+        <ChatSidebar
+          activeTab="chat"
+          collapsed={sidebarCollapsed}
+          theme={theme}
+          nearbyRouteIds={MOCK_NEARBY_LINES}
+          onOpenChat={() => undefined}
+          onOpenLiveMap={() => undefined}
+          onNewTrip={chat.reset}
+          onSelectNearbyLine={showMockArrivals}
+          onToggleCollapsed={() => setSidebarCollapsed((value) => !value)}
+          onToggleTheme={() => setTheme((value) => (value === "dark" ? "light" : "dark"))}
+        />
+        <div className="sr-chat-tab sr-tab-shell__panel sr-tab-shell__panel--chat" data-sr-theme={theme}>
+          <ChatPanel
+            chat={chat}
+            theme={theme}
+            onOpenLiveMap={() => undefined}
+            onOpenNearbyStation={(arrivals) => {
+              // eslint-disable-next-line no-console
+              console.log("[dev/agent-chat] station directions", arrivals.stationName);
+            }}
+          />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       style={{
@@ -379,11 +437,6 @@ function AgentChatStoryInner() {
         <ChatPanel
           chat={chat}
           theme={theme}
-          onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
-          nearbyTransitGroups={DEMO_RAIL_DATA.nearbyTransitGroups}
-          nearbyArrivals={DEMO_RAIL_DATA.arrivals}
-          nearbyBusArrivals={DEMO_RAIL_DATA.nearbyBusArrivals}
-          nearestStopName={DEMO_RAIL_DATA.station.name}
           onOpenLiveMap={() => {
             // eslint-disable-next-line no-console
             console.log("[dev/agent-chat] open live map (stub — no map on this story page)");

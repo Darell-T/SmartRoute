@@ -152,6 +152,27 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         assistant_turns = [h for h in session["history"] if h["role"] == "assistant"]
         self.assertEqual(assistant_turns[-1]["text"], "ok, taking the Q")
 
+    async def test_internal_card_ids_and_markdown_do_not_reach_rider_prose(self):
+        events_out, session = await self._run(
+            [
+                {
+                    "text": [
+                        "**Recommended: Card ",
+                        "rc_b87e6f1a — Q/D trains, 1 transfer, ~31 min**",
+                    ],
+                    "stop_reason": "end_turn",
+                }
+            ]
+        )
+
+        prose = "".join(event.text for event in events_out if event.type == "token")
+        self.assertEqual(
+            prose,
+            "Recommended: Q/D trains, 1 transfer, about 31 min",
+        )
+        self.assertNotIn("rc_b87e6f1a", session["history"][-1]["text"])
+        self.assertNotIn("**", session["history"][-1]["text"])
+
     async def test_done_last_even_after_upstream_model_error(self):
         events_out, _ = await self._run([{"raise": True}])
         self.assertEqual(events_out[0].type, "meta")
@@ -224,6 +245,58 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(route_cards[0].card_id, "rc_test0001")
         self.assertEqual(route_cards[0].turn_id, "t1")
         self.assertEqual(session["route_cards"][0]["card_id"], "rc_test0001")
+
+    async def test_no_bus_language_is_enforced_at_the_plan_trip_boundary(self):
+        rounds = [
+            {"tool_use": [{"id": "tu_1", "name": "plan_trip", "input": {"destination": "Costco"}}], "stop_reason": "tool_use"},
+            {"text": ["Take the Q."], "stop_reason": "end_turn"},
+        ]
+        trace = self.loop.TurnTrace()
+
+        _events, session = await self._run(
+            rounds,
+            message="Heading to Costco, no bus",
+            tool_registry=_test_registry(),
+            trace=trace,
+        )
+
+        self.assertEqual(trace.tool_calls[0][1]["exclude_modes"], ["BUS"])
+        self.assertEqual(session["slots"]["constraints"]["exclude_modes"], ["BUS"])
+
+    async def test_rider_can_explicitly_allow_bus_again(self):
+        _discard_id, session = session_module.new_session()
+        session["slots"] = {"constraints": {"exclude_modes": ["BUS"]}}
+        rounds = [
+            {"tool_use": [{"id": "tu_1", "name": "plan_trip", "input": {"destination": "Costco"}}], "stop_reason": "tool_use"},
+            {"text": ["Take the B35."], "stop_reason": "end_turn"},
+        ]
+        trace = self.loop.TurnTrace()
+
+        await self._run(
+            rounds,
+            message="Bus is okay now",
+            session=session,
+            tool_registry=_test_registry(),
+            trace=trace,
+        )
+
+        self.assertNotIn("exclude_modes", trace.tool_calls[0][1])
+
+    async def test_route_card_turn_gets_grounded_text_when_model_returns_no_prose(self):
+        rounds = [
+            {"tool_use": [{"id": "tu_1", "name": "plan_trip", "input": {"destination": "Costco"}}], "stop_reason": "tool_use"},
+            {"text": [], "stop_reason": "end_turn"},
+        ]
+
+        events_out, session = await self._run(rounds, tool_registry=_test_registry())
+
+        prose = "".join(event.text for event in events_out if event.type == "token")
+        self.assertIn("I'd take the Q", prose)
+        self.assertIn("20 minutes", prose)
+        self.assertIn("no transfers", prose)
+        self.assertIn("fastest option", prose)
+        self.assertEqual(session["history"][-1]["role"], "assistant")
+        self.assertEqual(session["history"][-1]["text"], prose)
 
     async def test_trace_records_tool_calls_and_final_text(self):
         trace = self.loop.TurnTrace()
@@ -303,6 +376,30 @@ class AgentDisabledBudgetTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCa
         self.assertEqual(error.code, "budget_exceeded")
         self.assertEqual(events_out[-1].type, "done")
         self.assertEqual(len(self.loop.client.messages.calls), 0)
+
+
+class MockAgentModeTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.loop = _load_agent_loop({"AGENT_MOCK_MODE": "1"})
+
+    def setUp(self):
+        cache._mem.clear()
+
+    async def test_mock_mode_streams_preview_events_without_a_model_call(self):
+        with patch.dict(os.environ, {"AGENT_MOCK_STEP_DELAY_MS": "0"}):
+            events_out, session = await self._run([], message="Heading to Costco with a cart")
+
+        event_types = [event.type for event in events_out]
+        self.assertEqual(event_types[0], "meta")
+        self.assertEqual(event_types[-1], "done")
+        self.assertIn("tool_start", event_types)
+        self.assertIn("tool_end", event_types)
+        self.assertIn("token", event_types)
+        self.assertIn("route_card", event_types)
+        self.assertEqual(len(self.loop.client.messages.calls), 0)
+        self.assertIn("preview", "".join(event.text for event in events_out if event.type == "token").casefold())
+        self.assertEqual(session["route_cards"][-1]["card_id"], "mock-t1")
 
 
 class RateLimitBudgetTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):

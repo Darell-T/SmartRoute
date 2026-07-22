@@ -9,22 +9,19 @@
    turns a Near You bullet tap into a local (no-model-call) arrivals turn.
    ════════════════════════════════════════════════════════════════════════ */
 
-import { useMemo, useRef, useState } from "react";
-import type { useAgentChat } from "@/lib/use-agent-chat";
-import type { ChatTheme } from "@/lib/use-chat-theme";
+import { useRef, useState } from "react";
+import type { ArrivalsTurnPayload, useAgentChat } from "@/lib/use-agent-chat";
 import type { RouteCard } from "@/lib/agent-chat-stream";
-import type { Arrival, NearbyTransitGroup } from "@/components/smart-route/left-rail/types";
-import { SUBWAY_BULLET_ROUTES } from "@/components/smart-route/train-bullet";
+import type { ChatTheme } from "@/lib/use-chat-theme";
 import {
   ChatContainerContent,
   ChatContainerRoot,
   ChatContainerScrollAnchor,
 } from "@/components/prompt-kit/chat-container";
 import { ScrollButton } from "@/components/prompt-kit/scroll-button";
-import { ChatTopBar } from "./chat-top-bar";
 import { ChatMessage } from "./chat-message";
 import { ChatComposer } from "./chat-composer";
-import { deriveNearbyRouteIds, stationNameForRoute, buildArrivalsPayloadForRoute } from "./near-you";
+import { ChatWelcome } from "./chat-welcome";
 
 const EXAMPLE_QUERIES = [
   "Heading to Costco, no bus, I've got a cart",
@@ -35,42 +32,22 @@ const EXAMPLE_QUERIES = [
 export function ChatPanel({
   chat,
   theme,
-  onToggleTheme,
-  nearbyTransitGroups,
-  nearbyArrivals,
-  nearbyBusArrivals,
-  nearestStopName,
   onOpenLiveMap,
   onSelectRouteCard,
+  onOpenNearbyStation,
 }: {
   chat: ReturnType<typeof useAgentChat>;
   theme: ChatTheme;
-  onToggleTheme: () => void;
-  nearbyTransitGroups: NearbyTransitGroup[];
-  nearbyArrivals: Arrival[];
-  nearbyBusArrivals: Arrival[];
-  nearestStopName: string;
   onOpenLiveMap: () => void;
   onSelectRouteCard?: (card: RouteCard) => void;
+  onOpenNearbyStation?: (arrivals: ArrivalsTurnPayload) => void;
 }) {
   const [draft, setDraft] = useState("");
   const composerRef = useRef<HTMLDivElement | null>(null);
 
-  const nearbyRouteIds = useMemo(
-    () => deriveNearbyRouteIds({ nearbyTransitGroups, arrivals: nearbyArrivals, nearbyBusArrivals }),
-    [nearbyTransitGroups, nearbyArrivals, nearbyBusArrivals],
-  );
-
   function handleSelectRouteCard(card: RouteCard) {
     chat.selectCard(card.card_id);
     onSelectRouteCard?.(card);
-  }
-
-  function handleSelectNearbyRoute(routeId: string) {
-    const stationName = stationNameForRoute(routeId, nearbyTransitGroups, nearestStopName);
-    const payload = buildArrivalsPayloadForRoute(routeId, nearbyArrivals, stationName);
-    const vehicleWord = SUBWAY_BULLET_ROUTES.has(routeId.toUpperCase()) ? "trains" : "buses";
-    chat.appendLocalTurn({ text: `Next ${routeId} ${vehicleWord} near you:`, arrivals: payload });
   }
 
   function fillDraftAndFocus(query: string) {
@@ -158,42 +135,20 @@ export function ChatPanel({
           </feMerge>
         </filter>
       </svg>
-      <ChatTopBar
-        nearbyRouteIds={nearbyRouteIds}
-        onSelectNearbyRoute={handleSelectNearbyRoute}
-        onOpenLiveMap={onOpenLiveMap}
-        theme={theme}
-        onToggleTheme={onToggleTheme}
-      />
-
       <ChatContainerRoot className="sr-chat-thread">
         <ChatContainerContent className="sr-chat-thread__content" data-empty={isEmpty ? "true" : "false"}>
           {isEmpty ? (
-            <div className="sr-chat-empty">
-              <p className="sr-chat-empty__title">Where to?</p>
-              <p className="sr-chat-empty__subtitle">Ask about any trip in New York.</p>
-              <div className="sr-chat-empty__suggestions">
-                {EXAMPLE_QUERIES.map((query) => (
-                  <button
-                    key={query}
-                    type="button"
-                    className="sr-chat-suggestion-pill"
-                    onClick={() => fillDraftAndFocus(query)}
-                  >
-                    {query}
-                  </button>
-                ))}
-              </div>
-            </div>
+            <ChatWelcome suggestions={EXAMPLE_QUERIES} onSelectSuggestion={fillDraftAndFocus} />
           ) : (
             chat.messages.map((turn, index) => (
               <ChatMessage
                 key={index}
                 turn={turn}
+                theme={theme}
                 showCaret={chat.isStreaming && index === chat.messages.length - 1 && turn.role === "assistant"}
                 selectedCardId={chat.selectedCardId}
                 onSelectRouteCard={handleSelectRouteCard}
-                onSeeArrivalsOnMap={onOpenLiveMap}
+                onSeeArrivalsOnMap={onOpenNearbyStation ?? (() => onOpenLiveMap())}
               />
             ))
           )}

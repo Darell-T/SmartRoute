@@ -19,7 +19,7 @@
     "Helvetica Neue", ui-sans-serif, system-ui, sans-serif;
 
   /* Color / material (dark only — the rail is dark-on-map). */
-  --sr-material: rgba(16, 19, 26, 0.72);
+  --sr-material: rgba(9, 11, 13, 0.94);
   --sr-text-1: rgba(255, 255, 255, 0.96);
   --sr-text-2: rgba(255, 255, 255, 0.6);
   --sr-text-3: rgba(255, 255, 255, 0.38);
@@ -29,6 +29,7 @@
   --sr-fill-2: rgba(120, 120, 128, 0.16); /* nested/inset surfaces */
   --sr-card: rgba(255, 255, 255, 0.055); /* grouped-cell surface */
   --sr-card-hairline: rgba(255, 255, 255, 0.075);
+  --sr-row-hover: rgba(255, 255, 255, 0.055);
   --sr-accent: #34d399;
   --sr-accent-tint: rgba(52, 211, 153, 0.16); /* pill backgrounds */
   --sr-accent-text: #6ee7b7; /* text on tinted pills */
@@ -84,11 +85,136 @@
   --sr-mono: var(--sr-font);
 }
 
+/* The workspace owns one theme state. These token overrides deliberately
+   preserve the rail's approved structure, spacing, and active treatment. */
+.sr-tab-shell[data-sr-theme="light"] {
+  --sr-material: rgba(247, 249, 246, 0.9);
+  --sr-text-1: rgba(13, 20, 16, 0.96);
+  --sr-text-2: rgba(13, 20, 16, 0.62);
+  --sr-text-3: rgba(13, 20, 16, 0.42);
+  --sr-hairline: rgba(13, 20, 16, 0.08);
+  --sr-hairline-bright: rgba(13, 20, 16, 0.14);
+  --sr-fill: rgba(118, 118, 128, 0.13);
+  --sr-fill-2: rgba(118, 118, 128, 0.09);
+  --sr-card: rgba(255, 255, 255, 0.68);
+  --sr-card-hairline: rgba(13, 20, 16, 0.08);
+  --sr-row-hover: rgba(13, 20, 16, 0.065);
+  --sr-accent: #168b43;
+  --sr-accent-tint: rgba(22, 139, 67, 0.12);
+  --sr-accent-text: #126f38;
+  --sr-on-accent: #f4fff8;
+  --rail-accent: #168b43;
+  --rail-accent-strong: #117337;
+  --rail-bg: var(--sr-material);
+  --rail-surface: var(--sr-fill-2);
+  --rail-surface-strong: var(--sr-fill);
+  --rail-border: var(--sr-hairline-bright);
+  --rail-border-strong: var(--sr-accent-tint);
+  --rail-hover: var(--sr-fill-2);
+  --rail-text-primary: var(--sr-text-1);
+  --rail-text-secondary: var(--sr-text-2);
+  --rail-text-muted: var(--sr-text-3);
+  --sr-bg: var(--rail-bg);
+  --sr-surface: var(--rail-bg);
+  --sr-surface-2: var(--rail-surface);
+  --sr-surface-3: var(--rail-surface-strong);
+  --sr-fg: var(--rail-text-primary);
+  --sr-fg-2: var(--rail-text-secondary);
+  --sr-fg-3: var(--rail-text-muted);
+  --sr-fg-4: var(--sr-text-3);
+  --sr-muted: var(--rail-text-muted);
+  --sr-rule: var(--sr-hairline);
+  --sr-rule-bright: var(--sr-hairline-bright);
+  --sr-cyan: var(--rail-accent);
+  --sr-cyan-deep: rgba(22, 139, 67, 0.12);
+  color-scheme: light;
+}
+
+.sr-tab-shell[data-sr-theme="light"] .sr-rail {
+  box-shadow: 0 18px 46px rgba(31, 45, 36, 0.14);
+  scrollbar-color: rgba(13, 20, 16, 0.2) transparent;
+}
+
+.sr-tab-shell[data-sr-theme="light"] .sr-rail::-webkit-scrollbar-thumb {
+  background: rgba(13, 20, 16, 0.16);
+}
+
+.sr-tab-shell[data-sr-theme="light"] .sr-tab-underline {
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow:
+    0 1px 1px rgba(31, 45, 36, 0.08),
+    0 1px 3px rgba(31, 45, 36, 0.12);
+}
+
+.sr-tab-shell[data-sr-theme="light"] .sr-input-group {
+  border-color: rgba(13, 20, 16, 0.14);
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    0 10px 28px rgba(31, 45, 36, 0.1);
+  color: var(--sr-text-2);
+}
+
+.sr-tab-shell[data-sr-theme="light"] .sr-input-group:hover,
+.sr-tab-shell[data-sr-theme="light"] .sr-input-group:focus-within {
+  border-color: rgba(13, 20, 16, 0.22);
+  background: rgba(255, 255, 255, 0.94);
+}
+
+.sr-tab-shell[data-sr-theme="light"] .sr-input-voice,
+.sr-tab-shell[data-sr-theme="light"] .sr-input-submit {
+  color: var(--sr-text-2);
+}
+
+.sr-tab-shell[data-sr-theme="light"] .sr-input-submit {
+  background: rgba(13, 20, 16, 0.1);
+}
+
+.sr-tab-shell[data-sr-theme="light"] .sr-input-voice:hover,
+.sr-tab-shell[data-sr-theme="light"] .sr-input-voice[data-listening="true"] {
+  color: var(--sr-text-1);
+}
+
+.sr-tab-shell[data-sr-theme="light"] .sr-input-submit:hover {
+  background: rgba(13, 20, 16, 0.15);
+}
+
+.sr-tab-shell[data-sr-theme="light"] .sr-search-popover {
+  background: rgba(249, 251, 248, 0.985);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    0 18px 42px rgba(31, 45, 36, 0.16);
+}
+
+.sr-tab-shell[data-sr-theme="light"] .sr-search-option[aria-selected="true"],
+.sr-tab-shell[data-sr-theme="light"] .sr-search-option:hover,
+.sr-tab-shell[data-sr-theme="light"] .sr-toggle-group button:hover:not([data-active="true"]) {
+  background: rgba(13, 20, 16, 0.06);
+}
+
+.sr-tab-shell[data-sr-theme="light"] .sr-search-option__icon,
+.sr-tab-shell[data-sr-theme="light"] .sr-toggle-group {
+  border-color: rgba(13, 20, 16, 0.09);
+  background: rgba(13, 20, 16, 0.035);
+}
+
+.sr-tab-shell[data-sr-theme="light"] .sr-toggle-group button {
+  color: var(--sr-text-3);
+}
+
+.sr-tab-shell[data-sr-theme="light"] .sr-toggle-group button:hover:not([data-active="true"]) {
+  color: var(--sr-text-1);
+}
+
+.sr-tab-shell[data-sr-theme="light"] .sr-toggle-group button[data-active="true"] {
+  color: var(--sr-accent-text);
+}
+
 .sr-rail {
   background: var(--sr-material);
   -webkit-backdrop-filter: blur(50px) saturate(1.8);
   backdrop-filter: blur(50px) saturate(1.8);
-  border: 1px solid var(--sr-hairline-bright);
+  border: 1px solid var(--sr-hairline);
   border-radius: var(--sr-radius-card);
   box-shadow: 0 18px 46px rgba(0, 0, 0, 0.28);
   color: var(--sr-text-1);
@@ -907,10 +1033,14 @@
   transition: border-color var(--sr-dur-1) var(--sr-ease);
 }
 
-/* Hide the hairline above the hovered/open row and its successor so the
-   rounded inset hover never leaves a rule cutting across it. */
-.sr-alert-line-row:hover,
-.sr-alert-line-row:hover + .sr-alert-line-row,
+/* Hide the hairline only around an interactive disclosure. Static alert rows
+   deliberately have no hover treatment, so they never imply clickability. */
+.sr-alert-line-row:has(
+    .sr-alert-line-row__summary:not([data-static="true"]):hover
+  ),
+.sr-alert-line-row:has(
+    .sr-alert-line-row__summary:not([data-static="true"]):hover
+  ) + .sr-alert-line-row,
 .sr-alert-line-row[data-open="true"],
 .sr-alert-line-row[data-open="true"] + .sr-alert-line-row {
   border-top-color: transparent;
@@ -920,7 +1050,8 @@
   opacity: 0.62;
 }
 
-.sr-alert-line-row[data-lifecycle="resolved"] .sr-alert-line-row__summary:hover {
+.sr-alert-line-row[data-lifecycle="resolved"]
+  .sr-alert-line-row__summary:not([data-static="true"]):hover {
   opacity: 0.82;
 }
 
@@ -937,7 +1068,7 @@
   background: transparent;
   color: inherit;
   text-align: left;
-  cursor: pointer;
+  cursor: default;
   transition:
     background var(--sr-dur-1) var(--sr-ease),
     opacity var(--sr-dur-1) var(--sr-ease);
@@ -946,36 +1077,31 @@
 /* Rounded inset hover: the fill is pulled in from the card edges (negative
    margin + matching padding) so it reads as a contained row highlight, not a
    square band bleeding into the card corners. */
-.sr-alert-line-row__summary:hover {
-  background: rgba(255, 255, 255, 0.05);
-}
-
 .sr-alert-line-row__summary:not([data-static="true"]) {
   margin: 0 -9px;
   padding-left: 9px;
   padding-right: 9px;
   border-radius: 9px;
+  cursor: pointer;
 }
 
-.sr-alert-line-row__summary:hover .sr-alert-line-row__title {
-  color: #fff;
+.sr-alert-line-row__summary:not([data-static="true"]):hover {
+  background: var(--sr-row-hover);
 }
 
-.sr-alert-line-row__summary:hover .sr-alert-line-row__chevron {
+.sr-alert-line-row__summary:not([data-static="true"]):hover
+  .sr-alert-line-row__title {
+  color: var(--sr-fg);
+}
+
+.sr-alert-line-row__summary:not([data-static="true"]):hover
+  .sr-alert-line-row__chevron {
   color: var(--sr-fg-2);
   transform: translateX(2px);
 }
 
 .sr-alert-line-row__summary[aria-expanded="true"]:hover .sr-alert-line-row__chevron {
   transform: rotate(90deg);
-}
-
-.sr-alert-line-row__summary[data-static="true"] {
-  cursor: default;
-}
-
-.sr-alert-line-row__summary[data-static="true"]:hover {
-  background: transparent;
 }
 
 .sr-alert-line-row__media {
@@ -1568,6 +1694,12 @@
    collapsible control, so the chevron is an honest affordance. */
 .sr-reasoning {
   border-top: 1px solid var(--sr-rule);
+  --shimmer-gradient: linear-gradient(
+    90deg,
+    var(--sr-fg) 0%,
+    var(--sr-fg-3) 50%,
+    var(--sr-fg) 100%
+  );
 }
 
 .sr-reasoning__status {
@@ -1958,7 +2090,7 @@
   height: 1em;
   margin-left: 2px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.72);
+  background: var(--sr-text-2);
   vertical-align: -2px;
   animation: srReasoningCaret 0.9s steps(2, start) infinite;
 }

@@ -13,23 +13,34 @@ export const runtime = "nodejs";
 export const maxDuration = 90;
 export const dynamic = "force-dynamic";
 
-// Strict: an agent chat turn takes exactly this shape. Reject anything else
-// rather than silently dropping unknown fields, so a client typo surfaces
-// immediately instead of the field being ignored.
+// The message is the only required chat input. Session/card/location metadata
+// is optional and may be serialized as `null` by an older browser bundle or a
+// location refresh. Normalize that metadata at the boundary instead of
+// rejecting an otherwise valid rider message.
 const ChatSchema = z
   .object({
-    session_id: z.string().max(64).optional(),
+    session_id: z.string().max(128).nullable().optional(),
     message: z.string().min(1).max(500),
     origin: z
       .object({
         lat: z.number(),
         lng: z.number(),
       })
-      .strict()
+      // Browser location objects can include display metadata such as
+      // `accuracyMeters`. It is not part of the agent contract, so retain
+      // the validated coordinates and discard any extra client metadata.
+      .strip()
+      .nullable()
       .optional(),
-    selected_card_id: z.string().max(32).optional(),
+    selected_card_id: z.string().max(64).nullable().optional(),
   })
-  .strict();
+  .strip()
+  .transform((payload) => ({
+    ...payload,
+    session_id: payload.session_id ?? undefined,
+    origin: payload.origin ?? undefined,
+    selected_card_id: payload.selected_card_id ?? undefined,
+  }));
 
 export async function POST(req: NextRequest) {
   const limited = rateLimit(req, { key: "agent-chat", limit: 10, windowMs: 60_000 });
@@ -42,7 +53,21 @@ export async function POST(req: NextRequest) {
 
   const parsed = ChatSchema.safeParse(jsonBody.empty ? {} : jsonBody.value);
   if (!parsed.success) {
-    return NextResponse.json({ error: "Invalid chat request." }, { status: 400 });
+    const issues = parsed.error.issues.map((issue) => ({
+      path: issue.path.join(".") || "body",
+      code: issue.code,
+      message: issue.message,
+    }));
+    console.warn("[agent-chat] rejected invalid request", issues);
+    return NextResponse.json(
+      {
+        error:
+          process.env.NODE_ENV === "development"
+            ? `Invalid chat request: ${issues.map((issue) => `${issue.path} (${issue.message})`).join("; ")}`
+            : "Invalid chat request.",
+      },
+      { status: 400 },
+    );
   }
 
   return streamProxyToBackend("/api/agent/chat", parsed.data, req.signal);

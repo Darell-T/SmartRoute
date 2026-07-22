@@ -61,8 +61,6 @@ POI_SEARCH_SCHEMA = {
             },
             "max_results": {
                 "type": "integer",
-                "minimum": 1,
-                "maximum": 5,
                 "description": "Maximum results to return (default 3).",
             },
         },

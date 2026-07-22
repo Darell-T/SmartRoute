@@ -148,16 +148,16 @@ Windows PowerShell:
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+python -m pip install -r requirements.txt
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 macOS/Linux:
 
 ```bash
 source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+python -m pip install -r requirements.txt
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 The backend requires `APP_KEY` before startup. Add it to a local `.env` at the repository root or `backend/.env`.
@@ -185,6 +185,8 @@ Do not commit real secrets. Use local `.env` files and hosting provider environm
 | `NEXT_PUBLIC_MAPBOX_TOKEN` | Frontend search | Yes for destination search | Mapbox token for destination autocomplete and retrieval. |
 | `GOOGLE_ROUTES_API_KEY` | Backend | Yes for trip planning | Google Routes API key for transit route candidates. |
 | `ANTHROPIC_API_KEY` | Backend | Yes for hosted recommendation reasoning | Provider key used by the route recommendation service. |
+| `AGENT_MOCK_MODE` | Backend | Optional | Set to `1` locally to stream deterministic chat preview data without model, route, or transit-provider requests. Never enable in production. |
+| `AGENT_MOCK_STEP_DELAY_MS` | Backend | Optional | Delay between simulated chat events; defaults to `280` for realistic UI testing. |
 | `SMARTROUTE_SYSTEM_PROMPT` | Backend | Optional | Preferred environment override for the route-ranking system prompt. |
 | `SYSTEM_PROMPT` | Backend | Optional | Supported prompt override alias. |
 | `ELEVENLABS_API_KEY` | Backend | Optional | Required only if text-to-speech is enabled. |

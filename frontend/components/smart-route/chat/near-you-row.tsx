@@ -44,7 +44,7 @@ export function NearYouRow({
             aria-label={`${routeId} arrivals near you`}
             onClick={() => onSelectRoute(routeId)}
           >
-            <LineBadge line={routeId} size={22} />
+          <LineBadge line={routeId} size={20} />
           </button>
         ))}
         {overflowCount > 0 && (

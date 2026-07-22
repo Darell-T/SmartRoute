@@ -14,6 +14,7 @@ import asyncio
 import dataclasses
 import json
 import os
+import re
 import time
 from typing import AsyncIterator
 
@@ -32,6 +33,17 @@ AGENT_MAX_ROUNDS = int(os.getenv("AGENT_MAX_ROUNDS", "5"))
 AGENT_TURN_DEADLINE_S = float(os.getenv("AGENT_TURN_DEADLINE_S", "50"))
 AGENT_MAX_TOKENS_PER_ROUND = int(os.getenv("AGENT_MAX_TOKENS_PER_ROUND", "1024"))
 AGENT_WRAPUP_MAX_TOKENS = 300
+# Local UI work should be repeatable and must not spend model credits. This
+# flag swaps the entire turn (including tool work) for a deterministic SSE
+# fixture; production remains live unless explicitly configured otherwise.
+AGENT_MOCK_MODE = os.getenv("AGENT_MOCK_MODE", "0").strip() == "1"
+
+
+def _mock_step_delay_s() -> float:
+    try:
+        return max(0.0, float(os.getenv("AGENT_MOCK_STEP_DELAY_MS", "280")) / 1000)
+    except ValueError:
+        return 0.28
 
 WRAP_UP_INSTRUCTION = (
     "You are out of time or tool calls for this turn. Summarize what you "
@@ -48,6 +60,138 @@ class TurnTrace:
 
     tool_calls: list[tuple[str, dict]] = dataclasses.field(default_factory=list)
     final_text: str = ""
+
+
+def _mock_trip_copy(message: str) -> tuple[str, dict, int, list[str]]:
+    """Return stable preview content without inferring live service status."""
+    query = message.casefold()
+    if "costco" in query:
+        return (
+            "I'd take the A train to Costco in this preview. It is the best fit "
+            "because it uses one train and keeps the final walk short with your cart.",
+            {"label": "Costco Sunset Park", "lat": 40.6559, "lng": -74.0089},
+            34,
+            ["A"],
+        )
+    if "pizza" in query:
+        return (
+            "I'd take the N and Q for this preview and stop for pizza near Midtown. "
+            "I picked it because the sample itinerary keeps the transfer count low.",
+            {"label": "Pizza stop near Midtown", "lat": 40.7549, "lng": -73.9840},
+            27,
+            ["N", "Q"],
+        )
+    return (
+        "I’m showing a simulated transit option so you can preview the chat experience. "
+        "Switch off mock mode when you’re ready to use live route data.",
+        {"label": "Demo destination", "lat": 40.7306, "lng": -73.9866},
+        22,
+        ["Q"],
+    )
+
+
+def _mock_token_chunks(text: str) -> list[str]:
+    words = text.split(" ")
+    return [
+        ("" if index == 0 else " ") + " ".join(words[index : index + 3])
+        for index in range(0, len(words), 3)
+    ]
+
+
+async def _stream_mock_turn(
+    *,
+    session: dict,
+    session_id: str,
+    turn_id: str,
+    message: str,
+    origin: dict | None,
+    trace: TurnTrace | None,
+) -> AsyncIterator[agent_events.AgentEvent]:
+    """Stream a small, deterministic fixture for local chat/UI development.
+
+    It deliberately avoids calling model clients, route providers, or agent
+    tools. The event order mirrors a live turn so the production reducer,
+    reasoning panel, and route-card UI are exercised unchanged.
+    """
+    started_at = time.monotonic()
+    delay_s = _mock_step_delay_s()
+    text, destination, eta_minutes, lines = _mock_trip_copy(message)
+    mock_origin = {
+        "label": "Your location",
+        "lat": float((origin or {}).get("lat", 40.7484)),
+        "lng": float((origin or {}).get("lng", -73.9857)),
+    }
+    tool_calls = [("mock_plan_trip", {"destination": destination["label"]})]
+
+    session_module.append_history(session, "user", message)
+    yield agent_events.ToolStartEvent(
+        tool_call_id=f"mock-route-{turn_id}",
+        tool="plan_trip",
+        label="Previewing a cart-friendly subway route…",
+    )
+    await asyncio.sleep(delay_s)
+    yield agent_events.ToolEndEvent(
+        tool_call_id=f"mock-route-{turn_id}",
+        tool="plan_trip",
+        ok=True,
+        duration_ms=round(delay_s * 1000),
+        summary="Preview route ready",
+    )
+
+    yield agent_events.ToolStartEvent(
+        tool_call_id=f"mock-service-{turn_id}",
+        tool="transit_snapshot",
+        label="Loading simulated service conditions…",
+    )
+    await asyncio.sleep(delay_s)
+    yield agent_events.ToolEndEvent(
+        tool_call_id=f"mock-service-{turn_id}",
+        tool="transit_snapshot",
+        ok=True,
+        duration_ms=round(delay_s * 1000),
+        summary="Preview data only",
+    )
+
+    for chunk in _mock_token_chunks(text):
+        await asyncio.sleep(min(0.06, delay_s))
+        yield agent_events.TokenEvent(text=chunk)
+
+    card_id = f"mock-{turn_id}"
+    card = agent_events.RouteCardEvent(
+        card_id=card_id,
+        turn_id=turn_id,
+        role="recommended",
+        origin=mock_origin,
+        destination=destination,
+        summary={
+            "eta_minutes": eta_minutes,
+            "transfers": max(0, len(lines) - 1),
+            "lines": lines,
+            "reason": "A simple sample route with a short final walk.",
+        },
+        route=[],
+        alerts=[],
+    )
+    yield card
+
+    session_module.append_history(session, "assistant", text)
+    session_module.append_tool_summary(session, "mock_agent", "served deterministic preview data")
+    session_module.add_route_cards(
+        session,
+        [{"card_id": card_id, "role": "recommended", "lines": lines, "eta_minutes": eta_minutes}],
+    )
+    if trace is not None:
+        trace.tool_calls = tool_calls
+        trace.final_text = text
+
+    elapsed_ms = round((time.monotonic() - started_at) * 1000)
+    print(f"[agent] turn={turn_id} sess={session_id[:6]} mock=1 total_ms={elapsed_ms}")
+    yield agent_events.DoneEvent(
+        session_id=session_id,
+        turn_id=turn_id,
+        stop_reason="end_turn",
+        usage={"input_tokens": 0, "output_tokens": 0},
+    )
 
 
 def _system_blocks() -> list[dict]:
@@ -90,6 +234,76 @@ def _build_stream_kwargs(*, force_final: bool, messages: list[dict], system_bloc
     return kwargs
 
 
+def _route_card_text_fallback(card: agent_events.RouteCardEvent) -> str:
+    """Grounded copy for the rare tool turn whose final model response is empty."""
+    summary = card.summary or {}
+    destination = (card.destination or {}).get("label") or "your destination"
+    eta = summary.get("eta_minutes")
+    lines = [str(line) for line in (summary.get("lines") or []) if line]
+    transfers = summary.get("transfers")
+    reason = str(summary.get("reason") or "").strip().rstrip(".")
+
+    route_name = f"the {' and '.join(lines)}" if lines else "this route"
+    sentences = [f"I'd take {route_name} to {destination}."]
+
+    eta_copy = f"about {round(eta)} minutes" if isinstance(eta, (int, float)) else ""
+    transfer_copy = ""
+    if isinstance(transfers, int):
+        transfer_copy = (
+            "no transfers"
+            if transfers == 0
+            else f"{transfers} transfer{'s' if transfers != 1 else ''}"
+        )
+    if eta_copy:
+        detail = f"{eta_copy} with {transfer_copy}" if transfer_copy else eta_copy
+        sentences.append(f"It takes {detail}.")
+    elif transfer_copy:
+        sentences.append(f"It has {transfer_copy}.")
+
+    if reason:
+        if reason.casefold() == "fastest":
+            reason = "it is the fastest option"
+        else:
+            reason = reason[:1].lower() + reason[1:]
+        sentences.append(f"I picked it because {reason}.")
+
+    return " ".join(sentences)
+
+
+_INTERNAL_CARD_REFERENCE = re.compile(
+    r"\b(?:route\s+)?card\s+[`'\"]?(?:rc|mock)[_-][A-Za-z0-9_-]+[`'\"]?\s*(?:[—–-]\s*)?",
+    re.IGNORECASE,
+)
+_OPAQUE_CARD_ID = re.compile(r"\b(?:rc|mock)[_-][A-Za-z0-9_-]{4,}\b", re.IGNORECASE)
+
+
+def _sanitize_rider_text(text: str) -> str:
+    """Remove model formatting and internal route identifiers from prose.
+
+    The prompt is the primary contract. This boundary sanitizer is a final
+    guard so an ignored instruction cannot expose implementation details in
+    the passenger-facing stream or persist them into conversation history.
+    """
+    sanitized = _INTERNAL_CARD_REFERENCE.sub("", text)
+    sanitized = _OPAQUE_CARD_ID.sub("the route", sanitized)
+    sanitized = re.sub(r"\*\*(.*?)\*\*", r"\1", sanitized, flags=re.DOTALL)
+    sanitized = re.sub(r"__(.*?)__", r"\1", sanitized, flags=re.DOTALL)
+    sanitized = re.sub(r"`([^`]+)`", r"\1", sanitized)
+    sanitized = re.sub(r"(?m)^\s*#{1,6}\s+", "", sanitized)
+    sanitized = re.sub(r"~(?=\d)", "about ", sanitized)
+    return sanitized
+
+
+def _sanitize_token_events(
+    token_events: list[agent_events.TokenEvent],
+) -> list[agent_events.TokenEvent]:
+    original = "".join(event.text for event in token_events)
+    sanitized = _sanitize_rider_text(original)
+    if sanitized == original:
+        return token_events
+    return [agent_events.TokenEvent(text=sanitized)] if sanitized else []
+
+
 async def _call_model(
     *, stream_kwargs: dict, log_tag: str
 ) -> tuple[object | None, list[agent_events.TokenEvent], agent_events.ErrorEvent | None]:
@@ -111,11 +325,11 @@ async def _call_model(
         print(f"[agent-loop] {log_tag} failed: {type(exc).__name__}: {exc!r}")
         error_event = agent_events.ErrorEvent(
             code="upstream_error",
-            message="The routing assistant is temporarily unavailable.",
+            message="Live trip planning is temporarily unavailable.",
             retryable=True,
         )
         return None, token_events, error_event
-    return final_message, token_events, None
+    return final_message, _sanitize_token_events(token_events), None
 
 
 async def _run_one_tool(name: str, tool_input: dict, ctx: ToolContext) -> ToolResult:
@@ -134,18 +348,62 @@ async def _run_one_tool(name: str, tool_input: dict, ctx: ToolContext) -> ToolRe
     return result
 
 
+def _rider_excluded_modes(message: str, session: dict) -> set[str]:
+    """Keep explicit rider constraints authoritative across follow-up turns."""
+    constraints = ((session.get("slots") or {}).get("constraints") or {})
+    excluded = {
+        str(mode).strip().upper()
+        for mode in (constraints.get("exclude_modes") or [])
+        if str(mode).strip()
+    }
+    rider_text = message.casefold()
+
+    if re.search(r"\b(?:no|without|avoid(?:ing)?)\s+(?:the\s+)?(?:bus|buses)\b", rider_text):
+        excluded.add("BUS")
+    elif re.search(
+        r"\b(?:include|allow)\s+(?:the\s+)?(?:bus|buses)\b|\b(?:bus|buses)\s+(?:is|are)\s+(?:ok|okay|fine)\b",
+        rider_text,
+    ):
+        excluded.discard("BUS")
+
+    session.setdefault("slots", {}).setdefault("constraints", {})["exclude_modes"] = sorted(excluded)
+    return excluded
+
+
+def _constrained_tool_input(name: str, tool_input: dict, excluded_modes: set[str]) -> dict:
+    normalized = dict(tool_input)
+    if name == "plan_trip" and excluded_modes:
+        requested = {
+            str(mode).strip().upper()
+            for mode in (normalized.get("exclude_modes") or [])
+            if str(mode).strip()
+        }
+        normalized["exclude_modes"] = sorted(requested | excluded_modes)
+    return normalized
+
+
 async def _execute_tool_round(
     tool_use_blocks: list,
     ctx: ToolContext,
     session: dict,
     tool_calls_this_turn: list[tuple[str, dict]],
+    excluded_modes: set[str],
 ) -> AsyncIterator:
     """Emits tool_start/tool_end/route_card events for one round of (possibly
     parallel) tool calls, and yields the assembled tool_result message last
     (wrapped so the caller can tell it apart from an AgentEvent)."""
+    tool_inputs = {
+        block.id: _constrained_tool_input(
+            getattr(block, "name", ""),
+            getattr(block, "input", {}) or {},
+            excluded_modes,
+        )
+        for block in tool_use_blocks
+    }
+
     for block in tool_use_blocks:
         name = getattr(block, "name", "")
-        tool_input = getattr(block, "input", {}) or {}
+        tool_input = tool_inputs[block.id]
         spec = TOOL_REGISTRY.get(name)
         label = spec.label_fn(tool_input) if spec else f"Using {name}…"
         yield agent_events.ToolStartEvent(tool_call_id=block.id, tool=name, label=label)
@@ -153,7 +411,7 @@ async def _execute_tool_round(
     start_times = {block.id: time.monotonic() for block in tool_use_blocks}
     outcomes = await asyncio.gather(
         *(
-            _run_one_tool(getattr(block, "name", ""), getattr(block, "input", {}) or {}, ctx)
+            _run_one_tool(getattr(block, "name", ""), tool_inputs[block.id], ctx)
             for block in tool_use_blocks
         )
     )
@@ -161,7 +419,7 @@ async def _execute_tool_round(
     tool_result_content = []
     for block, result in zip(tool_use_blocks, outcomes):
         name = getattr(block, "name", "")
-        tool_input = getattr(block, "input", {}) or {}
+        tool_input = tool_inputs[block.id]
         duration_ms = round((time.monotonic() - start_times[block.id]) * 1000)
         tool_calls_this_turn.append((name, tool_input))
 
@@ -208,6 +466,7 @@ async def _stream_turn(
     trace: TurnTrace | None,
 ) -> AsyncIterator[agent_events.AgentEvent]:
     system_blocks = _system_blocks()
+    excluded_modes = _rider_excluded_modes(message, session)
     messages = _messages_from_history(session.get("history") or [])
     context_block = agent_prompt.build_turn_context(session, ctx.now_et, ctx.origin, selected_card_id)
     messages.append({"role": "user", "content": f"{message}\n\n{context_block}"})
@@ -222,6 +481,7 @@ async def _stream_turn(
     round_num = 0
     text_parts: list[str] = []
     tool_calls_this_turn: list[tuple[str, dict]] = []
+    recommended_route_card: agent_events.RouteCardEvent | None = None
 
     try:
         needs_wrapup = False
@@ -261,10 +521,18 @@ async def _stream_turn(
 
             tool_round_start = time.monotonic()
             tool_result_message = None
-            async for item in _execute_tool_round(tool_use_blocks, ctx, session, tool_calls_this_turn):
+            async for item in _execute_tool_round(
+                tool_use_blocks,
+                ctx,
+                session,
+                tool_calls_this_turn,
+                excluded_modes,
+            ):
                 if isinstance(item, dict) and "__tool_result_message__" in item:
                     tool_result_message = item["__tool_result_message__"]
                 else:
+                    if isinstance(item, agent_events.RouteCardEvent) and item.role == "recommended":
+                        recommended_route_card = item
                     yield item
             tools_ms_total += (time.monotonic() - tool_round_start) * 1000
             messages.append(tool_result_message)
@@ -293,6 +561,11 @@ async def _stream_turn(
                 input_tokens += int(getattr(usage, "input_tokens", 0) or 0)
                 output_tokens += int(getattr(usage, "output_tokens", 0) or 0)
                 messages.append({"role": "assistant", "content": final_message.content})
+
+        if not text_parts and recommended_route_card is not None:
+            fallback_text = _route_card_text_fallback(recommended_route_card)
+            text_parts.append(fallback_text)
+            yield agent_events.TokenEvent(text=fallback_text)
     except Exception as exc:
         print(f"[agent-loop] turn failed unexpectedly: {type(exc).__name__}: {exc!r}")
         yield agent_events.ErrorEvent(
@@ -349,6 +622,18 @@ async def run_agent_turn(
     """
     yield agent_events.MetaEvent(session_id=session_id, turn_id=turn_id)
 
+    if AGENT_MOCK_MODE:
+        async for event in _stream_mock_turn(
+            session=session,
+            session_id=session_id,
+            turn_id=turn_id,
+            message=message,
+            origin=origin,
+            trace=trace,
+        ):
+            yield event
+        return
+
     def _reject(code: str, text: str, retryable: bool) -> tuple[agent_events.ErrorEvent, agent_events.DoneEvent]:
         return (
             agent_events.ErrorEvent(code=code, message=text, retryable=retryable),
@@ -358,7 +643,7 @@ async def run_agent_turn(
         )
 
     if not budget.agent_enabled():
-        for event in _reject("budget_exceeded", "The conversational agent is temporarily disabled.", True):
+        for event in _reject("budget_exceeded", "Trip planning is temporarily unavailable.", True):
             yield event
         return
 
@@ -374,7 +659,7 @@ async def run_agent_turn(
 
     sem = budget.concurrency_semaphore()
     if sem.locked():
-        for event in _reject("rate_limited", "The agent is busy helping other riders -- try again shortly.", True):
+        for event in _reject("rate_limited", "SmartRoute is busy helping other riders -- try again shortly.", True):
             yield event
         return
 

@@ -18,6 +18,13 @@ type RoutePlanningControllerInput = {
   userLocation: UserLocation;
 };
 
+export type ExternalRoutePlan = {
+  destination: DestinationSelection;
+  candidates: RouteCandidate[];
+  activeCandidateId: string;
+  recommendationText: string;
+};
+
 export type RoutePlanningPhase = "idle" | "cancellable" | "finalizing";
 
 export function useRoutePlanningController({
@@ -200,6 +207,28 @@ export function useRoutePlanningController({
     setSwitchHeadline(`Rerouting via the ${line}.`);
   }
 
+  function handleLoadExternalRoutes(plan: ExternalRoutePlan) {
+    const activeCandidate = plan.candidates.find(
+      (candidate) => candidate.id === plan.activeCandidateId,
+    );
+    if (!activeCandidate) return;
+
+    routePlanningRequestIdRef.current += 1;
+    routePlanningAbortRef.current?.abort();
+    routePlanningAbortRef.current = null;
+    setInputValue(plan.destination.label);
+    setSelectedDestination(plan.destination);
+    setIsLoading(false);
+    setPlanningPhase("idle");
+    setErrorText(null);
+    setRouteCandidates(plan.candidates);
+    setActiveRouteCandidateId(activeCandidate.id);
+    setSelectedRouteIndex(activeCandidate.index);
+    setPlannedRouteSteps(activeCandidate.steps);
+    setRecommendationText(plan.recommendationText);
+    setSwitchHeadline(null);
+  }
+
   function handleCancelRoutePlanning() {
     routePlanningRequestIdRef.current += 1;
     routePlanningAbortRef.current?.abort();
@@ -237,7 +266,8 @@ export function useRoutePlanningController({
     isLoading, planningPhase, errorText, plannedRouteSteps,
     routeCandidates, activeRouteCandidateId,
     handleDestinationInputChange, handleSearchSubmit,
-    handleSelectAlternative, handleCancelRoutePlanning, handleClearRoute,
+    handleSelectAlternative, handleLoadExternalRoutes,
+    handleCancelRoutePlanning, handleClearRoute,
   };
 }
 

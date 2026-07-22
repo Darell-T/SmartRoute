@@ -15,15 +15,20 @@
    ════════════════════════════════════════════════════════════════════════ */
 
 .sr-tab-shell {
+  --sr-shell-sidebar-width: 236px;
   position: relative;
   height: 100dvh;
   width: 100vw;
   overflow: hidden;
 }
 
+.sr-tab-shell[data-sidebar-collapsed="true"] {
+  --sr-shell-sidebar-width: 70px;
+}
+
 .sr-tab-shell__panel {
   position: absolute;
-  inset: 0;
+  inset: 0 0 0 var(--sr-shell-sidebar-width);
 }
 
 .sr-tab-shell__panel--livemap {
@@ -37,6 +42,13 @@
 .sr-tab-shell__panel--hidden {
   visibility: hidden;
   pointer-events: none;
+}
+
+@media (max-width: 900px) {
+  .sr-tab-shell,
+  .sr-tab-shell[data-sidebar-collapsed="true"] {
+    --sr-shell-sidebar-width: 64px;
+  }
 }
 
 /* ── Floating tab toggle ─────────────────────────────────────────────── */

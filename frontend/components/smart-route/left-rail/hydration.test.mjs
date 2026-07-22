@@ -54,6 +54,10 @@ test("left rail uses restrained transit product surfaces", () => {
     path.join(ROOT, "components/smart-route/ui/spiral-fill-loader.tsx"),
     "utf8",
   );
+  const shimmer = fs.readFileSync(
+    path.join(ROOT, "components/ai-elements/shimmer.tsx"),
+    "utf8",
+  );
   const mobileSheet = fs.readFileSync(
     path.join(ROOT, "components/smart-route/page/use-mobile-rail-sheet.ts"),
     "utf8",
@@ -389,6 +393,11 @@ test("left rail uses restrained transit product surfaces", () => {
   );
   assert.match(
     alertsView,
+    /if \(!hasDetail && item\.expandable\)[\s\S]*detail\.currentStatus\?\.trim\(\)/,
+    "alerts declared expandable should retain a real status fallback after visual de-duplication",
+  );
+  assert.match(
+    alertsView,
     /sr-alert-status\b/,
     "alert status renders as quiet textual metadata",
   );
@@ -474,6 +483,26 @@ test("left rail uses restrained transit product surfaces", () => {
     railCss,
     /\.sr-reasoning-lines/,
     "planning state should render appended status lines",
+  );
+  assert.match(
+    railCss,
+    /--sr-row-hover:\s*rgba\(13,\s*20,\s*16,\s*0\.065\)/,
+    "light mode should provide a visible neutral alert-row hover fill",
+  );
+  assert.match(
+    railCss,
+    /\.sr-alert-line-row__summary:not\(\[data-static="true"\]\):hover/,
+    "only expandable service-alert rows should receive hover feedback",
+  );
+  assert.doesNotMatch(
+    railCss,
+    /\.sr-alert-line-row__summary:hover\s+\.sr-alert-line-row__title\s*\{[^}]*color:\s*#fff/s,
+    "service-alert titles should not turn white on light surfaces",
+  );
+  assert.match(
+    shimmer,
+    /var\(--shimmer-gradient,/,
+    "animated reasoning text should accept the active surface theme gradient",
   );
   assert.doesNotMatch(
     railCss,

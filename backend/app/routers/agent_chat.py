@@ -133,7 +133,7 @@ async def agent_chat(request: Request, payload: AgentChatRequest):
         raise HTTPException(
             status_code=503,
             detail=(
-                "The conversational agent requires Redis-backed sessions "
+                "Chat requires Redis-backed sessions "
                 "(REDIS_URL is not set); the in-memory cache fallback is not "
                 "durable enough for this feature."
             ),

@@ -13,6 +13,7 @@
 
 import { ChevronRight } from "lucide-react";
 import type { RouteCard as RouteCardData } from "@/lib/agent-chat-stream";
+import { Button } from "@/components/ui/button";
 import { LineBadge } from "./line-badge";
 
 function formatClockTime(iso: string): string | null {
@@ -61,8 +62,9 @@ export function ChatRouteCard({
   const transfers = card.summary.transfers;
 
   return (
-    <button
+    <Button
       type="button"
+      variant="ghost"
       className="sr-chat-route-card"
       data-role={card.role}
       data-selected={isSelected ? "true" : "false"}
@@ -82,7 +84,7 @@ export function ChatRouteCard({
                   aria-hidden="true"
                 />
               )}
-              <LineBadge line={line} size={22} />
+              <LineBadge line={line} size={20} />
             </span>
           ))}
         </span>
@@ -108,7 +110,7 @@ export function ChatRouteCard({
         View on map
         <ChevronRight size={13} strokeWidth={2} aria-hidden="true" />
       </span>
-    </button>
+    </Button>
   );
 }
 

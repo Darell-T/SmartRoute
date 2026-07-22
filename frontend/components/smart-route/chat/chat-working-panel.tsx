@@ -91,15 +91,33 @@ export function ChatWorkingPanel({
   const everStreamed = useEverStreamed(isStreaming);
   const elapsedSeconds = useElapsedSeconds(isStreaming);
   const hasStarted = everStreamed || toolChips.length > 0;
+  const isFindingRoutes = toolChips.some(
+    (chip) => chip.tool === "plan_trip" && chip.status === "running",
+  );
+  const hasRouteResult = toolChips.some(
+    (chip) => chip.tool === "plan_trip" && chip.status === "ok",
+  );
   if (!hasStarted) return null;
 
   return (
-    <Reasoning className="sr-chat-working-panel" isStreaming={isStreaming} duration={elapsedSeconds}>
+    <Reasoning
+      className="sr-chat-working-panel"
+      isStreaming={isStreaming}
+      duration={elapsedSeconds}
+      aria-live="polite"
+      aria-busy={isStreaming}
+    >
       <ReasoningTrigger className="sr-chat-working-panel__trigger">
         {isStreaming ? (
-          <Shimmer>Thinking…</Shimmer>
+          <Shimmer className="sr-chat-working-panel__shimmer" duration={1.35}>
+            {isFindingRoutes ? "Finding the best route…" : "Thinking…"}
+          </Shimmer>
         ) : (
-          `Worked for ${elapsedSeconds ?? 1} second${elapsedSeconds === 1 ? "" : "s"}`
+          hasRouteResult
+            ? "Found your route"
+            : elapsedSeconds
+              ? `Thought for ${elapsedSeconds}s`
+              : "Done"
         )}
       </ReasoningTrigger>
       <ReasoningContent className="sr-chat-working-panel__content">

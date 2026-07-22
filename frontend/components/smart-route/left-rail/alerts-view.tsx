@@ -675,18 +675,32 @@ function buildAlertDetailView(item: AlertFeedItem): AlertDetailView | null {
   if (!detail) return null;
   const summary = detailSummary(item);
   const { impact, alternatives } = disruptionAndGuidance(item, summary);
-  const statusText = distinctStatus(item, summary);
+  let statusText = distinctStatus(item, summary);
   const stops = detail.affectedStops ?? [];
   const updates = (detail.updates ?? []).filter((update) =>
     Boolean(update.title?.trim() || update.summary?.trim()),
   );
-  const hasDetail = Boolean(
+  let hasDetail = Boolean(
     impact ||
       alternatives ||
       statusText ||
       stops.length > 0 ||
       updates.length > 0,
   );
+
+  /* The feed adapter is the source of truth for whether real expanded content
+     exists. Its full current status can intentionally match the compact row
+     subtitle; when de-duplication removes every other detail, retain that real
+     status instead of silently downgrading an expandable alert to a static row. */
+  if (!hasDetail && item.expandable) {
+    statusText =
+      detail.currentStatus?.trim() ||
+      detail.whatHappened?.trim() ||
+      item.summary?.trim() ||
+      undefined;
+    hasDetail = Boolean(statusText);
+  }
+
   if (!hasDetail) return null;
   return { impact, alternatives, statusText, stops, updates };
 }

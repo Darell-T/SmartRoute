@@ -77,6 +77,12 @@ export interface ArrivalsTurnDirectionGroup {
 export interface ArrivalsTurnPayload {
   routeId: string;
   stationName: string;
+  /** Short access guidance derived from the nearby-stop feed, for example
+   *  "4 min walk · 0.2 mi away". */
+  stationGuidance?: string;
+  /** Used by the arrivals-card CTA to request walking/transit directions
+   *  to the station on the live map. */
+  stationCoordinates?: { lat: number; lng: number };
   groups: ArrivalsTurnDirectionGroup[];
 }
 
@@ -95,6 +101,7 @@ export interface ChatState {
  *  can end). */
 export type ChatReducerAction =
   | AgentEvent
+  | { type: "chat_reset" }
   | { type: "turn_started"; text: string }
   | { type: "stream_error"; message: string }
   | { type: "stream_cancelled" }
@@ -134,6 +141,8 @@ function cardFromEvent(event: Extract<AgentEvent, { type: "route_card" }>): Rout
  */
 export function applyAgentEvent(state: ChatState, action: ChatReducerAction): ChatState {
   switch (action.type) {
+    case "chat_reset":
+      return initChatState(null);
     case "turn_started": {
       const userTurn: UserTurn = { role: "user", text: action.text };
       const assistantTurn: AssistantTurn = {
@@ -257,7 +266,8 @@ export function applyAgentEvent(state: ChatState, action: ChatReducerAction): Ch
 
 /** `Pick<Storage, ...>` rather than `Storage` so tests can pass a plain
  *  object instead of needing `jsdom`/`sessionStorage`. */
-type StorageLike = Pick<Storage, "getItem" | "setItem">;
+type StorageLike = Pick<Storage, "getItem" | "setItem"> &
+  Partial<Pick<Storage, "removeItem">>;
 
 /** `sessionStorage` throws in some privacy-mode/embedded-webview contexts
  *  even though `window` exists — treat that the same as "no storage
@@ -296,10 +306,10 @@ export function persistSessionId(storage: StorageLike | undefined, sessionId: st
   }
 }
 
-function initChatState(): ChatState {
+function initChatState(sessionId = readPersistedSessionId(safeSessionStorage())): ChatState {
   return {
     messages: [],
-    sessionId: readPersistedSessionId(safeSessionStorage()),
+    sessionId,
     isStreaming: false,
     error: null,
   };
@@ -310,6 +320,31 @@ export interface AgentChatRequestBody {
   message: string;
   origin?: { lat: number; lng: number };
   selected_card_id?: string;
+}
+
+/**
+ * Browser geolocation and map callbacks can briefly surface incomplete or
+ * non-finite coordinates while a position is being refreshed. `JSON.stringify`
+ * turns `NaN`/`Infinity` into `null`, which the strict API schema rightly
+ * rejects. The agent can work without an origin, so omit an invalid fix and
+ * let it resolve a named origin instead of rejecting the whole chat turn.
+ */
+function validOrigin(origin: { lat: number; lng: number } | null | undefined):
+  | { lat: number; lng: number }
+  | undefined {
+  if (!origin || !Number.isFinite(origin.lat) || !Number.isFinite(origin.lng)) {
+    return undefined;
+  }
+  // Position objects can originate from MapLibre/browser geolocation and
+  // carry display-only metadata such as `accuracyMeters`. Build a minimal
+  // routing payload rather than returning that runtime object by reference.
+  return { lat: origin.lat, lng: origin.lng };
+}
+
+/** A stale browser tab can retain an old or corrupt session value. Sessions
+ * are an optional convenience, never a reason to reject a new rider query. */
+function validOpaqueId(value: string | null, maxLength: number): string | undefined {
+  return value && value.length <= maxLength ? value : undefined;
 }
 
 /** Injection point for the dev harness: replaces the real fetch/SSE
@@ -368,6 +403,7 @@ export interface UseAgentChatResult {
   messages: ChatTurn[];
   send: (text: string) => void;
   cancel: () => void;
+  reset: () => void;
   isStreaming: boolean;
   error: string | null;
   sessionId: string | null;
@@ -411,10 +447,10 @@ export function useAgentChat(options: UseAgentChatOptions = {}): UseAgentChatRes
     dispatch({ type: "turn_started", text: trimmed });
 
     const request: AgentChatRequestBody = {
-      session_id: state.sessionId ?? undefined,
+      session_id: validOpaqueId(state.sessionId, 128),
       message: trimmed,
-      origin: getOrigin?.() ?? undefined,
-      selected_card_id: cardId ?? undefined,
+      origin: validOrigin(getOrigin?.()),
+      selected_card_id: validOpaqueId(cardId, 64),
     };
 
     void runTurn(transport, request, controller, dispatch, inFlightRef, abortControllerRef);
@@ -422,6 +458,20 @@ export function useAgentChat(options: UseAgentChatOptions = {}): UseAgentChatRes
 
   function cancel(): void {
     abortControllerRef.current?.abort();
+  }
+
+  function reset(): void {
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    inFlightRef.current = false;
+    setSelectedCardId(null);
+    localTurnSeqRef.current = 0;
+    try {
+      safeSessionStorage()?.removeItem?.(SESSION_STORAGE_KEY);
+    } catch {
+      // A fresh in-memory state is still useful when storage is unavailable.
+    }
+    dispatch({ type: "chat_reset" });
   }
 
   function selectCard(cardId: string): void {
@@ -442,6 +492,7 @@ export function useAgentChat(options: UseAgentChatOptions = {}): UseAgentChatRes
     messages: state.messages,
     send,
     cancel,
+    reset,
     isStreaming: state.isStreaming,
     error: state.error,
     sessionId: state.sessionId,

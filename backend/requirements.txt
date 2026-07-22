@@ -12,6 +12,7 @@ anthropic==0.79.0
 elevenlabs==2.39.0
 xai-sdk==1.7.0
 python-dotenv==1.2.1
+tzdata==2026.3
 geopy==2.4.1
 psycopg2-binary==2.9.11
 # Dev-only: parses backend/evals/golden_queries.yaml for the manual Layer-2

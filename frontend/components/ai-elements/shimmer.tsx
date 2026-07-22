@@ -29,7 +29,7 @@ export type ShimmerProps = {
 const SHIMMER_TEXT_STYLE: CSSProperties = {
   display: "inline-block",
   backgroundImage:
-    "linear-gradient(90deg, rgba(255,255,255,.92) 0%, rgba(255,255,255,.40) 50%, rgba(255,255,255,.92) 100%)",
+    "var(--shimmer-gradient, linear-gradient(90deg, rgba(255,255,255,.92) 0%, rgba(255,255,255,.40) 50%, rgba(255,255,255,.92) 100%))",
   backgroundSize: "200% 100%",
   WebkitBackgroundClip: "text",
   backgroundClip: "text",

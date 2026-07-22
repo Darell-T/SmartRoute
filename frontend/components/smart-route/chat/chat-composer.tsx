@@ -15,31 +15,18 @@
    fake keyboard event.
    ════════════════════════════════════════════════════════════════════════ */
 
-import { Mic, Square } from "lucide-react";
+import { ArrowUp, Microphone, Square } from "iconoir-react";
 import {
   PromptInput,
   PromptInputActions,
   PromptInputTextarea,
 } from "@/components/prompt-kit/prompt-input";
+import { Button } from "@/components/ui/button";
 import { useVoiceInput } from "@/lib/use-voice-input";
 
 const MAX_MESSAGE_LENGTH = 500;
 // ~4 lines at the composer's 15px/1.55 type + vertical padding.
 const TEXTAREA_MAX_HEIGHT = 112;
-
-function SendGlyph() {
-  return (
-    <svg width={16} height={16} viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path
-        d="M8 13V3M8 3 3.5 7.5M8 3l4.5 4.5"
-        stroke="currentColor"
-        strokeWidth={1.8}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
 
 export function ChatComposer({
   value,
@@ -83,31 +70,36 @@ export function ChatComposer({
       />
       <PromptInputActions className="sr-chat-composer__actions">
         {voice.isSupported && (
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="icon"
             className="sr-chat-mic-button"
             data-listening={voice.isListening ? "true" : "false"}
             aria-label={voice.isListening ? "Listening" : "Use voice input"}
             aria-pressed={voice.isListening}
             onClick={voice.start}
           >
-            <Mic size={16} strokeWidth={1.8} aria-hidden="true" />
-          </button>
+            <Microphone width={19} height={19} strokeWidth={1.7} aria-hidden="true" />
+          </Button>
         )}
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="icon"
           className="sr-chat-send-button"
           data-mode={isStreaming ? "stop" : "send"}
+          data-ready={canSend ? "true" : "false"}
           aria-label={isStreaming ? "Stop" : "Send message"}
           disabled={!isStreaming && !canSend}
           onClick={isStreaming ? onCancel : submit}
         >
           {isStreaming ? (
-            <Square size={13} strokeWidth={2} fill="currentColor" aria-hidden="true" />
+            <Square width={14} height={14} strokeWidth={2} fill="currentColor" aria-hidden="true" />
           ) : (
-            <SendGlyph />
+            <ArrowUp width={18} height={18} strokeWidth={1.9} aria-hidden="true" />
           )}
-        </button>
+        </Button>
       </PromptInputActions>
     </PromptInput>
   );

@@ -1,93 +1,97 @@
 "use client";
 
 /**
- * Chat tab theme (dark/light), independent of the rest of the app (which is
- * dark-only). Dark is the hard default; on first visit (no stored
- * preference) the OS `prefers-color-scheme: light` signal is honored once.
- * After that the rider's explicit choice always wins, persisted under
- * `sr-theme` in localStorage.
+ * Shared SmartRoute workspace theme.
  *
- * Modeled as a tiny external store (`useSyncExternalStore`) rather than
- * `useState` + a mount `useEffect`: `getServerSnapshot` always returns
- * "dark", so server and first client render agree (no hydration
- * mismatch), and `getSnapshot` reads the real stored/OS preference — React
- * reconciles the two before paint with no manual effect needed. `toggleTheme`
- * writes through to localStorage and notifies subscribers directly.
+ * One provider owns the state for navigation, chat, the Route/Alerts panel,
+ * and the map. The first render is dark on both server and client; the stored
+ * or OS preference is restored on the first client frame, then explicit
+ * choices persist under `sr-theme` in localStorage.
  */
 
-import { useSyncExternalStore } from "react";
+import {
+  createContext,
+  createElement,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 
 const STORAGE_KEY = "sr-theme";
 
-export type ChatTheme = "dark" | "light";
+export type SmartRouteTheme = "dark" | "light";
+/** @deprecated Use SmartRouteTheme for new shared-workspace consumers. */
+export type ChatTheme = SmartRouteTheme;
 
-function isChatTheme(value: unknown): value is ChatTheme {
+function isSmartRouteTheme(value: unknown): value is SmartRouteTheme {
   return value === "dark" || value === "light";
 }
 
-function readStoredTheme(): ChatTheme | null {
+function readInitialTheme(): SmartRouteTheme {
   try {
     const stored = window.localStorage.getItem(STORAGE_KEY);
-    return isChatTheme(stored) ? stored : null;
+    if (isSmartRouteTheme(stored)) return stored;
   } catch {
-    return null;
+    // Storage may be unavailable in embedded/private browser contexts.
   }
-}
 
-function readInitialTheme(): ChatTheme {
-  const stored = readStoredTheme();
-  if (stored) return stored;
   try {
     if (window.matchMedia?.("(prefers-color-scheme: light)").matches) return "light";
   } catch {
-    // matchMedia unavailable in some embedded webviews — fall through.
+    // matchMedia may be unavailable in embedded webviews.
   }
+
   return "dark";
 }
 
-type Listener = () => void;
-const listeners = new Set<Listener>();
-// Lazily computed on first client read (readInitialTheme touches
-// window/localStorage, so it must never run during SSR); cached after that
-// so every hook instance and re-render agree without re-reading storage.
-let cachedTheme: ChatTheme | null = null;
-
-function subscribe(listener: Listener): () => void {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
-}
-
-function getSnapshot(): ChatTheme {
-  if (cachedTheme === null) cachedTheme = readInitialTheme();
-  return cachedTheme;
-}
-
-function getServerSnapshot(): ChatTheme {
-  return "dark";
-}
-
-function setTheme(next: ChatTheme): void {
-  cachedTheme = next;
+function persistTheme(next: SmartRouteTheme): void {
   try {
     window.localStorage.setItem(STORAGE_KEY, next);
   } catch {
-    // Storage blocked/full: the toggle still works for this session, it
-    // just won't survive a refresh. Not worth surfacing to the rider.
+    // The in-memory choice still works for this session.
   }
-  for (const listener of listeners) listener();
 }
 
 export interface UseChatThemeResult {
-  theme: ChatTheme;
+  theme: SmartRouteTheme;
   toggleTheme: () => void;
 }
 
-export function useChatTheme(): UseChatThemeResult {
-  const theme = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+const SmartRouteThemeContext = createContext<UseChatThemeResult | null>(null);
 
-  function toggleTheme(): void {
-    setTheme(theme === "dark" ? "light" : "dark");
-  }
+export function SmartRouteThemeProvider({ children }: { children: ReactNode }) {
+  const [theme, setTheme] = useState<SmartRouteTheme>("dark");
 
-  return { theme, toggleTheme };
+  useEffect(() => {
+    const initialTheme = readInitialTheme();
+    if (initialTheme === "dark") return;
+    const frame = window.requestAnimationFrame(() => setTheme(initialTheme));
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+
+  const toggleTheme = useCallback(() => {
+    setTheme((currentTheme) => {
+      const nextTheme = currentTheme === "dark" ? "light" : "dark";
+      persistTheme(nextTheme);
+      return nextTheme;
+    });
+  }, []);
+
+  const value = useMemo(() => ({ theme, toggleTheme }), [theme, toggleTheme]);
+
+  return createElement(SmartRouteThemeContext.Provider, { value }, children);
 }
+
+export function useSmartRouteTheme(): UseChatThemeResult {
+  const context = useContext(SmartRouteThemeContext);
+  if (!context) {
+    throw new Error("useSmartRouteTheme must be used within SmartRouteThemeProvider");
+  }
+  return context;
+}
+
+/** @deprecated Kept for compatibility with chat-specific imports. */
+export const useChatTheme = useSmartRouteTheme;

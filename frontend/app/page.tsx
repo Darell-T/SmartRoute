@@ -8,14 +8,26 @@ import { useLiveFeed } from "@/lib/use-live-feed";
 import { useServiceAlerts } from "@/lib/use-service-alerts";
 import { deriveTransitRouteIds } from "@/lib/route-planning";
 import { summarizeRoute } from "@/lib/smart-route";
-import { useAgentChat } from "@/lib/use-agent-chat";
-import { useChatTheme } from "@/lib/use-chat-theme";
+import { useAgentChat, type ArrivalsTurnPayload } from "@/lib/use-agent-chat";
+import {
+  SmartRouteThemeProvider,
+  useSmartRouteTheme,
+} from "@/lib/use-chat-theme";
 import type { RouteCard } from "@/lib/agent-chat-stream";
-import { agentRouteFromCard, type AgentRouteSelection } from "@/lib/agent-route-selection";
+import {
+  agentRoutePlanFromCards,
+  normalizeRouteCoordinate,
+} from "@/lib/agent-route-selection";
 import { type RouteRailStatus } from "@/components/smart-route/left-rail";
 import { buildLeftRailData } from "@/components/smart-route/left-rail/live-data";
 import { ChatPanel } from "@/components/smart-route/chat/chat-panel";
-import { TabToggle } from "@/components/smart-route/chat/tab-toggle";
+import { ChatSidebar } from "@/components/smart-route/chat/chat-sidebar";
+import { SUBWAY_BULLET_ROUTES } from "@/components/smart-route/train-bullet";
+import {
+  buildArrivalsPayloadForRoute,
+  deriveNearbyRouteIds,
+  stationNameForRoute,
+} from "@/components/smart-route/chat/near-you";
 
 import { LiveWorkspace } from "@/components/smart-route/page/live-workspace";
 import { useMobileRailSheet } from "@/components/smart-route/page/use-mobile-rail-sheet";
@@ -24,11 +36,21 @@ import { useRoutePlanningController } from "@/components/smart-route/page/use-ro
 import { type AppTab, type MapActions } from "./page-parts";
 
 export default function SmartRoutePage() {
+  return (
+    <SmartRouteThemeProvider>
+      <SmartRoutePageContent />
+    </SmartRouteThemeProvider>
+  );
+}
+
+function SmartRoutePageContent() {
   const [userLocation, setUserLocation] = useState<{
     lng: number;
     lat: number;
   } | null>(null);
   const [activeTab, setActiveTab] = useState<AppTab>("chat");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [newTripKey, setNewTripKey] = useState(0);
   const mapActionsRef = useRef<MapActions | null>(null);
   const liveMapFrameRef = useRef<HTMLElement | null>(null);
   const mobileRail = useMobileRailSheet();
@@ -57,17 +79,9 @@ export default function SmartRoutePage() {
 
   const activeRouteSteps = activeRouteCandidate?.steps ?? plannedRouteSteps;
 
-  // The agent-selected route (a tapped chat route card) never enters the
-  // rail's own state -- the rail must stay in standby for agent routes so
-  // rail and map never disagree about what's "the" active route (see the
-  // build plan's "Card->map wiring" section). It only ever overrides what
-  // the map itself renders, below.
-  const [agentRoute, setAgentRoute] = useState<AgentRouteSelection | null>(null);
-
   const routeData = useMemo<TransitRouteData | null>(() => {
-    if (agentRoute) return { steps: agentRoute.steps };
     return activeRouteSteps.length > 0 ? { steps: activeRouteSteps } : null;
-  }, [agentRoute, activeRouteSteps]);
+  }, [activeRouteSteps]);
 
   const summary = useMemo(
     () =>
@@ -78,15 +92,13 @@ export default function SmartRoutePage() {
   );
 
   const destCoords = useMemo(() => {
-    if (agentRoute) return agentRoute.destCoords;
     const lastStep = activeRouteSteps[activeRouteSteps.length - 1];
     const rawDest =
       lastStep?.type === "WALK" ? lastStep.end_point : lastStep?.arrival_coords;
-    if (rawDest) {
-      return { lat: rawDest.latitude, lng: rawDest.longitude };
-    }
+    const stepDestination = normalizeRouteCoordinate(rawDest);
+    if (stepDestination) return stepDestination;
     return selectedDestination?.coordinates ?? null;
-  }, [agentRoute, activeRouteSteps, selectedDestination]);
+  }, [activeRouteSteps, selectedDestination]);
 
   const activeRouteIds = useMemo(
     () => deriveTransitRouteIds(activeRouteSteps),
@@ -232,57 +244,136 @@ export default function SmartRoutePage() {
   }
 
   const chat = useAgentChat({ getOrigin: () => userLocation });
-  const { theme, toggleTheme } = useChatTheme();
+  const { theme, toggleTheme } = useSmartRouteTheme();
+
+  const nearbyRouteIds = useMemo(
+    () =>
+      deriveNearbyRouteIds(leftRailData).filter((routeId) =>
+        SUBWAY_BULLET_ROUTES.has(routeId),
+      ),
+    [leftRailData],
+  );
 
   const openLiveMap = useCallback(() => setActiveTab("livemap"), []);
+  const openChat = useCallback(() => setActiveTab("chat"), []);
 
-  // Card tap -> map handoff. Clearing the rail's route FIRST (before setting
-  // agentRoute) guarantees the rail drops to standby the instant an agent
-  // route takes over the map, so the two never show conflicting routes.
-  const handleSelectRouteCard = useCallback(
-    (card: RouteCard) => {
-      const selection = agentRouteFromCard(card);
-      if (!selection) return;
-      routePlanning.handleClearRoute();
-      setAgentRoute(selection);
+  const startNewTrip = useCallback(() => {
+    chat.reset();
+    routePlanning.handleClearRoute();
+    setNewTripKey((key) => key + 1);
+    setActiveTab("chat");
+  }, [chat, routePlanning]);
+
+  const handleSelectNearbyLine = useCallback(
+    (routeId: string) => {
+      const normalizedRouteId = routeId.toUpperCase();
+      const nearbyGroup = leftRailData.nearbyTransitGroups.find((group) =>
+        group.routeIds.some((id) => id.toUpperCase() === normalizedRouteId),
+      );
+      const stationName = stationNameForRoute(
+        normalizedRouteId,
+        leftRailData.nearbyTransitGroups,
+        liveFeed.nearestStop?.stop_name ?? "Nearest station",
+      );
+      const stop =
+        liveFeed.stops.find(
+          (candidate) =>
+            candidate.stop_name === stationName &&
+            candidate.route_ids.some((id) => id.toUpperCase() === normalizedRouteId),
+        ) ??
+        liveFeed.stops.find((candidate) =>
+          candidate.route_ids.some((id) => id.toUpperCase() === normalizedRouteId),
+        ) ??
+        liveFeed.nearestStop;
+      const stationCoordinates =
+        typeof stop?.stop_lat === "number" && typeof stop.stop_lon === "number"
+          ? { lat: stop.stop_lat, lng: stop.stop_lon }
+          : undefined;
+      const distanceMiles =
+        nearbyGroup?.distanceMiles ??
+        (typeof stop?.distance_m === "number" ? stop.distance_m / 1609.344 : undefined);
+      const walkMinutes =
+        nearbyGroup?.walkMinutes ??
+        (typeof stop?.distance_m === "number"
+          ? Math.max(1, Math.round(stop.distance_m / 80))
+          : undefined);
+
+      const arrivals = buildArrivalsPayloadForRoute(
+        normalizedRouteId,
+        leftRailData.arrivals,
+        stationName,
+        { walkMinutes, distanceMiles, coordinates: stationCoordinates },
+      );
+      chat.appendLocalTurn({
+        text: `Here are the next ${normalizedRouteId} trains at ${stationName}.`,
+        arrivals,
+      });
+      setActiveTab("chat");
+    },
+    [chat, leftRailData, liveFeed.nearestStop, liveFeed.stops],
+  );
+
+  const handleOpenNearbyStation = useCallback(
+    (arrivals: ArrivalsTurnPayload) => {
+      if (!arrivals.stationCoordinates) {
+        setActiveTab("livemap");
+        return;
+      }
+      routePlanning.handleSearchSubmit(`${arrivals.stationName} station`, {
+        label: `${arrivals.stationName} station`,
+        coordinates: arrivals.stationCoordinates,
+      });
       setActiveTab("livemap");
     },
     [routePlanning],
   );
 
-  // Thin wrappers around the rail's three manual route entry points so a
-  // manual search / alternative pick / clear always drops any agent route
-  // first -- rail and map must never disagree about which route is "the"
-  // active one. The controller itself (use-route-planning-controller.ts) is
-  // untouched; this only intercepts what page.tsx hands down to LiveWorkspace.
-  const manualRoutePlanning = useMemo(
-    () => ({
-      ...routePlanning,
-      handleSearchSubmit: (
-        ...args: Parameters<typeof routePlanning.handleSearchSubmit>
-      ) => {
-        setAgentRoute(null);
-        routePlanning.handleSearchSubmit(...args);
-      },
-      handleSelectAlternative: (
-        ...args: Parameters<typeof routePlanning.handleSelectAlternative>
-      ) => {
-        setAgentRoute(null);
-        routePlanning.handleSelectAlternative(...args);
-      },
-      handleClearRoute: () => {
-        setAgentRoute(null);
-        routePlanning.handleClearRoute();
-      },
-    }),
-    [routePlanning],
+  // Card tap -> the same route model used by manual planning. This lets the
+  // map, detailed rail steps, and alternatives stay synchronized while chat
+  // remains mounted for follow-up questions.
+  const handleSelectRouteCard = useCallback(
+    (card: RouteCard) => {
+      const sourceTurn = [...chat.messages]
+        .reverse()
+        .find(
+          (turn) =>
+            turn.role === "assistant" &&
+            turn.routeCards.some((candidate) => candidate.card_id === card.card_id),
+        );
+      const plan = agentRoutePlanFromCards(
+        sourceTurn?.role === "assistant" ? sourceTurn.routeCards : [card],
+        card.card_id,
+      );
+      if (!plan) return;
+      routePlanning.handleLoadExternalRoutes(plan);
+      setActiveTab("livemap");
+    },
+    [chat.messages, routePlanning],
   );
 
   const isLivemapTab = activeTab === "livemap";
 
   return (
     <MotionConfig reducedMotion="user">
-      <div className="sr-tab-shell" data-tab={activeTab}>
+      <div
+        className="sr-tab-shell"
+        data-tab={activeTab}
+        data-sr-theme={theme}
+        data-sidebar-collapsed={sidebarCollapsed ? "true" : "false"}
+      >
+        <ChatSidebar
+          activeTab={activeTab}
+          collapsed={sidebarCollapsed}
+          theme={theme}
+          onOpenChat={openChat}
+          onOpenLiveMap={openLiveMap}
+          onNewTrip={startNewTrip}
+          nearbyRouteIds={nearbyRouteIds}
+          onSelectNearbyLine={handleSelectNearbyLine}
+          onToggleCollapsed={() => setSidebarCollapsed((collapsed) => !collapsed)}
+          onToggleTheme={toggleTheme}
+        />
+
         <div
           className={`sr-app-shell sr-tab-shell__panel sr-tab-shell__panel--livemap${
             isLivemapTab ? "" : " sr-tab-shell__panel--hidden"
@@ -299,7 +390,7 @@ export default function SmartRoutePage() {
         >
           <LiveWorkspace
             mobileRail={mobileRail}
-            routePlanning={manualRoutePlanning}
+            routePlanning={routePlanning}
             leftRailData={leftRailData}
             routeStatus={routeStatus}
             hasActiveRoute={Boolean(summary)}
@@ -323,19 +414,14 @@ export default function SmartRoutePage() {
           inert={isLivemapTab ? true : undefined}
         >
           <ChatPanel
+            key={newTripKey}
             chat={chat}
             theme={theme}
-            onToggleTheme={toggleTheme}
-            nearbyTransitGroups={leftRailData.nearbyTransitGroups ?? []}
-            nearbyArrivals={leftRailData.arrivals}
-            nearbyBusArrivals={leftRailData.nearbyBusArrivals ?? []}
-            nearestStopName={leftRailData.station.name}
             onOpenLiveMap={openLiveMap}
             onSelectRouteCard={handleSelectRouteCard}
+            onOpenNearbyStation={handleOpenNearbyStation}
           />
         </div>
-
-        <TabToggle activeTab={activeTab} onChange={setActiveTab} />
       </div>
     </MotionConfig>
   );
