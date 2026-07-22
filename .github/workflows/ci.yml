@@ -44,3 +44,25 @@ jobs:
           python-version: "3.12"
       - run: pip install -r requirements.txt -r requirements-dev.txt
       - run: python -m pytest -q
+      - name: Run deterministic route-intelligence replays
+        run: >-
+          python -m scripts.replay_route_intelligence
+          --json-out validation-results.json
+          --text-out validation-report.txt
+          --metrics-out validation-metrics.json
+          --ablations-out validation-ablations.json
+      - name: Preserve deterministic validation reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: route-intelligence-validation
+          path: |
+            backend/validation-results.json
+            backend/validation-report.txt
+            backend/validation-metrics.json
+            backend/validation-ablations.json
+          # A pytest/setup failure can prevent the replay step from creating
+          # artifacts. Preserve them when available without masking the
+          # original failure with a second upload error.
+          if-no-files-found: warn
+          retention-days: 14

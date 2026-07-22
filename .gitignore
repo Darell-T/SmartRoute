@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+backend/.venv/
 
 # Large GTFS static data files (downloaded at runtime)
 backend/data/gtfs_static/stop_times.txt
@@ -90,6 +91,13 @@ frontend/scripts/qa/screenshots/
 # Local browser profiles + python cache (QA/screenshot scratch)
 .tmp-chrome-*/
 .pytest_cache/
+
+# Deterministic route-intelligence reports are generated per run and uploaded
+# by CI; keep local timing-bearing copies out of commits.
+backend/validation-results.json
+backend/validation-report.txt
+backend/validation-metrics.json
+backend/validation-ablations.json
 
 # Internal design/planning docs + agent session data (not for the deployed repo)
 docs/

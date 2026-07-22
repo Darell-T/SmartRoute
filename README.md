@@ -352,18 +352,22 @@ Backend checks:
 
 ```bash
 cd backend
+python -m pip install -r requirements.txt -r requirements-dev.txt
 python -m pytest -q
 ```
 
-Focused city-intelligence checks (the repository test suite uses `unittest`; use the
-project virtual environment if your shell does not resolve the installed packages):
+The canonical backend runner is pytest. Use the project virtual environment if
+your global Python installation does not include the declared test dependencies.
+The deterministic route-intelligence suite and its opt-in live certification
+commands are documented in [Route-intelligence validation](docs/intelligence-validation.md).
+
+Focused city-intelligence checks:
 
 ```bash
 cd backend
-python -m unittest -v tests.test_ny511
-python -m unittest -v tests.test_incident_context_matching tests.test_incident_monitor tests.test_trips_incidents
-python -m unittest -v tests.test_ticketmaster_event_lookup tests.test_agent_tools_p1 tests.test_agent_tools_p2 tests.test_agent_prompt
-python -m unittest discover -s tests -v
+python -m pytest -q tests/test_ny511.py
+python -m pytest -q tests/test_incident_context_matching.py tests/test_incident_monitor.py tests/test_trips_incidents.py
+python -m scripts.replay_route_intelligence stalled-subway
 ```
 
 To run the optional Ticketmaster smoke test deliberately (never in CI by default):
@@ -381,7 +385,7 @@ $env:TICKETMASTER_LIVE_SMOKE_TEST = "1"
 python -m unittest -v tests.test_ticketmaster_event_lookup.TicketmasterLiveSmokeTest
 ```
 
-CI runs frontend artifact generation, typecheck, unit tests, lint, transit artifact verification, build, and backend pytest. Some local machines may need project dependencies installed before the full suite can run.
+CI runs frontend artifact generation, typecheck, unit tests, lint, transit artifact verification, build, backend pytest, and the offline route-intelligence replay suite. Some local machines may need project dependencies installed before the full suite can run.
 
 ## Data Sources
 
