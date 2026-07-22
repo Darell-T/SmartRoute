@@ -119,6 +119,29 @@ class NormalizationTests(TestCase):
         self.assertTrue(settings.enabled)
         self.assertEqual(settings.poll_interval_seconds, 60.0)
 
+    def test_non_finite_numeric_configuration_disables_source(self):
+        variables = (
+            "NY511_POLL_INTERVAL_SECONDS",
+            "NY511_REQUEST_TIMEOUT_SECONDS",
+            "NY511_STALE_AFTER_SECONDS",
+            "NY511_MAX_STALE_SECONDS",
+            "NY511_NYC_BUFFER_DEGREES",
+        )
+        for variable in variables:
+            for value in ("nan", "inf", "-inf"):
+                with self.subTest(variable=variable, value=value), patch.dict(
+                    "os.environ",
+                    {"NY511_API_KEY": "configured", variable: value},
+                    clear=True,
+                ):
+                    settings = NY511Settings.from_env()
+                    self.assertFalse(settings.enabled)
+                    self.assertEqual(
+                        settings.diagnostic,
+                        "invalid 511NY numeric configuration",
+                    )
+                    self.assertNotIn("configured", settings.diagnostic or "")
+
     def test_base_url_cannot_include_another_host_or_credential_query(self):
         with patch.dict("os.environ", {"NY511_API_KEY": "configured", "NY511_API_BASE_URL": "https://example.test/event"}, clear=True):
             self.assertFalse(NY511Settings.from_env().enabled)

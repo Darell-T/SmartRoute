@@ -87,6 +87,13 @@ class IncidentSnapshot(BaseModel):
     last_error: str | None = None
 
 
+def _finite_env_float(name: str, default: float) -> float:
+    value = float(os.getenv(name, default))
+    if not math.isfinite(value):
+        raise ValueError(f"{name} must be finite")
+    return value
+
+
 @dataclass(frozen=True)
 class NY511Settings:
     api_key: str | None
@@ -118,11 +125,39 @@ class NY511Settings:
             return cls(api_key=key, enabled=False, diagnostic="invalid API base URL")
 
         try:
-            poll_interval = max(60.0, float(os.getenv("NY511_POLL_INTERVAL_SECONDS", DEFAULT_POLL_INTERVAL_SECONDS)))
-            timeout = max(1.0, float(os.getenv("NY511_REQUEST_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS)))
-            stale_after = max(1.0, float(os.getenv("NY511_STALE_AFTER_SECONDS", DEFAULT_STALE_AFTER_SECONDS)))
-            max_stale = max(stale_after, float(os.getenv("NY511_MAX_STALE_SECONDS", DEFAULT_MAX_STALE_SECONDS)))
-            buffer = max(0.0, min(0.25, float(os.getenv("NY511_NYC_BUFFER_DEGREES", DEFAULT_NYC_BUFFER_DEGREES))))
+            poll_interval = max(
+                60.0,
+                _finite_env_float(
+                    "NY511_POLL_INTERVAL_SECONDS", DEFAULT_POLL_INTERVAL_SECONDS
+                ),
+            )
+            timeout = max(
+                1.0,
+                _finite_env_float(
+                    "NY511_REQUEST_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS
+                ),
+            )
+            stale_after = max(
+                1.0,
+                _finite_env_float(
+                    "NY511_STALE_AFTER_SECONDS", DEFAULT_STALE_AFTER_SECONDS
+                ),
+            )
+            max_stale = max(
+                stale_after,
+                _finite_env_float(
+                    "NY511_MAX_STALE_SECONDS", DEFAULT_MAX_STALE_SECONDS
+                ),
+            )
+            buffer = max(
+                0.0,
+                min(
+                    0.25,
+                    _finite_env_float(
+                        "NY511_NYC_BUFFER_DEGREES", DEFAULT_NYC_BUFFER_DEGREES
+                    ),
+                ),
+            )
         except ValueError:
             return cls(api_key=key, enabled=False, diagnostic="invalid 511NY numeric configuration")
 
