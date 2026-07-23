@@ -3,9 +3,9 @@
 /* ════════════════════════════════════════════════════════════════════════
    SmartRoute chat — recommended itinerary card
 
-   Compact, curated inline recommendation preview (not a full itinerary
-   panel). Flat charcoal surface, official MTA bullets, condensed journey
-   chunks, Motion entrance with reduced-motion support.
+   Quiet data card: one curated journey preview. No timeline chrome, no
+   liquid glass. Official MTA bullets, tabular metrics, restrained accent.
+   Motion entrance with reduced-motion support.
    ════════════════════════════════════════════════════════════════════════ */
 
 import { useId, useMemo } from "react";
@@ -76,7 +76,7 @@ function EventModeVisual({ event }: { event: ItineraryEvent }) {
   }
 
   if (event.routeIds.length === 0) {
-    return null;
+    return <span className="sr-itinerary-card__mode-spacer" aria-hidden="true" />;
   }
 
   return (
@@ -95,57 +95,36 @@ function EventModeVisual({ event }: { event: ItineraryEvent }) {
   );
 }
 
+/** Single-line data row: mode · place · duration. No timeline rail. */
 function PreviewRow({
   event,
-  isFirst,
-  isLast,
   index,
   reduceMotion,
 }: {
   event: ItineraryEvent;
-  isFirst: boolean;
-  isLast: boolean;
   index: number;
   reduceMotion: boolean;
 }) {
-  const nodeClass = [
-    "sr-itinerary-card__node",
-    isFirst ? "sr-itinerary-card__node--start" : "",
-    isLast ? "sr-itinerary-card__node--end" : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-
-  const showInlineTitle = event.kind === "walk" || event.kind === "pickup";
-
-  return (
+return (
     <motion.li
       className="sr-itinerary-card__event"
       data-kind={event.kind}
-      initial={reduceMotion ? false : { opacity: 0, y: 4 }}
+      initial={reduceMotion ? false : { opacity: 0, y: 3 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.24, delay: reduceMotion ? 0 : 0.05 + index * 0.03, ease: EASE_OUT }}
+      transition={{ duration: 0.22, delay: reduceMotion ? 0 : 0.04 + index * 0.03, ease: EASE_OUT }}
     >
-      <span className="sr-itinerary-card__rail" aria-hidden="true">
-        <span className={nodeClass} />
-      </span>
-      <div className="sr-itinerary-card__event-body">
-        <div className="sr-itinerary-card__event-main">
-          <div className="sr-itinerary-card__event-lead">
-            <EventModeVisual event={event} />
-            {showInlineTitle && (
-              <span className="sr-itinerary-card__event-title">{event.title}</span>
-            )}
-          </div>
-          {event.durationLabel && (
-            <span className="sr-itinerary-card__event-duration">{event.durationLabel}</span>
-          )}
+      <div className="sr-itinerary-card__event-lead">
+        <EventModeVisual event={event} />
+        <div className="sr-itinerary-card__event-copy">
+          <span className="sr-itinerary-card__event-title">{event.title}</span>
+          {event.subtitle ? (
+            <span className="sr-itinerary-card__event-sub">{event.subtitle}</span>
+          ) : null}
         </div>
-        {!showInlineTitle && event.title && (
-          <p className="sr-itinerary-card__event-path">{event.title}</p>
-        )}
-        {event.subtitle && <p className="sr-itinerary-card__event-sub">{event.subtitle}</p>}
       </div>
+      {event.durationLabel && (
+        <span className="sr-itinerary-card__event-duration">{event.durationLabel}</span>
+      )}
     </motion.li>
   );
 }
@@ -186,83 +165,80 @@ function ItineraryCardShell({
       data-role={model.recommended ? "recommended" : "alternative"}
       data-selected={isSelected ? "true" : "false"}
       aria-labelledby={titleId}
-      initial={reduceMotion ? false : { opacity: 0, y: 10, scale: 0.99 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
+      initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
       transition={{
-        duration: 0.36,
+        duration: 0.32,
         delay: reduceMotion ? 0 : landDelayMs / 1000,
         ease: EASE_OUT,
       }}
     >
-      {model.recommended && (
-        <span className="sr-itinerary-card__badge">Recommended</span>
-      )}
-
-      <div className="sr-itinerary-card__summary">
-        <JourneyTitle names={model.placeNames} id={titleId} />
-
-        {model.arrivalLabel && (
-          <p className="sr-itinerary-card__arrive">Arrive {model.arrivalLabel}</p>
+      <header className="sr-itinerary-card__header">
+        {model.recommended && (
+          <span className="sr-itinerary-card__badge">Recommended</span>
         )}
+        <JourneyTitle names={model.placeNames} id={titleId} />
+      </header>
 
+      <div className="sr-itinerary-card__metrics">
         <p className="sr-itinerary-card__duration">
           <span className="sr-itinerary-card__duration-value">{model.durationLabel}</span>
         </p>
-
-        {model.metaParts.length > 0 && (
-          <p className="sr-itinerary-card__meta">
-            {model.metaParts.map((part, index) => (
-              <span key={part}>
-                {index > 0 && (
-                  <span className="sr-itinerary-card__meta-sep" aria-hidden="true">
-                    {" "}
-                    ·{" "}
-                  </span>
-                )}
-                <span>{part}</span>
-              </span>
-            ))}
-          </p>
-        )}
+        <div className="sr-itinerary-card__metrics-side">
+          {model.arrivalLabel && (
+            <p className="sr-itinerary-card__arrive">
+              <span className="sr-itinerary-card__arrive-label">Arrive</span>
+              <span className="sr-itinerary-card__arrive-value">{model.arrivalLabel}</span>
+            </p>
+          )}
+          {model.metaParts.length > 0 && (
+            <p className="sr-itinerary-card__meta">
+              {model.metaParts.map((part, index) => (
+                <span key={part}>
+                  {index > 0 && (
+                    <span className="sr-itinerary-card__meta-sep" aria-hidden="true">
+                      {" "}
+                      ·{" "}
+                    </span>
+                  )}
+                  <span>{part}</span>
+                </span>
+              ))}
+            </p>
+          )}
+        </div>
       </div>
 
       {model.events.length > 0 && (
-        <>
-          <div className="sr-itinerary-card__divider" role="presentation" />
-          <ol className="sr-itinerary-card__timeline" aria-label="Route preview">
-            {model.events.map((event, index) => (
-              <PreviewRow
-                key={event.id}
-                event={event}
-                index={index}
-                isFirst={index === 0}
-                isLast={index === model.events.length - 1}
-                reduceMotion={reduceMotion}
-              />
-            ))}
-          </ol>
-        </>
+        <ol className="sr-itinerary-card__timeline" aria-label="Route preview">
+          {model.events.map((event, index) => (
+            <PreviewRow
+              key={event.id}
+              event={event}
+              index={index}
+              reduceMotion={reduceMotion}
+            />
+          ))}
+        </ol>
       )}
-
-      <div className="sr-itinerary-card__divider" role="presentation" />
 
       {model.rationale.length > 0 && (
-        <div className="sr-itinerary-card__rationale">
-          <p className="sr-itinerary-card__rationale-label">Why this route</p>
-          <p className="sr-itinerary-card__rationale-text">
+        <p className="sr-itinerary-card__rationale">
+          <span className="sr-itinerary-card__rationale-label">Why</span>
+          <span className="sr-itinerary-card__rationale-text">
             {model.rationale.join(" · ")}
-          </p>
-        </div>
+          </span>
+        </p>
       )}
 
-      <div className="sr-itinerary-card__actions">
+      <footer className="sr-itinerary-card__actions">
         <button
           type="button"
           className="sr-itinerary-card__secondary"
           onClick={onViewDetails}
         >
           {model.secondaryActionLabel}
-          <ChevronRight size={13} strokeWidth={2} aria-hidden="true" />
+          <ChevronRight size={12} strokeWidth={2.25} aria-hidden="true" />
         </button>
         <button
           type="button"
@@ -271,7 +247,7 @@ function ItineraryCardShell({
         >
           {model.primaryActionLabel}
         </button>
-      </div>
+      </footer>
     </motion.article>
   );
 }
@@ -359,15 +335,16 @@ export function ItineraryCardSkeleton() {
     <motion.div
       className="sr-itinerary-card sr-itinerary-card--skeleton"
       aria-hidden="true"
-      initial={reduceMotion ? false : { opacity: 0.55 }}
-      animate={reduceMotion ? undefined : { opacity: [0.55, 0.85, 0.55] }}
-      transition={reduceMotion ? undefined : { duration: 1.4, repeat: Infinity, ease: "easeInOut" }}
+      initial={reduceMotion ? false : { opacity: 0.5 }}
+      animate={reduceMotion ? undefined : { opacity: [0.5, 0.78, 0.5] }}
+      transition={reduceMotion ? undefined : { duration: 1.5, repeat: Infinity, ease: "easeInOut" }}
     >
       <div className="sr-itinerary-card__skel-pill" />
       <div className="sr-itinerary-card__skel-line sr-itinerary-card__skel-line--lg" />
-      <div className="sr-itinerary-card__skel-line sr-itinerary-card__skel-line--sm" />
-      <div className="sr-itinerary-card__skel-line sr-itinerary-card__skel-line--xl" />
-      <div className="sr-itinerary-card__divider" />
+      <div className="sr-itinerary-card__skel-metrics">
+        <div className="sr-itinerary-card__skel-line sr-itinerary-card__skel-line--xl" />
+        <div className="sr-itinerary-card__skel-line sr-itinerary-card__skel-line--sm" />
+      </div>
       <div className="sr-itinerary-card__skel-line" />
       <div className="sr-itinerary-card__skel-line" />
     </motion.div>
