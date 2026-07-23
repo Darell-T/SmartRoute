@@ -79,6 +79,7 @@ export function TrainBullet({
       className={className}
       title={label}
       aria-label={label}
+      role="img"
       style={{
         width: size,
         height: size,
@@ -88,9 +89,12 @@ export function TrainBullet({
         flexShrink: 0,
       }}
     >
+      {/* Decorative: accessible name lives on the wrapper to avoid duplicate SR output. */}
       <img
         src={subwayBulletSrc(line)}
-        alt={label}
+        alt=""
+        aria-hidden="true"
+        draggable={false}
         style={{
           width: size,
           height: size,

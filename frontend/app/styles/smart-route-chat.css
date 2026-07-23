@@ -50,8 +50,8 @@
   );
 
   /* Shared transit-glass material. Route cards and the composer consume the
-     same surface, border, blur, and shadow so the two primary interaction
-     surfaces cannot drift into slightly different materials. */
+       same surface, border, blur, and shadow so the two primary interaction
+       surfaces cannot drift into slightly different materials. */
   --sr-glass-surface: rgba(23, 25, 29, 0.42);
   --sr-glass-surface-hover: rgba(30, 33, 38, 0.5);
   --sr-glass-border: rgba(255, 255, 255, 0.1);
@@ -65,8 +65,7 @@
   --sr-glow-neutral: rgba(107, 181, 98, 0.035);
   --sr-glass-shadow:
     inset 0 1.5px 0 rgba(255, 255, 255, 0.12),
-    inset 0 -2px 3px rgba(0, 0, 0, 0.16),
-    0 14px 38px rgba(0, 0, 0, 0.15);
+    inset 0 -2px 3px rgba(0, 0, 0, 0.16), 0 14px 38px rgba(0, 0, 0, 0.15);
 }
 
 .sr-chat-tab[data-sr-theme="light"] {
@@ -105,8 +104,7 @@
   --sr-glow-neutral: rgba(71, 145, 74, 0.035);
   --sr-glass-shadow:
     inset 0 1.5px 0 rgba(255, 255, 255, 0.7),
-    inset 0 -1px 2px rgba(15, 16, 18, 0.06),
-    0 14px 38px rgba(28, 34, 30, 0.09);
+    inset 0 -1px 2px rgba(15, 16, 18, 0.06), 0 14px 38px rgba(28, 34, 30, 0.09);
 }
 
 /* ── shadcn variable bridge ──────────────────────────────────────────── */
@@ -141,10 +139,10 @@
 
 .sr-chat-tab button {
   /* `font-family` only (not the `font` shorthand): the shorthand also
-     resets font-size/line-height/weight, and `.sr-chat-tab button`'s
-     specificity (0,1,1) beats a single-class rule like
-     `.sr-chat-near-you__label` (0,1,0) — it was silently winning over
-     every button's explicit font-size. */
+       resets font-size/line-height/weight, and `.sr-chat-tab button`'s
+       specificity (0,1,1) beats a single-class rule like
+       `.sr-chat-near-you__label` (0,1,0) — it was silently winning over
+       every button's explicit font-size. */
   font-family: inherit;
   color: inherit;
 }
@@ -176,9 +174,9 @@
 }
 
 /* Second bar row (phones only): Near You inside the SAME container as the
-   brand and theme toggle — one border, one surface, the bar just grows.
-   Exists because the floating toggle's center reservation leaves the
-   first row's side columns too narrow for a bullet row on small screens. */
+     brand and theme toggle — one border, one surface, the bar just grows.
+     Exists because the floating toggle's center reservation leaves the
+     first row's side columns too narrow for a bullet row on small screens. */
 .sr-chat-top-bar__row2 {
   display: none;
   grid-column: 1 / -1;
@@ -226,8 +224,8 @@
 }
 
 /* Reserves space for the shell-level TabToggle, which floats above both
-   panels at the same vertical offset (see smart-route-tab-shell.css) —
-   this column keeps the brand/near-you slots from colliding with it. */
+     panels at the same vertical offset (see smart-route-tab-shell.css) —
+     this column keeps the brand/near-you slots from colliding with it. */
 .sr-chat-top-bar__toggle-slot {
   min-width: 148px;
   height: 1px;
@@ -245,7 +243,7 @@
   display: flex;
   flex-direction: column;
   /* Label ranges left so "Near you" starts exactly above the first
-     bullet; the whole cluster still sits on the bar's right side. */
+       bullet; the whole cluster still sits on the bar's right side. */
   align-items: flex-start;
   gap: 3px;
   min-width: 0;
@@ -324,14 +322,7 @@
   flex: 1 1 auto;
   min-height: 0;
   position: relative;
-  /* Barely-there ambient wash. It exists for one reason: the liquid-glass
-     route cards refract whatever sits behind them, and a perfectly flat
-     canvas gives the lens nothing to bend. Content scrolls over these
-     fixed glows, so the refraction visibly shifts as cards move. */
-  background:
-    radial-gradient(620px 420px at 78% 12%, var(--sr-glow-green), transparent 64%),
-    radial-gradient(520px 360px at 4% 86%, var(--sr-glow-orange), transparent 62%),
-    radial-gradient(460px 320px at 38% 42%, var(--sr-glow-neutral), transparent 62%);
+  background: transparent;
 }
 
 .sr-chat-thread__content {
@@ -476,7 +467,11 @@
 .sr-chat-suggestion-pill:hover,
 .sr-chat-suggestion-pill:focus-visible {
   background-color: var(--sr-chat-hover-fill);
-  border-color: color-mix(in srgb, var(--sr-chat-accent) 28%, var(--sr-chat-hairline));
+  border-color: color-mix(
+    in srgb,
+    var(--sr-chat-accent) 28%,
+    var(--sr-chat-hairline)
+  );
   transform: translateY(-1px);
   box-shadow:
     inset 0 1px rgba(255, 255, 255, 0.075),
@@ -758,7 +753,7 @@
   white-space: nowrap;
 }
 
-/* ── Route cards ─────────────────────────────────────────────────────── */
+/* ── Route cards / itinerary ─────────────────────────────────────────── */
 
 .sr-chat-route-cards {
   display: flex;
@@ -777,44 +772,468 @@
   gap: 8px;
 }
 
-/* Liquid-glass material: the card refracts and warps what sits behind it
-   like a water droplet — bend and color shift strongest at the borders,
-   subtle in the center, not just blur. Chromium gets true backdrop
-   refraction via the SVG displacement filter (#sr-liquid-lens, mounted by
-   ChatPanel); everywhere else the frost + specular + dispersion layers
-   carry the droplet read on their own. */
+/* Recommended itinerary — flat charcoal transit card (not liquid glass). */
+.sr-itinerary-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 14px 12px;
+  border-radius: 13px;
+  border: 1px solid var(--sr-chat-hairline);
+  background: var(--sr-chat-surface);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14);
+  color: var(--sr-chat-ink);
+}
+
+.sr-chat-tab[data-sr-theme="light"] .sr-itinerary-card {
+  box-shadow: 0 4px 14px rgba(15, 16, 18, 0.06);
+}
+
+.sr-itinerary-card[data-selected="true"] {
+  border-color: color-mix(in srgb, var(--sr-chat-accent) 42%, var(--sr-chat-hairline));
+  box-shadow:
+    0 6px 20px rgba(0, 0, 0, 0.14),
+    0 0 0 1px var(--sr-chat-accent-tint);
+}
+
+.sr-itinerary-card--invalid {
+  padding: 14px;
+}
+
+.sr-itinerary-card__invalid-msg {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--sr-chat-ink-dim);
+}
+
+.sr-itinerary-card__badge {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: 5px;
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  line-height: 1;
+  background: var(--sr-chat-accent-tint);
+  color: var(--sr-chat-accent);
+}
+
+.sr-itinerary-card__summary {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.sr-itinerary-card__title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  color: var(--sr-chat-ink);
+  overflow-wrap: anywhere;
+}
+
+.sr-itinerary-card__title-part {
+  white-space: normal;
+}
+
+.sr-itinerary-card__title-arrow {
+  display: inline-block;
+  margin: 0 0.35em;
+  color: var(--sr-chat-ink-dim);
+  font-weight: 500;
+}
+
+.sr-itinerary-card__arrive {
+  margin: 2px 0 0;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--sr-chat-ink-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-itinerary-card__duration {
+  margin: 2px 0 0;
+}
+
+.sr-itinerary-card__duration-value {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  color: var(--sr-chat-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-itinerary-card__meta {
+  margin: 2px 0 0;
+  font-size: 12.5px;
+  color: var(--sr-chat-ink-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-itinerary-card__meta-sep {
+  color: var(--sr-chat-ink-dim);
+}
+
+.sr-itinerary-card__divider {
+  height: 1px;
+  width: 100%;
+  background: var(--sr-chat-hairline);
+  margin: 1px 0;
+}
+
+.sr-itinerary-card__timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.sr-itinerary-card__event {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  gap: 10px;
+  align-items: stretch;
+  min-height: 0;
+  padding: 6px 0;
+}
+
+.sr-itinerary-card__rail {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 5px;
+}
+
+.sr-itinerary-card__rail::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: color-mix(in srgb, var(--sr-chat-ink) 14%, transparent);
+}
+
+.sr-itinerary-card__event:first-child .sr-itinerary-card__rail::before {
+  top: 10px;
+}
+
+.sr-itinerary-card__event:last-child .sr-itinerary-card__rail::before {
+  bottom: calc(100% - 12px);
+}
+
+.sr-itinerary-card__node {
+  position: relative;
+  z-index: 1;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in srgb, var(--sr-chat-ink) 28%, transparent);
+  background: var(--sr-chat-surface);
+  box-sizing: border-box;
+  flex-shrink: 0;
+}
+
+.sr-itinerary-card__node--start {
+  border-color: color-mix(in srgb, var(--sr-chat-accent) 70%, transparent);
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--sr-chat-accent) 35%, transparent);
+}
+
+.sr-itinerary-card__node--waypoint {
+  border-color: color-mix(in srgb, var(--sr-chat-ink) 35%, transparent);
+  background: color-mix(in srgb, var(--sr-chat-ink) 12%, var(--sr-chat-surface));
+}
+
+.sr-itinerary-card__node--end {
+  border-color: color-mix(in srgb, var(--sr-chat-ink) 40%, transparent);
+  background: var(--sr-chat-surface);
+}
+
+.sr-itinerary-card__event-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sr-itinerary-card__event-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.sr-itinerary-card__event-lead {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.sr-itinerary-card__bullets {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  min-width: 0;
+}
+
+.sr-itinerary-card__bullet-item {
+  display: inline-flex;
+  align-items: center;
+}
+
+.sr-itinerary-card__bullet-arrow {
+  margin: 0 4px;
+  color: var(--sr-chat-ink-dim);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.sr-itinerary-card__mode-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: var(--sr-chat-ink);
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.sr-itinerary-card__pickup-mark {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--sr-chat-ink) 28%, transparent);
+  flex-shrink: 0;
+}
+
+.sr-itinerary-card__mode-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--sr-chat-ink) 35%, transparent);
+}
+
+.sr-itinerary-card__route-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--sr-chat-ink) 14%, transparent);
+  color: var(--sr-chat-ink);
+  font-weight: 700;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.sr-itinerary-card__event-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--sr-chat-ink);
+  min-width: 0;
+}
+
+.sr-itinerary-card__event-title--walk {
+  font-weight: 500;
+}
+
+.sr-itinerary-card__event-duration {
+  flex-shrink: 0;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--sr-chat-ink-dim);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.sr-itinerary-card__event-path,
+.sr-itinerary-card__event-sub {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.35;
+  color: var(--sr-chat-ink-dim);
+  overflow-wrap: anywhere;
+}
+
+.sr-itinerary-card__event-sub {
+  font-size: 12px;
+}
+
+.sr-itinerary-card__more {
+  margin: 0;
+  font-size: 12px;
+  color: var(--sr-chat-ink-dim);
+}
+
+.sr-itinerary-card__rationale {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sr-itinerary-card__rationale-label {
+  margin: 0;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: color-mix(in srgb, var(--sr-chat-accent) 72%, var(--sr-chat-ink-dim));
+}
+
+.sr-itinerary-card__rationale-text {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--sr-chat-ink-dim);
+}
+
+.sr-itinerary-card__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.sr-itinerary-card__secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 44px;
+  padding: 0 2px;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  color: var(--sr-chat-ink-dim);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: 8px;
+  transition: color 140ms var(--sr-motion-ease);
+}
+
+.sr-itinerary-card__secondary:hover {
+  color: var(--sr-chat-ink);
+}
+
+.sr-itinerary-card__secondary:focus-visible,
+.sr-itinerary-card__primary:focus-visible {
+  outline: 2px solid var(--sr-chat-accent);
+  outline-offset: 2px;
+}
+
+.sr-itinerary-card__primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  height: 38px;
+  padding: 0 16px;
+  margin: 0;
+  border: 0;
+  border-radius: 9px;
+  background: var(--sr-chat-accent);
+  color: #0b0d0e;
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 650;
+  cursor: pointer;
+  transition:
+    filter 140ms var(--sr-motion-ease),
+    transform 120ms var(--sr-motion-ease),
+    opacity 140ms var(--sr-motion-ease);
+}
+
+.sr-chat-tab[data-sr-theme="light"] .sr-itinerary-card__primary {
+  color: #ffffff;
+}
+
+.sr-itinerary-card__primary:hover {
+  filter: brightness(1.06);
+}
+
+.sr-itinerary-card__primary:active {
+  transform: scale(0.98);
+}
+
+.sr-itinerary-card__primary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.sr-itinerary-card--skeleton {
+  gap: 8px;
+  pointer-events: none;
+}
+
+.sr-itinerary-card__skel-pill {
+  width: 72px;
+  height: 16px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--sr-chat-ink) 8%, transparent);
+}
+
+.sr-itinerary-card__skel-line {
+  height: 12px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--sr-chat-ink) 8%, transparent);
+  width: 72%;
+}
+
+.sr-itinerary-card__skel-line--sm {
+  width: 40%;
+  height: 10px;
+}
+
+.sr-itinerary-card__skel-line--lg {
+  width: 88%;
+  height: 14px;
+}
+
+.sr-itinerary-card__skel-line--xl {
+  width: 48%;
+  height: 24px;
+  margin-top: 2px;
+}
+
+/* Compact alternative route cards — flat, same family as itinerary. */
 button.sr-chat-route-card {
   position: relative;
-  isolation: isolate;
-  overflow: hidden;
   display: flex;
   flex-direction: column;
   align-items: stretch;
   justify-content: flex-start;
-  gap: 8px;
+  gap: 6px;
   width: 100%;
   height: auto;
   min-height: 44px;
   white-space: normal;
   text-align: left;
   cursor: pointer;
-  /* Surface tint + the droplet's specular catchlights painted as
-     background layers (a bright arc top-left, a faint counter-light
-     bottom-right — a droplet has two, from refracted spill light). */
-  background:
-    radial-gradient(120% 70% at 16% -6%, var(--sr-glass-specular), transparent 46%),
-    radial-gradient(90% 60% at 88% 108%, var(--sr-glass-specular-counter), transparent 42%),
-    var(--sr-glass-surface);
-  -webkit-backdrop-filter: blur(var(--sr-glass-frost)) saturate(1.5);
-  backdrop-filter: blur(var(--sr-glass-frost)) saturate(1.5);
-  border: 1px solid var(--sr-glass-border);
-  border-radius: 16px;
-  padding: 16px;
+  background: var(--sr-chat-surface);
+  border: 1px solid var(--sr-chat-hairline);
+  border-radius: 12px;
+  padding: 12px 14px;
   color: inherit;
-  /* Meniscus: light catches the top edge, the bottom edge rolls into
-     shadow, and the whole droplet lifts slightly off the canvas. */
-  box-shadow: var(--sr-glass-shadow);
-  animation: srChatCardLand 220ms var(--sr-motion-ease) both;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.1);
   transition:
     background 150ms var(--sr-motion-ease),
     border-color 150ms var(--sr-motion-ease),
@@ -822,114 +1241,32 @@ button.sr-chat-route-card {
     transform 150ms var(--sr-motion-ease);
 }
 
-/* True lens: displacement of the backdrop itself (feTurbulence +
-   feDisplacementMap in #sr-liquid-lens). Supported by Chromium's
-   backdrop-filter: url(); other engines keep the plain-frost branch. */
-@supports (backdrop-filter: url(#sr-liquid-lens)) {
-  .sr-chat-route-card {
-    -webkit-backdrop-filter: url(#sr-liquid-lens) blur(var(--sr-glass-frost)) saturate(1.45);
-    backdrop-filter: url(#sr-liquid-lens) blur(var(--sr-glass-frost)) saturate(1.45);
-  }
-}
-
-/* Rim band — the ring where a droplet bends light hardest. A masked ring
-   with its OWN backdrop treatment (extra blur + brightness + saturation)
-   makes the border optically different from the center in every engine,
-   including ones without SVG backdrop filters. */
-.sr-chat-route-card::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  border-radius: inherit;
-  -webkit-backdrop-filter: blur(var(--sr-glass-rim-frost)) saturate(1.7) brightness(1.08);
-  backdrop-filter: blur(var(--sr-glass-rim-frost)) saturate(1.7) brightness(1.08);
-  -webkit-mask: radial-gradient(120% 130% at 50% 50%, transparent 58%, #000 89%);
-  mask: radial-gradient(120% 130% at 50% 50%, transparent 58%, #000 89%);
-  pointer-events: none;
-}
-
-/* Chromatic dispersion fringe — a 1px RGB-split ring that only lives at
-   the border, where a real droplet bends light hardest. */
-.sr-chat-route-card::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  padding: 1px;
-  background: linear-gradient(
-    115deg,
-    rgba(255, 118, 118, var(--sr-glass-dispersion)),
-    rgba(132, 255, 190, calc(var(--sr-glass-dispersion) * 0.65)) 46%,
-    rgba(126, 158, 255, var(--sr-glass-dispersion))
-  );
-  -webkit-mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  mask-composite: exclude;
-  pointer-events: none;
+.sr-chat-tab[data-sr-theme="light"] button.sr-chat-route-card {
+  box-shadow: 0 2px 8px rgba(15, 16, 18, 0.05);
 }
 
 .sr-chat-route-card:hover {
-  background: var(--sr-glass-surface-hover);
+  background: color-mix(in srgb, var(--sr-chat-surface) 88%, var(--sr-chat-ink));
 }
 
 .sr-chat-route-card:active {
   transform: scale(0.98);
 }
 
+.sr-chat-route-card:focus-visible {
+  outline: 2px solid var(--sr-chat-accent);
+  outline-offset: 2px;
+}
+
 .sr-chat-route-card[data-selected="true"] {
-  border-color: var(--sr-chat-accent);
+  border-color: color-mix(in srgb, var(--sr-chat-accent) 42%, var(--sr-chat-hairline));
   box-shadow:
-    var(--sr-glass-shadow),
-    0 0 0 2px var(--sr-chat-accent-tint);
-}
-
-/* The glass reads as decoration to anyone who asked the OS for less
-   transparency — give them the previous solid card instead. */
-@media (prefers-reduced-transparency: reduce) {
-  .sr-chat-route-card {
-    background: var(--sr-chat-surface);
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
-  }
-  .sr-chat-route-card::before,
-  .sr-chat-route-card::after {
-    content: none;
-  }
-  .sr-chat-thread {
-    background: none;
-  }
-}
-
-.sr-chat-route-card[data-role="alternative"] {
-  padding: 14px 16px;
-  opacity: 0.92;
+    0 4px 14px rgba(0, 0, 0, 0.1),
+    0 0 0 1px var(--sr-chat-accent-tint);
 }
 
 .sr-chat-route-card[data-role="alternative"] .sr-chat-route-card__hero strong {
-  font-size: 18px;
-}
-
-@keyframes srChatCardLand {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .sr-chat-route-card {
-    animation: none;
-  }
+  font-size: 17px;
 }
 
 .sr-chat-route-card__top {
@@ -956,20 +1293,7 @@ button.sr-chat-route-card {
   flex-shrink: 0;
 }
 
-.sr-chat-route-card__pill {
-  display: inline-flex;
-  border-radius: var(--sr-radius-pill);
-  padding: 3px 9px;
-  font-size: 11px;
-  font-weight: 650;
-  background: var(--sr-chat-accent-tint);
-  color: var(--sr-chat-accent);
-}
-
 .sr-chat-route-card__leg {
-  /* Sentence case, not a caps eyebrow label — the taste-skill copy rules
-     ban decorative all-caps tags; this is server-provided leg copy
-     ("Leg 1"), rendered as-is. */
   font-size: 11px;
   font-weight: 600;
   color: var(--sr-chat-ink-dim);
@@ -984,10 +1308,11 @@ button.sr-chat-route-card {
 }
 
 .sr-chat-route-card__hero strong {
-  font-size: 24px;
+  font-size: 18px;
   font-weight: 700;
   letter-spacing: -0.01em;
   color: var(--sr-chat-ink);
+  font-variant-numeric: tabular-nums;
 }
 
 .sr-chat-route-card__dest {
@@ -1004,13 +1329,14 @@ button.sr-chat-route-card {
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
-  font-size: 13px;
+  font-size: 12.5px;
   color: var(--sr-chat-ink-dim);
+  font-variant-numeric: tabular-nums;
 }
 
 .sr-chat-route-card__reason {
   margin: 0;
-  font-size: 13px;
+  font-size: 12.5px;
   line-height: 1.4;
   color: var(--sr-chat-ink-dim);
 }
@@ -1020,10 +1346,30 @@ button.sr-chat-route-card {
   align-items: center;
   gap: 2px;
   align-self: flex-start;
-  margin-top: 2px;
+  margin-top: 1px;
   font-size: 12.5px;
   font-weight: 500;
   color: var(--sr-chat-ink-dim);
+}
+
+@media (max-width: 520px) {
+  .sr-itinerary-card {
+    padding: 11px 12px;
+    border-radius: 12px;
+  }
+
+  .sr-itinerary-card__duration-value {
+    font-size: 24px;
+  }
+
+  .sr-itinerary-card__actions {
+    gap: 8px;
+  }
+
+  .sr-itinerary-card__primary {
+    flex: 1 1 auto;
+    min-width: min(100%, 140px);
+  }
 }
 
 /* ── Arrivals card ───────────────────────────────────────────────────── */
@@ -1118,7 +1464,8 @@ button.sr-chat-arrivals-card__footer {
   height: 32px;
   min-height: 32px;
   padding: 0 12px;
-  border: 1px solid color-mix(in srgb, var(--sr-chat-accent) 22%, var(--sr-chat-hairline));
+  border: 1px solid
+    color-mix(in srgb, var(--sr-chat-accent) 22%, var(--sr-chat-hairline));
   border-radius: var(--sr-radius-pill);
   background: var(--sr-chat-accent-tint);
   cursor: pointer;
@@ -1134,29 +1481,49 @@ button.sr-chat-arrivals-card__footer:hover {
 
 /* ── Composer ────────────────────────────────────────────────────────── */
 
-.sr-chat-composer {
-  /* Tailwind utility classes from the vendored PromptInput (border-input
-     bg-background rounded-3xl border p-2 shadow-xs) live in Tailwind's
-     `@layer utilities`; this file is unlayered, so these plain declarations
-     win the cascade without needing `!important` — same rule the rest of
-     this stylesheet relies on.
-
-     Single compact row (textarea beside the actions, like the rail's
-     search pill) instead of the vendored two-row stack: the input should
-     not eat a large slice of the screen. It still grows when the text
-     wraps, up to the textarea's max height. */
-  display: flex;
-  align-items: flex-end;
-  gap: 8px;
+.sr-chat-composer-beam {
+  /* BorderBeam is now the layout-owning shell. Keeping width and margin on
+       this wrapper makes the pulse follow only the composer instead of
+       spanning the full chat panel. */
+  display: block;
   max-width: 640px;
   width: calc(100% - 32px);
   margin: 0 auto calc(12px + env(safe-area-inset-bottom));
+  flex: 0 0 auto;
+  border-radius: 28px;
+}
+
+.sr-chat-composer {
+  /* Tailwind utility classes from the vendored PromptInput (border-input
+       bg-background rounded-3xl border p-2 shadow-xs) live in Tailwind's
+       `@layer utilities`; this file is unlayered, so these plain declarations
+       win the cascade without needing `!important` — same rule the rest of
+       this stylesheet relies on.
+  
+       Single compact row (textarea beside the actions, like the rail's
+       search pill) instead of the vendored two-row stack: the input should
+       not eat a large slice of the screen. It still grows when the text
+       wraps, up to the textarea's max height. */
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  max-width: none;
+  width: 100%;
+  margin: 0;
   min-height: 54px;
   padding: 6px 6px 6px 18px;
   border-radius: 28px;
   background:
-    radial-gradient(120% 80% at 16% -12%, var(--sr-glass-specular), transparent 44%),
-    radial-gradient(90% 70% at 88% 112%, var(--sr-glass-specular-counter), transparent 42%),
+    radial-gradient(
+      120% 80% at 16% -12%,
+      var(--sr-glass-specular),
+      transparent 44%
+    ),
+    radial-gradient(
+      90% 70% at 88% 112%,
+      var(--sr-glass-specular-counter),
+      transparent 42%
+    ),
     var(--sr-glass-surface);
   border-color: var(--sr-glass-border);
   -webkit-backdrop-filter: blur(var(--sr-glass-frost)) saturate(150%);
@@ -1170,11 +1537,11 @@ button.sr-chat-arrivals-card__footer:hover {
 }
 
 .sr-chat-composer:focus-within {
-  border-color: color-mix(in srgb, var(--sr-chat-accent) 38%, var(--sr-chat-hairline));
-  box-shadow:
-    var(--sr-glass-shadow),
-    0 0 0 3px color-mix(in srgb, var(--sr-chat-accent) 8%, transparent),
-    0 0 34px color-mix(in srgb, var(--sr-chat-accent) 7%, transparent);
+  /* Keep focus neutral. The always-on monochrome BorderBeam is the only
+       perimeter treatment around the composer. */
+  border-color: var(--sr-glass-border);
+  box-shadow: var(--sr-glass-shadow);
+  outline: none;
 }
 
 .sr-chat-composer__textarea {
@@ -1221,7 +1588,8 @@ button.sr-chat-arrivals-card__footer:hover {
 .sr-chat-mic-button:focus-visible,
 .sr-chat-send-button:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--sr-chat-accent) 24%, transparent);
+  box-shadow: 0 0 0 3px
+    color-mix(in srgb, var(--sr-chat-accent) 24%, transparent);
 }
 
 .sr-chat-mic-button:hover {
@@ -1264,7 +1632,11 @@ button.sr-chat-arrivals-card__footer:hover {
 }
 
 .sr-chat-send-button {
-  background: color-mix(in srgb, var(--sr-chat-surface) 78%, var(--sr-chat-ink) 22%);
+  background: color-mix(
+    in srgb,
+    var(--sr-chat-surface) 78%,
+    var(--sr-chat-ink) 22%
+  );
   border: 1px solid color-mix(in srgb, var(--sr-chat-hairline) 78%, white 22%);
   color: color-mix(in srgb, var(--sr-chat-ink-dim) 82%, var(--sr-chat-ink) 18%);
   transition:
@@ -1292,11 +1664,16 @@ button.sr-chat-arrivals-card__footer:hover {
   background: var(--sr-chat-accent);
   border-color: var(--sr-chat-accent);
   color: #071207;
-  box-shadow: 0 5px 16px color-mix(in srgb, var(--sr-chat-accent) 18%, transparent);
+  box-shadow: 0 5px 16px
+    color-mix(in srgb, var(--sr-chat-accent) 18%, transparent);
 }
 
 .sr-chat-send-button[data-mode="stop"] {
-  background: color-mix(in srgb, var(--sr-chat-surface) 76%, var(--sr-chat-ink) 24%);
+  background: color-mix(
+    in srgb,
+    var(--sr-chat-surface) 76%,
+    var(--sr-chat-ink) 24%
+  );
   border-color: color-mix(in srgb, var(--sr-chat-hairline) 72%, white 28%);
   color: var(--sr-chat-ink);
 }
@@ -1335,16 +1712,10 @@ button.sr-chat-arrivals-card__footer:hover {
     gap: 8px;
   }
 
-  .sr-chat-composer,
+  .sr-chat-composer-beam,
   .sr-chat-error-banner {
     width: calc(100% - 24px);
   }
 }
 
-/* Zero-footprint SVG defs holder for the liquid-glass lens filter. */
-.sr-chat-lens-defs {
-  position: absolute;
-  width: 0;
-  height: 0;
-  overflow: hidden;
-}
+

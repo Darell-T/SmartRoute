@@ -127,8 +127,7 @@ async function* successTurn(turnId: string, signal: AbortSignal): AsyncGenerator
   };
 
   const prose =
-    "I'd take the A train to Costco. It is the best fit because it avoids the bus, " +
-    "uses no transfers, and keeps the final walk short with your cart.";
+    "The A train keeps the cart-friendly path intact with no bus and no transfer.";
   for (const chunk of tokenChunks(prose)) {
     await wait(55, signal);
     yield { type: "token", text: chunk };
@@ -146,11 +145,14 @@ async function* successTurn(turnId: string, signal: AbortSignal): AsyncGenerator
       eta_minutes: 34,
       transfers: 0,
       lines: ["A"],
-      reason: "No bus, fewest transfers, and the platform has elevator access for the cart.",
+      reason: "No bus · Elevator access for the cart",
     },
     route: [
       {
         type: "WALK",
+        departure_stop: "Your location",
+        arrival_stop: "34 St-Penn Station",
+        minutes_until_arrival: 4,
         start_point: { latitude: ORIGIN.lat, longitude: ORIGIN.lng },
         end_point: { latitude: 40.7527, longitude: -73.9862 },
         polyline: encodedLine([
@@ -161,6 +163,9 @@ async function* successTurn(turnId: string, signal: AbortSignal): AsyncGenerator
       {
         type: "SUBWAY",
         train_line: "A",
+        departure_stop: "34 St-Penn Station",
+        arrival_stop: "Jay St-MetroTech",
+        minutes_until_arrival: 26,
         departure_coords: { latitude: 40.7527, longitude: -73.9862 },
         arrival_coords: { latitude: 40.6627, longitude: -73.9958 },
         polyline: encodedLine([
@@ -169,16 +174,20 @@ async function* successTurn(turnId: string, signal: AbortSignal): AsyncGenerator
           [40.6627, -73.9958],
         ]),
         departure_time_iso: "2026-07-18T14:05:00-04:00",
-        arrival_time_iso: "2026-07-18T14:35:00-04:00",
+        arrival_time_iso: "2026-07-18T14:31:00-04:00",
       },
       {
         type: "WALK",
+        departure_stop: "Jay St-MetroTech",
+        arrival_stop: "Costco Sunset Park",
+        minutes_until_arrival: 4,
         start_point: { latitude: 40.6627, longitude: -73.9958 },
         end_point: { latitude: DESTINATION.lat, longitude: DESTINATION.lng },
         polyline: encodedLine([
           [40.6627, -73.9958],
           [DESTINATION.lat, DESTINATION.lng],
         ]),
+        arrival_time_iso: "2026-07-18T14:39:00-04:00",
       },
     ],
     alerts: [],
@@ -203,6 +212,9 @@ async function* successTurn(turnId: string, signal: AbortSignal): AsyncGenerator
       {
         type: "SUBWAY",
         train_line: "N",
+        departure_stop: "34 St-Herald Sq",
+        arrival_stop: "Atlantic Av-Barclays Ctr",
+        minutes_until_arrival: 18,
         departure_coords: { latitude: 40.7484, longitude: -73.9857 },
         arrival_coords: { latitude: 40.6892, longitude: -73.9906 },
         polyline: encodedLine([
@@ -214,6 +226,9 @@ async function* successTurn(turnId: string, signal: AbortSignal): AsyncGenerator
       {
         type: "SUBWAY",
         train_line: "R",
+        departure_stop: "Atlantic Av-Barclays Ctr",
+        arrival_stop: "36 St",
+        minutes_until_arrival: 8,
         departure_coords: { latitude: 40.6892, longitude: -73.9906 },
         arrival_coords: { latitude: 40.6459, longitude: -74.0089 },
         polyline: encodedLine([
