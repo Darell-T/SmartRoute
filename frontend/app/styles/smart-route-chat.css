@@ -773,10 +773,8 @@
 }
 
 /* ── Liquid-metal perimeter shell ──────────────────────────────────────
-   Graphite/chrome rim inspired by metal.jakubantalik.com material behavior,
-   implemented as a padding-box conic gradient (no WebGL). The shell paints
-   the rotating metal; the inner surface covers the center with matte fill
-   so only the perimeter reads as liquid metal. */
+   Quiet graphite rim + soft lift so the card reads slightly in front of
+   the chat plane. Metal is a thin contour, not a chrome spectacle. */
 
 @property --sr-metal-angle {
   syntax: "<angle>";
@@ -786,34 +784,35 @@
 
 .sr-liquid-metal {
   --sr-metal-radius: 14px;
-  --sr-metal-rim: 1.5px;
+  --sr-metal-rim: 1px;
   position: relative;
   isolation: isolate;
   border-radius: var(--sr-metal-radius);
   padding: var(--sr-metal-rim);
-  /* The shell background IS the metal rim (visible around the surface). */
+  /* Muted graphite perimeter — soft midtones, no bright silver peaks. */
   background: conic-gradient(
     from var(--sr-metal-angle, 0deg),
-    #1c1f24 0deg,
-    #6a7380 28deg,
-    #d8dee6 52deg,
-    #8b949e 78deg,
-    #2a2f36 120deg,
-    #aab3bd 158deg,
-    #f0f3f6 178deg,
-    #5e6772 220deg,
-    #c4ccd5 268deg,
-    #3a414a 310deg,
-    #b0b8c2 340deg,
-    #1c1f24 360deg
+    #25292f 0deg,
+    #4a515a 45deg,
+    #7a828c 70deg,
+    #3a4048 110deg,
+    #5c646e 160deg,
+    #8a929c 190deg,
+    #343a42 240deg,
+    #6a727c 290deg,
+    #454c56 330deg,
+    #25292f 360deg
   );
-  animation: srLiquidMetalSpin 10s linear infinite;
+  animation: srLiquidMetalSpin 16s linear infinite;
+  /* Lift: layered shadows so the card pops slightly off the canvas. */
   box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.04),
-    0 12px 32px rgba(0, 0, 0, 0.32);
+    0 0 0 1px rgba(255, 255, 255, 0.03),
+    0 2px 4px rgba(0, 0, 0, 0.18),
+    0 10px 24px rgba(0, 0, 0, 0.22),
+    0 22px 48px rgba(0, 0, 0, 0.16);
 }
 
-/* Moving specular highlight over the rim for viscous metal feel. */
+/* Narrow, low-opacity specular — a quiet glint, not a chrome sweep. */
 .sr-liquid-metal__sheen {
   position: absolute;
   inset: 0;
@@ -822,13 +821,13 @@
   z-index: 1;
   padding: var(--sr-metal-rim);
   background: conic-gradient(
-    from calc(var(--sr-metal-angle, 0deg) * -1.2 + 50deg),
+    from calc(var(--sr-metal-angle, 0deg) * -1.15 + 40deg),
     transparent 0deg,
-    transparent 30deg,
-    rgba(255, 255, 255, 0.08) 55deg,
-    rgba(255, 255, 255, 0.65) 72deg,
-    rgba(200, 210, 220, 0.18) 95deg,
-    transparent 130deg,
+    transparent 48deg,
+    rgba(255, 255, 255, 0.06) 62deg,
+    rgba(220, 228, 236, 0.28) 72deg,
+    rgba(255, 255, 255, 0.05) 86deg,
+    transparent 110deg,
     transparent 360deg
   );
   -webkit-mask:
@@ -839,8 +838,8 @@
     linear-gradient(#000 0 0) content-box,
     linear-gradient(#000 0 0);
   mask-composite: exclude;
-  opacity: 0.85;
-  animation: srLiquidMetalSpin 13s linear infinite reverse;
+  opacity: 0.55;
+  animation: srLiquidMetalSpin 22s linear infinite reverse;
 }
 
 .sr-liquid-metal__surface {
@@ -849,6 +848,8 @@
   border-radius: calc(var(--sr-metal-radius) - var(--sr-metal-rim));
   overflow: hidden;
   background: #121418;
+  /* Soft top catch-light so the face feels slightly raised. */
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045);
 }
 
 /* Inside metal shell the card drops its own border — the rim is the border. */
@@ -861,23 +862,28 @@
 .sr-chat-tab[data-sr-theme="light"] .sr-liquid-metal {
   background: conic-gradient(
     from var(--sr-metal-angle, 0deg),
-    #9aa3ad 0deg,
-    #f5f7f9 40deg,
-    #7a8490 95deg,
-    #dfe4ea 150deg,
-    #6a7380 210deg,
-    #eef1f4 270deg,
-    #a8b0ba 320deg,
-    #9aa3ad 360deg
+    #c0c6ce 0deg,
+    #e4e8ed 50deg,
+    #a8b0ba 110deg,
+    #d5dae0 180deg,
+    #9aa3ad 250deg,
+    #e8ebf0 310deg,
+    #c0c6ce 360deg
   );
   box-shadow:
-    0 0 0 1px rgba(15, 16, 18, 0.06),
-    0 10px 28px rgba(15, 16, 18, 0.08);
+    0 0 0 1px rgba(15, 16, 18, 0.05),
+    0 2px 4px rgba(15, 16, 18, 0.04),
+    0 10px 28px rgba(15, 16, 18, 0.08),
+    0 20px 40px rgba(15, 16, 18, 0.05);
 }
 
 .sr-chat-tab[data-sr-theme="light"] .sr-liquid-metal__surface,
 .sr-chat-tab[data-sr-theme="light"] .sr-liquid-metal .sr-itinerary-card {
   background: #fbfbfa;
+}
+
+.sr-chat-tab[data-sr-theme="light"] .sr-liquid-metal__surface {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
 }
 
 @keyframes srLiquidMetalSpin {
@@ -886,26 +892,24 @@
   }
 }
 
-/* Fallback when @property unsupported: slow brightness pulse on fixed gradient. */
+/* Fallback when @property unsupported: slow soft drift on a muted gradient. */
 @supports not (background: conic-gradient(from var(--sr-metal-angle), red, blue)) {
   .sr-liquid-metal {
     background: linear-gradient(
       125deg,
       #2a2f36 0%,
-      #c8d0d8 18%,
-      #4a525c 40%,
-      #e8edf2 55%,
-      #3a414a 72%,
-      #aab3bd 88%,
-      #1c1f24 100%
+      #6a727c 35%,
+      #4a525c 55%,
+      #7a828c 75%,
+      #25292f 100%
     );
-    background-size: 220% 220%;
-    animation: srLiquidMetalDrift 8s ease-in-out infinite alternate;
+    background-size: 200% 200%;
+    animation: srLiquidMetalDrift 12s ease-in-out infinite alternate;
   }
 
   .sr-liquid-metal__sheen {
     animation: none;
-    opacity: 0.35;
+    opacity: 0.2;
   }
 }
 
@@ -918,27 +922,26 @@
   }
 }
 
-/* Static metallic contour for reduced motion. */
+/* Static muted contour for reduced motion — still lifted, no motion. */
 .sr-liquid-metal[data-reduced-motion="true"] {
   animation: none;
   background: linear-gradient(
     135deg,
     #2e333a 0%,
-    #c5ccd4 24%,
-    #4a525c 48%,
-    #e4e8ed 68%,
-    #2a2f36 100%
+    #6a727c 40%,
+    #4a525c 70%,
+    #3a4048 100%
   );
 }
 
 .sr-liquid-metal[data-reduced-motion="true"] .sr-liquid-metal__sheen {
   animation: none;
-  opacity: 0.25;
+  opacity: 0.18;
   background: linear-gradient(
     120deg,
-    transparent 20%,
-    rgba(255, 255, 255, 0.35) 48%,
-    transparent 72%
+    transparent 30%,
+    rgba(255, 255, 255, 0.18) 50%,
+    transparent 70%
   );
 }
 
@@ -948,21 +951,20 @@
     background: linear-gradient(
       135deg,
       #2e333a 0%,
-      #c5ccd4 24%,
-      #4a525c 48%,
-      #e4e8ed 68%,
-      #2a2f36 100%
+      #6a727c 40%,
+      #4a525c 70%,
+      #3a4048 100%
     ) !important;
   }
 
   .sr-liquid-metal__sheen {
     animation: none !important;
-    opacity: 0.25;
+    opacity: 0.18;
     background: linear-gradient(
       120deg,
-      transparent 20%,
-      rgba(255, 255, 255, 0.35) 48%,
-      transparent 72%
+      transparent 30%,
+      rgba(255, 255, 255, 0.18) 50%,
+      transparent 70%
     ) !important;
   }
 }
