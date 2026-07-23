@@ -3,14 +3,13 @@
 /* ════════════════════════════════════════════════════════════════════════
    SmartRoute chat — recommended itinerary card
 
-   Flat charcoal transit itinerary embedded in the conversation. One card
-   represents a complete journey (including multi-stop chains). Official MTA
-   bullets come from TrainBullet / public/mta-bullets SVGs. Entrance uses
-   Motion with reduced-motion collapse.
+   Compact, curated inline recommendation preview (not a full itinerary
+   panel). Flat charcoal surface, official MTA bullets, condensed journey
+   chunks, Motion entrance with reduced-motion support.
    ════════════════════════════════════════════════════════════════════════ */
 
-import { useId, useMemo, useState } from "react";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { useId, useMemo } from "react";
+import { motion, useReducedMotion } from "motion/react";
 import { ChevronRight } from "lucide-react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faPersonWalking } from "@fortawesome/free-solid-svg-icons";
@@ -20,7 +19,6 @@ import {
   buildItineraryViewModel,
   buildMergedItineraryViewModel,
   isSupportedSubwayRoute,
-  shouldCollapseEvents,
   warnUnsupportedRouteId,
   type ItineraryEvent,
   type ItineraryViewModel,
@@ -42,7 +40,7 @@ function JourneyTitle({ names, id }: { names: string[]; id: string }) {
   );
 }
 
-function RouteGlyph({ routeId, size = 20 }: { routeId: string; size?: number }) {
+function RouteGlyph({ routeId, size = 18 }: { routeId: string; size?: number }) {
   const normalized = routeId.trim().toUpperCase();
   if (!normalized) return null;
 
@@ -50,7 +48,6 @@ function RouteGlyph({ routeId, size = 20 }: { routeId: string; size?: number }) 
     return <TrainBullet line={normalized} size={size} />;
   }
 
-  // Bus-style rectangular chip for bus routes; restrained fallback otherwise.
   const looksLikeBus = /[A-Z]{1,3}\d/.test(normalized) || normalized.length > 2;
   if (looksLikeBus) {
     return <TrainBullet line={normalized} size={size} title={`${normalized} bus`} />;
@@ -78,16 +75,12 @@ function EventModeVisual({ event }: { event: ItineraryEvent }) {
     );
   }
 
-  if (event.kind === "pickup") {
-    return <span className="sr-itinerary-card__pickup-mark" aria-hidden="true" />;
-  }
-
   if (event.routeIds.length === 0) {
-    return <span className="sr-itinerary-card__mode-dot" aria-hidden="true" />;
+    return null;
   }
 
   return (
-    <span className="sr-itinerary-card__bullets" aria-hidden={false}>
+    <span className="sr-itinerary-card__bullets">
       {event.routeIds.map((routeId, index) => (
         <span key={`${event.id}-${routeId}-${index}`} className="sr-itinerary-card__bullet-item">
           {index > 0 && (
@@ -95,14 +88,14 @@ function EventModeVisual({ event }: { event: ItineraryEvent }) {
               →
             </span>
           )}
-          <RouteGlyph routeId={routeId} size={20} />
+          <RouteGlyph routeId={routeId} size={18} />
         </span>
       ))}
     </span>
   );
 }
 
-function TimelineEvent({
+function PreviewRow({
   event,
   isFirst,
   isLast,
@@ -115,22 +108,23 @@ function TimelineEvent({
   index: number;
   reduceMotion: boolean;
 }) {
-  const nodeClass =
-    event.kind === "pickup"
-      ? "sr-itinerary-card__node sr-itinerary-card__node--waypoint"
-      : isFirst
-        ? "sr-itinerary-card__node sr-itinerary-card__node--start"
-        : isLast
-          ? "sr-itinerary-card__node sr-itinerary-card__node--end"
-          : "sr-itinerary-card__node";
+  const nodeClass = [
+    "sr-itinerary-card__node",
+    isFirst ? "sr-itinerary-card__node--start" : "",
+    isLast ? "sr-itinerary-card__node--end" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const showInlineTitle = event.kind === "walk" || event.kind === "pickup";
 
   return (
     <motion.li
       className="sr-itinerary-card__event"
       data-kind={event.kind}
-      initial={reduceMotion ? false : { opacity: 0, y: 6 }}
+      initial={reduceMotion ? false : { opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.28, delay: reduceMotion ? 0 : 0.08 + index * 0.04, ease: EASE_OUT }}
+      transition={{ duration: 0.24, delay: reduceMotion ? 0 : 0.05 + index * 0.03, ease: EASE_OUT }}
     >
       <span className="sr-itinerary-card__rail" aria-hidden="true">
         <span className={nodeClass} />
@@ -139,23 +133,18 @@ function TimelineEvent({
         <div className="sr-itinerary-card__event-main">
           <div className="sr-itinerary-card__event-lead">
             <EventModeVisual event={event} />
-            {event.kind === "pickup" ? (
+            {showInlineTitle && (
               <span className="sr-itinerary-card__event-title">{event.title}</span>
-            ) : event.kind === "walk" ? (
-              <span className="sr-itinerary-card__event-title sr-itinerary-card__event-title--walk">
-                {event.title}
-              </span>
-            ) : null}
+            )}
           </div>
           {event.durationLabel && (
             <span className="sr-itinerary-card__event-duration">{event.durationLabel}</span>
           )}
         </div>
-        {event.kind !== "walk" && event.kind !== "pickup" && (
+        {!showInlineTitle && event.title && (
           <p className="sr-itinerary-card__event-path">{event.title}</p>
         )}
         {event.subtitle && <p className="sr-itinerary-card__event-sub">{event.subtitle}</p>}
-        {event.kind === "pickup" && !event.subtitle && null}
       </div>
     </motion.li>
   );
@@ -176,12 +165,6 @@ function ItineraryCardShell({
 }) {
   const reduceMotion = useReducedMotion() ?? false;
   const titleId = useId();
-  const [expanded, setExpanded] = useState(false);
-
-  const collapse = shouldCollapseEvents(model.events.length);
-  const visibleEvents =
-    collapse && !expanded ? model.events.slice(0, 4) : model.events;
-  const hiddenCount = model.events.length - visibleEvents.length;
 
   if (model.invalid) {
     return (
@@ -197,24 +180,16 @@ function ItineraryCardShell({
     );
   }
 
-function handleViewDetails() {
-    if (collapse && !expanded) {
-      setExpanded(true);
-      return;
-    }
-    onViewDetails?.();
-  }
-
   return (
     <motion.article
       className="sr-itinerary-card"
       data-role={model.recommended ? "recommended" : "alternative"}
       data-selected={isSelected ? "true" : "false"}
       aria-labelledby={titleId}
-      initial={reduceMotion ? false : { opacity: 0, y: 14, scale: 0.985 }}
+      initial={reduceMotion ? false : { opacity: 0, y: 10, scale: 0.99 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
       transition={{
-        duration: 0.42,
+        duration: 0.36,
         delay: reduceMotion ? 0 : landDelayMs / 1000,
         ease: EASE_OUT,
       }}
@@ -251,28 +226,21 @@ function handleViewDetails() {
         )}
       </div>
 
-      {visibleEvents.length > 0 && (
+      {model.events.length > 0 && (
         <>
           <div className="sr-itinerary-card__divider" role="presentation" />
-          <ol className="sr-itinerary-card__timeline" aria-label="Journey steps">
-            <AnimatePresence initial={false}>
-              {visibleEvents.map((event, index) => (
-                <TimelineEvent
-                  key={event.id}
-                  event={event}
-                  index={index}
-                  isFirst={index === 0}
-                  isLast={index === visibleEvents.length - 1 && hiddenCount === 0}
-                  reduceMotion={reduceMotion}
-                />
-              ))}
-            </AnimatePresence>
+          <ol className="sr-itinerary-card__timeline" aria-label="Route preview">
+            {model.events.map((event, index) => (
+              <PreviewRow
+                key={event.id}
+                event={event}
+                index={index}
+                isFirst={index === 0}
+                isLast={index === model.events.length - 1}
+                reduceMotion={reduceMotion}
+              />
+            ))}
           </ol>
-          {hiddenCount > 0 && (
-            <p className="sr-itinerary-card__more">
-              {hiddenCount} more step{hiddenCount === 1 ? "" : "s"}
-            </p>
-          )}
         </>
       )}
 
@@ -291,10 +259,10 @@ function handleViewDetails() {
         <button
           type="button"
           className="sr-itinerary-card__secondary"
-          onClick={handleViewDetails}
+          onClick={onViewDetails}
         >
-          {collapse && !expanded ? "View itinerary" : model.secondaryActionLabel}
-          <ChevronRight size={14} strokeWidth={2} aria-hidden="true" />
+          {model.secondaryActionLabel}
+          <ChevronRight size={13} strokeWidth={2} aria-hidden="true" />
         </button>
         <button
           type="button"
@@ -314,7 +282,7 @@ export function RecommendedItineraryCard({
   landDelayMs = 0,
   onSelect,
   primaryActionLabel = "Open on map",
-  secondaryActionLabel = "View itinerary",
+  secondaryActionLabel = "View steps",
 }: {
   card: RouteCardData;
   isSelected?: boolean;
@@ -349,7 +317,7 @@ export function RecommendedItineraryFromCards({
   landDelayMs = 0,
   onSelect,
   primaryActionLabel = "Open on map",
-  secondaryActionLabel = "View itinerary",
+  secondaryActionLabel = "View steps",
 }: {
   cards: RouteCardData[];
   selectedCardId?: string | null;

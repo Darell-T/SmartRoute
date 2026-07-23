@@ -4,9 +4,11 @@ import test from "node:test";
 import {
   buildItineraryViewModel,
   buildMergedItineraryViewModel,
+  condensePreviewEvents,
   formatDurationMinutes,
   isSupportedSubwayRoute,
   parseRationale,
+  PREVIEW_EVENT_MAX,
   shouldCollapseEvents,
   transferLabel,
 } from "./itinerary-view-model.ts";
@@ -77,7 +79,7 @@ test("parseRationale splits middle-dot phrases and omits empty", () => {
   assert.deepEqual(parseRationale(null), []);
 });
 
-test("builds a standard single-destination itinerary from supplied route data", () => {
+test("builds a compact preview: drops short lead walk, keeps transit + final walk", () => {
   const model = buildItineraryViewModel(baseCard());
 
   assert.equal(model.invalid, false);
@@ -86,22 +88,21 @@ test("builds a standard single-destination itinerary from supplied route data", 
   assert.equal(model.durationLabel, "34 min");
   assert.equal(model.totalMinutes, 34);
   assert.equal(model.transferCount, 0);
-  assert.ok(model.metaParts.includes("0 transfers"));
+  // Zero transfers are omitted from meta (not "0 transfers").
+  assert.equal(model.metaParts.length, 0);
   assert.ok(model.arrivalLabel);
-  assert.match(model.arrivalLabel, /\d{1,2}:\d{2}\s?(AM|PM)/i);
-  assert.deepEqual(model.rationale, [
-    "No bus",
-    "Elevator access for the cart",
-  ]);
+  assert.deepEqual(model.rationale, ["No bus", "Elevator access for the cart"]);
   assert.equal(model.primaryActionLabel, "Open on map");
-  assert.equal(model.events.length, 3);
-  assert.equal(model.events[0].kind, "walk");
-  assert.equal(model.events[1].kind, "subway");
-  assert.deepEqual(model.events[1].routeIds, ["A"]);
-  assert.equal(model.events[2].kind, "walk");
-  // Walking never carries subway route ids.
-  assert.deepEqual(model.events[0].routeIds, []);
-  assert.deepEqual(model.events[2].routeIds, []);
+  assert.equal(model.secondaryActionLabel, "View steps");
+
+  // Curated: A transit + final walk only (no 4-min lead walk dump).
+  assert.equal(model.events.length, 2);
+  assert.equal(model.events[0].kind, "subway");
+  assert.deepEqual(model.events[0].routeIds, ["A"]);
+  assert.equal(model.events[0].title, "Jay St-MetroTech");
+  assert.equal(model.events[1].kind, "walk");
+  assert.equal(model.events[1].title, "Walk to Costco Sunset Park");
+  assert.deepEqual(model.events[1].routeIds, []);
 });
 
 test("walk steps never use subway route ids even when summary lines exist", () => {
@@ -121,7 +122,7 @@ test("walk steps never use subway route ids even when summary lines exist", () =
   assert.equal(model.events.length, 1);
   assert.equal(model.events[0].kind, "walk");
   assert.deepEqual(model.events[0].routeIds, []);
-  assert.match(model.events[0].title, /Prada/);
+  assert.match(model.events[0].title, /Walk to/);
 });
 
 test("groups consecutive subway transfers into one multi-bullet event", () => {
@@ -229,7 +230,7 @@ test("invalid card fails safely without fabricated times", () => {
   assert.ok(model.invalidReason);
 });
 
-test("merged multi-stop itinerary is one card with pickup dwell event", () => {
+test("merged multi-stop nests pickup under transit and keeps final walk", () => {
   const leg1 = baseCard({
     card_id: "rc_leg1",
     origin: { label: "Home", lat: 40.72, lng: -73.98 },
@@ -298,19 +299,51 @@ test("merged multi-stop itinerary is one card with pickup dwell event", () => {
   assert.deepEqual(model.placeNames, ["Home", "Sunday Morning", "Prada"]);
   assert.equal(model.sourceCardIds.length, 2);
   assert.equal(model.primaryCardId, "rc_leg2");
-
-  const pickup = model.events.find((e) => e.kind === "pickup");
-  assert.ok(pickup, "expected a pickup/dwell event between legs");
-  assert.equal(pickup.subtitle, "Sunday Morning");
-  assert.equal(pickup.durationMinutes, 25);
   assert.ok(model.metaParts.some((p) => p.includes("pickup")));
+  assert.ok(model.metaParts.includes("1 transfer"));
 
-  // Subway bullets only on subway events.
+  // Nested pickup: first transit row shows waypoint + pickup subtitle.
+  const first = model.events[0];
+  assert.equal(first.kind, "subway");
+  assert.deepEqual(first.routeIds, ["Q", "4"]);
+  assert.equal(first.title, "Sunday Morning");
+  assert.match(first.subtitle ?? "", /pickup/i);
+
+  // No separate pickup row; walks never carry subway bullets.
+  assert.equal(
+    model.events.some((e) => e.kind === "pickup"),
+    false,
+  );
+  assert.ok(model.events.length <= PREVIEW_EVENT_MAX);
+
   for (const event of model.events) {
-    if (event.kind === "walk" || event.kind === "pickup") {
+    if (event.kind === "walk") {
       assert.deepEqual(event.routeIds, []);
     }
   }
+
+  const finalWalk = model.events.find((e) => e.kind === "walk");
+  assert.ok(finalWalk);
+  assert.equal(finalWalk.title, "Walk to Prada");
+});
+
+test("condensePreviewEvents drops short intermediate walks and caps rows", () => {
+  const condensed = condensePreviewEvents(
+    [
+      { id: "1", kind: "walk", routeIds: [], title: "Walk", durationMinutes: 3, durationLabel: "3 min" },
+      { id: "2", kind: "subway", routeIds: ["Q"], title: "Union Sq", durationMinutes: 20, durationLabel: "20 min" },
+      { id: "3", kind: "walk", routeIds: [], title: "Walk", durationMinutes: 2, durationLabel: "2 min" },
+      { id: "4", kind: "subway", routeIds: ["M"], title: "Lafayette", durationMinutes: 12, durationLabel: "12 min" },
+      { id: "5", kind: "walk", routeIds: [], title: "Walk", durationMinutes: 6, durationLabel: "6 min" },
+    ],
+    "Prada",
+  );
+
+  assert.ok(condensed.length <= PREVIEW_EVENT_MAX);
+  assert.equal(condensed.some((e) => e.durationMinutes === 3), false);
+  assert.equal(condensed.some((e) => e.durationMinutes === 2), false);
+  assert.equal(condensed.at(-1)?.kind, "walk");
+  assert.equal(condensed.at(-1)?.title, "Walk to Prada");
 });
 
 test("official subway routes are recognized; unsupported ids are not", () => {
