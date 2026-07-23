@@ -131,7 +131,6 @@ export function ChatRouteCardList({
           onSelect={onSelect}
           landDelayMs={0}
           primaryActionLabel="Open on map"
-          secondaryActionLabel="View steps"
         />
       )}
       {alternatives.length > 0 && (

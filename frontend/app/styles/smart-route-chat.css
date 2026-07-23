@@ -772,32 +772,220 @@
   gap: 8px;
 }
 
-/* Recommended itinerary — quiet xAI-style data card.
-   Hierarchy: label → title → metric band → clean rows → reason → actions.
-   No timeline rail, no glass, no neon outline. */
+/* ── Liquid-metal perimeter shell ──────────────────────────────────────
+   Graphite/chrome rim inspired by metal.jakubantalik.com material behavior,
+   implemented as a padding-box conic gradient (no WebGL). The shell paints
+   the rotating metal; the inner surface covers the center with matte fill
+   so only the perimeter reads as liquid metal. */
+
+@property --sr-metal-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+.sr-liquid-metal {
+  --sr-metal-radius: 14px;
+  --sr-metal-rim: 1.5px;
+  position: relative;
+  isolation: isolate;
+  border-radius: var(--sr-metal-radius);
+  padding: var(--sr-metal-rim);
+  /* The shell background IS the metal rim (visible around the surface). */
+  background: conic-gradient(
+    from var(--sr-metal-angle, 0deg),
+    #1c1f24 0deg,
+    #6a7380 28deg,
+    #d8dee6 52deg,
+    #8b949e 78deg,
+    #2a2f36 120deg,
+    #aab3bd 158deg,
+    #f0f3f6 178deg,
+    #5e6772 220deg,
+    #c4ccd5 268deg,
+    #3a414a 310deg,
+    #b0b8c2 340deg,
+    #1c1f24 360deg
+  );
+  animation: srLiquidMetalSpin 10s linear infinite;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.04),
+    0 12px 32px rgba(0, 0, 0, 0.32);
+}
+
+/* Moving specular highlight over the rim for viscous metal feel. */
+.sr-liquid-metal__sheen {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 1;
+  padding: var(--sr-metal-rim);
+  background: conic-gradient(
+    from calc(var(--sr-metal-angle, 0deg) * -1.2 + 50deg),
+    transparent 0deg,
+    transparent 30deg,
+    rgba(255, 255, 255, 0.08) 55deg,
+    rgba(255, 255, 255, 0.65) 72deg,
+    rgba(200, 210, 220, 0.18) 95deg,
+    transparent 130deg,
+    transparent 360deg
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  opacity: 0.85;
+  animation: srLiquidMetalSpin 13s linear infinite reverse;
+}
+
+.sr-liquid-metal__surface {
+  position: relative;
+  z-index: 2;
+  border-radius: calc(var(--sr-metal-radius) - var(--sr-metal-rim));
+  overflow: hidden;
+  background: #121418;
+}
+
+/* Inside metal shell the card drops its own border — the rim is the border. */
+.sr-liquid-metal .sr-itinerary-card {
+  border-color: transparent;
+  border-radius: inherit;
+  background: #121418;
+}
+
+.sr-chat-tab[data-sr-theme="light"] .sr-liquid-metal {
+  background: conic-gradient(
+    from var(--sr-metal-angle, 0deg),
+    #9aa3ad 0deg,
+    #f5f7f9 40deg,
+    #7a8490 95deg,
+    #dfe4ea 150deg,
+    #6a7380 210deg,
+    #eef1f4 270deg,
+    #a8b0ba 320deg,
+    #9aa3ad 360deg
+  );
+  box-shadow:
+    0 0 0 1px rgba(15, 16, 18, 0.06),
+    0 10px 28px rgba(15, 16, 18, 0.08);
+}
+
+.sr-chat-tab[data-sr-theme="light"] .sr-liquid-metal__surface,
+.sr-chat-tab[data-sr-theme="light"] .sr-liquid-metal .sr-itinerary-card {
+  background: #fbfbfa;
+}
+
+@keyframes srLiquidMetalSpin {
+  to {
+    --sr-metal-angle: 360deg;
+  }
+}
+
+/* Fallback when @property unsupported: slow brightness pulse on fixed gradient. */
+@supports not (background: conic-gradient(from var(--sr-metal-angle), red, blue)) {
+  .sr-liquid-metal {
+    background: linear-gradient(
+      125deg,
+      #2a2f36 0%,
+      #c8d0d8 18%,
+      #4a525c 40%,
+      #e8edf2 55%,
+      #3a414a 72%,
+      #aab3bd 88%,
+      #1c1f24 100%
+    );
+    background-size: 220% 220%;
+    animation: srLiquidMetalDrift 8s ease-in-out infinite alternate;
+  }
+
+  .sr-liquid-metal__sheen {
+    animation: none;
+    opacity: 0.35;
+  }
+}
+
+@keyframes srLiquidMetalDrift {
+  from {
+    background-position: 0% 40%;
+  }
+  to {
+    background-position: 100% 60%;
+  }
+}
+
+/* Static metallic contour for reduced motion. */
+.sr-liquid-metal[data-reduced-motion="true"] {
+  animation: none;
+  background: linear-gradient(
+    135deg,
+    #2e333a 0%,
+    #c5ccd4 24%,
+    #4a525c 48%,
+    #e4e8ed 68%,
+    #2a2f36 100%
+  );
+}
+
+.sr-liquid-metal[data-reduced-motion="true"] .sr-liquid-metal__sheen {
+  animation: none;
+  opacity: 0.25;
+  background: linear-gradient(
+    120deg,
+    transparent 20%,
+    rgba(255, 255, 255, 0.35) 48%,
+    transparent 72%
+  );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sr-liquid-metal {
+    animation: none !important;
+    background: linear-gradient(
+      135deg,
+      #2e333a 0%,
+      #c5ccd4 24%,
+      #4a525c 48%,
+      #e4e8ed 68%,
+      #2a2f36 100%
+    ) !important;
+  }
+
+  .sr-liquid-metal__sheen {
+    animation: none !important;
+    opacity: 0.25;
+    background: linear-gradient(
+      120deg,
+      transparent 20%,
+      rgba(255, 255, 255, 0.35) 48%,
+      transparent 72%
+    ) !important;
+  }
+}
+
+/* Recommended itinerary — simplified dark data card.
+   Hierarchy: badge → title → arrive → duration → meta → rows → map action. */
 .sr-itinerary-card {
-  --sr-itinerary-pad-x: 14px;
-  --sr-itinerary-pad-y: 12px;
-  --sr-itinerary-accent: color-mix(in srgb, var(--sr-chat-accent) 82%, #1a2e14);
+  --sr-itinerary-pad-x: 16px;
+  --sr-itinerary-pad-y: 14px;
   position: relative;
   display: flex;
   flex-direction: column;
   gap: 0;
   width: 100%;
   padding: var(--sr-itinerary-pad-y) var(--sr-itinerary-pad-x);
-  border-radius: 10px;
+  border-radius: 14px;
   border: 1px solid var(--sr-chat-hairline);
   background: var(--sr-chat-surface);
   box-shadow: none;
   color: var(--sr-chat-ink);
 }
 
-.sr-chat-tab[data-sr-theme="light"] .sr-itinerary-card {
-  box-shadow: 0 1px 2px rgba(15, 16, 18, 0.04);
-}
-
 .sr-itinerary-card[data-selected="true"] {
-  border-color: color-mix(in srgb, var(--sr-chat-ink) 16%, var(--sr-chat-hairline));
   background: color-mix(in srgb, var(--sr-chat-surface) 94%, var(--sr-chat-ink));
 }
 
@@ -816,32 +1004,30 @@
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
 }
 
-/* Quiet status chip — readable, not a marketing pill. */
 .sr-itinerary-card__badge {
   display: inline-flex;
   align-items: center;
   height: 18px;
-  padding: 0 7px;
-  border-radius: 999px;
+  padding: 0 8px;
+  border-radius: 5px;
   font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
+  font-weight: 650;
+  letter-spacing: 0.01em;
   line-height: 1;
-  color: color-mix(in srgb, var(--sr-chat-accent) 78%, var(--sr-chat-ink));
-  background: color-mix(in srgb, var(--sr-chat-accent) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--sr-chat-accent) 18%, transparent);
+  color: color-mix(in srgb, var(--sr-chat-accent) 86%, #fff);
+  background: color-mix(in srgb, var(--sr-chat-accent) 14%, transparent);
 }
 
 .sr-itinerary-card__title {
   margin: 0;
-  font-size: 14px;
+  font-size: 15.5px;
   font-weight: 560;
-  line-height: 1.3;
-  letter-spacing: -0.012em;
+  line-height: 1.28;
+  letter-spacing: -0.015em;
   color: var(--sr-chat-ink);
   overflow-wrap: anywhere;
 }
@@ -852,82 +1038,68 @@
 
 .sr-itinerary-card__title-arrow {
   display: inline-block;
-  margin: 0 0.32em;
-  color: color-mix(in srgb, var(--sr-chat-ink) 38%, transparent);
+  margin: 0 0.38em;
+  color: color-mix(in srgb, var(--sr-chat-ink) 36%, transparent);
   font-weight: 450;
 }
 
-/* Metric band: big duration left, arrival + meta right. */
-.sr-itinerary-card__metrics {
+.sr-itinerary-card__arrive {
+  margin: -2px 0 0;
+  font-size: 12.5px;
+  font-weight: 450;
+  color: color-mix(in srgb, var(--sr-chat-ink) 52%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-itinerary-card__hero {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--sr-chat-hairline);
   display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 12px;
-  margin-top: 10px;
-  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .sr-itinerary-card__duration {
   margin: 0;
-  min-width: 0;
 }
 
 .sr-itinerary-card__duration-value {
-  font-size: 28px;
+  font-size: 30px;
   font-weight: 650;
   letter-spacing: -0.03em;
-  line-height: 0.98;
+  line-height: 1;
   color: var(--sr-chat-ink);
   font-variant-numeric: tabular-nums;
 }
 
-.sr-itinerary-card__metrics-side {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 2px;
-  text-align: right;
-  flex-shrink: 0;
-  padding-bottom: 2px;
-}
-
-.sr-itinerary-card__arrive {
-  margin: 0;
-  display: flex;
-  align-items: baseline;
-  gap: 5px;
-  font-variant-numeric: tabular-nums;
-}
-
-.sr-itinerary-card__arrive-label {
-  font-size: 11px;
-  font-weight: 500;
-  color: color-mix(in srgb, var(--sr-chat-ink) 42%, transparent);
-}
-
-.sr-itinerary-card__arrive-value {
-  font-size: 12.5px;
-  font-weight: 550;
-  color: var(--sr-chat-ink-dim);
-}
-
 .sr-itinerary-card__meta {
   margin: 0;
-  font-size: 11.5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
   font-weight: 450;
-  color: color-mix(in srgb, var(--sr-chat-ink) 48%, transparent);
+  color: color-mix(in srgb, var(--sr-chat-ink) 50%, transparent);
   font-variant-numeric: tabular-nums;
+}
+
+.sr-itinerary-card__meta-icon {
+  width: 11px;
+  height: 11px;
+  opacity: 0.7;
+  flex-shrink: 0;
 }
 
 .sr-itinerary-card__meta-sep {
   color: color-mix(in srgb, var(--sr-chat-ink) 32%, transparent);
 }
 
-/* Clean step list — rows only, no vertical timeline. */
+/* Compact preview with a thin timeline spine. */
 .sr-itinerary-card__timeline {
   list-style: none;
   margin: 12px 0 0;
-  padding: 8px 0 0;
+  padding: 10px 0 0;
   border-top: 1px solid var(--sr-chat-hairline);
   display: flex;
   flex-direction: column;
@@ -935,22 +1107,64 @@
 }
 
 .sr-itinerary-card__event {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 32px;
-  padding: 5px 0;
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr);
+  gap: 10px;
+  align-items: stretch;
   min-width: 0;
+  padding: 6px 0;
 }
 
-.sr-itinerary-card__event + .sr-itinerary-card__event {
-  border-top: 1px solid color-mix(in srgb, var(--sr-chat-hairline) 70%, transparent);
+.sr-itinerary-card__rail {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 6px;
+}
+
+.sr-itinerary-card__rail::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: color-mix(in srgb, var(--sr-chat-ink) 12%, transparent);
+}
+
+.sr-itinerary-card__event[data-first="true"] .sr-itinerary-card__rail::before {
+  top: 11px;
+}
+
+.sr-itinerary-card__event[data-last="true"] .sr-itinerary-card__rail::before {
+  bottom: calc(100% - 12px);
+}
+
+.sr-itinerary-card__node {
+  position: relative;
+  z-index: 1;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in srgb, var(--sr-chat-ink) 30%, transparent);
+  background: transparent;
+  box-sizing: border-box;
+  flex-shrink: 0;
+}
+
+.sr-itinerary-card__event-main {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
 }
 
 .sr-itinerary-card__event-lead {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 9px;
   min-width: 0;
   flex: 1 1 auto;
@@ -959,15 +1173,17 @@
 .sr-itinerary-card__event-copy {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
   min-width: 0;
+  padding-top: 1px;
 }
 
 .sr-itinerary-card__bullets {
   display: inline-flex;
   align-items: center;
   flex-shrink: 0;
-  min-width: 18px;
+  min-width: 20px;
+  padding-top: 0;
 }
 
 .sr-itinerary-card__bullet-item {
@@ -986,15 +1202,15 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   color: color-mix(in srgb, var(--sr-chat-ink) 72%, transparent);
   font-size: 12px;
   flex-shrink: 0;
 }
 
 .sr-itinerary-card__mode-spacer {
-  width: 18px;
+  width: 20px;
   flex-shrink: 0;
 }
 
@@ -1011,17 +1227,17 @@
 }
 
 .sr-itinerary-card__event-title {
-  font-size: 13px;
-  font-weight: 500;
+  font-size: 13.5px;
+  font-weight: 520;
   line-height: 1.25;
-  color: color-mix(in srgb, var(--sr-chat-ink) 92%, transparent);
+  color: color-mix(in srgb, var(--sr-chat-ink) 94%, transparent);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .sr-itinerary-card__event-sub {
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 450;
   line-height: 1.25;
   color: color-mix(in srgb, var(--sr-chat-ink) 46%, transparent);
@@ -1034,117 +1250,60 @@
   flex-shrink: 0;
   font-size: 12.5px;
   font-weight: 500;
-  color: color-mix(in srgb, var(--sr-chat-ink) 52%, transparent);
+  color: color-mix(in srgb, var(--sr-chat-ink) 50%, transparent);
   font-variant-numeric: tabular-nums;
   text-align: right;
   letter-spacing: -0.01em;
-}
-
-/* Inline reason — stacked label + body, no loud green block. */
-.sr-itinerary-card__rationale {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin: 10px 0 0;
-  padding-top: 9px;
-  border-top: 1px solid var(--sr-chat-hairline);
-  font-size: 12px;
-  line-height: 1.35;
-  color: color-mix(in srgb, var(--sr-chat-ink) 52%, transparent);
-}
-
-.sr-itinerary-card__rationale-label {
-  font-size: 10.5px;
-  font-weight: 550;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-  color: color-mix(in srgb, var(--sr-chat-ink) 42%, transparent);
-}
-
-.sr-itinerary-card__rationale-text {
-  font-weight: 450;
-  color: color-mix(in srgb, var(--sr-chat-ink) 56%, transparent);
-}
-
-.sr-itinerary-card__actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin-top: 11px;
   padding-top: 2px;
 }
 
-.sr-itinerary-card__secondary {
-  display: inline-flex;
+/* Dark outline map action — does not compete with the metal rim. */
+.sr-itinerary-card__actions {
+  display: flex;
   align-items: center;
-  gap: 1px;
-  min-height: 34px;
-  padding: 0;
-  margin: 0;
-  border: 0;
-  background: transparent;
-  color: color-mix(in srgb, var(--sr-chat-ink) 52%, transparent);
-  font: inherit;
-  font-size: 12.5px;
-  font-weight: 500;
-  cursor: pointer;
-  border-radius: 4px;
-  transition: color 140ms var(--sr-motion-ease);
+  justify-content: flex-end;
+  margin-top: 12px;
+  padding-top: 2px;
 }
 
-.sr-itinerary-card__secondary:hover {
-  color: var(--sr-chat-ink);
-}
-
-.sr-itinerary-card__secondary:focus-visible,
-.sr-itinerary-card__primary:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--sr-chat-accent) 70%, transparent);
-  outline-offset: 2px;
-}
-
-/* Tool-like primary — solid, slightly muted, not candy CTA. */
-.sr-itinerary-card__primary {
+.sr-itinerary-card__map-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 34px;
-  height: 32px;
-  padding: 0 13px;
+  gap: 7px;
+  min-height: 36px;
+  height: 34px;
+  padding: 0 14px;
   margin: 0;
-  border: 0;
-  border-radius: 7px;
-  background: var(--sr-itinerary-accent);
-  color: #0c100c;
+  border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--sr-chat-ink) 14%, transparent);
+  background: color-mix(in srgb, var(--sr-chat-ink) 4%, transparent);
+  color: color-mix(in srgb, var(--sr-chat-ink) 82%, transparent);
   font: inherit;
   font-size: 12.5px;
-  font-weight: 600;
+  font-weight: 520;
   letter-spacing: -0.01em;
   cursor: pointer;
   transition:
-    filter 140ms var(--sr-motion-ease),
-    transform 110ms var(--sr-motion-ease),
-    opacity 140ms var(--sr-motion-ease);
+    background 140ms var(--sr-motion-ease),
+    border-color 140ms var(--sr-motion-ease),
+    color 140ms var(--sr-motion-ease),
+    transform 110ms var(--sr-motion-ease);
 }
 
-.sr-chat-tab[data-sr-theme="light"] .sr-itinerary-card__primary {
-  color: #ffffff;
-  background: color-mix(in srgb, var(--sr-chat-accent) 92%, #0a1a0c);
+.sr-itinerary-card__map-btn:hover {
+  background: color-mix(in srgb, var(--sr-chat-ink) 8%, transparent);
+  border-color: color-mix(in srgb, var(--sr-chat-ink) 22%, transparent);
+  color: var(--sr-chat-ink);
 }
 
-.sr-itinerary-card__primary:hover {
-  filter: brightness(1.05);
-}
-
-.sr-itinerary-card__primary:active {
+.sr-itinerary-card__map-btn:active {
   transform: scale(0.98);
 }
 
-.sr-itinerary-card__primary:disabled {
-  opacity: 0.42;
-  cursor: not-allowed;
-  transform: none;
+.sr-itinerary-card__map-btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--sr-chat-accent) 55%, transparent);
+  outline-offset: 2px;
 }
 
 .sr-itinerary-card--skeleton {
@@ -1155,7 +1314,7 @@
 .sr-itinerary-card__skel-pill {
   width: 68px;
   height: 15px;
-  border-radius: 999px;
+  border-radius: 5px;
   background: color-mix(in srgb, var(--sr-chat-ink) 7%, transparent);
 }
 
@@ -1178,14 +1337,7 @@
 
 .sr-itinerary-card__skel-line--xl {
   width: 42%;
-  height: 26px;
-}
-
-.sr-itinerary-card__skel-metrics {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 12px;
+  height: 28px;
 }
 
 /* Compact alternative route cards — flat, same family as itinerary. */
@@ -1327,38 +1479,32 @@ button.sr-chat-route-card {
 }
 
 @media (max-width: 520px) {
+  .sr-liquid-metal {
+    --sr-metal-radius: 12px;
+  }
+
   .sr-itinerary-card {
-    --sr-itinerary-pad-x: 12px;
-    --sr-itinerary-pad-y: 11px;
-    border-radius: 10px;
+    --sr-itinerary-pad-x: 13px;
+    --sr-itinerary-pad-y: 12px;
+    border-radius: 12px;
   }
 
   .sr-itinerary-card__duration-value {
     font-size: 26px;
   }
 
-  .sr-itinerary-card__metrics {
-    align-items: flex-start;
-    flex-wrap: wrap;
+  .sr-itinerary-card__title {
+    font-size: 14.5px;
   }
 
-  .sr-itinerary-card__metrics-side {
-    align-items: flex-start;
-    text-align: left;
+  .sr-itinerary-card__map-btn {
+    min-height: 40px;
+    height: 36px;
+    width: 100%;
   }
 
   .sr-itinerary-card__actions {
-    gap: 8px;
-  }
-
-  .sr-itinerary-card__primary {
-    min-height: 40px;
-    height: 36px;
-    padding: 0 14px;
-  }
-
-  .sr-itinerary-card__secondary {
-    min-height: 40px;
+    justify-content: stretch;
   }
 }
 
