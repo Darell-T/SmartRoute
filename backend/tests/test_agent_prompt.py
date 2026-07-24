@@ -66,6 +66,16 @@ class SystemPromptGuardTests(unittest.TestCase):
         # slipping through, without pinning an exact byte count.
         self.assertGreater(len(agent_prompt.SYSTEM_PROMPT), 500)
 
+    def test_response_presentation_cannot_change_route_decisions(self):
+        self.assertIn("RESPONSE PRESENTATION", agent_prompt.SYSTEM_PROMPT)
+        normalized = " ".join(agent_prompt.SYSTEM_PROMPT.lower().split())
+        self.assertIn("final rider-facing prose only", normalized)
+        self.assertIn("never change tool choice", normalized)
+        self.assertIn("route candidates", normalized)
+        self.assertIn("scoring", normalized)
+        self.assertIn("recommendation", normalized)
+        self.assertIn("severe disruptions", normalized)
+
 
 class BuildTurnContextTests(unittest.TestCase):
     def test_includes_current_time(self):
@@ -108,6 +118,23 @@ class BuildTurnContextTests(unittest.TestCase):
     def test_omits_selected_card_id_when_absent(self):
         block = agent_prompt.build_turn_context({}, "now", None, None)
         self.assertNotIn("selected_card_id", block)
+
+    def test_response_presentation_defaults_to_auto_and_accepts_quick(self):
+        automatic = agent_prompt.build_turn_context({}, "now")
+        quick = agent_prompt.build_turn_context(
+            {},
+            "now",
+            response_presentation="quick",
+        )
+        invalid = agent_prompt.build_turn_context(
+            {},
+            "now",
+            response_presentation="verbose",
+        )
+
+        self.assertIn("response_presentation: auto", automatic)
+        self.assertIn("response_presentation: quick", quick)
+        self.assertIn("response_presentation: auto", invalid)
 
 
 if __name__ == "__main__":

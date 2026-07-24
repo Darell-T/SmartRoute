@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   applyAgentEvent,
+  buildAgentChatRequest,
   persistSessionId,
   readPersistedSessionId,
 } from "./use-agent-chat.ts";
@@ -299,4 +300,26 @@ test("session id persistence: writes only a non-null id, and tolerates a throwin
     setItem() { throw new Error("quota exceeded"); },
   };
   assert.doesNotThrow(() => persistSessionId(throwing, "sess-1"));
+});
+
+test("chat requests carry response presentation without changing route inputs", () => {
+  const shared = {
+    sessionId: "sess-42",
+    message: "  Take me to Costco  ",
+    origin: { lat: 40.65, lng: -74.01 },
+    selectedCardId: "rc-primary",
+  };
+  const automatic = buildAgentChatRequest(shared);
+  const quick = buildAgentChatRequest({
+    ...shared,
+    responsePresentation: "quick",
+  });
+
+  assert.equal(automatic.response_presentation, "auto");
+  assert.equal(quick.response_presentation, "quick");
+  assert.deepEqual(
+    { ...quick, response_presentation: "auto" },
+    automatic,
+  );
+  assert.equal(quick.message, "Take me to Costco");
 });

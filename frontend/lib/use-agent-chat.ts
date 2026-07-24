@@ -328,6 +328,28 @@ export interface AgentChatRequestBody {
   response_presentation: ResponsePresentationMode;
 }
 
+export function buildAgentChatRequest({
+  sessionId,
+  message,
+  origin,
+  selectedCardId,
+  responsePresentation = "auto",
+}: {
+  sessionId: string | null;
+  message: string;
+  origin?: { lat: number; lng: number } | null;
+  selectedCardId: string | null;
+  responsePresentation?: ResponsePresentationMode;
+}): AgentChatRequestBody {
+  return {
+    session_id: validOpaqueId(sessionId, 128),
+    message: message.trim(),
+    origin: validOrigin(origin),
+    selected_card_id: validOpaqueId(selectedCardId, 64),
+    response_presentation: responsePresentation,
+  };
+}
+
 /**
  * Browser geolocation and map callbacks can briefly surface incomplete or
  * non-finite coordinates while a position is being refreshed. `JSON.stringify`
@@ -455,13 +477,13 @@ export function useAgentChat(options: UseAgentChatOptions = {}): UseAgentChatRes
 
     dispatch({ type: "turn_started", text: trimmed });
 
-    const request: AgentChatRequestBody = {
-      session_id: validOpaqueId(state.sessionId, 128),
+    const request = buildAgentChatRequest({
+      sessionId: state.sessionId,
       message: trimmed,
-      origin: validOrigin(getOrigin?.()),
-      selected_card_id: validOpaqueId(cardId, 64),
-      response_presentation: responsePresentation,
-    };
+      origin: getOrigin?.(),
+      selectedCardId: cardId,
+      responsePresentation,
+    });
 
     void runTurn(transport, request, controller, dispatch, inFlightRef, abortControllerRef);
   }

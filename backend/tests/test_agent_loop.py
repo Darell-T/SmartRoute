@@ -95,6 +95,7 @@ class _AgentLoopHelpers:
         trace=None,
         tool_registry=None,
         selected_card_id=None,
+        response_presentation="auto",
     ):
         self.loop.client.messages._rounds = list(rounds)
         self.loop.client.messages.calls = []
@@ -119,6 +120,7 @@ class _AgentLoopHelpers:
                 gtfs=None,
                 origin=origin,
                 selected_card_id=selected_card_id,
+                response_presentation=response_presentation,
                 trace=trace,
             ):
                 events_out.append(event)
@@ -193,6 +195,28 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         last_user_content = kwargs["messages"][-1]["content"]
         self.assertIn("<context>", last_user_content)
         self.assertIn("rider_location: 40.7000,-73.9000", last_user_content)
+
+    async def test_quick_presentation_changes_context_but_not_tool_arguments(self):
+        rounds = [
+            {"tool_use": [{"id": "tu_1", "name": "plan_trip", "input": {"destination": "Costco"}}], "stop_reason": "tool_use"},
+            {"text": ["Take the Q."], "stop_reason": "end_turn"},
+        ]
+        trace = self.loop.TurnTrace()
+
+        await self._run(
+            rounds,
+            message="Take me to Costco",
+            response_presentation="quick",
+            tool_registry=_test_registry(),
+            trace=trace,
+        )
+
+        first_call = self.loop.client.messages.calls[0]
+        self.assertIn(
+            "response_presentation: quick",
+            first_call["messages"][-1]["content"],
+        )
+        self.assertEqual(trace.tool_calls[0][1], {"destination": "Costco"})
 
     async def test_parallel_tools_return_single_tool_result_message(self):
         rounds = [
@@ -400,6 +424,13 @@ class MockAgentModeTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.loop.client.messages.calls), 0)
         self.assertIn("preview", "".join(event.text for event in events_out if event.type == "token").casefold())
         self.assertEqual(session["route_cards"][-1]["card_id"], "mock-t1")
+
+    async def test_quick_mock_copy_is_shorter_without_changing_route_facts(self):
+        automatic = self.loop._mock_trip_copy("Heading to Costco", "auto")
+        quick = self.loop._mock_trip_copy("Heading to Costco", "quick")
+
+        self.assertLess(len(quick[0]), len(automatic[0]))
+        self.assertEqual(quick[1:], automatic[1:])
 
 
 class RateLimitBudgetTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
