@@ -111,8 +111,21 @@ class BuildChainedItineraryTests(unittest.TestCase):
         self.assertEqual(result["departure_at"], "2026-07-23T09:00:00-04:00")
         self.assertEqual(result["arrival_at"], "2026-07-23T10:00:00-04:00")
 
-        # No FE invent: transfer_count is sum of per-segment transfers (0+0)
-        self.assertEqual(result["transfer_count"], 0)
+        # A service change at the waypoint remains a transfer even though the
+        # provider planned each OD segment independently.
+        self.assertEqual(result["transfer_count"], 1)
+        self.assertEqual(len(result["segments"]), 2)
+        self.assertEqual(result["segments"][0]["destination"]["display_name"], "Joe's Pizza")
+        self.assertEqual(result["segments"][1]["destination"], "Times Square")
+        self.assertEqual(result["segments"][0]["legs"][0]["segment_index"], 0)
+        self.assertEqual(result["segments"][1]["legs"][0]["segment_index"], 1)
+        self.assertEqual(result["dwell_events"], [{
+            "event_type": "dwell",
+            "after_segment_index": 0,
+            "waypoint": wp,
+            "duration_seconds": 25 * 60,
+            "source": "default",
+        }])
 
     def test_user_specified_dwell_source(self):
         from app.services.trips.itinerary import build_chained_itinerary
@@ -245,7 +258,7 @@ class BuildChainedItineraryTests(unittest.TestCase):
                 final_destination="B",
             )
 
-    def test_transfer_count_sums_per_segment(self):
+    def test_transfer_count_includes_cross_segment_service_change(self):
         from app.services.trips.itinerary import build_chained_itinerary
 
         # Segment 1: two subway legs → 1 transfer
@@ -287,8 +300,9 @@ class BuildChainedItineraryTests(unittest.TestCase):
             origin="Prospect Park",
             final_destination="Queens",
         )
-        # 1 transfer in seg1 + 0 in seg2; dwell is not a transfer
-        self.assertEqual(result["transfer_count"], 1)
+        # 1 transfer in seg1 + B/2 -> N cross-segment service change;
+        # dwell is not a transfer.
+        self.assertEqual(result["transfer_count"], 2)
         self.assertEqual(result["total_dwell_seconds"], 25 * 60)
         self.assertEqual(result["total_duration_seconds"], (25 + 15 + 25) * 60)
 

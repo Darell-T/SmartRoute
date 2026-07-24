@@ -2014,6 +2014,13 @@
   line-height: 1.45;
 }
 
+.sr-recommended-route__journey {
+  color: var(--sr-text-2) !important;
+  font-size: 12px !important;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
 /* ── Reasoning — the signature element ────────────────────────────────
    A nested inset container around the typed AI rationale. While typing,
    its 1px border runs a slow emerald→cyan shimmer; once settled it's a
@@ -2235,6 +2242,23 @@
 
 .sr-detail-step:first-child {
   border-top: 0;
+}
+
+.sr-detail-step--segment {
+  grid-template-columns: 1fr;
+  padding: 15px 0 7px;
+  border-top-color: var(--sr-hairline-bright);
+}
+
+.sr-detail-step--segment .sr-detail-step__copy strong {
+  color: var(--sr-text-2);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.sr-detail-step--dwell {
+  border-top-color: var(--sr-accent-tint);
 }
 
 .sr-detail-step__icon {

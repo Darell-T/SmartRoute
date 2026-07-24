@@ -81,6 +81,40 @@ export interface CanonicalItineraryLeg {
   [key: string]: unknown;
 }
 
+/** A rider-facing endpoint retained by the canonical itinerary. */
+export interface CanonicalItineraryPlace {
+  display_name?: string | null;
+  label?: string | null;
+  name?: string | null;
+  address?: string | null;
+  place_id?: string | null;
+  lat?: number | null;
+  lng?: number | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  dwell_minutes?: number | null;
+  dwell_source?: "default" | "user" | string | null;
+  [key: string]: unknown;
+}
+
+/** One ordered OD portion of a canonical chained journey. */
+export interface CanonicalItinerarySegment {
+  segment_index: number;
+  origin?: CanonicalItineraryPlace | RouteCardEndpoint | string | null;
+  destination?: CanonicalItineraryPlace | RouteCardEndpoint | string | null;
+  legs: CanonicalItineraryLeg[];
+  duration_seconds?: number;
+}
+
+/** Server-owned intermediate stop time. This is never a transit transfer. */
+export interface CanonicalDwellEvent {
+  event_type: "dwell";
+  after_segment_index: number;
+  waypoint: CanonicalItineraryPlace;
+  duration_seconds: number;
+  source: "default" | "user" | string;
+}
+
 /**
  * Seconds-based immutable itinerary from the backend normalizer
  * (`backend/app/services/trips/itinerary.py`). Optional on older servers;
@@ -89,7 +123,7 @@ export interface CanonicalItineraryLeg {
 export interface CanonicalItinerary {
   itinerary_id?: string;
   origin?: unknown;
-  waypoints?: unknown[];
+  waypoints?: CanonicalItineraryPlace[];
   destination?: unknown;
   timezone?: string;
   planning_mode?: string;
@@ -107,6 +141,10 @@ export interface CanonicalItinerary {
   total_dwell_seconds?: number;
   transfer_count?: number;
   legs?: CanonicalItineraryLeg[];
+  /** Present for server-owned multi-stop journeys; preserves OD boundaries. */
+  segments?: CanonicalItinerarySegment[];
+  /** Present for multi-stop journeys; dwell is a distinct semantic event. */
+  dwell_events?: CanonicalDwellEvent[];
   /** Typed facts for current payloads; strings are a legacy-session adapter. */
   structured_recommendation_reasons?: Array<RecommendationReason | string>;
   [key: string]: unknown;

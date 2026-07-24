@@ -191,6 +191,10 @@ class PlanTripItineraryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(itinerary["waypoints"][0]["display_name"], "Joe's Pizza")
         self.assertEqual(itinerary["waypoints"][0]["dwell_minutes"], 25)
         self.assertEqual(itinerary["waypoints"][0]["dwell_source"], "default")
+        self.assertEqual(len(itinerary["segments"]), 2)
+        self.assertEqual(itinerary["segments"][0]["destination"]["display_name"], "Joe's Pizza")
+        self.assertEqual(itinerary["dwell_events"][0]["duration_seconds"], 25 * 60)
+        self.assertEqual([step["segment_index"] for step in event.route], [0, 1])
         self.assertEqual(itinerary["total_dwell_seconds"], 25 * 60)
         # Each provider route is 25 minutes, plus one server-owned dwell.
         self.assertEqual(itinerary["total_duration_seconds"], 75 * 60)

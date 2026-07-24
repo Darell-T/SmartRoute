@@ -497,6 +497,54 @@ test("uses canonical leg seconds for preview rows instead of relative arrival cl
   assert.deepEqual(model.rationale, ["Avoids the delayed transfer"]);
 });
 
+test("canonical multi-stop preview preserves ordered waypoint, dwell, and per-leg durations", () => {
+  const model = buildItineraryViewModel(baseCard({
+    summary: { eta_minutes: 999, transfers: 0, lines: ["B35", "B37"], reason: "Legacy" },
+    itinerary: {
+      itinerary_id: "pizza-chain",
+      total_duration_seconds: 4380,
+      total_dwell_seconds: 1500,
+      transfer_count: 1,
+      waypoints: [{ display_name: "Luigi's Pizza", address: "123 Fifth Ave", lat: 40.7, lng: -74 }],
+      destination: { display_name: "Costco Sunset Park", lat: 40.65, lng: -74.01 },
+      segments: [
+        {
+          segment_index: 0,
+          destination: { display_name: "Luigi's Pizza" },
+          legs: [{ mode: "BUS", service_id: "B35", alight: "Luigi's Pizza", ride_seconds: 900 }],
+          duration_seconds: 900,
+        },
+        {
+          segment_index: 1,
+          destination: { display_name: "Costco Sunset Park" },
+          legs: [{ mode: "BUS", service_id: "B37", alight: "Costco Sunset Park", ride_seconds: 780 }],
+          duration_seconds: 780,
+        },
+      ],
+      dwell_events: [{
+        event_type: "dwell",
+        after_segment_index: 0,
+        waypoint: { display_name: "Luigi's Pizza", dwell_minutes: 25 },
+        duration_seconds: 1500,
+        source: "default",
+      }],
+    },
+    route: [],
+  }));
+
+  assert.deepEqual(model.placeNames, ["Your location", "Luigi's Pizza", "Costco Sunset Park"]);
+  assert.equal(model.transferCount, 1);
+  assert.ok(model.metaParts.includes("1 transfer"));
+  assert.ok(model.metaParts.includes("25 min stop"));
+  const waypoint = model.events.find((event) => event.kind === "waypoint");
+  assert.ok(waypoint);
+  assert.equal(waypoint.title, "Luigi's Pizza");
+  assert.equal(waypoint.subtitle, "25 min stop");
+  const rides = model.events.filter((event) => event.kind === "bus");
+  assert.deepEqual(rides.map((event) => event.routeIds), [["B35"], ["B37"]]);
+  assert.deepEqual(rides.map((event) => event.durationLabel), ["15 min", "13 min"]);
+});
+
 test("without itinerary, falls back to summary totals (back-compat)", () => {
   const model = buildItineraryViewModel(baseCard());
   assert.equal(model.totalMinutes, 34);

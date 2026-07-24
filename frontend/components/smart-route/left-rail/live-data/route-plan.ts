@@ -7,11 +7,23 @@ import {
   publicRecommendationText,
 } from "./route-reason-copy";
 import {
-  detailStepsFromSteps,
+  detailStepsFromCanonicalItinerary,
   mergeConsecutiveWalks,
   routeStepToRailStep,
   stripFromSteps,
 } from "./route-steps";
+
+function canonicalPlaceLabel(place: unknown, fallback: string): string {
+  if (typeof place === "string" && place.trim()) return place.trim();
+  if (place && typeof place === "object" && !Array.isArray(place)) {
+    const record = place as Record<string, unknown>;
+    for (const key of ["display_name", "label", "name", "address"]) {
+      const value = record[key];
+      if (typeof value === "string" && value.trim()) return value.trim();
+    }
+  }
+  return fallback;
+}
 
 export function buildPlan(
   routeSteps: ApiRouteStep[] | undefined,
@@ -75,6 +87,15 @@ export function buildPlan(
   }
   const selectedTotalTime =
     selectedEtaMinutes !== null ? `${selectedEtaMinutes} min` : null;
+  const journeyPlaces = activeRouteCandidate?.itinerary
+    ? [
+        canonicalPlaceLabel(activeRouteCandidate.itinerary.origin, "Your location"),
+        ...(activeRouteCandidate.itinerary.waypoints ?? []).map((waypoint) =>
+          canonicalPlaceLabel(waypoint, "Waypoint"),
+        ),
+        canonicalPlaceLabel(activeRouteCandidate.itinerary.destination, "Destination"),
+      ].filter((place, index, values) => index === 0 || values[index - 1] !== place)
+    : undefined;
 
   // Transfers: prefer candidate score_breakdown (from itinerary.transfer_count
   // via agentRoutePlanFromCards). Recompute only when absent.
@@ -129,8 +150,11 @@ export function buildPlan(
     leaveByLabel: activeRouteCandidate ? leaveByLabel : undefined,
     nextDepartureMinutes: activeRouteCandidate ? nextDepartureMinutes : undefined,
     transferCount: activeRouteCandidate ? transferCount : undefined,
+    journeyPlaces,
     strip: activeRouteCandidate ? stripFromSteps(routeSteps) : undefined,
-    detailSteps: activeRouteCandidate ? detailStepsFromSteps(routeSteps) : undefined,
+    detailSteps: activeRouteCandidate
+      ? detailStepsFromCanonicalItinerary(routeSteps, activeRouteCandidate.itinerary)
+      : undefined,
     pickedLine: line,
     steps,
     alternatives: buildAlternatives(routeCandidates, activeRouteCandidate, nowMs),

@@ -167,6 +167,39 @@ test("agentRoutePlanFromCards uses summary when itinerary is absent", () => {
   assert.equal(plan?.candidates[0].arrival_at, undefined);
 });
 
+test("Open on map keeps the one canonical chained itinerary on its selected candidate", () => {
+  const itinerary = {
+    itinerary_id: "chain-1",
+    total_duration_seconds: 4380,
+    transfer_count: 1,
+    waypoints: [{ display_name: "Luigi's Pizza", lat: 40.7, lng: -74, dwell_minutes: 25 }],
+    segments: [
+      { segment_index: 0, destination: { display_name: "Luigi's Pizza" }, legs: [] },
+      { segment_index: 1, destination: { display_name: "Costco Sunset Park" }, legs: [] },
+    ],
+    dwell_events: [{
+      event_type: "dwell",
+      after_segment_index: 0,
+      waypoint: { display_name: "Luigi's Pizza" },
+      duration_seconds: 1500,
+      source: "default",
+    }],
+  };
+  const card = baseCard({
+    itinerary,
+    route: [
+      { type: "BUS", train_line: "B35", segment_index: 0 },
+      { type: "BUS", train_line: "B37", segment_index: 1, arrival_coords: { latitude: 40.6559, longitude: -74.0089 } },
+    ],
+  });
+
+  const plan = agentRoutePlanFromCards([card], "rc_1");
+  assert.equal(plan?.candidates[0].itinerary_id, "chain-1");
+  assert.equal(plan?.candidates[0].itinerary, itinerary);
+  assert.equal(plan?.candidates[0].score_breakdown.transfers, 1);
+  assert.deepEqual(plan?.candidates[0].steps.map((step) => step.segment_index), [0, 1]);
+});
+
 test("agent route plans carry chat entry context for the map rail", () => {
   const plan = agentRoutePlanFromCards([baseCard({
     route: [{ type: "WALK", end_point: { latitude: 40.6559, longitude: -74.0089 } }],

@@ -1241,6 +1241,49 @@ test("chat-origin routes do not repeat chat reasoning in the map rail", () => {
   assert.equal(plan.rationale, "");
 });
 
+test("canonical chained itinerary groups rail details and replaces cumulative step clocks", () => {
+  const route = [
+    { type: "BUS", train_line: "B35", segment_index: 0, minutes_until_arrival: 80 },
+    { type: "BUS", train_line: "B37", segment_index: 1, minutes_until_arrival: 80 },
+  ];
+  const candidate = {
+    id: "pizza-chain",
+    index: 0,
+    steps: route,
+    is_recommended: true,
+    total_minutes: 73,
+    score_breakdown: { duration_minutes: 73, transfers: 1, active_alerts: 0, transit_lines: ["B35", "B37"] },
+    itinerary: {
+      itinerary_id: "pizza-chain",
+      origin: { label: "Your location" },
+      destination: { display_name: "Costco Sunset Park" },
+      waypoints: [{ display_name: "Luigi's Pizza", dwell_minutes: 25 }],
+      total_duration_seconds: 4380,
+      total_dwell_seconds: 1500,
+      transfer_count: 1,
+      segments: [
+        { segment_index: 0, destination: { display_name: "Luigi's Pizza" }, legs: [{ mode: "BUS", ride_seconds: 900 }] },
+        { segment_index: 1, destination: { display_name: "Costco Sunset Park" }, legs: [{ mode: "BUS", ride_seconds: 780 }] },
+      ],
+      dwell_events: [{ event_type: "dwell", after_segment_index: 0, waypoint: { display_name: "Luigi's Pizza" }, duration_seconds: 1500, source: "default" }],
+    },
+  };
+
+  const plan = buildPlan(route, candidate, [candidate], null, null, null, 1_700_000_000_000, "chat");
+  assert.deepEqual(plan.journeyPlaces, ["Your location", "Luigi's Pizza", "Costco Sunset Park"]);
+  assert.equal(plan.transferCount, 1);
+  assert.deepEqual(
+    plan.detailSteps.filter((step) => step.kind === "segment").map((step) => step.title),
+    ["Leg 1 · To Luigi's Pizza", "Leg 2 · To Costco Sunset Park"],
+  );
+  assert.equal(plan.detailSteps.filter((step) => step.kind === "dwell").length, 1);
+  assert.match(plan.detailSteps.find((step) => step.kind === "dwell").subtitle, /25 min stop.*Default dwell time/);
+  assert.deepEqual(
+    plan.detailSteps.filter((step) => step.kind === "ride").map((step) => step.rideMeta),
+    ["Ride · 15 min", "Ride · 13 min"],
+  );
+});
+
 test("bus arrivals split tabs by stop compass; crosstown and unknown remain all-directions rows", () => {
   const nowMs = 1_700_000_000_000;
   const bus = (route, dest, stopCompass, stopId) => ({

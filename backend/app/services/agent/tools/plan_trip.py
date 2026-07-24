@@ -394,7 +394,14 @@ async def _execute_chained_trip(
         reasons=[],
         itinerary_id=card_id,
     )
-    chained_route = [step for route in raw_routes for step in route]
+    # Preserve the server-owned segment boundary alongside the existing route
+    # step shape. Legacy clients ignore the additive field; modern map/rail
+    # consumers use it only to associate geometry with the canonical segment.
+    chained_route = [
+        {**step, "segment_index": segment_index}
+        for segment_index, route in enumerate(raw_routes)
+        for step in route
+    ]
     lines = _dedupe_lines(raw_routes)
     alerts: list = []
     for event in recommended_events:

@@ -190,15 +190,63 @@ def build_chained_itinerary(
             waypoints.append(waypoint)
             total_dwell_seconds += max(0, int(dwell_minutes)) * 60
 
+    # Keep both the legacy flat leg sequence and the canonical segment
+    # boundaries. Existing direct-route consumers can continue reading
+    # ``legs``; modern map/card/rail consumers must read ``segments`` so an
+    # intermediate destination is never mistaken for an ordinary transfer.
     all_legs: list[dict] = []
-    for itin in built:
-        all_legs.extend(list(itin.get("legs") or []))
+    canonical_segments: list[dict] = []
+    dwell_events: list[dict] = []
+    for index, itin in enumerate(built):
+        segment_legs = [
+            {**leg, "segment_index": index}
+            for leg in list(itin.get("legs") or [])
+        ]
+        all_legs.extend(segment_legs)
+        segment_origin = (
+            origin
+            if index == 0
+            else _place_fields(segment_list[index - 1].get("destination_place"))
+        )
+        segment_destination = (
+            final_destination
+            if index == len(built) - 1
+            else _place_fields(segment_list[index].get("destination_place"))
+        )
+        canonical_segments.append(
+            {
+                "segment_index": index,
+                "origin": segment_origin,
+                "destination": segment_destination,
+                "legs": segment_legs,
+                "duration_seconds": int(itin["total_duration_seconds"]),
+            }
+        )
+        if index < len(waypoints):
+            waypoint = waypoints[index]
+            dwell_events.append(
+                {
+                    "event_type": "dwell",
+                    "after_segment_index": index,
+                    "waypoint": waypoint,
+                    "duration_seconds": int(waypoint["dwell_minutes"]) * 60,
+                    "source": waypoint["dwell_source"],
+                }
+            )
 
     total_walk = sum(int(itin["total_walk_seconds"]) for itin in built)
     total_wait = sum(int(itin["total_wait_seconds"]) for itin in built)
     total_in_vehicle = sum(int(itin["total_in_vehicle_seconds"]) for itin in built)
-    # Dwell is not a transfer; sum per-OD transfer counts only.
-    transfer_count = sum(int(itin["transfer_count"]) for itin in built)
+    # Dwell is not a transfer. However, changing services between two
+    # separately planned OD segments still is. Count every transit boarding
+    # across the complete canonical journey so B35 -> B37 is one transfer,
+    # not a misleading zero.
+    transit_count = sum(
+        1
+        for leg in all_legs
+        if str(leg.get("mode") or "").upper() in _TRANSIT_MODES
+    )
+    transfer_count = max(0, transit_count - 1)
     total_duration_seconds = (
         sum(int(itin["total_duration_seconds"]) for itin in built) + total_dwell_seconds
     )
@@ -227,6 +275,8 @@ def build_chained_itinerary(
         "total_dwell_seconds": total_dwell_seconds,
         "transfer_count": transfer_count,
         "legs": all_legs,
+        "segments": canonical_segments,
+        "dwell_events": dwell_events,
         "structured_recommendation_reasons": list(reasons or []),
     }
 

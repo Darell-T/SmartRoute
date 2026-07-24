@@ -19,6 +19,7 @@ export type ItineraryEventKind =
   | "bus"
   | "walk"
   | "pickup"
+  | "waypoint"
   | "transfer"
   | "destination";
 
@@ -176,6 +177,19 @@ function canonicalStopLabel(stop: unknown): string | null {
   return null;
 }
 
+/** Resolve a server-owned place without ever turning it into a coordinate label. */
+function canonicalPlaceLabel(place: unknown, fallback: string): string {
+  if (typeof place === "string" && place.trim()) return place.trim();
+  if (place && typeof place === "object" && !Array.isArray(place)) {
+    const record = place as Record<string, unknown>;
+    for (const key of ["display_name", "label", "name", "address"]) {
+      const value = record[key];
+      if (typeof value === "string" && value.trim()) return value.trim();
+    }
+  }
+  return fallback;
+}
+
 function canonicalLegDurationMinutes(leg: CanonicalItineraryLeg): number | null {
   const mode = leg.mode.trim().toUpperCase();
   if (mode === "WALK") return durationMinutesFromSeconds(leg.walk_seconds);
@@ -193,10 +207,12 @@ function buildEventsFromCanonicalItinerary(
   destinationLabel: string,
   idPrefix: string,
 ): ItineraryEvent[] {
-  const legs = Array.isArray(itinerary.legs) ? itinerary.legs : [];
   const events: ItineraryEvent[] = [];
-
-  legs.forEach((leg, index) => {
+  const appendLegs = (
+    legs: CanonicalItineraryLeg[],
+    segmentDestination: string,
+    segmentId: string,
+  ) => legs.forEach((leg, index) => {
     const mode = leg.mode.trim().toUpperCase();
     const isLast = index === legs.length - 1;
     const durationMinutes = canonicalLegDurationMinutes(leg);
@@ -205,10 +221,10 @@ function buildEventsFromCanonicalItinerary(
 
     if (mode === "WALK") {
       events.push({
-        id: `${idPrefix}-canonical-${index}`,
+        id: `${idPrefix}-${segmentId}-canonical-${index}`,
         kind: "walk",
         routeIds: [],
-        title: isLast ? `Walk to ${destinationLabel}` : alight || board || "Walk",
+        title: isLast ? `Walk to ${segmentDestination}` : alight || board || "Walk",
         durationMinutes: durationMinutes ?? undefined,
         durationLabel: durationLabelFromMinutes(durationMinutes),
       });
@@ -218,7 +234,7 @@ function buildEventsFromCanonicalItinerary(
     if (mode === "SUBWAY" || mode === "BUS") {
       const routeId = typeof leg.service_id === "string" ? leg.service_id.trim().toUpperCase() : "";
       events.push({
-        id: `${idPrefix}-canonical-${index}`,
+        id: `${idPrefix}-${segmentId}-canonical-${index}`,
         kind: mode === "BUS" ? "bus" : "subway",
         routeIds: routeId ? [routeId] : [],
         title: alight || board || originLabel,
@@ -227,6 +243,45 @@ function buildEventsFromCanonicalItinerary(
       });
     }
   });
+
+  const segments = Array.isArray(itinerary.segments) ? itinerary.segments : [];
+  if (segments.length > 0) {
+    const dwellBySegment = new Map(
+      (Array.isArray(itinerary.dwell_events) ? itinerary.dwell_events : [])
+        .filter((event) => event?.event_type === "dwell")
+        .map((event) => [event.after_segment_index, event]),
+    );
+    [...segments]
+      .sort((a, b) => a.segment_index - b.segment_index)
+      .forEach((segment, segmentPosition) => {
+        const segmentDestination = canonicalPlaceLabel(
+          segment.destination,
+          segmentPosition === segments.length - 1 ? destinationLabel : "Waypoint",
+        );
+        appendLegs(
+          Array.isArray(segment.legs) ? segment.legs : [],
+          segmentDestination,
+          `segment-${segment.segment_index}`,
+        );
+        const dwell = dwellBySegment.get(segment.segment_index);
+        if (dwell) {
+          const minutes = durationMinutesFromSeconds(dwell.duration_seconds);
+          const waypoint = canonicalPlaceLabel(dwell.waypoint, segmentDestination);
+          events.push({
+            id: `${idPrefix}-dwell-${segment.segment_index}`,
+            kind: "waypoint",
+            routeIds: [],
+            title: waypoint,
+            subtitle: minutes != null ? `${formatDurationMinutes(minutes)} stop` : "Stop",
+            durationMinutes: minutes ?? undefined,
+            durationLabel: durationLabelFromMinutes(minutes),
+          });
+        }
+      });
+    return condensePreviewEvents(events, destinationLabel);
+  }
+
+  appendLegs(Array.isArray(itinerary.legs) ? itinerary.legs : [], destinationLabel, "direct");
 
   return condensePreviewEvents(events, destinationLabel);
 }
@@ -406,6 +461,14 @@ export function condensePreviewEvents(
       continue;
     }
 
+    // Canonical waypoint dwell is a real rider-facing event. Unlike the old
+    // pickup heuristic, it must never be nested into a transit row or
+    // mistaken for a transfer.
+    if (event.kind === "waypoint") {
+      curated.push(event);
+      continue;
+    }
+
     curated.push(event);
   }
 
@@ -484,11 +547,15 @@ function dwellMinutesBetween(earlier: RouteCard, later: RouteCard): number | nul
   return minutes;
 }
 
-function buildMetaParts(transferCount: number, pickupMinutesTotal: number): string[] {
+function buildMetaParts(
+  transferCount: number,
+  dwellMinutesTotal: number,
+  dwellLabel = "pickup",
+): string[] {
   const parts: string[] = [];
   if (transferCount > 0) parts.push(transferLabel(transferCount));
-  if (pickupMinutesTotal > 0) {
-    parts.push(`${formatDurationMinutes(pickupMinutesTotal)} pickup`);
+  if (dwellMinutesTotal > 0) {
+    parts.push(`${formatDurationMinutes(dwellMinutesTotal)} ${dwellLabel}`);
   }
   return parts;
 }
@@ -526,13 +593,21 @@ export function buildItineraryViewModel(
 
   const originLabel = card.origin?.label?.trim() || "Origin";
   const destinationLabel = card.destination.label.trim();
-  const placeNames = [originLabel, destinationLabel];
+  const waypointNames = Array.isArray(card.itinerary?.waypoints)
+    ? card.itinerary.waypoints.map((waypoint) => canonicalPlaceLabel(waypoint, "")).filter(Boolean)
+    : [];
+  const placeNames = [originLabel, ...waypointNames, destinationLabel].filter(
+    (name, index, values) => index === 0 || values[index - 1] !== name,
+  );
   const totalMinutes = cardTotalMinutes(card);
   const transferCount = cardTransferCount(card);
 
-  const events = Array.isArray(card.itinerary?.legs) && card.itinerary.legs.length > 0
-    ? buildEventsFromCanonicalItinerary(
-        card.itinerary,
+  const hasCanonicalEvents =
+    (Array.isArray(card.itinerary?.segments) && card.itinerary.segments.length > 0) ||
+    (Array.isArray(card.itinerary?.legs) && card.itinerary.legs.length > 0);
+  const events = hasCanonicalEvents
+      ? buildEventsFromCanonicalItinerary(
+        card.itinerary!,
         originLabel,
         destinationLabel,
         card.card_id,
@@ -559,7 +634,11 @@ export function buildItineraryViewModel(
     durationLabel: formatDurationMinutes(totalMinutes),
     totalMinutes,
     transferCount,
-    metaParts: buildMetaParts(transferCount, 0),
+    metaParts: buildMetaParts(
+      transferCount,
+      durationMinutesFromSeconds(card.itinerary?.total_dwell_seconds) ?? 0,
+      "stop",
+    ),
     events,
     rationale,
     primaryActionLabel,

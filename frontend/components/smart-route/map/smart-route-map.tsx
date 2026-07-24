@@ -9,6 +9,7 @@ import { DEFAULT_LOCATION } from "@/lib/api";
 import {
   createCurrentLocationDot,
   createDestinationPin,
+  createWaypointMarker,
   updateCurrentLocationDot,
 } from "./route-preview-markers";
 import { flyToRoute, stopRotation } from "@/components/map/camera";
@@ -117,6 +118,7 @@ export function SmartRouteMap({
   const marker = useRef<maplibregl.Marker | null>(null);
   const markerElement = useRef<HTMLDivElement | null>(null);
   const destMarker = useRef<maplibregl.Marker | null>(null);
+  const waypointMarkersRef = useRef<maplibregl.Marker[]>([]);
   const onLocationUpdateRef = useRef(onLocationUpdate);
   const mapReadyRef = useRef(false);
   const rotationIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -357,6 +359,8 @@ export function SmartRouteMap({
       currentMap?.remove();
       marker.current = null;
       markerElement.current = null;
+      for (const waypointMarker of waypointMarkersRef.current) waypointMarker.remove();
+      waypointMarkersRef.current = [];
       if (watchId !== undefined) navigator.geolocation.clearWatch(watchId);
     };
   }, [onMapReady]);
@@ -560,6 +564,10 @@ export function SmartRouteMap({
       // guaranteed in view, not just the transit polyline.
       const fitCoords = stepCoords.flat();
       if (originRef.current) fitCoords.push(originRef.current);
+      for (const waypoint of routeData.itinerary?.waypoints ?? []) {
+        const point = canonicalWaypointCoordinates(waypoint);
+        if (point) fitCoords.push(point);
+      }
       if (destCoords) fitCoords.push([destCoords.lng, destCoords.lat]);
       if (fitCoords.length > 0) {
         flyToRoute(m, fitCoords, { duration: 900, maxZoom: 16 });
@@ -640,7 +648,65 @@ export function SmartRouteMap({
     };
   }, [destLng, destLat]);
 
+  // A chained itinerary has real intermediate destinations, not transfer
+  // stations. Render them separately from ordinary route-stop dots and retain
+  // the canonical geometry for camera fitting above.
+  useEffect(() => {
+    if (!map.current || !mapReadyRef.current) return;
+    for (const waypointMarker of waypointMarkersRef.current) waypointMarker.remove();
+    waypointMarkersRef.current = [];
+
+    if (!routeData?.itinerary) return;
+    for (const waypoint of routeData.itinerary.waypoints ?? []) {
+      const point = canonicalWaypointCoordinates(waypoint);
+      if (!point) continue;
+      const label = canonicalWaypointLabel(waypoint);
+      if (!label) continue;
+      const dwell = typeof waypoint.dwell_minutes === "number"
+        ? waypoint.dwell_minutes
+        : undefined;
+      const marker = new maplibregl.Marker({
+        element: createWaypointMarker(label, dwell),
+        anchor: "left",
+        offset: [10, 0],
+      })
+        .setLngLat(point)
+        .addTo(map.current);
+      waypointMarkersRef.current.push(marker);
+    }
+    return () => {
+      for (const waypointMarker of waypointMarkersRef.current) waypointMarker.remove();
+      waypointMarkersRef.current = [];
+    };
+  }, [routeData, mapStyleVersion]);
+
   return (
     <div ref={mapContainer} className="absolute inset-0 w-full h-full" />
   );
+}
+
+function canonicalWaypointCoordinates(waypoint: {
+  lat?: number | null;
+  lng?: number | null;
+  latitude?: number | null;
+  longitude?: number | null;
+}): [number, number] | null {
+  const lat = waypoint.lat ?? waypoint.latitude;
+  const lng = waypoint.lng ?? waypoint.longitude;
+  return typeof lat === "number" && Number.isFinite(lat) &&
+    typeof lng === "number" && Number.isFinite(lng)
+    ? [lng, lat]
+    : null;
+}
+
+function canonicalWaypointLabel(waypoint: {
+  display_name?: string | null;
+  label?: string | null;
+  name?: string | null;
+  address?: string | null;
+}): string | null {
+  for (const value of [waypoint.display_name, waypoint.label, waypoint.name, waypoint.address]) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return null;
 }

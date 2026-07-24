@@ -195,7 +195,7 @@ export function RouteView({
                   <RecommendedRouteCard
                     candidate={recommended}
                     plan={plan}
-                    destination={search?.inputValue}
+                    destination={plan.journeyPlaces?.at(-1) ?? search?.inputValue}
                     cardRef={recommendedCardRef}
                   />
                 </motion.div>
@@ -883,6 +883,11 @@ function RecommendedRouteCard({
       {plan.strip && plan.strip.length > 0 && (
         <RouteStepStrip segments={plan.strip} />
       )}
+      {plan.journeyPlaces && plan.journeyPlaces.length > 2 && (
+        <p className="sr-recommended-route__journey" aria-label="Journey stops">
+          {plan.journeyPlaces.join(" → ")}
+        </p>
+      )}
       {plan.rationale ? <TypedRouteReasoning text={plan.rationale} /> : null}
       <div className="sr-recommended-route__footer">
         <span>{meta}</span>
@@ -1101,6 +1106,28 @@ function RouteDetailsChain({
         </span>
       </li>
       {steps.map((step, index) => {
+        if (step.kind === "segment") {
+          return (
+            <li key={index} className="sr-detail-step sr-detail-step--segment">
+              <span className="sr-detail-step__copy">
+                <strong>{step.title}</strong>
+              </span>
+            </li>
+          );
+        }
+        if (step.kind === "dwell") {
+          return (
+            <li key={index} className="sr-detail-step sr-detail-step--dwell">
+              <span className="sr-detail-step__icon">
+                <LocationPin tone="start" size={18} />
+              </span>
+              <span className="sr-detail-step__copy">
+                <strong>{step.title}</strong>
+                {step.subtitle && <small>{step.subtitle}</small>}
+              </span>
+            </li>
+          );
+        }
         if (step.kind === "ride") {
           const lineColor =
             step.mode === "bus"

@@ -81,8 +81,10 @@ function SmartRoutePageContent() {
   const activeRouteSteps = activeRouteCandidate?.steps ?? plannedRouteSteps;
 
   const routeData = useMemo<TransitRouteData | null>(() => {
-    return activeRouteSteps.length > 0 ? { steps: activeRouteSteps } : null;
-  }, [activeRouteSteps]);
+    return activeRouteSteps.length > 0
+      ? { steps: activeRouteSteps, itinerary: activeRouteCandidate?.itinerary }
+      : null;
+  }, [activeRouteSteps, activeRouteCandidate?.itinerary]);
 
   const summary = useMemo(
     () =>
