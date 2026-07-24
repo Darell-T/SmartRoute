@@ -1500,10 +1500,6 @@ button.sr-chat-route-card {
 }
 
 @media (max-width: 520px) {
-  .sr-liquid-metal {
-    --sr-metal-radius: 12px;
-  }
-
   .sr-itinerary-card {
     --sr-itinerary-pad-x: 13px;
     --sr-itinerary-pad-y: 12px;
