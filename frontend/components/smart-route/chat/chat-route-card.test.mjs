@@ -48,6 +48,19 @@ test("recommendation card preserves total duration and route-colored chains", ()
   assert.match(CARD_SOURCE, /duration: 0\.3, ease: LAYOUT_EASE/);
 });
 
+test("chat card omits the redundant recommendation badge without changing recommendation data", () => {
+  assert.doesNotMatch(CARD_SOURCE, /sr-itinerary-card__badge/);
+  assert.match(CARD_SOURCE, /data-selected=\{isSelected/);
+});
+
+test("bus legs use a compact bus glyph, plain route text, and the shared chain", () => {
+  assert.match(CARD_SOURCE, /className="sr-itinerary-card__bus-glyph"/);
+  assert.match(CARD_SOURCE, /className="sr-itinerary-card__bus-route"/);
+  assert.match(CARD_SOURCE, /event\.kind === "bus"/);
+  assert.match(CARD_SOURCE, /className="sr-itinerary-card__chain-track"/);
+  assert.doesNotMatch(CARD_SOURCE, /<TrainBullet line=\{normalized\} size=\{34\}/);
+});
+
 test("Open on map remains a direct keyboard-accessible action", () => {
   assert.match(CARD_SOURCE, /<motion\.button[\s\S]*?type="button"/);
   assert.match(CARD_SOURCE, /aria-label=\{model\.primaryActionLabel\}/);

@@ -3,7 +3,7 @@
 import { useId, useMemo, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { BorderBeam } from "border-beam";
-import { Map as MapIcon, NavArrowDown } from "iconoir-react";
+import { Bus, Map as MapIcon, NavArrowDown } from "iconoir-react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faArrowRightArrowLeft,
@@ -45,14 +45,27 @@ function JourneyTitle({ names, id }: { names: string[]; id: string }) {
   );
 }
 
-function RouteGlyph({ routeId }: { routeId: string }) {
+function RouteGlyph({
+  routeId,
+  kind,
+}: {
+  routeId: string;
+  kind: ItineraryEvent["kind"];
+}) {
   const normalized = routeId.trim().toUpperCase();
   if (!normalized) return null;
+  if (kind === "bus") {
+    return (
+      <span className="sr-itinerary-card__bus-glyph" aria-hidden="true">
+        <Bus width={17} height={17} strokeWidth={1.8} fill="currentColor" />
+      </span>
+    );
+  }
   if (!SUBWAY_BULLET_ROUTES.has(normalized)) {
     const looksLikeBus = /[A-Z]{1,3}\d/.test(normalized) || normalized.length > 2;
     if (!looksLikeBus) warnUnsupportedRouteId(normalized);
   }
-  return <TrainBullet line={normalized} size={34} />;
+  return <TrainBullet line={normalized} size={30} />;
 }
 
 function intermediateStops(event: ItineraryEvent): string[] {
@@ -87,6 +100,7 @@ function StopChain({
         aria-controls={`${event.id}-stops`}
         onClick={onToggle}
       >
+        <span className="sr-itinerary-card__chain-summary-marker" aria-hidden="true" />
         <span>Ride {rideLabel}</span>
         <motion.span
           className="sr-itinerary-card__disclosure-icon"
@@ -101,7 +115,10 @@ function StopChain({
         </motion.span>
       </button>
     ) : (
-      <p className="sr-itinerary-card__ride-summary">Ride {rideLabel}</p>
+      <p className="sr-itinerary-card__ride-summary">
+        <span className="sr-itinerary-card__chain-summary-marker" aria-hidden="true" />
+        <span>Ride {rideLabel}</span>
+      </p>
     )
   ) : null;
 
@@ -118,51 +135,52 @@ function StopChain({
         } as React.CSSProperties
       }
     >
-      <div className="sr-itinerary-card__chain-row">
-        <span className="sr-itinerary-card__chain-marker sr-itinerary-card__chain-marker--start" />
-        <span className="sr-itinerary-card__station">{event.fromLabel ?? "Board"}</span>
+      <div className="sr-itinerary-card__chain-track">
+        <div className="sr-itinerary-card__chain-row">
+          <span className="sr-itinerary-card__chain-marker sr-itinerary-card__chain-marker--start" />
+          <span className="sr-itinerary-card__station">{event.fromLabel ?? "Board"}</span>
+        </div>
+
+        {disclosure}
+
+        <AnimatePresence initial={false}>
+          {expanded && stops.length > 0 ? (
+            <motion.ol
+              id={`${event.id}-stops`}
+              className="sr-itinerary-card__intermediate-stops"
+              initial={reduceMotion ? false : { opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={reduceMotion ? undefined : { opacity: 0, height: 0 }}
+              transition={
+                reduceMotion
+                  ? { duration: 0 }
+                  : { duration: 0.3, ease: LAYOUT_EASE }
+              }
+            >
+              {stops.map((stop, index) => (
+                <motion.li
+                  key={`${event.id}-${stop}-${index}`}
+                  initial={reduceMotion ? false : { opacity: 0, y: -2 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={
+                    reduceMotion
+                      ? { duration: 0 }
+                      : { duration: 0.16, delay: index * 0.018 }
+                  }
+                >
+                  <span className="sr-itinerary-card__chain-marker sr-itinerary-card__chain-marker--mid" />
+                  <span>{stop}</span>
+                </motion.li>
+              ))}
+            </motion.ol>
+          ) : null}
+        </AnimatePresence>
+
+        <div className="sr-itinerary-card__chain-row">
+          <span className="sr-itinerary-card__chain-marker sr-itinerary-card__chain-marker--end" />
+          <span className="sr-itinerary-card__station">{event.toLabel ?? event.title}</span>
+        </div>
       </div>
-
-      {!expanded ? disclosure : null}
-
-      <AnimatePresence initial={false}>
-        {expanded && stops.length > 0 ? (
-          <motion.ol
-            id={`${event.id}-stops`}
-            className="sr-itinerary-card__intermediate-stops"
-            initial={reduceMotion ? false : { opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: "auto" }}
-            exit={reduceMotion ? undefined : { opacity: 0, height: 0 }}
-            transition={
-              reduceMotion
-                ? { duration: 0 }
-                : { duration: 0.3, ease: LAYOUT_EASE }
-            }
-          >
-            {stops.map((stop, index) => (
-              <motion.li
-                key={`${event.id}-${stop}-${index}`}
-                initial={reduceMotion ? false : { opacity: 0, y: -2 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={
-                  reduceMotion
-                    ? { duration: 0 }
-                    : { duration: 0.16, delay: index * 0.018 }
-                }
-              >
-                <span className="sr-itinerary-card__chain-marker sr-itinerary-card__chain-marker--mid" />
-                <span>{stop}</span>
-              </motion.li>
-            ))}
-          </motion.ol>
-        ) : null}
-      </AnimatePresence>
-
-      <div className="sr-itinerary-card__chain-row">
-        <span className="sr-itinerary-card__chain-marker sr-itinerary-card__chain-marker--end" />
-        <span className="sr-itinerary-card__station">{event.toLabel ?? event.title}</span>
-      </div>
-      {expanded ? disclosure : null}
     </div>
   );
 }
@@ -189,10 +207,15 @@ function TransitLeg({
   return (
     <section className="sr-itinerary-card__leg" aria-label={`${event.kind} leg`}>
       <div className="sr-itinerary-card__leg-glyph">
-        <RouteGlyph routeId={event.routeIds[0] ?? ""} />
+        <RouteGlyph routeId={event.routeIds[0] ?? ""} kind={event.kind} />
       </div>
       <div className="sr-itinerary-card__leg-body">
         <div className="sr-itinerary-card__leg-heading">
+          {event.kind === "bus" && event.routeIds[0] ? (
+            <span className="sr-itinerary-card__bus-route">
+              {event.routeIds[0].toUpperCase()}
+            </span>
+          ) : null}
           <span>{event.fromLabel ?? "Board"}</span>
           <span className="sr-itinerary-card__leg-arrow" aria-hidden="true">→</span>
           <span>{event.toLabel ?? event.title}</span>
@@ -294,7 +317,7 @@ function ItineraryCardShell({
       brightness={0.9}
       duration={4.8}
       active={!reduceMotion}
-      borderRadius={18}
+      borderRadius={16}
       className="sr-itinerary-card-beam"
     >
       <motion.article
@@ -318,9 +341,6 @@ function ItineraryCardShell({
         }
       >
         <header className="sr-itinerary-card__header">
-          {model.recommended ? (
-            <span className="sr-itinerary-card__badge">Recommended</span>
-          ) : null}
           <JourneyTitle names={model.placeNames} id={titleId} />
           {model.arrivalLabel ? (
             <p className="sr-itinerary-card__arrive">
