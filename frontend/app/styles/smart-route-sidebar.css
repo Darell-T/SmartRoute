@@ -187,16 +187,37 @@
   color: currentColor;
 }
 
-.sr-app-sidebar__item-icon svg,
-.sr-app-sidebar__control-icon svg,
-.sr-app-sidebar__theme-icon svg {
-  transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1);
+.sr-app-sidebar__animated-icon {
+  position: relative;
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 20px;
 }
 
-.sr-app-sidebar__item:hover:not(:disabled) .sr-app-sidebar__item-icon svg,
-.sr-app-sidebar__control:hover .sr-app-sidebar__control-icon svg,
-.sr-app-sidebar__theme:hover .sr-app-sidebar__theme-icon svg {
-  transform: translateY(-1px);
+.sr-app-sidebar__animated-icon-layer {
+  position: absolute;
+  inset: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sr-app-sidebar__animated-icon-layer svg {
+  display: block;
+  width: 20px;
+  height: 20px;
+}
+
+.sr-app-sidebar__animated-icon-layer--filled {
+  color: currentColor;
+}
+
+.sr-app-sidebar__item[data-active="true"]
+  .sr-app-sidebar__animated-icon-layer--filled {
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--sr-sidebar-accent) 24%, transparent));
 }
 
 .sr-app-sidebar__item-copy {
