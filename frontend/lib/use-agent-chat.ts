@@ -19,6 +19,7 @@ import {
   type AgentEvent,
   type RouteCard,
 } from "./agent-chat-stream";
+import type { ResponsePresentationMode } from "./response-presentation";
 
 const SESSION_STORAGE_KEY = "sr-agent-session";
 const CHAT_ENDPOINT = "/api/agent/chat";
@@ -324,6 +325,7 @@ export interface AgentChatRequestBody {
   message: string;
   origin?: { lat: number; lng: number };
   selected_card_id?: string;
+  response_presentation: ResponsePresentationMode;
 }
 
 /**
@@ -405,7 +407,7 @@ export interface UseAgentChatOptions {
 
 export interface UseAgentChatResult {
   messages: ChatTurn[];
-  send: (text: string) => void;
+  send: (text: string, responsePresentation?: ResponsePresentationMode) => void;
   cancel: () => void;
   reset: () => void;
   isStreaming: boolean;
@@ -437,7 +439,10 @@ export function useAgentChat(options: UseAgentChatOptions = {}): UseAgentChatRes
     persistSessionId(safeSessionStorage(), state.sessionId);
   }, [state.sessionId]);
 
-  function send(text: string): void {
+  function send(
+    text: string,
+    responsePresentation: ResponsePresentationMode = "auto",
+  ): void {
     const trimmed = text.trim();
     if (!trimmed || inFlightRef.current) return;
 
@@ -455,6 +460,7 @@ export function useAgentChat(options: UseAgentChatOptions = {}): UseAgentChatRes
       message: trimmed,
       origin: validOrigin(getOrigin?.()),
       selected_card_id: validOpaqueId(cardId, 64),
+      response_presentation: responsePresentation,
     };
 
     void runTurn(transport, request, controller, dispatch, inFlightRef, abortControllerRef);

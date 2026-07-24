@@ -15,7 +15,7 @@
    fake keyboard event.
    ════════════════════════════════════════════════════════════════════════ */
 
-import { ArrowUp, Microphone, Square } from "iconoir-react";
+import { ArrowUp, Microphone, NavArrowDown, Square } from "iconoir-react";
 import {
   PromptInput,
   PromptInputActions,
@@ -23,6 +23,7 @@ import {
 } from "@/components/prompt-kit/prompt-input";
 import { Button } from "@/components/ui/button";
 import { useVoiceInput } from "@/lib/use-voice-input";
+import type { ResponsePresentationMode } from "@/lib/response-presentation";
 
 const MAX_MESSAGE_LENGTH = 500;
 // ~4 lines at the composer's 15px/1.55 type + vertical padding.
@@ -31,12 +32,16 @@ const TEXTAREA_MAX_HEIGHT = 112;
 export function ChatComposer({
   value,
   onValueChange,
+  presentationMode,
+  onPresentationModeChange,
   onSend,
   onCancel,
   isStreaming,
 }: {
   value: string;
   onValueChange: (value: string) => void;
+  presentationMode: ResponsePresentationMode;
+  onPresentationModeChange: (mode: ResponsePresentationMode) => void;
   onSend: (text: string) => void;
   onCancel: () => void;
   isStreaming: boolean;
@@ -62,6 +67,30 @@ export function ChatComposer({
       maxHeight={TEXTAREA_MAX_HEIGHT}
       className="sr-chat-composer"
     >
+      <label
+        className="sr-chat-composer__mode"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <span className="sr-chat-composer__mode-label">Response style</span>
+        <select
+          className="sr-chat-composer__mode-select"
+          aria-label="Response style"
+          value={presentationMode}
+          onChange={(event) =>
+            onPresentationModeChange(event.target.value as ResponsePresentationMode)
+          }
+        >
+          <option value="auto">Auto</option>
+          <option value="quick">Quick</option>
+        </select>
+        <NavArrowDown
+          className="sr-chat-composer__mode-chevron"
+          width={13}
+          height={13}
+          strokeWidth={1.8}
+          aria-hidden="true"
+        />
+      </label>
       <PromptInputTextarea
         aria-label="Message SmartRoute"
         placeholder="Ask SmartRoute"

@@ -33,6 +33,7 @@ const ChatSchema = z
       .nullable()
       .optional(),
     selected_card_id: z.string().max(64).nullable().optional(),
+    response_presentation: z.enum(["auto", "quick"]).default("auto"),
   })
   .strip()
   .transform((payload) => ({

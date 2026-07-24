@@ -16,7 +16,7 @@ import json
 import os
 import re
 import time
-from typing import AsyncIterator
+from typing import AsyncIterator, Literal
 
 import anthropic
 
@@ -62,21 +62,39 @@ class TurnTrace:
     final_text: str = ""
 
 
-def _mock_trip_copy(message: str) -> tuple[str, dict, int, list[str]]:
+def _mock_trip_copy(
+    message: str,
+    response_presentation: Literal["auto", "quick"] = "auto",
+) -> tuple[str, dict, int, list[str]]:
     """Return stable preview content without inferring live service status."""
     query = message.casefold()
     if "costco" in query:
+        text = (
+            "Take the A train to Costco in this preview — about 34 minutes "
+            "with no transfers."
+            if response_presentation == "quick"
+            else (
+                "I'd take the A train to Costco in this preview. It is the best fit "
+                "because it uses one train and keeps the final walk short with your cart."
+            )
+        )
         return (
-            "I'd take the A train to Costco in this preview. It is the best fit "
-            "because it uses one train and keeps the final walk short with your cart.",
+            text,
             {"label": "Costco Sunset Park", "lat": 40.6559, "lng": -74.0089},
             34,
             ["A"],
         )
     if "pizza" in query:
+        text = (
+            "Take the N and Q in this preview — about 27 minutes with one transfer."
+            if response_presentation == "quick"
+            else (
+                "I'd take the N and Q for this preview and stop for pizza near Midtown. "
+                "I picked it because the sample itinerary keeps the transfer count low."
+            )
+        )
         return (
-            "I'd take the N and Q for this preview and stop for pizza near Midtown. "
-            "I picked it because the sample itinerary keeps the transfer count low.",
+            text,
             {"label": "Pizza stop near Midtown", "lat": 40.7549, "lng": -73.9840},
             27,
             ["N", "Q"],
@@ -106,6 +124,7 @@ async def _stream_mock_turn(
     message: str,
     origin: dict | None,
     trace: TurnTrace | None,
+    response_presentation: Literal["auto", "quick"],
 ) -> AsyncIterator[agent_events.AgentEvent]:
     """Stream a small, deterministic fixture for local chat/UI development.
 
@@ -115,7 +134,10 @@ async def _stream_mock_turn(
     """
     started_at = time.monotonic()
     delay_s = _mock_step_delay_s()
-    text, destination, eta_minutes, lines = _mock_trip_copy(message)
+    text, destination, eta_minutes, lines = _mock_trip_copy(
+        message,
+        response_presentation,
+    )
     mock_origin = {
         "label": "Your location",
         "lat": float((origin or {}).get("lat", 40.7484)),
@@ -463,12 +485,19 @@ async def _stream_turn(
     message: str,
     ctx: ToolContext,
     selected_card_id: str | None,
+    response_presentation: Literal["auto", "quick"],
     trace: TurnTrace | None,
 ) -> AsyncIterator[agent_events.AgentEvent]:
     system_blocks = _system_blocks()
     excluded_modes = _rider_excluded_modes(message, session)
     messages = _messages_from_history(session.get("history") or [])
-    context_block = agent_prompt.build_turn_context(session, ctx.now_et, ctx.origin, selected_card_id)
+    context_block = agent_prompt.build_turn_context(
+        session,
+        ctx.now_et,
+        ctx.origin,
+        selected_card_id,
+        response_presentation,
+    )
     messages.append({"role": "user", "content": f"{message}\n\n{context_block}"})
     session_module.append_history(session, "user", message)
 
@@ -611,6 +640,7 @@ async def run_agent_turn(
     gtfs=None,
     origin: dict | None = None,
     selected_card_id: str | None = None,
+    response_presentation: Literal["auto", "quick"] = "auto",
     trace: TurnTrace | None = None,
 ) -> AsyncIterator[agent_events.AgentEvent]:
     """Run one conversational turn, yielding SSE events as they happen.
@@ -630,6 +660,7 @@ async def run_agent_turn(
             message=message,
             origin=origin,
             trace=trace,
+            response_presentation=response_presentation,
         ):
             yield event
         return
@@ -673,6 +704,7 @@ async def run_agent_turn(
             message=message,
             ctx=ctx,
             selected_card_id=selected_card_id,
+            response_presentation=response_presentation,
             trace=trace,
         ):
             yield event

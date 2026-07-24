@@ -9,10 +9,15 @@
    turns a Near You bullet tap into a local (no-model-call) arrivals turn.
    ════════════════════════════════════════════════════════════════════════ */
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ArrivalsTurnPayload, useAgentChat } from "@/lib/use-agent-chat";
 import type { RouteCard } from "@/lib/agent-chat-stream";
 import type { ChatTheme } from "@/lib/use-chat-theme";
+import {
+  browserSessionStorage,
+  persistResponsePresentationMode,
+  readResponsePresentationMode,
+} from "@/lib/response-presentation";
 import {
   ChatContainerContent,
   ChatContainerRoot,
@@ -43,7 +48,14 @@ export function ChatPanel({
   onOpenNearbyStation?: (arrivals: ArrivalsTurnPayload) => void;
 }) {
   const [draft, setDraft] = useState("");
+  const [presentationMode, setPresentationMode] = useState(() =>
+    readResponsePresentationMode(browserSessionStorage()),
+  );
   const composerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    persistResponsePresentationMode(browserSessionStorage(), presentationMode);
+  }, [presentationMode]);
 
   function handleSelectRouteCard(card: RouteCard) {
     chat.selectCard(card.card_id);
@@ -93,7 +105,9 @@ export function ChatPanel({
         <ChatComposer
           value={draft}
           onValueChange={setDraft}
-          onSend={chat.send}
+          presentationMode={presentationMode}
+          onPresentationModeChange={setPresentationMode}
+          onSend={(text) => chat.send(text, presentationMode)}
           onCancel={chat.cancel}
           isStreaming={chat.isStreaming}
         />

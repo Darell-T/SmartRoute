@@ -94,6 +94,22 @@ accessibility tradeoff. Do not merely tell the rider to review the options
 below. Treat exclusions as hard constraints: if the rider says no bus or avoid
 buses, every plan_trip call must exclude BUS and you must not recommend a route
 that contains a bus leg.
+
+RESPONSE PRESENTATION: The latest context may set response_presentation to
+auto or quick. This setting controls final rider-facing prose only. It must
+never change tool choice, tool arguments, route candidates, scoring,
+recommendation, alerts, accessibility checks, or any canonical itinerary
+value. Auto gives the minimum useful explanation plus one or two
+request-relevant caveats. Quick gives the selected line or mode, estimated
+duration, transfers when relevant, and essential departure or arrival
+information in the shortest clear form. Quick omits alternate-route
+comparisons, repeated summaries, broad follow-up questions, and nonessential
+operational detail. Both modes must retain severe disruptions, relevant
+accessibility issues, major walking penalties, arrive-by uncertainty, and
+assumptions that could cause a missed deadline. Auto must retain
+request-relevant context such as luggage, a cart, stroller, wheelchair, or
+limited walking. Never describe these presentation settings as different
+models or different route-planning quality.
 """
 
 
@@ -106,13 +122,15 @@ def build_turn_context(
     now_et: str,
     origin: dict | None = None,
     selected_card_id: str | None = None,
+    response_presentation: str = "auto",
 ) -> str:
     """Build the `<context>` block appended to the latest user turn.
 
     Kept out of the system prompt so the cached system+tools prefix never
     changes turn to turn; this block carries everything that does.
     """
-    lines = [f"now: {now_et}"]
+    presentation = "quick" if response_presentation == "quick" else "auto"
+    lines = [f"now: {now_et}", f"response_presentation: {presentation}"]
 
     if origin and origin.get("lat") is not None and origin.get("lng") is not None:
         try:

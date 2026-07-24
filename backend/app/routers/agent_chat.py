@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import datetime
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Request
@@ -59,6 +60,7 @@ class AgentChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=500)
     origin: AgentOrigin | None = None
     selected_card_id: str | None = None
+    response_presentation: Literal["auto", "quick"] = "auto"
 
 
 def _log_sess(session_id: str) -> str:
@@ -92,6 +94,7 @@ async def _sse_stream(
     gtfs,
     origin: dict | None,
     selected_card_id: str | None,
+    response_presentation: Literal["auto", "quick"],
 ):
     agen = agent_loop.run_agent_turn(
         session=session,
@@ -102,6 +105,7 @@ async def _sse_stream(
         gtfs=gtfs,
         origin=origin,
         selected_card_id=selected_card_id,
+        response_presentation=response_presentation,
     )
     try:
         while True:
@@ -161,6 +165,7 @@ async def agent_chat(request: Request, payload: AgentChatRequest):
         f"[agent-chat] sess[{_log_sess(session_id)}] turn={turn_id} "
         f"msg_len={len(payload.message)} origin={origin_log} "
         f"selected_card={'yes' if payload.selected_card_id else 'no'}"
+        f" presentation={payload.response_presentation}"
     )
 
     return StreamingResponse(
@@ -174,6 +179,7 @@ async def agent_chat(request: Request, payload: AgentChatRequest):
             gtfs,
             origin,
             payload.selected_card_id,
+            payload.response_presentation,
         ),
         media_type="text/event-stream",
         headers=_SSE_HEADERS,
