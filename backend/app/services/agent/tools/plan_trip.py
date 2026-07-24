@@ -33,6 +33,7 @@ from app.services.mta_feed import (
 )
 from app.services.trips import advisor_context, candidates, enrichment, scoring, text
 from app.services.trips import incidents as trip_incidents
+from app.services.trips.itinerary import build_canonical_itinerary
 from app.utils import geo
 
 directions_service = importlib.import_module("app.services.directions")
@@ -112,23 +113,15 @@ def _point_label(raw_value: str) -> str:
     return text._safe_text(value, 80)
 
 
-def _walk_minutes(route: list[dict]) -> float:
-    """Sum of walking-leg time via haversine distance -- WALK steps carry no
-    duration of their own in the parsed shape (only the whole route's total
-    duration, repeated per step), so this is computed from endpoints."""
-    total = 0.0
-    for step in route:
-        if step.get("type") != "WALK":
-            continue
-        start = step.get("start_point") or {}
-        end = step.get("end_point") or {}
-        lat1, lon1 = start.get("latitude"), start.get("longitude")
-        lat2, lon2 = end.get("latitude"), end.get("longitude")
-        if None in (lat1, lon1, lat2, lon2):
-            continue
-        meters = geo.distance_meters(lat1, lon1, lat2, lon2)
-        total += geo.walking_time_minutes(meters)
-    return round(total, 1)
+def _summary_eta_minutes(route: list[dict], total_duration_seconds: int) -> int:
+    """Card/digest ETA from itinerary seconds only.
+
+    Empty route → 0 (no trip). Otherwise max(1, round(seconds/60)) so a
+    sub-minute non-empty trip still shows as 1 minute.
+    """
+    if not route:
+        return 0
+    return max(1, round(int(total_duration_seconds) / 60))
 
 
 async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
@@ -247,6 +240,13 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
 
     origin_label = _point_label(origin_raw)
     destination_label = _point_label(destination_raw)
+    origin_point = {"label": origin_label, "lat": origin_coords[0], "lng": origin_coords[1]}
+    destination_point = {
+        "label": destination_label,
+        "lat": dest_coords[0],
+        "lng": dest_coords[1],
+    }
+    planning_mode = "depart_at" if departure_time else "leave_now"
 
     digest = []
     events = []
@@ -256,12 +256,24 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
         is_recommended = index == chosen_index
         cand = display_candidates[index]
         lines = cand["score_breakdown"]["transit_lines"]
-        eta_minutes = cand["total_minutes"]
-        transfers = cand["score_breakdown"]["transfers"]
         reason = cand["recommendation_reason"] if is_recommended else cand["rejection_reason"]
         alert_headlines = [text._safe_text(a.get("header") or "", 80) for a in (relevant_alerts or [])][:3]
         first_step = route[0] if route else {}
         last_step = route[-1] if route else {}
+
+        # One immutable itinerary per card; summary times derive only from it.
+        itinerary = build_canonical_itinerary(
+            route,
+            origin=origin_point,
+            destination=destination_point,
+            planning_mode=planning_mode,
+            requested_departure=departure_time,
+            reasons=[reason] if reason else None,
+            itinerary_id=card_id,
+        )
+        eta_minutes = _summary_eta_minutes(route, itinerary["total_duration_seconds"])
+        transfers = int(itinerary["transfer_count"])
+        walk_minutes = round(int(itinerary["total_walk_seconds"]) / 60)
 
         digest.append(
             {
@@ -271,7 +283,7 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
                 "transfers": transfers,
                 "departs_iso": first_step.get("departure_time_iso"),
                 "arrives_iso": last_step.get("arrival_time_iso"),
-                "walk_minutes": _walk_minutes(route),
+                "walk_minutes": walk_minutes,
                 "alert_headlines": alert_headlines,
                 "reason": reason,
             }
@@ -287,12 +299,13 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
                 card_id=card_id,
                 turn_id=ctx.turn_id,
                 role="recommended" if is_recommended else "alternative",
-                origin={"label": origin_label, "lat": origin_coords[0], "lng": origin_coords[1]},
-                destination={"label": destination_label, "lat": dest_coords[0], "lng": dest_coords[1]},
+                origin=origin_point,
+                destination=destination_point,
                 depart_iso=departure_time,
                 summary=summary,
                 route=route,
                 alerts=relevant_alerts,
+                itinerary=itinerary,
             )
         )
         session_cards.append(

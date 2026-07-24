@@ -78,6 +78,9 @@ class RouteCardEvent:
     alerts: list
     leg_label: str | None = None
     depart_iso: str | None = None
+    # Canonical seconds-based itinerary (Task 2+). Optional for back-compat
+    # with mocks / older session digests; plan_trip always populates it.
+    itinerary: dict | None = None
     type: str = "route_card"
 
     def to_data(self) -> dict[str, Any]:
@@ -95,6 +98,8 @@ class RouteCardEvent:
             data["leg_label"] = self.leg_label
         if self.depart_iso is not None:
             data["depart_iso"] = self.depart_iso
+        if self.itinerary is not None:
+            data["itinerary"] = self.itinerary
         return data
 
 
