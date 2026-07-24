@@ -25,7 +25,6 @@ import polyline from "@mapbox/polyline";
 import {
   useAgentChat,
   type AgentChatRequestBody,
-  type ArrivalsTurnPayload,
 } from "@/lib/use-agent-chat";
 import type {
   AgentEvent,
@@ -40,7 +39,6 @@ const FIRST_DEMO_QUERY = "Heading to Costco, no bus, I've got a cart";
 
 const ORIGIN: RouteCardEndpoint = { label: "Your location", lat: 40.7484, lng: -73.9857 };
 const DESTINATION: RouteCardEndpoint = { label: "Costco Sunset Park", lat: 40.6559, lng: -74.0089 };
-const MOCK_NEARBY_LINES = ["A", "C", "E", "N", "Q", "R", "1", "2"];
 
 function encodedLine(points: [number, number][]): { encodedPolyline: string } {
   return { encodedPolyline: polyline.encode(points) };
@@ -680,23 +678,6 @@ function AgentChatStoryInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function showMockArrivals(routeId: string) {
-    const arrivals: ArrivalsTurnPayload = {
-      routeId,
-      stationName: "34 St–Penn Station",
-      stationGuidance: "4 min walk · 0.2 mi away",
-      stationCoordinates: { lat: 40.7506, lng: -73.9935 },
-      groups: [
-        { direction: "uptown", label: "Uptown · Inwood–207 St", minutes: [2, 8, 14] },
-        { direction: "downtown", label: "Downtown · Far Rockaway", minutes: [4, 11, 18] },
-      ],
-    };
-    chat.appendLocalTurn({
-      text: `Here are the next ${routeId} trains at ${arrivals.stationName}.`,
-      arrivals,
-    });
-  }
-
   if (showSidebar) {
     return (
       <div
@@ -708,11 +689,9 @@ function AgentChatStoryInner() {
           activeTab="chat"
           collapsed={sidebarCollapsed}
           theme={theme}
-          nearbyRouteIds={MOCK_NEARBY_LINES}
           onOpenChat={() => undefined}
           onOpenLiveMap={() => undefined}
           onNewTrip={chat.reset}
-          onSelectNearbyLine={showMockArrivals}
           onToggleCollapsed={() => setSidebarCollapsed((value) => !value)}
           onToggleTheme={() => setTheme((value) => (value === "dark" ? "light" : "dark"))}
         />

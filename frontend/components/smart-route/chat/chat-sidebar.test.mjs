@@ -7,13 +7,18 @@ const SOURCE = fs.readFileSync(
   fileURLToPath(new URL("./chat-sidebar.tsx", import.meta.url)),
   "utf8",
 );
+const CSS_SOURCE = fs.readFileSync(
+  fileURLToPath(
+    new URL("../../../app/styles/smart-route-sidebar.css", import.meta.url),
+  ),
+  "utf8",
+);
 
-test("sidebar icons share one 20px animated outline-to-fill system", () => {
+test("sidebar icons share one restrained 20px outline system", () => {
   assert.match(SOURCE, /data-state=\{active \? "active" : engaged \? "engaged" : "rest"\}/);
-  assert.match(SOURCE, /animated-icon-layer--outline/);
-  assert.match(SOURCE, /animated-icon-layer--filled/);
-  assert.match(SOURCE, /<OutlineIcon width=\{20\} height=\{20\}/);
-  assert.match(SOURCE, /width=\{20\}[\s\S]*height=\{20\}[\s\S]*fill="currentColor"/);
+  assert.match(SOURCE, /<Icon width=\{20\} height=\{20\} strokeWidth=\{1\.85\}/);
+  assert.doesNotMatch(SOURCE, /animated-icon-layer--filled/);
+  assert.doesNotMatch(SOURCE, /fill="currentColor"/);
 });
 
 test("pointer and keyboard engagement use the same state and reduced motion is honored", () => {
@@ -28,5 +33,14 @@ test("sidebar retains active-page and tooltip semantics", () => {
   assert.match(SOURCE, /aria-current=\{active \? "page" : undefined\}/);
   assert.match(SOURCE, /aria-label=\{tooltipLabel\}/);
   assert.match(SOURCE, /<TooltipContent side="right"/);
-  assert.match(SOURCE, /aria-expanded=\{open && !collapsed\}/);
+});
+
+test("sidebar uses a neutral Grok-like rail without Nearby Lines or green active styling", () => {
+  assert.match(SOURCE, /SquarePen/);
+  assert.match(SOURCE, /icon=\{MapIcon\}/);
+  assert.doesNotMatch(SOURCE, /Nearby Lines/);
+  assert.doesNotMatch(SOURCE, /nearbyRouteIds/);
+  assert.doesNotMatch(CSS_SOURCE, /--sr-sidebar-accent/);
+  assert.doesNotMatch(CSS_SOURCE, /#22c55e|#2ee85f|rgba\(46,\s*232,\s*95/i);
+  assert.match(CSS_SOURCE, /\.sr-app-sidebar\[data-collapsed="true"\][\s\S]*inset: 4px/);
 });

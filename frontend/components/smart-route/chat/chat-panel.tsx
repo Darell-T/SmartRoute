@@ -107,6 +107,7 @@ export function ChatPanel({
           onValueChange={setDraft}
           presentationMode={presentationMode}
           onPresentationModeChange={setPresentationMode}
+          theme={theme}
           onSend={(text) => chat.send(text, presentationMode)}
           onCancel={chat.cancel}
           isStreaming={chat.isStreaming}

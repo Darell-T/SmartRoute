@@ -9,6 +9,12 @@ const CARD_SOURCE = fs.readFileSync(
   fileURLToPath(new URL("./recommended-itinerary-card.tsx", import.meta.url)),
   "utf8",
 );
+const CHAT_CSS_SOURCE = fs.readFileSync(
+  fileURLToPath(
+    new URL("../../../app/styles/smart-route-chat.css", import.meta.url),
+  ),
+  "utf8",
+);
 
 const cards = [
   { card_id: "recommended", role: "recommended" },
@@ -46,6 +52,14 @@ test("recommendation card preserves total duration and route-colored chains", ()
   assert.match(CARD_SOURCE, /model\.metaParts\.map/);
   assert.match(CARD_SOURCE, /getRouteColor\(event\.routeIds\[0\]/);
   assert.match(CARD_SOURCE, /duration: 0\.3, ease: LAYOUT_EASE/);
+  assert.match(
+    CHAT_CSS_SOURCE,
+    /\.sr-itinerary-card__chain-marker--start,[\s\S]*?background: var\(--sr-route-color\)/,
+  );
+  assert.doesNotMatch(
+    CHAT_CSS_SOURCE,
+    /\.sr-itinerary-card__chain-marker--(?:start|end)::after/,
+  );
 });
 
 test("chat card omits the redundant recommendation badge without changing recommendation data", () => {

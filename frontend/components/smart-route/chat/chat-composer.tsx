@@ -15,15 +15,18 @@
    fake keyboard event.
    ════════════════════════════════════════════════════════════════════════ */
 
-import { ArrowUp, Microphone, NavArrowDown, Square } from "iconoir-react";
+import { ArrowUp, Mic, Square } from "lucide-react";
 import {
   PromptInput,
+  PromptInputAction,
   PromptInputActions,
   PromptInputTextarea,
 } from "@/components/prompt-kit/prompt-input";
 import { Button } from "@/components/ui/button";
 import { useVoiceInput } from "@/lib/use-voice-input";
 import type { ResponsePresentationMode } from "@/lib/response-presentation";
+import type { ChatTheme } from "@/lib/use-chat-theme";
+import { ResponseModeMenu } from "./response-mode-menu";
 
 const MAX_MESSAGE_LENGTH = 500;
 // ~4 lines at the composer's 15px/1.55 type + vertical padding.
@@ -34,6 +37,7 @@ export function ChatComposer({
   onValueChange,
   presentationMode,
   onPresentationModeChange,
+  theme,
   onSend,
   onCancel,
   isStreaming,
@@ -42,6 +46,7 @@ export function ChatComposer({
   onValueChange: (value: string) => void;
   presentationMode: ResponsePresentationMode;
   onPresentationModeChange: (mode: ResponsePresentationMode) => void;
+  theme: ChatTheme;
   onSend: (text: string) => void;
   onCancel: () => void;
   isStreaming: boolean;
@@ -67,68 +72,55 @@ export function ChatComposer({
       maxHeight={TEXTAREA_MAX_HEIGHT}
       className="sr-chat-composer"
     >
-      <label
-        className="sr-chat-composer__mode"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <span className="sr-chat-composer__mode-label">Response style</span>
-        <select
-          className="sr-chat-composer__mode-select"
-          aria-label="Response style"
-          value={presentationMode}
-          onChange={(event) =>
-            onPresentationModeChange(event.target.value as ResponsePresentationMode)
-          }
-        >
-          <option value="auto">Auto</option>
-          <option value="quick">Quick</option>
-        </select>
-        <NavArrowDown
-          className="sr-chat-composer__mode-chevron"
-          width={13}
-          height={13}
-          strokeWidth={1.8}
-          aria-hidden="true"
-        />
-      </label>
-      <PromptInputTextarea
-        aria-label="Message SmartRoute"
-        placeholder="Ask SmartRoute"
-        maxLength={MAX_MESSAGE_LENGTH}
-        className="sr-chat-composer__textarea"
-      />
       <PromptInputActions className="sr-chat-composer__actions">
+        <ResponseModeMenu
+          value={presentationMode}
+          theme={theme}
+          onValueChange={onPresentationModeChange}
+        />
+        <PromptInputTextarea
+          aria-label="Message SmartRoute"
+          placeholder="Ask SmartRoute"
+          maxLength={MAX_MESSAGE_LENGTH}
+          className="sr-chat-composer__textarea"
+        />
         {voice.isSupported && (
+          <PromptInputAction
+            tooltip={voice.isListening ? "Listening" : "Use voice input"}
+          >
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="sr-chat-mic-button"
+              data-listening={voice.isListening ? "true" : "false"}
+              aria-label={voice.isListening ? "Listening" : "Use voice input"}
+              aria-pressed={voice.isListening}
+              onClick={voice.start}
+            >
+              <Mic size={18} strokeWidth={1.8} aria-hidden="true" />
+            </Button>
+          </PromptInputAction>
+        )}
+        <PromptInputAction tooltip={isStreaming ? "Stop response" : "Send message"}>
           <Button
             type="button"
             variant="ghost"
             size="icon"
-            className="sr-chat-mic-button"
-            data-listening={voice.isListening ? "true" : "false"}
-            aria-label={voice.isListening ? "Listening" : "Use voice input"}
-            aria-pressed={voice.isListening}
-            onClick={voice.start}
+            className="sr-chat-send-button"
+            data-mode={isStreaming ? "stop" : "send"}
+            data-ready={canSend ? "true" : "false"}
+            aria-label={isStreaming ? "Stop" : "Send message"}
+            disabled={!isStreaming && !canSend}
+            onClick={isStreaming ? onCancel : submit}
           >
-            <Microphone width={19} height={19} strokeWidth={1.7} aria-hidden="true" />
+            {isStreaming ? (
+              <Square size={13} strokeWidth={2} fill="currentColor" aria-hidden="true" />
+            ) : (
+              <ArrowUp size={18} strokeWidth={2} aria-hidden="true" />
+            )}
           </Button>
-        )}
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="sr-chat-send-button"
-          data-mode={isStreaming ? "stop" : "send"}
-          data-ready={canSend ? "true" : "false"}
-          aria-label={isStreaming ? "Stop" : "Send message"}
-          disabled={!isStreaming && !canSend}
-          onClick={isStreaming ? onCancel : submit}
-        >
-          {isStreaming ? (
-            <Square width={14} height={14} strokeWidth={2} fill="currentColor" aria-hidden="true" />
-          ) : (
-            <ArrowUp width={18} height={18} strokeWidth={1.9} aria-hidden="true" />
-          )}
-        </Button>
+        </PromptInputAction>
       </PromptInputActions>
     </PromptInput>
   );

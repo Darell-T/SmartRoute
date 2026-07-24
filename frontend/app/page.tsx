@@ -22,12 +22,6 @@ import { type RouteRailStatus } from "@/components/smart-route/left-rail";
 import { buildLeftRailData } from "@/components/smart-route/left-rail/live-data";
 import { ChatPanel } from "@/components/smart-route/chat/chat-panel";
 import { ChatSidebar } from "@/components/smart-route/chat/chat-sidebar";
-import { SUBWAY_BULLET_ROUTES } from "@/components/smart-route/train-bullet";
-import {
-  buildArrivalsPayloadForRoute,
-  deriveNearbyRouteIds,
-  stationNameForRoute,
-} from "@/components/smart-route/chat/near-you";
 
 import { LiveWorkspace } from "@/components/smart-route/page/live-workspace";
 import { useMobileRailSheet } from "@/components/smart-route/page/use-mobile-rail-sheet";
@@ -264,14 +258,6 @@ function SmartRoutePageContent() {
   const chat = useAgentChat({ getOrigin: () => userLocation });
   const { theme, toggleTheme } = useSmartRouteTheme();
 
-  const nearbyRouteIds = useMemo(
-    () =>
-      deriveNearbyRouteIds(leftRailData).filter((routeId) =>
-        SUBWAY_BULLET_ROUTES.has(routeId),
-      ),
-    [leftRailData],
-  );
-
   const openLiveMap = useCallback(() => setActiveTab("livemap"), []);
   const openChat = useCallback(() => setActiveTab("chat"), []);
 
@@ -281,55 +267,6 @@ function SmartRoutePageContent() {
     setNewTripKey((key) => key + 1);
     setActiveTab("chat");
   }, [chat, routePlanning]);
-
-  const handleSelectNearbyLine = useCallback(
-    (routeId: string) => {
-      const normalizedRouteId = routeId.toUpperCase();
-      const nearbyGroup = leftRailData.nearbyTransitGroups.find((group) =>
-        group.routeIds.some((id) => id.toUpperCase() === normalizedRouteId),
-      );
-      const stationName = stationNameForRoute(
-        normalizedRouteId,
-        leftRailData.nearbyTransitGroups,
-        liveFeed.nearestStop?.stop_name ?? "Nearest station",
-      );
-      const stop =
-        liveFeed.stops.find(
-          (candidate) =>
-            candidate.stop_name === stationName &&
-            candidate.route_ids.some((id) => id.toUpperCase() === normalizedRouteId),
-        ) ??
-        liveFeed.stops.find((candidate) =>
-          candidate.route_ids.some((id) => id.toUpperCase() === normalizedRouteId),
-        ) ??
-        liveFeed.nearestStop;
-      const stationCoordinates =
-        typeof stop?.stop_lat === "number" && typeof stop.stop_lon === "number"
-          ? { lat: stop.stop_lat, lng: stop.stop_lon }
-          : undefined;
-      const distanceMiles =
-        nearbyGroup?.distanceMiles ??
-        (typeof stop?.distance_m === "number" ? stop.distance_m / 1609.344 : undefined);
-      const walkMinutes =
-        nearbyGroup?.walkMinutes ??
-        (typeof stop?.distance_m === "number"
-          ? Math.max(1, Math.round(stop.distance_m / 80))
-          : undefined);
-
-      const arrivals = buildArrivalsPayloadForRoute(
-        normalizedRouteId,
-        leftRailData.arrivals,
-        stationName,
-        { walkMinutes, distanceMiles, coordinates: stationCoordinates },
-      );
-      chat.appendLocalTurn({
-        text: `Here are the next ${normalizedRouteId} trains at ${stationName}.`,
-        arrivals,
-      });
-      setActiveTab("chat");
-    },
-    [chat, leftRailData, liveFeed.nearestStop, liveFeed.stops],
-  );
 
   const handleOpenNearbyStation = useCallback(
     (arrivals: ArrivalsTurnPayload) => {
@@ -386,8 +323,6 @@ function SmartRoutePageContent() {
           onOpenChat={openChat}
           onOpenLiveMap={openLiveMap}
           onNewTrip={startNewTrip}
-          nearbyRouteIds={nearbyRouteIds}
-          onSelectNearbyLine={handleSelectNearbyLine}
           onToggleCollapsed={() => setSidebarCollapsed((collapsed) => !collapsed)}
           onToggleTheme={toggleTheme}
         />

@@ -1,38 +1,33 @@
 "use client";
 
 import Image from "next/image";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { motion, useReducedMotion } from "motion/react";
 import { useState, type ComponentType, type SVGProps } from "react";
+import { Map as MapIcon } from "iconoir-react";
 import {
   Bookmark,
-  BookmarkSolid,
-  ChatBubble,
-  ChatBubbleSolid,
-  HalfMoon,
-  HelpCircle,
-  HelpCircleSolid,
-  Map,
-  MessageText,
-  MessageTextSolid,
-  NavArrowDown,
-  NavArrowLeft,
-  NavArrowRight,
-  Plus,
+  CircleHelp,
+  MessageCircle,
+  MessageSquareText,
+  Moon,
+  PanelLeftClose,
+  PanelLeftOpen,
   Settings,
-  SunLight,
-  Train,
-} from "iconoir-react";
+  SquarePen,
+  Sun,
+} from "lucide-react";
 import type { AppTab } from "@/app/page-parts";
 import type { ChatTheme } from "@/lib/use-chat-theme";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { LineBadge } from "./line-badge";
+
+type SidebarIcon = ComponentType<SVGProps<SVGSVGElement>>;
+type IconMotion = "lift" | "rotate" | "open";
 
 type SidebarItemProps = {
   label: string;
-  icon: ComponentType<SVGProps<SVGSVGElement>>;
-  filledIcon?: ComponentType<SVGProps<SVGSVGElement>>;
-  motionEffect?: "lift" | "rotate" | "open";
+  icon: SidebarIcon;
+  motionEffect?: IconMotion;
   active?: boolean;
   description?: string;
   disabled?: boolean;
@@ -40,10 +35,45 @@ type SidebarItemProps = {
   onClick?: () => void;
 };
 
+function AnimatedSidebarIcon({
+  icon: Icon,
+  active = false,
+  engaged = false,
+  effect = "lift",
+}: {
+  icon: SidebarIcon;
+  active?: boolean;
+  engaged?: boolean;
+  effect?: IconMotion;
+}) {
+  const reduceMotion = useReducedMotion() ?? false;
+  const transform = reduceMotion
+    ? { x: 0, y: 0, rotate: 0, scale: 1 }
+    : effect === "rotate"
+      ? { x: 0, y: 0, rotate: engaged ? 9 : 0, scale: engaged ? 1.025 : 1 }
+      : effect === "open"
+        ? { x: engaged ? 0.8 : 0, y: 0, rotate: 0, scale: engaged ? 1.025 : 1 }
+        : { x: 0, y: engaged ? -1 : 0, rotate: 0, scale: engaged ? 1.025 : 1 };
+
+  return (
+    <motion.span
+      className="sr-app-sidebar__animated-icon"
+      data-state={active ? "active" : engaged ? "engaged" : "rest"}
+      data-reduced-motion={reduceMotion ? "true" : "false"}
+      animate={transform}
+      transition={{
+        duration: reduceMotion ? 0 : 0.19,
+        ease: [0.22, 1, 0.36, 1],
+      }}
+    >
+      <Icon width={20} height={20} strokeWidth={1.85} aria-hidden="true" />
+    </motion.span>
+  );
+}
+
 function SidebarItem({
   label,
-  icon: Icon,
-  filledIcon,
+  icon,
   motionEffect = "lift",
   active = false,
   description,
@@ -77,8 +107,7 @@ function SidebarItem({
         >
           <span className="sr-app-sidebar__item-icon" aria-hidden="true">
             <AnimatedSidebarIcon
-              icon={Icon}
-              filledIcon={filledIcon}
+              icon={icon}
               active={active}
               engaged={engaged}
               effect={motionEffect}
@@ -99,190 +128,22 @@ function SidebarItem({
   );
 }
 
-function AnimatedSidebarIcon({
-  icon: OutlineIcon,
-  filledIcon: FilledIcon,
-  active = false,
-  engaged = false,
-  effect = "lift",
-}: {
-  icon: ComponentType<SVGProps<SVGSVGElement>>;
-  filledIcon?: ComponentType<SVGProps<SVGSVGElement>>;
-  active?: boolean;
-  engaged?: boolean;
-  effect?: "lift" | "rotate" | "open";
-}) {
-  const reduceMotion = useReducedMotion() ?? false;
-  const showFilled = active || engaged;
-  const transform = reduceMotion
-    ? { x: 0, y: 0, rotate: 0, scale: 1 }
-    : effect === "rotate"
-      ? { x: 0, y: 0, rotate: engaged ? 7 : 0, scale: engaged ? 1.02 : 1 }
-      : effect === "open"
-        ? { x: engaged ? 0.7 : 0, y: 0, rotate: engaged ? -1.5 : 0, scale: engaged ? 1.015 : 1 }
-        : { x: 0, y: engaged ? -1 : 0, rotate: 0, scale: engaged ? 1.02 : 1 };
-  const transition = {
-    duration: reduceMotion ? 0 : 0.19,
-    ease: [0.22, 1, 0.36, 1] as const,
-  };
-  const ActiveIcon = FilledIcon ?? OutlineIcon;
-
-  return (
-    <motion.span
-      className="sr-app-sidebar__animated-icon"
-      data-state={active ? "active" : engaged ? "engaged" : "rest"}
-      data-reduced-motion={reduceMotion ? "true" : "false"}
-      animate={transform}
-      transition={transition}
-    >
-      <motion.span
-        className="sr-app-sidebar__animated-icon-layer sr-app-sidebar__animated-icon-layer--outline"
-        animate={{ opacity: showFilled ? 0 : 1 }}
-        transition={transition}
-      >
-        <OutlineIcon width={20} height={20} strokeWidth={1.65} />
-      </motion.span>
-      <motion.span
-        className="sr-app-sidebar__animated-icon-layer sr-app-sidebar__animated-icon-layer--filled"
-        animate={{ opacity: showFilled ? 1 : 0 }}
-        transition={transition}
-      >
-        <ActiveIcon
-          width={20}
-          height={20}
-          strokeWidth={FilledIcon ? 0 : 1.5}
-          fill="currentColor"
-        />
-      </motion.span>
-    </motion.span>
-  );
-}
-
-function NearbyLinesAccordion({
-  collapsed,
-  routeIds,
-  onRequestExpand,
-  onSelectLine,
-}: {
-  collapsed: boolean;
-  routeIds: string[];
-  onRequestExpand: () => void;
-  onSelectLine: (routeId: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [engaged, setEngaged] = useState(false);
-  const reduceMotion = useReducedMotion() ?? false;
-  const visibleRouteIds = routeIds.slice(0, 10);
-
-  function toggleOpen() {
-    if (collapsed) {
-      setOpen(true);
-      onRequestExpand();
-      return;
-    }
-    setOpen((value) => !value);
-  }
-
-  return (
-    <div className="sr-app-sidebar__nearby" data-open={open ? "true" : "false"}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            className="sr-app-sidebar__item sr-app-sidebar__nearby-trigger"
-            data-active={open ? "true" : "false"}
-            aria-expanded={open && !collapsed}
-            aria-controls="sr-nearby-lines-grid"
-            aria-label="Nearby Lines"
-            onPointerEnter={() => setEngaged(true)}
-            onPointerLeave={() => setEngaged(false)}
-            onFocus={() => setEngaged(true)}
-            onBlur={() => setEngaged(false)}
-            onClick={toggleOpen}
-          >
-            <span className="sr-app-sidebar__item-icon" aria-hidden="true">
-              <AnimatedSidebarIcon
-                icon={Train}
-                active={open}
-                engaged={engaged}
-                effect="lift"
-              />
-            </span>
-            <span className="sr-app-sidebar__item-copy">
-              <span className="sr-app-sidebar__item-label">Nearby Lines</span>
-            </span>
-            <NavArrowDown
-              className="sr-app-sidebar__nearby-chevron"
-              width={13}
-              height={13}
-              strokeWidth={1.7}
-              aria-hidden="true"
-            />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="right" sideOffset={10} className="sr-app-sidebar__tooltip">
-          Nearby Lines
-        </TooltipContent>
-      </Tooltip>
-
-      <AnimatePresence initial={false}>
-        {open && !collapsed ? (
-          <motion.div
-            id="sr-nearby-lines-grid"
-            className="sr-app-sidebar__nearby-panel"
-            initial={{ height: 0, opacity: 0, y: -4 }}
-            animate={{ height: "auto", opacity: 1, y: 0 }}
-            exit={{ height: 0, opacity: 0, y: -4 }}
-            transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
-          >
-            {visibleRouteIds.length > 0 ? (
-              <div className="sr-app-sidebar__nearby-grid" aria-label="Subway lines near you">
-                {visibleRouteIds.map((routeId) => (
-                  <motion.button
-                    key={routeId}
-                    type="button"
-                    className="sr-app-sidebar__line-button"
-                    aria-label={`Show ${routeId} train arrivals`}
-                    whileHover={reduceMotion ? undefined : { scale: 1.03, y: -1 }}
-                    whileTap={reduceMotion ? undefined : { scale: 0.97 }}
-                    transition={{ duration: reduceMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
-                    onClick={() => onSelectLine(routeId)}
-                  >
-                    <LineBadge line={routeId} size={20} />
-                  </motion.button>
-                ))}
-              </div>
-            ) : (
-              <p className="sr-app-sidebar__nearby-empty">Locating nearby service…</p>
-            )}
-          </motion.div>
-        ) : null}
-      </AnimatePresence>
-    </div>
-  );
-}
-
 export function ChatSidebar({
   activeTab,
   collapsed,
   theme,
-  nearbyRouteIds,
   onOpenChat,
   onOpenLiveMap,
   onNewTrip,
-  onSelectNearbyLine,
   onToggleCollapsed,
   onToggleTheme,
 }: {
   activeTab: AppTab;
   collapsed: boolean;
   theme: ChatTheme;
-  nearbyRouteIds: string[];
   onOpenChat: () => void;
   onOpenLiveMap: () => void;
   onNewTrip: () => void;
-  onSelectNearbyLine: (routeId: string) => void;
   onToggleCollapsed: () => void;
   onToggleTheme: () => void;
 }) {
@@ -317,46 +178,37 @@ export function ChatSidebar({
         <SidebarItem
           label="Chat"
           description="Plan and explore trips"
-          icon={ChatBubble}
-          filledIcon={ChatBubbleSolid}
+          icon={MessageCircle}
           active={activeTab === "chat"}
           onClick={onOpenChat}
         />
         <SidebarItem
           label="Transit Map"
           description="Live feed · Alerts · Routes"
-          icon={Map}
+          icon={MapIcon}
           motionEffect="open"
           active={activeTab === "livemap"}
           onClick={onOpenLiveMap}
         />
         <SidebarItem
           label="New Trip"
-          icon={Plus}
-          motionEffect="rotate"
+          icon={SquarePen}
+          motionEffect="open"
           onClick={onNewTrip}
         />
-        <SidebarItem label="Favorites" icon={Bookmark} filledIcon={BookmarkSolid} disabled />
-        <NearbyLinesAccordion
-          collapsed={collapsed}
-          routeIds={nearbyRouteIds}
-          onRequestExpand={onToggleCollapsed}
-          onSelectLine={onSelectNearbyLine}
-        />
+        <SidebarItem label="Favorites" icon={Bookmark} disabled />
 
         <div className="sr-app-sidebar__nav-rule" aria-hidden="true" />
 
         <SidebarItem
           label="Feedback"
-          icon={MessageText}
-          filledIcon={MessageTextSolid}
+          icon={MessageSquareText}
           appearance="secondary"
           disabled
         />
         <SidebarItem
           label="Help"
-          icon={HelpCircle}
-          filledIcon={HelpCircleSolid}
+          icon={CircleHelp}
           appearance="secondary"
           disabled
         />
@@ -385,9 +237,9 @@ export function ChatSidebar({
             >
               <span className="sr-app-sidebar__control-icon" aria-hidden="true">
                 <AnimatedSidebarIcon
-                  icon={collapsed ? NavArrowRight : NavArrowLeft}
+                  icon={collapsed ? PanelLeftOpen : PanelLeftClose}
                   engaged={collapseEngaged}
-                  effect="lift"
+                  effect="open"
                 />
               </span>
               <span className="sr-app-sidebar__control-label">
@@ -417,7 +269,7 @@ export function ChatSidebar({
             >
               <span className="sr-app-sidebar__theme-icon" aria-hidden="true">
                 <AnimatedSidebarIcon
-                  icon={theme === "dark" ? SunLight : HalfMoon}
+                  icon={theme === "dark" ? Sun : Moon}
                   engaged={themeEngaged}
                   effect="rotate"
                 />
