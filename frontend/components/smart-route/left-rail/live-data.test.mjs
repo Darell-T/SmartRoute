@@ -811,6 +811,77 @@ test("plan carries strip, detail steps, leave-by, and correct transfer count", (
   assert.equal(singleLeg.plan.transferCount, 0);
 });
 
+test("plan prefers candidate score_breakdown.transfers over step re-count", () => {
+  const nowMs = 1_700_000_000_000;
+  // Two transit boardings re-count as 1 transfer; canonical says 2.
+  const steps = [
+    {
+      type: "SUBWAY",
+      route_id: "Q",
+      train_line: "Q",
+      departure_stop: "Church Av",
+      arrival_stop: "Union Sq",
+      minutes_until_arrival: 24,
+    },
+    {
+      type: "SUBWAY",
+      route_id: "5",
+      train_line: "5",
+      departure_stop: "Union Sq",
+      arrival_stop: "Burke Av",
+      minutes_until_arrival: 44,
+    },
+  ];
+  const candidate = {
+    id: "c0",
+    index: 0,
+    steps,
+    is_recommended: true,
+    total_minutes: 86,
+    score_breakdown: { duration_minutes: 86, transfers: 2, active_alerts: 0 },
+  };
+  const data = buildLeftRailData({
+    nowMs,
+    routeSteps: steps,
+    routeCandidates: [candidate],
+    activeRouteCandidate: candidate,
+  });
+  assert.equal(data.plan.transferCount, 2);
+});
+
+test("plan prefers candidate arrival_at ISO over now+eta for clock", () => {
+  const nowMs = Date.parse("2026-07-16T12:00:00-04:00");
+  const steps = [
+    {
+      type: "SUBWAY",
+      route_id: "A",
+      train_line: "A",
+      departure_stop: "34 St",
+      arrival_stop: "Jay St",
+      minutes_until_arrival: 40,
+    },
+  ];
+  const candidate = {
+    id: "c0",
+    index: 0,
+    steps,
+    is_recommended: true,
+    total_minutes: 89,
+    arrival_at: "2026-07-16T15:45:00-04:00",
+    score_breakdown: { duration_minutes: 89, transfers: 0, active_alerts: 0 },
+  };
+  const data = buildLeftRailData({
+    nowMs,
+    routeSteps: steps,
+    routeCandidates: [candidate],
+    activeRouteCandidate: candidate,
+  });
+  // Canonical wall clock (3:45 PM), not 12:00 + 89 min (1:29 PM)
+  assert.equal(data.plan.eta, "3:45 PM");
+  assert.equal(data.plan.totalTime, "89 min");
+  assert.equal(data.plan.transferCount, 0);
+});
+
 test("walk detail titles name subway stations and bus stops", () => {
   const nowMs = 1_700_000_000_000;
   const busSteps = [

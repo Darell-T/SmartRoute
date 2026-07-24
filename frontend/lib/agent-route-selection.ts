@@ -37,6 +37,13 @@ function transferCountFromCard(card: RouteCard): number {
   return card.summary.transfers;
 }
 
+/** Prefer itinerary.arrival_at when it is a non-empty string. */
+function arrivalAtFromCard(card: RouteCard): string | undefined {
+  const iso = card.itinerary?.arrival_at;
+  if (typeof iso === "string" && iso.trim()) return iso.trim();
+  return undefined;
+}
+
 export function normalizeRouteCoordinate(
   value: unknown,
 ): { lat: number; lng: number } | null {
@@ -114,6 +121,7 @@ export function agentRoutePlanFromCards(
     const isRecommended = card.role === "recommended";
     const totalMinutes = totalMinutesFromCard(card);
     const transfers = transferCountFromCard(card);
+    const arrivalAt = arrivalAtFromCard(card);
     return [
       {
         id: card.card_id,
@@ -121,6 +129,7 @@ export function agentRoutePlanFromCards(
         steps: route.steps,
         is_recommended: isRecommended,
         total_minutes: totalMinutes,
+        ...(arrivalAt ? { arrival_at: arrivalAt } : {}),
         score_breakdown: {
           duration_minutes: totalMinutes,
           transfers,

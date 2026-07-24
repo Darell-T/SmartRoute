@@ -86,9 +86,22 @@ function SmartRoutePageContent() {
   const summary = useMemo(
     () =>
       activeRouteSteps.length > 0
-        ? summarizeRoute(activeRouteSteps, new Date(), activeRouteCandidate?.total_minutes)
+        ? summarizeRoute(
+            activeRouteSteps,
+            new Date(),
+            activeRouteCandidate?.total_minutes,
+            {
+              arrivalAtIso: activeRouteCandidate?.arrival_at,
+              transfers: activeRouteCandidate?.score_breakdown?.transfers,
+            },
+          )
         : null,
-    [activeRouteSteps, activeRouteCandidate?.total_minutes],
+    [
+      activeRouteSteps,
+      activeRouteCandidate?.total_minutes,
+      activeRouteCandidate?.arrival_at,
+      activeRouteCandidate?.score_breakdown?.transfers,
+    ],
   );
 
   const destCoords = useMemo(() => {

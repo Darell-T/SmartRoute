@@ -93,10 +93,19 @@ function stepCountsStops(step: RouteStep): number | undefined {
   return undefined;
 }
 
+/** Optional canonical overrides when itinerary / candidate already knows clocks. */
+export interface SummarizeRouteOptions {
+  /** ISO-8601 arrival wall-clock from itinerary.arrival_at. */
+  arrivalAtIso?: string | null;
+  /** transfer_count from itinerary / score_breakdown; re-count only if absent. */
+  transfers?: number | null;
+}
+
 export function summarizeRoute(
   steps: RouteStep[],
   now = new Date(),
   totalMinutesOverride?: number | null,
+  options?: SummarizeRouteOptions | null,
 ): RouteSummary {
   const legs: RouteLeg[] = [];
   const transitLines: string[] = [];
@@ -104,7 +113,7 @@ export function summarizeRoute(
   let fallbackTotalMin = 0;
   let routeEtaMin: number | null = null;
   let routeTotalFromSource: number | null = null;
-  let transfers = 0;
+  let recomputedTransfers = 0;
 
   let prevWasTransit: RouteStep | null = null;
 
@@ -147,13 +156,15 @@ export function summarizeRoute(
         const station =
           step.departure_stop || prevWasTransit.arrival_stop || "transfer";
         if (!transferStation) transferStation = station;
+        // Still insert a transfer leg for path visualization. Duration stays a
+        // 1-min filler when no per-leg transfer_seconds exist (documented invent).
         legs.push({
           mode: "transfer",
           detail: `Transfer at ${station}`,
           min: 1,
         });
         fallbackTotalMin += 1;
-        transfers += 1;
+        recomputedTransfers += 1;
       }
       const line = step.train_line || (step.type === "BUS" ? "BUS" : "?");
       transitLines.push(line);
@@ -182,7 +193,22 @@ export function summarizeRoute(
         : (routeTotalFromSource ?? routeEtaMin ?? fallbackTotalMin),
     ),
   );
-  const arrive = new Date(now.getTime() + totalMin * 60_000);
+  const arriveFromOffset = new Date(now.getTime() + totalMin * 60_000);
+
+  // Preference: itinerary ISO → now+total (legacy).
+  let arriveLabel = formatClockOffset(arriveFromOffset);
+  const arrivalAtIso = options?.arrivalAtIso;
+  if (typeof arrivalAtIso === "string" && arrivalAtIso.trim()) {
+    const parsed = new Date(arrivalAtIso);
+    if (!Number.isNaN(parsed.getTime())) {
+      arriveLabel = formatClockOffset(parsed);
+    }
+  }
+
+  const transfers =
+    typeof options?.transfers === "number" && Number.isFinite(options.transfers)
+      ? Math.max(0, Math.round(options.transfers))
+      : recomputedTransfers;
 
   // Legacy primaryHeadline (kept for safety, unused by HeroCard).
   let prefix = "Route";
@@ -252,7 +278,7 @@ export function summarizeRoute(
       ? `Direct walk from origin to destination — no transit needed. Total walk time ${totalMin} min.`
       : `Selected ${transitLines.join(" + ")}${transferStation ? ` with a transfer at ${transferStation}` : ""}. ` +
         `This path avoids active alerts and minimizes dwell risk based on current GTFS-rt vehicle positions. ` +
-        `ETA ${formatClockOffset(arrive)} · total ${totalMin} min.`;
+        `ETA ${arriveLabel} · total ${totalMin} min.`;
 
   return {
     legs,
@@ -260,7 +286,7 @@ export function summarizeRoute(
     transitLines,
     transferStation,
     departLabel: formatClockOffset(now),
-    arriveLabel: formatClockOffset(arrive),
+    arriveLabel,
     primaryHeadline: { prefix, emphasis, suffix },
     reasonHeadline,
     reasonLong,

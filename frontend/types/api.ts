@@ -40,6 +40,11 @@ export interface RouteCandidate {
   steps: RouteStep[];
   is_recommended: boolean;
   total_minutes?: number;
+  /**
+   * Canonical itinerary arrival wall-clock (ISO). When present, map/rail must
+   * format this for arrive labels instead of inventing now+eta.
+   */
+  arrival_at?: string;
   selection_score?: number;
   selection_rank?: number;
   score_breakdown?: {

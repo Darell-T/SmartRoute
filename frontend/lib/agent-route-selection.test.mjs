@@ -142,6 +142,7 @@ test("agentRoutePlanFromCards prefers itinerary totals over summary", () => {
     itinerary: {
       total_duration_seconds: 5340,
       transfer_count: 2,
+      arrival_at: "2026-07-16T15:45:00-04:00",
     },
     route: [{ type: "WALK", end_point: { latitude: 40.6559, longitude: -74.0089 } }],
   });
@@ -151,6 +152,7 @@ test("agentRoutePlanFromCards prefers itinerary totals over summary", () => {
   assert.equal(plan.candidates[0].total_minutes, 89);
   assert.equal(plan.candidates[0].score_breakdown.duration_minutes, 89);
   assert.equal(plan.candidates[0].score_breakdown.transfers, 2);
+  assert.equal(plan.candidates[0].arrival_at, "2026-07-16T15:45:00-04:00");
 });
 
 test("agentRoutePlanFromCards uses summary when itinerary is absent", () => {
@@ -162,4 +164,5 @@ test("agentRoutePlanFromCards uses summary when itinerary is absent", () => {
   const plan = agentRoutePlanFromCards([card], "rc_1");
   assert.equal(plan?.candidates[0].total_minutes, 34);
   assert.equal(plan?.candidates[0].score_breakdown.transfers, 1);
+  assert.equal(plan?.candidates[0].arrival_at, undefined);
 });
