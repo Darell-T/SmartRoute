@@ -456,6 +456,47 @@ test("prefers itinerary.arrival_at over inventing depart+eta", () => {
   assert.notEqual(model.arrivalLabel, stepClock);
 });
 
+test("uses canonical leg seconds for preview rows instead of relative arrival clocks", () => {
+  const model = buildItineraryViewModel(
+    baseCard({
+      itinerary: {
+        total_duration_seconds: 2100,
+        transfer_count: 0,
+        arrival_at: "2026-07-18T14:39:00-04:00",
+        structured_recommendation_reasons: ["Avoids the delayed transfer"],
+        legs: [
+          {
+            mode: "WALK",
+            board: "Your location",
+            alight: "34 St-Penn Station",
+            walk_seconds: 240,
+          },
+          {
+            mode: "SUBWAY",
+            service_id: "A",
+            board: "34 St-Penn Station",
+            alight: "Jay St-MetroTech",
+            // The legacy clock is deliberately incompatible with a 20-minute ride.
+            ride_seconds: 1200,
+          },
+          {
+            mode: "WALK",
+            board: "Jay St-MetroTech",
+            alight: "Costco Sunset Park",
+            walk_seconds: 300,
+          },
+        ],
+      },
+      route: baseCard().route.map((step) => ({ ...step, minutes_until_arrival: 99 })),
+    }),
+  );
+
+  assert.equal(model.durationLabel, "35 min");
+  assert.equal(model.events[0].durationLabel, "20 min");
+  assert.equal(model.events[1].durationLabel, "5 min");
+  assert.deepEqual(model.rationale, ["Avoids the delayed transfer"]);
+});
+
 test("without itinerary, falls back to summary totals (back-compat)", () => {
   const model = buildItineraryViewModel(baseCard());
   assert.equal(model.totalMinutes, 34);

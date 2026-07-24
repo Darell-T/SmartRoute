@@ -61,6 +61,7 @@ function SmartRoutePageContent() {
   const {
     selectedDestination,
     recommendationText,
+    routeEntryContext,
     switchHeadline,
     isLoading,
     errorText,
@@ -164,6 +165,7 @@ function SmartRoutePageContent() {
         activeRouteCandidate,
         switchHeadline,
         recommendationText,
+        routeEntryContext,
         routeEta: summary?.arriveLabel ?? null,
         routeTotalTime: summary ? `${summary.totalMin} min` : null,
         serviceAlerts: serviceAlerts.alerts,
@@ -177,6 +179,7 @@ function SmartRoutePageContent() {
       activeRouteCandidate,
       switchHeadline,
       recommendationText,
+      routeEntryContext,
       summary,
       serviceAlerts.alerts,
       clientNowMs,

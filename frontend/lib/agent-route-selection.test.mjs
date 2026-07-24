@@ -166,3 +166,10 @@ test("agentRoutePlanFromCards uses summary when itinerary is absent", () => {
   assert.equal(plan?.candidates[0].score_breakdown.transfers, 1);
   assert.equal(plan?.candidates[0].arrival_at, undefined);
 });
+
+test("agent route plans carry chat entry context for the map rail", () => {
+  const plan = agentRoutePlanFromCards([baseCard({
+    route: [{ type: "WALK", end_point: { latitude: 40.6559, longitude: -74.0089 } }],
+  })], "rc_1");
+  assert.equal(plan?.entryContext, "chat");
+});

@@ -208,6 +208,15 @@ class TripEnrichmentTests(unittest.IsolatedAsyncioTestCase):
         chosen_candidate = result["route_candidates"][0]
         self.assertTrue(chosen_candidate["enriched"])
         self.assertFalse(chosen_candidate["can_enrich_on_select"])
+        self.assertIn("itinerary", chosen_candidate)
+        self.assertEqual(
+            chosen_candidate["total_minutes"],
+            round(chosen_candidate["itinerary"]["total_duration_seconds"] / 60),
+        )
+        self.assertEqual(
+            chosen_candidate["score_breakdown"]["transfers"],
+            chosen_candidate["itinerary"]["transfer_count"],
+        )
 
         # Alternates are deferred: empty stop lists, flagged for lazy enrichment.
         alt_candidate = result["route_candidates"][1]

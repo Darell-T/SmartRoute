@@ -14,6 +14,10 @@ import {
 
 type UserLocation = { lng: number; lat: number } | null;
 
+/** Origin of the currently displayed route. This is presentation context, not
+ * route data: selecting an alternative must preserve it. */
+export type RouteEntryContext = "chat" | "map_search" | "deep_link" | "restored";
+
 type RoutePlanningControllerInput = {
   userLocation: UserLocation;
 };
@@ -23,6 +27,7 @@ export type ExternalRoutePlan = {
   candidates: RouteCandidate[];
   activeCandidateId: string;
   recommendationText: string;
+  entryContext?: RouteEntryContext;
 };
 
 export type RoutePlanningPhase = "idle" | "cancellable" | "finalizing";
@@ -34,6 +39,8 @@ export function useRoutePlanningController({
   const [selectedDestination, setSelectedDestination] =
     useState<DestinationSelection | null>(null);
   const [recommendationText, setRecommendationText] = useState("");
+  const [routeEntryContext, setRouteEntryContext] =
+    useState<RouteEntryContext>("map_search");
   // Canned line after the user switches to an alternative route;
   // overrides the rail's plan headline until the next trip or clear.
   const [switchHeadline, setSwitchHeadline] = useState<string | null>(null);
@@ -161,6 +168,7 @@ export function useRoutePlanningController({
     destinationOverride?: string,
     selectionOverride?: DestinationSelection | null,
   ) {
+    setRouteEntryContext("map_search");
     if (selectionOverride) setSelectedDestination(selectionOverride);
     void handleSubmit(destinationOverride, selectionOverride);
   }
@@ -226,6 +234,9 @@ export function useRoutePlanningController({
     setSelectedRouteIndex(activeCandidate.index);
     setPlannedRouteSteps(activeCandidate.steps);
     setRecommendationText(plan.recommendationText);
+    // Older restored/deep-linked plans predate the explicit field. Keep that
+    // fallback intentional rather than silently treating them as chat routes.
+    setRouteEntryContext(plan.entryContext ?? "restored");
     setSwitchHeadline(null);
   }
 
@@ -257,12 +268,13 @@ export function useRoutePlanningController({
     setSelectedRouteIndex(null);
     setPlannedRouteSteps([]);
     setRecommendationText("");
+    setRouteEntryContext("map_search");
     setSwitchHeadline(null);
     setErrorText(null);
   }
 
   return {
-    inputValue, selectedDestination, recommendationText, switchHeadline,
+    inputValue, selectedDestination, recommendationText, routeEntryContext, switchHeadline,
     isLoading, planningPhase, errorText, plannedRouteSteps,
     routeCandidates, activeRouteCandidateId,
     handleDestinationInputChange, handleSearchSubmit,

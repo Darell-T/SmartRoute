@@ -71,6 +71,8 @@ export interface AgentRoutePlan {
   candidates: RouteCandidate[];
   activeCandidateId: string;
   recommendationText: string;
+  /** The rail suppresses duplicated chat reasoning for this route source. */
+  entryContext: "chat";
 }
 
 /**
@@ -153,5 +155,6 @@ export function agentRoutePlanFromCards(
     candidates,
     activeCandidateId: selectedCardId,
     recommendationText: selectedCard.summary.reason,
+    entryContext: "chat",
   };
 }

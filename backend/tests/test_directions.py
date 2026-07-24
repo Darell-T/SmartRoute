@@ -272,6 +272,7 @@ class ParseLegStepsTests(unittest.TestCase):
         self.assertTrue(transit_step["arrival_time_iso"].startswith("2026-03-22T"))
         self.assertIn("minutes_until_train_arrives", transit_step)
         self.assertIn("minutes_until_arrival", transit_step)
+        self.assertEqual(transit_step["route_total_seconds"], 2340)
         self.assertEqual(transit_step["departure_stop"], "Church Av")
         self.assertEqual(transit_step["arrival_stop"], "Times Sq-42 St")
 
@@ -283,7 +284,7 @@ class ParseLegStepsTests(unittest.TestCase):
 
         self.assertEqual(
             set(walk_step.keys()),
-            {"type", "start_point", "end_point", "route_total_minutes", "polyline"},
+            {"type", "start_point", "end_point", "route_total_minutes", "route_total_seconds", "polyline"},
         )
 
 

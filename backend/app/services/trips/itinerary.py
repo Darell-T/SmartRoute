@@ -64,8 +64,13 @@ def build_canonical_itinerary(
 
     # Prefer provider door-to-door total when available. Component sums may
     # not equal this (walks estimated, waits often unknown without walk ISO).
+    route_total_seconds = _first_route_total_seconds(step_list)
     route_total_minutes = _first_route_total_minutes(step_list)
-    if route_total_minutes is not None:
+    if route_total_seconds is not None:
+        total_duration_seconds = route_total_seconds
+    elif route_total_minutes is not None:
+        # Compatibility for older parsed routes. New directions parsing emits
+        # route_total_seconds so provider precision is retained end to end.
         total_duration_seconds = max(0, int(round(route_total_minutes * 60)))
     else:
         total_duration_seconds = (
@@ -120,6 +125,7 @@ def build_chained_itinerary(
 
         {
           "steps": list[dict],           # parsed Google route steps for this OD
+          "origin_place": str|dict?,     # optional explicit segment origin
           "destination_place": str|dict, # intermediate stop or final place
           "dwell_minutes": int|float?,   # optional; default 25 for intermediates
           "dwell_source": "default"|"user"?,  # optional; inferred if omitted
@@ -146,6 +152,7 @@ def build_chained_itinerary(
     built: list[dict] = []
     waypoints: list[dict] = []
     total_dwell_seconds = 0
+    previous_destination: Any = origin
 
     for index, raw in enumerate(segment_list):
         if not isinstance(raw, dict):
@@ -155,11 +162,12 @@ def build_chained_itinerary(
         steps = raw.get("steps")
         place = raw.get("destination_place")
         is_last = index == len(segment_list) - 1
+        segment_origin = raw.get("origin_place", previous_destination)
         segment_destination = final_destination if is_last else place
 
         segment_itinerary = build_canonical_itinerary(
             steps if isinstance(steps, list) else list(steps or []),
-            origin=origin if index == 0 else place,
+            origin=segment_origin,
             destination=segment_destination,
             planning_mode=planning_mode,
             requested_departure=requested_departure if index == 0 else None,
@@ -168,6 +176,7 @@ def build_chained_itinerary(
             itinerary_id=None,
         )
         built.append(segment_itinerary)
+        previous_destination = segment_destination
 
         if not is_last:
             dwell_minutes, dwell_source = _resolve_dwell(raw)
@@ -397,6 +406,14 @@ def _first_route_total_minutes(steps: list[dict]) -> float | None:
         value = step.get("route_total_minutes")
         if isinstance(value, (int, float)):
             return float(value)
+    return None
+
+
+def _first_route_total_seconds(steps: list[dict]) -> int | None:
+    for step in steps:
+        value = step.get("route_total_seconds")
+        if isinstance(value, (int, float)) and value >= 0:
+            return int(round(value))
     return None
 
 

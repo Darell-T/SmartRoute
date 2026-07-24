@@ -72,6 +72,17 @@ def _duration_to_minutes(value) -> int | None:
         return None
     return max(1, round(seconds / 60))
 
+
+def _duration_to_seconds(value) -> int | None:
+    """Parse the provider duration without losing sub-minute precision."""
+    if not isinstance(value, str) or not value.endswith("s"):
+        return None
+    try:
+        seconds = float(value[:-1])
+    except ValueError:
+        return None
+    return max(0, int(round(seconds)))
+
 def _serialize_departure_time(value: str | datetime) -> str:
     if isinstance(value, datetime):
         dt = value
@@ -236,6 +247,7 @@ def parse_response(response: dict) -> list:
 def _parse_leg_steps(leg: dict) -> list:
     steps = []
     route_total_minutes = _duration_to_minutes(leg.get("duration"))
+    route_total_seconds = _duration_to_seconds(leg.get("duration"))
     for step in leg.get("steps", []):
 
             if step["travelMode"] == "TRANSIT":
@@ -280,6 +292,7 @@ def _parse_leg_steps(leg: dict) -> list:
                     "departure_time_iso": departure_est.isoformat(),
                     "arrival_time_iso": arrival_est.isoformat(),
                     "route_total_minutes": route_total_minutes,
+                    "route_total_seconds": route_total_seconds,
                     "polyline": step["polyline"]
 
                 }
@@ -291,6 +304,7 @@ def _parse_leg_steps(leg: dict) -> list:
                     "start_point": step["startLocation"]["latLng"],
                     "end_point": step["endLocation"]["latLng"],
                     "route_total_minutes": route_total_minutes,
+                    "route_total_seconds": route_total_seconds,
                     "polyline": step["polyline"],
                 })
     return steps

@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from app.services.ai_advisor import stream_recommendation
 from app.services.mta_feed import fetch_service_alerts, get_stalled_buses, parse_service_alerts, filter_alerts_for_routes, get_stalled_trains
 from app.services.trips import text, scoring, candidates, enrichment, incidents as trip_incidents, advisor_context
+from app.services.trips.itinerary import build_canonical_itinerary
 from app.services.validation import production_shadow
 from app.services.validation.shadow import ShadowEvaluationStatus
 
@@ -229,6 +230,42 @@ async def plan_trip(request: Request, payload: TripRequest):
             candidate_analysis,
             scoring._score_routes(parsed_response, relevant_alerts),
         )
+        # The direct map planner uses the same canonical timing contract as
+        # agent cards. Keep its established candidate fields as compatibility
+        # aliases, but do not make the frontend derive a parallel trip total.
+        origin_point = {
+            "label": "Your location",
+            "lat": payload.origin_lat,
+            "lng": payload.origin_lng,
+        }
+        destination_point = {
+            "label": payload.destination,
+            "lat": payload.destination_lat,
+            "lng": payload.destination_lng,
+        }
+        for candidate in route_candidates:
+            route = candidate.get("steps") or []
+            reason = (
+                candidate.get("recommendation_reason")
+                if candidate.get("is_recommended")
+                else candidate.get("rejection_reason")
+            )
+            itinerary = build_canonical_itinerary(
+                route,
+                origin=origin_point,
+                destination=destination_point,
+                reasons=[reason] if isinstance(reason, str) and reason else None,
+                itinerary_id=str(candidate.get("id") or "") or None,
+            )
+            candidate["itinerary"] = itinerary
+            candidate["total_minutes"] = max(
+                0, round(int(itinerary["total_duration_seconds"]) / 60)
+            )
+            candidate.setdefault("score_breakdown", {})["transfers"] = int(
+                itinerary["transfer_count"]
+            )
+            if itinerary.get("arrival_at"):
+                candidate["arrival_at"] = itinerary["arrival_at"]
         elapsed = time.monotonic() - t0
         # Single per-trip log line: time taken for each pipeline step + total.
         _d = lambda cur, prev: max(0.0, marks.get(cur, 0.0) - marks.get(prev, 0.0))

@@ -883,7 +883,7 @@ function RecommendedRouteCard({
       {plan.strip && plan.strip.length > 0 && (
         <RouteStepStrip segments={plan.strip} />
       )}
-      <TypedRouteReasoning text={plan.rationale || "Best available route."} />
+      {plan.rationale ? <TypedRouteReasoning text={plan.rationale} /> : null}
       <div className="sr-recommended-route__footer">
         <span>{meta}</span>
         {hasDetails && (

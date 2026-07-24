@@ -89,6 +89,17 @@ def _walk_subway_walk_fixture() -> list[dict]:
 
 
 class BuildCanonicalItineraryTests(unittest.TestCase):
+    def test_preserves_provider_seconds_before_legacy_minute_alias(self):
+        from app.services.trips.itinerary import build_canonical_itinerary
+
+        steps = _walk_subway_walk_fixture()
+        for step in steps:
+            step["route_total_seconds"] = 1_531
+            step["route_total_minutes"] = 26  # legacy alias must not win
+
+        result = build_canonical_itinerary(steps, origin="A", destination="B")
+        self.assertEqual(result["total_duration_seconds"], 1_531)
+
     def test_walk_subway_walk_totals_and_transfer_count(self):
         from app.services.trips.itinerary import build_canonical_itinerary
 

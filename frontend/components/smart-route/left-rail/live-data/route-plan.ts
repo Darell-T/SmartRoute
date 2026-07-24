@@ -21,6 +21,7 @@ export function buildPlan(
   routeEta?: string | null,
   routeTotalTime?: string | null,
   nowMs = Date.now(),
+  routeEntryContext: "chat" | "map_search" | "deep_link" | "restored" = "map_search",
 ): RoutePlan {
   const transitStep = routeSteps?.find(
     (step) => step.type === "SUBWAY" || step.type === "BUS",
@@ -110,13 +111,15 @@ export function buildPlan(
 
   return {
     headline: publicRecommendationText(switchHeadline) || defaultHeadline,
-    rationale: activeRouteCandidate
-      ? buildVisibleRouteReason(
-          activeRouteCandidate,
-          routeSteps,
-          routeCandidates,
-        )
-      : "Nearby arrivals are live within a half-mile radius.",
+    rationale: !activeRouteCandidate
+      ? "Nearby arrivals are live within a half-mile radius."
+      : routeEntryContext === "chat"
+        ? ""
+        : buildVisibleRouteReason(
+            activeRouteCandidate,
+            routeSteps,
+            routeCandidates,
+          ),
     headsign: activeRouteCandidate ? headsign : undefined,
     isAlternativeRoute: activeRouteCandidate?.is_recommended === false,
     eta: (activeRouteCandidate && (routeEta || selectedEta)) || "Live",

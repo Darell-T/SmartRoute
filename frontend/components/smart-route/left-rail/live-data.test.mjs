@@ -6,6 +6,7 @@ import {
   buildRouteReasoningInsights,
   HALF_MILE_METERS,
 } from "./live-data.ts";
+import { buildPlan } from "./live-data/route-plan.ts";
 
 test("route reasoning insights derive from real nearby facts only", () => {
   const groups = [
@@ -1214,6 +1215,30 @@ test("plan rationale distinguishes duplicate same-line alternatives", () => {
 
   assert.doesNotMatch(data.plan.rationale, /the B(?: train| route)? and the B\b/);
   assert.match(data.plan.rationale, /B route from Church Av|B route from Beverley Rd/);
+});
+
+test("chat-origin routes do not repeat chat reasoning in the map rail", () => {
+  const route = [{
+    type: "SUBWAY",
+    train_line: "Q",
+    departure_stop: "Church Av",
+    arrival_stop: "Atlantic Av-Barclays Ctr",
+    minutes_until_arrival: 18,
+  }];
+  const candidate = {
+    id: "chat-q",
+    index: 0,
+    steps: route,
+    is_recommended: true,
+    total_minutes: 18,
+    score_breakdown: { duration_minutes: 18, transfers: 0, active_alerts: 0, transit_lines: ["Q"] },
+    enriched: true,
+    can_enrich_on_select: false,
+    recommendation_reason: "The Q is the clearest choice.",
+  };
+
+  const plan = buildPlan(route, candidate, [candidate], null, null, null, 1_700_000_000_000, "chat");
+  assert.equal(plan.rationale, "");
 });
 
 test("bus arrivals split tabs by stop compass; crosstown and unknown remain all-directions rows", () => {

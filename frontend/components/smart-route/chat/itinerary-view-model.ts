@@ -5,7 +5,12 @@
  * curated preview (key journey chunks), not a full expanded step dump.
  */
 
-import type { AgentRouteStep, RouteCard } from "@/lib/agent-chat-stream";
+import type {
+  AgentRouteStep,
+  CanonicalItinerary,
+  CanonicalItineraryLeg,
+  RouteCard,
+} from "@/lib/agent-chat-stream";
 import { SUBWAY_BULLET_ROUTES } from "@/components/smart-route/train-bullet";
 
 export type ItineraryEventKind =
@@ -102,7 +107,12 @@ function stepRouteId(step: AgentRouteStep): string | null {
   return normalized || null;
 }
 
-function stepDurationMinutes(step: AgentRouteStep): number | null {
+/**
+ * Legacy-only duration fallback. `minutes_until_arrival` is a clock relative
+ * to the server's parse time, not a leg duration. It is used only when an
+ * older card has no canonical itinerary at all.
+ */
+function legacyStepDurationMinutes(step: AgentRouteStep): number | null {
   if (
     typeof step.minutes_until_arrival === "number" &&
     Number.isFinite(step.minutes_until_arrival)
@@ -115,6 +125,80 @@ function stepDurationMinutes(step: AgentRouteStep): number | null {
     return Math.max(0, Math.round((arrive - depart) / 60_000));
   }
   return null;
+}
+
+function durationMinutesFromSeconds(seconds: unknown): number | null {
+  if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0) {
+    return null;
+  }
+  return Math.round(seconds / 60);
+}
+
+function canonicalStopLabel(stop: unknown): string | null {
+  if (typeof stop === "string" && stop.trim()) return stop.trim();
+  if (stop && typeof stop === "object" && !Array.isArray(stop)) {
+    const record = stop as Record<string, unknown>;
+    for (const key of ["name", "label", "display_name", "station_name"]) {
+      const value = record[key];
+      if (typeof value === "string" && value.trim()) return value.trim();
+    }
+  }
+  return null;
+}
+
+function canonicalLegDurationMinutes(leg: CanonicalItineraryLeg): number | null {
+  const mode = leg.mode.trim().toUpperCase();
+  if (mode === "WALK") return durationMinutesFromSeconds(leg.walk_seconds);
+  return durationMinutesFromSeconds(leg.ride_seconds);
+}
+
+/**
+ * The canonical itinerary is the timing authority. This deliberately reads
+ * no relative `minutes_until_*` fields: each row duration comes from the
+ * server-normalized leg it represents.
+ */
+function buildEventsFromCanonicalItinerary(
+  itinerary: CanonicalItinerary,
+  originLabel: string,
+  destinationLabel: string,
+  idPrefix: string,
+): ItineraryEvent[] {
+  const legs = Array.isArray(itinerary.legs) ? itinerary.legs : [];
+  const events: ItineraryEvent[] = [];
+
+  legs.forEach((leg, index) => {
+    const mode = leg.mode.trim().toUpperCase();
+    const isLast = index === legs.length - 1;
+    const durationMinutes = canonicalLegDurationMinutes(leg);
+    const board = canonicalStopLabel(leg.board);
+    const alight = canonicalStopLabel(leg.alight);
+
+    if (mode === "WALK") {
+      events.push({
+        id: `${idPrefix}-canonical-${index}`,
+        kind: "walk",
+        routeIds: [],
+        title: isLast ? `Walk to ${destinationLabel}` : alight || board || "Walk",
+        durationMinutes: durationMinutes ?? undefined,
+        durationLabel: durationLabelFromMinutes(durationMinutes),
+      });
+      return;
+    }
+
+    if (mode === "SUBWAY" || mode === "BUS") {
+      const routeId = typeof leg.service_id === "string" ? leg.service_id.trim().toUpperCase() : "";
+      events.push({
+        id: `${idPrefix}-canonical-${index}`,
+        kind: mode === "BUS" ? "bus" : "subway",
+        routeIds: routeId ? [routeId] : [],
+        title: alight || board || originLabel,
+        durationMinutes: durationMinutes ?? undefined,
+        durationLabel: durationLabelFromMinutes(durationMinutes),
+      });
+    }
+  });
+
+  return condensePreviewEvents(events, destinationLabel);
 }
 
 function lastArrivalIso(steps: AgentRouteStep[]): string | null {
@@ -160,7 +244,7 @@ function buildEventsFromSteps(
     }
 
     if (step.type === "WALK") {
-      const minutes = stepDurationMinutes(step);
+      const minutes = legacyStepDurationMinutes(step);
       const isLast = i === steps.length - 1;
       const to = step.arrival_stop?.trim() || (isLast ? destinationLabel : undefined);
       raw.push({
@@ -195,7 +279,7 @@ function buildEventsFromSteps(
 
       let totalMinutes: number | null = null;
       for (const s of chain) {
-        const m = stepDurationMinutes(s);
+        const m = legacyStepDurationMinutes(s);
         if (m != null) totalMinutes = (totalMinutes ?? 0) + m;
       }
 
@@ -416,12 +500,26 @@ export function buildItineraryViewModel(
   const totalMinutes = cardTotalMinutes(card);
   const transferCount = cardTransferCount(card);
 
-  const events = buildEventsFromSteps(
-    Array.isArray(card.route) ? card.route : [],
-    originLabel,
-    destinationLabel,
-    card.card_id,
-  );
+  const events = Array.isArray(card.itinerary?.legs) && card.itinerary.legs.length > 0
+    ? buildEventsFromCanonicalItinerary(
+        card.itinerary,
+        originLabel,
+        destinationLabel,
+        card.card_id,
+      )
+    : buildEventsFromSteps(
+        Array.isArray(card.route) ? card.route : [],
+        originLabel,
+        destinationLabel,
+        card.card_id,
+      );
+
+  const canonicalRationale = card.itinerary?.structured_recommendation_reasons;
+  const rationale = Array.isArray(canonicalRationale) && canonicalRationale.length > 0
+    ? canonicalRationale.filter((reason): reason is string =>
+        typeof reason === "string" && reason.trim().length > 0,
+      )
+    : parseRationale(card.summary.reason);
 
   return {
     id: card.card_id,
@@ -433,7 +531,7 @@ export function buildItineraryViewModel(
     transferCount,
     metaParts: buildMetaParts(transferCount, 0),
     events,
-    rationale: parseRationale(card.summary.reason),
+    rationale,
     primaryActionLabel,
     secondaryActionLabel,
     invalid: false,
@@ -570,7 +668,7 @@ function buildRawEventsFromSteps(
     }
 
     if (step.type === "WALK") {
-      const minutes = stepDurationMinutes(step);
+      const minutes = legacyStepDurationMinutes(step);
       const isLast = i === steps.length - 1;
       raw.push({
         id: `${idPrefix}-e${eventIndex++}`,
@@ -600,7 +698,7 @@ function buildRawEventsFromSteps(
 
       let totalMinutes: number | null = null;
       for (const s of chain) {
-        const m = stepDurationMinutes(s);
+        const m = legacyStepDurationMinutes(s);
         if (m != null) totalMinutes = (totalMinutes ?? 0) + m;
       }
 
