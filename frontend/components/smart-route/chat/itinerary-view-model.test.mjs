@@ -364,3 +364,101 @@ test("does not hardcode mockup destination names when card data differs", () => 
   assert.equal(serialized.includes("Sunday Morning"), false);
   assert.equal(serialized.includes("1 hr 29 min"), false);
 });
+
+test("prefers itinerary.total_duration_seconds for hero total over summary.eta_minutes", () => {
+  // 5340s = 89 min; summary intentionally wrong so we prove preference.
+  const model = buildItineraryViewModel(
+    baseCard({
+      summary: {
+        eta_minutes: 34,
+        transfers: 0,
+        lines: ["A"],
+        reason: "Legacy summary",
+      },
+      itinerary: {
+        itinerary_id: "rc_1",
+        total_duration_seconds: 5340,
+        transfer_count: 0,
+        arrival_at: "2026-07-18T15:34:00-04:00",
+        departure_at: "2026-07-18T14:05:00-04:00",
+        legs: [],
+      },
+    }),
+  );
+
+  assert.equal(model.invalid, false);
+  assert.equal(model.totalMinutes, 89);
+  assert.equal(model.durationLabel, "1 hr 29 min");
+  // Must not invent hero total from summary's 34.
+  assert.notEqual(model.totalMinutes, 34);
+});
+
+test("prefers itinerary.transfer_count over summary.transfers", () => {
+  const model = buildItineraryViewModel(
+    baseCard({
+      summary: {
+        eta_minutes: 40,
+        transfers: 0,
+        lines: ["N", "R"],
+        reason: "One transfer",
+      },
+      itinerary: {
+        total_duration_seconds: 2400,
+        transfer_count: 1,
+      },
+    }),
+  );
+
+  assert.equal(model.transferCount, 1);
+  assert.ok(model.metaParts.includes("1 transfer"));
+});
+
+test("prefers itinerary.arrival_at over inventing depart+eta", () => {
+  const model = buildItineraryViewModel(
+    baseCard({
+      // Summary ETA and step ISO would invent a different clock if used first.
+      summary: {
+        eta_minutes: 10,
+        transfers: 0,
+        lines: ["A"],
+        reason: "",
+      },
+      depart_iso: "2026-07-18T14:00:00-04:00",
+      route: [
+        {
+          type: "SUBWAY",
+          train_line: "A",
+          departure_time_iso: "2026-07-18T14:00:00-04:00",
+          // Last step arrival that would win without itinerary preference:
+          arrival_time_iso: "2026-07-18T14:10:00-04:00",
+        },
+      ],
+      itinerary: {
+        total_duration_seconds: 5340,
+        transfer_count: 0,
+        arrival_at: "2026-07-18T15:34:00-04:00",
+      },
+    }),
+  );
+
+  const expected = new Date("2026-07-18T15:34:00-04:00").toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+  assert.equal(model.arrivalLabel, expected);
+  // Must not surface the step-derived 2:10 PM.
+  const stepClock = new Date("2026-07-18T14:10:00-04:00").toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+  assert.notEqual(model.arrivalLabel, stepClock);
+});
+
+test("without itinerary, falls back to summary totals (back-compat)", () => {
+  const model = buildItineraryViewModel(baseCard());
+  assert.equal(model.totalMinutes, 34);
+  assert.equal(model.durationLabel, "34 min");
+  assert.equal(model.transferCount, 0);
+});

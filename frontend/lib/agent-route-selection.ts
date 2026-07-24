@@ -19,6 +19,24 @@ export interface AgentRouteSelection {
   destCoords: { lat: number; lng: number };
 }
 
+/** Prefer canonical itinerary seconds over legacy summary ETA. */
+function totalMinutesFromCard(card: RouteCard): number {
+  const seconds = card.itinerary?.total_duration_seconds;
+  if (typeof seconds === "number" && Number.isFinite(seconds)) {
+    return Math.round(seconds / 60);
+  }
+  return card.summary.eta_minutes;
+}
+
+/** Prefer canonical itinerary transfer_count over summary.transfers. */
+function transferCountFromCard(card: RouteCard): number {
+  const fromItin = card.itinerary?.transfer_count;
+  if (typeof fromItin === "number" && Number.isFinite(fromItin)) {
+    return Math.max(0, Math.round(fromItin));
+  }
+  return card.summary.transfers;
+}
+
 export function normalizeRouteCoordinate(
   value: unknown,
 ): { lat: number; lng: number } | null {
@@ -94,16 +112,18 @@ export function agentRoutePlanFromCards(
     const route = agentRouteFromCard(card);
     if (!route) return [];
     const isRecommended = card.role === "recommended";
+    const totalMinutes = totalMinutesFromCard(card);
+    const transfers = transferCountFromCard(card);
     return [
       {
         id: card.card_id,
         index,
         steps: route.steps,
         is_recommended: isRecommended,
-        total_minutes: card.summary.eta_minutes,
+        total_minutes: totalMinutes,
         score_breakdown: {
-          duration_minutes: card.summary.eta_minutes,
-          transfers: card.summary.transfers,
+          duration_minutes: totalMinutes,
+          transfers,
           active_alerts: card.alerts.length,
           transit_lines: card.summary.lines,
         },

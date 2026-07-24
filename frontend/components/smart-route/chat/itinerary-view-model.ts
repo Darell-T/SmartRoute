@@ -317,6 +317,12 @@ function isValidCard(card: RouteCard): boolean {
 }
 
 function cardArrivalLabel(card: RouteCard): string | null {
+  // Prefer canonical itinerary arrival; never invent depart+eta when present.
+  const itineraryArrival = card.itinerary?.arrival_at;
+  if (typeof itineraryArrival === "string" && itineraryArrival.trim()) {
+    return formatClockTime(itineraryArrival);
+  }
+
   const fromSteps = lastArrivalIso(card.route ?? []);
   if (fromSteps) return formatClockTime(fromSteps);
 
@@ -329,6 +335,27 @@ function cardArrivalLabel(card: RouteCard): string | null {
     }
   }
   return null;
+}
+
+/** Hero total minutes: itinerary seconds first, else legacy summary ETA. */
+function cardTotalMinutes(card: RouteCard): number {
+  const seconds = card.itinerary?.total_duration_seconds;
+  if (typeof seconds === "number" && Number.isFinite(seconds)) {
+    return Math.round(seconds / 60);
+  }
+  return Math.round(card.summary.eta_minutes);
+}
+
+/** Transfer count: itinerary first, else summary. */
+function cardTransferCount(card: RouteCard): number {
+  const fromItin = card.itinerary?.transfer_count;
+  if (typeof fromItin === "number" && Number.isFinite(fromItin)) {
+    return Math.max(0, Math.round(fromItin));
+  }
+  if (typeof card.summary.transfers === "number" && Number.isFinite(card.summary.transfers)) {
+    return Math.max(0, Math.round(card.summary.transfers));
+  }
+  return 0;
 }
 
 function dwellMinutesBetween(earlier: RouteCard, later: RouteCard): number | null {
@@ -386,11 +413,8 @@ export function buildItineraryViewModel(
   const originLabel = card.origin?.label?.trim() || "Origin";
   const destinationLabel = card.destination.label.trim();
   const placeNames = [originLabel, destinationLabel];
-  const totalMinutes = Math.round(card.summary.eta_minutes);
-  const transferCount =
-    typeof card.summary.transfers === "number" && Number.isFinite(card.summary.transfers)
-      ? Math.max(0, Math.round(card.summary.transfers))
-      : 0;
+  const totalMinutes = cardTotalMinutes(card);
+  const transferCount = cardTransferCount(card);
 
   const events = buildEventsFromSteps(
     Array.isArray(card.route) ? card.route : [],
@@ -462,11 +486,8 @@ export function buildMergedItineraryViewModel(
   for (let i = 0; i < valid.length; i += 1) {
     const card = valid[i];
     sourceCardIds.push(card.card_id);
-    totalMinutes += Math.round(card.summary.eta_minutes);
-    transferCount +=
-      typeof card.summary.transfers === "number" && Number.isFinite(card.summary.transfers)
-        ? Math.max(0, Math.round(card.summary.transfers))
-        : 0;
+    totalMinutes += cardTotalMinutes(card);
+    transferCount += cardTransferCount(card);
 
     const originLabel = card.origin?.label?.trim() || placeNames[i] || "Origin";
     const destinationLabel = card.destination.label.trim();

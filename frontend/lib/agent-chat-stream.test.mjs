@@ -166,6 +166,50 @@ test("parses a route_card event with the full nested payload", async () => {
   assert.deepEqual(events, [{ type: "route_card", ...payload }]);
 });
 
+test("parses optional itinerary on route_card and ignores non-object itinerary", async () => {
+  const itinerary = {
+    itinerary_id: "rc_abc123",
+    total_duration_seconds: 5340,
+    transfer_count: 1,
+    arrival_at: "2026-07-16T10:49:00-04:00",
+    departure_at: "2026-07-16T10:00:00-04:00",
+    legs: [{ mode: "SUBWAY", ride_seconds: 1500 }],
+  };
+  const withItin = {
+    card_id: "rc_abc123",
+    turn_id: "t1",
+    role: "recommended",
+    origin: { label: "Home", lat: 40.7, lng: -73.9 },
+    destination: { label: "Costco", lat: 40.8, lng: -73.8 },
+    summary: { eta_minutes: 89, transfers: 1, lines: ["A"], reason: "ok" },
+    route: [{ type: "WALK" }],
+    alerts: [],
+    itinerary,
+  };
+  const withoutItin = {
+    card_id: "rc_legacy",
+    turn_id: "t1",
+    role: "alternative",
+    origin: { label: "Home", lat: 40.7, lng: -73.9 },
+    destination: { label: "Costco", lat: 40.8, lng: -73.8 },
+    summary: { eta_minutes: 40, transfers: 0, lines: ["D"], reason: "legacy" },
+    route: [{ type: "WALK" }],
+    alerts: [],
+    // Non-object must not be copied onto the card.
+    itinerary: "not-an-object",
+  };
+
+  const chunk =
+    `event: route_card\ndata: ${JSON.stringify(withItin)}\n\n` +
+    `event: route_card\ndata: ${JSON.stringify(withoutItin)}\n\n`;
+
+  const events = await collect(readerFromChunks([chunk]));
+
+  assert.equal(events.length, 2);
+  assert.deepEqual(events[0].itinerary, itinerary);
+  assert.equal("itinerary" in events[1], false);
+});
+
 test("flushes a trailing frame with no terminating blank line once the stream closes", async () => {
   const chunk = 'event: token\ndata: {"text":"trailing"}\n\n' + 'event: token\ndata: {"text":"no trailer"}';
 

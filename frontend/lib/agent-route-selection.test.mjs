@@ -135,3 +135,31 @@ test("converts a turn's route cards into the shared rail candidate model", () =>
   assert.equal(plan?.candidates[1].is_recommended, false);
   assert.deepEqual(plan?.destination.coordinates, { lat: 40.6559, lng: -74.0089 });
 });
+
+test("agentRoutePlanFromCards prefers itinerary totals over summary", () => {
+  const card = baseCard({
+    summary: { eta_minutes: 34, transfers: 0, lines: ["A"], reason: "Fewest transfers." },
+    itinerary: {
+      total_duration_seconds: 5340,
+      transfer_count: 2,
+    },
+    route: [{ type: "WALK", end_point: { latitude: 40.6559, longitude: -74.0089 } }],
+  });
+
+  const plan = agentRoutePlanFromCards([card], "rc_1");
+  assert.ok(plan);
+  assert.equal(plan.candidates[0].total_minutes, 89);
+  assert.equal(plan.candidates[0].score_breakdown.duration_minutes, 89);
+  assert.equal(plan.candidates[0].score_breakdown.transfers, 2);
+});
+
+test("agentRoutePlanFromCards uses summary when itinerary is absent", () => {
+  const card = baseCard({
+    summary: { eta_minutes: 34, transfers: 1, lines: ["A"], reason: "ok" },
+    route: [{ type: "WALK", end_point: { latitude: 40.6559, longitude: -74.0089 } }],
+  });
+
+  const plan = agentRoutePlanFromCards([card], "rc_1");
+  assert.equal(plan?.candidates[0].total_minutes, 34);
+  assert.equal(plan?.candidates[0].score_breakdown.transfers, 1);
+});

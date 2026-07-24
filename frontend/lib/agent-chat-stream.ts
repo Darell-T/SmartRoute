@@ -59,6 +59,53 @@ export interface RouteCardSummary {
   reason: string;
 }
 
+/** One normalized leg inside a canonical itinerary (backend
+ *  `build_canonical_itinerary`). UI may format seconds; it must not invent. */
+export interface CanonicalItineraryLeg {
+  mode: string;
+  service_id?: string | null;
+  board?: unknown;
+  alight?: unknown;
+  departure_at?: string | null;
+  arrival_at?: string | null;
+  walk_seconds?: number;
+  wait_seconds?: number;
+  ride_seconds?: number;
+  transfer_seconds?: number;
+  geometry?: unknown;
+  service_data_basis?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * Seconds-based immutable itinerary from the backend normalizer
+ * (`backend/app/services/trips/itinerary.py`). Optional on older servers;
+ * when present, chat/map must prefer these fields over re-derived totals.
+ */
+export interface CanonicalItinerary {
+  itinerary_id?: string;
+  origin?: unknown;
+  waypoints?: unknown[];
+  destination?: unknown;
+  timezone?: string;
+  planning_mode?: string;
+  requested_departure?: string | null;
+  generated_at?: string | null;
+  data_basis?: string;
+  data_freshness?: string | null;
+  departure_at?: string | null;
+  arrival_at?: string | null;
+  total_duration_seconds?: number;
+  total_walk_seconds?: number;
+  total_wait_seconds?: number;
+  total_in_vehicle_seconds?: number;
+  total_dwell_seconds?: number;
+  transfer_count?: number;
+  legs?: CanonicalItineraryLeg[];
+  structured_recommendation_reasons?: string[];
+  [key: string]: unknown;
+}
+
 /** A single transit step, additively extended with the absolute departure /
  *  arrival timestamps future-departure turns need (design correction #1 in
  *  the plan: "future departures break the current step shape"). Everything
@@ -84,6 +131,8 @@ export interface RouteCardEvent {
   alerts: ServiceAlert[];
   leg_label?: string;
   depart_iso?: string;
+  /** Canonical seconds-based itinerary when the server emits it (Task 2+). */
+  itinerary?: CanonicalItinerary;
 }
 
 /** `route_card` payload as attached to an assistant turn (same shape as the
@@ -238,6 +287,10 @@ function buildEvent(eventType: string, data: unknown): AgentEvent | null {
         alerts: data.alerts as unknown as ServiceAlert[],
         leg_label: isString(data.leg_label) ? data.leg_label : undefined,
         depart_iso: isString(data.depart_iso) ? data.depart_iso : undefined,
+        // Copy opaque object only when present; omit key for legacy payloads.
+        ...(isRecord(data.itinerary)
+          ? { itinerary: data.itinerary as CanonicalItinerary }
+          : {}),
       };
     }
     case "error": {
