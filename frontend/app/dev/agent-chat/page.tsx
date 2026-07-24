@@ -127,7 +127,7 @@ async function* successTurn(turnId: string, signal: AbortSignal): AsyncGenerator
   };
 
   const prose =
-    "The A train keeps the cart-friendly path intact with no bus and no transfer.";
+    "The B to N route keeps the trip bus-free and limits the journey to one transfer.";
   for (const chunk of tokenChunks(prose)) {
     await wait(55, signal);
     yield { type: "token", text: chunk };
@@ -143,8 +143,8 @@ async function* successTurn(turnId: string, signal: AbortSignal): AsyncGenerator
     destination: DESTINATION,
     summary: {
       eta_minutes: 34,
-      transfers: 0,
-      lines: ["A"],
+      transfers: 1,
+      lines: ["B", "N"],
       reason: "No bus · Elevator access for the cart",
     },
     route: [
@@ -162,36 +162,119 @@ async function* successTurn(turnId: string, signal: AbortSignal): AsyncGenerator
       },
       {
         type: "SUBWAY",
-        train_line: "A",
-        departure_stop: "34 St-Penn Station",
-        arrival_stop: "Jay St-MetroTech",
-        minutes_until_arrival: 26,
+        train_line: "B",
+        departure_stop: "Church Av",
+        arrival_stop: "Atlantic Av-Barclays Ctr",
+        minutes_until_arrival: 11,
+        stop_count: 6,
+        intermediate_stops: [
+          "Church Av",
+          "Beverley Rd",
+          "Cortelyou Rd",
+          "Newkirk Plaza",
+          "Avenue H",
+          "Kings Hwy",
+          "Atlantic Av-Barclays Ctr",
+        ],
         departure_coords: { latitude: 40.7527, longitude: -73.9862 },
-        arrival_coords: { latitude: 40.6627, longitude: -73.9958 },
+        arrival_coords: { latitude: 40.6844, longitude: -73.9777 },
         polyline: encodedLine([
           [40.7527, -73.9862],
-          [40.72, -73.995],
-          [40.6627, -73.9958],
+          [40.72, -73.985],
+          [40.6844, -73.9777],
         ]),
         departure_time_iso: "2026-07-18T14:05:00-04:00",
-        arrival_time_iso: "2026-07-18T14:31:00-04:00",
+        arrival_time_iso: "2026-07-18T14:16:00-04:00",
+      },
+      {
+        type: "SUBWAY",
+        train_line: "N",
+        departure_stop: "Atlantic Av-Barclays Ctr",
+        arrival_stop: "36 St",
+        minutes_until_arrival: 9,
+        stop_count: 9,
+        intermediate_stops: [
+          "Atlantic Av-Barclays Ctr",
+          "Union St",
+          "9 St",
+          "Prospect Av",
+          "25 St",
+          "36 St",
+        ],
+        departure_coords: { latitude: 40.6844, longitude: -73.9777 },
+        arrival_coords: { latitude: 40.6551, longitude: -74.0035 },
+        polyline: encodedLine([
+          [40.6844, -73.9777],
+          [40.67, -73.99],
+          [40.6551, -74.0035],
+        ]),
+        departure_time_iso: "2026-07-18T14:18:00-04:00",
+        arrival_time_iso: "2026-07-18T14:27:00-04:00",
       },
       {
         type: "WALK",
-        departure_stop: "Jay St-MetroTech",
+        departure_stop: "36 St",
         arrival_stop: "Costco Sunset Park",
         minutes_until_arrival: 4,
-        start_point: { latitude: 40.6627, longitude: -73.9958 },
+        start_point: { latitude: 40.6551, longitude: -74.0035 },
         end_point: { latitude: DESTINATION.lat, longitude: DESTINATION.lng },
         polyline: encodedLine([
-          [40.6627, -73.9958],
+          [40.6551, -74.0035],
           [DESTINATION.lat, DESTINATION.lng],
         ]),
-        arrival_time_iso: "2026-07-18T14:39:00-04:00",
+        arrival_time_iso: "2026-07-18T14:42:00-04:00",
       },
     ],
     alerts: [],
     depart_iso: "2026-07-18T14:05:00-04:00",
+    itinerary: {
+      itinerary_id: "rc_demo1",
+      total_duration_seconds: 2220,
+      transfer_count: 1,
+      departure_at: "2026-07-18T14:05:00-04:00",
+      arrival_at: "2026-07-18T14:42:00-04:00",
+      legs: [
+        {
+          mode: "SUBWAY",
+          service_id: "B",
+          board: "Church Av",
+          alight: "Atlantic Av-Barclays Ctr",
+          stop_count: 6,
+          ride_seconds: 660,
+          stops: [
+            { name: "Church Av" },
+            { name: "Beverley Rd" },
+            { name: "Cortelyou Rd" },
+            { name: "Newkirk Plaza" },
+            { name: "Avenue H" },
+            { name: "Kings Hwy" },
+            { name: "Atlantic Av-Barclays Ctr" },
+          ],
+        },
+        {
+          mode: "SUBWAY",
+          service_id: "N",
+          board: "Atlantic Av-Barclays Ctr",
+          alight: "36 St",
+          stop_count: 9,
+          ride_seconds: 540,
+          stops: [
+            { name: "Atlantic Av-Barclays Ctr" },
+            { name: "Union St" },
+            { name: "9 St" },
+            { name: "Prospect Av" },
+            { name: "25 St" },
+            { name: "36 St" },
+          ],
+        },
+        {
+          mode: "WALK",
+          board: "36 St",
+          alight: "Costco Sunset Park",
+          walk_seconds: 240,
+        },
+      ],
+    },
   };
 
   await wait(220, signal);

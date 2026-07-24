@@ -303,6 +303,60 @@ class BuildCanonicalItineraryTests(unittest.TestCase):
         self.assertEqual(result["legs"][1]["geometry"], {"encodedPolyline": "subway_poly"})
         self.assertEqual(result["legs"][1]["service_data_basis"], "realtime")
 
+    def test_preserves_provider_stop_count_and_ordered_stop_locations(self):
+        from app.services.trips.itinerary import build_canonical_itinerary
+
+        step = _subway_step(
+            line="B",
+            departure_stop="Church Av",
+            arrival_stop="Atlantic Av-Barclays Ctr",
+            departure_time_iso="2026-07-23T09:10:00-04:00",
+            arrival_time_iso="2026-07-23T09:21:00-04:00",
+        )
+        step["stop_count"] = 6
+        step["intermediate_stop_locations"] = [
+            {"name": "Church Av", "lat": 40.6505, "lng": -73.9629},
+            {"name": "Beverley Rd", "lat": 40.6443, "lng": -73.9644},
+            {"name": "Cortelyou Rd", "lat": 40.6409, "lng": -73.9639},
+            {"name": "Newkirk Plaza", "lat": 40.6351, "lng": -73.9628},
+            {"name": "Avenue H", "lat": 40.6293, "lng": -73.9617},
+            {"name": "Atlantic Av-Barclays Ctr", "lat": 40.6844, "lng": -73.9777},
+        ]
+
+        result = build_canonical_itinerary([step], origin="A", destination="B")
+        leg = result["legs"][0]
+
+        self.assertEqual(leg["stop_count"], 6)
+        self.assertEqual(
+            [stop["name"] for stop in leg["stops"]],
+            [
+                "Church Av",
+                "Beverley Rd",
+                "Cortelyou Rd",
+                "Newkirk Plaza",
+                "Avenue H",
+                "Atlantic Av-Barclays Ctr",
+            ],
+        )
+        self.assertEqual(leg["stops"][1]["lat"], 40.6443)
+        self.assertEqual(leg["stops"][1]["lng"], -73.9644)
+
+    def test_does_not_fabricate_stops_when_provider_omits_them(self):
+        from app.services.trips.itinerary import build_canonical_itinerary
+
+        step = _subway_step(
+            departure_time_iso="2026-07-23T09:10:00-04:00",
+            arrival_time_iso="2026-07-23T09:22:00-04:00",
+        )
+        step["intermediate_stops"] = ["Prospect Park", "7 Av", "Canal St"]
+        result = build_canonical_itinerary([step], origin="A", destination="B")
+
+        self.assertEqual(
+            result["legs"][0]["stops"],
+            [{"name": "Prospect Park"}, {"name": "7 Av"}, {"name": "Canal St"}],
+        )
+        self.assertIsNone(result["legs"][0]["stop_count"])
+
 
 if __name__ == "__main__":
     unittest.main()

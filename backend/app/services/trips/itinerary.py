@@ -390,11 +390,22 @@ def _build_legs(steps: list[dict], *, data_basis: str) -> list[dict]:
         if geometry is None:
             geometry = None
 
+        stops = _canonical_stops_for_step(step)
+        raw_stop_count = step.get("stop_count")
+        if isinstance(raw_stop_count, (int, float)) and not isinstance(
+            raw_stop_count, bool
+        ):
+            stop_count = max(0, int(round(raw_stop_count)))
+        else:
+            stop_count = None
+
         leg = {
             "mode": mode,
             "service_id": service_id,
             "board": board,
             "alight": alight,
+            "stop_count": stop_count,
+            "stops": stops,
             "departure_at": _iso_or_none(dep_iso, dep_dt),
             "arrival_at": _iso_or_none(arr_iso, arr_dt),
             "walk_seconds": int(walk_seconds),
@@ -415,6 +426,41 @@ def _build_legs(steps: list[dict], *, data_basis: str) -> list[dict]:
         prev_mode = mode
 
     return legs
+
+
+def _canonical_stops_for_step(step: dict) -> list[dict]:
+    """Preserve an enriched leg's ordered stops in a stable typed shape.
+
+    The enrichment layer owns stop ordering. This normalizer only validates
+    labels and optional coordinates; it never inserts, sorts, or fabricates
+    stations.
+    """
+    located = step.get("intermediate_stop_locations")
+    if isinstance(located, list) and located:
+        stops: list[dict] = []
+        for value in located:
+            if not isinstance(value, dict):
+                continue
+            name = str(value.get("name") or "").strip()
+            if not name:
+                continue
+            stop: dict[str, Any] = {"name": name}
+            lat, lng = _lat_lon(value)
+            if lat is not None and lng is not None:
+                stop["lat"] = lat
+                stop["lng"] = lng
+            stops.append(stop)
+        if stops:
+            return stops
+
+    names = step.get("intermediate_stops")
+    if not isinstance(names, list):
+        return []
+    return [
+        {"name": str(value).strip()}
+        for value in names
+        if isinstance(value, str) and value.strip()
+    ]
 
 
 def _walk_seconds_for_step(

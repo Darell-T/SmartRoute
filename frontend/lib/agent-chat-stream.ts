@@ -70,6 +70,10 @@ export interface CanonicalItineraryLeg {
   service_id?: string | null;
   board?: unknown;
   alight?: unknown;
+  /** Provider-owned number of stops ridden on this leg. */
+  stop_count?: number | null;
+  /** Ordered provider/enrichment stop sequence, including endpoints when known. */
+  stops?: CanonicalItineraryStop[];
   departure_at?: string | null;
   arrival_at?: string | null;
   walk_seconds?: number;
@@ -79,6 +83,12 @@ export interface CanonicalItineraryLeg {
   geometry?: unknown;
   service_data_basis?: string;
   [key: string]: unknown;
+}
+
+export interface CanonicalItineraryStop {
+  name: string;
+  lat?: number | null;
+  lng?: number | null;
 }
 
 /** A rider-facing endpoint retained by the canonical itinerary. */
