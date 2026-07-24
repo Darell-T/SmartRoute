@@ -48,6 +48,10 @@ export interface RouteCardEndpoint {
   label: string;
   lat: number;
   lng: number;
+  name?: string;
+  address?: string | null;
+  place_id?: string | null;
+  source?: "places" | "geocoder" | "user" | "fallback" | string;
 }
 
 /** Compact digest the model reasoned over — mirrors `RouteCardEvent.summary`
@@ -90,6 +94,7 @@ export interface CanonicalItinerary {
   timezone?: string;
   planning_mode?: string;
   requested_departure?: string | null;
+  requested_arrival?: string | null;
   generated_at?: string | null;
   data_basis?: string;
   data_freshness?: string | null;

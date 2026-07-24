@@ -23,7 +23,7 @@ from datetime import datetime, timedelta
 
 from app.services import ai_advisor
 from app.services.agent import events as agent_events
-from app.services.agent.tools._location import resolve_named_point
+from app.services.agent.tools._location import ResolvedPlace, resolve_named_place
 from app.services.agent.tools._types import ToolContext, ToolResult
 from app.services.mta_feed import (
     fetch_service_alerts,
@@ -96,6 +96,13 @@ PLAN_TRIP_SCHEMA = {
                     "Google Routes only accepts times within about 7 days out."
                 ),
             },
+            "arrival_by": {
+                "type": "string",
+                "description": (
+                    "Optional timezone-aware RFC3339 arrival target. SmartRoute "
+                    "derives a scheduled departure; do not combine with departure_time."
+                ),
+            },
             "waypoints": {
                 "type": "array",
                 "items": {"type": "string"},
@@ -143,6 +150,95 @@ def _summary_eta_minutes(route: list[dict], total_duration_seconds: int) -> int:
     if not route:
         return 0
     return max(1, round(int(total_duration_seconds) / 60))
+
+
+def _parse_rfc3339(value: object, *, field: str) -> datetime:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field} is required")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"{field} must be RFC3339 with a timezone offset") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(f"{field} must include a timezone offset")
+    return parsed
+
+
+async def _route_with_recovery(
+    *,
+    origin: ResolvedPlace,
+    destination: ResolvedPlace,
+    destination_query: str,
+    allowed_modes: list[str],
+    routing_preference: str,
+    departure_time: str | None,
+) -> dict:
+    """Try the rider's resolved label first, then privately recover by coords."""
+    try:
+        return await directions_service.get_transit_route(
+            (origin.latitude, origin.longitude),
+            destination_query,
+            None,
+            allowed_travel_modes=allowed_modes,
+            routing_preference=routing_preference,
+            departure_time=departure_time,
+        )
+    except directions_service.GoogleRoutesError:
+        # This is an internal provider recovery, not a second rider operation.
+        # Keep the named destination attached to the resulting itinerary.
+        return await directions_service.get_transit_route(
+            (origin.latitude, origin.longitude),
+            destination_query,
+            (destination.latitude, destination.longitude),
+            allowed_travel_modes=allowed_modes,
+            routing_preference=routing_preference,
+            departure_time=departure_time,
+        )
+
+
+async def _derive_arrive_by_departure(
+    *,
+    origin: ResolvedPlace,
+    destination: ResolvedPlace,
+    destination_query: str,
+    arrival_by: str,
+    allowed_modes: list[str],
+    routing_preference: str,
+) -> str:
+    """Estimate a provider-supported departure for an explicit arrival target.
+
+    Google Routes' transit endpoint takes departure time, not arrival time.
+    The probe is an internal estimate only; the actual planning request below
+    is still made at the derived departure and its provider timestamps remain
+    canonical.
+    """
+    target = _parse_rfc3339(arrival_by, field="arrival_by")
+    probe = await _route_with_recovery(
+        origin=origin,
+        destination=destination,
+        destination_query=destination_query,
+        allowed_modes=allowed_modes,
+        routing_preference=routing_preference,
+        departure_time=target.isoformat(),
+    )
+    parsed = directions_service.parse_response(probe)
+    if not parsed:
+        raise directions_service.GoogleRoutesError(
+            "no_route",
+            "no route available to estimate arrive-by departure",
+        )
+    durations = [
+        int(step["route_total_seconds"])
+        for route in parsed
+        for step in route
+        if isinstance(step.get("route_total_seconds"), (int, float))
+    ]
+    if not durations:
+        raise directions_service.GoogleRoutesError(
+            "no_duration",
+            "provider did not return a route duration for arrive-by planning",
+        )
+    return (target - timedelta(seconds=min(durations))).isoformat()
 
 
 def _normalized_waypoints(value: object) -> list[str]:
@@ -206,6 +302,11 @@ async def _execute_chained_trip(
     destination = str(tool_input.get("destination") or "").strip()
     if not destination:
         return ToolResult(ok=False, error="destination is required")
+    if tool_input.get("arrival_by"):
+        return ToolResult(
+            ok=False,
+            error="arrive-by planning with intermediate stops is not available yet",
+        )
 
     dwell_minutes, dwell_source = _safe_dwell_minutes(
         tool_input.get("waypoint_dwell_minutes")
@@ -361,33 +462,50 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
     if not allowed_modes:
         return ToolResult(ok=False, error="no transit modes left after excluding all of them")
 
-    origin_coords, origin_error = await resolve_named_point(
+    origin_place, origin_error = await resolve_named_place(
         origin_raw,
         ctx,
         missing_location_message="I need your current location to plan from 'origin' -- share GPS or give me an address instead.",
     )
-    if origin_coords is None:
+    if origin_place is None:
         return ToolResult(ok=False, error=origin_error or "could not resolve the origin")
 
-    dest_coords, dest_error = await resolve_named_point(
+    destination_place, dest_error = await resolve_named_place(
         destination_raw,
         ctx,
         missing_location_message=(
             "I need your current location to plan from 'destination' -- share GPS or give me an address instead."
         ),
     )
-    if dest_coords is None:
+    if destination_place is None:
         return ToolResult(ok=False, error=dest_error or "could not find that destination in NYC")
 
     routing_preference = tool_input.get("routing_preference") or "FEWER_TRANSFERS"
     departure_time = tool_input.get("departure_time") or None
+    arrival_by = tool_input.get("arrival_by") or None
+    if departure_time and arrival_by:
+        return ToolResult(ok=False, error="use either departure_time or arrival_by, not both")
+    if arrival_by:
+        try:
+            departure_time = await _derive_arrive_by_departure(
+                origin=origin_place,
+                destination=destination_place,
+                destination_query=destination_raw,
+                arrival_by=str(arrival_by),
+                allowed_modes=allowed_modes,
+                routing_preference=routing_preference,
+            )
+        except ValueError as exc:
+            return ToolResult(ok=False, error=str(exc))
+        except directions_service.GoogleRoutesError as exc:
+            return ToolResult(ok=False, error=f"could not estimate an arrive-by departure ({exc.code})")
 
     try:
-        response = await directions_service.get_transit_route(
-            origin_coords,
-            destination_raw,
-            dest_coords,
-            allowed_travel_modes=allowed_modes,
+        response = await _route_with_recovery(
+            origin=origin_place,
+            destination=destination_place,
+            destination_query=destination_raw,
+            allowed_modes=allowed_modes,
             routing_preference=routing_preference,
             departure_time=departure_time,
         )
@@ -480,13 +598,13 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
 
     origin_label = _point_label(origin_raw)
     destination_label = _point_label(destination_raw)
-    origin_point = {"label": origin_label, "lat": origin_coords[0], "lng": origin_coords[1]}
-    destination_point = {
-        "label": destination_label,
-        "lat": dest_coords[0],
-        "lng": dest_coords[1],
-    }
-    planning_mode = "depart_at" if departure_time else "leave_now"
+    origin_point = origin_place.to_event_point()
+    destination_point = destination_place.to_event_point()
+    # A named search query is a better display label than the normalized
+    # provider coordinate. Never surface an internal latitude/longitude.
+    origin_point["label"] = origin_label if origin_place.source != "user" else "Your location"
+    destination_point["label"] = destination_label
+    planning_mode = "arrive_by" if arrival_by else ("depart_at" if departure_time else "leave_now")
 
     digest = []
     events = []
@@ -510,6 +628,7 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
             destination=destination_point,
             planning_mode=planning_mode,
             requested_departure=departure_time,
+            requested_arrival=str(arrival_by) if arrival_by else None,
             reasons=structured_reasons if is_recommended else [],
             itinerary_id=card_id,
         )

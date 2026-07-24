@@ -173,7 +173,11 @@ export function applyAgentEvent(state: ChatState, action: ChatReducerAction): Ch
       return updateLastAssistantTurn(state, (turn) => ({
         ...turn,
         toolChips: [
-          ...turn.toolChips,
+          // A recovered provider retry is one rider-facing operation. Replace
+          // its prior failed attempt instead of leaving a misleading red row.
+          ...turn.toolChips.filter(
+            (chip) => !(chip.tool === action.tool && chip.status === "failed"),
+          ),
           { id: action.tool_call_id, tool: action.tool, label: action.label, status: "running" },
         ],
       }));

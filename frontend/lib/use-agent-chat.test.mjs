@@ -107,6 +107,41 @@ test("tool_end for an unknown tool_call_id leaves existing chips untouched", () 
   assert.equal(state.messages[1].toolChips[0].status, "running");
 });
 
+test("a recovered route attempt replaces the prior failed chip", () => {
+  let state = applyAgentEvent(initialState(), { type: "turn_started", text: "to Costco" });
+  state = applyAgentEvent(state, {
+    type: "tool_start",
+    tool_call_id: "address-attempt",
+    tool: "plan_trip",
+    label: "Planning a route without busesâ€¦",
+  });
+  state = applyAgentEvent(state, {
+    type: "tool_end",
+    tool_call_id: "address-attempt",
+    tool: "plan_trip",
+    ok: false,
+    duration_ms: 120,
+  });
+  state = applyAgentEvent(state, {
+    type: "tool_start",
+    tool_call_id: "coordinate-recovery",
+    tool: "plan_trip",
+    label: "Planning a route without busesâ€¦",
+  });
+  state = applyAgentEvent(state, {
+    type: "tool_end",
+    tool_call_id: "coordinate-recovery",
+    tool: "plan_trip",
+    ok: true,
+    duration_ms: 280,
+  });
+
+  const chips = state.messages[1].toolChips;
+  assert.equal(chips.length, 1);
+  assert.equal(chips[0].id, "coordinate-recovery");
+  assert.equal(chips[0].status, "ok");
+});
+
 test("a mid-stream error event sets both the turn error and the top-level error, without a done", () => {
   let state = applyAgentEvent(initialState(), { type: "turn_started", text: "drive me to Boston" });
   state = applyAgentEvent(state, { type: "meta", session_id: "s1", turn_id: "t1" });

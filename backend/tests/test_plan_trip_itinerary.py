@@ -211,6 +211,54 @@ class PlanTripItineraryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reasons[0]["difference_seconds"], 6 * 60)
         self.assertIsInstance(result.data["candidates"][0]["structured_recommendation_reasons"], list)
 
+    async def test_arrive_by_derives_a_scheduled_departure_without_becoming_leave_now(self):
+        arrival_by = "2026-07-16T22:00:00-04:00"
+        result = await plan_trip.execute(
+            {
+                "origin": "user",
+                "destination": "Costco Sunset Park",
+                "arrival_by": arrival_by,
+            },
+            self._ctx(),
+        )
+
+        self.assertTrue(result.ok)
+        # One internal probe, then the actual route request at derived departure.
+        self.assertEqual(self._get_route.await_count, 2)
+        recommended = next(event for event in result.events if event.role == "recommended")
+        self.assertEqual(recommended.itinerary["planning_mode"], "arrive_by")
+        self.assertEqual(recommended.itinerary["requested_arrival"], arrival_by)
+        self.assertIsNotNone(recommended.itinerary["requested_departure"])
+        self.assertNotEqual(
+            recommended.itinerary["requested_departure"],
+            arrival_by,
+        )
+
+    async def test_coordinate_recovery_keeps_the_named_destination_identity(self):
+        first_failure = plan_trip.directions_service.GoogleRoutesError(
+            "request_failed",
+            "address route failed",
+        )
+        self._get_route.side_effect = [
+            first_failure,
+            _google_response(_leg("Q", 5, 20, duration_minutes=25)),
+        ]
+        result = await plan_trip.execute(
+            {"origin": "user", "destination": "Costco Sunset Park"},
+            self._ctx(),
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(self._get_route.await_count, 2)
+        event = next(item for item in result.events if item.role == "recommended")
+        self.assertEqual(event.destination["label"], "Costco Sunset Park")
+        self.assertEqual(event.destination["address"], "Costco Sunset Park")
+        self.assertEqual(event.origin["label"], "Your location")
+        self.assertNotIn("40.7", event.destination["label"])
+        # The recovery request alone carries the provider coordinate input.
+        self.assertIsNone(self._get_route.await_args_list[0].args[2])
+        self.assertEqual(self._get_route.await_args_list[1].args[2], (40.7128, -74.006))
+
 
 class RouteCardEventItineraryWireTests(unittest.TestCase):
     def test_to_data_omits_itinerary_when_none(self):

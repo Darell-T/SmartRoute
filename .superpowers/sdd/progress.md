@@ -29,4 +29,9 @@ Branch: `feat/intelligence-validation-replays`
 - Task 6: complete for active chat and direct-map plans. Canonical
   recommendation facts use typed, scorer-owned records; legacy prose remains
   a compatibility alias for older sessions.
+- Time and place-identity follow-up (2026-07-24): arrive-by requests now
+  derive an offset-aware provider departure internally and preserve their
+  requested arrival in the canonical itinerary. Resolved rider-facing place
+  identity now survives private address-to-coordinate recovery, and recovered
+  retries replace failed reasoning chips instead of leaving a red failure row.
 - Task 7: in progress; focused backend and frontend regression coverage added.
