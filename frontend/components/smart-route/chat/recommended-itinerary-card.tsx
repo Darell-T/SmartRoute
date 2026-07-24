@@ -3,7 +3,7 @@
 /* ════════════════════════════════════════════════════════════════════════
    SmartRoute chat — recommended itinerary card
 
-   Quiet dark data card with an optional liquid-metal perimeter shell.
+   Quiet dark data card with a restrained editorial route spine.
    Official MTA bullets, condensed journey chunks, restrained Open on map.
    ════════════════════════════════════════════════════════════════════════ */
 
@@ -22,7 +22,6 @@ import {
   type ItineraryEvent,
   type ItineraryViewModel,
 } from "./itinerary-view-model";
-import { LiquidMetalShell } from "./liquid-metal-shell";
 
 const EASE_OUT = [0.16, 1, 0.3, 1] as const;
 
@@ -152,8 +151,6 @@ function ItineraryCardShell({
 }) {
   const reduceMotion = useReducedMotion() ?? false;
   const titleId = useId();
-  const useMetal = model.recommended && !model.invalid;
-
   if (model.invalid) {
     return (
       <article
@@ -173,7 +170,6 @@ function ItineraryCardShell({
       className="sr-itinerary-card"
       data-role={model.recommended ? "recommended" : "alternative"}
       data-selected={isSelected ? "true" : "false"}
-      data-metal={useMetal ? "true" : "false"}
       aria-labelledby={titleId}
       initial={reduceMotion ? false : { opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
@@ -251,9 +247,7 @@ function ItineraryCardShell({
     </motion.article>
   );
 
-  if (!useMetal) return card;
-
-  return <LiquidMetalShell>{card}</LiquidMetalShell>;
+  return card;
 }
 
 export function RecommendedItineraryCard({
@@ -301,14 +295,19 @@ export function RecommendedItineraryFromCards({
   onSelect?: (card: RouteCardData) => void;
   primaryActionLabel?: string;
 }) {
-  const model = useMemo(
-    () =>
-      buildMergedItineraryViewModel(cards, {
-        primaryActionLabel,
-        secondaryActionLabel: "View steps",
-      }),
-    [cards, primaryActionLabel],
-  );
+  const model = useMemo(() => {
+    const options = {
+      primaryActionLabel,
+      secondaryActionLabel: "View steps",
+    };
+    // A server-owned canonical card already contains every ordered segment.
+    // Only pre-canonical session history is allowed through the legacy
+    // client merger; it is intentionally not used to infer new dwell time.
+    const canonical = cards.find((card) => card.itinerary);
+    return canonical
+      ? buildItineraryViewModel(canonical, options)
+      : buildMergedItineraryViewModel(cards, options);
+  }, [cards, primaryActionLabel]);
 
   if (!model) return null;
 

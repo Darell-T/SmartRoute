@@ -8,6 +8,10 @@ from app.services.ai_advisor import stream_recommendation
 from app.services.mta_feed import fetch_service_alerts, get_stalled_buses, parse_service_alerts, filter_alerts_for_routes, get_stalled_trains
 from app.services.trips import text, scoring, candidates, enrichment, incidents as trip_incidents, advisor_context
 from app.services.trips.itinerary import build_canonical_itinerary
+from app.services.trips.recommendation_reasons import (
+    build_recommendation_reasons,
+    format_recommendation_reason,
+)
 from app.services.validation import production_shadow
 from app.services.validation.shadow import ShadowEvaluationStatus
 
@@ -224,12 +228,14 @@ async def plan_trip(request: Request, payload: TripRequest):
         # Candidate REASON text (why each alternate wasn't picked) still falls
         # back to a time/transfer/alert comparison when ATLAS doesn't supply its
         # own reason; that is display copy only and never changes the selection.
+        scored_routes = scoring._score_routes(parsed_response, relevant_alerts)
         route_candidates = candidates._build_route_candidates(
             parsed_response,
             chosen_index,
             candidate_analysis,
-            scoring._score_routes(parsed_response, relevant_alerts),
+            scored_routes,
         )
+        score_by_index = scoring._score_by_index(scored_routes)
         # The direct map planner uses the same canonical timing contract as
         # agent cards. Keep its established candidate fields as compatibility
         # aliases, but do not make the frontend derive a parallel trip total.
@@ -243,21 +249,45 @@ async def plan_trip(request: Request, payload: TripRequest):
             "lat": payload.destination_lat,
             "lng": payload.destination_lng,
         }
-        for candidate in route_candidates:
+        for index, candidate in enumerate(route_candidates):
             route = candidate.get("steps") or []
             reason = (
                 candidate.get("recommendation_reason")
                 if candidate.get("is_recommended")
                 else candidate.get("rejection_reason")
             )
+            structured_reasons = (
+                build_recommendation_reasons(
+                    score_by_index[chosen_index],
+                    [
+                        score
+                        for score_index, score in score_by_index.items()
+                        if score_index != chosen_index
+                    ],
+                )
+                if index == chosen_index
+                else []
+            )
+            if candidate.get("is_recommended"):
+                rendered_reasons = [
+                    rendered
+                    for rendered in (
+                        format_recommendation_reason(structured)
+                        for structured in structured_reasons
+                    )
+                    if rendered
+                ]
+                if rendered_reasons:
+                    candidate["recommendation_reason"] = rendered_reasons[0]
             itinerary = build_canonical_itinerary(
                 route,
                 origin=origin_point,
                 destination=destination_point,
-                reasons=[reason] if isinstance(reason, str) and reason else None,
+                reasons=structured_reasons,
                 itinerary_id=str(candidate.get("id") or "") or None,
             )
             candidate["itinerary"] = itinerary
+            candidate["structured_recommendation_reasons"] = structured_reasons
             candidate["total_minutes"] = max(
                 0, round(int(itinerary["total_duration_seconds"]) / 60)
             )

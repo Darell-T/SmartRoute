@@ -1097,7 +1097,7 @@
   color: color-mix(in srgb, var(--sr-chat-ink) 32%, transparent);
 }
 
-/* Compact preview with a thin timeline spine. */
+/* Compact preview with a deliberate editorial route spine. */
 .sr-itinerary-card__timeline {
   list-style: none;
   margin: 12px 0 0;
@@ -1154,6 +1154,25 @@
   background: transparent;
   box-sizing: border-box;
   flex-shrink: 0;
+}
+
+.sr-itinerary-card__event[data-first="true"] .sr-itinerary-card__node {
+  width: 8px;
+  height: 8px;
+  border-color: color-mix(in srgb, var(--sr-chat-ink) 54%, transparent);
+}
+
+.sr-itinerary-card__event:not([data-first="true"]):not([data-last="true"]) .sr-itinerary-card__node {
+  border-color: color-mix(in srgb, var(--sr-chat-ink) 42%, transparent);
+  background: color-mix(in srgb, var(--sr-chat-surface) 68%, var(--sr-chat-ink));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--sr-chat-ink) 9%, transparent);
+}
+
+.sr-itinerary-card__event[data-last="true"] .sr-itinerary-card__node {
+  width: 8px;
+  height: 8px;
+  border-color: color-mix(in srgb, var(--sr-chat-ink) 64%, transparent);
+  background: color-mix(in srgb, var(--sr-chat-ink) 70%, var(--sr-chat-surface));
 }
 
 .sr-itinerary-card__event-main {
@@ -1259,7 +1278,7 @@
   padding-top: 2px;
 }
 
-/* Dark outline map action — does not compete with the metal rim. */
+/* Quiet outline map action — secondary to the route facts. */
 .sr-itinerary-card__actions {
   display: flex;
   align-items: center;

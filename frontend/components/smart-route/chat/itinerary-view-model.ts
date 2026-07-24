@@ -9,6 +9,7 @@ import type {
   AgentRouteStep,
   CanonicalItinerary,
   CanonicalItineraryLeg,
+  RecommendationReason,
   RouteCard,
 } from "@/lib/agent-chat-stream";
 import { SUBWAY_BULLET_ROUTES } from "@/components/smart-route/train-bullet";
@@ -98,6 +99,35 @@ export function parseRationale(reason: string | undefined | null): string[] {
     .split(/\s*[·•|]\s*/)
     .map((part) => part.trim().replace(/[.]+$/, ""))
     .filter(Boolean);
+}
+
+/** Format only supported server-owned recommendation facts. */
+export function formatStructuredRecommendationReason(
+  reason: RecommendationReason | string | unknown,
+): string | null {
+  // Explicit temporary adapter for older saved conversations.
+  if (typeof reason === "string") return reason.trim() || null;
+  if (!reason || typeof reason !== "object" || !("code" in reason)) return null;
+  const structured = reason as RecommendationReason;
+
+  if (structured.code === "fastest") {
+    const seconds =
+      typeof structured.difference_seconds === "number" && Number.isFinite(structured.difference_seconds)
+        ? Math.max(0, structured.difference_seconds)
+        : 0;
+    return seconds >= 60
+      ? `About ${Math.round(seconds / 60)} min faster than the next option`
+      : "Fastest available route";
+  }
+  if (structured.code === "fewer_transfers") {
+    const difference = Math.max(0, structured.transfer_difference);
+    if (!difference) return null;
+    return `Uses ${difference} fewer ${difference === 1 ? "transfer" : "transfers"}`;
+  }
+  if (structured.code === "avoids_active_disruption") {
+    return "Avoids active service alerts on another option";
+  }
+  return null;
 }
 
 function stepRouteId(step: AgentRouteStep): string | null {
@@ -516,9 +546,9 @@ export function buildItineraryViewModel(
 
   const canonicalRationale = card.itinerary?.structured_recommendation_reasons;
   const rationale = Array.isArray(canonicalRationale) && canonicalRationale.length > 0
-    ? canonicalRationale.filter((reason): reason is string =>
-        typeof reason === "string" && reason.trim().length > 0,
-      )
+    ? canonicalRationale
+        .map(formatStructuredRecommendationReason)
+        .filter((reason): reason is string => Boolean(reason))
     : parseRationale(card.summary.reason);
 
   return {
@@ -541,7 +571,10 @@ export function buildItineraryViewModel(
 }
 
 /**
- * Merge ordered recommended cards into one multi-stop itinerary preview.
+ * Legacy-only fallback for session history that predates canonical itineraries.
+ *
+ * New multi-stop plans are assembled by the backend into one canonical card.
+ * This function must never be used to infer dwell for a canonical card.
  */
 export function buildMergedItineraryViewModel(
   recommendedCards: RouteCard[],

@@ -19,5 +19,14 @@ Branch: `feat/intelligence-validation-replays`
 - Repair started: provider duration seconds are retained, direct map candidates
   now emit canonical itineraries, chat previews prefer canonical leg seconds,
   and chat-to-map entry context suppresses duplicated rail reasoning.
-- Task 6: pending typed fact schema and production wiring.
+- Multi-stop runtime repair: complete. One plan_trip call can now carry ordered
+  waypoints; the backend plans each production leg, owns dwell timing, and
+  emits one chained RouteCardEvent / itinerary ID. The frontend merger is
+  legacy-only and bypassed whenever a canonical card exists.
+- Card review repair: complete. The recommendation card has no liquid-metal
+  wrapper, uses neutral start/transfer/destination spine states, and keeps
+  Open on map as its only secondary action.
+- Task 6: complete for active chat and direct-map plans. Canonical
+  recommendation facts use typed, scorer-owned records; legacy prose remains
+  a compatibility alias for older sessions.
 - Task 7: in progress; focused backend and frontend regression coverage added.

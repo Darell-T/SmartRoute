@@ -503,3 +503,24 @@ test("without itinerary, falls back to summary totals (back-compat)", () => {
   assert.equal(model.durationLabel, "34 min");
   assert.equal(model.transferCount, 0);
 });
+
+test("formats supported structured reason facts and ignores unknown facts", () => {
+  const model = buildItineraryViewModel(
+    baseCard({
+      itinerary: {
+        total_duration_seconds: 1800,
+        transfer_count: 0,
+        structured_recommendation_reasons: [
+          { code: "fastest", difference_seconds: 300 },
+          { code: "fewer_transfers", transfer_difference: 1 },
+          { code: "not_a_supported_reason" },
+        ],
+      },
+    }),
+  );
+
+  assert.deepEqual(model.rationale, [
+    "About 5 min faster than the next option",
+    "Uses 1 fewer transfer",
+  ]);
+});

@@ -170,6 +170,47 @@ class PlanTripItineraryTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(event.itinerary["planning_mode"], "leave_now")
             self.assertIsNone(event.itinerary["requested_departure"])
 
+    async def test_waypoints_emit_one_server_owned_chained_itinerary(self):
+        result = await plan_trip.execute(
+            {
+                "origin": "user",
+                "waypoints": ["Joe's Pizza"],
+                "destination": "Costco",
+            },
+            self._ctx(),
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(self._get_route.await_count, 2)
+        self.assertEqual(len(result.events), 1)
+        self.assertEqual(len(result.data["candidates"]), 1)
+
+        event = result.events[0]
+        itinerary = event.itinerary
+        self.assertEqual(event.role, "recommended")
+        self.assertEqual(itinerary["waypoints"][0]["display_name"], "Joe's Pizza")
+        self.assertEqual(itinerary["waypoints"][0]["dwell_minutes"], 25)
+        self.assertEqual(itinerary["waypoints"][0]["dwell_source"], "default")
+        self.assertEqual(itinerary["total_dwell_seconds"], 25 * 60)
+        # Each provider route is 25 minutes, plus one server-owned dwell.
+        self.assertEqual(itinerary["total_duration_seconds"], 75 * 60)
+        self.assertEqual(
+            event.summary["eta_minutes"],
+            round(itinerary["total_duration_seconds"] / 60),
+        )
+
+    async def test_recommended_card_carries_deterministic_reason_facts(self):
+        result = await plan_trip.execute(
+            {"origin": "user", "destination": "Costco"}, self._ctx()
+        )
+
+        recommended = next(event for event in result.events if event.role == "recommended")
+        reasons = recommended.itinerary["structured_recommendation_reasons"]
+        self.assertTrue(reasons)
+        self.assertEqual(reasons[0]["code"], "fastest")
+        self.assertEqual(reasons[0]["difference_seconds"], 6 * 60)
+        self.assertIsInstance(result.data["candidates"][0]["structured_recommendation_reasons"], list)
+
 
 class RouteCardEventItineraryWireTests(unittest.TestCase):
     def test_to_data_omits_itinerary_when_none(self):

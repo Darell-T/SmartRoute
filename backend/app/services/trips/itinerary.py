@@ -37,7 +37,7 @@ def build_canonical_itinerary(
     requested_departure: str | None = None,
     generated_at: str | None = None,
     data_basis: str = "mixed",
-    reasons: list[str] | None = None,
+    reasons: list[object] | None = None,
     itinerary_id: str | None = None,
 ) -> dict:
     """Normalize parsed route steps into a canonical itinerary dict.
@@ -116,7 +116,7 @@ def build_chained_itinerary(
     requested_departure: str | None = None,
     generated_at: str | None = None,
     data_basis: str = "mixed",
-    reasons: list[str] | None = None,
+    reasons: list[object] | None = None,
     itinerary_id: str | None = None,
 ) -> dict:
     """Merge ordered OD segments into one multi-stop CanonicalItinerary.

@@ -102,9 +102,23 @@ export interface CanonicalItinerary {
   total_dwell_seconds?: number;
   transfer_count?: number;
   legs?: CanonicalItineraryLeg[];
-  structured_recommendation_reasons?: string[];
+  /** Typed facts for current payloads; strings are a legacy-session adapter. */
+  structured_recommendation_reasons?: Array<RecommendationReason | string>;
   [key: string]: unknown;
 }
+
+export type RecommendationReason =
+  | {
+      code: "fastest";
+      difference_seconds?: number;
+    }
+  | {
+      code: "fewer_transfers";
+      transfer_difference: number;
+    }
+  | {
+      code: "avoids_active_disruption";
+    };
 
 /** A single transit step, additively extended with the absolute departure /
  *  arrival timestamps future-departure turns need (design correction #1 in
