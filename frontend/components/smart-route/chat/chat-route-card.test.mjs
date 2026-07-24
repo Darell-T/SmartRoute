@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { recommendedCardsForChat } from "./recommended-card-selection.ts";
+
+const CARD_SOURCE = fs.readFileSync(
+  fileURLToPath(new URL("./recommended-itinerary-card.tsx", import.meta.url)),
+  "utf8",
+);
 
 const cards = [
   { card_id: "recommended", role: "recommended" },
@@ -22,4 +29,21 @@ test("chat renders only the recommended route without mutating map alternatives"
 
 test("chat does not promote an alternative when no recommendation exists", () => {
   assert.deepEqual(recommendedCardsForChat(cards.slice(1)), []);
+});
+
+test("recommendation card keeps transit details collapsed by default", () => {
+  assert.match(
+    CARD_SOURCE,
+    /useState<Set<string>>\(\(\) => new Set\(\)\)/,
+  );
+  assert.match(CARD_SOURCE, /aria-expanded=\{expanded\}/);
+  assert.match(CARD_SOURCE, /onClick=\{onToggle\}/);
+  assert.match(CARD_SOURCE, /<motion\.article[\s\S]*?\blayout\b/);
+});
+
+test("recommendation card preserves total duration and route-colored chains", () => {
+  assert.match(CARD_SOURCE, /model\.durationLabel/);
+  assert.match(CARD_SOURCE, /model\.metaParts\.map/);
+  assert.match(CARD_SOURCE, /getRouteColor\(event\.routeIds\[0\]/);
+  assert.match(CARD_SOURCE, /duration: 0\.3, ease: LAYOUT_EASE/);
 });

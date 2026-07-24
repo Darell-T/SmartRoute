@@ -165,8 +165,8 @@
 }
 
 .sr-chat-tab .sr-itinerary-card {
-  --sr-itinerary-pad-x: 26px;
-  --sr-itinerary-pad-y: 20px;
+  --sr-itinerary-pad-x: 22px;
+  --sr-itinerary-pad-y: 18px;
   overflow: hidden;
   padding: 0;
   border-radius: 18px;
@@ -193,8 +193,8 @@
 }
 
 .sr-chat-tab .sr-itinerary-card__header {
-  gap: 7px;
-  padding: var(--sr-itinerary-pad-y) var(--sr-itinerary-pad-x) 15px;
+  gap: 6px;
+  padding: var(--sr-itinerary-pad-y) var(--sr-itinerary-pad-x) 6px;
 }
 
 .sr-chat-tab .sr-itinerary-card__badge {
@@ -261,6 +261,27 @@
   color: #667184;
 }
 
+.sr-chat-tab .sr-itinerary-card__hero {
+  display: flex;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 14px;
+  margin: 0;
+  padding: 8px var(--sr-itinerary-pad-x) 14px;
+  border: 0;
+}
+
+.sr-chat-tab .sr-itinerary-card__duration-value {
+  font-size: 29px;
+  font-weight: 650;
+  line-height: 1;
+}
+
+.sr-chat-tab .sr-itinerary-card__meta {
+  gap: 6px;
+  font-size: 12.5px;
+}
+
 .sr-itinerary-card__legs {
   display: flex;
   flex-direction: column;
@@ -272,9 +293,9 @@
 .sr-itinerary-card__waypoint {
   position: relative;
   display: grid;
-  grid-template-columns: 50px minmax(0, 1fr);
-  column-gap: 17px;
-  padding: 18px 0;
+  grid-template-columns: 42px minmax(0, 1fr);
+  column-gap: 12px;
+  padding: 15px 0;
   border-top: 1px solid rgba(255, 255, 255, 0.1);
 }
 
@@ -299,7 +320,7 @@
   align-items: baseline;
   flex-wrap: wrap;
   color: rgba(255, 255, 255, 0.94);
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 540;
   line-height: 1.3;
   letter-spacing: -0.018em;
@@ -324,7 +345,7 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  margin-top: 8px;
+  margin-top: 6px;
 }
 
 .sr-itinerary-card__stop-chain::before {
@@ -339,6 +360,10 @@
   background: var(--sr-route-color);
 }
 
+.sr-itinerary-card__stop-chain[data-expanded="true"]::before {
+  bottom: 40px;
+}
+
 .sr-itinerary-card__chain-row,
 .sr-itinerary-card__intermediate-stops > li {
   position: relative;
@@ -347,7 +372,7 @@
   grid-template-columns: 15px minmax(0, 1fr);
   align-items: center;
   gap: 11px;
-  min-height: 25px;
+  min-height: 23px;
 }
 
 .sr-itinerary-card__intermediate-stops {
@@ -358,7 +383,7 @@
 }
 
 .sr-itinerary-card__intermediate-stops > li {
-  min-height: 20px;
+  min-height: 19px;
   color: rgba(255, 255, 255, 0.68);
   font-size: 13px;
   line-height: 1.25;
@@ -435,11 +460,11 @@
   align-items: center;
   gap: 5px;
   width: max-content;
-  min-height: 30px;
+  min-height: 28px;
   margin: 0 0 0 26px;
   padding: 3px 4px 3px 0;
   border: 0;
-  border-radius: 5px;
+  border-radius: 0;
   background: transparent;
   color: #929cb1;
   font: inherit;
@@ -451,14 +476,11 @@
 
 .sr-itinerary-card__disclosure {
   cursor: pointer;
-  transition:
-    color 140ms var(--sr-motion-ease),
-    background 140ms var(--sr-motion-ease);
+  transition: color 140ms var(--sr-motion-ease);
 }
 
 .sr-itinerary-card__disclosure:hover {
   color: rgba(255, 255, 255, 0.92);
-  background: rgba(255, 255, 255, 0.035);
 }
 
 .sr-chat-tab[data-sr-theme="light"] .sr-itinerary-card__disclosure,
@@ -468,7 +490,6 @@
 
 .sr-chat-tab[data-sr-theme="light"] .sr-itinerary-card__disclosure:hover {
   color: rgba(15, 16, 18, 0.92);
-  background: rgba(15, 16, 18, 0.035);
 }
 
 .sr-itinerary-card__disclosure:focus-visible {
@@ -548,6 +569,14 @@
   pointer-events: none;
 }
 
+.sr-chat-tab
+  .sr-itinerary-card:not([data-has-final-walk="true"])
+  .sr-itinerary-card__actions {
+  min-height: 0;
+  margin-top: 0;
+  padding-top: 0;
+}
+
 .sr-chat-tab .sr-itinerary-card__map-btn {
   align-self: flex-end;
   min-height: 40px;
@@ -593,8 +622,8 @@
   }
 
   .sr-chat-tab .sr-itinerary-card {
-    --sr-itinerary-pad-x: 17px;
-    --sr-itinerary-pad-y: 17px;
+    --sr-itinerary-pad-x: 16px;
+    --sr-itinerary-pad-y: 16px;
   }
 
   .sr-chat-tab .sr-itinerary-card__title {
@@ -615,7 +644,7 @@
   .sr-itinerary-card__waypoint {
     grid-template-columns: 42px minmax(0, 1fr);
     column-gap: 11px;
-    padding: 16px 0;
+    padding: 14px 0;
   }
 
   .sr-itinerary-card__leg-heading,

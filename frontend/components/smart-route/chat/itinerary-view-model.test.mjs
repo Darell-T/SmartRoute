@@ -88,8 +88,7 @@ test("preserves every ordered journey leg in the recommendation card", () => {
   assert.equal(model.durationLabel, "34 min");
   assert.equal(model.totalMinutes, 34);
   assert.equal(model.transferCount, 0);
-  // Zero transfers are omitted from meta (not "0 transfers").
-  assert.equal(model.metaParts.length, 0);
+  assert.deepEqual(model.metaParts, ["0 transfers"]);
   assert.ok(model.arrivalLabel);
   assert.deepEqual(model.rationale, ["No bus", "Elevator access for the cart"]);
   assert.equal(model.primaryActionLabel, "Open on map");
@@ -322,23 +321,130 @@ test("merged legacy multi-stop keeps ordered legs and destination identity", () 
   assert.equal(finalWalk.toLabel, "Prada");
 });
 
-test("condensePreviewEvents no longer removes canonical journey facts", () => {
+test("condensePreviewEvents merges adjacent walks without crossing transit legs", () => {
   const condensed = condensePreviewEvents(
     [
-      { id: "1", kind: "walk", routeIds: [], title: "Walk", durationMinutes: 3, durationLabel: "3 min" },
-      { id: "2", kind: "subway", routeIds: ["Q"], title: "Union Sq", durationMinutes: 20, durationLabel: "20 min" },
-      { id: "3", kind: "walk", routeIds: [], title: "Walk", durationMinutes: 2, durationLabel: "2 min" },
-      { id: "4", kind: "subway", routeIds: ["M"], title: "Lafayette", durationMinutes: 12, durationLabel: "12 min" },
-      { id: "5", kind: "walk", routeIds: [], title: "Walk", durationMinutes: 6, durationLabel: "6 min" },
+      { id: "1", kind: "walk", routeIds: [], title: "Walk", durationSeconds: 60 },
+      { id: "2", kind: "walk", routeIds: [], title: "Walk", durationSeconds: 120 },
+      {
+        id: "3",
+        kind: "subway",
+        routeIds: ["Q"],
+        title: "Union Sq",
+        fromLabel: "Canal St",
+        toLabel: "Union Sq",
+        durationMinutes: 20,
+        durationLabel: "20 min",
+      },
+      {
+        id: "4",
+        kind: "walk",
+        routeIds: [],
+        title: "Walk",
+        fromLabel: "Union Sq",
+        toLabel: "Broadway-Lafayette",
+        durationSeconds: 120,
+      },
+      {
+        id: "5",
+        kind: "subway",
+        routeIds: ["M"],
+        title: "Lafayette",
+        fromLabel: "Broadway-Lafayette",
+        toLabel: "Lafayette",
+        durationMinutes: 12,
+        durationLabel: "12 min",
+      },
+      { id: "6", kind: "walk", routeIds: [], title: "Walk", durationSeconds: 180 },
+      { id: "7", kind: "walk", routeIds: [], title: "Walk", durationSeconds: 180 },
     ],
     "Prada",
+    "Home",
   );
 
   assert.equal(condensed.length, 5);
-  assert.equal(condensed.some((e) => e.durationMinutes === 3), true);
-  assert.equal(condensed.some((e) => e.durationMinutes === 2), true);
+  assert.deepEqual(
+    condensed.map((event) => event.kind),
+    ["walk", "subway", "walk", "subway", "walk"],
+  );
+  assert.equal(condensed[0].fromLabel, "Home");
+  assert.equal(condensed[0].toLabel, "Canal St");
+  assert.equal(condensed[0].durationMinutes, 3);
   assert.equal(condensed.at(-1)?.kind, "walk");
-  assert.equal(condensed.at(-1)?.title, "Walk");
+  assert.equal(condensed.at(-1)?.fromLabel, "Lafayette");
+  assert.equal(condensed.at(-1)?.toLabel, "Prada");
+  assert.equal(condensed.at(-1)?.durationMinutes, 6);
+});
+
+test("canonical provider micro-walks become compact semantic sections", () => {
+  const model = buildItineraryViewModel(baseCard({
+    summary: {
+      eta_minutes: 31,
+      transfers: 1,
+      lines: ["B", "D"],
+      reason: "Fastest route",
+    },
+    itinerary: {
+      total_duration_seconds: 1860,
+      transfer_count: 1,
+      arrival_at: "2026-07-18T15:46:00-04:00",
+      legs: [
+        { mode: "WALK", walk_seconds: 0, geometry: [[0, 0], [1, 1]] },
+        { mode: "WALK", walk_seconds: 30, geometry: [[1, 1], [2, 2]] },
+        { mode: "WALK", walk_seconds: 30, geometry: [[2, 2], [3, 3]] },
+        {
+          mode: "SUBWAY",
+          service_id: "B",
+          board: "Church Av",
+          alight: "Atlantic Av-Barclays Ctr",
+          stop_count: 6,
+          ride_seconds: 660,
+        },
+        { mode: "WALK", walk_seconds: 120, geometry: [[3, 3], [4, 4]] },
+        {
+          mode: "SUBWAY",
+          service_id: "D",
+          board: "Atlantic Av-Barclays Ctr",
+          alight: "36 St",
+          stop_count: 2,
+          ride_seconds: 360,
+        },
+        { mode: "WALK", walk_seconds: 0, geometry: [[4, 4], [5, 5]] },
+        { mode: "WALK", walk_seconds: 60, geometry: [[5, 5], [6, 6]] },
+        { mode: "WALK", walk_seconds: 180, geometry: [[6, 6], [7, 7]] },
+      ],
+    },
+    route: [],
+  }));
+
+  assert.deepEqual(
+    model.events.map((event) => event.kind),
+    ["subway", "subway", "walk"],
+  );
+  assert.equal(model.events.filter((event) => event.kind === "walk").length, 1);
+  const finalWalk = model.events.at(-1);
+  assert.equal(finalWalk.fromLabel, "36 St");
+  assert.equal(finalWalk.toLabel, "Costco Sunset Park");
+  assert.equal(finalWalk.durationLabel, "4 min");
+  assert.equal(model.events.some((event) => event.durationLabel === "0 min"), false);
+  assert.equal(model.durationLabel, "31 min");
+  assert.deepEqual(model.metaParts, ["1 transfer"]);
+});
+
+test("zero-duration geometry-only walks never become customer-facing rows", () => {
+  const condensed = condensePreviewEvents(
+    [{
+      id: "geometry-only",
+      kind: "walk",
+      routeIds: [],
+      title: "Costco Sunset Park",
+      durationSeconds: 0,
+    }],
+    "Costco Sunset Park",
+    "Your location",
+  );
+
+  assert.deepEqual(condensed, []);
 });
 
 test("official subway routes are recognized; unsupported ids are not", () => {

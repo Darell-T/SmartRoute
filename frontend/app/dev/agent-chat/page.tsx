@@ -27,7 +27,11 @@ import {
   type AgentChatRequestBody,
   type ArrivalsTurnPayload,
 } from "@/lib/use-agent-chat";
-import type { AgentEvent, RouteCardEndpoint } from "@/lib/agent-chat-stream";
+import type {
+  AgentEvent,
+  RouteCardEndpoint,
+  RouteCardEvent,
+} from "@/lib/agent-chat-stream";
 import type { ChatTheme } from "@/lib/use-chat-theme";
 import { ChatPanel } from "@/components/smart-route/chat/chat-panel";
 import { ChatSidebar } from "@/components/smart-route/chat/chat-sidebar";
@@ -235,6 +239,21 @@ async function* successTurn(turnId: string, signal: AbortSignal): AsyncGenerator
       arrival_at: "2026-07-18T14:42:00-04:00",
       legs: [
         {
+          mode: "WALK",
+          walk_seconds: 0,
+          geometry: [[40.7484, -73.9857], [40.7485, -73.9858]],
+        },
+        {
+          mode: "WALK",
+          walk_seconds: 30,
+          geometry: [[40.7485, -73.9858], [40.7486, -73.9859]],
+        },
+        {
+          mode: "WALK",
+          walk_seconds: 30,
+          geometry: [[40.7486, -73.9859], [40.7487, -73.986]],
+        },
+        {
           mode: "SUBWAY",
           service_id: "B",
           board: "Church Av",
@@ -250,6 +269,11 @@ async function* successTurn(turnId: string, signal: AbortSignal): AsyncGenerator
             { name: "Kings Hwy" },
             { name: "Atlantic Av-Barclays Ctr" },
           ],
+        },
+        {
+          mode: "WALK",
+          walk_seconds: 120,
+          geometry: [[40.6844, -73.9777], [40.6845, -73.9778]],
         },
         {
           mode: "SUBWAY",
@@ -269,9 +293,18 @@ async function* successTurn(turnId: string, signal: AbortSignal): AsyncGenerator
         },
         {
           mode: "WALK",
-          board: "36 St",
-          alight: "Costco Sunset Park",
-          walk_seconds: 240,
+          walk_seconds: 0,
+          geometry: [[40.6551, -74.0035], [40.6552, -74.0036]],
+        },
+        {
+          mode: "WALK",
+          walk_seconds: 60,
+          geometry: [[40.6552, -74.0036], [40.6555, -74.005]],
+        },
+        {
+          mode: "WALK",
+          walk_seconds: 180,
+          geometry: [[40.6555, -74.005], [40.6559, -74.0089]],
         },
       ],
     },
@@ -363,6 +396,179 @@ async function* successTurn(turnId: string, signal: AbortSignal): AsyncGenerator
   };
 }
 
+async function* multiStopTurn(
+  turnId: string,
+  signal: AbortSignal,
+): AsyncGenerator<AgentEvent> {
+  yield { type: "meta", session_id: "dev-session", turn_id: turnId };
+  await wait(120, signal);
+
+  const prose =
+    "This route includes your pizza stop, preserves the 25-minute pickup, and then continues to Costco.";
+  for (const chunk of tokenChunks(prose)) {
+    await wait(25, signal);
+    yield { type: "token", text: chunk };
+  }
+
+  const card: RouteCardEvent = {
+    type: "route_card",
+    card_id: "rc_multi_stop",
+    turn_id: turnId,
+    role: "recommended",
+    origin: ORIGIN,
+    destination: DESTINATION,
+    summary: {
+      eta_minutes: 55,
+      transfers: 1,
+      lines: ["B35", "R"],
+      reason: "Preserves the requested pickup stop",
+    },
+    route: [
+      {
+        type: "BUS",
+        train_line: "B35",
+        departure_stop: "Church Av",
+        arrival_stop: "5 Av/9 St",
+        stop_count: 5,
+        intermediate_stops: [
+          "Church Av",
+          "McDonald Av",
+          "7 Av",
+          "5 Av/9 St",
+        ],
+        minutes_until_arrival: 15,
+      },
+      {
+        type: "WALK",
+        departure_stop: "5 Av/9 St",
+        arrival_stop: "Luigi's Pizza",
+        minutes_until_arrival: 3,
+      },
+      {
+        type: "WALK",
+        departure_stop: "Luigi's Pizza",
+        arrival_stop: "4 Av-9 St",
+        minutes_until_arrival: 3,
+      },
+      {
+        type: "SUBWAY",
+        train_line: "R",
+        departure_stop: "4 Av-9 St",
+        arrival_stop: "36 St",
+        stop_count: 2,
+        intermediate_stops: ["4 Av-9 St", "Prospect Av", "25 St", "36 St"],
+        minutes_until_arrival: 5,
+      },
+      {
+        type: "WALK",
+        departure_stop: "36 St",
+        arrival_stop: "Costco Sunset Park",
+        minutes_until_arrival: 4,
+      },
+    ],
+    alerts: [],
+    itinerary: {
+      itinerary_id: "rc_multi_stop",
+      total_duration_seconds: 3300,
+      total_dwell_seconds: 1500,
+      transfer_count: 1,
+      arrival_at: "2026-07-18T15:00:00-04:00",
+      waypoints: [
+        {
+          display_name: "Luigi's Pizza",
+          address: "686 5th Ave, Brooklyn, NY",
+          dwell_minutes: 25,
+        },
+      ],
+      segments: [
+        {
+          segment_index: 0,
+          destination: { display_name: "Luigi's Pizza" },
+          duration_seconds: 1080,
+          legs: [
+            {
+              mode: "BUS",
+              service_id: "B35",
+              board: "Church Av",
+              alight: "5 Av/9 St",
+              stop_count: 5,
+              ride_seconds: 900,
+              stops: [
+                { name: "Church Av" },
+                { name: "McDonald Av" },
+                { name: "7 Av" },
+                { name: "5 Av/9 St" },
+              ],
+            },
+            {
+              mode: "WALK",
+              board: "5 Av/9 St",
+              alight: "Luigi's Pizza",
+              walk_seconds: 180,
+            },
+          ],
+        },
+        {
+          segment_index: 1,
+          origin: { display_name: "Luigi's Pizza" },
+          destination: { display_name: "Costco Sunset Park" },
+          duration_seconds: 720,
+          legs: [
+            {
+              mode: "WALK",
+              board: "Luigi's Pizza",
+              alight: "4 Av-9 St",
+              walk_seconds: 180,
+            },
+            {
+              mode: "SUBWAY",
+              service_id: "R",
+              board: "4 Av-9 St",
+              alight: "36 St",
+              stop_count: 2,
+              ride_seconds: 300,
+              stops: [
+                { name: "4 Av-9 St" },
+                { name: "Prospect Av" },
+                { name: "25 St" },
+                { name: "36 St" },
+              ],
+            },
+            {
+              mode: "WALK",
+              board: "36 St",
+              alight: "Costco Sunset Park",
+              walk_seconds: 240,
+            },
+          ],
+        },
+      ],
+      dwell_events: [
+        {
+          event_type: "dwell",
+          after_segment_index: 0,
+          waypoint: {
+            display_name: "Luigi's Pizza",
+            address: "686 5th Ave, Brooklyn, NY",
+            dwell_minutes: 25,
+          },
+          duration_seconds: 1500,
+          source: "user",
+        },
+      ],
+    },
+  };
+
+  yield card;
+  yield {
+    type: "done",
+    session_id: "dev-session",
+    turn_id: turnId,
+    stop_reason: "end_turn",
+    usage: { input_tokens: 430, output_tokens: 54 },
+  };
+}
+
 async function* errorTurn(turnId: string, signal: AbortSignal): AsyncGenerator<AgentEvent> {
   yield { type: "meta", session_id: "dev-session", turn_id: turnId };
 
@@ -442,6 +648,7 @@ function AgentChatStoryInner() {
   // used by the W-A screenshot gate's "empty state" requirement.
   const skipAutoSend = searchParams.get("empty") === "1";
   const showSidebar = searchParams.get("sidebar") === "1";
+  const scenario = searchParams.get("scenario");
   const [theme, setTheme] = useState<ChatTheme>(initialTheme);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const turnCountRef = useRef(0);
@@ -451,7 +658,11 @@ function AgentChatStoryInner() {
       turnCountRef.current += 1;
       const turnId = `turn-${turnCountRef.current}`;
       if (turnCountRef.current === 1) {
-        yield* successTurn(turnId, signal);
+        if (scenario === "multi-stop") {
+          yield* multiStopTurn(turnId, signal);
+        } else {
+          yield* successTurn(turnId, signal);
+        }
       } else {
         yield* errorTurn(turnId, signal);
       }

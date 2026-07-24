@@ -30,6 +30,8 @@ export interface ItineraryEvent {
   routeIds: string[];
   title: string;
   subtitle?: string;
+  /** Exact canonical duration used by the presentation adapter before display rounding. */
+  durationSeconds?: number;
   durationLabel?: string;
   durationMinutes?: number;
   fromLabel?: string;
@@ -59,8 +61,9 @@ export interface ItineraryViewModel {
   primaryCardId: string;
 }
 
-/** Retained for older callers; the redesigned card no longer truncates legs. */
+/** Retained for older callers. Semantic sections are not hard-truncated. */
 export const PREVIEW_EVENT_MAX = 5;
+const MIN_INFERRED_WALK_SECONDS = 90;
 
 export function formatDurationMinutes(totalMinutes: number): string {
   if (!Number.isFinite(totalMinutes) || totalMinutes < 0) return "—";
@@ -135,6 +138,10 @@ function durationLabelFromMinutes(minutes: number | null): string | undefined {
   return minutes == null ? undefined : formatDurationMinutes(minutes);
 }
 
+function durationLabelFromSeconds(seconds: number): string {
+  return formatDurationMinutes(Math.max(1, Math.round(seconds / 60)));
+}
+
 function canonicalStopLabel(stop: unknown): string | null {
   if (typeof stop === "string" && stop.trim()) return stop.trim();
   if (stop && typeof stop === "object" && !Array.isArray(stop)) {
@@ -191,6 +198,14 @@ function canonicalLegDurationMinutes(leg: CanonicalItineraryLeg): number | null 
     : durationMinutesFromSeconds(leg.ride_seconds);
 }
 
+function canonicalLegDurationSeconds(leg: CanonicalItineraryLeg): number | null {
+  const value =
+    leg.mode.trim().toUpperCase() === "WALK" ? leg.walk_seconds : leg.ride_seconds;
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : null;
+}
+
 function canonicalLegStops(leg: CanonicalItineraryLeg): string[] {
   if (!Array.isArray(leg.stops)) return [];
   return leg.stops
@@ -206,12 +221,16 @@ function appendCanonicalLegs(
 ): void {
   legs.forEach((leg, index) => {
     const mode = leg.mode.trim().toUpperCase();
-    const fromLabel = canonicalStopLabel(leg.board) ?? undefined;
-    const toLabel = canonicalStopLabel(leg.alight) ?? undefined;
+    const stops = canonicalLegStops(leg);
+    const fromLabel = canonicalStopLabel(leg.board) ?? stops[0] ?? undefined;
+    const toLabel =
+      canonicalStopLabel(leg.alight) ?? stops.at(-1) ?? undefined;
+    const durationSeconds = canonicalLegDurationSeconds(leg);
     const durationMinutes = canonicalLegDurationMinutes(leg);
     const base = {
       id: `${idPrefix}-${index}`,
       title: toLabel || fromLabel || segmentDestination,
+      durationSeconds: durationSeconds ?? undefined,
       durationMinutes: durationMinutes ?? undefined,
       durationLabel: durationLabelFromMinutes(durationMinutes),
       fromLabel,
@@ -234,13 +253,118 @@ function appendCanonicalLegs(
         typeof leg.stop_count === "number" && Number.isFinite(leg.stop_count)
           ? Math.max(0, Math.round(leg.stop_count))
           : undefined,
-      stops: canonicalLegStops(leg),
+      stops,
     });
   });
 }
 
+function eventBoundaryLabel(
+  event: ItineraryEvent | undefined,
+  edge: "start" | "end",
+): string | undefined {
+  if (!event) return undefined;
+  if (edge === "start") {
+    return event.fromLabel ?? (event.kind === "waypoint" ? event.title : undefined);
+  }
+  return event.toLabel ?? (event.kind === "waypoint" ? event.title : undefined);
+}
+
+function labelsMatch(a: string | undefined, b: string | undefined): boolean {
+  if (!a || !b) return false;
+  return a.trim().toLocaleLowerCase() === b.trim().toLocaleLowerCase();
+}
+
+function walkGroupDurationSeconds(events: ItineraryEvent[]): number {
+  return events.reduce((total, event) => {
+    if (
+      typeof event.durationSeconds === "number" &&
+      Number.isFinite(event.durationSeconds)
+    ) {
+      return total + Math.max(0, event.durationSeconds);
+    }
+    if (
+      typeof event.durationMinutes === "number" &&
+      Number.isFinite(event.durationMinutes)
+    ) {
+      return total + Math.max(0, event.durationMinutes) * 60;
+    }
+    return total;
+  }, 0);
+}
+
+/**
+ * Convert provider/canonical legs into customer-facing semantic sections.
+ *
+ * Raw legs remain on RouteCard for map and rail detail. The chat card gets
+ * one section per transit leg, waypoint/dwell event, or contiguous walk.
+ */
+export function condensePreviewEvents(
+  events: ItineraryEvent[],
+  destinationLabel: string,
+  originLabel = "Your location",
+): ItineraryEvent[] {
+  const sections: ItineraryEvent[] = [];
+  let index = 0;
+
+  while (index < events.length) {
+    const event = events[index];
+    if (event.kind !== "walk") {
+      sections.push({ ...event });
+      index += 1;
+      continue;
+    }
+
+    let end = index + 1;
+    while (end < events.length && events[end].kind === "walk") end += 1;
+    const group = events.slice(index, end);
+    const durationSeconds = walkGroupDurationSeconds(group);
+
+    const explicitFrom = group.find((item) => item.fromLabel)?.fromLabel;
+    const explicitTo = [...group].reverse().find((item) => item.toLabel)?.toLabel;
+    const previous = sections.at(-1);
+    const next = events[end];
+    const fromLabel =
+      explicitFrom ??
+      eventBoundaryLabel(previous, "end") ??
+      (index === 0 ? originLabel : undefined);
+    const toLabel =
+      explicitTo ??
+      eventBoundaryLabel(next, "start") ??
+      (end === events.length ? destinationLabel : undefined);
+    const hasExplicitIdentity = Boolean(explicitFrom || explicitTo);
+    const isInternalSamePlaceTransfer = labelsMatch(fromLabel, toLabel);
+    const isUnlabeledMicroFragment =
+      !hasExplicitIdentity && durationSeconds < MIN_INFERRED_WALK_SECONDS;
+
+    if (
+      durationSeconds > 0 &&
+      !isInternalSamePlaceTransfer &&
+      !isUnlabeledMicroFragment &&
+      (fromLabel || toLabel)
+    ) {
+      const durationMinutes = Math.max(1, Math.round(durationSeconds / 60));
+      sections.push({
+        id: `${group[0].id}-walk-section`,
+        kind: "walk",
+        routeIds: [],
+        title: toLabel ?? fromLabel ?? "Walk",
+        fromLabel,
+        toLabel,
+        durationSeconds,
+        durationMinutes,
+        durationLabel: durationLabelFromSeconds(durationSeconds),
+      });
+    }
+
+    index = end;
+  }
+
+  return sections;
+}
+
 function buildEventsFromCanonicalItinerary(
   itinerary: CanonicalItinerary,
+  originLabel: string,
   destinationLabel: string,
   idPrefix: string,
 ): ItineraryEvent[] {
@@ -281,7 +405,7 @@ function buildEventsFromCanonicalItinerary(
           sourceLabel: dwell.source === "user" ? "Requested stop" : "Planned stop",
         });
       });
-    return events;
+    return condensePreviewEvents(events, destinationLabel, originLabel);
   }
 
   appendCanonicalLegs(
@@ -290,15 +414,16 @@ function buildEventsFromCanonicalItinerary(
     destinationLabel,
     `${idPrefix}-direct`,
   );
-  return events;
+  return condensePreviewEvents(events, destinationLabel, originLabel);
 }
 
 function buildEventsFromSteps(
   steps: AgentRouteStep[],
+  originLabel: string,
   destinationLabel: string,
   idPrefix: string,
 ): ItineraryEvent[] {
-  return steps.flatMap((step, index): ItineraryEvent[] => {
+  const raw = steps.flatMap((step, index): ItineraryEvent[] => {
     const fromLabel = step.departure_stop?.trim() || undefined;
     const toLabel =
       step.arrival_stop?.trim() ||
@@ -329,14 +454,7 @@ function buildEventsFromSteps(
         : [],
     }];
   });
-}
-
-/** Legacy helper retained for downstream imports; no longer drops journey legs. */
-export function condensePreviewEvents(
-  events: ItineraryEvent[],
-  _destinationLabel: string,
-): ItineraryEvent[] {
-  return events.map((event) => ({ ...event }));
+  return condensePreviewEvents(raw, destinationLabel, originLabel);
 }
 
 function isValidCard(card: RouteCard): boolean {
@@ -371,8 +489,7 @@ function cardArrivalLabel(card: RouteCard): string | null {
 }
 
 function buildMetaParts(transferCount: number, dwellMinutes: number): string[] {
-  const parts: string[] = [];
-  if (transferCount > 0) parts.push(transferLabel(transferCount));
+  const parts: string[] = [transferLabel(transferCount)];
   if (dwellMinutes > 0) parts.push(`${formatDurationMinutes(dwellMinutes)} stop`);
   return parts;
 }
@@ -424,8 +541,18 @@ export function buildItineraryViewModel(
     ((Array.isArray(card.itinerary?.segments) && card.itinerary.segments.length > 0) ||
       (Array.isArray(card.itinerary?.legs) && card.itinerary.legs.length > 0));
   const events = hasCanonicalEvents
-    ? buildEventsFromCanonicalItinerary(card.itinerary!, destinationLabel, card.card_id)
-    : buildEventsFromSteps(card.route ?? [], destinationLabel, card.card_id);
+    ? buildEventsFromCanonicalItinerary(
+        card.itinerary!,
+        originLabel,
+        destinationLabel,
+        card.card_id,
+      )
+    : buildEventsFromSteps(
+        card.route ?? [],
+        originLabel,
+        destinationLabel,
+        card.card_id,
+      );
   const structuredReasons = card.itinerary?.structured_recommendation_reasons;
   const rationale =
     Array.isArray(structuredReasons) && structuredReasons.length > 0
@@ -483,7 +610,12 @@ export function buildMergedItineraryViewModel(
     ...valid.map((card) => card.destination.label.trim()),
   ].filter((name, index, values) => index === 0 || values[index - 1] !== name);
   const events = valid.flatMap((card) =>
-    buildEventsFromSteps(card.route ?? [], card.destination.label.trim(), card.card_id),
+    buildEventsFromSteps(
+      card.route ?? [],
+      card.origin?.label?.trim() || "Your location",
+      card.destination.label.trim(),
+      card.card_id,
+    ),
   );
   const totalMinutes = valid.reduce((total, card) => total + cardTotalMinutes(card), 0);
   const transferCount = valid.reduce(

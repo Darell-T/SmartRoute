@@ -5,7 +5,11 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { BorderBeam } from "border-beam";
 import { Map as MapIcon, NavArrowDown } from "iconoir-react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faPersonWalking, faLocationDot } from "@fortawesome/free-solid-svg-icons";
+import {
+  faArrowRightArrowLeft,
+  faLocationDot,
+  faPersonWalking,
+} from "@fortawesome/free-solid-svg-icons";
 import type { RouteCard as RouteCardData } from "@/lib/agent-chat-stream";
 import { getRouteColor } from "@/lib/mta-colors";
 import {
@@ -61,16 +65,50 @@ function intermediateStops(event: ItineraryEvent): string[] {
 function StopChain({
   event,
   expanded,
+  rideLabel,
+  canExpand,
+  onToggle,
   reduceMotion,
 }: {
   event: ItineraryEvent;
   expanded: boolean;
+  rideLabel: string;
+  canExpand: boolean;
+  onToggle: () => void;
   reduceMotion: boolean;
 }) {
   const stops = intermediateStops(event);
+  const disclosure = rideLabel ? (
+    canExpand ? (
+      <button
+        type="button"
+        className="sr-itinerary-card__disclosure"
+        aria-expanded={expanded}
+        aria-controls={`${event.id}-stops`}
+        onClick={onToggle}
+      >
+        <span>Ride {rideLabel}</span>
+        <motion.span
+          className="sr-itinerary-card__disclosure-icon"
+          animate={{ rotate: expanded ? 180 : 0 }}
+          transition={
+            reduceMotion
+              ? { duration: 0 }
+              : { duration: 0.3, ease: LAYOUT_EASE }
+          }
+        >
+          <NavArrowDown width={14} height={14} strokeWidth={1.8} />
+        </motion.span>
+      </button>
+    ) : (
+      <p className="sr-itinerary-card__ride-summary">Ride {rideLabel}</p>
+    )
+  ) : null;
+
   return (
     <div
       className="sr-itinerary-card__stop-chain"
+      data-expanded={expanded ? "true" : "false"}
       style={
         {
           "--sr-route-color":
@@ -85,6 +123,8 @@ function StopChain({
         <span className="sr-itinerary-card__station">{event.fromLabel ?? "Board"}</span>
       </div>
 
+      {!expanded ? disclosure : null}
+
       <AnimatePresence initial={false}>
         {expanded && stops.length > 0 ? (
           <motion.ol
@@ -96,7 +136,7 @@ function StopChain({
             transition={
               reduceMotion
                 ? { duration: 0 }
-                : { duration: 0.24, ease: LAYOUT_EASE }
+                : { duration: 0.3, ease: LAYOUT_EASE }
             }
           >
             {stops.map((stop, index) => (
@@ -122,6 +162,7 @@ function StopChain({
         <span className="sr-itinerary-card__chain-marker sr-itinerary-card__chain-marker--end" />
         <span className="sr-itinerary-card__station">{event.toLabel ?? event.title}</span>
       </div>
+      {expanded ? disclosure : null}
     </div>
   );
 }
@@ -160,35 +201,11 @@ function TransitLeg({
         <StopChain
           event={event}
           expanded={expanded}
+          rideLabel={rideLabel}
+          canExpand={canExpand}
+          onToggle={onToggle}
           reduceMotion={reduceMotion}
         />
-
-        {rideLabel ? (
-          canExpand ? (
-            <button
-              type="button"
-              className="sr-itinerary-card__disclosure"
-              aria-expanded={expanded}
-              aria-controls={`${event.id}-stops`}
-              onClick={onToggle}
-            >
-              <span>Ride {rideLabel}</span>
-              <motion.span
-                className="sr-itinerary-card__disclosure-icon"
-                animate={{ rotate: expanded ? 180 : 0 }}
-                transition={
-                  reduceMotion
-                    ? { duration: 0 }
-                    : { duration: 0.2, ease: LAYOUT_EASE }
-                }
-              >
-                <NavArrowDown width={15} height={15} strokeWidth={1.8} />
-              </motion.span>
-            </button>
-          ) : (
-            <p className="sr-itinerary-card__ride-summary">Ride {rideLabel}</p>
-          )
-        ) : null}
       </div>
     </section>
   );
@@ -284,6 +301,9 @@ function ItineraryCardShell({
         layout
         className="sr-itinerary-card"
         data-selected={isSelected ? "true" : "false"}
+        data-has-final-walk={
+          model.events.at(-1)?.kind === "walk" ? "true" : "false"
+        }
         aria-labelledby={titleId}
         initial={reduceMotion ? false : { opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
@@ -308,6 +328,34 @@ function ItineraryCardShell({
             </p>
           ) : null}
         </header>
+
+        <div className="sr-itinerary-card__hero" aria-label="Trip summary">
+          <p className="sr-itinerary-card__duration">
+            <span className="sr-itinerary-card__duration-value">
+              {model.durationLabel}
+            </span>
+          </p>
+          <p className="sr-itinerary-card__meta">
+            <FontAwesomeIcon
+              icon={faArrowRightArrowLeft}
+              className="sr-itinerary-card__meta-icon"
+              aria-hidden="true"
+            />
+            <span>
+              {model.metaParts.map((part, index) => (
+                <span key={part}>
+                  {index > 0 ? (
+                    <span className="sr-itinerary-card__meta-sep" aria-hidden="true">
+                      {" "}
+                      ·{" "}
+                    </span>
+                  ) : null}
+                  {part}
+                </span>
+              ))}
+            </span>
+          </p>
+        </div>
 
         <div className="sr-itinerary-card__legs">
           {model.events.map((event) => {
