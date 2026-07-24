@@ -24,6 +24,9 @@ _WALK_SPEED_MPS = 1.4
 
 _TRANSIT_MODES = frozenset({"SUBWAY", "BUS", "RAIL", "TRAIN", "LIGHT_RAIL"})
 
+# Server-owned multi-stop pickup buffer when the rider does not specify.
+DEFAULT_DWELL_MINUTES = 25
+
 
 def build_canonical_itinerary(
     steps: list[dict] | None,
@@ -56,7 +59,7 @@ def build_canonical_itinerary(
     total_wait = sum(int(leg["wait_seconds"]) for leg in legs)
     total_in_vehicle = sum(int(leg["ride_seconds"]) for leg in legs)
     total_transfer = sum(int(leg["transfer_seconds"]) for leg in legs)
-    # Single OD has no waypoint dwell; multi-stop chain is a later task.
+    # Single OD has no waypoint dwell; multi-stop uses build_chained_itinerary.
     total_dwell = 0
 
     # Prefer provider door-to-door total when available. Component sums may
@@ -96,6 +99,179 @@ def build_canonical_itinerary(
         "transfer_count": transfer_count,
         "legs": legs,
         "structured_recommendation_reasons": list(reasons or []),
+    }
+
+
+def build_chained_itinerary(
+    segments: list[dict] | None,
+    *,
+    origin: Any,
+    final_destination: Any,
+    planning_mode: str = "leave_now",
+    requested_departure: str | None = None,
+    generated_at: str | None = None,
+    data_basis: str = "mixed",
+    reasons: list[str] | None = None,
+    itinerary_id: str | None = None,
+) -> dict:
+    """Merge ordered OD segments into one multi-stop CanonicalItinerary.
+
+    Each ``segments`` item is::
+
+        {
+          "steps": list[dict],           # parsed Google route steps for this OD
+          "destination_place": str|dict, # intermediate stop or final place
+          "dwell_minutes": int|float?,   # optional; default 25 for intermediates
+          "dwell_source": "default"|"user"?,  # optional; inferred if omitted
+        }
+
+    Intermediate destinations (all but the last segment) become ``waypoints``
+    with server-owned dwell. Totals:
+
+    - ``total_dwell_seconds`` = sum of intermediate dwells * 60
+    - ``total_duration_seconds`` = sum of segment totals + total dwell
+    - ``legs`` = concatenation of each segment's canonical legs
+    - ``departure_at`` / ``arrival_at`` from first / last segment clocks
+
+    Does not invent FE-side dwell. Pure function: no network, no LLM.
+
+    Later wiring: after N ``plan_trip`` OD plans (or a multi-stop tool), pass
+    each plan's parsed steps + place + optional rider dwell into this helper
+    and emit one chained itinerary / card instead of FE multi-card merge.
+    """
+    segment_list = list(segments or [])
+    if not segment_list:
+        raise ValueError("build_chained_itinerary requires at least one segment")
+
+    built: list[dict] = []
+    waypoints: list[dict] = []
+    total_dwell_seconds = 0
+
+    for index, raw in enumerate(segment_list):
+        if not isinstance(raw, dict):
+            raise TypeError(
+                f"segment[{index}] must be a dict with steps/destination_place"
+            )
+        steps = raw.get("steps")
+        place = raw.get("destination_place")
+        is_last = index == len(segment_list) - 1
+        segment_destination = final_destination if is_last else place
+
+        segment_itinerary = build_canonical_itinerary(
+            steps if isinstance(steps, list) else list(steps or []),
+            origin=origin if index == 0 else place,
+            destination=segment_destination,
+            planning_mode=planning_mode,
+            requested_departure=requested_departure if index == 0 else None,
+            generated_at=generated_at,
+            data_basis=data_basis,
+            itinerary_id=None,
+        )
+        built.append(segment_itinerary)
+
+        if not is_last:
+            dwell_minutes, dwell_source = _resolve_dwell(raw)
+            waypoint = _place_fields(place)
+            waypoint["dwell_minutes"] = dwell_minutes
+            waypoint["dwell_source"] = dwell_source
+            waypoints.append(waypoint)
+            total_dwell_seconds += max(0, int(dwell_minutes)) * 60
+
+    all_legs: list[dict] = []
+    for itin in built:
+        all_legs.extend(list(itin.get("legs") or []))
+
+    total_walk = sum(int(itin["total_walk_seconds"]) for itin in built)
+    total_wait = sum(int(itin["total_wait_seconds"]) for itin in built)
+    total_in_vehicle = sum(int(itin["total_in_vehicle_seconds"]) for itin in built)
+    # Dwell is not a transfer; sum per-OD transfer counts only.
+    transfer_count = sum(int(itin["transfer_count"]) for itin in built)
+    total_duration_seconds = (
+        sum(int(itin["total_duration_seconds"]) for itin in built) + total_dwell_seconds
+    )
+
+    departure_at = built[0].get("departure_at")
+    arrival_at = built[-1].get("arrival_at")
+
+    return {
+        "itinerary_id": itinerary_id or str(uuid4()),
+        "origin": origin,
+        "waypoints": waypoints,
+        "destination": final_destination,
+        "timezone": TIMEZONE_NAME,
+        "planning_mode": planning_mode,
+        "requested_departure": requested_departure,
+        "generated_at": generated_at,
+        "data_basis": data_basis,
+        "data_freshness": generated_at,
+        "departure_at": departure_at,
+        "arrival_at": arrival_at,
+        "total_duration_seconds": total_duration_seconds,
+        "total_walk_seconds": total_walk,
+        "total_wait_seconds": total_wait,
+        "total_in_vehicle_seconds": total_in_vehicle,
+        "total_dwell_seconds": total_dwell_seconds,
+        "transfer_count": transfer_count,
+        "legs": all_legs,
+        "structured_recommendation_reasons": list(reasons or []),
+    }
+
+
+def _resolve_dwell(segment: dict) -> tuple[int, str]:
+    """Return (dwell_minutes, dwell_source) for an intermediate segment."""
+    raw_source = segment.get("dwell_source")
+    if "dwell_minutes" in segment and segment.get("dwell_minutes") is not None:
+        try:
+            minutes = int(round(float(segment["dwell_minutes"])))
+        except (TypeError, ValueError):
+            minutes = DEFAULT_DWELL_MINUTES
+            source = "default"
+        else:
+            minutes = max(0, minutes)
+            if raw_source in ("default", "user"):
+                source = str(raw_source)
+            else:
+                source = "user"
+            return minutes, source
+    else:
+        minutes = DEFAULT_DWELL_MINUTES
+        source = "default"
+
+    if raw_source in ("default", "user"):
+        source = str(raw_source)
+    return minutes, source
+
+
+def _place_fields(place: Any) -> dict:
+    """Normalize a place string or dict into waypoint base fields."""
+    if isinstance(place, dict):
+        lat = place.get("lat")
+        if lat is None:
+            lat = place.get("latitude")
+        lng = place.get("lng")
+        if lng is None:
+            lng = place.get("longitude")
+        if lng is None:
+            lng = place.get("lon")
+        display = (
+            place.get("display_name")
+            or place.get("label")
+            or place.get("name")
+            or place.get("address")
+        )
+        return {
+            "place_id": place.get("place_id"),
+            "display_name": display,
+            "address": place.get("address"),
+            "lat": lat,
+            "lng": lng,
+        }
+    return {
+        "place_id": None,
+        "display_name": str(place) if place is not None else None,
+        "address": None,
+        "lat": None,
+        "lng": None,
     }
 
 
