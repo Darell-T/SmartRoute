@@ -381,14 +381,18 @@ function ItineraryCardShell({
         </div>
 
         <footer className="sr-itinerary-card__actions">
-          <button
+          <motion.button
             type="button"
             className="sr-itinerary-card__map-btn"
+            aria-label={model.primaryActionLabel}
+            disabled={!onPrimaryAction}
             onClick={onPrimaryAction}
+            whileTap={reduceMotion || !onPrimaryAction ? undefined : { scale: 0.985 }}
+            transition={{ duration: reduceMotion ? 0 : 0.12 }}
           >
             <MapIcon width={20} height={20} strokeWidth={1.6} aria-hidden="true" />
             <span>{model.primaryActionLabel}</span>
-          </button>
+          </motion.button>
         </footer>
       </motion.article>
     </BorderBeam>

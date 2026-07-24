@@ -47,3 +47,11 @@ test("recommendation card preserves total duration and route-colored chains", ()
   assert.match(CARD_SOURCE, /getRouteColor\(event\.routeIds\[0\]/);
   assert.match(CARD_SOURCE, /duration: 0\.3, ease: LAYOUT_EASE/);
 });
+
+test("Open on map remains a direct keyboard-accessible action", () => {
+  assert.match(CARD_SOURCE, /<motion\.button[\s\S]*?type="button"/);
+  assert.match(CARD_SOURCE, /aria-label=\{model\.primaryActionLabel\}/);
+  assert.match(CARD_SOURCE, /disabled=\{!onPrimaryAction\}/);
+  assert.match(CARD_SOURCE, /onClick=\{onPrimaryAction\}/);
+  assert.doesNotMatch(CARD_SOURCE, /onClick=\{\(\) => onPrimaryAction/);
+});
