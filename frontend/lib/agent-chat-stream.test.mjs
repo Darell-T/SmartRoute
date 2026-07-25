@@ -166,6 +166,47 @@ test("parses a route_card event with the full nested payload", async () => {
   assert.deepEqual(events, [{ type: "route_card", ...payload }]);
 });
 
+test("parses a grounded arrival_card event", async () => {
+  const payload = {
+    turn_id: "t2",
+    route_id: "Q",
+    stop: {
+      id: "D28",
+      name: "Newkirk Plaza",
+      distance_meters: 320,
+      latitude: 40.635,
+      longitude: -73.962,
+    },
+    directions: [
+      {
+        id: "downtown",
+        label: "Downtown / Brooklyn-bound",
+        arrivals: [
+          {
+            expected_at: "2026-07-25T14:04:00Z",
+            minutes: 4,
+            realtime: true,
+          },
+        ],
+      },
+    ],
+    updated_at: "2026-07-25T14:00:00Z",
+    source_status: "live",
+    catchability: {
+      walking_minutes: 1,
+      boarding_buffer_minutes: 2,
+      arrival_minutes: [4],
+      catchable_arrival_minutes: 4,
+      confidence: 0.9,
+    },
+  };
+  const chunk = `event: arrival_card\ndata: ${JSON.stringify(payload)}\n\n`;
+
+  const events = await collect(readerFromChunks([chunk]));
+
+  assert.deepEqual(events, [{ type: "arrival_card", ...payload }]);
+});
+
 test("parses optional itinerary on route_card and ignores non-object itinerary", async () => {
   const itinerary = {
     itinerary_id: "rc_abc123",

@@ -47,6 +47,7 @@ export interface ItineraryViewModel {
   recommended: boolean;
   placeNames: string[];
   arrivalLabel: string | null;
+  firstLegArrivalLabel: string | null;
   durationLabel: string;
   totalMinutes: number;
   transferCount: number;
@@ -88,6 +89,21 @@ export function formatClockTime(iso: string | undefined | null): string | null {
 export function transferLabel(count: number): string {
   if (count <= 0) return "0 transfers";
   return count === 1 ? "1 transfer" : `${count} transfers`;
+}
+
+function firstLegArrivalLabel(card: RouteCard): string | null {
+  const context = card.summary.first_leg_arrival;
+  const minutes = context?.catchable_arrival_minutes;
+  const routeId = context?.route_id?.trim();
+  if (
+    !routeId ||
+    typeof minutes !== "number" ||
+    !Number.isFinite(minutes) ||
+    !["live", "scheduled"].includes(context?.source_status ?? "")
+  ) {
+    return null;
+  }
+  return `Next realistic ${routeId}: ${Math.max(0, Math.round(minutes))} min`;
 }
 
 export function parseRationale(reason: string | undefined | null): string[] {
@@ -510,6 +526,7 @@ export function buildItineraryViewModel(
       recommended: card?.role === "recommended",
       placeNames: [],
       arrivalLabel: null,
+      firstLegArrivalLabel: null,
       durationLabel: "—",
       totalMinutes: 0,
       transferCount: 0,
@@ -566,6 +583,7 @@ export function buildItineraryViewModel(
     recommended: card.role === "recommended",
     placeNames,
     arrivalLabel: cardArrivalLabel(card),
+    firstLegArrivalLabel: firstLegArrivalLabel(card),
     durationLabel: formatDurationMinutes(cardTotalMinutes(card)),
     totalMinutes: cardTotalMinutes(card),
     transferCount,
@@ -629,6 +647,7 @@ export function buildMergedItineraryViewModel(
     recommended: true,
     placeNames,
     arrivalLabel: cardArrivalLabel(last),
+    firstLegArrivalLabel: firstLegArrivalLabel(first),
     durationLabel: formatDurationMinutes(totalMinutes),
     totalMinutes,
     transferCount,

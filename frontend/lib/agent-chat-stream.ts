@@ -61,6 +61,14 @@ export interface RouteCardSummary {
   transfers: number;
   lines: string[];
   reason: string;
+  first_leg_arrival?: {
+    route_id?: string;
+    stop_name?: string;
+    source_status?: ArrivalSourceStatus;
+    walking_minutes?: number;
+    catchable_arrival_minutes?: number | null;
+    arrival_minutes?: number[];
+  } | null;
 }
 
 /** One normalized leg inside a canonical itinerary (backend
@@ -207,6 +215,52 @@ export interface RouteCardEvent {
  *  an SSE event" framing). */
 export type RouteCard = Omit<RouteCardEvent, "type">;
 
+export type ArrivalSourceStatus =
+  | "live"
+  | "scheduled"
+  | "stale"
+  | "provider_unavailable"
+  | "no_predictions"
+  | "stop_not_resolved";
+
+export interface ArrivalPrediction {
+  expected_at: string;
+  minutes: number;
+  realtime: boolean;
+  trip_id?: string | null;
+  vehicle_id?: string | null;
+}
+
+export interface ArrivalDirection {
+  id: string;
+  label: string;
+  arrivals: ArrivalPrediction[];
+}
+
+export interface ArrivalCardEvent {
+  type: "arrival_card";
+  turn_id: string;
+  route_id: string;
+  stop: {
+    id?: string;
+    name?: string;
+    distance_meters?: number | null;
+    latitude?: number | null;
+    longitude?: number | null;
+  };
+  directions: ArrivalDirection[];
+  updated_at: string;
+  source_status: ArrivalSourceStatus;
+  catchability?: {
+    walking_minutes: number;
+    boarding_buffer_minutes: number;
+    arrival_minutes: number[];
+    catchable_arrival_minutes?: number | null;
+    confidence: number;
+  };
+  ambiguity?: Array<{ stop_id?: string; stop_name?: string }>;
+}
+
 /** `error` — codes match `backend/app/services/agent/events.py`. */
 export type AgentErrorCode =
   | "rate_limited"
@@ -245,6 +299,7 @@ export type AgentEvent =
   | ToolStartEvent
   | ToolEndEvent
   | RouteCardEvent
+  | ArrivalCardEvent
   | ErrorEvent
   | DoneEvent;
 
@@ -254,6 +309,7 @@ const KNOWN_EVENT_TYPES = new Set<AgentEvent["type"]>([
   "tool_start",
   "tool_end",
   "route_card",
+  "arrival_card",
   "error",
   "done",
 ]);
@@ -357,6 +413,33 @@ function buildEvent(eventType: string, data: unknown): AgentEvent | null {
         // Copy opaque object only when present; omit key for legacy payloads.
         ...(isRecord(data.itinerary)
           ? { itinerary: data.itinerary as CanonicalItinerary }
+          : {}),
+      };
+    }
+    case "arrival_card": {
+      if (
+        !isString(data.turn_id) ||
+        !isString(data.route_id) ||
+        !isRecord(data.stop) ||
+        !Array.isArray(data.directions) ||
+        !isString(data.updated_at) ||
+        !isString(data.source_status)
+      ) {
+        break;
+      }
+      return {
+        type: "arrival_card",
+        turn_id: data.turn_id,
+        route_id: data.route_id,
+        stop: data.stop as ArrivalCardEvent["stop"],
+        directions: data.directions as ArrivalDirection[],
+        updated_at: data.updated_at,
+        source_status: data.source_status as ArrivalSourceStatus,
+        ...(isRecord(data.catchability)
+          ? { catchability: data.catchability as ArrivalCardEvent["catchability"] }
+          : {}),
+        ...(Array.isArray(data.ambiguity)
+          ? { ambiguity: data.ambiguity as NonNullable<ArrivalCardEvent["ambiguity"]> }
           : {}),
       };
     }

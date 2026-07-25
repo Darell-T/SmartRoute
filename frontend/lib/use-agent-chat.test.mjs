@@ -302,6 +302,51 @@ test("session id persistence: writes only a non-null id, and tolerates a throwin
   assert.doesNotThrow(() => persistSessionId(throwing, "sess-1"));
 });
 
+test("arrival_card attaches production arrival evidence to the streaming assistant turn", () => {
+  let state = applyAgentEvent(initialState(), { type: "turn_started", text: "Next Q at Newkirk Avenue?" });
+  state = applyAgentEvent(state, {
+    type: "arrival_card",
+    turn_id: "t1",
+    route_id: "Q",
+    stop: {
+      id: "D28",
+      name: "Newkirk Plaza",
+      distance_meters: 322,
+      latitude: 40.635,
+      longitude: -73.962,
+    },
+    directions: [
+      {
+        id: "downtown",
+        label: "Downtown / Brooklyn-bound",
+        arrivals: [
+          { expected_at: "2026-07-25T14:04:00Z", minutes: 4, realtime: true },
+          { expected_at: "2026-07-25T14:11:00Z", minutes: 11, realtime: true },
+        ],
+      },
+    ],
+    updated_at: "2026-07-25T14:00:00Z",
+    source_status: "live",
+    catchability: {
+      walking_minutes: 1,
+      boarding_buffer_minutes: 2,
+      arrival_minutes: [4, 11],
+      catchable_arrival_minutes: 4,
+      confidence: 0.9,
+    },
+  });
+
+  const turn = state.messages[1];
+  assert.equal(turn.role, "assistant");
+  assert.equal(turn.local, undefined);
+  assert.deepEqual(turn.arrivals.groups, [
+    { direction: "downtown", label: "Downtown / Brooklyn-bound", minutes: [4, 11] },
+  ]);
+  assert.equal(turn.arrivals.sourceStatus, "live");
+  assert.deepEqual(turn.arrivals.stationCoordinates, { lat: 40.635, lng: -73.962 });
+  assert.match(turn.arrivals.stationGuidance, /0\.2 mi away/);
+});
+
 test("chat requests carry response presentation without changing route inputs", () => {
   const shared = {
     sessionId: "sess-42",

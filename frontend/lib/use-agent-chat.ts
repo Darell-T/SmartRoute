@@ -17,6 +17,8 @@ import { useEffect, useReducer, useRef, useState, type Dispatch } from "react";
 import {
   parseSseStream,
   type AgentEvent,
+  type ArrivalCardEvent,
+  type ArrivalSourceStatus,
   type RouteCard,
 } from "./agent-chat-stream";
 import type { ResponsePresentationMode } from "./response-presentation";
@@ -67,7 +69,7 @@ export type ChatTurn = UserTurn | AssistantTurn;
  *  `ArrivalsCard` — "Uptown · 2, 7, 12 min". Minutes are already sorted
  *  ascending by the caller (mirrors the left rail's own arrival grouping). */
 export interface ArrivalsTurnDirectionGroup {
-  direction: "uptown" | "downtown";
+  direction: string;
   /** Passenger-facing direction label ("Uptown", "To Coney Island"). */
   label: string;
   minutes: number[];
@@ -85,6 +87,9 @@ export interface ArrivalsTurnPayload {
    *  to the station on the live map. */
   stationCoordinates?: { lat: number; lng: number };
   groups: ArrivalsTurnDirectionGroup[];
+  sourceStatus?: ArrivalSourceStatus;
+  updatedAt?: string;
+  catchability?: ArrivalCardEvent["catchability"];
 }
 
 export interface ChatState {
@@ -133,6 +138,35 @@ function updateLastAssistantTurn(
 function cardFromEvent(event: Extract<AgentEvent, { type: "route_card" }>): RouteCard {
   const { type: _type, ...card } = event;
   return card;
+}
+
+function arrivalsFromEvent(event: ArrivalCardEvent): ArrivalsTurnPayload {
+  const distance = event.stop.distance_meters;
+  const walking = event.catchability?.walking_minutes;
+  const guidance = [
+    typeof walking === "number" ? `${walking} min walk` : null,
+    typeof distance === "number"
+      ? `${Math.max(0.1, distance / 1609.344).toFixed(1)} mi away`
+      : null,
+  ].filter((value): value is string => Boolean(value));
+  const latitude = event.stop.latitude;
+  const longitude = event.stop.longitude;
+  return {
+    routeId: event.route_id,
+    stationName: event.stop.name || "Transit stop",
+    ...(guidance.length > 0 ? { stationGuidance: guidance.join(" · ") } : {}),
+    ...(typeof latitude === "number" && typeof longitude === "number"
+      ? { stationCoordinates: { lat: latitude, lng: longitude } }
+      : {}),
+    groups: event.directions.map((direction) => ({
+      direction: direction.id,
+      label: direction.label,
+      minutes: direction.arrivals.map((arrival) => arrival.minutes),
+    })),
+    sourceStatus: event.source_status,
+    updatedAt: event.updated_at,
+    ...(event.catchability ? { catchability: event.catchability } : {}),
+  };
 }
 
 /**
@@ -203,6 +237,12 @@ export function applyAgentEvent(state: ChatState, action: ChatReducerAction): Ch
       return updateLastAssistantTurn(state, (turn) => ({
         ...turn,
         routeCards: [...turn.routeCards, card],
+      }));
+    }
+    case "arrival_card": {
+      return updateLastAssistantTurn(state, (turn) => ({
+        ...turn,
+        arrivals: arrivalsFromEvent(action),
       }));
     }
     case "error": {

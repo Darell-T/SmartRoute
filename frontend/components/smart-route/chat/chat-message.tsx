@@ -48,12 +48,14 @@ function AssistantMessage({
   showCaret,
   selectedCardId,
   onSelectRouteCard,
+  onSeeArrivalsOnMap,
 }: {
   turn: AssistantTurn;
   theme: ChatTheme;
   showCaret: boolean;
   selectedCardId?: string | null;
   onSelectRouteCard?: (card: RouteCard) => void;
+  onSeeArrivalsOnMap?: (arrivals: ArrivalsTurnPayload) => void;
 }) {
   const hasText = turn.text.length > 0;
   const reduceMotion = useReducedMotion() ?? false;
@@ -63,6 +65,7 @@ function AssistantMessage({
   );
   const orbState = isFindingRoutes ? "searching" : "composing";
   const showCards = !turn.isStreaming && hasText && isCaughtUp && turn.routeCards.length > 0;
+  const showArrivals = !turn.isStreaming && isCaughtUp && Boolean(turn.arrivals);
 
   return (
     <div className="sr-chat-message sr-chat-message--assistant">
@@ -106,6 +109,12 @@ function AssistantMessage({
               ) : null}
             </p>
           )}
+          {showArrivals && turn.arrivals ? (
+            <ChatArrivalsCard
+              arrivals={turn.arrivals}
+              onSeeOnMap={() => onSeeArrivalsOnMap?.(turn.arrivals!)}
+            />
+          ) : null}
         </div>
       </div>
       <AnimatePresence initial={false}>
@@ -163,6 +172,7 @@ export function ChatMessage({
       showCaret={showCaret}
       selectedCardId={selectedCardId}
       onSelectRouteCard={onSelectRouteCard}
+      onSeeArrivalsOnMap={onSeeArrivalsOnMap}
     />
   );
 }

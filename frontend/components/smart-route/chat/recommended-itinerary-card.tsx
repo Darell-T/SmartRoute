@@ -347,6 +347,11 @@ function ItineraryCardShell({
               Arrive around {model.arrivalLabel}
             </p>
           ) : null}
+          {model.firstLegArrivalLabel ? (
+            <p className="sr-itinerary-card__arrive">
+              {model.firstLegArrivalLabel}
+            </p>
+          ) : null}
         </header>
 
         <div className="sr-itinerary-card__hero" aria-label="Trip summary">

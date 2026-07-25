@@ -688,6 +688,49 @@ test("without itinerary, falls back to summary totals (back-compat)", () => {
   assert.equal(model.transferCount, 0);
 });
 
+test("shows only a grounded catchable first-leg arrival", () => {
+  const model = buildItineraryViewModel(baseCard({
+    summary: {
+      eta_minutes: 34,
+      transfers: 0,
+      lines: ["B"],
+      reason: "Fastest complete trip",
+      first_leg_arrival: {
+        route_id: "B",
+        stop_name: "Newkirk Plaza",
+        source_status: "live",
+        walking_minutes: 6,
+        arrival_minutes: [3, 11, 19],
+        catchable_arrival_minutes: 11,
+      },
+    },
+  }));
+
+  assert.equal(model.firstLegArrivalLabel, "Next realistic B: 11 min");
+});
+
+test("does not present stale or unavailable first-leg evidence as current", () => {
+  for (const sourceStatus of ["stale", "provider_unavailable", "no_predictions"]) {
+    const model = buildItineraryViewModel(baseCard({
+      summary: {
+        eta_minutes: 34,
+        transfers: 0,
+        lines: ["B"],
+        reason: "",
+        first_leg_arrival: {
+          route_id: "B",
+          stop_name: "Newkirk Plaza",
+          source_status: sourceStatus,
+          walking_minutes: 6,
+          arrival_minutes: [11],
+          catchable_arrival_minutes: 11,
+        },
+      },
+    }));
+    assert.equal(model.firstLegArrivalLabel, null);
+  }
+});
+
 test("formats supported structured reason facts and ignores unknown facts", () => {
   const model = buildItineraryViewModel(
     baseCard({
