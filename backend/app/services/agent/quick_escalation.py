@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
-
-from app.services.agent.tools._types import ToolResult
+from typing import Any, Literal, Protocol
 
 QuickEscalationReason = Literal[
     "unresolved_place",
@@ -14,6 +12,13 @@ QuickEscalationReason = Literal[
     "effectively_tied_final_scores",
     "required_tool_failure",
 ]
+
+
+class ToolResultLike(Protocol):
+    ok: bool
+    data: Any
+    error: str | None
+
 
 _PLACE_FAILURE_MARKERS = (
     "could not resolve",
@@ -34,7 +39,7 @@ def effectively_tied_scores(scored: list[dict], *, tolerance: float = 1.0) -> bo
 
 def reason_for_tool_result(
     tool_name: str,
-    result: ToolResult,
+    result: ToolResultLike,
     *,
     required: bool,
 ) -> QuickEscalationReason | None:
