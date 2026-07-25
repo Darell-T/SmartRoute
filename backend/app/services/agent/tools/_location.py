@@ -22,6 +22,74 @@ from app.utils import geo
 
 
 @dataclasses.dataclass(frozen=True)
+class KnownPlace:
+    name: str
+    latitude: float
+    longitude: float
+    address: str | None = None
+    place_id: str | None = None
+
+
+_KNOWN_PLACES: dict[str, KnownPlace] = {}
+
+
+def _register(place: KnownPlace, *aliases: str) -> None:
+    for alias in aliases:
+        _KNOWN_PLACES[" ".join(alias.casefold().split())] = place
+
+
+_register(
+    KnownPlace("John F. Kennedy International Airport", 40.6413, -73.7781, "Queens, NY 11430"),
+    "JFK",
+    "JFK Airport",
+    "Kennedy Airport",
+)
+_register(
+    KnownPlace("LaGuardia Airport", 40.7769, -73.8740, "Queens, NY 11371"),
+    "LGA",
+    "LaGuardia",
+    "LaGuardia Airport",
+)
+_register(
+    KnownPlace("Newark Liberty International Airport", 40.6895, -74.1745, "Newark, NJ 07114"),
+    "EWR",
+    "Newark Airport",
+    "Newark Liberty Airport",
+)
+_register(
+    KnownPlace("Penn Station", 40.7506, -73.9935, "New York, NY 10119"),
+    "Penn Station",
+    "NY Penn Station",
+)
+_register(
+    KnownPlace("Grand Central Terminal", 40.7527, -73.9772, "89 E 42nd St, New York, NY 10017"),
+    "Grand Central",
+    "Grand Central Terminal",
+)
+_register(
+    KnownPlace("Atlantic Terminal", 40.6845, -73.9775, "Brooklyn, NY 11217"),
+    "Atlantic Terminal",
+)
+_register(
+    KnownPlace("Barclays Center", 40.6826, -73.9754, "620 Atlantic Ave, Brooklyn, NY 11217"),
+    "Barclays Center",
+)
+_register(
+    KnownPlace("Madison Square Garden", 40.7505, -73.9934, "4 Pennsylvania Plaza, New York, NY 10001"),
+    "Madison Square Garden",
+    "MSG",
+)
+_register(
+    KnownPlace("Yankee Stadium", 40.8296, -73.9262, "1 E 161 St, Bronx, NY 10451"),
+    "Yankee Stadium",
+)
+_register(
+    KnownPlace("Citi Field", 40.7571, -73.8458, "41 Seaver Way, Queens, NY 11368"),
+    "Citi Field",
+)
+
+
+@dataclasses.dataclass(frozen=True)
 class ResolvedPlace:
     """Stable place identity for rider-facing surfaces and provider calls."""
 
@@ -47,6 +115,15 @@ class ResolvedPlace:
 _COORDINATE_RE = re.compile(r"^-?\d+\.?\d*,\s*-?\d+\.?\d*$")
 
 
+def known_place(raw_value: str) -> KnownPlace | None:
+    return _KNOWN_PLACES.get(" ".join(str(raw_value or "").casefold().split()))
+
+
+def canonical_display_name(raw_value: str) -> str:
+    place = known_place(raw_value)
+    return place.name if place else str(raw_value or "").strip()
+
+
 async def resolve_named_point(
     raw_value: str, ctx: ToolContext, *, missing_location_message: str
 ) -> tuple[tuple[float, float] | None, str | None]:
@@ -59,6 +136,9 @@ async def resolve_named_point(
         if lat is not None and lng is not None:
             return (float(lat), float(lng)), None
         return None, missing_location_message
+    alias = known_place(value)
+    if alias:
+        return (alias.latitude, alias.longitude), None
     return await asyncio.to_thread(geo.geocode_address_with_reason, value)
 
 
@@ -82,6 +162,20 @@ async def resolve_named_place(
                 latitude=float(lat),
                 longitude=float(lng),
                 source="user",
+            ),
+            None,
+        )
+
+    alias = known_place(value)
+    if alias:
+        return (
+            ResolvedPlace(
+                name=alias.name,
+                latitude=alias.latitude,
+                longitude=alias.longitude,
+                source="fallback",
+                address=alias.address,
+                place_id=alias.place_id,
             ),
             None,
         )

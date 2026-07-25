@@ -9,7 +9,9 @@ from __future__ import annotations
 import asyncio
 import os
 import unittest
+from datetime import datetime
 from unittest.mock import AsyncMock, patch
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -73,7 +75,7 @@ class TicketmasterEventLookupTests(unittest.IsolatedAsyncioTestCase):
         params = kwargs["params"]
         self.assertEqual(params["apikey"], "ticketmaster-test-key")
         self.assertEqual(params["latlong"], "40.7128,-74.0060")
-        self.assertEqual(params["radius"], "25.0")
+        self.assertEqual(params["radius"], "25")
         self.assertEqual(params["unit"], "miles")
         self.assertEqual(params["includeTBA"], "no")
         self.assertEqual(params["includeTBD"], "no")
@@ -83,6 +85,32 @@ class TicketmasterEventLookupTests(unittest.IsolatedAsyncioTestCase):
         event = result.data["events"][0]
         self.assertEqual(event["venue_latitude"], 40.7505)
         self.assertEqual(event["venue_longitude"], -73.9934)
+
+    async def test_local_route_hub_filter_uses_the_requested_hub_not_city_center(self):
+        sunset_park_venue = {
+            "name": "Sunset Park venue",
+            "location": {"latitude": "40.6558", "longitude": "-74.0090"},
+        }
+        fetch = AsyncMock(
+            return_value=(
+                {"_embedded": {"events": [_event("sunset", venue=sunset_park_venue)]}},
+                None,
+            )
+        )
+        with patch.object(event_lookup, "fetch_json", fetch):
+            result = await event_lookup.execute(
+                {
+                    "query": "",
+                    "date": "2026-07-16",
+                    "latitude": 40.6558,
+                    "longitude": -74.0090,
+                    "radius_miles": 1.25,
+                },
+                _ctx(),
+            )
+
+        self.assertTrue(result.ok)
+        self.assertEqual([event["event_id"] for event in result.data["events"]], ["sunset"])
 
     async def test_radius_is_clamped_to_a_safe_upper_bound(self):
         fetch = AsyncMock(return_value=({"_embedded": {"events": []}}, None))
@@ -205,7 +233,12 @@ class TicketmasterEventLookupTests(unittest.IsolatedAsyncioTestCase):
                 with patch.object(_http.httpx, "AsyncClient", client_class):
                     result = await event_lookup.execute({"query": f"event-{status_code}"}, _ctx())
             self.assertFalse(result.ok)
-            self.assertEqual(result.error, "event lookup failed")
+            self.assertEqual(
+                result.error,
+                "event lookup authentication failed"
+                if status_code == 401
+                else "event lookup rate limited",
+            )
             self.assertNotIn("ticketmaster-test-key", " ".join(str(call) for call in print_mock.call_args_list))
 
     async def test_timeout_is_bounded_and_clean(self):
@@ -314,7 +347,13 @@ class TicketmasterLiveSmokeTest(unittest.IsolatedAsyncioTestCase):
             self.skipTest("TICKETMASTER_API_KEY is not configured")
         cache._mem.clear()
         with patch("builtins.print") as print_mock:
-            result = await event_lookup.execute({"query": "New York"}, _ctx())
+            result = await event_lookup.execute(
+                {
+                    "query": "New York",
+                    "date": datetime.now(ZoneInfo("America/New_York")).date().isoformat(),
+                },
+                _ctx(),
+            )
         self.assertTrue(result.ok, result.error)
         key = os.environ["TICKETMASTER_API_KEY"]
         internal_output = " ".join(str(call) for call in print_mock.call_args_list)

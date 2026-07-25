@@ -5,7 +5,7 @@ Pure functions over Google-parsed route step dicts. Depends only on ``text``
 shared candidate display helpers.
 """
 
-from app.services.trips import text
+from app.services.trips import event_crowd, text
 
 
 def _step_minutes(step: dict) -> int:
@@ -63,12 +63,22 @@ def _route_alert_hits(route: list[dict], alerts: list[dict] | None) -> list[str]
                 hits.append(title)
     return hits
 
-def _route_score(route: list[dict], alerts: list[dict] | None) -> dict:
+def _route_score(
+    route: list[dict],
+    alerts: list[dict] | None,
+    *,
+    route_index: int = 0,
+    ticketmaster_event_impacts: list[dict] | None = None,
+) -> dict:
     total_minutes = _route_total_minutes(route)
     transfers = _route_transfer_count(route)
     alert_hits = _route_alert_hits(route, alerts)
     transit_count = len(_route_lines(route))
-    score = total_minutes + transfers * 4 + len(alert_hits) * 8
+    event_penalty = event_crowd.route_event_penalty(
+        route_index,
+        ticketmaster_event_impacts or [],
+    )
+    score = total_minutes + transfers * 4 + len(alert_hits) * 8 + event_penalty
     return {
         "total_minutes": total_minutes,
         "transfers": transfers,
@@ -76,12 +86,22 @@ def _route_score(route: list[dict], alerts: list[dict] | None) -> dict:
         "transit_count": transit_count,
         "score": score,
         "alerts": alert_hits[:2],
+        "event_crowd_penalty": event_penalty,
     }
 
-def _score_routes(routes: list[list[dict]], alerts: list[dict] | None) -> list[dict]:
+def _score_routes(
+    routes: list[list[dict]],
+    alerts: list[dict] | None,
+    ticketmaster_event_impacts: list[dict] | None = None,
+) -> list[dict]:
     scored = []
     for index, route in enumerate(routes):
-        score = _route_score(route, alerts)
+        score = _route_score(
+            route,
+            alerts,
+            route_index=index,
+            ticketmaster_event_impacts=ticketmaster_event_impacts,
+        )
         scored.append({"index": index, **score})
     scored.sort(
         key=lambda row: (

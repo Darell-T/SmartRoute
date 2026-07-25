@@ -21,7 +21,7 @@ import time
 from app.utils import cache
 
 SESSION_KEY_PREFIX = "agent:sess:"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 AGENT_SESSION_TTL_S = float(os.getenv("AGENT_SESSION_TTL_S", "1800"))
 
@@ -50,6 +50,8 @@ def new_session() -> tuple[str, dict]:
         "turn_seq": 0,
         "slots": {},
         "route_cards": [],
+        "active_trip": None,
+        "pending_trip": {"status": "none", "resume_offered": False},
         "history": [],
     }
     return session_id, session
@@ -69,8 +71,12 @@ def load_session(session_id: str) -> dict | None:
     except (ValueError, TypeError, UnicodeDecodeError) as exc:
         print(f"[agent-session] corrupt session blob sess[{session_id[:6]}]: {exc!r}")
         return None
-    if not isinstance(session, dict) or session.get("v") != SCHEMA_VERSION:
+    if not isinstance(session, dict) or session.get("v") not in {1, SCHEMA_VERSION}:
         return None
+    if session.get("v") == 1:
+        session["v"] = SCHEMA_VERSION
+        session.setdefault("active_trip", None)
+        session.setdefault("pending_trip", {"status": "none", "resume_offered": False})
     return session
 
 
@@ -122,6 +128,71 @@ def append_tool_summary(session: dict, tool: str, summary: str) -> None:
 
 def add_route_cards(session: dict, cards: list[dict]) -> None:
     session["route_cards"] = _trim_route_cards(list(session.get("route_cards") or []) + list(cards))
+    recommended = next(
+        (card for card in reversed(cards) if card.get("role") == "recommended"),
+        None,
+    )
+    if recommended:
+        session["active_trip"] = recommended
+
+
+def pending_trip(session: dict) -> dict:
+    value = session.get("pending_trip")
+    if not isinstance(value, dict):
+        value = {"status": "none", "resume_offered": False}
+        session["pending_trip"] = value
+    return value
+
+
+def mark_pending_trip_failed(session: dict, tool_input: dict, error: str) -> None:
+    destination = str(tool_input.get("destination") or "").strip()
+    summary = f"the trip to {destination}" if destination else "the unfinished trip"
+    session["pending_trip"] = {
+        "status": "failed",
+        "summary": summary,
+        "request": {
+            key: tool_input.get(key)
+            for key in (
+                "origin",
+                "destination",
+                "exclude_modes",
+                "routing_preference",
+                "departure_time",
+                "arrival_by",
+                "waypoints",
+                "avoid_crowds",
+            )
+            if tool_input.get(key) is not None
+        },
+        "last_error": str(error or "route planning failed")[:160],
+        "last_attempt_at": time.time(),
+        "resume_offered": False,
+    }
+
+
+def clear_pending_trip(session: dict) -> None:
+    session["pending_trip"] = {"status": "none", "resume_offered": False}
+
+
+def consume_resume_offer(session: dict) -> str | None:
+    pending = pending_trip(session)
+    if pending.get("status") != "failed" or pending.get("resume_offered"):
+        return None
+    pending["resume_offered"] = True
+    pending["status"] = "awaiting_confirmation"
+    summary = str(pending.get("summary") or "the unfinished trip")
+    return f"Do you want me to retry {summary}?"
+
+
+def reset_for_new_trip(session: dict) -> None:
+    """Drop stale trip constraints without erasing ordinary conversation."""
+
+    slots = session.setdefault("slots", {})
+    slots.pop("destination", None)
+    slots.pop("time_anchor", None)
+    slots.pop("constraints", None)
+    session["active_trip"] = None
+    clear_pending_trip(session)
 
 
 def next_turn_id(session: dict) -> str:

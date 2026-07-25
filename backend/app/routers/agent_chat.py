@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import datetime
-from typing import Literal
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Request
@@ -60,7 +59,12 @@ class AgentChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=500)
     origin: AgentOrigin | None = None
     selected_card_id: str | None = None
-    response_presentation: Literal["auto", "quick"] = "auto"
+    response_presentation: str = "auto"
+
+    @field_validator("response_presentation", mode="before")
+    @classmethod
+    def _normalize_response_presentation(cls, value: object) -> str:
+        return "quick" if str(value or "").strip().lower() == "quick" else "auto"
 
 
 def _log_sess(session_id: str) -> str:
@@ -94,7 +98,7 @@ async def _sse_stream(
     gtfs,
     origin: dict | None,
     selected_card_id: str | None,
-    response_presentation: Literal["auto", "quick"],
+    response_presentation: str,
 ):
     agen = agent_loop.run_agent_turn(
         session=session,

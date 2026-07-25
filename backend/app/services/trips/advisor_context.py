@@ -102,6 +102,13 @@ def normalize_ticketmaster_event_impacts(values: Iterable[object] | None) -> lis
                 48,
             ),
         }
+        for numeric_key in ("route_index", "distance_meters", "risk_score", "confidence"):
+            value = raw.get(numeric_key)
+            if isinstance(value, (int, float)):
+                row[numeric_key] = value
+        exposure_window = _bounded_text(raw.get("exposure_window"), 16).lower()
+        if exposure_window in {"ingress", "during", "egress"}:
+            row["exposure_window"] = exposure_window
         crowd_level = _bounded_text(raw.get("crowd_level"), 16).lower()
         if crowd_level in _ALLOWED_CROWD_LEVELS:
             row["crowd_level"] = crowd_level

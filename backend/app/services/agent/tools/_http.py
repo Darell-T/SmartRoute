@@ -46,7 +46,16 @@ async def fetch_json(
         print(f"[{log_tag}] {what} timed out")
         return None, f"{what} timed out"
     except httpx.HTTPStatusError as exc:
-        print(f"[{log_tag}] {what} HTTP {exc.response.status_code}")
+        status = exc.response.status_code
+        print(f"[{log_tag}] {what} HTTP {status}")
+        if status in {401, 403}:
+            return None, f"{what} authentication failed"
+        if status == 429:
+            return None, f"{what} rate limited"
+        if status in {400, 404, 422}:
+            return None, f"{what} request was invalid"
+        if status >= 500:
+            return None, f"{what} is temporarily unavailable"
         return None, f"{what} failed"
     except httpx.RequestError as exc:
         print(f"[{log_tag}] {what} request failed: {type(exc).__name__}")

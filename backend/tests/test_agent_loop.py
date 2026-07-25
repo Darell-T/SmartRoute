@@ -72,12 +72,74 @@ async def _fake_plan_trip_tool(tool_input, ctx):
     )
 
 
+async def _fake_arrivals_tool(tool_input, ctx):
+    payload = {
+        "route_id": tool_input["route_id"],
+        "stop": {
+            "id": "D28",
+            "name": tool_input.get("stop_query") or "Newkirk Plaza",
+            "latitude": 40.6351,
+            "longitude": -73.9628,
+        },
+        "directions": [
+            {
+                "id": "downtown",
+                "label": "Downtown / Brooklyn-bound",
+                "arrivals": [
+                    {
+                        "expected_at": "2026-07-25T14:04:00Z",
+                        "minutes": 4,
+                        "realtime": True,
+                    }
+                ],
+            }
+        ],
+        "updated_at": "2026-07-25T14:00:00Z",
+        "source_status": "live",
+    }
+    return ToolResult(
+        ok=True,
+        data=payload,
+        summary="live arrivals",
+        events=[agent_events.ArrivalCardEvent.from_lookup(ctx.turn_id, payload)],
+    )
+
+
+async def _fake_poi_tool(tool_input, ctx):
+    return ToolResult(
+        ok=True,
+        data={
+            "results": [
+                {
+                    "name": "Di Fara Pizza",
+                    "address": "1424 Avenue J, Brooklyn, NY",
+                    "lat": 40.625,
+                    "lng": -73.961,
+                }
+            ]
+        },
+        summary="found one grounded place",
+    )
+
+
 def _test_registry() -> dict[str, ToolSpec]:
     return {
         "ok_tool": ToolSpec(schema={"name": "ok_tool"}, executor=_fake_ok_tool, label_fn=lambda i: "Doing the thing…", timeout_s=5.0),
         "fail_tool": ToolSpec(schema={"name": "fail_tool"}, executor=_fake_fail_tool, label_fn=lambda i: "Doing the failing thing…", timeout_s=5.0),
         "slow_tool": ToolSpec(schema={"name": "slow_tool"}, executor=_fake_slow_tool, label_fn=lambda i: "Doing the slow thing…", timeout_s=0.05),
         "plan_trip": ToolSpec(schema={"name": "plan_trip"}, executor=_fake_plan_trip_tool, label_fn=lambda i: "Finding routes…", timeout_s=5.0),
+        "lookup_arrivals": ToolSpec(
+            schema={"name": "lookup_arrivals"},
+            executor=_fake_arrivals_tool,
+            label_fn=lambda i: f"Checking {i.get('route_id')} arrivals",
+            timeout_s=5.0,
+        ),
+        "poi_search": ToolSpec(
+            schema={"name": "poi_search"},
+            executor=_fake_poi_tool,
+            label_fn=lambda i: "Finding places",
+            timeout_s=5.0,
+        ),
     }
 
 
@@ -196,7 +258,7 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         self.assertIn("<context>", last_user_content)
         self.assertIn("rider_location: 40.7000,-73.9000", last_user_content)
 
-    async def test_quick_presentation_changes_context_but_not_tool_arguments(self):
+    async def test_quick_presentation_uses_the_shared_pipeline_with_smaller_budgets(self):
         rounds = [
             {"tool_use": [{"id": "tu_1", "name": "plan_trip", "input": {"destination": "Costco"}}], "stop_reason": "tool_use"},
             {"text": ["Take the Q."], "stop_reason": "end_turn"},
@@ -216,7 +278,10 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
             "response_presentation: quick",
             first_call["messages"][-1]["content"],
         )
-        self.assertEqual(trace.tool_calls[0][1], {"destination": "Costco"})
+        self.assertEqual(trace.tool_calls[0][1]["destination"], "Costco")
+        self.assertEqual(trace.tool_calls[0][1]["max_candidates"], 2)
+        self.assertFalse(trace.tool_calls[0][1]["avoid_crowds"])
+        self.assertFalse(trace.tool_calls[0][1]["include_first_leg_arrivals"])
 
     async def test_parallel_tools_return_single_tool_result_message(self):
         rounds = [
@@ -332,11 +397,68 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(trace.tool_calls, [("ok_tool", {"x": 1})])
         self.assertEqual(trace.final_text, "final answer")
 
+    async def test_simple_arithmetic_skips_model_and_tools(self):
+        events_out, session = await self._run([], message="What is 5 + 5?")
+        self.assertEqual(len(self.loop.client.messages.calls), 0)
+        self.assertEqual(
+            "".join(event.text for event in events_out if event.type == "token"),
+            "10.",
+        )
+        self.assertEqual(session["history"][-1]["text"], "10.")
+
+    async def test_arrival_intent_runs_grounded_lookup_before_model_in_quick_mode(self):
+        trace = self.loop.TurnTrace()
+        events_out, _session = await self._run(
+            [{"text": ["The next Q is in four minutes."], "stop_reason": "end_turn"}],
+            message="When is the next Q at Newkirk Avenue?",
+            response_presentation="quick",
+            tool_registry=_test_registry(),
+            trace=trace,
+        )
+        self.assertEqual(trace.tool_calls[0][0], "lookup_arrivals")
+        self.assertEqual(trace.tool_calls[0][1]["limit"], 2)
+        self.assertTrue(any(event.type == "arrival_card" for event in events_out))
+        model_context = self.loop.client.messages.calls[0]["messages"][-1]["content"]
+        self.assertIn('<required_evidence source="lookup_arrivals">', model_context)
+        self.assertIn('"source_status":"live"', model_context)
+
+    async def test_destination_discovery_is_grounded_before_model_in_both_modes(self):
+        for mode, expected_limit in (("auto", 3), ("quick", 2)):
+            with self.subTest(mode=mode):
+                trace = self.loop.TurnTrace()
+                await self._run(
+                    [{"text": ["Try Di Fara Pizza."], "stop_reason": "end_turn"}],
+                    message="What is one of the best pizza places in Brooklyn?",
+                    response_presentation=mode,
+                    tool_registry=_test_registry(),
+                    trace=trace,
+                )
+                self.assertEqual(trace.tool_calls[0][0], "poi_search")
+                self.assertEqual(trace.tool_calls[0][1]["max_results"], expected_limit)
+                model_context = self.loop.client.messages.calls[0]["messages"][-1]["content"]
+                self.assertIn('<required_evidence source="poi_search">', model_context)
+                self.assertIn("Di Fara Pizza", model_context)
+
+    async def test_failed_trip_resume_offer_is_added_once_without_auto_retry(self):
+        _session_id, session = session_module.new_session()
+        session_module.mark_pending_trip_failed(
+            session,
+            {"destination": "JFK"},
+            "routing timed out",
+        )
+        first, session = await self._run([], message="5 + 5", session=session)
+        second, _session = await self._run([], message="2 + 2", session=session)
+        first_text = "".join(event.text for event in first if event.type == "token")
+        second_text = "".join(event.text for event in second if event.type == "token")
+        self.assertIn("retry the trip to JFK", first_text)
+        self.assertEqual(second_text, "4.")
+        self.assertEqual(len(self.loop.client.messages.calls), 0)
+
 
 class RoundCapTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls):
-        cls.loop = _load_agent_loop({"AGENT_MAX_ROUNDS": "2", "AGENT_TURN_DEADLINE_S": "60"})
+        cls.loop = _load_agent_loop({"AGENT_AUTO_MAX_ROUNDS": "2", "AGENT_TURN_DEADLINE_S": "60"})
 
     def setUp(self):
         cache._mem.clear()
@@ -349,7 +471,8 @@ class RoundCapTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
             {"tool_use": [{"id": "tu_2", "name": "ok_tool", "input": {}}], "stop_reason": "tool_use"},
             {"text": ["here is what I know so far"], "stop_reason": "end_turn"},
         ]
-        events_out, _session = await self._run(rounds, tool_registry=_test_registry())
+        with patch.dict(os.environ, {"AGENT_AUTO_MAX_ROUNDS": "2"}):
+            events_out, _session = await self._run(rounds, tool_registry=_test_registry())
 
         self.assertEqual(len(self.loop.client.messages.calls), 3)
         wrapup_kwargs = self.loop.client.messages.calls[-1]

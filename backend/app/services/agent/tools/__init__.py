@@ -19,6 +19,7 @@ from typing import Awaitable, Callable
 from app.services.agent.tools import (
     accessibility_status,
     event_lookup,
+    lookup_arrivals,
     lookup_facts,
     plan_trip,
     poi_search,
@@ -58,6 +59,13 @@ def _transit_snapshot_label(tool_input: dict) -> str:
 def _event_lookup_label(tool_input: dict) -> str:
     query = str(tool_input.get("query") or "that event").strip()
     return f"Checking {query} schedule…"
+
+
+def _lookup_arrivals_label(tool_input: dict) -> str:
+    route = str(tool_input.get("route_id") or "your line").strip().upper()
+    stop = str(tool_input.get("stop_query") or "").strip()
+    suffix = f" at {stop}" if stop else ""
+    return f"Checking {route} arrivals{suffix}..."
 
 
 def _poi_search_label(tool_input: dict) -> str:
@@ -146,6 +154,12 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
         transit_snapshot.TRANSIT_SNAPSHOT_SCHEMA, transit_snapshot.execute, _transit_snapshot_label, 8.0
     ),
     "event_lookup": _spec(event_lookup.EVENT_LOOKUP_SCHEMA, event_lookup.execute, _event_lookup_label, 8.0),
+    "lookup_arrivals": _spec(
+        lookup_arrivals.LOOKUP_ARRIVALS_SCHEMA,
+        lookup_arrivals.execute,
+        _lookup_arrivals_label,
+        12.0,
+    ),
     "poi_search": _spec(poi_search.POI_SEARCH_SCHEMA, poi_search.execute, _poi_search_label, 8.0),
     "venue_crowd_window": _spec(
         venue_crowd_window.VENUE_CROWD_WINDOW_SCHEMA, venue_crowd_window.execute, _venue_crowd_window_label, 2.0

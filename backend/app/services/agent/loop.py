@@ -16,23 +16,21 @@ import json
 import os
 import re
 import time
-from typing import AsyncIterator, Literal
+from typing import AsyncIterator
 
 import anthropic
 
 from app.services.agent import budget
 from app.services.agent import events as agent_events
+from app.services.agent import intelligence
+from app.services.agent import policy as agent_policy
 from app.services.agent import prompt as agent_prompt
 from app.services.agent import session as session_module
 from app.services.agent.tools import TOOL_REGISTRY, TOOLS, ToolContext, ToolResult
 
 client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
-AGENT_MODEL = os.getenv("AGENT_MODEL", "claude-sonnet-5")
-AGENT_MAX_ROUNDS = int(os.getenv("AGENT_MAX_ROUNDS", "5"))
 AGENT_TURN_DEADLINE_S = float(os.getenv("AGENT_TURN_DEADLINE_S", "50"))
-AGENT_MAX_TOKENS_PER_ROUND = int(os.getenv("AGENT_MAX_TOKENS_PER_ROUND", "1024"))
-AGENT_WRAPUP_MAX_TOKENS = 300
 # Local UI work should be repeatable and must not spend model credits. This
 # flag swaps the entire turn (including tool work) for a deterministic SSE
 # fixture; production remains live unless explicitly configured otherwise.
@@ -64,7 +62,7 @@ class TurnTrace:
 
 def _mock_trip_copy(
     message: str,
-    response_presentation: Literal["auto", "quick"] = "auto",
+    response_presentation: str = "auto",
 ) -> tuple[str, dict, int, list[str]]:
     """Return stable preview content without inferring live service status."""
     query = message.casefold()
@@ -124,7 +122,7 @@ async def _stream_mock_turn(
     message: str,
     origin: dict | None,
     trace: TurnTrace | None,
-    response_presentation: Literal["auto", "quick"],
+    response_presentation: str,
 ) -> AsyncIterator[agent_events.AgentEvent]:
     """Stream a small, deterministic fixture for local chat/UI development.
 
@@ -241,17 +239,23 @@ def _messages_from_history(history: list[dict]) -> list[dict]:
     return messages
 
 
-def _build_stream_kwargs(*, force_final: bool, messages: list[dict], system_blocks: list[dict]) -> dict:
+def _build_stream_kwargs(
+    *,
+    force_final: bool,
+    messages: list[dict],
+    system_blocks: list[dict],
+    mode_policy: agent_policy.AgentModePolicy,
+) -> dict:
     kwargs: dict = {
-        "model": AGENT_MODEL,
+        "model": mode_policy.model,
         "messages": messages,
         "system": system_blocks,
     }
     if force_final:
-        kwargs["max_tokens"] = AGENT_WRAPUP_MAX_TOKENS
+        kwargs["max_tokens"] = mode_policy.wrapup_output_tokens
         kwargs["tool_choice"] = {"type": "none"}
     else:
-        kwargs["max_tokens"] = AGENT_MAX_TOKENS_PER_ROUND
+        kwargs["max_tokens"] = mode_policy.max_output_tokens
         kwargs["tools"] = TOOLS
     return kwargs
 
@@ -327,7 +331,10 @@ def _sanitize_token_events(
 
 
 async def _call_model(
-    *, stream_kwargs: dict, log_tag: str
+    *,
+    stream_kwargs: dict,
+    log_tag: str,
+    retry_count: int,
 ) -> tuple[object | None, list[agent_events.TokenEvent], agent_events.ErrorEvent | None]:
     """Runs one `messages.stream()` call to completion, collecting its text
     deltas as `TokenEvent`s. Returns `(final_message, token_events, None)` on
@@ -337,21 +344,38 @@ async def _call_model(
     on the wrap-up call). Shared by both the per-round model call and the
     forced wrap-up call, which otherwise duplicated this stream/collect/
     error-handle sequence verbatim."""
-    token_events: list[agent_events.TokenEvent] = []
-    try:
-        async with client.messages.stream(**stream_kwargs) as stream:
-            async for delta in stream.text_stream:
-                token_events.append(agent_events.TokenEvent(text=delta))
-            final_message = await stream.get_final_message()
-    except Exception as exc:
-        print(f"[agent-loop] {log_tag} failed: {type(exc).__name__}: {exc!r}")
-        error_event = agent_events.ErrorEvent(
-            code="upstream_error",
-            message="Live trip planning is temporarily unavailable.",
-            retryable=True,
-        )
-        return None, token_events, error_event
-    return final_message, _sanitize_token_events(token_events), None
+    attempts = max(1, int(retry_count) + 1)
+    for attempt in range(1, attempts + 1):
+        token_events: list[agent_events.TokenEvent] = []
+        try:
+            async with client.messages.stream(**stream_kwargs) as stream:
+                async for delta in stream.text_stream:
+                    token_events.append(agent_events.TokenEvent(text=delta))
+                final_message = await stream.get_final_message()
+            return final_message, _sanitize_token_events(token_events), None
+        except Exception as exc:
+            # Provider exception bodies can contain request payload fragments.
+            # Keep operational logs useful without echoing those details.
+            print(
+                f"[agent-loop] {log_tag} failed type={type(exc).__name__} "
+                f"attempt={attempt}/{attempts}"
+            )
+            retryable_type = type(exc).__name__ in {
+                "APIConnectionError",
+                "APITimeoutError",
+                "InternalServerError",
+                "OverloadedError",
+                "RateLimitError",
+            }
+            if token_events or attempt >= attempts or not retryable_type:
+                error_event = agent_events.ErrorEvent(
+                    code="upstream_error",
+                    message="Live trip planning is temporarily unavailable.",
+                    retryable=True,
+                )
+                return None, token_events, error_event
+            await asyncio.sleep(min(0.15 * attempt, 0.45))
+    raise AssertionError("model retry loop exited unexpectedly")
 
 
 async def _run_one_tool(name: str, tool_input: dict, ctx: ToolContext) -> ToolResult:
@@ -365,7 +389,8 @@ async def _run_one_tool(name: str, tool_input: dict, ctx: ToolContext) -> ToolRe
     except asyncio.TimeoutError:
         return ToolResult(ok=False, error="timed out")
     except Exception as exc:
-        print(f"[agent-loop] tool {name} failed: {type(exc).__name__}: {exc!r}")
+        # Provider exception details can contain credential-bearing URLs.
+        print(f"[agent-loop] tool {name} failed type={type(exc).__name__}")
         return ToolResult(ok=False, error="tool failed")
     return result
 
@@ -392,16 +417,62 @@ def _rider_excluded_modes(message: str, session: dict) -> set[str]:
     return excluded
 
 
-def _constrained_tool_input(name: str, tool_input: dict, excluded_modes: set[str]) -> dict:
+def _constrained_tool_input(
+    name: str,
+    tool_input: dict,
+    excluded_modes: set[str],
+    *,
+    mode_policy: agent_policy.AgentModePolicy,
+    parsed_intent: intelligence.ParsedIntent,
+) -> dict:
     normalized = dict(tool_input)
-    if name == "plan_trip" and excluded_modes:
-        requested = {
-            str(mode).strip().upper()
-            for mode in (normalized.get("exclude_modes") or [])
-            if str(mode).strip()
-        }
-        normalized["exclude_modes"] = sorted(requested | excluded_modes)
+    if name == "plan_trip":
+        if excluded_modes:
+            requested = {
+                str(mode).strip().upper()
+                for mode in (normalized.get("exclude_modes") or [])
+                if str(mode).strip()
+            }
+            normalized["exclude_modes"] = sorted(requested | excluded_modes)
+        normalized["max_candidates"] = mode_policy.max_route_candidates
+        normalized["avoid_crowds"] = bool(
+            normalized.get("avoid_crowds") or parsed_intent.avoid_crowds
+        )
+        normalized["include_first_leg_arrivals"] = mode_policy.optional_enrichment
+    elif name == "lookup_arrivals":
+        normalized["limit"] = min(
+            int(normalized.get("limit") or 3),
+            2 if mode_policy.mode == "quick" else 3,
+        )
     return normalized
+
+
+def _required_arrival_input(
+    parsed_intent: intelligence.ParsedIntent,
+    ctx: ToolContext,
+    mode_policy: agent_policy.AgentModePolicy,
+) -> dict | None:
+    route_id = str(parsed_intent.arrival_route_id or "").strip().upper()
+    active_trip = (ctx.session or {}).get("active_trip") or {}
+    boarding = active_trip.get("first_boarding") if isinstance(active_trip, dict) else None
+    if not route_id and isinstance(boarding, dict):
+        route_id = str(boarding.get("route_id") or "").strip().upper()
+    if not route_id:
+        return None
+
+    tool_input: dict = {
+        "route_id": route_id,
+        "mode": "bus" if any(char.isdigit() for char in route_id) and len(route_id) > 1 else "subway",
+        "limit": 2 if mode_policy.mode == "quick" else 3,
+    }
+    if parsed_intent.arrival_stop_query:
+        tool_input["stop_query"] = parsed_intent.arrival_stop_query
+    if ctx.origin:
+        tool_input["user_location"] = {
+            "latitude": ctx.origin.get("lat"),
+            "longitude": ctx.origin.get("lng"),
+        }
+    return tool_input
 
 
 async def _execute_tool_round(
@@ -410,6 +481,8 @@ async def _execute_tool_round(
     session: dict,
     tool_calls_this_turn: list[tuple[str, dict]],
     excluded_modes: set[str],
+    mode_policy: agent_policy.AgentModePolicy,
+    parsed_intent: intelligence.ParsedIntent,
 ) -> AsyncIterator:
     """Emits tool_start/tool_end/route_card events for one round of (possibly
     parallel) tool calls, and yields the assembled tool_result message last
@@ -419,6 +492,8 @@ async def _execute_tool_round(
             getattr(block, "name", ""),
             getattr(block, "input", {}) or {},
             excluded_modes,
+            mode_policy=mode_policy,
+            parsed_intent=parsed_intent,
         )
         for block in tool_use_blocks
     }
@@ -457,6 +532,8 @@ async def _execute_tool_round(
                 session_module.append_tool_summary(session, name, result.summary)
             if result.session_route_cards:
                 session_module.add_route_cards(session, result.session_route_cards)
+            if name == "plan_trip":
+                session_module.clear_pending_trip(session)
             for ev in result.events:
                 yield ev
         else:
@@ -473,6 +550,8 @@ async def _execute_tool_round(
             yield agent_events.ToolEndEvent(
                 tool_call_id=block.id, tool=name, ok=False, duration_ms=duration_ms, summary=reason
             )
+            if name == "plan_trip":
+                session_module.mark_pending_trip_failed(session, tool_input, reason)
 
     yield {"__tool_result_message__": {"role": "user", "content": tool_result_content}}
 
@@ -485,9 +564,13 @@ async def _stream_turn(
     message: str,
     ctx: ToolContext,
     selected_card_id: str | None,
-    response_presentation: Literal["auto", "quick"],
+    response_presentation: str,
     trace: TurnTrace | None,
 ) -> AsyncIterator[agent_events.AgentEvent]:
+    mode_policy = agent_policy.policy_for_mode(response_presentation)
+    parsed_intent = intelligence.parse_intent(message)
+    if intelligence.is_new_trip_request(message):
+        session_module.reset_for_new_trip(session)
     system_blocks = _system_blocks()
     excluded_modes = _rider_excluded_modes(message, session)
     messages = _messages_from_history(session.get("history") or [])
@@ -511,8 +594,94 @@ async def _stream_turn(
     text_parts: list[str] = []
     tool_calls_this_turn: list[tuple[str, dict]] = []
     recommended_route_card: agent_events.RouteCardEvent | None = None
+    tool_failures = 0
 
     try:
+        if parsed_intent.intent == "destination_discovery":
+            required_input = {
+                "query": message,
+                "max_results": 2 if mode_policy.mode == "quick" else 3,
+            }
+            tool_call_id = f"required-places-{turn_id}"
+            spec = TOOL_REGISTRY.get("poi_search")
+            label = (
+                spec.label_fn(required_input)
+                if spec is not None
+                else "Finding grounded places"
+            )
+            yield agent_events.ToolStartEvent(
+                tool_call_id=tool_call_id,
+                tool="poi_search",
+                label=label,
+            )
+            tool_started = time.monotonic()
+            result = await _run_one_tool("poi_search", required_input, ctx)
+            tools_ms_total += (time.monotonic() - tool_started) * 1000
+            tool_calls_this_turn.append(("poi_search", required_input))
+            evidence = (
+                result.data
+                if result.ok
+                else {
+                    "source_status": "provider_unavailable",
+                    "error": result.error or "place search unavailable",
+                }
+            )
+            messages[-1]["content"] += (
+                "\n\n<required_evidence source=\"poi_search\">"
+                + json.dumps(evidence, separators=(",", ":"), default=str)
+                + "</required_evidence>"
+            )
+            yield agent_events.ToolEndEvent(
+                tool_call_id=tool_call_id,
+                tool="poi_search",
+                ok=result.ok,
+                duration_ms=round((time.monotonic() - tool_started) * 1000),
+                summary=result.summary or result.error or None,
+            )
+            if not result.ok:
+                tool_failures += 1
+            if result.summary:
+                session_module.append_tool_summary(session, "poi_search", result.summary)
+
+        if parsed_intent.intent == "arrival_lookup":
+            required_input = _required_arrival_input(parsed_intent, ctx, mode_policy)
+            if required_input is not None:
+                tool_call_id = f"required-arrivals-{turn_id}"
+                spec = TOOL_REGISTRY.get("lookup_arrivals")
+                label = (
+                    spec.label_fn(required_input)
+                    if spec is not None
+                    else f"Checking {required_input['route_id']} arrivals"
+                )
+                yield agent_events.ToolStartEvent(
+                    tool_call_id=tool_call_id,
+                    tool="lookup_arrivals",
+                    label=label,
+                )
+                tool_started = time.monotonic()
+                result = await _run_one_tool("lookup_arrivals", required_input, ctx)
+                tools_ms_total += (time.monotonic() - tool_started) * 1000
+                tool_calls_this_turn.append(("lookup_arrivals", required_input))
+                evidence = result.data if result.ok else {"source_status": "provider_unavailable"}
+                messages[-1]["content"] += (
+                    "\n\n<required_evidence source=\"lookup_arrivals\">"
+                    + json.dumps(evidence, separators=(",", ":"), default=str)
+                    + "</required_evidence>"
+                )
+                yield agent_events.ToolEndEvent(
+                    tool_call_id=tool_call_id,
+                    tool="lookup_arrivals",
+                    ok=result.ok,
+                    duration_ms=round((time.monotonic() - tool_started) * 1000),
+                    summary=result.summary or result.error or None,
+                )
+                if not result.ok:
+                    tool_failures += 1
+                if result.summary:
+                    session_module.append_tool_summary(session, "lookup_arrivals", result.summary)
+                for event in result.events:
+                    yield event
+
         needs_wrapup = False
 
         while True:
@@ -521,14 +690,23 @@ async def _stream_turn(
                 needs_wrapup = True
                 stop_reason_out = "deadline"
                 break
-            if round_num > AGENT_MAX_ROUNDS:
+            if round_num > mode_policy.max_rounds:
                 needs_wrapup = True
                 stop_reason_out = "max_rounds"
                 break
 
-            stream_kwargs = _build_stream_kwargs(force_final=False, messages=messages, system_blocks=system_blocks)
+            stream_kwargs = _build_stream_kwargs(
+                force_final=False,
+                messages=messages,
+                system_blocks=system_blocks,
+                mode_policy=mode_policy,
+            )
             model_call_start = time.monotonic()
-            final_message, token_events, error_event = await _call_model(stream_kwargs=stream_kwargs, log_tag="model call")
+            final_message, token_events, error_event = await _call_model(
+                stream_kwargs=stream_kwargs,
+                log_tag="model call",
+                retry_count=mode_policy.retry_count,
+            )
             model_ms_total += (time.monotonic() - model_call_start) * 1000
             for token_event in token_events:
                 text_parts.append(token_event.text)
@@ -556,12 +734,16 @@ async def _stream_turn(
                 session,
                 tool_calls_this_turn,
                 excluded_modes,
+                mode_policy,
+                parsed_intent,
             ):
                 if isinstance(item, dict) and "__tool_result_message__" in item:
                     tool_result_message = item["__tool_result_message__"]
                 else:
                     if isinstance(item, agent_events.RouteCardEvent) and item.role == "recommended":
                         recommended_route_card = item
+                    if isinstance(item, agent_events.ToolEndEvent) and not item.ok:
+                        tool_failures += 1
                     yield item
             tools_ms_total += (time.monotonic() - tool_round_start) * 1000
             messages.append(tool_result_message)
@@ -573,10 +755,17 @@ async def _stream_turn(
 
         if needs_wrapup:
             messages.append({"role": "user", "content": WRAP_UP_INSTRUCTION})
-            stream_kwargs = _build_stream_kwargs(force_final=True, messages=messages, system_blocks=system_blocks)
+            stream_kwargs = _build_stream_kwargs(
+                force_final=True,
+                messages=messages,
+                system_blocks=system_blocks,
+                mode_policy=mode_policy,
+            )
             model_call_start = time.monotonic()
             final_message, token_events, error_event = await _call_model(
-                stream_kwargs=stream_kwargs, log_tag="wrap-up model call"
+                stream_kwargs=stream_kwargs,
+                log_tag="wrap-up model call",
+                retry_count=mode_policy.retry_count,
             )
             model_ms_total += (time.monotonic() - model_call_start) * 1000
             for token_event in token_events:
@@ -595,8 +784,16 @@ async def _stream_turn(
             fallback_text = _route_card_text_fallback(recommended_route_card)
             text_parts.append(fallback_text)
             yield agent_events.TokenEvent(text=fallback_text)
+        if stop_reason_out == "end_turn" and not any(
+            name == "plan_trip" for name, _tool_input in tool_calls_this_turn
+        ):
+            resume_offer = session_module.consume_resume_offer(session)
+            if resume_offer:
+                prefix = "\n\n" if text_parts else ""
+                text_parts.append(prefix + resume_offer)
+                yield agent_events.TokenEvent(text=prefix + resume_offer)
     except Exception as exc:
-        print(f"[agent-loop] turn failed unexpectedly: {type(exc).__name__}: {exc!r}")
+        print(f"[agent-loop] turn failed unexpectedly type={type(exc).__name__}")
         yield agent_events.ErrorEvent(
             code="internal", message="Something went wrong handling that request.", retryable=True
         )
@@ -612,12 +809,17 @@ async def _stream_turn(
         budget.record_usage_cost(input_tokens, output_tokens)
 
     total_ms = (time.monotonic() - turn_start) * 1000
+    required_tools = ",".join(parsed_intent.required_evidence.required_tools()) or "none"
     # Single per-turn timing/spend log line, mirroring trips.py's `[trip]`
     # line -- no message text, session id truncated to 6 chars per the
     # existing sess[:6] logging convention (session.py, routers/agent_chat.py).
     print(
         f"[agent] turn={turn_id} sess={session_id[:6]} rounds={round_num} "
-        f"tools={len(tool_calls_this_turn)} model_ms={model_ms_total:.0f} "
+        f"mode={mode_policy.mode} model={agent_policy.safe_model_label(mode_policy.model)} "
+        f"candidate_budget={mode_policy.max_route_candidates} retries={mode_policy.retry_count} "
+        f"required_tools={required_tools} optional_enrichment="
+        f"{int(mode_policy.optional_enrichment)} tools={len(tool_calls_this_turn)} "
+        f"tool_failures={tool_failures} model_ms={model_ms_total:.0f} "
         f"tools_ms={tools_ms_total:.0f} total_ms={total_ms:.0f} "
         f"in_tok={input_tokens} out_tok={output_tokens} stop={stop_reason_out}"
     )
@@ -640,7 +842,7 @@ async def run_agent_turn(
     gtfs=None,
     origin: dict | None = None,
     selected_card_id: str | None = None,
-    response_presentation: Literal["auto", "quick"] = "auto",
+    response_presentation: str = "auto",
     trace: TurnTrace | None = None,
 ) -> AsyncIterator[agent_events.AgentEvent]:
     """Run one conversational turn, yielding SSE events as they happen.
@@ -686,6 +888,23 @@ async def run_agent_turn(
     if budget.daily_spend_exceeded():
         for event in _reject("budget_exceeded", "Today's usage budget is reached -- please try again tomorrow.", False):
             yield event
+        return
+
+    arithmetic_answer = intelligence.evaluate_simple_arithmetic(message)
+    if arithmetic_answer is not None:
+        session_module.append_history(session, "user", message)
+        resume_offer = session_module.consume_resume_offer(session)
+        final_text = arithmetic_answer + (f"\n\n{resume_offer}" if resume_offer else "")
+        session_module.append_history(session, "assistant", final_text)
+        if trace is not None:
+            trace.final_text = final_text
+        yield agent_events.TokenEvent(text=final_text)
+        yield agent_events.DoneEvent(
+            session_id=session_id,
+            turn_id=turn_id,
+            stop_reason="end_turn",
+            usage={"input_tokens": 0, "output_tokens": 0},
+        )
         return
 
     sem = budget.concurrency_semaphore()

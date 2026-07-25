@@ -372,7 +372,13 @@ class EndToEndFakeModelTests(unittest.IsolatedAsyncioTestCase):
         failures = [(r.spec, r.detail) for r in result.assertion_results if not r.ok]
         self.assertTrue(result.ok, failures)
         self.assertEqual(call_count, 2)
-        self.assertEqual(result.tool_calls, [("plan_trip", rounds[0]["tool_use"][0]["input"])])
+        expected_input = {
+            **rounds[0]["tool_use"][0]["input"],
+            "max_candidates": 5,
+            "avoid_crowds": False,
+            "include_first_leg_arrivals": True,
+        }
+        self.assertEqual(result.tool_calls, [("plan_trip", expected_input)])
 
     async def test_t5_multi_stop_query_end_to_end(self):
         # T5: pizza-first multi-stop -- poi_search, then TWO plan_trip legs

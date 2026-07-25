@@ -66,14 +66,15 @@ class SystemPromptGuardTests(unittest.TestCase):
         # slipping through, without pinning an exact byte count.
         self.assertGreater(len(agent_prompt.SYSTEM_PROMPT), 500)
 
-    def test_response_presentation_cannot_change_route_decisions(self):
+    def test_response_modes_share_required_evidence_and_scoring(self):
         self.assertIn("RESPONSE PRESENTATION", agent_prompt.SYSTEM_PROMPT)
         normalized = " ".join(agent_prompt.SYSTEM_PROMPT.lower().split())
         self.assertIn("final rider-facing prose only", normalized)
-        self.assertIn("never change tool choice", normalized)
-        self.assertIn("route candidates", normalized)
+        self.assertIn("same tools", normalized)
+        self.assertIn("evidence requirements", normalized)
+        self.assertIn("smaller candidate", normalized)
+        self.assertIn("must never omit evidence", normalized)
         self.assertIn("scoring", normalized)
-        self.assertIn("recommendation", normalized)
         self.assertIn("severe disruptions", normalized)
 
 

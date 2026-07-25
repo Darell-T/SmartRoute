@@ -56,7 +56,10 @@ EVENT_LOOKUP_SCHEMA = {
         "properties": {
             "query": {
                 "type": "string",
-                "description": "Event, team, or artist name to search, e.g. 'Knicks' or 'FIFA'.",
+                "description": (
+                    "Optional event, team, or artist name. Omit for a bounded "
+                    "all-events search near a route hub."
+                ),
             },
             "date": {
                 "type": "string",
@@ -66,8 +69,20 @@ EVENT_LOOKUP_SCHEMA = {
                 "type": "string",
                 "description": "Venue name to narrow the search, e.g. 'Madison Square Garden'.",
             },
+            "latitude": {
+                "type": "number",
+                "description": "Optional NYC route-hub latitude for a local event search.",
+            },
+            "longitude": {
+                "type": "number",
+                "description": "Optional NYC route-hub longitude for a local event search.",
+            },
+            "radius_miles": {
+                "type": "number",
+                "description": "Optional bounded search radius. Internal route searches use a small radius.",
+            },
         },
-        "required": ["query"],
+        "required": [],
         "additionalProperties": False,
     },
 }
@@ -86,12 +101,21 @@ def _et_day_bounds_utc(date_str: str) -> tuple[str, str] | None:
     return start_et.astimezone(timezone.utc).strftime(fmt), end_et.astimezone(timezone.utc).strftime(fmt)
 
 
-def _cache_key(query: str, date: str | None, venue: str | None, radius_miles: float) -> str:
+def _cache_key(
+    query: str,
+    date: str | None,
+    venue: str | None,
+    radius_miles: float,
+    latitude: float,
+    longitude: float,
+) -> str:
     normalized = {
         "q": query.strip().lower(),
         "date": (date or "").strip(),
         "venue": (venue or "").strip().lower(),
         "radius_miles": radius_miles,
+        "latitude": round(latitude, 4),
+        "longitude": round(longitude, 4),
     }
     canonical = json.dumps(normalized, sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
@@ -215,10 +239,24 @@ def _venue_coordinates(venue: dict | None) -> tuple[float | None, float | None]:
     return latitude, longitude
 
 
-def _is_within_nyc_search_radius(latitude: float, longitude: float, radius_miles: float) -> bool:
-    """Defend against an upstream geo-filter miss without rejecting records
-    that omit coordinates altogether (those remain location-unknown)."""
-    return distance_meters(latitude, longitude, 40.7128, -74.0060) <= radius_miles * 1609.344
+def _is_within_search_radius(
+    latitude: float,
+    longitude: float,
+    center_latitude: float,
+    center_longitude: float,
+    radius_miles: float,
+) -> bool:
+    """Defend against an upstream geo-filter miss using the actual search hub."""
+
+    return (
+        distance_meters(
+            latitude,
+            longitude,
+            center_latitude,
+            center_longitude,
+        )
+        <= radius_miles * 1609.344
+    )
 
 
 def _classification_strings(event: dict) -> tuple[str, str, str]:
@@ -315,12 +353,17 @@ async def _lookup_uncached(
     venue: str | None,
     api_key: str,
     radius_miles: float,
+    latitude: float = 40.7128,
+    longitude: float = -74.0060,
 ) -> ToolResult:
     params = {
         "apikey": api_key,
-        "keyword": f"{query} {venue}".strip() if venue else query,
-        "latlong": TICKETMASTER_NYC_LATLONG,
-        "radius": str(radius_miles),
+        "latlong": (
+            TICKETMASTER_NYC_LATLONG
+            if (latitude, longitude) == (40.7128, -74.0060)
+            else f"{latitude:.6f},{longitude:.6f}"
+        ),
+        "radius": f"{radius_miles:g}",
         "unit": "miles",
         # Unscheduled listings cannot support an event-timing crowd window.
         # Keep defensive parsing below because upstream records can still be
@@ -331,6 +374,9 @@ async def _lookup_uncached(
         "page": "0",
         "sort": "date,asc",
     }
+    keyword = f"{query} {venue}".strip() if venue else query
+    if keyword:
+        params["keyword"] = keyword
     if date:
         bounds = _et_day_bounds_utc(date)
         if bounds is None:
@@ -364,10 +410,18 @@ async def _lookup_uncached(
             return ToolResult(ok=False, error="event lookup returned an unexpected response")
         for raw_event in raw_events:
             parsed = _parse_event(raw_event)
-            latitude = parsed["venue_latitude"]
-            longitude = parsed["venue_longitude"]
-            if latitude is not None and longitude is not None and not _is_within_nyc_search_radius(
-                latitude, longitude, radius_miles
+            event_latitude = parsed["venue_latitude"]
+            event_longitude = parsed["venue_longitude"]
+            if (
+                event_latitude is not None
+                and event_longitude is not None
+                and not _is_within_search_radius(
+                    event_latitude,
+                    event_longitude,
+                    latitude,
+                    longitude,
+                    radius_miles,
+                )
             ):
                 continue
             # A cancelled event cannot produce a useful current crowd window.
@@ -393,18 +447,17 @@ async def _lookup_uncached(
     if partial:
         data["partial"] = True
 
+    subject = f"'{query}'" if query else "the route area"
     summary = (
-        f"found {len(parsed_events)} event(s) for '{query}'"
+        f"found {len(parsed_events)} event(s) for {subject}"
         if parsed_events
-        else f"no events found for '{query}'"
+        else f"no events found for {subject}"
     )
     return ToolResult(ok=True, data=data, summary=summary)
 
 
 async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
     query = str(tool_input.get("query") or "").strip()
-    if not query:
-        return ToolResult(ok=False, error="query is required")
 
     if os.getenv("TICKETMASTER_ENABLED", "true").strip().lower() in {"0", "false", "no", "off"}:
         return ToolResult(ok=False, error="event lookup is disabled")
@@ -416,10 +469,35 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
     date = tool_input.get("date")
     venue = tool_input.get("venue")
 
-    radius_miles = _positive_float_env(
+    configured_radius = _positive_float_env(
         "TICKETMASTER_SEARCH_RADIUS_MILES", EVENT_LOOKUP_DEFAULT_RADIUS_MILES, EVENT_LOOKUP_MAX_RADIUS_MILES
     )
-    cache_key = _cache_key(query, date, venue, radius_miles)
+    try:
+        requested_radius = float(tool_input.get("radius_miles", configured_radius))
+    except (TypeError, ValueError):
+        requested_radius = configured_radius
+    radius_miles = (
+        min(max(requested_radius, 0.1), EVENT_LOOKUP_MAX_RADIUS_MILES)
+        if math.isfinite(requested_radius)
+        else configured_radius
+    )
+    try:
+        latitude = float(tool_input.get("latitude", 40.7128))
+        longitude = float(tool_input.get("longitude", -74.0060))
+    except (TypeError, ValueError):
+        return ToolResult(ok=False, error="event search location is invalid")
+    if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+        return ToolResult(ok=False, error="event search location is invalid")
+    if not _is_within_search_radius(
+        latitude,
+        longitude,
+        40.7128,
+        -74.0060,
+        EVENT_LOOKUP_MAX_RADIUS_MILES,
+    ):
+        return ToolResult(ok=False, error="event search location is outside the NYC service area")
+
+    cache_key = _cache_key(query, date, venue, radius_miles, latitude, longitude)
     cached = _read_cache(cache_key)
     if cached is not None:
         return ToolResult(ok=True, data=cached.get("data"), summary=cached.get("summary") or "")
@@ -437,6 +515,8 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
                 str(venue) if venue is not None else None,
                 api_key,
                 radius_miles,
+                latitude,
+                longitude,
             )
             if result.ok:
                 _write_cache(cache_key, {"data": result.data, "summary": result.summary})

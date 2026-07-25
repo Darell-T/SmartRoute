@@ -263,6 +263,104 @@ class PlanTripItineraryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self._get_route.await_args_list[0].args[2])
         self.assertEqual(self._get_route.await_args_list[1].args[2], (40.7128, -74.006))
 
+    async def test_crowd_intent_searches_events_and_can_change_the_recommended_route(self):
+        impacts = [
+            {
+                "event_id": "evt-msg",
+                "title": "Concert at the Garden",
+                "venue": "Madison Square Garden",
+                "route_index": 0,
+                "distance_meters": 80,
+                "risk_score": 8,
+                "confidence": 0.85,
+                "exposure_window": "ingress",
+                "impact_scope": "station_crowding",
+            }
+        ]
+        with patch.object(
+            plan_trip.event_crowd,
+            "collect_route_event_evidence",
+            new=AsyncMock(return_value=("available", impacts, [])),
+        ) as collect:
+            result = await plan_trip.execute(
+                {
+                    "origin": "user",
+                    "destination": "Costco",
+                    "avoid_crowds": True,
+                },
+                self._ctx(),
+            )
+
+        self.assertTrue(result.ok)
+        collect.assert_awaited_once()
+        recommended = next(event for event in result.events if event.role == "recommended")
+        self.assertEqual(recommended.summary["lines"], ["B"])
+        self.assertEqual(result.data["event_evidence"]["status"], "available")
+        first = result.data["candidates"][0]
+        self.assertEqual(first["event_impacts"][0]["event_name"], "Concert at the Garden")
+        self.assertGreater(first["event_crowd_penalty"], 0)
+
+    async def test_ticketmaster_failure_does_not_fail_route_planning(self):
+        with patch.object(
+            plan_trip.event_crowd,
+            "collect_route_event_evidence",
+            new=AsyncMock(
+                return_value=("provider_unavailable", [], ["event lookup timed out"])
+            ),
+        ):
+            result = await plan_trip.execute(
+                {
+                    "origin": "user",
+                    "destination": "Costco",
+                    "avoid_crowds": True,
+                },
+                self._ctx(),
+            )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(
+            result.data["event_evidence"]["status"],
+            "provider_unavailable",
+        )
+        self.assertEqual(result.data["event_evidence"]["provider_failure_count"], 1)
+
+    async def test_first_leg_arrival_context_is_preserved_on_recommended_card(self):
+        from app.services.agent.tools._types import ToolResult
+
+        arrival_result = ToolResult(
+            ok=True,
+            data={
+                "source_status": "live",
+                "catchability": {
+                    "walking_minutes": 6,
+                    "boarding_buffer_minutes": 2,
+                    "arrival_minutes": [3, 11],
+                    "catchable_arrival_minutes": 11,
+                    "confidence": 0.9,
+                },
+            },
+            summary="live arrivals",
+        )
+        with patch(
+            "app.services.agent.tools.lookup_arrivals.execute",
+            new=AsyncMock(return_value=arrival_result),
+        ) as lookup:
+            result = await plan_trip.execute(
+                {
+                    "origin": "user",
+                    "destination": "Costco",
+                    "include_first_leg_arrivals": True,
+                },
+                self._ctx(),
+            )
+
+        self.assertTrue(result.ok)
+        lookup.assert_awaited_once()
+        recommended = next(event for event in result.events if event.role == "recommended")
+        context = recommended.summary["first_leg_arrival"]
+        self.assertEqual(context["route_id"], "Q")
+        self.assertEqual(context["catchable_arrival_minutes"], 11)
+
 
 class RouteCardEventItineraryWireTests(unittest.TestCase):
     def test_to_data_omits_itinerary_when_none(self):

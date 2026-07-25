@@ -104,6 +104,47 @@ class RouteCardEvent:
 
 
 @dataclasses.dataclass(frozen=True)
+class ArrivalCardEvent:
+    turn_id: str
+    route_id: str
+    stop: dict
+    directions: list
+    updated_at: str
+    source_status: str
+    catchability: dict | None = None
+    ambiguity: list | None = None
+    type: str = "arrival_card"
+
+    @classmethod
+    def from_lookup(cls, turn_id: str, payload: dict) -> "ArrivalCardEvent":
+        return cls(
+            turn_id=turn_id,
+            route_id=str(payload.get("route_id") or ""),
+            stop=dict(payload.get("stop") or {}),
+            directions=list(payload.get("directions") or []),
+            updated_at=str(payload.get("updated_at") or ""),
+            source_status=str(payload.get("source_status") or "provider_unavailable"),
+            catchability=payload.get("catchability"),
+            ambiguity=payload.get("ambiguity"),
+        )
+
+    def to_data(self) -> dict[str, Any]:
+        data: dict[str, Any] = {
+            "turn_id": self.turn_id,
+            "route_id": self.route_id,
+            "stop": self.stop,
+            "directions": self.directions,
+            "updated_at": self.updated_at,
+            "source_status": self.source_status,
+        }
+        if self.catchability is not None:
+            data["catchability"] = self.catchability
+        if self.ambiguity is not None:
+            data["ambiguity"] = self.ambiguity
+        return data
+
+
+@dataclasses.dataclass(frozen=True)
 class ErrorEvent:
     code: str  # rate_limited|budget_exceeded|session_expired|upstream_error|internal
     message: str
@@ -137,6 +178,7 @@ AgentEvent = Union[
     ToolStartEvent,
     ToolEndEvent,
     RouteCardEvent,
+    ArrivalCardEvent,
     ErrorEvent,
     DoneEvent,
 ]

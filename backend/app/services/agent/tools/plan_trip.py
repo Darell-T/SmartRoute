@@ -17,13 +17,18 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import math
 import os
 import secrets
 from datetime import datetime, timedelta
 
 from app.services import ai_advisor
 from app.services.agent import events as agent_events
-from app.services.agent.tools._location import ResolvedPlace, resolve_named_place
+from app.services.agent.tools._location import (
+    ResolvedPlace,
+    canonical_display_name,
+    resolve_named_place,
+)
 from app.services.agent.tools._types import ToolContext, ToolResult
 from app.services.mta_feed import (
     fetch_service_alerts,
@@ -32,7 +37,7 @@ from app.services.mta_feed import (
     get_stalled_trains,
     parse_service_alerts,
 )
-from app.services.trips import advisor_context, candidates, enrichment, scoring, text
+from app.services.trips import advisor_context, candidates, enrichment, event_crowd, scoring, text
 from app.services.trips import incidents as trip_incidents
 from app.services.trips.itinerary import build_canonical_itinerary, build_chained_itinerary
 from app.services.trips.recommendation_reasons import (
@@ -127,6 +132,21 @@ PLAN_TRIP_SCHEMA = {
                     "this scan is slow and must not run on ordinary requests."
                 ),
             },
+            "avoid_crowds": {
+                "type": "boolean",
+                "description": (
+                    "True when the rider explicitly asks to avoid crowds, busy "
+                    "stations, game traffic, or concert traffic. This makes "
+                    "bounded event evidence mandatory for route comparison."
+                ),
+            },
+            "max_candidates": {
+                "type": "integer",
+                "description": (
+                    "Internal response-mode candidate budget. The orchestrator "
+                    "sets this; do not infer a value from rider wording."
+                ),
+            },
         },
         "required": ["origin", "destination"],
         "additionalProperties": False,
@@ -138,7 +158,7 @@ def _point_label(raw_value: str) -> str:
     value = (raw_value or "").strip()
     if not value or value.lower() == "user":
         return "your location"
-    return text._safe_text(value, 80)
+    return text._safe_text(canonical_display_name(value), 80)
 
 
 def _summary_eta_minutes(route: list[dict], total_duration_seconds: int) -> int:
@@ -523,8 +543,19 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
     parsed_routes = directions_service.parse_response(response)
     if not parsed_routes:
         return ToolResult(ok=False, error="no transit route found between those points")
+    try:
+        max_candidates = max(1, int(tool_input.get("max_candidates") or len(parsed_routes)))
+    except (TypeError, ValueError):
+        max_candidates = len(parsed_routes)
+    parsed_routes = parsed_routes[:max_candidates]
 
     route_ids, bus_route_ids = candidates._collect_route_and_bus_ids(parsed_routes)
+    avoid_crowds = bool(tool_input.get("avoid_crowds"))
+    event_task = (
+        asyncio.create_task(event_crowd.collect_route_event_evidence(parsed_routes, ctx))
+        if avoid_crowds
+        else None
+    )
 
     try:
         raw_alerts, stalled, stalled_buses = await asyncio.wait_for(
@@ -545,6 +576,18 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
     parsed_alerts = parse_service_alerts(raw_alerts) if raw_alerts else []
     relevant_alerts = filter_alerts_for_routes(parsed_alerts, route_ids)
 
+    event_evidence_status: event_crowd.EventEvidenceStatus = "not_required"
+    event_impacts: list[dict] = []
+    event_failures: list[str] = []
+    if event_task is not None:
+        try:
+            event_evidence_status, event_impacts, event_failures = await event_task
+        except Exception as exc:
+            print(f"[agent-plan_trip] event enrichment failed: {type(exc).__name__}")
+            event_evidence_status = "provider_unavailable"
+            event_impacts = []
+            event_failures = [type(exc).__name__]
+
     incidents: list = []
     if tool_input.get("include_incident_scan"):
         incident_context = trip_incidents.build_candidate_stop_context(ctx.gtfs, parsed_routes)
@@ -563,6 +606,7 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
         incidents=incidents,
         stalled_trains=stalled,
         stalled_buses=stalled_buses,
+        ticketmaster_event_impacts=event_impacts,
         mode=advisor_context.PlanningMode.INTELLIGENCE,
     )
 
@@ -574,7 +618,7 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
         print(f"[agent-plan_trip] advisor timed out ({TRIP_ADVISOR_TIMEOUT_S:.2f}s)")
         raw_recommendation = "[ROUTE:0] Live reasoning timed out; showing the fastest option."
     except Exception as exc:
-        print(f"[agent-plan_trip] advisor unavailable: {exc!r}")
+        print(f"[agent-plan_trip] advisor unavailable type={type(exc).__name__}")
         raw_recommendation = "[ROUTE:0] Live reasoning was unavailable; showing the fastest option."
 
     chosen_index, candidate_analysis = advisor_context.parse_advisor_selection(
@@ -582,10 +626,96 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
         len(parsed_routes),
     )
 
+    scored = scoring._score_routes(
+        parsed_routes,
+        relevant_alerts,
+        ticketmaster_event_impacts=event_impacts,
+    )
+    selection_reason = "advisor_selection"
+    if avoid_crowds and event_impacts:
+        # Crowd avoidance is a hard evidence contract. The model may explain
+        # the evidence, but the actual route choice remains deterministic.
+        chosen_index = min(
+            scored,
+            key=lambda row: (
+                row["score"],
+                row["event_crowd_penalty"],
+                row["total_minutes"],
+                row["index"],
+            ),
+        )["index"]
+        selection_reason = "risk_adjusted_event_score"
+    print(
+        f"[agent-plan_trip] candidates={len(parsed_routes)} selected={chosen_index} "
+        f"reason={selection_reason} event_status={event_evidence_status} "
+        f"event_impacts={len(event_impacts)}"
+    )
+
     chosen_route = parsed_routes[chosen_index]
     await enrichment._enrich_route(ctx.gtfs, chosen_route)
+    first_leg_arrival_context: dict | None = None
+    if tool_input.get("include_first_leg_arrivals"):
+        first_transit = next(
+            (step for step in chosen_route if step.get("type") in {"SUBWAY", "BUS"}),
+            None,
+        )
+        if first_transit:
+            departure_coords = first_transit.get("departure_coords") or {}
+            try:
+                boarding_latitude = float(
+                    departure_coords.get("latitude", departure_coords.get("lat"))
+                )
+                boarding_longitude = float(
+                    departure_coords.get("longitude", departure_coords.get("lng"))
+                )
+                walk_minutes = max(
+                    0,
+                    math.ceil(
+                        geo.distance_meters(
+                            origin_place.latitude,
+                            origin_place.longitude,
+                            boarding_latitude,
+                            boarding_longitude,
+                        )
+                        / 80
+                    ),
+                )
+                from app.services.agent.tools import lookup_arrivals
 
-    scored = scoring._score_routes(parsed_routes, relevant_alerts)
+                arrival_result = await asyncio.wait_for(
+                    lookup_arrivals.execute(
+                        {
+                            "mode": str(first_transit.get("type") or "").lower(),
+                            "route_id": scoring._step_route_id(first_transit),
+                            "stop_query": first_transit.get("departure_stop"),
+                            "direction": first_transit.get("direction"),
+                            "user_location": {
+                                "latitude": boarding_latitude,
+                                "longitude": boarding_longitude,
+                            },
+                            "walking_minutes": walk_minutes,
+                            "limit": 3,
+                        },
+                        ctx,
+                    ),
+                    timeout=3.0,
+                )
+                if arrival_result.ok and isinstance(arrival_result.data, dict):
+                    catchability = arrival_result.data.get("catchability")
+                    if isinstance(catchability, dict):
+                        first_leg_arrival_context = {
+                            "route_id": scoring._step_route_id(first_transit),
+                            "stop_name": first_transit.get("departure_stop"),
+                            "source_status": arrival_result.data.get("source_status"),
+                            "walking_minutes": catchability.get("walking_minutes"),
+                            "catchable_arrival_minutes": catchability.get(
+                                "catchable_arrival_minutes"
+                            ),
+                            "arrival_minutes": catchability.get("arrival_minutes") or [],
+                        }
+            except (asyncio.TimeoutError, TypeError, ValueError):
+                first_leg_arrival_context = None
+
     display_candidates = candidates._build_route_candidates(parsed_routes, chosen_index, candidate_analysis, scored)
     score_by_index = scoring._score_by_index(scored)
     selected_score = score_by_index[chosen_index]
@@ -597,6 +727,17 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
             if index != chosen_index
         ],
     )
+    selected_event_impacts = [
+        impact for impact in event_impacts if impact.get("route_index") == chosen_index
+    ]
+    if avoid_crowds and event_impacts:
+        structured_reasons.append(
+            {
+                "code": "lower_event_crowd_exposure",
+                "event_count": len(selected_event_impacts),
+                "provider_status": event_evidence_status,
+            }
+        )
     canonical_reason_copy = [
         rendered
         for rendered in (format_recommendation_reason(reason) for reason in structured_reasons)
@@ -655,6 +796,20 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
                 "alert_headlines": alert_headlines,
                 "reason": reason,
                 "structured_recommendation_reasons": structured_reasons if is_recommended else [],
+                "event_evidence_status": event_evidence_status,
+                "event_crowd_penalty": score_by_index[index].get("event_crowd_penalty", 0),
+                "event_impacts": [
+                    {
+                        "event_name": impact.get("title"),
+                        "venue_name": impact.get("venue"),
+                        "exposure_window": impact.get("exposure_window"),
+                        "distance_meters": impact.get("distance_meters"),
+                        "risk_score": impact.get("risk_score"),
+                    }
+                    for impact in event_impacts
+                    if impact.get("route_index") == index
+                ][:3],
+                "first_leg_arrival": first_leg_arrival_context if is_recommended else None,
             }
         )
         summary = {
@@ -665,6 +820,8 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
             # recommendation facts above always come from deterministic
             # candidate scores.
             "reason": reason or (canonical_reason_copy[0] if canonical_reason_copy else None),
+            "event_evidence_status": event_evidence_status,
+            "first_leg_arrival": first_leg_arrival_context if is_recommended else None,
         }
         events.append(
             agent_events.RouteCardEvent(
@@ -680,12 +837,34 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
                 itinerary=itinerary,
             )
         )
+        first_transit = next(
+            (step for step in route if step.get("type") in {"SUBWAY", "BUS"}),
+            None,
+        )
+        initial_walk_seconds = 0
+        for leg in itinerary.get("legs") or []:
+            if str(leg.get("mode") or "").upper() != "WALK":
+                break
+            initial_walk_seconds += int(leg.get("walk_seconds") or 0)
         session_cards.append(
             {
                 "card_id": card_id,
                 "role": "recommended" if is_recommended else "alternative",
                 "lines": lines,
                 "eta_minutes": eta_minutes,
+                "destination": destination_point,
+                "first_boarding": (
+                    {
+                        "route_id": scoring._step_route_id(first_transit),
+                        "mode": str(first_transit.get("type") or "").lower(),
+                        "stop_name": first_transit.get("departure_stop"),
+                        "coordinates": first_transit.get("departure_coords"),
+                        "direction": first_transit.get("direction"),
+                        "walking_minutes": round(initial_walk_seconds / 60),
+                    }
+                    if first_transit
+                    else None
+                ),
             }
         )
 
@@ -696,7 +875,15 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
     )
     return ToolResult(
         ok=True,
-        data={"candidates": digest},
+        data={
+            "candidates": digest,
+            "event_evidence": {
+                "status": event_evidence_status,
+                "impact_count": len(event_impacts),
+                "provider_failure_count": len(event_failures),
+            },
+            "selection_reason": selection_reason,
+        },
         summary=tool_summary,
         events=events,
         session_route_cards=session_cards,
