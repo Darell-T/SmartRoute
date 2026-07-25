@@ -185,6 +185,10 @@ Do not commit real secrets. Use local `.env` files and hosting provider environm
 | `NEXT_PUBLIC_MAPBOX_TOKEN` | Frontend search | Yes for destination search | Mapbox token for destination autocomplete and retrieval. |
 | `GOOGLE_ROUTES_API_KEY` | Backend | Yes for trip planning | Google Routes API key for transit route candidates. |
 | `ANTHROPIC_API_KEY` | Backend | Yes for hosted recommendation reasoning | Provider key used by the route recommendation service. |
+| `AGENT_AUTO_MODEL` | Backend | Optional | Anthropic model for Auto chat mode; defaults to the repository's Sonnet configuration. `AGENT_MODEL` remains a backwards-compatible alias. |
+| `AGENT_QUICK_MODEL` | Backend | Optional | Anthropic model for Quick chat mode; defaults to the repository's Haiku configuration. |
+| `AGENT_AUTO_MAX_ROUTE_CANDIDATES` | Backend | Optional | Auto candidate budget; defaults to `5`. |
+| `AGENT_QUICK_MAX_ROUTE_CANDIDATES` | Backend | Optional | Quick candidate budget; defaults to `2`. |
 | `AGENT_MOCK_MODE` | Backend | Optional | Set to `1` locally to stream deterministic chat preview data without model, route, or transit-provider requests. Never enable in production. |
 | `AGENT_MOCK_STEP_DELAY_MS` | Backend | Optional | Delay between simulated chat events; defaults to `280` for realistic UI testing. |
 | `SMARTROUTE_SYSTEM_PROMPT` | Backend | Optional | Preferred environment override for the route-ranking system prompt. |
@@ -285,8 +289,13 @@ endpoint with a server-side key, an explicit NYC `latlong`, miles radius, bounde
 pagination, local distance filtering, event ID de-duplication, and bounded timeout.
 It does not invent start times for date-only/TBA/TBD events, excludes cancelled
 events from crowd predictions, and withholds crowd windows for postponed or
-rescheduled entries. Adding `TICKETMASTER_API_KEY` is the only deployment action
-needed to enable this integration; no frontend key is used.
+rescheduled entries. For an explicit crowd-avoidance trip, `plan_trip` now searches
+bounded route hubs concurrently, associates normalized events to each candidate by
+distance and travel window, and applies a capped deterministic crowd penalty before
+the recommendation is emitted. A missing or failed provider remains distinct from a
+successful search with no relevant events and never prevents route planning. Adding
+`TICKETMASTER_API_KEY` enables this server-side evidence path; no frontend key is
+used.
 
 An opt-in live smoke test makes one small request only when both
 `TICKETMASTER_API_KEY` and `TICKETMASTER_LIVE_SMOKE_TEST=1` are present. It emits a
