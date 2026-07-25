@@ -316,6 +316,9 @@ class PlanTripItineraryTests(unittest.IsolatedAsyncioTestCase):
         first = result.data["candidates"][0]
         self.assertEqual(first["event_impacts"][0]["event_name"], "Concert at the Garden")
         self.assertGreater(first["event_crowd_penalty"], 0)
+        self.assertEqual(result.data["evidence"]["events"]["status"], "current")
+        self.assertEqual(result.data["evidence"]["events"]["payload"], {"count": 1})
+        self.assertNotIn("latitude", str(result.data["evidence"]))
 
     async def test_ticketmaster_failure_does_not_fail_route_planning(self):
         with patch.object(

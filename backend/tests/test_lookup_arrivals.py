@@ -42,6 +42,22 @@ class FakeGtfs:
         return [f"{stop_id}N", f"{stop_id}S"]
 
 
+class FakeScheduledGtfs(FakeGtfs):
+    def get_scheduled_arrivals(self, **kwargs):
+        return {
+            "status": "scheduled",
+            "valid_until": "2027-01-16T05:00:00+00:00",
+            "predictions": [
+                {
+                    "arrival_time": NOW + 480,
+                    "direction": "downtown",
+                    "direction_label": "Coney Island-bound",
+                    "trip_id": "scheduled-q",
+                }
+            ],
+        }
+
+
 def _ctx(*, session=None, origin=None):
     return ToolContext(
         gtfs=FakeGtfs(),
@@ -169,6 +185,20 @@ class SubwayArrivalLookupTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(result.data["source_status"], "provider_unavailable")
         self.assertEqual(result.data["directions"], [])
+
+    async def test_provider_unavailable_falls_back_to_distinct_scheduled_data(self):
+        context = _ctx()
+        context.gtfs = FakeScheduledGtfs()
+        result = await self._run(
+            {"route_id": "Q", "stop_query": "Newkirk Plaza"},
+            [],
+            ctx=context,
+        )
+        self.assertEqual(result.data["source_status"], "scheduled")
+        arrival = result.data["directions"][0]["arrivals"][0]
+        self.assertFalse(arrival["realtime"])
+        self.assertEqual(result.data["evidence"]["source"], "mta_static_gtfs")
+        self.assertEqual(result.data["evidence"]["status"], "current")
 
     async def test_unserved_route_does_not_choose_an_unrelated_station(self):
         result = await self._run(

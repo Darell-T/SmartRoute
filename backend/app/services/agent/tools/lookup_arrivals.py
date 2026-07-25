@@ -12,6 +12,7 @@ from typing import Iterable
 from app.services import mta_feed
 from app.services.agent import events as agent_events
 from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.evidence import evidence_envelope
 from app.services.mta.feeds import parse_feed_message
 from app.utils.geo import distance_meters
 
@@ -225,12 +226,19 @@ def _empty_payload(
     stop_name: str = "Transit stop",
     ambiguity: list[dict] | None = None,
 ) -> dict:
+    observed = datetime.now(timezone.utc)
     return {
         "route_id": route_id,
         "stop": {"id": "", "name": stop_name},
         "directions": [],
-        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": observed.isoformat(),
         "source_status": status,
+        "evidence": evidence_envelope(
+            "mta_arrivals",
+            {"directions": []},
+            observed_at=observed,
+            available=False,
+        ).to_dict(observed),
         **({"ambiguity": ambiguity} if ambiguity is not None else {}),
     }
 
@@ -243,6 +251,7 @@ def _arrival_payload(
     updated_at: int,
     status: str,
     walking_minutes: int | None = None,
+    valid_until: object = None,
 ) -> dict:
     directions = []
     now = int(time.time())
@@ -291,7 +300,63 @@ def _arrival_payload(
             all_minutes,
             walking_minutes=walking_minutes,
         )
+    available = status not in {"provider_unavailable", "stop_not_resolved"}
+    envelope = evidence_envelope(
+        "mta_gtfs_rt" if status != "scheduled" else "mta_static_gtfs",
+        {"directions": directions},
+        observed_at=datetime.fromtimestamp(updated_at, timezone.utc),
+        ttl_seconds=FEED_STALE_AFTER_S if status != "scheduled" else None,
+        valid_until=valid_until,
+        available=available,
+    )
+    payload["evidence"] = envelope.to_dict(datetime.fromtimestamp(now, timezone.utc))
     return payload
+
+
+async def _scheduled_fallback(
+    *,
+    ctx: ToolContext,
+    route_id: str,
+    stop: dict,
+    child_ids: set[str],
+    requested_direction: str | None,
+    limit: int,
+    walking_minutes: int | None,
+) -> dict | None:
+    lookup = getattr(ctx.gtfs, "get_scheduled_arrivals", None)
+    if not callable(lookup):
+        return None
+    now = int(time.time())
+    try:
+        result = await asyncio.to_thread(
+            lookup,
+            route_id=route_id,
+            stop_ids=sorted(child_ids),
+            direction=requested_direction,
+            now=datetime.fromtimestamp(now, timezone.utc),
+            limit=limit,
+        )
+    except Exception:
+        return None
+    if not isinstance(result, dict) or result.get("status") != "scheduled":
+        return None
+    grouped: dict[str, list[dict]] = {}
+    for value in result.get("predictions") or []:
+        direction = _normalize_direction(value.get("direction")) or "unknown"
+        grouped.setdefault(direction, []).append(value)
+    grouped = {
+        direction: _dedupe_predictions(values, limit=limit)
+        for direction, values in grouped.items()
+    }
+    return _arrival_payload(
+        route_id=route_id,
+        stop=stop,
+        grouped=grouped,
+        updated_at=now,
+        status="scheduled",
+        walking_minutes=walking_minutes,
+        valid_until=result.get("valid_until"),
+    )
 
 
 async def _lookup_subway(tool_input: dict, ctx: ToolContext, route_id: str, limit: int) -> ToolResult:
@@ -325,8 +390,41 @@ async def _lookup_subway(tool_input: dict, ctx: ToolContext, route_id: str, limi
 
     child_ids = {str(item) for item in ctx.gtfs.get_child_stop_ids(stop["stop_id"])}
     child_ids.add(str(stop["stop_id"]))
+    requested_direction = _normalize_direction(
+        tool_input.get("direction") or (boarding or {}).get("direction")
+    )
+    walking_minutes = tool_input.get("walking_minutes")
+    if walking_minutes is None:
+        walking_minutes = (boarding or {}).get("walking_minutes")
+    normalized_walking = int(walking_minutes) if walking_minutes is not None else None
+    if location:
+        stop["distance_m"] = round(
+            distance_meters(
+                location[0],
+                location[1],
+                float(stop["stop_lat"]),
+                float(stop["stop_lon"]),
+            ),
+            1,
+        )
     metadata = await mta_feed.fetch_feeds_with_metadata([route_id], "agent_arrivals")
     if not metadata:
+        scheduled = await _scheduled_fallback(
+            ctx=ctx,
+            route_id=route_id,
+            stop=stop,
+            child_ids=child_ids,
+            requested_direction=requested_direction,
+            limit=limit,
+            walking_minutes=normalized_walking,
+        )
+        if scheduled is not None:
+            return ToolResult(
+                ok=True,
+                data=scheduled,
+                summary=f"scheduled arrivals for {route_id} at {stop['stop_name']}",
+                events=[agent_events.ArrivalCardEvent.from_lookup(ctx.turn_id, scheduled)],
+            )
         payload = _arrival_payload(
             route_id=route_id,
             stop=stop,
@@ -364,9 +462,6 @@ async def _lookup_subway(tool_input: dict, ctx: ToolContext, route_id: str, limi
                 continue
             predictions.append(row)
 
-    requested_direction = _normalize_direction(
-        tool_input.get("direction") or (boarding or {}).get("direction")
-    )
     now = int(time.time())
     future = [
         value
@@ -394,26 +489,34 @@ async def _lookup_subway(tool_input: dict, ctx: ToolContext, route_id: str, limi
         if grouped
         else "no_predictions"
     )
-    if location:
-        stop["distance_m"] = round(
-            distance_meters(
-                location[0],
-                location[1],
-                float(stop["stop_lat"]),
-                float(stop["stop_lon"]),
-            ),
-            1,
+    if status == "stale" or (not feed_timestamps and not grouped):
+        scheduled = await _scheduled_fallback(
+            ctx=ctx,
+            route_id=route_id,
+            stop=stop,
+            child_ids=child_ids,
+            requested_direction=requested_direction,
+            limit=limit,
+            walking_minutes=normalized_walking,
         )
-    walking_minutes = tool_input.get("walking_minutes")
-    if walking_minutes is None:
-        walking_minutes = (boarding or {}).get("walking_minutes")
+        if scheduled is not None:
+            return ToolResult(
+                ok=True,
+                data=scheduled,
+                summary=f"scheduled arrivals for {route_id} at {stop['stop_name']}",
+                events=[agent_events.ArrivalCardEvent.from_lookup(ctx.turn_id, scheduled)],
+            )
+    if status == "stale":
+        # Preserve the stale provenance but do not feed expired predictions to
+        # scoring, catchability, or the conversational model.
+        grouped = {}
     payload = _arrival_payload(
         route_id=route_id,
         stop=stop,
         grouped=grouped,
         updated_at=latest_feed,
         status=status,
-        walking_minutes=int(walking_minutes) if walking_minutes is not None else None,
+        walking_minutes=normalized_walking,
     )
     return ToolResult(
         ok=True,

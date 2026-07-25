@@ -11,6 +11,14 @@
 
 import type { RouteStep, ServiceAlert } from "@/types/api";
 
+export interface EvidenceEnvelope<T> {
+  source: string;
+  observedAt: string;
+  validUntil?: string;
+  status: "current" | "stale" | "unavailable";
+  payload: T;
+}
+
 /** `meta` — first event of every turn; carries the (possibly new) session. */
 export interface MetaEvent {
   type: "meta";
@@ -272,6 +280,7 @@ export interface ArrivalCardEvent {
   directions: ArrivalDirection[];
   updated_at: string;
   source_status: ArrivalSourceStatus;
+  evidence?: EvidenceEnvelope<{ directions: ArrivalDirection[] }>;
   catchability?: {
     walking_minutes: number;
     boarding_buffer_minutes: number;
@@ -464,6 +473,11 @@ function buildEvent(eventType: string, data: unknown): AgentEvent | null {
         directions: data.directions as ArrivalDirection[],
         updated_at: data.updated_at,
         source_status: data.source_status as ArrivalSourceStatus,
+        ...(isRecord(data.evidence)
+          ? {
+              evidence: data.evidence as unknown as ArrivalCardEvent["evidence"],
+            }
+          : {}),
         ...(isRecord(data.catchability)
           ? { catchability: data.catchability as ArrivalCardEvent["catchability"] }
           : {}),

@@ -26,6 +26,7 @@ from app.services.agent import intelligence
 from app.services.agent import model_request
 from app.services.agent import policy as agent_policy
 from app.services.agent import prompt as agent_prompt
+from app.services.agent import quick_escalation
 from app.services.agent import session as session_module
 from app.services.agent.tools import TOOL_REGISTRY, TOOLS, ToolContext, ToolResult
 
@@ -61,6 +62,9 @@ class TurnTrace:
 
     tool_calls: list[tuple[str, dict]] = dataclasses.field(default_factory=list)
     final_text: str = ""
+    initial_mode: str = ""
+    final_mode: str = ""
+    escalation_reason: str | None = None
 
 
 def _mock_trip_copy(
@@ -503,11 +507,18 @@ async def _execute_tool_round(
     )
 
     tool_result_content = []
+    escalation_reason = None
+    required_tools = set(parsed_intent.required_evidence.required_tools())
     for block, result in zip(tool_use_blocks, outcomes):
         name = getattr(block, "name", "")
         tool_input = tool_inputs[block.id]
         duration_ms = round((time.monotonic() - start_times[block.id]) * 1000)
         tool_calls_this_turn.append((name, tool_input))
+        escalation_reason = escalation_reason or quick_escalation.reason_for_tool_result(
+            name,
+            result,
+            required=name in required_tools or name == "plan_trip",
+        )
 
         if result.ok:
             wrapped = {"source": name, "data": result.data, "untrusted": True}
@@ -542,7 +553,10 @@ async def _execute_tool_round(
             if name == "plan_trip":
                 session_module.mark_pending_trip_failed(session, tool_input, reason)
 
-    yield {"__tool_result_message__": {"role": "user", "content": tool_result_content}}
+    yield {
+        "__tool_result_message__": {"role": "user", "content": tool_result_content},
+        "__quick_escalation_reason__": escalation_reason,
+    }
 
 
 async def _stream_turn(
@@ -557,6 +571,8 @@ async def _stream_turn(
     trace: TurnTrace | None,
 ) -> AsyncIterator[agent_events.AgentEvent]:
     mode_policy = agent_policy.policy_for_mode(response_presentation)
+    initial_mode = mode_policy.mode
+    escalation_reason: str | None = None
     parsed_intent = intelligence.parse_intent(message)
     if intelligence.is_new_trip_request(message):
         session_module.reset_for_new_trip(session)
@@ -629,6 +645,13 @@ async def _stream_turn(
             )
             if not result.ok:
                 tool_failures += 1
+            reason = quick_escalation.reason_for_tool_result(
+                "poi_search", result, required=True
+            )
+            if mode_policy.mode == "quick" and escalation_reason is None and reason:
+                escalation_reason = reason
+                mode_policy = agent_policy.policy_for_mode("auto")
+                print(f"[agent-escalation] turn={turn_id} quick_to_auto=1 reason={reason}")
             if result.summary:
                 session_module.append_tool_summary(session, "poi_search", result.summary)
 
@@ -666,6 +689,16 @@ async def _stream_turn(
                 )
                 if not result.ok:
                     tool_failures += 1
+                reason = quick_escalation.reason_for_tool_result(
+                    "lookup_arrivals", result, required=True
+                )
+                if mode_policy.mode == "quick" and escalation_reason is None and reason:
+                    escalation_reason = reason
+                    mode_policy = agent_policy.policy_for_mode("auto")
+                    print(
+                        f"[agent-escalation] turn={turn_id} "
+                        f"quick_to_auto=1 reason={reason}"
+                    )
                 if result.summary:
                     session_module.append_tool_summary(session, "lookup_arrivals", result.summary)
                 for event in result.events:
@@ -728,6 +761,18 @@ async def _stream_turn(
             ):
                 if isinstance(item, dict) and "__tool_result_message__" in item:
                     tool_result_message = item["__tool_result_message__"]
+                    reason = item.get("__quick_escalation_reason__")
+                    if (
+                        mode_policy.mode == "quick"
+                        and escalation_reason is None
+                        and reason
+                    ):
+                        escalation_reason = str(reason)
+                        mode_policy = agent_policy.policy_for_mode("auto")
+                        print(
+                            f"[agent-escalation] turn={turn_id} "
+                            f"quick_to_auto=1 reason={escalation_reason}"
+                        )
                 else:
                     if isinstance(item, agent_events.RouteCardEvent) and item.role == "recommended":
                         recommended_route_card = item
@@ -795,6 +840,9 @@ async def _stream_turn(
         if trace is not None:
             trace.tool_calls = list(tool_calls_this_turn)
             trace.final_text = final_text
+            trace.initial_mode = initial_mode
+            trace.final_mode = mode_policy.mode
+            trace.escalation_reason = escalation_reason
         budget.record_usage_cost(input_tokens, output_tokens)
 
     total_ms = (time.monotonic() - turn_start) * 1000
@@ -804,7 +852,9 @@ async def _stream_turn(
     # existing sess[:6] logging convention (session.py, routers/agent_chat.py).
     print(
         f"[agent] turn={turn_id} sess={session_id[:6]} rounds={round_num} "
-        f"mode={mode_policy.mode} model={agent_policy.safe_model_label(mode_policy.model)} "
+        f"mode={initial_mode} final_mode={mode_policy.mode} "
+        f"escalation={escalation_reason or 'none'} "
+        f"model={agent_policy.safe_model_label(mode_policy.model)} "
         f"candidate_budget={mode_policy.max_route_candidates} retries={mode_policy.retry_count} "
         f"required_tools={required_tools} optional_enrichment="
         f"{int(mode_policy.optional_enrichment)} tools={len(tool_calls_this_turn)} "

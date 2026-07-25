@@ -16,6 +16,7 @@ from enum import Enum
 import re
 from typing import Any, Iterable, Mapping
 
+from app.services.evidence import EvidenceEnvelope, current_payload
 from app.services.trips import candidates, text
 
 
@@ -126,6 +127,7 @@ def build_advisor_payload(
     stalled_trains: Iterable[object] | None = None,
     stalled_buses: Iterable[object] | None = None,
     ticketmaster_event_impacts: Iterable[object] | None = None,
+    evidence: Mapping[str, EvidenceEnvelope[Any]] | None = None,
     mode: PlanningMode | str | None = PlanningMode.INTELLIGENCE,
 ) -> dict[str, Any]:
     """Build a common advisor contract for endpoint, agent, and replays.
@@ -139,25 +141,39 @@ def build_advisor_payload(
     """
 
     parsed_mode = parse_planning_mode(mode)
+    envelopes = dict(evidence or {})
+
+    def fresh_values(name: str, fallback: Iterable[object] | None) -> list[object]:
+        envelope = envelopes.get(name)
+        if envelope is None:
+            return list(fallback or ())
+        return list(current_payload(envelope, empty=[]))
+
     payload: dict[str, Any] = {
         "routes": routes,
         "route_candidate_labels": candidates._build_route_candidate_labels(routes),
-        "service_alerts": list(service_alerts or ()),
+        "service_alerts": fresh_values("alerts", service_alerts),
         "planning_mode": parsed_mode.value,
         "incidents": [],
         "stalled_trains": [],
         "stalled_buses": [],
         "ticketmaster_event_impacts": [],
+        "evidence": {
+            name: envelope.to_model_dict(empty=[])
+            for name, envelope in sorted(envelopes.items())
+        },
     }
     if parsed_mode is PlanningMode.BASELINE:
         return payload
 
     payload.update(
         {
-            "incidents": list(incidents or ()),
-            "stalled_trains": list(stalled_trains or ()),
-            "stalled_buses": list(stalled_buses or ()),
-            "ticketmaster_event_impacts": normalize_ticketmaster_event_impacts(ticketmaster_event_impacts),
+            "incidents": fresh_values("advisor", incidents),
+            "stalled_trains": fresh_values("subway_vehicles", stalled_trains),
+            "stalled_buses": fresh_values("bus_vehicles", stalled_buses),
+            "ticketmaster_event_impacts": normalize_ticketmaster_event_impacts(
+                fresh_values("events", ticketmaster_event_impacts)
+            ),
         }
     )
     return payload

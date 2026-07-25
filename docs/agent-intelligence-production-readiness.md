@@ -71,6 +71,74 @@ documented Sonnet 5 incompatibilities, and the next failure will expose the
 safe structured cause. `backend/scripts/run_anthropic_agent_smoke.py --live`
 is the bounded follow-up command once credentialed network use is approved.
 
+## P1 completion pass
+
+All model- and scoring-facing live inputs now use one `EvidenceEnvelope`
+contract with source, observation time, optional expiry, current/stale/
+unavailable status, and payload. Expired or unavailable payloads are removed
+before advisor/model input while the bounded provenance remains visible.
+This covers explicit arrivals, MTA alerts, subway and bus vehicle evidence,
+Ticketmaster event impacts, and incident-advisor evidence. Empty current
+evidence remains distinct from unavailable evidence.
+
+Quick now escalates to Auto only from allowlisted deterministic signals:
+unresolved places, ambiguous stations/destinations, unsatisfied mandatory
+constraints, conflicting mandatory evidence, effectively tied final scores,
+or a required-tool failure with an Auto recovery path. The escalation is
+one-way and capped at one per turn. Existing tool results remain in the
+message sequence, so escalation does not repeat already-fetched evidence.
+Turn traces and bounded logs record initial mode, final mode, and reason.
+
+The arrivals tool now falls back from absent, unparseable, or expired subway
+GTFS-RT to a separately labeled static-GTFS schedule. The schedule index
+handles NYC time, prior-day times beyond 24:00, calendar ranges, added/removed
+calendar exceptions, frequency headways, station-complex child stops, and
+direction. It is built offline by
+`backend/scripts/build_scheduled_arrival_artifact.py`, loaded once at startup,
+and never served after its validity date. The repository's older partial GTFS
+database does not contain calendars or arrival times, so it is not treated as
+a valid schedule and no scheduled production result is claimed until a fresh
+artifact is generated.
+
+Production shadow comparison was already non-user-facing, fail-closed, and
+privacy-minimized. It now also applies `ROUTE_SHADOW_SAMPLE_RATE` (default
+0.05); disabled, unsampled, timeout, evaluator failure, and sink failure paths
+still return the exact displayed result object.
+
+### P1 measurement boundary
+
+The required 30 paired Auto/Quick staging traces were not executed because
+this environment did not authorize sending the configured Anthropic
+credential. No Quick latency or cost advantage is claimed. The deterministic
+suite validates trace fields, budgets, ordinary no-escalation behavior, and a
+single evidence-reusing escalation; hosted p50/p95 measurements remain an
+approved-environment follow-up.
+
+### P1 verification evidence
+
+```text
+backend\.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider
+556 passed, 1 skipped
+
+frontend complete unit suite
+162 passed, 0 failed
+
+frontend\node_modules\.bin\tsc.cmd --noEmit
+PASS
+
+frontend\node_modules\.bin\eslint.cmd .
+PASS — 0 errors, 22 pre-existing warnings
+
+frontend\node_modules\.bin\next.cmd build
+PASS — compiled, typechecked, generated 12/12 static pages
+```
+
+The production build used a local empty `/api/subway-stops` fixture because
+the checked-in frontend environment targets a loopback backend that was not
+running. The first unmodified build attempt exhausted that proxy's three
+65-second retries. The fixture validates the production compilation and static
+generation path only; it is not evidence about live subway-stop data.
+
 ## Executive finding
 
 Before this pass, Ticketmaster was a normalized standalone agent tool but was not

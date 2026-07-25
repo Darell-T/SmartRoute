@@ -113,6 +113,14 @@ async def lifespan(app: FastAPI):
         )
     except Exception as exc:
         print(f"[startup] stop-pattern index load FAILED (enrichment degraded): {exc!r}")
+    try:
+        schedule_loaded = gtfs.load_scheduled_arrivals()
+        print(f"[startup] scheduled-arrival fallback loaded={int(schedule_loaded)}")
+    except Exception as exc:
+        print(
+            "[startup] scheduled-arrival fallback unavailable "
+            f"type={type(exc).__name__}"
+        )
     app.state.gtfs = gtfs
     # 511NY snapshots are process-local. This deployment currently runs one
     # application process; with multiple workers, each would poll separately,

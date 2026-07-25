@@ -116,6 +116,7 @@ class ArrivalCardEvent:
     source_status: str
     catchability: dict | None = None
     ambiguity: list | None = None
+    evidence: dict | None = None
     type: str = "arrival_card"
 
     @classmethod
@@ -129,6 +130,7 @@ class ArrivalCardEvent:
             source_status=str(payload.get("source_status") or "provider_unavailable"),
             catchability=payload.get("catchability"),
             ambiguity=payload.get("ambiguity"),
+            evidence=payload.get("evidence"),
         )
 
     def to_data(self) -> dict[str, Any]:
@@ -144,6 +146,8 @@ class ArrivalCardEvent:
             data["catchability"] = self.catchability
         if self.ambiguity is not None:
             data["ambiguity"] = self.ambiguity
+        if self.evidence is not None:
+            data["evidence"] = self.evidence
         return data
 
 

@@ -1,5 +1,7 @@
 import os
 import threading
+from datetime import datetime
+from pathlib import Path
 
 import psycopg2
 import psycopg2.pool
@@ -87,6 +89,41 @@ def _get_pool():
 
 
 class GTFSStaticData:
+
+    def load_scheduled_arrivals(self, path: str | Path | None = None) -> bool:
+        """Load the optional preprocessed full-GTFS schedule once at startup."""
+
+        from app.services.agent.tools.scheduled_arrivals import ScheduledArrivalIndex
+
+        candidate = Path(
+            path
+            or os.getenv("GTFS_SCHEDULE_ARTIFACT", "")
+            or Path(__file__).resolve().parent.parent / "data" / "scheduled_arrivals.json"
+        )
+        if not candidate.is_file():
+            return False
+        self.__dict__["_scheduled_arrival_index"] = ScheduledArrivalIndex.load(candidate)
+        return True
+
+    def get_scheduled_arrivals(
+        self,
+        *,
+        route_id: str,
+        stop_ids,
+        direction: str | None,
+        now: datetime,
+        limit: int,
+    ):
+        index = self.__dict__.get("_scheduled_arrival_index")
+        if index is None:
+            return {"status": "unavailable", "predictions": []}
+        return index.lookup(
+            route_id=route_id,
+            stop_ids=stop_ids,
+            direction=direction,
+            now=now,
+            limit=limit,
+        )
 
     # ------------------------------------------------------------------
     # Simplified my over engineered support for concurrent users

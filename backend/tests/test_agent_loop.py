@@ -72,6 +72,17 @@ async def _fake_plan_trip_tool(tool_input, ctx):
     )
 
 
+async def _fake_ambiguous_plan_trip_tool(tool_input, ctx):
+    return ToolResult(
+        ok=True,
+        data={
+            "source_status": "stop_not_resolved",
+            "ambiguity": [{"name": "34 St"}, {"name": "34 St-Hudson Yards"}],
+        },
+        summary="destination is ambiguous",
+    )
+
+
 async def _fake_arrivals_tool(tool_input, ctx):
     payload = {
         "route_id": tool_input["route_id"],
@@ -328,6 +339,51 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(trace.tool_calls[0][1]["max_candidates"], 2)
         self.assertFalse(trace.tool_calls[0][1]["avoid_crowds"])
         self.assertFalse(trace.tool_calls[0][1]["include_first_leg_arrivals"])
+        self.assertEqual(trace.initial_mode, "quick")
+        self.assertEqual(trace.final_mode, "quick")
+        self.assertIsNone(trace.escalation_reason)
+
+    async def test_quick_escalates_once_and_reuses_tool_result_context(self):
+        rounds = [
+            {
+                "tool_use": [
+                    {
+                        "id": "tu_1",
+                        "name": "plan_trip",
+                        "input": {"destination": "34th Street"},
+                    }
+                ],
+                "stop_reason": "tool_use",
+            },
+            {"text": ["Which 34th Street stop do you mean?"], "stop_reason": "end_turn"},
+        ]
+        registry = _test_registry()
+        registry["plan_trip"] = ToolSpec(
+            schema={"name": "plan_trip"},
+            executor=_fake_ambiguous_plan_trip_tool,
+            label_fn=lambda _input: "Finding routesâ€¦",
+            timeout_s=5.0,
+        )
+        trace = self.loop.TurnTrace()
+
+        await self._run(
+            rounds,
+            message="Take me to 34th Street",
+            response_presentation="quick",
+            tool_registry=registry,
+            trace=trace,
+        )
+
+        self.assertEqual(trace.initial_mode, "quick")
+        self.assertEqual(trace.final_mode, "auto")
+        self.assertEqual(
+            trace.escalation_reason, "ambiguous_station_or_destination"
+        )
+        self.assertEqual(len(trace.tool_calls), 1)
+        self.assertEqual(
+            self.loop.client.messages.calls[1]["model"],
+            self.loop.agent_policy.policy_for_mode("auto").model,
+        )
 
     async def test_parallel_tools_return_single_tool_result_message(self):
         rounds = [

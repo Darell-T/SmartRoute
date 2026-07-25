@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import secrets
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Sequence
 
@@ -41,6 +42,18 @@ def shadow_enabled() -> bool:
 def shadow_timeout_seconds() -> str:
     # The shared executor owns numeric parsing and the hard maximum.
     return os.getenv("ROUTE_SHADOW_TIMEOUT_SECONDS", "2.0")
+
+
+def shadow_sample_rate() -> float:
+    try:
+        configured = float(os.getenv("ROUTE_SHADOW_SAMPLE_RATE", "0.05"))
+    except ValueError:
+        return 0.05
+    return min(1.0, max(0.0, configured))
+
+
+def shadow_sampled() -> bool:
+    return secrets.randbelow(10_000) < round(shadow_sample_rate() * 10_000)
 
 
 def shadow_sink() -> JsonlShadowSink | NullShadowSink:
@@ -156,7 +169,7 @@ async def run_trip_shadow(
 
     outcome = await execute_counterfactual_shadow(
         displayed_result,
-        enabled=shadow_enabled(),
+        enabled=shadow_enabled() and shadow_sampled(),
         baseline_evaluator=baseline_evaluator,
         timeout_s=shadow_timeout_seconds(),
         record_factory=record_factory,

@@ -45,6 +45,7 @@ class TripShadowIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "ROUTE_SHADOW_VALIDATION_ENABLED": "true",
                     "ROUTE_SHADOW_LOG_PATH": str(path),
+                    "ROUTE_SHADOW_SAMPLE_RATE": "1",
                 },
                 clear=True,
             ):
@@ -96,6 +97,35 @@ class TripShadowIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 snapshot_status="fresh",
                 intelligence_latency_ms=1,
             )
+        self.assertIs(result, displayed)
+        evaluator.assert_not_awaited()
+
+    async def test_zero_sample_rate_never_evaluates(self):
+        displayed = {"selected_route_index": 0}
+        evaluator = AsyncMock()
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "shadow.jsonl"
+            with patch.dict(
+                os.environ,
+                {
+                    "ROUTE_SHADOW_VALIDATION_ENABLED": "true",
+                    "ROUTE_SHADOW_LOG_PATH": str(path),
+                    "ROUTE_SHADOW_SAMPLE_RATE": "0",
+                },
+                clear=True,
+            ):
+                result = await production_shadow.run_trip_shadow(
+                    displayed,
+                    baseline_evaluator=evaluator,
+                    production_route_id="candidate-0",
+                    production_status=ShadowEvaluationStatus.COMPLETE,
+                    candidate_summaries=[],
+                    source_counts={},
+                    incident_count=0,
+                    scan_status="complete",
+                    snapshot_status="fresh",
+                    intelligence_latency_ms=1,
+                )
         self.assertIs(result, displayed)
         evaluator.assert_not_awaited()
 

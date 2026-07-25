@@ -13,10 +13,10 @@ the execution environment; no live success, latency, model-access, or exact
 historical-400-cause claim is made.
 
 Production shadow evaluation was already implemented before this completion
-pass and remains disabled/fail-closed unless both its feature flag and `.jsonl`
-sink are configured. The remaining P1 work is freshness normalization,
-deterministic bounded Quick escalation, static scheduled-arrival fallback, and
-paired traces when credential use is permitted.
+pass. P1 now adds normalized freshness envelopes, deterministic one-way Quick
+escalation, a fresh-artifact-only scheduled-arrival fallback, and configurable
+privacy-safe shadow sampling. Paired Auto/Quick staging traces remain blocked
+until credentialed provider execution is authorized; no latency claim is made.
 
 ## P0 — required before production
 
@@ -58,6 +58,9 @@ paired traces when credential use is permitted.
 
 ### Confidence-triggered Quick escalation
 
+Status: implemented with deterministic signals only. The original heading is
+retained for backlog history; model self-confidence is not used.
+
 - Problem: a smaller candidate/model budget can encounter genuine ambiguity.
 - Evidence: Quick intentionally has two candidates and no optional enrichment.
 - Change: escalate to Auto only for deterministic signals such as unresolved place,
@@ -69,6 +72,10 @@ paired traces when credential use is permitted.
 
 ### Evidence freshness envelope
 
+Status: implemented for arrivals, alerts, events, subway/bus vehicles, and
+incident-advisor evidence. Expired payloads are suppressed at the model and
+scoring boundaries.
+
 - Problem: providers expose different freshness semantics.
 - Evidence: arrivals distinguish stale data; event and alert freshness are separate.
 - Change: include normalized `observed_at`, `valid_until`, and `status` on every
@@ -79,6 +86,9 @@ paired traces when credential use is permitted.
 
 ### Production shadow evaluation
 
+Status: implemented, disabled by default, fail-closed, and sampled with
+`ROUTE_SHADOW_SAMPLE_RATE`.
+
 - Problem: deterministic fixtures cannot measure real-world recommendation quality.
 - Evidence: route scoring is now structured enough to compare safely.
 - Change: log a privacy-minimized baseline/intelligence comparison without changing
@@ -88,6 +98,10 @@ paired traces when credential use is permitted.
 - Effort/risk: medium/medium.
 
 ### Arrival scheduled fallback
+
+Status: implemented behind an offline-built full-GTFS schedule artifact. The
+checked-in partial static database lacks the required calendar/timing tables
+and is correctly treated as unavailable rather than inferred.
 
 - Problem: GTFS-RT absence currently yields no prediction or unavailable, even when
   static schedule data may help.

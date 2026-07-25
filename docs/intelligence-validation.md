@@ -161,12 +161,14 @@ Shadow mode is disabled by default and fails closed unless both settings exist:
 ```text
 ROUTE_SHADOW_VALIDATION_ENABLED=true
 ROUTE_SHADOW_LOG_PATH=<local-path-ending-in-.jsonl>
+ROUTE_SHADOW_SAMPLE_RATE=0.05
 ROUTE_SHADOW_TIMEOUT_SECONDS=2.0
 ```
 
-The timeout is bounded by the shared executor. Disabled, timeout, evaluator
-failure, record failure, and sink failure paths return the exact same displayed
-result object. A record contains generated observation id, advisor identity,
+Sampling occurs before the counterfactual evaluator runs. The timeout is
+bounded by the shared executor. Disabled, unsampled, timeout, evaluator failure,
+record failure, and sink failure paths return the exact same displayed result
+object. A record contains generated observation id, advisor identity,
 candidate ids/lines/timing summaries, production and counterfactual selections,
 fixed source counts, incident count, scan/snapshot status, and bounded latency.
 It excludes prompts, model prose, coordinates, stop names, URLs, user text,

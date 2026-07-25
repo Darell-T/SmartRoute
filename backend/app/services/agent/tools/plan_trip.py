@@ -20,10 +20,12 @@ import importlib
 import math
 import os
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from app.services import ai_advisor
+from app.services.evidence import current_payload, evidence_envelope
 from app.services.agent import events as agent_events
+from app.services.agent.quick_escalation import effectively_tied_scores
 from app.services.agent.tools._location import (
     ResolvedPlace,
     canonical_display_name,
@@ -54,6 +56,8 @@ directions_service = importlib.import_module("app.services.directions")
 # on for its own importability/testability).
 TRIP_CONTEXT_TIMEOUT_S = float(os.getenv("TRIP_CONTEXT_TIMEOUT_S", "2.0"))
 TRIP_ADVISOR_TIMEOUT_S = float(os.getenv("TRIP_ADVISOR_TIMEOUT_S", "8.0"))
+LIVE_EVIDENCE_TTL_S = 120
+EVENT_EVIDENCE_TTL_S = 300
 # Overrides (does not modify) trip_incidents' own 25s default -- the agent
 # turn has a much tighter overall deadline than a one-shot /api/trip call.
 AGENT_GROK_BUDGET_S = float(os.getenv("AGENT_GROK_BUDGET_S", "6.0"))
@@ -558,6 +562,7 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
         else None
     )
 
+    context_collection_timed_out = False
     try:
         raw_alerts, stalled, stalled_buses = await asyncio.wait_for(
             asyncio.gather(
@@ -569,7 +574,11 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
             timeout=TRIP_CONTEXT_TIMEOUT_S,
         )
     except asyncio.TimeoutError:
+        context_collection_timed_out = True
         raw_alerts, stalled, stalled_buses = [], [], []
+    alerts_available = not context_collection_timed_out and not isinstance(raw_alerts, BaseException)
+    subway_vehicles_available = not context_collection_timed_out and not isinstance(stalled, BaseException)
+    bus_vehicles_available = not context_collection_timed_out and not isinstance(stalled_buses, BaseException)
     raw_alerts = [] if isinstance(raw_alerts, BaseException) else raw_alerts
     stalled = [] if isinstance(stalled, BaseException) else stalled
     stalled_buses = [] if isinstance(stalled_buses, BaseException) else stalled_buses
@@ -590,6 +599,7 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
             event_failures = [type(exc).__name__]
 
     incidents: list = []
+    advisor_evidence_available = False
     if tool_input.get("include_incident_scan"):
         incident_context = trip_incidents.build_candidate_stop_context(ctx.gtfs, parsed_routes)
         try:
@@ -597,9 +607,57 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
                 trip_incidents._scan_route_incidents(incident_context),
                 timeout=AGENT_GROK_BUDGET_S,
             )
+            advisor_evidence_available = True
         except asyncio.TimeoutError:
             print(f"[agent-plan_trip] incident scan timed out ({AGENT_GROK_BUDGET_S:.0f}s)")
             incidents = []
+
+    evidence_observed_at = datetime.now(timezone.utc)
+    evidence_envelopes = {
+        "alerts": evidence_envelope(
+            "mta_service_alerts",
+            relevant_alerts,
+            observed_at=evidence_observed_at,
+            ttl_seconds=LIVE_EVIDENCE_TTL_S,
+            available=alerts_available,
+        ),
+        "subway_vehicles": evidence_envelope(
+            "mta_subway_vehicle_positions",
+            stalled,
+            observed_at=evidence_observed_at,
+            ttl_seconds=LIVE_EVIDENCE_TTL_S,
+            available=subway_vehicles_available,
+        ),
+        "bus_vehicles": evidence_envelope(
+            "mta_bus_vehicle_positions",
+            stalled_buses,
+            observed_at=evidence_observed_at,
+            ttl_seconds=LIVE_EVIDENCE_TTL_S,
+            available=bus_vehicles_available,
+        ),
+        "events": evidence_envelope(
+            "ticketmaster",
+            event_impacts,
+            observed_at=evidence_observed_at,
+            ttl_seconds=EVENT_EVIDENCE_TTL_S,
+            available=event_evidence_status != "provider_unavailable",
+        ),
+        "advisor": evidence_envelope(
+            "route_incident_advisor",
+            incidents,
+            observed_at=evidence_observed_at,
+            ttl_seconds=LIVE_EVIDENCE_TTL_S,
+            available=advisor_evidence_available,
+        ),
+    }
+    # These values are still current immediately after collection. Keeping the
+    # suppression at this boundary makes expiry deterministic if collection is
+    # later cached or replayed.
+    relevant_alerts = current_payload(evidence_envelopes["alerts"], empty=[])
+    stalled = current_payload(evidence_envelopes["subway_vehicles"], empty=[])
+    stalled_buses = current_payload(evidence_envelopes["bus_vehicles"], empty=[])
+    event_impacts = current_payload(evidence_envelopes["events"], empty=[])
+    incidents = current_payload(evidence_envelopes["advisor"], empty=[])
 
     judge_payload = advisor_context.build_advisor_payload(
         routes=parsed_routes,
@@ -608,6 +666,7 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
         stalled_trains=stalled,
         stalled_buses=stalled_buses,
         ticketmaster_event_impacts=event_impacts,
+        evidence=evidence_envelopes,
         mode=advisor_context.PlanningMode.INTELLIGENCE,
     )
 
@@ -902,8 +961,22 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
                 "impact_count": len(event_impacts),
                 "provider_failure_count": len(event_failures),
             },
+            "evidence": {
+                name: {
+                    **envelope.to_model_dict(empty=[]),
+                    "payload": {
+                        "count": len(envelope.current_payload() or []),
+                    },
+                }
+                for name, envelope in sorted(evidence_envelopes.items())
+            },
             "selected_route_index": chosen_index,
             "selection_decision": selection_decision,
+            **(
+                {"quick_escalation_reason": "effectively_tied_final_scores"}
+                if effectively_tied_scores(scored)
+                else {}
+            ),
         },
         summary=tool_summary,
         events=events,

@@ -192,6 +192,13 @@ test("parses a grounded arrival_card event", async () => {
     ],
     updated_at: "2026-07-25T14:00:00Z",
     source_status: "live",
+    evidence: {
+      source: "mta_gtfs_rt",
+      observedAt: "2026-07-25T14:00:00Z",
+      validUntil: "2026-07-25T14:02:00Z",
+      status: "current",
+      payload: { directions: [] },
+    },
     catchability: {
       walking_minutes: 1,
       boarding_buffer_minutes: 2,
