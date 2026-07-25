@@ -343,6 +343,44 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(trace.final_mode, "quick")
         self.assertIsNone(trace.escalation_reason)
 
+    async def test_intent_tool_profiles_stay_within_provider_schema_limit(self):
+        def optional_parameter_count(schema):
+            if not schema:
+                return 0
+            properties = schema.get("properties") or {}
+            required = set(schema.get("required") or [])
+            return (
+                sum(name not in required for name in properties)
+                + sum(
+                    optional_parameter_count(value)
+                    for value in properties.values()
+                    if isinstance(value, dict)
+                )
+                + optional_parameter_count(schema.get("items") or {})
+            )
+
+        cases = (
+            ("Plan a trip to Coney Island with less walking", {"plan_trip"}),
+            ("When is the next Q train?", {"lookup_arrivals"}),
+            ("Find a good pizza place", {"poi_search", "plan_trip"}),
+            ("Are there events at Barclays Center tonight?", {"event_lookup"}),
+        )
+        for message, expected_tools in cases:
+            with self.subTest(message=message):
+                await self._run(
+                    [{"text": ["Grounded response."], "stop_reason": "end_turn"}],
+                    message=message,
+                )
+                schemas = self.loop.client.messages.calls[0]["tools"]
+                total = sum(
+                    optional_parameter_count(schema["input_schema"])
+                    for schema in schemas
+                )
+                self.assertLessEqual(total, 24)
+                self.assertTrue(
+                    expected_tools.issubset({schema["name"] for schema in schemas})
+                )
+
     async def test_quick_escalates_once_and_reuses_tool_result_context(self):
         rounds = [
             {

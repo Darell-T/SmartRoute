@@ -14,7 +14,8 @@ timeout, rate-limit, overload, and 5xx failures retain bounded retries.
 The inspected Sonnet 5 production request contains:
 
 - model `claude-sonnet-5`;
-- eight strict client tools on ordinary rounds;
+- an intent-scoped strict-tool profile with 21 optional schema parameters,
+  below the provider limit of 24;
 - no manual `thinking` field;
 - no `temperature`, `top_p`, or `top_k`;
 - no assistant prefill;
@@ -63,13 +64,15 @@ because it would send a live third-party request using the local credential.
 No workaround was attempted. The live result, live event count/latency, and the
 two live crowd-sensitive routes therefore remain unclaimed.
 
-The same external-credential boundary prevents the minimal Sonnet request and
-Models API query. The original 400 did not include its structured Anthropic
-body, so its exact cause cannot be identified honestly from the old log line.
-The current code proves that the locally constructed request omits the three
-documented Sonnet 5 incompatibilities, and the next failure will expose the
-safe structured cause. `backend/scripts/run_anthropic_agent_smoke.py --live`
-is the bounded follow-up command once credentialed network use is approved.
+The same external-credential boundary prevents Codex from running the minimal
+Sonnet request and Models API query. A subsequent user-run production request
+did expose the exact historical 400 cause: all eight tool schemas were sent
+together and contained 30 optional parameters, while the provider accepts at
+most 24. Request construction now selects tools deterministically by intent.
+Route/discovery and general/arrival profiles each contain 21 optionals while
+retaining their required tools. `backend/scripts/run_anthropic_agent_smoke.py
+--live` remains the bounded direct follow-up command once credentialed network
+use is approved.
 
 ## P1 completion pass
 

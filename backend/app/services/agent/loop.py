@@ -252,14 +252,23 @@ def _build_stream_kwargs(
     messages: list[dict],
     system_blocks: list[dict],
     mode_policy: agent_policy.AgentModePolicy,
+    tools: list[dict],
 ) -> dict:
     return model_request.build_stream_kwargs(
         force_final=force_final,
         messages=messages,
         system_blocks=system_blocks,
         mode_policy=mode_policy,
-        tools=TOOLS,
+        tools=tools,
     )
+
+
+def _tools_for_intent(parsed_intent: intelligence.ParsedIntent) -> list[dict]:
+    if parsed_intent.intent in {"route_planning", "destination_discovery"}:
+        excluded = {"event_lookup", "venue_crowd_window"}
+    else:
+        excluded = {"plan_trip"}
+    return [schema for schema in TOOLS if schema.get("name") not in excluded]
 
 
 def _route_card_text_fallback(card: agent_events.RouteCardEvent) -> str:
@@ -574,6 +583,7 @@ async def _stream_turn(
     initial_mode = mode_policy.mode
     escalation_reason: str | None = None
     parsed_intent = intelligence.parse_intent(message)
+    turn_tools = _tools_for_intent(parsed_intent)
     if intelligence.is_new_trip_request(message):
         session_module.reset_for_new_trip(session)
     system_blocks = _system_blocks()
@@ -722,6 +732,7 @@ async def _stream_turn(
                 messages=messages,
                 system_blocks=system_blocks,
                 mode_policy=mode_policy,
+                tools=turn_tools,
             )
             model_call_start = time.monotonic()
             final_message, token_events, error_event = await _call_model(
@@ -794,6 +805,7 @@ async def _stream_turn(
                 messages=messages,
                 system_blocks=system_blocks,
                 mode_policy=mode_policy,
+                tools=turn_tools,
             )
             model_call_start = time.monotonic()
             final_message, token_events, error_event = await _call_model(
