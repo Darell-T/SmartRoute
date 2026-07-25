@@ -37,6 +37,9 @@ jobs:
       # Module import requires APP_KEY (fail-fast startup guard); a dummy value
       # is fine for the test suite, which stubs the DB and external providers.
       APP_KEY: ci-test-key
+      # The enabled agent validates server-only configuration at import. Tests
+      # replace all model calls, so this sentinel is never sent externally.
+      ANTHROPIC_API_KEY: ci-test-anthropic-key
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

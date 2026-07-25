@@ -9,8 +9,10 @@ from __future__ import annotations
 import asyncio
 import os
 import unittest
+from pathlib import Path
 from datetime import datetime
 from unittest.mock import AsyncMock, patch
+from dotenv import load_dotenv
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -343,8 +345,9 @@ class TicketmasterLiveSmokeTest(unittest.IsolatedAsyncioTestCase):
         "set TICKETMASTER_LIVE_SMOKE_TEST=1 to run the Ticketmaster live smoke test",
     )
     async def test_live_smoke_uses_server_side_key_without_printing_it(self):
+        load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)
         if not os.getenv("TICKETMASTER_API_KEY"):
-            self.skipTest("TICKETMASTER_API_KEY is not configured")
+            self.fail("BLOCKED: TICKETMASTER_API_KEY is not configured after live opt-in")
         cache._mem.clear()
         with patch("builtins.print") as print_mock:
             result = await event_lookup.execute(

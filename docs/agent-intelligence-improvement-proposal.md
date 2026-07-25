@@ -3,6 +3,21 @@
 This backlog is intentionally prioritized. It does not recommend adding complexity
 without a demonstrated problem.
 
+## 2026-07-25 completion update
+
+The P0 request-hardening, retry classification, SSE recovery, canonical
+selection-decision, frontend test, configuration validation, deterministic
+backend/frontend suites, typecheck, lint, and production build are complete.
+Credentialed Ticketmaster and Anthropic checks remain explicitly blocked by
+the execution environment; no live success, latency, model-access, or exact
+historical-400-cause claim is made.
+
+Production shadow evaluation was already implemented before this completion
+pass and remains disabled/fail-closed unless both its feature flag and `.jsonl`
+sink are configured. The remaining P1 work is freshness normalization,
+deterministic bounded Quick escalation, static scheduled-arrival fallback, and
+paired traces when credential use is permitted.
+
 ## P0 — required before production
 
 ### Run provider certification and capture sanitized evidence

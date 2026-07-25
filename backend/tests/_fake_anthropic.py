@@ -50,6 +50,8 @@ class FakeStreamContext:
         self._round_spec = round_spec or {}
 
     async def __aenter__(self):
+        if self._round_spec.get("exception") is not None:
+            raise self._round_spec["exception"]
         if self._round_spec.get("raise"):
             raise RuntimeError(self._round_spec.get("raise_message", "simulated upstream failure"))
         return self
@@ -106,7 +108,12 @@ class FakeMessagesAPI:
 
 
 class FakeAsyncAnthropic:
-    def __init__(self, rounds: list[dict] | None = None, api_key: str | None = None):
+    def __init__(
+        self,
+        rounds: list[dict] | None = None,
+        api_key: str | None = None,
+        **_kwargs,
+    ):
         self.api_key = api_key
         self.messages = FakeMessagesAPI(rounds or [])
 
@@ -120,8 +127,8 @@ def make_fake_anthropic_module(rounds: list[dict] | None = None, client_holder: 
     class _FakeAPIStatusError(Exception):
         status_code = 500
 
-    def _async_anthropic(api_key: str | None = None) -> FakeAsyncAnthropic:
-        client = FakeAsyncAnthropic(rounds=rounds, api_key=api_key)
+    def _async_anthropic(api_key: str | None = None, **kwargs) -> FakeAsyncAnthropic:
+        client = FakeAsyncAnthropic(rounds=rounds, api_key=api_key, **kwargs)
         if client_holder is not None:
             client_holder.append(client)
         return client

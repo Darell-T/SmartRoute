@@ -47,6 +47,25 @@ class AgentModePolicy:
     optional_enrichment: bool
 
 
+@dataclasses.dataclass(frozen=True)
+class ModelRequestCapabilities:
+    supports_manual_thinking: bool
+    supports_non_default_sampling: bool
+    supports_assistant_prefill: bool
+
+
+_DEFAULT_REQUEST_CAPABILITIES = ModelRequestCapabilities(
+    supports_manual_thinking=True,
+    supports_non_default_sampling=True,
+    supports_assistant_prefill=True,
+)
+_SONNET_5_REQUEST_CAPABILITIES = ModelRequestCapabilities(
+    supports_manual_thinking=False,
+    supports_non_default_sampling=False,
+    supports_assistant_prefill=False,
+)
+
+
 def _sonnet_model() -> str:
     # AGENT_MODEL remains a backwards-compatible alias while deployments
     # migrate to the explicit Auto/Sonnet setting.
@@ -109,3 +128,33 @@ def safe_model_label(model: str) -> str:
     """Bound model telemetry and strip characters that could forge log fields."""
 
     return "".join(char for char in str(model) if char.isalnum() or char in "._-")[:96] or "unconfigured"
+
+
+def request_capabilities(model: str) -> ModelRequestCapabilities:
+    """Return the request contract for a configured Claude model.
+
+    Model-specific API behavior belongs here rather than in the agent loop.
+    Unknown/private model IDs retain the legacy request surface so a custom
+    deployment is not silently downgraded.
+    """
+
+    if safe_model_label(model).casefold() == "claude-sonnet-5":
+        return _SONNET_5_REQUEST_CAPABILITIES
+    return _DEFAULT_REQUEST_CAPABILITIES
+
+
+def validate_agent_configuration() -> None:
+    """Fail startup on unsafe or incomplete enabled-agent configuration."""
+
+    if os.getenv("NEXT_PUBLIC_ANTHROPIC_API_KEY"):
+        raise RuntimeError("Anthropic credentials must remain server-only")
+    if os.getenv("AGENT_ENABLED", "1").strip() == "0":
+        return
+    if not os.getenv("ANTHROPIC_API_KEY", "").strip():
+        raise RuntimeError(
+            "ANTHROPIC_API_KEY is required when the conversational agent is enabled"
+        )
+    for mode in ("auto", "quick"):
+        configured = policy_for_mode(mode)
+        if safe_model_label(configured.model) == "unconfigured":
+            raise RuntimeError(f"Agent {mode} model is not configured")

@@ -44,6 +44,7 @@ from app.services.trips.recommendation_reasons import (
     build_recommendation_reasons,
     format_recommendation_reason,
 )
+from app.services.trips.selection_decision import build_route_selection_decision
 from app.utils import geo
 
 directions_service = importlib.import_module("app.services.directions")
@@ -631,7 +632,8 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
         relevant_alerts,
         ticketmaster_event_impacts=event_impacts,
     )
-    selection_reason = "advisor_selection"
+    decision_reason = "advisor_tiebreak"
+    selection_log_reason = "advisor_selection"
     if avoid_crowds and event_impacts:
         # Crowd avoidance is a hard evidence contract. The model may explain
         # the evidence, but the actual route choice remains deterministic.
@@ -644,12 +646,8 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
                 row["index"],
             ),
         )["index"]
-        selection_reason = "risk_adjusted_event_score"
-    print(
-        f"[agent-plan_trip] candidates={len(parsed_routes)} selected={chosen_index} "
-        f"reason={selection_reason} event_status={event_evidence_status} "
-        f"event_impacts={len(event_impacts)}"
-    )
+        decision_reason = "lowest_final_score"
+        selection_log_reason = "risk_adjusted_event_score"
 
     chosen_route = parsed_routes[chosen_index]
     await enrichment._enrich_route(ctx.gtfs, chosen_route)
@@ -719,6 +717,24 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
     display_candidates = candidates._build_route_candidates(parsed_routes, chosen_index, candidate_analysis, scored)
     score_by_index = scoring._score_by_index(scored)
     selected_score = score_by_index[chosen_index]
+    card_ids = [f"rc_{secrets.token_hex(4)}" for _route in parsed_routes]
+    selection_decision = build_route_selection_decision(
+        selected_index=chosen_index,
+        selected_candidate_id=card_ids[chosen_index],
+        selected_score=selected_score,
+        selection_reason=decision_reason,
+        excluded_modes=excluded,
+        arrival_by=bool(arrival_by),
+        avoid_crowds=avoid_crowds,
+        event_evidence_status=event_evidence_status,
+        event_impacts=event_impacts,
+    )
+    print(
+        f"[agent-plan_trip] candidates={len(parsed_routes)} selected={chosen_index} "
+        f"selected_id={selection_decision['selected_candidate_id']} "
+        f"reason={selection_log_reason} event_status={event_evidence_status} "
+        f"event_impacts={len(event_impacts)}"
+    )
     structured_reasons = build_recommendation_reasons(
         selected_score,
         [
@@ -758,7 +774,7 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
     events = []
     session_cards = []
     for index, route in enumerate(parsed_routes):
-        card_id = f"rc_{secrets.token_hex(4)}"
+        card_id = card_ids[index]
         is_recommended = index == chosen_index
         cand = display_candidates[index]
         lines = cand["score_breakdown"]["transit_lines"]
@@ -780,6 +796,8 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
             reasons=structured_reasons if is_recommended else [],
             itinerary_id=card_id,
         )
+        if is_recommended:
+            itinerary["selection_decision"] = selection_decision
         eta_minutes = _summary_eta_minutes(route, itinerary["total_duration_seconds"])
         transfers = int(itinerary["transfer_count"])
         walk_minutes = round(int(itinerary["total_walk_seconds"]) / 60)
@@ -835,6 +853,7 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
                 route=route,
                 alerts=relevant_alerts,
                 itinerary=itinerary,
+                selection_decision=selection_decision,
             )
         )
         first_transit = next(
@@ -865,6 +884,7 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
                     if first_transit
                     else None
                 ),
+                "selection_decision": selection_decision,
             }
         )
 
@@ -882,7 +902,8 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
                 "impact_count": len(event_impacts),
                 "provider_failure_count": len(event_failures),
             },
-            "selection_reason": selection_reason,
+            "selected_route_index": chosen_index,
+            "selection_decision": selection_decision,
         },
         summary=tool_summary,
         events=events,

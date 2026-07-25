@@ -40,6 +40,44 @@ class AgentModePolicyTests(unittest.TestCase):
     def test_model_label_is_safe_for_structured_logs(self):
         self.assertEqual(policy.safe_model_label("sonnet\nmessage=secret"), "sonnetmessagesecret")
 
+    def test_sonnet_five_request_capabilities_are_centralized(self):
+        capabilities = policy.request_capabilities("claude-sonnet-5")
+        self.assertFalse(capabilities.supports_manual_thinking)
+        self.assertFalse(capabilities.supports_non_default_sampling)
+        self.assertFalse(capabilities.supports_assistant_prefill)
+
+    def test_private_model_keeps_legacy_request_capabilities(self):
+        capabilities = policy.request_capabilities("private-claude-endpoint")
+        self.assertTrue(capabilities.supports_manual_thinking)
+        self.assertTrue(capabilities.supports_non_default_sampling)
+        self.assertTrue(capabilities.supports_assistant_prefill)
+
+    def test_enabled_agent_requires_server_side_credential(self):
+        with patch.dict(
+            os.environ,
+            {"AGENT_ENABLED": "1", "ANTHROPIC_API_KEY": ""},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "ANTHROPIC_API_KEY"):
+                policy.validate_agent_configuration()
+
+    def test_disabled_agent_does_not_require_credential(self):
+        with patch.dict(os.environ, {"AGENT_ENABLED": "0"}, clear=True):
+            policy.validate_agent_configuration()
+
+    def test_public_anthropic_credential_is_rejected(self):
+        with patch.dict(
+            os.environ,
+            {
+                "AGENT_ENABLED": "1",
+                "ANTHROPIC_API_KEY": "server-test-key",
+                "NEXT_PUBLIC_ANTHROPIC_API_KEY": "unsafe-public-key",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "server-only"):
+                policy.validate_agent_configuration()
+
 
 class IntentAndContinuityTests(unittest.TestCase):
     def test_simple_arithmetic_is_deterministic(self):

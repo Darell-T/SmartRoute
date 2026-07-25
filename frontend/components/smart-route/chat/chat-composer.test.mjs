@@ -41,7 +41,7 @@ test("response menu opens upward and supports keyboard navigation", () => {
 test("composer actions use the shared Prompt Kit action primitive", () => {
   assert.match(COMPOSER_SOURCE, /<PromptInputActions className="sr-chat-composer__actions">/);
   assert.match(COMPOSER_SOURCE, /<PromptInputAction[\s\S]*Use voice input/);
-  assert.match(COMPOSER_SOURCE, /<PromptInputAction tooltip=\{isStreaming \? "Stop response" : "Send message"\}>/);
+  assert.match(COMPOSER_SOURCE, /<PromptInputAction\s+tooltip=\{isStreaming \? "Stop response" : "Send message"\}/);
 });
 
 test("changing presentation does not regenerate a completed response", () => {

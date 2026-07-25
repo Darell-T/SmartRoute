@@ -296,6 +296,23 @@ class PlanTripItineraryTests(unittest.IsolatedAsyncioTestCase):
         recommended = next(event for event in result.events if event.role == "recommended")
         self.assertEqual(recommended.summary["lines"], ["B"])
         self.assertEqual(result.data["event_evidence"]["status"], "available")
+        decision = result.data["selection_decision"]
+        self.assertEqual(result.data["selected_route_index"], 1)
+        self.assertEqual(decision["selected_candidate_index"], 1)
+        self.assertEqual(decision["selected_candidate_id"], recommended.card_id)
+        self.assertEqual(
+            recommended.itinerary["selection_decision"],
+            decision,
+        )
+        self.assertEqual(recommended.selection_decision, decision)
+        self.assertEqual(decision["selection_reason"], "lowest_final_score")
+        self.assertIn("crowd_evidence_considered", decision["hard_constraints_satisfied"])
+        self.assertEqual(decision["evidence_ids"], [])
+        active = next(
+            card for card in result.session_route_cards if card["role"] == "recommended"
+        )
+        self.assertEqual(active["card_id"], decision["selected_candidate_id"])
+        self.assertEqual(active["selection_decision"], decision)
         first = result.data["candidates"][0]
         self.assertEqual(first["event_impacts"][0]["event_name"], "Concert at the Garden")
         self.assertGreater(first["event_crowd_penalty"], 0)

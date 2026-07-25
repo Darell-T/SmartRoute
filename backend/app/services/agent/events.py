@@ -81,6 +81,7 @@ class RouteCardEvent:
     # Canonical seconds-based itinerary (Task 2+). Optional for back-compat
     # with mocks / older session digests; plan_trip always populates it.
     itinerary: dict | None = None
+    selection_decision: dict | None = None
     type: str = "route_card"
 
     def to_data(self) -> dict[str, Any]:
@@ -100,6 +101,8 @@ class RouteCardEvent:
             data["depart_iso"] = self.depart_iso
         if self.itinerary is not None:
             data["itinerary"] = self.itinerary
+        if self.selection_decision is not None:
+            data["selection_decision"] = self.selection_decision
         return data
 
 
@@ -146,7 +149,7 @@ class ArrivalCardEvent:
 
 @dataclasses.dataclass(frozen=True)
 class ErrorEvent:
-    code: str  # rate_limited|budget_exceeded|session_expired|upstream_error|internal
+    code: str  # rate_limited|budget_exceeded|session_expired|invalid_request|provider_configuration|upstream_error|internal
     message: str
     retryable: bool
     type: str = "error"

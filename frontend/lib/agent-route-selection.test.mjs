@@ -206,3 +206,35 @@ test("agent route plans carry chat entry context for the map rail", () => {
   })], "rc_1");
   assert.equal(plan?.entryContext, "chat");
 });
+
+test("Open on map preserves the server-owned recommended decision", () => {
+  const decision = {
+    selected_candidate_index: 0,
+    selected_candidate_id: "rc_1",
+    base_score: 34,
+    final_score: 34,
+    hard_constraints_satisfied: ["at_least_one_transit_mode"],
+    penalties: [],
+    selection_reason: "lowest_final_score",
+    evidence_ids: [],
+  };
+  const card = baseCard({
+    selection_decision: decision,
+    itinerary: {
+      itinerary_id: "rc_1",
+      total_duration_seconds: 2040,
+      transfer_count: 0,
+      selection_decision: decision,
+    },
+    route: [
+      {
+        type: "WALK",
+        end_point: { latitude: 40.6559, longitude: -74.0089 },
+      },
+    ],
+  });
+
+  const plan = agentRoutePlanFromCards([card], decision.selected_candidate_id);
+  assert.equal(plan?.activeCandidateId, decision.selected_candidate_id);
+  assert.equal(plan?.candidates[0].itinerary?.selection_decision, decision);
+});

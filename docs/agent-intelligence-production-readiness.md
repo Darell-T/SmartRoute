@@ -3,6 +3,74 @@
 Date: 2026-07-25
 Branch: `feat/intelligence-validation-replays`
 
+## P0 completion pass
+
+The production request path now has a centralized Claude capability policy,
+request-shape diagnostics, structured SDK error extraction, and one explicit
+application retry layer. The Anthropic client disables SDK retries. HTTP
+400/401/402/403/404 failures stop after one application attempt; connection,
+timeout, rate-limit, overload, and 5xx failures retain bounded retries.
+
+The inspected Sonnet 5 production request contains:
+
+- model `claude-sonnet-5`;
+- eight strict client tools on ordinary rounds;
+- no manual `thinking` field;
+- no `temperature`, `top_p`, or `top_k`;
+- no assistant prefill;
+- exact unmodified assistant content blocks on tool-result continuations;
+- `max_tokens=900` on ordinary Auto rounds and `300` on wrap-up.
+
+Safe failure telemetry now records only status, Anthropic error type, sanitized
+message, request ID, model, tool presence/count, thinking presence, sampling
+field names, output-token cap, and attempt. It excludes prompts, rider text,
+tool inputs, coordinates, headers, URLs, and credentials. Typed SSE failures
+stop the frontend thinking state and cannot create a route card.
+
+Route planning now emits one canonical `selection_decision`. The same selected
+candidate ID/index is carried by the tool result used for narration, the
+recommended route card, canonical itinerary, first-leg enrichment path, map
+handoff, active-trip session record, and bounded selection log. A deterministic
+Ticketmaster test changes the winner and asserts these identities remain equal.
+
+Configuration validation requires a server-side Anthropic credential whenever
+the agent is enabled, rejects a public Anthropic credential, keeps Auto/Quick
+model IDs centralized, and preserves unknown-mode normalization to Auto.
+
+### P0 verification evidence
+
+```text
+backend\.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider
+542 passed, 1 skipped
+
+frontend complete unit suite
+161 passed, 0 failed
+
+frontend\node_modules\.bin\tsc.cmd --noEmit
+PASS
+
+frontend\node_modules\.bin\eslint.cmd .
+PASS — 0 errors, 22 pre-existing warnings
+
+frontend\node_modules\.bin\next.cmd build
+PASS — compiled, typechecked, generated 12/12 static pages
+```
+
+### Credentialed checks blocked by execution policy
+
+The environment rejected the explicit one-request Ticketmaster smoke command
+because it would send a live third-party request using the local credential.
+No workaround was attempted. The live result, live event count/latency, and the
+two live crowd-sensitive routes therefore remain unclaimed.
+
+The same external-credential boundary prevents the minimal Sonnet request and
+Models API query. The original 400 did not include its structured Anthropic
+body, so its exact cause cannot be identified honestly from the old log line.
+The current code proves that the locally constructed request omits the three
+documented Sonnet 5 incompatibilities, and the next failure will expose the
+safe structured cause. `backend/scripts/run_anthropic_agent_smoke.py --live`
+is the bounded follow-up command once credentialed network use is approved.
+
 ## Executive finding
 
 Before this pass, Ticketmaster was a normalized standalone agent tool but was not

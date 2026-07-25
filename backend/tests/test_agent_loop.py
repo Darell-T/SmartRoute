@@ -246,6 +246,52 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(errors), 1)
         self.assertEqual(errors[0].code, "upstream_error")
 
+    async def test_bad_request_is_attempted_once_and_emits_typed_error(self):
+        class BadRequest(Exception):
+            status_code = 400
+            request_id = "req_bad_request"
+            body = {
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "temperature is not supported",
+                },
+            }
+
+        events_out, _ = await self._run(
+            [
+                {"exception": BadRequest()},
+                {"text": ["must not run"], "stop_reason": "end_turn"},
+            ]
+        )
+        self.assertEqual(len(self.loop.client.messages.calls), 1)
+        errors = [event for event in events_out if event.type == "error"]
+        self.assertEqual(errors[0].code, "invalid_request")
+        self.assertFalse(errors[0].retryable)
+        self.assertEqual(events_out[-1].stop_reason, "error")
+
+    async def test_transient_server_error_retries_within_application_bound(self):
+        class ServerError(Exception):
+            status_code = 503
+            request_id = "req_server_error"
+            body = {
+                "type": "error",
+                "error": {
+                    "type": "api_error",
+                    "message": "service temporarily unavailable",
+                },
+            }
+
+        events_out, _ = await self._run(
+            [
+                {"exception": ServerError()},
+                {"text": ["recovered"], "stop_reason": "end_turn"},
+            ]
+        )
+        self.assertEqual(len(self.loop.client.messages.calls), 2)
+        self.assertFalse(any(event.type == "error" for event in events_out))
+        self.assertEqual(events_out[-1].stop_reason, "end_turn")
+
     async def test_system_block_carries_ephemeral_cache_control(self):
         await self._run([{"text": ["hi"], "stop_reason": "end_turn"}])
         kwargs = self.loop.client.messages.calls[0]

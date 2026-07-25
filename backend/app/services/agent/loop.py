@@ -23,12 +23,15 @@ import anthropic
 from app.services.agent import budget
 from app.services.agent import events as agent_events
 from app.services.agent import intelligence
+from app.services.agent import model_request
 from app.services.agent import policy as agent_policy
 from app.services.agent import prompt as agent_prompt
 from app.services.agent import session as session_module
 from app.services.agent.tools import TOOL_REGISTRY, TOOLS, ToolContext, ToolResult
 
-client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+# Application retries are classified below. Disable the SDK's own retries so
+# one configured retry never expands into several hidden provider attempts.
+client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"), max_retries=0)
 
 AGENT_TURN_DEADLINE_S = float(os.getenv("AGENT_TURN_DEADLINE_S", "50"))
 # Local UI work should be repeatable and must not spend model credits. This
@@ -246,18 +249,13 @@ def _build_stream_kwargs(
     system_blocks: list[dict],
     mode_policy: agent_policy.AgentModePolicy,
 ) -> dict:
-    kwargs: dict = {
-        "model": mode_policy.model,
-        "messages": messages,
-        "system": system_blocks,
-    }
-    if force_final:
-        kwargs["max_tokens"] = mode_policy.wrapup_output_tokens
-        kwargs["tool_choice"] = {"type": "none"}
-    else:
-        kwargs["max_tokens"] = mode_policy.max_output_tokens
-        kwargs["tools"] = TOOLS
-    return kwargs
+    return model_request.build_stream_kwargs(
+        force_final=force_final,
+        messages=messages,
+        system_blocks=system_blocks,
+        mode_policy=mode_policy,
+        tools=TOOLS,
+    )
 
 
 def _route_card_text_fallback(card: agent_events.RouteCardEvent) -> str:
@@ -354,26 +352,17 @@ async def _call_model(
                 final_message = await stream.get_final_message()
             return final_message, _sanitize_token_events(token_events), None
         except Exception as exc:
-            # Provider exception bodies can contain request payload fragments.
-            # Keep operational logs useful without echoing those details.
             print(
-                f"[agent-loop] {log_tag} failed type={type(exc).__name__} "
-                f"attempt={attempt}/{attempts}"
-            )
-            retryable_type = type(exc).__name__ in {
-                "APIConnectionError",
-                "APITimeoutError",
-                "InternalServerError",
-                "OverloadedError",
-                "RateLimitError",
-            }
-            if token_events or attempt >= attempts or not retryable_type:
-                error_event = agent_events.ErrorEvent(
-                    code="upstream_error",
-                    message="Live trip planning is temporarily unavailable.",
-                    retryable=True,
+                model_request.format_failure_log(
+                    exc=exc,
+                    kwargs=stream_kwargs,
+                    log_tag=log_tag,
+                    attempt=attempt,
+                    attempts=attempts,
                 )
-                return None, token_events, error_event
+            )
+            if token_events or attempt >= attempts or not model_request.should_retry(exc):
+                return None, token_events, model_request.error_event_for(exc)
             await asyncio.sleep(min(0.15 * attempt, 0.45))
     raise AssertionError("model retry loop exited unexpectedly")
 

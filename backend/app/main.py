@@ -14,6 +14,10 @@ _repo_root = _backend_dir.parent
 load_dotenv(_repo_root / ".env", override=True)
 load_dotenv(_backend_dir / ".env", override=True)
 
+from app.services.agent import policy as agent_policy
+
+agent_policy.validate_agent_configuration()
+
 # Fail fast on missing required auth config instead of discovering it per request.
 # An unset APP_KEY would let the API key check and WebSocket auth fall through.
 if not os.getenv("APP_KEY"):

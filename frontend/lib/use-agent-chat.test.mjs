@@ -302,6 +302,34 @@ test("session id persistence: writes only a non-null id, and tolerates a throwin
   assert.doesNotThrow(() => persistSessionId(throwing, "sess-1"));
 });
 
+test("a typed provider request failure stops cleanly without creating a route card", () => {
+  let state = applyAgentEvent(initialState(), {
+    type: "turn_started",
+    text: "Plan a trip",
+  });
+  state = applyAgentEvent(state, {
+    type: "error",
+    code: "invalid_request",
+    message: "SmartRoute could not complete that request. Please try again.",
+    retryable: false,
+  });
+  state = applyAgentEvent(state, {
+    type: "done",
+    session_id: "sess-1",
+    turn_id: "t1",
+    stop_reason: "error",
+    usage: {},
+  });
+
+  const assistant = state.messages.at(-1);
+  assert.equal(state.isStreaming, false);
+  assert.equal(assistant.isStreaming, false);
+  assert.equal(assistant.stopReason, "error");
+  assert.equal(assistant.routeCards.length, 0);
+  assert.equal(assistant.error.code, "invalid_request");
+  assert.equal(assistant.error.retryable, false);
+});
+
 test("arrival_card attaches production arrival evidence to the streaming assistant turn", () => {
   let state = applyAgentEvent(initialState(), { type: "turn_started", text: "Next Q at Newkirk Avenue?" });
   state = applyAgentEvent(state, {

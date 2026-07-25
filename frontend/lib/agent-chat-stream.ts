@@ -165,7 +165,26 @@ export interface CanonicalItinerary {
   dwell_events?: CanonicalDwellEvent[];
   /** Typed facts for current payloads; strings are a legacy-session adapter. */
   structured_recommendation_reasons?: Array<RecommendationReason | string>;
+  selection_decision?: RouteSelectionDecision;
   [key: string]: unknown;
+}
+
+export interface RouteSelectionDecision {
+  selected_candidate_index: number;
+  selected_candidate_id: string;
+  base_score: number;
+  final_score: number;
+  hard_constraints_satisfied: string[];
+  penalties: Array<{
+    source: string;
+    amount: number;
+    reason: string;
+  }>;
+  selection_reason:
+    | "lowest_final_score"
+    | "hard_constraint"
+    | "advisor_tiebreak";
+  evidence_ids: string[];
 }
 
 export type RecommendationReason =
@@ -208,6 +227,8 @@ export interface RouteCardEvent {
   depart_iso?: string;
   /** Canonical seconds-based itinerary when the server emits it (Task 2+). */
   itinerary?: CanonicalItinerary;
+  /** One server-owned decision shared by narration, cards, map, and active trip. */
+  selection_decision?: RouteSelectionDecision;
 }
 
 /** `route_card` payload as attached to an assistant turn (same shape as the
@@ -266,6 +287,8 @@ export type AgentErrorCode =
   | "rate_limited"
   | "budget_exceeded"
   | "session_expired"
+  | "invalid_request"
+  | "provider_configuration"
   | "upstream_error"
   | "internal";
 
@@ -413,6 +436,12 @@ function buildEvent(eventType: string, data: unknown): AgentEvent | null {
         // Copy opaque object only when present; omit key for legacy payloads.
         ...(isRecord(data.itinerary)
           ? { itinerary: data.itinerary as CanonicalItinerary }
+          : {}),
+        ...(isRecord(data.selection_decision)
+          ? {
+              selection_decision:
+                data.selection_decision as unknown as RouteSelectionDecision,
+            }
           : {}),
       };
     }
