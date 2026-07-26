@@ -92,6 +92,16 @@ class IntentAndContinuityTests(unittest.TestCase):
         self.assertTrue(parsed.required_evidence.events)
         self.assertEqual(parsed.required_evidence.required_tools(), ("plan_trip",))
 
+    def test_explicit_route_request_becomes_a_hard_planning_constraint(self):
+        parsed = intelligence.parse_intent("Plan a Q route to Coney Island")
+
+        self.assertEqual(parsed.intent, "route_planning")
+        self.assertEqual(parsed.requested_route_ids, ("Q",))
+        self.assertEqual(
+            intelligence.parse_intent("Plan a trip to Coney Island").requested_route_ids,
+            (),
+        )
+
     def test_arrival_lookup_is_required_in_both_modes(self):
         parsed = intelligence.parse_intent("When is the next Q at Newkirk Avenue?")
         self.assertEqual(parsed.intent, "arrival_lookup")

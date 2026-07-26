@@ -312,6 +312,15 @@ def _first_boarding_context(gtfs, step: dict, walking_minutes: int) -> dict:
     return context
 
 
+def _route_service_ids(route: list[dict]) -> set[str]:
+    return {
+        scoring._step_route_id(step).strip().upper()
+        for step in route
+        if step.get("type") in {"SUBWAY", "BUS"}
+        and scoring._step_route_id(step).strip()
+    }
+
+
 def _next_segment_departure(arrival_at: object, dwell_minutes: int) -> str | None:
     if not isinstance(arrival_at, str) or not arrival_at.strip():
         return None
@@ -592,6 +601,23 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
     parsed_routes = directions_service.parse_response(response)
     if not parsed_routes:
         return ToolResult(ok=False, error="no transit route found between those points")
+    required_route_ids = {
+        str(route_id).strip().upper()
+        for route_id in tool_input.get("required_route_ids") or []
+        if str(route_id).strip()
+    }
+    if required_route_ids:
+        parsed_routes = [
+            route
+            for route in parsed_routes
+            if required_route_ids.issubset(_route_service_ids(route))
+        ]
+        if not parsed_routes:
+            requested = "/".join(sorted(required_route_ids))
+            return ToolResult(
+                ok=False,
+                error=f"no route candidate used the requested {requested} service",
+            )
     try:
         max_candidates = max(1, int(tool_input.get("max_candidates") or len(parsed_routes)))
     except (TypeError, ValueError):

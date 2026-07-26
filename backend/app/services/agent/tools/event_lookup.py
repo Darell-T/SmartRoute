@@ -363,7 +363,10 @@ async def _lookup_uncached(
             if (latitude, longitude) == (40.7128, -74.0060)
             else f"{latitude:.6f},{longitude:.6f}"
         ),
-        "radius": f"{radius_miles:g}",
+        # Discovery v2 rejects fractional radii with HTTP 400. Round outward
+        # for provider retrieval; the stricter local distance filter below
+        # still enforces the rider-requested radius.
+        "radius": str(max(1, math.ceil(radius_miles))),
         "unit": "miles",
         # Unscheduled listings cannot support an event-timing crowd window.
         # Keep defensive parsing below because upstream records can still be

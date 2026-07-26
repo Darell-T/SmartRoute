@@ -113,6 +113,7 @@ class TicketmasterEventLookupTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(result.ok)
         self.assertEqual([event["event_id"] for event in result.data["events"]], ["sunset"])
+        self.assertEqual(fetch.await_args.kwargs["params"]["radius"], "2")
 
     async def test_radius_is_clamped_to_a_safe_upper_bound(self):
         fetch = AsyncMock(return_value=({"_embedded": {"events": []}}, None))

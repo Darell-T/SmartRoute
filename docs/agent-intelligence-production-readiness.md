@@ -14,7 +14,8 @@ timeout, rate-limit, overload, and 5xx failures retain bounded retries.
 The inspected Sonnet 5 production request contains:
 
 - model `claude-sonnet-5`;
-- an intent-scoped strict-tool profile with 21 optional schema parameters,
+- an intent-scoped strict-tool profile; route planning exposes only
+  `plan_trip` and `accessibility_status` (10 optional schema parameters),
   below the provider limit of 24;
 - no manual `thinking` field;
 - no `temperature`, `top_p`, or `top_k`;
@@ -57,22 +58,20 @@ frontend\node_modules\.bin\next.cmd build
 PASS — compiled, typechecked, generated 12/12 static pages
 ```
 
-### Credentialed checks blocked by execution policy
+### Credentialed checks
 
-The environment rejected the explicit one-request Ticketmaster smoke command
-because it would send a live third-party request using the local credential.
-No workaround was attempted. The live result, live event count/latency, and the
-two live crowd-sensitive routes therefore remain unclaimed.
+A user-run production request exposed the historical Anthropic 400 cause: all
+eight tool schemas were sent together and contained 30 optional parameters,
+while the provider accepts at most 24. Request construction now selects tools
+deterministically by intent. Route planning exposes only `plan_trip` and
+`accessibility_status`; a live end-to-end replay was accepted by Sonnet, called
+`plan_trip`, and completed with a canonical Q itinerary and matching narration.
 
-The same external-credential boundary prevents Codex from running the minimal
-Sonnet request and Models API query. A subsequent user-run production request
-did expose the exact historical 400 cause: all eight tool schemas were sent
-together and contained 30 optional parameters, while the provider accepts at
-most 24. Request construction now selects tools deterministically by intent.
-Route/discovery and general/arrival profiles each contain 21 optionals while
-retaining their required tools. `backend/scripts/run_anthropic_agent_smoke.py
---live` remains the bounded direct follow-up command once credentialed network
-use is approved.
+The opt-in Ticketmaster smoke test also completed successfully with the configured
+server-side credential and returned five normalized events. A Columbus Circle
+replay completed with `event_evidence_status=no_relevant_events`, proving that
+the provider was available even though no event survived the route/time/distance
+association rules for that itinerary.
 
 ## P1 completion pass
 
@@ -271,10 +270,14 @@ and explanation payloads; raw provider responses and keys do not.
 
 ### Live verification
 
-`.env` contains a Ticketmaster key. A bounded one-day NYC smoke test was prepared
-and invoked without printing the key, but the execution environment rejected the
-required network approval because its external-usage allowance was exhausted. The
-test remains opt-in through:
+The bounded one-day NYC smoke test passed without printing the key and returned
+five normalized events. An exact Columbus Circle lookup initially returned HTTP
+400 even though the credential was accepted. Ticketmaster Discovery v2 rejected
+the fractional `radius=1.25` request parameter. Provider retrieval now rounds the
+radius outward to the next whole mile while the existing local distance filter
+continues to enforce the requested 1.25-mile boundary.
+
+The live smoke test remains opt-in through:
 
 ```powershell
 $env:TICKETMASTER_LIVE_SMOKE_TEST = "1"
@@ -282,9 +285,9 @@ backend\.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider `
   backend/tests/test_ticketmaster_event_lookup.py -k live_smoke -s
 ```
 
-Passing mocked tests prove request construction, normalization, timeout/error
-handling, route association, scoring, and explanation propagation. They do not
-prove the current live credential or Ticketmaster availability.
+Mocked tests continue to prove request construction, normalization, timeout/error
+handling, route association, scoring, and explanation propagation. The live smoke
+test additionally proves that the current credential is enabled and accepted.
 
 ## Conversation intelligence
 
@@ -460,13 +463,13 @@ continuation and no redundant third wrap-up call.
 ### Provider and persistence configuration boundary
 
 A read-only configuration diagnostic found the Ticketmaster key present and
-Ticketmaster enabled; the configured radius uses the documented default.
-This does not certify that the current credential or upstream endpoint is
-healthy, because the opt-in live smoke test was not run. Redis-compatible
-session storage is not configured, so backend restarts still discard
-server-side sessions; the new client recovery makes a fresh empty page
-transparent, while preserving an honest error when visible conversation
-cannot be recovered.
+Ticketmaster enabled. The opt-in live smoke test passed, so the current
+credential and upstream endpoint are healthy. The route-specific failure was a
+fractional-radius request rejected by Discovery v2, not a bad API key.
+Redis-compatible session storage is not configured, so backend restarts still
+discard server-side sessions; the new client recovery makes a fresh empty page
+transparent, while preserving an honest error when visible conversation cannot
+be recovered.
 
 The configured static-GTFS PostgreSQL connection rejected the read-only
 diagnostic. The arrival path no longer requires it when the local
@@ -482,7 +485,7 @@ browser for arbitrary chat.
 
 ```text
 backend\.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider
-567 passed, 1 skipped
+572 passed, 1 skipped
 
 frontend\node_modules\.bin\tsx.cmd --test <complete unit-test list>
 168 passed
@@ -497,7 +500,8 @@ frontend\node_modules\.bin\next.cmd build
 PASS — compiled, typechecked, and generated 12/12 static pages
 ```
 
-The one backend skip remains the opt-in live Ticketmaster smoke test.
+The one backend skip in the default suite remains the opt-in live Ticketmaster
+smoke test; that test was run separately and passed.
 
 Manual QA against the running local app:
 
@@ -507,16 +511,24 @@ Manual QA against the running local app:
 | `When does the next Q arrive?` | live 34 St–Herald Sq Q card and deterministic text; UI reported 1 second; no duplicate error |
 | `When does the next Q arrive at Newkirk Plaza?` | explicit Newkirk Plaza Q card; UI reported 1 second; no duplicate error |
 | `When is the next B train?` | explicit no-predictions state at 34 St–Herald Sq; no provider-failure claim or generic error |
+| `Plan a Q route from Times Square to Coney Island` | completed; canonical card and narration both selected Q; no provider 400 |
+| Crowd-avoidance trip to Columbus Circle | completed; Ticketmaster state was `no_relevant_events`, not `provider_unavailable` |
 
 Backend restart recovery is covered deterministically by frontend tests rather
 than by interrupting the user's running server.
 
-### Remaining risk found during manual QA
+### Follow-up correction and remaining risk
 
-When explicitly asked to plan a Q route to Coney Island, the model narration
-claimed that Q was selected while the canonical card correctly showed an N
-itinerary. The regression pass preserves the canonical card/session contract,
-but explicit line-preference enforcement and narration grounding need a
-separate focused fix. This was not folded into the arrival/session regression
-scope without a dedicated test and product decision about whether a requested
-line is a hard constraint or a preference.
+Explicit service requests are now hard planning constraints. The deterministic
+intent layer extracts the requested service, the orchestrator injects it into
+`plan_trip`, and candidate filtering occurs before scoring and canonical
+selection. If no candidate uses the requested service, the planner fails
+honestly instead of substituting another line. Focused tests and the live Q
+replay cover both the selection and no-substitution paths.
+
+Ticketmaster is not a complete NYC event directory. Free/community events may
+not appear in its catalog even when a general web search finds them. The existing
+bounded web/X scan is for current route incidents, not a second event-schedule
+provider, so `no_relevant_events` means no associated Ticketmaster evidence—not
+proof that no nearby gathering exists. Adding a second event source requires a
+normalized provenance and timing contract before it can affect canonical scoring.

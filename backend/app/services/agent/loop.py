@@ -268,11 +268,18 @@ def _build_stream_kwargs(
 
 
 def _tools_for_intent(parsed_intent: intelligence.ParsedIntent) -> list[dict]:
-    if parsed_intent.intent in {"route_planning", "destination_discovery"}:
-        excluded = {"event_lookup", "venue_crowd_window"}
-    else:
-        excluded = {"plan_trip"}
-    return [schema for schema in TOOLS if schema.get("name") not in excluded]
+    tool_names_by_intent = {
+        "route_planning": {"plan_trip", "accessibility_status"},
+        "destination_discovery": {
+            "poi_search",
+            "plan_trip",
+            "accessibility_status",
+        },
+    }
+    included = tool_names_by_intent.get(parsed_intent.intent)
+    if included is not None:
+        return [schema for schema in TOOLS if schema.get("name") in included]
+    return [schema for schema in TOOLS if schema.get("name") != "plan_trip"]
 
 
 def _route_card_text_fallback(card: agent_events.RouteCardEvent) -> str:
@@ -446,6 +453,8 @@ def _constrained_tool_input(
             normalized.get("avoid_crowds") or parsed_intent.avoid_crowds
         )
         normalized["include_first_leg_arrivals"] = mode_policy.optional_enrichment
+        if parsed_intent.requested_route_ids:
+            normalized["required_route_ids"] = list(parsed_intent.requested_route_ids)
         if normalized.get("include_incident_scan") or (
             parsed_intent.avoid_crowds and mode_policy.mode == "auto"
         ):

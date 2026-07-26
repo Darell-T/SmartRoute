@@ -393,6 +393,31 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         self.assertTrue(plan_input["avoid_crowds"])
         self.assertTrue(plan_input["include_incident_scan"])
 
+    async def test_explicit_route_request_is_injected_into_plan_trip(self):
+        trace = self.loop.TurnTrace()
+        rounds = [
+            {
+                "tool_use": [
+                    {
+                        "id": "tu_1",
+                        "name": "plan_trip",
+                        "input": {"destination": "Coney Island"},
+                    }
+                ],
+                "stop_reason": "tool_use",
+            },
+            {"text": ["Take the Q."], "stop_reason": "end_turn"},
+        ]
+
+        await self._run(
+            rounds,
+            message="Plan a Q route to Coney Island",
+            tool_registry=_test_registry(),
+            trace=trace,
+        )
+
+        self.assertEqual(trace.tool_calls[0][1]["required_route_ids"], ["Q"])
+
     async def test_intent_tool_profiles_stay_within_provider_schema_limit(self):
         def optional_parameter_count(schema):
             if not schema:
@@ -410,7 +435,10 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
             )
 
         cases = (
-            ("Plan a trip to Coney Island with less walking", {"plan_trip"}),
+            (
+                "Plan a trip to Coney Island with less walking",
+                {"plan_trip", "accessibility_status"},
+            ),
             ("When is the next Q train?", {"lookup_arrivals"}),
             ("Find a good pizza place", {"poi_search", "plan_trip"}),
             ("Are there events at Barclays Center tonight?", {"event_lookup"}),
@@ -427,6 +455,18 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(
                     expected_tools.issubset({schema["name"] for schema in schemas})
                 )
+
+    async def test_route_planning_uses_a_minimal_tool_profile(self):
+        parsed_intent = self.loop.intelligence.parse_intent(
+            "Plan a Q route to Coney Island with less walking"
+        )
+
+        schemas = self.loop._tools_for_intent(parsed_intent)
+
+        self.assertEqual(
+            {schema["name"] for schema in schemas},
+            {"plan_trip", "accessibility_status"},
+        )
 
     async def test_quick_escalates_once_and_reuses_tool_result_context(self):
         rounds = [

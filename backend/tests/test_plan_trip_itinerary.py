@@ -140,6 +140,38 @@ class PlanTripItineraryTests(unittest.IsolatedAsyncioTestCase):
                 round(event.itinerary["total_walk_seconds"] / 60),
             )
 
+    async def test_explicit_route_constraint_filters_candidates_before_selection(self):
+        result = await plan_trip.execute(
+            {
+                "origin": "user",
+                "destination": "Costco",
+                "required_route_ids": ["B"],
+            },
+            self._ctx(),
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(len(result.events), 1)
+        self.assertEqual(result.events[0].summary["lines"], ["B"])
+        self.assertEqual(result.data["candidates"][0]["lines"], ["B"])
+
+    async def test_missing_requested_route_fails_instead_of_substituting_another_line(self):
+        result = await plan_trip.execute(
+            {
+                "origin": "user",
+                "destination": "Costco",
+                "required_route_ids": ["N"],
+            },
+            self._ctx(),
+        )
+
+        self.assertFalse(result.ok)
+        self.assertEqual(
+            result.error,
+            "no route candidate used the requested N service",
+        )
+        self.assertEqual(result.events, [])
+
     async def test_recommended_card_persists_canonical_first_boarding_context(self):
         pattern_index = StopPatternIndex(
             {

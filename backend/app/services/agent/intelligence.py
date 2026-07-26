@@ -31,6 +31,18 @@ _ROUTE_ID_RE = re.compile(
     r"[1234567ABCDEFGJLMNQRSWZ])\b",
     re.IGNORECASE,
 )
+_ROUTE_ID_TOKEN = (
+    r"(?:M\d{1,3}|B\d{1,3}|Q\d{1,3}|S\d{1,3}|X\d{1,3}|"
+    r"[1234567ABCDEFGJLMNQRSWZ])"
+)
+_REQUESTED_ROUTE_RE = re.compile(
+    rf"\b(?:take|use|using|via|ride|prefer|want)\s+(?:the\s+)?"
+    rf"(?P<after_action>{_ROUTE_ID_TOKEN})"
+    rf"(?:\s+(?:train|subway|bus|line|route))?\b|"
+    rf"\b(?P<before_noun>{_ROUTE_ID_TOKEN})\s+"
+    rf"(?:train|subway|bus|line|route)\b",
+    re.IGNORECASE,
+)
 _NEW_TRIP_RE = re.compile(
     r"\b(?:get|take|route|directions?|heading|travel|trip)\b.{0,32}\b(?:to|from)\b|"
     r"\b(?:go|going)\s+to\b",
@@ -79,6 +91,7 @@ class ParsedIntent:
     avoid_crowds: bool
     arrival_route_id: str | None = None
     arrival_stop_query: str | None = None
+    requested_route_ids: tuple[str, ...] = ()
 
     @property
     def required_evidence(self) -> RequiredEvidence:
@@ -111,8 +124,25 @@ def parse_intent(message: str) -> ParsedIntent:
     if _DISCOVERY_RE.search(text):
         return ParsedIntent("destination_discovery", avoid_crowds)
     if _NEW_TRIP_RE.search(text):
-        return ParsedIntent("route_planning", avoid_crowds)
+        return ParsedIntent(
+            "route_planning",
+            avoid_crowds,
+            requested_route_ids=_requested_route_ids(text),
+        )
     return ParsedIntent("transit_question", avoid_crowds)
+
+
+def _requested_route_ids(text: str) -> tuple[str, ...]:
+    route_ids: list[str] = []
+    for match in _REQUESTED_ROUTE_RE.finditer(text):
+        raw_route_id = match.group("after_action") or match.group("before_noun") or ""
+        # Lowercase "a route/train" is an article, not a request for the A.
+        if raw_route_id == "a":
+            continue
+        route_id = raw_route_id.upper()
+        if route_id not in route_ids:
+            route_ids.append(route_id)
+    return tuple(route_ids)
 
 
 def is_new_trip_request(message: str) -> bool:
