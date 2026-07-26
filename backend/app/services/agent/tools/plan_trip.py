@@ -40,7 +40,16 @@ from app.services.mta_feed import (
     get_stalled_trains,
     parse_service_alerts,
 )
-from app.services.trips import advisor_context, candidates, enrichment, event_crowd, scoring, text
+from app.services.trips import (
+    advisor_context,
+    candidates,
+    crowd_evidence,
+    crowd_hotspots,
+    enrichment,
+    event_crowd,
+    scoring,
+    text,
+)
 from app.services.trips import incidents as trip_incidents
 from app.services.trips.itinerary import build_canonical_itinerary, build_chained_itinerary
 from app.services.trips.recommendation_reasons import (
@@ -626,21 +635,34 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
 
     route_ids, bus_route_ids = candidates._collect_route_and_bus_ids(parsed_routes)
     avoid_crowds = bool(tool_input.get("avoid_crowds"))
+    hotspot_hits = crowd_hotspots.find_hotspot_hits(ctx.gtfs, parsed_routes)
+    collect_crowd_evidence = avoid_crowds or bool(hotspot_hits)
+    allow_live_crowd_search = (
+        collect_crowd_evidence
+        and str(tool_input.get("crowd_search_mode") or "auto") == "auto"
+    )
 
     async def collect_event_evidence() -> tuple[
         event_crowd.EventEvidenceStatus,
         list[dict],
         list[str],
+        dict,
     ]:
         started = time.monotonic()
         try:
-            return await event_crowd.collect_route_event_evidence(parsed_routes, ctx)
+            return await crowd_evidence.collect(
+                parsed_routes,
+                ctx,
+                hotspot_hits=hotspot_hits,
+                explicit_crowd_request=avoid_crowds,
+                allow_live_search=allow_live_crowd_search,
+            )
         finally:
             timings["ticketmaster_ms"] = (time.monotonic() - started) * 1000
 
     event_task = (
         asyncio.create_task(collect_event_evidence())
-        if avoid_crowds
+        if collect_crowd_evidence
         else None
     )
     incident_task = None
@@ -682,9 +704,15 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
     event_evidence_status: event_crowd.EventEvidenceStatus = "not_required"
     event_impacts: list[dict] = []
     event_failures: list[str] = []
+    crowd_search_metadata: dict = {"grok_status": "not_required"}
     if event_task is not None:
         try:
-            event_evidence_status, event_impacts, event_failures = await event_task
+            (
+                event_evidence_status,
+                event_impacts,
+                event_failures,
+                crowd_search_metadata,
+            ) = await event_task
         except Exception as exc:
             print(f"[agent-plan_trip] event enrichment failed: {type(exc).__name__}")
             event_evidence_status = "provider_unavailable"
@@ -728,7 +756,7 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
             available=bus_vehicles_available,
         ),
         "events": evidence_envelope(
-            "ticketmaster",
+            "crowd_events",
             event_impacts,
             observed_at=evidence_observed_at,
             ttl_seconds=EVENT_EVIDENCE_TTL_S,
@@ -787,7 +815,12 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
     timings["scoring_ms"] = (time.monotonic() - scoring_started) * 1000
     decision_reason = "advisor_tiebreak"
     selection_log_reason = "advisor_selection"
-    if avoid_crowds and event_impacts:
+    scoring_event_impacts = [
+        impact
+        for impact in event_impacts
+        if float(impact.get("risk_score") or 0) > 0
+    ]
+    if scoring_event_impacts:
         # Crowd avoidance is a hard evidence contract. The model may explain
         # the evidence, but the actual route choice remains deterministic.
         chosen_index = min(
@@ -878,7 +911,7 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
         selection_reason=decision_reason,
         excluded_modes=excluded,
         arrival_by=bool(arrival_by),
-        avoid_crowds=avoid_crowds,
+        avoid_crowds=collect_crowd_evidence,
         event_evidence_status=event_evidence_status,
         event_impacts=event_impacts,
     )
@@ -899,7 +932,7 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
     selected_event_impacts = [
         impact for impact in event_impacts if impact.get("route_index") == chosen_index
     ]
-    if avoid_crowds and event_impacts:
+    if scoring_event_impacts:
         structured_reasons.append(
             {
                 "code": "lower_event_crowd_exposure",
@@ -976,6 +1009,10 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
                         "exposure_window": impact.get("exposure_window"),
                         "distance_meters": impact.get("distance_meters"),
                         "risk_score": impact.get("risk_score"),
+                        "confidence": impact.get("confidence"),
+                        "source_class": impact.get("source_class"),
+                        "verification_tier": impact.get("verification_tier"),
+                        "scoring_authorized": impact.get("scoring_authorized"),
                     }
                     for impact in event_impacts
                     if impact.get("route_index") == index
@@ -1051,6 +1088,7 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
                 "status": event_evidence_status,
                 "impact_count": len(event_impacts),
                 "provider_failure_count": len(event_failures),
+                "search": crowd_search_metadata,
             },
             "evidence": {
                 name: {

@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, patch
 from app.services.ny511 import NY511Settings
 from scripts import run_live_511ny_validation as ny511_script
 from scripts import run_live_advisor_validation as advisor_script
+from scripts import run_live_crowd_search_validation as crowd_search_script
 from scripts import run_live_ticketmaster_validation as ticketmaster_script
 
 
@@ -122,6 +123,58 @@ class LiveTicketmasterCertificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["status"], "failed")
         self.assertNotIn("ticketmaster-secret", str(result))
         self.assertEqual(ticketmaster_script.event_lookup.EVENT_LOOKUP_MAX_PAGES, original_max_pages)
+
+
+class LiveCrowdSearchCertificationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_missing_key_skips_without_network(self):
+        with patch.dict(os.environ, {"XAI_API_KEY": ""}, clear=False):
+            result = await crowd_search_script.certify()
+        self.assertEqual(result["status"], "skipped")
+
+    async def test_certification_reports_only_safe_normalized_counts(self):
+        from app.services.trips import crowd_search
+
+        safe_result = {
+            "status": "complete",
+            "events": [
+                {
+                    "source_class": "official_web",
+                    "source_ref": "https://example.invalid/private-source",
+                }
+            ],
+            "completed_sources": ["web_search", "x_search"],
+        }
+        with (
+            patch.dict(os.environ, {"XAI_API_KEY": "xai-secret"}, clear=False),
+            patch.object(crowd_search, "_run_search", return_value=safe_result),
+        ):
+            result = await crowd_search_script.certify()
+
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(result["completed_sources"], ["web_search", "x_search"])
+        self.assertEqual(result["source_classes"], ["official_web"])
+        self.assertNotIn("xai-secret", str(result))
+        self.assertNotIn("private-source", str(result))
+
+    async def test_partial_provider_coverage_fails_certification(self):
+        from app.services.trips import crowd_search
+
+        with (
+            patch.dict(os.environ, {"XAI_API_KEY": "xai-secret"}, clear=False),
+            patch.object(
+                crowd_search,
+                "_run_search",
+                return_value={
+                    "status": "partial",
+                    "events": [],
+                    "completed_sources": ["web_search"],
+                },
+            ),
+        ):
+            result = await crowd_search_script.certify()
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["provider_status"], "partial")
 
 
 class LiveAdvisorCertificationTests(unittest.IsolatedAsyncioTestCase):

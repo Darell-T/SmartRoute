@@ -234,9 +234,9 @@ class PlanTripItineraryTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 active_providers.remove(name)
 
-        async def collect_events(_routes, _ctx):
+        async def collect_events(*_args, **_kwargs):
             await wait_for_other_provider("ticketmaster")
-            return "available", [], []
+            return "available", [], [], {"grok_status": "complete"}
 
         async def scan_incidents(_context):
             await wait_for_other_provider("web")
@@ -244,8 +244,8 @@ class PlanTripItineraryTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(
-                plan_trip.event_crowd,
-                "collect_route_event_evidence",
+                plan_trip.crowd_evidence,
+                "collect",
                 new=collect_events,
             ),
             patch.object(
@@ -416,9 +416,16 @@ class PlanTripItineraryTests(unittest.IsolatedAsyncioTestCase):
             }
         ]
         with patch.object(
-            plan_trip.event_crowd,
-            "collect_route_event_evidence",
-            new=AsyncMock(return_value=("available", impacts, [])),
+            plan_trip.crowd_evidence,
+            "collect",
+            new=AsyncMock(
+                return_value=(
+                    "available",
+                    impacts,
+                    [],
+                    {"grok_status": "complete"},
+                )
+            ),
         ) as collect:
             result = await plan_trip.execute(
                 {
@@ -460,10 +467,15 @@ class PlanTripItineraryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_ticketmaster_failure_does_not_fail_route_planning(self):
         with patch.object(
-            plan_trip.event_crowd,
-            "collect_route_event_evidence",
+            plan_trip.crowd_evidence,
+            "collect",
             new=AsyncMock(
-                return_value=("provider_unavailable", [], ["event lookup timed out"])
+                return_value=(
+                    "provider_unavailable",
+                    [],
+                    ["event lookup timed out"],
+                    {"grok_status": "unavailable"},
+                )
             ),
         ):
             result = await plan_trip.execute(
@@ -481,6 +493,86 @@ class PlanTripItineraryTests(unittest.IsolatedAsyncioTestCase):
             "provider_unavailable",
         )
         self.assertEqual(result.data["event_evidence"]["provider_failure_count"], 1)
+
+    async def test_automatic_hotspot_triggers_crowd_collection_in_auto(self):
+        hit = plan_trip.crowd_hotspots.HotspotHit(
+            route_index=0,
+            hotspot_key="midtown_34",
+            hotspot_name="MSG and Herald Square",
+            station_name="34 St-Herald Sq",
+            latitude=40.75,
+            longitude=-73.99,
+            expected_at=datetime.now(timezone.utc),
+            route_id="Q",
+        )
+        collect = AsyncMock(
+            return_value=(
+                "no_relevant_events",
+                [],
+                [],
+                {"grok_status": "complete"},
+            )
+        )
+        with (
+            patch.object(
+                plan_trip.crowd_hotspots,
+                "find_hotspot_hits",
+                return_value=[hit],
+            ),
+            patch.object(plan_trip.crowd_evidence, "collect", new=collect),
+        ):
+            result = await plan_trip.execute(
+                {
+                    "origin": "user",
+                    "destination": "Costco",
+                    "crowd_search_mode": "auto",
+                },
+                self._ctx(),
+            )
+
+        self.assertTrue(result.ok)
+        collect.assert_awaited_once()
+        self.assertFalse(collect.await_args.kwargs["explicit_crowd_request"])
+        self.assertTrue(collect.await_args.kwargs["allow_live_search"])
+
+    async def test_incidental_hotspot_in_quick_uses_structured_evidence_only(self):
+        hit = plan_trip.crowd_hotspots.HotspotHit(
+            route_index=0,
+            hotspot_key="midtown_34",
+            hotspot_name="MSG and Herald Square",
+            station_name="34 St-Herald Sq",
+            latitude=40.75,
+            longitude=-73.99,
+            expected_at=datetime.now(timezone.utc),
+            route_id="Q",
+        )
+        collect = AsyncMock(
+            return_value=(
+                "no_relevant_events",
+                [],
+                [],
+                {"grok_status": "not_required"},
+            )
+        )
+        with (
+            patch.object(
+                plan_trip.crowd_hotspots,
+                "find_hotspot_hits",
+                return_value=[hit],
+            ),
+            patch.object(plan_trip.crowd_evidence, "collect", new=collect),
+        ):
+            result = await plan_trip.execute(
+                {
+                    "origin": "user",
+                    "destination": "Costco",
+                    "crowd_search_mode": "quick",
+                },
+                self._ctx(),
+            )
+
+        self.assertTrue(result.ok)
+        self.assertFalse(collect.await_args.kwargs["allow_live_search"])
 
     async def test_first_leg_arrival_context_is_preserved_on_recommended_card(self):
         from app.services.agent.tools._types import ToolResult

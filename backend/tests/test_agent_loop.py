@@ -363,7 +363,7 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(trace.final_mode, "quick")
         self.assertIsNone(trace.escalation_reason)
 
-    async def test_auto_crowd_avoidance_enables_bounded_incident_corroboration(self):
+    async def test_auto_crowd_avoidance_enables_bounded_crowd_research(self):
         trace = self.loop.TurnTrace()
         rounds = [
             {
@@ -391,7 +391,36 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
 
         plan_input = trace.tool_calls[0][1]
         self.assertTrue(plan_input["avoid_crowds"])
-        self.assertTrue(plan_input["include_incident_scan"])
+        self.assertEqual(plan_input["crowd_search_mode"], "auto")
+        self.assertNotIn("include_incident_scan", plan_input)
+
+    async def test_quick_crowd_request_escalates_before_planning(self):
+        trace = self.loop.TurnTrace()
+        rounds = [
+            {
+                "tool_use": [
+                    {
+                        "id": "tu_1",
+                        "name": "plan_trip",
+                        "input": {"destination": "Columbus Circle"},
+                    }
+                ],
+                "stop_reason": "tool_use",
+            },
+            {"text": ["Take the Q."], "stop_reason": "end_turn"},
+        ]
+
+        await self._run(
+            rounds,
+            message="Plan a trip to Columbus Circle and avoid crowds",
+            response_presentation="quick",
+            tool_registry=_test_registry(),
+            trace=trace,
+        )
+
+        self.assertEqual(trace.escalation_reason, "explicit_crowd_evidence")
+        self.assertEqual(trace.final_mode, "auto")
+        self.assertEqual(trace.tool_calls[0][1]["crowd_search_mode"], "auto")
 
     async def test_explicit_route_request_is_injected_into_plan_trip(self):
         trace = self.loop.TurnTrace()
@@ -672,6 +701,49 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(trace.tool_call_count, 1)
         self.assertEqual(trace.retry_count, 0)
         self.assertGreaterEqual(trace.stage_ms["arrival_lookup_ms"], 0)
+
+    async def test_implicit_arrival_followup_uses_active_first_boarding(self):
+        _session_id, session = session_module.new_session()
+        session["active_trip"] = {
+            "first_boarding": {
+                "route_id": "2",
+                "stop_id": "247",
+                "stop_name": "Church Av",
+                "direction_id": 2,
+                "direction_label": "Manhattan",
+                "destination_stop_id": "120",
+            }
+        }
+        trace = self.loop.TurnTrace()
+
+        events_out, _session = await self._run(
+            [],
+            message="when is the next arrival",
+            session=session,
+            tool_registry=_test_registry(),
+            trace=trace,
+        )
+
+        self.assertEqual(trace.tool_calls[0][0], "lookup_arrivals")
+        self.assertEqual(trace.tool_calls[0][1]["route_id"], "2")
+        self.assertEqual(len(self.loop.client.messages.calls), 0)
+        self.assertEqual([event.type for event in events_out].count("done"), 1)
+        self.assertFalse(any(event.type == "error" for event in events_out))
+
+    async def test_implicit_arrival_without_active_trip_clarifies_without_model(self):
+        events_out, _session = await self._run(
+            [],
+            message="when is the next arrival",
+            tool_registry=_test_registry(),
+        )
+
+        self.assertEqual(len(self.loop.client.messages.calls), 0)
+        self.assertEqual(
+            "".join(event.text for event in events_out if event.type == "token"),
+            "Which train or bus route do you want arrivals for?",
+        )
+        self.assertEqual(events_out[-1].terminal_state, "clarification_required")
+        self.assertFalse(any(event.type == "error" for event in events_out))
 
     async def test_arrival_clarification_is_terminal_and_never_becomes_a_generic_error(self):
         registry = _test_registry()

@@ -18,12 +18,22 @@ SmartRouteIntent = Literal[
 ]
 
 _CROWD_RE = re.compile(
-    r"\b(?:avoid|less|fewer)\s+(?:the\s+)?(?:crowd(?:s|ed)?|busy\s+stations?|"
-    r"event\s+traffic|concert\s+crowds?|game\s+traffic|theater\s+crowds?)\b",
+    r"\b(?:(?:avoid|less|fewer)\s+(?:the\s+)?(?:crowd(?:s|ed)?|busy\s+stations?|"
+    r"event\s+traffic|concert\s+crowds?|game\s+traffic|theater\s+crowds?|"
+    r"protests?|parades?|rallies?|street\s+(?:conditions?|fairs?))|"
+    r"(?:check|research|look\s+for|account\s+for)\s+(?:nearby\s+)?(?:crowds?|"
+    r"events?|concerts?|protests?|parades?|rallies?|street\s+conditions?))\b",
     re.IGNORECASE,
 )
 _ARRIVAL_RE = re.compile(
     r"\b(?:next|arriv(?:e|al|ing)|coming|how\s+long\s+until|will\s+i\s+make)\b",
+    re.IGNORECASE,
+)
+_IMPLICIT_ARRIVAL_RE = re.compile(
+    r"\b(?:when\s+(?:is|does)\s+(?:the\s+)?next\s+(?:arrival|one)|"
+    r"next\s+arrival|"
+    r"how\s+long\s+until\s+(?:it|the\s+(?:train|bus))\s+arrives?|"
+    r"when\s+does\s+(?:it|the\s+(?:train|bus))\s+arrive)\b",
     re.IGNORECASE,
 )
 _ROUTE_ID_RE = re.compile(
@@ -44,7 +54,7 @@ _REQUESTED_ROUTE_RE = re.compile(
     re.IGNORECASE,
 )
 _NEW_TRIP_RE = re.compile(
-    r"\b(?:get|take|route|directions?|heading|travel|trip)\b.{0,32}\b(?:to|from)\b|"
+    r"\b(?:get|take|route|directions?|head(?:ing)?|travel|trip)\b.{0,32}\b(?:to|from)\b|"
     r"\b(?:go|going)\s+to\b",
     re.IGNORECASE,
 )
@@ -108,7 +118,10 @@ def parse_intent(message: str) -> ParsedIntent:
     text = " ".join(str(message or "").split())
     route_match = _ROUTE_ID_RE.search(text)
     avoid_crowds = bool(_CROWD_RE.search(text))
-    if _ARRIVAL_RE.search(text) and (route_match or "my train" in text.casefold()):
+    if (
+        _ARRIVAL_RE.search(text)
+        and (route_match or "my train" in text.casefold())
+    ) or _IMPLICIT_ARRIVAL_RE.search(text):
         stop_query = None
         at_match = re.search(r"\b(?:at|from)\s+(.+?)(?:\?|$)", text, re.IGNORECASE)
         if at_match:

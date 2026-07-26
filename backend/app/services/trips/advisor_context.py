@@ -113,6 +113,19 @@ def normalize_ticketmaster_event_impacts(values: Iterable[object] | None) -> lis
         crowd_level = _bounded_text(raw.get("crowd_level"), 16).lower()
         if crowd_level in _ALLOWED_CROWD_LEVELS:
             row["crowd_level"] = crowd_level
+        source_class = _bounded_text(raw.get("source_class"), 24).lower()
+        if source_class in {
+            "structured",
+            "official_web",
+            "official_x",
+            "independent_web",
+            "independent_x",
+        }:
+            row["source_class"] = source_class
+        verification_tier = _bounded_text(raw.get("verification_tier"), 24).lower()
+        if verification_tier in {"structured", "official", "corroborative"}:
+            row["verification_tier"] = verification_tier
+        row["scoring_authorized"] = bool(raw.get("scoring_authorized", True))
         normalized.append(row)
         if len(normalized) >= _MAX_TICKETMASTER_EVENT_IMPACTS:
             break

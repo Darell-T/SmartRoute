@@ -92,6 +92,17 @@ class IntentAndContinuityTests(unittest.TestCase):
         self.assertTrue(parsed.required_evidence.events)
         self.assertEqual(parsed.required_evidence.required_tools(), ("plan_trip",))
 
+    def test_civic_and_street_crowd_requests_trigger_event_research(self):
+        for phrase in (
+            "Plan a trip to City Hall and avoid protests",
+            "Get me to Fifth Avenue and avoid parades",
+            "Head to Columbus Circle and check street conditions",
+        ):
+            with self.subTest(phrase=phrase):
+                parsed = intelligence.parse_intent(phrase)
+                self.assertEqual(parsed.intent, "route_planning")
+                self.assertTrue(parsed.avoid_crowds)
+
     def test_explicit_route_request_becomes_a_hard_planning_constraint(self):
         parsed = intelligence.parse_intent("Plan a Q route to Coney Island")
 
@@ -108,6 +119,17 @@ class IntentAndContinuityTests(unittest.TestCase):
         self.assertEqual(parsed.arrival_route_id, "Q")
         self.assertEqual(parsed.arrival_stop_query, "Newkirk Avenue")
         self.assertEqual(parsed.required_evidence.required_tools(), ("lookup_arrivals",))
+
+    def test_implicit_next_arrival_followup_is_deterministic(self):
+        parsed = intelligence.parse_intent("when is the next arrival")
+
+        self.assertEqual(parsed.intent, "arrival_lookup")
+        self.assertIsNone(parsed.arrival_route_id)
+
+    def test_destination_eta_question_is_not_a_vehicle_arrival_lookup(self):
+        parsed = intelligence.parse_intent("when will I arrive?")
+
+        self.assertEqual(parsed.intent, "transit_question")
 
     def test_destination_discovery_requires_place_evidence(self):
         parsed = intelligence.parse_intent("Find me a good pizza place in Brooklyn")

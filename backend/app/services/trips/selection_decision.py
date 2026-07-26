@@ -63,7 +63,7 @@ def build_route_selection_decision(
     if event_penalty:
         penalties.append(
             {
-                "source": "ticketmaster",
+                "source": "crowd_events",
                 "amount": event_penalty,
                 "reason": "relevant event crowd exposure",
             }
@@ -76,10 +76,14 @@ def build_route_selection_decision(
         constraints.append("arrival_by")
     if avoid_crowds and event_evidence_status in {"available", "no_relevant_events"}:
         constraints.append("crowd_evidence_considered")
+    elif avoid_crowds and event_evidence_status == "partial":
+        constraints.append("crowd_evidence_partial")
 
     evidence_ids = sorted(
         {
-            "ticketmaster:" + str(impact.get("event_id"))
+            str(impact.get("source_class") or "structured")
+            + ":"
+            + str(impact.get("event_id"))
             for impact in event_impacts
             if int(impact.get("route_index", -1)) == selected_index
             and str(impact.get("event_id") or "").strip()

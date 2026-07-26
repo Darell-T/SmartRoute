@@ -452,12 +452,12 @@ def _constrained_tool_input(
         normalized["avoid_crowds"] = bool(
             normalized.get("avoid_crowds") or parsed_intent.avoid_crowds
         )
+        if mode_policy.mode != "auto" or parsed_intent.avoid_crowds:
+            normalized["crowd_search_mode"] = mode_policy.mode
         normalized["include_first_leg_arrivals"] = mode_policy.optional_enrichment
         if parsed_intent.requested_route_ids:
             normalized["required_route_ids"] = list(parsed_intent.requested_route_ids)
-        if normalized.get("include_incident_scan") or (
-            parsed_intent.avoid_crowds and mode_policy.mode == "auto"
-        ):
+        if normalized.get("include_incident_scan"):
             normalized["include_incident_scan"] = True
     elif name == "lookup_arrivals":
         normalized["limit"] = min(
@@ -661,6 +661,13 @@ async def _stream_turn(
     escalation_reason: str | None = None
     intent_started = time.monotonic()
     parsed_intent = intelligence.parse_intent(message)
+    if mode_policy.mode == "quick" and parsed_intent.avoid_crowds:
+        escalation_reason = "explicit_crowd_evidence"
+        mode_policy = agent_policy.policy_for_mode("auto")
+        print(
+            f"[agent-escalation] turn={turn_id} "
+            f"quick_to_auto=1 reason={escalation_reason}"
+        )
     stage_ms = {
         "intent_ms": (time.monotonic() - intent_started) * 1000,
         "session_load_ms": 0.0,

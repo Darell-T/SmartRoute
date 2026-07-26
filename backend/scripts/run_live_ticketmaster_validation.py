@@ -5,7 +5,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+from pathlib import Path
 from typing import Any
+
+from dotenv import load_dotenv
 
 from app.services.agent.tools import event_lookup
 from app.services.agent.tools import venue_crowd_window
@@ -84,6 +87,7 @@ def main() -> int:
     if not args.live:
         print("SKIPPED: pass --live to allow one sanitized Ticketmaster request")
         return 0
+    load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)
     result = asyncio.run(certify())
     safe_fields = (
         "status", "normalized_event_count", "events_with_venue_coordinates",

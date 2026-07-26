@@ -61,6 +61,10 @@ class EventCrowdAssociationTests(unittest.TestCase):
         self.assertEqual(impacts[0]["route_index"], 0)
         self.assertEqual(impacts[0]["exposure_window"], "ingress")
         self.assertEqual(impacts[0]["impact_scope"], "station_crowding")
+        self.assertEqual(impacts[0]["lines"], ["A"])
+        self.assertEqual(impacts[0]["category"], "other")
+        self.assertEqual(impacts[0]["freshness_status"], "current")
+        self.assertEqual(impacts[0]["source_ref"], "structured:evt-msg")
 
     def test_distant_event_does_not_affect_route(self):
         impacts = event_crowd.associate_events(
@@ -112,6 +116,42 @@ class EventCrowdAssociationTests(unittest.TestCase):
         self.assertGreater(score_by_index[0]["event_crowd_penalty"], 0)
         self.assertEqual(score_by_index[1]["event_crowd_penalty"], 0)
         self.assertGreater(score_by_index[0]["score"], score_by_index[1]["score"])
+
+    def test_official_x_penalty_is_reduced_and_capped(self):
+        event = {
+            **_event(),
+            "source_class": "official_x",
+            "verification_tier": "official",
+            "scoring_authorized": True,
+            "confidence": 0.75,
+        }
+
+        impacts = event_crowd.associate_events(
+            [_route()],
+            [event],
+            fallback_time=event_crowd._parse_time("2026-07-25T23:15:00Z"),
+        )
+
+        self.assertEqual(impacts[0]["risk_score"], 5.0)
+        self.assertEqual(impacts[0]["source_class"], "official_x")
+
+    def test_independent_x_evidence_cannot_change_score(self):
+        event = {
+            **_event(),
+            "source_class": "independent_x",
+            "verification_tier": "corroborative",
+            "scoring_authorized": False,
+            "confidence": 0.4,
+        }
+
+        impacts = event_crowd.associate_events(
+            [_route()],
+            [event],
+            fallback_time=event_crowd._parse_time("2026-07-25T23:15:00Z"),
+        )
+
+        self.assertEqual(impacts[0]["risk_score"], 0)
+        self.assertEqual(event_crowd.route_event_penalty(0, impacts), 0)
 
 
 class EventCrowdCollectionTests(unittest.IsolatedAsyncioTestCase):

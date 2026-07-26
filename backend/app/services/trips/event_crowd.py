@@ -18,6 +18,7 @@ from app.utils.geo import distance_meters
 EventEvidenceStatus = Literal[
     "available",
     "no_relevant_events",
+    "partial",
     "provider_unavailable",
     "not_required",
 ]
@@ -35,6 +36,7 @@ class RoutePoint:
     latitude: float
     longitude: float
     expected_at: datetime | None
+    route_id: str = ""
 
 
 def _parse_time(value: object) -> datetime | None:
@@ -82,6 +84,9 @@ def route_points(routes: list[list[dict]]) -> list[RoutePoint]:
                         latitude=coords[0],
                         longitude=coords[1],
                         expected_at=_parse_time(step.get(time_key)),
+                        route_id=str(
+                            step.get("route_id") or step.get("train_line") or ""
+                        ).strip().upper(),
                     )
                 )
     return points
@@ -106,10 +111,11 @@ def associate_events(
     events: Iterable[dict],
     *,
     fallback_time: datetime,
+    additional_route_points: Iterable[RoutePoint] = (),
 ) -> list[dict]:
     """Associate only events close in both space and the candidate timeline."""
 
-    points = route_points(routes)
+    points = [*route_points(routes), *additional_route_points]
     closest: dict[tuple[int, str], dict] = {}
     for event in events:
         try:
@@ -134,10 +140,25 @@ def associate_events(
                 continue
             window, base_risk = exposure
             distance_factor = max(0.35, 1.0 - distance / _ASSOCIATION_RADIUS_METERS)
-            risk_score = round(base_risk * distance_factor, 2)
+            scoring_authorized = bool(event.get("scoring_authorized", True))
+            source_class = str(event.get("source_class") or "structured")
+            source_multiplier = 0.65 if source_class == "official_x" else 1.0
+            risk_score = (
+                min(
+                    5.0 if source_class == "official_x" else 18.0,
+                    round(base_risk * distance_factor * source_multiplier, 2),
+                )
+                if scoring_authorized
+                else 0.0
+            )
             row = {
                 "event_id": event_id,
+                "source_ref": str(
+                    event.get("source_reference")
+                    or f"{event.get('source_class') or 'structured'}:{event_id}"
+                )[:160],
                 "title": str(event.get("name") or "Nearby event")[:140],
+                "category": str(event.get("category") or "other")[:24],
                 "venue": str(event.get("venue_name") or "venue")[:100],
                 "latitude": event_lat,
                 "longitude": event_lng,
@@ -145,14 +166,24 @@ def associate_events(
                 "distance_meters": round(distance, 1),
                 "affected_stop_ids": [point.name],
                 "stations": [point.name],
-                "lines": [],
+                "lines": [point.route_id] if point.route_id else [],
                 "impact_scope": "station_crowding",
                 "exposure_window": window,
                 "window_start_iso": event.get("start_iso"),
                 "window_end_iso": event.get("estimated_end_iso"),
                 "risk_score": risk_score,
-                "confidence": 0.85 if event.get("start_time_status") == "confirmed" else 0.6,
+                "confidence": float(
+                    event.get("confidence")
+                    or (0.85 if event.get("start_time_status") == "confirmed" else 0.6)
+                ),
                 "crowd_level": "high" if risk_score >= 6 else "moderate",
+                "source_class": source_class,
+                "verification_tier": str(
+                    event.get("verification_tier") or "structured"
+                ),
+                "scoring_authorized": scoring_authorized,
+                "observed_at": event.get("observed_at"),
+                "freshness_status": "current",
             }
             key = (point.route_index, event_id)
             previous = closest.get(key)
@@ -164,7 +195,7 @@ def associate_events(
     )
 
 
-def _search_hubs(routes: list[list[dict]]) -> list[RoutePoint]:
+def search_hubs(routes: list[list[dict]]) -> list[RoutePoint]:
     unique: list[RoutePoint] = []
     seen: set[tuple[int, int]] = set()
     for point in route_points(routes):
@@ -189,6 +220,7 @@ async def collect_route_event_evidence(
     ctx: Any,
     *,
     lookup: Callable[[dict, Any], Awaitable[Any]] | None = None,
+    search_points: Iterable[RoutePoint] | None = None,
 ) -> tuple[EventEvidenceStatus, list[dict], list[str]]:
     """Search route hubs concurrently and return status, impacts, failures."""
 
@@ -197,7 +229,8 @@ async def collect_route_event_evidence(
         # agent tool registry during package initialization.
         from app.services.agent.tools.event_lookup import execute as lookup
 
-    hubs = _search_hubs(routes)
+    supplied_points = list(search_points or [])
+    hubs = supplied_points or search_hubs(routes)
     if not hubs:
         return "no_relevant_events", [], []
     travel_time = next((point.expected_at for point in hubs if point.expected_at), None)
@@ -235,7 +268,12 @@ async def collect_route_event_evidence(
             seen.add(event_id)
             events.append(event)
 
-    impacts = associate_events(routes, events, fallback_time=travel_time)
+    impacts = associate_events(
+        routes,
+        events,
+        fallback_time=travel_time,
+        additional_route_points=supplied_points,
+    )
     if impacts:
         return "available", impacts, failures
     if failures and not events:
