@@ -114,6 +114,7 @@ class ArrivalCardEvent:
     directions: list
     updated_at: str
     source_status: str
+    resolution_status: str
     catchability: dict | None = None
     ambiguity: list | None = None
     evidence: dict | None = None
@@ -121,15 +122,26 @@ class ArrivalCardEvent:
 
     @classmethod
     def from_lookup(cls, turn_id: str, payload: dict) -> "ArrivalCardEvent":
+        source_status = str(payload.get("source_status") or "provider_unavailable")
+        ambiguity = payload.get("ambiguity")
+        if source_status == "stop_not_resolved":
+            resolution_status = "ambiguous" if ambiguity else "location_required"
+        elif source_status == "provider_unavailable":
+            resolution_status = "provider_unavailable"
+        elif source_status == "no_predictions":
+            resolution_status = "no_predictions"
+        else:
+            resolution_status = "resolved"
         return cls(
             turn_id=turn_id,
             route_id=str(payload.get("route_id") or ""),
             stop=dict(payload.get("stop") or {}),
             directions=list(payload.get("directions") or []),
             updated_at=str(payload.get("updated_at") or ""),
-            source_status=str(payload.get("source_status") or "provider_unavailable"),
+            source_status=source_status,
+            resolution_status=resolution_status,
             catchability=payload.get("catchability"),
-            ambiguity=payload.get("ambiguity"),
+            ambiguity=ambiguity,
             evidence=payload.get("evidence"),
         )
 
@@ -141,6 +153,7 @@ class ArrivalCardEvent:
             "directions": self.directions,
             "updated_at": self.updated_at,
             "source_status": self.source_status,
+            "resolution_status": self.resolution_status,
         }
         if self.catchability is not None:
             data["catchability"] = self.catchability
@@ -166,15 +179,24 @@ class ErrorEvent:
 class DoneEvent:
     session_id: str
     turn_id: str
-    stop_reason: str  # end_turn|max_rounds|deadline|error
+    stop_reason: str  # end_turn|clarification_required|max_rounds|deadline|error
     usage: dict
     type: str = "done"
+
+    @property
+    def terminal_state(self) -> str:
+        if self.stop_reason == "clarification_required":
+            return "clarification_required"
+        if self.stop_reason == "end_turn":
+            return "completed"
+        return "failed"
 
     def to_data(self) -> dict[str, Any]:
         return {
             "session_id": self.session_id,
             "turn_id": self.turn_id,
             "stop_reason": self.stop_reason,
+            "terminal_state": self.terminal_state,
             "usage": self.usage,
         }
 

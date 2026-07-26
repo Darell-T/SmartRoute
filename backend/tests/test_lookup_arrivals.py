@@ -58,6 +58,14 @@ class FakeScheduledGtfs(FakeGtfs):
         }
 
 
+class BrokenDatabaseGtfs:
+    def get_subway_stops_with_routes(self, _route_ids):
+        raise RuntimeError("database unavailable")
+
+    def get_child_stop_ids(self, _stop_id):
+        raise RuntimeError("database unavailable")
+
+
 def _ctx(*, session=None, origin=None):
     return ToolContext(
         gtfs=FakeGtfs(),
@@ -119,6 +127,27 @@ class SubwayArrivalLookupTests(unittest.IsolatedAsyncioTestCase):
             {"uptown", "downtown"},
         )
 
+    async def test_explicit_station_overrides_active_trip_boarding(self):
+        session = {
+            "active_trip": {
+                "first_boarding": {
+                    "route_id": "Q",
+                    "stop_id": "D28",
+                    "stop_name": "Newkirk Plaza",
+                    "direction_id": 1,
+                    "coordinates": {"latitude": 40.6351, "longitude": -73.9628},
+                }
+            }
+        }
+        result = await self._run(
+            {"route_id": "Q", "stop_query": "Prospect Park"},
+            [_feed([("D26S", NOW + 240), ("D28S", NOW + 420)])],
+            ctx=_ctx(session=session),
+        )
+
+        self.assertEqual(result.data["stop"]["name"], "Prospect Park")
+        self.assertEqual([group["id"] for group in result.data["directions"]], ["downtown"])
+
     async def test_line_only_uses_nearest_station_served_by_that_line(self):
         result = await self._run(
             {
@@ -149,6 +178,40 @@ class SubwayArrivalLookupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.data["stop"]["name"], "Newkirk Plaza")
         self.assertEqual([group["id"] for group in result.data["directions"]], ["downtown"])
         self.assertEqual(result.data["catchability"]["catchable_arrival_minutes"], 7)
+
+    async def test_active_q_at_church_uses_persisted_stop_when_database_is_unavailable(self):
+        session = {
+            "active_trip": {
+                "first_boarding": {
+                    "route_id": "q",
+                    "stop_id": "D28",
+                    "stop_name": "Church Av",
+                    "direction_id": 1,
+                    "direction_label": "Coney Island-Stillwell Av",
+                    "destination_stop_id": "D43",
+                    "coordinates": {"latitude": 40.6505, "longitude": -73.9624},
+                }
+            }
+        }
+        context = _ctx(session=session)
+        context.gtfs = BrokenDatabaseGtfs()
+
+        result = await self._run(
+            {"route_id": "q"},
+            [_feed([("D28N", NOW + 120), ("D28S", NOW + 420)])],
+            ctx=context,
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.data["route_id"], "Q")
+        self.assertEqual(result.data["stop"], {
+            "id": "D28",
+            "name": "Church Av",
+            "distance_meters": 0.0,
+            "latitude": 40.6505,
+            "longitude": -73.9624,
+        })
+        self.assertEqual([group["id"] for group in result.data["directions"]], ["downtown"])
 
     async def test_predictions_are_deduplicated_and_sorted(self):
         result = await self._run(

@@ -116,6 +116,26 @@ async def _fake_arrivals_tool(tool_input, ctx):
     )
 
 
+async def _fake_arrival_clarification_tool(tool_input, ctx):
+    payload = {
+        "route_id": tool_input["route_id"],
+        "stop": {"id": "", "name": "Transit stop"},
+        "directions": [],
+        "updated_at": "2026-07-25T14:00:00Z",
+        "source_status": "stop_not_resolved",
+        "ambiguity": [
+            {"stop_id": "A01", "stop_name": "34 St-Penn Station"},
+            {"stop_id": "A32", "stop_name": "34 St-Hudson Yards"},
+        ],
+    }
+    return ToolResult(
+        ok=True,
+        data=payload,
+        summary="station clarification required",
+        events=[agent_events.ArrivalCardEvent.from_lookup(ctx.turn_id, payload)],
+    )
+
+
 async def _fake_poi_tool(tool_input, ctx):
     return ToolResult(
         ok=True,
@@ -343,6 +363,36 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(trace.final_mode, "quick")
         self.assertIsNone(trace.escalation_reason)
 
+    async def test_auto_crowd_avoidance_enables_bounded_incident_corroboration(self):
+        trace = self.loop.TurnTrace()
+        rounds = [
+            {
+                "tool_use": [
+                    {
+                        "id": "tu_1",
+                        "name": "plan_trip",
+                        "input": {"destination": "Columbus Circle"},
+                    }
+                ],
+                "stop_reason": "tool_use",
+            },
+            {"text": ["Take the A."], "stop_reason": "end_turn"},
+        ]
+
+        await self._run(
+            rounds,
+            message=(
+                "I want to head to Columbus Circle later and avoid crowds "
+                "on both the street and subway"
+            ),
+            tool_registry=_test_registry(),
+            trace=trace,
+        )
+
+        plan_input = trace.tool_calls[0][1]
+        self.assertTrue(plan_input["avoid_crowds"])
+        self.assertTrue(plan_input["include_incident_scan"])
+
     async def test_intent_tool_profiles_stay_within_provider_schema_limit(self):
         def optional_parameter_count(schema):
             if not schema:
@@ -367,11 +417,8 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         )
         for message, expected_tools in cases:
             with self.subTest(message=message):
-                await self._run(
-                    [{"text": ["Grounded response."], "stop_reason": "end_turn"}],
-                    message=message,
-                )
-                schemas = self.loop.client.messages.calls[0]["tools"]
+                parsed_intent = self.loop.intelligence.parse_intent(message)
+                schemas = self.loop._tools_for_intent(parsed_intent)
                 total = sum(
                     optional_parameter_count(schema["input_schema"])
                     for schema in schemas
@@ -536,6 +583,7 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         await self._run(rounds, tool_registry=_test_registry(), trace=trace)
         self.assertEqual(trace.tool_calls, [("ok_tool", {"x": 1})])
         self.assertEqual(trace.final_text, "final answer")
+        self.assertEqual(trace.model_call_count, 2)
 
     async def test_simple_arithmetic_skips_model_and_tools(self):
         events_out, session = await self._run([], message="What is 5 + 5?")
@@ -546,21 +594,89 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(session["history"][-1]["text"], "10.")
 
-    async def test_arrival_intent_runs_grounded_lookup_before_model_in_quick_mode(self):
+    async def test_resolved_arrival_uses_active_trip_and_skips_every_model_call(self):
+        _session_id, session = session_module.new_session()
+        session["active_trip"] = {
+            "first_boarding": {
+                "route_id": "q",
+                "stop_id": "D28",
+                "stop_name": "Church Av",
+                "direction_id": 1,
+                "direction_label": "Coney Island-Stillwell Av",
+                "destination_stop_id": "D43",
+            }
+        }
         trace = self.loop.TurnTrace()
         events_out, _session = await self._run(
-            [{"text": ["The next Q is in four minutes."], "stop_reason": "end_turn"}],
-            message="When is the next Q at Newkirk Avenue?",
+            [],
+            message="When does the next q arrive?",
+            session=session,
             response_presentation="quick",
             tool_registry=_test_registry(),
             trace=trace,
         )
         self.assertEqual(trace.tool_calls[0][0], "lookup_arrivals")
         self.assertEqual(trace.tool_calls[0][1]["limit"], 2)
-        self.assertTrue(any(event.type == "arrival_card" for event in events_out))
-        model_context = self.loop.client.messages.calls[0]["messages"][-1]["content"]
-        self.assertIn('<required_evidence source="lookup_arrivals">', model_context)
-        self.assertIn('"source_status":"live"', model_context)
+        self.assertFalse(any(name == "plan_trip" for name, _ in trace.tool_calls))
+        arrival_event = next(event for event in events_out if event.type == "arrival_card")
+        self.assertEqual(arrival_event.resolution_status, "resolved")
+        self.assertEqual(len(self.loop.client.messages.calls), 0)
+        self.assertEqual(
+            "".join(event.text for event in events_out if event.type == "token"),
+            "The next downtown Q train at Newkirk Plaza is in 4 minutes.",
+        )
+        self.assertEqual([event.type for event in events_out].count("done"), 1)
+        self.assertEqual(events_out[-1].stop_reason, "end_turn")
+        self.assertEqual(events_out[-1].terminal_state, "completed")
+        self.assertEqual(trace.model_call_count, 0)
+        self.assertEqual(trace.tool_call_count, 1)
+        self.assertEqual(trace.retry_count, 0)
+        self.assertGreaterEqual(trace.stage_ms["arrival_lookup_ms"], 0)
+
+    async def test_arrival_clarification_is_terminal_and_never_becomes_a_generic_error(self):
+        registry = _test_registry()
+        registry["lookup_arrivals"] = ToolSpec(
+            schema={"name": "lookup_arrivals"},
+            executor=_fake_arrival_clarification_tool,
+            label_fn=lambda i: f"Checking {i.get('route_id')} arrivals",
+            timeout_s=5.0,
+        )
+
+        events_out, _session = await self._run(
+            [],
+            message="When does the next Q arrive at 34 St?",
+            tool_registry=registry,
+        )
+
+        self.assertEqual(len(self.loop.client.messages.calls), 0)
+        arrival_event = next(event for event in events_out if event.type == "arrival_card")
+        self.assertEqual(arrival_event.resolution_status, "ambiguous")
+        self.assertFalse(any(event.type == "error" for event in events_out))
+        self.assertEqual([event.type for event in events_out].count("done"), 1)
+        self.assertEqual(events_out[-1].stop_reason, "clarification_required")
+        self.assertEqual(events_out[-1].terminal_state, "clarification_required")
+
+    def test_stale_arrival_copy_preserves_the_prediction_and_its_freshness(self):
+        text, stop_reason = self.loop._arrival_response(
+            {
+                "route_id": "Q",
+                "stop": {"name": "Church Av"},
+                "source_status": "stale",
+                "directions": [
+                    {
+                        "id": "downtown",
+                        "arrivals": [{"minutes": 4}],
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(stop_reason, "end_turn")
+        self.assertEqual(
+            text,
+            "The latest available downtown Q prediction at Church Av is 4 minutes, "
+            "but live data is stale.",
+        )
 
     async def test_destination_discovery_is_grounded_before_model_in_both_modes(self):
         for mode, expected_limit in (("auto", 3), ("quick", 2)):

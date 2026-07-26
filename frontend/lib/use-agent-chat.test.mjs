@@ -6,6 +6,8 @@ import {
   buildAgentChatRequest,
   persistSessionId,
   readPersistedSessionId,
+  runTurn,
+  sessionStorageKey,
 } from "./use-agent-chat.ts";
 
 function initialState(overrides = {}) {
@@ -223,13 +225,39 @@ test("events after turn_started with no assistant turn present are dropped, not 
   assert.deepEqual(state.messages, []);
 });
 
-test("session id persistence: reads a stored id and treats missing storage as no session", () => {
-  const storage = { store: { "sr-agent-session": "sess-42" }, getItem(key) { return this.store[key] ?? null; }, setItem(key, value) { this.store[key] = value; } };
-  assert.equal(readPersistedSessionId(storage), "sess-42");
-  assert.equal(readPersistedSessionId(undefined), null);
+test("session id persistence is versioned and namespaced by backend environment", () => {
+  const namespace = "http://localhost:3000|development";
+  const storage = {
+    store: {},
+    getItem(key) { return this.store[key] ?? null; },
+    setItem(key, value) { this.store[key] = value; },
+    removeItem(key) { delete this.store[key]; },
+  };
 
-  const empty = { store: {}, getItem(key) { return this.store[key] ?? null; }, setItem(key, value) { this.store[key] = value; } };
-  assert.equal(readPersistedSessionId(empty), null);
+  persistSessionId(storage, "sess-42", namespace);
+
+  assert.equal(readPersistedSessionId(storage, namespace), "sess-42");
+  assert.equal(readPersistedSessionId(storage, "https://smartroute.app|production"), null);
+  assert.equal(readPersistedSessionId(undefined), null);
+  assert.match(sessionStorageKey(namespace), /development/);
+});
+
+test("legacy and incompatible session records are discarded", () => {
+  const namespace = "http://localhost:3000|development";
+  const key = sessionStorageKey(namespace);
+  const removed = [];
+  const storage = {
+    store: {
+      "sr-agent-session": "legacy-bare-session",
+      [key]: JSON.stringify({ version: 999, namespace, sessionId: "stale" }),
+    },
+    getItem(name) { return this.store[name] ?? null; },
+    setItem(name, value) { this.store[name] = value; },
+    removeItem(name) { removed.push(name); delete this.store[name]; },
+  };
+
+  assert.equal(readPersistedSessionId(storage, namespace), null);
+  assert.deepEqual(removed, ["sr-agent-session", key]);
 });
 
 test("local_turn_appended appends a display-only assistant turn without touching isStreaming", () => {
@@ -285,21 +313,36 @@ test("local_turn_appended after an in-progress streaming turn leaves that turn u
   assert.equal(state.isStreaming, true);
 });
 
-test("session id persistence: writes only a non-null id, and tolerates a throwing storage", () => {
+test("session id persistence writes a record, clears null, and tolerates throwing storage", () => {
+  const namespace = "http://localhost:3000|development";
   const writes = [];
+  const removals = [];
   const storage = {
     getItem() { return null; },
     setItem(key, value) { writes.push([key, value]); },
+    removeItem(key) { removals.push(key); },
   };
-  persistSessionId(storage, "sess-1");
-  persistSessionId(storage, null);
-  assert.deepEqual(writes, [["sr-agent-session", "sess-1"]]);
+  persistSessionId(storage, "sess-1", namespace);
+  persistSessionId(storage, null, namespace);
+  assert.equal(writes.length, 1);
+  assert.deepEqual(JSON.parse(writes[0][1]), {
+    version: 2,
+    namespace,
+    sessionId: "sess-1",
+  });
+  assert.deepEqual(removals, [
+    "sr-agent-session",
+    sessionStorageKey(namespace),
+    "sr-agent-session",
+  ]);
 
   const throwing = {
     getItem() { return null; },
     setItem() { throw new Error("quota exceeded"); },
+    removeItem() { throw new Error("blocked"); },
   };
-  assert.doesNotThrow(() => persistSessionId(throwing, "sess-1"));
+  assert.doesNotThrow(() => persistSessionId(throwing, "sess-1", namespace));
+  assert.doesNotThrow(() => persistSessionId(throwing, null, namespace));
 });
 
 test("a typed provider request failure stops cleanly without creating a route card", () => {
@@ -373,6 +416,213 @@ test("arrival_card attaches production arrival evidence to the streaming assista
   assert.equal(turn.arrivals.sourceStatus, "live");
   assert.deepEqual(turn.arrivals.stationCoordinates, { lat: 40.635, lng: -73.962 });
   assert.match(turn.arrivals.stationGuidance, /0\.2 mi away/);
+});
+
+test("arrival clarification suppresses generic errors and accepts only one terminal event", () => {
+  let state = applyAgentEvent(initialState(), {
+    type: "turn_started",
+    text: "When does the next Q arrive?",
+  });
+  state = applyAgentEvent(state, {
+    type: "meta",
+    session_id: "sess-1",
+    turn_id: "t2",
+  });
+  state = applyAgentEvent(state, {
+    type: "arrival_card",
+    turn_id: "t2",
+    route_id: "Q",
+    stop: { id: "", name: "Transit stop" },
+    directions: [],
+    updated_at: "2026-07-25T14:00:00Z",
+    source_status: "stop_not_resolved",
+    ambiguity: [{ stop_id: "D28", stop_name: "Church Av" }],
+  });
+  state = applyAgentEvent(state, {
+    type: "error",
+    code: "upstream_error",
+    message: "SmartRoute could not complete that request.",
+    retryable: true,
+  });
+  state = applyAgentEvent(state, {
+    type: "done",
+    session_id: "sess-1",
+    turn_id: "t2",
+    stop_reason: "clarification_required",
+    usage: {},
+  });
+  state = applyAgentEvent(state, {
+    type: "done",
+    session_id: "sess-1",
+    turn_id: "t2",
+    stop_reason: "error",
+    usage: {},
+  });
+
+  const assistant = state.messages.at(-1);
+  assert.equal(state.error, null);
+  assert.equal(assistant.error, undefined);
+  assert.equal(assistant.stopReason, "clarification_required");
+  assert.equal(assistant.isStreaming, false);
+});
+
+test("a stale fresh-load session is recreated once without redispatching the failed attempt", async () => {
+  const attempts = [];
+  const actions = [];
+  let discarded = 0;
+  const transport = async function* (request) {
+    attempts.push(request);
+    if (attempts.length === 1) {
+      yield { type: "meta", session_id: "stale", turn_id: "t0" };
+      yield {
+        type: "error",
+        code: "session_expired",
+        message: "expired",
+        retryable: true,
+      };
+      yield {
+        type: "done",
+        session_id: "stale",
+        turn_id: "t0",
+        stop_reason: "error",
+        usage: {},
+      };
+      return;
+    }
+    yield { type: "meta", session_id: "fresh", turn_id: "t1" };
+    yield { type: "token", text: "Your route is ready." };
+    yield {
+      type: "done",
+      session_id: "fresh",
+      turn_id: "t1",
+      stop_reason: "end_turn",
+      usage: {},
+    };
+  };
+  const controller = new AbortController();
+  const inFlightRef = { current: true };
+  const abortControllerRef = { current: controller };
+  const request = {
+    session_id: "stale",
+    message: "Plan my trip",
+    response_presentation: "auto",
+  };
+
+  await runTurn(
+    transport,
+    request,
+    controller,
+    (action) => actions.push(action),
+    inFlightRef,
+    abortControllerRef,
+    { canRecoverSession: true, discardSession: () => { discarded += 1; } },
+  );
+
+  assert.equal(attempts.length, 2);
+  assert.equal(attempts[0].message, attempts[1].message);
+  assert.equal(attempts[1].session_id, undefined);
+  assert.equal(discarded, 1);
+  assert.deepEqual(actions.map((action) => action.type), ["meta", "token", "done"]);
+  assert.equal(actions.filter((action) => action.type === "done").length, 1);
+});
+
+test("session recreation is capped at one attempt and visible history is not discarded", async () => {
+  async function run(canRecoverSession) {
+    let attempts = 0;
+    let discarded = 0;
+    const actions = [];
+    const transport = async function* () {
+      attempts += 1;
+      yield { type: "meta", session_id: "stale", turn_id: "t0" };
+      yield {
+        type: "error",
+        code: "session_expired",
+        message: "expired",
+        retryable: true,
+      };
+      yield {
+        type: "done",
+        session_id: "stale",
+        turn_id: "t0",
+        stop_reason: "error",
+        usage: {},
+      };
+    };
+    const controller = new AbortController();
+    await runTurn(
+      transport,
+      {
+        session_id: "stale",
+        message: "Keep this message",
+        response_presentation: "auto",
+      },
+      controller,
+      (action) => actions.push(action),
+      { current: true },
+      { current: controller },
+      {
+        canRecoverSession,
+        discardSession: () => { discarded += 1; },
+      },
+    );
+    return { attempts, discarded, actions };
+  }
+
+  const fresh = await run(true);
+  assert.equal(fresh.attempts, 2);
+  assert.equal(fresh.discarded, 1);
+  assert.equal(fresh.actions.filter((action) => action.type === "error").length, 1);
+
+  const visible = await run(false);
+  assert.equal(visible.attempts, 1);
+  assert.equal(visible.discarded, 0);
+  assert.equal(visible.actions.find((action) => action.type === "error").code, "session_expired");
+});
+
+test("a failed replacement request produces one terminal connection error", async () => {
+  let attempts = 0;
+  const actions = [];
+  const transport = async function* () {
+    attempts += 1;
+    if (attempts === 1) {
+      yield { type: "meta", session_id: "stale", turn_id: "t0" };
+      yield {
+        type: "error",
+        code: "session_expired",
+        message: "expired",
+        retryable: true,
+      };
+      yield {
+        type: "done",
+        session_id: "stale",
+        turn_id: "t0",
+        stop_reason: "error",
+        usage: {},
+      };
+      return;
+    }
+    throw new Error("replacement failed");
+  };
+  const controller = new AbortController();
+
+  await runTurn(
+    transport,
+    {
+      session_id: "stale",
+      message: "Preserve me",
+      response_presentation: "auto",
+    },
+    controller,
+    (action) => actions.push(action),
+    { current: true },
+    { current: controller },
+    { canRecoverSession: true, discardSession: () => undefined },
+  );
+
+  assert.equal(attempts, 2);
+  assert.deepEqual(actions, [
+    { type: "stream_error", message: "replacement failed" },
+  ]);
 });
 
 test("chat requests carry response presentation without changing route inputs", () => {

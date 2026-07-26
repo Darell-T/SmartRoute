@@ -23,7 +23,9 @@ import {
 } from "./agent-chat-stream";
 import type { ResponsePresentationMode } from "./response-presentation";
 
-const SESSION_STORAGE_KEY = "sr-agent-session";
+const LEGACY_SESSION_STORAGE_KEY = "sr-agent-session";
+const SESSION_RECORD_VERSION = 2;
+const SESSION_STORAGE_KEY = "sr-agent-session:v2";
 const CHAT_ENDPOINT = "/api/agent/chat";
 
 export interface ToolChip {
@@ -52,7 +54,14 @@ export interface AssistantTurn {
   /** `end_turn|max_rounds|deadline|error` from the backend, or the two
    *  frontend-only outcomes for a turn that never got a `done`: `cancelled`
    *  (the rider hit stop) and `dropped` (the connection died first). */
-  stopReason?: "end_turn" | "max_rounds" | "deadline" | "error" | "cancelled" | "dropped";
+  stopReason?:
+    | "end_turn"
+    | "clarification_required"
+    | "max_rounds"
+    | "deadline"
+    | "error"
+    | "cancelled"
+    | "dropped";
   error?: { code: string; message: string; retryable: boolean };
   /** True only for turns appended by `appendLocalTurn` (the Near You bullet
    *  tap flow) — rendered from data already in memory, never sent to or
@@ -108,6 +117,7 @@ export interface ChatState {
 export type ChatReducerAction =
   | AgentEvent
   | { type: "chat_reset" }
+  | { type: "session_discarded" }
   | { type: "turn_started"; text: string }
   | { type: "stream_error"; message: string }
   | { type: "stream_cancelled" }
@@ -178,6 +188,8 @@ export function applyAgentEvent(state: ChatState, action: ChatReducerAction): Ch
   switch (action.type) {
     case "chat_reset":
       return initChatState(null);
+    case "session_discarded":
+      return { ...state, sessionId: null };
     case "turn_started": {
       const userTurn: UserTurn = { role: "user", text: action.text };
       const assistantTurn: AssistantTurn = {
@@ -246,6 +258,8 @@ export function applyAgentEvent(state: ChatState, action: ChatReducerAction): Ch
       }));
     }
     case "error": {
+      const turn = lastAssistantTurn(state.messages);
+      if (turn?.arrivals) return state;
       return {
         ...updateLastAssistantTurn(state, (turn) => ({
           ...turn,
@@ -255,6 +269,13 @@ export function applyAgentEvent(state: ChatState, action: ChatReducerAction): Ch
       };
     }
     case "done": {
+      const turn = lastAssistantTurn(state.messages);
+      if (
+        turn &&
+        (!turn.isStreaming || (turn.turnId && turn.turnId !== action.turn_id))
+      ) {
+        return state;
+      }
       return {
         ...updateLastAssistantTurn(state, (turn) => ({
           ...turn,
@@ -314,6 +335,19 @@ export function applyAgentEvent(state: ChatState, action: ChatReducerAction): Ch
 type StorageLike = Pick<Storage, "getItem" | "setItem"> &
   Partial<Pick<Storage, "removeItem">>;
 
+function currentSessionNamespace(): string {
+  const origin = typeof window === "undefined" ? "server" : window.location.origin;
+  const environment =
+    process.env.NEXT_PUBLIC_AGENT_SESSION_ENV ||
+    process.env.NEXT_PUBLIC_API_URL ||
+    "default";
+  return `${origin}|${environment}`;
+}
+
+export function sessionStorageKey(namespace: string): string {
+  return `${SESSION_STORAGE_KEY}:${encodeURIComponent(namespace)}`;
+}
+
 /** `sessionStorage` throws in some privacy-mode/embedded-webview contexts
  *  even though `window` exists — treat that the same as "no storage
  *  available" rather than crashing turn 1. */
@@ -321,7 +355,7 @@ function safeSessionStorage(): StorageLike | undefined {
   if (typeof window === "undefined") return undefined;
   try {
     const storage = window.sessionStorage;
-    storage.getItem(SESSION_STORAGE_KEY); // touch it — some contexts throw lazily
+    storage.getItem(sessionStorageKey(currentSessionNamespace()));
     return storage;
   } catch {
     return undefined;
@@ -330,21 +364,62 @@ function safeSessionStorage(): StorageLike | undefined {
 
 /** Reads the persisted session id (if any) so a page refresh continues the
  *  same conversation instead of silently starting a new one. */
-export function readPersistedSessionId(storage: StorageLike | undefined): string | null {
+export function readPersistedSessionId(
+  storage: StorageLike | undefined,
+  namespace = currentSessionNamespace(),
+): string | null {
   if (!storage) return null;
+  const key = sessionStorageKey(namespace);
   try {
-    return storage.getItem(SESSION_STORAGE_KEY);
+    storage.removeItem?.(LEGACY_SESSION_STORAGE_KEY);
+    const raw = storage.getItem(key);
+    if (!raw) return null;
+    const record: unknown = JSON.parse(raw);
+    if (
+      !record ||
+      typeof record !== "object" ||
+      (record as { version?: unknown }).version !== SESSION_RECORD_VERSION ||
+      (record as { namespace?: unknown }).namespace !== namespace ||
+      typeof (record as { sessionId?: unknown }).sessionId !== "string"
+    ) {
+      storage.removeItem?.(key);
+      return null;
+    }
+    return (record as { sessionId: string }).sessionId;
   } catch {
+    try {
+      storage.removeItem?.(key);
+    } catch {
+      // Storage is unavailable; continue without a persisted session.
+    }
     return null;
   }
 }
 
 /** Persists the session id from a `meta`/`done` event. No-op for a null
  *  session id or unavailable storage. */
-export function persistSessionId(storage: StorageLike | undefined, sessionId: string | null): void {
-  if (!storage || !sessionId) return;
+export function persistSessionId(
+  storage: StorageLike | undefined,
+  sessionId: string | null,
+  namespace = currentSessionNamespace(),
+): void {
+  if (!storage) return;
+  const key = sessionStorageKey(namespace);
   try {
-    storage.setItem(SESSION_STORAGE_KEY, sessionId);
+    if (!sessionId) {
+      storage.removeItem?.(key);
+      storage.removeItem?.(LEGACY_SESSION_STORAGE_KEY);
+      return;
+    }
+    storage.removeItem?.(LEGACY_SESSION_STORAGE_KEY);
+    storage.setItem(
+      key,
+      JSON.stringify({
+        version: SESSION_RECORD_VERSION,
+        namespace,
+        sessionId,
+      }),
+    );
   } catch {
     // Storage full/blocked: the conversation still works for this tab, it
     // just won't survive a refresh. Not worth surfacing to the rider.
@@ -525,7 +600,21 @@ export function useAgentChat(options: UseAgentChatOptions = {}): UseAgentChatRes
       responsePresentation,
     });
 
-    void runTurn(transport, request, controller, dispatch, inFlightRef, abortControllerRef);
+    void runTurn(
+      transport,
+      request,
+      controller,
+      dispatch,
+      inFlightRef,
+      abortControllerRef,
+      {
+        canRecoverSession: state.messages.length === 0,
+        discardSession: () => {
+          persistSessionId(safeSessionStorage(), null);
+          dispatch({ type: "session_discarded" });
+        },
+      },
+    );
   }
 
   function cancel(): void {
@@ -539,7 +628,9 @@ export function useAgentChat(options: UseAgentChatOptions = {}): UseAgentChatRes
     setSelectedCardId(null);
     localTurnSeqRef.current = 0;
     try {
-      safeSessionStorage()?.removeItem?.(SESSION_STORAGE_KEY);
+      const storage = safeSessionStorage();
+      storage?.removeItem?.(sessionStorageKey(currentSessionNamespace()));
+      storage?.removeItem?.(LEGACY_SESSION_STORAGE_KEY);
     } catch {
       // A fresh in-memory state is still useful when storage is unavailable.
     }
@@ -579,25 +670,72 @@ export function useAgentChat(options: UseAgentChatOptions = {}): UseAgentChatRes
  *  ends without a `done` event — "no polling, no reconnection: a dropped
  *  stream just finalizes the turn." Pulled out of `send` so the guard/abort
  *  refs it needs are passed explicitly rather than closed over stale. */
-async function runTurn(
+interface SessionRecoveryOptions {
+  canRecoverSession: boolean;
+  discardSession: () => void;
+}
+
+export async function runTurn(
   transport: AgentChatTransport,
   request: AgentChatRequestBody,
   controller: AbortController,
   dispatch: Dispatch<ChatReducerAction>,
   inFlightRef: { current: boolean },
   abortControllerRef: { current: AbortController | null },
+  recovery: SessionRecoveryOptions = {
+    canRecoverSession: false,
+    discardSession: () => undefined,
+  },
 ): Promise<void> {
   let receivedDone = false;
+  let recoveryAttempted = false;
+  let activeRequest = request;
   try {
-    for await (const event of transport(request, controller.signal)) {
-      if (event.type === "done") receivedDone = true;
-      dispatch(event);
-    }
-    if (!receivedDone && !controller.signal.aborted) {
-      dispatch({
-        type: "stream_error",
-        message: "The connection to SmartRoute dropped before it finished responding.",
-      });
+    while (true) {
+      const buffered: AgentEvent[] = [];
+      let sessionExpired = false;
+      receivedDone = false;
+
+      for await (const event of transport(activeRequest, controller.signal)) {
+        if (buffered.length === 0 && event.type === "meta") {
+          buffered.push(event);
+          continue;
+        }
+        if (event.type === "error" && event.code === "session_expired") {
+          sessionExpired = true;
+          buffered.push(event);
+          continue;
+        }
+        if (sessionExpired) {
+          buffered.push(event);
+          if (event.type === "done") receivedDone = true;
+          continue;
+        }
+        for (const pending of buffered.splice(0)) dispatch(pending);
+        if (event.type === "done") receivedDone = true;
+        dispatch(event);
+      }
+
+      if (
+        sessionExpired &&
+        recovery.canRecoverSession &&
+        !recoveryAttempted &&
+        !controller.signal.aborted
+      ) {
+        recoveryAttempted = true;
+        recovery.discardSession();
+        activeRequest = { ...request, session_id: undefined };
+        continue;
+      }
+
+      for (const pending of buffered) dispatch(pending);
+      if (!receivedDone && !controller.signal.aborted) {
+        dispatch({
+          type: "stream_error",
+          message: "The connection to SmartRoute dropped before it finished responding.",
+        });
+      }
+      break;
     }
   } catch (err) {
     if (controller.signal.aborted) {

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -99,6 +100,7 @@ async def _sse_stream(
     origin: dict | None,
     selected_card_id: str | None,
     response_presentation: str,
+    trace: agent_loop.TurnTrace,
 ):
     agen = agent_loop.run_agent_turn(
         session=session,
@@ -110,6 +112,7 @@ async def _sse_stream(
         origin=origin,
         selected_card_id=selected_card_id,
         response_presentation=response_presentation,
+        trace=trace,
     )
     try:
         while True:
@@ -147,6 +150,7 @@ async def agent_chat(request: Request, payload: AgentChatRequest):
             ),
         )
 
+    session_load_started = time.monotonic()
     if payload.session_id:
         session = session_module.load_session(payload.session_id)
         if session is None:
@@ -158,6 +162,11 @@ async def agent_chat(request: Request, payload: AgentChatRequest):
         session_id = payload.session_id
     else:
         session_id, session = session_module.new_session()
+    trace = agent_loop.TurnTrace(
+        stage_ms={
+            "session_load_ms": (time.monotonic() - session_load_started) * 1000,
+        }
+    )
 
     gtfs = getattr(request.app.state, "gtfs", None)
     turn_id = session_module.next_turn_id(session)
@@ -184,6 +193,7 @@ async def agent_chat(request: Request, payload: AgentChatRequest):
             origin,
             payload.selected_card_id,
             payload.response_presentation,
+            trace,
         ),
         media_type="text/event-stream",
         headers=_SSE_HEADERS,

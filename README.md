@@ -181,6 +181,7 @@ Do not commit real secrets. Use local `.env` files and hosting provider environm
 | `APP_KEY` | Frontend server routes + backend | Yes | Shared server-side secret for API proxy auth and signed WebSocket tickets. Never expose as `NEXT_PUBLIC_*`. |
 | `API_URL` | Frontend server routes | Production | Server-side FastAPI base URL used by Next.js route handlers. |
 | `NEXT_PUBLIC_API_URL` | Browser + frontend server fallback | Production | Public backend base URL when browser-visible clients need it. |
+| `NEXT_PUBLIC_AGENT_SESSION_ENV` | Browser | Optional | Stable environment label used with the frontend origin to namespace persisted agent sessions when multiple backends share one frontend origin. |
 | `NEXT_PUBLIC_MAPTILER_API_KEY` | Frontend map | Yes for basemap | MapTiler key for map tiles and 3D building layers. |
 | `NEXT_PUBLIC_MAPBOX_TOKEN` | Frontend search | Yes for destination search | Mapbox token for destination autocomplete and retrieval. |
 | `GOOGLE_ROUTES_API_KEY` | Backend | Yes for trip planning | Google Routes API key for transit route candidates. |

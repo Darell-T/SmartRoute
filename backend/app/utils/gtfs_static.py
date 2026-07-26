@@ -406,6 +406,9 @@ class GTFSStaticData:
         return [r["route_id"] for r in rows]
 
     def get_child_stop_ids(self, parent_stop_id: str):
+        index = self.__dict__.get("_pattern_index")
+        if index is not None and parent_stop_id in index.stops:
+            return [f"{parent_stop_id}N", f"{parent_stop_id}S"]
         rows = self._query(
             "SELECT stop_id FROM stops WHERE parent_station = %s",
             (parent_stop_id,),
@@ -489,6 +492,9 @@ class GTFSStaticData:
     # then a single grouped pull of route_ids per parent so we don't fall
     # into N+1.
     def get_subway_stops_with_routes(self, route_id_whitelist: set[str] | None = None):
+        index = self.__dict__.get("_pattern_index")
+        if index is not None:
+            return index.stops_for_routes(route_id_whitelist)
         parent_rows = self._query(
             "SELECT stop_id, stop_name, stop_lat, stop_lon FROM stops WHERE location_type = '1'"
         )

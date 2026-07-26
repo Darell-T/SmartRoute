@@ -40,3 +40,4 @@ class ToolResult:
     error: str | None = None
     events: list = dataclasses.field(default_factory=list)
     session_route_cards: list = dataclasses.field(default_factory=list)
+    timings: dict[str, float] = dataclasses.field(default_factory=dict)

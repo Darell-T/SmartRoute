@@ -133,12 +133,11 @@ def _resolve_subway_stop(
     location: tuple[float, float] | None,
     boarding: dict | None,
 ) -> tuple[dict | None, list[dict]]:
-    stops = _served_subway_stops(gtfs, route_id)
-    if not stops:
-        return None, []
-
     query = canonical_station_query(stop_query) if stop_query else ""
     if query:
+        stops = _served_subway_stops(gtfs, route_id)
+        if not stops:
+            return None, []
         normalized_query = _normalized_name(query)
         exact = [stop for stop in stops if _normalized_name(stop.get("stop_name")) == normalized_query]
         matches = exact or [
@@ -153,6 +152,18 @@ def _resolve_subway_stop(
             return None, matches[:4]
         return None, []
 
+    if boarding and boarding.get("stop_id"):
+        coords = boarding.get("coordinates") or {}
+        return {
+            "stop_id": str(boarding["stop_id"]),
+            "stop_name": str(boarding.get("stop_name") or "Transit stop"),
+            "stop_lat": coords.get("latitude", coords.get("lat")),
+            "stop_lon": coords.get("longitude", coords.get("lng")),
+        }, []
+
+    stops = _served_subway_stops(gtfs, route_id)
+    if not stops:
+        return None, []
     if boarding and boarding.get("stop_name"):
         target = _normalized_name(canonical_station_query(boarding["stop_name"]))
         match = next((stop for stop in stops if _normalized_name(stop.get("stop_name")) == target), None)
@@ -183,6 +194,19 @@ def _normalize_direction(value: object) -> str | None:
     if any(token in normalized for token in ("downtown", "southbound", "brooklyn bound", "queens bound")):
         return "downtown"
     return normalized
+
+
+def _direction_from_boarding(boarding: dict | None) -> str | None:
+    if not boarding:
+        return None
+    direction_id = boarding.get("direction_id")
+    if str(direction_id) == "0":
+        return "uptown"
+    if str(direction_id) == "1":
+        return "downtown"
+    return _normalize_direction(
+        boarding.get("direction_label") or boarding.get("direction")
+    )
 
 
 def _dedupe_predictions(values: Iterable[dict], *, limit: int) -> list[dict]:
@@ -388,11 +412,13 @@ async def _lookup_subway(tool_input: dict, ctx: ToolContext, route_id: str, limi
             events=[agent_events.ArrivalCardEvent.from_lookup(ctx.turn_id, data)],
         )
 
-    child_ids = {str(item) for item in ctx.gtfs.get_child_stop_ids(stop["stop_id"])}
+    try:
+        child_ids = {str(item) for item in ctx.gtfs.get_child_stop_ids(stop["stop_id"])}
+    except Exception:
+        child_ids = {f"{stop['stop_id']}N", f"{stop['stop_id']}S"}
     child_ids.add(str(stop["stop_id"]))
-    requested_direction = _normalize_direction(
-        tool_input.get("direction") or (boarding or {}).get("direction")
-    )
+    requested_direction = _normalize_direction(tool_input.get("direction"))
+    requested_direction = requested_direction or _direction_from_boarding(boarding)
     walking_minutes = tool_input.get("walking_minutes")
     if walking_minutes is None:
         walking_minutes = (boarding or {}).get("walking_minutes")
@@ -564,9 +590,8 @@ async def _lookup_bus(tool_input: dict, ctx: ToolContext, route_id: str, limit: 
             tool_input.get("stop_query") or (boarding or {}).get("stop_name") or ""
         )
     )
-    requested_direction = _normalize_direction(
-        tool_input.get("direction") or (boarding or {}).get("direction")
-    )
+    requested_direction = _normalize_direction(tool_input.get("direction"))
+    requested_direction = requested_direction or _direction_from_boarding(boarding)
     matches = [
         row
         for row in arrivals

@@ -166,6 +166,24 @@ test("parses a route_card event with the full nested payload", async () => {
   assert.deepEqual(events, [{ type: "route_card", ...payload }]);
 });
 
+test("parses the explicit terminal state on a clarification completion", async () => {
+  const chunk =
+    'event: done\ndata: {"session_id":"s1","turn_id":"t2","stop_reason":"clarification_required","terminal_state":"clarification_required","usage":{}}\n\n';
+
+  const events = await collect(readerFromChunks([chunk]));
+
+  assert.deepEqual(events, [
+    {
+      type: "done",
+      session_id: "s1",
+      turn_id: "t2",
+      stop_reason: "clarification_required",
+      terminal_state: "clarification_required",
+      usage: {},
+    },
+  ]);
+});
+
 test("parses a grounded arrival_card event", async () => {
   const payload = {
     turn_id: "t2",
@@ -192,6 +210,7 @@ test("parses a grounded arrival_card event", async () => {
     ],
     updated_at: "2026-07-25T14:00:00Z",
     source_status: "live",
+    resolution_status: "resolved",
     evidence: {
       source: "mta_gtfs_rt",
       observedAt: "2026-07-25T14:00:00Z",

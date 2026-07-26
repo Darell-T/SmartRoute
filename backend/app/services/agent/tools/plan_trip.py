@@ -20,6 +20,7 @@ import importlib
 import math
 import os
 import secrets
+import time
 from datetime import datetime, timedelta, timezone
 
 from app.services import ai_advisor
@@ -279,6 +280,38 @@ def _normalized_waypoints(value: object) -> list[str]:
     return seen
 
 
+def _first_boarding_context(gtfs, step: dict, walking_minutes: int) -> dict:
+    route_id = scoring._step_route_id(step).strip().upper()
+    context = {
+        "route_id": route_id,
+        "mode": str(step.get("type") or "").lower(),
+        "stop_name": step.get("departure_stop"),
+        "coordinates": step.get("departure_coords"),
+        "direction_label": step.get("direction"),
+        "walking_minutes": walking_minutes,
+    }
+    pattern_index = getattr(gtfs, "_pattern_index", None) if gtfs else None
+    resolve = getattr(pattern_index, "resolve_route_segment", None)
+    if not callable(resolve):
+        return context
+    resolved = resolve(
+        route_id,
+        step.get("departure_stop"),
+        step.get("arrival_stop"),
+        step.get("departure_coords"),
+        step.get("arrival_coords"),
+    )
+    if resolved:
+        context.update(
+            {
+                "stop_id": resolved.get("origin_stop_id"),
+                "direction_id": resolved.get("direction_id"),
+                "destination_stop_id": resolved.get("destination_stop_id"),
+            }
+        )
+    return context
+
+
 def _next_segment_departure(arrival_at: object, dwell_minutes: int) -> str | None:
     if not isinstance(arrival_at, str) or not arrival_at.strip():
         return None
@@ -479,6 +512,13 @@ async def _execute_chained_trip(
 
 
 async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
+    timings = {
+        "place_resolution_ms": 0.0,
+        "route_provider_ms": 0.0,
+        "mta_ms": 0.0,
+        "ticketmaster_ms": 0.0,
+        "scoring_ms": 0.0,
+    }
     waypoints = _normalized_waypoints(tool_input.get("waypoints"))
     if waypoints:
         return await _execute_chained_trip(tool_input, ctx, waypoints)
@@ -494,6 +534,7 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
     if not allowed_modes:
         return ToolResult(ok=False, error="no transit modes left after excluding all of them")
 
+    place_started = time.monotonic()
     origin_place, origin_error = await resolve_named_place(
         origin_raw,
         ctx,
@@ -511,6 +552,7 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
     )
     if destination_place is None:
         return ToolResult(ok=False, error=dest_error or "could not find that destination in NYC")
+    timings["place_resolution_ms"] = (time.monotonic() - place_started) * 1000
 
     routing_preference = tool_input.get("routing_preference") or "FEWER_TRANSFERS"
     departure_time = tool_input.get("departure_time") or None
@@ -532,6 +574,7 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
         except directions_service.GoogleRoutesError as exc:
             return ToolResult(ok=False, error=f"could not estimate an arrive-by departure ({exc.code})")
 
+    route_started = time.monotonic()
     try:
         response = await _route_with_recovery(
             origin=origin_place,
@@ -544,6 +587,7 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
     except directions_service.GoogleRoutesError as exc:
         print(f"[agent-plan_trip] routing failed code={exc.code}")
         return ToolResult(ok=False, error=f"routing failed ({exc.code})")
+    timings["route_provider_ms"] = (time.monotonic() - route_started) * 1000
 
     parsed_routes = directions_service.parse_response(response)
     if not parsed_routes:
@@ -556,13 +600,35 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
 
     route_ids, bus_route_ids = candidates._collect_route_and_bus_ids(parsed_routes)
     avoid_crowds = bool(tool_input.get("avoid_crowds"))
+
+    async def collect_event_evidence() -> tuple[
+        event_crowd.EventEvidenceStatus,
+        list[dict],
+        list[str],
+    ]:
+        started = time.monotonic()
+        try:
+            return await event_crowd.collect_route_event_evidence(parsed_routes, ctx)
+        finally:
+            timings["ticketmaster_ms"] = (time.monotonic() - started) * 1000
+
     event_task = (
-        asyncio.create_task(event_crowd.collect_route_event_evidence(parsed_routes, ctx))
+        asyncio.create_task(collect_event_evidence())
         if avoid_crowds
         else None
     )
+    incident_task = None
+    if tool_input.get("include_incident_scan"):
+        incident_context = trip_incidents.build_candidate_stop_context(ctx.gtfs, parsed_routes)
+        incident_task = asyncio.create_task(
+            asyncio.wait_for(
+                trip_incidents._scan_route_incidents(incident_context),
+                timeout=AGENT_GROK_BUDGET_S,
+            )
+        )
 
     context_collection_timed_out = False
+    mta_started = time.monotonic()
     try:
         raw_alerts, stalled, stalled_buses = await asyncio.wait_for(
             asyncio.gather(
@@ -582,6 +648,7 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
     raw_alerts = [] if isinstance(raw_alerts, BaseException) else raw_alerts
     stalled = [] if isinstance(stalled, BaseException) else stalled
     stalled_buses = [] if isinstance(stalled_buses, BaseException) else stalled_buses
+    timings["mta_ms"] = (time.monotonic() - mta_started) * 1000
 
     parsed_alerts = parse_service_alerts(raw_alerts) if raw_alerts else []
     relevant_alerts = filter_alerts_for_routes(parsed_alerts, route_ids)
@@ -600,16 +667,15 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
 
     incidents: list = []
     advisor_evidence_available = False
-    if tool_input.get("include_incident_scan"):
-        incident_context = trip_incidents.build_candidate_stop_context(ctx.gtfs, parsed_routes)
+    if incident_task is not None:
         try:
-            incidents = await asyncio.wait_for(
-                trip_incidents._scan_route_incidents(incident_context),
-                timeout=AGENT_GROK_BUDGET_S,
-            )
+            incidents = await incident_task
             advisor_evidence_available = True
         except asyncio.TimeoutError:
             print(f"[agent-plan_trip] incident scan timed out ({AGENT_GROK_BUDGET_S:.0f}s)")
+            incidents = []
+        except Exception as exc:
+            print(f"[agent-plan_trip] incident scan failed: {type(exc).__name__}")
             incidents = []
 
     evidence_observed_at = datetime.now(timezone.utc)
@@ -659,6 +725,7 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
     event_impacts = current_payload(evidence_envelopes["events"], empty=[])
     incidents = current_payload(evidence_envelopes["advisor"], empty=[])
 
+    scoring_started = time.monotonic()
     judge_payload = advisor_context.build_advisor_payload(
         routes=parsed_routes,
         service_alerts=relevant_alerts,
@@ -691,6 +758,7 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
         relevant_alerts,
         ticketmaster_event_impacts=event_impacts,
     )
+    timings["scoring_ms"] = (time.monotonic() - scoring_started) * 1000
     decision_reason = "advisor_tiebreak"
     selection_log_reason = "advisor_selection"
     if avoid_crowds and event_impacts:
@@ -932,14 +1000,11 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
                 "eta_minutes": eta_minutes,
                 "destination": destination_point,
                 "first_boarding": (
-                    {
-                        "route_id": scoring._step_route_id(first_transit),
-                        "mode": str(first_transit.get("type") or "").lower(),
-                        "stop_name": first_transit.get("departure_stop"),
-                        "coordinates": first_transit.get("departure_coords"),
-                        "direction": first_transit.get("direction"),
-                        "walking_minutes": round(initial_walk_seconds / 60),
-                    }
+                    _first_boarding_context(
+                        ctx.gtfs,
+                        first_transit,
+                        round(initial_walk_seconds / 60),
+                    )
                     if first_transit
                     else None
                 ),
@@ -981,4 +1046,5 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
         summary=tool_summary,
         events=events,
         session_route_cards=session_cards,
+        timings=timings,
     )

@@ -6,11 +6,13 @@ summary.eta_minutes / summary.transfers must come only from the itinerary
 
 from __future__ import annotations
 
+import asyncio
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 from app.services.agent.tools import plan_trip
+from app.utils.stop_patterns import StopPatternIndex
 from tests._fake_http_tools import make_tool_ctx
 
 
@@ -84,8 +86,8 @@ class PlanTripItineraryTests(unittest.IsolatedAsyncioTestCase):
         ).start()
         self.addCleanup(patch.stopall)
 
-    def _ctx(self):
-        return make_tool_ctx(origin={"lat": 40.7, "lng": -73.9})
+    def _ctx(self, *, gtfs=None):
+        return make_tool_ctx(origin={"lat": 40.7, "lng": -73.9}, gtfs=gtfs)
 
     async def test_route_cards_carry_canonical_itinerary(self):
         result = await plan_trip.execute(
@@ -93,6 +95,15 @@ class PlanTripItineraryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(result.ok)
         self.assertEqual(len(result.events), 2)
+        self.assertTrue(
+            {
+                "place_resolution_ms",
+                "route_provider_ms",
+                "mta_ms",
+                "ticketmaster_ms",
+                "scoring_ms",
+            }.issubset(result.timings)
+        )
 
         for event in result.events:
             self.assertIsNotNone(event.itinerary)
@@ -128,6 +139,101 @@ class PlanTripItineraryTests(unittest.IsolatedAsyncioTestCase):
                 candidate["walk_minutes"],
                 round(event.itinerary["total_walk_seconds"] / 60),
             )
+
+    async def test_recommended_card_persists_canonical_first_boarding_context(self):
+        pattern_index = StopPatternIndex(
+            {
+                "stops": {
+                    "Q1": {"name": "Q Start", "lat": 40.75, "lon": -73.98},
+                    "Q2": {"name": "Q End", "lat": 40.76, "lon": -73.99},
+                },
+                "patterns": [
+                    {
+                        "route_id": "Q",
+                        "route_short_name": "Q",
+                        "direction_id": 1,
+                        "trip_count": 10,
+                        "signature": "q-test",
+                        "stop_ids": ["Q1", "Q2"],
+                    }
+                ],
+            }
+        )
+        gtfs = type("Gtfs", (), {"_pattern_index": pattern_index})()
+
+        result = await plan_trip.execute(
+            {"origin": "user", "destination": "Costco"},
+            self._ctx(gtfs=gtfs),
+        )
+
+        active = next(
+            card for card in result.session_route_cards if card["role"] == "recommended"
+        )
+        self.assertEqual(
+            active["first_boarding"],
+            {
+                "route_id": "Q",
+                "mode": "subway",
+                "stop_id": "Q1",
+                "stop_name": "Q Start",
+                "coordinates": {"latitude": 40.75, "longitude": -73.98},
+                "direction_id": 1,
+                "direction_label": "Uptown",
+                "destination_stop_id": "Q2",
+                "walking_minutes": 0,
+            },
+        )
+
+    async def test_crowd_evidence_providers_run_concurrently(self):
+        active_providers: set[str] = set()
+        overlap_observed = False
+        overlap_gate = asyncio.Event()
+
+        async def wait_for_other_provider(name: str):
+            nonlocal overlap_observed
+            active_providers.add(name)
+            if len(active_providers) == 2:
+                overlap_observed = True
+                overlap_gate.set()
+            try:
+                await asyncio.wait_for(overlap_gate.wait(), timeout=0.05)
+            except asyncio.TimeoutError:
+                pass
+            finally:
+                active_providers.remove(name)
+
+        async def collect_events(_routes, _ctx):
+            await wait_for_other_provider("ticketmaster")
+            return "available", [], []
+
+        async def scan_incidents(_context):
+            await wait_for_other_provider("web")
+            return []
+
+        with (
+            patch.object(
+                plan_trip.event_crowd,
+                "collect_route_event_evidence",
+                new=collect_events,
+            ),
+            patch.object(
+                plan_trip.trip_incidents,
+                "_scan_route_incidents",
+                new=scan_incidents,
+            ),
+        ):
+            result = await plan_trip.execute(
+                {
+                    "origin": "user",
+                    "destination": "Columbus Circle",
+                    "avoid_crowds": True,
+                    "include_incident_scan": True,
+                },
+                self._ctx(),
+            )
+
+        self.assertTrue(result.ok)
+        self.assertTrue(overlap_observed)
 
     async def test_summary_not_from_scoring_total_when_itinerary_differs(self):
         """If scoring would disagree, card still uses itinerary seconds."""

@@ -423,3 +423,100 @@ local binaries were used instead.
   production lookup primarily returns GTFS-RT live/stale/no-prediction states.
 - Destination discovery still depends on the existing POI provider/model tool
   choice; this pass enforces grounding but does not add a new discovery provider.
+
+## Post-P1 arrival and latency regression pass (2026-07-25)
+
+This section supersedes the earlier test counts and latency notes for the
+post-P1 regression scope.
+
+### Root causes and corrections
+
+| Observed behavior | Root cause | Correction |
+|---|---|---|
+| Active-trip Q lookup asked for a station | the selected itinerary persisted a boarding label and coordinates, but not the canonical stop/direction identity | persist normalized route ID, stop ID/name, direction ID/label, and destination stop ID from the canonical selected itinerary |
+| An expired GTFS database could prevent subway stop resolution | arrival lookup queried the remote static-GTFS database even though startup had already loaded the local stop-pattern artifact | resolve route membership, parent/child stop IDs, and route segments through `StopPatternIndex` first; retain the database only as a fallback |
+| Arrival questions could wait 60–66 seconds and then show a generic failure | deterministic arrival preflight still entered the general model/tool loop and could reach retries or wrap-up work | a resolved or clarification arrival result now emits its card, deterministic rider text, and one terminal event with zero model calls |
+| Clarification produced a component, assistant failure, and global error | source state and terminal state were not explicit enough, and the reducer accepted later duplicate/error events | emit explicit arrival resolution and terminal states; suppress generic errors after an arrival outcome and ignore duplicate completion for the turn |
+| A fresh page could reuse an expired server session | the browser stored one unversioned, unnamespaced ID and did not recover from `session_expired` | store a versioned record namespaced by origin/environment, discard incompatible records, and retry a fresh-load request once without duplicating the user or assistant turn |
+| Optional crowd evidence extended the critical path | Ticketmaster ran beside MTA, but bounded web/X incident corroboration started only after those providers completed | start Ticketmaster and the trip-scoped web/X scan concurrently with required MTA evidence |
+
+Arrival results now expose one of `resolved`, `ambiguous`,
+`location_required`, `no_predictions`, or `provider_unavailable`. A provider
+failure never claims that no trains are coming.
+
+### Bounded telemetry
+
+The turn trace records `intent_ms`, `session_load_ms`, `place_resolution_ms`,
+`route_provider_ms`, `mta_ms`, `ticketmaster_ms`, `arrival_lookup_ms`,
+`scoring_ms`, `model_ms`, `stream_finalize_ms`, `total_ms`,
+`model_call_count`, `tool_call_count`, and `retry_count`. It does not log
+message content, prompts, coordinates, credentials, or provider payloads.
+
+Deterministic tests prove that a context-resolved arrival uses one tool call,
+zero model calls, no route-planning call, no wrap-up call, and one terminal
+completion. Ordinary route planning uses the existing one selection/narration
+continuation and no redundant third wrap-up call.
+
+### Provider and persistence configuration boundary
+
+A read-only configuration diagnostic found the Ticketmaster key present and
+Ticketmaster enabled; the configured radius uses the documented default.
+This does not certify that the current credential or upstream endpoint is
+healthy, because the opt-in live smoke test was not run. Redis-compatible
+session storage is not configured, so backend restarts still discard
+server-side sessions; the new client recovery makes a fresh empty page
+transparent, while preserving an honest error when visible conversation
+cannot be recovered.
+
+The configured static-GTFS PostgreSQL connection rejected the read-only
+diagnostic. The arrival path no longer requires it when the local
+stop-pattern artifact is loaded. Database renewal is still required for
+features that genuinely depend on remote static GTFS or persistence.
+
+For Auto crowd-avoidance trips, the existing xAI `web_search` and `x_search`
+incident monitor is now enabled as bounded, trip-scoped corroboration and
+runs concurrently with other evidence. It is not a general unrestricted
+browser for arbitrary chat.
+
+### Verification evidence
+
+```text
+backend\.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider
+567 passed, 1 skipped
+
+frontend\node_modules\.bin\tsx.cmd --test <complete unit-test list>
+168 passed
+
+frontend\node_modules\.bin\tsc.cmd --noEmit
+PASS
+
+frontend\node_modules\.bin\eslint.cmd .
+PASS with 22 existing warnings and 0 errors
+
+frontend\node_modules\.bin\next.cmd build
+PASS — compiled, typechecked, and generated 12/12 static pages
+```
+
+The one backend skip remains the opt-in live Ticketmaster smoke test.
+
+Manual QA against the running local app:
+
+| Request | Observed result |
+|---|---|
+| Fresh page → plan Coney Island trip | completed with grounded narration and one route card |
+| `When does the next Q arrive?` | live 34 St–Herald Sq Q card and deterministic text; UI reported 1 second; no duplicate error |
+| `When does the next Q arrive at Newkirk Plaza?` | explicit Newkirk Plaza Q card; UI reported 1 second; no duplicate error |
+| `When is the next B train?` | explicit no-predictions state at 34 St–Herald Sq; no provider-failure claim or generic error |
+
+Backend restart recovery is covered deterministically by frontend tests rather
+than by interrupting the user's running server.
+
+### Remaining risk found during manual QA
+
+When explicitly asked to plan a Q route to Coney Island, the model narration
+claimed that Q was selected while the canonical card correctly showed an N
+itinerary. The regression pass preserves the canonical card/session contract,
+but explicit line-preference enforcement and narration grounding need a
+separate focused fix. This was not folded into the arrival/session regression
+scope without a dedicated test and product decision about whether a requested
+line is a hard constraint or a preference.

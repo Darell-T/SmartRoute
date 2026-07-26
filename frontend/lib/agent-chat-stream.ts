@@ -266,6 +266,13 @@ export interface ArrivalDirection {
   arrivals: ArrivalPrediction[];
 }
 
+export type ArrivalResolutionStatus =
+  | "resolved"
+  | "ambiguous"
+  | "location_required"
+  | "no_predictions"
+  | "provider_unavailable";
+
 export interface ArrivalCardEvent {
   type: "arrival_card";
   turn_id: string;
@@ -280,6 +287,7 @@ export interface ArrivalCardEvent {
   directions: ArrivalDirection[];
   updated_at: string;
   source_status: ArrivalSourceStatus;
+  resolution_status: ArrivalResolutionStatus;
   evidence?: EvidenceEnvelope<{ directions: ArrivalDirection[] }>;
   catchability?: {
     walking_minutes: number;
@@ -308,7 +316,12 @@ export interface ErrorEvent {
   retryable: boolean;
 }
 
-export type AgentStopReason = "end_turn" | "max_rounds" | "deadline" | "error";
+export type AgentStopReason =
+  | "end_turn"
+  | "clarification_required"
+  | "max_rounds"
+  | "deadline"
+  | "error";
 
 export interface DoneUsage {
   input_tokens?: number;
@@ -322,6 +335,7 @@ export interface DoneEvent {
   session_id: string;
   turn_id: string;
   stop_reason: AgentStopReason;
+  terminal_state?: "completed" | "clarification_required" | "failed" | "cancelled";
   usage: DoneUsage;
 }
 
@@ -365,6 +379,26 @@ function isNumber(value: unknown): value is number {
 
 function isBoolean(value: unknown): value is boolean {
   return typeof value === "boolean";
+}
+
+function arrivalResolutionStatus(data: Record<string, unknown>): ArrivalResolutionStatus {
+  switch (data.resolution_status) {
+    case "resolved":
+    case "ambiguous":
+    case "location_required":
+    case "no_predictions":
+    case "provider_unavailable":
+      return data.resolution_status;
+    default:
+      if (data.source_status === "stop_not_resolved") {
+        return Array.isArray(data.ambiguity) && data.ambiguity.length > 0
+          ? "ambiguous"
+          : "location_required";
+      }
+      if (data.source_status === "provider_unavailable") return "provider_unavailable";
+      if (data.source_status === "no_predictions") return "no_predictions";
+      return "resolved";
+  }
 }
 
 /** Validates the decoded JSON payload against the event's minimum required
@@ -473,6 +507,7 @@ function buildEvent(eventType: string, data: unknown): AgentEvent | null {
         directions: data.directions as ArrivalDirection[],
         updated_at: data.updated_at,
         source_status: data.source_status as ArrivalSourceStatus,
+        resolution_status: arrivalResolutionStatus(data),
         ...(isRecord(data.evidence)
           ? {
               evidence: data.evidence as unknown as ArrivalCardEvent["evidence"],
@@ -509,6 +544,12 @@ function buildEvent(eventType: string, data: unknown): AgentEvent | null {
         session_id: data.session_id,
         turn_id: data.turn_id,
         stop_reason: data.stop_reason as AgentStopReason,
+        ...(isString(data.terminal_state)
+          ? {
+              terminal_state:
+                data.terminal_state as DoneEvent["terminal_state"],
+            }
+          : {}),
         usage: data.usage as DoneUsage,
       };
     }

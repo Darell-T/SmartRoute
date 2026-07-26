@@ -96,6 +96,89 @@ class StopPatternIndex:
     def ids_for_name(self, name: str) -> frozenset:
         return self.name_index.get(normalize_station_name(name), frozenset())
 
+    def stops_for_routes(self, route_ids=None) -> list[dict]:
+        """Return parent stops served by the requested routes from memory."""
+
+        requested = (
+            {str(route_id).strip().upper() for route_id in route_ids}
+            if route_ids is not None
+            else {str(route_id).upper() for route_id in self.route_patterns}
+        )
+        routes_by_stop: dict[str, set[str]] = {}
+        for route_id in sorted(requested):
+            for pattern in self.route_patterns.get(route_id, []):
+                public_route = str(
+                    pattern.get("route_short_name") or pattern.get("route_id") or route_id
+                ).upper()
+                for stop_id in pattern.get("stop_ids") or []:
+                    routes_by_stop.setdefault(str(stop_id), set()).add(public_route)
+
+        return [
+            {
+                "stop_id": stop_id,
+                "stop_name": self.stops[stop_id]["name"],
+                "stop_lat": self.stops[stop_id]["lat"],
+                "stop_lon": self.stops[stop_id]["lon"],
+                "route_ids": sorted(routes),
+            }
+            for stop_id, routes in sorted(routes_by_stop.items())
+            if stop_id in self.stops
+        ]
+
+    def resolve_route_segment(
+        self,
+        route_id,
+        origin,
+        destination,
+        origin_coords=None,
+        destination_coords=None,
+    ) -> dict | None:
+        """Resolve route-specific endpoint IDs and direction without I/O."""
+
+        origin_ids = self.ids_for_name(origin)
+        destination_ids = self.ids_for_name(destination)
+        origin_coord = _coord(origin_coords)
+        destination_coord = _coord(destination_coords)
+        best = None
+        for pattern in self.route_patterns.get(str(route_id).strip().upper(), []):
+            positions = pattern["pos"]
+            origin_position = self._pick_pos(positions, origin_ids, origin_coord)
+            destination_position = self._pick_pos(
+                positions, destination_ids, destination_coord
+            )
+            if (
+                origin_position is None
+                or destination_position is None
+                or origin_position >= destination_position
+            ):
+                continue
+            origin_stop_id = pattern["stop_ids"][origin_position]
+            destination_stop_id = pattern["stop_ids"][destination_position]
+            score = (
+                self._proximity(
+                    origin_stop_id,
+                    destination_stop_id,
+                    origin_coord,
+                    destination_coord,
+                ),
+                destination_position - origin_position,
+                -pattern.get("trip_count", 0),
+            )
+            if best is None or score < best[0]:
+                best = (
+                    score,
+                    origin_stop_id,
+                    destination_stop_id,
+                    pattern.get("direction_id"),
+                )
+        if best is None:
+            return None
+        return {
+            "origin_stop_id": best[1],
+            "destination_stop_id": best[2],
+            "direction_id": best[3],
+        }
+
     def get_intermediate_stops_with_coords(
         self, route_id, origin, dest, origin_coords=None, dest_coords=None
     ):
