@@ -23,6 +23,7 @@ import anthropic
 from app.services.agent import budget
 from app.services.agent import events as agent_events
 from app.services.agent import intelligence
+from app.services.agent import model_stream
 from app.services.agent import model_request
 from app.services.agent import policy as agent_policy
 from app.services.agent import prompt as agent_prompt
@@ -267,7 +268,26 @@ def _build_stream_kwargs(
     )
 
 
-def _tools_for_intent(parsed_intent: intelligence.ParsedIntent) -> list[dict]:
+def _web_search_tool(mode_policy: agent_policy.AgentModePolicy) -> dict:
+    return {
+        "type": "web_search_20250305",
+        "name": "web_search",
+        "max_uses": 2 if mode_policy.mode == "quick" else 3,
+        "user_location": {
+            "type": "approximate",
+            "city": "New York City",
+            "region": "New York",
+            "country": "US",
+            "timezone": "America/New_York",
+        },
+    }
+
+
+def _tools_for_intent(
+    parsed_intent: intelligence.ParsedIntent,
+    mode_policy: agent_policy.AgentModePolicy | None = None,
+) -> list[dict]:
+    mode_policy = mode_policy or agent_policy.policy_for_mode("auto")
     tool_names_by_intent = {
         "route_planning": {"plan_trip", "accessibility_status"},
         "destination_discovery": {
@@ -278,8 +298,19 @@ def _tools_for_intent(parsed_intent: intelligence.ParsedIntent) -> list[dict]:
     }
     included = tool_names_by_intent.get(parsed_intent.intent)
     if included is not None:
-        return [schema for schema in TOOLS if schema.get("name") in included]
-    return [schema for schema in TOOLS if schema.get("name") != "plan_trip"]
+        tools = [schema for schema in TOOLS if schema.get("name") in included]
+    else:
+        tools = [schema for schema in TOOLS if schema.get("name") != "plan_trip"]
+    # Claude decides whether current web evidence is useful. Availability is
+    # intentionally bounded to place discovery and NYC routing; arrival and
+    # simple transit questions retain their deterministic fast paths.
+    if parsed_intent.intent in {
+        "destination_discovery",
+        "route_planning",
+        "transit_question",
+    }:
+        tools.append(_web_search_tool(mode_policy))
+    return tools
 
 
 def _route_card_text_fallback(card: agent_events.RouteCardEvent) -> str:
@@ -340,56 +371,6 @@ def _sanitize_rider_text(text: str) -> str:
     sanitized = re.sub(r"(?m)^\s*#{1,6}\s+", "", sanitized)
     sanitized = re.sub(r"~(?=\d)", "about ", sanitized)
     return sanitized
-
-
-def _sanitize_token_events(
-    token_events: list[agent_events.TokenEvent],
-) -> list[agent_events.TokenEvent]:
-    original = "".join(event.text for event in token_events)
-    sanitized = _sanitize_rider_text(original)
-    if sanitized == original:
-        return token_events
-    return [agent_events.TokenEvent(text=sanitized)] if sanitized else []
-
-
-async def _call_model(
-    *,
-    stream_kwargs: dict,
-    log_tag: str,
-    retry_count: int,
-) -> tuple[
-    object | None,
-    list[agent_events.TokenEvent],
-    agent_events.ErrorEvent | None,
-    int,
-]:
-    """Runs one `messages.stream()` call to completion, collecting its text
-    deltas as `TokenEvent`s. Returns the final message, sanitized token
-    events, any translated error, and the number of attempts used. Callers
-    re-yield token events and decide whether an error ends the turn."""
-    attempts = max(1, int(retry_count) + 1)
-    for attempt in range(1, attempts + 1):
-        token_events: list[agent_events.TokenEvent] = []
-        try:
-            async with client.messages.stream(**stream_kwargs) as stream:
-                async for delta in stream.text_stream:
-                    token_events.append(agent_events.TokenEvent(text=delta))
-                final_message = await stream.get_final_message()
-            return final_message, _sanitize_token_events(token_events), None, attempt
-        except Exception as exc:
-            print(
-                model_request.format_failure_log(
-                    exc=exc,
-                    kwargs=stream_kwargs,
-                    log_tag=log_tag,
-                    attempt=attempt,
-                    attempts=attempts,
-                )
-            )
-            if token_events or attempt >= attempts or not model_request.should_retry(exc):
-                return None, token_events, model_request.error_event_for(exc), attempt
-            await asyncio.sleep(min(0.15 * attempt, 0.45))
-    raise AssertionError("model retry loop exited unexpectedly")
 
 
 async def _run_one_tool(name: str, tool_input: dict, ctx: ToolContext) -> ToolResult:
@@ -487,6 +468,8 @@ def _required_arrival_input(
     }
     if parsed_intent.arrival_stop_query:
         tool_input["stop_query"] = parsed_intent.arrival_stop_query
+    if parsed_intent.arrival.direction_query:
+        tool_input["direction"] = parsed_intent.arrival.direction_query
     if ctx.origin:
         tool_input["user_location"] = {
             "latitude": ctx.origin.get("lat"),
@@ -527,7 +510,11 @@ def _arrival_response(data: dict) -> tuple[str, str]:
         )
 
     group = directions[0]
-    arrivals = list(group.get("arrivals") or [])
+    arrivals = [
+        arrival
+        for arrival in group.get("arrivals") or []
+        if int(arrival.get("minutes") or 0) > 0
+    ]
     if not arrivals:
         return (
             f"No current {route_id} arrival predictions are available at {stop_name}.",
@@ -672,10 +659,17 @@ async def _stream_turn(
         "intent_ms": (time.monotonic() - intent_started) * 1000,
         "session_load_ms": 0.0,
         "place_resolution_ms": 0.0,
+        "web_search_ms": 0.0,
+        "place_normalization_ms": 0.0,
         "route_provider_ms": 0.0,
+        "evidence_ms": 0.0,
         "mta_ms": 0.0,
         "ticketmaster_ms": 0.0,
         "arrival_lookup_ms": 0.0,
+        "stop_resolution_ms": 0.0,
+        "feed_fetch_ms": 0.0,
+        "feed_parse_ms": 0.0,
+        "render_ms": 0.0,
         "scoring_ms": 0.0,
         "model_ms": 0.0,
         "stream_finalize_ms": 0.0,
@@ -685,7 +679,7 @@ async def _stream_turn(
         for stage, duration in trace.stage_ms.items():
             if stage in stage_ms:
                 stage_ms[stage] = max(0.0, float(duration))
-    turn_tools = _tools_for_intent(parsed_intent)
+    turn_tools = _tools_for_intent(parsed_intent, mode_policy)
     if intelligence.is_new_trip_request(message):
         session_module.reset_for_new_trip(session)
     system_blocks = _system_blocks()
@@ -713,64 +707,10 @@ async def _stream_turn(
     tool_failures = 0
     deterministic_arrival = False
     model_call_count = 0
+    server_tool_call_count = 0
     retry_count_total = 0
 
     try:
-        if parsed_intent.intent == "destination_discovery":
-            required_input = {
-                "query": message,
-                "max_results": 2 if mode_policy.mode == "quick" else 3,
-            }
-            tool_call_id = f"required-places-{turn_id}"
-            spec = TOOL_REGISTRY.get("poi_search")
-            label = (
-                spec.label_fn(required_input)
-                if spec is not None
-                else "Finding grounded places"
-            )
-            yield agent_events.ToolStartEvent(
-                tool_call_id=tool_call_id,
-                tool="poi_search",
-                label=label,
-            )
-            tool_started = time.monotonic()
-            result = await _run_one_tool("poi_search", required_input, ctx)
-            tool_duration_ms = (time.monotonic() - tool_started) * 1000
-            tools_ms_total += tool_duration_ms
-            stage_ms["place_resolution_ms"] += tool_duration_ms
-            tool_calls_this_turn.append(("poi_search", required_input))
-            evidence = (
-                result.data
-                if result.ok
-                else {
-                    "source_status": "provider_unavailable",
-                    "error": result.error or "place search unavailable",
-                }
-            )
-            messages[-1]["content"] += (
-                "\n\n<required_evidence source=\"poi_search\">"
-                + json.dumps(evidence, separators=(",", ":"), default=str)
-                + "</required_evidence>"
-            )
-            yield agent_events.ToolEndEvent(
-                tool_call_id=tool_call_id,
-                tool="poi_search",
-                ok=result.ok,
-                duration_ms=round((time.monotonic() - tool_started) * 1000),
-                summary=result.summary or result.error or None,
-            )
-            if not result.ok:
-                tool_failures += 1
-            reason = quick_escalation.reason_for_tool_result(
-                "poi_search", result, required=True
-            )
-            if mode_policy.mode == "quick" and escalation_reason is None and reason:
-                escalation_reason = reason
-                mode_policy = agent_policy.policy_for_mode("auto")
-                print(f"[agent-escalation] turn={turn_id} quick_to_auto=1 reason={reason}")
-            if result.summary:
-                session_module.append_tool_summary(session, "poi_search", result.summary)
-
         if parsed_intent.intent == "arrival_lookup":
             required_input = _required_arrival_input(parsed_intent, ctx, mode_policy)
             if required_input is None:
@@ -797,6 +737,9 @@ async def _stream_turn(
                 tool_duration_ms = (time.monotonic() - tool_started) * 1000
                 tools_ms_total += tool_duration_ms
                 stage_ms["arrival_lookup_ms"] += tool_duration_ms
+                for stage, duration in result.timings.items():
+                    if stage in stage_ms:
+                        stage_ms[stage] += max(0.0, float(duration))
                 tool_calls_this_turn.append(("lookup_arrivals", required_input))
                 yield agent_events.ToolEndEvent(
                     tool_call_id=tool_call_id,
@@ -821,6 +764,7 @@ async def _stream_turn(
                     session_module.append_tool_summary(session, "lookup_arrivals", result.summary)
                 for event in result.events:
                     yield event
+                render_started = time.monotonic()
                 response_text, stop_reason_out = _arrival_response(
                     result.data
                     if result.ok and isinstance(result.data, dict)
@@ -829,6 +773,9 @@ async def _stream_turn(
                         "source_status": "provider_unavailable",
                     }
                 )
+                stage_ms["render_ms"] += (
+                    time.monotonic() - render_started
+                ) * 1000
                 text_parts.append(response_text)
                 deterministic_arrival = True
                 yield agent_events.TokenEvent(text=response_text)
@@ -854,21 +801,38 @@ async def _stream_turn(
                 tools=turn_tools,
             )
             model_call_start = time.monotonic()
-            final_message, token_events, error_event, attempts_used = await _call_model(
+            model_outcome: model_stream.ModelCallCompleted | None = None
+            async for model_event in model_stream.stream_model_call(
+                client=client,
                 stream_kwargs=stream_kwargs,
                 log_tag="model call",
                 retry_count=mode_policy.retry_count,
-            )
+                sanitize_text=_sanitize_rider_text,
+            ):
+                if isinstance(model_event, model_stream.ModelCallCompleted):
+                    model_outcome = model_event
+                    continue
+                if isinstance(model_event, agent_events.TokenEvent):
+                    text_parts.append(model_event.text)
+                if isinstance(model_event, agent_events.ToolEndEvent) and not model_event.ok:
+                    tool_failures += 1
+                yield model_event
+            if model_outcome is None:
+                raise RuntimeError("model stream ended without a completion record")
+            final_message = model_outcome.final_message
+            error_event = model_outcome.error
+            attempts_used = model_outcome.attempts
+            stage_ms["web_search_ms"] += model_outcome.web_search_ms
+            server_tool_call_count += model_outcome.server_tool_call_count
             model_call_count += 1
             retry_count_total += max(0, attempts_used - 1)
             model_ms_total += (time.monotonic() - model_call_start) * 1000
-            for token_event in token_events:
-                text_parts.append(token_event.text)
-                yield token_event
             if error_event is not None:
                 yield error_event
                 stop_reason_out = "error"
                 break
+            if final_message is None:
+                raise RuntimeError("model stream completed without a final message")
 
             usage = getattr(final_message, "usage", None)
             input_tokens += int(getattr(usage, "input_tokens", 0) or 0)
@@ -930,21 +894,40 @@ async def _stream_turn(
                 tools=turn_tools,
             )
             model_call_start = time.monotonic()
-            final_message, token_events, error_event, attempts_used = await _call_model(
+            model_outcome = None
+            async for model_event in model_stream.stream_model_call(
+                client=client,
                 stream_kwargs=stream_kwargs,
                 log_tag="wrap-up model call",
                 retry_count=mode_policy.retry_count,
-            )
+                sanitize_text=_sanitize_rider_text,
+            ):
+                if isinstance(model_event, model_stream.ModelCallCompleted):
+                    model_outcome = model_event
+                    continue
+                if isinstance(model_event, agent_events.TokenEvent):
+                    text_parts.append(model_event.text)
+                if isinstance(model_event, agent_events.ToolEndEvent) and not model_event.ok:
+                    tool_failures += 1
+                yield model_event
+            if model_outcome is None:
+                raise RuntimeError("wrap-up stream ended without a completion record")
+            final_message = model_outcome.final_message
+            error_event = model_outcome.error
+            attempts_used = model_outcome.attempts
+            stage_ms["web_search_ms"] += model_outcome.web_search_ms
+            server_tool_call_count += model_outcome.server_tool_call_count
             model_call_count += 1
             retry_count_total += max(0, attempts_used - 1)
             model_ms_total += (time.monotonic() - model_call_start) * 1000
-            for token_event in token_events:
-                text_parts.append(token_event.text)
-                yield token_event
             if error_event is not None:
                 yield error_event
                 stop_reason_out = "error"
             else:
+                if final_message is None:
+                    raise RuntimeError(
+                        "wrap-up stream completed without a final message"
+                    )
                 usage = getattr(final_message, "usage", None)
                 input_tokens += int(getattr(usage, "input_tokens", 0) or 0)
                 output_tokens += int(getattr(usage, "output_tokens", 0) or 0)
@@ -981,7 +964,9 @@ async def _stream_turn(
             trace.final_mode = mode_policy.mode
             trace.escalation_reason = escalation_reason
             trace.model_call_count = model_call_count
-            trace.tool_call_count = len(tool_calls_this_turn)
+            trace.tool_call_count = (
+                len(tool_calls_this_turn) + server_tool_call_count
+            )
             trace.retry_count = retry_count_total
         budget.record_usage_cost(input_tokens, output_tokens)
         stage_ms["stream_finalize_ms"] = (
@@ -990,6 +975,10 @@ async def _stream_turn(
 
     total_ms = (time.monotonic() - turn_start) * 1000
     stage_ms["model_ms"] = model_ms_total
+    stage_ms["evidence_ms"] = max(
+        stage_ms["evidence_ms"],
+        stage_ms["mta_ms"] + stage_ms["ticketmaster_ms"],
+    )
     stage_ms["total_ms"] = total_ms
     if trace is not None:
         trace.stage_ms = dict(stage_ms)
@@ -1004,19 +993,30 @@ async def _stream_turn(
         f"model={agent_policy.safe_model_label(mode_policy.model)} "
         f"candidate_budget={mode_policy.max_route_candidates} retries={mode_policy.retry_count} "
         f"required_tools={required_tools} optional_enrichment="
-        f"{int(mode_policy.optional_enrichment)} tools={len(tool_calls_this_turn)} "
+        f"{int(mode_policy.optional_enrichment)} "
+        f"tools={len(tool_calls_this_turn) + server_tool_call_count} "
         f"tool_failures={tool_failures} intent_ms={stage_ms['intent_ms']:.0f} "
         f"session_load_ms={stage_ms['session_load_ms']:.0f} "
         f"place_resolution_ms={stage_ms['place_resolution_ms']:.0f} "
+        f"web_search_ms={stage_ms['web_search_ms']:.0f} "
+        f"place_normalization_ms={stage_ms['place_normalization_ms']:.0f} "
         f"route_provider_ms={stage_ms['route_provider_ms']:.0f} "
+        f"evidence_ms={stage_ms['evidence_ms']:.0f} "
         f"mta_ms={stage_ms['mta_ms']:.0f} "
         f"ticketmaster_ms={stage_ms['ticketmaster_ms']:.0f} "
         f"arrival_lookup_ms={stage_ms['arrival_lookup_ms']:.0f} "
+        f"stop_resolution_ms={stage_ms['stop_resolution_ms']:.0f} "
+        f"feed_fetch_ms={stage_ms['feed_fetch_ms']:.0f} "
+        f"feed_parse_ms={stage_ms['feed_parse_ms']:.0f} "
+        f"render_ms={stage_ms['render_ms']:.0f} "
         f"scoring_ms={stage_ms['scoring_ms']:.0f} "
         f"model_ms={model_ms_total:.0f} stream_finalize_ms="
         f"{stage_ms['stream_finalize_ms']:.0f} tools_ms={tools_ms_total:.0f} "
         f"total_ms={total_ms:.0f} model_calls={model_call_count} "
-        f"tool_calls={len(tool_calls_this_turn)} retry_count={retry_count_total} "
+        f"model_call_count={model_call_count} "
+        f"tool_calls={len(tool_calls_this_turn) + server_tool_call_count} "
+        f"tool_call_count={len(tool_calls_this_turn) + server_tool_call_count} "
+        f"retry_count={retry_count_total} "
         f"in_tok={input_tokens} out_tok={output_tokens} stop={stop_reason_out}"
     )
 

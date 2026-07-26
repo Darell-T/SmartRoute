@@ -212,11 +212,12 @@ def _direction_from_boarding(boarding: dict | None) -> str | None:
 def _dedupe_predictions(values: Iterable[dict], *, limit: int) -> list[dict]:
     seen: set[tuple[str, int]] = set()
     result: list[dict] = []
+    now = int(time.time())
     for value in sorted(values, key=lambda row: int(row.get("arrival_time") or 0)):
         arrival_time = int(value.get("arrival_time") or 0)
         direction = str(value.get("direction") or "unknown")
         key = (direction, arrival_time)
-        if arrival_time <= 0 or key in seen:
+        if arrival_time <= now or key in seen:
             continue
         seen.add(key)
         result.append(value)
@@ -231,7 +232,7 @@ def assess_catchability(
     walking_minutes: int,
     boarding_buffer_minutes: int = BOARDING_BUFFER_MINUTES,
 ) -> dict:
-    values = sorted({max(0, int(value)) for value in arrival_minutes})
+    values = sorted({int(value) for value in arrival_minutes if int(value) > 0})
     threshold = max(0, int(walking_minutes)) + max(0, int(boarding_buffer_minutes))
     catchable = next((value for value in values if value >= threshold), None)
     return {
@@ -283,28 +284,32 @@ def _arrival_payload(
         arrivals = []
         for value in values:
             timestamp = int(value["arrival_time"])
+            minutes = math.ceil((timestamp - now) / 60)
+            if minutes <= 0:
+                continue
             arrivals.append(
                 {
                     "expected_at": datetime.fromtimestamp(timestamp, timezone.utc).isoformat(),
-                    "minutes": max(0, math.ceil((timestamp - now) / 60)),
+                    "minutes": minutes,
                     "realtime": status in {"live", "stale"},
                     "trip_id": value.get("trip_id"),
                     "vehicle_id": value.get("vehicle_id"),
                 }
             )
-        directions.append(
-            {
-                "id": direction,
-                "label": (
-                    "Uptown / Manhattan-bound"
-                    if direction == "uptown"
-                    else "Downtown / Brooklyn-bound"
-                    if direction == "downtown"
-                    else str(values[0].get("direction_label") or direction).title()
-                ),
-                "arrivals": arrivals,
-            }
-        )
+        if arrivals:
+            directions.append(
+                {
+                    "id": direction,
+                    "label": (
+                        "Uptown / Manhattan-bound"
+                        if direction == "uptown"
+                        else "Downtown / Brooklyn-bound"
+                        if direction == "downtown"
+                        else str(values[0].get("direction_label") or direction).title()
+                    ),
+                    "arrivals": arrivals,
+                }
+            )
     all_minutes = [arrival["minutes"] for group in directions for arrival in group["arrivals"]]
     payload = {
         "route_id": route_id,
@@ -384,8 +389,19 @@ async def _scheduled_fallback(
 
 
 async def _lookup_subway(tool_input: dict, ctx: ToolContext, route_id: str, limit: int) -> ToolResult:
+    timings = {
+        "stop_resolution_ms": 0.0,
+        "feed_fetch_ms": 0.0,
+        "feed_parse_ms": 0.0,
+    }
+
+    def completed(result: ToolResult) -> ToolResult:
+        result.timings.update(timings)
+        return result
+
     if ctx.gtfs is None:
-        return ToolResult(ok=False, error="transit stop data is not ready")
+        return completed(ToolResult(ok=False, error="transit stop data is not ready"))
+    stop_started = time.monotonic()
     boarding = _active_boarding(ctx, route_id)
     location = _location(tool_input, ctx, boarding)
     stop, ambiguity = _resolve_subway_stop(
@@ -395,6 +411,7 @@ async def _lookup_subway(tool_input: dict, ctx: ToolContext, route_id: str, limi
         location,
         boarding,
     )
+    timings["stop_resolution_ms"] = (time.monotonic() - stop_started) * 1000
     if stop is None:
         data = _empty_payload(
             route_id,
@@ -405,12 +422,12 @@ async def _lookup_subway(tool_input: dict, ctx: ToolContext, route_id: str, limi
                 for item in ambiguity
             ],
         )
-        return ToolResult(
+        return completed(ToolResult(
             ok=True,
             data=data,
             summary=f"could not resolve a {route_id} station",
             events=[agent_events.ArrivalCardEvent.from_lookup(ctx.turn_id, data)],
-        )
+        ))
 
     try:
         child_ids = {str(item) for item in ctx.gtfs.get_child_stop_ids(stop["stop_id"])}
@@ -433,8 +450,11 @@ async def _lookup_subway(tool_input: dict, ctx: ToolContext, route_id: str, limi
             ),
             1,
         )
+    feed_started = time.monotonic()
     metadata = await mta_feed.fetch_feeds_with_metadata([route_id], "agent_arrivals")
+    timings["feed_fetch_ms"] = (time.monotonic() - feed_started) * 1000
     if not metadata:
+        parse_started = time.monotonic()
         scheduled = await _scheduled_fallback(
             ctx=ctx,
             route_id=route_id,
@@ -444,13 +464,14 @@ async def _lookup_subway(tool_input: dict, ctx: ToolContext, route_id: str, limi
             limit=limit,
             walking_minutes=normalized_walking,
         )
+        timings["feed_parse_ms"] = (time.monotonic() - parse_started) * 1000
         if scheduled is not None:
-            return ToolResult(
+            return completed(ToolResult(
                 ok=True,
                 data=scheduled,
                 summary=f"scheduled arrivals for {route_id} at {stop['stop_name']}",
                 events=[agent_events.ArrivalCardEvent.from_lookup(ctx.turn_id, scheduled)],
-            )
+            ))
         payload = _arrival_payload(
             route_id=route_id,
             stop=stop,
@@ -458,13 +479,14 @@ async def _lookup_subway(tool_input: dict, ctx: ToolContext, route_id: str, limi
             updated_at=int(time.time()),
             status="provider_unavailable",
         )
-        return ToolResult(
+        return completed(ToolResult(
             ok=True,
             data=payload,
             summary=f"arrival provider unavailable for {route_id} at {stop['stop_name']}",
             events=[agent_events.ArrivalCardEvent.from_lookup(ctx.turn_id, payload)],
-        )
+        ))
 
+    parse_started = time.monotonic()
     parsed = await asyncio.gather(
         *(asyncio.to_thread(mta_feed.parse_bytes, item["content"]) for item in metadata),
         return_exceptions=True,
@@ -526,12 +548,13 @@ async def _lookup_subway(tool_input: dict, ctx: ToolContext, route_id: str, limi
             walking_minutes=normalized_walking,
         )
         if scheduled is not None:
-            return ToolResult(
+            timings["feed_parse_ms"] = (time.monotonic() - parse_started) * 1000
+            return completed(ToolResult(
                 ok=True,
                 data=scheduled,
                 summary=f"scheduled arrivals for {route_id} at {stop['stop_name']}",
                 events=[agent_events.ArrivalCardEvent.from_lookup(ctx.turn_id, scheduled)],
-            )
+            ))
     if status == "stale":
         # Preserve the stale provenance but do not feed expired predictions to
         # scoring, catchability, or the conversational model.
@@ -544,47 +567,63 @@ async def _lookup_subway(tool_input: dict, ctx: ToolContext, route_id: str, limi
         status=status,
         walking_minutes=normalized_walking,
     )
-    return ToolResult(
+    timings["feed_parse_ms"] = (time.monotonic() - parse_started) * 1000
+    return completed(ToolResult(
         ok=True,
         data=payload,
         summary=f"{status} arrivals for {route_id} at {stop['stop_name']}",
         events=[agent_events.ArrivalCardEvent.from_lookup(ctx.turn_id, payload)],
-    )
+    ))
 
 
 async def _lookup_bus(tool_input: dict, ctx: ToolContext, route_id: str, limit: int) -> ToolResult:
+    timings = {
+        "stop_resolution_ms": 0.0,
+        "feed_fetch_ms": 0.0,
+        "feed_parse_ms": 0.0,
+    }
+
+    def completed(result: ToolResult) -> ToolResult:
+        result.timings.update(timings)
+        return result
+
+    stop_started = time.monotonic()
     boarding = _active_boarding(ctx, route_id)
     location = _location(tool_input, ctx, boarding)
+    timings["stop_resolution_ms"] = (time.monotonic() - stop_started) * 1000
     if location is None:
         data = _empty_payload(
             route_id,
             "stop_not_resolved",
             stop_name=str(tool_input.get("stop_query") or "Transit stop"),
         )
-        return ToolResult(
+        return completed(ToolResult(
             ok=True,
             data=data,
             summary=f"a location or stop is needed for {route_id} arrivals",
             events=[agent_events.ArrivalCardEvent.from_lookup(ctx.turn_id, data)],
-        )
+        ))
+    feed_started = time.monotonic()
     arrivals, debug = await mta_feed.fetch_nearby_bus_arrivals(
         location[0],
         location[1],
         stop_limit=12,
         visits_per_stop=max(limit, 3),
     )
+    timings["feed_fetch_ms"] = (time.monotonic() - feed_started) * 1000
     if not debug.get("bus_arrivals_supported"):
         data = _empty_payload(
             route_id,
             "provider_unavailable",
             stop_name=str(tool_input.get("stop_query") or "Transit stop"),
         )
-        return ToolResult(
+        return completed(ToolResult(
             ok=True,
             data=data,
             summary=f"arrival provider unavailable for {route_id}",
             events=[agent_events.ArrivalCardEvent.from_lookup(ctx.turn_id, data)],
-        )
+        ))
+    parse_started = time.monotonic()
     stop_query = _normalized_name(
         canonical_station_query(
             tool_input.get("stop_query") or (boarding or {}).get("stop_name") or ""
@@ -609,12 +648,13 @@ async def _lookup_bus(tool_input: dict, ctx: ToolContext, route_id: str, limit: 
             "no_predictions",
             stop_name=str(tool_input.get("stop_query") or "Transit stop"),
         )
-        return ToolResult(
+        timings["feed_parse_ms"] = (time.monotonic() - parse_started) * 1000
+        return completed(ToolResult(
             ok=True,
             data=data,
             summary=f"no predictions returned for {route_id}",
             events=[agent_events.ArrivalCardEvent.from_lookup(ctx.turn_id, data)],
-        )
+        ))
     nearest = min(matches, key=lambda row: float(row.get("distance_m") or 0))
     stop = {
         "stop_id": nearest.get("parent_stop_id") or nearest.get("stop_id"),
@@ -646,12 +686,13 @@ async def _lookup_bus(tool_input: dict, ctx: ToolContext, route_id: str, limit: 
         status="live",
         walking_minutes=(boarding or {}).get("walking_minutes"),
     )
-    return ToolResult(
+    timings["feed_parse_ms"] = (time.monotonic() - parse_started) * 1000
+    return completed(ToolResult(
         ok=True,
         data=payload,
         summary=f"live arrivals for {route_id} at {stop['stop_name']}",
         events=[agent_events.ArrivalCardEvent.from_lookup(ctx.turn_id, payload)],
-    )
+    ))
 
 
 async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:

@@ -168,11 +168,14 @@ function arrivalsFromEvent(event: ArrivalCardEvent): ArrivalsTurnPayload {
     ...(typeof latitude === "number" && typeof longitude === "number"
       ? { stationCoordinates: { lat: latitude, lng: longitude } }
       : {}),
-    groups: event.directions.map((direction) => ({
-      direction: direction.id,
-      label: direction.label,
-      minutes: direction.arrivals.map((arrival) => arrival.minutes),
-    })),
+    groups: event.directions.flatMap((direction) => {
+      const minutes = direction.arrivals
+        .map((arrival) => arrival.minutes)
+        .filter((value) => value > 0);
+      return minutes.length > 0
+        ? [{ direction: direction.id, label: direction.label, minutes }]
+        : [];
+    }),
     sourceStatus: event.source_status,
     updatedAt: event.updated_at,
     ...(event.catchability ? { catchability: event.catchability } : {}),
@@ -217,17 +220,34 @@ export function applyAgentEvent(state: ChatState, action: ChatReducerAction): Ch
       return updateLastAssistantTurn(state, (turn) => ({ ...turn, text: turn.text + action.text }));
     }
     case "tool_start": {
-      return updateLastAssistantTurn(state, (turn) => ({
-        ...turn,
-        toolChips: [
-          // A recovered provider retry is one rider-facing operation. Replace
-          // its prior failed attempt instead of leaving a misleading red row.
-          ...turn.toolChips.filter(
-            (chip) => !(chip.tool === action.tool && chip.status === "failed"),
-          ),
-          { id: action.tool_call_id, tool: action.tool, label: action.label, status: "running" },
-        ],
-      }));
+      return updateLastAssistantTurn(state, (turn) => {
+        const nextChip: ToolChip = {
+          id: action.tool_call_id,
+          tool: action.tool,
+          label: action.label,
+          status: "running",
+        };
+        const existingIndex = turn.toolChips.findIndex(
+          (chip) => chip.id === action.tool_call_id,
+        );
+        if (existingIndex >= 0) {
+          const toolChips = turn.toolChips.slice();
+          toolChips[existingIndex] = nextChip;
+          return { ...turn, toolChips };
+        }
+        return {
+          ...turn,
+          toolChips: [
+            // A recovered provider retry is one rider-facing operation.
+            // Replace its prior failed attempt instead of leaving a
+            // misleading permanent failure row.
+            ...turn.toolChips.filter(
+              (chip) => !(chip.tool === action.tool && chip.status === "failed"),
+            ),
+            nextChip,
+          ],
+        };
+      });
     }
     case "tool_end": {
       return updateLastAssistantTurn(state, (turn) => ({
@@ -246,10 +266,11 @@ export function applyAgentEvent(state: ChatState, action: ChatReducerAction): Ch
     }
     case "route_card": {
       const card = cardFromEvent(action);
-      return updateLastAssistantTurn(state, (turn) => ({
-        ...turn,
-        routeCards: [...turn.routeCards, card],
-      }));
+      return updateLastAssistantTurn(state, (turn) =>
+        turn.routeCards.some((existing) => existing.card_id === card.card_id)
+          ? turn
+          : { ...turn, routeCards: [...turn.routeCards, card] },
+      );
     }
     case "arrival_card": {
       return updateLastAssistantTurn(state, (turn) => ({

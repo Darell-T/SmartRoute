@@ -173,10 +173,9 @@ async def agent_chat(request: Request, payload: AgentChatRequest):
     now_et = datetime.now(ZoneInfo("America/New_York")).isoformat()
     origin = {"lat": payload.origin.lat, "lng": payload.origin.lng} if payload.origin else None
 
-    origin_log = f"{round(origin['lat'], 3)},{round(origin['lng'], 3)}" if origin else "none"
     print(
         f"[agent-chat] sess[{_log_sess(session_id)}] turn={turn_id} "
-        f"msg_len={len(payload.message)} origin={origin_log} "
+        f"msg_len={len(payload.message)} origin_present={'yes' if origin else 'no'} "
         f"selected_card={'yes' if payload.selected_card_id else 'no'}"
         f" presentation={payload.response_presentation}"
     )

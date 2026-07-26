@@ -8,7 +8,6 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faArrowRightArrowLeft,
   faLocationDot,
-  faPersonWalking,
 } from "@fortawesome/free-solid-svg-icons";
 import type { RouteCard as RouteCardData } from "@/lib/agent-chat-stream";
 import { getRouteColor } from "@/lib/mta-colors";
@@ -23,6 +22,7 @@ import {
   type ItineraryEvent,
   type ItineraryViewModel,
 } from "./itinerary-view-model";
+import { WalkingIcon } from "./walking-icon";
 
 const LAYOUT_EASE = [0.22, 1, 0.36, 1] as const;
 
@@ -238,7 +238,7 @@ function WalkingLeg({ event }: { event: ItineraryEvent }) {
   return (
     <section className="sr-itinerary-card__walk" aria-label="Walking directions">
       <span className="sr-itinerary-card__walk-icon" aria-hidden="true">
-        <FontAwesomeIcon icon={faPersonWalking} />
+        <WalkingIcon />
       </span>
       <div className="sr-itinerary-card__walk-copy">
         <div className="sr-itinerary-card__walk-heading">

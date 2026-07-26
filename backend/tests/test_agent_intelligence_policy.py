@@ -126,6 +126,42 @@ class IntentAndContinuityTests(unittest.TestCase):
         self.assertEqual(parsed.intent, "arrival_lookup")
         self.assertIsNone(parsed.arrival_route_id)
 
+    def test_arrival_paraphrase_matrix_produces_structured_intent(self):
+        phrases = (
+            "next arrivals",
+            "show me the next arrivals",
+            "show arrivals",
+            "what's coming next",
+            "when is my train",
+            "next Q",
+            "any Q trains coming",
+            "how long until the Q",
+            "when's the next bus",
+            "are there any M15s nearby",
+            "will I make the next F",
+        )
+
+        for phrase in phrases:
+            with self.subTest(phrase=phrase):
+                parsed = intelligence.parse_intent(phrase)
+                self.assertEqual(parsed.intent, "arrival_lookup", phrase)
+                if phrase == "when's the next bus":
+                    self.assertIsNone(parsed.arrival.route_id)
+                self.assertTrue(parsed.arrival.requested)
+                self.assertTrue(parsed.arrival.include_multiple_arrivals)
+                self.assertGreaterEqual(parsed.arrival.confidence, 0.9)
+
+    def test_arrival_intent_preserves_explicit_stop_direction_and_catchability(self):
+        parsed = intelligence.parse_intent(
+            "Will I make the next downtown Q at Newkirk Plaza?"
+        )
+
+        self.assertEqual(parsed.arrival.route_id, "Q")
+        self.assertEqual(parsed.arrival.stop_query, "Newkirk Plaza")
+        self.assertEqual(parsed.arrival.direction_query, "downtown")
+        self.assertTrue(parsed.arrival.catchability_requested)
+        self.assertFalse(parsed.arrival.use_active_trip)
+
     def test_destination_eta_question_is_not_a_vehicle_arrival_lookup(self):
         parsed = intelligence.parse_intent("when will I arrive?")
 
@@ -133,6 +169,14 @@ class IntentAndContinuityTests(unittest.TestCase):
 
     def test_destination_discovery_requires_place_evidence(self):
         parsed = intelligence.parse_intent("Find me a good pizza place in Brooklyn")
+        self.assertEqual(parsed.intent, "destination_discovery")
+        self.assertTrue(parsed.required_evidence.places)
+
+    def test_conversational_pancake_request_uses_destination_discovery(self):
+        parsed = intelligence.parse_intent(
+            "In the mood for pancakes this Sunday morning, any suggestions on where to go?"
+        )
+
         self.assertEqual(parsed.intent, "destination_discovery")
         self.assertTrue(parsed.required_evidence.places)
 

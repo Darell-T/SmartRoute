@@ -477,7 +477,7 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
                 parsed_intent = self.loop.intelligence.parse_intent(message)
                 schemas = self.loop._tools_for_intent(parsed_intent)
                 total = sum(
-                    optional_parameter_count(schema["input_schema"])
+                    optional_parameter_count(schema.get("input_schema"))
                     for schema in schemas
                 )
                 self.assertLessEqual(total, 24)
@@ -494,7 +494,7 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             {schema["name"] for schema in schemas},
-            {"plan_trip", "accessibility_status"},
+            {"plan_trip", "accessibility_status", "web_search"},
         )
 
     async def test_quick_escalates_once_and_reuses_tool_result_context(self):
@@ -790,22 +790,84 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
             "but live data is stale.",
         )
 
-    async def test_destination_discovery_is_grounded_before_model_in_both_modes(self):
+    def test_arrival_copy_skips_a_due_prediction(self):
+        text, stop_reason = self.loop._arrival_response(
+            {
+                "route_id": "Q",
+                "stop": {"name": "Church Av"},
+                "source_status": "live",
+                "directions": [
+                    {
+                        "id": "downtown",
+                        "arrivals": [{"minutes": 0}, {"minutes": 8}, {"minutes": 14}],
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(stop_reason, "end_turn")
+        self.assertEqual(
+            text,
+            "The next downtown Q train at Church Av is in 8 minutes.",
+        )
+
+    async def test_destination_discovery_is_model_directed_and_grounded_in_both_modes(self):
         for mode, expected_limit in (("auto", 3), ("quick", 2)):
             with self.subTest(mode=mode):
                 trace = self.loop.TurnTrace()
                 await self._run(
-                    [{"text": ["Try Di Fara Pizza."], "stop_reason": "end_turn"}],
+                    [
+                        {
+                            "tool_use": [
+                                {
+                                    "id": "poi-1",
+                                    "name": "poi_search",
+                                    "input": {
+                                        "query": "pizza Brooklyn",
+                                        "max_results": expected_limit,
+                                    },
+                                }
+                            ],
+                            "stop_reason": "tool_use",
+                        },
+                        {
+                            "text": ["One strong grounded option is Di Fara Pizza."],
+                            "stop_reason": "end_turn",
+                        },
+                    ],
                     message="What is one of the best pizza places in Brooklyn?",
                     response_presentation=mode,
                     tool_registry=_test_registry(),
                     trace=trace,
                 )
                 self.assertEqual(trace.tool_calls[0][0], "poi_search")
-                self.assertEqual(trace.tool_calls[0][1]["max_results"], expected_limit)
-                model_context = self.loop.client.messages.calls[0]["messages"][-1]["content"]
-                self.assertIn('<required_evidence source="poi_search">', model_context)
-                self.assertIn("Di Fara Pizza", model_context)
+                self.assertEqual(
+                    trace.tool_calls[0][1]["max_results"],
+                    expected_limit,
+                )
+                schemas = self.loop.client.messages.calls[0]["tools"]
+                names = {schema["name"] for schema in schemas}
+                self.assertEqual(
+                    names,
+                    {"poi_search", "plan_trip", "accessibility_status", "web_search"},
+                )
+                web_schema = next(
+                    schema for schema in schemas if schema["name"] == "web_search"
+                )
+                self.assertEqual(
+                    web_schema["max_uses"],
+                    2 if mode == "quick" else 3,
+                )
+                self.assertEqual(
+                    web_schema["user_location"]["city"],
+                    "New York City",
+                )
+                self.assertIn(
+                    "Di Fara Pizza",
+                    self.loop.client.messages.calls[1]["messages"][-1]["content"][0][
+                        "content"
+                    ],
+                )
 
     async def test_failed_trip_resume_offer_is_added_once_without_auto_retry(self):
         _session_id, session = session_module.new_session()

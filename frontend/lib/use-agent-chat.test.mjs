@@ -110,6 +110,43 @@ test("tool_end for an unknown tool_call_id leaves existing chips untouched", () 
   assert.equal(state.messages[1].toolChips[0].status, "running");
 });
 
+test("replayed tool and route-card events are deduplicated by stable id", () => {
+  let state = applyAgentEvent(initialState(), {
+    type: "turn_started",
+    text: "Plan a trip",
+  });
+  const toolStart = {
+    type: "tool_start",
+    tool_call_id: "tool-1",
+    tool: "plan_trip",
+    label: "Comparing routes",
+  };
+  const routeCard = {
+    type: "route_card",
+    card_id: "route-1",
+    turn_id: "turn-1",
+    role: "recommended",
+    origin: { label: "Your location", lat: 40.7, lng: -73.9 },
+    destination: { label: "Coney Island", lat: 40.57, lng: -73.98 },
+    summary: {
+      eta_minutes: 30,
+      transfers: 0,
+      lines: ["Q"],
+      reason: "Direct",
+    },
+    route: [],
+    alerts: [],
+  };
+
+  state = applyAgentEvent(state, toolStart);
+  state = applyAgentEvent(state, toolStart);
+  state = applyAgentEvent(state, routeCard);
+  state = applyAgentEvent(state, routeCard);
+
+  assert.equal(state.messages[1].toolChips.length, 1);
+  assert.equal(state.messages[1].routeCards.length, 1);
+});
+
 test("a recovered route attempt replaces the prior failed chip", () => {
   let state = applyAgentEvent(initialState(), { type: "turn_started", text: "to Costco" });
   state = applyAgentEvent(state, {
@@ -391,6 +428,7 @@ test("arrival_card attaches production arrival evidence to the streaming assista
         id: "downtown",
         label: "Downtown / Brooklyn-bound",
         arrivals: [
+          { expected_at: "2026-07-25T14:00:00Z", minutes: 0, realtime: true },
           { expected_at: "2026-07-25T14:04:00Z", minutes: 4, realtime: true },
           { expected_at: "2026-07-25T14:11:00Z", minutes: 11, realtime: true },
         ],

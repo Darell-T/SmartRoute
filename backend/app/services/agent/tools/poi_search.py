@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 
 from app.services.agent.tools._http import fetch_json
 from app.services.agent.tools._location import resolve_named_point
@@ -108,17 +109,33 @@ def _clamp_max_results(raw_value) -> int:
 
 
 async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
+    timings = {
+        "place_resolution_ms": 0.0,
+        "place_normalization_ms": 0.0,
+    }
     query = str(tool_input.get("query") or "").strip()
     if not query:
-        return ToolResult(ok=False, error="query is required")
+        return ToolResult(ok=False, error="query is required", timings=timings)
 
     api_key = _resolve_api_key()
     if not api_key:
-        return ToolResult(ok=False, error="place search is not configured")
+        return ToolResult(
+            ok=False,
+            error="place search is not configured",
+            timings=timings,
+        )
 
+    resolution_started = time.monotonic()
     bias, error = await _resolve_bias(str(tool_input.get("near") or ""), ctx)
+    timings["place_resolution_ms"] = (
+        time.monotonic() - resolution_started
+    ) * 1000
     if bias is None:
-        return ToolResult(ok=False, error=error or "could not resolve that location")
+        return ToolResult(
+            ok=False,
+            error=error or "could not resolve that location",
+            timings=timings,
+        )
     lat, lng, radius_m = bias
     max_results = _clamp_max_results(tool_input.get("max_results"))
 
@@ -143,8 +160,9 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
         headers=headers,
     )
     if error:
-        return ToolResult(ok=False, error=error)
+        return ToolResult(ok=False, error=error, timings=timings)
 
+    normalization_started = time.monotonic()
     try:
         results = []
         for place in (payload or {}).get("places") or []:
@@ -164,8 +182,23 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
             )
     except (KeyError, TypeError, AttributeError) as exc:
         print(f"[agent-poi_search] malformed Places response: {exc!r}")
-        return ToolResult(ok=False, error="place search returned an unexpected response")
+        timings["place_normalization_ms"] = (
+            time.monotonic() - normalization_started
+        ) * 1000
+        return ToolResult(
+            ok=False,
+            error="place search returned an unexpected response",
+            timings=timings,
+        )
 
     results = results[:max_results]
+    timings["place_normalization_ms"] = (
+        time.monotonic() - normalization_started
+    ) * 1000
     summary = f"found {len(results)} place(s) for '{query}'" if results else f"no places found for '{query}'"
-    return ToolResult(ok=True, data={"results": results}, summary=summary)
+    return ToolResult(
+        ok=True,
+        data={"results": results},
+        summary=summary,
+        timings=timings,
+    )

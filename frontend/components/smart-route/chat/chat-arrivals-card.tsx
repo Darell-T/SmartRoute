@@ -9,10 +9,11 @@
    already-in-memory live-feed data, rendered instantly.
    ════════════════════════════════════════════════════════════════════════ */
 
-import { MapPin, Walking } from "iconoir-react";
+import { MapPin } from "iconoir-react";
 import type { ArrivalsTurnPayload } from "@/lib/use-agent-chat";
 import { Button } from "@/components/ui/button";
 import { LineBadge } from "./line-badge";
+import { WalkingIcon } from "./walking-icon";
 
 function arrivalStatusLabel(arrivals: ArrivalsTurnPayload): string | null {
   const status =
@@ -62,7 +63,7 @@ export function ChatArrivalsCard({
           <span className="sr-chat-arrivals-card__station">{arrivals.stationName}</span>
           {arrivals.stationGuidance ? (
             <span className="sr-chat-arrivals-card__guidance">
-              <Walking width={14} height={14} strokeWidth={1.6} aria-hidden="true" />
+              <WalkingIcon className="sr-chat-arrivals-card__walk-icon" />
               {arrivals.stationGuidance}
             </span>
           ) : null}

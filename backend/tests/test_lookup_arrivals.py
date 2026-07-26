@@ -126,6 +126,11 @@ class SubwayArrivalLookupTests(unittest.IsolatedAsyncioTestCase):
             {direction["id"] for direction in result.data["directions"]},
             {"uptown", "downtown"},
         )
+        self.assertEqual(
+            set(result.timings),
+            {"stop_resolution_ms", "feed_fetch_ms", "feed_parse_ms"},
+        )
+        self.assertTrue(all(value >= 0 for value in result.timings.values()))
 
     async def test_explicit_station_overrides_active_trip_boarding(self):
         session = {
@@ -229,6 +234,15 @@ class SubwayArrivalLookupTests(unittest.IsolatedAsyncioTestCase):
         minutes = result.data["directions"][0]["arrivals"]
         self.assertEqual([arrival["minutes"] for arrival in minutes], [3, 10])
 
+    async def test_due_prediction_is_skipped_in_favor_of_the_next_arrival(self):
+        result = await self._run(
+            {"route_id": "Q", "stop_query": "Newkirk Plaza", "limit": 3},
+            [_feed([("D28N", NOW), ("D28N", NOW + 480), ("D28N", NOW + 840)])],
+        )
+
+        arrivals = result.data["directions"][0]["arrivals"]
+        self.assertEqual([arrival["minutes"] for arrival in arrivals], [8, 14])
+
     async def test_stale_and_no_prediction_states_remain_distinct(self):
         stale = await self._run(
             {"route_id": "Q", "stop_query": "Newkirk Plaza"},
@@ -282,6 +296,15 @@ class CatchabilityTests(unittest.TestCase):
             boarding_buffer_minutes=2,
         )
         self.assertEqual(result["catchable_arrival_minutes"], 9)
+
+    def test_due_arrival_is_not_part_of_catchability(self):
+        result = lookup_arrivals.assess_catchability(
+            [0, 8, 14],
+            walking_minutes=2,
+            boarding_buffer_minutes=2,
+        )
+        self.assertEqual(result["arrival_minutes"], [8, 14])
+        self.assertEqual(result["catchable_arrival_minutes"], 8)
 
     def test_no_predictions_has_no_catchable_arrival(self):
         result = lookup_arrivals.assess_catchability([], walking_minutes=3)

@@ -44,3 +44,15 @@ test("sidebar uses a neutral Grok-like rail without Nearby Lines or green active
   assert.doesNotMatch(CSS_SOURCE, /#22c55e|#2ee85f|rgba\(46,\s*232,\s*95/i);
   assert.match(CSS_SOURCE, /\.sr-app-sidebar\[data-collapsed="true"\][\s\S]*inset: 4px/);
 });
+
+test("light sidebar uses a shadow separator without a dark border or layout change", () => {
+  assert.match(
+    CSS_SOURCE,
+    /\.sr-app-sidebar\[data-theme="light"\]\s*\{[\s\S]*?border-right-color:\s*transparent;/,
+  );
+  assert.match(
+    CSS_SOURCE,
+    /\.sr-app-sidebar\[data-theme="light"\]\s*\{[\s\S]*?box-shadow:\s*8px 0 20px rgba\(15,\s*17,\s*19,\s*0\.055\);/,
+  );
+  assert.match(CSS_SOURCE, /border-right:\s*1px solid var\(--sr-sidebar-line\);/);
+});

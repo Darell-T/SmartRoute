@@ -532,3 +532,139 @@ bounded web/X scan is for current route incidents, not a second event-schedule
 provider, so `no_relevant_events` means no associated Ticketmaster evidence—not
 proof that no nearby gathering exists. Adding a second event source requires a
 normalized provenance and timing contract before it can affect canonical scoring.
+
+## Conversational streaming, discovery, and arrivals pass (2026-07-26)
+
+### Streaming root cause and event flow
+
+Each Anthropic model round previously collected all text deltas before the
+orchestrator yielded them. Tool execution was ordered internally but appeared
+to the rider as one late response. Model calls now yield safe user-facing
+deltas directly from the active SDK stream:
+
+```text
+assistant tokens
+-> real server-tool start
+-> real server-tool completion
+-> assistant continuation tokens
+-> grounded card event
+-> one terminal event
+```
+
+Ordinary prose is not buffered. Only text fragments that may contain Markdown
+or internal identifiers are briefly held for the existing rider-text boundary
+sanitizer. If a later provider operation fails, already-streamed text is
+preserved and the turn receives one concise terminal failure. Cancellation is
+reraised so the active SDK/tool task closes with the request.
+
+The frontend updates tool rows and route cards by stable event IDs. Replayed
+SSE events cannot duplicate a progress row or card, and a recovered provider
+retry replaces its failed row instead of leaving a misleading red failure
+after the operation succeeds. The existing SSE response already disables proxy
+transformation and buffering.
+
+### Model-directed NYC web discovery
+
+Anthropic's bounded server-side web search is available to destination
+discovery, route planning, and NYC transit questions. The model decides whether
+current public evidence is useful; deterministic arrival and arithmetic paths
+do not receive the tool. Auto allows at most three searches and Quick at most
+two. The tool receives only approximate NYC locality and timezone context,
+never precise rider coordinates.
+
+The prompt requires current menu/hours evidence for place recommendations,
+prohibits invented places and objective "best" claims, and requires a selected
+web result to pass through the existing place provider before routing. A named,
+already-resolved destination does not need to search. Search failures remain
+provider failures rather than fabricated destination matches.
+
+### Arrival paraphrase coverage
+
+Arrival parsing now produces a structured intent containing route, stop,
+direction, active-trip use, plural-result, catchability, and confidence fields.
+The deterministic matrix covers:
+
+```text
+next arrivals
+show me the next arrivals
+show arrivals
+what's coming next
+when is my train
+next Q
+any Q trains coming
+how long until the Q
+when's the next bus
+are there any M15s nearby
+will I make the next F
+```
+
+Explicit stops and directions override active-trip context. Plural bus
+shorthand such as `M15s` normalizes to `M15`; the possessive in `when's` cannot
+be misclassified as the S train. A destination ETA question such as "When will
+I arrive?" remains outside vehicle-arrival lookup. Resolved requests retain the
+zero-model-call fast path and filter zero-minute predictions consistently in
+text and cards.
+
+### Bounded diagnostics
+
+Turn traces include `web_search_ms`, `place_normalization_ms`, `evidence_ms`,
+`stop_resolution_ms`, `feed_fetch_ms`, `feed_parse_ms`, and `render_ms`, plus
+the existing intent, session, provider, scoring, model, finalization, and total
+timings. Logs include exact model/tool call counts but not prompts, raw queries,
+coordinates, provider payloads, URLs, or credentials. Place and arrival tools
+populate these timing stages from their actual provider boundaries.
+
+### Visual consistency
+
+The arrival and itinerary cards now share one Font Awesome walking primitive;
+the arrival surface no longer introduces a second visual metaphor. Light mode
+strengthens the existing 34-pixel thinking orb through a neutral theme-only
+filter and surface contrast without changing its size or dark appearance. The
+expanded and collapsed light sidebar remove the black divider and use a subtle
+shadow without changing rail dimensions.
+
+Manual browser QA verified dark mode, expanded light mode, and collapsed light
+mode against the running application. Accessible names, disabled coming-soon
+controls, theme switching, and collapse/expand semantics remained intact.
+
+### Verification evidence
+
+```text
+backend\.venv\Scripts\python.exe -m pytest -q
+608 passed, 1 skipped
+
+frontend complete unit suite
+175 passed, 0 failed
+
+frontend TypeScript typecheck
+PASS
+
+frontend ESLint
+PASS - 0 errors, 22 existing warnings
+
+frontend Next.js production build
+PASS - compiled, typechecked, generated 12/12 static pages
+
+git diff --check
+PASS
+```
+
+The default backend skip remains an explicitly opt-in live-provider check. The
+first production-build attempt could not download Google fonts inside the
+network-restricted sandbox; the approved network-enabled rerun passed.
+
+The independent subway renderer and station-overlay artifact checks passed. A
+separate subway palette check still reports the pre-existing
+`mta-bullets/a.svg` color mismatch; this pass does not edit generated transit
+artifacts or map palette inputs.
+
+### Remaining limitations
+
+- Deterministic tests prove event ordering and tool-boundary behavior; hosted
+  first-token and web-search latency still require an approved credentialed
+  staging measurement.
+- Web discovery depends on Anthropic server-tool availability and the existing
+  place provider for canonical address/coordinate normalization.
+- Current listings can be incomplete or disagree about hours; the response
+  contract permits concise uncertainty rather than claiming an unsupported
+  opening status.
