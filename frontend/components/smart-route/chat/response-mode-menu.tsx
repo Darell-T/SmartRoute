@@ -18,31 +18,24 @@ import type { ChatTheme } from "@/lib/use-chat-theme";
 const RESPONSE_MODES: Array<{
   value: ResponsePresentationMode;
   label: string;
-  title: string;
   description: string;
   tooltip: string;
 }> = [
   {
     value: "auto",
     label: "Auto",
-    title: "Best for most trips",
-    description:
-      "SmartRoute adjusts the amount of explanation to your trip, transfers, and current conditions.",
-    tooltip:
-      "SmartRoute adjusts its explanation based on your trip, transfers, and current conditions.",
+    description: "Chooses the right amount of analysis",
+    tooltip: "Chooses the right amount of analysis.",
   },
   {
     value: "quick",
     label: "Quick",
-    title: "Shorter response",
-    description:
-      "Uses the same route analysis and returns the essential directions in a shorter answer.",
-    tooltip:
-      "Uses the same route analysis and returns a shorter answer with the essential directions.",
+    description: "Faster response with fewer comparisons",
+    tooltip: "Faster response with fewer comparisons.",
   },
 ];
 
-const MENU_WIDTH = 256;
+const MENU_WIDTH = 240;
 const VIEWPORT_GUTTER = 8;
 
 export function ResponseModeMenu({
@@ -70,7 +63,10 @@ export function ResponseModeMenu({
       window.innerWidth - MENU_WIDTH - VIEWPORT_GUTTER,
     );
     setMenuStyle({
-      left: Math.min(Math.max(VIEWPORT_GUTTER, rect.left), maxLeft),
+      left: Math.min(
+        Math.max(VIEWPORT_GUTTER, rect.right - MENU_WIDTH),
+        maxLeft,
+      ),
       bottom: window.innerHeight - rect.top + 8,
       width: MENU_WIDTH,
     });
@@ -155,6 +151,10 @@ export function ResponseModeMenu({
     } else if (event.key === "Escape") {
       event.preventDefault();
       closeMenu();
+    } else if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      onValueChange(RESPONSE_MODES[index].value);
+      closeMenu();
     }
   }
 
@@ -168,7 +168,6 @@ export function ResponseModeMenu({
           aria-label="Route analysis"
           style={menuStyle}
         >
-          <p className="sr-response-mode-menu__eyebrow">Response style</p>
           <div className="sr-response-mode-menu__options">
             {RESPONSE_MODES.map((mode, index) => {
               const selected = mode.value === value;
@@ -189,22 +188,21 @@ export function ResponseModeMenu({
                     closeMenu();
                   }}
                 >
-                  <span className="sr-response-mode-menu__check" aria-hidden="true">
-                    {selected ? <Check size={14} strokeWidth={2.2} /> : null}
-                  </span>
                   <span className="sr-response-mode-menu__copy">
                     <span className="sr-response-mode-menu__label">{mode.label}</span>
-                    <span className="sr-response-mode-menu__title">{mode.title}</span>
                     <span className="sr-response-mode-menu__description">
                       {mode.description}
                     </span>
+                  </span>
+                  <span className="sr-response-mode-menu__check" aria-hidden="true">
+                    {selected ? <Check size={14} strokeWidth={2.2} /> : null}
                   </span>
                 </button>
               );
             })}
           </div>
           <p className="sr-response-mode-menu__note">
-            Quick changes response length, not route choice or travel time.
+            Mode affects response depth, not trip time.
           </p>
         </div>,
         document.body,

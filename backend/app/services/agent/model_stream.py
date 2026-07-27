@@ -67,9 +67,26 @@ async def stream_model_call(
     log_tag: str,
     retry_count: int,
     sanitize_text: Callable[[str], str],
+    deadline_monotonic: float | None = None,
 ) -> AsyncIterator[agent_events.AgentEvent | ModelCallCompleted]:
     attempts = max(1, int(retry_count) + 1)
     for attempt in range(1, attempts + 1):
+        remaining_s = (
+            None
+            if deadline_monotonic is None
+            else deadline_monotonic - time.monotonic()
+        )
+        if remaining_s is not None and remaining_s <= 0:
+            yield ModelCallCompleted(
+                final_message=None,
+                error=agent_events.ErrorEvent(
+                    code="deadline",
+                    message="The response took too long. Please try again.",
+                    retryable=True,
+                ),
+                attempts=attempt - 1,
+            )
+            return
         sanitizer = _RiderTextSanitizer(sanitize_text)
         saw_text = False
         text_indexes: set[int] = set()
@@ -77,70 +94,71 @@ async def stream_model_call(
         web_search_ms = 0.0
         server_tool_calls = 0
         try:
-            async with client.messages.stream(**stream_kwargs) as stream:
-                if hasattr(stream, "__aiter__"):
-                    async for event in stream:
-                        event_type = getattr(event, "type", "")
-                        if event_type == "content_block_start":
-                            block = getattr(event, "content_block", None)
-                            block_type = getattr(block, "type", "")
-                            if block_type == "text":
-                                text_indexes.add(int(getattr(event, "index", -1)))
-                            elif block_type == "server_tool_use" and getattr(
-                                block, "name", ""
-                            ) == "web_search":
-                                server_tool_calls += 1
-                                tool_id = str(getattr(block, "id", "web-search"))
-                                web_started[tool_id] = time.monotonic()
-                                yield agent_events.ToolStartEvent(
-                                    tool_call_id=tool_id,
-                                    tool="web_search",
-                                    label="Searching current NYC place information...",
-                                )
-                            elif block_type == "web_search_tool_result":
-                                tool_id = str(
-                                    getattr(block, "tool_use_id", "web-search")
-                                )
-                                started = web_started.pop(tool_id, time.monotonic())
-                                duration_ms = (time.monotonic() - started) * 1000
-                                web_search_ms += duration_ms
-                                ok = _web_result_ok(getattr(block, "content", None))
-                                yield agent_events.ToolEndEvent(
-                                    tool_call_id=tool_id,
-                                    tool="web_search",
-                                    ok=ok,
-                                    duration_ms=round(duration_ms),
-                                    summary=(
-                                        "Current place information checked"
-                                        if ok
-                                        else "Current place search was unavailable"
-                                    ),
-                                )
-                        elif event_type == "content_block_delta":
-                            delta = getattr(event, "delta", None)
-                            if getattr(delta, "type", "") == "text_delta":
-                                saw_text = True
-                                text = sanitizer.feed(str(getattr(delta, "text", "")))
-                                if text:
-                                    yield agent_events.TokenEvent(text=text)
-                        elif event_type == "content_block_stop":
-                            index = int(getattr(event, "index", -1))
-                            if index in text_indexes:
-                                text_indexes.discard(index)
-                                text = sanitizer.flush()
-                                if text:
-                                    yield agent_events.TokenEvent(text=text)
-                else:
-                    async for delta in stream.text_stream:
-                        saw_text = True
-                        text = sanitizer.feed(str(delta))
-                        if text:
-                            yield agent_events.TokenEvent(text=text)
+            async with asyncio.timeout(remaining_s):
+                async with client.messages.stream(**stream_kwargs) as stream:
+                    if hasattr(stream, "__aiter__"):
+                        async for event in stream:
+                            event_type = getattr(event, "type", "")
+                            if event_type == "content_block_start":
+                                block = getattr(event, "content_block", None)
+                                block_type = getattr(block, "type", "")
+                                if block_type == "text":
+                                    text_indexes.add(int(getattr(event, "index", -1)))
+                                elif block_type == "server_tool_use" and getattr(
+                                    block, "name", ""
+                                ) == "web_search":
+                                    server_tool_calls += 1
+                                    tool_id = str(getattr(block, "id", "web-search"))
+                                    web_started[tool_id] = time.monotonic()
+                                    yield agent_events.ToolStartEvent(
+                                        tool_call_id=tool_id,
+                                        tool="web_search",
+                                        label="Searching current NYC place information...",
+                                    )
+                                elif block_type == "web_search_tool_result":
+                                    tool_id = str(
+                                        getattr(block, "tool_use_id", "web-search")
+                                    )
+                                    started = web_started.pop(tool_id, time.monotonic())
+                                    duration_ms = (time.monotonic() - started) * 1000
+                                    web_search_ms += duration_ms
+                                    ok = _web_result_ok(getattr(block, "content", None))
+                                    yield agent_events.ToolEndEvent(
+                                        tool_call_id=tool_id,
+                                        tool="web_search",
+                                        ok=ok,
+                                        duration_ms=round(duration_ms),
+                                        summary=(
+                                            "Current place information checked"
+                                            if ok
+                                            else "Current place search was unavailable"
+                                        ),
+                                    )
+                            elif event_type == "content_block_delta":
+                                delta = getattr(event, "delta", None)
+                                if getattr(delta, "type", "") == "text_delta":
+                                    saw_text = True
+                                    text = sanitizer.feed(str(getattr(delta, "text", "")))
+                                    if text:
+                                        yield agent_events.TokenEvent(text=text)
+                            elif event_type == "content_block_stop":
+                                index = int(getattr(event, "index", -1))
+                                if index in text_indexes:
+                                    text_indexes.discard(index)
+                                    text = sanitizer.flush()
+                                    if text:
+                                        yield agent_events.TokenEvent(text=text)
+                    else:
+                        async for delta in stream.text_stream:
+                            saw_text = True
+                            text = sanitizer.feed(str(delta))
+                            if text:
+                                yield agent_events.TokenEvent(text=text)
 
-                trailing = sanitizer.flush()
-                if trailing:
-                    yield agent_events.TokenEvent(text=trailing)
-                final_message = await stream.get_final_message()
+                    trailing = sanitizer.flush()
+                    if trailing:
+                        yield agent_events.TokenEvent(text=trailing)
+                    final_message = await stream.get_final_message()
 
             for tool_id, started in web_started.items():
                 duration_ms = (time.monotonic() - started) * 1000
@@ -162,6 +180,30 @@ async def stream_model_call(
             return
         except asyncio.CancelledError:
             raise
+        except TimeoutError:
+            trailing = sanitizer.flush()
+            if trailing:
+                yield agent_events.TokenEvent(text=trailing)
+            for tool_id, started in web_started.items():
+                yield agent_events.ToolEndEvent(
+                    tool_call_id=tool_id,
+                    tool="web_search",
+                    ok=False,
+                    duration_ms=round((time.monotonic() - started) * 1000),
+                    summary="Current place search was interrupted",
+                )
+            yield ModelCallCompleted(
+                final_message=None,
+                error=agent_events.ErrorEvent(
+                    code="deadline",
+                    message="The response took too long. Please try again.",
+                    retryable=True,
+                ),
+                attempts=attempt,
+                web_search_ms=web_search_ms,
+                server_tool_call_count=server_tool_calls,
+            )
+            return
         except Exception as exc:
             trailing = sanitizer.flush()
             if trailing:
@@ -195,5 +237,21 @@ async def stream_model_call(
                     server_tool_call_count=server_tool_calls,
                 )
                 return
-            await asyncio.sleep(min(0.15 * attempt, 0.45))
+            retry_delay = min(0.15 * attempt, 0.45)
+            if deadline_monotonic is not None:
+                retry_delay = min(retry_delay, max(0.0, deadline_monotonic - time.monotonic()))
+            if retry_delay <= 0:
+                yield ModelCallCompleted(
+                    final_message=None,
+                    error=agent_events.ErrorEvent(
+                        code="deadline",
+                        message="The response took too long. Please try again.",
+                        retryable=True,
+                    ),
+                    attempts=attempt,
+                    web_search_ms=web_search_ms,
+                    server_tool_call_count=server_tool_calls,
+                )
+                return
+            await asyncio.sleep(retry_delay)
     raise AssertionError("model retry loop exited unexpectedly")

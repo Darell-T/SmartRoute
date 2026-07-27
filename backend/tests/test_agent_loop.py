@@ -13,9 +13,12 @@ under heavy reload cycling in this sandbox.
 from __future__ import annotations
 
 import importlib
+import asyncio
 import os
 import secrets
 import sys
+import types
+import time
 import unittest
 from unittest.mock import patch
 
@@ -466,11 +469,46 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         cases = (
             (
                 "Plan a trip to Coney Island with less walking",
-                {"plan_trip", "accessibility_status"},
+                {"plan_trip", "accessibility_status", "web_search"},
             ),
             ("When is the next Q train?", {"lookup_arrivals"}),
-            ("Find a good pizza place", {"poi_search", "plan_trip"}),
-            ("Are there events at Barclays Center tonight?", {"event_lookup"}),
+            (
+                "Find a good pizza place",
+                {"poi_search", "plan_trip", "accessibility_status", "web_search"},
+            ),
+            (
+                "Are there events at Barclays Center tonight?",
+                {
+                    "transit_snapshot",
+                    "event_lookup",
+                    "lookup_arrivals",
+                    "accessibility_status",
+                    "lookup_facts",
+                    "web_search",
+                },
+            ),
+            (
+                "How much is the subway fare?",
+                {
+                    "transit_snapshot",
+                    "event_lookup",
+                    "lookup_arrivals",
+                    "accessibility_status",
+                    "lookup_facts",
+                    "web_search",
+                },
+            ),
+            (
+                "Hello",
+                {
+                    "transit_snapshot",
+                    "event_lookup",
+                    "lookup_arrivals",
+                    "accessibility_status",
+                    "lookup_facts",
+                    "web_search",
+                },
+            ),
         )
         for message, expected_tools in cases:
             with self.subTest(message=message):
@@ -480,9 +518,11 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
                     optional_parameter_count(schema.get("input_schema"))
                     for schema in schemas
                 )
-                self.assertLessEqual(total, 24)
-                self.assertTrue(
-                    expected_tools.issubset({schema["name"] for schema in schemas})
+                self.assertLessEqual(total, 16)
+                self.assertLessEqual(len(schemas), 6)
+                self.assertEqual(
+                    expected_tools,
+                    {schema["name"] for schema in schemas},
                 )
 
     async def test_route_planning_uses_a_minimal_tool_profile(self):
@@ -768,6 +808,58 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events_out[-1].stop_reason, "clarification_required")
         self.assertEqual(events_out[-1].terminal_state, "clarification_required")
 
+    async def test_station_only_arrival_clarification_can_resume_lookup(self):
+        clarification_registry = _test_registry()
+        clarification_registry["lookup_arrivals"] = ToolSpec(
+            schema={"name": "lookup_arrivals"},
+            executor=_fake_arrival_clarification_tool,
+            label_fn=lambda i: f"Checking {i.get('route_id')} arrivals",
+            timeout_s=5.0,
+        )
+        first_events, session = await self._run(
+            [],
+            message="When does the next Q arrive at 34 St?",
+            tool_registry=clarification_registry,
+        )
+        self.assertEqual(
+            first_events[-1].terminal_state,
+            "clarification_required",
+        )
+
+        trace = self.loop.TurnTrace()
+        await self._run(
+            [
+                {
+                    "tool_use": [
+                        {
+                            "id": "tu_arrival_followup",
+                            "name": "lookup_arrivals",
+                            "input": {
+                                "route_id": "Q",
+                                "stop_query": "34 St-Herald Sq",
+                            },
+                        }
+                    ],
+                    "stop_reason": "tool_use",
+                },
+                {
+                    "text": ["The next downtown Q is in 4 minutes."],
+                    "stop_reason": "end_turn",
+                },
+            ],
+            message="34 St-Herald Sq",
+            session=session,
+            tool_registry=_test_registry(),
+            trace=trace,
+        )
+
+        first_model_call = self.loop.client.messages.calls[0]
+        self.assertIn(
+            "lookup_arrivals",
+            {schema["name"] for schema in first_model_call["tools"]},
+        )
+        self.assertEqual(trace.tool_calls[0][0], "lookup_arrivals")
+
     def test_stale_arrival_copy_preserves_the_prediction_and_its_freshness(self):
         text, stop_reason = self.loop._arrival_response(
             {
@@ -925,16 +1017,74 @@ class DeadlineTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         cache._mem.clear()
 
-    async def test_deadline_exceeded_before_first_round_goes_straight_to_wrapup(self):
-        rounds = [{"text": ["summary of what I know"], "stop_reason": "end_turn"}]
-        events_out, _session = await self._run(rounds, tool_registry=_test_registry())
+    async def test_deadline_exceeded_before_first_round_never_starts_wrapup(self):
+        events_out, _session = await self._run([], tool_registry=_test_registry())
 
-        self.assertEqual(len(self.loop.client.messages.calls), 1)
-        kwargs = self.loop.client.messages.calls[0]
-        self.assertEqual(kwargs["tool_choice"], {"type": "none"})
-
+        self.assertEqual(len(self.loop.client.messages.calls), 0)
         done = events_out[-1]
         self.assertEqual(done.stop_reason, "deadline")
+
+    async def test_near_deadline_tool_is_cancelled_and_returns_deadline_terminal(self):
+        async def slow_arrivals(_tool_input, _ctx):
+            await asyncio.sleep(0.05)
+            return ToolResult(ok=True, data={"source_status": "available"})
+
+        registry = _test_registry()
+        registry["lookup_arrivals"] = ToolSpec(
+            schema={"name": "lookup_arrivals"},
+            executor=slow_arrivals,
+            label_fn=lambda _input: "Checking arrivals",
+            timeout_s=5.0,
+        )
+        with patch.object(self.loop, "AGENT_TURN_DEADLINE_S", 0.01):
+            events_out, _session = await self._run(
+                [],
+                message="When is the next Q train?",
+                tool_registry=registry,
+            )
+        self.assertEqual([event.type for event in events_out].count("done"), 1)
+        self.assertEqual(events_out[-1].stop_reason, "deadline")
+        self.assertEqual(
+            [event.code for event in events_out if event.type == "error"], ["deadline"]
+        )
+        self.assertTrue(any(event.type == "tool_start" for event in events_out))
+        self.assertTrue(any(event.type == "tool_end" and not event.ok for event in events_out))
+
+    async def test_grounded_route_card_survives_followup_deadline_with_one_terminal_done(self):
+        calls = 0
+
+        async def scripted_stream(**stream_kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                message = types.SimpleNamespace(
+                    content=[types.SimpleNamespace(type="tool_use", id="plan-1", name="plan_trip", input={})],
+                    stop_reason="tool_use",
+                    usage=types.SimpleNamespace(input_tokens=1, output_tokens=1),
+                )
+                yield self.loop.model_stream.ModelCallCompleted(message, None, 1)
+                return
+            remaining = max(0.0, stream_kwargs["deadline_monotonic"] - time.monotonic())
+            await asyncio.sleep(remaining + 0.001)
+            yield self.loop.model_stream.ModelCallCompleted(
+                None,
+                agent_events.ErrorEvent(code="deadline", message="timed out", retryable=True),
+                1,
+            )
+
+        started = time.monotonic()
+        with patch.object(self.loop, "AGENT_TURN_DEADLINE_S", 0.2), patch.object(
+            self.loop.model_stream, "stream_model_call", scripted_stream
+        ):
+            events_out, session = await self._run([], message="Plan a trip", tool_registry=_test_registry())
+
+        self.assertLess(time.monotonic() - started, 0.5)
+        self.assertEqual(calls, 2)
+        self.assertEqual(len([event for event in events_out if event.type == "done"]), 1)
+        self.assertEqual(events_out[-1].stop_reason, "deadline")
+        self.assertTrue(any(event.type == "route_card" and event.card_id == "rc_test0001" for event in events_out))
+        self.assertTrue(any("takes about 20 min" in event.text for event in events_out if event.type == "token"))
+        self.assertTrue(any(card["card_id"] == "rc_test0001" for card in session["route_cards"]))
 
 
 class AgentDisabledBudgetTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):

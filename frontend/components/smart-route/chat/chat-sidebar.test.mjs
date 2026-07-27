@@ -13,6 +13,10 @@ const CSS_SOURCE = fs.readFileSync(
   ),
   "utf8",
 );
+const TOOLTIP_SOURCE = fs.readFileSync(
+  fileURLToPath(new URL("../../ui/tooltip.tsx", import.meta.url)),
+  "utf8",
+);
 
 test("sidebar icons share one restrained 20px outline system", () => {
   assert.match(SOURCE, /data-state=\{active \? "active" : engaged \? "engaged" : "rest"\}/);
@@ -33,6 +37,11 @@ test("sidebar retains active-page and tooltip semantics", () => {
   assert.match(SOURCE, /aria-current=\{active \? "page" : undefined\}/);
   assert.match(SOURCE, /aria-label=\{tooltipLabel\}/);
   assert.match(SOURCE, /<TooltipContent side="right"/);
+  assert.match(SOURCE, /aria-disabled=\{disabled \|\| undefined\}/);
+  assert.match(SOURCE, /<span>Coming soon<\/span>/);
+  assert.match(SOURCE, /onClick=\{disabled \? undefined : onClick\}/);
+  assert.doesNotMatch(SOURCE, /disabled=\{disabled\}/);
+  assert.doesNotMatch(TOOLTIP_SOURCE, /TooltipPrimitive\.Arrow/);
 });
 
 test("sidebar uses a neutral Grok-like rail without Nearby Lines or green active styling", () => {

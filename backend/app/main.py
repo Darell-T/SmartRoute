@@ -25,6 +25,7 @@ if not os.getenv("APP_KEY"):
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Security
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.security.api_key import APIKeyHeader
 from app.routers import trips, live_feed, subway, agent_chat
 from app.services.mta.warm import warm_realtime_caches
@@ -136,7 +137,9 @@ async def lifespan(app: FastAPI):
     app.state.pool_task = asyncio.create_task(_init_pool_bg())
     refresh_task = asyncio.create_task(_gtfs_refresh_loop())
     warm_task = asyncio.create_task(_realtime_warm_loop())
+    app.state.startup_complete = True
     yield
+    app.state.startup_complete = False
     refresh_task.cancel()
     warm_task.cancel()
     for task in (refresh_task, warm_task):
@@ -171,4 +174,35 @@ app.include_router(live_feed.ws_router)
 @app.get("/health", dependencies=[])
 @app.head("/health", dependencies=[])
 async def health():
+    """Liveness only: the process can answer an HTTP request."""
     return {"status": "ok"}
+
+
+async def _session_store_ready() -> bool:
+    """Bound the Redis probe so readiness never occupies an event-loop worker."""
+    from app.utils import cache
+
+    if cache.redis_client is None:
+        return False
+    try:
+        return bool(await asyncio.wait_for(asyncio.to_thread(cache.redis_client.ping), timeout=0.25))
+    except Exception:
+        return False
+
+
+@app.get("/ready", dependencies=[])
+@app.head("/ready", dependencies=[])
+async def readiness():
+    """Readiness for chat sessions; optional providers are not startup gates."""
+    if not getattr(app.state, "startup_complete", False):
+        return JSONResponse({"status": "not_ready", "reason": "startup"}, status_code=503)
+    if not os.getenv("REDIS_URL") and not agent_chat.AGENT_ALLOW_MEMORY_SESSIONS:
+        return JSONResponse(
+            {"status": "not_ready", "reason": "redis_session_store"}, status_code=503
+        )
+    if os.getenv("REDIS_URL") and not await _session_store_ready():
+        return JSONResponse(
+            {"status": "not_ready", "reason": "redis_session_store_unreachable"},
+            status_code=503,
+        )
+    return {"status": "ready", "chat_sessions": "durable" if os.getenv("REDIS_URL") else "local"}

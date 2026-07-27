@@ -9,15 +9,11 @@
    turns a Near You bullet tap into a local (no-model-call) arrivals turn.
    ════════════════════════════════════════════════════════════════════════ */
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState, useSyncExternalStore } from "react";
 import type { ArrivalsTurnPayload, useAgentChat } from "@/lib/use-agent-chat";
 import type { RouteCard } from "@/lib/agent-chat-stream";
 import type { ChatTheme } from "@/lib/use-chat-theme";
-import {
-  browserSessionStorage,
-  persistResponsePresentationMode,
-  readResponsePresentationMode,
-} from "@/lib/response-presentation";
+import { responsePresentationModeStore } from "@/lib/response-presentation";
 import {
   ChatContainerContent,
   ChatContainerRoot,
@@ -29,9 +25,9 @@ import { ChatComposer } from "./chat-composer";
 import { ChatWelcome } from "./chat-welcome";
 
 const EXAMPLE_QUERIES = [
-  "Heading to Costco, no bus, I've got a cart",
-  "Best way home after the Knicks game tomorrow, avoiding the crowd",
-  "Heading to the FIFA game today, want pizza first",
+  "Get me to JFK by 6:30 PM with the fewest transfers",
+  "Best route from Brooklyn to Midtown while avoiding current delays",
+  "Plan a trip to Coney Island with less walking",
 ];
 
 export function ChatPanel({
@@ -48,14 +44,12 @@ export function ChatPanel({
   onOpenNearbyStation?: (arrivals: ArrivalsTurnPayload) => void;
 }) {
   const [draft, setDraft] = useState("");
-  const [presentationMode, setPresentationMode] = useState(() =>
-    readResponsePresentationMode(browserSessionStorage()),
+  const presentationMode = useSyncExternalStore(
+    responsePresentationModeStore.subscribe,
+    responsePresentationModeStore.getClientSnapshot,
+    responsePresentationModeStore.getServerSnapshot,
   );
   const composerRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    persistResponsePresentationMode(browserSessionStorage(), presentationMode);
-  }, [presentationMode]);
 
   function handleSelectRouteCard(card: RouteCard) {
     chat.selectCard(card.card_id);
@@ -106,7 +100,7 @@ export function ChatPanel({
           value={draft}
           onValueChange={setDraft}
           presentationMode={presentationMode}
-          onPresentationModeChange={setPresentationMode}
+          onPresentationModeChange={responsePresentationModeStore.setMode}
           theme={theme}
           onSend={(text) => chat.send(text, presentationMode)}
           onCancel={chat.cancel}

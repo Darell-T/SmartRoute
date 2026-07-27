@@ -42,3 +42,15 @@ test("nearby-line payload carries sorted arrivals and station directions metadat
     { direction: "downtown", label: "Downtown", minutes: [4, 11] },
   ]);
 });
+
+test("nearby-line payload omits arrivals that are already due", () => {
+  const result = buildArrivalsPayloadForRoute(
+    "A",
+    [arrival("uptown", [0, 8, 14])],
+    "34 Stâ€“Penn Station",
+  );
+
+  assert.deepEqual(result.groups, [
+    { direction: "uptown", label: "Uptown", minutes: [8, 14] },
+  ]);
+});

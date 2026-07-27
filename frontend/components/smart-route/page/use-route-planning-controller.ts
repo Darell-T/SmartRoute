@@ -129,15 +129,19 @@ export function useRoutePlanningController({
       );
       if (routePlanningRequestIdRef.current !== requestId) return;
 
+      const normalizedTrip = normalizeTripCandidates(tripData);
+      if (!normalizedTrip) {
+        throw new Error("The route response is missing its canonical itinerary.");
+      }
       const {
         candidates: nextCandidates,
         selected: selectedCandidate,
         selectedIndex: nextSelectedIndex,
-      } = normalizeTripCandidates(tripData);
-      const selectedSteps = selectedCandidate?.steps ?? tripData.route;
+      } = normalizedTrip;
+      const selectedSteps = selectedCandidate.steps;
       setRouteCandidates(nextCandidates);
       setActiveRouteCandidateId(
-        selectedCandidate?.id ?? nextCandidates[0]?.id ?? null,
+        selectedCandidate.id,
       );
       setSelectedRouteIndex(nextSelectedIndex);
       setPlannedRouteSteps(selectedSteps);

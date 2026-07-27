@@ -72,17 +72,17 @@ export function ChatComposer({
       maxHeight={TEXTAREA_MAX_HEIGHT}
       className="sr-chat-composer"
     >
+      <PromptInputTextarea
+        aria-label="Message SmartRoute"
+        placeholder="Ask SmartRoute"
+        maxLength={MAX_MESSAGE_LENGTH}
+        className="sr-chat-composer__textarea pl-4!"
+      />
       <PromptInputActions className="sr-chat-composer__actions">
         <ResponseModeMenu
           value={presentationMode}
           theme={theme}
           onValueChange={onPresentationModeChange}
-        />
-        <PromptInputTextarea
-          aria-label="Message SmartRoute"
-          placeholder="Ask SmartRoute"
-          maxLength={MAX_MESSAGE_LENGTH}
-          className="sr-chat-composer__textarea"
         />
         {voice.isSupported && (
           <PromptInputAction
@@ -102,7 +102,9 @@ export function ChatComposer({
             </Button>
           </PromptInputAction>
         )}
-        <PromptInputAction tooltip={isStreaming ? "Stop response" : "Send message"}>
+        <PromptInputAction
+          tooltip={isStreaming ? "Stop response" : "Send message"}
+        >
           <Button
             type="button"
             variant="ghost"
@@ -115,7 +117,12 @@ export function ChatComposer({
             onClick={isStreaming ? onCancel : submit}
           >
             {isStreaming ? (
-              <Square size={13} strokeWidth={2} fill="currentColor" aria-hidden="true" />
+              <Square
+                size={13}
+                strokeWidth={2}
+                fill="currentColor"
+                aria-hidden="true"
+              />
             ) : (
               <ArrowUp size={18} strokeWidth={2} aria-hidden="true" />
             )}

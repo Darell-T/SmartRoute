@@ -85,6 +85,14 @@ function SidebarItem({
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
   const engaged = !disabled && (hovered || focused);
+  const tooltipCopy = disabled ? (
+    <span className="sr-app-sidebar__tooltip-copy">
+      <span>{label}</span>
+      <span>Coming soon</span>
+    </span>
+  ) : (
+    label
+  );
 
   return (
     <Tooltip>
@@ -97,13 +105,13 @@ function SidebarItem({
           data-disabled={disabled ? "true" : "false"}
           data-appearance={appearance}
           aria-current={active ? "page" : undefined}
+          aria-disabled={disabled || undefined}
           aria-label={tooltipLabel}
-          disabled={disabled}
           onPointerEnter={() => setHovered(true)}
           onPointerLeave={() => setHovered(false)}
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
-          onClick={onClick}
+          onClick={disabled ? undefined : onClick}
         >
           <span className="sr-app-sidebar__item-icon" aria-hidden="true">
             <AnimatedSidebarIcon
@@ -122,7 +130,7 @@ function SidebarItem({
         </Button>
       </TooltipTrigger>
       <TooltipContent side="right" sideOffset={10} className="sr-app-sidebar__tooltip">
-        {tooltipLabel}
+        {tooltipCopy}
       </TooltipContent>
     </Tooltip>
   );

@@ -74,7 +74,7 @@ export function buildArrivalsPayloadForRoute(
     if (!arrival.routeIds.some((id) => id.toUpperCase() === normalized)) continue;
     if (arrival.direction !== "uptown" && arrival.direction !== "downtown") continue;
     const bucket = minutesByDirection.get(arrival.direction) ?? [];
-    bucket.push(...arrival.arrivalMinutes);
+    bucket.push(...arrival.arrivalMinutes.filter((minutes) => minutes > 0));
     minutesByDirection.set(arrival.direction, bucket);
   }
 

@@ -10,8 +10,8 @@
    ════════════════════════════════════════════════════════════════════════ */
 
 import { MapPin } from "iconoir-react";
+import { motion, useReducedMotion } from "motion/react";
 import type { ArrivalsTurnPayload } from "@/lib/use-agent-chat";
-import { Button } from "@/components/ui/button";
 import { LineBadge } from "./line-badge";
 import { WalkingIcon } from "./walking-icon";
 
@@ -43,6 +43,7 @@ export function ChatArrivalsCard({
   arrivals: ArrivalsTurnPayload;
   onSeeOnMap?: () => void;
 }) {
+  const reduceMotion = useReducedMotion() ?? false;
   const hasArrivals = arrivals.groups.length > 0;
   const emptyCopy =
     arrivals.sourceStatus === "provider_unavailable"
@@ -96,15 +97,17 @@ export function ChatArrivalsCard({
       </div>
 
       {onSeeOnMap ? (
-        <Button
+        <motion.button
           type="button"
-          variant="ghost"
-          className="sr-chat-arrivals-card__footer"
+          className="sr-itinerary-card__map-btn sr-chat-arrivals-card__footer"
+          aria-label="Open in Live Feed"
           onClick={onSeeOnMap}
+          whileTap={reduceMotion ? undefined : { scale: 0.985 }}
+          transition={{ duration: reduceMotion ? 0 : 0.12 }}
         >
-          <MapPin width={15} height={15} strokeWidth={1.7} aria-hidden="true" />
+          <MapPin width={20} height={20} strokeWidth={1.6} aria-hidden="true" />
           Open in Live Feed
-        </Button>
+        </motion.button>
       ) : null}
     </div>
   );

@@ -11,7 +11,7 @@ Real-time NYC transit routing with live alerts, vehicle context, and incident-aw
 ![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-4-06b6d4?logo=tailwindcss&logoColor=white)
 ![MapLibre](https://img.shields.io/badge/MapLibre_GL-5-396cb2?logo=maplibre&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-optional-4169e1?logo=postgresql&logoColor=white)
-![Redis](https://img.shields.io/badge/Redis-optional-dc382d?logo=redis&logoColor=white)
+![Redis](https://img.shields.io/badge/Redis-required_for_production_chat-dc382d?logo=redis&logoColor=white)
 ![Vercel](https://img.shields.io/badge/Vercel-frontend-black?logo=vercel)
 ![Render](https://img.shields.io/badge/Render-backend-46e3b7?logo=render&logoColor=111827)
 
@@ -282,6 +282,22 @@ this repository proves the current production worker topology. Multiple worker
 processes would each start a poller and hold different snapshots; before enabling
 multi-worker deployment, move snapshot and poller coordination to shared
 storage/locking. Do not compensate by calling 511NY from route requests.
+
+### Production topology and readiness contract
+
+The repository-supported topology is one FastAPI worker process with one
+process-local 511NY poller/snapshot and a Redis-backed chat session store.
+`REDIS_URL` is required for production chat; `AGENT_ALLOW_MEMORY_SESSIONS=1`
+is a local/test-only escape hatch. Probe `/health` for liveness and `/ready`
+for traffic readiness: liveness only proves the process can answer HTTP,
+while readiness fails until startup has completed and durable chat sessions are
+configured. Optional database, live-feed, and provider failures do not make a
+worker unready; their passenger-facing fallbacks remain explicit.
+
+See [`docs/production-topology-contract.md`](docs/production-topology-contract.md)
+for the versioned startup, worker, validation, and rollback procedure. Platform
+worker settings, Redis durability, health-check targets, and rollback history
+must be confirmed by the release operator before deployment.
 
 ### Ticketmaster Discovery v2
 

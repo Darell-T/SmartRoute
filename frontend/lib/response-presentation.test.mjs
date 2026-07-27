@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   DEFAULT_RESPONSE_PRESENTATION_MODE,
   RESPONSE_PRESENTATION_STORAGE_KEY,
+  createResponsePresentationModeStore,
   normalizeResponsePresentationMode,
   persistResponsePresentationMode,
   readResponsePresentationMode,
@@ -39,6 +40,32 @@ test("Quick persists for the current browser session", () => {
   assert.equal(readResponsePresentationMode(storage), "quick");
 });
 
+test("the server snapshot stays Auto while a client can promote stored Quick", () => {
+  const storage = memoryStorage({
+    [RESPONSE_PRESENTATION_STORAGE_KEY]: "quick",
+  });
+  const store = createResponsePresentationModeStore(() => storage);
+
+  assert.equal(store.getServerSnapshot(), "auto");
+  assert.equal(store.getClientSnapshot(), "quick");
+});
+
+test("same-tab mode selection updates subscribers and persists the mode", () => {
+  const storage = memoryStorage();
+  const store = createResponsePresentationModeStore(() => storage);
+  let updates = 0;
+  const unsubscribe = store.subscribe(() => {
+    updates += 1;
+  });
+
+  store.setMode("quick");
+  unsubscribe();
+
+  assert.equal(updates, 1);
+  assert.equal(store.getClientSnapshot(), "quick");
+  assert.equal(storage.getItem(RESPONSE_PRESENTATION_STORAGE_KEY), "quick");
+});
+
 test("blocked session storage falls back safely to Auto", () => {
   const blocked = {
     getItem() {
@@ -53,4 +80,10 @@ test("blocked session storage falls back safely to Auto", () => {
   assert.doesNotThrow(() =>
     persistResponsePresentationMode(blocked, "quick"),
   );
+
+  const store = createResponsePresentationModeStore(() => blocked);
+  assert.equal(store.getServerSnapshot(), "auto");
+  assert.equal(store.getClientSnapshot(), "auto");
+  assert.doesNotThrow(() => store.setMode("quick"));
+  assert.equal(store.getClientSnapshot(), "quick");
 });

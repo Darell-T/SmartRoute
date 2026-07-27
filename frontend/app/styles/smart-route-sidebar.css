@@ -127,20 +127,20 @@
     transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.sr-app-sidebar__item:hover:not(:disabled),
-.sr-app-sidebar__item:focus-visible,
+.sr-app-sidebar__item:hover:not([data-disabled="true"]),
+.sr-app-sidebar__item:focus-visible:not([data-disabled="true"]),
 .sr-app-sidebar__control:hover,
 .sr-app-sidebar__control:focus-visible {
   color: color-mix(in srgb, var(--sr-sidebar-ink) 86%, transparent);
   background: var(--sr-sidebar-hover);
 }
 
-.sr-app-sidebar__item:focus-visible,
+.sr-app-sidebar__item:focus-visible:not([data-disabled="true"]),
 .sr-app-sidebar__control:focus-visible {
   box-shadow: 0 0 0 2px var(--sr-sidebar-focus);
 }
 
-.sr-app-sidebar__item:active:not(:disabled),
+.sr-app-sidebar__item:active:not([data-disabled="true"]),
 .sr-app-sidebar__control:active {
   transform: scale(0.985);
 }
@@ -150,7 +150,7 @@
   background: var(--sr-sidebar-active);
 }
 
-.sr-app-sidebar__item:disabled {
+.sr-app-sidebar__item[data-disabled="true"] {
   color: var(--sr-sidebar-ink-dim);
   cursor: default;
   opacity: 0.48;
@@ -251,10 +251,25 @@
 }
 
 .sr-app-sidebar__tooltip {
+  padding: 6px 12px;
   border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 8px;
   background: rgba(18, 20, 23, 0.97);
   color: rgba(255, 255, 255, 0.92);
+  font-size: 12px;
+  font-weight: 560;
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.24);
+}
+
+.sr-app-sidebar__tooltip-copy {
+  display: grid;
+  gap: 1px;
+}
+
+.sr-app-sidebar__tooltip-copy > span:last-child {
+  color: rgba(255, 255, 255, 0.54);
+  font-size: 10.5px;
+  font-weight: 500;
 }
 
 .sr-app-sidebar[data-collapsed="true"] .sr-app-sidebar__brand-name,
@@ -299,8 +314,9 @@
 }
 
 .sr-app-sidebar[data-collapsed="true"]
-  .sr-app-sidebar__item:hover:not(:disabled)::after,
-.sr-app-sidebar[data-collapsed="true"] .sr-app-sidebar__item:focus-visible::after,
+  .sr-app-sidebar__item:hover:not([data-disabled="true"])::after,
+.sr-app-sidebar[data-collapsed="true"]
+  .sr-app-sidebar__item:focus-visible:not([data-disabled="true"])::after,
 .sr-app-sidebar[data-collapsed="true"] .sr-app-sidebar__control:hover::after,
 .sr-app-sidebar[data-collapsed="true"] .sr-app-sidebar__control:focus-visible::after {
   background: var(--sr-sidebar-hover);
@@ -363,8 +379,8 @@
     transition: background-color 150ms ease;
   }
 
-  .sr-app-sidebar__item:hover::after,
-  .sr-app-sidebar__item:focus-visible::after,
+  .sr-app-sidebar__item:hover:not([data-disabled="true"])::after,
+  .sr-app-sidebar__item:focus-visible:not([data-disabled="true"])::after,
   .sr-app-sidebar__control:hover::after,
   .sr-app-sidebar__control:focus-visible::after {
     background: var(--sr-sidebar-hover);

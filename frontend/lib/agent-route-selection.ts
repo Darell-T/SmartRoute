@@ -19,31 +19,6 @@ export interface AgentRouteSelection {
   destCoords: { lat: number; lng: number };
 }
 
-/** Prefer canonical itinerary seconds over legacy summary ETA. */
-function totalMinutesFromCard(card: RouteCard): number {
-  const seconds = card.itinerary?.total_duration_seconds;
-  if (typeof seconds === "number" && Number.isFinite(seconds)) {
-    return Math.round(seconds / 60);
-  }
-  return card.summary.eta_minutes;
-}
-
-/** Prefer canonical itinerary transfer_count over summary.transfers. */
-function transferCountFromCard(card: RouteCard): number {
-  const fromItin = card.itinerary?.transfer_count;
-  if (typeof fromItin === "number" && Number.isFinite(fromItin)) {
-    return Math.max(0, Math.round(fromItin));
-  }
-  return card.summary.transfers;
-}
-
-/** Prefer itinerary.arrival_at when it is a non-empty string. */
-function arrivalAtFromCard(card: RouteCard): string | undefined {
-  const iso = card.itinerary?.arrival_at;
-  if (typeof iso === "string" && iso.trim()) return iso.trim();
-  return undefined;
-}
-
 export function normalizeRouteCoordinate(
   value: unknown,
 ): { lat: number; lng: number } | null {
@@ -73,6 +48,13 @@ export interface AgentRoutePlan {
   recommendationText: string;
   /** The rail suppresses duplicated chat reasoning for this route source. */
   entryContext: "chat";
+}
+
+function canonicalDurationMinutes(card: RouteCard): number | null {
+  const seconds = card.itinerary?.total_duration_seconds;
+  return typeof seconds === "number" && Number.isFinite(seconds) && seconds >= 0
+    ? Math.round(seconds / 60)
+    : null;
 }
 
 /**
@@ -113,39 +95,42 @@ export function agentRoutePlanFromCards(
   selectedCardId: string,
 ): AgentRoutePlan | null {
   const selectedCard = cards.find((card) => card.card_id === selectedCardId);
-  if (!selectedCard) return null;
+  if (
+    !selectedCard ||
+    !selectedCard.itinerary ||
+    canonicalDurationMinutes(selectedCard) === null ||
+    !Number.isFinite(selectedCard.itinerary.transfer_count)
+  ) return null;
   const selectedRoute = agentRouteFromCard(selectedCard);
   if (!selectedRoute) return null;
 
   const candidates = cards.flatMap((card, index): RouteCandidate[] => {
     const route = agentRouteFromCard(card);
     if (!route) return [];
-    const isRecommended = card.role === "recommended";
-    const totalMinutes = totalMinutesFromCard(card);
-    const transfers = transferCountFromCard(card);
-    const arrivalAt = arrivalAtFromCard(card);
+    const totalMinutes = canonicalDurationMinutes(card);
+    if (!card.itinerary || totalMinutes === null || !Number.isFinite(card.itinerary.transfer_count)) return [];
     return [
       {
         id: card.card_id,
         index,
         steps: route.steps,
         itinerary: card.itinerary,
-        itinerary_id: card.itinerary?.itinerary_id ?? card.card_id,
+        itinerary_id: card.itinerary.itinerary_id,
         origin: card.origin,
         destination: card.destination,
-        is_recommended: isRecommended,
+        is_recommended: card.role === "recommended",
         total_minutes: totalMinutes,
-        ...(arrivalAt ? { arrival_at: arrivalAt } : {}),
+        ...(card.itinerary.arrival_at ? { arrival_at: card.itinerary.arrival_at } : {}),
         score_breakdown: {
           duration_minutes: totalMinutes,
-          transfers,
+          transfers: card.itinerary.transfer_count,
           active_alerts: card.alerts.length,
           transit_lines: card.summary.lines,
         },
         enriched: true,
         can_enrich_on_select: false,
-        recommendation_reason: isRecommended ? card.summary.reason : undefined,
-        rejection_reason: isRecommended ? undefined : card.summary.reason,
+        recommendation_reason: card.role === "recommended" ? card.summary.reason : undefined,
+        rejection_reason: card.role === "recommended" ? undefined : card.summary.reason,
       },
     ];
   });

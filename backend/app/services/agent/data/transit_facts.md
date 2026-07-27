@@ -6,24 +6,32 @@ curated -- it is not a live data source. For anything that changes day to
 day (delays, elevator outages, event schedules, live arrivals), use the
 live tools instead of this file.
 
+Fare corpus version: `2026.01.04-mta-fare-change`
+Fare source: https://www.mta.info/document/186881
+Effective date: 2026-01-04
+Last reviewed: 2026-07-27
+Review by: 2026-10-27
+
+Do not quote the fare section after its review-by date. Tell the rider that
+the stored fare reference needs review and direct them to the official MTA
+fare page instead of guessing.
+
 ## Fares & OMNY
 
-- As of mid-2026, the base subway and local bus fare is $2.90 per ride --
-  verify the current fare at mta.info before quoting an exact number, since
-  MTA fares are adjusted periodically.
-- OMNY (tap a contactless card, phone, smartwatch, or an MTA-issued OMNY
-  card) and MetroCard are both accepted at every subway station and on
-  every local bus.
-- OMNY has a weekly fare cap: once a rider has paid for 12 subway/local-bus
-  rides in a rolling Monday-Sunday week, additional rides that week are
-  free. MetroCard does not have an equivalent cap -- a rider who wants a
-  cap needs to use OMNY, or buy an unlimited-ride MetroCard instead.
+- Effective January 4, 2026, the base subway and local bus fare is $3.00 per
+  ride. Source: MTA 2026 Fare Change Materials
+  (https://www.mta.info/document/186881).
+- Use OMNY (a contactless card, phone, smartwatch, or MTA-issued OMNY card)
+  for subway and local-bus fare payment. MetroCard sales ended with the 2026
+  fare change; do not recommend buying an unlimited-ride MetroCard.
+- OMNY has a rolling seven-day fare cap of $35.00 for eligible subway and
+  local-bus taps. The cap is not a Monday-Sunday or 12-ride rule.
 - Reduced-fare programs exist for seniors, riders with qualifying
   disabilities, and eligible low-income riders (Fair Fares NYC).
   Enrollment and eligibility are handled by MTA/NYC programs directly, not
   by this app -- point riders to mta.info for enrollment.
 - Express buses, AirTrain JFK, and the Staten Island Railway all have their
-  own fares, separate from the $2.90 local subway/bus fare -- never assume
+  own fares, separate from the $3.00 local subway/bus fare -- never assume
   the base fare applies to those.
 
 ## Transfers

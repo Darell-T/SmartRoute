@@ -8,6 +8,15 @@ type StorageLike = {
   setItem(key: string, value: string): void;
 };
 
+type ResponsePresentationListener = () => void;
+
+export type ResponsePresentationModeStore = {
+  subscribe(listener: ResponsePresentationListener): () => void;
+  getServerSnapshot(): ResponsePresentationMode;
+  getClientSnapshot(): ResponsePresentationMode;
+  setMode(mode: ResponsePresentationMode): void;
+};
+
 export function normalizeResponsePresentationMode(
   value: unknown,
 ): ResponsePresentationMode {
@@ -47,3 +56,36 @@ export function browserSessionStorage(): Storage | undefined {
     return undefined;
   }
 }
+
+/**
+ * Keeps the server and hydration snapshots deterministic while allowing the
+ * browser to promote a session preference immediately after hydration.
+ */
+export function createResponsePresentationModeStore(
+  getStorage: () => StorageLike | undefined,
+): ResponsePresentationModeStore {
+  let inMemoryMode: ResponsePresentationMode | undefined;
+  const listeners = new Set<ResponsePresentationListener>();
+
+  return {
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    getServerSnapshot() {
+      return DEFAULT_RESPONSE_PRESENTATION_MODE;
+    },
+    getClientSnapshot() {
+      return inMemoryMode ?? readResponsePresentationMode(getStorage());
+    },
+    setMode(mode) {
+      inMemoryMode = mode;
+      persistResponsePresentationMode(getStorage(), mode);
+      listeners.forEach((listener) => listener());
+    },
+  };
+}
+
+export const responsePresentationModeStore = createResponsePresentationModeStore(
+  browserSessionStorage,
+);

@@ -7,7 +7,6 @@
  */
 
 import type {
-  AgentRouteStep,
   CanonicalItinerary,
   CanonicalItineraryLeg,
   RecommendationReason,
@@ -180,32 +179,6 @@ function canonicalPlaceLabel(place: unknown, fallback: string): string {
     }
   }
   return fallback;
-}
-
-function stepRouteId(step: AgentRouteStep): string | null {
-  const value = step.train_line || step.route_id;
-  return typeof value === "string" && value.trim()
-    ? value.trim().toUpperCase()
-    : null;
-}
-
-function legacyStepDurationMinutes(step: AgentRouteStep): number | null {
-  const departure = step.departure_time_iso
-    ? Date.parse(step.departure_time_iso)
-    : Number.NaN;
-  const arrival = step.arrival_time_iso
-    ? Date.parse(step.arrival_time_iso)
-    : Number.NaN;
-  if (Number.isFinite(departure) && Number.isFinite(arrival) && arrival >= departure) {
-    return Math.round((arrival - departure) / 60_000);
-  }
-  if (
-    typeof step.minutes_until_arrival === "number" &&
-    Number.isFinite(step.minutes_until_arrival)
-  ) {
-    return Math.max(0, Math.round(step.minutes_until_arrival));
-  }
-  return null;
 }
 
 function canonicalLegDurationMinutes(leg: CanonicalItineraryLeg): number | null {
@@ -433,75 +406,30 @@ function buildEventsFromCanonicalItinerary(
   return condensePreviewEvents(events, destinationLabel, originLabel);
 }
 
-function buildEventsFromSteps(
-  steps: AgentRouteStep[],
-  originLabel: string,
-  destinationLabel: string,
-  idPrefix: string,
-): ItineraryEvent[] {
-  const raw = steps.flatMap((step, index): ItineraryEvent[] => {
-    const fromLabel = step.departure_stop?.trim() || undefined;
-    const toLabel =
-      step.arrival_stop?.trim() ||
-      (index === steps.length - 1 ? destinationLabel : undefined);
-    const durationMinutes = legacyStepDurationMinutes(step);
-    const base = {
-      id: `${idPrefix}-legacy-${index}`,
-      title: toLabel || fromLabel || destinationLabel,
-      durationMinutes: durationMinutes ?? undefined,
-      durationLabel: durationLabelFromMinutes(durationMinutes),
-      fromLabel,
-      toLabel,
-    };
-
-    if (step.type === "WALK") return [{ ...base, kind: "walk", routeIds: [] }];
-    if (step.type !== "SUBWAY" && step.type !== "BUS") return [];
-    const routeId = stepRouteId(step);
-    return [{
-      ...base,
-      kind: step.type === "BUS" ? "bus" : "subway",
-      routeIds: routeId ? [routeId] : [],
-      stopCount:
-        typeof step.stop_count === "number" && Number.isFinite(step.stop_count)
-          ? Math.max(0, Math.round(step.stop_count))
-          : undefined,
-      stops: Array.isArray(step.intermediate_stops)
-        ? step.intermediate_stops.filter((stop) => typeof stop === "string" && stop.trim())
-        : [],
-    }];
-  });
-  return condensePreviewEvents(raw, destinationLabel, originLabel);
-}
-
 function isValidCard(card: RouteCard): boolean {
   return Boolean(
     card &&
       card.card_id &&
       card.destination?.label?.trim() &&
-      Number.isFinite(card.summary?.eta_minutes),
+      card.itinerary?.itinerary_id &&
+      Number.isFinite(card.itinerary.total_duration_seconds) &&
+      Number.isFinite(card.itinerary.transfer_count),
   );
 }
 
 function cardTotalMinutes(card: RouteCard): number {
-  const canonical = durationMinutesFromSeconds(card.itinerary?.total_duration_seconds);
-  return canonical ?? Math.max(0, Math.round(card.summary.eta_minutes));
+  return durationMinutesFromSeconds(card.itinerary?.total_duration_seconds) ?? 0;
 }
 
 function cardTransferCount(card: RouteCard): number {
   const canonical = card.itinerary?.transfer_count;
   return typeof canonical === "number" && Number.isFinite(canonical)
     ? Math.max(0, Math.round(canonical))
-    : Math.max(0, Math.round(card.summary.transfers));
+    : 0;
 }
 
 function cardArrivalLabel(card: RouteCard): string | null {
-  const canonical = formatClockTime(card.itinerary?.arrival_at);
-  if (canonical) return canonical;
-  for (let index = card.route.length - 1; index >= 0; index -= 1) {
-    const label = formatClockTime(card.route[index]?.arrival_time_iso);
-    if (label) return label;
-  }
-  return null;
+  return formatClockTime(card.itinerary?.arrival_at);
 }
 
 function buildMetaParts(transferCount: number, dwellMinutes: number): string[] {
@@ -553,23 +481,12 @@ export function buildItineraryViewModel(
     (name, index, values) => index === 0 || values[index - 1] !== name,
   );
   const transferCount = cardTransferCount(card);
-  const hasCanonicalEvents =
-    Boolean(card.itinerary) &&
-    ((Array.isArray(card.itinerary?.segments) && card.itinerary.segments.length > 0) ||
-      (Array.isArray(card.itinerary?.legs) && card.itinerary.legs.length > 0));
-  const events = hasCanonicalEvents
-    ? buildEventsFromCanonicalItinerary(
-        card.itinerary!,
-        originLabel,
-        destinationLabel,
-        card.card_id,
-      )
-    : buildEventsFromSteps(
-        card.route ?? [],
-        originLabel,
-        destinationLabel,
-        card.card_id,
-      );
+  const events = buildEventsFromCanonicalItinerary(
+    card.itinerary!,
+    originLabel,
+    destinationLabel,
+    card.card_id,
+  );
   const structuredReasons = card.itinerary?.structured_recommendation_reasons;
   const rationale =
     Array.isArray(structuredReasons) && structuredReasons.length > 0
@@ -602,8 +519,9 @@ export function buildItineraryViewModel(
 }
 
 /**
- * Compatibility path for saved sessions that predate canonical itineraries.
- * New plans arrive as one server-owned canonical card.
+ * Selects the server-owned canonical card when callers pass a card group.
+ * Legacy cards without a canonical itinerary deliberately render unavailable;
+ * this adapter never merges their duration, transfer, or selection facts.
  */
 export function buildMergedItineraryViewModel(
   recommendedCards: RouteCard[],
@@ -613,53 +531,8 @@ export function buildMergedItineraryViewModel(
   },
 ): ItineraryViewModel | null {
   if (recommendedCards.length === 0) return null;
-  if (recommendedCards.length === 1 || recommendedCards.some((card) => card.itinerary)) {
-    const canonical =
-      recommendedCards.find((card) => card.itinerary) ?? recommendedCards[0];
-    return buildItineraryViewModel(canonical, options);
-  }
-
-  const valid = recommendedCards.filter(isValidCard);
-  if (valid.length === 0) return buildItineraryViewModel(recommendedCards[0], options);
-  const first = valid[0];
-  const last = valid[valid.length - 1];
-  const placeNames = [
-    first.origin?.label?.trim() || "Your location",
-    ...valid.map((card) => card.destination.label.trim()),
-  ].filter((name, index, values) => index === 0 || values[index - 1] !== name);
-  const events = valid.flatMap((card) =>
-    buildEventsFromSteps(
-      card.route ?? [],
-      card.origin?.label?.trim() || "Your location",
-      card.destination.label.trim(),
-      card.card_id,
-    ),
-  );
-  const totalMinutes = valid.reduce((total, card) => total + cardTotalMinutes(card), 0);
-  const transferCount = valid.reduce(
-    (total, card) => total + cardTransferCount(card),
-    0,
-  );
-  const rationale = valid.flatMap((card) => parseRationale(card.summary.reason));
-
-  return {
-    id: valid.map((card) => card.card_id).join("-"),
-    recommended: true,
-    placeNames,
-    arrivalLabel: cardArrivalLabel(last),
-    firstLegArrivalLabel: firstLegArrivalLabel(first),
-    durationLabel: formatDurationMinutes(totalMinutes),
-    totalMinutes,
-    transferCount,
-    metaParts: buildMetaParts(transferCount, 0),
-    events,
-    rationale: [...new Set(rationale)],
-    primaryActionLabel: options?.primaryActionLabel ?? "Open on map",
-    secondaryActionLabel: options?.secondaryActionLabel ?? "View steps",
-    invalid: false,
-    sourceCardIds: valid.map((card) => card.card_id),
-    primaryCardId: last.card_id,
-  };
+  const canonical = recommendedCards.find(isValidCard) ?? recommendedCards[0];
+  return buildItineraryViewModel(canonical, options);
 }
 
 export function shouldCollapseEvents(eventCount: number): boolean {

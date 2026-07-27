@@ -7,7 +7,7 @@ import { DEFAULT_LOCATION } from "@/lib/api";
 import { useLiveFeed } from "@/lib/use-live-feed";
 import { useServiceAlerts } from "@/lib/use-service-alerts";
 import { deriveTransitRouteIds } from "@/lib/route-planning";
-import { summarizeRoute } from "@/lib/smart-route";
+import { formatCanonicalRouteSummary } from "@/lib/smart-route";
 import { useAgentChat, type ArrivalsTurnPayload } from "@/lib/use-agent-chat";
 import {
   SmartRouteThemeProvider,
@@ -81,24 +81,8 @@ function SmartRoutePageContent() {
   }, [activeRouteSteps, activeRouteCandidate?.itinerary]);
 
   const summary = useMemo(
-    () =>
-      activeRouteSteps.length > 0
-        ? summarizeRoute(
-            activeRouteSteps,
-            new Date(),
-            activeRouteCandidate?.total_minutes,
-            {
-              arrivalAtIso: activeRouteCandidate?.arrival_at,
-              transfers: activeRouteCandidate?.score_breakdown?.transfers,
-            },
-          )
-        : null,
-    [
-      activeRouteSteps,
-      activeRouteCandidate?.total_minutes,
-      activeRouteCandidate?.arrival_at,
-      activeRouteCandidate?.score_breakdown?.transfers,
-    ],
+    () => formatCanonicalRouteSummary(activeRouteCandidate),
+    [activeRouteCandidate],
   );
 
   const destCoords = useMemo(() => {
@@ -163,7 +147,7 @@ function SmartRoutePageContent() {
         recommendationText,
         routeEntryContext,
         routeEta: summary?.arriveLabel ?? null,
-        routeTotalTime: summary ? `${summary.totalMin} min` : null,
+        routeTotalTime: summary?.totalLabel ?? null,
         serviceAlerts: serviceAlerts.alerts,
         incidents: [],
         nowMs: clientNowMs || 0,

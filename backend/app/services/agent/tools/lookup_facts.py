@@ -11,12 +11,17 @@ answers "how does accessibility work in general," the live tool answers
 from __future__ import annotations
 
 import re
+from datetime import date
 from pathlib import Path
 
 from app.services.agent.tools._types import ToolContext, ToolResult
 
 FACTS_PATH = Path(__file__).resolve().parent.parent / "data" / "transit_facts.md"
 MAX_DIGEST_CHARS = 1200
+FARE_FACTS_VERSION = "2026.01.04-mta-fare-change"
+FARE_FACTS_SOURCE_URL = "https://www.mta.info/document/186881"
+FARE_FACTS_EFFECTIVE_DATE = date(2026, 1, 4)
+FARE_FACTS_REVIEW_BY = date(2026, 10, 27)
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
@@ -121,9 +126,24 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
         )
 
     matched_slug, section = found
+    if matched_slug == "fares-omny" and date.today() > FARE_FACTS_REVIEW_BY:
+        return ToolResult(
+            ok=False,
+            error=(
+                "fare facts require review before they can be quoted; "
+                "check the official MTA fare page"
+            ),
+        )
     body = f"{section['header']}\n{section['body']}".strip()
     if len(body) > MAX_DIGEST_CHARS:
         body = body[: MAX_DIGEST_CHARS - 1].rstrip() + "…"
 
     data = {"topic": matched_slug, "text": body}
+    if matched_slug == "fares-omny":
+        data["source"] = {
+            "version": FARE_FACTS_VERSION,
+            "url": FARE_FACTS_SOURCE_URL,
+            "effective_date": FARE_FACTS_EFFECTIVE_DATE.isoformat(),
+            "review_by": FARE_FACTS_REVIEW_BY.isoformat(),
+        }
     return ToolResult(ok=True, data=data, summary=f"facts: {matched_slug}")

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import io
 import unittest
+from datetime import date
 from contextlib import redirect_stdout
 from unittest.mock import patch
 
@@ -174,6 +175,23 @@ class LookupFactsTests(unittest.IsolatedAsyncioTestCase):
         result = await lookup_facts.execute({"topic": "fare"}, _ctx())
         self.assertTrue(result.ok)
         self.assertIn("fare", result.data["topic"])
+
+    async def test_fare_facts_are_effective_dated_and_sourced(self):
+        result = await lookup_facts.execute({"topic": "fare"}, _ctx())
+        self.assertTrue(result.ok)
+        self.assertIn("$3.00", result.data["text"])
+        self.assertIn("$35.00", result.data["text"])
+        self.assertIn("MetroCard sales ended", result.data["text"])
+        self.assertEqual(result.data["source"]["version"], lookup_facts.FARE_FACTS_VERSION)
+        self.assertEqual(result.data["source"]["effective_date"], "2026-01-04")
+        self.assertEqual(result.data["source"]["url"], lookup_facts.FARE_FACTS_SOURCE_URL)
+
+    async def test_expired_fare_facts_fail_safely(self):
+        with patch.object(lookup_facts, "date") as fake_date:
+            fake_date.today.return_value = date(2026, 10, 28)
+            result = await lookup_facts.execute({"topic": "fare"}, _ctx())
+        self.assertFalse(result.ok)
+        self.assertIn("require review", result.error)
 
     async def test_fuzzy_match_on_natural_phrase(self):
         result = await lookup_facts.execute({"topic": "elevator accessibility"}, _ctx())

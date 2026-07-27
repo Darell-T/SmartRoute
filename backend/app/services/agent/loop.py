@@ -295,15 +295,22 @@ def _tools_for_intent(
             "plan_trip",
             "accessibility_status",
         },
+        "arrival_lookup": {"lookup_arrivals"},
+        "transit_question": {
+            "transit_snapshot",
+            "event_lookup",
+            "lookup_arrivals",
+            "accessibility_status",
+            "lookup_facts",
+        },
+        "simple_general": set(),
+        "unsupported": set(),
     }
-    included = tool_names_by_intent.get(parsed_intent.intent)
-    if included is not None:
-        tools = [schema for schema in TOOLS if schema.get("name") in included]
-    else:
-        tools = [schema for schema in TOOLS if schema.get("name") != "plan_trip"]
+    included = tool_names_by_intent.get(parsed_intent.intent, set())
+    tools = [schema for schema in TOOLS if schema.get("name") in included]
     # Claude decides whether current web evidence is useful. Availability is
-    # intentionally bounded to place discovery and NYC routing; arrival and
-    # simple transit questions retain their deterministic fast paths.
+    # limited to place, route, and current transit/event questions. Explicit
+    # arrivals and deterministic general turns retain their fast paths.
     if parsed_intent.intent in {
         "destination_discovery",
         "route_planning",
@@ -353,6 +360,10 @@ _INTERNAL_CARD_REFERENCE = re.compile(
     r"\b(?:route\s+)?card\s+[`'\"]?(?:rc|mock)[_-][A-Za-z0-9_-]+[`'\"]?\s*(?:[—–-]\s*)?",
     re.IGNORECASE,
 )
+
+
+class _TurnDeadlineReached(Exception):
+    """Internal control flow that still reaches the turn's single DoneEvent."""
 _OPAQUE_CARD_ID = re.compile(r"\b(?:rc|mock)[_-][A-Za-z0-9_-]{4,}\b", re.IGNORECASE)
 
 
@@ -373,15 +384,28 @@ def _sanitize_rider_text(text: str) -> str:
     return sanitized
 
 
-async def _run_one_tool(name: str, tool_input: dict, ctx: ToolContext) -> ToolResult:
+async def _run_one_tool(
+    name: str,
+    tool_input: dict,
+    ctx: ToolContext,
+    *,
+    deadline_monotonic: float | None = None,
+) -> ToolResult:
     """Always returns a ToolResult -- timeouts and exceptions are captured
     as ToolResult(ok=False, error=<short reason>), never raised."""
     spec = TOOL_REGISTRY.get(name)
     if spec is None:
         return ToolResult(ok=False, error=f"unknown tool '{name}'")
+    timeout_s = spec.timeout_s
+    if deadline_monotonic is not None:
+        timeout_s = min(timeout_s, deadline_monotonic - time.monotonic())
+    if timeout_s <= 0:
+        return ToolResult(ok=False, error="turn deadline reached")
     try:
-        result = await asyncio.wait_for(spec.executor(tool_input, ctx), timeout=spec.timeout_s)
+        result = await asyncio.wait_for(spec.executor(tool_input, ctx), timeout=timeout_s)
     except asyncio.TimeoutError:
+        if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+            return ToolResult(ok=False, error="turn deadline reached")
         return ToolResult(ok=False, error="timed out")
     except Exception as exc:
         # Provider exception details can contain credential-bearing URLs.
@@ -545,6 +569,7 @@ async def _execute_tool_round(
     mode_policy: agent_policy.AgentModePolicy,
     parsed_intent: intelligence.ParsedIntent,
     stage_ms: dict[str, float],
+    deadline_monotonic: float,
 ) -> AsyncIterator:
     """Emits tool_start/tool_end/route_card events for one round of (possibly
     parallel) tool calls, and yields the assembled tool_result message last
@@ -570,7 +595,12 @@ async def _execute_tool_round(
     start_times = {block.id: time.monotonic() for block in tool_use_blocks}
     outcomes = await asyncio.gather(
         *(
-            _run_one_tool(getattr(block, "name", ""), tool_inputs[block.id], ctx)
+            _run_one_tool(
+                getattr(block, "name", ""),
+                tool_inputs[block.id],
+                ctx,
+                deadline_monotonic=deadline_monotonic,
+            )
             for block in tool_use_blocks
         )
     )
@@ -643,6 +673,7 @@ async def _stream_turn(
     trace: TurnTrace | None,
 ) -> AsyncIterator[agent_events.AgentEvent]:
     turn_start = time.monotonic()
+    deadline_monotonic = turn_start + AGENT_TURN_DEADLINE_S
     mode_policy = agent_policy.policy_for_mode(response_presentation)
     initial_mode = mode_policy.mode
     escalation_reason: str | None = None
@@ -733,7 +764,12 @@ async def _stream_turn(
                     label=label,
                 )
                 tool_started = time.monotonic()
-                result = await _run_one_tool("lookup_arrivals", required_input, ctx)
+                result = await _run_one_tool(
+                    "lookup_arrivals",
+                    required_input,
+                    ctx,
+                    deadline_monotonic=deadline_monotonic,
+                )
                 tool_duration_ms = (time.monotonic() - tool_started) * 1000
                 tools_ms_total += tool_duration_ms
                 stage_ms["arrival_lookup_ms"] += tool_duration_ms
@@ -750,6 +786,14 @@ async def _stream_turn(
                 )
                 if not result.ok:
                     tool_failures += 1
+                if result.error == "turn deadline reached":
+                    yield agent_events.ErrorEvent(
+                        code="deadline",
+                        message="The response took too long. Please try again.",
+                        retryable=True,
+                    )
+                    stop_reason_out = "deadline"
+                    raise _TurnDeadlineReached
                 reason = quick_escalation.reason_for_tool_result(
                     "lookup_arrivals", result, required=True
                 )
@@ -784,8 +828,7 @@ async def _stream_turn(
 
         while not deterministic_arrival:
             round_num += 1
-            if time.monotonic() - turn_start > AGENT_TURN_DEADLINE_S:
-                needs_wrapup = True
+            if time.monotonic() >= deadline_monotonic:
                 stop_reason_out = "deadline"
                 break
             if round_num > mode_policy.max_rounds:
@@ -808,6 +851,7 @@ async def _stream_turn(
                 log_tag="model call",
                 retry_count=mode_policy.retry_count,
                 sanitize_text=_sanitize_rider_text,
+                deadline_monotonic=deadline_monotonic,
             ):
                 if isinstance(model_event, model_stream.ModelCallCompleted):
                     model_outcome = model_event
@@ -829,7 +873,7 @@ async def _stream_turn(
             model_ms_total += (time.monotonic() - model_call_start) * 1000
             if error_event is not None:
                 yield error_event
-                stop_reason_out = "error"
+                stop_reason_out = "deadline" if error_event.code == "deadline" else "error"
                 break
             if final_message is None:
                 raise RuntimeError("model stream completed without a final message")
@@ -855,6 +899,7 @@ async def _stream_turn(
                 mode_policy,
                 parsed_intent,
                 stage_ms,
+                deadline_monotonic,
             ):
                 if isinstance(item, dict) and "__tool_result_message__" in item:
                     tool_result_message = item["__tool_result_message__"]
@@ -879,12 +924,11 @@ async def _stream_turn(
             tools_ms_total += (time.monotonic() - tool_round_start) * 1000
             messages.append(tool_result_message)
 
-            if time.monotonic() - turn_start > AGENT_TURN_DEADLINE_S:
-                needs_wrapup = True
+            if time.monotonic() >= deadline_monotonic:
                 stop_reason_out = "deadline"
                 break
 
-        if needs_wrapup:
+        if needs_wrapup and time.monotonic() < deadline_monotonic:
             messages.append({"role": "user", "content": WRAP_UP_INSTRUCTION})
             stream_kwargs = _build_stream_kwargs(
                 force_final=True,
@@ -901,6 +945,7 @@ async def _stream_turn(
                 log_tag="wrap-up model call",
                 retry_count=mode_policy.retry_count,
                 sanitize_text=_sanitize_rider_text,
+                deadline_monotonic=deadline_monotonic,
             ):
                 if isinstance(model_event, model_stream.ModelCallCompleted):
                     model_outcome = model_event
@@ -922,7 +967,7 @@ async def _stream_turn(
             model_ms_total += (time.monotonic() - model_call_start) * 1000
             if error_event is not None:
                 yield error_event
-                stop_reason_out = "error"
+                stop_reason_out = "deadline" if error_event.code == "deadline" else "error"
             else:
                 if final_message is None:
                     raise RuntimeError(
@@ -945,6 +990,8 @@ async def _stream_turn(
                 prefix = "\n\n" if text_parts else ""
                 text_parts.append(prefix + resume_offer)
                 yield agent_events.TokenEvent(text=prefix + resume_offer)
+    except _TurnDeadlineReached:
+        stop_reason_out = "deadline"
     except Exception as exc:
         print(f"[agent-loop] turn failed unexpectedly type={type(exc).__name__}")
         yield agent_events.ErrorEvent(

@@ -19,6 +19,32 @@ const WALKING_ICON_SOURCE = readFileSync(
   "utf8",
 );
 
+test("Live Feed action reuses the map action interaction contract", () => {
+  assert.match(CARD_SOURCE, /<motion\.button[\s\S]*?type="button"/);
+  assert.match(
+    CARD_SOURCE,
+    /className="sr-itinerary-card__map-btn sr-chat-arrivals-card__footer"/,
+  );
+  assert.match(CARD_SOURCE, /aria-label="Open in Live Feed"/);
+  assert.match(CARD_SOURCE, /whileTap=\{reduceMotion \? undefined/);
+  assert.match(CHAT_CSS, /\.sr-itinerary-card__map-btn:hover svg\s*\{/);
+});
+
+test("chat focus and selected outlines use neutral ink instead of green accent", () => {
+  assert.match(
+    CHAT_CSS,
+    /--ring:\s*color-mix\(in srgb, var\(--sr-chat-ink\) 28%, transparent\)/,
+  );
+  assert.match(
+    CHAT_CSS,
+    /\.sr-chat-route-card:focus-visible\s*\{[\s\S]*?var\(--sr-chat-ink\)/,
+  );
+  assert.doesNotMatch(
+    CHAT_CSS,
+    /button\.sr-chat-arrivals-card__footer\s*\{[^}]*var\(--sr-chat-accent\)/,
+  );
+});
+
 test("arrival and itinerary cards share the same walking icon primitive", () => {
   assert.match(CARD_SOURCE, /import \{ WalkingIcon \} from "\.\/walking-icon"/);
   assert.match(ITINERARY_SOURCE, /import \{ WalkingIcon \} from "\.\/walking-icon"/);

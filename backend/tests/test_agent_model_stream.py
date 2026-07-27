@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import types
 import unittest
 
@@ -91,7 +92,108 @@ class _Messages:
         return self._stream
 
 
+class _NoFirstByteStream:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return False
+
+    async def __aiter__(self):
+        await asyncio.Event().wait()
+        yield None
+
+    async def get_final_message(self):
+        raise AssertionError("deadline should cancel before final message")
+
+
+class _WebStallStream(_NoFirstByteStream):
+    async def __aiter__(self):
+        yield _event("content_block_start", index=0, content_block=_event("server_tool_use", id="web-1", name="web_search"))
+        await asyncio.Event().wait()
+
+
+class _RetryableFailureStream:
+    async def __aenter__(self):
+        error = RuntimeError("retryable")
+        error.status_code = 503
+        raise error
+
+    async def __aexit__(self, *_args):
+        return False
+
+
 class ModelStreamTests(unittest.IsolatedAsyncioTestCase):
+    async def test_deadline_before_first_byte_is_typed_and_bounded(self):
+        client = types.SimpleNamespace(messages=_Messages(_NoFirstByteStream()))
+        started = time.monotonic()
+        items = [
+            item
+            async for item in model_stream.stream_model_call(
+                client=client,
+                stream_kwargs={},
+                log_tag="test",
+                retry_count=0,
+                sanitize_text=lambda value: value,
+                deadline_monotonic=time.monotonic() + 0.001,
+            )
+        ]
+        self.assertLess(time.monotonic() - started, 0.25)
+        outcome = next(item for item in items if isinstance(item, model_stream.ModelCallCompleted))
+        self.assertEqual(outcome.error.code, "deadline")
+
+    async def test_web_search_progress_is_balanced_when_deadline_cancels_stream(self):
+        client = types.SimpleNamespace(messages=_Messages(_WebStallStream()))
+        items = [item async for item in model_stream.stream_model_call(client=client, stream_kwargs={}, log_tag="test", retry_count=0, sanitize_text=lambda value: value, deadline_monotonic=time.monotonic() + 0.01)]
+        progress = [item for item in items if isinstance(item, events.ToolEndEvent)]
+        self.assertEqual(len(progress), 1)
+        self.assertFalse(progress[0].ok)
+        self.assertEqual(next(item for item in items if isinstance(item, model_stream.ModelCallCompleted)).error.code, "deadline")
+
+    async def test_cancellation_propagates_without_synthetic_terminal_event(self):
+        client = types.SimpleNamespace(messages=_Messages(_NoFirstByteStream()))
+        stream = model_stream.stream_model_call(client=client, stream_kwargs={}, log_tag="test", retry_count=0, sanitize_text=lambda value: value)
+        task = asyncio.create_task(anext(stream))
+        await asyncio.sleep(0)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+
+    async def test_retry_backoff_is_cut_off_by_turn_deadline(self):
+        class Messages:
+            def __init__(self): self.calls = 0
+            def stream(self, **_kwargs):
+                self.calls += 1
+                return _RetryableFailureStream()
+        messages = Messages()
+        started = time.monotonic()
+        items = [item async for item in model_stream.stream_model_call(client=types.SimpleNamespace(messages=messages), stream_kwargs={}, log_tag="test", retry_count=2, sanitize_text=lambda value: value, deadline_monotonic=time.monotonic() + 0.01)]
+        self.assertLess(time.monotonic() - started, 0.25)
+        outcome = next(item for item in items if isinstance(item, model_stream.ModelCallCompleted))
+        self.assertEqual(outcome.error.code, "deadline")
+        self.assertEqual(outcome.attempts, 1)
+        self.assertEqual(messages.calls, 1)
+
+    async def test_deadline_cancels_a_stalled_stream_with_typed_outcome(self):
+        release = asyncio.Event()
+        client = types.SimpleNamespace(messages=_Messages(_RawStream(release=release)))
+        started = time.monotonic()
+        items = [
+            item
+            async for item in model_stream.stream_model_call(
+                client=client,
+                stream_kwargs={},
+                log_tag="test",
+                retry_count=1,
+                sanitize_text=lambda value: value,
+                deadline_monotonic=time.monotonic() + 0.02,
+            )
+        ]
+        self.assertLess(time.monotonic() - started, 0.25)
+        outcome = next(item for item in items if isinstance(item, model_stream.ModelCallCompleted))
+        self.assertEqual(outcome.error.code, "deadline")
+        self.assertEqual(outcome.attempts, 1)
+
     async def test_text_arrives_before_round_completion_and_resumes_after_web_search(self):
         release = asyncio.Event()
         client = types.SimpleNamespace(
