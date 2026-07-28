@@ -102,12 +102,13 @@ PLAN_TRIP_SCHEMA = {
             },
             "waypoints": {
                 "type": "array",
-                "maxItems": MAX_WAYPOINTS,
-                "items": {"type": "string", "maxLength": MAX_WAYPOINT_CHARS},
+                "items": {"type": "string"},
                 "description": (
-                    "Optional ordered intermediate stops. Use one plan_trip call "
-                    "for a multi-stop trip; SmartRoute owns dwell timing and "
-                    "returns one chained itinerary."
+                    "Optional ordered intermediate stops (at most "
+                    f"{MAX_WAYPOINTS} names, each at most {MAX_WAYPOINT_CHARS} "
+                    "characters). Use one plan_trip call for a multi-stop trip; "
+                    "SmartRoute owns dwell timing, enforces those bounds "
+                    "server-side, and returns one chained itinerary."
                 ),
             },
             "waypoint_dwell_minutes": {

@@ -26,6 +26,7 @@ from app.services.agent.tools import (
     transit_snapshot,
     venue_crowd_window,
 )
+from app.services.agent.strict_tool_schema import assert_strict_tool_schemas_compatible
 from app.services.agent.tools._types import ToolContext, ToolResult
 
 ToolExecutor = Callable[[dict, ToolContext], Awaitable[ToolResult]]
@@ -174,5 +175,8 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
 }
 
 TOOLS: list[dict] = [spec.schema for spec in TOOL_REGISTRY.values()]
+# Fail closed at import if a strict custom tool reintroduces unsupported
+# Anthropic JSON Schema keywords (e.g. maxItems under strict: true).
+assert_strict_tool_schemas_compatible(TOOLS)
 
 __all__ = ["TOOL_REGISTRY", "TOOLS", "ToolSpec", "ToolContext", "ToolResult"]
