@@ -11,8 +11,6 @@ import asyncio
 import concurrent.futures
 import json
 import re
-import shlex
-import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -300,30 +298,6 @@ def readiness_check(
             "elapsed_ms": result.elapsed_ms,
         },
     )
-
-
-def run_advisory_commands(
-    commands: list[str],
-    timeout_seconds: float,
-) -> ExternalCheckResult:
-    if not commands:
-        return ExternalCheckResult("BLOCKED", "no advisory scanner command was supplied", {})
-    results: list[dict[str, object]] = []
-    for command in commands:
-        try:
-            completed = subprocess.run(
-                shlex.split(command),
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=timeout_seconds,
-            )
-        except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
-            return ExternalCheckResult("FAILED", f"scanner execution failed: {exc}", {})
-        results.append({"command": command, "exit_code": completed.returncode})
-    if any(result["exit_code"] != 0 for result in results):
-        return ExternalCheckResult("FAILED", "one or more scanner commands failed", {"commands": results})
-    return ExternalCheckResult("PASSED", "all supplied scanner commands exited zero", {"commands": results})
 
 
 def deployment_evidence(

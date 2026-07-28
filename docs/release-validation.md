@@ -53,6 +53,74 @@ deliberately excludes `@visual` snapshots: visual comparison remains
 platform-local (Windows baseline) and is explicitly **not certified** by this
 browser evidence.
 
+## Dependency advisory evidence
+
+The `dependency-advisories` CI job scans all supported dependency sets: the
+full frontend lock, frontend runtime lock (`npm audit --omit=dev`), backend
+runtime requirements, and backend development requirements. It publishes only
+`dependency-advisories.json`; raw scanner JSON and stderr stay in the ephemeral
+runner workspace.
+
+The generator binds each scanner result to the exact Git SHA and SHA-256 digest
+of its lockfile or requirements file. It records scanner name/version/format,
+scope, scanner exit code, count-by-severity, and normalized advisory IDs,
+packages, directness, dependency paths when the scanner provides them, and
+fixed versions. A scan may exit `0` only with no findings and `1` only with
+findings. Unknown scanner output, omitted scope, a changed input digest, a
+mismatched SHA, or any unaccepted finding fails closed. This gate deliberately
+does not accept arbitrary commands or status-only JSON.
+
+### Approved development exception
+
+`backend/release_advisory_exceptions.json` contains one temporary exception for
+`GHSA-mh99-v99m-4gvg` in `brace-expansion@1.1.16` at
+`node_modules/brace-expansion`. It is development-only: the finding is present
+in the full frontend audit but absent from `npm audit --omit=dev`. It is the
+`eslint-config-next@16.2.9` / ESLint 9.39.4 chain through
+`@eslint/config-array@0.21.2`, `@eslint/eslintrc@3.3.5`,
+`eslint-plugin-import@2.32.0`,
+`eslint-plugin-jsx-a11y@6.10.2`, `eslint-plugin-react@7.37.5`, and callable
+`minimatch@3.1.5`. Forcing Minimatch 10 is not safe because the current ESLint
+plugins still require the callable 3.x API and no compatible upstream patched
+chain is available.
+
+The exception's first invalid UTC day is **2026-08-27**. It is bound to the exact
+`frontend/package-lock.json` SHA-256
+`67d5dcfdb3b2c68883b162db8c4c08d107f77b7d1a3272b363a2d4fa301e3bc6` and to
+the exact package paths and versions above. A lock digest, ESLint/plugin,
+Minimatch, or Brace Expansion change invalidates it immediately. The generated
+evidence retains the accepted finding separately from all scanner findings; the
+release parser reloads the policy from the candidate checkout and requires a
+one-to-one match. Runtime scopes can never use an exception.
+
+Candidate identity is carried by the CI job's immutable `${{ github.sha }}` and
+is compared to the release command's `--commit-sha`. The policy is read from
+that same candidate checkout, while its lock digest prevents a policy from
+being replayed against a different dependency tree. Re-audit before expiry or
+after any dependency change:
+
+```powershell
+cd frontend
+npm audit --json
+npm audit --omit=dev --json
+
+cd ..\backend
+pip-audit -r requirements.txt --format json
+pip-audit -r requirements-dev.txt --format json
+```
+
+Use the retained CI artifact in the staging gate:
+
+```powershell
+cd backend
+python -m scripts.release_validation `
+  --commit-sha <immutable-git-sha> `
+  --staging --staging-url <staging-base-url> `
+  --advisory-evidence <dependency-advisories.json> `
+  --deployment-evidence <deployment-evidence.json> `
+  --rollback-evidence <rollback-evidence.json>
+```
+
 ## Opt-in staging validation
 
 The production behavior contract is documented in
@@ -69,8 +137,7 @@ cd backend
 python -m scripts.release_validation `
   --commit-sha <immutable-git-sha> `
   --staging --staging-url <staging-base-url> `
-  --advisory-command "npm audit --omit=dev" `
-  --advisory-command "pip-audit -r requirements.txt" `
+  --advisory-evidence <dependency-advisories.json> `
   --deployment-evidence <deployment-evidence.json> `
   --rollback-evidence <rollback-evidence.json> `
   --model-chat-smoke --chat-header "X-App-Key: <secret-injected-value>" `

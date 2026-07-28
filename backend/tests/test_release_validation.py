@@ -211,8 +211,8 @@ def test_staging_evidence_runs_costed_model_chat_without_leaking_header(monkeypa
     )
     monkeypatch.setattr(
         release_validation,
-        "run_advisory_commands",
-        lambda *_args: transport.ExternalCheckResult("PASSED", "scanner passed", {}),
+        "advisory_evidence",
+        lambda *_args: transport.ExternalCheckResult("PASSED", "advisory evidence passed", {}),
     )
     monkeypatch.setattr(
         transport,
@@ -231,7 +231,7 @@ def test_staging_evidence_runs_costed_model_chat_without_leaking_header(monkeypa
 
     report = run_command(
         "--commit-sha", "a1b2c3d4", "--staging", "--staging-url", "https://staging.example.test",
-        "--advisory-command", "scanner", "--deployment-evidence", str(deployment),
+        "--advisory-evidence", str(tmp_path / "advisories.json"), "--deployment-evidence", str(deployment),
         "--rollback-evidence", str(rollback), "--model-chat-smoke",
         "--chat-header", "X-App-Key: never-print-this", "--max-estimated-cost-usd", "0.01",
         "--estimated-cost-per-request-usd", "0.001",
@@ -303,7 +303,7 @@ def test_http_200_does_not_override_sse_error(monkeypatch) -> None:
     assert done_result.status_code == 200 and done_result.passed
 
 
-def test_missing_scanner_executable_is_actionable_and_nonzero(monkeypatch, tmp_path, capsys) -> None:
+def test_missing_advisory_evidence_blocks_staging_without_subprocess(monkeypatch, tmp_path, capsys) -> None:
     deployment = tmp_path / "deployment.json"
     rollback = tmp_path / "rollback.json"
     deployment.write_text(json.dumps({"commit_sha": "a1b2c3d4", "instance_ids": ["staging-a"]}), encoding="utf-8")
@@ -319,21 +319,21 @@ def test_missing_scanner_executable_is_actionable_and_nonzero(monkeypatch, tmp_p
 
     exit_code = release_validation.main([
         "--commit-sha", "a1b2c3d4", "--staging", "--staging-url", "https://stage.example.test",
-        "--advisory-command", "definitely-missing-release-scanner", "--deployment-evidence", str(deployment),
+        "--deployment-evidence", str(deployment),
         "--rollback-evidence", str(rollback),
     ])
     report = json.loads(capsys.readouterr().out)
 
     assert exit_code == 1
     scanner = checks_by_name(report)["dependency_advisories"]
-    assert scanner["status"] == release_validation.STATUS_FAILED
-    assert "scanner execution failed" in scanner["reason"]
+    assert scanner["status"] == release_validation.STATUS_BLOCKED
+    assert "not supplied" in scanner["reason"]
 
 
 def test_modes_and_model_cost_gate_before_work(monkeypatch) -> None:
     monkeypatch.setattr(
         release_validation,
-        "run_advisory_commands",
+        "advisory_evidence",
         lambda *_args: (_ for _ in ()).throw(AssertionError("must not run")),
     )
     missing_mode = run_command("--commit-sha", "a1b2c3d4")
@@ -357,7 +357,7 @@ def test_invalid_staging_url_or_chat_header_blocks_before_scanner(monkeypatch) -
     def scanner_must_not_run(*_args, **_kwargs):
         raise AssertionError("invalid staging prerequisites must precede scanners")
 
-    monkeypatch.setattr(release_validation, "run_advisory_commands", scanner_must_not_run)
+    monkeypatch.setattr(release_validation, "advisory_evidence", scanner_must_not_run)
     invalid_url = run_command(
         "--commit-sha",
         "a1b2c3d4",

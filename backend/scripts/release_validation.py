@@ -23,10 +23,10 @@ from scripts.release_validation_transport import (
     report_status,
     readiness_check,
     rollback_evidence,
-    run_advisory_commands,
     validate_staging_url,
 )
 from scripts.provider_fault_jitter_validation import run_provider_fault_jitter_validation
+from scripts.release_validation_advisories import advisory_evidence
 from scripts.release_validation_browser import browser_evidence
 
 
@@ -235,7 +235,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
 
     deployment = deployment_evidence(commit_sha, args.deployment_evidence)
     rollback = rollback_evidence(commit_sha, args.rollback_evidence)
-    advisory = run_advisory_commands(args.advisory_command, budget.timeout_seconds)
+    advisory = advisory_evidence(args.advisory_evidence, commit_sha)
     deployment_check = check(
         "deployment_evidence",
         deployment.status,
@@ -418,7 +418,10 @@ def arguments(argv: list[str] | None = None) -> argparse.Namespace:
         help="X-App-Key header as 'X-App-Key: value'; output redacts values.",
     )
     parser.add_argument("--max-chat-bytes", type=int, default=65536)
-    parser.add_argument("--advisory-command", action="append", default=[], help="Opt-in advisory scanner command.")
+    parser.add_argument(
+        "--advisory-evidence",
+        help="Sanitized npm/pip advisory evidence bound to the candidate and dependency inputs.",
+    )
     parser.add_argument("--deployment-evidence", help="External JSON with commit_sha and instance_ids.")
     parser.add_argument("--rollback-evidence", help="External JSON proving prior SHA restoration.")
     parser.add_argument("--browser-evidence", help="Sanitized Playwright browser evidence bound to the candidate SHA.")
