@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { motion, useReducedMotion } from "motion/react";
-import { useState, type ComponentType, type SVGProps } from "react";
+import { useState, useSyncExternalStore, type ComponentType, type SVGProps } from "react";
 import { Map as MapIcon } from "iconoir-react";
 import {
   Bookmark,
@@ -23,6 +23,14 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 
 type SidebarIcon = ComponentType<SVGProps<SVGSVGElement>>;
 type IconMotion = "lift" | "rotate" | "open";
+
+function subscribeToHydration() {
+  return () => undefined;
+}
+
+function useHydrated(): boolean {
+  return useSyncExternalStore(subscribeToHydration, () => true, () => false);
+}
 
 type SidebarItemProps = {
   label: string;
@@ -46,7 +54,11 @@ function AnimatedSidebarIcon({
   engaged?: boolean;
   effect?: IconMotion;
 }) {
-  const reduceMotion = useReducedMotion() ?? false;
+  const hydrated = useHydrated();
+  const prefersReducedMotion = useReducedMotion() ?? false;
+  // Motion's media-query value is client-only. Keep the server's initial
+  // attribute stable until hydration completes, then honor the preference.
+  const reduceMotion = hydrated && prefersReducedMotion;
   const transform = reduceMotion
     ? { x: 0, y: 0, rotate: 0, scale: 1 }
     : effect === "rotate"

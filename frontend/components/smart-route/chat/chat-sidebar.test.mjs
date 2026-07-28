@@ -33,6 +33,16 @@ test("pointer and keyboard engagement use the same state and reduced motion is h
   assert.doesNotMatch(SOURCE, /scale: 1\.24/);
 });
 
+test("sidebar defers the client reduced-motion preference until hydration", () => {
+  assert.match(SOURCE, /useSyncExternalStore/);
+  assert.match(
+    SOURCE,
+    /useSyncExternalStore\(subscribeToHydration, \(\) => true, \(\) => false\)/,
+  );
+  assert.match(SOURCE, /const prefersReducedMotion = useReducedMotion\(\) \?\? false/);
+  assert.match(SOURCE, /const reduceMotion = hydrated && prefersReducedMotion/);
+});
+
 test("sidebar retains active-page and tooltip semantics", () => {
   assert.match(SOURCE, /aria-current=\{active \? "page" : undefined\}/);
   assert.match(SOURCE, /aria-label=\{tooltipLabel\}/);
