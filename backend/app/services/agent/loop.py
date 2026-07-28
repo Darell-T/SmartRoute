@@ -1,56 +1,43 @@
-"""The conversational agent's turn loop: a manual round loop over
-`AsyncAnthropic().messages.stream(...)`, not the SDK tool runner -- we own
-per-round streaming (re-emitted as `token` SSE events), parallel tool
-execution, and the round/deadline wrap-up policy ourselves.
+"""Public facade for the conversational agent's turn lifecycle.
 
-`run_agent_turn()` is the public entry point. It always yields a `meta`
-event first and a `done` event last, even when a budget check rejects the
-turn before any model call, or something fails mid-turn.
+`run_agent_turn()` preserves the SSE contract: a `meta` event first and one
+terminal `done` event last. Focused collaborators own mock fixtures, per-turn
+tool accounting, tool-round execution, and the deadline-bound live stream.
 """
 
 from __future__ import annotations
 
-import asyncio
 import dataclasses
-import json
 import os
 import re
-import time
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 import anthropic
 
+from app import runtime
 from app.services.agent import budget
 from app.services.agent import events as agent_events
 from app.services.agent import intelligence
-from app.services.agent import model_stream
 from app.services.agent import model_request
+from app.services.agent import model_stream  # Compatibility patch point for loop tests.
+from app.services.agent import mock_turn
 from app.services.agent import policy as agent_policy
 from app.services.agent import prompt as agent_prompt
-from app.services.agent import quick_escalation
 from app.services.agent import session as session_module
+from app.services.agent import tool_round
+from app.services.agent import turn_stream
 from app.services.agent.tools import TOOL_REGISTRY, TOOLS, ToolContext, ToolResult
-from app import runtime
+from app.services.agent.turn_ledger import TurnToolLedger as _TurnToolLedger
 
-# Application retries are classified below. Disable the SDK's own retries so
-# one configured retry never expands into several hidden provider attempts.
+
+# Application retries are classified in model_stream. Disable SDK retries so
+# one configured retry never expands into hidden provider attempts.
 client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"), max_retries=0)
 
 AGENT_TURN_DEADLINE_S = float(os.getenv("AGENT_TURN_DEADLINE_S", "50"))
-# Local UI work should be repeatable and must not spend model credits. This
-# flag swaps the entire turn (including tool work) for a deterministic SSE
-# fixture; production remains live unless explicitly configured otherwise.
 AGENT_MOCK_MODE = runtime.enabled("AGENT_MOCK_MODE")
 MAX_TOOL_EXECUTIONS_PER_TURN = 12
 MAX_TOOL_EXECUTIONS_PER_NAME = 4
-
-
-def _mock_step_delay_s() -> float:
-    try:
-        return max(0.0, float(os.getenv("AGENT_MOCK_STEP_DELAY_MS", "280")) / 1000)
-    except ValueError:
-        return 0.28
-
 WRAP_UP_INSTRUCTION = (
     "You are out of time or tool calls for this turn. Summarize what you "
     "know from the tool results so far, and plainly state what you could "
@@ -60,10 +47,7 @@ WRAP_UP_INSTRUCTION = (
 
 @dataclasses.dataclass
 class TurnTrace:
-    """Optional eval hook: pass an instance in via `trace=` and it is
-    populated in place as the turn runs. ``tool_calls`` records model
-    tool-use requests; provider execution counts are separate because a
-    successful request may be replayed from the per-turn ledger."""
+    """Optional eval hook populated in place while a turn runs."""
 
     tool_calls: list[tuple[str, dict]] = dataclasses.field(default_factory=list)
     final_text: str = ""
@@ -78,197 +62,61 @@ class TurnTrace:
     retry_count: int = 0
 
 
-@dataclasses.dataclass
-class TurnToolLedger:
-    """Provider-work ledger scoped to one rider turn only."""
-
-    successful: dict[str, ToolResult] = dataclasses.field(default_factory=dict)
-    total_executions: int = 0
-    executions_by_name: dict[str, int] = dataclasses.field(default_factory=dict)
-
-    @staticmethod
-    def key(name: str, tool_input: dict) -> str:
-        canonical = json.dumps(tool_input, sort_keys=True, separators=(",", ":"), default=str)
-        return f"{name}:{canonical}"
-
-    async def execute(
-        self, name: str, tool_input: dict, ctx: ToolContext, *, deadline_monotonic: float
-    ) -> ToolResult:
-        key = self.key(name, tool_input)
-        cached = self.successful.get(key)
-        if cached is not None:
-            return cached
-        if self.total_executions >= MAX_TOOL_EXECUTIONS_PER_TURN:
-            return ToolResult(ok=False, error="tool execution limit reached for this turn")
-        if self.executions_by_name.get(name, 0) >= MAX_TOOL_EXECUTIONS_PER_NAME:
-            return ToolResult(ok=False, error=f"{name} execution limit reached for this turn")
-        self.total_executions += 1
-        self.executions_by_name[name] = self.executions_by_name.get(name, 0) + 1
-        result = await _run_one_tool(name, tool_input, ctx, deadline_monotonic=deadline_monotonic)
-        if result.ok:
-            self.successful[key] = result
-        return result
+# Private aliases preserve direct test patches and existing local integrations
+# while the implementation lives in focused modules.
+_mock_step_delay_s = mock_turn.mock_step_delay_s
+_mock_trip_copy = mock_turn.mock_trip_copy
+_mock_token_chunks = mock_turn.mock_token_chunks
+_stream_mock_turn = mock_turn.stream_mock_turn
+_TurnDeadlineReached = tool_round.TurnDeadlineReached
+_rider_excluded_modes = tool_round.rider_excluded_modes
+_constrained_tool_input = tool_round.constrained_tool_input
+_required_arrival_input = tool_round.required_arrival_input
+_arrival_response = tool_round.arrival_response
 
 
-def _mock_trip_copy(
-    message: str,
-    response_presentation: str = "auto",
-) -> tuple[str, dict, int, list[str]]:
-    """Return stable preview content without inferring live service status."""
-    query = message.casefold()
-    if "costco" in query:
-        text = (
-            "Take the A train to Costco in this preview — about 34 minutes "
-            "with no transfers."
-            if response_presentation == "quick"
-            else (
-                "I'd take the A train to Costco in this preview. It is the best fit "
-                "because it uses one train and keeps the final walk short with your cart."
-            )
-        )
-        return (
-            text,
-            {"label": "Costco Sunset Park", "lat": 40.6559, "lng": -74.0089},
-            34,
-            ["A"],
-        )
-    if "pizza" in query:
-        text = (
-            "Take the N and Q in this preview — about 27 minutes with one transfer."
-            if response_presentation == "quick"
-            else (
-                "I'd take the N and Q for this preview and stop for pizza near Midtown. "
-                "I picked it because the sample itinerary keeps the transfer count low."
-            )
-        )
-        return (
-            text,
-            {"label": "Pizza stop near Midtown", "lat": 40.7549, "lng": -73.9840},
-            27,
-            ["N", "Q"],
-        )
-    return (
-        "I’m showing a simulated transit option so you can preview the chat experience. "
-        "Switch off mock mode when you’re ready to use live route data.",
-        {"label": "Demo destination", "lat": 40.7306, "lng": -73.9866},
-        22,
-        ["Q"],
-    )
-
-
-def _mock_token_chunks(text: str) -> list[str]:
-    words = text.split(" ")
-    return [
-        ("" if index == 0 else " ") + " ".join(words[index : index + 3])
-        for index in range(0, len(words), 3)
-    ]
-
-
-async def _stream_mock_turn(
+async def _run_one_tool(
+    name: str,
+    tool_input: dict,
+    ctx: ToolContext,
     *,
-    session: dict,
-    session_id: str,
-    turn_id: str,
-    message: str,
-    origin: dict | None,
-    trace: TurnTrace | None,
-    response_presentation: str,
-) -> AsyncIterator[agent_events.AgentEvent]:
-    """Stream a small, deterministic fixture for local chat/UI development.
-
-    It deliberately avoids calling model clients, route providers, or agent
-    tools. The event order mirrors a live turn so the production reducer,
-    reasoning panel, and route-card UI are exercised unchanged.
-    """
-    started_at = time.monotonic()
-    delay_s = _mock_step_delay_s()
-    text, destination, eta_minutes, lines = _mock_trip_copy(
-        message,
-        response_presentation,
-    )
-    mock_origin = {
-        "label": "Your location",
-        "lat": float((origin or {}).get("lat", 40.7484)),
-        "lng": float((origin or {}).get("lng", -73.9857)),
-    }
-    tool_calls = [("mock_plan_trip", {"destination": destination["label"]})]
-
-    session_module.append_history(session, "user", message)
-    yield agent_events.ToolStartEvent(
-        tool_call_id=f"mock-route-{turn_id}",
-        tool="plan_trip",
-        label="Previewing a cart-friendly subway route…",
-    )
-    await asyncio.sleep(delay_s)
-    yield agent_events.ToolEndEvent(
-        tool_call_id=f"mock-route-{turn_id}",
-        tool="plan_trip",
-        ok=True,
-        duration_ms=round(delay_s * 1000),
-        summary="Preview route ready",
+    deadline_monotonic: float | None = None,
+) -> ToolResult:
+    return await tool_round.run_one_tool(
+        name,
+        tool_input,
+        ctx,
+        tool_registry=TOOL_REGISTRY,
+        deadline_monotonic=deadline_monotonic,
     )
 
-    yield agent_events.ToolStartEvent(
-        tool_call_id=f"mock-service-{turn_id}",
-        tool="transit_snapshot",
-        label="Loading simulated service conditions…",
-    )
-    await asyncio.sleep(delay_s)
-    yield agent_events.ToolEndEvent(
-        tool_call_id=f"mock-service-{turn_id}",
-        tool="transit_snapshot",
-        ok=True,
-        duration_ms=round(delay_s * 1000),
-        summary="Preview data only",
-    )
 
-    for chunk in _mock_token_chunks(text):
-        await asyncio.sleep(min(0.06, delay_s))
-        yield agent_events.TokenEvent(text=chunk)
+class TurnToolLedger(_TurnToolLedger):
+    """Loop-compatible ledger that reads patchable loop policy at creation."""
 
-    card_id = f"mock-{turn_id}"
-    card = agent_events.RouteCardEvent(
-        card_id=card_id,
-        turn_id=turn_id,
-        role="recommended",
-        origin=mock_origin,
-        destination=destination,
-        summary={
-            "eta_minutes": eta_minutes,
-            "transfers": max(0, len(lines) - 1),
-            "lines": lines,
-            "reason": "A simple sample route with a short final walk.",
-        },
-        route=[],
-        alerts=[],
-    )
-    yield card
+    def __init__(self) -> None:
+        super().__init__(
+            run_tool=_run_one_tool,
+            max_executions=MAX_TOOL_EXECUTIONS_PER_TURN,
+            max_executions_per_name=MAX_TOOL_EXECUTIONS_PER_NAME,
+        )
 
-    session_module.append_history(session, "assistant", text)
-    session_module.append_tool_summary(session, "mock_agent", "served deterministic preview data")
-    session_module.add_route_cards(
-        session,
-        [{"card_id": card_id, "role": "recommended", "lines": lines, "eta_minutes": eta_minutes}],
-    )
-    if trace is not None:
-        trace.tool_calls = tool_calls
-        trace.final_text = text
+    async def execute(self, *args, **kwargs) -> ToolResult:
+        # Keep historical loop-level patch points dynamic for focused tests and
+        # local instrumentation that alter caps or the tool runner mid-turn.
+        self.run_tool = _run_one_tool
+        self.max_executions = MAX_TOOL_EXECUTIONS_PER_TURN
+        self.max_executions_per_name = MAX_TOOL_EXECUTIONS_PER_NAME
+        return await super().execute(*args, **kwargs)
 
-    elapsed_ms = round((time.monotonic() - started_at) * 1000)
-    print(f"[agent] turn={turn_id} sess={session_id[:6]} mock=1 total_ms={elapsed_ms}")
-    yield agent_events.DoneEvent(
-        session_id=session_id,
-        turn_id=turn_id,
-        stop_reason="end_turn",
-        usage={"input_tokens": 0, "output_tokens": 0},
-    )
+
+async def _execute_tool_round(*args, **kwargs) -> AsyncIterator:
+    kwargs.pop("tool_registry", None)
+    async for item in tool_round.execute_tool_round(*args, tool_registry=TOOL_REGISTRY, **kwargs):
+        yield item
 
 
 def _system_blocks() -> list[dict]:
-    # cache_control on the last (only) system block caches tools + system
-    # together (render order is tools -> system -> messages); per-turn
-    # dynamic state lives in the <context> block of the latest user message
-    # instead, so this stays byte-stable across turns/sessions.
     return [{"type": "text", "text": agent_prompt.SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}]
 
 
@@ -276,16 +124,10 @@ def _messages_from_history(history: list[dict]) -> list[dict]:
     messages: list[dict] = []
     for entry in history or []:
         role = entry.get("role")
-        if role == "user":
-            messages.append({"role": "user", "content": entry.get("text", "")})
-        elif role == "assistant":
-            messages.append({"role": "assistant", "content": entry.get("text", "")})
+        if role in {"user", "assistant"}:
+            messages.append({"role": role, "content": entry.get("text", "")})
         elif role == "tool":
-            # Tool summaries are attributed to the assistant turn that ran
-            # them; consecutive assistant-role messages are combined by the
-            # API, so this doesn't break alternation.
-            tool_name = entry.get("tool", "tool")
-            messages.append({"role": "assistant", "content": f"[{tool_name} result] {entry.get('text', '')}"})
+            messages.append({"role": "assistant", "content": f"[{entry.get('tool', 'tool')} result] {entry.get('text', '')}"})
     return messages
 
 
@@ -328,816 +170,87 @@ def _tools_for_intent(
     mode_policy = mode_policy or agent_policy.policy_for_mode("auto")
     tool_names_by_intent = {
         "route_planning": {"plan_trip", "accessibility_status"},
-        "destination_discovery": {
-            "poi_search",
-            "plan_trip",
-            "accessibility_status",
-        },
+        "destination_discovery": {"poi_search", "plan_trip", "accessibility_status"},
         "arrival_lookup": {"lookup_arrivals"},
-        "transit_question": {
-            "transit_snapshot",
-            "event_lookup",
-            "lookup_arrivals",
-            "accessibility_status",
-            "lookup_facts",
-        },
+        "transit_question": {"transit_snapshot", "event_lookup", "lookup_arrivals", "accessibility_status", "lookup_facts"},
         "simple_general": set(),
         "unsupported": set(),
     }
     included = tool_names_by_intent.get(parsed_intent.intent, set())
     tools = [schema for schema in TOOLS if schema.get("name") in included]
-    # Claude decides whether current web evidence is useful. Availability is
-    # limited to place, route, and current transit/event questions. Explicit
-    # arrivals and deterministic general turns retain their fast paths.
-    if parsed_intent.intent in {
-        "destination_discovery",
-        "route_planning",
-        "transit_question",
-    }:
+    if parsed_intent.intent in {"destination_discovery", "route_planning", "transit_question"}:
         tools.append(_web_search_tool(mode_policy))
     return tools
 
 
 def _route_card_text_fallback(card: agent_events.RouteCardEvent) -> str:
-    """Grounded copy for the rare tool turn whose final model response is empty."""
     summary = card.summary or {}
     destination = (card.destination or {}).get("label") or "your destination"
     eta = summary.get("eta_minutes")
     lines = [str(line) for line in (summary.get("lines") or []) if line]
     transfers = summary.get("transfers")
     reason = str(summary.get("reason") or "").strip().rstrip(".")
-
     route_name = f"the {' and '.join(lines)}" if lines else "this route"
     sentences = [f"I'd take {route_name} to {destination}."]
-
     eta_copy = f"about {round(eta)} minutes" if isinstance(eta, (int, float)) else ""
     transfer_copy = ""
     if isinstance(transfers, int):
-        transfer_copy = (
-            "no transfers"
-            if transfers == 0
-            else f"{transfers} transfer{'s' if transfers != 1 else ''}"
-        )
+        transfer_copy = "no transfers" if transfers == 0 else f"{transfers} transfer{'s' if transfers != 1 else ''}"
     if eta_copy:
-        detail = f"{eta_copy} with {transfer_copy}" if transfer_copy else eta_copy
-        sentences.append(f"It takes {detail}.")
+        sentences.append(f"It takes {eta_copy} with {transfer_copy}." if transfer_copy else f"It takes {eta_copy}.")
     elif transfer_copy:
         sentences.append(f"It has {transfer_copy}.")
-
     if reason:
-        if reason.casefold() == "fastest":
-            reason = "it is the fastest option"
-        else:
-            reason = reason[:1].lower() + reason[1:]
+        reason = "it is the fastest option" if reason.casefold() == "fastest" else reason[:1].lower() + reason[1:]
         sentences.append(f"I picked it because {reason}.")
-
     return " ".join(sentences)
 
 
-_INTERNAL_CARD_REFERENCE = re.compile(
-    r"\b(?:route\s+)?card\s+[`'\"]?(?:rc|mock)[_-][A-Za-z0-9_-]+[`'\"]?\s*(?:[—–-]\s*)?",
-    re.IGNORECASE,
-)
-
-
-class _TurnDeadlineReached(Exception):
-    """Internal control flow that still reaches the turn's single DoneEvent."""
+_INTERNAL_CARD_REFERENCE = re.compile(r"\b(?:route\s+)?card\s+[`'\"]?(?:rc|mock)[_-][A-Za-z0-9_-]+[`'\"]?\s*(?:[\u2014\u2013-]\s*)?", re.IGNORECASE)
 _OPAQUE_CARD_ID = re.compile(r"\b(?:rc|mock)[_-][A-Za-z0-9_-]{4,}\b", re.IGNORECASE)
 
 
 def _sanitize_rider_text(text: str) -> str:
-    """Remove model formatting and internal route identifiers from prose.
-
-    The prompt is the primary contract. This boundary sanitizer is a final
-    guard so an ignored instruction cannot expose implementation details in
-    the passenger-facing stream or persist them into conversation history.
-    """
     sanitized = _INTERNAL_CARD_REFERENCE.sub("", text)
     sanitized = _OPAQUE_CARD_ID.sub("the route", sanitized)
     sanitized = re.sub(r"\*\*(.*?)\*\*", r"\1", sanitized, flags=re.DOTALL)
     sanitized = re.sub(r"__(.*?)__", r"\1", sanitized, flags=re.DOTALL)
     sanitized = re.sub(r"`([^`]+)`", r"\1", sanitized)
     sanitized = re.sub(r"(?m)^\s*#{1,6}\s+", "", sanitized)
-    sanitized = re.sub(r"~(?=\d)", "about ", sanitized)
-    return sanitized
+    return re.sub(r"~(?=\d)", "about ", sanitized)
 
 
-async def _run_one_tool(
-    name: str,
-    tool_input: dict,
-    ctx: ToolContext,
-    *,
-    deadline_monotonic: float | None = None,
-) -> ToolResult:
-    """Always returns a ToolResult -- timeouts and exceptions are captured
-    as ToolResult(ok=False, error=<short reason>), never raised."""
-    spec = TOOL_REGISTRY.get(name)
-    if spec is None:
-        return ToolResult(ok=False, error=f"unknown tool '{name}'")
-    timeout_s = spec.timeout_s
-    if deadline_monotonic is not None:
-        timeout_s = min(timeout_s, deadline_monotonic - time.monotonic())
-    if timeout_s <= 0:
-        return ToolResult(ok=False, error="turn deadline reached")
-    try:
-        result = await asyncio.wait_for(spec.executor(tool_input, ctx), timeout=timeout_s)
-    except asyncio.TimeoutError:
-        if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
-            return ToolResult(ok=False, error="turn deadline reached")
-        return ToolResult(ok=False, error="timed out")
-    except Exception as exc:
-        # Provider exception details can contain credential-bearing URLs.
-        print(f"[agent-loop] tool {name} failed type={type(exc).__name__}")
-        return ToolResult(ok=False, error="tool failed")
-    return result
+def _turn_dependencies() -> turn_stream.TurnDependencies:
+    return turn_stream.TurnDependencies(
+        deadline_s=AGENT_TURN_DEADLINE_S,
+        client=client,
+        tool_registry=TOOL_REGISTRY,
+        wrap_up_instruction=WRAP_UP_INSTRUCTION,
+        make_ledger=TurnToolLedger,
+        system_blocks=_system_blocks,
+        messages_from_history=_messages_from_history,
+        build_stream_kwargs=_build_stream_kwargs,
+        tools_for_intent=_tools_for_intent,
+        route_card_text_fallback=_route_card_text_fallback,
+        sanitize_rider_text=_sanitize_rider_text,
+        required_arrival_input=_required_arrival_input,
+        arrival_response=_arrival_response,
+        rider_excluded_modes=_rider_excluded_modes,
+        execute_tool_round=_execute_tool_round,
+    )
 
 
-def _rider_excluded_modes(message: str, session: dict) -> set[str]:
-    """Keep explicit rider constraints authoritative across follow-up turns."""
-    constraints = ((session.get("slots") or {}).get("constraints") or {})
-    excluded = {
-        str(mode).strip().upper()
-        for mode in (constraints.get("exclude_modes") or [])
-        if str(mode).strip()
-    }
-    rider_text = message.casefold()
-
-    if re.search(r"\b(?:no|without|avoid(?:ing)?)\s+(?:the\s+)?(?:bus|buses)\b", rider_text):
-        excluded.add("BUS")
-    elif re.search(
-        r"\b(?:include|allow)\s+(?:the\s+)?(?:bus|buses)\b|\b(?:bus|buses)\s+(?:is|are)\s+(?:ok|okay|fine)\b",
-        rider_text,
-    ):
-        excluded.discard("BUS")
-
-    session.setdefault("slots", {}).setdefault("constraints", {})["exclude_modes"] = sorted(excluded)
-    return excluded
+async def _stream_turn(**kwargs) -> AsyncIterator[agent_events.AgentEvent]:
+    async for event in turn_stream.stream_turn(dependencies=_turn_dependencies(), **kwargs):
+        yield event
 
 
-def _constrained_tool_input(
-    name: str,
-    tool_input: dict,
-    excluded_modes: set[str],
-    *,
-    mode_policy: agent_policy.AgentModePolicy,
-    parsed_intent: intelligence.ParsedIntent,
-) -> dict:
-    normalized = dict(tool_input)
-    if name == "plan_trip":
-        if excluded_modes:
-            requested = {
-                str(mode).strip().upper()
-                for mode in (normalized.get("exclude_modes") or [])
-                if str(mode).strip()
-            }
-            normalized["exclude_modes"] = sorted(requested | excluded_modes)
-        normalized["max_candidates"] = mode_policy.max_route_candidates
-        normalized["avoid_crowds"] = bool(
-            normalized.get("avoid_crowds") or parsed_intent.avoid_crowds
-        )
-        if mode_policy.mode != "auto" or parsed_intent.avoid_crowds:
-            normalized["crowd_search_mode"] = mode_policy.mode
-        normalized["include_first_leg_arrivals"] = mode_policy.optional_enrichment
-        if parsed_intent.requested_route_ids:
-            normalized["required_route_ids"] = list(parsed_intent.requested_route_ids)
-        if normalized.get("include_incident_scan"):
-            normalized["include_incident_scan"] = True
-    elif name == "lookup_arrivals":
-        normalized["limit"] = min(
-            int(normalized.get("limit") or 3),
-            2 if mode_policy.mode == "quick" else 3,
-        )
-    return normalized
-
-
-def _required_arrival_input(
-    parsed_intent: intelligence.ParsedIntent,
-    ctx: ToolContext,
-    mode_policy: agent_policy.AgentModePolicy,
-) -> dict | None:
-    route_id = str(parsed_intent.arrival_route_id or "").strip().upper()
-    active_trip = (ctx.session or {}).get("active_trip") or {}
-    boarding = active_trip.get("first_boarding") if isinstance(active_trip, dict) else None
-    if not route_id and isinstance(boarding, dict):
-        route_id = str(boarding.get("route_id") or "").strip().upper()
-    if not route_id:
-        return None
-
-    tool_input: dict = {
-        "route_id": route_id,
-        "mode": "bus" if any(char.isdigit() for char in route_id) and len(route_id) > 1 else "subway",
-        "limit": 2 if mode_policy.mode == "quick" else 3,
-    }
-    if parsed_intent.arrival_stop_query:
-        tool_input["stop_query"] = parsed_intent.arrival_stop_query
-    if parsed_intent.arrival.direction_query:
-        tool_input["direction"] = parsed_intent.arrival.direction_query
-    if ctx.origin:
-        tool_input["user_location"] = {
-            "latitude": ctx.origin.get("lat"),
-            "longitude": ctx.origin.get("lng"),
-        }
-    return tool_input
-
-
-def _arrival_response(data: dict) -> tuple[str, str]:
-    route_id = str(data.get("route_id") or "train")
-    stop_name = str((data.get("stop") or {}).get("name") or "that stop")
-    status = str(data.get("source_status") or "provider_unavailable")
-    directions = list(data.get("directions") or [])
-    if status == "stop_not_resolved":
-        matches = [
-            str(match.get("stop_name") or "").strip()
-            for match in data.get("ambiguity") or []
-            if str(match.get("stop_name") or "").strip()
-        ]
-        if matches:
-            return (
-                f"Which {route_id} station do you mean: {', '.join(matches)}?",
-                "clarification_required",
-            )
-        return (
-            f"I need a more specific station or your location to check {route_id} arrivals.",
-            "clarification_required",
-        )
-    if status == "provider_unavailable":
-        return (
-            f"Live and scheduled {route_id} arrival data at {stop_name} is temporarily unavailable.",
-            "end_turn",
-        )
-    if status == "no_predictions" or not directions:
-        return (
-            f"No current {route_id} arrival predictions are available at {stop_name}.",
-            "end_turn",
-        )
-
-    group = directions[0]
-    arrivals = [
-        arrival
-        for arrival in group.get("arrivals") or []
-        if int(arrival.get("minutes") or 0) > 0
-    ]
-    if not arrivals:
-        return (
-            f"No current {route_id} arrival predictions are available at {stop_name}.",
-            "end_turn",
-        )
-    minutes = max(0, int(arrivals[0].get("minutes") or 0))
-    direction = str(group.get("id") or group.get("label") or "").strip().casefold()
-    qualifier = f"{direction} " if direction else ""
-    minute_copy = "1 minute" if minutes == 1 else f"{minutes} minutes"
-    if status == "stale":
-        return (
-            f"The latest available {qualifier}{route_id} prediction at {stop_name} "
-            f"is {minute_copy}, but live data is stale.",
-            "end_turn",
-        )
+def _rejection_events(
+    session_id: str, turn_id: str, code: str, text: str, retryable: bool
+) -> tuple[agent_events.ErrorEvent, agent_events.DoneEvent]:
     return (
-        f"The next {qualifier}{route_id} train at {stop_name} is in {minute_copy}.",
-        "end_turn",
-    )
-
-
-async def _execute_tool_round(
-    tool_use_blocks: list,
-    ctx: ToolContext,
-    session: dict,
-    tool_calls_this_turn: list[tuple[str, dict]],
-    excluded_modes: set[str],
-    mode_policy: agent_policy.AgentModePolicy,
-    parsed_intent: intelligence.ParsedIntent,
-    stage_ms: dict[str, float],
-    deadline_monotonic: float,
-    tool_ledger: TurnToolLedger,
-) -> AsyncIterator:
-    """Emits tool_start/tool_end/route_card events for one round of (possibly
-    parallel) tool calls, and yields the assembled tool_result message last
-    (wrapped so the caller can tell it apart from an AgentEvent)."""
-    tool_inputs = {
-        block.id: _constrained_tool_input(
-            getattr(block, "name", ""),
-            getattr(block, "input", {}) or {},
-            excluded_modes,
-            mode_policy=mode_policy,
-            parsed_intent=parsed_intent,
-        )
-        for block in tool_use_blocks
-    }
-
-    for block in tool_use_blocks:
-        name = getattr(block, "name", "")
-        tool_input = tool_inputs[block.id]
-        spec = TOOL_REGISTRY.get(name)
-        label = spec.label_fn(tool_input) if spec else f"Using {name}…"
-        yield agent_events.ToolStartEvent(tool_call_id=block.id, tool=name, label=label)
-
-    start_times = {block.id: time.monotonic() for block in tool_use_blocks}
-    round_tasks: dict[str, asyncio.Task[ToolResult]] = {}
-    outcomes_by_key: dict[str, ToolResult] = {}
-    first_block_id_by_key: dict[str, str] = {}
-    for block in tool_use_blocks:
-        name = getattr(block, "name", "")
-        tool_input = tool_inputs[block.id]
-        key = tool_ledger.key(name, tool_input)
-        first_block_id_by_key.setdefault(key, block.id)
-        cached = tool_ledger.successful.get(key)
-        if cached is not None:
-            outcomes_by_key[key] = cached
-        elif key not in round_tasks:
-            round_tasks[key] = asyncio.create_task(
-                tool_ledger.execute(
-                    name,
-                    tool_input,
-                    ctx,
-                    deadline_monotonic=deadline_monotonic,
-                )
-            )
-    if round_tasks:
-        completed = await asyncio.gather(*round_tasks.values())
-        outcomes_by_key.update(zip(round_tasks, completed))
-    outcomes = [
-        outcomes_by_key[tool_ledger.key(getattr(block, "name", ""), tool_inputs[block.id])]
-        for block in tool_use_blocks
-    ]
-
-    tool_result_content = []
-    escalation_reason = None
-    required_tools = set(parsed_intent.required_evidence.required_tools())
-    for block, result in zip(tool_use_blocks, outcomes):
-        name = getattr(block, "name", "")
-        tool_input = tool_inputs[block.id]
-        key = tool_ledger.key(name, tool_input)
-        surface_side_effects = (
-            key in round_tasks and first_block_id_by_key[key] == block.id
-        )
-        duration_ms = round((time.monotonic() - start_times[block.id]) * 1000)
-        tool_calls_this_turn.append((name, tool_input))
-        if surface_side_effects:
-            for stage, duration in result.timings.items():
-                if stage in stage_ms:
-                    stage_ms[stage] += max(0.0, float(duration))
-        escalation_reason = escalation_reason or quick_escalation.reason_for_tool_result(
-            name,
-            result,
-            required=name in required_tools or name == "plan_trip",
-        )
-
-        if result.ok:
-            wrapped = {"source": name, "data": result.data, "untrusted": True}
-            tool_result_content.append(
-                {"type": "tool_result", "tool_use_id": block.id, "content": json.dumps(wrapped, default=str)}
-            )
-            yield agent_events.ToolEndEvent(
-                tool_call_id=block.id, tool=name, ok=True, duration_ms=duration_ms, summary=result.summary or None
-            )
-            if surface_side_effects:
-                if result.summary:
-                    session_module.append_tool_summary(session, name, result.summary)
-                if result.session_route_cards:
-                    session_module.add_route_cards(session, result.session_route_cards)
-                if name == "plan_trip":
-                    session_module.clear_pending_trip(session)
-                for ev in result.events:
-                    yield ev
-        else:
-            reason = result.error or "tool failed"
-            wrapped = {"source": name, "data": {"error": reason}, "untrusted": True}
-            tool_result_content.append(
-                {
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": json.dumps(wrapped, default=str),
-                    "is_error": True,
-                }
-            )
-            yield agent_events.ToolEndEvent(
-                tool_call_id=block.id, tool=name, ok=False, duration_ms=duration_ms, summary=reason
-            )
-            if surface_side_effects and name == "plan_trip":
-                session_module.mark_pending_trip_failed(session, tool_input, reason)
-
-    yield {
-        "__tool_result_message__": {"role": "user", "content": tool_result_content},
-        "__quick_escalation_reason__": escalation_reason,
-    }
-
-
-async def _stream_turn(
-    *,
-    session: dict,
-    session_id: str,
-    turn_id: str,
-    message: str,
-    ctx: ToolContext,
-    selected_card_id: str | None,
-    response_presentation: str,
-    trace: TurnTrace | None,
-) -> AsyncIterator[agent_events.AgentEvent]:
-    turn_start = time.monotonic()
-    deadline_monotonic = turn_start + AGENT_TURN_DEADLINE_S
-    mode_policy = agent_policy.policy_for_mode(response_presentation)
-    initial_mode = mode_policy.mode
-    escalation_reason: str | None = None
-    intent_started = time.monotonic()
-    parsed_intent = intelligence.parse_intent(message)
-    if mode_policy.mode == "quick" and parsed_intent.avoid_crowds:
-        escalation_reason = "explicit_crowd_evidence"
-        mode_policy = agent_policy.policy_for_mode("auto")
-        print(
-            f"[agent-escalation] turn={turn_id} "
-            f"quick_to_auto=1 reason={escalation_reason}"
-        )
-    stage_ms = {
-        "intent_ms": (time.monotonic() - intent_started) * 1000,
-        "session_load_ms": 0.0,
-        "place_resolution_ms": 0.0,
-        "web_search_ms": 0.0,
-        "place_normalization_ms": 0.0,
-        "route_provider_ms": 0.0,
-        "evidence_ms": 0.0,
-        "mta_ms": 0.0,
-        "ticketmaster_ms": 0.0,
-        "arrival_lookup_ms": 0.0,
-        "stop_resolution_ms": 0.0,
-        "feed_fetch_ms": 0.0,
-        "feed_parse_ms": 0.0,
-        "render_ms": 0.0,
-        "scoring_ms": 0.0,
-        "model_ms": 0.0,
-        "stream_finalize_ms": 0.0,
-        "total_ms": 0.0,
-    }
-    if trace is not None:
-        for stage, duration in trace.stage_ms.items():
-            if stage in stage_ms:
-                stage_ms[stage] = max(0.0, float(duration))
-    turn_tools = _tools_for_intent(parsed_intent, mode_policy)
-    if intelligence.is_new_trip_request(message):
-        session_module.reset_for_new_trip(session)
-    system_blocks = _system_blocks()
-    excluded_modes = _rider_excluded_modes(message, session)
-    messages = _messages_from_history(session.get("history") or [])
-    context_block = agent_prompt.build_turn_context(
-        session,
-        ctx.now_et,
-        ctx.origin,
-        selected_card_id,
-        response_presentation,
-    )
-    messages.append({"role": "user", "content": f"{message}\n\n{context_block}"})
-    session_module.append_history(session, "user", message)
-
-    stop_reason_out = "end_turn"
-    input_tokens = 0
-    output_tokens = 0
-    model_ms_total = 0.0
-    tools_ms_total = 0.0
-    round_num = 0
-    text_parts: list[str] = []
-    tool_calls_this_turn: list[tuple[str, dict]] = []
-    recommended_route_card: agent_events.RouteCardEvent | None = None
-    tool_failures = 0
-    deterministic_arrival = False
-    model_call_count = 0
-    server_tool_call_count = 0
-    retry_count_total = 0
-    tool_ledger = TurnToolLedger()
-
-    try:
-        if parsed_intent.intent == "arrival_lookup":
-            required_input = _required_arrival_input(parsed_intent, ctx, mode_policy)
-            if required_input is None:
-                clarification = "Which train or bus route do you want arrivals for?"
-                text_parts.append(clarification)
-                stop_reason_out = "clarification_required"
-                deterministic_arrival = True
-                yield agent_events.TokenEvent(text=clarification)
-            else:
-                tool_call_id = f"required-arrivals-{turn_id}"
-                spec = TOOL_REGISTRY.get("lookup_arrivals")
-                label = (
-                    spec.label_fn(required_input)
-                    if spec is not None
-                    else f"Checking {required_input['route_id']} arrivals"
-                )
-                yield agent_events.ToolStartEvent(
-                    tool_call_id=tool_call_id,
-                    tool="lookup_arrivals",
-                    label=label,
-                )
-                tool_started = time.monotonic()
-                result = await tool_ledger.execute(
-                    "lookup_arrivals",
-                    required_input,
-                    ctx,
-                    deadline_monotonic=deadline_monotonic,
-                )
-                tool_duration_ms = (time.monotonic() - tool_started) * 1000
-                tools_ms_total += tool_duration_ms
-                stage_ms["arrival_lookup_ms"] += tool_duration_ms
-                for stage, duration in result.timings.items():
-                    if stage in stage_ms:
-                        stage_ms[stage] += max(0.0, float(duration))
-                tool_calls_this_turn.append(("lookup_arrivals", required_input))
-                yield agent_events.ToolEndEvent(
-                    tool_call_id=tool_call_id,
-                    tool="lookup_arrivals",
-                    ok=result.ok,
-                    duration_ms=round((time.monotonic() - tool_started) * 1000),
-                    summary=result.summary or result.error or None,
-                )
-                if not result.ok:
-                    tool_failures += 1
-                if result.error == "turn deadline reached":
-                    yield agent_events.ErrorEvent(
-                        code="deadline",
-                        message="The response took too long. Please try again.",
-                        retryable=True,
-                    )
-                    stop_reason_out = "deadline"
-                    raise _TurnDeadlineReached
-                reason = quick_escalation.reason_for_tool_result(
-                    "lookup_arrivals", result, required=True
-                )
-                if mode_policy.mode == "quick" and escalation_reason is None and reason:
-                    escalation_reason = reason
-                    mode_policy = agent_policy.policy_for_mode("auto")
-                    print(
-                        f"[agent-escalation] turn={turn_id} "
-                        f"quick_to_auto=1 reason={reason}"
-                    )
-                if result.summary:
-                    session_module.append_tool_summary(session, "lookup_arrivals", result.summary)
-                for event in result.events:
-                    yield event
-                render_started = time.monotonic()
-                response_text, stop_reason_out = _arrival_response(
-                    result.data
-                    if result.ok and isinstance(result.data, dict)
-                    else {
-                        "route_id": required_input["route_id"],
-                        "source_status": "provider_unavailable",
-                    }
-                )
-                stage_ms["render_ms"] += (
-                    time.monotonic() - render_started
-                ) * 1000
-                text_parts.append(response_text)
-                deterministic_arrival = True
-                yield agent_events.TokenEvent(text=response_text)
-
-        needs_wrapup = False
-
-        while not deterministic_arrival:
-            round_num += 1
-            if time.monotonic() >= deadline_monotonic:
-                stop_reason_out = "deadline"
-                break
-            if round_num > mode_policy.max_rounds:
-                needs_wrapup = True
-                stop_reason_out = "max_rounds"
-                break
-
-            stream_kwargs = _build_stream_kwargs(
-                force_final=False,
-                messages=messages,
-                system_blocks=system_blocks,
-                mode_policy=mode_policy,
-                tools=turn_tools,
-            )
-            model_call_start = time.monotonic()
-            model_outcome: model_stream.ModelCallCompleted | None = None
-            async for model_event in model_stream.stream_model_call(
-                client=client,
-                stream_kwargs=stream_kwargs,
-                log_tag="model call",
-                retry_count=mode_policy.retry_count,
-                sanitize_text=_sanitize_rider_text,
-                deadline_monotonic=deadline_monotonic,
-            ):
-                if isinstance(model_event, model_stream.ModelCallCompleted):
-                    model_outcome = model_event
-                    continue
-                if isinstance(model_event, agent_events.TokenEvent):
-                    text_parts.append(model_event.text)
-                if isinstance(model_event, agent_events.ToolEndEvent) and not model_event.ok:
-                    tool_failures += 1
-                yield model_event
-            if model_outcome is None:
-                raise RuntimeError("model stream ended without a completion record")
-            final_message = model_outcome.final_message
-            error_event = model_outcome.error
-            attempts_used = model_outcome.attempts
-            stage_ms["web_search_ms"] += model_outcome.web_search_ms
-            server_tool_call_count += model_outcome.server_tool_call_count
-            model_call_count += 1
-            retry_count_total += max(0, attempts_used - 1)
-            model_ms_total += (time.monotonic() - model_call_start) * 1000
-            if error_event is not None:
-                yield error_event
-                stop_reason_out = "deadline" if error_event.code == "deadline" else "error"
-                break
-            if final_message is None:
-                raise RuntimeError("model stream completed without a final message")
-
-            usage = getattr(final_message, "usage", None)
-            input_tokens += int(getattr(usage, "input_tokens", 0) or 0)
-            output_tokens += int(getattr(usage, "output_tokens", 0) or 0)
-            messages.append({"role": "assistant", "content": final_message.content})
-
-            tool_use_blocks = [b for b in final_message.content if getattr(b, "type", None) == "tool_use"]
-            if final_message.stop_reason != "tool_use" or not tool_use_blocks:
-                stop_reason_out = "end_turn"
-                break
-
-            tool_round_start = time.monotonic()
-            tool_result_message = None
-            async for item in _execute_tool_round(
-                tool_use_blocks,
-                ctx,
-                session,
-                tool_calls_this_turn,
-                excluded_modes,
-                mode_policy,
-                parsed_intent,
-                stage_ms,
-                deadline_monotonic,
-                tool_ledger,
-            ):
-                if isinstance(item, dict) and "__tool_result_message__" in item:
-                    tool_result_message = item["__tool_result_message__"]
-                    reason = item.get("__quick_escalation_reason__")
-                    if (
-                        mode_policy.mode == "quick"
-                        and escalation_reason is None
-                        and reason
-                    ):
-                        escalation_reason = str(reason)
-                        mode_policy = agent_policy.policy_for_mode("auto")
-                        print(
-                            f"[agent-escalation] turn={turn_id} "
-                            f"quick_to_auto=1 reason={escalation_reason}"
-                        )
-                else:
-                    if isinstance(item, agent_events.RouteCardEvent) and item.role == "recommended":
-                        recommended_route_card = item
-                    if isinstance(item, agent_events.ToolEndEvent) and not item.ok:
-                        tool_failures += 1
-                    yield item
-            tools_ms_total += (time.monotonic() - tool_round_start) * 1000
-            messages.append(tool_result_message)
-
-            if time.monotonic() >= deadline_monotonic:
-                stop_reason_out = "deadline"
-                break
-
-        if needs_wrapup and time.monotonic() < deadline_monotonic:
-            messages.append({"role": "user", "content": WRAP_UP_INSTRUCTION})
-            stream_kwargs = _build_stream_kwargs(
-                force_final=True,
-                messages=messages,
-                system_blocks=system_blocks,
-                mode_policy=mode_policy,
-                tools=turn_tools,
-            )
-            model_call_start = time.monotonic()
-            model_outcome = None
-            async for model_event in model_stream.stream_model_call(
-                client=client,
-                stream_kwargs=stream_kwargs,
-                log_tag="wrap-up model call",
-                retry_count=mode_policy.retry_count,
-                sanitize_text=_sanitize_rider_text,
-                deadline_monotonic=deadline_monotonic,
-            ):
-                if isinstance(model_event, model_stream.ModelCallCompleted):
-                    model_outcome = model_event
-                    continue
-                if isinstance(model_event, agent_events.TokenEvent):
-                    text_parts.append(model_event.text)
-                if isinstance(model_event, agent_events.ToolEndEvent) and not model_event.ok:
-                    tool_failures += 1
-                yield model_event
-            if model_outcome is None:
-                raise RuntimeError("wrap-up stream ended without a completion record")
-            final_message = model_outcome.final_message
-            error_event = model_outcome.error
-            attempts_used = model_outcome.attempts
-            stage_ms["web_search_ms"] += model_outcome.web_search_ms
-            server_tool_call_count += model_outcome.server_tool_call_count
-            model_call_count += 1
-            retry_count_total += max(0, attempts_used - 1)
-            model_ms_total += (time.monotonic() - model_call_start) * 1000
-            if error_event is not None:
-                yield error_event
-                stop_reason_out = "deadline" if error_event.code == "deadline" else "error"
-            else:
-                if final_message is None:
-                    raise RuntimeError(
-                        "wrap-up stream completed without a final message"
-                    )
-                usage = getattr(final_message, "usage", None)
-                input_tokens += int(getattr(usage, "input_tokens", 0) or 0)
-                output_tokens += int(getattr(usage, "output_tokens", 0) or 0)
-                messages.append({"role": "assistant", "content": final_message.content})
-
-        if not text_parts and recommended_route_card is not None:
-            fallback_text = _route_card_text_fallback(recommended_route_card)
-            text_parts.append(fallback_text)
-            yield agent_events.TokenEvent(text=fallback_text)
-        if stop_reason_out == "end_turn" and not any(
-            name == "plan_trip" for name, _tool_input in tool_calls_this_turn
-        ):
-            resume_offer = session_module.consume_resume_offer(session)
-            if resume_offer:
-                prefix = "\n\n" if text_parts else ""
-                text_parts.append(prefix + resume_offer)
-                yield agent_events.TokenEvent(text=prefix + resume_offer)
-    except _TurnDeadlineReached:
-        stop_reason_out = "deadline"
-    except Exception as exc:
-        print(f"[agent-loop] turn failed unexpectedly type={type(exc).__name__}")
-        yield agent_events.ErrorEvent(
-            code="internal", message="Something went wrong handling that request.", retryable=True
-        )
-        stop_reason_out = "error"
-    finally:
-        finalize_started = time.monotonic()
-        final_text = "".join(text_parts)
-        if final_text:
-            session_module.append_history(session, "assistant", final_text)
-        session_module.extract_slots(session, tool_calls_this_turn)
-        if trace is not None:
-            trace.tool_calls = list(tool_calls_this_turn)
-            trace.final_text = final_text
-            trace.initial_mode = initial_mode
-            trace.final_mode = mode_policy.mode
-            trace.escalation_reason = escalation_reason
-            trace.model_call_count = model_call_count
-            trace.tool_call_count = (
-                len(tool_calls_this_turn) + server_tool_call_count
-            )
-            trace.model_tool_use_count = len(tool_calls_this_turn) + server_tool_call_count
-            trace.provider_tool_execution_count = tool_ledger.total_executions + server_tool_call_count
-            trace.retry_count = retry_count_total
-        budget.record_usage_cost(input_tokens, output_tokens)
-        stage_ms["stream_finalize_ms"] = (
-            time.monotonic() - finalize_started
-        ) * 1000
-
-    total_ms = (time.monotonic() - turn_start) * 1000
-    stage_ms["model_ms"] = model_ms_total
-    stage_ms["evidence_ms"] = max(
-        stage_ms["evidence_ms"],
-        stage_ms["mta_ms"] + stage_ms["ticketmaster_ms"],
-    )
-    stage_ms["total_ms"] = total_ms
-    if trace is not None:
-        trace.stage_ms = dict(stage_ms)
-    required_tools = ",".join(parsed_intent.required_evidence.required_tools()) or "none"
-    # Single per-turn timing/spend log line, mirroring trips.py's `[trip]`
-    # line -- no message text, session id truncated to 6 chars per the
-    # existing sess[:6] logging convention (session.py, routers/agent_chat.py).
-    print(
-        f"[agent] turn={turn_id} sess={session_id[:6]} rounds={round_num} "
-        f"mode={initial_mode} final_mode={mode_policy.mode} "
-        f"escalation={escalation_reason or 'none'} "
-        f"model={agent_policy.safe_model_label(mode_policy.model)} "
-        f"candidate_budget={mode_policy.max_route_candidates} retries={mode_policy.retry_count} "
-        f"required_tools={required_tools} optional_enrichment="
-        f"{int(mode_policy.optional_enrichment)} "
-        f"model_tool_uses={len(tool_calls_this_turn) + server_tool_call_count} "
-        f"provider_tool_executions={tool_ledger.total_executions + server_tool_call_count} "
-        f"tool_failures={tool_failures} intent_ms={stage_ms['intent_ms']:.0f} "
-        f"session_load_ms={stage_ms['session_load_ms']:.0f} "
-        f"place_resolution_ms={stage_ms['place_resolution_ms']:.0f} "
-        f"web_search_ms={stage_ms['web_search_ms']:.0f} "
-        f"place_normalization_ms={stage_ms['place_normalization_ms']:.0f} "
-        f"route_provider_ms={stage_ms['route_provider_ms']:.0f} "
-        f"evidence_ms={stage_ms['evidence_ms']:.0f} "
-        f"mta_ms={stage_ms['mta_ms']:.0f} "
-        f"ticketmaster_ms={stage_ms['ticketmaster_ms']:.0f} "
-        f"arrival_lookup_ms={stage_ms['arrival_lookup_ms']:.0f} "
-        f"stop_resolution_ms={stage_ms['stop_resolution_ms']:.0f} "
-        f"feed_fetch_ms={stage_ms['feed_fetch_ms']:.0f} "
-        f"feed_parse_ms={stage_ms['feed_parse_ms']:.0f} "
-        f"render_ms={stage_ms['render_ms']:.0f} "
-        f"scoring_ms={stage_ms['scoring_ms']:.0f} "
-        f"model_ms={model_ms_total:.0f} stream_finalize_ms="
-        f"{stage_ms['stream_finalize_ms']:.0f} tools_ms={tools_ms_total:.0f} "
-        f"total_ms={total_ms:.0f} model_calls={model_call_count} "
-        f"model_call_count={model_call_count} "
-        f"model_tool_uses={len(tool_calls_this_turn) + server_tool_call_count} "
-        f"provider_tool_executions={tool_ledger.total_executions + server_tool_call_count} "
-        f"retry_count={retry_count_total} "
-        f"in_tok={input_tokens} out_tok={output_tokens} stop={stop_reason_out}"
-    )
-
-    yield agent_events.DoneEvent(
-        session_id=session_id,
-        turn_id=turn_id,
-        stop_reason=stop_reason_out,
-        usage={"input_tokens": input_tokens, "output_tokens": output_tokens},
+        agent_events.ErrorEvent(code=code, message=text, retryable=retryable),
+        agent_events.DoneEvent(session_id=session_id, turn_id=turn_id, stop_reason="error", usage={"input_tokens": 0, "output_tokens": 0}),
     )
 
 
@@ -1154,51 +267,27 @@ async def run_agent_turn(
     response_presentation: str = "auto",
     trace: TurnTrace | None = None,
 ) -> AsyncIterator[agent_events.AgentEvent]:
-    """Run one conversational turn, yielding SSE events as they happen.
-
-    `session` is mutated in place (history/slots/route_cards); the caller
-    (routers/agent_chat.py) owns persisting it via session.save_session --
-    including on early client disconnect, which is why this function does
-    not save the session itself.
-    """
+    """Run one conversational turn; callers persist the mutated session."""
     yield agent_events.MetaEvent(session_id=session_id, turn_id=turn_id)
-
     if AGENT_MOCK_MODE:
         async for event in _stream_mock_turn(
-            session=session,
-            session_id=session_id,
-            turn_id=turn_id,
-            message=message,
-            origin=origin,
-            trace=trace,
-            response_presentation=response_presentation,
+            session=session, session_id=session_id, turn_id=turn_id, message=message,
+            origin=origin, trace=trace, response_presentation=response_presentation,
         ):
             yield event
         return
-
-    def _reject(code: str, text: str, retryable: bool) -> tuple[agent_events.ErrorEvent, agent_events.DoneEvent]:
-        return (
-            agent_events.ErrorEvent(code=code, message=text, retryable=retryable),
-            agent_events.DoneEvent(
-                session_id=session_id, turn_id=turn_id, stop_reason="error", usage={"input_tokens": 0, "output_tokens": 0}
-            ),
-        )
-
     if not budget.agent_enabled():
-        for event in _reject("budget_exceeded", "Trip planning is temporarily unavailable.", True):
+        for event in _rejection_events(session_id, turn_id, "budget_exceeded", "Trip planning is temporarily unavailable.", True):
             yield event
         return
-
     if not budget.check_session_rate_limit(session_id):
-        for event in _reject("rate_limited", "Too many messages in the last minute -- try again shortly.", True):
+        for event in _rejection_events(session_id, turn_id, "rate_limited", "Too many messages in the last minute -- try again shortly.", True):
             yield event
         return
-
     if budget.daily_spend_exceeded():
-        for event in _reject("budget_exceeded", "Today's usage budget is reached -- please try again tomorrow.", False):
+        for event in _rejection_events(session_id, turn_id, "budget_exceeded", "Today's usage budget is reached -- please try again tomorrow.", False):
             yield event
         return
-
     deterministic_answer = intelligence.deterministic_response(message)
     if deterministic_answer is not None:
         session_module.append_history(session, "user", message)
@@ -1208,31 +297,17 @@ async def run_agent_turn(
         if trace is not None:
             trace.final_text = final_text
         yield agent_events.TokenEvent(text=final_text)
-        yield agent_events.DoneEvent(
-            session_id=session_id,
-            turn_id=turn_id,
-            stop_reason="end_turn",
-            usage={"input_tokens": 0, "output_tokens": 0},
-        )
+        yield agent_events.DoneEvent(session_id=session_id, turn_id=turn_id, stop_reason="end_turn", usage={"input_tokens": 0, "output_tokens": 0})
         return
-
     sem = budget.concurrency_semaphore()
     if sem.locked():
-        for event in _reject("rate_limited", "SmartRoute is busy helping other riders -- try again shortly.", True):
+        for event in _rejection_events(session_id, turn_id, "rate_limited", "SmartRoute is busy helping other riders -- try again shortly.", True):
             yield event
         return
-
     ctx = ToolContext(gtfs=gtfs, session=session, turn_id=turn_id, now_et=now_et, origin=origin)
-
     async with sem:
         async for event in _stream_turn(
-            session=session,
-            session_id=session_id,
-            turn_id=turn_id,
-            message=message,
-            ctx=ctx,
-            selected_card_id=selected_card_id,
-            response_presentation=response_presentation,
-            trace=trace,
+            session=session, session_id=session_id, turn_id=turn_id, message=message, ctx=ctx,
+            selected_card_id=selected_card_id, response_presentation=response_presentation, trace=trace,
         ):
             yield event
