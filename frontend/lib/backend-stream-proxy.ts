@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+import { requestPrincipal } from "./request-principal";
 
 // Mirrors the backendBase resolution in backend-proxy.ts (kept private there,
 // so duplicated rather than imported to avoid coupling two proxy modules that
@@ -38,6 +40,7 @@ export async function streamProxyToBackend(
   path: string,
   body: unknown,
   signal?: AbortSignal,
+  request?: NextRequest,
 ): Promise<Response> {
   const appKey = process.env.APP_KEY;
   if (!appKey) {
@@ -46,6 +49,8 @@ export async function streamProxyToBackend(
   }
 
   const controller = new AbortController();
+  const principal = request ? requestPrincipal(request) : null;
+  if (request && !principal) return redactedError("Request identity is unavailable.", 503);
   const onAbort = () => controller.abort();
   if (signal) {
     if (signal.aborted) controller.abort();
@@ -59,6 +64,7 @@ export async function streamProxyToBackend(
       method: "POST",
       headers: {
         "X-App-Key": appKey,
+        ...(principal ? { "X-SmartRoute-Principal": principal } : {}),
         "Content-Type": "application/json",
         Accept: "text/event-stream",
       },

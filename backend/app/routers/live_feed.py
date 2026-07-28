@@ -1,16 +1,19 @@
 from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app.utils.geo import find_nearest_stops
 from app.services import mta_feed
 from app.services.live_feed import vehicle_enrichment
 from app.services.live_feed.log import _vlog
+from app.services import admission
 import asyncio
 import hashlib
 import hmac
 import json
+import math
 import os
+import re
 import time
 
 
@@ -38,38 +41,60 @@ def signal_realtime_refresh() -> None:
     previous.set()
 
 
-def _verify_ws_ticket(ticket: str, path: str) -> bool:
+async def _verify_ws_ticket(ticket: str, path: str) -> tuple[str | None, bool]:
     """Validate a short-lived ticket minted by the Next /api/ws-ticket route.
 
-    The ticket is "<exp>.<hmac_sha256(APP_KEY, exp.path)>". Binding the
-    signature to the websocket path prevents a ticket minted for one endpoint
-    from being replayed on another. Fails closed when APP_KEY is unset, the path
-    is missing, or the ticket is malformed.
+    The ticket is ``exp.nonce.principal.signature``. Its nonce is atomically
+    consumed before accept, preventing replays across backend instances.
     """
     app_key = os.getenv("APP_KEY", "")
     if not app_key or not ticket or not path:
-        return False
-    exp_str, _, sig = ticket.partition(".")
-    if not exp_str or not sig:
-        return False
+        return None, False
+    if len(ticket) > 512:
+        return None, False
+    parts = ticket.split(".")
+    if len(parts) != 4:
+        return None, False
+    exp_str, nonce, principal_id, sig = parts
+    principal = f"v1.{principal_id}"
+    if (not exp_str or len(exp_str) > 12 or not exp_str.isdigit() or not nonce
+            or not re.fullmatch(r"[A-Za-z0-9_-]{16,64}", nonce)
+            or not re.fullmatch(r"[A-Za-z0-9_-]{16,64}", principal_id)
+            or not re.fullmatch(r"[0-9a-f]{64}", sig)):
+        return None, False
     try:
         exp = int(exp_str)
     except ValueError:
-        return False
-    if exp < int(time.time()):
-        return False
+        return None, False
+    now = int(time.time())
+    if exp < now or exp > now + 120:
+        return None, False
     expected = hmac.new(
         app_key.encode(),
-        f"{exp_str}.{path}".encode(),
+        f"{exp_str}.{path}.{nonce}.{principal}".encode(),
         hashlib.sha256,
     ).hexdigest()
-    return hmac.compare_digest(expected, sig)
+    if not hmac.compare_digest(expected, sig):
+        return None, False
+    try:
+        admission.principal_from_request(principal)
+    except admission.AdmissionDenied:
+        return None, False
+    nonce_result = await admission.consume_nonce(nonce, exp - now)
+    if nonce_result == "unavailable":
+        return None, True
+    if nonce_result != "consumed":
+        return None, False
+    return principal, False
 
 
 _LAST_EMPTY_VEHICLE_LOG = 0.0
 _WS_CONNECTION_COUNTER = 0
 NEARBY_ARRIVAL_RADIUS_M = 804.672
 NEARBY_ARRIVAL_STOP_LIMIT = 32
+MAX_WS_MESSAGE_BYTES = 4 * 1024
+MAX_SELECTED_ROUTE_IDS = 12
+LEASE_GUARD_INTERVAL_S = max(1, admission.LEASE_TTL_S // 3)
 _SIGNAL_DISRUPTION_KEYWORDS = (
     "SUSPEND",
     "NO ",
@@ -98,12 +123,77 @@ async def _send_json_safe(websocket: WebSocket, payload: dict) -> bool:
         return False
 
 
+async def _receive_bounded_ws_json(websocket: WebSocket) -> dict:
+    """Read one complete text/bytes frame before parsing untrusted JSON."""
+    frame = await websocket.receive()
+    raw = frame.get("text") if isinstance(frame.get("text"), str) else frame.get("bytes")
+    if not isinstance(raw, (str, bytes)):
+        raise ValueError("missing websocket payload")
+    data = raw.encode("utf-8") if isinstance(raw, str) else raw
+    if len(data) > MAX_WS_MESSAGE_BYTES:
+        raise ValueError("websocket payload too large")
+    try:
+        message = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("malformed websocket JSON") from exc
+    if not isinstance(message, dict):
+        raise ValueError("websocket message must be an object")
+    message_type = message.get("type")
+    if message_type == "location":
+        if set(message) - {"type", "lat", "lng", "selected_route_ids"}:
+            raise ValueError("unexpected location fields")
+        if not all(isinstance(message.get(key), (int, float)) and not isinstance(message.get(key), bool) and math.isfinite(float(message[key])) for key in ("lat", "lng")):
+            raise ValueError("invalid location")
+        if not (40.2 <= float(message["lat"]) <= 41.2 and -74.6 <= float(message["lng"]) <= -73.2):
+            raise ValueError("location outside service area")
+    elif message_type == "vehicle_scope":
+        if set(message) - {"type", "selected_route_ids"}:
+            raise ValueError("unexpected scope fields")
+    else:
+        raise ValueError("unsupported websocket message")
+    selected = message.get("selected_route_ids")
+    if selected is not None and (not isinstance(selected, list) or len(selected) > MAX_SELECTED_ROUTE_IDS or any(not isinstance(route, str) or not route.strip() or len(route) > 12 for route in selected)):
+        raise ValueError("invalid route selection")
+    return message
+
+
+async def _guard_socket_lease(websocket: WebSocket, lease: admission.AdmissionLease, stopped: asyncio.Event, owner: asyncio.Task) -> None:
+    """Refresh independent of rider frames; never reads from the socket."""
+    while not stopped.is_set():
+        try:
+            await asyncio.wait_for(stopped.wait(), timeout=LEASE_GUARD_INTERVAL_S)
+            return
+        except asyncio.TimeoutError:
+            pass
+        if not await admission.refresh(lease):
+            try:
+                await websocket.close(code=1013)
+            except (WebSocketDisconnect, RuntimeError):
+                pass
+            finally:
+                owner.cancel()
+            return
+
+
 class LiveFeedRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     lat: float
     lng: float
 
+
+
+def _live_feed_coordinates_are_valid(payload: LiveFeedRequest) -> bool:
+    return (
+        isinstance(payload.lat, (int, float)) and not isinstance(payload.lat, bool)
+        and isinstance(payload.lng, (int, float)) and not isinstance(payload.lng, bool)
+        and math.isfinite(payload.lat) and math.isfinite(payload.lng)
+        and 40.2 <= payload.lat <= 41.2 and -74.6 <= payload.lng <= -73.2
+    )
+
 @router.post("/api/live-feed")
 async def live_feed(request: Request, payload: LiveFeedRequest):
+    if not _live_feed_coordinates_are_valid(payload):
+        return JSONResponse({"error": "Invalid live feed request."}, status_code=400)
     gtfs = getattr(request.app.state, "gtfs", None)
     if gtfs is None:
         return JSONResponse({"error": "GTFS not ready"}, status_code=503)
@@ -234,6 +324,21 @@ def _normalize_route_ids(route_ids):
         for route_id in (route_ids or [])
         if str(route_id).strip()
     }
+
+
+def _location_verbose_log(connection_id: int, selected_route_ids: set[str]) -> str:
+    """Return location telemetry without rider-provided coordinates."""
+
+    return (
+        f"[ws_live_feed:{connection_id}] location "
+        f"selected_routes={sorted(selected_route_ids)}"
+    )
+
+
+def _socket_failure_log(channel: str, exc: Exception) -> str:
+    """Preserve failure classification without serializing provider details."""
+
+    return f"[{channel}] failed error_type={type(exc).__name__}"
 
 
 def _expand_vehicle_route_scope(route_ids):
@@ -604,11 +709,19 @@ async def service_alerts_socket(websocket: WebSocket):
     ticket = websocket.query_params.get("ticket", "")
     # Fail closed: reject unless the ticket carries a valid, unexpired signature
     # minted by the Next /api/ws-ticket route (APP_KEY never reaches the client).
-    if not _verify_ws_ticket(ticket, websocket.url.path):
-        await websocket.close(code=1008)
+    principal, ticket_store_unavailable = await _verify_ws_ticket(ticket, websocket.url.path)
+    if principal is None:
+        await websocket.close(code=1013 if ticket_store_unavailable else 1008)
+        return
+    try:
+        lease = await admission.acquire(principal, "ws")
+    except admission.AdmissionDenied as exc:
+        await websocket.close(code=1013 if exc.status_code == 503 else 1008)
         return
 
     await websocket.accept()
+    guard_stopped = asyncio.Event()
+    guard_task = asyncio.create_task(_guard_socket_lease(websocket, lease, guard_stopped, asyncio.current_task()))
     _vlog(f"[ws_service_alerts:{connection_id}] accepted")
     previous_signatures: dict[str, str] = {}
     sent_snapshot = False
@@ -654,7 +767,7 @@ async def service_alerts_socket(websocket: WebSocket):
             except Exception as exc:
                 if isinstance(exc, WebSocketDisconnect):
                     return
-                print(f"[ws_service_alerts] stream failed: {type(exc).__name__}: {exc!r}")
+                print(_socket_failure_log("ws_service_alerts", exc))
                 # Generic public message; the real exception is logged above only.
                 sent = await _send_json_safe(
                     websocket,
@@ -666,6 +779,16 @@ async def service_alerts_socket(websocket: WebSocket):
     except WebSocketDisconnect:
         _vlog(f"[ws_service_alerts:{connection_id}] disconnected")
         return
+    except asyncio.CancelledError:
+        return
+    finally:
+        guard_stopped.set()
+        guard_task.cancel()
+        try:
+            await guard_task
+        except asyncio.CancelledError:
+            pass
+        await admission.release(lease)
 
 
 @ws_router.websocket("/ws/live-feed")
@@ -677,8 +800,14 @@ async def live_feed_socket(websocket: WebSocket):
     ticket = websocket.query_params.get("ticket", "")
     # Fail closed: reject unless the ticket carries a valid, unexpired signature
     # minted by the Next /api/ws-ticket route (APP_KEY never reaches the client).
-    if not _verify_ws_ticket(ticket, websocket.url.path):
-        await websocket.close(code=1008)
+    principal, ticket_store_unavailable = await _verify_ws_ticket(ticket, websocket.url.path)
+    if principal is None:
+        await websocket.close(code=1013 if ticket_store_unavailable else 1008)
+        return
+    try:
+        lease = await admission.acquire(principal, "ws")
+    except admission.AdmissionDenied as exc:
+        await websocket.close(code=1013 if exc.status_code == 503 else 1008)
         return
 
     await websocket.accept()
@@ -687,7 +816,11 @@ async def live_feed_socket(websocket: WebSocket):
     if gtfs is None:
         await _send_json_safe(websocket, {"type": "error", "message": "GTFS not ready"})
         await websocket.close(code=1011)
+        await admission.release(lease)
         return
+
+    guard_stopped = asyncio.Event()
+    guard_task = asyncio.create_task(_guard_socket_lease(websocket, lease, guard_stopped, asyncio.current_task()))
 
     location: tuple[float, float] | None = None
     selected_route_ids: set[str] = set()
@@ -704,7 +837,11 @@ async def live_feed_socket(websocket: WebSocket):
     try:
         while True:
             if location is None:
-                msg = await websocket.receive_json()
+                try:
+                    msg = await _receive_bounded_ws_json(websocket)
+                except ValueError:
+                    await websocket.close(code=1008)
+                    return
             else:
                 # Push-driven: wake on whichever fires first -- a client message
                 # (location/scope change), a realtime data refresh, or the
@@ -712,7 +849,7 @@ async def live_feed_socket(websocket: WebSocket):
                 # iterations (never cancelled) so receive_json() is never
                 # re-entered concurrently; only the cheap event wait is cancelled.
                 if recv_task is None:
-                    recv_task = asyncio.ensure_future(websocket.receive_json())
+                    recv_task = asyncio.ensure_future(_receive_bounded_ws_json(websocket))
                 refresh_task = asyncio.ensure_future(get_realtime_refresh_event().wait())
                 done, _pending = await asyncio.wait(
                     {recv_task, refresh_task},
@@ -726,6 +863,9 @@ async def live_feed_socket(websocket: WebSocket):
                     finished, recv_task = recv_task, None
                     try:
                         msg = finished.result()
+                    except ValueError:
+                        await websocket.close(code=1008)
+                        return
                     except Exception:
                         return
 
@@ -737,11 +877,7 @@ async def live_feed_socket(websocket: WebSocket):
                 if isinstance(lat, (int, float)) and isinstance(lng, (int, float)):
                     location = (float(lat), float(lng))
                     last_sent = 0
-                    _vlog(
-                        f"[ws_live_feed:{connection_id}] location "
-                        f"lat={location[0]:.5f} lng={location[1]:.5f} "
-                        f"selected_routes={sorted(selected_route_ids)}"
-                    )
+                    _vlog(_location_verbose_log(connection_id, selected_route_ids))
             elif isinstance(msg, dict) and msg.get("type") == "vehicle_scope":
                 selected_route_ids = _normalize_route_ids(msg.get("selected_route_ids"))
                 last_sent = 0
@@ -792,7 +928,7 @@ async def live_feed_socket(websocket: WebSocket):
             except Exception as exc:
                 if isinstance(exc, WebSocketDisconnect):
                     return
-                print(f"[ws_live_feed] snapshot failed: {type(exc).__name__}: {exc!r}")
+                print(_socket_failure_log("ws_live_feed", exc))
                 # Generic public message; the real exception is logged above only.
                 sent = await _send_json_safe(
                     websocket,
@@ -805,7 +941,16 @@ async def live_feed_socket(websocket: WebSocket):
     except WebSocketDisconnect:
         _vlog(f"[ws_live_feed:{connection_id}] disconnected")
         return
+    except asyncio.CancelledError:
+        return
     finally:
         # Never leak the in-flight receive task when the socket closes.
         if recv_task is not None and not recv_task.done():
             recv_task.cancel()
+        guard_stopped.set()
+        guard_task.cancel()
+        try:
+            await guard_task
+        except asyncio.CancelledError:
+            pass
+        await admission.release(lease)

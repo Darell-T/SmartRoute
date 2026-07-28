@@ -9,6 +9,8 @@ shared store and this contract is revised.
 
 Required production environment:
 
+- `SMARTROUTE_ENV=production`. This is mandatory; an absent or unknown
+  profile never authorizes mock agent/advisor modes.
 - `APP_KEY` for protected API and WebSocket ticket verification.
 - `ANTHROPIC_API_KEY` and configured Auto/Quick model names when agent chat is enabled.
 - `REDIS_URL` for durable agent sessions. `AGENT_ALLOW_MEMORY_SESSIONS` must be unset or `0`.

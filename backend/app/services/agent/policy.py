@@ -11,6 +11,8 @@ import dataclasses
 import os
 from typing import Literal
 
+from app import runtime
+
 ResponseMode = Literal["auto", "quick"]
 
 
@@ -146,6 +148,7 @@ def request_capabilities(model: str) -> ModelRequestCapabilities:
 def validate_agent_configuration() -> None:
     """Fail startup on unsafe or incomplete enabled-agent configuration."""
 
+    runtime.validate_mock_safeguards()
     if os.getenv("NEXT_PUBLIC_ANTHROPIC_API_KEY"):
         raise RuntimeError("Anthropic credentials must remain server-only")
     if os.getenv("AGENT_ENABLED", "1").strip() == "0":

@@ -1,10 +1,15 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 type ProgressiveTextResult = {
   displayedText: string;
   isCaughtUp: boolean;
+};
+
+export type ProgressiveRevealState = {
+  visibleLength: number;
+  targetLength: number;
 };
 
 /** Keep short answers natural while allowing large, bursty SSE payloads to
@@ -18,6 +23,27 @@ export function nextRevealLength(current: number, target: number): number {
   return Math.min(target, current + step);
 }
 
+export function clampRevealLength(visibleLength: number, textLength: number): number {
+  return Math.min(visibleLength, textLength);
+}
+
+export function preserveRevealLength(
+  visibleLength: number,
+  priorTextLength: number,
+  textLength: number,
+): number {
+  return Math.min(visibleLength, priorTextLength, textLength);
+}
+
+export function reconcileProgressiveReveal(
+  state: ProgressiveRevealState,
+  nextTextLength: number,
+): ProgressiveRevealState {
+  return nextTextLength < state.targetLength
+    ? { visibleLength: Math.min(state.visibleLength, nextTextLength), targetLength: nextTextLength }
+    : state;
+}
+
 /**
  * Reveals text that arrives after mount, but never replays an already-finished
  * conversation when the user returns to the chat tab. This is intentionally a
@@ -28,32 +54,37 @@ export function useProgressiveText(
   text: string,
   reduceMotion = false,
 ): ProgressiveTextResult {
-  const shouldAnimateRef = useRef(text.length === 0);
-  const [visibleLength, setVisibleLength] = useState(text.length);
+  const [shouldAnimate] = useState(() => text.length === 0);
+  const [previousText, setPreviousText] = useState(text);
+  const [revealState, setRevealState] = useState<ProgressiveRevealState>(() => ({
+    visibleLength: text.length,
+    targetLength: text.length,
+  }));
+  if (previousText !== text) {
+    setPreviousText(text);
+    setRevealState((state) => reconcileProgressiveReveal(state, text.length));
+  }
+  const shouldReveal = shouldAnimate && !reduceMotion;
+  const displayedLength = shouldReveal
+    ? preserveRevealLength(revealState.visibleLength, revealState.targetLength, text.length)
+    : text.length;
 
   useEffect(() => {
-    if (visibleLength > text.length) {
-      setVisibleLength(text.length);
-      return;
-    }
-
-    if (!shouldAnimateRef.current || reduceMotion) {
-      if (visibleLength !== text.length) setVisibleLength(text.length);
-      return;
-    }
-
-    if (visibleLength >= text.length) return;
+    if (!shouldReveal) return;
+    if (displayedLength >= text.length && revealState.targetLength === text.length) return;
 
     const timer = window.setTimeout(() => {
-      setVisibleLength((current) => nextRevealLength(current, text.length));
+      setRevealState(() => ({
+        visibleLength: nextRevealLength(displayedLength, text.length),
+        targetLength: text.length,
+      }));
     }, 18);
 
     return () => window.clearTimeout(timer);
-  }, [reduceMotion, text.length, visibleLength]);
+  }, [displayedLength, revealState.targetLength, shouldReveal, text.length]);
 
-  const clampedLength = Math.min(visibleLength, text.length);
   return {
-    displayedText: text.slice(0, clampedLength),
-    isCaughtUp: clampedLength >= text.length,
+    displayedText: text.slice(0, displayedLength),
+    isCaughtUp: displayedLength >= text.length,
   };
 }

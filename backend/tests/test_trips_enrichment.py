@@ -15,7 +15,7 @@ import time
 import types
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 SUBWAY_LOCATED = [
     {"name": "Church Av", "lat": 40.644, "lng": -73.979},
@@ -58,6 +58,7 @@ def _load_trips_module(bus_fetch):
                 setattr(self, key, value)
 
     fake_pydantic.BaseModel = _FakeBaseModel
+    fake_pydantic.ConfigDict = dict
 
     fake_directions = types.ModuleType("app.services.directions")
 
@@ -149,11 +150,15 @@ def _load_trips_module(bus_fetch):
         # binds at module load.
         for _m in [k for k in list(sys.modules) if k == "app.routers.trips" or k.startswith("app.services.trips")]:
             sys.modules.pop(_m, None)
-        return importlib.import_module("app.routers.trips")
+        module = importlib.import_module("app.routers.trips")
+        module.admission.acquire = AsyncMock(return_value=module.admission.AdmissionLease("v1.test-principal-opaque-123456", "trip", "test-lease"))
+        module.admission.release = AsyncMock()
+        return module
 
 
 def _request_with_gtfs():
     return SimpleNamespace(
+        headers={"X-SmartRoute-Principal": "v1.test-principal-opaque-123456"},
         app=SimpleNamespace(
             state=SimpleNamespace(
                 gtfs=SimpleNamespace(
@@ -170,6 +175,7 @@ def _request_with_slow_gtfs():
         return list(SUBWAY_LOCATED)
 
     return SimpleNamespace(
+        headers={"X-SmartRoute-Principal": "v1.test-principal-opaque-123456"},
         app=SimpleNamespace(
             state=SimpleNamespace(
                 gtfs=SimpleNamespace(get_intermediate_stops_with_coords=_slow_lookup)
@@ -241,6 +247,95 @@ class TripEnrichmentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             enriched["steps"][0]["intermediate_stop_locations"], SUBWAY_LOCATED
         )
+
+    async def test_enrich_route_accepts_complete_step_and_rejects_invalid_steps_before_enrichment(self):
+        async def bus_fetch(route_id):
+            return {"canned": BUS_LOCATED}
+
+        trips = _load_trips_module(bus_fetch)
+        step = {
+            "type": "SUBWAY",
+            "route_id": "A",
+            "train_line": "A",
+            "line_color": "#0039A6",
+            "direction": "Downtown",
+            "departure_stop": "Jay St-MetroTech",
+            "arrival_stop": "59 St-Columbus Circle",
+            "departure_time_iso": "2026-07-28T12:00:00-04:00",
+            "arrival_time_iso": "2026-07-28T12:20:00-04:00",
+            "minutes_until_train_arrives": -1,
+            "minutes_until_arrival": 19,
+            "route_total_minutes": 20,
+            "route_total_seconds": 1200,
+            "duration_minutes": 18,
+            "distance_meters": 4300,
+            "stop_count": 5,
+            "segment_index": 1,
+            "start_point": {"lat": 40.692, "lng": -73.987},
+            "end_point": {"lat": 40.764, "lng": -73.98},
+            "departure_coords": {"latitude": 40.692, "longitude": -73.987},
+            "arrival_coords": {"latitude": 40.764, "longitude": -73.98},
+            "polyline": {"encodedPolyline": "abc"},
+            "intermediate_stops": ["Canal St"],
+            "intermediate_stop_locations": [
+                {"name": "Canal St", "lat": 40.72, "lng": -74.0}
+            ],
+        }
+        enrich = AsyncMock(return_value={
+            "subway_legs": 1,
+            "bus_legs": 0,
+            "subway_with_stops": 1,
+            "bus_with_stops": 0,
+        })
+
+        with patch.object(trips.enrichment, "_enrich_route", enrich):
+            result = await trips.enrich_route(
+                _request_with_gtfs(), trips.EnrichRouteRequest(steps=[step])
+            )
+        self.assertTrue(result["enriched"])
+        enrich.assert_awaited_once()
+
+        invalid_steps = (
+            {**step, "route_total_minutes": -1},
+            {**step, "route_total_seconds": -1},
+            {**step, "stop_count": 1.5},
+            {**step, "unexpected": True},
+            {**step, "route_id": {}},
+            {**step, "departure_time_iso": 123},
+            {**step, "direction": []},
+            {**step, "route_id": "x" * 301},
+            {**step, "arrival_time_iso": "x" * 65},
+            {**step, "departure_coords": None},
+            {**step, "start_point": {"lat": 40.692}},
+            {**step, "end_point": {"lat": 40.764, "longitude": -73.98}},
+            {
+                **step,
+                "arrival_coords": {
+                    "lat": 40.764,
+                    "lng": -73.98,
+                    "latitude": 40.764,
+                    "longitude": -73.98,
+                },
+            },
+            {**step, "start_point": {"lat": True, "lng": -73.987}},
+            {**step, "end_point": {"lat": float("nan"), "lng": -73.98}},
+            {**step, "departure_coords": {"latitude": 42, "longitude": -73.987}},
+            {
+                **step,
+                "intermediate_stop_locations": [
+                    {"name": "Canal St", "lat": "invalid", "lng": -74.0}
+                ],
+            },
+        )
+        rejected_enrich = AsyncMock()
+        with patch.object(trips.enrichment, "_enrich_route", rejected_enrich):
+            for invalid_step in invalid_steps:
+                with self.subTest(invalid_step=invalid_step), self.assertRaises(trips.HTTPException):
+                    await trips.enrich_route(
+                        _request_with_gtfs(),
+                        trips.EnrichRouteRequest(steps=[invalid_step]),
+                    )
+        rejected_enrich.assert_not_awaited()
 
     async def test_oba_failure_degrades_to_empty_without_breaking_trip(self):
         async def bus_fetch(route_id):

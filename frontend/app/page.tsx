@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MotionConfig } from "motion/react";
 import type { TransitRouteData } from "@/types";
 import { DEFAULT_LOCATION } from "@/lib/api";
+import { requestInitialLocation } from "@/lib/initial-geolocation";
 import { useLiveFeed } from "@/lib/use-live-feed";
 import { useServiceAlerts } from "@/lib/use-service-alerts";
 import { deriveTransitRouteIds } from "@/lib/route-planning";
@@ -105,12 +106,6 @@ function SmartRoutePageContent() {
   );
   const serviceAlerts = useServiceAlerts();
 
-  const [clientNowMs, setClientNowMs] = useState(0);
-
-  useEffect(() => {
-    setClientNowMs(Date.now());
-  }, [liveFeed.clockTick]);
-
   const leftRailFeed = useMemo(
     () => ({
       nearest_stop: liveFeed.nearestStop,
@@ -150,7 +145,7 @@ function SmartRoutePageContent() {
         routeTotalTime: summary?.totalLabel ?? null,
         serviceAlerts: serviceAlerts.alerts,
         incidents: [],
-        nowMs: clientNowMs || 0,
+        nowMs: liveFeed.nowMs,
       }),
     [
       leftRailFeed,
@@ -162,7 +157,7 @@ function SmartRoutePageContent() {
       routeEntryContext,
       summary,
       serviceAlerts.alerts,
-      clientNowMs,
+      liveFeed.nowMs,
     ],
   );
 
@@ -179,40 +174,11 @@ function SmartRoutePageContent() {
         : "standby";
 
   useEffect(() => {
-    if (!navigator.geolocation) {
-      setUserLocation(DEFAULT_LOCATION);
-      return;
-    }
-
-    let resolved = false;
-    const timeoutId = setTimeout(() => {
-      if (!resolved)
-        setUserLocation((previous) => previous ?? DEFAULT_LOCATION);
-    }, 8_000);
-
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        resolved = true;
-        clearTimeout(timeoutId);
-        setUserLocation({
-          lat: position.coords.latitude,
-          lng: position.coords.longitude,
-        });
-      },
-      () => {
-        resolved = true;
-        clearTimeout(timeoutId);
-        setUserLocation(DEFAULT_LOCATION);
-      },
-      // This first fix only gates the live feed (nearest stops), where
-      // city-block accuracy is plenty -- so use a fast NETWORK fix instead of
-      // waiting up to 5s for GPS. The precise dot is refined separately by the
-      // high-accuracy watchPosition in SmartRouteMap. A recent cached fix is
-      // accepted instantly (maximumAge) so arrivals can appear right away.
-      { enableHighAccuracy: false, timeout: 6_000, maximumAge: 60_000 },
+    return requestInitialLocation(
+      navigator.geolocation,
+      DEFAULT_LOCATION,
+      setUserLocation,
     );
-
-    return () => clearTimeout(timeoutId);
   }, []);
 
   const handleLocationUpdate = useCallback(

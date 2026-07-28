@@ -47,9 +47,12 @@ export async function POST(req: NextRequest) {
   const limited = rateLimit(req, { key: "agent-chat", limit: 10, windowMs: 60_000 });
   if (limited) return limited;
 
-  const jsonBody = await readJsonBody(req);
+  const jsonBody = await readJsonBody(req, 32 * 1024);
   if (!jsonBody.ok) {
-    return NextResponse.json({ error: "Malformed JSON request body." }, { status: 400 });
+    return NextResponse.json(
+      { error: jsonBody.tooLarge ? "Request body is too large." : "Malformed JSON request body." },
+      { status: jsonBody.tooLarge ? 413 : 400 },
+    );
   }
 
   const parsed = ChatSchema.safeParse(jsonBody.empty ? {} : jsonBody.value);
@@ -71,5 +74,5 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  return streamProxyToBackend("/api/agent/chat", parsed.data, req.signal);
+  return streamProxyToBackend("/api/agent/chat", parsed.data, req.signal, req);
 }

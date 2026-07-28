@@ -20,6 +20,9 @@ export interface RouteStep {
   minutes_until_train_arrives?: number;
   minutes_until_arrival?: number;
   route_total_minutes?: number;
+  route_total_seconds?: number;
+  duration_minutes?: number;
+  distance_meters?: number;
   stop_count?: number;
   route_id?: string;
   intermediate_stops?: string[];

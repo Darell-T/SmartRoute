@@ -103,8 +103,14 @@ class MockAdvisorTests(unittest.IsolatedAsyncioTestCase):
         text = self.advisor.build_mock_recommendation({"routes": []})
         self.assertIn("[ROUTE:0]", text)
 
+    def test_mock_fixture_never_claims_unevidenced_disruption_safety(self):
+        text = self.advisor.build_mock_recommendation(_payload()).casefold()
+        self.assertNotIn("no disruption", text)
+        self.assertNotIn("no reported delay", text)
+        self.assertNotIn("none blocking this path", text)
+
     async def test_stream_yields_mock_when_flag_set(self):
-        with patch.dict("os.environ", {"JARVIS_MOCK_ADVISOR": "1"}):
+        with patch.dict("os.environ", {"SMARTROUTE_ENV": "test", "JARVIS_MOCK_ADVISOR": "1"}):
             chunks = []
             async for chunk in self.advisor.stream_recommendation(_payload()):
                 chunks.append(chunk)

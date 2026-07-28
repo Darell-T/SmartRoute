@@ -10,6 +10,7 @@
  */
 
 import type { RouteStep, ServiceAlert } from "@/types/api";
+import { parseAgentEvent } from "./agent-chat-event-validator";
 
 export interface EvidenceEnvelope<T> {
   source: string;
@@ -405,157 +406,16 @@ function arrivalResolutionStatus(data: Record<string, unknown>): ArrivalResoluti
  *  shape and returns a typed `AgentEvent`, or `null` (after a console.warn)
  *  when the frame doesn't match — a single bad frame must never crash the
  *  whole turn's stream. */
-function buildEvent(eventType: string, data: unknown): AgentEvent | null {
+function buildEvent(eventType: string, data: Record<string, unknown>): AgentEvent | null {
   if (!KNOWN_EVENT_TYPES.has(eventType as AgentEvent["type"])) {
     warnSkip(`unknown event type "${eventType}"`, data);
     return null;
   }
-  if (!isRecord(data)) {
-    warnSkip(`"${eventType}" data is not an object`, data);
-    return null;
-  }
-
-  switch (eventType as AgentEvent["type"]) {
-    case "meta": {
-      if (!isString(data.session_id) || !isString(data.turn_id)) break;
-      return { type: "meta", session_id: data.session_id, turn_id: data.turn_id };
-    }
-    case "token": {
-      if (!isString(data.text)) break;
-      return { type: "token", text: data.text };
-    }
-    case "tool_start": {
-      if (!isString(data.tool_call_id) || !isString(data.tool) || !isString(data.label)) break;
-      return {
-        type: "tool_start",
-        tool_call_id: data.tool_call_id,
-        tool: data.tool,
-        label: data.label,
-      };
-    }
-    case "tool_end": {
-      if (
-        !isString(data.tool_call_id) ||
-        !isString(data.tool) ||
-        !isBoolean(data.ok) ||
-        !isNumber(data.duration_ms)
-      ) {
-        break;
-      }
-      return {
-        type: "tool_end",
-        tool_call_id: data.tool_call_id,
-        tool: data.tool,
-        ok: data.ok,
-        duration_ms: data.duration_ms,
-        summary: isString(data.summary) ? data.summary : undefined,
-      };
-    }
-    case "route_card": {
-      if (
-        !isString(data.card_id) ||
-        !isString(data.turn_id) ||
-        (data.role !== "recommended" && data.role !== "alternative") ||
-        !isRecord(data.origin) ||
-        !isRecord(data.destination) ||
-        !isRecord(data.summary) ||
-        !Array.isArray(data.route) ||
-        !Array.isArray(data.alerts)
-      ) {
-        break;
-      }
-      return {
-        type: "route_card",
-        card_id: data.card_id,
-        turn_id: data.turn_id,
-        role: data.role,
-        origin: data.origin as unknown as RouteCardEndpoint,
-        destination: data.destination as unknown as RouteCardEndpoint,
-        summary: data.summary as unknown as RouteCardSummary,
-        route: data.route as unknown as AgentRouteStep[],
-        alerts: data.alerts as unknown as ServiceAlert[],
-        leg_label: isString(data.leg_label) ? data.leg_label : undefined,
-        depart_iso: isString(data.depart_iso) ? data.depart_iso : undefined,
-        // Copy opaque object only when present; omit key for legacy payloads.
-        ...(isRecord(data.itinerary)
-          ? { itinerary: data.itinerary as CanonicalItinerary }
-          : {}),
-        ...(isRecord(data.selection_decision)
-          ? {
-              selection_decision:
-                data.selection_decision as unknown as RouteSelectionDecision,
-            }
-          : {}),
-      };
-    }
-    case "arrival_card": {
-      if (
-        !isString(data.turn_id) ||
-        !isString(data.route_id) ||
-        !isRecord(data.stop) ||
-        !Array.isArray(data.directions) ||
-        !isString(data.updated_at) ||
-        !isString(data.source_status)
-      ) {
-        break;
-      }
-      return {
-        type: "arrival_card",
-        turn_id: data.turn_id,
-        route_id: data.route_id,
-        stop: data.stop as ArrivalCardEvent["stop"],
-        directions: data.directions as ArrivalDirection[],
-        updated_at: data.updated_at,
-        source_status: data.source_status as ArrivalSourceStatus,
-        resolution_status: arrivalResolutionStatus(data),
-        ...(isRecord(data.evidence)
-          ? {
-              evidence: data.evidence as unknown as ArrivalCardEvent["evidence"],
-            }
-          : {}),
-        ...(isRecord(data.catchability)
-          ? { catchability: data.catchability as ArrivalCardEvent["catchability"] }
-          : {}),
-        ...(Array.isArray(data.ambiguity)
-          ? { ambiguity: data.ambiguity as NonNullable<ArrivalCardEvent["ambiguity"]> }
-          : {}),
-      };
-    }
-    case "error": {
-      if (!isString(data.code) || !isString(data.message) || !isBoolean(data.retryable)) break;
-      return {
-        type: "error",
-        code: data.code as AgentErrorCode,
-        message: data.message,
-        retryable: data.retryable,
-      };
-    }
-    case "done": {
-      if (
-        !isString(data.session_id) ||
-        !isString(data.turn_id) ||
-        !isString(data.stop_reason) ||
-        !isRecord(data.usage)
-      ) {
-        break;
-      }
-      return {
-        type: "done",
-        session_id: data.session_id,
-        turn_id: data.turn_id,
-        stop_reason: data.stop_reason as AgentStopReason,
-        ...(isString(data.terminal_state)
-          ? {
-              terminal_state:
-                data.terminal_state as DoneEvent["terminal_state"],
-            }
-          : {}),
-        usage: data.usage as DoneUsage,
-      };
-    }
-  }
-  warnSkip(`"${eventType}" data is missing required fields`, data);
+  const parsed = parseAgentEvent(eventType, data);
+  if (parsed) return parsed;
+  warnSkip(`"${eventType}" data failed nested contract validation`, data);
   return null;
+
 }
 
 /** Parses one `\n`-joined SSE frame (already split on the blank-line frame
@@ -589,6 +449,10 @@ function parseSseFrame(frame: string): AgentEvent | null {
     data = raw ? JSON.parse(raw) : {};
   } catch (err) {
     warnSkip(`invalid JSON in "${eventType}" frame`, err);
+    return null;
+  }
+  if (!isRecord(data)) {
+    warnSkip(`"${eventType}" data is not an object`, data);
     return null;
   }
   return buildEvent(eventType, data);

@@ -67,6 +67,19 @@ _DISCOVERY_RE = re.compile(
     r"museum|park|show|venue|place|somewhere|go)\b",
     re.IGNORECASE,
 )
+_GREETING_RE = re.compile(
+    r"(?:hi|hello|hey|good\s+(?:morning|afternoon|evening))(?:\s+(?:there|smartroute))?[!. ]*",
+    re.IGNORECASE,
+)
+_THANKS_RE = re.compile(r"(?:thanks|thank you|thx)(?:\s+(?:so much|smartroute))?[!. ]*", re.IGNORECASE)
+_HELP_RE = re.compile(
+    r"(?:help|what can you do|how (?:do|does) (?:this|smartroute) work)[?.! ]*",
+    re.IGNORECASE,
+)
+_OFF_TOPIC_RE = re.compile(
+    r"(?:tell me a joke|write (?:me )?(?:a )?(?:poem|story)|who won (?:the )?(?:game|election)|translate .+)[?.! ]*",
+    re.IGNORECASE,
+)
 _SUPPORTED_BINOPS = {
     ast.Add: operator.add,
     ast.Sub: operator.sub,
@@ -152,6 +165,10 @@ def parse_intent(message: str) -> ParsedIntent:
         )
     if evaluate_simple_arithmetic(text) is not None:
         return ParsedIntent("simple_general", avoid_crowds)
+    if _GREETING_RE.fullmatch(text) or _THANKS_RE.fullmatch(text) or _HELP_RE.fullmatch(text):
+        return ParsedIntent("simple_general", avoid_crowds)
+    if _OFF_TOPIC_RE.fullmatch(text):
+        return ParsedIntent("unsupported", avoid_crowds)
     if _DISCOVERY_RE.search(text):
         return ParsedIntent("destination_discovery", avoid_crowds)
     if _NEW_TRIP_RE.search(text):
@@ -254,6 +271,21 @@ def is_new_trip_request(message: str) -> bool:
     if re.search(r"\b(?:retry|resume|again|that route|same trip)\b", text, re.IGNORECASE):
         return False
     return bool(_NEW_TRIP_RE.search(text))
+
+
+def deterministic_response(message: str) -> str | None:
+    """Handle only unambiguous non-transit turns without model or tools."""
+
+    text = " ".join(str(message or "").split()).strip()
+    if _GREETING_RE.fullmatch(text):
+        return "Hi — I can plan NYC subway and bus trips, check arrivals, and explain service changes."
+    if _THANKS_RE.fullmatch(text):
+        return "You’re welcome."
+    if _HELP_RE.fullmatch(text):
+        return "Tell me where you’re starting and going, or ask about a train or bus arrival."
+    if _OFF_TOPIC_RE.fullmatch(text):
+        return "SmartRoute is for NYC transit help. I can plan a subway or bus trip, compare routes, or check arrivals."
+    return evaluate_simple_arithmetic(text)
 
 
 def evaluate_simple_arithmetic(message: str) -> str | None:

@@ -1,7 +1,7 @@
 export type JsonBodyReadResult =
   | { ok: true; empty: false; value: unknown }
   | { ok: true; empty: true; value: undefined }
-  | { ok: false; empty: false; value: undefined };
+  | { ok: false; tooLarge: boolean; empty: false; value: undefined };
 
 export type BackendTextResult =
   | { ok: true; status: number; raw: string }
@@ -13,16 +13,53 @@ export function appendRequestSearch(path: string, request: Request): string {
 }
 
 /** Parse a request JSON body, distinguishing empty input from malformed JSON. */
-export async function readJsonBody(request: Request): Promise<JsonBodyReadResult> {
-  const raw = await request.text();
+export async function readJsonBody(request: Request, maxBytes = 32 * 1024): Promise<JsonBodyReadResult> {
+  const declaredLength = request.headers.get("content-length");
+  if (declaredLength && /^\d+$/.test(declaredLength) && Number(declaredLength) > maxBytes) {
+    return { ok: false, tooLarge: true, empty: false, value: undefined };
+  }
+  const reader = request.body?.getReader();
+  if (!reader) return { ok: true, empty: true, value: undefined };
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        return { ok: false, tooLarge: true, empty: false, value: undefined };
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  let raw: string;
+  try {
+    raw = new TextDecoder("utf-8", { fatal: true }).decode(concatBytes(chunks, total));
+  } catch {
+    return { ok: false, tooLarge: false, empty: false, value: undefined };
+  }
   if (!raw.trim()) {
     return { ok: true, empty: true, value: undefined };
   }
   try {
     return { ok: true, empty: false, value: JSON.parse(raw) };
   } catch {
-    return { ok: false, empty: false, value: undefined };
+    return { ok: false, tooLarge: false, empty: false, value: undefined };
   }
+}
+
+function concatBytes(chunks: Uint8Array[], length: number): Uint8Array {
+  const merged = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return merged;
 }
 
 export async function fetchBackendText(

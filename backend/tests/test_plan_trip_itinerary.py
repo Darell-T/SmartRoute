@@ -63,7 +63,7 @@ def _google_response(*legs: dict) -> dict:
 
 class PlanTripItineraryTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        env_patch = patch.dict("os.environ", {"JARVIS_MOCK_ADVISOR": "1"})
+        env_patch = patch.dict("os.environ", {"SMARTROUTE_ENV": "test", "JARVIS_MOCK_ADVISOR": "1"})
         env_patch.start()
         self.addCleanup(env_patch.stop)
 
@@ -340,6 +340,61 @@ class PlanTripItineraryTests(unittest.IsolatedAsyncioTestCase):
             event.summary["eta_minutes"],
             round(itinerary["total_duration_seconds"] / 60),
         )
+
+    async def test_invalid_waypoints_fail_before_location_or_route_providers(self):
+        for waypoints in (["A", "B", "C", "D"], ["x" * 161]):
+            with self.subTest(waypoints=waypoints):
+                self._get_route.reset_mock()
+                result = await plan_trip.execute(
+                    {"origin": "user", "destination": "Costco", "waypoints": waypoints},
+                    self._ctx(),
+                )
+                self.assertFalse(result.ok)
+                self._get_route.assert_not_awaited()
+
+    async def test_waypoint_boundaries_reject_every_invalid_shape_before_providers(self):
+        invalid_values = (
+            ["A", "B", "C", "D"],
+            ["x" * (plan_trip.MAX_WAYPOINT_CHARS + 1)],
+            ["A", 2],
+            ["A", "   "],
+        )
+        for waypoints in invalid_values:
+            with self.subTest(waypoints=waypoints), patch.object(
+                plan_trip.geo, "geocode_address_with_reason", return_value=((40.7, -73.9), None)
+            ) as geocode:
+                self._get_route.reset_mock()
+                result = await plan_trip.execute(
+                    {"origin": "user", "destination": "Costco", "waypoints": waypoints}, self._ctx()
+                )
+                self.assertFalse(result.ok)
+                geocode.assert_not_called()
+                self._get_route.assert_not_awaited()
+
+    async def test_waypoint_limits_accept_exact_bounds_and_bound_route_provider_legs(self):
+        self.assertEqual(plan_trip.MAX_WAYPOINTS, 3)
+        self.assertEqual(plan_trip.MAX_WAYPOINT_CHARS, 160)
+        self.assertEqual(
+            plan_trip._validated_waypoints(["A", "B"]),
+            (["A", "B"], None),
+        )
+        self.assertEqual(
+            plan_trip._validated_waypoints(["A", "B", "C"]),
+            (["A", "B", "C"], None),
+        )
+        self._get_route.reset_mock()
+        result = await plan_trip.execute(
+            {
+                "origin": "user",
+                "destination": "Costco",
+                "waypoints": ["A" * 160, "B", "C"],
+            },
+            self._ctx(),
+        )
+        self.assertTrue(result.ok)
+        # Three distinct ordered waypoints produce their three legs plus the
+        # final destination leg; the provider work is exactly bounded.
+        self.assertEqual(self._get_route.await_count, plan_trip.MAX_WAYPOINTS + 1)
 
     async def test_recommended_card_carries_deterministic_reason_facts(self):
         result = await plan_trip.execute(

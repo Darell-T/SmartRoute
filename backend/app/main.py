@@ -15,6 +15,7 @@ load_dotenv(_repo_root / ".env", override=True)
 load_dotenv(_backend_dir / ".env", override=True)
 
 from app.services.agent import policy as agent_policy
+from app import runtime
 
 agent_policy.validate_agent_configuration()
 
@@ -23,7 +24,7 @@ agent_policy.validate_agent_configuration()
 if not os.getenv("APP_KEY"):
     raise RuntimeError("APP_KEY is not set; refusing to start.")
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Security
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security.api_key import APIKeyHeader
@@ -154,6 +155,32 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+MAX_PUBLIC_BODY_BYTES = 32 * 1024
+
+
+@app.middleware("http")
+async def reject_oversize_public_json(request: Request, call_next):
+    """Bound raw request bytes before FastAPI/Pydantic parses public JSON."""
+    if request.method in {"POST", "PUT", "PATCH"} and request.url.path.startswith("/api/"):
+        raw_length = request.headers.get("content-length")
+        if raw_length and raw_length.isdigit() and int(raw_length) > MAX_PUBLIC_BODY_BYTES:
+            return JSONResponse({"detail": "Request body is too large."}, status_code=413)
+        chunks: list[bytes] = []
+        size = 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > MAX_PUBLIC_BODY_BYTES:
+                # Do not create an unbounded request-body cache. Draining is
+                # unnecessary after a terminal 413 response on this request.
+                return JSONResponse({"detail": "Request body is too large."}, status_code=413)
+            chunks.append(chunk)
+        # Starlette caches ``_body`` for downstream JSON/Pydantic consumers;
+        # it is assigned only after the streaming cap has been satisfied.
+        request._body = b"".join(chunks)
+        if size > MAX_PUBLIC_BODY_BYTES:
+            return JSONResponse({"detail": "Request body is too large."}, status_code=413)
+    return await call_next(request)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins(),
@@ -195,14 +222,14 @@ async def _session_store_ready() -> bool:
 async def readiness():
     """Readiness for chat sessions; optional providers are not startup gates."""
     if not getattr(app.state, "startup_complete", False):
-        return JSONResponse({"status": "not_ready", "reason": "startup"}, status_code=503)
+        return JSONResponse({"status": "not_ready", "reason": "startup", "runtime_mode": runtime.runtime_mode_label()}, status_code=503)
     if not os.getenv("REDIS_URL") and not agent_chat.AGENT_ALLOW_MEMORY_SESSIONS:
         return JSONResponse(
-            {"status": "not_ready", "reason": "redis_session_store"}, status_code=503
+            {"status": "not_ready", "reason": "redis_session_store", "runtime_mode": runtime.runtime_mode_label()}, status_code=503
         )
     if os.getenv("REDIS_URL") and not await _session_store_ready():
         return JSONResponse(
-            {"status": "not_ready", "reason": "redis_session_store_unreachable"},
+            {"status": "not_ready", "reason": "redis_session_store_unreachable", "runtime_mode": runtime.runtime_mode_label()},
             status_code=503,
         )
-    return {"status": "ready", "chat_sessions": "durable" if os.getenv("REDIS_URL") else "local"}
+    return {"status": "ready", "chat_sessions": "durable" if os.getenv("REDIS_URL") else "local", "runtime_mode": runtime.runtime_mode_label()}

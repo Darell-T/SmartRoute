@@ -58,6 +58,7 @@ class ReadinessTests(unittest.IsolatedAsyncioTestCase):
             response = await main.readiness()
         self.assertEqual(response["status"], "ready")
         self.assertEqual(response["chat_sessions"], "durable")
+        self.assertEqual(response["runtime_mode"], "unknown")
 
     async def test_readiness_rejects_unreachable_configured_redis(self):
         with patch.object(main.app, "state", SimpleNamespace(startup_complete=True)), patch.dict(
@@ -65,7 +66,10 @@ class ReadinessTests(unittest.IsolatedAsyncioTestCase):
         ), patch.object(main, "_session_store_ready", AsyncMock(return_value=False)):
             response = await main.readiness()
         self.assertEqual(response.status_code, 503)
-        self.assertEqual(response.body, b'{"status":"not_ready","reason":"redis_session_store_unreachable"}')
+        self.assertEqual(
+            response.body,
+            b'{"status":"not_ready","reason":"redis_session_store_unreachable","runtime_mode":"unknown"}',
+        )
 
     async def test_local_memory_readiness_is_explicit_test_only_state(self):
         with patch.object(main.app, "state", SimpleNamespace(startup_complete=True)), patch.dict(

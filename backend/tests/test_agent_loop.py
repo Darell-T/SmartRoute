@@ -23,7 +23,7 @@ import unittest
 from unittest.mock import patch
 
 from app.services.agent import session as session_module
-from app.services.agent.tools import ToolResult, ToolSpec
+from app.services.agent.tools import ToolContext, ToolResult, ToolSpec
 from app.services.agent import events as agent_events
 from app.utils import cache
 from tests._fake_anthropic import reload_agent_loop_module
@@ -184,7 +184,7 @@ class _AgentLoopHelpers:
         self,
         rounds,
         *,
-        message="hi",
+        message="transit status",
         session=None,
         session_id=None,
         origin=None,
@@ -498,17 +498,7 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
                     "web_search",
                 },
             ),
-            (
-                "Hello",
-                {
-                    "transit_snapshot",
-                    "event_lookup",
-                    "lookup_arrivals",
-                    "accessibility_status",
-                    "lookup_facts",
-                    "web_search",
-                },
-            ),
+            ("Hello", set()),
         )
         for message, expected_tools in cases:
             with self.subTest(message=message):
@@ -906,31 +896,43 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
     async def test_destination_discovery_is_model_directed_and_grounded_in_both_modes(self):
         for mode, expected_limit in (("auto", 3), ("quick", 2)):
             with self.subTest(mode=mode):
+                # Other test classes reload the module with narrow deadline
+                # fixtures; use a fresh fake client for each presentation.
+                self.loop = _load_agent_loop()
                 trace = self.loop.TurnTrace()
-                await self._run(
-                    [
-                        {
-                            "tool_use": [
-                                {
-                                    "id": "poi-1",
-                                    "name": "poi_search",
-                                    "input": {
-                                        "query": "pizza Brooklyn",
-                                        "max_results": expected_limit,
-                                    },
-                                }
-                            ],
-                            "stop_reason": "tool_use",
-                        },
-                        {
-                            "text": ["One strong grounded option is Di Fara Pizza."],
-                            "stop_reason": "end_turn",
-                        },
-                    ],
-                    message="What is one of the best pizza places in Brooklyn?",
-                    response_presentation=mode,
-                    tool_registry=_test_registry(),
-                    trace=trace,
+                with patch.object(self.loop, "AGENT_TURN_DEADLINE_S", 60), patch.object(
+                    self.loop.budget, "AGENT_DAILY_SPEND_LIMIT_USD", 5
+                ):
+                    events_out, _session = await self._run(
+                        [
+                            {
+                                "tool_use": [
+                                    {
+                                        "id": "poi-1",
+                                        "name": "poi_search",
+                                        "input": {
+                                            "query": "pizza Brooklyn",
+                                            "max_results": expected_limit,
+                                        },
+                                    }
+                                ],
+                                "stop_reason": "tool_use",
+                            },
+                            {
+                                "text": ["One strong grounded option is Di Fara Pizza."],
+                                "stop_reason": "end_turn",
+                            },
+                        ],
+                        message="What is one of the best pizza places in Brooklyn?",
+                        response_presentation=mode,
+                        tool_registry=_test_registry(),
+                        trace=trace,
+                    )
+                self.assertTrue(
+                    trace.tool_calls,
+                    f"events={[event.type for event in events_out]} "
+                    f"errors={[getattr(event, 'code', '') for event in events_out if event.type == 'error']} "
+                    f"model_calls={len(self.loop.client.messages.calls)}",
                 )
                 self.assertEqual(trace.tool_calls[0][0], "poi_search")
                 self.assertEqual(
@@ -1108,7 +1110,7 @@ class AgentDisabledBudgetTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCa
 class MockAgentModeTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls):
-        cls.loop = _load_agent_loop({"AGENT_MOCK_MODE": "1"})
+        cls.loop = _load_agent_loop({"SMARTROUTE_ENV": "test", "AGENT_MOCK_MODE": "1"})
 
     def setUp(self):
         cache._mem.clear()
@@ -1193,6 +1195,117 @@ class ConcurrencyBudgetTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase
         error = next(e for e in events_out if e.type == "error")
         self.assertEqual(error.code, "rate_limited")
         self.assertEqual(len(self.loop.client.messages.calls), 0)
+
+
+class DeterministicAndDeduplicationTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.loop = _load_agent_loop()
+
+    def setUp(self):
+        cache._mem.clear()
+
+    async def test_clear_simple_and_off_topic_turns_use_no_model_or_tools(self):
+        cases = {
+            "hello": "Hi — I can plan NYC subway and bus trips, check arrivals, and explain service changes.",
+            "thanks": "You’re welcome.",
+            "help": "Tell me where you’re starting and going, or ask about a train or bus arrival.",
+            "2 + 2": "4.",
+            "tell me a joke": "SmartRoute is for NYC transit help. I can plan a subway or bus trip, compare routes, or check arrivals.",
+        }
+        for message, expected in cases.items():
+            with self.subTest(message=message):
+                trace = self.loop.TurnTrace()
+                events_out, _session = await self._run([], message=message, trace=trace)
+                self.assertEqual("".join(e.text for e in events_out if e.type == "token"), expected)
+                self.assertEqual(trace.model_call_count, 0)
+                self.assertEqual(trace.tool_call_count, 0)
+                self.assertEqual(len(self.loop.client.messages.calls), 0)
+
+    async def test_ambiguous_transit_question_remains_model_backed(self):
+        events_out, _session = await self._run(
+            [{"text": ["Which line are you asking about?"], "stop_reason": "end_turn"}],
+            message="Is the subway running?",
+        )
+        self.assertTrue(any(event.type == "token" for event in events_out))
+        self.assertEqual(len(self.loop.client.messages.calls), 1)
+
+    async def test_greeting_thanks_help_and_off_topic_paraphrases_stay_deterministic(self):
+        for message in ("good morning", "thank you so much", "what can you do", "write me a poem"):
+            with self.subTest(message=message):
+                trace = self.loop.TurnTrace()
+                events_out, _session = await self._run([], message=message, trace=trace)
+                self.assertTrue(any(event.type == "token" for event in events_out))
+                self.assertEqual(trace.model_call_count, 0)
+                self.assertEqual(trace.tool_call_count, 0)
+
+    async def test_turn_ledger_reuses_successes_and_retries_failures(self):
+        calls = {"success": 0, "failure": 0}
+
+        async def succeeds(tool_input, _ctx):
+            calls["success"] += 1
+            value = tool_input["value"]
+            return ToolResult(
+                ok=True,
+                data={"value": value},
+                summary=f"ok-{value}",
+                events=[agent_events.TokenEvent(text=f"effect-{value}")],
+                session_route_cards=[{"card_id": f"card-{value}", "role": "recommended"}],
+                timings={"render_ms": 5},
+            )
+
+        async def fails_then_succeeds(tool_input, _ctx):
+            calls["failure"] += 1
+            return ToolResult(ok=calls["failure"] == 2, data={"retry": True}, error="retry")
+
+        registry = {
+            "success": ToolSpec(schema={"name": "success"}, executor=succeeds, label_fn=lambda _i: "Working", timeout_s=5),
+            "failure": ToolSpec(schema={"name": "failure"}, executor=fails_then_succeeds, label_fn=lambda _i: "Working", timeout_s=5),
+        }
+        rounds = [
+            {"tool_use": [
+                {"id": "a", "name": "success", "input": {"value": 1, "other": 2}},
+                {"id": "b", "name": "success", "input": {"other": 2, "value": 1}},
+            ], "stop_reason": "tool_use"},
+            {"tool_use": [
+                {"id": "c", "name": "success", "input": {"value": 1, "other": 2}},
+                {"id": "d", "name": "success", "input": {"value": 2, "other": 2}},
+                {"id": "e", "name": "failure", "input": {"value": 1}},
+            ], "stop_reason": "tool_use"},
+            {"tool_use": [{"id": "f", "name": "failure", "input": {"value": 1}}], "stop_reason": "tool_use"},
+            {"text": ["done"], "stop_reason": "end_turn"},
+        ]
+        trace = self.loop.TurnTrace()
+        events_out, session = await self._run(rounds, tool_registry=registry, trace=trace)
+
+        self.assertEqual(calls, {"success": 2, "failure": 2})
+        self.assertEqual([event.text for event in events_out if event.type == "token"], ["effect-1", "effect-2", "done"])
+        self.assertEqual([entry["text"] for entry in session["history"] if entry["role"] == "tool"], ["ok-1", "ok-2"])
+        self.assertEqual([card["card_id"] for card in session["route_cards"]], ["card-1", "card-2"])
+        self.assertEqual(trace.stage_ms["render_ms"], 10)
+        self.assertEqual(len(trace.tool_calls), 6)
+        self.assertEqual(trace.model_tool_use_count, 6)
+        self.assertEqual(trace.provider_tool_execution_count, 4)
+        self.assertEqual(len([event for event in events_out if event.type == "tool_end"]), 6)
+
+    async def test_turn_ledger_caps_block_provider_work_at_the_boundaries(self):
+        calls = 0
+
+        async def fake_run(*_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            return ToolResult(ok=True, data={})
+
+        ledger = self.loop.TurnToolLedger()
+        with patch.object(self.loop, "MAX_TOOL_EXECUTIONS_PER_TURN", 2), patch.object(
+            self.loop, "MAX_TOOL_EXECUTIONS_PER_NAME", 1
+        ), patch.object(self.loop, "_run_one_tool", fake_run):
+            self.assertTrue((await ledger.execute("one", {"value": 1}, ToolContext(), deadline_monotonic=999999)).ok)
+            self.assertFalse((await ledger.execute("one", {"value": 2}, ToolContext(), deadline_monotonic=999999)).ok)
+            self.assertTrue((await ledger.execute("two", {"value": 1}, ToolContext(), deadline_monotonic=999999)).ok)
+            self.assertFalse((await ledger.execute("three", {"value": 1}, ToolContext(), deadline_monotonic=999999)).ok)
+
+        self.assertEqual(calls, 2)
 
 
 if __name__ == "__main__":

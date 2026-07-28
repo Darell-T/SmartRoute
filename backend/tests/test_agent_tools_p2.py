@@ -279,7 +279,8 @@ class TimingLogLineTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         line = lines[0]
         self.assertIn("sess=timing", line)
         self.assertIn("rounds=1", line)
-        self.assertIn("tools=0", line)
+        self.assertIn("model_tool_uses=0", line)
+        self.assertIn("provider_tool_executions=0", line)
         self.assertIn("model_ms=", line)
         self.assertIn("tools_ms=", line)
         self.assertIn("intent_ms=", line)
@@ -292,7 +293,8 @@ class TimingLogLineTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         self.assertIn("scoring_ms=", line)
         self.assertIn("stream_finalize_ms=", line)
         self.assertIn("model_calls=", line)
-        self.assertIn("tool_calls=", line)
+        self.assertIn("model_tool_uses=", line)
+        self.assertIn("provider_tool_executions=", line)
         self.assertIn("retry_count=", line)
         self.assertIn("total_ms=", line)
         self.assertIn("in_tok=", line)
@@ -310,7 +312,8 @@ class TimingLogLineTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
             await self._run(rounds, tool_registry=_test_registry(), session_id="timing-log-tools")
         line = next(line for line in buf.getvalue().splitlines() if line.startswith("[agent] turn="))
         self.assertIn("rounds=2", line)
-        self.assertIn("tools=1", line)
+        self.assertIn("model_tool_uses=1", line)
+        self.assertIn("provider_tool_executions=1", line)
 
 
 if __name__ == "__main__":

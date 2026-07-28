@@ -4,6 +4,8 @@ import json
 import os
 from pathlib import Path
 
+from app import runtime
+
 client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
 _DEFAULT_SYSTEM_PROMPT = """You are the SmartRoute routing engine for NYC transit.
@@ -135,13 +137,13 @@ def build_mock_recommendation(payload: dict) -> str:
 
     if faster_by is not None:
         why = f" It is about {faster_by} minutes faster than your next best option."
-        chosen_reason = f"About {faster_by} min faster than the next option, with no disruptions on its path."
+        chosen_reason = f"About {faster_by} min faster than the next option."
     elif chosen_transfers == 0:
         why = " It is a straight shot, no transfers."
-        chosen_reason = "Direct ride with no transfers and no disruptions on its path."
+        chosen_reason = "Direct ride with no transfers."
     else:
         why = " It has the cleanest connections of everything I weighed."
-        chosen_reason = "Cleanest connections of the alternatives, with no disruptions right now."
+        chosen_reason = "Cleanest connections of the alternatives."
 
     analysis = []
     for index, route in enumerate(routes):
@@ -203,7 +205,7 @@ async def stream_recommendation(payload: dict):
     Set JARVIS_MOCK_ADVISOR=1 to bypass Claude entirely (e.g. no API
     credits): routes/stops/alerts stay real, only this narration is
     generated locally."""
-    if os.getenv("JARVIS_MOCK_ADVISOR", "").strip() == "1":
+    if runtime.enabled("JARVIS_MOCK_ADVISOR"):
         yield build_mock_recommendation(payload)
         return
 

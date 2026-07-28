@@ -37,6 +37,7 @@ def _load_trips_module():
                 setattr(self, key, value)
 
     fake_pydantic.BaseModel = _FakeBaseModel
+    fake_pydantic.ConfigDict = dict
 
     fake_directions = types.ModuleType("app.services.directions")
 
@@ -116,7 +117,10 @@ def _load_trips_module():
             if key == "app.routers.trips" or key.startswith("app.services.trips")
         ]:
             sys.modules.pop(module_name, None)
-        return importlib.import_module("app.routers.trips")
+        module = importlib.import_module("app.routers.trips")
+        module.admission.acquire = AsyncMock(return_value=module.admission.AdmissionLease("v1.test-principal-opaque-123456", "trip", "test-lease"))
+        module.admission.release = AsyncMock()
+        return module
 
 
 class TripsIncidentPayloadTests(unittest.IsolatedAsyncioTestCase):
@@ -167,6 +171,7 @@ class TripsIncidentPayloadTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         request = SimpleNamespace(
+            headers={"X-SmartRoute-Principal": "v1.test-principal-opaque-123456"},
             app=SimpleNamespace(
                 state=SimpleNamespace(gtfs=SimpleNamespace(_pattern_index=pattern_index))
             )

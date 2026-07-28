@@ -73,6 +73,8 @@ EVENT_EVIDENCE_TTL_S = 300
 AGENT_GROK_BUDGET_S = float(os.getenv("AGENT_GROK_BUDGET_S", "6.0"))
 
 _ALL_MODES = ("SUBWAY", "BUS")
+MAX_WAYPOINTS = 3
+MAX_WAYPOINT_CHARS = 160
 
 PLAN_TRIP_SCHEMA = {
     "name": "plan_trip",
@@ -125,7 +127,8 @@ PLAN_TRIP_SCHEMA = {
             },
             "waypoints": {
                 "type": "array",
-                "items": {"type": "string"},
+                "maxItems": MAX_WAYPOINTS,
+                "items": {"type": "string", "maxLength": MAX_WAYPOINT_CHARS},
                 "description": (
                     "Optional ordered intermediate stops. Use one plan_trip call "
                     "for a multi-stop trip; SmartRoute owns dwell timing and "
@@ -276,17 +279,23 @@ async def _derive_arrive_by_departure(
     return (target - timedelta(seconds=min(durations))).isoformat()
 
 
-def _normalized_waypoints(value: object) -> list[str]:
+def _validated_waypoints(value: object) -> tuple[list[str], str | None]:
     if not isinstance(value, list):
-        return []
+        return [], None
+    if len(value) > MAX_WAYPOINTS:
+        return [], f"a trip can include at most {MAX_WAYPOINTS} waypoints"
     seen: list[str] = []
     for raw in value:
         if not isinstance(raw, str):
-            continue
+            return [], "each waypoint must be a location name"
+        if len(raw) > MAX_WAYPOINT_CHARS:
+            return [], f"each waypoint must be at most {MAX_WAYPOINT_CHARS} characters"
         place = raw.strip()
-        if place and place not in seen:
+        if not place:
+            return [], "each waypoint must be a location name"
+        if place not in seen:
             seen.append(place)
-    return seen
+    return seen, None
 
 
 def _first_boarding_context(gtfs, step: dict, walking_minutes: int) -> dict:
@@ -537,7 +546,9 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
         "ticketmaster_ms": 0.0,
         "scoring_ms": 0.0,
     }
-    waypoints = _normalized_waypoints(tool_input.get("waypoints"))
+    waypoints, waypoint_error = _validated_waypoints(tool_input.get("waypoints"))
+    if waypoint_error:
+        return ToolResult(ok=False, error=waypoint_error)
     if waypoints:
         return await _execute_chained_trip(tool_input, ctx, waypoints)
 

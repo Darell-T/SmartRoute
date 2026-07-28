@@ -30,6 +30,7 @@ from app.services.agent import prompt as agent_prompt
 from app.services.agent import quick_escalation
 from app.services.agent import session as session_module
 from app.services.agent.tools import TOOL_REGISTRY, TOOLS, ToolContext, ToolResult
+from app import runtime
 
 # Application retries are classified below. Disable the SDK's own retries so
 # one configured retry never expands into several hidden provider attempts.
@@ -39,7 +40,9 @@ AGENT_TURN_DEADLINE_S = float(os.getenv("AGENT_TURN_DEADLINE_S", "50"))
 # Local UI work should be repeatable and must not spend model credits. This
 # flag swaps the entire turn (including tool work) for a deterministic SSE
 # fixture; production remains live unless explicitly configured otherwise.
-AGENT_MOCK_MODE = os.getenv("AGENT_MOCK_MODE", "0").strip() == "1"
+AGENT_MOCK_MODE = runtime.enabled("AGENT_MOCK_MODE")
+MAX_TOOL_EXECUTIONS_PER_TURN = 12
+MAX_TOOL_EXECUTIONS_PER_NAME = 4
 
 
 def _mock_step_delay_s() -> float:
@@ -58,8 +61,9 @@ WRAP_UP_INSTRUCTION = (
 @dataclasses.dataclass
 class TurnTrace:
     """Optional eval hook: pass an instance in via `trace=` and it is
-    populated in place as the turn runs -- every (tool_name, input) call and
-    the final assistant text."""
+    populated in place as the turn runs. ``tool_calls`` records model
+    tool-use requests; provider execution counts are separate because a
+    successful request may be replayed from the per-turn ledger."""
 
     tool_calls: list[tuple[str, dict]] = dataclasses.field(default_factory=list)
     final_text: str = ""
@@ -69,7 +73,41 @@ class TurnTrace:
     stage_ms: dict[str, float] = dataclasses.field(default_factory=dict)
     model_call_count: int = 0
     tool_call_count: int = 0
+    model_tool_use_count: int = 0
+    provider_tool_execution_count: int = 0
     retry_count: int = 0
+
+
+@dataclasses.dataclass
+class TurnToolLedger:
+    """Provider-work ledger scoped to one rider turn only."""
+
+    successful: dict[str, ToolResult] = dataclasses.field(default_factory=dict)
+    total_executions: int = 0
+    executions_by_name: dict[str, int] = dataclasses.field(default_factory=dict)
+
+    @staticmethod
+    def key(name: str, tool_input: dict) -> str:
+        canonical = json.dumps(tool_input, sort_keys=True, separators=(",", ":"), default=str)
+        return f"{name}:{canonical}"
+
+    async def execute(
+        self, name: str, tool_input: dict, ctx: ToolContext, *, deadline_monotonic: float
+    ) -> ToolResult:
+        key = self.key(name, tool_input)
+        cached = self.successful.get(key)
+        if cached is not None:
+            return cached
+        if self.total_executions >= MAX_TOOL_EXECUTIONS_PER_TURN:
+            return ToolResult(ok=False, error="tool execution limit reached for this turn")
+        if self.executions_by_name.get(name, 0) >= MAX_TOOL_EXECUTIONS_PER_NAME:
+            return ToolResult(ok=False, error=f"{name} execution limit reached for this turn")
+        self.total_executions += 1
+        self.executions_by_name[name] = self.executions_by_name.get(name, 0) + 1
+        result = await _run_one_tool(name, tool_input, ctx, deadline_monotonic=deadline_monotonic)
+        if result.ok:
+            self.successful[key] = result
+        return result
 
 
 def _mock_trip_copy(
@@ -570,6 +608,7 @@ async def _execute_tool_round(
     parsed_intent: intelligence.ParsedIntent,
     stage_ms: dict[str, float],
     deadline_monotonic: float,
+    tool_ledger: TurnToolLedger,
 ) -> AsyncIterator:
     """Emits tool_start/tool_end/route_card events for one round of (possibly
     parallel) tool calls, and yields the assembled tool_result message last
@@ -593,17 +632,33 @@ async def _execute_tool_round(
         yield agent_events.ToolStartEvent(tool_call_id=block.id, tool=name, label=label)
 
     start_times = {block.id: time.monotonic() for block in tool_use_blocks}
-    outcomes = await asyncio.gather(
-        *(
-            _run_one_tool(
-                getattr(block, "name", ""),
-                tool_inputs[block.id],
-                ctx,
-                deadline_monotonic=deadline_monotonic,
+    round_tasks: dict[str, asyncio.Task[ToolResult]] = {}
+    outcomes_by_key: dict[str, ToolResult] = {}
+    first_block_id_by_key: dict[str, str] = {}
+    for block in tool_use_blocks:
+        name = getattr(block, "name", "")
+        tool_input = tool_inputs[block.id]
+        key = tool_ledger.key(name, tool_input)
+        first_block_id_by_key.setdefault(key, block.id)
+        cached = tool_ledger.successful.get(key)
+        if cached is not None:
+            outcomes_by_key[key] = cached
+        elif key not in round_tasks:
+            round_tasks[key] = asyncio.create_task(
+                tool_ledger.execute(
+                    name,
+                    tool_input,
+                    ctx,
+                    deadline_monotonic=deadline_monotonic,
+                )
             )
-            for block in tool_use_blocks
-        )
-    )
+    if round_tasks:
+        completed = await asyncio.gather(*round_tasks.values())
+        outcomes_by_key.update(zip(round_tasks, completed))
+    outcomes = [
+        outcomes_by_key[tool_ledger.key(getattr(block, "name", ""), tool_inputs[block.id])]
+        for block in tool_use_blocks
+    ]
 
     tool_result_content = []
     escalation_reason = None
@@ -611,11 +666,16 @@ async def _execute_tool_round(
     for block, result in zip(tool_use_blocks, outcomes):
         name = getattr(block, "name", "")
         tool_input = tool_inputs[block.id]
+        key = tool_ledger.key(name, tool_input)
+        surface_side_effects = (
+            key in round_tasks and first_block_id_by_key[key] == block.id
+        )
         duration_ms = round((time.monotonic() - start_times[block.id]) * 1000)
         tool_calls_this_turn.append((name, tool_input))
-        for stage, duration in result.timings.items():
-            if stage in stage_ms:
-                stage_ms[stage] += max(0.0, float(duration))
+        if surface_side_effects:
+            for stage, duration in result.timings.items():
+                if stage in stage_ms:
+                    stage_ms[stage] += max(0.0, float(duration))
         escalation_reason = escalation_reason or quick_escalation.reason_for_tool_result(
             name,
             result,
@@ -630,14 +690,15 @@ async def _execute_tool_round(
             yield agent_events.ToolEndEvent(
                 tool_call_id=block.id, tool=name, ok=True, duration_ms=duration_ms, summary=result.summary or None
             )
-            if result.summary:
-                session_module.append_tool_summary(session, name, result.summary)
-            if result.session_route_cards:
-                session_module.add_route_cards(session, result.session_route_cards)
-            if name == "plan_trip":
-                session_module.clear_pending_trip(session)
-            for ev in result.events:
-                yield ev
+            if surface_side_effects:
+                if result.summary:
+                    session_module.append_tool_summary(session, name, result.summary)
+                if result.session_route_cards:
+                    session_module.add_route_cards(session, result.session_route_cards)
+                if name == "plan_trip":
+                    session_module.clear_pending_trip(session)
+                for ev in result.events:
+                    yield ev
         else:
             reason = result.error or "tool failed"
             wrapped = {"source": name, "data": {"error": reason}, "untrusted": True}
@@ -652,7 +713,7 @@ async def _execute_tool_round(
             yield agent_events.ToolEndEvent(
                 tool_call_id=block.id, tool=name, ok=False, duration_ms=duration_ms, summary=reason
             )
-            if name == "plan_trip":
+            if surface_side_effects and name == "plan_trip":
                 session_module.mark_pending_trip_failed(session, tool_input, reason)
 
     yield {
@@ -740,6 +801,7 @@ async def _stream_turn(
     model_call_count = 0
     server_tool_call_count = 0
     retry_count_total = 0
+    tool_ledger = TurnToolLedger()
 
     try:
         if parsed_intent.intent == "arrival_lookup":
@@ -764,7 +826,7 @@ async def _stream_turn(
                     label=label,
                 )
                 tool_started = time.monotonic()
-                result = await _run_one_tool(
+                result = await tool_ledger.execute(
                     "lookup_arrivals",
                     required_input,
                     ctx,
@@ -900,6 +962,7 @@ async def _stream_turn(
                 parsed_intent,
                 stage_ms,
                 deadline_monotonic,
+                tool_ledger,
             ):
                 if isinstance(item, dict) and "__tool_result_message__" in item:
                     tool_result_message = item["__tool_result_message__"]
@@ -1014,6 +1077,8 @@ async def _stream_turn(
             trace.tool_call_count = (
                 len(tool_calls_this_turn) + server_tool_call_count
             )
+            trace.model_tool_use_count = len(tool_calls_this_turn) + server_tool_call_count
+            trace.provider_tool_execution_count = tool_ledger.total_executions + server_tool_call_count
             trace.retry_count = retry_count_total
         budget.record_usage_cost(input_tokens, output_tokens)
         stage_ms["stream_finalize_ms"] = (
@@ -1041,7 +1106,8 @@ async def _stream_turn(
         f"candidate_budget={mode_policy.max_route_candidates} retries={mode_policy.retry_count} "
         f"required_tools={required_tools} optional_enrichment="
         f"{int(mode_policy.optional_enrichment)} "
-        f"tools={len(tool_calls_this_turn) + server_tool_call_count} "
+        f"model_tool_uses={len(tool_calls_this_turn) + server_tool_call_count} "
+        f"provider_tool_executions={tool_ledger.total_executions + server_tool_call_count} "
         f"tool_failures={tool_failures} intent_ms={stage_ms['intent_ms']:.0f} "
         f"session_load_ms={stage_ms['session_load_ms']:.0f} "
         f"place_resolution_ms={stage_ms['place_resolution_ms']:.0f} "
@@ -1061,8 +1127,8 @@ async def _stream_turn(
         f"{stage_ms['stream_finalize_ms']:.0f} tools_ms={tools_ms_total:.0f} "
         f"total_ms={total_ms:.0f} model_calls={model_call_count} "
         f"model_call_count={model_call_count} "
-        f"tool_calls={len(tool_calls_this_turn) + server_tool_call_count} "
-        f"tool_call_count={len(tool_calls_this_turn) + server_tool_call_count} "
+        f"model_tool_uses={len(tool_calls_this_turn) + server_tool_call_count} "
+        f"provider_tool_executions={tool_ledger.total_executions + server_tool_call_count} "
         f"retry_count={retry_count_total} "
         f"in_tok={input_tokens} out_tok={output_tokens} stop={stop_reason_out}"
     )
@@ -1133,11 +1199,11 @@ async def run_agent_turn(
             yield event
         return
 
-    arithmetic_answer = intelligence.evaluate_simple_arithmetic(message)
-    if arithmetic_answer is not None:
+    deterministic_answer = intelligence.deterministic_response(message)
+    if deterministic_answer is not None:
         session_module.append_history(session, "user", message)
         resume_offer = session_module.consume_resume_offer(session)
-        final_text = arithmetic_answer + (f"\n\n{resume_offer}" if resume_offer else "")
+        final_text = deterministic_answer + (f"\n\n{resume_offer}" if resume_offer else "")
         session_module.append_history(session, "assistant", final_text)
         if trace is not None:
             trace.final_text = final_text

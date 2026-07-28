@@ -61,7 +61,7 @@ NYC_COORDS = (40.7128, -74.0060)
 
 class PlanTripToolTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        env_patch = patch.dict("os.environ", {"JARVIS_MOCK_ADVISOR": "1"})
+        env_patch = patch.dict("os.environ", {"SMARTROUTE_ENV": "test", "JARVIS_MOCK_ADVISOR": "1"})
         env_patch.start()
         self.addCleanup(env_patch.stop)
 

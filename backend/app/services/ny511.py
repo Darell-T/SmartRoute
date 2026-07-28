@@ -21,6 +21,8 @@ from urllib.parse import urlsplit
 import httpx
 from pydantic import BaseModel, Field
 
+from app import runtime
+
 
 DEFAULT_API_URL = "https://511ny.org/api/v2/get/event"
 DEFAULT_POLL_INTERVAL_SECONDS = 300.0
@@ -122,12 +124,7 @@ class NY511Settings:
         # loading therefore requires an explicit non-production declaration;
         # an unset environment is not enough to accidentally replace live
         # provider data in a deployment.
-        runtime_environment = (
-            os.getenv("SMARTROUTE_ENV")
-            or os.getenv("APP_ENV")
-            or os.getenv("ENVIRONMENT")
-            or ""
-        ).strip().casefold()
+        runtime_environment = runtime.runtime_profile()
         api_url = (os.getenv("NY511_API_BASE_URL") or DEFAULT_API_URL).strip()
         parsed_url = urlsplit(api_url)
         if (
