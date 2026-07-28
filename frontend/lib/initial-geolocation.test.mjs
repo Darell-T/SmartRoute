@@ -25,3 +25,44 @@ test("initial geolocation applies success and error fallback", () => {
   failure();
   assert.deepEqual(values.at(-1), { lat: 1, lng: 2 });
 });
+
+test("initial geolocation cleanup cancels its timeout before a Strict Mode-style remount", () => {
+  const values = [];
+  const timers = [];
+  const setTimer = (callback) => {
+    const timer = { callback, cleared: false };
+    timers.push(timer);
+    return timer;
+  };
+  const clearTimer = (timer) => {
+    timer.cleared = true;
+  };
+  let firstSuccess;
+  const firstCleanup = requestInitialLocation(
+    { getCurrentPosition(success) { firstSuccess = success; } },
+    { lat: 1, lng: 2 },
+    (value) => values.push(value),
+    setTimer,
+    clearTimer,
+  );
+
+  firstCleanup();
+  timers[0].callback();
+  firstSuccess({ coords: { latitude: 10, longitude: 20 } });
+  assert.equal(timers[0].cleared, true);
+  assert.deepEqual(values, []);
+
+  let secondSuccess;
+  const secondCleanup = requestInitialLocation(
+    { getCurrentPosition(success) { secondSuccess = success; } },
+    { lat: 3, lng: 4 },
+    (value) => values.push(value),
+    setTimer,
+    clearTimer,
+  );
+  secondSuccess({ coords: { latitude: 30, longitude: 40 } });
+  secondCleanup();
+
+  assert.deepEqual(values, [{ lat: 30, lng: 40 }]);
+  assert.equal(timers[1].cleared, true);
+});

@@ -31,6 +31,23 @@ const eslintConfig = [
       "no-console": "warn",
     },
   },
+  {
+    // SR-REVIEW-013: these lifecycle owners are verified independently and
+    // must not regress to hook/ref/dependency warnings while unrelated legacy
+    // warnings remain visible but non-blocking.
+    files: [
+      "app/page.tsx",
+      "lib/use-live-feed.ts",
+      "lib/use-destination-search.ts",
+      "lib/initial-geolocation.ts",
+      "components/smart-route/chat/use-progressive-text.ts",
+    ],
+    rules: {
+      "react-hooks/set-state-in-effect": "error",
+      "react-hooks/refs": "error",
+      "react-hooks/exhaustive-deps": "error",
+    },
+  },
 ];
 
 export default eslintConfig;
