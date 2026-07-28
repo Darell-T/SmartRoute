@@ -1,49 +1,55 @@
 import type { Metadata, Viewport } from "next";
-import {
-  Archivo,
-  Geist,
-  Instrument_Serif,
-  JetBrains_Mono,
-  Space_Grotesk,
-} from "next/font/google";
+import localFont from "next/font/local";
 import { Analytics } from "@vercel/analytics/next";
 import "./globals.css";
 
-const geist = Geist({
-  subsets: ["latin"],
-  weight: ["300", "400", "500", "600", "700"],
+const geist = localFont({
+  src: "./fonts/Geist[wght].ttf",
+  weight: "100 900",
   variable: "--font-geist",
+  display: "swap",
+  adjustFontFallback: "Arial",
 });
 
-const instrumentSerif = Instrument_Serif({
-  subsets: ["latin"],
-  weight: ["400"],
-  style: ["normal", "italic"],
+const instrumentSerif = localFont({
+  src: "./fonts/InstrumentSerif-Regular.ttf",
+  weight: "400",
+  style: "normal",
   variable: "--font-instrument-serif",
+  display: "swap",
+  adjustFontFallback: "Times New Roman",
 });
 
-const jetbrainsMono = JetBrains_Mono({
-  subsets: ["latin"],
-  weight: ["300", "400", "500", "600"],
+const jetbrainsMono = localFont({
+  src: "./fonts/JetBrainsMono[wght].ttf",
+  weight: "100 800",
   variable: "--font-jetbrains-mono",
+  display: "swap",
+  fallback: ["ui-monospace", "SFMono-Regular", "Menlo", "Consolas", "monospace"],
+  adjustFontFallback: false,
 });
 
 // Display face for the SmartRoute Left Rail — paired with JetBrains Mono for
 // meta caps. Loaded weights match the left-rail prototype (300–700 used across
 // headlines, line names, station names, and numeric counts).
-const spaceGrotesk = Space_Grotesk({
-  subsets: ["latin"],
-  weight: ["300", "400", "500", "600", "700"],
+const spaceGrotesk = localFont({
+  src: "./fonts/SpaceGrotesk[wght].ttf",
+  weight: "300 700",
   variable: "--font-space-grotesk",
+  display: "swap",
+  adjustFontFallback: "Arial",
 });
 
 // The left rail's single grotesk family. Variable font so the rail's
 // fractional weights (560/620/650) interpolate instead of snapping to Arial.
 // Stands in for Helvetica, the mandated NYCTA signage face — swap a licensed
 // Helvetica Now in front of it in --sr-display without touching components.
-const archivo = Archivo({
-  subsets: ["latin"],
+const archivo = localFont({
+  src: "./fonts/Archivo[wdth,wght].ttf",
+  weight: "100 900",
   variable: "--font-archivo",
+  display: "swap",
+  adjustFontFallback: "Arial",
 });
 
 export const viewport: Viewport = {
