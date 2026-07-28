@@ -13,6 +13,7 @@
     "test:unit": "tsx --test app/api/trip/enrich-route/route.test.mjs lib/backend-proxy.test.mjs lib/backend-stream-proxy.test.mjs lib/live-feed-connection.test.mjs lib/use-destination-search.test.mjs lib/initial-geolocation.test.mjs lib/use-live-feed.test.mjs lib/ws-ticket.test.mjs lib/request-principal.test.mjs lib/use-service-alerts.test.mjs lib/agent-chat-stream.test.mjs lib/use-agent-chat.test.mjs lib/response-presentation.test.mjs lib/agent-route-selection.test.mjs lib/smart-route.test.mjs components/smart-route/chat/use-progressive-text.test.mjs components/smart-route/chat/near-you.test.ts components/smart-route/chat/itinerary-view-model.test.mjs components/smart-route/chat/chat-route-card.test.mjs components/smart-route/chat/chat-sidebar.test.mjs components/smart-route/chat/chat-composer.test.mjs components/smart-route/left-rail/alert-feed.test.mjs components/smart-route/left-rail/live-data.test.mjs components/smart-route/left-rail/hydration.test.mjs scripts/build/tests/station-anchors.test.ts",
     "test:release": "playwright test --config=playwright.config.ts",
     "test:release:ci": "playwright test --config=playwright.config.ts --grep-invert @visual",
+    "test:release:evidence": "tsx --test scripts/release/build-browser-evidence.test.ts",
     "test:release:visual": "playwright test --config=playwright.config.ts --grep @visual",
     "check:station-overlay": "node components/map/subway-station-overlay.check.mjs",
     "check:subway-palette": "node components/map/subway-palette.check.mjs",

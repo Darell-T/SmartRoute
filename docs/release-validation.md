@@ -17,9 +17,41 @@ All reports use `PASSED`, `FAILED`, `BLOCKED`, or `NOT_APPLICABLE`. Invalid
 mode, SHA, request, time, concurrency, byte, soak-duration, or declared-cost
 budgets fail before any scanner or network work. The report never includes
 supplied URLs, header values, query secrets, tokens, SSE body content, or
-scanner output. `provider_fault_jitter` remains `BLOCKED`: this repository has
-no external provider-fault/jitter harness. That is an intentional release gap,
-not a claim of coverage.
+scanner output. `provider_fault_jitter` is a fixed-seed, offline replay and
+fake-provider gate; it fails closed if the covered provider classifications,
+deadline, cancellation, or jitter contracts regress.
+
+## Browser and accessibility evidence
+
+The committed Linux browser job runs the deterministic non-visual Playwright
+suite and then emits `frontend/test-results/release/browser-evidence.json`.
+It is bound to GitHub's exact candidate SHA and is retained with the raw JSON
+report and failure traces. The evidence contains only required coverage IDs,
+desktop/mobile project counts, candidate SHA, and visual-certification status.
+
+To reproduce the CI evidence locally:
+
+```powershell
+cd frontend
+npm run test:release:ci
+npx tsx scripts/release/build-browser-evidence.ts `
+  test-results/release/results.json `
+  test-results/release/browser-evidence.json `
+  <immutable-git-sha>
+
+cd ..\backend
+python -m scripts.release_validation `
+  --commit-sha <immutable-git-sha> `
+  --self-test `
+  --browser-evidence ..\frontend\test-results\release\browser-evidence.json
+```
+
+The parser fails closed on malformed reports, retries/flakes, failures, missing
+desktop/mobile coverage, missing chat/Quick/map/accessibility/shell/zoom cases,
+or a mismatched SHA. A status-only JSON cannot satisfy the gate. Linux CI
+deliberately excludes `@visual` snapshots: visual comparison remains
+platform-local (Windows baseline) and is explicitly **not certified** by this
+browser evidence.
 
 ## Opt-in staging validation
 
@@ -67,8 +99,8 @@ they do not prove provider jitter/fault behavior, global multi-instance limits,
 or production capacity. `migration_restore` is `NOT_APPLICABLE` until platform
 automation exists and is exercised externally.
 
-Browser and accessibility certification is a separate gate. Wave 5C1 remains
-blocked because the approval system rejected pinned Playwright and axe
-installation until August 4. This command does not substitute HTTP/source
-checks for that browser evidence. Transit-line certification remains outside
-this release-validation scope.
+Browser and accessibility certification is a separate evidence gate. Supply
+the CI artifact with `--browser-evidence`; without it the gate remains
+`BLOCKED`. This command does not substitute HTTP/source checks for browser
+evidence. Transit-line certification remains outside this release-validation
+scope.

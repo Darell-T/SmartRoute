@@ -27,6 +27,7 @@ from scripts.release_validation_transport import (
     validate_staging_url,
 )
 from scripts.provider_fault_jitter_validation import run_provider_fault_jitter_validation
+from scripts.release_validation_browser import browser_evidence
 
 
 STATUS_PASSED = "PASSED"
@@ -113,8 +114,13 @@ def result_check(name: str, result: ExternalCheckResult) -> dict[str, object]:
     return check(name, result.status, result.reason, **result.evidence)
 
 
-def offline_checks() -> list[dict[str, object]]:
+def browser_accessibility_check(commit_sha: str, evidence_path: str | None) -> dict[str, object]:
+    return result_check("browser_accessibility", browser_evidence(evidence_path, commit_sha))
+
+
+def offline_checks(commit_sha: str, evidence_path: str | None) -> list[dict[str, object]]:
     checks = [check(name, status, reason) for name, status, reason in offline_check_specs()]
+    checks.append(browser_accessibility_check(commit_sha, evidence_path))
     checks.append(provider_fault_jitter_check())
     return checks
 
@@ -219,7 +225,13 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             args.model_chat_smoke,
         )
     if args.self_test:
-        return report(commit_sha, offline_checks(), requests, budget, False)
+        return report(
+            commit_sha,
+            offline_checks(commit_sha, args.browser_evidence),
+            requests,
+            budget,
+            False,
+        )
 
     deployment = deployment_evidence(commit_sha, args.deployment_evidence)
     rollback = rollback_evidence(commit_sha, args.rollback_evidence)
@@ -253,13 +265,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             "repository has no platform deployment, migration, or restore automation",
         )
     )
-    checks.append(
-        check(
-            "browser_accessibility",
-            STATUS_BLOCKED,
-            "pinned browser and accessibility dependencies are not approved",
-        )
-    )
+    checks.append(browser_accessibility_check(commit_sha, args.browser_evidence))
     checks.append(provider_fault_jitter_check())
 
     if deployment_check["status"] != STATUS_PASSED or rollback_check["status"] != STATUS_PASSED:
@@ -415,6 +421,7 @@ def arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--advisory-command", action="append", default=[], help="Opt-in advisory scanner command.")
     parser.add_argument("--deployment-evidence", help="External JSON with commit_sha and instance_ids.")
     parser.add_argument("--rollback-evidence", help="External JSON proving prior SHA restoration.")
+    parser.add_argument("--browser-evidence", help="Sanitized Playwright browser evidence bound to the candidate SHA.")
     parser.add_argument("--max-requests", type=int, default=16)
     parser.add_argument("--load-requests", type=int, default=1)
     parser.add_argument("--spike-requests", type=int, default=1)

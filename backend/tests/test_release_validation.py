@@ -20,6 +20,25 @@ def checks_by_name(report: dict[str, object]) -> dict[str, dict[str, object]]:
     return {str(item["name"]): item for item in checks}
 
 
+def browser_evidence(candidate_sha: str = "a1b2c3d4") -> dict[str, object]:
+    required = ["chat", "quick_mode", "map_handoff", "accessibility", "shell", "zoom"]
+    return {
+        "schema_version": 1,
+        "candidate": {"commit_sha": candidate_sha},
+        "status": "PASSED",
+        "runner": "playwright",
+        "required_cases": required,
+        "projects": {
+            "desktop": {"passed_required_cases": required, "expected_skipped_cases": []},
+            "mobile": {"passed_required_cases": required[:-1], "expected_skipped_cases": ["zoom"]},
+        },
+        "visual_comparison": {
+            "certified": False,
+            "scope": "platform_local_not_certified_in_linux_ci",
+        },
+    }
+
+
 def test_offline_self_test_is_deterministic_and_uses_report_schema() -> None:
     report = run_command("--commit-sha", "a1b2c3d4", "--self-test")
 
@@ -84,6 +103,50 @@ def test_provider_fault_check_fails_release_when_the_fixed_harness_fails(monkeyp
         "reason": "offline fault failed",
         "evidence": {},
     }
+
+
+def test_valid_browser_evidence_passes_the_offline_browser_gate(tmp_path) -> None:
+    evidence_path = tmp_path / "browser-evidence.json"
+    evidence_path.write_text(json.dumps(browser_evidence()), encoding="utf-8")
+
+    report = run_command(
+        "--commit-sha", "a1b2c3d4", "--self-test", "--browser-evidence", str(evidence_path)
+    )
+
+    check = checks_by_name(report)["browser_accessibility"]
+    assert check["status"] == release_validation.STATUS_PASSED
+    assert check["evidence"] == {
+        "runner": "playwright",
+        "desktop_required_cases": "6",
+        "mobile_required_cases": "5",
+        "mobile_expected_skips": "1",
+        "visual_comparison": "platform_local_not_certified_in_linux_ci",
+    }
+
+
+def test_browser_evidence_accepts_case_insensitive_candidate_sha(tmp_path) -> None:
+    evidence_path = tmp_path / "browser-evidence.json"
+    evidence_path.write_text(json.dumps(browser_evidence("A1B2C3D4")), encoding="utf-8")
+
+    report = run_command(
+        "--commit-sha", "a1b2c3d4", "--self-test", "--browser-evidence", str(evidence_path)
+    )
+
+    assert checks_by_name(report)["browser_accessibility"]["status"] == release_validation.STATUS_PASSED
+
+
+def test_browser_evidence_rejects_status_only_and_wrong_candidate(tmp_path) -> None:
+    forged = tmp_path / "forged.json"
+    wrong_candidate = tmp_path / "wrong-candidate.json"
+    forged.write_text(json.dumps({"status": "PASSED"}), encoding="utf-8")
+    wrong_candidate.write_text(json.dumps(browser_evidence("deadbeef")), encoding="utf-8")
+
+    for evidence_path in (forged, wrong_candidate):
+        report = run_command(
+            "--commit-sha", "a1b2c3d4", "--self-test", "--browser-evidence", str(evidence_path)
+        )
+        assert report["status"] == release_validation.STATUS_FAILED
+        assert checks_by_name(report)["browser_accessibility"]["status"] == release_validation.STATUS_FAILED
 
 
 def test_redaction_removes_header_and_query_secrets() -> None:

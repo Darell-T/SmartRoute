@@ -85,13 +85,21 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
       - run: npx playwright install --with-deps chromium
+      - run: npm run test:release:evidence
       - run: npm run test:release:ci
+      - name: Build sanitized browser validation evidence
+        run: >-
+          npx tsx scripts/release/build-browser-evidence.ts
+          test-results/release/results.json
+          test-results/release/browser-evidence.json
+          ${{ github.sha }}
       - name: Preserve sanitized browser validation evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: frontend-release-browser-evidence
           path: |
+            frontend/test-results/release/browser-evidence.json
             frontend/test-results/release/results.json
             frontend/test-results/release/**/*.zip
             frontend/test-results/release/**/*.png

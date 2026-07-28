@@ -83,7 +83,6 @@ def offline_check_specs() -> list[tuple[str, str, str]]:
         ("deployment_evidence", "NOT_APPLICABLE", "staging checks were not requested"),
         ("rollback_evidence", "NOT_APPLICABLE", "staging checks were not requested"),
         ("migration_restore", "NOT_APPLICABLE", "repository has no migration or restore automation"),
-        ("browser_accessibility", "BLOCKED", "pinned browser and accessibility dependencies are not approved"),
     ]
 
 
