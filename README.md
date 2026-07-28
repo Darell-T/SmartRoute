@@ -194,9 +194,6 @@ Do not commit real secrets. Use local `.env` files and hosting provider environm
 | `AGENT_MOCK_STEP_DELAY_MS` | Backend | Optional | Delay between simulated chat events; defaults to `280` for realistic UI testing. |
 | `SMARTROUTE_SYSTEM_PROMPT` | Backend | Optional | Preferred environment override for the route-ranking system prompt. |
 | `SYSTEM_PROMPT` | Backend | Optional | Supported prompt override alias. |
-| `ELEVENLABS_API_KEY` | Backend | Optional | Required only if text-to-speech is enabled. |
-| `ENABLE_TTS` | Backend | Optional | Enables text-to-speech when set to `1`, `true`, or `yes`. |
-| `DISABLE_TTS` | Backend | Optional | Legacy local toggle for disabling text-to-speech. |
 | `XAI_API_KEY` | Backend | Optional | Enables external incident scanning when configured. |
 | `XAI_INCIDENT_TIMEOUT_S` | Backend | Optional | Bounded xAI incident-request timeout; defaults to `12` seconds and is clamped from `1` to `30`. |
 | `NY511_API_KEY` | Backend | Optional | Server-side 511NY v2 event-feed key. When omitted, only the official 511NY source is disabled. |
@@ -215,12 +212,13 @@ Do not commit real secrets. Use local `.env` files and hosting provider environm
 | `EVENT_LOOKUP_TIMEOUT_S` | Backend | Optional | Ticketmaster request timeout; defaults to `6` seconds and is capped at `15`. |
 | `MTA_BUS_API_KEY` | Backend | Optional for buses | MTA BusTime SIRI key for bus monitoring. |
 | `DATABASE_URL` | Backend | Optional | PostgreSQL connection string for GTFS-related background/database paths. |
-| `REDIS_URL` | Backend | Optional | Shared cache URL; backend falls back to in-memory cache when absent. |
+| `REDIS_URL` | Backend | Required for production chat/admission | Shared session and admission store. It is optional only for local/test or non-chat paths; missing or unreachable Redis makes protected chat/admission return `503` outside those profiles. |
+| `AGENT_ALLOW_MEMORY_SESSIONS` | Backend | Local/test only | Set to `1` only with an explicit local/test runtime profile to permit non-durable memory sessions. Never set it in production. |
 | `CORS_ORIGIN_REGEX` | Backend | Optional | Regex for allowed preview origins. Production origin is configured in backend code. |
 | `GTFS_DB_FALLBACK` | Backend | Optional | Enables a local GTFS fallback path when set to `1`. |
 | `BACKEND_VERBOSE_LOGS` | Backend | Optional | Enables extra backend feed logs when set to `1`. |
 
-Advanced tuning variables also exist for provider and trip-stage timeouts, including `GOOGLE_ROUTES_TIMEOUT_S`, `GOOGLE_ROUTES_RETRIES`, `GOOGLE_ROUTES_ALTERNATIVES`, `TRIP_CONTEXT_TIMEOUT_S`, `TRIP_ADVISOR_TIMEOUT_S`, `TRIP_TTS_TIMEOUT_S`, `TRIP_GTFS_ENRICH_TIMEOUT_S`, and `DATABASE_STATEMENT_TIMEOUT_MS`.
+Advanced tuning variables also exist for provider and trip-stage timeouts, including `GOOGLE_ROUTES_TIMEOUT_S`, `GOOGLE_ROUTES_RETRIES`, `GOOGLE_ROUTES_ALTERNATIVES`, `TRIP_CONTEXT_TIMEOUT_S`, `TRIP_ADVISOR_TIMEOUT_S`, `TRIP_GTFS_ENRICH_TIMEOUT_S`, and `DATABASE_STATEMENT_TIMEOUT_MS`.
 
 ## City incident intelligence
 
@@ -274,30 +272,13 @@ bounded in the final `source` field. Existing MTA service alerts and stalled
 subway/bus-vehicle observations are intentionally kept as separate advisor signals;
 this incident merge does not collapse those arrays into the Grok/511NY incident list.
 
-### Deployment note: 511NY poller ownership
+### Production readiness
 
-The supported configuration for this process-local snapshot integration is one backend
-application worker, which owns one poller and one snapshot. No deployment manifest in
-this repository proves the current production worker topology. Multiple worker
-processes would each start a poller and hold different snapshots; before enabling
-multi-worker deployment, move snapshot and poller coordination to shared
-storage/locking. Do not compensate by calling 511NY from route requests.
-
-### Production topology and readiness contract
-
-The repository-supported topology is one FastAPI worker process with one
-process-local 511NY poller/snapshot and a Redis-backed chat session store.
-`REDIS_URL` is required for production chat; `AGENT_ALLOW_MEMORY_SESSIONS=1`
-is a local/test-only escape hatch. Probe `/health` for liveness and `/ready`
-for traffic readiness: liveness only proves the process can answer HTTP,
-while readiness fails until startup has completed and durable chat sessions are
-configured. Optional database, live-feed, and provider failures do not make a
-worker unready; their passenger-facing fallbacks remain explicit.
-
-See [`docs/production-topology-contract.md`](docs/production-topology-contract.md)
-for the versioned startup, worker, validation, and rollback procedure. Platform
-worker settings, Redis durability, health-check targets, and rollback history
-must be confirmed by the release operator before deployment.
+The complete environment, Redis/admission, worker-observation, readiness, and
+rollback contract lives in
+[`docs/production-topology-contract.md`](docs/production-topology-contract.md).
+That document is the deployment source of truth; this README does not prescribe
+a platform worker count.
 
 ### Ticketmaster Discovery v2
 

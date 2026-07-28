@@ -38,8 +38,8 @@ function websocketBaseUrl(): string {
  * WebSocket without ever seeing APP_KEY. The backend recomputes the same HMAC
  * (it shares APP_KEY) and checks expiry, path, nonce, and opaque principal -- see
  * `_verify_ws_ticket` in backend/app/routers/live_feed.py. This replaces
- * NEXT_PUBLIC_APP_KEY, which would otherwise inline the backend key into the
- * client bundle.
+ * a browser-visible app key, which would otherwise inline the backend key
+ * into the client bundle.
  */
 export function GET(req: NextRequest) {
   const limited = rateLimit(req, { key: "ws-ticket", limit: 240, windowMs: 60_000 });

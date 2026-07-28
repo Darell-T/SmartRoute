@@ -1,41 +1,37 @@
 # SmartRoute production topology contract
 
-Version: `2026-07-27.1`
+Version: `2026-07-28.1`
 
-This repository supports one backend application worker process. That process
-owns one process-local 511NY poller and snapshot. Do not increase backend worker
-count or enable a second poller until snapshot/poller coordination moves to a
-shared store and this contract is revised.
+This document records the deployment behavior implemented by the application.
+It does not declare a platform worker count: no deployment manifest in this
+repository configures one.
 
-Required production environment:
+## Environment and deployment matrix
 
-- `SMARTROUTE_ENV=production`. This is mandatory; an absent or unknown
-  profile never authorizes mock agent/advisor modes.
-- `APP_KEY` for protected API and WebSocket ticket verification.
-- `ANTHROPIC_API_KEY` and configured Auto/Quick model names when agent chat is enabled.
-- `REDIS_URL` for durable agent sessions. `AGENT_ALLOW_MEMORY_SESSIONS` must be unset or `0`.
-- `CORS_ORIGIN_REGEX` only when preview-origin support is intended.
+| Concern | Production contract | Local/test or non-chat behavior |
+|---|---|---|
+| Runtime profile | Set `SMARTROUTE_ENV=production`. Unknown profiles never authorize mocks. | Use an explicit local/test profile for deterministic mock modes. |
+| Server authentication | `APP_KEY` is required at backend startup and is shared only by FastAPI and server-side Next.js proxy/ticket routes. | Use a placeholder local secret; never expose it to browser code. |
+| Chat sessions and admission | `REDIS_URL` is required and must be reachable. Chat, WebSocket ticket nonce replay protection, and admission leases are shared through Redis; absence or failure is a bounded `503`. | Redis is optional only for local/test or non-chat work. `AGENT_ALLOW_MEMORY_SESSIONS=1` is a local/test-only, non-durable escape hatch. |
+| Optional providers and data paths | Database, MTA, 511NY, and model-provider availability do not make startup fail. Their rider-facing degradation remains explicit. | The same optional-path behavior applies. |
+| Worker/poller behavior | Each FastAPI process starts its own 511NY poller and process-local snapshot. Redis shares chat/admission state, not 511NY snapshots. Record the platform worker configuration and monitor poller activity. | The same process-local ownership applies. |
+| Health probes | `/health` is process liveness. `/ready` requires completed startup plus a durable, reachable Redis store for production chat traffic. | `/ready` may report `chat_sessions: local` only with the explicit local/test memory-session escape hatch. |
 
-Startup must run exactly one FastAPI worker process. The operator must record
-the concrete platform command, worker count, Redis service/durability, and
-health-check target in the release record; those values are not inferable from
-this repository.
+Text-to-speech is not a current product configuration. Do not set or document
+legacy TTS environment variables; dependency cleanup is tracked separately.
 
-Probe `/health` for process liveness. Probe `/ready` for traffic admission: it
-returns `503` until application startup completes or durable chat sessions are
-unavailable. It intentionally does not make optional database, MTA, 511NY, or
-model-provider availability a startup fatality.
+## Release procedure
 
-Release procedure:
-
-1. Record the immutable Git SHA and verify the intended file list.
-2. Deploy with the declared single-worker topology and required environment.
-3. Verify `/health` and `/ready`, then a bounded authenticated chat/session
+1. Record the immutable Git SHA, platform worker configuration, Redis service
+   durability, and health-check target.
+2. Deploy with the required production environment from the matrix.
+3. Verify `/health` and `/ready`, then run a bounded authenticated chat/session
    continuity smoke.
-4. Confirm only one poller starts for the process and record the evidence.
+4. Inspect deploy logs for the process-local poller behavior appropriate to the
+   recorded platform topology.
 5. If readiness or smoke fails, route traffic back to the previously recorded
    healthy SHA; do not roll forward with memory-only chat sessions.
 
-External evidence still required: platform worker settings, Redis
-durability/connectivity, configured health probe, deploy logs showing one
-poller, a staging smoke, and the platform rollback result.
+External evidence remains required: platform topology settings, Redis
+durability/connectivity, configured probes, deploy logs, a staging smoke, and
+the platform rollback result.

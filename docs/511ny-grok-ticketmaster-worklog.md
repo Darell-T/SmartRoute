@@ -169,8 +169,10 @@
   gates.
 - Subway-exit guidance, unrelated transit feeds, and canonical GTFS/artifact
   changes are explicitly out of scope.
-- Process-local 511NY snapshots support one backend worker. Shared poller
-  coordination/storage is required before multi-worker deployment.
+- The 511NY snapshot and poller are process-local to each FastAPI process. This
+  repository does not define a platform worker count; releases must record the
+  topology and monitor the corresponding poller activity. See
+  [`production-topology-contract.md`](production-topology-contract.md).
 - Existing MTA alert and stalled-vehicle arrays remain separate advisor inputs;
   final Grok/511NY incidents are conservatively merged without flattening those
   established contracts.

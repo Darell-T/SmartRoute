@@ -208,22 +208,22 @@ one snapshot cycle, and confirms route-time matching remains local. The
 Ticketmaster command makes one NYC request/page. The advisor command accepts
 only the production structured selection contract.
 
-## Deployment assumption
+## Deployment observation
 
-The 511NY snapshot is process-local. The supported deployment is one FastAPI
-process, one poller, and one in-memory snapshot. Start with the documented
-single-process command, without `--workers`:
+The 511NY snapshot and poller are process-local: every FastAPI process starts
+its own instance. This repository does not configure a platform worker count,
+and Redis shares chat/admission state rather than 511NY snapshots. Use the
+deployment matrix in
+[`production-topology-contract.md`](production-topology-contract.md) to record
+the platform topology and poller evidence for a release.
 
 ```powershell
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-One worker does not mean one request at a time: the FastAPI process remains
-asynchronous and can handle concurrent I/O-bound requests. Multiple backend
-processes would each own a different snapshot and are unsupported until shared
-snapshot storage is deliberately introduced. The application cannot reliably
-detect every hosting provider's external process count, so this is documented
-rather than enforced with a misleading startup heuristic.
+The application cannot reliably infer a hosting provider's external process
+count. Treat the command as a local launch example, not a production topology
+directive.
 
 ## CI and limitations
 
@@ -242,4 +242,5 @@ Known limits:
   field, so opposite-direction isolation cannot yet be proven end to end.
 - Enabled shadow mode performs a second bounded advisor evaluation and therefore
   adds model cost and up to the configured timeout to that request.
-- The in-memory 511NY snapshot requires a single backend process.
+- The in-memory 511NY snapshot is local to each backend process; releases must
+  record the resulting poller/topology behavior.

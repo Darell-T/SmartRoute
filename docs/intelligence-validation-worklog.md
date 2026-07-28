@@ -182,4 +182,7 @@ Grok, MTA, stalled-vehicle, and Ticketmaster implementations.
   travel-time improvement or autonomous advisor accuracy.
 - Ticketmaster validation covers production parsing and the advisor-input seam;
   the normal `/api/trip` endpoint does not fetch Ticketmaster events.
-- The 511NY snapshot remains process-local and assumes one backend worker.
+- The 511NY snapshot and poller remain process-local to each FastAPI process.
+  The repository does not set a platform worker count; releases must record and
+  monitor the deployed topology. See
+  [`production-topology-contract.md`](production-topology-contract.md).
