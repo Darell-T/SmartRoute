@@ -19,10 +19,21 @@ test("left rail route view does not render an inline client clock during SSR", (
 });
 
 test("left rail uses restrained transit product surfaces", () => {
-  const routeView = fs.readFileSync(
-    path.join(ROOT, "components/smart-route/left-rail/route-view.tsx"),
-    "utf8",
-  );
+  const routeView = [
+    "route-view.tsx",
+    "route-view-actions.tsx",
+    "route-view-alternatives.tsx",
+    "route-view-itinerary.tsx",
+    "route-view-nearby.tsx",
+    "route-view-state.tsx",
+  ]
+    .map((file) =>
+      fs.readFileSync(
+        path.join(ROOT, "components/smart-route/left-rail", file),
+        "utf8",
+      ),
+    )
+    .join("\n");
   const alertsView = [
     "alerts-view.tsx",
     "alert-featured-card.tsx",
