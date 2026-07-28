@@ -45,6 +45,7 @@ class ReadinessSampleResult:
 
 
 SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{7,64}$")
+RELEASE_VALIDATION_PRINCIPAL = "v1.release-validation"
 
 
 def parse_chat_headers(values: Iterable[str]) -> dict[str, str]:
@@ -255,10 +256,23 @@ def chat_check(
     max_bytes: int,
 ) -> ExternalCheckResult:
     body = json.dumps({"message": "Release validation chat smoke."}).encode("utf-8")
+    request_headers = {
+        name: value
+        for name, value in headers.items()
+        if name.casefold() not in {"content-type", "x-smartroute-principal"}
+    }
+    request_headers.update(
+        {
+            "Content-Type": "application/json",
+            # The release runner is authenticated by X-App-Key; this stable value
+            # provides the separately required bounded admission identity.
+            "X-SmartRoute-Principal": RELEASE_VALIDATION_PRINCIPAL,
+        }
+    )
     result = chat_sse_check(
         base_url.rstrip("/") + path,
         timeout_seconds,
-        {"Content-Type": "application/json", **headers},
+        request_headers,
         body,
         max_bytes,
     )

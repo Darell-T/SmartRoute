@@ -278,6 +278,35 @@ def test_chat_sse_requires_successful_bounded_terminal_event() -> None:
     assert not oversized_result.passed and "byte limit" in oversized_result.reason
 
 
+def test_chat_check_supplies_the_stable_admission_principal(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def successful_sse(_url, _timeout, headers, _body, _max_bytes):
+        captured["headers"] = headers
+        return transport.TransportResult(True, 200, "successful SSE terminal event received")
+
+    monkeypatch.setattr(transport, "chat_sse_check", successful_sse)
+
+    result = transport.chat_check(
+        "https://stage.example.test",
+        "/api/agent/chat",
+        1.0,
+        {
+            "X-App-Key": "test-key",
+            "x-smartroute-principal": "v1.user-supplied-principal-123456",
+            "content-type": "text/plain",
+        },
+        128,
+    )
+
+    assert result.status == "PASSED"
+    assert captured["headers"] == {
+        "X-App-Key": "test-key",
+        "Content-Type": "application/json",
+        "X-SmartRoute-Principal": transport.RELEASE_VALIDATION_PRINCIPAL,
+    }
+
+
 def test_chat_sse_total_deadline_cancels_stalled_stream_without_sleep(monkeypatch) -> None:
     async def stalled_stream(*_args, **_kwargs):
         await asyncio.Future()

@@ -147,13 +147,15 @@ python -m scripts.release_validation `
   --max-requests 16 --timeout-seconds 5 --concurrency 2 `
   --max-chat-bytes 65536 --max-estimated-cost-usd 0.01 `
   --estimated-cost-per-request-usd 0.001 `
-  --load-requests 2 --spike-requests 4 --soak-requests 3 `
+  --load-requests 2 --spike-requests 4 --soak-requests 2 `
   --soak-interval-seconds 2 --max-soak-seconds 15
 ```
 
 Run the command only in a secure runner. Inject `X-App-Key` from its secret
 store; do not put a real value in shell history. The app actually authenticates
-this header, so arbitrary headers cannot satisfy the chat prerequisite.
+this header, so arbitrary headers cannot satisfy the chat prerequisite. The
+validator supplies its own fixed, non-secret `X-SmartRoute-Principal` admission
+identity; do not provide or log a principal value in the command.
 
 The model chat smoke is off by default. `--model-chat-smoke` is one explicit,
 costed model-backed request and requires both a positive maximum cost budget
