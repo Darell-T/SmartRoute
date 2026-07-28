@@ -93,6 +93,9 @@ evidence retains the accepted finding separately from all scanner findings; the
 release parser reloads the policy from the candidate checkout and requires a
 one-to-one match. Runtime scopes can never use an exception.
 
+This exception definition was approved and introduced in commit
+`4550d0d38b1bd6ff3ab539a95fadc1535fe529ed`.
+
 Candidate identity is carried by the CI job's immutable `${{ github.sha }}` and
 is compared to the release command's `--commit-sha`. The policy is read from
 that same candidate checkout, while its lock digest prevents a policy from
