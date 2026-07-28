@@ -23,10 +23,16 @@ test("left rail uses restrained transit product surfaces", () => {
     path.join(ROOT, "components/smart-route/left-rail/route-view.tsx"),
     "utf8",
   );
-  const alertsView = fs.readFileSync(
-    path.join(ROOT, "components/smart-route/left-rail/alerts-view.tsx"),
+  const alertsView = [
+    "alerts-view.tsx",
+    "alert-featured-card.tsx",
+    "alert-line-list.tsx",
+    "alert-detail.tsx",
+    "alert-view-model.ts",
+  ].map((file) => fs.readFileSync(
+    path.join(ROOT, "components/smart-route/left-rail", file),
     "utf8",
-  );
+  )).join("\n");
   const destinationSuggestions = fs.readFileSync(
     path.join(
       ROOT,
@@ -40,6 +46,22 @@ test("left rail uses restrained transit product surfaces", () => {
   );
   const alertFeed = fs.readFileSync(
     path.join(ROOT, "components/smart-route/left-rail/alert-feed.ts"),
+    "utf8",
+  );
+  const alertLineIdentities = fs.readFileSync(
+    path.join(ROOT, "components/smart-route/left-rail/alert-line-identities.ts"),
+    "utf8",
+  );
+  const alertFeedNormalizer = fs.readFileSync(
+    path.join(ROOT, "components/smart-route/left-rail/alert-feed-normalizer.ts"),
+    "utf8",
+  );
+  const alertFeedThreading = fs.readFileSync(
+    path.join(ROOT, "components/smart-route/left-rail/alert-feed-threading.ts"),
+    "utf8",
+  );
+  const alertFeedCopy = fs.readFileSync(
+    path.join(ROOT, "components/smart-route/left-rail/alert-feed-copy.ts"),
     "utf8",
   );
   const atoms = fs.readFileSync(
@@ -331,7 +353,7 @@ test("left rail uses restrained transit product surfaces", () => {
   );
   for (const label of ["Lexington Avenue", "Broadway", "8 Avenue"]) {
     assert.match(
-      alertFeed,
+      alertLineIdentities,
       new RegExp(label),
       `${label} should be available as a passenger-facing line group label`,
     );
@@ -412,17 +434,17 @@ test("left rail uses restrained transit product surfaces", () => {
     "alerts should not keep the post-merge feed-shell presentation",
   );
   assert.match(
-    alertFeed,
+    alertFeedThreading,
     /function groupAlertThreads|export function groupAlertThreads/,
     "alerts should group same-issue items into one row with an update thread",
   );
   assert.match(
-    alertFeed,
+    alertFeedNormalizer,
     /const byText/,
     "identical-text alerts tagged to many lines merge into one row with unioned badges",
   );
   assert.match(
-    alertFeed,
+    alertFeedCopy,
     /export function leadSentences/,
     "raw MTA paragraphs truncate to lead sentences — never rendered as text walls",
   );
