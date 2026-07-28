@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import importlib
 import asyncio
+from contextlib import contextmanager
 import os
+import random
 import secrets
 import sys
 import types
@@ -35,9 +37,21 @@ def _load_agent_loop(env: dict | None = None):
     return reload_agent_loop_module(env=env)
 
 
-def _reload_budget(env: dict):
-    with patch.dict(os.environ, env, clear=False):
-        return importlib.reload(sys.modules["app.services.agent.budget"])
+@contextmanager
+def _reloaded_budget(env: dict[str, str]):
+    """Reload budget constants for one test class, then restore ambient state.
+
+    ``importlib.reload`` mutates the existing module object, which is also the
+    object imported by ``loop``. The environment patch is therefore not enough:
+    after it exits, reload once more against the restored environment so later
+    classes and runner selections see their original budget configuration.
+    """
+    budget_module = importlib.import_module("app.services.agent.budget")
+    try:
+        with patch.dict(os.environ, env, clear=False):
+            yield importlib.reload(budget_module)
+    finally:
+        importlib.reload(budget_module)
 
 
 async def _fake_ok_tool(tool_input, ctx):
@@ -224,6 +238,17 @@ class _AgentLoopHelpers:
             if patcher is not None:
                 patcher.stop()
         return events_out, session
+
+
+class _BudgetConfiguredAgentLoopTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
+    BUDGET_ENV: dict[str, str]
+
+    @classmethod
+    def setUpClass(cls):
+        cls.loop = _load_agent_loop()
+        cls._budget_scope = _reloaded_budget(cls.BUDGET_ENV)
+        cls.budget = cls._budget_scope.__enter__()
+        cls.addClassCleanup(cls._budget_scope.__exit__, None, None, None)
 
 
 class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
@@ -1138,11 +1163,8 @@ class MockAgentModeTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(quick[1:], automatic[1:])
 
 
-class RateLimitBudgetTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.loop = _load_agent_loop()
-        cls.budget = _reload_budget({"AGENT_TURNS_PER_SESSION_PER_MIN": "1"})
+class RateLimitBudgetTests(_BudgetConfiguredAgentLoopTests):
+    BUDGET_ENV = {"AGENT_TURNS_PER_SESSION_PER_MIN": "1"}
 
     def setUp(self):
         cache._mem.clear()
@@ -1158,11 +1180,8 @@ class RateLimitBudgetTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.loop.client.messages.calls), 0)
 
 
-class DailySpendBudgetTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.loop = _load_agent_loop()
-        cls.budget = _reload_budget({"AGENT_DAILY_SPEND_LIMIT_USD": "0.000001"})
+class DailySpendBudgetTests(_BudgetConfiguredAgentLoopTests):
+    BUDGET_ENV = {"AGENT_DAILY_SPEND_LIMIT_USD": "0.000001"}
 
     def setUp(self):
         cache._mem.clear()
@@ -1176,11 +1195,8 @@ class DailySpendBudgetTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase)
         self.assertEqual(len(self.loop.client.messages.calls), 0)
 
 
-class ConcurrencyBudgetTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.loop = _load_agent_loop()
-        cls.budget = _reload_budget({"AGENT_MAX_CONCURRENT_STREAMS": "1"})
+class ConcurrencyBudgetTests(_BudgetConfiguredAgentLoopTests):
+    BUDGET_ENV = {"AGENT_MAX_CONCURRENT_STREAMS": "1"}
 
     def setUp(self):
         cache._mem.clear()
@@ -1306,6 +1322,47 @@ class DeterministicAndDeduplicationTests(_AgentLoopHelpers, unittest.IsolatedAsy
             self.assertFalse((await ledger.execute("three", {"value": 1}, ToolContext(), deadline_monotonic=999999)).ok)
 
         self.assertEqual(calls, 2)
+
+
+class AgentBudgetIsolationTests(unittest.TestCase):
+    def test_budget_classes_are_order_independent_across_repeated_runs(self):
+        budget_module = importlib.import_module("app.services.agent.budget")
+        original_limits = (
+            budget_module.AGENT_TURNS_PER_SESSION_PER_MIN,
+            budget_module.AGENT_DAILY_SPEND_LIMIT_USD,
+            budget_module.AGENT_MAX_CONCURRENT_STREAMS,
+        )
+        selected_classes = [
+            (RateLimitBudgetTests, "test_second_turn_in_the_same_minute_is_rate_limited"),
+            (DailySpendBudgetTests, "test_daily_spend_over_limit_blocks_the_next_turn"),
+            (ConcurrencyBudgetTests, "test_concurrency_semaphore_rejects_when_the_single_slot_is_taken"),
+            (LoopMechanicsTests, "test_destination_discovery_is_model_directed_and_grounded_in_both_modes"),
+        ]
+
+        orders = []
+        for seed in (17, 41):
+            ordered_classes = list(selected_classes)
+            random.Random(seed).shuffle(ordered_classes)
+            orders.append([test_case.__name__ for test_case, _method in ordered_classes])
+            suite = unittest.TestSuite(
+                test_case(method) for test_case, method in ordered_classes
+            )
+            result = unittest.TestResult()
+            suite.run(result)
+            self.assertTrue(
+                result.wasSuccessful(),
+                f"seed={seed} failures={result.failures} errors={result.errors}",
+            )
+            self.assertEqual(
+                (
+                    budget_module.AGENT_TURNS_PER_SESSION_PER_MIN,
+                    budget_module.AGENT_DAILY_SPEND_LIMIT_USD,
+                    budget_module.AGENT_MAX_CONCURRENT_STREAMS,
+                ),
+                original_limits,
+            )
+
+        self.assertNotEqual(orders[0], orders[1])
 
 
 if __name__ == "__main__":
