@@ -36,9 +36,10 @@ function ScrollButton({ className, variant = "outline", size = "sm", ...props }:
         className,
       )}
       onClick={() => scrollToBottom()}
+      aria-label="Scroll to latest messages"
       {...props}
     >
-      <ChevronDown className="h-5 w-5" />
+      <ChevronDown className="h-5 w-5" aria-hidden="true" />
     </Button>
   );
 }

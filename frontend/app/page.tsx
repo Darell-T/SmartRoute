@@ -260,12 +260,13 @@ function SmartRoutePageContent() {
 
   return (
     <MotionConfig reducedMotion="user">
-      <div
+      <main
         className="sr-tab-shell"
         data-tab={activeTab}
         data-sr-theme={theme}
         data-sidebar-collapsed={sidebarCollapsed ? "true" : "false"}
       >
+        <h1 className="sr-only">SmartRoute</h1>
         <ChatSidebar
           activeTab={activeTab}
           collapsed={sidebarCollapsed}
@@ -325,7 +326,7 @@ function SmartRoutePageContent() {
             onOpenNearbyStation={handleOpenNearbyStation}
           />
         </div>
-      </div>
+      </main>
     </MotionConfig>
   );
 }

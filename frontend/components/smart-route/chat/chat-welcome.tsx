@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { motion, useReducedMotion } from "motion/react";
 import Typewriter from "typewriter-effect";
 import { PromptSuggestion } from "@/components/prompt-kit/prompt-suggestion";
@@ -33,6 +33,12 @@ const suggestionVariants = {
   },
 };
 
+const subscribeToHydration = () => () => undefined;
+
+function useHydrated(): boolean {
+  return useSyncExternalStore(subscribeToHydration, () => true, () => false);
+}
+
 export function ChatWelcome({
   suggestions,
   onSelectSuggestion,
@@ -41,10 +47,14 @@ export function ChatWelcome({
   onSelectSuggestion: (query: string) => void;
 }) {
   const reduceMotion = useReducedMotion();
+  const hydrated = useHydrated();
   const [titleComplete, setTitleComplete] = useState(false);
   const [copyComplete, setCopyComplete] = useState(false);
 
-  const animationsDisabled = reduceMotion === true;
+  // `useReducedMotion` can resolve differently during SSR and the first
+  // browser render. Gate its visual branch until hydration completes so the
+  // welcome screen preserves React's event handlers for the composer.
+  const animationsDisabled = hydrated && reduceMotion === true;
   const titleVisible = animationsDisabled || titleComplete;
   const cardsVisible = animationsDisabled || copyComplete;
 
@@ -54,7 +64,7 @@ export function ChatWelcome({
         {WELCOME.title} {WELCOME.subtitle}
       </span>
 
-      <div
+      <h2
         className="sr-chat-welcome-line sr-chat-welcome-line--title"
         data-complete={titleVisible ? "true" : "false"}
         aria-hidden="true"
@@ -73,7 +83,7 @@ export function ChatWelcome({
             }}
           />
         )}
-      </div>
+      </h2>
 
       <div
         className="sr-chat-welcome-line sr-chat-welcome-line--subtitle"

@@ -28,7 +28,7 @@ const LAYOUT_EASE = [0.22, 1, 0.36, 1] as const;
 
 function JourneyTitle({ names, id }: { names: string[]; id: string }) {
   return (
-    <h3 id={id} className="sr-itinerary-card__title" aria-label={names.join(" to ")}>
+    <h2 id={id} className="sr-itinerary-card__title" aria-label={names.join(" to ")}>
       {names.map((name, index) => (
         <span
           key={`${name}-${index}`}
@@ -41,7 +41,7 @@ function JourneyTitle({ names, id }: { names: string[]; id: string }) {
           <span>{name}</span>
         </span>
       ))}
-    </h3>
+    </h2>
   );
 }
 
