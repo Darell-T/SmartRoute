@@ -26,6 +26,7 @@ from scripts.release_validation_transport import (
     run_advisory_commands,
     validate_staging_url,
 )
+from scripts.provider_fault_jitter_validation import run_provider_fault_jitter_validation
 
 
 STATUS_PASSED = "PASSED"
@@ -113,7 +114,14 @@ def result_check(name: str, result: ExternalCheckResult) -> dict[str, object]:
 
 
 def offline_checks() -> list[dict[str, object]]:
-    return [check(name, status, reason) for name, status, reason in offline_check_specs()]
+    checks = [check(name, status, reason) for name, status, reason in offline_check_specs()]
+    checks.append(provider_fault_jitter_check())
+    return checks
+
+
+def provider_fault_jitter_check() -> dict[str, object]:
+    status, reason, evidence = run_provider_fault_jitter_validation()
+    return check("provider_fault_jitter", status, reason, **evidence)
 
 
 def report(
@@ -252,13 +260,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             "pinned browser and accessibility dependencies are not approved",
         )
     )
-    checks.append(
-        check(
-            "provider_fault_jitter",
-            STATUS_BLOCKED,
-            "external provider fault and jitter harness is not configured",
-        )
-    )
+    checks.append(provider_fault_jitter_check())
 
     if deployment_check["status"] != STATUS_PASSED or rollback_check["status"] != STATUS_PASSED:
         checks.extend(

@@ -84,7 +84,6 @@ def offline_check_specs() -> list[tuple[str, str, str]]:
         ("rollback_evidence", "NOT_APPLICABLE", "staging checks were not requested"),
         ("migration_restore", "NOT_APPLICABLE", "repository has no migration or restore automation"),
         ("browser_accessibility", "BLOCKED", "pinned browser and accessibility dependencies are not approved"),
-        ("provider_fault_jitter", "BLOCKED", "external provider fault and jitter harness is not configured"),
     ]
 
 

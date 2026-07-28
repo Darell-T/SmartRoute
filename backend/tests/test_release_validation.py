@@ -32,7 +32,17 @@ def test_offline_self_test_is_deterministic_and_uses_report_schema() -> None:
     assert checks["dependency_advisories"]["status"] == release_validation.STATUS_NOT_APPLICABLE
     assert checks["migration_restore"]["status"] == release_validation.STATUS_NOT_APPLICABLE
     assert checks["browser_accessibility"]["status"] == release_validation.STATUS_BLOCKED
-    assert checks["provider_fault_jitter"]["status"] == release_validation.STATUS_BLOCKED
+    assert checks["provider_fault_jitter"]["status"] == release_validation.STATUS_PASSED
+    assert checks["provider_fault_jitter"]["evidence"] == {
+        "seeds": "37,73,109",
+        "named_cases": "malformed_payload,optional_provider_failure,invalid_request,invalid_credentials,rate_limited,model_unavailable,deadline_stall,disconnect,stream_jitter,agent_turn_terminal",
+        "named_case_count": "10",
+        "seeded_case_runs": "21",
+        "deadline_ms": "20",
+        "deadline_wall_bound_ms": "350",
+        "jitter_wall_bound_ms": "250",
+        "network": "disabled_by_replay_and_fake_provider_seams",
+    }
 
 
 def test_invalid_budget_blocks_before_any_network_work(monkeypatch) -> None:
@@ -56,6 +66,24 @@ def test_invalid_budget_blocks_before_any_network_work(monkeypatch) -> None:
     assert configuration["status"] == release_validation.STATUS_FAILED
     assert "exceeds max_requests" in configuration["reason"]
     assert "should-not-leak" not in json.dumps(report)
+
+
+def test_provider_fault_check_fails_release_when_the_fixed_harness_fails(monkeypatch) -> None:
+    monkeypatch.setattr(
+        release_validation,
+        "run_provider_fault_jitter_validation",
+        lambda: (release_validation.STATUS_FAILED, "offline fault failed", {}),
+    )
+
+    report = run_command("--commit-sha", "a1b2c3d4", "--self-test")
+
+    assert report["status"] == release_validation.STATUS_FAILED
+    assert checks_by_name(report)["provider_fault_jitter"] == {
+        "name": "provider_fault_jitter",
+        "status": release_validation.STATUS_FAILED,
+        "reason": "offline fault failed",
+        "evidence": {},
+    }
 
 
 def test_redaction_removes_header_and_query_secrets() -> None:
