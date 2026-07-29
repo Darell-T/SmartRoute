@@ -1,0 +1,42 @@
+[
+  [
+    {
+      "type": "BUS",
+      "route_id": "B35",
+      "train_line": "B35",
+      "direction": "Uptown",
+      "departure_stop": "Church Av / Flatbush Av",
+      "arrival_stop": "Sunset Park",
+      "departure_coords": {
+        "latitude": 40.6502,
+        "longitude": -73.963
+      },
+      "arrival_coords": {
+        "latitude": 40.645,
+        "longitude": -74.012
+      },
+      "minutes_until_arrival": 18,
+      "route_total_minutes": 18
+    }
+  ],
+  [
+    {
+      "type": "SUBWAY",
+      "route_id": "Q",
+      "train_line": "Q",
+      "direction": "Uptown",
+      "departure_stop": "Prospect Park",
+      "arrival_stop": "Atlantic Av-Barclays Ctr",
+      "departure_coords": {
+        "latitude": 40.6616,
+        "longitude": -73.9623
+      },
+      "arrival_coords": {
+        "latitude": 40.6844,
+        "longitude": -73.9777
+      },
+      "minutes_until_arrival": 23,
+      "route_total_minutes": 23
+    }
+  ]
+]

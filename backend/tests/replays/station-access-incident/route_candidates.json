@@ -1,0 +1,42 @@
+[
+  [
+    {
+      "type": "SUBWAY",
+      "route_id": "Q",
+      "train_line": "Q",
+      "direction": "Uptown",
+      "departure_stop": "34 St-Herald Sq",
+      "arrival_stop": "57 St-7 Av",
+      "departure_coords": {
+        "latitude": 40.7496,
+        "longitude": -73.9879
+      },
+      "arrival_coords": {
+        "latitude": 40.7648,
+        "longitude": -73.9808
+      },
+      "minutes_until_arrival": 18,
+      "route_total_minutes": 18
+    }
+  ],
+  [
+    {
+      "type": "SUBWAY",
+      "route_id": "R",
+      "train_line": "R",
+      "direction": "Uptown",
+      "departure_stop": "49 St",
+      "arrival_stop": "Lexington Av/59 St",
+      "departure_coords": {
+        "latitude": 40.7599,
+        "longitude": -73.9841
+      },
+      "arrival_coords": {
+        "latitude": 40.7627,
+        "longitude": -73.9673
+      },
+      "minutes_until_arrival": 21,
+      "route_total_minutes": 21
+    }
+  ]
+]

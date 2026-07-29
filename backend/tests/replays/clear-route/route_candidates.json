@@ -1,0 +1,28 @@
+[
+  [
+    {
+      "type": "SUBWAY",
+      "route_id": "N",
+      "direction": "Uptown",
+      "departure_stop": "34 St-Herald Sq",
+      "arrival_stop": "57 St-7 Av",
+      "departure_coords": {"latitude": 40.7496, "longitude": -73.9879},
+      "arrival_coords": {"latitude": 40.7648, "longitude": -73.9808},
+      "minutes_until_arrival": 18,
+      "route_total_minutes": 18
+    }
+  ],
+  [
+    {
+      "type": "BUS",
+      "route_id": "M7",
+      "direction": "Uptown",
+      "departure_stop": "34 St-Herald Sq",
+      "arrival_stop": "Columbus Circle",
+      "departure_coords": {"latitude": 40.7496, "longitude": -73.9879},
+      "arrival_coords": {"latitude": 40.7681, "longitude": -73.9819},
+      "minutes_until_arrival": 25,
+      "route_total_minutes": 25
+    }
+  ]
+]

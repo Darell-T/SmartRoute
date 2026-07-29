@@ -11,40 +11,30 @@ export function deriveTransitRouteIds(steps: RouteStep[] = []) {
 }
 
 export function normalizeTripCandidates(response: TripResponse) {
-  const candidates =
-    response.route_candidates?.length
-      ? response.route_candidates
-      : [
-          {
-            id: "candidate-0",
-            index: response.selected_route_index ?? 0,
-            steps: response.route,
-            is_recommended: true,
-            recommendation_reason: "Recommended route after checking live service conditions.",
-          },
-        ];
+  const candidates = response.route_candidates;
+  if (!Array.isArray(candidates) || candidates.length === 0) return null;
+  if (typeof response.selected_route_index !== "number") return null;
 
-  const normalized = candidates.map((candidate, position) => ({
-    ...candidate,
-    id: candidate.id || `candidate-${candidate.index ?? position}`,
-    index: candidate.index ?? position,
-    steps: candidate.steps?.length ? candidate.steps : response.route,
-  }));
-
-  const selectedIndex =
-    response.selected_route_index ??
-    normalized.find((candidate) => candidate.is_recommended)?.index ??
-    0;
-  const selected =
-    normalized.find((candidate) => candidate.index === selectedIndex) ??
-    normalized.find((candidate) => candidate.is_recommended) ??
-    normalized[0] ??
-    null;
+  const normalized = candidates.filter(
+    (candidate): candidate is RouteCandidate =>
+      Boolean(
+        candidate.id &&
+          candidate.itinerary?.itinerary_id &&
+          Array.isArray(candidate.steps) &&
+          typeof candidate.index === "number" &&
+          typeof candidate.total_minutes === "number" &&
+          typeof candidate.score_breakdown?.transfers === "number",
+      ),
+  );
+  const selected = normalized.find(
+    (candidate) => candidate.index === response.selected_route_index,
+  );
+  if (!selected) return null;
 
   return {
-    candidates: normalized as RouteCandidate[],
+    candidates: normalized,
     selected,
-    selectedIndex,
+    selectedIndex: response.selected_route_index,
   };
 }
 

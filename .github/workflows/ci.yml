@@ -37,12 +37,129 @@ jobs:
       # Module import requires APP_KEY (fail-fast startup guard); a dummy value
       # is fine for the test suite, which stubs the DB and external providers.
       APP_KEY: ci-test-key
+      # The enabled agent validates server-only configuration at import. Tests
+      # replace all model calls, so this sentinel is never sent externally.
+      ANTHROPIC_API_KEY: ci-test-anthropic-key
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -r requirements.txt pytest
-      # The service-alerts protobuf tests require a full feed fixture and are
-      # excluded from the gate; everything else must pass.
-      - run: python -m pytest -q -k "not service_alerts"
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - run: python -m pytest -q
+      - name: Run deterministic route-intelligence replays
+        run: >-
+          python -m scripts.replay_route_intelligence
+          --json-out validation-results.json
+          --text-out validation-report.txt
+          --metrics-out validation-metrics.json
+          --ablations-out validation-ablations.json
+      - name: Preserve deterministic validation reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: route-intelligence-validation
+          path: |
+            backend/validation-results.json
+            backend/validation-report.txt
+            backend/validation-metrics.json
+            backend/validation-ablations.json
+          # A pytest/setup failure can prevent the replay step from creating
+          # artifacts. Preserve them when available without masking the
+          # original failure with a second upload error.
+          if-no-files-found: warn
+          retention-days: 14
+
+  dependency-advisories:
+    name: Dependency advisories (candidate-bound)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install locked frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Install pinned advisory scanner
+        run: python -m pip install pip-audit==2.10.1
+      - name: Scan declared dependency inputs and build sanitized evidence
+        working-directory: backend
+        run: |
+          set +e
+          (cd ../frontend && npm audit --json) > "$RUNNER_TEMP/npm-audit-full.json" 2> "$RUNNER_TEMP/npm-audit-full.err"
+          npm_full_exit=$?
+          (cd ../frontend && npm audit --omit=dev --json) > "$RUNNER_TEMP/npm-audit-runtime.json" 2> "$RUNNER_TEMP/npm-audit-runtime.err"
+          npm_runtime_exit=$?
+          pip-audit -r requirements.txt --format json > "$RUNNER_TEMP/pip-audit-runtime.json" 2> "$RUNNER_TEMP/pip-audit-runtime.err"
+          pip_runtime_exit=$?
+          pip-audit -r requirements-dev.txt --format json > "$RUNNER_TEMP/pip-audit-development.json" 2> "$RUNNER_TEMP/pip-audit-development.err"
+          pip_development_exit=$?
+          set -e
+          python -m scripts.build_dependency_advisory_evidence \
+            --commit-sha "${{ github.sha }}" \
+            --npm-version "$(cd ../frontend && npm --version)" \
+            --pip-audit-version "$(pip-audit --version)" \
+            --npm-full-report "$RUNNER_TEMP/npm-audit-full.json" \
+            --npm-full-exit-code "$npm_full_exit" \
+            --npm-runtime-report "$RUNNER_TEMP/npm-audit-runtime.json" \
+            --npm-runtime-exit-code "$npm_runtime_exit" \
+            --pip-runtime-report "$RUNNER_TEMP/pip-audit-runtime.json" \
+            --pip-runtime-exit-code "$pip_runtime_exit" \
+            --pip-development-report "$RUNNER_TEMP/pip-audit-development.json" \
+            --pip-development-exit-code "$pip_development_exit" \
+            --frontend-lock ../frontend/package-lock.json \
+            --backend-requirements requirements.txt \
+            --backend-dev-requirements requirements-dev.txt \
+            --exception-policy release_advisory_exceptions.json \
+            --output test-results/release/dependency-advisories.json
+      - name: Preserve sanitized dependency advisory evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-advisory-evidence
+          path: backend/test-results/release/dependency-advisories.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  frontend-release-browser:
+    name: Frontend release browser (deterministic)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:release:evidence
+      - run: npm run test:release:ci
+      - name: Build sanitized browser validation evidence
+        run: >-
+          npx tsx scripts/release/build-browser-evidence.ts
+          test-results/release/results.json
+          test-results/release/browser-evidence.json
+          ${{ github.sha }}
+      - name: Preserve sanitized browser validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-release-browser-evidence
+          path: |
+            frontend/test-results/release/browser-evidence.json
+            frontend/test-results/release/results.json
+            frontend/test-results/release/**/*.zip
+            frontend/test-results/release/**/*.png
+            frontend/playwright-report/**
+          if-no-files-found: warn
+          retention-days: 14

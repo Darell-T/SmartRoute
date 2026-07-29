@@ -6,6 +6,7 @@ import {
   buildRouteReasoningInsights,
   HALF_MILE_METERS,
 } from "./live-data.ts";
+import { buildPlan } from "./live-data/route-plan.ts";
 
 test("route reasoning insights derive from real nearby facts only", () => {
   const groups = [
@@ -811,6 +812,77 @@ test("plan carries strip, detail steps, leave-by, and correct transfer count", (
   assert.equal(singleLeg.plan.transferCount, 0);
 });
 
+test("plan prefers candidate score_breakdown.transfers over step re-count", () => {
+  const nowMs = 1_700_000_000_000;
+  // Two transit boardings re-count as 1 transfer; canonical says 2.
+  const steps = [
+    {
+      type: "SUBWAY",
+      route_id: "Q",
+      train_line: "Q",
+      departure_stop: "Church Av",
+      arrival_stop: "Union Sq",
+      minutes_until_arrival: 24,
+    },
+    {
+      type: "SUBWAY",
+      route_id: "5",
+      train_line: "5",
+      departure_stop: "Union Sq",
+      arrival_stop: "Burke Av",
+      minutes_until_arrival: 44,
+    },
+  ];
+  const candidate = {
+    id: "c0",
+    index: 0,
+    steps,
+    is_recommended: true,
+    total_minutes: 86,
+    score_breakdown: { duration_minutes: 86, transfers: 2, active_alerts: 0 },
+  };
+  const data = buildLeftRailData({
+    nowMs,
+    routeSteps: steps,
+    routeCandidates: [candidate],
+    activeRouteCandidate: candidate,
+  });
+  assert.equal(data.plan.transferCount, 2);
+});
+
+test("plan prefers candidate arrival_at ISO over now+eta for clock", () => {
+  const nowMs = Date.parse("2026-07-16T12:00:00-04:00");
+  const steps = [
+    {
+      type: "SUBWAY",
+      route_id: "A",
+      train_line: "A",
+      departure_stop: "34 St",
+      arrival_stop: "Jay St",
+      minutes_until_arrival: 40,
+    },
+  ];
+  const candidate = {
+    id: "c0",
+    index: 0,
+    steps,
+    is_recommended: true,
+    total_minutes: 89,
+    arrival_at: "2026-07-16T15:45:00-04:00",
+    score_breakdown: { duration_minutes: 89, transfers: 0, active_alerts: 0 },
+  };
+  const data = buildLeftRailData({
+    nowMs,
+    routeSteps: steps,
+    routeCandidates: [candidate],
+    activeRouteCandidate: candidate,
+  });
+  // Canonical wall clock (3:45 PM), not 12:00 + 89 min (1:29 PM)
+  assert.equal(data.plan.eta, "3:45 PM");
+  assert.equal(data.plan.totalTime, "89 min");
+  assert.equal(data.plan.transferCount, 0);
+});
+
 test("walk detail titles name subway stations and bus stops", () => {
   const nowMs = 1_700_000_000_000;
   const busSteps = [
@@ -1143,6 +1215,73 @@ test("plan rationale distinguishes duplicate same-line alternatives", () => {
 
   assert.doesNotMatch(data.plan.rationale, /the B(?: train| route)? and the B\b/);
   assert.match(data.plan.rationale, /B route from Church Av|B route from Beverley Rd/);
+});
+
+test("chat-origin routes do not repeat chat reasoning in the map rail", () => {
+  const route = [{
+    type: "SUBWAY",
+    train_line: "Q",
+    departure_stop: "Church Av",
+    arrival_stop: "Atlantic Av-Barclays Ctr",
+    minutes_until_arrival: 18,
+  }];
+  const candidate = {
+    id: "chat-q",
+    index: 0,
+    steps: route,
+    is_recommended: true,
+    total_minutes: 18,
+    score_breakdown: { duration_minutes: 18, transfers: 0, active_alerts: 0, transit_lines: ["Q"] },
+    enriched: true,
+    can_enrich_on_select: false,
+    recommendation_reason: "The Q is the clearest choice.",
+  };
+
+  const plan = buildPlan(route, candidate, [candidate], null, null, null, 1_700_000_000_000, "chat");
+  assert.equal(plan.rationale, "");
+});
+
+test("canonical chained itinerary groups rail details and replaces cumulative step clocks", () => {
+  const route = [
+    { type: "BUS", train_line: "B35", segment_index: 0, minutes_until_arrival: 80 },
+    { type: "BUS", train_line: "B37", segment_index: 1, minutes_until_arrival: 80 },
+  ];
+  const candidate = {
+    id: "pizza-chain",
+    index: 0,
+    steps: route,
+    is_recommended: true,
+    total_minutes: 73,
+    score_breakdown: { duration_minutes: 73, transfers: 1, active_alerts: 0, transit_lines: ["B35", "B37"] },
+    itinerary: {
+      itinerary_id: "pizza-chain",
+      origin: { label: "Your location" },
+      destination: { display_name: "Costco Sunset Park" },
+      waypoints: [{ display_name: "Luigi's Pizza", dwell_minutes: 25 }],
+      total_duration_seconds: 4380,
+      total_dwell_seconds: 1500,
+      transfer_count: 1,
+      segments: [
+        { segment_index: 0, destination: { display_name: "Luigi's Pizza" }, legs: [{ mode: "BUS", ride_seconds: 900 }] },
+        { segment_index: 1, destination: { display_name: "Costco Sunset Park" }, legs: [{ mode: "BUS", ride_seconds: 780 }] },
+      ],
+      dwell_events: [{ event_type: "dwell", after_segment_index: 0, waypoint: { display_name: "Luigi's Pizza" }, duration_seconds: 1500, source: "default" }],
+    },
+  };
+
+  const plan = buildPlan(route, candidate, [candidate], null, null, null, 1_700_000_000_000, "chat");
+  assert.deepEqual(plan.journeyPlaces, ["Your location", "Luigi's Pizza", "Costco Sunset Park"]);
+  assert.equal(plan.transferCount, 1);
+  assert.deepEqual(
+    plan.detailSteps.filter((step) => step.kind === "segment").map((step) => step.title),
+    ["Leg 1 · To Luigi's Pizza", "Leg 2 · To Costco Sunset Park"],
+  );
+  assert.equal(plan.detailSteps.filter((step) => step.kind === "dwell").length, 1);
+  assert.match(plan.detailSteps.find((step) => step.kind === "dwell").subtitle, /25 min stop.*Default dwell time/);
+  assert.deepEqual(
+    plan.detailSteps.filter((step) => step.kind === "ride").map((step) => step.rideMeta),
+    ["Ride · 15 min", "Ride · 13 min"],
+  );
 });
 
 test("bus arrivals split tabs by stop compass; crosstown and unknown remain all-directions rows", () => {

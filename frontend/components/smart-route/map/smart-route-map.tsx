@@ -3,14 +3,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import type { Layer } from "@deck.gl/core";
-import { MapboxOverlay } from "@deck.gl/mapbox";
 
 import type { TransitRouteData } from "@/types";
 import { DEFAULT_LOCATION } from "@/lib/api";
 import {
   createCurrentLocationDot,
   createDestinationPin,
+  createWaypointMarker,
   updateCurrentLocationDot,
 } from "./route-preview-markers";
 import { flyToRoute, stopRotation } from "@/components/map/camera";
@@ -42,7 +41,6 @@ import {
   toLngLat,
   artifactUrl,
   mapFeatureArrayProperty,
-  selectedRouteLayers,
   firstSymbolLayerId,
   DEBUG_LIVE_MAP,
   loadVisualSubwayNetworkOrNull,
@@ -52,6 +50,46 @@ import {
 declare global {
   interface Window {
     __smartRouteMap?: maplibregl.Map;
+  }
+}
+
+const DARK_MAP_STYLE_URL =
+  "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
+
+function applyDarkMapTheme(mapInstance: maplibregl.Map): void {
+  // The map remains a stable dark cartographic canvas in both interface
+  // themes. Only the navigation and Route/Alerts rail switch appearance.
+  for (const layer of mapInstance.getStyle().layers ?? []) {
+    const id = layer.id;
+    const type = layer.type;
+    try {
+      if (
+        type === "line" &&
+        /road|street|tunnel|bridge|motorway|trunk|primary|secondary|tertiary/i.test(id)
+      ) {
+        mapInstance.setPaintProperty(id, "line-color", "#2B3A4D");
+        mapInstance.setPaintProperty(id, "line-opacity", 0.55);
+      } else if (type === "fill" && /water|ocean|river|bay/i.test(id)) {
+        mapInstance.setPaintProperty(id, "fill-color", "#1B3A52");
+      } else if (type === "fill" && /park|wood|grass|forest|cemetery/i.test(id)) {
+        mapInstance.setPaintProperty(id, "fill-color", "#1C4327");
+        mapInstance.setPaintProperty(id, "fill-opacity", 0.72);
+      } else if (type === "fill" && /land|landuse|sand/i.test(id)) {
+        mapInstance.setPaintProperty(id, "fill-color", "#161E2E");
+        mapInstance.setPaintProperty(id, "fill-opacity", 0.66);
+      } else if (type === "background") {
+        mapInstance.setPaintProperty(id, "background-color", "#0D1220");
+      } else if (type === "symbol") {
+        if (/poi/i.test(id)) {
+          mapInstance.setLayoutProperty(id, "visibility", "none");
+        } else {
+          mapInstance.setPaintProperty(id, "text-opacity", 0.55);
+          mapInstance.setPaintProperty(id, "text-halo-color", "#05070A");
+        }
+      }
+    } catch {
+      // This CARTO style revision lacks the targeted property; skip it.
+    }
   }
 }
 
@@ -80,6 +118,7 @@ export function SmartRouteMap({
   const marker = useRef<maplibregl.Marker | null>(null);
   const markerElement = useRef<HTMLDivElement | null>(null);
   const destMarker = useRef<maplibregl.Marker | null>(null);
+  const waypointMarkersRef = useRef<maplibregl.Marker[]>([]);
   const onLocationUpdateRef = useRef(onLocationUpdate);
   const mapReadyRef = useRef(false);
   const rotationIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -90,8 +129,6 @@ export function SmartRouteMap({
   const stationMarkersRef = useRef<maplibregl.Marker[]>([]);
   const initialFlyDoneRef = useRef(false);
   const routePreviewFitKeyRef = useRef<string | null>(null);
-  const overlayRef = useRef<MapboxOverlay | null>(null);
-  const routeDeckLayersRef = useRef<Layer[]>([]);
   const subwayLanesRef = useRef<GeoJSON.FeatureCollection | null>(null);
   const subwayStopsRef = useRef<GeoJSON.FeatureCollection | null>(null);
   const subwayStationMarkersRef =
@@ -99,15 +136,7 @@ export function SmartRouteMap({
   const subwayVisualModeActiveRef = useRef(false);
   const subwayVisualFallbackUsedRef = useRef(false);
   const [subwayLayerDataVersion, setSubwayLayerDataVersion] = useState(0);
-
-  // The deck overlay now carries ONLY the route path layers (buildings moved
-  // to a native MapLibre fill-extrusion). Most of the time this is empty, so
-  // the interleaved overlay costs almost nothing during pan.
-  const syncDeckOverlay = useCallback(() => {
-    const overlay = overlayRef.current;
-    if (!overlay) return;
-    overlay.setProps({ layers: [...routeDeckLayersRef.current] });
-  }, []);
+  const [mapStyleVersion, setMapStyleVersion] = useState(0);
 
   // Slot the native buildings below the subway lines once those layers exist.
   const syncBuildingsOrder = () => {
@@ -120,11 +149,6 @@ export function SmartRouteMap({
     ensureBuildingsLayer(map.current, beforeId);
   };
 
-  const setRouteDeckLayers = useCallback((layers: Layer[]) => {
-    routeDeckLayersRef.current = layers;
-    syncDeckOverlay();
-  }, [syncDeckOverlay]);
-
   useEffect(() => {
     onLocationUpdateRef.current = onLocationUpdate;
   }, [onLocationUpdate]);
@@ -134,7 +158,7 @@ export function SmartRouteMap({
 
     map.current = new maplibregl.Map({
       container: mapContainer.current,
-      style: "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
+      style: DARK_MAP_STYLE_URL,
       center: [DEFAULT_LOCATION.lng, DEFAULT_LOCATION.lat],
       zoom: 14.5,
       pitch: 45,
@@ -202,65 +226,8 @@ export function SmartRouteMap({
     map.current.on("style.load", () => {
       if (!map.current) return;
 
-      // Gotham-noir basemap. Recolor the CARTO Dark Matter ground into a deep
-      // indigo night-city: charcoal-indigo land in shadow, a readable steel-blue
-      // harbour, noir-green parks, streets with a cold gleam -- all still quieter
-      // than the colored transit lines so they stay the loudest thing. Pure paint
-      // overrides on the existing
-      // base layers (matched by type + id, since CARTO's ids live in the remote
-      // style.json) -- delete this loop to restore stock Dark Matter. Each layer
-      // is wrapped so a paint prop missing on a future CARTO revision can't throw.
-      for (const layer of map.current.getStyle().layers ?? []) {
-        const id = layer.id;
-        const type = layer.type;
-        try {
-          if (
-            type === "line" &&
-            /road|street|tunnel|bridge|motorway|trunk|primary|secondary|tertiary/i.test(id)
-          ) {
-            // Streets catch a cold steel-blue gleam -- visible, still quiet under
-            // the transit lines.
-            map.current.setPaintProperty(id, "line-color", "#2B3A4D");
-            map.current.setPaintProperty(id, "line-opacity", 0.55);
-          } else if (type === "fill" && /water|ocean|river|bay/i.test(id)) {
-            // Gotham harbour: lifted from near-black to a readable deep steel-blue.
-            map.current.setPaintProperty(id, "fill-color", "#1B3A52");
-          } else if (
-            type === "fill" &&
-            /park|wood|grass|forest|cemetery/i.test(id)
-          ) {
-            // Parks + grass read as a clear dark forest green -- the Dark
-            // Knight's green lungs in the indigo city.
-            map.current.setPaintProperty(id, "fill-color", "#1C4327");
-            map.current.setPaintProperty(id, "fill-opacity", 0.72);
-          } else if (
-            type === "fill" &&
-            /land|landuse|sand/i.test(id)
-          ) {
-            // Charcoal-indigo land blocks: the city's deep shadow.
-            map.current.setPaintProperty(id, "fill-color", "#161E2E");
-            map.current.setPaintProperty(id, "fill-opacity", 0.66);
-          } else if (type === "background") {
-            map.current.setPaintProperty(id, "background-color", "#0D1220");
-          } else if (type === "symbol") {
-            if (/poi/i.test(id)) {
-              map.current.setLayoutProperty(id, "visibility", "none");
-            } else {
-              map.current.setPaintProperty(id, "text-opacity", 0.55);
-              map.current.setPaintProperty(id, "text-halo-color", "#05070A");
-            }
-          }
-        } catch {
-          // This CARTO style revision lacks the targeted paint prop; skip.
-        }
-      }
+      applyDarkMapTheme(map.current);
 
-      const overlay = new MapboxOverlay({
-        interleaved: true,
-        layers: [],
-      });
-      map.current.addControl(overlay as unknown as maplibregl.IControl);
-      overlayRef.current = overlay;
       // Native 3D buildings (fill-extrusion). Installed now over the
       // basemap; re-ordered below the subway lines once those load.
       ensureBuildingsLayer(map.current);
@@ -286,9 +253,8 @@ export function SmartRouteMap({
         // subway glow/casing layers exist.
         syncBuildingsOrder();
       }
-      syncDeckOverlay();
-
       mapReadyRef.current = true;
+      setMapStyleVersion((version) => version + 1);
 
       onMapReady?.({
         recenter: () => {
@@ -393,9 +359,11 @@ export function SmartRouteMap({
       currentMap?.remove();
       marker.current = null;
       markerElement.current = null;
+      for (const waypointMarker of waypointMarkersRef.current) waypointMarker.remove();
+      waypointMarkersRef.current = [];
       if (watchId !== undefined) navigator.geolocation.clearWatch(watchId);
     };
-  }, [onMapReady, syncDeckOverlay]);
+  }, [onMapReady]);
 
   useEffect(() => {
     let cancelled = false;
@@ -506,12 +474,12 @@ export function SmartRouteMap({
     // Push native buildings below the subway polylines now that the subway
     // casing/glow layers exist.
     syncBuildingsOrder();
-  }, [subwayLayerDataVersion]);
+  }, [subwayLayerDataVersion, mapStyleVersion]);
 
 
   // Route animation + camera rotation
   useEffect(() => {
-    if (!map.current || !mapReadyRef.current || !overlayRef.current) return;
+    if (!map.current || !mapReadyRef.current) return;
 
     const m = map.current;
 
@@ -533,7 +501,6 @@ export function SmartRouteMap({
     function clearRouteFromMap() {
       clearBadges(stationMarkersRef.current);
       clearRouteStopData(m);
-      setRouteDeckLayers([]);
     }
 
     if (!routeData) {
@@ -550,9 +517,7 @@ export function SmartRouteMap({
     clearBadges(stationMarkersRef.current);
     const steps = routeData.steps;
     if (steps && steps.length > 0) {
-      const { trips, stepCoords } = buildTrips(steps);
-      // WALK segments render as a dashed MapLibre line instead.
-      setRouteDeckLayers(selectedRouteLayers(trips.filter((t) => t.type !== "WALK")));
+      const { stepCoords } = buildTrips(steps);
 
       setRouteStopData(m, steps);
       // Only the first boarding stop gets a pill. The destination is already
@@ -599,6 +564,10 @@ export function SmartRouteMap({
       // guaranteed in view, not just the transit polyline.
       const fitCoords = stepCoords.flat();
       if (originRef.current) fitCoords.push(originRef.current);
+      for (const waypoint of routeData.itinerary?.waypoints ?? []) {
+        const point = canonicalWaypointCoordinates(waypoint);
+        if (point) fitCoords.push(point);
+      }
       if (destCoords) fitCoords.push([destCoords.lng, destCoords.lat]);
       if (fitCoords.length > 0) {
         flyToRoute(m, fitCoords, { duration: 900, maxZoom: 16 });
@@ -606,7 +575,7 @@ export function SmartRouteMap({
     }
 
     return stopAll;
-  }, [routeData, destCoords, mobileSheetState, setRouteDeckLayers]);
+  }, [routeData, destCoords, mobileSheetState, mapStyleVersion]);
 
   // Focus mode: hide the ambient subway network while a route is displayed
   // so the picked path reads as the hero. subwayLayerDataVersion re-applies
@@ -615,7 +584,7 @@ export function SmartRouteMap({
   useEffect(() => {
     if (!map.current || !mapReadyRef.current) return;
     setSubwayNetworkHidden(map.current, routeActive);
-  }, [routeActive, subwayLayerDataVersion]);
+  }, [routeActive, subwayLayerDataVersion, mapStyleVersion]);
 
   // Destination marker — use primitive deps to avoid spurious re-runs
   const destLng = destCoords?.lng ?? null;
@@ -679,7 +648,65 @@ export function SmartRouteMap({
     };
   }, [destLng, destLat]);
 
+  // A chained itinerary has real intermediate destinations, not transfer
+  // stations. Render them separately from ordinary route-stop dots and retain
+  // the canonical geometry for camera fitting above.
+  useEffect(() => {
+    if (!map.current || !mapReadyRef.current) return;
+    for (const waypointMarker of waypointMarkersRef.current) waypointMarker.remove();
+    waypointMarkersRef.current = [];
+
+    if (!routeData?.itinerary) return;
+    for (const waypoint of routeData.itinerary.waypoints ?? []) {
+      const point = canonicalWaypointCoordinates(waypoint);
+      if (!point) continue;
+      const label = canonicalWaypointLabel(waypoint);
+      if (!label) continue;
+      const dwell = typeof waypoint.dwell_minutes === "number"
+        ? waypoint.dwell_minutes
+        : undefined;
+      const marker = new maplibregl.Marker({
+        element: createWaypointMarker(label, dwell),
+        anchor: "left",
+        offset: [10, 0],
+      })
+        .setLngLat(point)
+        .addTo(map.current);
+      waypointMarkersRef.current.push(marker);
+    }
+    return () => {
+      for (const waypointMarker of waypointMarkersRef.current) waypointMarker.remove();
+      waypointMarkersRef.current = [];
+    };
+  }, [routeData, mapStyleVersion]);
+
   return (
     <div ref={mapContainer} className="absolute inset-0 w-full h-full" />
   );
+}
+
+function canonicalWaypointCoordinates(waypoint: {
+  lat?: number | null;
+  lng?: number | null;
+  latitude?: number | null;
+  longitude?: number | null;
+}): [number, number] | null {
+  const lat = waypoint.lat ?? waypoint.latitude;
+  const lng = waypoint.lng ?? waypoint.longitude;
+  return typeof lat === "number" && Number.isFinite(lat) &&
+    typeof lng === "number" && Number.isFinite(lng)
+    ? [lng, lat]
+    : null;
+}
+
+function canonicalWaypointLabel(waypoint: {
+  display_name?: string | null;
+  label?: string | null;
+  name?: string | null;
+  address?: string | null;
+}): string | null {
+  for (const value of [waypoint.display_name, waypoint.label, waypoint.name, waypoint.address]) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return null;
 }

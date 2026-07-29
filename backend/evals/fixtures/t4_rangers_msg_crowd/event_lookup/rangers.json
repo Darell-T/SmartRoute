@@ -1,0 +1,18 @@
+{
+  "data": {
+    "events": [
+      {
+        "end_estimate_basis": "NHL game \u2248 2h30m",
+        "estimated_end_iso": "2026-07-16T01:30:00Z",
+        "name": "New York Rangers vs. New Jersey Devils",
+        "start_iso": "2026-07-15T23:00:00Z",
+        "venue_key": "msg",
+        "venue_name": "Madison Square Garden"
+      }
+    ],
+    "note": "end times are estimates based on typical event length, not an official schedule"
+  },
+  "error": null,
+  "ok": true,
+  "summary": "found 1 event(s) for 'Rangers'"
+}

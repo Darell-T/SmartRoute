@@ -1,0 +1,23 @@
+{
+  "data": {
+    "candidates": [
+      {
+        "alert_headlines": [],
+        "arrives_iso": "2026-07-15T15:06:00-04:00",
+        "card_id": "rc_t1jfk01",
+        "departs_iso": "2026-07-15T14:08:00-04:00",
+        "eta_minutes": 58,
+        "lines": [
+          "E",
+          "AirTrain"
+        ],
+        "reason": "Subway plus AirTrain, fastest transit option.",
+        "transfers": 1,
+        "walk_minutes": 8.0
+      }
+    ]
+  },
+  "error": null,
+  "ok": true,
+  "summary": "found 1 route(s) to JFK Airport; recommended E/AirTrain"
+}

@@ -1,0 +1,16 @@
+{
+  "data": {
+    "results": [
+      {
+        "address": "205 E 42nd St, New York, NY",
+        "lat": 40.7505,
+        "lng": -73.9736,
+        "name": "Duane Reade",
+        "open_now": true
+      }
+    ]
+  },
+  "error": null,
+  "ok": true,
+  "summary": "found 1 place(s) for 'pharmacy'"
+}

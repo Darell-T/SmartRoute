@@ -8,11 +8,15 @@ import type { RouteStep } from "@/types";
 import { getLineColor } from "./route-layers";
 import {
   buildRouteStopFeatures,
+  buildTransitPathFeatures,
   buildWalkFeatures,
 } from "./route-stops-features";
 
 const ROUTE_STOPS_SOURCE_ID = "sr-route-stops";
 const ROUTE_WALK_SOURCE_ID = "sr-route-walk";
+const ROUTE_TRANSIT_SOURCE_ID = "sr-route-transit";
+const ROUTE_TRANSIT_CASING_LAYER_ID = "sr-route-transit-casing";
+const ROUTE_TRANSIT_LINE_LAYER_ID = "sr-route-transit-line";
 export const ROUTE_WALK_LINE_LAYER_ID = "sr-route-walk-line";
 const ROUTE_STOP_DOT_LAYER_ID = "sr-route-stop-dot";
 const ROUTE_STOP_LABEL_LAYER_ID = "sr-route-stop-label";
@@ -33,8 +37,37 @@ function ensureSource(map: maplibregl.Map, id: string) {
 /** Idempotent: create sources + layers for route stops and walk dashes.
  *  Call from style.load so they survive style reloads. */
 export function ensureRouteStopLayers(map: maplibregl.Map) {
+  ensureSource(map, ROUTE_TRANSIT_SOURCE_ID);
   ensureSource(map, ROUTE_WALK_SOURCE_ID);
   ensureSource(map, ROUTE_STOPS_SOURCE_ID);
+
+  if (!map.getLayer(ROUTE_TRANSIT_CASING_LAYER_ID)) {
+    map.addLayer({
+      id: ROUTE_TRANSIT_CASING_LAYER_ID,
+      type: "line",
+      source: ROUTE_TRANSIT_SOURCE_ID,
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: {
+        "line-color": "#080B10",
+        "line-opacity": 0.92,
+        "line-width": ["+", ["get", "width"], 3],
+      },
+    });
+  }
+
+  if (!map.getLayer(ROUTE_TRANSIT_LINE_LAYER_ID)) {
+    map.addLayer({
+      id: ROUTE_TRANSIT_LINE_LAYER_ID,
+      type: "line",
+      source: ROUTE_TRANSIT_SOURCE_ID,
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: {
+        "line-color": ["get", "color"],
+        "line-opacity": 1,
+        "line-width": ["get", "width"],
+      },
+    });
+  }
 
   if (!map.getLayer(ROUTE_WALK_LINE_LAYER_ID)) {
     map.addLayer({
@@ -99,22 +132,31 @@ export function setRouteStopData(map: maplibregl.Map, steps: RouteStep[]) {
   ensureRouteStopLayers(map);
   const stops = map.getSource(ROUTE_STOPS_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
   const walk = map.getSource(ROUTE_WALK_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
+  const transit = map.getSource(ROUTE_TRANSIT_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
   stops?.setData(buildRouteStopFeatures(steps, routeStopColorFor));
   walk?.setData(buildWalkFeatures(steps));
+  transit?.setData(buildTransitPathFeatures(steps, routeStopColorFor));
 }
 
 export function clearRouteStopData(map: maplibregl.Map) {
   const stops = map.getSource(ROUTE_STOPS_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
   const walk = map.getSource(ROUTE_WALK_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
+  const transit = map.getSource(ROUTE_TRANSIT_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
   stops?.setData(EMPTY);
   walk?.setData(EMPTY);
+  transit?.setData(EMPTY);
 }
 
-/** The deck.gl overlay is interleaved and inserts its route path layers at
- *  the top of the stack; call this after every deck layer swap so stop
- *  dots/labels stay above the colored path. */
+/** Keep the selected route above the ambient network, with stop dots and
+ *  labels above its path. */
 export function bringRouteStopsToTop(map: maplibregl.Map) {
-  for (const id of [ROUTE_WALK_LINE_LAYER_ID, ROUTE_STOP_DOT_LAYER_ID, ROUTE_STOP_LABEL_LAYER_ID]) {
+  for (const id of [
+    ROUTE_TRANSIT_CASING_LAYER_ID,
+    ROUTE_TRANSIT_LINE_LAYER_ID,
+    ROUTE_WALK_LINE_LAYER_ID,
+    ROUTE_STOP_DOT_LAYER_ID,
+    ROUTE_STOP_LABEL_LAYER_ID,
+  ]) {
     if (map.getLayer(id)) {
       map.moveLayer(id);
     }

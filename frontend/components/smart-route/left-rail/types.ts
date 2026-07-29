@@ -209,7 +209,7 @@ export type RouteStripSegment =
    riding steps come from the candidate's precomputed steps; the UI adds
    the Start and Arrive endpoints. */
 export interface RouteDetailStep {
-  kind: "walk" | "board" | "ride";
+  kind: "walk" | "board" | "ride" | "segment" | "dwell";
   title: string;
   subtitle?: string;
   routeId?: string;
@@ -268,6 +268,8 @@ export interface RoutePlan {
   nextDepartureMinutes?: number;
   // Transit-vehicle boardings minus one; walking never counts.
   transferCount?: number;
+  /** Full canonical journey identity for a multi-stop map route. */
+  journeyPlaces?: string[];
   strip?: RouteStripSegment[];
   detailSteps?: RouteDetailStep[];
   pickedLine: string;

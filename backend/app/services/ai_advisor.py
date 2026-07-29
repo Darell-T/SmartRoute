@@ -4,6 +4,8 @@ import json
 import os
 from pathlib import Path
 
+from app import runtime
+
 client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
 _DEFAULT_SYSTEM_PROMPT = """You are the SmartRoute routing engine for NYC transit.
@@ -61,7 +63,22 @@ def _load_system_prompt(prompt_path: Path | None = None) -> str:
 SYSTEM_PROMPT = _load_system_prompt()
 
 
+# The production route advisor is intentionally pinned to Haiku. This module
+# has no Sonnet fallback; a configuration or documentation mention of Sonnet
+# belongs to a different agent loop, not route selection.
+ADVISOR_PROVIDER = "anthropic"
 _MODEL_PRIORITY = ["claude-haiku-4-5-20251001"]
+
+
+def advisor_identity() -> dict[str, str]:
+    """Return safe route-advisor metadata for diagnostics and validation.
+
+    Deliberately excludes prompts, request payloads, and provider credentials.
+    """
+    return {
+        "advisor_provider": ADVISOR_PROVIDER,
+        "advisor_model": _MODEL_PRIORITY[0],
+    }
 
 
 def _route_eta_minutes(route: list) -> float | None:
@@ -120,13 +137,13 @@ def build_mock_recommendation(payload: dict) -> str:
 
     if faster_by is not None:
         why = f" It is about {faster_by} minutes faster than your next best option."
-        chosen_reason = f"About {faster_by} min faster than the next option, with no disruptions on its path."
+        chosen_reason = f"About {faster_by} min faster than the next option."
     elif chosen_transfers == 0:
         why = " It is a straight shot, no transfers."
-        chosen_reason = "Direct ride with no transfers and no disruptions on its path."
+        chosen_reason = "Direct ride with no transfers."
     else:
         why = " It has the cleanest connections of everything I weighed."
-        chosen_reason = "Cleanest connections of the alternatives, with no disruptions right now."
+        chosen_reason = "Cleanest connections of the alternatives."
 
     analysis = []
     for index, route in enumerate(routes):
@@ -180,7 +197,7 @@ def build_mock_recommendation(payload: dict) -> str:
 
 async def stream_recommendation(payload: dict):
     """Async generator that yields text chunks from Claude as they arrive.
-    Retries with exponential backoff and falls back to Haiku if Sonnet is overloaded.
+    Retries the configured Haiku route-advisor model with exponential backoff.
 
     payload should contain keys: routes, service_alerts, incidents,
     stalled_trains, and stalled_buses.
@@ -188,7 +205,7 @@ async def stream_recommendation(payload: dict):
     Set JARVIS_MOCK_ADVISOR=1 to bypass Claude entirely (e.g. no API
     credits): routes/stops/alerts stay real, only this narration is
     generated locally."""
-    if os.getenv("JARVIS_MOCK_ADVISOR", "").strip() == "1":
+    if runtime.enabled("JARVIS_MOCK_ADVISOR"):
         yield build_mock_recommendation(payload)
         return
 
@@ -215,3 +232,13 @@ async def stream_recommendation(payload: dict):
                     raise
         print(f"[claude] {model} still overloaded after retries, trying next model")
     raise RuntimeError("All Claude models are currently overloaded. Please try again.")
+
+
+async def collect_recommendation(payload: dict) -> str:
+    """Drains `stream_recommendation` into a single string. Shared by
+    routers/trips.py's /api/trip and the plan_trip agent tool, which both
+    otherwise defined this identical loop themselves."""
+    raw = ""
+    async for chunk in stream_recommendation(payload):
+        raw += chunk
+    return raw

@@ -6,6 +6,7 @@ import {
   readJsonBody,
 } from "./backend-proxy-core";
 import { rateLimit } from "./rate-limit";
+import { requestPrincipal } from "./request-principal";
 
 export { appendRequestSearch } from "./backend-proxy-core";
 
@@ -38,7 +39,7 @@ interface ProxyOptions {
  * status preservation, and error redaction so the route handlers stay thin and
  * never leak backend/provider details to the browser.
  */
-export async function proxyToBackend(path: string, options: ProxyOptions = {}) {
+export async function proxyToBackend(path: string, options: ProxyOptions = {}, request?: NextRequest) {
   const appKey = process.env.APP_KEY;
   if (!appKey) {
     // Operator misconfiguration, not a data leak: APP_KEY must match FastAPI's.
@@ -50,6 +51,13 @@ export async function proxyToBackend(path: string, options: ProxyOptions = {}) {
 
   const { method = "GET", body, timeoutMs = DEFAULT_TIMEOUT_MS, cache, next } = options;
   const headers: Record<string, string> = { "X-App-Key": appKey };
+  if (request) {
+    const principal = requestPrincipal(request);
+    if (!principal) {
+      return NextResponse.json({ error: "Request identity is unavailable." }, { status: 503 });
+    }
+    headers["X-SmartRoute-Principal"] = principal;
+  }
   if (body !== undefined) headers["Content-Type"] = "application/json";
 
   const result = await fetchBackendText(
@@ -117,8 +125,8 @@ export async function postProxy<T>(
     const jsonBody = await readJsonBody(req);
     if (!jsonBody.ok) {
       return NextResponse.json(
-        { error: "Malformed JSON request body." },
-        { status: 400 },
+        { error: jsonBody.tooLarge ? "Request body is too large." : "Malformed JSON request body." },
+        { status: jsonBody.tooLarge ? 413 : 400 },
       );
     }
 
@@ -131,5 +139,5 @@ export async function postProxy<T>(
     }
     body = parsed.data;
   }
-  return proxyToBackend(opts.path, { method: "POST", body, cache: opts.cache });
+  return proxyToBackend(opts.path, { method: "POST", body, cache: opts.cache }, req);
 }

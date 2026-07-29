@@ -1,5 +1,7 @@
 import os
 import threading
+from datetime import datetime
+from pathlib import Path
 
 import psycopg2
 import psycopg2.pool
@@ -87,6 +89,41 @@ def _get_pool():
 
 
 class GTFSStaticData:
+
+    def load_scheduled_arrivals(self, path: str | Path | None = None) -> bool:
+        """Load the optional preprocessed full-GTFS schedule once at startup."""
+
+        from app.services.agent.tools.scheduled_arrivals import ScheduledArrivalIndex
+
+        candidate = Path(
+            path
+            or os.getenv("GTFS_SCHEDULE_ARTIFACT", "")
+            or Path(__file__).resolve().parent.parent / "data" / "scheduled_arrivals.json"
+        )
+        if not candidate.is_file():
+            return False
+        self.__dict__["_scheduled_arrival_index"] = ScheduledArrivalIndex.load(candidate)
+        return True
+
+    def get_scheduled_arrivals(
+        self,
+        *,
+        route_id: str,
+        stop_ids,
+        direction: str | None,
+        now: datetime,
+        limit: int,
+    ):
+        index = self.__dict__.get("_scheduled_arrival_index")
+        if index is None:
+            return {"status": "unavailable", "predictions": []}
+        return index.lookup(
+            route_id=route_id,
+            stop_ids=stop_ids,
+            direction=direction,
+            now=now,
+            limit=limit,
+        )
 
     # ------------------------------------------------------------------
     # Simplified my over engineered support for concurrent users
@@ -369,6 +406,9 @@ class GTFSStaticData:
         return [r["route_id"] for r in rows]
 
     def get_child_stop_ids(self, parent_stop_id: str):
+        index = self.__dict__.get("_pattern_index")
+        if index is not None and parent_stop_id in index.stops:
+            return [f"{parent_stop_id}N", f"{parent_stop_id}S"]
         rows = self._query(
             "SELECT stop_id FROM stops WHERE parent_station = %s",
             (parent_stop_id,),
@@ -452,6 +492,9 @@ class GTFSStaticData:
     # then a single grouped pull of route_ids per parent so we don't fall
     # into N+1.
     def get_subway_stops_with_routes(self, route_id_whitelist: set[str] | None = None):
+        index = self.__dict__.get("_pattern_index")
+        if index is not None:
+            return index.stops_for_routes(route_id_whitelist)
         parent_rows = self._query(
             "SELECT stop_id, stop_name, stop_lat, stop_lon FROM stops WHERE location_type = '1'"
         )

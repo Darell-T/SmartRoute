@@ -19,14 +19,31 @@ test("left rail route view does not render an inline client clock during SSR", (
 });
 
 test("left rail uses restrained transit product surfaces", () => {
-  const routeView = fs.readFileSync(
-    path.join(ROOT, "components/smart-route/left-rail/route-view.tsx"),
+  const routeView = [
+    "route-view.tsx",
+    "route-view-actions.tsx",
+    "route-view-alternatives.tsx",
+    "route-view-itinerary.tsx",
+    "route-view-nearby.tsx",
+    "route-view-state.tsx",
+  ]
+    .map((file) =>
+      fs.readFileSync(
+        path.join(ROOT, "components/smart-route/left-rail", file),
+        "utf8",
+      ),
+    )
+    .join("\n");
+  const alertsView = [
+    "alerts-view.tsx",
+    "alert-featured-card.tsx",
+    "alert-line-list.tsx",
+    "alert-detail.tsx",
+    "alert-view-model.ts",
+  ].map((file) => fs.readFileSync(
+    path.join(ROOT, "components/smart-route/left-rail", file),
     "utf8",
-  );
-  const alertsView = fs.readFileSync(
-    path.join(ROOT, "components/smart-route/left-rail/alerts-view.tsx"),
-    "utf8",
-  );
+  )).join("\n");
   const destinationSuggestions = fs.readFileSync(
     path.join(
       ROOT,
@@ -42,6 +59,22 @@ test("left rail uses restrained transit product surfaces", () => {
     path.join(ROOT, "components/smart-route/left-rail/alert-feed.ts"),
     "utf8",
   );
+  const alertLineIdentities = fs.readFileSync(
+    path.join(ROOT, "components/smart-route/left-rail/alert-line-identities.ts"),
+    "utf8",
+  );
+  const alertFeedNormalizer = fs.readFileSync(
+    path.join(ROOT, "components/smart-route/left-rail/alert-feed-normalizer.ts"),
+    "utf8",
+  );
+  const alertFeedThreading = fs.readFileSync(
+    path.join(ROOT, "components/smart-route/left-rail/alert-feed-threading.ts"),
+    "utf8",
+  );
+  const alertFeedCopy = fs.readFileSync(
+    path.join(ROOT, "components/smart-route/left-rail/alert-feed-copy.ts"),
+    "utf8",
+  );
   const atoms = fs.readFileSync(
     path.join(ROOT, "components/smart-route/left-rail/atoms.tsx"),
     "utf8",
@@ -52,6 +85,10 @@ test("left rail uses restrained transit product surfaces", () => {
   );
   const spiralLoader = fs.readFileSync(
     path.join(ROOT, "components/smart-route/ui/spiral-fill-loader.tsx"),
+    "utf8",
+  );
+  const shimmer = fs.readFileSync(
+    path.join(ROOT, "components/ai-elements/shimmer.tsx"),
     "utf8",
   );
   const mobileSheet = fs.readFileSync(
@@ -327,7 +364,7 @@ test("left rail uses restrained transit product surfaces", () => {
   );
   for (const label of ["Lexington Avenue", "Broadway", "8 Avenue"]) {
     assert.match(
-      alertFeed,
+      alertLineIdentities,
       new RegExp(label),
       `${label} should be available as a passenger-facing line group label`,
     );
@@ -389,6 +426,11 @@ test("left rail uses restrained transit product surfaces", () => {
   );
   assert.match(
     alertsView,
+    /if \(!hasDetail && item\.expandable\)[\s\S]*detail\.currentStatus\?\.trim\(\)/,
+    "alerts declared expandable should retain a real status fallback after visual de-duplication",
+  );
+  assert.match(
+    alertsView,
     /sr-alert-status\b/,
     "alert status renders as quiet textual metadata",
   );
@@ -403,17 +445,17 @@ test("left rail uses restrained transit product surfaces", () => {
     "alerts should not keep the post-merge feed-shell presentation",
   );
   assert.match(
-    alertFeed,
+    alertFeedThreading,
     /function groupAlertThreads|export function groupAlertThreads/,
     "alerts should group same-issue items into one row with an update thread",
   );
   assert.match(
-    alertFeed,
+    alertFeedNormalizer,
     /const byText/,
     "identical-text alerts tagged to many lines merge into one row with unioned badges",
   );
   assert.match(
-    alertFeed,
+    alertFeedCopy,
     /export function leadSentences/,
     "raw MTA paragraphs truncate to lead sentences — never rendered as text walls",
   );
@@ -474,6 +516,26 @@ test("left rail uses restrained transit product surfaces", () => {
     railCss,
     /\.sr-reasoning-lines/,
     "planning state should render appended status lines",
+  );
+  assert.match(
+    railCss,
+    /--sr-row-hover:\s*rgba\(13,\s*20,\s*16,\s*0\.065\)/,
+    "light mode should provide a visible neutral alert-row hover fill",
+  );
+  assert.match(
+    railCss,
+    /\.sr-alert-line-row__summary:not\(\[data-static="true"\]\):hover/,
+    "only expandable service-alert rows should receive hover feedback",
+  );
+  assert.doesNotMatch(
+    railCss,
+    /\.sr-alert-line-row__summary:hover\s+\.sr-alert-line-row__title\s*\{[^}]*color:\s*#fff/s,
+    "service-alert titles should not turn white on light surfaces",
+  );
+  assert.match(
+    shimmer,
+    /var\(--shimmer-gradient,/,
+    "animated reasoning text should accept the active surface theme gradient",
   );
   assert.doesNotMatch(
     railCss,

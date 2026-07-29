@@ -1,0 +1,18 @@
+{
+  "data": {
+    "events": [
+      {
+        "end_estimate_basis": "Soccer match \u2248 2h15m",
+        "estimated_end_iso": "2026-07-15T21:15:00Z",
+        "name": "FIFA World Cup 2026: Group Stage Match",
+        "start_iso": "2026-07-15T19:00:00Z",
+        "venue_key": null,
+        "venue_name": "MetLife Stadium"
+      }
+    ],
+    "note": "end times are estimates based on typical event length, not an official schedule"
+  },
+  "error": null,
+  "ok": true,
+  "summary": "found 1 event(s) for 'FIFA'"
+}

@@ -1,0 +1,23 @@
+{
+  "data": {
+    "candidates": [
+      {
+        "alert_headlines": [],
+        "arrives_iso": "2026-07-15T14:28:00-04:00",
+        "card_id": "rc_t1tsq01",
+        "departs_iso": "2026-07-15T14:06:00-04:00",
+        "eta_minutes": 22,
+        "lines": [
+          "2",
+          "3"
+        ],
+        "reason": "Fastest option; light foot traffic reported.",
+        "transfers": 1,
+        "walk_minutes": 5.0
+      }
+    ]
+  },
+  "error": null,
+  "ok": true,
+  "summary": "found 1 route(s) to Times Square; recommended 2/3"
+}

@@ -1,0 +1,22 @@
+{
+  "data": {
+    "candidates": [
+      {
+        "alert_headlines": [],
+        "arrives_iso": "2026-07-15T14:52:00-04:00",
+        "card_id": "rc_t2nf002",
+        "departs_iso": "2026-07-15T14:12:00-04:00",
+        "eta_minutes": 40,
+        "lines": [
+          "6"
+        ],
+        "reason": "Subway-only route, avoids buses as requested.",
+        "transfers": 0,
+        "walk_minutes": 8.0
+      }
+    ]
+  },
+  "error": null,
+  "ok": true,
+  "summary": "found 1 route(s) to Costco Wholesale; recommended 6"
+}

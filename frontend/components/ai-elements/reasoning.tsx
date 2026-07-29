@@ -1,13 +1,18 @@
 "use client";
 
-/* Vendored from Vercel AI Elements ("reasoning"), adapted for SmartRoute:
-   markdown/Streamdown rendering is dropped (rail copy is plain product
-   text), visual styling comes from the rail stylesheet via classNames
-   rather than Tailwind design tokens, and duration is a plain prop instead
-   of an internally-clocked measurement. The API shape — Reasoning /
+/* Vendored from Vercel AI Elements ("reasoning"), source:
+   https://github.com/vercel/ai-elements/blob/main/packages/elements/src/reasoning.tsx
+   License: Apache-2.0 (https://github.com/vercel/ai-elements/blob/main/LICENSE)
+
+   Local tweaks: markdown/Streamdown rendering is dropped (rail and chat copy
+   is plain product text, never model-authored markdown), visual styling
+   comes from the rail/chat stylesheets via classNames rather than Tailwind
+   design tokens, and duration is a plain prop instead of an
+   internally-clocked measurement. The API shape — Reasoning /
    ReasoningTrigger / ReasoningContent with isStreaming, duration, and
    controlled/uncontrolled open — matches upstream so a future package
-   install is a drop-in swap. */
+   install is a drop-in swap. Reused as-is (no further edits) for the chat
+   tab's working panel — see components/smart-route/chat/chat-working-panel.tsx. */
 
 import {
   createContext,

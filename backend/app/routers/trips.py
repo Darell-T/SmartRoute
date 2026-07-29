@@ -1,13 +1,21 @@
 import asyncio
 import importlib
 import os
-import re
+import math
 import time
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from app.services.ai_advisor import stream_recommendation
 from app.services.mta_feed import fetch_service_alerts, get_stalled_buses, parse_service_alerts, filter_alerts_for_routes, get_stalled_trains
-from app.services.trips import text, scoring, candidates, enrichment, incidents as trip_incidents
+from app.services.trips import text, scoring, candidates, enrichment, incidents as trip_incidents, advisor_context
+from app.services.trips.itinerary import build_canonical_itinerary
+from app.services.trips.recommendation_reasons import (
+    build_recommendation_reasons,
+    format_recommendation_reason,
+)
+from app.services.validation import production_shadow
+from app.services.validation.shadow import ShadowEvaluationStatus
+from app.services import admission
 
 directions_service = importlib.import_module("app.services.directions")
 get_transit_route = directions_service.get_transit_route
@@ -39,17 +47,46 @@ async def _collect_recommendation(payload: dict) -> str:
 
 
 class TripRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     origin_lat: float
     origin_lng: float
     destination: str
     destination_lat: float | None = None
     destination_lng: float | None = None
 
+
+
+def _trip_payload_is_bounded(payload: TripRequest) -> bool:
+    coordinates = (payload.origin_lat, payload.origin_lng, payload.destination_lat, payload.destination_lng)
+    if any(value is not None and (not isinstance(value, (int, float)) or not math.isfinite(value)) for value in coordinates):
+        return False
+    if not (40.2 <= payload.origin_lat <= 41.2 and -74.6 <= payload.origin_lng <= -73.2):
+        return False
+    if (payload.destination_lat is None) != (payload.destination_lng is None):
+        return False
+    if payload.destination_lat is not None and not (40.2 <= payload.destination_lat <= 41.2 and -74.6 <= payload.destination_lng <= -73.2):
+        return False
+    return isinstance(payload.destination, str) and bool(payload.destination.strip()) and len(payload.destination) <= 300
+
 @router.post("/api/trip")
 async def plan_trip(request: Request, payload: TripRequest):
     t0 = time.monotonic()
     marks: dict[str, float] = {}  # stage -> cumulative seconds, for the timing log
+    lease = None
     try:
+        if not _trip_payload_is_bounded(payload):
+            raise HTTPException(status_code=400, detail="Invalid trip request")
+        try:
+            lease = await admission.acquire(
+                admission.principal_from_request(request.headers.get("X-SmartRoute-Principal")),
+                "trip",
+            )
+        except admission.AdmissionDenied as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail=("Request identity is invalid." if exc.status_code == 403 else "Request admission is temporarily unavailable." if exc.status_code == 503 else "Too many requests."),
+                headers={"Retry-After": str(exc.retry_after_s)},
+            ) from None
         gtfs = getattr(request.app.state, "gtfs", None)
 
         # 1. Get routes from Google
@@ -110,19 +147,7 @@ async def plan_trip(request: Request, payload: TripRequest):
         # it, below). Enriching every Google candidate's legs against the remote
         # GTFS DB was the dominant request latency; alternates are now enriched
         # lazily when the rider selects them (POST /api/trip/enrich-route).
-        route_ids = set()
-        bus_route_ids = set()
-        for route in parsed_response:
-            for step in route:
-                step_type = step["type"]
-                if step_type in ("SUBWAY", "BUS"):
-                    route_ids.add(step["route_id"])
-                    # Stable response shape: every transit step always carries
-                    # these keys, empty until (and unless) its route is enriched.
-                    step["intermediate_stops"] = []
-                    step["intermediate_stop_locations"] = []
-                if step_type == "BUS":
-                    bus_route_ids.add(step["route_id"])
+        route_ids, bus_route_ids = candidates._collect_route_and_bus_ids(parsed_response)
 
         # 4. Fetch the fast live context (alerts + stalled vehicles) in parallel.
         # return_exceptions keeps one slow upstream from 500-ing the whole trip.
@@ -159,38 +184,46 @@ async def plan_trip(request: Request, payload: TripRequest):
         # intermediate stops) so Claude can account for incidents when choosing
         # between candidates. This is intentionally not a detached background
         # scan: if it times out or fails, the trip continues with [].
-        incident_station_names = trip_incidents._scan_station_names(gtfs, parsed_response)
-        incidents = await trip_incidents._scan_route_incidents(incident_station_names)
+        incident_context = trip_incidents.build_candidate_stop_context(gtfs, parsed_response)
+        # The lifecycle-owned store is a snapshot reader only.  No request path
+        # can construct a NY511 client or fetch the provider directly.
+        incident_scan = await trip_incidents._scan_route_incidents_with_metadata(
+            incident_context,
+            snapshot_store=getattr(request.app.state, "ny511_snapshot_store", None),
+        )
+        incidents = incident_scan["incidents"]
         marks["incidents"] = time.monotonic() - t0
 
         # 5. Filter alerts for relevant routes
         parsed_alerts = parse_service_alerts(raw_alerts) if raw_alerts else []
         relevant_alerts = filter_alerts_for_routes(parsed_alerts, route_ids)
 
-        # 6. Build payload for ATLAS (routes + alerts + incidents + stalled vehicles).
-        # ATLAS makes the route decision itself from these raw signals -- there is
+        # 6. Build the SmartRoute advisor payload (routes + alerts + incidents + stalled vehicles).
+        # The route advisor makes the decision itself from these raw signals -- there is
         # deliberately no precomputed "best route" score in the payload, so the
         # model reasons over the full data rather than deferring to a number.
-        route_advisor_payload = {
-            "routes": parsed_response,
-            "route_candidate_labels": candidates._build_route_candidate_labels(parsed_response),
-            "service_alerts": relevant_alerts,
-            "incidents": incidents,
-            "stalled_trains": stalled if stalled else [],
-            "stalled_buses": stalled_buses if stalled_buses else [],
-        }
+        route_advisor_payload = advisor_context.build_advisor_payload(
+            routes=parsed_response,
+            service_alerts=relevant_alerts,
+            incidents=incidents,
+            stalled_trains=stalled,
+            stalled_buses=stalled_buses,
+            mode=advisor_context.PlanningMode.INTELLIGENCE,
+        )
 
         # 7. Stream to Claude. The advisor is non-essential to DISPLAYING a
         # route: if it times out or errors (no credits, overload, network), an
         # unhandled exception here would 500 the whole trip. Fall back to a
         # plain non-mock rider-facing line so the real route still ships.
         raw_recommendation = ""
+        advisor_status = ShadowEvaluationStatus.COMPLETE
         try:
             raw_recommendation = await asyncio.wait_for(
                 _collect_recommendation(route_advisor_payload),
                 timeout=TRIP_ADVISOR_TIMEOUT_S,
             )
         except asyncio.TimeoutError:
+            advisor_status = ShadowEvaluationStatus.FALLBACK
             print(
                 f"[trip] advisor timed out ({TRIP_ADVISOR_TIMEOUT_S:.2f}s), "
                 "using text-only fallback"
@@ -200,6 +233,7 @@ async def plan_trip(request: Request, payload: TripRequest):
                 "is still built from real-time transit data."
             )
         except Exception as exc:
+            advisor_status = ShadowEvaluationStatus.FALLBACK
             print(f"[trip] advisor unavailable, using text-only fallback: {exc!r}")
             raw_recommendation = (
                 "[ROUTE:0] SmartRoute could not complete live reasoning, but the route shown "
@@ -207,18 +241,11 @@ async def plan_trip(request: Request, payload: TripRequest):
             )
         marks["advisor"] = time.monotonic() - t0
 
-        # 8. Parse chosen route index from ATLAS tag, then strip it
-        chosen_index = 0
-        route_tag_match = re.search(r"\[ROUTE:(\d+)\]", raw_recommendation)
-        if route_tag_match:
-            chosen_index = int(route_tag_match.group(1))
-            if chosen_index >= len(parsed_response):
-                chosen_index = 0
-        analysis_selected_index, candidate_analysis = candidates._parse_candidate_analysis(raw_recommendation)
-        if not route_tag_match and analysis_selected_index is not None:
-            chosen_index = analysis_selected_index
-            if chosen_index >= len(parsed_response):
-                chosen_index = 0
+        # 8. Parse the chosen route index from the advisor tag, then strip it.
+        chosen_index, candidate_analysis = advisor_context.parse_advisor_selection(
+            raw_recommendation,
+            len(parsed_response),
+        )
         recommendation = candidates._strip_model_control_blocks(raw_recommendation)
         recommendation = text._sanitize_recommendation(recommendation)
 
@@ -232,12 +259,74 @@ async def plan_trip(request: Request, payload: TripRequest):
         # Candidate REASON text (why each alternate wasn't picked) still falls
         # back to a time/transfer/alert comparison when ATLAS doesn't supply its
         # own reason; that is display copy only and never changes the selection.
+        scored_routes = scoring._score_routes(parsed_response, relevant_alerts)
         route_candidates = candidates._build_route_candidates(
             parsed_response,
             chosen_index,
             candidate_analysis,
-            scoring._score_routes(parsed_response, relevant_alerts),
+            scored_routes,
         )
+        score_by_index = scoring._score_by_index(scored_routes)
+        # The direct map planner uses the same canonical timing contract as
+        # agent cards. Keep its established candidate fields as compatibility
+        # aliases, but do not make the frontend derive a parallel trip total.
+        origin_point = {
+            "label": "Your location",
+            "lat": payload.origin_lat,
+            "lng": payload.origin_lng,
+        }
+        destination_point = {
+            "label": payload.destination,
+            "lat": payload.destination_lat,
+            "lng": payload.destination_lng,
+        }
+        for index, candidate in enumerate(route_candidates):
+            route = candidate.get("steps") or []
+            reason = (
+                candidate.get("recommendation_reason")
+                if candidate.get("is_recommended")
+                else candidate.get("rejection_reason")
+            )
+            structured_reasons = (
+                build_recommendation_reasons(
+                    score_by_index[chosen_index],
+                    [
+                        score
+                        for score_index, score in score_by_index.items()
+                        if score_index != chosen_index
+                    ],
+                )
+                if index == chosen_index
+                else []
+            )
+            if candidate.get("is_recommended"):
+                rendered_reasons = [
+                    rendered
+                    for rendered in (
+                        format_recommendation_reason(structured)
+                        for structured in structured_reasons
+                    )
+                    if rendered
+                ]
+                if rendered_reasons:
+                    candidate["recommendation_reason"] = rendered_reasons[0]
+            itinerary = build_canonical_itinerary(
+                route,
+                origin=origin_point,
+                destination=destination_point,
+                reasons=structured_reasons,
+                itinerary_id=str(candidate.get("id") or "") or None,
+            )
+            candidate["itinerary"] = itinerary
+            candidate["structured_recommendation_reasons"] = structured_reasons
+            candidate["total_minutes"] = max(
+                0, round(int(itinerary["total_duration_seconds"]) / 60)
+            )
+            candidate.setdefault("score_breakdown", {})["transfers"] = int(
+                itinerary["transfer_count"]
+            )
+            if itinerary.get("arrival_at"):
+                candidate["arrival_at"] = itinerary["arrival_at"]
         elapsed = time.monotonic() - t0
         # Single per-trip log line: time taken for each pipeline step + total.
         _d = lambda cur, prev: max(0.0, marks.get(cur, 0.0) - marks.get(prev, 0.0))
@@ -249,13 +338,48 @@ async def plan_trip(request: Request, payload: TripRequest):
             f"enrich={_d('enrich', 'advisor'):.2f}s "
             f"total={elapsed:.2f}s"
         )
-        return {
+        displayed_result = {
             "recommendation": recommendation,
             "route": chosen_route,
             "selected_route_index": chosen_index,
             "route_candidates": route_candidates,
             "alerts": relevant_alerts,
         }
+        baseline_payload = advisor_context.build_advisor_payload(
+            routes=parsed_response,
+            service_alerts=relevant_alerts,
+            mode=advisor_context.PlanningMode.BASELINE,
+        )
+
+        async def _evaluate_shadow_baseline():
+            raw = await _collect_recommendation(baseline_payload)
+            return production_shadow.parse_counterfactual_baseline(
+                raw, len(parsed_response)
+            )
+
+        return await production_shadow.run_trip_shadow(
+            displayed_result,
+            baseline_evaluator=_evaluate_shadow_baseline,
+            production_route_id=f"candidate-{chosen_index}",
+            production_status=advisor_status,
+            candidate_summaries=production_shadow.safe_candidate_summaries(
+                route_candidates
+            ),
+            source_counts=production_shadow.safe_source_counts(
+                incidents=incidents,
+                alert_count=len(relevant_alerts),
+                stalled_train_count=len(stalled),
+                stalled_bus_count=len(stalled_buses),
+            ),
+            incident_count=len(incidents),
+            scan_status=str(incident_scan["scan_metadata"].get("status") or "failed"),
+            snapshot_status=str(
+                incident_scan["scan_metadata"].get("snapshot_status") or "unavailable"
+            ),
+            intelligence_latency_ms=round(
+                _d("advisor", "incidents") * 1000
+            ),
+        )
 
     except HTTPException:
         raise
@@ -265,10 +389,121 @@ async def plan_trip(request: Request, payload: TripRequest):
         # so internal exception text is never exposed to the browser.
         print(f"[trip] UNHANDLED ERROR:\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail="Trip planning failed")
+    finally:
+        await admission.release(lease)
 
 
 class EnrichRouteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     steps: list[dict]
+
+
+_STEP_KEYS = frozenset({
+    "type", "start_point", "end_point", "polyline", "train_line", "line_color", "direction",
+    "departure_stop", "arrival_stop", "departure_coords", "arrival_coords", "minutes_until_train_arrives",
+    "minutes_until_arrival", "route_total_minutes", "stop_count", "route_id", "intermediate_stops",
+    "intermediate_stop_locations", "segment_index", "duration_minutes", "distance_meters",
+    "route_total_seconds", "departure_time_iso", "arrival_time_iso",
+})
+_STEP_TEXT_FIELDS = frozenset({
+    "route_id", "train_line", "line_color", "direction", "departure_stop", "arrival_stop",
+})
+_STEP_ISO_FIELDS = frozenset({"departure_time_iso", "arrival_time_iso"})
+
+
+def _bounded_point(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    if set(value) == {"lat", "lng"}:
+        lat, lng = value["lat"], value["lng"]
+    elif set(value) == {"latitude", "longitude"}:
+        lat, lng = value["latitude"], value["longitude"]
+    else:
+        return False
+    return (
+        isinstance(lat, (int, float))
+        and not isinstance(lat, bool)
+        and isinstance(lng, (int, float))
+        and not isinstance(lng, bool)
+        and math.isfinite(lat)
+        and math.isfinite(lng)
+        and 40.2 <= lat <= 41.2
+        and -74.6 <= lng <= -73.2
+    )
+
+
+def _bounded_stop_location(value: object) -> bool:
+    return (
+        isinstance(value, dict) and set(value) == {"name", "lat", "lng"}
+        and isinstance(value["name"], str) and len(value["name"]) <= 300
+        and _bounded_point({"lat": value["lat"], "lng": value["lng"]})
+    )
+
+
+def _enrichment_steps_are_bounded(steps: object) -> bool:
+    if not isinstance(steps, list) or len(steps) > 64:
+        return False
+    for step in steps:
+        if not isinstance(step, dict) or set(step) - _STEP_KEYS or not isinstance(step.get("type"), str) or step["type"] not in {"WALK", "SUBWAY", "BUS"}:
+            return False
+        for key, value in step.items():
+            if key in _STEP_TEXT_FIELDS and (
+                not isinstance(value, str) or len(value) > 300
+            ):
+                return False
+            if key in _STEP_ISO_FIELDS and (
+                not isinstance(value, str) or len(value) > 64
+            ):
+                return False
+            if key in {"minutes_until_train_arrives", "minutes_until_arrival"} and (
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not math.isfinite(value)
+                or not -1440 <= value <= 1440
+            ):
+                return False
+            if key in {"route_total_minutes", "duration_minutes"} and (
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not math.isfinite(value)
+                or not 0 <= value <= 1440
+            ):
+                return False
+            if key == "route_total_seconds" and (
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not math.isfinite(value)
+                or not 0 <= value <= 86_400
+            ):
+                return False
+            if key == "distance_meters" and (
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not math.isfinite(value)
+                or not 0 <= value <= 1_000_000
+            ):
+                return False
+            if key == "stop_count" and (
+                not isinstance(value, int)
+                or isinstance(value, bool)
+                or not 0 <= value <= 256
+            ):
+                return False
+            if key == "segment_index" and (
+                not isinstance(value, int)
+                or isinstance(value, bool)
+                or not 0 <= value <= 64
+            ):
+                return False
+            if key == "polyline" and (not isinstance(value, dict) or set(value) != {"encodedPolyline"} or not isinstance(value.get("encodedPolyline"), str) or len(value["encodedPolyline"]) > 8192):
+                return False
+            if key in {"start_point", "end_point", "departure_coords", "arrival_coords"} and not _bounded_point(value):
+                return False
+            if key == "intermediate_stops" and (not isinstance(value, list) or len(value) > 64 or any(not isinstance(item, str) or len(item) > 300 for item in value)):
+                return False
+            if key == "intermediate_stop_locations" and (not isinstance(value, list) or len(value) > 64 or any(not _bounded_stop_location(item) for item in value)):
+                return False
+    return True
 
 
 @router.post("/api/trip/enrich-route")
@@ -281,6 +516,8 @@ async def enrich_route(request: Request, payload: EnrichRouteRequest):
     t0 = time.monotonic()
     gtfs = getattr(request.app.state, "gtfs", None)
     steps = payload.steps or []
+    if not _enrichment_steps_are_bounded(steps):
+        raise HTTPException(status_code=400, detail="Invalid route enrichment request")
     _q0 = getattr(gtfs, "_query_count", 0) if gtfs else 0
     try:
         metrics = await enrichment._enrich_route(gtfs, steps)

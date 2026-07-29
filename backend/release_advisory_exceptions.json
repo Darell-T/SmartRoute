@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "exceptions": [
+    {
+      "id": "eslint-brace-expansion-ghsa-mh99-v99m-4gvg",
+      "advisory_id": "GHSA-mh99-v99m-4gvg",
+      "package": "brace-expansion",
+      "installed_versions": ["1.1.16"],
+      "paths": ["node_modules/brace-expansion"],
+      "scope": "development",
+      "scan_id": "frontend_full",
+      "scanner": "npm-audit",
+      "lock": {
+        "path": "frontend/package-lock.json",
+        "sha256": "2c9ddceac6cb0b5074cb0d08983e18820f0d85c9a4bb51a03d376ee53b62566a"
+      },
+      "expected_packages": [
+        {"path": "node_modules/eslint", "name": "eslint", "version": "9.39.4"},
+        {"path": "node_modules/eslint-config-next", "name": "eslint-config-next", "version": "16.2.9"},
+        {"path": "node_modules/@eslint/config-array", "name": "@eslint/config-array", "version": "0.21.2"},
+        {"path": "node_modules/@eslint/eslintrc", "name": "@eslint/eslintrc", "version": "3.3.5"},
+        {"path": "node_modules/eslint-plugin-import", "name": "eslint-plugin-import", "version": "2.32.0"},
+        {"path": "node_modules/eslint-plugin-jsx-a11y", "name": "eslint-plugin-jsx-a11y", "version": "6.10.2"},
+        {"path": "node_modules/eslint-plugin-react", "name": "eslint-plugin-react", "version": "7.37.5"},
+        {"path": "node_modules/minimatch", "name": "minimatch", "version": "3.1.5"},
+        {"path": "node_modules/brace-expansion", "name": "brace-expansion", "version": "1.1.16"}
+      ],
+      "rationale": "The remaining advisory is confined to the ESLint development dependency chain. Current ESLint plugins require callable minimatch 3.x, while minimatch 10 is API-incompatible; upstream has no compatible patched chain.",
+      "expires_on": "2026-08-27"
+    }
+  ]
+}

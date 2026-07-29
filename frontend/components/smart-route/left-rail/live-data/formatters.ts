@@ -1,3 +1,5 @@
+import { formatNycRouteClock } from "@/lib/nyc-route-clock";
+
 export function secondsSince(epochSeconds: number | null | undefined, nowMs: number): number {
   if (!epochSeconds) return 0;
   return Math.max(0, Math.round(nowMs / 1000 - epochSeconds));
@@ -139,9 +141,5 @@ export function minutesAgo(epochSeconds: number | null | undefined, nowMs: numbe
 }
 
 export function formatClockAt(ms: number): string {
-  return new Date(ms).toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  });
+  return formatNycRouteClock(ms) ?? "";
 }

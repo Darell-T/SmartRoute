@@ -1,0 +1,24 @@
+{
+  "data": {
+    "alternates": "walk ~5 min to Herald Sq (B/D/F/M/N/Q/R/W) or 28 St",
+    "is_heuristic": true,
+    "lines": [
+      "1",
+      "2",
+      "3",
+      "A",
+      "C",
+      "E"
+    ],
+    "note": "",
+    "stations": [
+      "34 St-Penn Station"
+    ],
+    "surge_end_iso": "2026-07-15T22:20:00-04:00",
+    "surge_start_iso": "2026-07-15T21:15:00-04:00",
+    "venue": "msg"
+  },
+  "error": null,
+  "ok": true,
+  "summary": "post-event crowd surge near msg ~21:15-22:20 (heuristic)"
+}

@@ -2,10 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import { fetchWsTicket, wsUrlWithTicket } from "./ws-ticket";
+import { LiveFeedConnection } from "./live-feed-connection";
 import type {
   LiveArrival,
-  LiveFeedResponse,
   LiveFeedIncident,
+  LiveFeedResponse,
   LiveSystemSignals,
   LiveVehicle,
   NearestStop,
@@ -25,36 +26,42 @@ interface LiveFeedState {
   degraded: boolean;
   debug: LiveFeedResponse["debug"] | null;
   error: string | null;
-  clockTick: number;
+  nowMs: number;
 }
 
 const INITIAL: LiveFeedState = {
-  nearestStop: null,
-  stops: [],
-  arrivals: [],
-  alerts: [],
-  vehicles: [],
-  signals: null,
-  incidents: [],
-  updatedAt: null,
-  isLoading: false,
-  degraded: false,
-  debug: null,
-  error: null,
-  clockTick: 0,
+  nearestStop: null, stops: [], arrivals: [], alerts: [], vehicles: [], signals: null,
+  incidents: [], updatedAt: null, isLoading: false, degraded: false, debug: null,
+  error: null, nowMs: 0,
 };
 
-const DEBUG_LIVE_FEED = process.env.NODE_ENV !== "production";
+export function withLiveFeedNow<T extends { nowMs: number }>(state: T, nowMs: number): T {
+  return nowMs > 0 ? { ...state, nowMs } : state;
+}
 
-function shouldSendLocation(
-  previous: { lng: number; lat: number } | null,
-  next: { lng: number; lat: number },
-) {
-  if (!previous) return true;
-  return (
-    Math.abs(previous.lat - next.lat) > 0.00045 ||
-    Math.abs(previous.lng - next.lng) > 0.00045
-  );
+function applySocketMessage(raw: string, setState: React.Dispatch<React.SetStateAction<LiveFeedState>>): void {
+  try {
+    const message: unknown = JSON.parse(raw);
+    if (!message || typeof message !== "object") throw new Error("not an object");
+    const payload = message as { type?: unknown; data?: LiveFeedResponse; message?: unknown };
+    if (payload.type === "snapshot" && payload.data) {
+      const data = payload.data;
+      setState((previous) => withLiveFeedNow({
+        ...previous,
+        nearestStop: data.nearest_stop ?? null,
+        stops: data.stops ?? [], arrivals: data.arrivals ?? [], alerts: data.alerts ?? [],
+        vehicles: data.vehicles ?? [], signals: data.signals ?? null, incidents: data.incidents ?? [],
+        updatedAt: data.updated_at ?? Math.floor(Date.now() / 1000), degraded: Boolean(data.degraded),
+        debug: data.debug ?? null, isLoading: false, error: null,
+      }, Date.now()));
+    } else if (payload.type === "error") {
+      const error = payload.message;
+      if (typeof error !== "string") throw new Error("missing error message");
+      setState((previous) => withLiveFeedNow({ ...previous, isLoading: false, degraded: true, error }, Date.now()));
+    }
+  } catch {
+    setState((previous) => withLiveFeedNow({ ...previous, isLoading: false, degraded: true, error: "Malformed live feed message" }, Date.now()));
+  }
 }
 
 export function useLiveFeed(
@@ -62,216 +69,45 @@ export function useLiveFeed(
   selectedRouteIds: string[] = [],
 ): LiveFeedState {
   const [state, setState] = useState<LiveFeedState>(INITIAL);
-  const wsRef = useRef<WebSocket | null>(null);
-  const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const backoffRef = useRef(1000);
+  const controllerRef = useRef<LiveFeedConnection | null>(null);
   const locationRef = useRef(location);
-  const selectedRouteIdsRef = useRef(selectedRouteIds);
-  const sentLocationRef = useRef<{ lng: number; lat: number } | null>(null);
-
-  locationRef.current = location;
-  selectedRouteIdsRef.current = selectedRouteIds;
+  const routeIdsRef = useRef(selectedRouteIds);
+  const hasLocation = location !== null;
 
   useEffect(() => {
-    if (!location) return;
+    locationRef.current = location;
+    routeIdsRef.current = selectedRouteIds;
+    controllerRef.current?.updateLocation(location);
+    controllerRef.current?.updateRouteIds(selectedRouteIds);
+  }, [location, selectedRouteIds]);
 
-    let cancelled = false;
-    let connecting = false;
-
-    function sendLocation(ws: WebSocket, force = false) {
-      const loc = locationRef.current;
-      if (!loc || ws.readyState !== WebSocket.OPEN) return;
-      if (!force && !shouldSendLocation(sentLocationRef.current, loc)) return;
-      if (DEBUG_LIVE_FEED) {
-        console.info("[live-feed/ws] send location", {
-          lat: loc.lat,
-          lng: loc.lng,
-          selected_route_ids: selectedRouteIdsRef.current,
-          force,
-        });
-      }
-      ws.send(JSON.stringify({
-        type: "location",
-        lat: loc.lat,
-        lng: loc.lng,
-        selected_route_ids: selectedRouteIdsRef.current,
-      }));
-      sentLocationRef.current = loc;
-    }
-
-    function scheduleReconnect() {
-      if (cancelled || reconnectRef.current) return;
-      const delay = Math.min(backoffRef.current, 30_000);
-      reconnectRef.current = setTimeout(() => {
-        reconnectRef.current = null;
-        backoffRef.current = Math.min(backoffRef.current * 2, 30_000);
-        connect();
-      }, delay);
-    }
-
-    async function connect() {
-      if (cancelled || wsRef.current || connecting) return;
-      connecting = true;
-      setState((prev) => ({ ...prev, isLoading: true, error: null }));
-
-      let ticket: string;
-      try {
-        ticket = await fetchWsTicket("/ws/live-feed");
-      } catch {
-        connecting = false;
-        if (cancelled) return;
-        setState((prev) => ({
-          ...prev,
-          isLoading: false,
-          degraded: true,
-          error: "Live feed reconnecting",
-        }));
-        scheduleReconnect();
-        return;
-      }
-
-      connecting = false;
-      if (cancelled || wsRef.current) return;
-
-      const ws = new WebSocket(wsUrlWithTicket("/ws/live-feed", ticket));
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        backoffRef.current = 1000;
-        if (DEBUG_LIVE_FEED) {
-          console.info("[live-feed/ws] open");
-        }
-        sendLocation(ws, true);
-      };
-
-      ws.onmessage = (ev) => {
-        try {
-          const msg = JSON.parse(ev.data) as
-            | { type: "snapshot"; data: LiveFeedResponse }
-            | { type: "error"; message: string };
-
-          if (msg.type === "snapshot") {
-            const data = msg.data;
-            if (DEBUG_LIVE_FEED) {
-              console.info("[live-feed/ws] snapshot", JSON.stringify({
-                arrivals: data.arrivals?.length ?? 0,
-                vehicles: data.vehicles?.length ?? 0,
-                updated_at: data.updated_at,
-                degraded: data.degraded,
-                debug: data.debug,
-                sampleVehicles: (data.vehicles ?? []).slice(0, 3).map((vehicle) => ({
-                  id: vehicle.id,
-                  route_id: vehicle.route_id,
-                  lat: vehicle.lat,
-                  lng: vehicle.lng,
-                  stale: vehicle.stale,
-                  position_source: vehicle.position_source,
-                  current_stop_sequence: vehicle.current_stop_sequence,
-                  segment: vehicle.segment,
-                })),
-              }, null, 2));
-            }
-            setState((prev) => ({
-              ...prev,
-              nearestStop: data.nearest_stop ?? null,
-              stops: data.stops ?? [],
-              arrivals: data.arrivals ?? [],
-              alerts: data.alerts ?? [],
-              vehicles: data.vehicles ?? [],
-              signals: data.signals ?? null,
-              incidents: data.incidents ?? [],
-              updatedAt: data.updated_at ?? Math.floor(Date.now() / 1000),
-              degraded: Boolean(data.degraded),
-              debug: data.debug ?? null,
-              isLoading: false,
-              error: null,
-            }));
-          } else if (msg.type === "error") {
-            setState((prev) => ({
-              ...prev,
-              isLoading: false,
-              degraded: true,
-              error: msg.message,
-            }));
-          }
-        } catch {
-          setState((prev) => ({
-            ...prev,
-            isLoading: false,
-            degraded: true,
-            error: "Malformed live feed message",
-          }));
-        }
-      };
-
-      ws.onclose = () => {
-        wsRef.current = null;
-        if (cancelled) return;
-        if (DEBUG_LIVE_FEED) {
-          console.info("[live-feed/ws] close");
-        }
-        setState((prev) => ({
-          ...prev,
-          isLoading: false,
-          degraded: true,
-          error: "Live feed reconnecting",
-        }));
-        scheduleReconnect();
-      };
-
-      ws.onerror = () => {
-        setState((prev) => ({ ...prev, degraded: true }));
-      };
-    }
-
-    connect();
-
+  useEffect(() => {
+    if (!hasLocation) return;
+    const controller = new LiveFeedConnection({
+      fetchTicket: () => fetchWsTicket("/ws/live-feed"),
+      createSocket: (ticket) => new WebSocket(wsUrlWithTicket("/ws/live-feed", ticket)),
+      onMessage: (raw) => applySocketMessage(raw, setState),
+      onStatus: (status) => {
+        setState((previous) => withLiveFeedNow(status === "open"
+          ? { ...previous, isLoading: false, error: null }
+          : status === "error"
+            ? { ...previous, degraded: true }
+            : { ...previous, isLoading: true, degraded: status === "reconnecting" ? true : previous.degraded, error: status === "reconnecting" ? "Live feed reconnecting" : null }, Date.now()));
+      },
+    });
+    controllerRef.current = controller;
+    controller.updateLocation(locationRef.current);
+    controller.updateRouteIds(routeIdsRef.current);
+    controller.start();
     return () => {
-      cancelled = true;
-      if (reconnectRef.current) clearTimeout(reconnectRef.current);
-      reconnectRef.current = null;
-      if (wsRef.current) {
-        wsRef.current.onclose = null;
-        wsRef.current.close();
-        wsRef.current = null;
-      }
+      if (controllerRef.current === controller) controllerRef.current = null;
+      controller.dispose();
     };
-  }, [Boolean(location)]);
+  }, [hasLocation]);
 
   useEffect(() => {
-    if (!location || !wsRef.current) return;
-    const ws = wsRef.current;
-    if (ws.readyState === WebSocket.OPEN && shouldSendLocation(sentLocationRef.current, location)) {
-      ws.send(JSON.stringify({
-        type: "location",
-        lat: location.lat,
-        lng: location.lng,
-        selected_route_ids: selectedRouteIdsRef.current,
-      }));
-      sentLocationRef.current = location;
-    }
-  }, [location?.lat, location?.lng]);
-
-  useEffect(() => {
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    if (DEBUG_LIVE_FEED) {
-      console.info("[live-feed/ws] vehicle scope", {
-        selected_route_ids: selectedRouteIds,
-      });
-    }
-    ws.send(JSON.stringify({
-      type: "vehicle_scope",
-      selected_route_ids: selectedRouteIds,
-    }));
-  }, [selectedRouteIds.join("|")]);
-
-  useEffect(() => {
-    // Local display clock only. Live data arrives through the WebSocket.
-    const id = setInterval(() => {
-      setState((prev) => ({ ...prev, clockTick: prev.clockTick + 1 }));
-    }, 10_000);
-    return () => clearInterval(id);
+    const id = window.setInterval(() => setState((previous) => withLiveFeedNow(previous, Date.now())), 10_000);
+    return () => window.clearInterval(id);
   }, []);
 
   return state;

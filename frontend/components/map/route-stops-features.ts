@@ -91,6 +91,42 @@ interface RouteStopProps {
   interpolated: boolean;
 }
 
+interface TransitPathProps {
+  color: string;
+  width: number;
+}
+
+/** LineString per transit step. Keeping selected-route paths in MapLibre
+ *  alongside walk dashes and stop dots avoids a second WebGL renderer and
+ *  guarantees every route layer shares the same camera and style lifecycle. */
+export function buildTransitPathFeatures(
+  steps: RouteStep[] | undefined,
+  colorFor: ColorResolver = defaultColorFor,
+): GeoJSON.FeatureCollection<GeoJSON.LineString, TransitPathProps> {
+  const features: GeoJSON.Feature<GeoJSON.LineString, TransitPathProps>[] = [];
+
+  for (const step of steps ?? []) {
+    if (step.type !== "SUBWAY" && step.type !== "BUS") continue;
+    const encoded = step.polyline?.encodedPolyline;
+    if (!encoded) continue;
+    const coordinates = decode(encoded).filter(
+      (point) => Number.isFinite(point[0]) && Number.isFinite(point[1]),
+    );
+    if (coordinates.length < 2) continue;
+
+    features.push({
+      type: "Feature",
+      geometry: { type: "LineString", coordinates },
+      properties: {
+        color: colorFor(step),
+        width: step.type === "BUS" ? 5 : 6,
+      },
+    });
+  }
+
+  return { type: "FeatureCollection", features };
+}
+
 /**
  * One Point feature per intermediate stop of every transit step. Real
  * coordinates (intermediate_stop_locations) win; when only names exist the

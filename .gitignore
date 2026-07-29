@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+backend/.venv/
 
 # Large GTFS static data files (downloaded at runtime)
 backend/data/gtfs_static/stop_times.txt
@@ -15,6 +16,10 @@ backend/data/
 # server (loaded into memory at startup), so re-include it past the data/ rule.
 !backend/app/data/
 !backend/app/data/stop_patterns.json
+# Fix C: the agent's curated static facts file is source, not runtime data --
+# re-include it past the data/ rule the same way as stop_patterns.json above.
+!backend/app/services/agent/data/
+!backend/app/services/agent/data/transit_facts.md
 .gtfs-cache/
 .worktrees/
 
@@ -29,6 +34,7 @@ next.user-config.*
 
 # Environment variables
 .env*
+!.env.example
 
 # Local ATLAS prompt override
 backend/app/services/ai_advisor_system_prompt.txt
@@ -86,9 +92,22 @@ frontend/scripts/qa/screenshots/
 .tmp-chrome-*/
 .pytest_cache/
 
-# Internal design/planning docs + agent session data (not for the deployed repo)
-docs/
-!docs/
+# Deterministic route-intelligence reports are generated per run and uploaded
+# by CI; keep local timing-bearing copies out of commits.
+backend/validation-results.json
+backend/validation-report.txt
+backend/validation-metrics.json
+backend/validation-ablations.json
+
+# Only README screenshot PNGs may be tracked under docs/
+docs/*
 !docs/assets/
+docs/assets/*
 !docs/assets/*.png
+
+# Internal agent/session material (not for the deployed repo)
+.superpowers/
 .claude/
+
+# Generated per-run by the eval harness fixture router (debug manifest)
+backend/evals/fixtures/*/index.json

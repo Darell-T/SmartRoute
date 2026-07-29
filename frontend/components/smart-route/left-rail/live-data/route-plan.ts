@@ -7,11 +7,23 @@ import {
   publicRecommendationText,
 } from "./route-reason-copy";
 import {
-  detailStepsFromSteps,
+  detailStepsFromCanonicalItinerary,
   mergeConsecutiveWalks,
   routeStepToRailStep,
   stripFromSteps,
 } from "./route-steps";
+
+function canonicalPlaceLabel(place: unknown, fallback: string): string {
+  if (typeof place === "string" && place.trim()) return place.trim();
+  if (place && typeof place === "object" && !Array.isArray(place)) {
+    const record = place as Record<string, unknown>;
+    for (const key of ["display_name", "label", "name", "address"]) {
+      const value = record[key];
+      if (typeof value === "string" && value.trim()) return value.trim();
+    }
+  }
+  return fallback;
+}
 
 export function buildPlan(
   routeSteps: ApiRouteStep[] | undefined,
@@ -21,6 +33,7 @@ export function buildPlan(
   routeEta?: string | null,
   routeTotalTime?: string | null,
   nowMs = Date.now(),
+  routeEntryContext: "chat" | "map_search" | "deep_link" | "restored" = "map_search",
 ): RoutePlan {
   const transitStep = routeSteps?.find(
     (step) => step.type === "SUBWAY" || step.type === "BUS",
@@ -60,19 +73,41 @@ export function buildPlan(
     || "Walking route";
 
   const selectedEtaMinutes = candidateEtaMinutes(activeRouteCandidate);
-  const selectedEta =
-    selectedEtaMinutes !== null && nowMs > 0
-      ? formatClockAt(nowMs + selectedEtaMinutes * 60_000)
-      : null;
+  // Preference: canonical itinerary.arrival_at → now+eta (legacy).
+  let selectedEta: string | null = null;
+  const arrivalAtIso = activeRouteCandidate?.arrival_at;
+  if (typeof arrivalAtIso === "string" && arrivalAtIso.trim() && nowMs > 0) {
+    const parsed = Date.parse(arrivalAtIso);
+    if (Number.isFinite(parsed)) {
+      selectedEta = formatClockAt(parsed);
+    }
+  }
+  if (selectedEta === null && selectedEtaMinutes !== null && nowMs > 0) {
+    selectedEta = formatClockAt(nowMs + selectedEtaMinutes * 60_000);
+  }
   const selectedTotalTime =
     selectedEtaMinutes !== null ? `${selectedEtaMinutes} min` : null;
+  const journeyPlaces = activeRouteCandidate?.itinerary
+    ? [
+        canonicalPlaceLabel(activeRouteCandidate.itinerary.origin, "Your location"),
+        ...(activeRouteCandidate.itinerary.waypoints ?? []).map((waypoint) =>
+          canonicalPlaceLabel(waypoint, "Waypoint"),
+        ),
+        canonicalPlaceLabel(activeRouteCandidate.itinerary.destination, "Destination"),
+      ].filter((place, index, values) => index === 0 || values[index - 1] !== place)
+    : undefined;
 
-  // Transfers = transit-vehicle boardings minus one. Walking segments never
-  // count, whether they start, end, or connect the trip.
+  // Transfers: prefer candidate score_breakdown (from itinerary.transfer_count
+  // via agentRoutePlanFromCards). Recompute only when absent.
+  // Recompute rule: transit-vehicle boardings minus one; walks never count.
   const transitLegs = merged.filter(
     (step) => step.type === "SUBWAY" || step.type === "BUS",
   );
-  const transferCount = Math.max(0, transitLegs.length - 1);
+  const fromCandidate = activeRouteCandidate?.score_breakdown?.transfers;
+  const transferCount =
+    typeof fromCandidate === "number" && Number.isFinite(fromCandidate)
+      ? Math.max(0, Math.round(fromCandidate))
+      : Math.max(0, transitLegs.length - 1);
 
   // "Leave by" backs the transit departure off by the approach walk; if the
   // walk consumes the whole wait, it's simply "now".
@@ -97,13 +132,15 @@ export function buildPlan(
 
   return {
     headline: publicRecommendationText(switchHeadline) || defaultHeadline,
-    rationale: activeRouteCandidate
-      ? buildVisibleRouteReason(
-          activeRouteCandidate,
-          routeSteps,
-          routeCandidates,
-        )
-      : "Nearby arrivals are live within a half-mile radius.",
+    rationale: !activeRouteCandidate
+      ? "Nearby arrivals are live within a half-mile radius."
+      : routeEntryContext === "chat"
+        ? ""
+        : buildVisibleRouteReason(
+            activeRouteCandidate,
+            routeSteps,
+            routeCandidates,
+          ),
     headsign: activeRouteCandidate ? headsign : undefined,
     isAlternativeRoute: activeRouteCandidate?.is_recommended === false,
     eta: (activeRouteCandidate && (routeEta || selectedEta)) || "Live",
@@ -113,8 +150,11 @@ export function buildPlan(
     leaveByLabel: activeRouteCandidate ? leaveByLabel : undefined,
     nextDepartureMinutes: activeRouteCandidate ? nextDepartureMinutes : undefined,
     transferCount: activeRouteCandidate ? transferCount : undefined,
+    journeyPlaces,
     strip: activeRouteCandidate ? stripFromSteps(routeSteps) : undefined,
-    detailSteps: activeRouteCandidate ? detailStepsFromSteps(routeSteps) : undefined,
+    detailSteps: activeRouteCandidate
+      ? detailStepsFromCanonicalItinerary(routeSteps, activeRouteCandidate.itinerary)
+      : undefined,
     pickedLine: line,
     steps,
     alternatives: buildAlternatives(routeCandidates, activeRouteCandidate, nowMs),

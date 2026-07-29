@@ -1,0 +1,36 @@
+{
+  "data": {
+    "candidates": [
+      {
+        "alert_headlines": [],
+        "arrives_iso": "2026-07-15T14:37:00-04:00",
+        "card_id": "rc_t1cba01",
+        "departs_iso": "2026-07-15T14:03:00-04:00",
+        "eta_minutes": 34,
+        "lines": [
+          "6",
+          "M116"
+        ],
+        "reason": "Fastest option with one transfer; no active alerts on the 6 or M116.",
+        "transfers": 1,
+        "walk_minutes": 6.0
+      },
+      {
+        "alert_headlines": [],
+        "arrives_iso": "2026-07-15T14:51:00-04:00",
+        "card_id": "rc_t1cba02",
+        "departs_iso": "2026-07-15T14:05:00-04:00",
+        "eta_minutes": 46,
+        "lines": [
+          "Q102"
+        ],
+        "reason": "Zero transfers but noticeably slower.",
+        "transfers": 0,
+        "walk_minutes": 9.0
+      }
+    ]
+  },
+  "error": null,
+  "ok": true,
+  "summary": "found 2 route(s) to Costco Wholesale (East Harlem); recommended 6/M116"
+}

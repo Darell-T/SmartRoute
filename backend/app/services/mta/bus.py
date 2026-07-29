@@ -300,31 +300,51 @@ async def get_stalled_buses(route_ids: set) -> list:
         if isinstance(result, Exception):
             print(f"[mta_feed] bus feed fetch error: {result}")
             continue
+        stalled_buses.extend(parse_stalled_bus_positions(result))
 
-        vehicles = (
-            result.get("Siri", {})
-            .get("ServiceDelivery", {})
-            .get("VehicleMonitoringDelivery", [{}])[0]
-            .get("VehicleActivity", [])
-        )
+    return stalled_buses
 
-        for vehicle in vehicles:
-            vehicle_position = vehicle.get("MonitoredVehicleJourney", {})
-            progress_rate = vehicle_position.get("ProgressRate")
-            progress_status = vehicle_position.get("ProgressStatus", [])
 
-            if progress_rate == "noProgress" and "layover" not in progress_status:
-                line_ref = vehicle_position.get("LineRef", "")
-                location = vehicle_position.get("VehicleLocation")
-                recorded_at_time = vehicle.get("RecordedAtTime") or vehicle_position.get("RecordedAtTime")
+def parse_stalled_bus_positions(payload: object) -> list[dict]:
+    """Extract stalled buses from one provider-shaped SIRI payload.
 
-                if not line_ref or location is None:
-                    continue
+    This is the pure parsing portion previously embedded in
+    :func:`get_stalled_buses`.  Keeping it separate lets deterministic replay
+    fixtures exercise the same SIRI interpretation without performing an MTA
+    BusTime request.
+    """
+    if not isinstance(payload, dict):
+        return []
+    service_delivery = payload.get("Siri", {}).get("ServiceDelivery", {})
+    if not isinstance(service_delivery, dict):
+        return []
 
-                stalled_buses.append({
-                    "route_id": line_ref.replace("MTA NYCT_", ""),
-                    "location": location,
-                    "time_recorded": recorded_at_time,
-                })
+    deliveries = service_delivery.get("VehicleMonitoringDelivery", [{}])
+    if not isinstance(deliveries, list) or not deliveries or not isinstance(deliveries[0], dict):
+        return []
+    vehicles = deliveries[0].get("VehicleActivity", [])
+    if not isinstance(vehicles, list):
+        return []
 
+    stalled_buses = []
+    for vehicle in vehicles:
+        if not isinstance(vehicle, dict):
+            continue
+        vehicle_position = vehicle.get("MonitoredVehicleJourney", {})
+        if not isinstance(vehicle_position, dict):
+            continue
+        progress_rate = vehicle_position.get("ProgressRate")
+        progress_status = vehicle_position.get("ProgressStatus", [])
+        if progress_rate != "noProgress" or "layover" in progress_status:
+            continue
+        line_ref = vehicle_position.get("LineRef", "")
+        location = vehicle_position.get("VehicleLocation")
+        recorded_at_time = vehicle.get("RecordedAtTime") or vehicle_position.get("RecordedAtTime")
+        if not line_ref or location is None:
+            continue
+        stalled_buses.append({
+            "route_id": line_ref.replace("MTA NYCT_", ""),
+            "location": location,
+            "time_recorded": recorded_at_time,
+        })
     return stalled_buses

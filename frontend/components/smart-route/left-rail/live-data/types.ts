@@ -24,6 +24,8 @@ export interface BuildLeftRailDataInput {
   activeRouteCandidate?: RouteCandidate | null;
   switchHeadline?: string | null;
   recommendationText?: string | null;
+  /** UI origin only; chat owns its own explanatory prose. */
+  routeEntryContext?: "chat" | "map_search" | "deep_link" | "restored";
   routeEta?: string | null;
   routeTotalTime?: string | null;
   serviceAlerts?: ServiceAlertDetail[];

@@ -243,15 +243,36 @@ async def get_stalled_trains(route_ids: set) -> list:
     for feed in raw_feeds:
         all_positions.extend(parse_vehicle_positions(feed))
 
-    now = datetime.now(tz=NYC_TZ).timestamp()
+    return detect_stalled_trains(
+        all_positions,
+        route_ids,
+        now_timestamp=datetime.now(tz=NYC_TZ).timestamp(),
+    )
+
+
+def detect_stalled_trains(
+    positions: list[dict],
+    route_ids: set[str],
+    *,
+    now_timestamp: float,
+) -> list[dict]:
+    """Return the existing stalled-train signal from parsed GTFS-RT positions.
+
+    Fetching and protobuf parsing remain separate.  This pure detection step
+    permits recorded feeds to exercise the exact live stale-position rule.
+    """
     stalled = []
-    for pos in all_positions:
-        if pos["route_id"] in route_ids and pos["timestamp"] and (now - pos["timestamp"]) > 300:
+    for pos in positions:
+        if not isinstance(pos, dict):
+            continue
+        timestamp = pos.get("timestamp")
+        route_id = pos.get("route_id")
+        if route_id in route_ids and timestamp and (now_timestamp - timestamp) > 300:
             stalled.append({
-                "route_id": pos["route_id"],
-                "stop_id": pos["stop_id"],
-                "status": pos["status"],
-                "stalled_minutes": round((now - pos["timestamp"]) / 60),
+                "route_id": route_id,
+                "stop_id": pos.get("stop_id"),
+                "status": pos.get("status"),
+                "stalled_minutes": round((now_timestamp - timestamp) / 60),
             })
     return stalled
 
