@@ -12,7 +12,7 @@
       "scanner": "npm-audit",
       "lock": {
         "path": "frontend/package-lock.json",
-        "sha256": "67d5dcfdb3b2c68883b162db8c4c08d107f77b7d1a3272b363a2d4fa301e3bc6"
+        "sha256": "2c9ddceac6cb0b5074cb0d08983e18820f0d85c9a4bb51a03d376ee53b62566a"
       },
       "expected_packages": [
         {"path": "node_modules/eslint", "name": "eslint", "version": "9.39.4"},

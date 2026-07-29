@@ -274,11 +274,12 @@ this incident merge does not collapse those arrays into the Grok/511NY incident 
 
 ### Production readiness
 
-The complete environment, Redis/admission, worker-observation, readiness, and
-rollback contract lives in
-[`docs/production-topology-contract.md`](docs/production-topology-contract.md).
-That document is the deployment source of truth; this README does not prescribe
-a platform worker count.
+Production chat requires Redis-backed sessions and a reachable `REDIS_URL`.
+`/health` is process liveness; `/ready` requires completed startup plus durable
+Redis for chat traffic. Deploy with `SMARTROUTE_ENV=production` and a shared
+server-only `APP_KEY`. If readiness or chat smoke fails, roll traffic back to the
+previously healthy backend SHA without running database migrations during rollback.
+This README does not prescribe a platform worker count.
 
 ### Ticketmaster Discovery v2
 
@@ -365,8 +366,13 @@ python -m pytest -q
 
 The canonical backend runner is pytest. Use the project virtual environment if
 your global Python installation does not include the declared test dependencies.
-The deterministic route-intelligence suite and its opt-in live certification
-commands are documented in [Route-intelligence validation](docs/intelligence-validation.md).
+
+Deterministic route-intelligence replays:
+
+```bash
+cd backend
+python -m scripts.replay_route_intelligence --json-out validation-results.json --text-out validation-report.txt --metrics-out validation-metrics.json --ablations-out validation-ablations.json
+```
 
 Focused city-intelligence checks:
 

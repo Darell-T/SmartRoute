@@ -1,4 +1,5 @@
 import type { RouteCandidate } from "@/types";
+import { formatNycRouteClock } from "@/lib/nyc-route-clock";
 
 export interface CanonicalRouteSummary {
   arriveLabel: string | null;
@@ -6,11 +7,7 @@ export interface CanonicalRouteSummary {
 }
 
 function formatArrival(iso: string | undefined): string | null {
-  if (!iso) return null;
-  const value = new Date(iso);
-  return Number.isFinite(value.getTime())
-    ? value.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
-    : null;
+  return formatNycRouteClock(iso);
 }
 
 /**

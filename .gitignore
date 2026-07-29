@@ -99,11 +99,14 @@ backend/validation-report.txt
 backend/validation-metrics.json
 backend/validation-ablations.json
 
-# Internal design/planning docs + agent session data (not for the deployed repo)
-docs/
-!docs/
+# Only README screenshot PNGs may be tracked under docs/
+docs/*
 !docs/assets/
+docs/assets/*
 !docs/assets/*.png
+
+# Internal agent/session material (not for the deployed repo)
+.superpowers/
 .claude/
 
 # Generated per-run by the eval harness fixture router (debug manifest)

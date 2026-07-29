@@ -12,6 +12,7 @@ import type {
   RecommendationReason,
   RouteCard,
 } from "@/lib/agent-chat-stream";
+import { formatNycRouteClock } from "@/lib/nyc-route-clock";
 import { SUBWAY_BULLET_ROUTES } from "@/components/smart-route/train-bullet";
 
 export type ItineraryEventKind =
@@ -75,14 +76,7 @@ export function formatDurationMinutes(totalMinutes: number): string {
 }
 
 export function formatClockTime(iso: string | undefined | null): string | null {
-  if (!iso) return null;
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return null;
-  return date.toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  });
+  return formatNycRouteClock(iso);
 }
 
 export function transferLabel(count: number): string {
