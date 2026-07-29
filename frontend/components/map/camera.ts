@@ -30,9 +30,17 @@ export function flyToRoute(
     maxZoom?: number;
   } = {},
 ) {
-  if (allCoords.length === 0) return;
+  const validCoords = allCoords.filter(
+    (coord): coord is [number, number] =>
+      Array.isArray(coord) &&
+      coord.length >= 2 &&
+      Number.isFinite(coord[0]) &&
+      Number.isFinite(coord[1]),
+  );
+  if (validCoords.length === 0) return;
+
   const bounds = new maplibregl.LngLatBounds();
-  allCoords.forEach((c) => bounds.extend(c as maplibregl.LngLatLike));
+  validCoords.forEach((coord) => bounds.extend(coord));
   const reducedMotion =
     typeof window !== "undefined" &&
     window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;

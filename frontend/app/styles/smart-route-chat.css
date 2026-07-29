@@ -1,0 +1,2597 @@
+/* ════════════════════════════════════════════════════════════════════════
+   SmartRoute — Chat tab
+
+   Six neutral tokens (dark default, light second), scoped under
+   `.sr-chat-tab[data-sr-theme]`, plus the shadcn CSS-variable bridge that
+   lets the vendored prompt-kit/shadcn primitives (Button, Textarea,
+   Tooltip, ChatContainer) theme correctly without any component edits —
+   they read `--background`/`--foreground`/etc. via Tailwind's `@theme
+   inline` mapping in globals.css, and this block simply redefines those
+   variables locally to point at the six chat tokens instead of the app's
+   global (light-only) shadcn palette.
+
+   Structural/layout tokens shared with the rail (`--sr-radius-card`,
+   `--sr-font`, `--sr-motion-ease`, MTA line colors) are intentionally
+   reused from `:root` (smart-route-left-rail.css) rather than duplicated —
+   "bullets carry all the saturated color; chrome is neutral" is the same
+   design rule in both surfaces.
+   ════════════════════════════════════════════════════════════════════════ */
+
+.sr-chat-tab {
+  position: relative;
+  height: 100%;
+  font-family: var(--sr-font);
+  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+}
+
+.sr-chat-tab[data-sr-theme="dark"] {
+  --sr-chat-bg: #0b0d0e;
+  --sr-chat-surface: #181a1e;
+  --sr-chat-ink: rgba(255, 255, 255, 0.95);
+  --sr-chat-ink-dim: rgba(255, 255, 255, 0.61);
+  --sr-chat-accent: #3ed134;
+  --sr-chat-danger: #fb7185;
+
+  --sr-chat-hairline: rgba(255, 255, 255, 0.08);
+  --sr-chat-hover-fill: rgba(255, 255, 255, 0.07);
+  --sr-chat-accent-tint: rgba(62, 209, 52, 0.16);
+  --sr-chat-danger-tint: rgba(251, 113, 133, 0.12);
+  --sr-chat-danger-hairline: rgba(251, 113, 133, 0.28);
+  --sr-chat-raised-shadow: none;
+  --shimmer-gradient: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.54) 0%,
+    rgba(255, 255, 255, 0.98) 42%,
+    rgba(121, 240, 111, 0.94) 54%,
+    rgba(255, 255, 255, 0.98) 66%,
+    rgba(255, 255, 255, 0.54) 100%
+  );
+
+  /* Shared transit-glass material. Route cards and the composer consume the
+       same surface, border, blur, and shadow so the two primary interaction
+       surfaces cannot drift into slightly different materials. */
+  --sr-glass-surface: rgba(23, 25, 29, 0.42);
+  --sr-glass-surface-hover: rgba(30, 33, 38, 0.5);
+  --sr-glass-border: rgba(255, 255, 255, 0.1);
+  --sr-glass-frost: 7px;
+  --sr-glass-rim-frost: 3px;
+  --sr-glass-dispersion: 0.26;
+  --sr-glass-specular: rgba(255, 255, 255, 0.16);
+  --sr-glass-specular-counter: rgba(255, 255, 255, 0.05);
+  --sr-glow-green: rgba(62, 209, 52, 0.065);
+  --sr-glow-orange: rgba(238, 137, 65, 0.035);
+  --sr-glow-neutral: rgba(107, 181, 98, 0.035);
+  --sr-glass-shadow:
+    inset 0 1.5px 0 rgba(255, 255, 255, 0.12),
+    inset 0 -2px 3px rgba(0, 0, 0, 0.16), 0 14px 38px rgba(0, 0, 0, 0.15);
+}
+
+.sr-chat-tab[data-sr-theme="light"] {
+  --sr-chat-bg: #f7f7f5;
+  --sr-chat-surface: #ffffff;
+  --sr-chat-ink: rgba(15, 16, 18, 0.94);
+  --sr-chat-ink-dim: rgba(15, 16, 18, 0.61);
+  --sr-chat-accent: #1e8f2a;
+  --sr-chat-danger: #c74357;
+
+  --sr-chat-hairline: rgba(15, 16, 18, 0.12);
+  --sr-chat-hover-fill: rgba(15, 16, 18, 0.05);
+  --sr-chat-accent-tint: rgba(30, 143, 42, 0.12);
+  --sr-chat-danger-tint: rgba(199, 67, 87, 0.1);
+  --sr-chat-danger-hairline: rgba(199, 67, 87, 0.22);
+  --sr-chat-raised-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shimmer-gradient: linear-gradient(
+    90deg,
+    rgba(15, 16, 18, 0.5) 0%,
+    rgba(15, 16, 18, 0.96) 42%,
+    rgba(24, 126, 36, 0.92) 54%,
+    rgba(15, 16, 18, 0.96) 66%,
+    rgba(15, 16, 18, 0.5) 100%
+  );
+
+  --sr-glass-surface: rgba(255, 255, 255, 0.42);
+  --sr-glass-surface-hover: rgba(255, 255, 255, 0.55);
+  --sr-glass-border: rgba(15, 16, 18, 0.13);
+  --sr-glass-frost: 9px;
+  --sr-glass-rim-frost: 4px;
+  --sr-glass-dispersion: 0.2;
+  --sr-glass-specular: rgba(255, 255, 255, 0.55);
+  --sr-glass-specular-counter: rgba(255, 255, 255, 0.25);
+  --sr-glow-green: rgba(30, 143, 42, 0.055);
+  --sr-glow-orange: rgba(220, 118, 49, 0.04);
+  --sr-glow-neutral: rgba(71, 145, 74, 0.035);
+  --sr-glass-shadow:
+    inset 0 1.5px 0 rgba(255, 255, 255, 0.7),
+    inset 0 -1px 2px rgba(15, 16, 18, 0.06), 0 14px 38px rgba(28, 34, 30, 0.09);
+}
+
+/* ── shadcn variable bridge ──────────────────────────────────────────── */
+.sr-chat-tab {
+  --background: var(--sr-chat-bg);
+  --foreground: var(--sr-chat-ink);
+  --card: var(--sr-chat-surface);
+  --card-foreground: var(--sr-chat-ink);
+  --popover: var(--sr-chat-surface);
+  --popover-foreground: var(--sr-chat-ink);
+  --primary: var(--sr-chat-ink);
+  --primary-foreground: var(--sr-chat-bg);
+  --secondary: var(--sr-chat-surface);
+  --secondary-foreground: var(--sr-chat-ink);
+  --muted: var(--sr-chat-surface);
+  --muted-foreground: var(--sr-chat-ink-dim);
+  --accent: var(--sr-chat-hover-fill);
+  --accent-foreground: var(--sr-chat-ink);
+  --destructive: var(--sr-chat-danger);
+  --border: var(--sr-chat-hairline);
+  --input: var(--sr-chat-hairline);
+  --ring: color-mix(in srgb, var(--sr-chat-ink) 28%, transparent);
+  background: var(--sr-chat-bg);
+  color: var(--sr-chat-ink);
+}
+
+.sr-chat-tab *,
+.sr-chat-tab *::before,
+.sr-chat-tab *::after {
+  box-sizing: border-box;
+}
+
+.sr-chat-tab button {
+  /* `font-family` only (not the `font` shorthand): the shorthand also
+       resets font-size/line-height/weight, and `.sr-chat-tab button`'s
+       specificity (0,1,1) beats a single-class rule like
+       `.sr-chat-near-you__label` (0,1,0) — it was silently winning over
+       every button's explicit font-size. */
+  font-family: inherit;
+  color: inherit;
+}
+
+@media (max-width: 720px) {
+  .sr-chat-tab {
+    height: var(--visual-viewport-height, 100dvh);
+  }
+}
+
+/* Recommendation card v2: one calm itinerary surface. */
+.sr-itinerary-card-beam {
+  display: block;
+  width: 100%;
+  max-width: 620px;
+  border-radius: 16px;
+  isolation: isolate;
+}
+
+.sr-chat-tab .sr-itinerary-card-beam > .sr-itinerary-card {
+  overflow: hidden;
+}
+
+.sr-chat-tab .sr-itinerary-card {
+  --sr-itinerary-pad-x: 18px;
+  --sr-itinerary-pad-y: 14px;
+  overflow: hidden;
+  padding: 0;
+  border-radius: 16px;
+  border: 1px solid rgba(167, 179, 197, 0.32);
+  background: #0d0f12;
+  box-shadow:
+    0 18px 44px rgba(0, 0, 0, 0.24),
+    inset 0 1px 0 rgba(255, 255, 255, 0.025);
+  color: rgba(255, 255, 255, 0.94);
+}
+
+.sr-chat-tab[data-sr-theme="light"] .sr-itinerary-card,
+.sr-chat-tab[data-sr-theme="light"] .sr-itinerary-card[data-selected="true"] {
+  border-color: rgba(32, 39, 48, 0.2);
+  background: #fbfbfa;
+  box-shadow:
+    0 18px 44px rgba(24, 30, 38, 0.09),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  color: rgba(15, 16, 18, 0.94);
+}
+
+.sr-chat-tab .sr-itinerary-card[data-selected="true"] {
+  background: #0d0f12;
+}
+
+.sr-chat-tab .sr-itinerary-card__header {
+  gap: 4px;
+  padding: var(--sr-itinerary-pad-y) var(--sr-itinerary-pad-x) 4px;
+}
+
+.sr-chat-tab .sr-itinerary-card__title {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  row-gap: 3px;
+  margin-top: 1px;
+  font-size: clamp(17px, 1.9vw, 20px);
+  font-weight: 590;
+  line-height: 1.2;
+  letter-spacing: -0.026em;
+  color: inherit;
+}
+
+.sr-chat-tab .sr-itinerary-card__title-part {
+  display: inline-flex;
+  align-items: baseline;
+}
+
+.sr-chat-tab .sr-itinerary-card__title-arrow {
+  margin: 0 0.65em;
+  color: rgba(255, 255, 255, 0.43);
+  font-weight: 350;
+}
+
+.sr-chat-tab[data-sr-theme="light"] .sr-itinerary-card__title-arrow {
+  color: rgba(15, 16, 18, 0.38);
+}
+
+.sr-chat-tab .sr-itinerary-card__arrive {
+  margin: 0;
+  color: #8d97aa;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+}
+
+.sr-chat-tab[data-sr-theme="light"] .sr-itinerary-card__arrive {
+  color: #667184;
+}
+
+.sr-chat-tab .sr-itinerary-card__hero {
+  display: flex;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 12px;
+  margin: 0;
+  padding: 6px var(--sr-itinerary-pad-x) 10px;
+  border: 0;
+}
+
+.sr-chat-tab .sr-itinerary-card__duration-value {
+  font-size: 22px;
+  font-weight: 650;
+  line-height: 1;
+}
+
+.sr-chat-tab .sr-itinerary-card__meta {
+  gap: 6px;
+  font-size: 12px;
+}
+
+.sr-itinerary-card__legs {
+  display: flex;
+  flex-direction: column;
+  padding: 0 var(--sr-itinerary-pad-x);
+}
+
+.sr-itinerary-card__leg,
+.sr-itinerary-card__walk,
+.sr-itinerary-card__waypoint {
+  position: relative;
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  column-gap: 10px;
+  padding: 12px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.sr-chat-tab[data-sr-theme="light"] .sr-itinerary-card__leg,
+.sr-chat-tab[data-sr-theme="light"] .sr-itinerary-card__walk,
+.sr-chat-tab[data-sr-theme="light"] .sr-itinerary-card__waypoint {
+  border-top-color: rgba(15, 16, 18, 0.1);
+}
+
+.sr-itinerary-card__leg-glyph {
+  display: flex;
+  align-items: flex-start;
+}
+
+.sr-itinerary-card__leg-body {
+  min-width: 0;
+}
+
+.sr-itinerary-card__leg-heading,
+.sr-itinerary-card__walk-heading {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  color: rgba(255, 255, 255, 0.94);
+  gap: 0;
+  font-size: 14px;
+  font-weight: 540;
+  line-height: 1.3;
+  letter-spacing: -0.018em;
+}
+
+.sr-chat-tab[data-sr-theme="light"] .sr-itinerary-card__leg-heading,
+.sr-chat-tab[data-sr-theme="light"] .sr-itinerary-card__walk-heading {
+  color: rgba(15, 16, 18, 0.93);
+}
+
+.sr-itinerary-card__leg-arrow {
+  margin: 0 0.65em;
+  color: rgba(255, 255, 255, 0.4);
+  font-weight: 350;
+}
+
+.sr-chat-tab[data-sr-theme="light"] .sr-itinerary-card__leg-arrow {
+  color: rgba(15, 16, 18, 0.38);
+}
+
+.sr-itinerary-card__stop-chain {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  margin-top: 5px;
+}
+
+.sr-itinerary-card__chain-track {
+  position: relative;
+}
+
+.sr-itinerary-card__chain-track::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  top: 9px;
+  bottom: 9px;
+  left: 8px;
+  width: 2px;
+  transform: translateX(-50%);
+  background: var(--sr-route-color);
+}
+
+.sr-itinerary-card__chain-row,
+.sr-itinerary-card__intermediate-stops > li,
+.sr-itinerary-card__disclosure,
+.sr-itinerary-card__ride-summary {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-height: 22px;
+}
+
+.sr-itinerary-card__intermediate-stops {
+  overflow: hidden;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sr-itinerary-card__intermediate-stops > li {
+  min-height: 18px;
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+.sr-chat-tab[data-sr-theme="light"] .sr-itinerary-card__intermediate-stops > li {
+  color: rgba(15, 16, 18, 0.66);
+}
+
+.sr-itinerary-card__chain-marker {
+  display: block;
+  justify-self: center;
+  border-radius: 999px;
+  box-sizing: border-box;
+}
+
+.sr-itinerary-card__chain-marker--start,
+.sr-itinerary-card__chain-marker--end {
+  width: 16px;
+  height: 16px;
+  border: 2px solid
+    color-mix(in srgb, var(--sr-route-color) 82%, white 18%);
+  background: var(--sr-route-color);
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--sr-route-color) 24%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+
+.sr-itinerary-card__chain-marker--mid {
+  width: 6px;
+  height: 6px;
+  border: 1px solid #0d0f12;
+  background: var(--sr-route-color);
+}
+
+.sr-chat-tab[data-sr-theme="light"] .sr-itinerary-card__chain-marker--mid {
+  border-color: #fbfbfa;
+}
+
+.sr-itinerary-card__station {
+  overflow-wrap: anywhere;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 13.5px;
+  font-weight: 490;
+  line-height: 1.3;
+}
+
+.sr-chat-tab[data-sr-theme="light"] .sr-itinerary-card__station {
+  color: rgba(15, 16, 18, 0.88);
+}
+
+.sr-itinerary-card__disclosure,
+.sr-itinerary-card__ride-summary {
+  width: 100%;
+  min-height: 30px;
+  margin: 0;
+  padding: 2px 4px 2px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #929cb1;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 460;
+  line-height: 1.3;
+  text-align: left;
+}
+
+.sr-itinerary-card__disclosure {
+  grid-template-columns: 16px minmax(0, 1fr) 18px;
+  cursor: pointer;
+  transition: color 140ms var(--sr-motion-ease);
+}
+
+.sr-itinerary-card__chain-summary-marker {
+  display: block;
+  justify-self: center;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--sr-route-color);
+  box-shadow:
+    0 -7px 0 -1px var(--sr-route-color),
+    0 7px 0 -1px var(--sr-route-color);
+}
+
+.sr-itinerary-card__disclosure-icon {
+  grid-column: 3;
+  grid-row: 1;
+  justify-self: end;
+}
+
+.sr-itinerary-card__disclosure:hover {
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.sr-chat-tab[data-sr-theme="light"] .sr-itinerary-card__disclosure,
+.sr-chat-tab[data-sr-theme="light"] .sr-itinerary-card__ride-summary {
+  color: #667184;
+}
+
+.sr-chat-tab[data-sr-theme="light"] .sr-itinerary-card__disclosure:hover {
+  color: rgba(15, 16, 18, 0.92);
+}
+
+.sr-itinerary-card__disclosure:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--sr-chat-ink) 28%, transparent);
+  outline-offset: 2px;
+}
+
+.sr-itinerary-card__walk-icon,
+.sr-itinerary-card__waypoint-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.88);
+  background: rgba(255, 255, 255, 0.12);
+  font-size: 15px;
+}
+
+.sr-itinerary-card__bus-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  color: #dceaff;
+  background: color-mix(in srgb, #5f8fd9 28%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #5f8fd9 48%, transparent);
+}
+
+.sr-chat-tab[data-sr-theme="light"] .sr-itinerary-card__bus-glyph {
+  color: #245da9;
+  background: color-mix(in srgb, #5f8fd9 18%, transparent);
+}
+
+.sr-itinerary-card__bus-route {
+  margin-right: 0.5em;
+  color: #8cb8f5;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.sr-chat-tab[data-sr-theme="light"] .sr-itinerary-card__bus-route {
+  color: #245da9;
+}
+
+.sr-chat-tab[data-sr-theme="light"] .sr-itinerary-card__walk-icon,
+.sr-chat-tab[data-sr-theme="light"] .sr-itinerary-card__waypoint-icon {
+  color: rgba(15, 16, 18, 0.76);
+  background: rgba(15, 16, 18, 0.08);
+}
+
+.sr-itinerary-card__walk-copy {
+  min-width: 0;
+  padding-top: 3px;
+}
+
+.sr-itinerary-card__walk-meta,
+.sr-itinerary-card__waypoint-meta {
+  margin: 4px 0 0;
+  color: #929cb1;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-chat-tab[data-sr-theme="light"] .sr-itinerary-card__walk-meta,
+.sr-chat-tab[data-sr-theme="light"] .sr-itinerary-card__waypoint-meta {
+  color: #667184;
+}
+
+.sr-itinerary-card__waypoint-title {
+  margin: 1px 0 0;
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 15px;
+  font-weight: 540;
+}
+
+.sr-chat-tab[data-sr-theme="light"] .sr-itinerary-card__waypoint-title {
+  color: rgba(15, 16, 18, 0.91);
+}
+
+.sr-chat-tab .sr-itinerary-card__actions {
+  position: relative;
+  z-index: 3;
+  display: flex;
+  justify-content: flex-end;
+  min-height: 0;
+  margin-top: 0;
+  padding: 0 var(--sr-itinerary-pad-x) 14px;
+}
+
+.sr-chat-tab
+  .sr-itinerary-card:not([data-has-final-walk="true"])
+  .sr-itinerary-card__actions {
+  min-height: 0;
+  margin-top: 0;
+  padding-top: 0;
+}
+
+.sr-chat-tab .sr-itinerary-card__map-btn {
+  align-self: flex-end;
+  min-height: 38px;
+  height: 38px;
+  padding: 0 13px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.018);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 13px;
+  font-weight: 510;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.sr-chat-tab .sr-itinerary-card__map-btn svg {
+  transition: transform 180ms var(--sr-motion-ease);
+}
+
+.sr-chat-tab .sr-itinerary-card__map-btn:hover {
+  border-color: rgba(255, 255, 255, 0.38);
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.sr-chat-tab .sr-itinerary-card__map-btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--sr-chat-ink) 30%, transparent);
+  outline-offset: 3px;
+}
+
+.sr-chat-tab .sr-itinerary-card__map-btn:disabled {
+  cursor: default;
+  opacity: 0.48;
+}
+
+.sr-chat-tab .sr-itinerary-card__map-btn:hover svg {
+  transform: translateY(-1px) scale(1.04);
+}
+
+.sr-chat-tab[data-sr-theme="light"] .sr-itinerary-card__map-btn {
+  border-color: rgba(15, 16, 18, 0.2);
+  background: rgba(15, 16, 18, 0.015);
+  color: rgba(15, 16, 18, 0.88);
+}
+
+.sr-chat-tab[data-sr-theme="light"] .sr-itinerary-card__map-btn:hover {
+  border-color: rgba(15, 16, 18, 0.34);
+  background: rgba(15, 16, 18, 0.045);
+}
+
+@media (max-width: 640px) {
+  .sr-itinerary-card-beam,
+  .sr-chat-tab .sr-itinerary-card {
+    border-radius: 14px;
+  }
+
+  .sr-chat-tab .sr-itinerary-card {
+    --sr-itinerary-pad-x: 12px;
+    --sr-itinerary-pad-y: 12px;
+  }
+
+  .sr-chat-tab .sr-itinerary-card__title {
+    display: block;
+    font-size: 16px;
+  }
+
+  .sr-chat-tab .sr-itinerary-card__title-part {
+    display: inline;
+  }
+
+  .sr-chat-tab .sr-itinerary-card__title-arrow {
+    margin: 0 0.45em;
+  }
+
+  .sr-itinerary-card__leg,
+  .sr-itinerary-card__walk,
+  .sr-itinerary-card__waypoint {
+    grid-template-columns: 32px minmax(0, 1fr);
+    column-gap: 8px;
+    padding: 10px 0;
+  }
+
+  .sr-itinerary-card__leg-heading,
+  .sr-itinerary-card__walk-heading {
+    font-size: 13.5px;
+  }
+
+  .sr-chat-tab .sr-itinerary-card__actions {
+    min-height: 0;
+    margin-top: 0;
+    padding-top: 0;
+  }
+
+  .sr-chat-tab .sr-itinerary-card__map-btn {
+    width: 100%;
+    min-height: 44px;
+    height: 44px;
+  }
+
+  .sr-itinerary-card__disclosure {
+    min-height: 44px;
+    margin-top: -5px;
+    margin-bottom: -5px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sr-itinerary-card__map-btn,
+  .sr-itinerary-card__map-btn svg,
+  .sr-itinerary-card__disclosure {
+    transition: none !important;
+  }
+}
+
+.sr-chat-tab-inner {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+/* ── Top bar ─────────────────────────────────────────────────────────── */
+
+.sr-chat-top-bar {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  padding: max(10px, env(safe-area-inset-top)) 16px 10px;
+  border-bottom: 1px solid var(--sr-chat-hairline);
+  flex: 0 0 auto;
+}
+
+/* Second bar row (phones only): Near You inside the SAME container as the
+     brand and theme toggle — one border, one surface, the bar just grows.
+     Exists because the floating toggle's center reservation leaves the
+     first row's side columns too narrow for a bullet row on small screens. */
+.sr-chat-top-bar__row2 {
+  display: none;
+  grid-column: 1 / -1;
+  justify-content: flex-end;
+}
+
+@media (max-width: 560px) {
+  .sr-chat-top-bar {
+    row-gap: 8px;
+  }
+  .sr-chat-top-bar__row2 {
+    display: flex;
+  }
+  .sr-chat-near-you-slot--bar {
+    display: none;
+  }
+}
+
+.sr-chat-top-bar__brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.sr-chat-top-bar__brand img {
+  display: block;
+  flex-shrink: 0;
+}
+
+.sr-chat-top-bar__wordmark {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--sr-chat-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 400px) {
+  .sr-chat-top-bar__wordmark {
+    display: none;
+  }
+}
+
+/* Reserves space for the shell-level TabToggle, which floats above both
+     panels at the same vertical offset (see smart-route-tab-shell.css) —
+     this column keeps the brand/near-you slots from colliding with it. */
+.sr-chat-top-bar__toggle-slot {
+  min-width: 148px;
+  height: 1px;
+}
+
+.sr-chat-top-bar__right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 0;
+}
+
+.sr-chat-near-you {
+  display: flex;
+  flex-direction: column;
+  /* Label ranges left so "Near you" starts exactly above the first
+       bullet; the whole cluster still sits on the bar's right side. */
+  align-items: flex-start;
+  gap: 3px;
+  min-width: 0;
+}
+
+.sr-chat-near-you__label {
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--sr-chat-ink-dim);
+}
+
+.sr-chat-near-you__bullets {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: nowrap;
+}
+
+.sr-chat-near-you__bullet,
+.sr-chat-near-you__overflow {
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: transform 150ms var(--sr-motion-ease);
+}
+
+.sr-chat-near-you__bullet:hover,
+.sr-chat-near-you__overflow:hover {
+  transform: scale(1.08);
+}
+
+.sr-chat-near-you__overflow {
+  width: 22px;
+  height: 22px;
+  color: var(--sr-chat-ink-dim);
+  font-size: 13px;
+  font-weight: 700;
+  background: var(--sr-chat-hover-fill);
+  border-radius: 999px;
+}
+
+.sr-chat-theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: transparent;
+  border: 1px solid var(--sr-chat-hairline);
+  color: var(--sr-chat-ink-dim);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition:
+    background 150ms var(--sr-motion-ease),
+    color 150ms var(--sr-motion-ease);
+}
+
+.sr-chat-theme-toggle:hover {
+  background: var(--sr-chat-hover-fill);
+  color: var(--sr-chat-ink);
+}
+
+/* ── Thread ──────────────────────────────────────────────────────────── */
+
+.sr-chat-thread {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+  background: transparent;
+}
+
+.sr-chat-thread__content {
+  max-width: 720px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 20px 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.sr-chat-thread__content[data-empty="true"] {
+  flex: 1 1 auto;
+  min-height: 100%;
+  justify-content: center;
+}
+
+.sr-chat-thread__content[data-empty="false"] {
+  padding-top: clamp(68px, 10vh, 104px);
+}
+
+.sr-chat-scroll-button {
+  position: absolute;
+  right: 20px;
+  bottom: 16px;
+}
+
+/* ── Empty state ─────────────────────────────────────────────────────── */
+
+.sr-chat-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 320px;
+  text-align: center;
+  padding: 28px 12px;
+  animation: srChatEmptyIn 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.sr-chat-empty--loading {
+  visibility: hidden;
+}
+
+.sr-chat-welcome-line {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.sr-chat-welcome-line--title {
+  min-height: 1.2em;
+  font-size: clamp(26px, 2.4vw, 31px);
+  font-weight: 620;
+  letter-spacing: -0.035em;
+  color: var(--sr-chat-ink);
+}
+
+.sr-chat-welcome-line--subtitle {
+  min-height: 1.5em;
+  margin-bottom: 14px;
+  max-width: 340px;
+  font-size: 14.5px;
+  line-height: 1.5;
+  color: var(--sr-chat-ink-dim);
+}
+
+.sr-chat-welcome-line .Typewriter {
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: center;
+}
+
+.sr-chat-welcome-line .Typewriter__wrapper {
+  white-space: pre-wrap;
+}
+
+.sr-chat-welcome-line .Typewriter__cursor {
+  display: inline-block;
+  margin-left: 1px;
+  color: color-mix(in srgb, var(--sr-chat-accent) 72%, var(--sr-chat-ink));
+  font-weight: 420;
+  animation: srChatWelcomeCursor 760ms steps(1, end) infinite;
+}
+
+.sr-chat-welcome-line[data-complete="true"] .Typewriter__cursor {
+  visibility: hidden;
+}
+
+@keyframes srChatWelcomeCursor {
+  50% {
+    opacity: 0;
+  }
+}
+
+.sr-chat-empty__suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  width: 100%;
+  max-width: 440px;
+}
+
+.sr-chat-empty__suggestions[data-visible="false"] {
+  pointer-events: none;
+}
+
+.sr-chat-suggestion-motion {
+  width: 100%;
+}
+
+.sr-chat-suggestion-pill {
+  height: auto;
+  min-height: 44px;
+  width: 100%;
+  justify-content: flex-start;
+  padding: 11px 15px;
+  border: 1px solid color-mix(in srgb, var(--sr-chat-ink) 10%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--sr-chat-ink) 2.5%, transparent);
+  box-shadow: none;
+  color: color-mix(in srgb, var(--sr-chat-ink) 82%, transparent);
+  font-size: 14px;
+  font-weight: 440;
+  line-height: 1.4;
+  white-space: normal;
+  text-align: left;
+  transition:
+    color 160ms var(--sr-motion-ease),
+    background-color 160ms var(--sr-motion-ease),
+    border-color 160ms var(--sr-motion-ease);
+}
+
+.sr-chat-suggestion-pill:hover,
+.sr-chat-suggestion-pill:focus-visible {
+  border-color: color-mix(in srgb, var(--sr-chat-ink) 15%, transparent);
+  background: color-mix(in srgb, var(--sr-chat-ink) 5.5%, transparent);
+  color: var(--sr-chat-ink);
+}
+
+.sr-chat-suggestion-pill:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--sr-chat-ink) 22%, transparent);
+}
+
+.sr-chat-suggestion-pill:active {
+  background: color-mix(in srgb, var(--sr-chat-ink) 7%, transparent);
+}
+
+@keyframes srChatEmptyIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sr-chat-empty {
+    animation: none;
+  }
+
+  .sr-chat-suggestion-pill {
+    transition: none;
+  }
+
+  .sr-chat-welcome-line .Typewriter__cursor {
+    animation: none;
+  }
+}
+
+/* ── Messages ────────────────────────────────────────────────────────── */
+
+.sr-chat-message {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sr-chat-message--user {
+  align-items: flex-end;
+}
+
+.sr-chat-message--assistant {
+  align-items: flex-start;
+  width: 100%;
+}
+
+.sr-chat-assistant-response {
+  display: grid;
+  grid-template-columns: 0 minmax(0, 1fr);
+  column-gap: 0;
+  width: 100%;
+  transition:
+    grid-template-columns 180ms var(--sr-motion-ease),
+    column-gap 180ms var(--sr-motion-ease);
+}
+
+.sr-chat-assistant-response[data-orb-visible="true"] {
+  grid-template-columns: 34px minmax(0, 1fr);
+  column-gap: 12px;
+}
+
+.sr-chat-assistant-response__orb {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 0;
+  height: 0;
+  margin-top: 0;
+  border-radius: 50%;
+  opacity: 0;
+  transition:
+    width 180ms var(--sr-motion-ease),
+    height 180ms var(--sr-motion-ease),
+    margin-top 180ms var(--sr-motion-ease),
+    opacity 140ms var(--sr-motion-ease);
+}
+
+.sr-chat-assistant-response__orb[data-visible="true"] {
+  width: 34px;
+  height: 34px;
+  margin-top: -5px;
+  opacity: 1;
+  background: radial-gradient(
+    circle at 38% 32%,
+    color-mix(in srgb, var(--sr-chat-ink) 12%, transparent),
+    transparent 66%
+  );
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--sr-chat-ink) 10%, transparent),
+    0 0 18px color-mix(in srgb, var(--sr-chat-accent) 13%, transparent);
+}
+
+.sr-chat-assistant-response__orb-stage {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+}
+
+.sr-chat-assistant-response__orb canvas {
+  display: block;
+}
+
+.sr-chat-tab[data-sr-theme="light"]
+  .sr-chat-assistant-response__orb[data-visible="true"] {
+  background: radial-gradient(
+    circle at 38% 32%,
+    rgba(38, 41, 45, 0.16),
+    rgba(38, 41, 45, 0.035) 68%
+  );
+  box-shadow:
+    inset 0 0 0 1px rgba(18, 20, 22, 0.16),
+    0 4px 12px rgba(18, 20, 22, 0.08);
+}
+
+.sr-chat-tab[data-sr-theme="light"]
+  .sr-chat-assistant-response__orb[data-visible="true"]
+  canvas {
+  opacity: 0.96;
+  filter: brightness(0.74) contrast(1.38);
+}
+
+.sr-chat-assistant-response__content {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sr-chat-bubble {
+  margin: 0;
+  max-width: 78%;
+  background: var(--sr-chat-surface);
+  box-shadow: var(--sr-chat-raised-shadow);
+  color: var(--sr-chat-ink);
+  border-radius: 18px 18px 6px 18px;
+  padding: 9px 14px;
+  font-size: 15px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+  animation: srChatBubbleIn 160ms var(--sr-motion-ease) both;
+}
+
+.sr-chat-message__prose {
+  margin: 0;
+  max-width: 100%;
+  width: 100%;
+  color: var(--sr-chat-ink);
+  font-size: 15px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.sr-chat-message__error {
+  margin: 0;
+  color: var(--sr-chat-ink-dim);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.sr-chat-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  border-radius: 999px;
+  background: var(--sr-chat-ink-dim);
+  vertical-align: -2px;
+  animation: srReasoningCaret 0.9s steps(2, start) infinite;
+}
+
+@keyframes srChatBubbleIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sr-chat-assistant-response,
+  .sr-chat-assistant-response__orb,
+  .sr-chat-caret,
+  .sr-chat-bubble {
+    animation: none;
+    transition: none;
+  }
+}
+
+/* ── Working panel (Reasoning) ──────────────────────────────────────── */
+
+.sr-chat-working-panel {
+  width: 100%;
+}
+
+.sr-chat-working-panel__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  font-size: 14.5px;
+  line-height: 1.45;
+  font-weight: 520;
+  color: var(--sr-chat-ink-dim);
+  text-transform: none;
+}
+
+.sr-chat-working-panel__trigger svg {
+  transition: transform 200ms var(--sr-motion-ease);
+}
+
+.sr-chat-working-panel[data-state="open"] .sr-chat-working-panel__trigger svg {
+  transform: rotate(180deg);
+}
+
+.sr-chat-working-panel__content {
+  overflow: hidden;
+}
+
+.sr-chat-working-panel__content > div {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-top: 8px;
+}
+
+.sr-chat-tool-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--sr-chat-ink-dim);
+}
+
+.sr-chat-tool-row[data-status="failed"] svg {
+  color: var(--sr-chat-danger);
+}
+
+.sr-chat-tool-row__spinner {
+  animation: srSpin 0.8s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sr-chat-tool-row__spinner {
+    animation: none;
+  }
+}
+
+.sr-chat-tool-row__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Route cards / itinerary ─────────────────────────────────────────── */
+
+.sr-chat-route-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+
+.sr-chat-route-results {
+  width: 100%;
+}
+
+.sr-chat-route-cards__alternatives {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ── Liquid-metal perimeter shell ──────────────────────────────────────
+   Quiet graphite rim + soft lift so the card reads slightly in front of
+   the chat plane. Metal is a thin contour, not a chrome spectacle. */
+
+@property --sr-metal-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+.sr-liquid-metal {
+  --sr-metal-radius: 14px;
+  --sr-metal-rim: 1px;
+  position: relative;
+  isolation: isolate;
+  border-radius: var(--sr-metal-radius);
+  padding: var(--sr-metal-rim);
+  /* Muted graphite perimeter — soft midtones, no bright silver peaks. */
+  background: conic-gradient(
+    from var(--sr-metal-angle, 0deg),
+    #25292f 0deg,
+    #4a515a 45deg,
+    #7a828c 70deg,
+    #3a4048 110deg,
+    #5c646e 160deg,
+    #8a929c 190deg,
+    #343a42 240deg,
+    #6a727c 290deg,
+    #454c56 330deg,
+    #25292f 360deg
+  );
+  animation: srLiquidMetalSpin 16s linear infinite;
+  /* Lift: layered shadows so the card pops slightly off the canvas. */
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.03),
+    0 2px 4px rgba(0, 0, 0, 0.18),
+    0 10px 24px rgba(0, 0, 0, 0.22),
+    0 22px 48px rgba(0, 0, 0, 0.16);
+}
+
+/* Narrow, low-opacity specular — a quiet glint, not a chrome sweep. */
+.sr-liquid-metal__sheen {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 1;
+  padding: var(--sr-metal-rim);
+  background: conic-gradient(
+    from calc(var(--sr-metal-angle, 0deg) * -1.15 + 40deg),
+    transparent 0deg,
+    transparent 48deg,
+    rgba(255, 255, 255, 0.06) 62deg,
+    rgba(220, 228, 236, 0.28) 72deg,
+    rgba(255, 255, 255, 0.05) 86deg,
+    transparent 110deg,
+    transparent 360deg
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  opacity: 0.55;
+  animation: srLiquidMetalSpin 22s linear infinite reverse;
+}
+
+.sr-liquid-metal__surface {
+  position: relative;
+  z-index: 2;
+  border-radius: calc(var(--sr-metal-radius) - var(--sr-metal-rim));
+  overflow: hidden;
+  background: #121418;
+  /* Soft top catch-light so the face feels slightly raised. */
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+}
+
+/* Inside metal shell the card drops its own border — the rim is the border. */
+.sr-liquid-metal .sr-itinerary-card {
+  border-color: transparent;
+  border-radius: inherit;
+  background: #121418;
+}
+
+.sr-chat-tab[data-sr-theme="light"] .sr-liquid-metal {
+  background: conic-gradient(
+    from var(--sr-metal-angle, 0deg),
+    #c0c6ce 0deg,
+    #e4e8ed 50deg,
+    #a8b0ba 110deg,
+    #d5dae0 180deg,
+    #9aa3ad 250deg,
+    #e8ebf0 310deg,
+    #c0c6ce 360deg
+  );
+  box-shadow:
+    0 0 0 1px rgba(15, 16, 18, 0.05),
+    0 2px 4px rgba(15, 16, 18, 0.04),
+    0 10px 28px rgba(15, 16, 18, 0.08),
+    0 20px 40px rgba(15, 16, 18, 0.05);
+}
+
+.sr-chat-tab[data-sr-theme="light"] .sr-liquid-metal__surface,
+.sr-chat-tab[data-sr-theme="light"] .sr-liquid-metal .sr-itinerary-card {
+  background: #fbfbfa;
+}
+
+.sr-chat-tab[data-sr-theme="light"] .sr-liquid-metal__surface {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+@keyframes srLiquidMetalSpin {
+  to {
+    --sr-metal-angle: 360deg;
+  }
+}
+
+/* Fallback when @property unsupported: slow soft drift on a muted gradient. */
+@supports not (background: conic-gradient(from var(--sr-metal-angle), red, blue)) {
+  .sr-liquid-metal {
+    background: linear-gradient(
+      125deg,
+      #2a2f36 0%,
+      #6a727c 35%,
+      #4a525c 55%,
+      #7a828c 75%,
+      #25292f 100%
+    );
+    background-size: 200% 200%;
+    animation: srLiquidMetalDrift 12s ease-in-out infinite alternate;
+  }
+
+  .sr-liquid-metal__sheen {
+    animation: none;
+    opacity: 0.2;
+  }
+}
+
+@keyframes srLiquidMetalDrift {
+  from {
+    background-position: 0% 40%;
+  }
+  to {
+    background-position: 100% 60%;
+  }
+}
+
+/* Static muted contour for reduced motion — still lifted, no motion. */
+.sr-liquid-metal[data-reduced-motion="true"] {
+  animation: none;
+  background: linear-gradient(
+    135deg,
+    #2e333a 0%,
+    #6a727c 40%,
+    #4a525c 70%,
+    #3a4048 100%
+  );
+}
+
+.sr-liquid-metal[data-reduced-motion="true"] .sr-liquid-metal__sheen {
+  animation: none;
+  opacity: 0.18;
+  background: linear-gradient(
+    120deg,
+    transparent 30%,
+    rgba(255, 255, 255, 0.18) 50%,
+    transparent 70%
+  );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sr-liquid-metal {
+    animation: none !important;
+    background: linear-gradient(
+      135deg,
+      #2e333a 0%,
+      #6a727c 40%,
+      #4a525c 70%,
+      #3a4048 100%
+    ) !important;
+  }
+
+  .sr-liquid-metal__sheen {
+    animation: none !important;
+    opacity: 0.18;
+    background: linear-gradient(
+      120deg,
+      transparent 30%,
+      rgba(255, 255, 255, 0.18) 50%,
+      transparent 70%
+    ) !important;
+  }
+}
+
+/* Recommended itinerary — simplified dark data card.
+   Hierarchy: badge → title → arrive → duration → meta → rows → map action. */
+.sr-itinerary-card {
+  --sr-itinerary-pad-x: 16px;
+  --sr-itinerary-pad-y: 14px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  width: 100%;
+  padding: var(--sr-itinerary-pad-y) var(--sr-itinerary-pad-x);
+  border-radius: 14px;
+  border: 1px solid var(--sr-chat-hairline);
+  background: var(--sr-chat-surface);
+  box-shadow: none;
+  color: var(--sr-chat-ink);
+}
+
+.sr-itinerary-card[data-selected="true"] {
+  background: color-mix(in srgb, var(--sr-chat-surface) 94%, var(--sr-chat-ink));
+}
+
+.sr-itinerary-card--invalid {
+  padding: 12px 14px;
+}
+
+.sr-itinerary-card__invalid-msg {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--sr-chat-ink-dim);
+}
+
+.sr-itinerary-card__header {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.sr-itinerary-card__badge {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 8px;
+  border-radius: 5px;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  line-height: 1;
+  color: color-mix(in srgb, var(--sr-chat-accent) 86%, #fff);
+  background: color-mix(in srgb, var(--sr-chat-accent) 14%, transparent);
+}
+
+.sr-itinerary-card__title {
+  margin: 0;
+  font-size: 15.5px;
+  font-weight: 560;
+  line-height: 1.28;
+  letter-spacing: -0.015em;
+  color: var(--sr-chat-ink);
+  overflow-wrap: anywhere;
+}
+
+.sr-itinerary-card__title-part {
+  white-space: normal;
+}
+
+.sr-itinerary-card__title-arrow {
+  display: inline-block;
+  margin: 0 0.38em;
+  color: color-mix(in srgb, var(--sr-chat-ink) 36%, transparent);
+  font-weight: 450;
+}
+
+.sr-itinerary-card__arrive {
+  margin: -2px 0 0;
+  font-size: 12.5px;
+  font-weight: 450;
+  color: color-mix(in srgb, var(--sr-chat-ink) 52%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-itinerary-card__hero {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--sr-chat-hairline);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sr-itinerary-card__duration {
+  margin: 0;
+}
+
+.sr-itinerary-card__duration-value {
+  font-size: 30px;
+  font-weight: 650;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  color: var(--sr-chat-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-itinerary-card__meta {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 450;
+  color: color-mix(in srgb, var(--sr-chat-ink) 50%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-itinerary-card__meta-icon {
+  width: 11px;
+  height: 11px;
+  opacity: 0.7;
+  flex-shrink: 0;
+}
+
+.sr-itinerary-card__meta-sep {
+  color: color-mix(in srgb, var(--sr-chat-ink) 32%, transparent);
+}
+
+/* Compact preview with a deliberate editorial route spine. */
+.sr-itinerary-card__timeline {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 10px 0 0;
+  border-top: 1px solid var(--sr-chat-hairline);
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.sr-itinerary-card__event {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr);
+  gap: 10px;
+  align-items: stretch;
+  min-width: 0;
+  padding: 6px 0;
+}
+
+.sr-itinerary-card__rail {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 6px;
+}
+
+.sr-itinerary-card__rail::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: color-mix(in srgb, var(--sr-chat-ink) 12%, transparent);
+}
+
+.sr-itinerary-card__event[data-first="true"] .sr-itinerary-card__rail::before {
+  top: 11px;
+}
+
+.sr-itinerary-card__event[data-last="true"] .sr-itinerary-card__rail::before {
+  bottom: calc(100% - 12px);
+}
+
+.sr-itinerary-card__node {
+  position: relative;
+  z-index: 1;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in srgb, var(--sr-chat-ink) 30%, transparent);
+  background: transparent;
+  box-sizing: border-box;
+  flex-shrink: 0;
+}
+
+.sr-itinerary-card__event[data-first="true"] .sr-itinerary-card__node {
+  width: 8px;
+  height: 8px;
+  border-color: color-mix(in srgb, var(--sr-chat-ink) 54%, transparent);
+}
+
+.sr-itinerary-card__event:not([data-first="true"]):not([data-last="true"]) .sr-itinerary-card__node {
+  border-color: color-mix(in srgb, var(--sr-chat-ink) 42%, transparent);
+  background: color-mix(in srgb, var(--sr-chat-surface) 68%, var(--sr-chat-ink));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--sr-chat-ink) 9%, transparent);
+}
+
+.sr-itinerary-card__event[data-last="true"] .sr-itinerary-card__node {
+  width: 8px;
+  height: 8px;
+  border-color: color-mix(in srgb, var(--sr-chat-ink) 64%, transparent);
+  background: color-mix(in srgb, var(--sr-chat-ink) 70%, var(--sr-chat-surface));
+}
+
+.sr-itinerary-card__event-main {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.sr-itinerary-card__event-lead {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.sr-itinerary-card__event-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding-top: 1px;
+}
+
+.sr-itinerary-card__bullets {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  min-width: 20px;
+  padding-top: 0;
+}
+
+.sr-itinerary-card__bullet-item {
+  display: inline-flex;
+  align-items: center;
+}
+
+.sr-itinerary-card__bullet-arrow {
+  margin: 0 3px;
+  color: color-mix(in srgb, var(--sr-chat-ink) 36%, transparent);
+  font-size: 10px;
+  line-height: 1;
+}
+
+.sr-itinerary-card__mode-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: color-mix(in srgb, var(--sr-chat-ink) 72%, transparent);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.sr-itinerary-card__mode-spacer {
+  width: 20px;
+  flex-shrink: 0;
+}
+
+.sr-itinerary-card__route-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--sr-chat-ink) 12%, transparent);
+  color: var(--sr-chat-ink);
+  font-weight: 700;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.sr-itinerary-card__event-title {
+  font-size: 13.5px;
+  font-weight: 520;
+  line-height: 1.25;
+  color: color-mix(in srgb, var(--sr-chat-ink) 94%, transparent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sr-itinerary-card__event-sub {
+  font-size: 12px;
+  font-weight: 450;
+  line-height: 1.25;
+  color: color-mix(in srgb, var(--sr-chat-ink) 46%, transparent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sr-itinerary-card__event-duration {
+  flex-shrink: 0;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: color-mix(in srgb, var(--sr-chat-ink) 50%, transparent);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  letter-spacing: -0.01em;
+  padding-top: 2px;
+}
+
+/* Quiet outline map action — secondary to the route facts. */
+.sr-itinerary-card__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  margin-top: 12px;
+  padding-top: 2px;
+}
+
+.sr-itinerary-card__map-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 36px;
+  height: 34px;
+  padding: 0 14px;
+  margin: 0;
+  border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--sr-chat-ink) 14%, transparent);
+  background: color-mix(in srgb, var(--sr-chat-ink) 4%, transparent);
+  color: color-mix(in srgb, var(--sr-chat-ink) 82%, transparent);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 520;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  transition:
+    background 140ms var(--sr-motion-ease),
+    border-color 140ms var(--sr-motion-ease),
+    color 140ms var(--sr-motion-ease),
+    transform 110ms var(--sr-motion-ease);
+}
+
+.sr-itinerary-card__map-btn:hover {
+  background: color-mix(in srgb, var(--sr-chat-ink) 8%, transparent);
+  border-color: color-mix(in srgb, var(--sr-chat-ink) 22%, transparent);
+  color: var(--sr-chat-ink);
+}
+
+.sr-itinerary-card__map-btn:active {
+  transform: scale(0.98);
+}
+
+.sr-itinerary-card__map-btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--sr-chat-ink) 30%, transparent);
+  outline-offset: 2px;
+}
+
+.sr-itinerary-card--skeleton {
+  gap: 10px;
+  pointer-events: none;
+}
+
+.sr-itinerary-card__skel-pill {
+  width: 68px;
+  height: 15px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--sr-chat-ink) 7%, transparent);
+}
+
+.sr-itinerary-card__skel-line {
+  height: 11px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--sr-chat-ink) 7%, transparent);
+  width: 70%;
+}
+
+.sr-itinerary-card__skel-line--sm {
+  width: 36%;
+  height: 10px;
+}
+
+.sr-itinerary-card__skel-line--lg {
+  width: 78%;
+  height: 13px;
+}
+
+.sr-itinerary-card__skel-line--xl {
+  width: 42%;
+  height: 28px;
+}
+
+/* Compact alternative route cards — flat, same family as itinerary. */
+button.sr-chat-route-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 6px;
+  width: 100%;
+  height: auto;
+  min-height: 44px;
+  white-space: normal;
+  text-align: left;
+  cursor: pointer;
+  background: var(--sr-chat-surface);
+  border: 1px solid var(--sr-chat-hairline);
+  border-radius: 12px;
+  padding: 12px 14px;
+  color: inherit;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.1);
+  transition:
+    background 150ms var(--sr-motion-ease),
+    border-color 150ms var(--sr-motion-ease),
+    box-shadow 150ms var(--sr-motion-ease),
+    transform 150ms var(--sr-motion-ease);
+}
+
+.sr-chat-tab[data-sr-theme="light"] button.sr-chat-route-card {
+  box-shadow: 0 2px 8px rgba(15, 16, 18, 0.05);
+}
+
+.sr-chat-route-card:hover {
+  background: color-mix(in srgb, var(--sr-chat-surface) 88%, var(--sr-chat-ink));
+}
+
+.sr-chat-route-card:active {
+  transform: scale(0.98);
+}
+
+.sr-chat-route-card:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--sr-chat-ink) 30%, transparent);
+  outline-offset: 2px;
+}
+
+.sr-chat-route-card[data-selected="true"] {
+  border-color: color-mix(in srgb, var(--sr-chat-ink) 18%, var(--sr-chat-hairline));
+  box-shadow:
+    0 4px 14px rgba(0, 0, 0, 0.1),
+    0 0 0 1px color-mix(in srgb, var(--sr-chat-ink) 8%, transparent);
+}
+
+.sr-chat-route-card[data-role="alternative"] .sr-chat-route-card__hero strong {
+  font-size: 17px;
+}
+
+.sr-chat-route-card__top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sr-chat-route-card__lines {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.sr-chat-route-card__line-item {
+  display: inline-flex;
+  align-items: center;
+}
+
+.sr-chat-route-card__leg-chevron {
+  color: var(--sr-chat-ink-dim);
+  margin: 0 2px;
+  flex-shrink: 0;
+}
+
+.sr-chat-route-card__leg {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--sr-chat-ink-dim);
+  margin-left: auto;
+}
+
+.sr-chat-route-card__hero {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sr-chat-route-card__hero strong {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--sr-chat-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-chat-route-card__dest {
+  font-size: 13px;
+  color: var(--sr-chat-ink-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.sr-chat-route-card__meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+  color: var(--sr-chat-ink-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-chat-route-card__reason {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--sr-chat-ink-dim);
+}
+
+.sr-chat-route-card__view-on-map {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  align-self: flex-start;
+  margin-top: 1px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--sr-chat-ink-dim);
+}
+
+@media (max-width: 520px) {
+  .sr-itinerary-card {
+    --sr-itinerary-pad-x: 13px;
+    --sr-itinerary-pad-y: 12px;
+    border-radius: 12px;
+  }
+
+  .sr-itinerary-card__duration-value {
+    font-size: 26px;
+  }
+
+  .sr-itinerary-card__title {
+    font-size: 14.5px;
+  }
+
+  .sr-itinerary-card__map-btn {
+    min-height: 40px;
+    height: 36px;
+    width: 100%;
+  }
+
+  .sr-itinerary-card__actions {
+    justify-content: stretch;
+  }
+}
+
+/* ── Arrivals card ───────────────────────────────────────────────────── */
+
+.sr-chat-arrivals-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  background: var(--sr-chat-surface);
+  box-shadow: var(--sr-chat-raised-shadow);
+  border: 1px solid var(--sr-chat-hairline);
+  border-radius: 16px;
+  padding: 16px;
+}
+
+.sr-chat-arrivals-card__header {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.sr-chat-arrivals-card__station-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.sr-chat-arrivals-card__station {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--sr-chat-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.sr-chat-arrivals-card__guidance {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: color-mix(in srgb, var(--sr-chat-ink) 78%, var(--sr-chat-ink-dim));
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.sr-chat-arrivals-card__walk-icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+}
+
+.sr-chat-working-panel__shimmer {
+  font-weight: 610;
+  letter-spacing: -0.01em;
+}
+
+.sr-chat-arrivals-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sr-chat-arrivals-card__group {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.sr-chat-arrivals-card__direction {
+  font-size: 12px;
+  color: var(--sr-chat-ink-dim);
+}
+
+.sr-chat-arrivals-card__minutes {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--sr-chat-ink);
+  text-align: right;
+}
+
+.sr-chat-arrivals-card__empty {
+  margin: 0;
+  font-size: 13px;
+  color: var(--sr-chat-ink-dim);
+}
+
+button.sr-chat-arrivals-card__footer {
+  align-self: flex-start;
+  margin-top: 2px;
+}
+
+/* ── Composer ────────────────────────────────────────────────────────── */
+
+.sr-chat-composer-beam {
+  /* BorderBeam is now the layout-owning shell. Keeping width and margin on
+       this wrapper makes the pulse follow only the composer instead of
+       spanning the full chat panel. */
+  display: block;
+  max-width: 640px;
+  width: calc(100% - 32px);
+  margin: 0 auto calc(12px + env(safe-area-inset-bottom));
+  flex: 0 0 auto;
+  border-radius: 28px;
+}
+
+.sr-chat-composer {
+  /* Tailwind utility classes from the vendored PromptInput (border-input
+       bg-background rounded-3xl border p-2 shadow-xs) live in Tailwind's
+       `@layer utilities`; this file is unlayered, so these plain declarations
+       win the cascade without needing `!important` — same rule the rest of
+       this stylesheet relies on.
+  
+       Single compact row (textarea beside the actions, like the rail's
+       search pill) instead of the vendored two-row stack: the input should
+       not eat a large slice of the screen. It still grows when the text
+       wraps, up to the textarea's max height. */
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  max-width: none;
+  width: 100%;
+  margin: 0;
+  min-height: 54px;
+  padding: 6px;
+  border-radius: 28px;
+  background:
+    radial-gradient(
+      120% 80% at 16% -12%,
+      var(--sr-glass-specular),
+      transparent 44%
+    ),
+    radial-gradient(
+      90% 70% at 88% 112%,
+      var(--sr-glass-specular-counter),
+      transparent 42%
+    ),
+    var(--sr-glass-surface);
+  border-color: var(--sr-glass-border);
+  -webkit-backdrop-filter: blur(var(--sr-glass-frost)) saturate(150%);
+  backdrop-filter: blur(var(--sr-glass-frost)) saturate(150%);
+  box-shadow: var(--sr-glass-shadow);
+  flex: 0 0 auto;
+  transition:
+    border-color 180ms var(--sr-motion-ease),
+    box-shadow 180ms var(--sr-motion-ease),
+    background-color 180ms var(--sr-motion-ease);
+}
+
+.sr-chat-composer__mode-trigger {
+  flex: 0 0 auto;
+  height: 32px;
+  min-width: 62px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.84);
+  font-size: 13px;
+  font-weight: 640;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    color 160ms var(--sr-motion-ease),
+    background-color 160ms var(--sr-motion-ease),
+    border-color 160ms var(--sr-motion-ease);
+}
+
+.sr-chat-composer__mode-trigger:hover,
+.sr-chat-composer__mode-trigger[data-state="open"] {
+  color: rgba(255, 255, 255, 0.96);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.sr-chat-composer__mode-trigger:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.22);
+}
+
+.sr-chat-composer__mode-trigger svg {
+  color: rgba(255, 255, 255, 0.48);
+  transition: transform 160ms var(--sr-motion-ease);
+}
+
+.sr-chat-composer__mode-trigger[data-state="open"] svg {
+  transform: rotate(180deg);
+}
+
+.sr-chat-tab[data-sr-theme="light"] .sr-chat-composer__mode-trigger {
+  background: transparent;
+  color: rgba(12, 14, 15, 0.82);
+}
+
+.sr-chat-tab[data-sr-theme="light"] .sr-chat-composer__mode-trigger:hover,
+.sr-chat-tab[data-sr-theme="light"]
+  .sr-chat-composer__mode-trigger[data-state="open"] {
+  background: rgba(12, 14, 15, 0.065);
+  color: rgba(12, 14, 15, 0.92);
+}
+
+.sr-chat-tab[data-sr-theme="light"]
+  .sr-chat-composer__mode-trigger:focus-visible {
+  box-shadow: 0 0 0 1px rgba(12, 14, 15, 0.2);
+}
+
+.sr-chat-tab[data-sr-theme="light"] .sr-chat-composer__mode-trigger svg {
+  color: rgba(12, 14, 15, 0.46);
+}
+
+.sr-response-mode-tooltip {
+  display: grid;
+  gap: 3px;
+  max-width: 230px;
+  line-height: 1.35;
+}
+
+.sr-response-mode-tooltip strong {
+  font-weight: 650;
+}
+
+.sr-response-mode-tooltip span {
+  color: rgba(255, 255, 255, 0.64);
+}
+
+.sr-response-mode-menu {
+  position: fixed;
+  z-index: 220;
+  width: 240px;
+  padding: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  background: rgba(48, 48, 50, 0.98);
+  color: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 20px 54px rgba(0, 0, 0, 0.46);
+  -webkit-backdrop-filter: blur(20px) saturate(118%);
+  backdrop-filter: blur(20px) saturate(118%);
+}
+
+.sr-response-mode-menu[data-theme="light"] {
+  border-color: rgba(14, 16, 18, 0.1);
+  background: rgba(249, 249, 248, 0.98);
+  color: rgba(14, 16, 18, 0.94);
+  box-shadow: 0 20px 54px rgba(20, 22, 24, 0.2);
+}
+
+.sr-response-mode-menu__options {
+  display: grid;
+  gap: 2px;
+}
+
+.sr-response-mode-menu__option {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 18px;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  outline: none;
+}
+
+.sr-response-mode-menu__option:hover,
+.sr-response-mode-menu__option:focus-visible,
+.sr-response-mode-menu__option[data-selected="true"] {
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.sr-response-mode-menu[data-theme="light"]
+  .sr-response-mode-menu__option:hover,
+.sr-response-mode-menu[data-theme="light"]
+  .sr-response-mode-menu__option:focus-visible,
+.sr-response-mode-menu[data-theme="light"]
+  .sr-response-mode-menu__option[data-selected="true"] {
+  background: rgba(14, 16, 18, 0.055);
+}
+
+.sr-response-mode-menu__option:focus-visible {
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+
+.sr-response-mode-menu[data-theme="light"]
+  .sr-response-mode-menu__option:focus-visible {
+  box-shadow: inset 0 0 0 1px rgba(14, 16, 18, 0.16);
+}
+
+.sr-response-mode-menu__check {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+}
+
+.sr-response-mode-menu__copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.sr-response-mode-menu__label {
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.sr-response-mode-menu__description,
+.sr-response-mode-menu__note {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.sr-response-mode-menu[data-theme="light"]
+  .sr-response-mode-menu__description,
+.sr-response-mode-menu[data-theme="light"] .sr-response-mode-menu__note {
+  color: rgba(14, 16, 18, 0.48);
+}
+
+.sr-response-mode-menu__note {
+  margin: 6px 10px 4px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 11px;
+}
+
+.sr-response-mode-menu[data-theme="light"] .sr-response-mode-menu__note {
+  border-top-color: rgba(14, 16, 18, 0.08);
+}
+
+.sr-chat-composer:focus-within {
+  /* Keep focus neutral. The always-on monochrome BorderBeam is the only
+       perimeter treatment around the composer. */
+  border-color: var(--sr-glass-border);
+  box-shadow: var(--sr-glass-shadow);
+  outline: none;
+}
+
+.sr-chat-composer__textarea {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--sr-chat-ink);
+  padding: 7px 0;
+}
+
+.sr-chat-composer__textarea::placeholder {
+  color: color-mix(in srgb, var(--sr-chat-ink-dim) 82%, var(--sr-chat-ink) 18%);
+}
+
+.sr-chat-composer__actions {
+  width: auto;
+  justify-content: flex-end;
+  align-self: center;
+  flex: 0 0 auto;
+  gap: 4px;
+  margin-left: auto;
+  padding: 1px 0;
+}
+
+.sr-chat-mic-button,
+.sr-chat-send-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.sr-chat-mic-button {
+  background: transparent;
+  color: var(--sr-chat-ink-dim);
+  transition:
+    background 150ms var(--sr-motion-ease),
+    color 150ms var(--sr-motion-ease);
+}
+
+.sr-chat-mic-button:focus-visible,
+.sr-chat-send-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.24);
+}
+
+.sr-chat-tab[data-sr-theme="light"] .sr-chat-mic-button:focus-visible,
+.sr-chat-tab[data-sr-theme="light"] .sr-chat-send-button:focus-visible {
+  box-shadow: 0 0 0 2px rgba(12, 14, 15, 0.18);
+}
+
+.sr-chat-mic-button:hover {
+  background: var(--sr-chat-hover-fill);
+  color: var(--sr-chat-ink);
+}
+
+.sr-chat-mic-button[data-listening="true"] {
+  color: var(--sr-chat-ink);
+  animation: srChatMicPulse 1.4s ease-out infinite;
+}
+
+@keyframes srChatMicPulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.2);
+  }
+  70% {
+    box-shadow: 0 0 0 8px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sr-chat-composer,
+  .sr-chat-composer__mode-trigger,
+  .sr-chat-mic-button,
+  .sr-chat-send-button {
+    transition: none;
+  }
+
+  .sr-chat-mic-button[data-listening="true"] {
+    animation: none;
+  }
+
+  .sr-chat-send-button:not(:disabled):hover,
+  .sr-chat-send-button:not(:disabled):active {
+    transform: none;
+  }
+}
+
+@media (max-width: 460px) {
+  .sr-chat-composer {
+    gap: 4px;
+  }
+
+  .sr-chat-composer__mode-trigger {
+    min-width: 62px;
+    padding-inline: 7px;
+  }
+
+  .sr-chat-composer__textarea {
+    font-size: 14px;
+  }
+}
+
+.sr-chat-send-button {
+  background: color-mix(
+    in srgb,
+    var(--sr-chat-surface) 78%,
+    var(--sr-chat-ink) 22%
+  );
+  border: 1px solid color-mix(in srgb, var(--sr-chat-hairline) 78%, white 22%);
+  color: color-mix(in srgb, var(--sr-chat-ink-dim) 82%, var(--sr-chat-ink) 18%);
+  transition:
+    background-color 180ms var(--sr-motion-ease),
+    border-color 180ms var(--sr-motion-ease),
+    color 180ms var(--sr-motion-ease),
+    transform 120ms var(--sr-motion-ease),
+    box-shadow 180ms var(--sr-motion-ease);
+}
+
+.sr-chat-send-button:disabled {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.3);
+  opacity: 1;
+  cursor: not-allowed;
+}
+
+.sr-chat-tab[data-sr-theme="light"] .sr-chat-send-button:disabled {
+  background: rgba(12, 14, 15, 0.07);
+  border-color: rgba(12, 14, 15, 0.08);
+  color: rgba(12, 14, 15, 0.3);
+}
+
+.sr-chat-send-button:not(:disabled):hover {
+  transform: translateY(-1px);
+}
+
+.sr-chat-send-button:not(:disabled):active {
+  transform: scale(0.96);
+}
+
+.sr-chat-send-button[data-ready="true"] {
+  background: #ffffff;
+  border-color: rgba(255, 255, 255, 0.92);
+  color: #101214;
+  box-shadow: 0 5px 16px rgba(0, 0, 0, 0.22);
+}
+
+.sr-chat-tab[data-sr-theme="light"] .sr-chat-send-button[data-ready="true"] {
+  background: #ffffff;
+  border-color: rgba(12, 14, 15, 0.18);
+  color: #101214;
+  box-shadow: 0 5px 16px rgba(20, 22, 24, 0.14);
+}
+
+.sr-chat-send-button[data-mode="stop"] {
+  background: color-mix(
+    in srgb,
+    var(--sr-chat-surface) 76%,
+    var(--sr-chat-ink) 24%
+  );
+  border-color: color-mix(in srgb, var(--sr-chat-hairline) 72%, white 28%);
+  color: var(--sr-chat-ink);
+}
+
+/* ── Error banner ────────────────────────────────────────────────────── */
+
+.sr-chat-error-banner {
+  max-width: 720px;
+  width: calc(100% - 32px);
+  margin: 0 auto 10px;
+  padding: 8px 12px;
+  border-radius: var(--sr-radius-inset);
+  background: var(--sr-chat-danger-tint);
+  border: 1px solid var(--sr-chat-danger-hairline);
+  color: var(--sr-chat-ink);
+  font-size: 12.5px;
+  line-height: 1.4;
+  flex: 0 0 auto;
+}
+
+@media (max-width: 720px) {
+  .sr-chat-thread__content {
+    padding: 16px 12px 8px;
+  }
+
+  .sr-chat-empty {
+    min-height: 300px;
+    padding-inline: 4px;
+  }
+
+  .sr-chat-welcome-line--title {
+    font-size: 27px;
+  }
+
+  .sr-chat-empty__suggestions {
+    gap: 8px;
+  }
+
+  .sr-chat-composer-beam,
+  .sr-chat-error-banner {
+    width: calc(100% - 24px);
+  }
+}
+
+

@@ -1,0 +1,25 @@
+{
+  "data": {
+    "candidates": [
+      {
+        "alert_headlines": [],
+        "arrives_iso": "2026-07-15T14:40:00-04:00",
+        "card_id": "rc_t5cf002",
+        "departs_iso": "2026-07-15T14:32:00-04:00",
+        "eta_minutes": 8,
+        "lines": [
+          "B",
+          "D",
+          "F",
+          "M"
+        ],
+        "reason": "Direct ride, short hop from the coffee stop to Bryant Park.",
+        "transfers": 0,
+        "walk_minutes": 3.0
+      }
+    ]
+  },
+  "error": null,
+  "ok": true,
+  "summary": "found 1 route(s) to Bryant Park; recommended B/D/F/M"
+}

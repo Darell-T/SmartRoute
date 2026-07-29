@@ -1,0 +1,554 @@
+# Golden-query bank for the Layer-2 eval harness (plan doc section 7).
+#
+# Runs the REAL Anthropic model against REPLAYED tool fixtures and asserts
+# on the resulting `TurnTrace` (tool call inputs + final text) -- never on
+# tool call OUTPUTS except the one special-cased `derived` assertion, which
+# reads the fixture the harness itself resolved (see fixture_router.py).
+#
+# ---------------------------------------------------------------- Schema --
+#
+# - id:          unique slug; also the fixture directory name under
+#                fixtures/<id>/<tool>/*.json
+# - tier:        T1..T6 (see tier docstrings below)
+# - description: one line, for humans reading `--verbose` output
+# - context:
+#     now:          frozen RFC3339 "now" (America/New_York offset) the turn
+#                   runs with -- every relative-time query ("tomorrow",
+#                   "right now") is written against this, so the expected
+#                   values in `assertions` below are literal ISO strings
+#                   computed BY HAND from this `now`, not evaluated live.
+#     origin_gps:   {lat, lng} if the rider shares GPS, or omit/null if not.
+# - messages:    list of rider utterances. Most queries are single-turn
+#                (one entry); a few are two-turn follow-ups exercising
+#                slot carry-over (see t1_followup_origin_change,
+#                t2_no_bus_followup). Assertions evaluate against the
+#                WHOLE query: tool calls accumulate across every turn in
+#                order, but final_text is the LAST turn's text.
+# - fixtures:    OPTIONAL. `{tool_name: [file_a.json, file_b.json, ...]}` --
+#                explicit call-order mapping consumed one entry per call to
+#                that tool. This is the PRIMARY fixture-resolution
+#                mechanism for any tool called more than once in a query
+#                (e.g. two plan_trip legs with different inputs, where a
+#                single-file fallback can't disambiguate). Tools called at
+#                most once per query don't need an entry here -- the
+#                single-file-in-directory fallback covers them. See
+#                fixture_router.py's docstring for the full resolution
+#                order (hash-exact -> this mapping -> single-file
+#                fallback -> loud miss).
+# - assertions:  list of single-key mappings, vocabulary below.
+#
+# Fixture-authoring convention used by the `derived` assertion: within one
+# query's plan_trip fixtures, list the recommended candidate FIRST in
+# `data.candidates`. Production's real digest carries no explicit
+# "recommended" flag (see tools/plan_trip.py), so this is a convention for
+# HANDCRAFTED eval fixtures only, documented again in assertions.py.
+#
+# ------------------------------------------------------- Assertion vocab --
+#
+# tool_called: {name, where?}
+#   where: "any" (default) -- name appears anywhere in the query's tool calls.
+#   where: "first"          -- name is the very first tool call of the query.
+#   where: {none_before: other_tool} -- name is called, and its first
+#     occurrence comes strictly before other_tool's first occurrence (or
+#     other_tool is never called at all).
+#
+# tool_not_called: {name}
+#   name never appears in the query's tool calls.
+#
+# no_tools: true
+#   zero tool calls anywhere in the query.
+#
+# tool_input: {name, path, op, value?, call_index?}
+#   call_index (default 0): which call to `name` this checks (0-indexed).
+#   path: dot-path into that call's input dict, e.g. "exclude_modes" or
+#     "a.b.c" for a nested field (none of the current tool schemas nest,
+#     but the engine supports it).
+#   op:
+#     contains       -- `value` is an element of the list (or substring of
+#                        the string) at `path`. Case-insensitive for strings.
+#     equals         -- `path` value == `value`. Case-insensitive for strings.
+#     absent         -- `path` is missing or null.
+#     matches_regex  -- `path` value (as a string) matches `value` as a
+#                        case-insensitive regex (re.search, not fullmatch).
+#     iso_within     -- `path` value is an RFC3339 timestamp within
+#                        `value.minutes` minutes of `value.of` (a literal
+#                        RFC3339 timestamp computed by hand from `context.now`).
+#
+# call_order: [name_a, name_b, ...]
+#   each name's first occurrence is strictly before the next name's first
+#   occurrence (a chain, not just pairwise for the first two).
+#
+# call_count: {name, op: eq|gte, value}
+#   number of calls to `name` satisfies `op` against `value`.
+#
+# final_text: {op: matches_regex|not_matches_regex, pattern}
+#   case-insensitive re.search against the LAST turn's final assistant text.
+#
+# derived: {leg2_departs_after_leg1_arrival_plus: {minutes}}
+#   multi-stop-only. Reads the FIRST plan_trip call's resolved fixture
+#   data.candidates[0].arrives_iso (see the fixture-authoring convention
+#   above) and the SECOND plan_trip call's `departure_time` input; passes
+#   if departure_time >= arrives_iso + minutes.
+
+tiers:
+  T1: "basic single-destination routing, incl. one follow-up origin change"
+  T2: "routing constraints -- exclude_modes, routing_preference"
+  T3: "timed departures -- relative time phrasing, the 7-day window edge case"
+  T4: "event grounding + post-event crowd heuristics"
+  T5: "multi-stop chains -- poi_search then two plan_trip legs"
+  T6: "refusal / grounding -- out-of-scope requests, ungrounded event claims"
+
+queries:
+  # ================================================================ T1 ==
+  - id: t1_costco_basic
+    tier: T1
+    description: "plain destination + explicit origin, no constraints"
+    context:
+      now: "2026-07-15T14:00:00-04:00"
+    messages:
+      - "How do I get to the Costco in East Harlem from Union Square?"
+    assertions:
+      - tool_called: {name: plan_trip}
+      - tool_input: {name: plan_trip, path: destination, op: matches_regex, value: "costco"}
+      - tool_input: {name: plan_trip, path: origin, op: matches_regex, value: "union square"}
+
+  - id: t1_msg_from_gps
+    tier: T1
+    description: "'from here' should resolve origin to 'user' when GPS is present"
+    context:
+      now: "2026-07-15T14:00:00-04:00"
+      origin_gps: {lat: 40.7359, lng: -73.9911}
+    messages:
+      - "What's the fastest way to Madison Square Garden from here?"
+    assertions:
+      - tool_called: {name: plan_trip}
+      - tool_input: {name: plan_trip, path: origin, op: equals, value: "user"}
+      - tool_input: {name: plan_trip, path: destination, op: matches_regex, value: "madison square garden|msg"}
+
+  - id: t1_times_square
+    tier: T1
+    description: "plain destination + explicit origin"
+    context:
+      now: "2026-07-15T14:00:00-04:00"
+    messages:
+      - "Take me to Times Square from the Brooklyn Museum."
+    assertions:
+      - tool_called: {name: plan_trip}
+      - tool_input: {name: plan_trip, path: destination, op: matches_regex, value: "times square"}
+
+  - id: t1_barclays
+    tier: T1
+    description: "plain destination + explicit origin"
+    context:
+      now: "2026-07-15T14:00:00-04:00"
+    messages:
+      - "I need to get to Barclays Center from Astoria."
+    assertions:
+      - tool_called: {name: plan_trip}
+      - tool_input: {name: plan_trip, path: destination, op: matches_regex, value: "barclays"}
+
+  - id: t1_jfk
+    tier: T1
+    description: "airport destination, still in-scope NYC transit"
+    context:
+      now: "2026-07-15T14:00:00-04:00"
+    messages:
+      - "How do I get to JFK Airport from Union Square?"
+    assertions:
+      - tool_called: {name: plan_trip}
+      - tool_input: {name: plan_trip, path: destination, op: matches_regex, value: "jfk"}
+
+  - id: t1_brooklyn_museum
+    tier: T1
+    description: "plain destination + explicit origin"
+    context:
+      now: "2026-07-15T14:00:00-04:00"
+    messages:
+      - "What's the best way from Union Square to the Brooklyn Museum?"
+    assertions:
+      - tool_called: {name: plan_trip}
+      - tool_input: {name: plan_trip, path: destination, op: matches_regex, value: "brooklyn museum"}
+
+  - id: t1_followup_origin_change
+    tier: T1
+    description: "two-turn follow-up: rider corrects their origin on turn 2, destination slot should carry over"
+    context:
+      now: "2026-07-15T14:00:00-04:00"
+    messages:
+      - "Route me to Yankee Stadium from Union Square."
+      - "Actually, I'm leaving from Grand Central instead."
+    fixtures:
+      plan_trip: [leg_from_union_square.json, leg_from_grand_central.json]
+    assertions:
+      - call_count: {name: plan_trip, op: gte, value: 2}
+      - tool_input: {name: plan_trip, path: origin, op: matches_regex, value: "union square", call_index: 0}
+      - tool_input: {name: plan_trip, path: origin, op: matches_regex, value: "grand central", call_index: 1}
+      - tool_input: {name: plan_trip, path: destination, op: matches_regex, value: "yankee", call_index: 1}
+
+  - id: t1_apollo
+    tier: T1
+    description: "plain destination + explicit origin"
+    context:
+      now: "2026-07-15T14:00:00-04:00"
+    messages:
+      - "Best route to the Apollo Theater from Wall Street?"
+    assertions:
+      - tool_called: {name: plan_trip}
+      - tool_input: {name: plan_trip, path: destination, op: matches_regex, value: "apollo"}
+
+  # ================================================================ T2 ==
+  - id: t2_no_bus_cart
+    tier: T2
+    description: "demo query (a): 'no bus, I've got a cart' -> exclude_modes contains BUS"
+    context:
+      now: "2026-07-15T14:00:00-04:00"
+      origin_gps: {lat: 40.7359, lng: -73.9911}
+    messages:
+      - "Heading to Costco, no bus, I've got a cart."
+    assertions:
+      - tool_called: {name: plan_trip}
+      - tool_input: {name: plan_trip, path: destination, op: matches_regex, value: "costco"}
+      - tool_input: {name: plan_trip, path: exclude_modes, op: contains, value: "BUS"}
+
+  - id: t2_no_bus_followup
+    tier: T2
+    description: "matches plan doc verification item 2: 'actually no bus' mutates exclude_modes on the next plan_trip"
+    context:
+      now: "2026-07-15T14:00:00-04:00"
+    messages:
+      - "Route me to Costco from Union Square."
+      - "Actually, no bus -- I've got a cart."
+    fixtures:
+      plan_trip: [leg_no_constraint.json, leg_no_bus.json]
+    assertions:
+      - call_count: {name: plan_trip, op: gte, value: 2}
+      - tool_input: {name: plan_trip, path: exclude_modes, op: absent, call_index: 0}
+      - tool_input: {name: plan_trip, path: exclude_modes, op: contains, value: "BUS", call_index: 1}
+
+  - id: t2_less_walking
+    tier: T2
+    description: "'as little walking as possible' -> routing_preference LESS_WALKING"
+    context:
+      now: "2026-07-15T14:00:00-04:00"
+    messages:
+      - "Get me to Bryant Park with as little walking as possible."
+    assertions:
+      - tool_called: {name: plan_trip}
+      - tool_input: {name: plan_trip, path: routing_preference, op: equals, value: "LESS_WALKING"}
+
+  - id: t2_no_subway
+    tier: T2
+    description: "'don't want to take the subway' -> exclude_modes contains SUBWAY"
+    context:
+      now: "2026-07-15T14:00:00-04:00"
+    messages:
+      - "I don't want to take the subway to Wall Street, just bus is fine."
+    assertions:
+      - tool_called: {name: plan_trip}
+      - tool_input: {name: plan_trip, path: exclude_modes, op: contains, value: "SUBWAY"}
+
+  - id: t2_fewer_transfers_explicit
+    tier: T2
+    description: "explicit 'fewest transfers' ask should not accidentally exclude a mode"
+    context:
+      now: "2026-07-15T14:00:00-04:00"
+    messages:
+      - "Get me to Coney Island with the fewest transfers possible."
+    assertions:
+      - tool_called: {name: plan_trip}
+      - tool_input: {name: plan_trip, path: destination, op: matches_regex, value: "coney island"}
+      - tool_input: {name: plan_trip, path: exclude_modes, op: absent}
+
+  - id: t2_no_bus_no_subway
+    tier: T2
+    description: "excluding both available modes is a real tool error the model must relay gracefully, not crash on"
+    context:
+      now: "2026-07-15T14:00:00-04:00"
+    messages:
+      - "I only want to walk or take commuter rail to Grand Central -- no bus, no subway."
+    assertions:
+      - tool_called: {name: plan_trip}
+      - tool_input: {name: plan_trip, path: exclude_modes, op: contains, value: "BUS"}
+      - tool_input: {name: plan_trip, path: exclude_modes, op: contains, value: "SUBWAY"}
+      - final_text: {op: matches_regex, pattern: "no (other |)(transit|route|option)|can.?t (avoid|find)|only (way|option)|both"}
+
+  - id: t2_stroller_avoid_bus
+    tier: T2
+    description: "indirect phrasing for the same cart/stroller-style constraint"
+    context:
+      now: "2026-07-15T14:00:00-04:00"
+    messages:
+      - "I have a stroller, please avoid buses, heading to the Whitney Museum."
+    assertions:
+      - tool_called: {name: plan_trip}
+      - tool_input: {name: plan_trip, path: exclude_modes, op: contains, value: "BUS"}
+      - tool_input: {name: plan_trip, path: destination, op: matches_regex, value: "whitney"}
+
+  - id: t2_luggage_less_walking
+    tier: T2
+    description: "indirect phrasing for LESS_WALKING"
+    context:
+      now: "2026-07-15T14:00:00-04:00"
+    messages:
+      - "I'm carrying heavy luggage, minimize walking, going to Penn Station."
+    assertions:
+      - tool_called: {name: plan_trip}
+      - tool_input: {name: plan_trip, path: routing_preference, op: equals, value: "LESS_WALKING"}
+
+  # ================================================================ T3 ==
+  - id: t3_tomorrow_10pm
+    tier: T3
+    description: "'tomorrow at 10pm' -> departure_time within 30min of 2026-07-16T22:00:00-04:00"
+    context:
+      now: "2026-07-15T14:00:00-04:00"
+    messages:
+      - "What's the best way home from Union Square tomorrow at 10pm?"
+    assertions:
+      - tool_called: {name: plan_trip}
+      - tool_input:
+          name: plan_trip
+          path: departure_time
+          op: iso_within
+          value: {of: "2026-07-16T22:00:00-04:00", minutes: 30}
+
+  - id: t3_next_month
+    tier: T3
+    description: "Google Routes' ~7-day departureTime window -- must refuse/explain gracefully, never crash"
+    context:
+      now: "2026-07-15T14:00:00-04:00"
+    messages:
+      - "Can you plan a trip to Coney Island for August 20th?"
+    assertions:
+      - final_text:
+          op: matches_regex
+          pattern: "(within|next|about|roughly).{0,20}(day|week)|too far out|closer to (that|the) date|can.?t.*that far|only.*days? (out|ahead|in advance)"
+
+  - id: t3_leave_at_330pm
+    tier: T3
+    description: "same-day specific clock time"
+    context:
+      now: "2026-07-15T14:00:00-04:00"
+    messages:
+      - "I want to leave Union Square at 3:30pm today for Bryant Park."
+    assertions:
+      - tool_called: {name: plan_trip}
+      - tool_input:
+          name: plan_trip
+          path: departure_time
+          op: iso_within
+          value: {of: "2026-07-15T15:30:00-04:00", minutes: 15}
+
+  - id: t3_right_now
+    tier: T3
+    description: "'right now' should omit departure_time entirely (leave-now semantics)"
+    context:
+      now: "2026-07-15T14:00:00-04:00"
+    messages:
+      - "Get me from Union Square to Bryant Park right now."
+    assertions:
+      - tool_called: {name: plan_trip}
+      - tool_input: {name: plan_trip, path: departure_time, op: absent}
+
+  - id: t3_after_work_6
+    tier: T3
+    description: "vague same-day future time phrasing"
+    context:
+      now: "2026-07-15T14:00:00-04:00"
+    messages:
+      - "I get off work around 6, what's the best way from my office near Union Square to Grand Central?"
+    assertions:
+      - tool_called: {name: plan_trip}
+      - tool_input:
+          name: plan_trip
+          path: departure_time
+          op: iso_within
+          value: {of: "2026-07-15T18:00:00-04:00", minutes: 30}
+
+  - id: t3_saturday_morning
+    tier: T3
+    description: "named future day + vague time-of-day, still within the 7-day window"
+    context:
+      now: "2026-07-15T14:00:00-04:00"
+    messages:
+      - "What's the best way to Coney Island this Saturday morning?"
+    assertions:
+      - tool_called: {name: plan_trip}
+      - tool_input:
+          name: plan_trip
+          path: departure_time
+          op: iso_within
+          value: {of: "2026-07-18T09:00:00-04:00", minutes: 60}
+
+  # ================================================================ T4 ==
+  - id: t4_knicks_crowd
+    tier: T4
+    description: "demo query (b): event grounding + crowd heuristic + estimate-qualified prose"
+    context:
+      now: "2026-07-15T14:00:00-04:00"
+      origin_gps: {lat: 40.7505, lng: -73.9934}
+    messages:
+      - "What's the best way home after the Knicks game tomorrow, avoiding the crowd?"
+    assertions:
+      - tool_called: {name: event_lookup}
+      - tool_called: {name: venue_crowd_window}
+      - call_order: [event_lookup, venue_crowd_window]
+      - tool_input: {name: venue_crowd_window, path: venue, op: equals, value: "msg"}
+      - final_text: {op: matches_regex, pattern: "estimat|around|roughly|about|likely"}
+
+  - id: t4_fifa_metlife
+    tier: T4
+    description: "demo query (c) minus the pizza stop: MetLife/NJ clause must surface in prose"
+    context:
+      now: "2026-07-15T14:00:00-04:00"
+    messages:
+      - "Heading to the FIFA game today, what's the best way?"
+    assertions:
+      - tool_called: {name: event_lookup}
+      - final_text: {op: matches_regex, pattern: "new jersey|nj transit|penn station|port authority"}
+
+  - id: t4_yankees_crowd
+    tier: T4
+    description: "event grounding + crowd heuristic for a different venue"
+    context:
+      now: "2026-07-15T14:00:00-04:00"
+      origin_gps: {lat: 40.8296, lng: -73.9262}
+    messages:
+      - "The Yankees game ends around 10pm tonight -- how crowded will the subway be after?"
+    assertions:
+      - tool_called: {name: event_lookup}
+      - tool_called: {name: venue_crowd_window}
+      - tool_input: {name: venue_crowd_window, path: venue, op: equals, value: "yankee_stadium"}
+      - final_text: {op: matches_regex, pattern: "estimat|around|roughly|about|likely"}
+
+  - id: t4_barclays_concert_crowd
+    tier: T4
+    description: "event grounding + crowd heuristic, non-sports event"
+    context:
+      now: "2026-07-15T14:00:00-04:00"
+    messages:
+      - "There's a concert at Barclays tonight -- how crowded will it be getting home after?"
+    assertions:
+      - tool_called: {name: event_lookup}
+      - tool_called: {name: venue_crowd_window}
+      - tool_input: {name: venue_crowd_window, path: venue, op: equals, value: "barclays"}
+      - final_text: {op: matches_regex, pattern: "estimat|around|roughly|about|likely"}
+
+  - id: t4_nets_end_time
+    tier: T4
+    description: "event time question with no crowd ask -- still must be grounded and estimate-qualified"
+    context:
+      now: "2026-07-15T14:00:00-04:00"
+    messages:
+      - "What time does the Nets game end tonight?"
+    assertions:
+      - tool_called: {name: event_lookup}
+      - final_text: {op: matches_regex, pattern: "estimat|around|roughly|about|likely"}
+
+  - id: t4_rangers_msg_crowd
+    tier: T4
+    description: "event grounding + crowd heuristic, NHL classification"
+    context:
+      now: "2026-07-15T14:00:00-04:00"
+    messages:
+      - "Rangers game at MSG tonight -- how crowded will the subway be after?"
+    assertions:
+      - tool_called: {name: event_lookup}
+      - tool_called: {name: venue_crowd_window}
+      - tool_input: {name: venue_crowd_window, path: venue, op: equals, value: "msg"}
+      - final_text: {op: matches_regex, pattern: "estimat|around|roughly|about|likely"}
+
+  # ================================================================ T5 ==
+  - id: t5_pizza_first
+    tier: T5
+    description: "demo query (c)'s multi-stop shape: poi_search then two plan_trip legs, default 25min dwell"
+    context:
+      now: "2026-07-15T14:00:00-04:00"
+    messages:
+      - "I want pizza before heading to Barclays Center from Union Square."
+    fixtures:
+      plan_trip: [leg1_to_pizza.json, leg2_pizza_to_barclays.json]
+    assertions:
+      - call_order: [poi_search, plan_trip]
+      - call_count: {name: plan_trip, op: gte, value: 2}
+      - derived: {leg2_departs_after_leg1_arrival_plus: {minutes: 25}}
+
+  - id: t5_coffee_first_10min
+    tier: T5
+    description: "multi-stop with a rider-specified dwell buffer shorter than the 25min default"
+    context:
+      now: "2026-07-15T14:00:00-04:00"
+    messages:
+      - "Quick coffee stop for like 10 minutes, then to Bryant Park from Union Square."
+    fixtures:
+      plan_trip: [leg1_to_coffee.json, leg2_coffee_to_bryant_park.json]
+    assertions:
+      - call_order: [poi_search, plan_trip]
+      - call_count: {name: plan_trip, op: gte, value: 2}
+      - derived: {leg2_departs_after_leg1_arrival_plus: {minutes: 10}}
+
+  - id: t5_fifa_pizza
+    tier: T5
+    description: "multi-stop combined with the MetLife/NJ clause"
+    context:
+      now: "2026-07-15T14:00:00-04:00"
+    messages:
+      - "Grab pizza first, then to the FIFA game from Union Square."
+    fixtures:
+      plan_trip: [leg1_to_pizza.json, leg2_pizza_to_penn.json]
+    assertions:
+      - call_order: [poi_search, plan_trip]
+      - call_count: {name: plan_trip, op: gte, value: 2}
+      - derived: {leg2_departs_after_leg1_arrival_plus: {minutes: 25}}
+      - final_text: {op: matches_regex, pattern: "new jersey|nj transit|penn station|port authority"}
+
+  - id: t5_pharmacy_cart
+    tier: T5
+    description: "multi-stop combined with a routing constraint that must apply to BOTH legs"
+    context:
+      now: "2026-07-15T14:00:00-04:00"
+    messages:
+      - "I need to stop at a pharmacy first, then Costco -- no bus, I've got a cart. Starting from Union Square."
+    fixtures:
+      plan_trip: [leg1_to_pharmacy.json, leg2_pharmacy_to_costco.json]
+    assertions:
+      - call_order: [poi_search, plan_trip]
+      - call_count: {name: plan_trip, op: gte, value: 2}
+      - tool_input: {name: plan_trip, path: exclude_modes, op: contains, value: "BUS", call_index: 0}
+      - tool_input: {name: plan_trip, path: exclude_modes, op: contains, value: "BUS", call_index: 1}
+      - derived: {leg2_departs_after_leg1_arrival_plus: {minutes: 25}}
+
+  # ================================================================ T6 ==
+  - id: t6_drive_to_boston
+    tier: T6
+    description: "out-of-scope: driving directions to a non-NYC city -- zero tools, plain refusal"
+    context:
+      now: "2026-07-15T14:00:00-04:00"
+    messages:
+      - "Can you drive me to Boston?"
+    assertions:
+      - no_tools: true
+      - final_text: {op: matches_regex, pattern: "boston|driv|outside|new york|nyc|don.?t (do|handle|cover|offer)"}
+
+  - id: t6_weather
+    tier: T6
+    description: "out-of-scope: no tool exists for this, must not call plan_trip or hallucinate"
+    context:
+      now: "2026-07-15T14:00:00-04:00"
+    messages:
+      - "What's the weather like today?"
+    assertions:
+      - tool_not_called: {name: plan_trip}
+      - final_text: {op: matches_regex, pattern: "weather|transit|rout|can.?t help|don.?t (have|do|know)"}
+
+  - id: t6_islanders_no_game_found
+    tier: T6
+    description: "grounding: event_lookup returns no results -- the model must not invent a game time"
+    context:
+      now: "2026-07-15T14:00:00-04:00"
+    messages:
+      - "What time does the Islanders game start tonight so I can plan my trip?"
+    assertions:
+      - tool_called: {name: event_lookup}
+      - final_text:
+          op: not_matches_regex
+          pattern: "\\b\\d{1,2}(:\\d{2})?\\s?(am|pm)\\b"

@@ -6,6 +6,7 @@ import polyline from "@mapbox/polyline";
 
 import {
   buildRouteStopFeatures,
+  buildTransitPathFeatures,
   buildWalkFeatures,
   interpolateAlongLine,
 } from "./route-stops-features.ts";
@@ -115,6 +116,18 @@ test("walk steps become dashed-line features; transit steps do not", () => {
   assert.equal(fc.features.length, 1);
   assert.equal(fc.features[0].geometry.type, "LineString");
   assert.equal(fc.features[0].geometry.coordinates.length, 3);
+});
+
+test("transit steps become colored native map paths; walk steps do not", () => {
+  const steps = [
+    { type: "WALK", polyline: { encodedPolyline: ENCODED } },
+    subwayStep(),
+  ];
+  const fc = buildTransitPathFeatures(steps);
+  assert.equal(fc.features.length, 1);
+  assert.equal(fc.features[0].geometry.type, "LineString");
+  assert.equal(fc.features[0].properties.color, "#FCCC0A");
+  assert.equal(fc.features[0].properties.width, 6);
 });
 
 test("steps without polylines or stops yield no features", () => {

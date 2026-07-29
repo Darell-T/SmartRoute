@@ -16,7 +16,7 @@ test("readJsonBody distinguishes malformed JSON from an empty body", async () =>
     }),
   );
 
-  assert.deepEqual(malformed, { ok: false, empty: false, value: undefined });
+  assert.deepEqual(malformed, { ok: false, tooLarge: false, empty: false, value: undefined });
 });
 
 test("readJsonBody marks missing or whitespace-only bodies as empty", async () => {
@@ -31,6 +31,36 @@ test("readJsonBody marks missing or whitespace-only bodies as empty", async () =
     ),
     { ok: true, empty: true, value: undefined },
   );
+});
+
+test("readJsonBody accepts an ASCII JSON body at its exact byte ceiling", async () => {
+  const acceptedBody = JSON.stringify({ value: "x".repeat(3) });
+  const rejectedBody = JSON.stringify({ value: "x".repeat(4) });
+  const limit = new TextEncoder().encode(acceptedBody).byteLength;
+  const atLimit = new Request("https://example.test", { method: "POST", body: acceptedBody });
+  const overLimit = new Request("https://example.test", { method: "POST", body: rejectedBody });
+  const accepted = await readJsonBody(atLimit, limit);
+  const rejected = await readJsonBody(overLimit, limit);
+  assert.deepEqual(accepted, { ok: true, empty: false, value: { value: "x".repeat(3) } });
+  assert.deepEqual(rejected, { ok: false, tooLarge: true, empty: false, value: undefined });
+});
+
+test("readJsonBody rejects a multibyte UTF-8 overflow", async () => {
+  const acceptedBody = JSON.stringify({ value: "\u00e9".repeat(3) });
+  const rejectedBody = JSON.stringify({ value: "\u00e9".repeat(4) });
+  const limit = new TextEncoder().encode(acceptedBody).byteLength;
+
+  const accepted = await readJsonBody(
+    new Request("https://example.test", { method: "POST", body: acceptedBody }),
+    limit,
+  );
+  const rejected = await readJsonBody(
+    new Request("https://example.test", { method: "POST", body: rejectedBody }),
+    limit,
+  );
+
+  assert.deepEqual(accepted, { ok: true, empty: false, value: { value: "\u00e9".repeat(3) } });
+  assert.deepEqual(rejected, { ok: false, tooLarge: true, empty: false, value: undefined });
 });
 
 test("fetchBackendText keeps timeout active while consuming the upstream body", async () => {

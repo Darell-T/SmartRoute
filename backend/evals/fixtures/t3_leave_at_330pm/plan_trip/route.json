@@ -1,0 +1,23 @@
+{
+  "data": {
+    "candidates": [
+      {
+        "alert_headlines": [],
+        "arrives_iso": "2026-07-15T15:57:00-04:00",
+        "card_id": "rc_t3lv001",
+        "departs_iso": "2026-07-15T15:33:00-04:00",
+        "eta_minutes": 24,
+        "lines": [
+          "6",
+          "M2"
+        ],
+        "reason": "One transfer, on schedule for a 3:30pm departure.",
+        "transfers": 1,
+        "walk_minutes": 3.0
+      }
+    ]
+  },
+  "error": null,
+  "ok": true,
+  "summary": "found 1 route(s) to Bryant Park; recommended 6/M2"
+}

@@ -27,27 +27,68 @@ export interface UseDestinationSearchOptions {
   isLoading?: boolean;
 }
 
+export interface DestinationSuggestionState {
+  query: string;
+  suggestions: MapboxSearchSuggestion[];
+}
+
+export class DestinationRequestGate {
+  private generation = 0;
+
+  begin(): number {
+    this.generation += 1;
+    return this.generation;
+  }
+
+  isCurrent(generation: number): boolean {
+    return this.generation === generation;
+  }
+}
+
+export function publishDestinationSearch(
+  state: DestinationSuggestionState,
+  gate: DestinationRequestGate,
+  generation: number,
+  query: string,
+  suggestions: MapboxSearchSuggestion[],
+): DestinationSuggestionState {
+  return gate.isCurrent(generation)
+    ? { ...state, query, suggestions }
+    : state;
+}
+
+export function visibleDestinationSuggestions(
+  state: DestinationSuggestionState,
+  query: string,
+  active: boolean,
+): MapboxSearchSuggestion[] {
+  return active && state.query === query ? state.suggestions : [];
+}
+
 export function useDestinationSearch({
   inputValue,
   enabled,
   isLoading = false,
 }: UseDestinationSearchOptions) {
-  const [suggestions, setSuggestions] = useState<MapboxSearchSuggestion[]>([]);
+  const [suggestionState, setSuggestionState] = useState<DestinationSuggestionState>({
+    query: "",
+    suggestions: [],
+  });
   const [highlightedIndex, setHighlightedIndex] = useState(0);
   const [isResolving, setIsResolving] = useState(false);
   const deferredInput = useDeferredValue(inputValue);
-  const selectedLabelRef = useRef<string | null>(null);
+  const [selectedLabel, setSelectedLabel] = useState<string | null>(null);
   const sessionRef = useRef(createMapboxSearchSessionToken());
+  const requestGateRef = useRef(new DestinationRequestGate());
 
   useEffect(() => {
+    const requestId = requestGateRef.current.begin();
     const query = deferredInput.trim();
     const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
-    if (selectedLabelRef.current === query) {
-      setSuggestions([]);
+    if (selectedLabel === query) {
       return;
     }
     if (!enabled || !token || query.length < 3 || isLoading) {
-      setSuggestions([]);
       return;
     }
 
@@ -60,13 +101,26 @@ export function useDestinationSearch({
           sessionToken: sessionRef.current,
           signal: controller.signal,
         });
+        if (controller.signal.aborted) return;
         startTransition(() => {
-          setSuggestions(nextSuggestions);
+          setSuggestionState((state) => publishDestinationSearch(
+            state,
+            requestGateRef.current,
+            requestId,
+            query,
+            nextSuggestions,
+          ));
           setHighlightedIndex(0);
         });
       } catch {
         if (!controller.signal.aborted) {
-          setSuggestions([]);
+          setSuggestionState((state) => publishDestinationSearch(
+            state,
+            requestGateRef.current,
+            requestId,
+            query,
+            [],
+          ));
         }
       }
     }, 180);
@@ -75,7 +129,7 @@ export function useDestinationSearch({
       clearTimeout(id);
       controller.abort();
     };
-  }, [deferredInput, enabled, isLoading]);
+  }, [deferredInput, enabled, isLoading, selectedLabel]);
 
   /** Resolve a suggestion to coordinates; resets the billing session token
    *  and suppresses re-suggesting the chosen label. Null on failure. */
@@ -98,27 +152,27 @@ export function useDestinationSearch({
       setIsResolving(false);
     }
     if (!selection) return null;
-    selectedLabelRef.current = selection.label;
-    setSuggestions([]);
+    setSelectedLabel(selection.label);
+    setSuggestionState((state) => ({ ...state, suggestions: [] }));
     sessionRef.current = createMapboxSearchSessionToken();
     return selection;
   }
 
   function clearSuggestions() {
-    setSuggestions([]);
+    setSuggestionState((state) => ({ ...state, suggestions: [] }));
   }
 
   /** Call when the user edits the input so the chosen label can re-suggest. */
   function markInputEdited() {
-    selectedLabelRef.current = null;
+    setSelectedLabel(null);
   }
 
   /** Suppress suggestions for a query the user already acted on (free-text
    *  submit) -- otherwise the debounced fetch reopens the dropdown over the
    *  rail after the trip request is already in flight. */
   function markSelectedLabel(label: string) {
-    selectedLabelRef.current = label;
-    setSuggestions([]);
+    setSelectedLabel(label);
+    setSuggestionState((state) => ({ ...state, suggestions: [] }));
   }
 
   function resetSession() {
@@ -126,7 +180,11 @@ export function useDestinationSearch({
   }
 
   return {
-    suggestions,
+    suggestions: visibleDestinationSuggestions(
+      suggestionState,
+      deferredInput.trim(),
+      enabled && !isLoading && selectedLabel !== deferredInput.trim(),
+    ),
     highlightedIndex,
     setHighlightedIndex,
     choose,

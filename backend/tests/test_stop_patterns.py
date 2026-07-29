@@ -97,6 +97,31 @@ class IndexTests(unittest.TestCase):
             ["Alpha Av", "Beta St", "Gamma Sq", "Delta Pkwy"],
         )
 
+    def test_stops_for_route_are_served_from_the_local_index(self):
+        stops = self.idx.stops_for_routes({"q"})
+
+        self.assertEqual(
+            [stop["stop_id"] for stop in stops],
+            ["A", "B", "C", "D", "E"],
+        )
+        self.assertTrue(all(stop["route_ids"] == ["Q"] for stop in stops))
+
+    def test_route_segment_exposes_canonical_boarding_identifiers(self):
+        segment = self.idx.resolve_route_segment(
+            "q",
+            "Alpha Avenue",
+            "Delta Parkway",
+        )
+
+        self.assertEqual(
+            segment,
+            {
+                "origin_stop_id": "A",
+                "destination_stop_id": "D",
+                "direction_id": 0,
+            },
+        )
+
     def test_miss_unknown_name(self):
         rows, meta = self.idx.get_intermediate_stops_with_coords("Q", "Nowhere", "Epsilon Ctr")
         self.assertFalse(meta["hit"])
@@ -139,6 +164,25 @@ class RealArtifactTests(unittest.TestCase):
         # Q from Canal St to Church Av runs via DeKalb + the Brighton line.
         self.assertIn("DeKalb Av", names)
         self.assertTrue(all("lat" in r and "lng" in r for r in rows))
+
+    @unittest.skipUnless(
+        (Path(__file__).resolve().parent.parent / "app" / "data" / "stop_patterns.json").exists(),
+        "stop_patterns.json not built",
+    )
+    def test_real_q_church_to_coney_segment_uses_route_specific_stop(self):
+        idx = StopPatternIndex.load(self.ARTIFACT)
+
+        segment = idx.resolve_route_segment(
+            "Q",
+            "Church Av",
+            "Coney Island-Stillwell Av",
+            {"latitude": 40.6505, "longitude": -73.9624},
+            {"latitude": 40.5774, "longitude": -73.9812},
+        )
+
+        self.assertEqual(segment["origin_stop_id"], "D28")
+        self.assertEqual(segment["destination_stop_id"], "D43")
+        self.assertEqual(segment["direction_id"], 1)
 
     @unittest.skipUnless(
         (Path(__file__).resolve().parent.parent / "app" / "data" / "stop_patterns.json").exists(),

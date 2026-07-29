@@ -193,3 +193,44 @@ export function createDestinationPin(): HTMLDivElement {
   `;
   return el;
 }
+
+/** A neutral intermediate-destination treatment for canonical waypoints. */
+export function createWaypointMarker(label: string, dwellMinutes?: number): HTMLDivElement {
+  const el = document.createElement("div");
+  el.className = "sr-route-waypoint-marker";
+  el.style.cssText = [
+    "display:flex",
+    "align-items:center",
+    "gap:7px",
+    "pointer-events:none",
+    "font:600 12px/1.15 Inter,ui-sans-serif,system-ui,sans-serif",
+    "color:#f8fafc",
+    "text-shadow:0 1px 4px rgba(0,0,0,.7)",
+  ].join(";");
+  el.setAttribute("role", "img");
+  el.setAttribute(
+    "aria-label",
+    dwellMinutes && dwellMinutes > 0
+      ? `${label}, ${dwellMinutes} minute stop`
+      : `Waypoint: ${label}`,
+  );
+  el.innerHTML = `
+    <span class="sr-route-waypoint-marker__dot" aria-hidden="true" style="width:16px;height:16px;box-sizing:border-box;border:3px solid #f8fafc;border-radius:999px;background:#111827;box-shadow:0 0 0 3px rgba(17,24,39,.55),0 3px 8px rgba(0,0,0,.35)"></span>
+    <span class="sr-route-waypoint-marker__label" style="display:grid;gap:1px;white-space:nowrap">${escapeMarkerLabel(label)}${
+      dwellMinutes && dwellMinutes > 0
+        ? `<small style="font:500 10px/1.15 Inter,ui-sans-serif,system-ui,sans-serif;color:#d1d5db">${Math.round(dwellMinutes)} min stop</small>`
+        : ""
+    }</span>
+  `;
+  return el;
+}
+
+function escapeMarkerLabel(value: string) {
+  return value.replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#039;",
+  })[char] ?? char);
+}

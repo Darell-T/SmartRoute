@@ -1,0 +1,24 @@
+{
+  "_embedded": {
+    "events": [
+      {
+        "id": "cancelled-fixture-event",
+        "name": "Cancelled fixture event",
+        "dates": {
+          "start": {"dateTime": "2026-07-22T23:00:00Z"},
+          "status": {"code": "cancelled"},
+          "timezone": "America/New_York"
+        },
+        "_embedded": {
+          "venues": [
+            {
+              "name": "Madison Square Garden",
+              "location": {"latitude": "40.7505", "longitude": "-73.9934"}
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "page": {"totalPages": 0}
+}

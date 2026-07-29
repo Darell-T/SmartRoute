@@ -14,8 +14,20 @@ import {
 
 type UserLocation = { lng: number; lat: number } | null;
 
+/** Origin of the currently displayed route. This is presentation context, not
+ * route data: selecting an alternative must preserve it. */
+export type RouteEntryContext = "chat" | "map_search" | "deep_link" | "restored";
+
 type RoutePlanningControllerInput = {
   userLocation: UserLocation;
+};
+
+export type ExternalRoutePlan = {
+  destination: DestinationSelection;
+  candidates: RouteCandidate[];
+  activeCandidateId: string;
+  recommendationText: string;
+  entryContext?: RouteEntryContext;
 };
 
 export type RoutePlanningPhase = "idle" | "cancellable" | "finalizing";
@@ -27,6 +39,8 @@ export function useRoutePlanningController({
   const [selectedDestination, setSelectedDestination] =
     useState<DestinationSelection | null>(null);
   const [recommendationText, setRecommendationText] = useState("");
+  const [routeEntryContext, setRouteEntryContext] =
+    useState<RouteEntryContext>("map_search");
   // Canned line after the user switches to an alternative route;
   // overrides the rail's plan headline until the next trip or clear.
   const [switchHeadline, setSwitchHeadline] = useState<string | null>(null);
@@ -115,15 +129,19 @@ export function useRoutePlanningController({
       );
       if (routePlanningRequestIdRef.current !== requestId) return;
 
+      const normalizedTrip = normalizeTripCandidates(tripData);
+      if (!normalizedTrip) {
+        throw new Error("The route response is missing its canonical itinerary.");
+      }
       const {
         candidates: nextCandidates,
         selected: selectedCandidate,
         selectedIndex: nextSelectedIndex,
-      } = normalizeTripCandidates(tripData);
-      const selectedSteps = selectedCandidate?.steps ?? tripData.route;
+      } = normalizedTrip;
+      const selectedSteps = selectedCandidate.steps;
       setRouteCandidates(nextCandidates);
       setActiveRouteCandidateId(
-        selectedCandidate?.id ?? nextCandidates[0]?.id ?? null,
+        selectedCandidate.id,
       );
       setSelectedRouteIndex(nextSelectedIndex);
       setPlannedRouteSteps(selectedSteps);
@@ -154,6 +172,7 @@ export function useRoutePlanningController({
     destinationOverride?: string,
     selectionOverride?: DestinationSelection | null,
   ) {
+    setRouteEntryContext("map_search");
     if (selectionOverride) setSelectedDestination(selectionOverride);
     void handleSubmit(destinationOverride, selectionOverride);
   }
@@ -200,6 +219,31 @@ export function useRoutePlanningController({
     setSwitchHeadline(`Rerouting via the ${line}.`);
   }
 
+  function handleLoadExternalRoutes(plan: ExternalRoutePlan) {
+    const activeCandidate = plan.candidates.find(
+      (candidate) => candidate.id === plan.activeCandidateId,
+    );
+    if (!activeCandidate) return;
+
+    routePlanningRequestIdRef.current += 1;
+    routePlanningAbortRef.current?.abort();
+    routePlanningAbortRef.current = null;
+    setInputValue(plan.destination.label);
+    setSelectedDestination(plan.destination);
+    setIsLoading(false);
+    setPlanningPhase("idle");
+    setErrorText(null);
+    setRouteCandidates(plan.candidates);
+    setActiveRouteCandidateId(activeCandidate.id);
+    setSelectedRouteIndex(activeCandidate.index);
+    setPlannedRouteSteps(activeCandidate.steps);
+    setRecommendationText(plan.recommendationText);
+    // Older restored/deep-linked plans predate the explicit field. Keep that
+    // fallback intentional rather than silently treating them as chat routes.
+    setRouteEntryContext(plan.entryContext ?? "restored");
+    setSwitchHeadline(null);
+  }
+
   function handleCancelRoutePlanning() {
     routePlanningRequestIdRef.current += 1;
     routePlanningAbortRef.current?.abort();
@@ -228,16 +272,18 @@ export function useRoutePlanningController({
     setSelectedRouteIndex(null);
     setPlannedRouteSteps([]);
     setRecommendationText("");
+    setRouteEntryContext("map_search");
     setSwitchHeadline(null);
     setErrorText(null);
   }
 
   return {
-    inputValue, selectedDestination, recommendationText, switchHeadline,
+    inputValue, selectedDestination, recommendationText, routeEntryContext, switchHeadline,
     isLoading, planningPhase, errorText, plannedRouteSteps,
     routeCandidates, activeRouteCandidateId,
     handleDestinationInputChange, handleSearchSubmit,
-    handleSelectAlternative, handleCancelRoutePlanning, handleClearRoute,
+    handleSelectAlternative, handleLoadExternalRoutes,
+    handleCancelRoutePlanning, handleClearRoute,
   };
 }
 

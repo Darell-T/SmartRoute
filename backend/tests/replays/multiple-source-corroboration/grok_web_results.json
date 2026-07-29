@@ -1,0 +1,11 @@
+[
+  {
+    "source": "grok_web",
+    "source_id": "web-signal-1",
+    "location": "Herald Square",
+    "nearby_station": "34 St-Herald Sq",
+    "severity": "high",
+    "description": "Signal obstruction near Herald Square delays Q trains.",
+    "observed_at": "2026-07-22T21:22:00Z"
+  }
+]

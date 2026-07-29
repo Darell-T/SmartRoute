@@ -27,13 +27,13 @@ def geocode_address_with_reason(address: str) -> tuple[tuple[float, float] | Non
         lat, lng = address.strip().split(",")
         lat, lng = float(lat.strip()), float(lng.strip())
         in_nyc = _is_in_nyc(lat, lng)
-        print(f"[geo] coordinate input detected: lat={lat}, lng={lng}, in_nyc={in_nyc}")
+        print(f"[geo] provider=input outcome=coordinates in_service_area={int(in_nyc)}")
         if not in_nyc:
             return None, "Coordinates are outside NYC bounds."
         return (lat, lng), None
 
     # Use NYC Planning GeoSearch API — free, no key, NYC-specific
-    print(f"[geo] GeoSearch query: {address!r}")
+    print("[geo] provider=nyc_geosearch outcome=request_started")
     try:
         import requests
 
@@ -45,18 +45,18 @@ def geocode_address_with_reason(address: str) -> tuple[tuple[float, float] | Non
         resp.raise_for_status()
         features = resp.json().get("features", [])
         if not features:
-            print(f"[geo] GeoSearch returned no results for {address!r}")
+            print("[geo] provider=nyc_geosearch outcome=no_result")
             return None, "Address not found in NYC."
 
         lng, lat = features[0]["geometry"]["coordinates"]  # GeoJSON is [lng, lat]
         in_nyc = _is_in_nyc(lat, lng)
-        print(f"[geo] GeoSearch result: lat={lat}, lng={lng}, in_nyc={in_nyc}")
+        print(f"[geo] provider=nyc_geosearch outcome=result in_service_area={int(in_nyc)}")
         if not in_nyc:
             return None, "Address is outside NYC bounds."
         return (lat, lng), None
     except requests.RequestException as err:
-        print(f"[geo] GeoSearch error: {err}")
-        return None, f"Geocoding service error: {err}"
+        print(f"[geo] provider=nyc_geosearch outcome=error error_type={type(err).__name__}")
+        return None, "Geocoding service is temporarily unavailable."
 
 
 def _is_in_nyc(lat: float, lon: float) -> bool:

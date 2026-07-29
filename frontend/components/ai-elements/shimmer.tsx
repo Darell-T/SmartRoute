@@ -1,10 +1,14 @@
 "use client";
 
-/* Vendored from Vercel AI Elements ("shimmer"), adapted for SmartRoute:
-   gradient stops map to the rail's Platform White tiers, the sweep is
-   disabled entirely under prefers-reduced-motion instead of merely slowed,
-   and the polymorphic `as` prop is narrowed to a fixed tag set so motion
-   components are created once at module scope, never during render. */
+/* Vendored from Vercel AI Elements ("shimmer"), source:
+   https://github.com/vercel/ai-elements/blob/main/packages/elements/src/shimmer.tsx
+   License: Apache-2.0 (https://github.com/vercel/ai-elements/blob/main/LICENSE)
+
+   Local tweaks: gradient stops map to the rail's Platform White tiers, the
+   sweep is disabled entirely under prefers-reduced-motion instead of merely
+   slowed, and the polymorphic `as` prop is narrowed to a fixed tag set so
+   motion components are created once at module scope, never during render.
+   Reused as-is for the chat tab's "Thinking…" reasoning trigger label. */
 
 import type { CSSProperties, ReactNode } from "react";
 import { motion, useReducedMotion } from "motion/react";
@@ -25,7 +29,7 @@ export type ShimmerProps = {
 const SHIMMER_TEXT_STYLE: CSSProperties = {
   display: "inline-block",
   backgroundImage:
-    "linear-gradient(90deg, rgba(255,255,255,.92) 0%, rgba(255,255,255,.40) 50%, rgba(255,255,255,.92) 100%)",
+    "var(--shimmer-gradient, linear-gradient(90deg, rgba(255,255,255,.92) 0%, rgba(255,255,255,.40) 50%, rgba(255,255,255,.92) 100%))",
   backgroundSize: "200% 100%",
   WebkitBackgroundClip: "text",
   backgroundClip: "text",

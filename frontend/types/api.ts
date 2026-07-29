@@ -1,3 +1,5 @@
+import type { CanonicalItinerary } from "@/lib/agent-chat-stream";
+
 export interface Coordinates {
   latitude: number;
   longitude: number;
@@ -18,10 +20,15 @@ export interface RouteStep {
   minutes_until_train_arrives?: number;
   minutes_until_arrival?: number;
   route_total_minutes?: number;
+  route_total_seconds?: number;
+  duration_minutes?: number;
+  distance_meters?: number;
   stop_count?: number;
   route_id?: string;
   intermediate_stops?: string[];
   intermediate_stop_locations?: IntermediateStopLocation[];
+  /** Server-owned chained-itinerary boundary; absent for legacy direct routes. */
+  segment_index?: number;
 }
 
 export interface IntermediateStopLocation {
@@ -32,6 +39,8 @@ export interface IntermediateStopLocation {
 
 export interface TransitRouteData {
   steps: RouteStep[];
+  /** Canonical agent itinerary, when this route entered the map from chat. */
+  itinerary?: CanonicalItinerary;
 }
 
 export interface RouteCandidate {
@@ -40,6 +49,11 @@ export interface RouteCandidate {
   steps: RouteStep[];
   is_recommended: boolean;
   total_minutes?: number;
+  /**
+   * Canonical itinerary arrival wall-clock (ISO). When present, map/rail must
+   * format this for arrive labels instead of inventing now+eta.
+   */
+  arrival_at?: string;
   selection_score?: number;
   selection_rank?: number;
   score_breakdown?: {
@@ -55,6 +69,23 @@ export interface RouteCandidate {
   can_enrich_on_select?: boolean;
   recommendation_reason?: string;
   rejection_reason?: string;
+  /** The original agent itinerary. Never reconstruct multi-stop state from steps. */
+  itinerary?: CanonicalItinerary;
+  itinerary_id?: string;
+  origin?: {
+    label: string;
+    lat: number;
+    lng: number;
+    name?: string;
+    address?: string | null;
+  };
+  destination?: {
+    label: string;
+    lat: number;
+    lng: number;
+    name?: string;
+    address?: string | null;
+  };
 }
 
 export interface DestinationSelection {

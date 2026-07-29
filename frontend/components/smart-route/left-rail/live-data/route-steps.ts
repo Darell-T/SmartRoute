@@ -1,4 +1,8 @@
 import type { RouteStep as ApiRouteStep } from "@/types/api";
+import type {
+  CanonicalItinerary,
+  CanonicalItineraryLeg,
+} from "@/lib/agent-chat-stream";
 import type { RouteDetailStep, RouteStep, RouteStripSegment } from "../types";
 import { cleanDestinationLabel } from "./formatters";
 
@@ -184,4 +188,79 @@ export function detailStepsFromSteps(steps: ApiRouteStep[] | undefined): RouteDe
   });
 
   return out;
+}
+
+function canonicalPlaceLabel(place: unknown, fallback: string) {
+  if (typeof place === "string" && place.trim()) return place.trim();
+  if (place && typeof place === "object") {
+    const record = place as Record<string, unknown>;
+    for (const key of ["display_name", "label", "name", "address"] as const) {
+      const value = record[key];
+      if (typeof value === "string" && value.trim()) return value.trim();
+    }
+  }
+  return fallback;
+}
+
+function canonicalLegMinutes(leg: CanonicalItineraryLeg | undefined): number | undefined {
+  if (!leg) return undefined;
+  const seconds = leg.mode.toUpperCase() === "WALK" ? leg.walk_seconds : leg.ride_seconds;
+  return typeof seconds === "number" && Number.isFinite(seconds) && seconds >= 0
+    ? Math.round(seconds / 60)
+    : undefined;
+}
+
+/**
+ * Build rail details from the same canonical OD segments used by the chat
+ * card. This is deliberately not a frontend itinerary merger: raw provider
+ * steps are only decorated with their matching canonical leg duration.
+ */
+export function detailStepsFromCanonicalItinerary(
+  steps: ApiRouteStep[] | undefined,
+  itinerary: CanonicalItinerary | undefined,
+): RouteDetailStep[] {
+  const segments = itinerary?.segments;
+  if (!Array.isArray(segments) || segments.length === 0) {
+    return detailStepsFromSteps(steps);
+  }
+
+  const dwellBySegment = new Map(
+    (Array.isArray(itinerary?.dwell_events) ? itinerary.dwell_events : [])
+      .filter((event) => event?.event_type === "dwell")
+      .map((event) => [event.after_segment_index, event]),
+  );
+  const result: RouteDetailStep[] = [];
+  const orderedSegments = [...segments].sort((a, b) => a.segment_index - b.segment_index);
+
+  for (let position = 0; position < orderedSegments.length; position += 1) {
+    const segment = orderedSegments[position];
+    const destination = canonicalPlaceLabel(
+      segment.destination,
+      position === orderedSegments.length - 1 ? "Destination" : "Waypoint",
+    );
+    result.push({
+      kind: "segment",
+      title: `Leg ${position + 1} · To ${destination}`,
+    });
+
+    const rawSegmentSteps = (steps ?? [])
+      .filter((step) => step.segment_index === segment.segment_index)
+      .map((step, index) => {
+        const minutes = canonicalLegMinutes(segment.legs[index]);
+        return minutes === undefined ? step : { ...step, minutes_until_arrival: minutes };
+      });
+    result.push(...detailStepsFromSteps(rawSegmentSteps));
+
+    const dwell = dwellBySegment.get(segment.segment_index);
+    if (dwell) {
+      const minutes = Math.max(0, Math.round(dwell.duration_seconds / 60));
+      const waypoint = canonicalPlaceLabel(dwell.waypoint, destination);
+      result.push({
+        kind: "dwell",
+        title: waypoint,
+        subtitle: `${minutes} min stop · ${dwell.source === "default" ? "Default dwell time" : "Your planned dwell time"}`,
+      });
+    }
+  }
+  return result;
 }

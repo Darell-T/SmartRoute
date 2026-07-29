@@ -189,6 +189,28 @@ def _transit_steps(route: list[dict]) -> list[dict]:
     ]
 
 
+def _collect_route_and_bus_ids(routes: list[list[dict]]) -> tuple[set[str], set[str]]:
+    """Collects the set of subway/bus route ids and the subset that are bus
+    routes across every candidate route, and stamps each transit step with
+    empty `intermediate_stops`/`intermediate_stop_locations` keys -- present
+    (even if empty) until, and unless, GTFS enrichment fills them in. Shared
+    by /api/trip and the plan_trip agent tool, which both build these same
+    sets from a freshly parsed Google Routes response before fetching live
+    context (alerts/stalled vehicles) for those routes."""
+    route_ids: set[str] = set()
+    bus_route_ids: set[str] = set()
+    for route in routes:
+        for step in route:
+            step_type = step["type"]
+            if step_type in ("SUBWAY", "BUS"):
+                route_ids.add(step["route_id"])
+                step.setdefault("intermediate_stops", [])
+                step.setdefault("intermediate_stop_locations", [])
+            if step_type == "BUS":
+                bus_route_ids.add(step["route_id"])
+    return route_ids, bus_route_ids
+
+
 def _route_ids(route: list[dict]) -> list[str]:
     route_ids: list[str] = []
     for step in _transit_steps(route):

@@ -1,0 +1,24 @@
+{
+  "data": {
+    "candidates": [
+      {
+        "alert_headlines": [],
+        "arrives_iso": "2026-07-15T18:21:00-04:00",
+        "card_id": "rc_t3aw001",
+        "departs_iso": "2026-07-15T18:03:00-04:00",
+        "eta_minutes": 18,
+        "lines": [
+          "4",
+          "5",
+          "6"
+        ],
+        "reason": "Direct ride timed for a 6pm departure.",
+        "transfers": 0,
+        "walk_minutes": 4.0
+      }
+    ]
+  },
+  "error": null,
+  "ok": true,
+  "summary": "found 1 route(s) to Grand Central; recommended 4/5/6"
+}

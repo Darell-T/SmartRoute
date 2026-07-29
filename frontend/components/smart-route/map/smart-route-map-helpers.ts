@@ -1,11 +1,8 @@
 "use client";
 
 import maplibregl from "maplibre-gl";
-import { PathLayer, type PathLayerProps } from "@deck.gl/layers";
 import type { Coordinates } from "@/types";
 import artifactManifest from "@/lib/artifact-manifest.json";
-import { type Trip } from "@/components/map/route-layers";
-import { ROUTE_WALK_LINE_LAYER_ID } from "@/components/map/route-stops";
 
 export const DEBUG_LIVE_MAP = process.env.NODE_ENV !== "production";
 
@@ -91,31 +88,6 @@ export function mapFeatureArrayProperty(value: unknown): string[] {
       .filter(Boolean);
   }
   return [];
-}
-
-export const ROUTE_PATH_DEPTH_PARAMETERS = {
-  depthCompare: "always" as const,
-  depthWriteEnabled: false,
-};
-
-export function selectedRouteLayers(trips: Trip[]) {
-  return trips.map(
-    (trip, i) =>
-      new PathLayer<Trip>({
-        id: `sr-selected-route-${i}`,
-        data: [trip],
-        getPath: (t) => t.path,
-        getColor: (t) => [t.color[0], t.color[1], t.color[2], 255],
-        getWidth: (t) => t.width,
-        widthUnits: "pixels",
-        widthMinPixels: 3,
-        opacity: 1,
-        capRounded: true,
-        jointRounded: true,
-        parameters: ROUTE_PATH_DEPTH_PARAMETERS,
-        beforeId: ROUTE_WALK_LINE_LAYER_ID,
-      } as PathLayerProps<Trip> & { beforeId: string }),
-  );
 }
 
 export function firstSymbolLayerId(m: maplibregl.Map) {
