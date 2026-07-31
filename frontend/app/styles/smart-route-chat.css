@@ -143,7 +143,7 @@
 
 @media (max-width: 720px) {
   .sr-chat-tab {
-    height: var(--visual-viewport-height, 100dvh);
+    height: var(--mobile-visible-height, 100dvh);
   }
 }
 
@@ -2837,20 +2837,54 @@ button.sr-chat-arrivals-card__footer {
   color: var(--sr-chat-ink);
 }
 
-/* ── Error banner ────────────────────────────────────────────────────── */
+/* ── Failed turn recovery ────────────────────────────────────────────── */
 
-.sr-chat-error-banner {
+.sr-chat-turn-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
   max-width: 720px;
-  width: calc(100% - 32px);
-  margin: 0 auto 10px;
-  padding: 8px 12px;
+  padding: 10px 12px;
   border-radius: var(--sr-radius-inset);
   background: var(--sr-chat-danger-tint);
   border: 1px solid var(--sr-chat-danger-hairline);
   color: var(--sr-chat-ink);
   font-size: 12.5px;
   line-height: 1.4;
+}
+
+.sr-chat-turn-error p {
+  margin: 0;
+}
+
+.sr-chat-turn-error__actions {
+  display: flex;
   flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+}
+
+.sr-chat-turn-error__actions button {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  font-weight: 620;
+  cursor: pointer;
+}
+
+.sr-chat-turn-error__actions button:hover,
+.sr-chat-turn-error__actions button:focus-visible {
+  background: var(--sr-chat-hover-fill);
+}
+
+.sr-chat-turn-error__actions button:focus-visible {
+  outline: 1px solid color-mix(in srgb, currentColor 45%, transparent);
+  outline-offset: 1px;
 }
 
 @media (max-width: 720px) {
@@ -3132,9 +3166,13 @@ button.sr-chat-arrivals-card__footer {
     flex: 0 0 auto;
   }
 
-  .sr-chat-composer-beam,
-  .sr-chat-error-banner {
+  .sr-chat-composer-beam {
     width: calc(100% - 24px);
+  }
+
+  .sr-chat-turn-error {
+    align-items: flex-start;
+    margin-inline: 4px;
   }
 
   .sr-chat-composer-beam {

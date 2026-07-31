@@ -1,4 +1,5 @@
 import type { Dispatch } from "react";
+import { safeChatFailure } from "./chat-failure-copy";
 import { parseSseStream, type AgentEvent } from "./agent-chat-stream";
 import type { AgentChatRequestBody } from "./agent-chat-request";
 import type { ChatReducerAction } from "./agent-chat-state";
@@ -19,19 +20,16 @@ interface MutableRef<T> {
   current: T;
 }
 
-function hasErrorMessage(body: unknown): body is { error: string } {
-  return Boolean(body) && typeof body === "object" &&
-    typeof Object.getOwnPropertyDescriptor(body, "error")?.value === "string";
-}
-
-async function readTransportErrorMessage(res: Response): Promise<string> {
-  try {
-    const body: unknown = await res.json();
-    if (hasErrorMessage(body)) return body.error;
-  } catch {
-    // Non-JSON (or empty) transport failures use the status fallback.
+export class AgentChatTransportError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly retryable: boolean,
+    readonly correlationId: string | null,
+  ) {
+    super(message);
+    this.name = "AgentChatTransportError";
   }
-  return `SmartRoute is unavailable right now (${res.status}).`;
 }
 
 export async function* fetchAgentChatEvents(
@@ -45,7 +43,18 @@ export async function* fetchAgentChatEvents(
     signal,
   });
 
-  if (!res.ok || !res.body) throw new Error(await readTransportErrorMessage(res));
+  if (!res.ok || !res.body) {
+    // The proxy body is deliberately ignored. Status is the only trusted
+    // browser-facing input, which prevents an upstream/provider body from
+    // ever becoming assistant copy if a proxy boundary regresses.
+    const failure = safeChatFailure(res.ok ? 502 : res.status);
+    throw new AgentChatTransportError(
+      failure.message,
+      res.ok ? 502 : res.status,
+      failure.retryable,
+      res.headers.get("x-smartroute-request-id"),
+    );
+  }
   yield* parseSseStream(res.body.getReader());
 }
 
@@ -112,9 +121,21 @@ export async function runTurn(
     if (controller.signal.aborted) {
       dispatch({ type: "stream_cancelled" });
     } else {
+      const transportFailure =
+        err instanceof AgentChatTransportError
+          ? err
+          : new AgentChatTransportError(
+              "SmartRoute couldn’t complete this request.",
+              500,
+              true,
+              null,
+            );
       dispatch({
         type: "stream_error",
-        message: err instanceof Error ? err.message : "Could not reach SmartRoute.",
+        message: transportFailure.message,
+        code: `transport_${transportFailure.status}`,
+        retryable: transportFailure.retryable,
+        correlationId: transportFailure.correlationId ?? undefined,
       });
     }
   } finally {

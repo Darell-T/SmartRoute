@@ -34,7 +34,12 @@ export interface AssistantTurn {
     | "error"
     | "cancelled"
     | "dropped";
-  error?: { code: string; message: string; retryable: boolean };
+  error?: {
+    code: string;
+    message: string;
+    retryable: boolean;
+    correlationId?: string;
+  };
   local?: boolean;
   arrivals?: ArrivalsTurnPayload;
 }
@@ -70,7 +75,15 @@ export type ChatReducerAction =
   | { type: "chat_reset" }
   | { type: "session_discarded" }
   | { type: "turn_started"; text: string }
-  | { type: "stream_error"; message: string }
+  | { type: "turn_retry_started" }
+  | { type: "turn_error_dismissed" }
+  | {
+      type: "stream_error";
+      message: string;
+      code?: string;
+      retryable?: boolean;
+      correlationId?: string;
+    }
   | { type: "stream_cancelled" }
   | { type: "local_turn_appended"; turnId: string; text: string; arrivals: ArrivalsTurnPayload };
 
@@ -136,14 +149,61 @@ export function applyAgentEvent(state: ChatState, action: ChatReducerAction): Ch
     case "session_discarded":
       return { ...state, sessionId: null };
     case "turn_started": {
+      const priorMessages = (() => {
+        const prior = lastAssistantTurn(state.messages);
+        if (
+          !prior?.error ||
+          prior.text ||
+          prior.routeCards.length > 0 ||
+          prior.arrivals
+        ) {
+          return state.messages;
+        }
+        return state.messages.slice(0, -1);
+      })();
       const userTurn: UserTurn = { role: "user", text: action.text };
       const assistantTurn: AssistantTurn = {
         role: "assistant", turnId: "", text: "", toolChips: [], routeCards: [], isStreaming: true,
       };
       return {
         ...state,
-        messages: [...state.messages, userTurn, assistantTurn],
+        messages: [...priorMessages, userTurn, assistantTurn],
         isStreaming: true,
+        error: null,
+      };
+    }
+    case "turn_retry_started":
+      return {
+        ...updateLastAssistantTurn(state, (turn) => ({
+          ...turn,
+          turnId: "",
+          text: "",
+          toolChips: [],
+          routeCards: [],
+          arrivals: undefined,
+          isStreaming: true,
+          stopReason: undefined,
+          error: undefined,
+        })),
+        isStreaming: true,
+        error: null,
+      };
+    case "turn_error_dismissed": {
+      const turn = lastAssistantTurn(state.messages);
+      const removeEmptyFailedTurn = Boolean(
+        turn?.error &&
+          !turn.text &&
+          turn.routeCards.length === 0 &&
+          !turn.arrivals,
+      );
+      return {
+        ...state,
+        messages: removeEmptyFailedTurn
+          ? state.messages.slice(0, -1)
+          : updateLastAssistantTurn(state, (current) => ({
+              ...current,
+              error: undefined,
+            })).messages,
         error: null,
       };
     }
@@ -221,7 +281,12 @@ export function applyAgentEvent(state: ChatState, action: ChatReducerAction): Ch
           ...turn,
           isStreaming: false,
           stopReason: "dropped",
-          error: turn.error ?? { code: "upstream_error", message: action.message, retryable: true },
+          error: turn.error ?? {
+            code: action.code ?? "upstream_error",
+            message: action.message,
+            retryable: action.retryable ?? true,
+            correlationId: action.correlationId,
+          },
         })),
         isStreaming: false,
         error: action.message,

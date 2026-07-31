@@ -105,35 +105,6 @@ export function useMobileRailSheet(): MobileRailSheetController {
   // compute release velocity for flick-to-advance settling.
   const mobileRailPointerSamplesRef = useRef<MobileRailPointerSample[]>([]);
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    const setVisualViewportHeight = () => {
-      const height = window.visualViewport?.height ?? window.innerHeight;
-      document.documentElement.style.setProperty(
-        "--visual-viewport-height",
-        `${Math.round(height)}px`,
-      );
-    };
-
-    setVisualViewportHeight();
-    window.visualViewport?.addEventListener("resize", setVisualViewportHeight);
-    window.visualViewport?.addEventListener("scroll", setVisualViewportHeight);
-    window.addEventListener("resize", setVisualViewportHeight);
-
-    return () => {
-      window.visualViewport?.removeEventListener(
-        "resize",
-        setVisualViewportHeight,
-      );
-      window.visualViewport?.removeEventListener(
-        "scroll",
-        setVisualViewportHeight,
-      );
-      window.removeEventListener("resize", setVisualViewportHeight);
-    };
-  }, []);
-
   const getMobileRailSnapHeights = useCallback(() => {
     if (typeof window === "undefined") {
       return {

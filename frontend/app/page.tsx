@@ -7,6 +7,7 @@ import { DEFAULT_LOCATION } from "@/lib/api";
 import { requestInitialLocation } from "@/lib/initial-geolocation";
 import { useLiveFeed } from "@/lib/use-live-feed";
 import { useServiceAlerts } from "@/lib/use-service-alerts";
+import { useMobileVisibleViewport } from "@/lib/use-mobile-visible-viewport";
 import { deriveTransitRouteIds } from "@/lib/route-planning";
 import { formatCanonicalRouteSummary } from "@/lib/smart-route";
 import { useAgentChat, type ArrivalsTurnPayload } from "@/lib/use-agent-chat";
@@ -43,6 +44,7 @@ export default function SmartRoutePage() {
 }
 
 function SmartRoutePageContent() {
+  useMobileVisibleViewport();
   const [userLocation, setUserLocation] = useState<{
     lng: number;
     lat: number;
@@ -346,6 +348,7 @@ function SmartRoutePageContent() {
         >
           <MobileTopBar
             navigationOpen={mobileNavigationOpen}
+            showBrand={!isLivemapTab}
             onOpenNavigation={() => setMobileNavigationOpen(true)}
             onNewTrip={startNewTrip}
           />

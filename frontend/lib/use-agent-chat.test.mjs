@@ -254,6 +254,41 @@ test("stream_error does not overwrite an error event's more specific message on 
   assert.equal(state.error, "connection dropped");
 });
 
+test("manual retry reuses the failed turn instead of duplicating the user message", () => {
+  let state = applyAgentEvent(initialState(), {
+    type: "turn_started",
+    text: "Plan a trip to Coney Island",
+  });
+  state = applyAgentEvent(state, {
+    type: "stream_error",
+    message: "SmartRoute is temporarily unavailable.",
+    code: "transport_503",
+    retryable: true,
+    correlationId: "request-123",
+  });
+  state = applyAgentEvent(state, { type: "turn_retry_started" });
+
+  assert.equal(state.messages.length, 2);
+  assert.equal(state.messages[0].role, "user");
+  assert.equal(state.messages[0].text, "Plan a trip to Coney Island");
+  assert.equal(state.messages[1].role, "assistant");
+  assert.equal(state.messages[1].isStreaming, true);
+  assert.equal(state.messages[1].error, undefined);
+  assert.equal(state.error, null);
+});
+
+test("dismissing an empty failed response preserves the original user message", () => {
+  let state = applyAgentEvent(initialState(), { type: "turn_started", text: "hi" });
+  state = applyAgentEvent(state, {
+    type: "stream_error",
+    message: "SmartRoute couldn’t complete this request.",
+  });
+  state = applyAgentEvent(state, { type: "turn_error_dismissed" });
+
+  assert.deepEqual(state.messages, [{ role: "user", text: "hi" }]);
+  assert.equal(state.error, null);
+});
+
 test("events after turn_started with no assistant turn present are dropped, not crashing", () => {
   // Defensive case: a token event arriving before any turn_started (should
   // never happen given the backend always sends meta first into a turn we
@@ -659,7 +694,13 @@ test("a failed replacement request produces one terminal connection error", asyn
 
   assert.equal(attempts, 2);
   assert.deepEqual(actions, [
-    { type: "stream_error", message: "replacement failed" },
+    {
+      type: "stream_error",
+      message: "SmartRoute couldn’t complete this request.",
+      code: "transport_500",
+      retryable: true,
+      correlationId: undefined,
+    },
   ]);
 });
 

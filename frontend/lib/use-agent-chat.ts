@@ -68,6 +68,8 @@ export interface UseAgentChatResult {
   send: (text: string, responsePresentation?: ResponsePresentationMode) => void;
   cancel: () => void;
   reset: () => void;
+  retryLast: () => void;
+  dismissError: () => void;
   isStreaming: boolean;
   error: string | null;
   sessionId: string | null;
@@ -92,6 +94,10 @@ export function useAgentChat(options: UseAgentChatOptions = {}): UseAgentChatRes
   // only ever touched from event handlers, never during render.
   const inFlightRef = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const lastRequestRef = useRef<{
+    request: AgentChatRequestBody;
+    canRecoverSession: boolean;
+  } | null>(null);
 
   useEffect(() => {
     persistSessionId(safeSessionStorage(), state.sessionId);
@@ -104,14 +110,8 @@ export function useAgentChat(options: UseAgentChatOptions = {}): UseAgentChatRes
     const trimmed = text.trim();
     if (!trimmed || inFlightRef.current) return;
 
-    inFlightRef.current = true;
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
-
     const cardId = selectedCardId;
     setSelectedCardId(null); // spec: cleared once it's been included in a send
-
-    dispatch({ type: "turn_started", text: trimmed });
 
     const request = buildAgentChatRequest({
       sessionId: state.sessionId,
@@ -121,6 +121,23 @@ export function useAgentChat(options: UseAgentChatOptions = {}): UseAgentChatRes
       responsePresentation,
     });
 
+    lastRequestRef.current = {
+      request,
+      canRecoverSession: state.messages.length === 0,
+    };
+    startTurn(request, { type: "turn_started", text: trimmed }, state.messages.length === 0);
+  }
+
+  function startTurn(
+    request: AgentChatRequestBody,
+    action: ChatReducerAction,
+    canRecoverSession: boolean,
+  ): void {
+    inFlightRef.current = true;
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    dispatch(action);
+
     void runTurn(
       transport,
       request,
@@ -129,13 +146,28 @@ export function useAgentChat(options: UseAgentChatOptions = {}): UseAgentChatRes
       inFlightRef,
       abortControllerRef,
       {
-        canRecoverSession: state.messages.length === 0,
+        canRecoverSession,
         discardSession: () => {
           persistSessionId(safeSessionStorage(), null);
           dispatch({ type: "session_discarded" });
         },
       },
     );
+  }
+
+  function retryLast(): void {
+    const previous = lastRequestRef.current;
+    if (!previous || inFlightRef.current) return;
+    startTurn(
+      previous.request,
+      { type: "turn_retry_started" },
+      previous.canRecoverSession,
+    );
+  }
+
+  function dismissError(): void {
+    lastRequestRef.current = null;
+    dispatch({ type: "turn_error_dismissed" });
   }
 
   function cancel(): void {
@@ -148,6 +180,7 @@ export function useAgentChat(options: UseAgentChatOptions = {}): UseAgentChatRes
     inFlightRef.current = false;
     setSelectedCardId(null);
     localTurnSeqRef.current = 0;
+    lastRequestRef.current = null;
     clearPersistedSession();
     dispatch({ type: "chat_reset" });
   }
@@ -171,6 +204,8 @@ export function useAgentChat(options: UseAgentChatOptions = {}): UseAgentChatRes
     send,
     cancel,
     reset,
+    retryLast,
+    dismissError,
     isStreaming: state.isStreaming,
     error: state.error,
     sessionId: state.sessionId,
