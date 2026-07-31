@@ -23,7 +23,6 @@ import {
   ensureSubwayNetworkLayers,
   splitStationAnchorFeatureCollections,
   stationMarkerRouteIds,
-  summarizeVisualLanes,
   setSubwayNetworkHidden,
   SUBWAY_CASING_LAYER_ID,
   SUBWAY_FILL_LAYER_ID,
@@ -168,6 +167,27 @@ export function SmartRouteMap({
       // content, which already has its own edge AA. Pan-smoothness win.
       canvasContextAttributes: { antialias: false },
     });
+
+    function handleMissingBaseStyleImage(event: { id: string }) {
+      const activeMap = map.current;
+      if (
+        !activeMap ||
+        event.id.startsWith("subway-bullet-") ||
+        activeMap.hasImage(event.id)
+      ) {
+        return;
+      }
+      // CARTO occasionally references an optional shield sprite that is absent
+      // from its published sprite sheet. Registering a transparent fallback
+      // keeps MapLibre quiet without masking SmartRoute's own transit bullets.
+      activeMap.addImage(event.id, {
+        width: 1,
+        height: 1,
+        data: new Uint8Array(4),
+      });
+    }
+
+    map.current.on("styleimagemissing", handleMissingBaseStyleImage);
 
     // QA debug handle: dev-only exposure for Playwright-driven route QA. Gated by
     // process.env.NODE_ENV !== "production" AND URL param `qa-map=1`. Never set
@@ -354,6 +374,7 @@ export function SmartRouteMap({
 
     return () => {
       const currentMap = map.current;
+      currentMap?.off("styleimagemissing", handleMissingBaseStyleImage);
       currentMap?.off("zoom", syncCurrentLocationAccuracy);
       currentMap?.off("zoomend", syncCurrentLocationAccuracy);
       currentMap?.remove();
@@ -401,10 +422,6 @@ export function SmartRouteMap({
           type: "FeatureCollection",
           features: [],
         };
-        const visualSummary = visualLanes
-          ? summarizeVisualLanes(visualLanes)
-          : null;
-
         subwayVisualModeActiveRef.current = visual != null;
         subwayVisualFallbackUsedRef.current = visual == null;
         subwayLanesRef.current = lanes;
@@ -425,24 +442,6 @@ export function SmartRouteMap({
         }
         // Bump version → triggers the layer-setup effect below.
         setSubwayLayerDataVersion((v) => v + 1);
-
-        if (DEBUG_LIVE_MAP) {
-          // eslint-disable-next-line no-console
-          console.info("[smart-route-map/subway-network] loaded geometry", {
-            laneFeatures: lanes.features.length,
-            stopDotFeatures: subwayStopsRef.current.features.length,
-            stationAnchorFeatures: stationAnchors?.features.length ?? 0,
-            visualFeaturesLoaded: visual?.features.length ?? 0,
-            visualRenderFeaturesEmitted: visualSummary?.renderFeatures ?? 0,
-            visualDistinctRoutesRepresented: visualSummary?.distinctRoutes ?? 0,
-            visualDistinctColorLanesEmitted:
-              visualSummary?.distinctColorLanes ?? 0,
-            visualDistinctColorGroups: visualSummary?.distinctColorGroups ?? 0,
-            visualCorridorsWithMultipleRoutes:
-              visualSummary?.corridorsWithMultipleRoutes ?? 0,
-            visualMultiColorCorridors: visualSummary?.multiColorCorridors ?? 0,
-          });
-        }
       })
       .catch((error) => {
         if (DEBUG_LIVE_MAP) {

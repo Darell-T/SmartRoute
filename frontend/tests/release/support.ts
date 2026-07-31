@@ -131,10 +131,7 @@ export async function openSmartRoute(page: Page, requests: AgentRequest[] = []):
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/");
   await expect(page.getByLabel("Message SmartRoute")).toBeVisible();
-  await expect(page.locator(".sr-chat-welcome-line--title")).toHaveAttribute(
-    "data-complete",
-    "true",
-  );
+  await expect(page.getByRole("heading", { name: "Near you" })).toBeVisible();
 }
 
 export async function sendChatMessage(page: Page, text: string): Promise<void> {

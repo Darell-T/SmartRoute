@@ -4,14 +4,14 @@ import { LiveFeedConnection, normalizeRouteScope } from "./live-feed-connection.
 
 function deferred() { let resolve; return { promise: new Promise((done) => { resolve = done; }), resolve }; }
 
-test("connection uses latest location and normalized scope without recreating its socket", async () => {
+test("connection sends only canonical location fields and normalized scope", async () => {
   const ticket = deferred();
   const socket = { readyState: 1, send: (payload) => socket.sent.push(JSON.parse(payload)), close() { socket.closed += 1; }, onopen: null, onclose: null, onerror: null, onmessage: null, sent: [], closed: 0 };
   const connection = new LiveFeedConnection({ fetchTicket: () => ticket.promise, createSocket: () => socket, onStatus: () => {}, onMessage: () => {} });
   connection.updateLocation({ lat: 40.7, lng: -73.9 });
   connection.updateRouteIds(["q", "Q", " "]);
   connection.start();
-  connection.updateLocation({ lat: 40.71, lng: -73.91 });
+  connection.updateLocation({ lat: 40.71, lng: -73.91, accuracyMeters: 12 });
   ticket.resolve("ticket");
   await Promise.resolve();
   socket.onopen();

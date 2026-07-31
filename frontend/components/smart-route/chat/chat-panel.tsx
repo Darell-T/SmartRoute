@@ -9,7 +9,7 @@
    turns a Near You bullet tap into a local (no-model-call) arrivals turn.
    ════════════════════════════════════════════════════════════════════════ */
 
-import { useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { ArrivalsTurnPayload, useAgentChat } from "@/lib/use-agent-chat";
 import type { RouteCard } from "@/lib/agent-chat-stream";
 import type { ChatTheme } from "@/lib/use-chat-theme";
@@ -22,34 +22,75 @@ import {
 import { ScrollButton } from "@/components/prompt-kit/scroll-button";
 import { ChatMessage } from "./chat-message";
 import { ChatComposer } from "./chat-composer";
-import { ChatWelcome } from "./chat-welcome";
+import {
+  ChatSuggestions,
+  ChatWelcome,
+  type ChatSuggestion,
+} from "./chat-welcome";
+import type { HomeNearbyModel } from "./near-you";
 
-const EXAMPLE_QUERIES = [
-  "Get me to JFK by 6:30 PM with the fewest transfers",
-  "Best route from Brooklyn to Midtown while avoiding current delays",
-  "Plan a trip to Coney Island with less walking",
+const EXAMPLE_QUERIES: readonly ChatSuggestion[] = [
+  {
+    label: "JFK by 6:30 PM",
+    query: "Get me to JFK by 6:30 PM with the fewest transfers",
+    icon: "airplane",
+  },
+  {
+    label: "Brooklyn to Midtown",
+    query: "Best route from Brooklyn to Midtown while avoiding current delays",
+    icon: "waypoints",
+  },
+  {
+    label: "Coney Island, less walking",
+    query: "Plan a trip to Coney Island with less walking",
+    icon: "accessibility",
+  },
 ];
 
 export function ChatPanel({
   chat,
   theme,
+  nearby,
   onOpenLiveMap,
   onSelectRouteCard,
   onOpenNearbyStation,
 }: {
   chat: ReturnType<typeof useAgentChat>;
   theme: ChatTheme;
+  nearby: HomeNearbyModel;
   onOpenLiveMap: () => void;
   onSelectRouteCard?: (card: RouteCard) => void;
   onOpenNearbyStation?: (arrivals: ArrivalsTurnPayload) => void;
 }) {
   const [draft, setDraft] = useState("");
+  const [composerFocused, setComposerFocused] = useState(false);
   const presentationMode = useSyncExternalStore(
     responsePresentationModeStore.subscribe,
     responsePresentationModeStore.getClientSnapshot,
     responsePresentationModeStore.getServerSnapshot,
   );
   const composerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const composerDock = composerRef.current;
+    if (!composerDock) return;
+
+    const handleFocusIn = () => setComposerFocused(true);
+    const handleFocusOut = () => {
+      requestAnimationFrame(() => {
+        setComposerFocused(
+          composerDock.contains(document.activeElement),
+        );
+      });
+    };
+
+    composerDock.addEventListener("focusin", handleFocusIn);
+    composerDock.addEventListener("focusout", handleFocusOut);
+    return () => {
+      composerDock.removeEventListener("focusin", handleFocusIn);
+      composerDock.removeEventListener("focusout", handleFocusOut);
+    };
+  }, []);
 
   function handleSelectRouteCard(card: RouteCard) {
     chat.selectCard(card.card_id);
@@ -66,11 +107,14 @@ export function ChatPanel({
   const isEmpty = chat.messages.length === 0;
 
   return (
-    <div className="sr-chat-tab-inner">
+    <div className="sr-chat-tab-inner" data-empty={isEmpty ? "true" : "false"}>
       <ChatContainerRoot className="sr-chat-thread">
         <ChatContainerContent className="sr-chat-thread__content" data-empty={isEmpty ? "true" : "false"}>
           {isEmpty ? (
-            <ChatWelcome suggestions={EXAMPLE_QUERIES} onSelectSuggestion={fillDraftAndFocus} />
+            <ChatWelcome
+              nearby={nearby}
+              onOpenLiveMap={onOpenLiveMap}
+            />
           ) : (
             chat.messages.map((turn, index) => (
               <ChatMessage
@@ -95,17 +139,30 @@ export function ChatPanel({
         </p>
       )}
 
-      <div ref={composerRef}>
-        <ChatComposer
-          value={draft}
-          onValueChange={setDraft}
-          presentationMode={presentationMode}
-          onPresentationModeChange={responsePresentationModeStore.setMode}
-          theme={theme}
-          onSend={(text) => chat.send(text, presentationMode)}
-          onCancel={chat.cancel}
-          isStreaming={chat.isStreaming}
-        />
+      <div className="sr-chat-interaction-dock">
+        {isEmpty ? (
+          <ChatSuggestions
+            suggestions={EXAMPLE_QUERIES}
+            hidden={composerFocused}
+            onSelectSuggestion={fillDraftAndFocus}
+          />
+        ) : null}
+
+        <div
+          ref={composerRef}
+          className="sr-chat-composer-dock"
+        >
+          <ChatComposer
+            value={draft}
+            onValueChange={setDraft}
+            presentationMode={presentationMode}
+            onPresentationModeChange={responsePresentationModeStore.setMode}
+            theme={theme}
+            onSend={(text) => chat.send(text, presentationMode)}
+            onCancel={chat.cancel}
+            isStreaming={chat.isStreaming}
+          />
+        </div>
       </div>
     </div>
   );

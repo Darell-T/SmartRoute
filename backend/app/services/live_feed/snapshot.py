@@ -6,7 +6,7 @@ import asyncio
 import time
 
 from app.services import mta_feed
-from app.services.live_feed import vehicle_enrichment
+from app.services.live_feed import nearby_issues, vehicle_enrichment
 from app.utils.geo import find_nearest_stops
 
 _LAST_EMPTY_VEHICLE_LOG = 0.0
@@ -288,6 +288,7 @@ async def _build_live_snapshot(
             "stops": enriched_stops,
             "arrivals": sorted(arrivals, key=lambda a: a.get("arrival_time") or 0)[:40],
             "alerts": [],
+            "nearby_issues": [],
             "vehicles": [],
             "signals": None,
             "updated_at": now,
@@ -313,6 +314,15 @@ async def _build_live_snapshot(
     vehicles, vehicle_debug = vehicle_result
     parsed_alerts = mta_feed.parse_service_alerts(raw_alerts) if raw_alerts else []
     filtered_alerts = mta_feed.filter_alerts_for_routes(parsed_alerts, set(route_ids))
+    home_issues = nearby_issues.build_nearby_transit_issues(
+        gtfs=gtfs,
+        alerts=parsed_alerts,
+        nearby_stop_id=nearest_stop.get("stop_id") if nearest_stop else None,
+        nearby_stop_name=nearest_stop.get("stop_name") if nearest_stop else None,
+        nearby_route_ids=route_ids,
+        selected_route_ids=selected_route_ids,
+        observed_at=now,
+    )
 
     stop_ids = [v.get("stop_id") for v in vehicles if v.get("stop_id")]
     stop_locations = gtfs.get_stop_locations(stop_ids)
@@ -384,6 +394,7 @@ async def _build_live_snapshot(
         "stops": enriched_stops,
         "arrivals": arrivals[:40],
         "alerts": filtered_alerts,
+        "nearby_issues": home_issues,
         "vehicles": vehicles,
         "signals": signals,
         "updated_at": now,

@@ -34,8 +34,21 @@ import type {
 import type { ChatTheme } from "@/lib/use-chat-theme";
 import { ChatPanel } from "@/components/smart-route/chat/chat-panel";
 import { ChatSidebar } from "@/components/smart-route/chat/chat-sidebar";
+import { DEMO_RAIL_DATA } from "@/components/smart-route/left-rail/demo-data";
+import { buildHomeNearbyModel } from "@/components/smart-route/chat/near-you";
 
 const FIRST_DEMO_QUERY = "Heading to Costco, no bus, I've got a cart";
+const DEMO_HOME_NEARBY = buildHomeNearbyModel({
+  data: DEMO_RAIL_DATA,
+  nearestStopName: "34 St-Herald Sq",
+  nearestRouteIds: DEMO_RAIL_DATA.nearbyTransitGroups.flatMap(
+    (group) => group.routeIds,
+  ),
+  arrivalsLoading: false,
+  arrivalsUnavailable: false,
+  serviceAlertsLoading: false,
+  serviceAlertsUnavailable: false,
+});
 
 const ORIGIN: RouteCardEndpoint = { label: "Your location", lat: 40.7484, lng: -73.9857 };
 const DESTINATION: RouteCardEndpoint = { label: "Costco Sunset Park", lat: 40.6559, lng: -74.0089 };
@@ -699,6 +712,7 @@ function AgentChatStoryInner() {
           <ChatPanel
             chat={chat}
             theme={theme}
+            nearby={DEMO_HOME_NEARBY}
             onOpenLiveMap={() => undefined}
             onOpenNearbyStation={(arrivals) => {
               // eslint-disable-next-line no-console
@@ -725,6 +739,7 @@ function AgentChatStoryInner() {
         <ChatPanel
           chat={chat}
           theme={theme}
+          nearby={DEMO_HOME_NEARBY}
           onOpenLiveMap={() => {
             // eslint-disable-next-line no-console
             console.log("[dev/agent-chat] open live map (stub — no map on this story page)");

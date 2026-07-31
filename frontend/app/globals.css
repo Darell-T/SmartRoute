@@ -4,6 +4,7 @@
 @import "./styles/smart-route-chat.css";
 @import "./styles/smart-route-sidebar.css";
 @import "./styles/smart-route-tab-shell.css";
+@import "./styles/smart-route-mobile-shell.css";
 
 @custom-variant dark (&:is(.dark *));
 

@@ -19,9 +19,19 @@ const WELCOME_SOURCE = fs.readFileSync(
   fileURLToPath(new URL("./chat-welcome.tsx", import.meta.url)),
   "utf8",
 );
+const HOME_NEARBY_SOURCE = fs.readFileSync(
+  fileURLToPath(new URL("./home-near-you.tsx", import.meta.url)),
+  "utf8",
+);
 const SUGGESTION_SOURCE = fs.readFileSync(
   fileURLToPath(
     new URL("../../prompt-kit/prompt-suggestion.tsx", import.meta.url),
+  ),
+  "utf8",
+);
+const CHAT_STYLE_SOURCE = fs.readFileSync(
+  fileURLToPath(
+    new URL("../../../app/styles/smart-route-chat.css", import.meta.url),
   ),
   "utf8",
 );
@@ -49,6 +59,9 @@ test("composer exposes Auto and Quick through an accessible custom menu", () => 
     /Faster response with fewer comparisons/,
   );
   assert.doesNotMatch(MODE_MENU_SOURCE, /sr-response-mode-menu__eyebrow/);
+  assert.doesNotMatch(MODE_MENU_SOURCE, /components\/ui\/brain/);
+  assert.doesNotMatch(MODE_MENU_SOURCE, /components\/ui\/zap/);
+  assert.match(MODE_MENU_SOURCE, /ChevronDown/);
 });
 
 test("response menu opens upward and supports keyboard navigation", () => {
@@ -79,6 +92,8 @@ test("composer actions use the shared Prompt Kit action primitive", () => {
       COMPOSER_SOURCE.indexOf("<PromptInputActions"),
     "the text area should precede Auto, microphone, and send controls",
   );
+  assert.doesNotMatch(COMPOSER_SOURCE, /import\s*\{[^}]*\bPlus\b[^}]*\}/s);
+  assert.doesNotMatch(COMPOSER_SOURCE, /aria-label=["'][^"']*attach/i);
 });
 
 test("changing presentation does not regenerate a completed response", () => {
@@ -91,13 +106,21 @@ test("changing presentation does not regenerate a completed response", () => {
   assert.doesNotMatch(PANEL_SOURCE, /useEffect\(\(\) => \{\s*chat\.send/);
 });
 
-test("empty chat uses fixed New York copy and normal Prompt Kit suggestions", () => {
-  assert.match(WELCOME_SOURCE, /title: "Where to\?"/);
-  assert.match(WELCOME_SOURCE, /subtitle: "Ask about any trip in New York\."/);
+test("empty chat leads with nearby transit proof and compact Prompt Kit suggestions", () => {
+  assert.match(WELCOME_SOURCE, /Where to\?/);
+  assert.match(WELCOME_SOURCE, /sr-chat-welcome-line--title/);
+  assert.match(WELCOME_SOURCE, /<HomeNearYou/);
+  assert.match(HOME_NEARBY_SOURCE, /<ArrivalCountdown/);
+  assert.match(HOME_NEARBY_SOURCE, /MapPin/);
+  assert.doesNotMatch(HOME_NEARBY_SOURCE, /Brain|Sparkle|Diamond/);
   assert.doesNotMatch(WELCOME_SOURCE, /Let’s get moving/);
   assert.match(WELCOME_SOURCE, /<PromptSuggestion/);
   assert.match(WELCOME_SOURCE, /variant="outline"/);
   assert.doesNotMatch(WELCOME_SOURCE, /NavArrowRight/);
+  assert.doesNotMatch(WELCOME_SOURCE, /Chevron/);
+  assert.match(PANEL_SOURCE, /JFK by 6:30 PM/);
+  assert.match(PANEL_SOURCE, /Brooklyn to Midtown/);
+  assert.match(PANEL_SOURCE, /Coney Island, less walking/);
   assert.match(SUGGESTION_SOURCE, /variant = "outline"/);
 
   assert.match(
@@ -116,5 +139,27 @@ test("empty chat uses fixed New York copy and normal Prompt Kit suggestions", ()
   assert.match(
     PANEL_SOURCE,
     /querySelector\("textarea"\)\?\.focus\(\)/,
+  );
+});
+
+test("mobile suggestions use animated transit glyphs and a focus-aware snap rail", () => {
+  assert.match(WELCOME_SOURCE, /components\/ui\/airplane/);
+  assert.match(WELCOME_SOURCE, /components\/ui\/waypoints/);
+  assert.match(WELCOME_SOURCE, /components\/ui\/accessibility/);
+  assert.match(PANEL_SOURCE, /icon: "airplane"/);
+  assert.match(PANEL_SOURCE, /icon: "waypoints"/);
+  assert.match(PANEL_SOURCE, /icon: "accessibility"/);
+  assert.match(PANEL_SOURCE, /className="sr-chat-composer-dock"/);
+  assert.match(CHAT_STYLE_SOURCE, /scroll-snap-type: x mandatory/);
+  assert.match(CHAT_STYLE_SOURCE, /scrollbar-width: none/);
+  assert.match(CHAT_STYLE_SOURCE, /env\(safe-area-inset-bottom\)/);
+  assert.match(
+    CHAT_STYLE_SOURCE,
+    /\.sr-chat-empty__suggestions\[data-hidden="true"\]/,
+  );
+  assert.match(PANEL_SOURCE, /hidden=\{composerFocused\}/);
+  assert.match(
+    CHAT_STYLE_SOURCE,
+    /\.sr-chat-suggestion-motion \{[\s\S]*?scroll-snap-align: start/,
   );
 });

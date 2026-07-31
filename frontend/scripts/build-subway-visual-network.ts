@@ -44,6 +44,7 @@ import { applyPhase3dSameColorMergeStage } from "./build/visual-network/core/pha
 import { buildStageDSpinePrepStage } from "./build/visual-network/core/stage-d-spine-prep-stage.ts";
 import { applyPhase3cLaneContinuityStage } from "./build/visual-network/core/phase-3c-lane-continuity-stage.ts";
 import { applyLaneOffsetFinalizationStage } from "./build/visual-network/core/lane-offset-finalization-stage.ts";
+import { applySharedCorridorSeparationStage } from "./build/visual-network/core/shared-corridor-separation-stage.ts";
 import { applyVisualRepairPipelineStage } from "./build/visual-network/core/visual-repair-pipeline-stage.ts";
 import { writeVisualArtifactStage } from "./build/visual-network/output/artifact-writer-stage.ts";
 import { reportFinalTopologySummaryStage } from "./build/visual-network/validation/final-reporting-stage.ts";
@@ -154,6 +155,7 @@ const OUT_MATERIALIZED_BUNDLES_GEOJSON = resolve(debugDir, "subway-network.visua
 const OUT_MATERIALIZED_BUNDLE_FANOUTS_GEOJSON = resolve(debugDir, "subway-network.visual-debug-bundle-fanouts.geojson");
 const OUT_MATERIALIZED_BUNDLE_SPLITS_GEOJSON = resolve(debugDir, "subway-network.visual-debug-bundle-splits.geojson");
 const OUT_MATERIALIZED_BUNDLE_DEFECTS_GEOJSON = resolve(debugDir, "subway-network.visual-debug-bundle-junction-defects.geojson");
+const OUT_SHARED_CORRIDOR_SEPARATION_JSON = resolve(debugDir, "subway-network.visual-debug-shared-corridor-separation.json");
 
 if (!existsSync(STATIONS_GEOJSON_PATH)) {
   throw new Error(
@@ -363,6 +365,16 @@ applyLaneOffsetFinalizationStage({
   crossColorSpreadGeoJsonPath: OUT_CROSS_COLOR_SPREAD_GEOJSON,
   crossColorSegmentsGeoJsonPath: OUT_CROSS_COLOR_SEGMENTS_GEOJSON,
   laneOrdersJsonPath: OUT_LANE_ORDERS_JSON,
+});
+
+// Re-measures ACTUAL pointwise separation across every shared-corridor pair
+// (physical-bundle-continuous members and cross-color spread groups alike)
+// and corrects any stretch that collapsed below the intended floor despite
+// each member's own offset being baked correctly -- see the file header for
+// why independent-normal offsets don't guarantee real-world separation.
+applySharedCorridorSeparationStage({
+  bundleArtifacts,
+  separationReportJsonPath: OUT_SHARED_CORRIDOR_SEPARATION_JSON,
 });
 
 const { perRouteStats, validationFailures } = runValidationReportingStage({

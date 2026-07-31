@@ -1,9 +1,11 @@
 import { readFileSync } from "node:fs";
 import { bridgeRouteGaps } from "../../bridge-route-gaps.ts";
+import { haversineM } from "../../brighton-bq-church-spacing.ts";
 import { simplifyTightCurves } from "../../simplify-tight-curves.ts";
 import { smoothSharpCorners } from "../../smooth-polyline.ts";
 import { snapOffRevenueToShape } from "../../snap-off-revenue-to-shape.ts";
 import type { RouteContinuityRepairStageInput } from "./route-continuity-repair-types.ts";
+import type { Position } from "../shared/types.ts";
 
 export function applyRouteContinuityRepairStage({
   bundleArtifacts,
@@ -62,7 +64,24 @@ export function applyRouteContinuityRepairStage({
       const before = f.geometry.coordinates;
       if (!Array.isArray(before) || before.length < 3) continue;
       const routes = Array.isArray(f.properties?.route_ids) ? f.properties.route_ids : [];
-      const shapes = routes.flatMap((r: any) => shapesByRoute.get(String(r)) ?? []);
+      const fStart: Position = before[0];
+      const fEnd: Position = before[before.length - 1];
+      const shapes: Position[][] = [];
+      for (const r of routes) {
+        const routeShapes: Position[][] | undefined = shapesByRoute.get(String(r));
+        if (!routeShapes?.length) continue;
+        if (routeShapes.length === 1) { shapes.push(routeShapes[0]); continue; }
+        let best = routeShapes[0];
+        let bestDist = Infinity;
+        for (const shape of routeShapes) {
+          if (!shape || shape.length < 2) continue;
+          const d1 = haversineM(fStart, shape[0]) + haversineM(fEnd, shape[shape.length - 1]);
+          const d2 = haversineM(fStart, shape[shape.length - 1]) + haversineM(fEnd, shape[0]);
+          const d = Math.min(d1, d2);
+          if (d < bestDist) { bestDist = d; best = shape; }
+        }
+        shapes.push(best);
+      }
       if (!shapes.length) continue;
       let coords = before;
       let moved = false;

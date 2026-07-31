@@ -3,6 +3,8 @@ import localFont from "next/font/local";
 import { Analytics } from "@vercel/analytics/next";
 import "./globals.css";
 
+const isVercelDeployment = process.env.VERCEL === "1";
+
 const geist = localFont({
   src: "./fonts/Geist[wght].ttf",
   weight: "100 900",
@@ -110,7 +112,7 @@ export default function RootLayout({
         }}
       >
         {children}
-        <Analytics />
+        {isVercelDeployment ? <Analytics /> : null}
       </body>
     </html>
   );

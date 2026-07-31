@@ -213,6 +213,9 @@ class LiveFeedApiTests(unittest.IsolatedAsyncioTestCase):
             async def send_json(self, _payload):
                 return None
 
+            async def receive(self):
+                await asyncio.Event().wait()
+
         lease = self.live_feed.admission.AdmissionLease(
             "v1.test-principal-opaque-123456", "ws", "lease"
         )
@@ -230,6 +233,52 @@ class LiveFeedApiTests(unittest.IsolatedAsyncioTestCase):
             self.live_feed, "_service_alerts_payload", AsyncMock(return_value={"alerts": [], "updated_at": 0})
         ):
             await self.live_feed.service_alerts_socket(Socket())
+        release.assert_awaited_once_with(lease)
+
+    async def test_service_alerts_releases_immediately_when_client_disconnects(self):
+        class Socket:
+            query_params = {"ticket": "valid"}
+            url = SimpleNamespace(path="/ws/service-alerts")
+            app = SimpleNamespace(state=SimpleNamespace(gtfs=None))
+
+            def __init__(self):
+                self.accepted = 0
+                self.sent = []
+
+            async def accept(self):
+                self.accepted += 1
+
+            async def send_json(self, payload):
+                self.sent.append(payload)
+
+            async def receive(self):
+                return {"type": "websocket.disconnect", "code": 1000}
+
+        lease = self.live_feed.admission.AdmissionLease(
+            "v1.test-principal-opaque-123456", "ws", "lease"
+        )
+        socket = Socket()
+        with patch.object(
+            self.live_feed,
+            "_verify_ws_ticket",
+            AsyncMock(return_value=(lease.principal, False)),
+        ), patch.object(
+            self.live_feed.admission,
+            "acquire",
+            AsyncMock(return_value=lease),
+        ), patch.object(
+            self.live_feed.admission,
+            "release",
+            AsyncMock(),
+        ) as release, patch.object(
+            self.live_feed,
+            "_service_alerts_payload",
+            AsyncMock(return_value={"alerts": [], "updated_at": 0}),
+        ):
+            await self.live_feed.service_alerts_socket(socket)
+
+        self.assertEqual(socket.accepted, 1)
+        self.assertEqual(socket.sent[0]["type"], "SERVICE_SNAPSHOT")
         release.assert_awaited_once_with(lease)
 
     async def test_both_socket_handlers_accept_valid_ticket_and_release_once(self):

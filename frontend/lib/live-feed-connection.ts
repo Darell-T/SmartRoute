@@ -114,7 +114,12 @@ export class LiveFeedConnection {
   private sendLocation(force: boolean): void {
     if (!this.location || !this.socket || this.socket.readyState !== WebSocket.OPEN) return;
     if (!force && !shouldSendLocation(this.sentLocation, this.location)) return;
-    this.socket.send(JSON.stringify({ type: "location", ...this.location, selected_route_ids: this.routeIds }));
+    this.socket.send(JSON.stringify({
+      type: "location",
+      lat: this.location.lat,
+      lng: this.location.lng,
+      selected_route_ids: this.routeIds,
+    }));
     this.sentLocation = this.location;
   }
 

@@ -184,6 +184,27 @@ export interface LiveSystemSignals {
   updated_at: number;
 }
 
+export interface NearbyTransitIssue {
+  id: string;
+  route_ids: string[];
+  direction?: "northbound" | "southbound";
+  station_id?: string;
+  station_name?: string;
+  segment_start_id?: string;
+  segment_end_id?: string;
+  stops_away?: number;
+  confidence: "confirmed" | "strong_inference";
+  status: "stalled" | "delays_developing" | "service_delay";
+  summary: string;
+  source_types: string[];
+  observed_at: string;
+  relevance:
+    | "nearby_line"
+    | "nearby_direction"
+    | "nearby_segment"
+    | "planned_route";
+}
+
 export interface LiveFeedIncident {
   id: string;
   type:
@@ -216,6 +237,7 @@ export interface LiveFeedResponse {
   vehicles?: LiveVehicle[];
   signals?: LiveSystemSignals | null;
   incidents?: LiveFeedIncident[];
+  nearby_issues?: NearbyTransitIssue[];
   updated_at: number;
   degraded?: boolean;
   debug?: {

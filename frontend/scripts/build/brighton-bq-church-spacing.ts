@@ -1,6 +1,6 @@
 import type { Feature, LineStringGeometry, Position } from "./types.ts";
 
-type Vector = [number, number];
+export type Vector = [number, number];
 
 type BBox = {
   minLon: number;
@@ -26,19 +26,19 @@ type BrightonProperties = {
 
 type BrightonFeature = Feature<LineStringGeometry, BrightonProperties>;
 
-type ArcRange = {
+export type ArcRange = {
   startArc: number;
   endArc: number;
 };
 
-type CenterlineFit = "raw_centerline" | "smoothed_raw_centerline" | "cubic_axis_fit" | "cubic_hermite_fit";
+export type CenterlineFit = "raw_centerline" | "smoothed_raw_centerline" | "cubic_axis_fit" | "cubic_hermite_fit";
 
-type FittedCenterline = {
+export type FittedCenterline = {
   coords: Position[];
   fit: CenterlineFit;
 };
 
-type BrightonRawOptions = {
+export type BrightonRawOptions = {
   bbox?: BBox;
   marginM?: number;
   targetSeparationM?: number;
@@ -48,16 +48,28 @@ type BrightonRawOptions = {
   blendFromCore?: boolean;
 };
 
-type BrightonOptions = Required<BrightonRawOptions>;
+export type BrightonOptions = Required<BrightonRawOptions>;
 
-type BalancedOptions = BrightonOptions & {
+// Generalized name: the "yellow"/"orange" naming in BalancedPair below is a
+// holdover from the Brighton B/Q origin of this helper. Shared-corridor
+// separation enforcement (shared-corridor-separation-stage.ts) reuses
+// buildBalancedPair for arbitrary color pairs -- "yellow" == the first/"a"
+// member, "orange" == the second/"b" member.
+export type BalancedOptions = BrightonOptions & {
   coreStartFraction: number;
   coreEndFraction: number;
+  // When set, skip the signSum side-detection and place "yellow"/a on this
+  // side (+1/-1) of the fitted centerline. Callers windowing a long corridor
+  // need this: with near-superimposed inputs the detected sign is
+  // floating-point noise and can flip between adjacent windows, which would
+  // make the two output lines cross at window boundaries.
+  forcedASign?: number;
 };
 
-type BalancedPair = {
+export type BalancedPair = {
   yellow: Position[];
   orange: Position[];
+  aSign: number;
   minBeforeM: number;
   minAfterM: number;
   centerlineFit: CenterlineFit;
@@ -99,7 +111,7 @@ function metersPerDegLng(lat: number): number {
   return 111320 * Math.cos((lat * Math.PI) / 180);
 }
 
-function haversineM([lon1, lat1]: Position, [lon2, lat2]: Position): number {
+export function haversineM([lon1, lat1]: Position, [lon2, lat2]: Position): number {
   const toRad = (d: number): number => (d * Math.PI) / 180;
   const dLat = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
@@ -143,7 +155,7 @@ function isLineFeature(feature: BrightonFeature): boolean {
   );
 }
 
-function cumulativeArcs(coords: Position[]): number[] {
+export function cumulativeArcs(coords: Position[]): number[] {
   const arcs = [0];
   for (let index = 1; index < coords.length; index += 1) {
     arcs.push(arcs[index - 1] + haversineM(coords[index - 1], coords[index]));
@@ -151,7 +163,7 @@ function cumulativeArcs(coords: Position[]): number[] {
   return arcs;
 }
 
-function interpolateAtArc(coords: Position[], arcs: number[], targetArc: number): Position {
+export function interpolateAtArc(coords: Position[], arcs: number[], targetArc: number): Position {
   if (targetArc <= 0) return coords[0];
   const total = arcs[arcs.length - 1];
   if (targetArc >= total) return coords[coords.length - 1];
@@ -187,7 +199,7 @@ function arcRangeForBBox(coords: Position[], bbox: BBox, marginM: number): ArcRa
   };
 }
 
-function sliceArc(coords: Position[], startArc: number, endArc: number): Position[] {
+export function sliceArc(coords: Position[], startArc: number, endArc: number): Position[] {
   const arcs = cumulativeArcs(coords);
   const total = arcs[arcs.length - 1];
   const start = Math.max(0, Math.min(total, startArc));
@@ -203,7 +215,7 @@ function sliceArc(coords: Position[], startArc: number, endArc: number): Positio
   return output;
 }
 
-function samplePolyline(coords: Position[], count: number): Position[] {
+export function samplePolyline(coords: Position[], count: number): Position[] {
   const arcs = cumulativeArcs(coords);
   const total = arcs[arcs.length - 1];
   const output: Position[] = [];
@@ -214,7 +226,7 @@ function samplePolyline(coords: Position[], count: number): Position[] {
   return output;
 }
 
-function lengthM(coords: Position[]): number {
+export function lengthM(coords: Position[]): number {
   const arcs = cumulativeArcs(coords);
   return arcs[arcs.length - 1] ?? 0;
 }
@@ -312,7 +324,7 @@ function normalizedVector(vector: Vector, fallback: Vector): Vector {
   return [vector[0] / length, vector[1] / length];
 }
 
-function fitHermiteCenterline(coords: Position[]): FittedCenterline {
+export function fitHermiteCenterline(coords: Position[]): FittedCenterline {
   if (coords.length < 4) return fitCubicAxisCenterline(coords);
 
   const refLat = coords[Math.floor(coords.length / 2)][1];
@@ -391,7 +403,7 @@ function maxBearingDeltaDegrees(coords: Position[], windowM = 35): number {
   return maxDelta;
 }
 
-function normalAt(coords: Position[], index: number): Vector {
+export function normalAt(coords: Position[], index: number): Vector {
   const here = coords[index];
   const before = coords[Math.max(0, index - 1)];
   const after = coords[Math.min(coords.length - 1, index + 1)];
@@ -405,25 +417,25 @@ function normalAt(coords: Position[], index: number): Vector {
   return [-dy / length, dx / length];
 }
 
-function lerpPoint(from: Position, to: Position, t: number): Position {
+export function lerpPoint(from: Position, to: Position, t: number): Position {
   return [
     from[0] + (to[0] - from[0]) * t,
     from[1] + (to[1] - from[1]) * t,
   ];
 }
 
-function smoothstep(t: number): number {
+export function smoothstep(t: number): number {
   const clamped = Math.max(0, Math.min(1, t));
   return clamped * clamped * (3 - 2 * clamped);
 }
 
-function offsetPoint(center: Position, normal: Vector, offsetM: number): Position {
+export function offsetPoint(center: Position, normal: Vector, offsetM: number): Position {
   const lat = center[1];
   const p = projectAt(center, lat);
   return unprojectAt([p[0] + normal[0] * offsetM, p[1] + normal[1] * offsetM], lat);
 }
 
-function removeAdjacentDuplicates(coords: Position[]): Position[] {
+export function removeAdjacentDuplicates(coords: Position[]): Position[] {
   const output: Position[] = [];
   for (const coord of coords) {
     if (output.length === 0 || haversineM(output[output.length - 1], coord) > 0.01) {
@@ -433,7 +445,7 @@ function removeAdjacentDuplicates(coords: Position[]): Position[] {
   return output;
 }
 
-function replaceArcRange(
+export function replaceArcRange(
   coords: Position[],
   startArc: number,
   endArc: number,
@@ -462,7 +474,7 @@ function pointSegmentDistanceM(point: Position, from: Position, to: Position): n
   return Math.hypot(p[0] - (a[0] + vx * t), p[1] - (a[1] + vy * t));
 }
 
-function pointLineDistanceM(point: Position, line: Position[]): number {
+export function pointLineDistanceM(point: Position, line: Position[]): number {
   let best = Infinity;
   for (let index = 1; index < line.length; index += 1) {
     best = Math.min(best, pointSegmentDistanceM(point, line[index - 1], line[index]));
@@ -470,21 +482,21 @@ function pointLineDistanceM(point: Position, line: Position[]): number {
   return best;
 }
 
-function minSeparationM(left: Position[], right: Position[]): number {
+export function minSeparationM(left: Position[], right: Position[]): number {
   let best = Infinity;
   for (const point of left) best = Math.min(best, pointLineDistanceM(point, right));
   for (const point of right) best = Math.min(best, pointLineDistanceM(point, left));
   return best;
 }
 
-function orientationNeedsReverse(left: Position[], right: Position[]): boolean {
+export function orientationNeedsReverse(left: Position[], right: Position[]): boolean {
   return (
     haversineM(left[0], right[0]) + haversineM(left[left.length - 1], right[right.length - 1]) >
     haversineM(left[0], right[right.length - 1]) + haversineM(left[left.length - 1], right[0])
   );
 }
 
-function buildBalancedPair(
+export function buildBalancedPair(
   yellowSegment: Position[],
   orangeSegment: Position[],
   options: BalancedOptions,
@@ -514,7 +526,7 @@ function buildBalancedPair(
     const yellow = projectAt(yellowSamples[index], lat);
     signSum += (yellow[0] - center[0]) * normal[0] + (yellow[1] - center[1]) * normal[1];
   }
-  const yellowSign = signSum < 0 ? -1 : 1;
+  const yellowSign = options.forcedASign ?? (signSum < 0 ? -1 : 1);
 
   const yellowOut: Position[] = [];
   const orangeOut: Position[] = [];
@@ -549,6 +561,13 @@ function buildBalancedPair(
   return {
     yellow: yellowOut,
     orange: reversedOrange ? orangeOut.slice().reverse() : orangeOut,
+    // Which side of the fitted centerline "yellow"/a landed on (+1 or -1),
+    // independent of `reversedOrange` (that only affects array order, not
+    // physical side). Callers outside the Brighton hotspot -- notably
+    // shared-corridor-separation-stage.ts -- use this to write an accurate
+    // lane_slot_semantic so the renderer's paint z-order reflects the actual
+    // geometric side rather than falling back to a color-rank tiebreak.
+    aSign: yellowSign,
     minBeforeM: minSeparationM(yellowSamples, orangeOriented),
     minAfterM: minSeparationM(yellowOut, orangeOut),
     centerlineFit: fittedCenterline.fit,

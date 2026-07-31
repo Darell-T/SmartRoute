@@ -23,6 +23,10 @@ import { type RouteRailStatus } from "@/components/smart-route/left-rail";
 import { buildLeftRailData } from "@/components/smart-route/left-rail/live-data";
 import { ChatPanel } from "@/components/smart-route/chat/chat-panel";
 import { ChatSidebar } from "@/components/smart-route/chat/chat-sidebar";
+import { MobileNavigation } from "@/components/smart-route/chat/mobile-navigation";
+import { MobileStage } from "@/components/smart-route/chat/mobile-stage";
+import { MobileTopBar } from "@/components/smart-route/chat/mobile-top-bar";
+import { buildHomeNearbyModel } from "@/components/smart-route/chat/near-you";
 
 import { LiveWorkspace } from "@/components/smart-route/page/live-workspace";
 import { useMobileRailSheet } from "@/components/smart-route/page/use-mobile-rail-sheet";
@@ -45,6 +49,7 @@ function SmartRoutePageContent() {
   } | null>(null);
   const [activeTab, setActiveTab] = useState<AppTab>("chat");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const [newTripKey, setNewTripKey] = useState(0);
   const mapActionsRef = useRef<MapActions | null>(null);
   const liveMapFrameRef = useRef<HTMLElement | null>(null);
@@ -161,6 +166,36 @@ function SmartRoutePageContent() {
     ],
   );
 
+  const homeNearby = useMemo(
+    () =>
+      buildHomeNearbyModel({
+        data: leftRailData,
+        nearestStopName: liveFeed.nearestStop?.stop_name,
+        nearestRouteIds: liveFeed.nearestStop?.route_ids ?? [],
+        arrivalsLoading: liveFeed.isLoading,
+        arrivalsUnavailable: Boolean(liveFeed.error),
+        serviceAlertsLoading:
+          serviceAlerts.isLoading && serviceAlerts.alerts.length === 0,
+        serviceAlertsUnavailable:
+          Boolean(serviceAlerts.error) && serviceAlerts.alerts.length === 0,
+        nearbyIssues: liveFeed.nearbyIssues,
+        hasPlannedRoute: Boolean(activeRouteCandidate),
+        nowMs: liveFeed.nowMs,
+      }),
+    [
+      leftRailData,
+      liveFeed.nearestStop,
+      liveFeed.isLoading,
+      liveFeed.error,
+      serviceAlerts.isLoading,
+      serviceAlerts.error,
+      serviceAlerts.alerts.length,
+      liveFeed.nearbyIssues,
+      liveFeed.nowMs,
+      activeRouteCandidate,
+    ],
+  );
+
   // ── SmartRoute Left Rail status ──────────────────────────────────────────
   // The rail consumes a four-value route status. We derive it from the
   // existing app signals so the rail stays in lockstep with the recommendation
@@ -179,6 +214,17 @@ function SmartRoutePageContent() {
       DEFAULT_LOCATION,
       setUserLocation,
     );
+  }, []);
+
+  useEffect(() => {
+    const desktopQuery = window.matchMedia("(min-width: 721px)");
+    const closeNavigationOnDesktop = (event: MediaQueryListEvent) => {
+      if (event.matches) setMobileNavigationOpen(false);
+    };
+    desktopQuery.addEventListener("change", closeNavigationOnDesktop);
+    return () => {
+      desktopQuery.removeEventListener("change", closeNavigationOnDesktop);
+    };
   }, []);
 
   const handleLocationUpdate = useCallback(
@@ -210,6 +256,12 @@ function SmartRoutePageContent() {
 
   const openLiveMap = useCallback(() => setActiveTab("livemap"), []);
   const openChat = useCallback(() => setActiveTab("chat"), []);
+  const closeMobileNavigation = useCallback(() => {
+    setMobileNavigationOpen(false);
+    window.requestAnimationFrame(() => {
+      document.querySelector<HTMLButtonElement>("#sr-mobile-menu-trigger")?.focus();
+    });
+  }, []);
 
   const startNewTrip = useCallback(() => {
     chat.reset();
@@ -267,6 +319,16 @@ function SmartRoutePageContent() {
         data-sidebar-collapsed={sidebarCollapsed ? "true" : "false"}
       >
         <h1 className="sr-only">SmartRoute</h1>
+        <MobileNavigation
+          open={mobileNavigationOpen}
+          activeTab={activeTab}
+          theme={theme}
+          onClose={closeMobileNavigation}
+          onOpenChat={openChat}
+          onOpenLiveMap={openLiveMap}
+          onNewTrip={startNewTrip}
+          onToggleTheme={toggleTheme}
+        />
         <ChatSidebar
           activeTab={activeTab}
           collapsed={sidebarCollapsed}
@@ -278,54 +340,66 @@ function SmartRoutePageContent() {
           onToggleTheme={toggleTheme}
         />
 
-        <div
-          className={`sr-app-shell sr-tab-shell__panel sr-tab-shell__panel--livemap${
-            isLivemapTab ? "" : " sr-tab-shell__panel--hidden"
-          }`}
-          data-active-tab="livemap"
-          inert={isLivemapTab ? undefined : true}
-          style={{
-            // Single full-viewport row: 400px LeftRail | 1fr Map. The rail owns
-            // Route / Alerts, while the map carries its own overlays.
-            display: "flex",
-            flexDirection: "row",
-            overflow: "hidden",
-          }}
+        <MobileStage
+          navigationOpen={mobileNavigationOpen}
+          onDismissNavigation={closeMobileNavigation}
         >
-          <LiveWorkspace
-            mobileRail={mobileRail}
-            routePlanning={routePlanning}
-            leftRailData={leftRailData}
-            routeStatus={routeStatus}
-            hasActiveRoute={Boolean(summary)}
-            liveMap={{
-              frameRef: liveMapFrameRef,
-              routeData,
-              destCoords,
-              onLocationUpdate: handleLocationUpdate,
-              onMapReady: handleMapReady,
-              onExpand: () => void toggleFullscreen(liveMapFrameRef.current),
-              onRecenter: () => mapActionsRef.current?.recenter(),
-            }}
+          <MobileTopBar
+            navigationOpen={mobileNavigationOpen}
+            onOpenNavigation={() => setMobileNavigationOpen(true)}
+            onNewTrip={startNewTrip}
           />
-        </div>
 
-        <div
-          className={`sr-chat-tab sr-tab-shell__panel sr-tab-shell__panel--chat${
-            isLivemapTab ? " sr-tab-shell__panel--hidden" : ""
-          }`}
-          data-sr-theme={theme}
-          inert={isLivemapTab ? true : undefined}
-        >
-          <ChatPanel
-            key={newTripKey}
-            chat={chat}
-            theme={theme}
-            onOpenLiveMap={openLiveMap}
-            onSelectRouteCard={handleSelectRouteCard}
-            onOpenNearbyStation={handleOpenNearbyStation}
-          />
-        </div>
+          <div
+            className={`sr-app-shell sr-tab-shell__panel sr-tab-shell__panel--livemap${
+              isLivemapTab ? "" : " sr-tab-shell__panel--hidden"
+            }`}
+            data-active-tab="livemap"
+            inert={isLivemapTab ? undefined : true}
+            style={{
+              // Single full-viewport row: 400px LeftRail | 1fr Map. The rail owns
+              // Route / Alerts, while the map carries its own overlays.
+              display: "flex",
+              flexDirection: "row",
+              overflow: "hidden",
+            }}
+          >
+            <LiveWorkspace
+              mobileRail={mobileRail}
+              routePlanning={routePlanning}
+              leftRailData={leftRailData}
+              routeStatus={routeStatus}
+              hasActiveRoute={Boolean(summary)}
+              liveMap={{
+                frameRef: liveMapFrameRef,
+                routeData,
+                destCoords,
+                onLocationUpdate: handleLocationUpdate,
+                onMapReady: handleMapReady,
+                onExpand: () => void toggleFullscreen(liveMapFrameRef.current),
+                onRecenter: () => mapActionsRef.current?.recenter(),
+              }}
+            />
+          </div>
+
+          <div
+            className={`sr-chat-tab sr-tab-shell__panel sr-tab-shell__panel--chat${
+              isLivemapTab ? " sr-tab-shell__panel--hidden" : ""
+            }`}
+            data-sr-theme={theme}
+            inert={isLivemapTab ? true : undefined}
+          >
+            <ChatPanel
+              key={newTripKey}
+              chat={chat}
+              theme={theme}
+              nearby={homeNearby}
+              onOpenLiveMap={openLiveMap}
+              onSelectRouteCard={handleSelectRouteCard}
+              onOpenNearbyStation={handleOpenNearbyStation}
+            />
+          </div>
+        </MobileStage>
       </main>
     </MotionConfig>
   );

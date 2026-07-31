@@ -24,6 +24,7 @@
     "@ss-blocks": "https://shadcnstudio.com/r/blocks/{name}.json",
     "@ss-themes": "https://shadcnstudio.com/r/themes/{name}.json",
     "@aceternity": "https://ui.aceternity.com/registry/{name}.json",
-    "@magicui": "https://magicui.design/r/{name}"
+    "@magicui": "https://magicui.design/r/{name}",
+    "@lucide-animated": "https://lucide-animated.com/r/{name}.json"
   }
 }

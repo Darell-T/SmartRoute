@@ -13,6 +13,12 @@ const CSS_SOURCE = fs.readFileSync(
   ),
   "utf8",
 );
+const SHELL_CSS_SOURCE = fs.readFileSync(
+  fileURLToPath(
+    new URL("../../../app/styles/smart-route-tab-shell.css", import.meta.url),
+  ),
+  "utf8",
+);
 const TOOLTIP_SOURCE = fs.readFileSync(
   fileURLToPath(new URL("../../ui/tooltip.tsx", import.meta.url)),
   "utf8",
@@ -64,14 +70,25 @@ test("sidebar uses a neutral Grok-like rail without Nearby Lines or green active
   assert.match(CSS_SOURCE, /\.sr-app-sidebar\[data-collapsed="true"\][\s\S]*inset: 4px/);
 });
 
-test("light sidebar uses a shadow separator without a dark border or layout change", () => {
+test("light sidebar uses one hairline separator without a dark shadow", () => {
   assert.match(
     CSS_SOURCE,
-    /\.sr-app-sidebar\[data-theme="light"\]\s*\{[\s\S]*?border-right-color:\s*transparent;/,
+    /\.sr-app-sidebar\[data-theme="light"\]\s*\{[\s\S]*?border-right-color:\s*var\(--sr-sidebar-line\);/,
   );
   assert.match(
     CSS_SOURCE,
-    /\.sr-app-sidebar\[data-theme="light"\]\s*\{[\s\S]*?box-shadow:\s*8px 0 20px rgba\(15,\s*17,\s*19,\s*0\.055\);/,
+    /\.sr-app-sidebar\[data-theme="light"\]\s*\{[\s\S]*?box-shadow:\s*none;/,
   );
   assert.match(CSS_SOURCE, /border-right:\s*1px solid var\(--sr-sidebar-line\);/);
+});
+
+test("collapsed sidebar and shell reserve the same width", () => {
+  assert.match(
+    CSS_SOURCE,
+    /\.sr-app-sidebar\[data-collapsed="true"\]\s*\{[\s\S]*?--sr-sidebar-width:\s*58px;/,
+  );
+  assert.match(
+    SHELL_CSS_SOURCE,
+    /\.sr-tab-shell\[data-sidebar-collapsed="true"\]\s*\{[\s\S]*?--sr-shell-sidebar-width:\s*58px;/,
+  );
 });

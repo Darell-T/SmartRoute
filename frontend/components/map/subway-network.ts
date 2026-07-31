@@ -185,6 +185,8 @@ interface VisualLaneProps extends LaneSegmentProps {
   lane_group_id: string | null;
   lane_slot_source: "bundle" | "chain" | "local";
   lane_order_basis: string[];
+  /** Optional segment-side hint emitted by the visual artifact builder. */
+  cross_color_segment_side?: number;
   bundle_id?: string | null;
   visual_feature_type?: string | null;
   /**
@@ -252,6 +254,12 @@ export function buildSubwayLaneFeaturesFromVisual(
           color,
           lane_slot: renderLaneSlot,
           lane_slot_semantic: semanticLaneSlot,
+          // Segment-level cross-color spread (cross-color-spread.ts v2) only
+          // tapers a SUB-extent of the feature, so it can't set a whole-feature
+          // lane_slot_semantic without lying about the untouched majority of
+          // the line. It still carries a per-feature side flag for the fill
+          // sort-key to fall back on ahead of the color-rank tiebreak.
+          cross_color_segment_side: Number(rawProps.cross_color_segment_side ?? 0),
           lane_offset_baked: laneOffsetBaked,
           corridor: null,
           route_ids: routeIds,
@@ -1137,8 +1145,14 @@ export function ensureSubwayNetworkLayers(
           // previous override hard-coded green above red/yellow/orange, which
           // made green visually dominate at borough zoom whenever neighboring
           // lanes compressed toward the same screen pixels. Semantic slot order
-          // keeps the top stroke tied to geometry side, with visual_z_order only
-          // as a tiny deterministic fallback for exact ties.
+          // keeps the top stroke tied to geometry side. cross_color_segment_side
+          // is the fallback for segment-level cross-color spread (v2), which
+          // can't set a whole-feature lane_slot_semantic (see the property's
+          // comment in subway-network.ts's buildSubwayLaneFeaturesFromVisual);
+          // without it, those features all sort as 0 and collapse to the
+          // color-rank tiebreak, which used to let one color systematically
+          // paint over its neighbor wherever their baked offset ran thin.
+          // visual_z_order stays the tiny last-resort tiebreak for exact ties.
           "line-sort-key": [
             "+",
             [
@@ -1146,6 +1160,7 @@ export function ensureSubwayNetworkLayers(
               ["coalesce", ["get", "lane_slot_semantic"], ["get", "lane_slot"], 0],
               10,
             ],
+            ["*", ["coalesce", ["get", "cross_color_segment_side"], 0], 1],
             ["*", ["coalesce", ["get", "visual_z_order"], 0], 0.01],
           ],
         },
