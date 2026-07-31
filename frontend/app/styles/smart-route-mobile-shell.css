@@ -24,7 +24,8 @@
   }
 
   .sr-mobile-stage {
-    height: var(--visual-viewport-height, 100dvh);
+    inset: var(--mobile-viewport-offset-top, 0px) 0 auto;
+    height: var(--mobile-visible-height, 100dvh);
     box-shadow: none;
     transition: box-shadow 180ms ease;
   }

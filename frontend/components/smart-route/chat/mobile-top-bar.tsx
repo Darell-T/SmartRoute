@@ -6,10 +6,12 @@ import { Menu } from "lucide-react";
 
 export function MobileTopBar({
   navigationOpen,
+  showBrand,
   onOpenNavigation,
   onNewTrip,
 }: {
   navigationOpen: boolean;
+  showBrand: boolean;
   onOpenNavigation: () => void;
   onNewTrip: () => void;
 }) {
@@ -28,22 +30,24 @@ export function MobileTopBar({
         <Menu size={22} strokeWidth={1.8} aria-hidden="true" />
       </motion.button>
 
-      <button
-        type="button"
-        className="sr-mobile-top-bar__brand"
-        aria-label="Start a new SmartRoute trip"
-        onClick={onNewTrip}
-      >
-        <Image
-          src="/smart-route-mark-512.png"
-          alt=""
-          width={30}
-          height={30}
-          priority
-          aria-hidden="true"
-        />
-        <span>SmartRoute</span>
-      </button>
+      {showBrand ? (
+        <button
+          type="button"
+          className="sr-mobile-top-bar__brand"
+          aria-label="Start a new SmartRoute trip"
+          onClick={onNewTrip}
+        >
+          <Image
+            src="/smart-route-mark-512.png"
+            alt=""
+            width={30}
+            height={30}
+            priority
+            aria-hidden="true"
+          />
+          <span>SmartRoute</span>
+        </button>
+      ) : null}
     </header>
   );
 }

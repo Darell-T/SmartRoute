@@ -163,3 +163,17 @@ test("mobile suggestions use animated transit glyphs and a focus-aware snap rail
     /\.sr-chat-suggestion-motion \{[\s\S]*?scroll-snap-align: start/,
   );
 });
+
+test("failed chat turns have one compact manual recovery surface", () => {
+  const messageSource = fs.readFileSync(
+    fileURLToPath(new URL("./chat-message.tsx", import.meta.url)),
+    "utf8",
+  );
+  assert.doesNotMatch(PANEL_SOURCE, /sr-chat-error-banner/);
+  assert.match(messageSource, /className="sr-chat-turn-error" role="alert"/);
+  assert.match(messageSource, />\s*Try again\s*</);
+  assert.match(messageSource, />\s*Dismiss\s*</);
+  assert.match(PANEL_SOURCE, /chat\.retryLast/);
+  assert.match(PANEL_SOURCE, /chat\.dismissError/);
+  assert.doesNotMatch(messageSource, /Upstream request failed\./);
+});

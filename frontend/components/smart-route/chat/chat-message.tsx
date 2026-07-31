@@ -49,6 +49,8 @@ function AssistantMessage({
   selectedCardId,
   onSelectRouteCard,
   onSeeArrivalsOnMap,
+  onRetry,
+  onDismissError,
 }: {
   turn: AssistantTurn;
   theme: ChatTheme;
@@ -56,6 +58,8 @@ function AssistantMessage({
   selectedCardId?: string | null;
   onSelectRouteCard?: (card: RouteCard) => void;
   onSeeArrivalsOnMap?: (arrivals: ArrivalsTurnPayload) => void;
+  onRetry?: () => void;
+  onDismissError?: () => void;
 }) {
   const hasText = turn.text.length > 0;
   const reduceMotion = useReducedMotion() ?? false;
@@ -66,6 +70,28 @@ function AssistantMessage({
   const orbState = isFindingRoutes ? "searching" : "composing";
   const showCards = !turn.isStreaming && hasText && isCaughtUp && turn.routeCards.length > 0;
   const showArrivals = !turn.isStreaming && isCaughtUp && Boolean(turn.arrivals);
+
+  if (turn.error) {
+    return (
+      <div className="sr-chat-message sr-chat-message--assistant">
+        <div className="sr-chat-turn-error" role="alert">
+          <p>{turn.error.message}</p>
+          <div className="sr-chat-turn-error__actions">
+            {turn.error.retryable && onRetry ? (
+              <button type="button" onClick={onRetry}>
+                Try again
+              </button>
+            ) : null}
+            {onDismissError ? (
+              <button type="button" onClick={onDismissError}>
+                Dismiss
+              </button>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="sr-chat-message sr-chat-message--assistant">
@@ -134,7 +160,6 @@ function AssistantMessage({
           </motion.div>
         ) : null}
       </AnimatePresence>
-      {turn.error && !hasText && <p className="sr-chat-message__error">{turn.error.message}</p>}
     </div>
   );
 }
@@ -146,6 +171,8 @@ export function ChatMessage({
   selectedCardId,
   onSelectRouteCard,
   onSeeArrivalsOnMap,
+  onRetry,
+  onDismissError,
 }: {
   turn: ChatTurn;
   theme: ChatTheme;
@@ -154,6 +181,8 @@ export function ChatMessage({
   selectedCardId?: string | null;
   onSelectRouteCard?: (card: RouteCard) => void;
   onSeeArrivalsOnMap?: (arrivals: ArrivalsTurnPayload) => void;
+  onRetry?: () => void;
+  onDismissError?: () => void;
 }) {
   if (turn.role === "user") {
     return (
@@ -173,6 +202,8 @@ export function ChatMessage({
       selectedCardId={selectedCardId}
       onSelectRouteCard={onSelectRouteCard}
       onSeeArrivalsOnMap={onSeeArrivalsOnMap}
+      onRetry={onRetry}
+      onDismissError={onDismissError}
     />
   );
 }

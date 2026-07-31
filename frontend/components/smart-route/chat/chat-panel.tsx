@@ -125,6 +125,10 @@ export function ChatPanel({
                 selectedCardId={chat.selectedCardId}
                 onSelectRouteCard={handleSelectRouteCard}
                 onSeeArrivalsOnMap={onOpenNearbyStation ?? (() => onOpenLiveMap())}
+                onRetry={index === chat.messages.length - 1 ? chat.retryLast : undefined}
+                onDismissError={
+                  index === chat.messages.length - 1 ? chat.dismissError : undefined
+                }
               />
             ))
           )}
@@ -132,12 +136,6 @@ export function ChatPanel({
         </ChatContainerContent>
         <ScrollButton className="sr-chat-scroll-button" />
       </ChatContainerRoot>
-
-      {chat.error && (
-        <p className="sr-chat-error-banner" role="alert">
-          {chat.error}
-        </p>
-      )}
 
       <div className="sr-chat-interaction-dock">
         {isEmpty ? (

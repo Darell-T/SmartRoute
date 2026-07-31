@@ -71,3 +71,8 @@ test("mobile chrome stays neutral and exposes reachable primary controls", () =>
     /#22c55e|#2ee85f|#3ed134|rgba\(46,\s*232,\s*95/i,
   );
 });
+
+test("mobile branding is removed while the live transit map is active", () => {
+  assert.match(PAGE_SOURCE, /showBrand=\{!isLivemapTab\}/);
+  assert.match(TOP_BAR_SOURCE, /\{showBrand \? \(/);
+});
