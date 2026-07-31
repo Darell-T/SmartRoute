@@ -24,7 +24,6 @@ from app.services.validation.shadow import (
     execute_counterfactual_shadow,
     submit_shadow_record_safely,
 )
-from scripts.review_shadow_decisions import main as review_shadow_main
 
 
 def _record(**overrides):
@@ -171,41 +170,6 @@ class ShadowDecisionRecordTests(unittest.TestCase):
             JsonlShadowSink("records.txt")
         with self.assertRaisesRegex(ValueError, "jsonl"):
             JsonlShadowReviewStore("reviews.txt")
-
-    def test_review_cli_classifies_only_an_existing_sanitized_observation(self):
-        with tempfile.TemporaryDirectory() as temp:
-            directory = Path(temp)
-            records = directory / "records.jsonl"
-            reviews = directory / "reviews.jsonl"
-            record = _record()
-            records.write_text(json.dumps(record.as_dict()) + "\n", encoding="utf-8")
-
-            self.assertEqual(
-                review_shadow_main(
-                    [
-                        str(records),
-                        str(reviews),
-                        record.observation_id,
-                        ReviewClassification.EQUIVALENT_ROUTE.value,
-                    ]
-                ),
-                0,
-            )
-            saved = json.loads(reviews.read_text(encoding="utf-8"))
-            self.assertEqual(saved["observation_id"], record.observation_id)
-            self.assertEqual(saved["classification"], "equivalent_route")
-            self.assertNotIn("note", saved)
-
-            with self.assertRaises(SystemExit):
-                review_shadow_main(
-                    [
-                        str(records),
-                        str(reviews),
-                        "7f2f14ee-8f34-4d2e-a540-ddc5f3498862",
-                        ReviewClassification.DATA_QUALITY_ISSUE.value,
-                    ]
-                )
-
 
 class CounterfactualShadowExecutionTests(unittest.IsolatedAsyncioTestCase):
     @staticmethod

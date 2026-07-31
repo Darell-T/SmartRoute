@@ -88,16 +88,60 @@ frontend/scripts/qa/tmp/
 frontend/scripts/qa/output/
 frontend/scripts/qa/screenshots/
 
+# Private local prototypes, browser QA, and release evidence tooling.
+frontend/app/dev/
+frontend/playwright.config.ts
+frontend/scripts/qa/
+frontend/scripts/release/
+frontend/tests/release/
+frontend/scripts/build/script-inventory.ts
+frontend/scripts/script-inventory.json
+frontend/scripts/build/visual-network/REFACTOR-HANDOFF.md
+frontend/public/qa-visual-map.html
+
 # Local browser profiles + python cache (QA/screenshot scratch)
 .tmp-chrome-*/
 .pytest_cache/
 
-# Deterministic route-intelligence reports are generated per run and uploaded
-# by CI; keep local timing-bearing copies out of commits.
+# Deterministic route-intelligence reports are private local evaluation output.
 backend/validation-results.json
 backend/validation-report.txt
 backend/validation-metrics.json
 backend/validation-ablations.json
+backend/test-results/
+
+# Private local agent evaluation and replay tooling.
+backend/evals/
+backend/tests/replays/
+backend/app/services/validation/comparison.py
+backend/app/services/validation/failure_modes.py
+backend/app/services/validation/metrics.py
+backend/app/services/validation/replay.py
+backend/app/services/validation/reporting.py
+backend/scripts/provider_fault_jitter_cases.py
+backend/scripts/provider_fault_jitter_validation.py
+backend/scripts/release_validation.py
+backend/scripts/release_validation_advisories.py
+backend/scripts/release_validation_browser.py
+backend/scripts/release_validation_transport.py
+backend/scripts/replay_route_intelligence.py
+backend/scripts/review_shadow_decisions.py
+backend/scripts/run_agent_replay_validation.py
+backend/scripts/run_anthropic_agent_smoke.py
+backend/scripts/run_live_511ny_validation.py
+backend/scripts/run_live_advisor_validation.py
+backend/scripts/run_live_crowd_search_validation.py
+backend/scripts/run_live_ticketmaster_validation.py
+backend/tests/test_agent_evals.py
+backend/tests/test_intelligence_ablation.py
+backend/tests/test_intelligence_comparison.py
+backend/tests/test_intelligence_golden.py
+backend/tests/test_intelligence_metrics.py
+backend/tests/test_intelligence_replay.py
+backend/tests/test_intelligence_reporting.py
+backend/tests/test_live_validation_scripts.py
+backend/tests/test_provider_fault_jitter_validation.py
+backend/tests/test_release_validation.py
 
 # Only README screenshot PNGs may be tracked under docs/
 docs/*

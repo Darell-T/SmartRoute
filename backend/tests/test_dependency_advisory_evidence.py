@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import json
 from datetime import date
-from hashlib import sha256
 from pathlib import Path
 
 from scripts import build_dependency_advisory_evidence as builder
 from scripts import release_advisory_policy as policy_module
-from scripts import release_validation_advisories as advisories
 
 
 def _write(path: Path, value: object) -> Path:
@@ -98,7 +96,10 @@ def _exception_policy(lock_path: Path, **changes: object) -> dict[str, object]:
         "scope": "development",
         "scan_id": "frontend_full",
         "scanner": "npm-audit",
-        "lock": {"path": "frontend/package-lock.json", "sha256": sha256(lock_path.read_bytes()).hexdigest()},
+        "lock": {
+            "path": "frontend/package-lock.json",
+            "sha256": policy_module.lock_sha256(lock_path),
+        },
         "expected_packages": [{"path": path, "name": name, "version": version} for path, name, version in packages],
         "rationale": "development-only ESLint chain",
         "expires_on": "2026-08-27",
@@ -112,25 +113,16 @@ def _write_policy(args: object, value: object) -> None:
     args.exception_policy.write_text(json.dumps(value), encoding="utf-8")
 
 
-def test_builder_and_parser_accept_complete_clean_candidate_evidence(tmp_path, monkeypatch) -> None:
+def test_builder_accepts_complete_clean_candidate_evidence(tmp_path) -> None:
     args = _arguments(tmp_path)
     evidence = builder.build(args)
-    args.output.write_text(json.dumps(evidence), encoding="utf-8")
-    monkeypatch.setattr(advisories, "REPOSITORY_ROOT", tmp_path)
-
-    result = advisories.advisory_evidence(str(args.output), "a1b2c3d4")
 
     assert evidence["status"] == "PASSED"
-    assert result.status == "PASSED"
-    assert result.evidence == {
-        "required_scans": 4,
-        "runtime_scans": 2,
-        "development_scans": 2,
-        "accepted_development_findings": 0,
-    }
+    assert len(evidence["scans"]) == 4
+    assert evidence["accepted_development_findings"] == []
 
 
-def test_builder_records_scanner_finding_and_validator_rejects_it(tmp_path, monkeypatch) -> None:
+def test_builder_records_scanner_finding_and_rejects_it(tmp_path) -> None:
     npm_finding = {
         "auditReportVersion": 2,
         "vulnerabilities": {
@@ -145,25 +137,16 @@ def test_builder_records_scanner_finding_and_validator_rejects_it(tmp_path, monk
     }
     args = _arguments(tmp_path, npm_finding)
     evidence = builder.build(args)
-    args.output.write_text(json.dumps(evidence), encoding="utf-8")
-    monkeypatch.setattr(advisories, "REPOSITORY_ROOT", tmp_path)
-
-    result = advisories.advisory_evidence(str(args.output), "a1b2c3d4")
 
     assert evidence["status"] == "FAILED"
     assert evidence["scans"][0]["findings"][0]["advisory_id"] == "GHSA-test-test-test"
-    assert result.status == "FAILED"
 
 
-def test_exact_development_exception_is_preserved_and_passes(tmp_path, monkeypatch) -> None:
+def test_exact_development_exception_is_preserved_and_passes(tmp_path) -> None:
     args = _arguments(tmp_path, _brace_report())
     policy = _exception_policy(args.frontend_lock)
     _write_policy(args, policy)
     evidence = builder.build(args)
-    args.output.write_text(json.dumps(evidence), encoding="utf-8")
-    monkeypatch.setattr(advisories, "REPOSITORY_ROOT", tmp_path)
-
-    result = advisories.advisory_evidence(str(args.output), "a1b2c3d4")
 
     assert evidence["status"] == "PASSED"
     assert evidence["scans"][0]["findings"]
@@ -173,7 +156,6 @@ def test_exact_development_exception_is_preserved_and_passes(tmp_path, monkeypat
         "scope": "development",
         "finding": evidence["scans"][0]["findings"][0],
     }]
-    assert result.status == "PASSED"
 
 
 def test_runtime_finding_cannot_use_development_exception(tmp_path) -> None:
@@ -260,18 +242,6 @@ def test_pip_audit_v2_envelope_preserves_direct_finding_and_fix() -> None:
     }]
 
 
-def test_parser_rejects_evidence_for_changed_dependency_input(tmp_path, monkeypatch) -> None:
-    args = _arguments(tmp_path)
-    args.output.write_text(json.dumps(builder.build(args)), encoding="utf-8")
-    (tmp_path / "frontend/package-lock.json").write_text("{}", encoding="utf-8")
-    monkeypatch.setattr(advisories, "REPOSITORY_ROOT", tmp_path)
-
-    result = advisories.advisory_evidence(str(args.output), "a1b2c3d4")
-
-    assert result.status == "FAILED"
-    assert result.reason == "dependency advisory input digest does not match"
-
-
 def test_exception_lock_digest_and_duplicate_or_unmatched_entries_fail_closed(tmp_path) -> None:
     args = _arguments(tmp_path, _brace_report())
     valid_policy = _exception_policy(args.frontend_lock)
@@ -285,6 +255,15 @@ def test_exception_lock_digest_and_duplicate_or_unmatched_entries_fail_closed(tm
         assert str(exc) == "advisory exception lock digest does not match"
     else:
         raise AssertionError("changed lock digest must fail closed")
+
+
+def test_lock_digest_is_stable_across_platform_line_endings(tmp_path) -> None:
+    lf_lock = tmp_path / "lf-package-lock.json"
+    crlf_lock = tmp_path / "crlf-package-lock.json"
+    lf_lock.write_bytes(b'{\n  "lockfileVersion": 3\n}\n')
+    crlf_lock.write_bytes(b'{\r\n  "lockfileVersion": 3\r\n}\r\n')
+
+    assert policy_module.lock_sha256(lf_lock) == policy_module.lock_sha256(crlf_lock)
 
     duplicate_root = tmp_path / "duplicate"
     duplicate_args = _arguments(duplicate_root, _brace_report())
@@ -328,16 +307,3 @@ def test_exception_expires_on_its_first_invalid_utc_day(tmp_path) -> None:
         assert str(exc) == "advisory exception has expired"
     else:
         raise AssertionError("expiry boundary must fail closed")
-
-
-def test_parser_rejects_unexpected_scanner_format(tmp_path, monkeypatch) -> None:
-    args = _arguments(tmp_path)
-    evidence = builder.build(args)
-    evidence["scans"][0]["scanner"]["format"] = "forged-format"
-    args.output.write_text(json.dumps(evidence), encoding="utf-8")
-    monkeypatch.setattr(advisories, "REPOSITORY_ROOT", tmp_path)
-
-    result = advisories.advisory_evidence(str(args.output), "a1b2c3d4")
-
-    assert result.status == "FAILED"
-    assert result.reason == "dependency advisory scan details are invalid"

@@ -98,6 +98,24 @@ class LiveFeedApiTests(unittest.IsolatedAsyncioTestCase):
     def setUpClass(cls):
         cls.live_feed = _load_live_feed_module()
 
+    def setUp(self):
+        # Keep unit tests independent of a Redis client or URL initialized by
+        # an earlier test module in the same pytest process.
+        self._redis_client_patch = patch.object(
+            self.live_feed.admission,
+            "_redis_client",
+            None,
+        )
+        self._redis_url_patch = patch.dict(os.environ, {"REDIS_URL": ""})
+        self._redis_client_patch.start()
+        self._redis_url_patch.start()
+        self.live_feed.admission._memory_nonces.clear()
+
+    def tearDown(self):
+        self.live_feed.admission._memory_nonces.clear()
+        self._redis_url_patch.stop()
+        self._redis_client_patch.stop()
+
     async def test_ws_ticket_accepts_valid_path_bound_signature(self):
         exp = int(self.live_feed.time.time()) + 90
         ticket = _mint_ticket(self.live_feed, "/ws/live-feed", exp)

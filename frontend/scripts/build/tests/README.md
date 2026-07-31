@@ -82,10 +82,7 @@ node components\map\subway-renderer.check.mjs
 
 ## Do-Not-Touch / Gotchas
 
-- Do not add slow visual screenshot QA here; those scripts belong under
-  `frontend/scripts/qa/`.
-- Do not update `frontend/scripts/script-inventory.json` just because a test was
-  moved.
+- Keep slow visual inspection outside the committed build-test suite.
 - Do not commit generated artifacts from test runs.
 
 ## Related Docs

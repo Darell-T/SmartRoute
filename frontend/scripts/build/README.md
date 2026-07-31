@@ -140,8 +140,6 @@ Local binary equivalents:
 
 - Do not hand-edit generated artifacts under `frontend/public/`.
 - Do not commit anything under `frontend/artifacts/`.
-- Do not update `frontend/scripts/script-inventory.json` during ordinary build
-  organization work.
 - Do not move runtime map checks out of `frontend/components/map/`; they validate
   renderer expectations as well as generated artifacts.
 - Do not treat long local geometry helpers as dead code without checking

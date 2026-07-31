@@ -16,6 +16,12 @@ def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def lock_sha256(path: Path) -> str:
+    """Hash lockfile content consistently across platform line endings."""
+    normalized = path.read_bytes().replace(b"\r\n", b"\n")
+    return hashlib.sha256(normalized).hexdigest()
+
+
 def _package_name(path: str, value: dict[str, object]) -> str:
     name = value.get("name")
     if isinstance(name, str) and name:
@@ -79,7 +85,7 @@ def _validate_exception(exception: dict[str, object], repository_root: Path, tod
     if not isinstance(lock, dict) or lock.get("path") != LOCK_RELATIVE_PATH:
         raise ValueError("advisory exception lock identity is invalid")
     lock_path = repository_root / LOCK_RELATIVE_PATH
-    if lock.get("sha256") != sha256(lock_path):
+    if lock.get("sha256") != lock_sha256(lock_path):
         raise ValueError("advisory exception lock digest does not match")
     expected_packages = exception.get("expected_packages")
     if not isinstance(expected_packages, list) or not expected_packages:
