@@ -12,8 +12,6 @@ Next.js runtime; they are not browser runtime modules.
   `build-subway-station-anchors.ts`, `regenerate-canonical-from-gtfs.ts`, and
   `build-artifact-manifest.ts`.
 - Build helper modules under `build/`.
-- QA and screenshot utilities under `qa/`.
-- Script metadata such as `script-inventory.json`.
 - Script-only TypeScript configuration in `tsconfig.json`.
 
 ## Important Files And Folders
@@ -27,8 +25,6 @@ Next.js runtime; they are not browser runtime modules.
 - `build-artifact-manifest.ts`: writes the manifest consumed by runtime code.
 - `build/`: transit build helpers, focused visual-network stages, and build
   pipeline tests.
-- `qa/`: visual and screenshot-oriented checks that are useful for development
-  but are not part of the main artifact pipeline.
 
 ## Inputs
 
@@ -91,8 +87,6 @@ If the local Windows `npm` shim is unavailable, use the local binaries:
 
 - Do not hand-edit generated files under `frontend/public/`.
 - Do not commit debug artifacts under `frontend/artifacts/`.
-- Do not update `script-inventory.json` during ordinary organization or
-  refactor passes unless the inventory workflow itself is being changed.
 - Do not rewrite `.mjs` provenance strings embedded in generated subway
   artifacts; some are intentionally preserved for artifact parity.
 - Runtime map checks live under `frontend/components/map/`, even when they

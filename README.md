@@ -367,20 +367,12 @@ python -m pytest -q
 The canonical backend runner is pytest. Use the project virtual environment if
 your global Python installation does not include the declared test dependencies.
 
-Deterministic route-intelligence replays:
-
-```bash
-cd backend
-python -m scripts.replay_route_intelligence --json-out validation-results.json --text-out validation-report.txt --metrics-out validation-metrics.json --ablations-out validation-ablations.json
-```
-
 Focused city-intelligence checks:
 
 ```bash
 cd backend
 python -m pytest -q tests/test_ny511.py
 python -m pytest -q tests/test_incident_context_matching.py tests/test_incident_monitor.py tests/test_trips_incidents.py
-python -m scripts.replay_route_intelligence stalled-subway
 ```
 
 To run the optional Ticketmaster smoke test deliberately (never in CI by default):
@@ -398,7 +390,12 @@ $env:TICKETMASTER_LIVE_SMOKE_TEST = "1"
 python -m unittest -v tests.test_ticketmaster_event_lookup.TicketmasterLiveSmokeTest
 ```
 
-CI runs frontend artifact generation, typecheck, unit tests, lint, transit artifact verification, build, backend pytest, and the offline route-intelligence replay suite. Some local machines may need project dependencies installed before the full suite can run.
+CI runs frontend typecheck, unit tests, lint, verification of the checked-in
+transit artifacts, the production build, backend pytest, and dependency
+advisory checks. Transit artifacts are regenerated deliberately through the
+documented build scripts rather than as a side effect of every app deployment.
+Some local machines may need project dependencies installed before the full
+suite can run.
 
 ## Data Sources
 

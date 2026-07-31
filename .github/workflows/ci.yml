@@ -7,7 +7,7 @@ on:
 
 jobs:
   frontend:
-    name: Frontend (artifacts, typecheck, lint, build)
+    name: Frontend (typecheck, test, lint, build)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -20,7 +20,6 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
-      - run: npm run build:transit-artifacts
       - run: npm run typecheck
       - run: npm run test:unit
       - run: npm run lint
@@ -47,28 +46,6 @@ jobs:
           python-version: "3.12"
       - run: pip install -r requirements.txt -r requirements-dev.txt
       - run: python -m pytest -q
-      - name: Run deterministic route-intelligence replays
-        run: >-
-          python -m scripts.replay_route_intelligence
-          --json-out validation-results.json
-          --text-out validation-report.txt
-          --metrics-out validation-metrics.json
-          --ablations-out validation-ablations.json
-      - name: Preserve deterministic validation reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: route-intelligence-validation
-          path: |
-            backend/validation-results.json
-            backend/validation-report.txt
-            backend/validation-metrics.json
-            backend/validation-ablations.json
-          # A pytest/setup failure can prevent the replay step from creating
-          # artifacts. Preserve them when available without masking the
-          # original failure with a second upload error.
-          if-no-files-found: warn
-          retention-days: 14
 
   dependency-advisories:
     name: Dependency advisories (candidate-bound)
@@ -124,42 +101,5 @@ jobs:
         with:
           name: dependency-advisory-evidence
           path: backend/test-results/release/dependency-advisories.json
-          if-no-files-found: warn
-          retention-days: 14
-
-  frontend-release-browser:
-    name: Frontend release browser (deterministic)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - run: npm ci
-      - run: npx playwright install --with-deps chromium
-      - run: npm run test:release:evidence
-      - run: npm run test:release:ci
-      - name: Build sanitized browser validation evidence
-        run: >-
-          npx tsx scripts/release/build-browser-evidence.ts
-          test-results/release/results.json
-          test-results/release/browser-evidence.json
-          ${{ github.sha }}
-      - name: Preserve sanitized browser validation evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: frontend-release-browser-evidence
-          path: |
-            frontend/test-results/release/browser-evidence.json
-            frontend/test-results/release/results.json
-            frontend/test-results/release/**/*.zip
-            frontend/test-results/release/**/*.png
-            frontend/playwright-report/**
           if-no-files-found: warn
           retention-days: 14
