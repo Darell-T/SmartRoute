@@ -4,6 +4,7 @@ export type {
   LiveFeedResponse,
   LiveVehicle,
   LiveFeedIncident,
+  NearbyTransitIssue,
   RouteCandidate,
   RouteStep,
   TransitRouteData,

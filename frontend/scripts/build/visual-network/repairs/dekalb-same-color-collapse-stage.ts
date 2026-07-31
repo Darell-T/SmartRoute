@@ -113,9 +113,10 @@ export function applyDekalbSameColorCollapseStage({
           while (run.length > 3 && nearestKept(run[run.length - 1], color).d < 30) run.pop();
           run.push(nkEnd.p.slice()); snapped += 1;
         }
-        // Aggressive local smoothing (lower angle threshold than the global pass) rounds the lateral
-        // merge notch where the clipped corridor's baked offset meets the trunk lane.
-        const mergedRun = smoothSharpCorners(run, { angleThresholdDeg: 16, iterations: 4, ratio: 0.25, maxFilletM: 28 });
+        const runNearDekalb = run.some((p: Position) => _dkHav(p, DEKALB_ZONE_CENTER as Position) < DEKALB_TRUNK_RADIUS_M);
+        const mergedRun = runNearDekalb
+          ? smoothSharpCorners(run, { angleThresholdDeg: 16, iterations: 4, ratio: 0.25, maxFilletM: 28 })
+          : run;
         out.push({ ...f, properties: { ...f.properties, dekalb_clipped: true, dekalb_clip_part: part++ }, geometry: { type: "LineString" as const, coordinates: mergedRun } });
       }
     }

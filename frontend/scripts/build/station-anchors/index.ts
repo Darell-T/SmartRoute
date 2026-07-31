@@ -37,9 +37,9 @@ const SHARED_BAR_MAX_LENGTH_M = 24;
 // End-cap padding so the interchange capsule extends slightly past the
 // outermost served lane rather than ending exactly on it.
 const SHARED_BAR_END_PADDING_M = 5;
-const BADGE_SPACING_X_PX = 18;
-const BADGE_SPACING_Y_PX = 18;
-const BADGE_BASE_OFFSET_Y_PX = 28;
+const BADGE_SPACING_X_PX = 28;
+const BADGE_SPACING_Y_PX = 28;
+const BADGE_BASE_OFFSET_Y_PX = 32;
 const BADGE_MAX_COLUMNS = 5;
 
 const MTA_ROUTE_ORDER = [
@@ -389,10 +389,10 @@ function clusterProjections(projections: Projection[]): ProjectionCluster[] {
 // that is roughly 18 characters per wrapped line; names cap out at 3 lines.
 const LABEL_WRAP_CHARS = 18;
 const LABEL_MAX_LINES = 3;
-// Raw icon_offset px (scaled by icon-size at render). 28px sits snugly under
+// Raw icon_offset px (scaled by icon-size at render). 32px sits snugly under
 // the marker; clearing a below-anchored label needs the text-top offset plus
-// one wrapped line plus a gap (~68px raw), plus ~24px per extra line.
-const BADGE_BELOW_LABEL_BASE_Y_PX = 68;
+// one wrapped line plus a gap (~73px raw), plus ~24px per extra line.
+const BADGE_BELOW_LABEL_BASE_Y_PX = 73;
 const BADGE_LABEL_LINE_Y_PX = 24;
 
 function estimateLabelLines(name: string) {

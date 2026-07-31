@@ -44,6 +44,24 @@ class _SharedRedis:
 
 
 class AdmissionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_two_streams_leave_capacity_for_normal_requests(self):
+        admission._memory_leases.clear()
+        admission._memory_requests.clear()
+        principal = "v1.principal-one-123456"
+        with patch.object(admission, "_redis_client", None), patch.dict(
+            "os.environ", {"REDIS_URL": ""}
+        ), patch.object(
+            admission.runtime, "allows_mock_modes", return_value=True
+        ):
+            leases = [
+                await admission.acquire(principal, kind)
+                for kind in ("ws", "ws", "trip", "chat")
+            ]
+            with self.assertRaises(admission.AdmissionDenied):
+                await admission.acquire(principal, "ws")
+            for lease in leases:
+                await admission.release(lease)
+
     async def test_orphaned_lease_prunes_while_another_refreshes(self):
         admission._memory_leases.clear()
         admission._memory_requests.clear()

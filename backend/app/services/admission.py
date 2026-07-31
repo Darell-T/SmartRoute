@@ -13,7 +13,10 @@ from app import runtime
 
 WINDOW_S, LEASE_TTL_S = 60, 120
 REQUESTS_PER_PRINCIPAL, REQUESTS_GLOBAL = 20, 240
-CONCURRENT_PER_PRINCIPAL, CONCURRENT_GLOBAL = 2, 48
+# The app holds two legitimate long-lived streams per rider (live feed and
+# service alerts). Keep two additional slots for a trip/chat request and brief
+# reconnect overlap so the streams cannot lock the rest of the product out.
+CONCURRENT_PER_PRINCIPAL, CONCURRENT_GLOBAL = 4, 48
 _PRINCIPAL_PATTERN = re.compile(r"^v1\.[A-Za-z0-9_-]{16,64}$")
 
 

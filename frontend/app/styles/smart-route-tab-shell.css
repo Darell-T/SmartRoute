@@ -23,7 +23,7 @@
 }
 
 .sr-tab-shell[data-sidebar-collapsed="true"] {
-  --sr-shell-sidebar-width: 70px;
+  --sr-shell-sidebar-width: 58px;
 }
 
 .sr-tab-shell__panel {

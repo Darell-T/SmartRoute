@@ -59,6 +59,11 @@ export function applyLaneOffsetFinalizationStage({
         f.properties.cross_color_spread_slot = member.lane_slot;
         f.properties.lane_offset_baked = true;
         f.properties.lane_width_m = LANE_WIDTH_METERS;
+        // This offset is constant across the WHOLE feature (unlike v2 below,
+        // which only tapers a sub-extent), so it's safe to record it as the
+        // feature's semantic slot -- the renderer's fill line-sort-key reads
+        // lane_slot_semantic ahead of the color-rank fallback.
+        f.properties.lane_slot_semantic = member.lane_slot;
         spreadFeaturesOffset += 1;
       }
       debugFeatures.push({

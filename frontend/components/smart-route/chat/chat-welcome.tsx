@@ -1,132 +1,168 @@
 "use client";
 
-import { useState, useSyncExternalStore } from "react";
 import { motion, useReducedMotion } from "motion/react";
-import Typewriter from "typewriter-effect";
+import type {
+  ForwardRefExoticComponent,
+  HTMLAttributes,
+  KeyboardEvent,
+  RefAttributes,
+} from "react";
+import { useRef, useState } from "react";
 import { PromptSuggestion } from "@/components/prompt-kit/prompt-suggestion";
+import { AccessibilityIcon } from "@/components/ui/accessibility";
+import { AirplaneIcon } from "@/components/ui/airplane";
+import { WaypointsIcon } from "@/components/ui/waypoints";
+import { HomeNearYou } from "./home-near-you";
+import type { HomeNearbyModel } from "./near-you";
 
-const WELCOME = {
-  title: "Where to?",
-  subtitle: "Ask about any trip in New York.",
-} as const;
-
-const suggestionGroupVariants = {
-  hidden: {},
-  visible: {
-    transition: {
-      delayChildren: 0.08,
-      staggerChildren: 0.085,
-    },
-  },
+export type ChatSuggestion = {
+  label: string;
+  query: string;
+  icon: "airplane" | "waypoints" | "accessibility";
 };
 
-const suggestionVariants = {
-  hidden: { opacity: 0, y: 12, scale: 0.985 },
-  visible: {
-    opacity: 1,
-    y: 0,
-    scale: 1,
-    transition: {
-      duration: 0.42,
-      ease: [0.16, 1, 0.3, 1] as const,
-    },
-  },
-};
-
-const subscribeToHydration = () => () => undefined;
-
-function useHydrated(): boolean {
-  return useSyncExternalStore(subscribeToHydration, () => true, () => false);
+interface AnimatedSuggestionIconHandle {
+  startAnimation: () => void;
+  stopAnimation: () => void;
 }
 
+type AnimatedSuggestionIcon = ForwardRefExoticComponent<
+  HTMLAttributes<HTMLDivElement> &
+    { size?: number } &
+    RefAttributes<AnimatedSuggestionIconHandle>
+>;
+
+const SUGGESTION_ICONS: Record<
+  ChatSuggestion["icon"],
+  AnimatedSuggestionIcon
+> = {
+  airplane: AirplaneIcon,
+  waypoints: WaypointsIcon,
+  accessibility: AccessibilityIcon,
+};
+
 export function ChatWelcome({
+  nearby,
+  onOpenLiveMap,
+}: {
+  nearby: HomeNearbyModel;
+  onOpenLiveMap: () => void;
+}) {
+  return (
+    <div className="sr-chat-empty">
+      <h2 className="sr-chat-welcome-line sr-chat-welcome-line--title">
+        Where to?
+      </h2>
+
+      <div className="sr-chat-empty__nearby">
+        <HomeNearYou model={nearby} onOpenLiveMap={onOpenLiveMap} />
+      </div>
+    </div>
+  );
+}
+
+export function ChatSuggestions({
   suggestions,
+  hidden = false,
   onSelectSuggestion,
 }: {
-  suggestions: readonly string[];
+  suggestions: readonly ChatSuggestion[];
+  hidden?: boolean;
   onSelectSuggestion: (query: string) => void;
 }) {
   const reduceMotion = useReducedMotion();
-  const hydrated = useHydrated();
-  const [titleComplete, setTitleComplete] = useState(false);
-  const [copyComplete, setCopyComplete] = useState(false);
+  const railRef = useRef<HTMLDivElement>(null);
+  const [scrolledFromStart, setScrolledFromStart] = useState(false);
 
-  // `useReducedMotion` can resolve differently during SSR and the first
-  // browser render. Gate its visual branch until hydration completes so the
-  // welcome screen preserves React's event handlers for the composer.
-  const animationsDisabled = hydrated && reduceMotion === true;
-  const titleVisible = animationsDisabled || titleComplete;
-  const cardsVisible = animationsDisabled || copyComplete;
+  function handleRailKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    const current = (event.target as HTMLElement).closest("button");
+    const buttons = Array.from(
+      railRef.current?.querySelectorAll<HTMLButtonElement>("button") ?? [],
+    );
+    const currentIndex = current ? buttons.indexOf(current as HTMLButtonElement) : -1;
+    if (currentIndex < 0) return;
+    const offset = event.key === "ArrowRight" ? 1 : -1;
+    const next = buttons[currentIndex + offset];
+    if (!next) return;
+    event.preventDefault();
+    next.focus();
+    next.scrollIntoView({
+      behavior: reduceMotion ? "auto" : "smooth",
+      block: "nearest",
+      inline: "nearest",
+    });
+  }
 
   return (
-    <div className="sr-chat-empty">
-      <span className="sr-only">
-        {WELCOME.title} {WELCOME.subtitle}
-      </span>
-
-      <h2
-        className="sr-chat-welcome-line sr-chat-welcome-line--title"
-        data-complete={titleVisible ? "true" : "false"}
-        aria-hidden="true"
-      >
-        {animationsDisabled ? (
-          WELCOME.title
-        ) : (
-          <Typewriter
-            options={{ delay: 38, cursor: "|", skipAddStyles: true }}
-            onInit={(typewriter) => {
-              typewriter
-                .pauseFor(140)
-                .typeString(WELCOME.title)
-                .callFunction(() => setTitleComplete(true))
-                .start();
-            }}
-          />
-        )}
-      </h2>
-
-      <div
-        className="sr-chat-welcome-line sr-chat-welcome-line--subtitle"
-        data-complete={cardsVisible ? "true" : "false"}
-        aria-hidden="true"
-      >
-        {animationsDisabled ? (
-          WELCOME.subtitle
-        ) : titleComplete ? (
-          <Typewriter
-            options={{ delay: 13, cursor: "|", skipAddStyles: true }}
-            onInit={(typewriter) => {
-              typewriter
-                .pauseFor(90)
-                .typeString(WELCOME.subtitle)
-                .pauseFor(90)
-                .callFunction(() => setCopyComplete(true))
-                .start();
-            }}
-          />
-        ) : null}
-      </div>
-
-      <motion.div
-        className="sr-chat-empty__suggestions"
-        data-visible={cardsVisible ? "true" : "false"}
-        variants={suggestionGroupVariants}
-        initial={animationsDisabled ? false : "hidden"}
-        animate={cardsVisible ? "visible" : "hidden"}
-      >
-        {suggestions.map((query) => (
-          <motion.div key={query} className="sr-chat-suggestion-motion" variants={suggestionVariants}>
-            <PromptSuggestion
-              variant="outline"
-              size="lg"
-              className="sr-chat-suggestion-pill"
-              onClick={() => onSelectSuggestion(query)}
-            >
-              {query}
-            </PromptSuggestion>
-          </motion.div>
-        ))}
-      </motion.div>
+    <div
+      ref={railRef}
+      className="sr-chat-empty__suggestions"
+      role="group"
+      aria-label="Trip suggestions"
+      aria-hidden={hidden || undefined}
+      inert={hidden || undefined}
+      data-hidden={hidden ? "true" : "false"}
+      data-scrolled={scrolledFromStart ? "true" : "false"}
+      onKeyDown={handleRailKeyDown}
+      onScroll={(event) => {
+        const isScrolled = event.currentTarget.scrollLeft > 4;
+        setScrolledFromStart((current) =>
+          current === isScrolled ? current : isScrolled,
+        );
+      }}
+    >
+      {suggestions.map((suggestion) => (
+        <AnimatedSuggestion
+          key={suggestion.query}
+          suggestion={suggestion}
+          reduceMotion={Boolean(reduceMotion)}
+          onSelect={onSelectSuggestion}
+        />
+      ))}
     </div>
+  );
+}
+
+function AnimatedSuggestion({
+  suggestion,
+  reduceMotion,
+  onSelect,
+}: {
+  suggestion: ChatSuggestion;
+  reduceMotion: boolean;
+  onSelect: (query: string) => void;
+}) {
+  const iconRef = useRef<AnimatedSuggestionIconHandle>(null);
+  const Icon = SUGGESTION_ICONS[suggestion.icon];
+
+  return (
+    <motion.div
+      className="sr-chat-suggestion-motion"
+      tabIndex={-1}
+      whileHover={reduceMotion ? undefined : { y: -1 }}
+      whileTap={reduceMotion ? undefined : { scale: 0.985 }}
+      onHoverStart={() => {
+        if (!reduceMotion) iconRef.current?.startAnimation();
+      }}
+      onHoverEnd={() => iconRef.current?.stopAnimation()}
+      transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+    >
+      <PromptSuggestion
+        variant="outline"
+        size="lg"
+        className="sr-chat-suggestion-pill"
+        aria-label={suggestion.query}
+        onClick={() => onSelect(suggestion.query)}
+      >
+        <Icon
+          ref={iconRef}
+          className={`sr-chat-suggestion-icon sr-chat-suggestion-icon--${suggestion.icon}`}
+          size={18}
+          aria-hidden="true"
+        />
+        <span>{suggestion.label}</span>
+      </PromptSuggestion>
+    </motion.div>
   );
 }

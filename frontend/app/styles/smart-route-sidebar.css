@@ -40,8 +40,8 @@
   --sr-sidebar-hover: rgba(10, 12, 13, 0.045);
   --sr-sidebar-active: rgba(10, 12, 13, 0.075);
   --sr-sidebar-focus: rgba(10, 12, 13, 0.2);
-  border-right-color: transparent;
-  box-shadow: 8px 0 20px rgba(15, 17, 19, 0.055);
+  border-right-color: var(--sr-sidebar-line);
+  box-shadow: none;
 }
 
 .sr-app-sidebar[data-collapsed="true"] {

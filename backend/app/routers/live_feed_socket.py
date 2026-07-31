@@ -12,6 +12,9 @@ from typing import Awaitable, Callable, Protocol
 from fastapi import WebSocket
 
 
+SERVICE_ALERT_REFRESH_INTERVAL_S = 60
+
+
 class LeaseRefresher(Protocol):
     async def refresh(self, lease: object) -> bool: ...
 
@@ -101,6 +104,20 @@ async def receive_bounded_json(
     return message
 
 
+async def wait_for_client_disconnect(
+    websocket: WebSocket,
+    timeout_seconds: float,
+) -> bool:
+    """Notice closed alert sockets while waiting for the next refresh."""
+    try:
+        await asyncio.wait_for(websocket.receive(), timeout=timeout_seconds)
+    except asyncio.TimeoutError:
+        return False
+    except RuntimeError:
+        return True
+    return True
+
+
 async def guard_lease(
     websocket: WebSocket,
     lease: object,
@@ -166,7 +183,11 @@ async def stream_service_alerts(
                 if not await deps.send(websocket, message):
                     print(f"[ws_service_alerts:{connection_id}] client closed before send")
                     return
-                await asyncio.sleep(60)
+                if await wait_for_client_disconnect(
+                    websocket,
+                    SERVICE_ALERT_REFRESH_INTERVAL_S,
+                ):
+                    return
             except Exception as exc:
                 if isinstance(exc, deps.disconnect_error):
                     return

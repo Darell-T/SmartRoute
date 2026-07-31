@@ -7,6 +7,7 @@ import type {
   LiveArrival,
   LiveFeedIncident,
   LiveFeedResponse,
+  NearbyTransitIssue,
   LiveSystemSignals,
   LiveVehicle,
   NearestStop,
@@ -21,6 +22,7 @@ interface LiveFeedState {
   vehicles: LiveVehicle[];
   signals: LiveSystemSignals | null;
   incidents: LiveFeedIncident[];
+  nearbyIssues: NearbyTransitIssue[];
   updatedAt: number | null;
   isLoading: boolean;
   degraded: boolean;
@@ -31,7 +33,7 @@ interface LiveFeedState {
 
 const INITIAL: LiveFeedState = {
   nearestStop: null, stops: [], arrivals: [], alerts: [], vehicles: [], signals: null,
-  incidents: [], updatedAt: null, isLoading: false, degraded: false, debug: null,
+  incidents: [], nearbyIssues: [], updatedAt: null, isLoading: false, degraded: false, debug: null,
   error: null, nowMs: 0,
 };
 
@@ -51,6 +53,7 @@ function applySocketMessage(raw: string, setState: React.Dispatch<React.SetState
         nearestStop: data.nearest_stop ?? null,
         stops: data.stops ?? [], arrivals: data.arrivals ?? [], alerts: data.alerts ?? [],
         vehicles: data.vehicles ?? [], signals: data.signals ?? null, incidents: data.incidents ?? [],
+        nearbyIssues: data.nearby_issues ?? [],
         updatedAt: data.updated_at ?? Math.floor(Date.now() / 1000), degraded: Boolean(data.degraded),
         debug: data.debug ?? null, isLoading: false, error: null,
       }, Date.now()));
