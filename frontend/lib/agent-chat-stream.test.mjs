@@ -166,6 +166,59 @@ test("parses a route_card event with the full nested payload", async () => {
   assert.deepEqual(events, [{ type: "route_card", ...payload }]);
 });
 
+test("accepts a production-length MTA alert description on a route card", async () => {
+  const description = `${"Service change details. ".repeat(200)}Structural maintenance`;
+  const payload = {
+    card_id: "rc_alert",
+    turn_id: "t1",
+    role: "recommended",
+    origin: { label: "Home", lat: 40.7, lng: -73.9 },
+    destination: { label: "Coney Island", lat: 40.58, lng: -73.98 },
+    summary: { eta_minutes: 64, transfers: 0, lines: ["D"], reason: "Less walking" },
+    route: [{ type: "SUBWAY", route_id: "D" }],
+    alerts: [{
+      alert_id: "lmm:planned_work:32986",
+      header: "D trains are running with service changes",
+      description,
+      route_ids: ["D"],
+      stop_ids: ["D17"],
+    }],
+  };
+
+  const events = await collect(readerFromChunks([
+    `event: route_card\ndata: ${JSON.stringify(payload)}\n\n`,
+  ]));
+
+  assert.equal(events.length, 1);
+  assert.equal(events[0].type, "route_card");
+  assert.equal(events[0].alerts[0].description, description);
+});
+
+test("parses a deadline error before its terminal done event", async () => {
+  const chunk =
+    'event: error\ndata: {"code":"deadline","message":"The response took too long. Please try again.","retryable":true}\n\n' +
+    'event: done\ndata: {"session_id":"s1","turn_id":"t1","stop_reason":"deadline","terminal_state":"failed","usage":{}}\n\n';
+
+  const events = await collect(readerFromChunks([chunk]));
+
+  assert.deepEqual(events, [
+    {
+      type: "error",
+      code: "deadline",
+      message: "The response took too long. Please try again.",
+      retryable: true,
+    },
+    {
+      type: "done",
+      session_id: "s1",
+      turn_id: "t1",
+      stop_reason: "deadline",
+      terminal_state: "failed",
+      usage: {},
+    },
+  ]);
+});
+
 test("round-trips every production route and canonical itinerary field without dropping facts", async () => {
   const firstLeg = {
     mode: "SUBWAY", service_id: "Q", board: { name: "Canal St" }, alight: { label: "Pickup" }, stop_count: 3,
@@ -174,7 +227,7 @@ test("round-trips every production route and canonical itinerary field without d
     ride_seconds: 540, transfer_seconds: 0, geometry: { encodedPolyline: "abc" }, service_data_basis: "mixed", segment_index: 0,
   };
   const secondLeg = {
-    mode: "WALK", service_id: null, board: { name: "Pickup" }, alight: { label: "Work" }, stop_count: 0,
+    mode: "WALK", service_id: null, board: { name: "Pickup" }, alight: { label: "Work" }, stop_count: null,
     stops: [{ name: "Pickup", lat: 40.75, lng: -73.95 }, { name: "Work", lat: 40.8, lng: -73.8 }],
     departure_at: "2026-07-25T14:15:00Z", arrival_at: "2026-07-25T14:20:00Z", walk_seconds: 300, wait_seconds: 0,
     ride_seconds: 0, transfer_seconds: 0, geometry: { encodedPolyline: "def" }, service_data_basis: "mixed", segment_index: 1,
@@ -185,7 +238,7 @@ test("round-trips every production route and canonical itinerary field without d
     summary: { eta_minutes: 20, transfers: 0, lines: ["Q"], reason: "fast", first_leg_arrival: { route_id: "Q", stop_name: "Canal", source_status: "live", walking_minutes: 2, catchable_arrival_minutes: 5, arrival_minutes: [5] } },
     route: [{ type: "SUBWAY", start_point: { latitude: 40.7, longitude: -73.9 }, end_point: { latitude: 40.8, longitude: -73.8 }, polyline: { encodedPolyline: "abc" }, train_line: "Q", line_color: "FCCC0A", direction: "North", departure_stop: "Canal", arrival_stop: "Atlantic", departure_coords: { latitude: 40.7, longitude: -73.9 }, arrival_coords: { latitude: 40.8, longitude: -73.8 }, minutes_until_train_arrives: 3, minutes_until_arrival: 20, route_total_minutes: 20, route_total_seconds: 1200, duration_minutes: 18, distance_meters: 4200, stop_count: 3, route_id: "Q", intermediate_stops: ["Canal", "Atlantic"], intermediate_stop_locations: [{ name: "Canal", lat: 40.72, lng: -74 }], segment_index: 0, departure_time_iso: "2026-07-25T14:00:00Z", arrival_time_iso: "2026-07-25T14:20:00Z" }],
     alerts: [{ header: "Service change", description: "Use the next train", routeIds: ["Q"], route_ids: ["Q"] }],
-    itinerary: { itinerary_id: "itin", origin: { display_name: "Home", lat: 40.7, lng: -73.9 }, waypoints: [{ display_name: "Pickup", lat: 40.75, lng: -73.95, dwell_minutes: 5, dwell_source: "user" }], destination: { display_name: "Work", lat: 40.8, lng: -73.8 }, timezone: "America/New_York", planning_mode: "leave_now", requested_departure: null, requested_arrival: null, generated_at: "2026-07-25T14:00:00Z", data_basis: "mixed", data_freshness: "2026-07-25T14:00:00Z", departure_at: "2026-07-25T14:00:00Z", arrival_at: "2026-07-25T14:20:00Z", total_duration_seconds: 1500, total_walk_seconds: 300, total_wait_seconds: 60, total_in_vehicle_seconds: 540, total_dwell_seconds: 300, transfer_count: 0, legs: [firstLeg, secondLeg], segments: [{ segment_index: 0, origin: { display_name: "Home", lat: 40.7, lng: -73.9 }, destination: { display_name: "Pickup", lat: 40.75, lng: -73.95 }, legs: [firstLeg], duration_seconds: 600 }, { segment_index: 1, origin: { display_name: "Pickup", lat: 40.75, lng: -73.95 }, destination: { display_name: "Work", lat: 40.8, lng: -73.8 }, legs: [secondLeg], duration_seconds: 600 }], dwell_events: [{ event_type: "dwell", after_segment_index: 0, waypoint: { display_name: "Pickup", lat: 40.75, lng: -73.95, dwell_minutes: 5, dwell_source: "user" }, duration_seconds: 300, source: "user" }], structured_recommendation_reasons: [{ code: "fastest", difference_seconds: 120 }], selection_decision: { selected_candidate_index: 0, selected_candidate_id: "candidate", base_score: 20, final_score: 20, hard_constraints_satisfied: ["transit"], penalties: [{ source: "transfers", amount: 0, reason: "none" }], selection_reason: "lowest_final_score", evidence_ids: ["mta:1"] } },
+    itinerary: { itinerary_id: "itin", origin: { display_name: "Home", lat: 40.7, lng: -73.9 }, waypoints: [{ display_name: "Pickup", lat: 40.75, lng: -73.95, dwell_minutes: 5, dwell_source: "user" }], destination: { display_name: "Work", lat: 40.8, lng: -73.8 }, timezone: "America/New_York", planning_mode: "leave_now", requested_departure: null, requested_arrival: null, generated_at: "2026-07-25T14:00:00Z", data_basis: "mixed", data_freshness: "2026-07-25T14:00:00Z", departure_at: "2026-07-25T14:00:00Z", arrival_at: "2026-07-25T14:20:00Z", total_duration_seconds: 1500, total_walk_seconds: 300, total_wait_seconds: 60, total_in_vehicle_seconds: 540, total_dwell_seconds: 300, transfer_count: 0, legs: [firstLeg, secondLeg], segments: [{ segment_index: 0, origin: { display_name: "Home", lat: 40.7, lng: -73.9 }, destination: { display_name: "Pickup", lat: 40.75, lng: -73.95 }, legs: [firstLeg], duration_seconds: 600 }, { segment_index: 1, origin: { display_name: "Pickup", lat: 40.75, lng: -73.95 }, destination: { display_name: "Work", lat: 40.8, lng: -73.8 }, legs: [secondLeg], duration_seconds: 600 }], dwell_events: [{ event_type: "dwell", after_segment_index: 0, waypoint: { display_name: "Pickup", lat: 40.75, lng: -73.95, dwell_minutes: 5, dwell_source: "user" }, duration_seconds: 300, source: "user" }], structured_recommendation_reasons: [{ code: "fastest", difference_seconds: 120 }, { code: "lower_event_crowd_exposure", event_count: 2, provider_status: "available" }], selection_decision: { selected_candidate_index: 0, selected_candidate_id: "candidate", base_score: 20, final_score: 20, hard_constraints_satisfied: ["transit"], penalties: [{ source: "transfers", amount: 0, reason: "none" }], selection_reason: "lowest_final_score", evidence_ids: ["mta:1"] } },
     selection_decision: { selected_candidate_index: 0, selected_candidate_id: "candidate", base_score: 20, final_score: 20, hard_constraints_satisfied: ["transit"], penalties: [{ source: "transfers", amount: 0, reason: "none" }], selection_reason: "lowest_final_score", evidence_ids: ["mta:1"] },
   };
   const events = await collect(readerFromChunks([`event: route_card\ndata: ${JSON.stringify(payload)}\n\n`]));
@@ -364,6 +417,7 @@ test("mutation corpus rejects each malformed nested family without losing a late
     { ...routeCard, route: [{ ...routeCard.route[0], distance_meters: 1_000_001 }] },
     { ...routeCard, route: [{ ...routeCard.route[0], intermediate_stop_locations: [{ name: "", lat: 40.7, lng: -73.9 }] }] },
     { ...routeCard, alerts: [{ header: "" }] },
+    { ...routeCard, alerts: [{ header: "Service change", description: "x".repeat(16_385) }] },
     { ...routeCard, itinerary: "malformed" },
     { ...routeCard, itinerary: { ...routeCard.itinerary, legs: [{ mode: "", ride_seconds: 2 }] } },
     { ...routeCard, selection_decision: null },

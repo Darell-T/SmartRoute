@@ -207,6 +207,11 @@ export type RecommendationReason =
     }
   | {
       code: "avoids_active_disruption";
+    }
+  | {
+      code: "lower_event_crowd_exposure";
+      event_count: number;
+      provider_status: string;
     };
 
 /** A single transit step, additively extended with the absolute departure /
@@ -308,6 +313,7 @@ export type AgentErrorCode =
   | "invalid_request"
   | "provider_configuration"
   | "upstream_error"
+  | "deadline"
   | "internal";
 
 export interface ErrorEvent {

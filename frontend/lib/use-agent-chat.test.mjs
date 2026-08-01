@@ -213,6 +213,33 @@ test("a mid-stream error event sets both the turn error and the top-level error,
   assert.equal(state.messages[1].stopReason, "error");
 });
 
+test("a deadline error remains visible after the terminal done event", () => {
+  let state = applyAgentEvent(initialState(), { type: "turn_started", text: "Can I get the directions?" });
+  state = applyAgentEvent(state, { type: "meta", session_id: "s1", turn_id: "t1" });
+  state = applyAgentEvent(state, {
+    type: "error",
+    code: "deadline",
+    message: "The response took too long. Please try again.",
+    retryable: true,
+  });
+  state = applyAgentEvent(state, {
+    type: "done",
+    session_id: "s1",
+    turn_id: "t1",
+    stop_reason: "deadline",
+    terminal_state: "failed",
+    usage: {},
+  });
+
+  assert.equal(state.isStreaming, false);
+  assert.equal(state.messages[1].stopReason, "deadline");
+  assert.deepEqual(state.messages[1].error, {
+    code: "deadline",
+    message: "The response took too long. Please try again.",
+    retryable: true,
+  });
+});
+
 test("stream_cancelled finalizes the turn as cancelled without setting a top-level error", () => {
   let state = applyAgentEvent(initialState(), { type: "turn_started", text: "hi" });
   state = applyAgentEvent(state, { type: "stream_cancelled" });

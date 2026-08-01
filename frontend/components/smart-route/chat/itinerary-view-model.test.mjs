@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildItineraryViewModel, condensePreviewEvents, formatClockTime, formatDurationMinutes, isSupportedSubwayRoute, parseRationale, PREVIEW_EVENT_MAX, shouldCollapseEvents, transferLabel } from "./itinerary-view-model.ts";
+import { buildItineraryViewModel, condensePreviewEvents, formatClockTime, formatDurationMinutes, formatStructuredRecommendationReason, isSupportedSubwayRoute, parseRationale, PREVIEW_EVENT_MAX, shouldCollapseEvents, transferLabel } from "./itinerary-view-model.ts";
 
 const card = {
   card_id: "rc_1", turn_id: "t1", role: "recommended",
@@ -143,4 +143,15 @@ test("multi-stop canonical itinerary preserves places, segments, dwell source, a
 test("unknown structured recommendation reason is ignored", () => {
   const model = buildItineraryViewModel({ ...card, itinerary: { ...card.itinerary, structured_recommendation_reasons: [{ code: "unknown" }] } });
   assert.deepEqual(model.rationale, []);
+});
+
+test("event crowd exposure reason stays concise and rider-facing", () => {
+  assert.equal(
+    formatStructuredRecommendationReason({
+      code: "lower_event_crowd_exposure",
+      event_count: 2,
+      provider_status: "available",
+    }),
+    "Lower exposure to nearby event crowds",
+  );
 });
