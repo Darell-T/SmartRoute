@@ -184,5 +184,58 @@ class CoordinateFallbackTests(unittest.TestCase):
         )
 
 
+class IntermediateStopCacheTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.module = _load_gtfs_module()
+
+    class PatternIndex:
+        def __init__(self, marker="cached"):
+            self.marker = marker
+            self.calls = 0
+
+        def get_intermediate_stops_with_coords(self, *_args):
+            self.calls += 1
+            return ([{"name": self.marker, "lat": 40.7, "lng": -73.9}], {
+                "hit": True,
+                "patterns_considered": 1,
+            })
+
+    def test_cache_is_bounded_and_repeated_lookups_hit(self):
+        gtfs = self.module.GTFSStaticData()
+        index = self.PatternIndex()
+        gtfs.set_pattern_index(index)
+
+        for item in range(self.module.INTERMEDIATE_STOPS_CACHE_MAXSIZE + 40):
+            gtfs.get_intermediate_stops_with_coords(
+                "Q", f"Origin {item}", f"Destination {item}"
+            )
+
+        info = gtfs.intermediate_stops_cache_info()
+        self.assertEqual(info.currsize, self.module.INTERMEDIATE_STOPS_CACHE_MAXSIZE)
+        calls_before = index.calls
+        gtfs.get_intermediate_stops_with_coords(
+            "Q", "Origin 551", "Destination 551"
+        )
+        self.assertEqual(index.calls, calls_before)
+        self.assertGreater(gtfs.intermediate_stops_cache_info().hits, 0)
+
+    def test_pattern_reload_clears_cached_values(self):
+        gtfs = self.module.GTFSStaticData()
+        gtfs.set_pattern_index(self.PatternIndex("before"))
+        self.assertEqual(
+            gtfs.get_intermediate_stops_with_coords("Q", "A", "B")[0]["name"],
+            "before",
+        )
+        self.assertEqual(gtfs.intermediate_stops_cache_info().currsize, 1)
+
+        gtfs.set_pattern_index(self.PatternIndex("after"))
+        self.assertEqual(gtfs.intermediate_stops_cache_info().currsize, 0)
+        self.assertEqual(
+            gtfs.get_intermediate_stops_with_coords("Q", "A", "B")[0]["name"],
+            "after",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

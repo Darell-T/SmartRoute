@@ -185,36 +185,37 @@ class LiveFeedApiTests(unittest.IsolatedAsyncioTestCase):
             await self.live_feed.live_feed_socket(socket)
         self.assertEqual(socket.codes, [1013])
 
-    async def test_lease_guard_refresh_failure_closes_idle_socket(self):
-        class Socket:
-            def __init__(self):
-                self.codes = []
-
-            async def close(self, code):
-                self.codes.append(code)
-
-        socket = Socket()
+    async def test_lease_guard_refresh_failure_marks_owner_for_single_close(self):
         lease = self.live_feed.admission.AdmissionLease("v1.test-principal-opaque-123456", "ws", "lease")
         owner = asyncio.create_task(asyncio.sleep(60))
+        lease_failed = asyncio.Event()
         with patch.object(self.live_feed, "LEASE_GUARD_INTERVAL_S", 0), patch.object(
             self.live_feed.admission, "refresh", AsyncMock(return_value=False)
         ):
-            await self.live_feed._guard_socket_lease(socket, lease, asyncio.Event(), owner)
+            await self.live_feed._guard_socket_lease(
+                lease,
+                asyncio.Event(),
+                lease_failed,
+                owner,
+            )
         self.assertTrue(owner.cancelled() or owner.cancelling())
-        self.assertEqual(socket.codes, [1013])
+        self.assertTrue(lease_failed.is_set())
 
-    async def test_lease_guard_cancels_owner_when_close_raises(self):
-        class Socket:
-            async def close(self, code):
-                raise RuntimeError("already closing")
-
+    async def test_lease_guard_does_not_own_socket_close(self):
         owner = asyncio.create_task(asyncio.sleep(60))
         lease = self.live_feed.admission.AdmissionLease("v1.test-principal-opaque-123456", "ws", "lease")
+        lease_failed = asyncio.Event()
         with patch.object(self.live_feed, "LEASE_GUARD_INTERVAL_S", 0), patch.object(
             self.live_feed.admission, "refresh", AsyncMock(return_value=False)
         ):
-            await self.live_feed._guard_socket_lease(Socket(), lease, asyncio.Event(), owner)
+            await self.live_feed._guard_socket_lease(
+                lease,
+                asyncio.Event(),
+                lease_failed,
+                owner,
+            )
         self.assertTrue(owner.cancelled() or owner.cancelling())
+        self.assertTrue(lease_failed.is_set())
 
     async def test_service_alerts_releases_once_when_guard_close_fails(self):
         class Socket:
@@ -442,8 +443,8 @@ class LiveFeedApiTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_vehicles_unhandled_errors_return_503_redacted_json(self):
         with patch.object(
-            self.live_feed.mta_feed,
-            "get_all_subway_vehicle_positions",
+            self.live_feed.network_snapshot_store,
+            "get_or_refresh",
             AsyncMock(side_effect=RuntimeError("provider secret details")),
         ):
             response = await self.live_feed.vehicles()
