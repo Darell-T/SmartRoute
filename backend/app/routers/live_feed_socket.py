@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Protocol
 
-from fastapi import WebSocket
+from fastapi import WebSocket, WebSocketDisconnect
 
 
 SERVICE_ALERT_REFRESH_INTERVAL_S = 60
@@ -28,7 +28,10 @@ class LiveFeedSocketDependencies:
     acquire: Callable[[str, str], Awaitable[object]]
     release: Callable[[object], Awaitable[None]]
     verify: Callable[[str, str], Awaitable[tuple[str | None, bool]]]
-    guard: Callable[[WebSocket, object, asyncio.Event, asyncio.Task], Awaitable[None]]
+    guard: Callable[
+        [object, asyncio.Event, asyncio.Event, asyncio.Task],
+        Awaitable[None],
+    ]
     receive: Callable[[WebSocket], Awaitable[dict]]
     send: Callable[[WebSocket, dict], Awaitable[bool]]
     refresh_event: Callable[[], asyncio.Event]
@@ -53,12 +56,33 @@ async def send_json_safe(
         return False
 
 
+async def close_socket_safe(
+    websocket: WebSocket,
+    code: int,
+    disconnect_error: type[Exception],
+) -> None:
+    try:
+        await websocket.close(code=code)
+    except (disconnect_error, RuntimeError):
+        pass
+
+
+async def cancel_and_await(*tasks: asyncio.Task | None) -> None:
+    pending = [task for task in tasks if task is not None and not task.done()]
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+
+
 async def receive_bounded_json(
     websocket: WebSocket,
     max_bytes: int,
     max_route_ids: int,
 ) -> dict:
     frame = await websocket.receive()
+    if frame.get("type") == "websocket.disconnect":
+        raise WebSocketDisconnect(code=int(frame.get("code") or 1000))
     raw = frame.get("text") if isinstance(frame.get("text"), str) else frame.get("bytes")
     if not isinstance(raw, (str, bytes)):
         raise ValueError("missing websocket payload")
@@ -119,14 +143,13 @@ async def wait_for_client_disconnect(
 
 
 async def guard_lease(
-    websocket: WebSocket,
     lease: object,
     stopped: asyncio.Event,
+    lease_failed: asyncio.Event,
     owner: asyncio.Task,
     *,
     admission: LeaseRefresher,
     interval_seconds: float,
-    disconnect_error: type[Exception],
 ) -> None:
     while not stopped.is_set():
         try:
@@ -135,12 +158,8 @@ async def guard_lease(
         except asyncio.TimeoutError:
             pass
         if not await admission.refresh(lease):
-            try:
-                await websocket.close(code=1013)
-            except (disconnect_error, RuntimeError):
-                pass
-            finally:
-                owner.cancel()
+            lease_failed.set()
+            owner.cancel()
             return
 
 
@@ -154,7 +173,10 @@ async def stream_service_alerts(
         return
     await websocket.accept()
     stopped = asyncio.Event()
-    guard = asyncio.create_task(deps.guard(websocket, lease, stopped, asyncio.current_task()))
+    lease_failed = asyncio.Event()
+    guard = asyncio.create_task(
+        deps.guard(lease, stopped, lease_failed, asyncio.current_task())
+    )
     previous: dict[str, str] = {}
     sent_snapshot = False
     deps.vlog(f"[ws_service_alerts:{connection_id}] accepted")
@@ -208,11 +230,9 @@ async def stream_service_alerts(
         return
     finally:
         stopped.set()
-        guard.cancel()
-        try:
-            await guard
-        except asyncio.CancelledError:
-            pass
+        await cancel_and_await(guard)
+        if lease_failed.is_set():
+            await close_socket_safe(websocket, 1013, deps.disconnect_error)
         await deps.release(lease)
 
 
@@ -226,14 +246,12 @@ async def stream_live_feed(
         return
     await websocket.accept()
     deps.vlog(f"[ws_live_feed:{connection_id}] accepted")
-    gtfs = getattr(websocket.app.state, "gtfs", None)
-    if gtfs is None:
-        await deps.send(websocket, {"type": "error", "message": "GTFS not ready"})
-        await websocket.close(code=1011)
-        await deps.release(lease)
-        return
     stopped = asyncio.Event()
-    guard = asyncio.create_task(deps.guard(websocket, lease, stopped, asyncio.current_task()))
+    lease_failed = asyncio.Event()
+    guard = asyncio.create_task(
+        deps.guard(lease, stopped, lease_failed, asyncio.current_task())
+    )
+    close_code: int | None = None
     location = None
     selected_route_ids: set[str] = set()
     last_sent = 0.0
@@ -243,12 +261,17 @@ async def stream_live_feed(
         await deps.send(websocket, {"type": "snapshot", "data": partial})
 
     try:
+        gtfs = getattr(websocket.app.state, "gtfs", None)
+        if gtfs is None:
+            await deps.send(websocket, {"type": "error", "message": "GTFS not ready"})
+            close_code = 1011
+            return
         while True:
             if location is None:
                 try:
                     message = await deps.receive(websocket)
                 except ValueError:
-                    await websocket.close(code=1008)
+                    close_code = 1008
                     return
             else:
                 if recv_task is None:
@@ -260,14 +283,14 @@ async def stream_live_feed(
                     return_when=asyncio.FIRST_COMPLETED,
                 )
                 if not refresh_task.done():
-                    refresh_task.cancel()
+                    await cancel_and_await(refresh_task)
                 message = None
                 if recv_task in done:
                     finished, recv_task = recv_task, None
                     try:
                         message = finished.result()
                     except ValueError:
-                        await websocket.close(code=1008)
+                        close_code = 1008
                         return
                     except Exception:
                         return
@@ -342,14 +365,12 @@ async def stream_live_feed(
     except asyncio.CancelledError:
         return
     finally:
-        if recv_task is not None and not recv_task.done():
-            recv_task.cancel()
         stopped.set()
-        guard.cancel()
-        try:
-            await guard
-        except asyncio.CancelledError:
-            pass
+        await cancel_and_await(recv_task, guard)
+        if lease_failed.is_set():
+            close_code = 1013
+        if close_code is not None:
+            await close_socket_safe(websocket, close_code, deps.disconnect_error)
         await deps.release(lease)
 
 
@@ -362,10 +383,18 @@ async def _admit_socket(
         websocket.url.path,
     )
     if principal is None:
-        await websocket.close(code=1013 if unavailable else 1008)
+        await close_socket_safe(
+            websocket,
+            1013 if unavailable else 1008,
+            deps.disconnect_error,
+        )
         return None
     try:
         return await deps.acquire(principal, "ws")
     except deps.admission_denied as exc:
-        await websocket.close(code=1013 if exc.status_code == 503 else 1008)
+        await close_socket_safe(
+            websocket,
+            1013 if exc.status_code == 503 else 1008,
+            deps.disconnect_error,
+        )
         return None

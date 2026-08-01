@@ -63,8 +63,3 @@ from app.services.mta.subway import (
     parse_vehicle_positions,
 )
 
-
-# warm_realtime_caches moved to app.services.mta.warm; re-exported here so the
-# legacy ``mta_feed.warm_realtime_caches`` path keeps working.
-from app.services.mta.warm import warm_realtime_caches
-

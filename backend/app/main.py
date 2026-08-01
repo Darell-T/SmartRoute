@@ -29,7 +29,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security.api_key import APIKeyHeader
 from app.routers import trips, live_feed, subway, agent_chat
-from app.services.mta.warm import warm_realtime_caches
+from app.services.live_feed.network_snapshot import network_snapshot_store
 from app.services.ny511 import NY511Poller, NY511Settings
 from app.services.incident_monitor import configure_snapshot_store
 from app.utils.gtfs_static import GTFSStaticData, close_pool, init_pool
@@ -74,17 +74,13 @@ async def _gtfs_refresh_loop():
 
 
 async def _realtime_warm_loop():
-    # Keep the MTA realtime caches warm so the live feed, hub, and alerts are
-    # served from cache (Transit-app style) instead of each fresh connection
-    # paying the full upstream fetch fan-out. First pass runs immediately.
+    # One process owner fetches and parses network-wide realtime data. Sockets
+    # only filter the latest completed generation for their rider location.
     while True:
         try:
-            await warm_realtime_caches()
+            await network_snapshot_store.refresh()
         except Exception as exc:
-            print(f"[warm] realtime cache warm failed: {exc!r}")
-        # Wake every connected live-feed socket so it pushes the freshly warmed
-        # data immediately -- event-driven realtime push, not a per-client timer.
-        live_feed.signal_realtime_refresh()
+            print(f"[live_feed] network snapshot refresh failed: {type(exc).__name__}")
         await asyncio.sleep(REALTIME_WARM_INTERVAL_S)
 
 
@@ -108,7 +104,7 @@ async def lifespan(app: FastAPI):
     # degrades to empty stop lists rather than touching the remote DB.
     try:
         from app.utils.stop_patterns import StopPatternIndex
-        gtfs._pattern_index = StopPatternIndex.load()
+        gtfs.set_pattern_index(StopPatternIndex.load())
         print(
             f"[startup] stop-pattern index loaded: {len(gtfs._pattern_index.patterns)} "
             f"patterns, {len(gtfs._pattern_index.stops)} stops"
@@ -148,6 +144,7 @@ async def lifespan(app: FastAPI):
             await task
         except asyncio.CancelledError:
             pass
+    await network_snapshot_store.close()
     if ny511_poller:
         await ny511_poller.stop()
     configure_snapshot_store(None)

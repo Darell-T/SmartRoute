@@ -8,6 +8,10 @@ import psycopg2.pool
 from psycopg2.extras import RealDictCursor
 
 from app.utils.stop_patterns import normalize_station_name
+from app.utils.gtfs_intermediate_cache import (
+    BoundedIntermediateStopsCache,
+    INTERMEDIATE_STOPS_CACHE_MAXSIZE,
+)
 
 # DATABASE_URL points at a remote Postgres; without a connect timeout and TCP
 # keepalives a dead peer leaves connections blocked indefinitely.
@@ -25,41 +29,6 @@ _CONNECT_KWARGS = {
 
 _pool = None
 _pool_lock = threading.Lock()
-
-
-# MTA GTFS and the routing provider abbreviate station names but not always
-# identically ("Church Av" vs "Church Avenue", case, punctuation). The
-# name -> stop_id lookup normalizes through this map (applied to both sides) so
-# the fast primary match resolves instead of falling through to the slow
-# coordinate snap.
-_STATION_TOKEN_MAP = {
-    "av": "avenue",
-    "ave": "avenue",
-    "blvd": "boulevard",
-    "ctr": "center",
-    "ft": "fort",
-    "hts": "heights",
-    "hwy": "highway",
-    "pkwy": "parkway",
-    "pl": "place",
-    "plz": "plaza",
-    "rd": "road",
-    "sq": "square",
-    "st": "street",
-}
-
-
-def _normalize_station_name(value) -> str:
-    if not isinstance(value, str):
-        return ""
-    text = value.casefold()
-    for ch in "&,-/.":
-        text = text.replace(ch, " ")
-    return " ".join(
-        _STATION_TOKEN_MAP.get(token, token)
-        for token in text.split()
-        if token
-    )
 
 
 def init_pool():
@@ -89,6 +58,22 @@ def _get_pool():
 
 
 class GTFSStaticData:
+
+    def set_pattern_index(self, pattern_index) -> None:
+        self.__dict__["_pattern_index"] = pattern_index
+        cache = self.__dict__.get("_intermediate_stops_cache_instance")
+        if cache is not None:
+            cache.clear()
+
+    def intermediate_stops_cache_info(self):
+        return self._intermediate_stops_cache().info()
+
+    def _intermediate_stops_cache(self):
+        cache = self.__dict__.get("_intermediate_stops_cache_instance")
+        if cache is None:
+            cache = BoundedIntermediateStopsCache(self)
+            self.__dict__["_intermediate_stops_cache_instance"] = cache
+        return cache
 
     def load_scheduled_arrivals(self, path: str | Path | None = None) -> bool:
         """Load the optional preprocessed full-GTFS schedule once at startup."""
@@ -174,7 +159,7 @@ class GTFSStaticData:
             except Exception:
                 rows = []
             for r in rows:
-                key = _normalize_station_name(r.get("stop_name"))
+                key = normalize_station_name(r.get("stop_name"))
                 if key:
                     idx.setdefault(key, set()).add(r["stop_id"].rstrip("NS"))
             # Only memoize a populated index; a transient load failure should be
@@ -186,7 +171,7 @@ class GTFSStaticData:
     def _ids_for_name(self, name: str) -> set:
         idx = self._name_index()
         if idx:
-            return set(idx.get(_normalize_station_name(name), set()))
+            return set(idx.get(normalize_station_name(name), set()))
         # Index could not load (DB hiccup): fall back to a direct exact match.
         rows = self._query("SELECT stop_id FROM stops WHERE stop_name = %s", (name,))
         return {r["stop_id"].rstrip("NS") for r in rows}
@@ -312,54 +297,15 @@ class GTFSStaticData:
         Fix B: resolved entirely from the in-memory static stop-pattern index
         (_pattern_index, loaded once at startup) -- NO remote-DB query on the
         trip hot path. The legacy DB path remains only as an explicit debug
-        fallback (see _db_fallback_enabled). Results are memoized per instance."""
-        cache = self.__dict__.setdefault("_intermediate_stops_cache", {})
-        cache_key = (route_id, origin, dest)
-        if cache_key in cache:
-            self.__dict__["_cache_hits"] = self.__dict__.get("_cache_hits", 0) + 1
-            return cache[cache_key]
-        self.__dict__["_cache_misses"] = self.__dict__.get("_cache_misses", 0) + 1
-
-        idx = self.__dict__.get("_pattern_index")
-        if idx is not None:
-            rows, meta = idx.get_intermediate_stops_with_coords(
-                route_id, origin, dest, origin_coords, dest_coords
-            )
-            counter = "_static_hits" if meta["hit"] else "_static_misses"
-            self.__dict__[counter] = self.__dict__.get(counter, 0) + 1
-            # A static MISS means a station name didn't resolve -> unlabeled
-            # dots, worth surfacing. A hit is the normal path (silent).
-            if not meta["hit"]:
-                print(
-                    f"[gtfs] static MISS route={route_id} origin={origin!r} dest={dest!r} "
-                    f"norm_origin={normalize_station_name(origin)!r} "
-                    f"norm_dest={normalize_station_name(dest)!r} "
-                    f"patterns={meta['patterns_considered']}"
-                )
-            cache[cache_key] = rows
-            return rows
-
-        # No static index loaded. Do NOT touch the remote DB on the hot path
-        # unless the debug fallback is explicitly enabled.
-        if not self._db_fallback_enabled():
-            print(
-                f"[gtfs] no static pattern index and DB fallback disabled; "
-                f"returning empty for route={route_id} {origin!r}->{dest!r}"
-            )
-            cache[cache_key] = []
-            return []
-        rows = self._find_trip_stop_rows(route_id, origin, dest)
-        if not rows and (origin_coords or dest_coords):
-            origin_ids = self._route_stop_ids_near(route_id, origin_coords) or self._ids_for_name(origin)
-            dest_ids = self._route_stop_ids_near(route_id, dest_coords) or self._ids_for_name(dest)
-            rows = self._trip_stops_between(route_id, origin_ids, dest_ids)
-        result = [
-            {"name": r["stop_name"], "lat": r["stop_lat"], "lng": r["stop_lon"]}
-            for r in rows
-            if r.get("stop_lat") is not None and r.get("stop_lon") is not None
-        ]
-        cache[cache_key] = result
-        return result
+        fallback (see _db_fallback_enabled). Results are memoized per instance
+        with an explicit bound."""
+        return self._intermediate_stops_cache().get(
+            route_id,
+            origin,
+            dest,
+            origin_coords,
+            dest_coords,
+        )
     
     def get_all_parent_stops(self):
         # location_type column is TEXT (raw GTFS value, "1" for parent stations).
