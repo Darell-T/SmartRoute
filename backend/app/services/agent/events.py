@@ -166,7 +166,7 @@ class ArrivalCardEvent:
 
 @dataclasses.dataclass(frozen=True)
 class ErrorEvent:
-    code: str  # rate_limited|budget_exceeded|session_expired|invalid_request|provider_configuration|upstream_error|internal
+    code: str  # rate_limited|budget_exceeded|session_expired|invalid_request|provider_configuration|upstream_error|deadline|internal
     message: str
     retryable: bool
     type: str = "error"

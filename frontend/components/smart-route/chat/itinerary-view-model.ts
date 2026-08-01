@@ -133,6 +133,9 @@ export function formatStructuredRecommendationReason(
   if (structured.code === "avoids_active_disruption") {
     return "Avoids active service alerts on another option";
   }
+  if (structured.code === "lower_event_crowd_exposure") {
+    return "Lower exposure to nearby event crowds";
+  }
   return null;
 }
 

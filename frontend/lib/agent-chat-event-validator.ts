@@ -25,6 +25,7 @@ type RecordValue = Record<string, unknown>;
 type Coordinate = { latitude: number; longitude: number };
 
 const MAX_TEXT = 300;
+const MAX_ALERT_DESCRIPTION = 16_384;
 const MAX_LIST = 256;
 const MAX_SECONDS = 86_400;
 
@@ -47,7 +48,7 @@ function arrivalResolutionStatus(value: unknown): value is ArrivalResolutionStat
 }
 
 function errorCode(value: unknown): value is AgentErrorCode {
-  return value === "rate_limited" || value === "budget_exceeded" || value === "session_expired" || value === "invalid_request" || value === "provider_configuration" || value === "upstream_error" || value === "internal";
+  return value === "rate_limited" || value === "budget_exceeded" || value === "session_expired" || value === "invalid_request" || value === "provider_configuration" || value === "upstream_error" || value === "deadline" || value === "internal";
 }
 
 function stopReason(value: unknown): value is AgentStopReason {
@@ -152,7 +153,7 @@ function routeStep(value: unknown): AgentRouteStep | null {
 }
 
 function alert(value: unknown): ServiceAlert | null {
-  if (!record(value) || !nonEmptyText(value.header) || !optional(value.description, text)
+  if (!record(value) || !nonEmptyText(value.header) || !optional(value.description, (item): item is string => text(item, MAX_ALERT_DESCRIPTION))
     || (value.routeIds !== undefined && !textList(value.routeIds, 64)) || (value.route_ids !== undefined && !textList(value.route_ids, 64))) return null;
   return { header: value.header, ...(typeof value.description === "string" ? { description: value.description } : {}), ...(Array.isArray(value.routeIds) ? { routeIds: value.routeIds } : {}), ...(Array.isArray(value.route_ids) ? { route_ids: value.route_ids } : {}) };
 }
@@ -189,9 +190,9 @@ function legGeometry(value: unknown): boolean {
 
 function itineraryLeg(value: unknown): CanonicalItineraryLeg | null {
   if (!record(value) || !nonEmptyText(value.mode) || !nullable(value.service_id, text) || !nullable(value.departure_at, text) || !nullable(value.arrival_at, text) || !optional(value.service_data_basis, text) || !legReference(value.board) || !legReference(value.alight) || !legGeometry(value.geometry)) return null;
-  const numeric = ["stop_count", "walk_seconds", "wait_seconds", "ride_seconds", "transfer_seconds", "segment_index"];
-  if (!numeric.every((field) => optional(value[field], (item): item is number => integer(item, 0, field === "segment_index" ? 64 : MAX_SECONDS))) || (value.stops !== undefined && (!Array.isArray(value.stops) || value.stops.length > MAX_LIST || !value.stops.every((stop) => record(stop) && nonEmptyText(stop.name) && optional(stop.lat, finite) && optional(stop.lng, finite))))) return null;
-  return { mode: value.mode, ...(typeof value.service_id === "string" || value.service_id === null ? { service_id: value.service_id } : {}), ...(value.board !== undefined ? { board: value.board } : {}), ...(value.alight !== undefined ? { alight: value.alight } : {}), ...(typeof value.departure_at === "string" || value.departure_at === null ? { departure_at: value.departure_at } : {}), ...(typeof value.arrival_at === "string" || value.arrival_at === null ? { arrival_at: value.arrival_at } : {}), ...(typeof value.service_data_basis === "string" ? { service_data_basis: value.service_data_basis } : {}), ...(finite(value.stop_count) ? { stop_count: value.stop_count } : {}), ...(finite(value.walk_seconds) ? { walk_seconds: value.walk_seconds } : {}), ...(finite(value.wait_seconds) ? { wait_seconds: value.wait_seconds } : {}), ...(finite(value.ride_seconds) ? { ride_seconds: value.ride_seconds } : {}), ...(finite(value.transfer_seconds) ? { transfer_seconds: value.transfer_seconds } : {}), ...(finite(value.segment_index) ? { segment_index: value.segment_index } : {}), ...(value.geometry !== undefined ? { geometry: value.geometry } : {}), ...(Array.isArray(value.stops) ? { stops: value.stops.map((stop): CanonicalItineraryStop => ({ name: stop.name, ...(finite(stop.lat) ? { lat: stop.lat } : {}), ...(finite(stop.lng) ? { lng: stop.lng } : {}) })) } : {}) };
+  const numeric = ["walk_seconds", "wait_seconds", "ride_seconds", "transfer_seconds", "segment_index"];
+  if (!nullable(value.stop_count, (item): item is number => integer(item, 0, MAX_LIST)) || !numeric.every((field) => optional(value[field], (item): item is number => integer(item, 0, field === "segment_index" ? 64 : MAX_SECONDS))) || (value.stops !== undefined && (!Array.isArray(value.stops) || value.stops.length > MAX_LIST || !value.stops.every((stop) => record(stop) && nonEmptyText(stop.name) && optional(stop.lat, finite) && optional(stop.lng, finite))))) return null;
+  return { mode: value.mode, ...(typeof value.service_id === "string" || value.service_id === null ? { service_id: value.service_id } : {}), ...(value.board !== undefined ? { board: value.board } : {}), ...(value.alight !== undefined ? { alight: value.alight } : {}), ...(typeof value.departure_at === "string" || value.departure_at === null ? { departure_at: value.departure_at } : {}), ...(typeof value.arrival_at === "string" || value.arrival_at === null ? { arrival_at: value.arrival_at } : {}), ...(typeof value.service_data_basis === "string" ? { service_data_basis: value.service_data_basis } : {}), ...(value.stop_count === null || finite(value.stop_count) ? { stop_count: value.stop_count } : {}), ...(finite(value.walk_seconds) ? { walk_seconds: value.walk_seconds } : {}), ...(finite(value.wait_seconds) ? { wait_seconds: value.wait_seconds } : {}), ...(finite(value.ride_seconds) ? { ride_seconds: value.ride_seconds } : {}), ...(finite(value.transfer_seconds) ? { transfer_seconds: value.transfer_seconds } : {}), ...(finite(value.segment_index) ? { segment_index: value.segment_index } : {}), ...(value.geometry !== undefined ? { geometry: value.geometry } : {}), ...(Array.isArray(value.stops) ? { stops: value.stops.map((stop): CanonicalItineraryStop => ({ name: stop.name, ...(finite(stop.lat) ? { lat: stop.lat } : {}), ...(finite(stop.lng) ? { lng: stop.lng } : {}) })) } : {}) };
 }
 
 function itinerary(value: unknown): CanonicalItinerary | null {
@@ -231,7 +232,7 @@ function dwellEvent(value: unknown): CanonicalDwellEvent | null {
 function recommendationReason(value: unknown): value is RecommendationReason | string {
   if (nonEmptyText(value)) return true;
   if (!record(value)) return false;
-  return (value.code === "fastest" && optional(value.difference_seconds, (item): item is number => integer(item, 0, MAX_SECONDS))) || (value.code === "fewer_transfers" && integer(value.transfer_difference, 0, 64)) || value.code === "avoids_active_disruption";
+  return (value.code === "fastest" && optional(value.difference_seconds, (item): item is number => integer(item, 0, MAX_SECONDS))) || (value.code === "fewer_transfers" && integer(value.transfer_difference, 0, 64)) || value.code === "avoids_active_disruption" || (value.code === "lower_event_crowd_exposure" && integer(value.event_count, 0, 64) && nonEmptyText(value.provider_status));
 }
 
 function prediction(value: unknown): ArrivalPrediction | null {
