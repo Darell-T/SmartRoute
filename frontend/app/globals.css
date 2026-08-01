@@ -304,8 +304,10 @@
   }
   @media (max-width: 767px) {
     body {
-      overflow: auto;
-      overscroll-behavior: contain;
+      height: 100%;
+      overflow: hidden;
+      overscroll-behavior: none;
+      padding-top: 0;
     }
   }
   /* Scrollbar — dashboard style */
@@ -2305,13 +2307,13 @@ body:has(.sr-app-shell) [data-nextjs-dev-tools-button] {
 
 @media (max-width: 720px) {
   body {
-    overflow: auto;
+    overflow: hidden;
   }
 
   .sr-app-shell {
-    height: auto;
-    min-height: 100vh;
-    overflow: visible;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
   }
 
   .sr-live-intel-rail {
@@ -2362,8 +2364,8 @@ body:has(.sr-app-shell) [data-nextjs-dev-tools-button] {
   }
 
   .sr-app-shell[data-active-tab="livemap"] {
-    height: 100dvh;
-    min-height: 100dvh;
+    height: 100%;
+    min-height: 0;
     overflow: hidden;
   }
 

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 import time
 
 from app.services import mta_feed
 from app.services.live_feed import nearby_issues, vehicle_enrichment
+from app.services.live_feed.network_snapshot import NetworkSnapshot
 from app.utils.geo import find_nearest_stops
 
 _LAST_EMPTY_VEHICLE_LOG = 0.0
@@ -197,7 +197,11 @@ def _build_live_signals(
 
 
 async def _build_live_snapshot(
-    gtfs, lat: float, lng: float, selected_route_ids: set[str] | None = None,
+    gtfs,
+    network: NetworkSnapshot,
+    lat: float,
+    lng: float,
+    selected_route_ids: set[str] | None = None,
     emit=None,
 ):
     global _LAST_EMPTY_VEHICLE_LOG
@@ -230,17 +234,7 @@ async def _build_live_snapshot(
         enriched_stops,
     )
 
-    feeds = await mta_feed.fetch_feeds(route_ids, "arrivals_nearest")
-
-    parse_tasks = [asyncio.to_thread(mta_feed.parse_bytes, feed) for feed in feeds]
-    parsed_lists = await asyncio.gather(*parse_tasks, return_exceptions=True)
-
-    trip_updates = []
-    for parsed in parsed_lists:
-        if isinstance(parsed, Exception):
-            print(f"[live_feed] parse_bytes failed: {parsed}")
-            continue
-        trip_updates.extend(parsed)
+    trip_updates = network.trip_updates
 
     now = int(time.time())
     arrivals = []
@@ -259,18 +253,7 @@ async def _build_live_snapshot(
             record["stop_lat"] = stop_context.get("stop_lat")
             record["stop_lon"] = stop_context.get("stop_lon")
         arrivals.append(record)
-    arrival_lookup = {
-        key: arrival["arrival_time"]
-        for arrival in trip_updates
-        if arrival.get("arrival_time")
-        for key in [
-            vehicle_enrichment._arrival_lookup_key(
-                arrival.get("trip_id"),
-                arrival.get("stop_id"),
-            )
-        ]
-        if key
-    }
+    arrival_lookup = network.arrival_lookup
 
     # Time-to-first-arrivals: everything above (nearest stops + the nearby
     # subway feed, served from the warm cache) is all the rider waits on for the
@@ -299,20 +282,19 @@ async def _build_live_snapshot(
 
     vehicle_route_ids = _expand_vehicle_route_scope(set(route_ids) | selected_route_ids)
 
-    raw_alerts, vehicle_result, bus_result = await asyncio.gather(
-        mta_feed.fetch_service_alerts(),
-        mta_feed.get_all_subway_vehicle_positions(
-            vehicle_route_ids,
-            debug=True,
-            include_stop_only=True,
-        ),
-        _safe_nearby_bus_arrivals(lat, lng),
-    )
-    bus_arrivals, bus_debug = bus_result
+    bus_arrivals, bus_debug = await _safe_nearby_bus_arrivals(lat, lng)
     arrivals.extend(bus_arrivals)
     arrivals.sort(key=lambda a: a.get("arrival_time") or 0)
-    vehicles, vehicle_debug = vehicle_result
-    parsed_alerts = mta_feed.parse_service_alerts(raw_alerts) if raw_alerts else []
+    vehicles = [
+        dict(vehicle)
+        for vehicle in network.vehicles
+        if str(vehicle.get("route_id") or "").upper() in vehicle_route_ids
+    ]
+    vehicle_debug = dict(network.vehicle_debug)
+    vehicle_debug["scope"] = "nearest_plus_selected"
+    vehicle_debug["requested_routes"] = sorted(vehicle_route_ids)
+    vehicle_debug["final_markers"] = len(vehicles)
+    parsed_alerts = [dict(alert) for alert in network.alerts]
     filtered_alerts = mta_feed.filter_alerts_for_routes(parsed_alerts, set(route_ids))
     home_issues = nearby_issues.build_nearby_transit_issues(
         gtfs=gtfs,
@@ -377,7 +359,7 @@ async def _build_live_snapshot(
     vehicle_debug["final_markers_after_stop_fallback"] = len(vehicles)
     signals = _build_live_signals(parsed_alerts, vehicles, vehicle_debug, now)
 
-    if feeds and not vehicles:
+    if network.feed_count and not vehicles:
         log_now = time.monotonic()
         if log_now - _LAST_EMPTY_VEHICLE_LOG > 60:
             print(
@@ -397,9 +379,10 @@ async def _build_live_snapshot(
         "nearby_issues": home_issues,
         "vehicles": vehicles,
         "signals": signals,
-        "updated_at": now,
-        "degraded": len(feeds) == 0 and len(route_ids) > 0,
+        "updated_at": network.updated_at,
+        "degraded": False,
         "debug": {
+            "network_generation": network.generation,
             "route_ids": sorted(route_ids),
             "nearest_route_ids": sorted(nearest_stop.get("route_ids", []) if nearest_stop else []),
             "nearby_route_ids": sorted(route_ids),
@@ -413,7 +396,7 @@ async def _build_live_snapshot(
             "bus_arrival_count": int(bus_debug.get("bus_arrival_count") or 0),
             "bus_stop_monitoring_failures": int(bus_debug.get("bus_stop_monitoring_failures") or 0),
             "bus_arrivals_reason": bus_debug.get("reason"),
-            "feed_count": len(feeds),
+            "feed_count": network.feed_count,
             "vehicle_count": len(vehicles),
             "vehicle_scope": "nearest_plus_selected",
             "vehicle_parse": vehicle_debug,

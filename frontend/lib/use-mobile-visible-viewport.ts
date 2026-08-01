@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 
+const VISIBLE_VIEWPORT_HEIGHT = "--visible-viewport-height";
 const MOBILE_VISIBLE_HEIGHT = "--mobile-visible-height";
 const MOBILE_VIEWPORT_OFFSET_TOP = "--mobile-viewport-offset-top";
 const LEGACY_VISIBLE_HEIGHT = "--visual-viewport-height";
@@ -19,8 +20,9 @@ type ViewportWindow = Pick<
 type ViewportRoot = Pick<HTMLElement, "style">;
 
 /**
- * Keeps CSS aligned to the viewport iOS is actually showing. Safari can pan
- * that viewport while the keyboard is open, so height alone is insufficient.
+ * Keeps the mobile shell aligned to the viewport iOS is actually showing.
+ * Layout consumes only the visible height; the grid naturally keeps the
+ * composer above the keyboard without a second keyboard-offset translation.
  */
 export function installMobileViewportVariables(
   targetWindow: ViewportWindow,
@@ -37,6 +39,7 @@ export function installMobileViewportVariables(
     );
     const offsetTop = Math.max(0, Math.round(viewport?.offsetTop ?? 0));
 
+    root.style.setProperty(VISIBLE_VIEWPORT_HEIGHT, `${visibleHeight}px`);
     root.style.setProperty(MOBILE_VISIBLE_HEIGHT, `${visibleHeight}px`);
     root.style.setProperty(MOBILE_VIEWPORT_OFFSET_TOP, `${offsetTop}px`);
     // The map sheet already consumes this name. Keep one measurement owner

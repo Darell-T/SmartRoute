@@ -11,33 +11,14 @@ from pydantic import BaseModel, ConfigDict
 
 from app.routers import live_feed_ticket as _live_feed_ticket
 from app.routers import live_feed_socket as _live_feed_socket
-from app.services import admission, mta_feed
+from app.services import admission
+from app.services.live_feed.network_snapshot import network_snapshot_store
 from app.services.live_feed import snapshot as _live_feed_snapshot
 from app.services.live_feed.log import _vlog
 
 
 router = APIRouter()
 ws_router = APIRouter()
-
-
-# Realtime push fan-out. The background warm loop (main.py) calls
-# signal_realtime_refresh() right after it refreshes the MTA caches; every
-# connected live-feed socket is awaiting the current event, so it wakes and
-# pushes a fresh snapshot the instant new upstream data lands -- event-driven
-# push, not a per-client timer. Swap-and-set so each waiter wakes exactly once
-# and any new waiter gets a fresh event (no clear/set race).
-_realtime_refresh_event: asyncio.Event = asyncio.Event()
-
-
-def get_realtime_refresh_event() -> asyncio.Event:
-    return _realtime_refresh_event
-
-
-def signal_realtime_refresh() -> None:
-    global _realtime_refresh_event
-    previous = _realtime_refresh_event
-    _realtime_refresh_event = asyncio.Event()
-    previous.set()
 
 
 async def _verify_ws_ticket(ticket: str, path: str) -> tuple[str | None, bool]:
@@ -79,20 +60,19 @@ async def _receive_bounded_ws_json(websocket: WebSocket) -> dict:
 
 
 async def _guard_socket_lease(
-    websocket: WebSocket,
     lease: admission.AdmissionLease,
     stopped: asyncio.Event,
+    lease_failed: asyncio.Event,
     owner: asyncio.Task,
 ) -> None:
     """Refresh independent of rider frames; never reads from the socket."""
     await _live_feed_socket.guard_lease(
-        websocket,
         lease,
         stopped,
+        lease_failed,
         owner,
         admission=admission,
         interval_seconds=LEASE_GUARD_INTERVAL_S,
-        disconnect_error=WebSocketDisconnect,
     )
 
 
@@ -178,13 +158,8 @@ def _attach_alert_stop_names(alerts: list[dict], gtfs) -> None:
 
 
 async def _service_alerts_payload(gtfs=None):
-    now = int(time.time())
-    raw_alerts = await mta_feed.fetch_service_alerts()
-    parsed_alerts = (
-        mta_feed.parse_service_alerts_for_service_board(raw_alerts)
-        if raw_alerts
-        else []
-    )
+    network = await network_snapshot_store.get_or_refresh()
+    parsed_alerts = [dict(alert) for alert in network.service_alerts]
     _attach_alert_stop_names(parsed_alerts, gtfs)
     affected_routes = {
         str(route_id).strip().upper()
@@ -195,7 +170,7 @@ async def _service_alerts_payload(gtfs=None):
 
     return {
         "alerts": parsed_alerts,
-        "updated_at": now,
+        "updated_at": network.updated_at,
         "active_count": len(parsed_alerts),
         "affected_route_count": len(affected_routes),
         "source": "mta",
@@ -251,9 +226,11 @@ async def _build_live_snapshot(
     selected_route_ids: set[str] | None = None,
     emit=None,
 ):
-    """Compatibility seam used by the HTTP, WebSocket, and agent tool paths."""
+    """Build only rider-specific output from the current process snapshot."""
+    network = await network_snapshot_store.get_or_refresh()
     return await _live_feed_snapshot._build_live_snapshot(
         gtfs,
+        network,
         lat,
         lng,
         selected_route_ids,
@@ -265,7 +242,13 @@ async def _build_live_snapshot(
 async def vehicles(route_ids: str | None = None):
     try:
         route_filter = {r.strip().upper() for r in route_ids.split(",")} if route_ids else None
-        positions = await mta_feed.get_all_subway_vehicle_positions(route_filter)
+        network = await network_snapshot_store.get_or_refresh()
+        positions = [
+            dict(vehicle)
+            for vehicle in network.vehicles
+            if route_filter is None
+            or str(vehicle.get("route_id") or "").upper() in route_filter
+        ]
     except Exception as exc:
         import traceback
         print(f"[vehicles] UNHANDLED ERROR:\n{traceback.format_exc()}")
@@ -316,7 +299,7 @@ def _socket_dependencies() -> _live_feed_socket.LiveFeedSocketDependencies:
         guard=_guard_socket_lease,
         receive=_receive_bounded_ws_json,
         send=_send_json_safe,
-        refresh_event=get_realtime_refresh_event,
+        refresh_event=network_snapshot_store.refresh_event,
         service_payload=_service_alerts_payload,
         alert_signatures=_service_alert_signatures,
         snapshot=_build_live_snapshot,
