@@ -11,6 +11,8 @@ from typing import Awaitable, Callable, Protocol
 
 from fastapi import WebSocket, WebSocketDisconnect
 
+from app.services.mta.bus_updates import BusUpdate, BusUpdateData, BusUpdateEvent
+
 
 SERVICE_ALERT_REFRESH_INTERVAL_S = 60
 
@@ -38,6 +40,7 @@ class LiveFeedSocketDependencies:
     service_payload: Callable[[object], Awaitable[dict]]
     alert_signatures: Callable[[list[dict]], dict[str, str]]
     snapshot: Callable[..., Awaitable[dict]]
+    bus_update: Callable[[float, float], Awaitable[BusUpdate]]
     normalize: Callable[[object], set[str]]
     location_log: Callable[[int, set[str]], str]
     failure_log: Callable[[str, Exception], str]
@@ -256,9 +259,36 @@ async def stream_live_feed(
     selected_route_ids: set[str] = set()
     last_sent = 0.0
     recv_task = None
+    bus_task: asyncio.Task[BusUpdate] | None = None
+    bus_task_generation: int | None = None
+    location_generation = 0
 
-    async def emit_partial(partial: dict) -> None:
-        await deps.send(websocket, {"type": "snapshot", "data": partial})
+    async def send_bus_update(task: asyncio.Task[BusUpdate], generation: int) -> bool:
+        try:
+            update = task.result()
+        except asyncio.CancelledError:
+            return True
+        except Exception as exc:
+            update: BusUpdate = {
+                "arrivals": [],
+                "fetched_at": int(time.time()),
+                "status": "unavailable",
+                "debug": {"reason": type(exc).__name__},
+            }
+        if generation != location_generation:
+            return True
+        status = update.get("status") if isinstance(update, dict) else "unavailable"
+        status = status if status in {"ready", "cached", "unavailable"} else "unavailable"
+        arrivals = update.get("arrivals") if isinstance(update, dict) else []
+        fetched_at = update.get("fetched_at") if isinstance(update, dict) else None
+        payload: BusUpdateData = {
+            "generation": generation,
+            "arrivals": arrivals if isinstance(arrivals, list) else [],
+            "fetched_at": fetched_at if isinstance(fetched_at, int) else int(time.time()),
+            "status": status,
+        }
+        event: BusUpdateEvent = {"type": "bus_update", "data": payload}
+        return await deps.send(websocket, event)
 
     try:
         gtfs = getattr(websocket.app.state, "gtfs", None)
@@ -267,6 +297,8 @@ async def stream_live_feed(
             close_code = 1011
             return
         while True:
+            finished_bus_task: asyncio.Task[BusUpdate] | None = None
+            finished_bus_generation: int | None = None
             if location is None:
                 try:
                     message = await deps.receive(websocket)
@@ -277,14 +309,20 @@ async def stream_live_feed(
                 if recv_task is None:
                     recv_task = asyncio.ensure_future(deps.receive(websocket))
                 refresh_task = asyncio.ensure_future(deps.refresh_event().wait())
+                waiting = {recv_task, refresh_task}
+                if bus_task is not None:
+                    waiting.add(bus_task)
                 done, _ = await asyncio.wait(
-                    {recv_task, refresh_task},
+                    waiting,
                     timeout=30,
                     return_when=asyncio.FIRST_COMPLETED,
                 )
                 if not refresh_task.done():
                     await cancel_and_await(refresh_task)
                 message = None
+                if bus_task is not None and bus_task in done:
+                    finished_bus_task, bus_task = bus_task, None
+                    finished_bus_generation, bus_task_generation = bus_task_generation, None
                 if recv_task in done:
                     finished, recv_task = recv_task, None
                     try:
@@ -300,7 +338,11 @@ async def stream_live_feed(
                 lat = message.get("lat")
                 lng = message.get("lng")
                 if isinstance(lat, (int, float)) and isinstance(lng, (int, float)):
+                    await cancel_and_await(bus_task)
+                    bus_task = None
+                    bus_task_generation = None
                     location = (float(lat), float(lng))
+                    location_generation += 1
                     last_sent = 0
                     deps.vlog(deps.location_log(connection_id, selected_route_ids))
             elif isinstance(message, dict) and message.get("type") == "vehicle_scope":
@@ -310,6 +352,19 @@ async def stream_live_feed(
                     f"[ws_live_feed:{connection_id}] vehicle scope "
                     f"selected_routes={sorted(selected_route_ids)}"
                 )
+            if finished_bus_task is not None:
+                # Process a same-tick location frame first. Otherwise a bus
+                # result completed for the old location could be emitted
+                # immediately before we advance the rider generation.
+                generation = (
+                    finished_bus_generation
+                    if finished_bus_generation is not None
+                    else location_generation
+                )
+                if not await send_bus_update(finished_bus_task, generation):
+                    return
+                if message is None:
+                    continue
             if location is None or time.monotonic() - last_sent < 1:
                 continue
             try:
@@ -318,8 +373,8 @@ async def stream_live_feed(
                     location[0],
                     location[1],
                     selected_route_ids,
-                    emit=emit_partial if last_sent == 0 else None,
                 )
+                snapshot["bus_generation"] = location_generation
                 if not await deps.send(websocket, {"type": "snapshot", "data": snapshot}):
                     print(f"[ws_live_feed:{connection_id}] client closed before snapshot send")
                     return
@@ -348,6 +403,12 @@ async def stream_live_feed(
                     f"degraded={snapshot.get('degraded')}"
                 )
                 last_sent = time.monotonic()
+                if snapshot.get("bus_status") != "cached" and bus_task is None:
+                    bus_task = asyncio.create_task(
+                        deps.bus_update(location[0], location[1]),
+                        name="ws-live-feed-bus-update",
+                    )
+                    bus_task_generation = location_generation
             except Exception as exc:
                 if isinstance(exc, deps.disconnect_error):
                     return
@@ -366,7 +427,7 @@ async def stream_live_feed(
         return
     finally:
         stopped.set()
-        await cancel_and_await(recv_task, guard)
+        await cancel_and_await(recv_task, bus_task, guard)
         if lease_failed.is_set():
             close_code = 1013
         if close_code is not None:

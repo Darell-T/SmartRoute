@@ -33,6 +33,7 @@ def project_single_leg(
     event_impacts: list[dict],
     event_failures: list[str],
     crowd_search_metadata: dict,
+    incident_scan_metadata: dict,
     evidence_envelopes: dict[str, Any],
     collect_crowd_evidence: bool,
     chosen_index: int,
@@ -256,6 +257,11 @@ def project_single_leg(
                 "impact_count": len(event_impacts),
                 "provider_failure_count": len(event_failures),
                 "search": crowd_search_metadata,
+            },
+            "incident_evidence": {
+                key: incident_scan_metadata[key]
+                for key in ("status", "scanned_at", "cache_hit", "sources")
+                if key in incident_scan_metadata
             },
             "evidence": {
                 name: {

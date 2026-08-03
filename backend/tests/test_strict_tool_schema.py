@@ -27,6 +27,7 @@ class StrictToolSchemaTests(unittest.TestCase):
             intelligence.ParsedIntent(intent="route_planning", avoid_crowds=False),
             intelligence.ParsedIntent(intent="destination_discovery", avoid_crowds=False),
             intelligence.ParsedIntent(intent="arrival_lookup", avoid_crowds=False),
+            intelligence.ParsedIntent(intent="area_conditions", avoid_crowds=False),
             intelligence.ParsedIntent(intent="transit_question", avoid_crowds=False),
         )
         for parsed in intents:
@@ -44,6 +45,12 @@ class StrictToolSchemaTests(unittest.TestCase):
                     if parsed.intent == "destination_discovery":
                         self.assertIn("poi_search", names)
                         self.assertIn("plan_trip", names)
+                    if parsed.intent == "area_conditions":
+                        self.assertEqual(names, {"check_area_conditions"})
+                        self.assertEqual(
+                            {tool.get("name") for tool in tools},
+                            {"check_area_conditions"},
+                        )
 
     def test_plan_trip_required_fields_remain(self):
         schema = plan_trip.PLAN_TRIP_SCHEMA

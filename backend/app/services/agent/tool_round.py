@@ -93,8 +93,6 @@ def constrained_tool_input(
         normalized["include_first_leg_arrivals"] = mode_policy.optional_enrichment
         if parsed_intent.requested_route_ids:
             normalized["required_route_ids"] = list(parsed_intent.requested_route_ids)
-        if normalized.get("include_incident_scan"):
-            normalized["include_incident_scan"] = True
     elif name == "lookup_arrivals":
         normalized["limit"] = min(int(normalized.get("limit") or 3), 2 if mode_policy.mode == "quick" else 3)
     return normalized

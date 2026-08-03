@@ -217,4 +217,15 @@ async def execute_chained_trip(
                 "eta_minutes": eta_minutes,
             }
         ],
+        timings={
+            name: sum(
+                max(0.0, float(result.timings.get(name) or 0.0))
+                for result in segment_results
+            )
+            for name in {
+                key
+                for result in segment_results
+                for key in result.timings
+            }
+        },
     )

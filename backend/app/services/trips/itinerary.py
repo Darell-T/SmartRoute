@@ -22,7 +22,9 @@ _ET = ZoneInfo(TIMEZONE_NAME)
 # meters / speed rather than round-trip through 0.1-minute rounding.
 _WALK_SPEED_MPS = 1.4
 
-_TRANSIT_MODES = frozenset({"SUBWAY", "BUS", "RAIL", "TRAIN", "LIGHT_RAIL"})
+TRANSIT_MODES = frozenset(
+    {"SUBWAY", "BUS", "RAIL", "TRAIN", "LIGHT_RAIL", "TRAM"}
+)
 
 # Server-owned multi-stop pickup buffer when the rider does not specify.
 DEFAULT_DWELL_MINUTES = 25
@@ -78,7 +80,7 @@ def build_canonical_itinerary(
             total_walk + total_wait + total_in_vehicle + total_transfer + total_dwell
         )
 
-    transit_count = sum(1 for leg in legs if leg["mode"] in _TRANSIT_MODES)
+    transit_count = sum(1 for leg in legs if leg["mode"] in TRANSIT_MODES)
     transfer_count = max(0, transit_count - 1)
 
     departure_at, arrival_at = _trip_clocks(legs, step_list)
@@ -244,7 +246,7 @@ def build_chained_itinerary(
     transit_count = sum(
         1
         for leg in all_legs
-        if str(leg.get("mode") or "").upper() in _TRANSIT_MODES
+        if str(leg.get("mode") or "").upper() in TRANSIT_MODES
     )
     transfer_count = max(0, transit_count - 1)
     total_duration_seconds = (
@@ -358,13 +360,13 @@ def _build_legs(steps: list[dict], *, data_basis: str) -> list[dict]:
 
         if mode == "WALK":
             walk_seconds = _walk_seconds_for_step(step, dep_dt, arr_dt)
-        elif mode in _TRANSIT_MODES:
+        elif mode in TRANSIT_MODES:
             # Ride length from absolute ISO only — never minutes_until_*.
             if dep_dt is not None and arr_dt is not None:
                 ride_seconds = _seconds_between(dep_dt, arr_dt)
             # Transfer: measurable ISO gap after previous transit (no filler).
             if (
-                prev_mode in _TRANSIT_MODES
+                prev_mode in TRANSIT_MODES
                 and prev_arrival_dt is not None
                 and dep_dt is not None
             ):
@@ -372,7 +374,7 @@ def _build_legs(steps: list[dict], *, data_basis: str) -> list[dict]:
             # Wait at board after a non-transit leg with known arrival ISO.
             elif (
                 prev_mode is not None
-                and prev_mode not in _TRANSIT_MODES
+                and prev_mode not in TRANSIT_MODES
                 and prev_arrival_dt is not None
                 and dep_dt is not None
             ):

@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict
 from app.routers import live_feed_ticket as _live_feed_ticket
 from app.routers import live_feed_socket as _live_feed_socket
 from app.services import admission
+from app.services import mta_feed
 from app.services.live_feed.network_snapshot import network_snapshot_store
 from app.services.live_feed import snapshot as _live_feed_snapshot
 from app.services.live_feed.log import _vlog
@@ -198,6 +199,16 @@ def _service_alert_signatures(alerts: list[dict]) -> dict[str, str]:
 
 async def _live_feed_impl(gtfs, payload: LiveFeedRequest):
     snapshot = await _build_live_snapshot(gtfs, payload.lat, payload.lng)
+    # The REST contract is primary subway data only. Warm an optional BusTime
+    # result for the next request without adding its latency to this response.
+    asyncio.create_task(
+        mta_feed.fetch_nearby_bus_update(
+            payload.lat,
+            payload.lng,
+            radius_m=_live_feed_snapshot.NEARBY_ARRIVAL_RADIUS_M,
+        ),
+        name="live-feed-rest-bus-refresh",
+    )
     return JSONResponse(
         {
             "nearest_stop": snapshot["nearest_stop"],
@@ -206,6 +217,7 @@ async def _live_feed_impl(gtfs, payload: LiveFeedRequest):
             "alerts": snapshot["alerts"],
             "vehicles": snapshot["vehicles"],
             "signals": snapshot["signals"],
+            "bus_status": snapshot["bus_status"],
             "updated_at": snapshot["updated_at"],
             "degraded": snapshot["degraded"],
             "debug": snapshot["debug"],
@@ -224,7 +236,6 @@ async def _build_live_snapshot(
     lat: float,
     lng: float,
     selected_route_ids: set[str] | None = None,
-    emit=None,
 ):
     """Build only rider-specific output from the current process snapshot."""
     network = await network_snapshot_store.get_or_refresh()
@@ -234,7 +245,6 @@ async def _build_live_snapshot(
         lat,
         lng,
         selected_route_ids,
-        emit,
     )
 
 
@@ -303,6 +313,7 @@ def _socket_dependencies() -> _live_feed_socket.LiveFeedSocketDependencies:
         service_payload=_service_alerts_payload,
         alert_signatures=_service_alert_signatures,
         snapshot=_build_live_snapshot,
+        bus_update=mta_feed.fetch_nearby_bus_update,
         normalize=_normalize_route_ids,
         location_log=_location_verbose_log,
         failure_log=_socket_failure_log,

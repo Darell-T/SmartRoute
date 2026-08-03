@@ -103,6 +103,20 @@ class IntentAndContinuityTests(unittest.TestCase):
                 self.assertEqual(parsed.intent, "route_planning")
                 self.assertTrue(parsed.avoid_crowds)
 
+    def test_direct_area_conditions_get_the_bounded_area_intent(self):
+        parsed = intelligence.parse_intent("Is there police activity near Barclays Center?")
+
+        self.assertEqual(parsed.intent, "area_conditions")
+
+    def test_route_request_with_incident_language_remains_route_planning(self):
+        for message in (
+            "Get me to Barclays Center while avoiding police activity and closures",
+            "Plan a trip to Barclays Center while avoiding crowds and protests",
+        ):
+            with self.subTest(message=message):
+                parsed = intelligence.parse_intent(message)
+                self.assertEqual(parsed.intent, "route_planning")
+
     def test_explicit_route_request_becomes_a_hard_planning_constraint(self):
         parsed = intelligence.parse_intent("Plan a Q route to Coney Island")
 

@@ -172,6 +172,7 @@ def _tools_for_intent(
         "route_planning": {"plan_trip", "accessibility_status"},
         "destination_discovery": {"poi_search", "plan_trip", "accessibility_status"},
         "arrival_lookup": {"lookup_arrivals"},
+        "area_conditions": {"check_area_conditions"},
         "transit_question": {"transit_snapshot", "event_lookup", "lookup_arrivals", "accessibility_status", "lookup_facts"},
         "simple_general": set(),
         "unsupported": set(),

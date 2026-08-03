@@ -32,6 +32,25 @@ def _candidate_reasons(
 
 
 class TripCandidateReasonTests(unittest.TestCase):
+    def test_airtrain_tram_counts_as_a_transfer_and_route_line(self):
+        route = _subway_route("F", 71)
+        route.append(
+            {
+                "type": "TRAM",
+                "route_id": "Jamaica AirTrain",
+                "train_line": "Jamaica AirTrain",
+                "departure_stop": "Jamaica",
+                "arrival_stop": "Terminal 1",
+                "minutes_until_arrival": 8,
+                "route_total_minutes": 71,
+            }
+        )
+
+        score = scoring._route_score(route, [])
+
+        self.assertEqual(score["transfers"], 1)
+        self.assertEqual(scoring._route_lines(route), ["F", "JAMAICA AIRTRAIN"])
+
     def test_candidate_fallback_recommends_fastest_with_no_reported_alerts(self):
         rows = _candidate_reasons(
             [_subway_route("Q", 20), _subway_route("B", 28)],

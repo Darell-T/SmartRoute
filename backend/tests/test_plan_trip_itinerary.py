@@ -84,6 +84,21 @@ class PlanTripItineraryTests(unittest.IsolatedAsyncioTestCase):
                 )
             ),
         ).start()
+        patch.object(
+            plan_trip.trip_incidents,
+            "scan_route_incidents",
+            new=AsyncMock(
+                return_value={
+                    "incidents": [],
+                    "scan_metadata": {
+                        "status": "complete",
+                        "snapshot_status": "fresh",
+                        "scanned_at": "2026-08-01T12:00:00Z",
+                        "cache_hit": False,
+                    },
+                }
+            ),
+        ).start()
         self.addCleanup(patch.stopall)
 
     def _ctx(self, *, gtfs=None):
@@ -238,9 +253,17 @@ class PlanTripItineraryTests(unittest.IsolatedAsyncioTestCase):
             await wait_for_other_provider("ticketmaster")
             return "available", [], [], {"grok_status": "complete"}
 
-        async def scan_incidents(_context):
+        async def scan_incidents(_context, **_kwargs):
             await wait_for_other_provider("web")
-            return []
+            return {
+                "incidents": [],
+                "scan_metadata": {
+                    "status": "complete",
+                    "snapshot_status": "fresh",
+                    "scanned_at": "2026-08-01T12:00:00Z",
+                    "cache_hit": False,
+                },
+            }
 
         with (
             patch.object(
@@ -250,7 +273,7 @@ class PlanTripItineraryTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch.object(
                 plan_trip.trip_incidents,
-                "_scan_route_incidents",
+                "scan_route_incidents",
                 new=scan_incidents,
             ),
         ):
@@ -259,7 +282,6 @@ class PlanTripItineraryTests(unittest.IsolatedAsyncioTestCase):
                     "origin": "user",
                     "destination": "Columbus Circle",
                     "avoid_crowds": True,
-                    "include_incident_scan": True,
                 },
                 self._ctx(),
             )
