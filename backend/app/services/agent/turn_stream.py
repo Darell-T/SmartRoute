@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import time
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
@@ -18,6 +17,10 @@ from app.services.agent import quick_escalation
 from app.services.agent import session as session_module
 from app.services.agent.tool_round import TurnDeadlineReached
 from app.services.agent.tools import ToolContext
+from app.services.agent.turn_telemetry import (
+    emit_trip_pipeline_timing as _emit_trip_pipeline_timing,
+    record_model_call,
+)
 from app.services.agent.turn_ledger import TurnToolLedger
 
 if TYPE_CHECKING:
@@ -73,58 +76,58 @@ def _stage_timings(trace: TurnTrace | None, intent_started: float) -> dict[str, 
     return stage_ms
 
 
-def _emit_trip_pipeline_timing(
+def _terminal_plan_trip_text(
+    result: object,
     *,
-    turn_id: str,
-    stage_ms: dict[str, float],
-    telemetry: dict[str, object],
-    first_route_card_ms: float | None,
-) -> dict[str, object] | None:
-    """Emit one allowlisted record without rider or provider request data."""
-    pipeline = telemetry.get("plan_trip")
-    if not isinstance(pipeline, dict):
-        return None
+    route_card: agent_events.RouteCardEvent | None,
+    route_card_text_fallback: Callable[[agent_events.RouteCardEvent], str],
+    sanitize_rider_text: Callable[[str], str],
+) -> str:
+    data = getattr(result, "data", None)
+    text = data.get("passenger_explanation") if isinstance(data, dict) else ""
+    if not isinstance(text, str) or not text.strip():
+        text = route_card_text_fallback(route_card) if route_card is not None else ""
+    return sanitize_rider_text(str(text)).strip()
 
-    def duration(name: str) -> int:
-        value = pipeline.get(name, 0.0)
-        return round(max(0.0, float(value))) if isinstance(value, (int, float)) else 0
 
-    incident_status = str(pipeline.get("incident_status") or "unknown")
-    if incident_status not in {"not_started", "complete", "partial", "failed", "disabled", "timeout"}:
-        incident_status = "unknown"
-    advisor_status = str(pipeline.get("advisor_status") or "unknown")
-    if advisor_status not in {"not_started", "complete", "failed", "timeout"}:
-        advisor_status = "unknown"
-    cache_hit = pipeline.get("incident_cache_hit")
-    record: dict[str, object] = {
-        "event": "trip_pipeline_timing",
-        "turn_id": turn_id,
-        "outcome": "success" if pipeline.get("outcome") == "success" else "error",
-        "leg_count": max(0, int(pipeline.get("leg_count") or 0)),
-        "outer_model_ms": round(max(0.0, float(stage_ms.get("model_ms", 0.0)))),
-        "google_routes_ms": duration("google_routes_ms"),
-        "mta_evidence_ms": duration("mta_evidence_ms"),
-        "incident_ms": duration("incident_ms"),
-        "incident_cache_hit": cache_hit if isinstance(cache_hit, bool) else None,
-        "incident_status": incident_status,
-        "advisor_ms": duration("advisor_ms"),
-        "advisor_status": advisor_status,
-        "advisor_fallback": pipeline.get("advisor_fallback") is True,
-        "scoring_ms": duration("scoring_ms"),
-        "enrichment_ms": duration("enrichment_ms"),
-        "plan_trip_ms": duration("plan_trip_ms"),
-        "first_route_card_ms": (
-            round(max(0.0, first_route_card_ms))
-            if isinstance(first_route_card_ms, (int, float))
-            else None
-        ),
-        "turn_total_ms": round(max(0.0, float(stage_ms.get("total_ms", 0.0)))),
-    }
-    print(
-        f"[trip-pipeline] {json.dumps(record, sort_keys=True, separators=(',', ':'))}",
-        flush=True,
-    )
-    return record
+def _fallback_plan_trip_acknowledgement(
+    tool_use_blocks: list,
+    *,
+    sanitize_rider_text: Callable[[str], str],
+) -> str | None:
+    """Provide one safe acknowledgement when a route tool call has no prose."""
+    for block in tool_use_blocks:
+        if getattr(block, "name", "") != "plan_trip":
+            continue
+        raw_input = getattr(block, "input", None)
+        if not isinstance(raw_input, dict):
+            continue
+        destination_value = raw_input.get("destination")
+        if not isinstance(destination_value, str):
+            continue
+        destination = sanitize_rider_text(" ".join(destination_value.split())).strip()
+        if not destination:
+            continue
+        details: list[str] = []
+        excluded = raw_input.get("exclude_modes")
+        blocked_modes = {
+            str(mode).strip().upper()
+            for mode in (excluded if isinstance(excluded, (list, tuple, set)) else ())
+        }
+        if "BUS" in blocked_modes:
+            details.append("without buses")
+        if "SUBWAY" in blocked_modes:
+            details.append("without subways")
+        preference = str(raw_input.get("routing_preference") or "").upper()
+        if preference == "FEWER_TRANSFERS":
+            details.append("with fewer transfers")
+        elif preference == "LESS_WALKING":
+            details.append("with less walking")
+        if raw_input.get("avoid_crowds") is True:
+            details.append("using your crowd-avoidance preference")
+        suffix = f" ({'; '.join(details)})" if details else ""
+        return f"I'll plan your trip to {destination}{suffix}."
+    return None
 
 
 async def _stream_model_round(
@@ -162,14 +165,16 @@ async def stream_turn(
     turn_start = time.monotonic()
     deadline_monotonic = turn_start + dependencies.deadline_s
     mode_policy = agent_policy.policy_for_mode(response_presentation)
+    ctx.agent_mode = mode_policy.mode
+    ctx.agent_model = mode_policy.model
+    ctx.agent_explanation_style = mode_policy.explanation_style
+    ctx.telemetry["mode"] = mode_policy.mode
     initial_mode = mode_policy.mode
     escalation_reason: str | None = None
     intent_started = time.monotonic()
     parsed_intent = intelligence.parse_intent(message)
     if mode_policy.mode == "quick" and parsed_intent.avoid_crowds:
         escalation_reason = "explicit_crowd_evidence"
-        mode_policy = agent_policy.policy_for_mode("auto")
-        print(f"[agent-escalation] turn={turn_id} quick_to_auto=1 reason={escalation_reason}")
     stage_ms = _stage_timings(trace, intent_started)
     turn_tools = dependencies.tools_for_intent(parsed_intent, mode_policy)
     if intelligence.is_new_trip_request(message):
@@ -227,8 +232,6 @@ async def stream_turn(
                 reason = quick_escalation.reason_for_tool_result("lookup_arrivals", result, required=True)
                 if mode_policy.mode == "quick" and escalation_reason is None and reason:
                     escalation_reason = reason
-                    mode_policy = agent_policy.policy_for_mode("auto")
-                    print(f"[agent-escalation] turn={turn_id} quick_to_auto=1 reason={reason}")
                 if result.summary:
                     session_module.append_tool_summary(session, "lookup_arrivals", result.summary)
                 for event in result.events:
@@ -243,6 +246,7 @@ async def stream_turn(
                 yield agent_events.TokenEvent(text=response_text)
 
         needs_wrapup = False
+        plan_trip_acknowledged = False
         while not deterministic_arrival:
             round_num += 1
             if time.monotonic() >= deadline_monotonic:
@@ -257,6 +261,7 @@ async def stream_turn(
             )
             model_call_start = time.monotonic()
             model_outcome: model_stream.ModelCallCompleted | None = None
+            model_prose_this_round = False
             async for model_event in _stream_model_round(
                 dependencies=dependencies, stream_kwargs=stream_kwargs, log_tag="model call", mode_policy=mode_policy, deadline_monotonic=deadline_monotonic
             ):
@@ -265,6 +270,9 @@ async def stream_turn(
                     continue
                 if isinstance(model_event, agent_events.TokenEvent):
                     text_parts.append(model_event.text)
+                    model_prose_this_round = model_prose_this_round or bool(
+                        model_event.text.strip()
+                    )
                 if isinstance(model_event, agent_events.ToolEndEvent) and not model_event.ok:
                     tool_failures += 1
                 yield model_event
@@ -276,7 +284,16 @@ async def stream_turn(
             server_tool_call_count += model_outcome.server_tool_call_count
             model_call_count += 1
             retry_count_total += max(0, model_outcome.attempts - 1)
-            model_ms_total += (time.monotonic() - model_call_start) * 1000
+            model_duration_ms = (time.monotonic() - model_call_start) * 1000
+            model_ms_total += model_duration_ms
+            record_model_call(
+                ctx.telemetry,
+                role="conversation",
+                provider="anthropic",
+                model=mode_policy.model,
+                duration_ms=model_duration_ms,
+                outcome="complete" if error_event is None else error_event.code,
+            )
             if error_event is not None:
                 yield error_event
                 stop_reason_out = "deadline" if error_event.code == "deadline" else "error"
@@ -291,19 +308,34 @@ async def stream_turn(
             if final_message.stop_reason != "tool_use" or not tool_use_blocks:
                 stop_reason_out = "end_turn"
                 break
+            has_plan_trip_tool = any(
+                getattr(block, "name", "") == "plan_trip" for block in tool_use_blocks
+            )
+            if has_plan_trip_tool and model_prose_this_round:
+                plan_trip_acknowledged = True
+            elif has_plan_trip_tool and not plan_trip_acknowledged:
+                acknowledgement = _fallback_plan_trip_acknowledgement(
+                    tool_use_blocks,
+                    sanitize_rider_text=dependencies.sanitize_rider_text,
+                )
+                if acknowledgement:
+                    prefix = "\n\n" if text_parts else ""
+                    text_parts.append(prefix + acknowledgement)
+                    yield agent_events.TokenEvent(text=prefix + acknowledgement)
+                    plan_trip_acknowledged = True
             tool_round_start = time.monotonic()
             tool_result_message = None
+            terminal_plan_trip_result = None
             async for item in dependencies.execute_tool_round(
                 tool_use_blocks, ctx, session, tool_calls_this_turn, excluded_modes, mode_policy, parsed_intent,
                 stage_ms, deadline_monotonic, tool_ledger, tool_registry=dependencies.tool_registry,
             ):
                 if isinstance(item, dict) and "__tool_result_message__" in item:
                     tool_result_message = item["__tool_result_message__"]
+                    terminal_plan_trip_result = item.get("__terminal_plan_trip_result__")
                     reason = item.get("__quick_escalation_reason__")
                     if mode_policy.mode == "quick" and escalation_reason is None and reason:
                         escalation_reason = str(reason)
-                        mode_policy = agent_policy.policy_for_mode("auto")
-                        print(f"[agent-escalation] turn={turn_id} quick_to_auto=1 reason={escalation_reason}")
                 else:
                     if isinstance(item, agent_events.RouteCardEvent) and item.role == "recommended":
                         recommended_route_card = item
@@ -313,7 +345,21 @@ async def stream_turn(
                         tool_failures += 1
                     yield item
             tools_ms_total += (time.monotonic() - tool_round_start) * 1000
-            messages.append(tool_result_message)
+            if terminal_plan_trip_result is not None:
+                terminal_text = _terminal_plan_trip_text(
+                    terminal_plan_trip_result,
+                    route_card=recommended_route_card,
+                    route_card_text_fallback=dependencies.route_card_text_fallback,
+                    sanitize_rider_text=dependencies.sanitize_rider_text,
+                )
+                if terminal_text:
+                    prefix = "\n\n" if text_parts else ""
+                    text_parts.append(prefix + terminal_text)
+                    yield agent_events.TokenEvent(text=prefix + terminal_text)
+                stop_reason_out = "end_turn"
+                break
+            if tool_result_message is not None:
+                messages.append(tool_result_message)
             if time.monotonic() >= deadline_monotonic:
                 stop_reason_out = "deadline"
                 break
@@ -344,7 +390,16 @@ async def stream_turn(
             server_tool_call_count += model_outcome.server_tool_call_count
             model_call_count += 1
             retry_count_total += max(0, model_outcome.attempts - 1)
-            model_ms_total += (time.monotonic() - model_call_start) * 1000
+            model_duration_ms = (time.monotonic() - model_call_start) * 1000
+            model_ms_total += model_duration_ms
+            record_model_call(
+                ctx.telemetry,
+                role="conversation_wrapup",
+                provider="anthropic",
+                model=mode_policy.model,
+                duration_ms=model_duration_ms,
+                outcome="complete" if error_event is None else error_event.code,
+            )
             if error_event is not None:
                 yield error_event
                 stop_reason_out = "deadline" if error_event.code == "deadline" else "error"
@@ -405,6 +460,10 @@ async def stream_turn(
         first_route_card_ms=first_route_card_ms,
     )
     required_tools = ",".join(parsed_intent.required_evidence.required_tools()) or "none"
+    recorded_model_calls = ctx.telemetry.get("model_calls")
+    total_model_call_count = (
+        len(recorded_model_calls) if isinstance(recorded_model_calls, list) else 0
+    )
     print(
         f"[agent] turn={turn_id} sess={session_id[:6]} rounds={round_num} "
         f"mode={initial_mode} final_mode={mode_policy.mode} escalation={escalation_reason or 'none'} "
@@ -418,8 +477,7 @@ async def stream_turn(
         f"arrival_lookup_ms={stage_ms['arrival_lookup_ms']:.0f} stop_resolution_ms={stage_ms['stop_resolution_ms']:.0f} "
         f"feed_fetch_ms={stage_ms['feed_fetch_ms']:.0f} feed_parse_ms={stage_ms['feed_parse_ms']:.0f} render_ms={stage_ms['render_ms']:.0f} "
         f"scoring_ms={stage_ms['scoring_ms']:.0f} model_ms={model_ms_total:.0f} stream_finalize_ms={stage_ms['stream_finalize_ms']:.0f} "
-        f"tools_ms={tools_ms_total:.0f} total_ms={total_ms:.0f} model_calls={model_call_count} model_call_count={model_call_count} "
-        f"model_tool_uses={len(tool_calls_this_turn) + server_tool_call_count} provider_tool_executions={tool_ledger.total_executions + server_tool_call_count} "
+        f"tools_ms={tools_ms_total:.0f} total_ms={total_ms:.0f} outer_model_calls={model_call_count} total_model_calls={total_model_call_count} "
         f"retry_count={retry_count_total} in_tok={input_tokens} out_tok={output_tokens} stop={stop_reason_out}",
         flush=True,
     )

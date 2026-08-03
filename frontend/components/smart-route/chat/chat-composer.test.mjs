@@ -35,6 +35,14 @@ const CHAT_STYLE_SOURCE = fs.readFileSync(
   ),
   "utf8",
 );
+const MESSAGE_SOURCE = fs.readFileSync(
+  fileURLToPath(new URL("./chat-message.tsx", import.meta.url)),
+  "utf8",
+);
+const WORKING_PANEL_SOURCE = fs.readFileSync(
+  fileURLToPath(new URL("./chat-working-panel.tsx", import.meta.url)),
+  "utf8",
+);
 
 test("composer exposes Auto and Quick through an accessible custom menu", () => {
   assert.match(COMPOSER_SOURCE, /<ResponseModeMenu/);
@@ -162,6 +170,19 @@ test("mobile suggestions use animated transit glyphs and a focus-aware snap rail
     CHAT_STYLE_SOURCE,
     /\.sr-chat-suggestion-motion \{[\s\S]*?scroll-snap-align: start/,
   );
+});
+
+test("generic working copy deliberates while semantic transit stages remain factual", () => {
+  assert.match(WORKING_PANEL_SOURCE, /Finding viable routes/);
+  assert.match(WORKING_PANEL_SOURCE, /Checking live service and current incidents/);
+  assert.match(WORKING_PANEL_SOURCE, /Deliberating between the best options/);
+  assert.match(WORKING_PANEL_SOURCE, /<Shimmer[^>]*>[\s\S]*?Deliberating?/);
+  assert.doesNotMatch(WORKING_PANEL_SOURCE, /Thinking?/);
+  assert.match(
+    MESSAGE_SOURCE,
+    /aria-label=\{isFindingRoutes \? "Searching for the best route" : "Deliberating"\}/,
+  );
+  assert.doesNotMatch(WORKING_PANEL_SOURCE, /CheckCircle|CircleCheck|CheckIcon/);
 });
 
 test("failed chat turns have one compact manual recovery surface", () => {

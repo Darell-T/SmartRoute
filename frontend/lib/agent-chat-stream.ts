@@ -33,6 +33,14 @@ export interface TokenEvent {
   text: string;
 }
 
+export type ProgressStage = "finding_routes" | "checking_live_conditions" | "comparing_options";
+export type ProgressStatus = "active" | "complete";
+export interface ProgressEvent {
+  type: "progress";
+  stage: ProgressStage;
+  status: ProgressStatus;
+}
+
 /** `tool_start` — a tool call kicked off; `label` is server-generated rider
  *  copy ("Finding routes to Costco (no bus)…"), never raw model text. */
 export interface ToolStartEvent {
@@ -349,6 +357,7 @@ export interface DoneEvent {
 export type AgentEvent =
   | MetaEvent
   | TokenEvent
+  | ProgressEvent
   | ToolStartEvent
   | ToolEndEvent
   | RouteCardEvent
@@ -359,6 +368,7 @@ export type AgentEvent =
 const KNOWN_EVENT_TYPES = new Set<AgentEvent["type"]>([
   "meta",
   "token",
+  "progress",
   "tool_start",
   "tool_end",
   "route_card",

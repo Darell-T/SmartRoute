@@ -8,7 +8,10 @@ without a circular import.
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Awaitable, Callable
 from typing import Any
+
+from app.services.agent.events import ProgressStage, ProgressStatus
 
 
 @dataclasses.dataclass
@@ -21,6 +24,16 @@ class ToolContext:
     now_et: str = ""
     origin: dict | None = None
     telemetry: dict[str, Any] = dataclasses.field(default_factory=dict)
+    # The agent loop owns these values. Keeping them turn-scoped prevents the
+    # route tool from falling back to the REST advisor's pinned model.
+    agent_mode: str = ""
+    agent_model: str = ""
+    agent_explanation_style: str = ""
+    progress_sink: Callable[[ProgressStage, ProgressStatus], Awaitable[None]] | None = None
+
+    async def emit_progress(self, stage: ProgressStage, status: ProgressStatus) -> None:
+        if self.progress_sink is not None:
+            await self.progress_sink(stage, status)
 
 
 @dataclasses.dataclass

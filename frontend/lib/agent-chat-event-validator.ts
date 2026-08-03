@@ -14,6 +14,7 @@ import type {
   CanonicalItineraryPlace,
   CanonicalItinerarySegment,
   CanonicalItineraryStop,
+  ProgressEvent,
   RecommendationReason,
   RouteCardEndpoint,
   RouteCardSummary,
@@ -234,6 +235,14 @@ function recommendationReason(value: unknown): value is RecommendationReason | s
   if (!record(value)) return false;
   return (value.code === "fastest" && optional(value.difference_seconds, (item): item is number => integer(item, 0, MAX_SECONDS))) || (value.code === "fewer_transfers" && integer(value.transfer_difference, 0, 64)) || value.code === "avoids_active_disruption" || (value.code === "lower_event_crowd_exposure" && integer(value.event_count, 0, 64) && nonEmptyText(value.provider_status));
 }
+function progressStage(value: unknown): value is ProgressEvent["stage"] {
+  return value === "finding_routes" || value === "checking_live_conditions" || value === "comparing_options";
+}
+
+function progressStatus(value: unknown): value is ProgressEvent["status"] {
+  return value === "active" || value === "complete";
+}
+
 
 function prediction(value: unknown): ArrivalPrediction | null {
   if (!record(value) || !nonEmptyText(value.expected_at, 64) || !bounded(value.minutes, -1_440, 1_440) || typeof value.realtime !== "boolean" || !nullable(value.trip_id, text) || !nullable(value.vehicle_id, text)) return null;
@@ -287,6 +296,7 @@ function arrival(value: RecordValue): ArrivalCardEvent | null {
 export function parseAgentEvent(eventType: string, data: unknown): AgentEvent | null {
   if (!record(data)) return null;
   if (eventType === "meta" && nonEmptyText(data.session_id) && nonEmptyText(data.turn_id)) return { type: "meta", session_id: data.session_id, turn_id: data.turn_id };
+  if (eventType === "progress" && progressStage(data.stage) && progressStatus(data.status)) return { type: "progress", stage: data.stage, status: data.status };
   if (eventType === "token" && text(data.text, 32_768)) return { type: "token", text: data.text };
   if (eventType === "tool_start" && nonEmptyText(data.tool_call_id) && nonEmptyText(data.tool) && nonEmptyText(data.label)) return { type: "tool_start", tool_call_id: data.tool_call_id, tool: data.tool, label: data.label };
   if (eventType === "tool_end" && nonEmptyText(data.tool_call_id) && nonEmptyText(data.tool) && typeof data.ok === "boolean" && bounded(data.duration_ms, 0, 300_000) && optional(data.summary, text)) return { type: "tool_end", tool_call_id: data.tool_call_id, tool: data.tool, ok: data.ok, duration_ms: data.duration_ms, ...(typeof data.summary === "string" ? { summary: data.summary } : {}) };

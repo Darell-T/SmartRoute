@@ -10,6 +10,7 @@ from typing import Any, Awaitable, Callable
 
 from app.services.agent.tools._location import ResolvedPlace
 from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.plan_trip_advisor import select_agent_route
 from app.services.agent.tools.plan_trip_first_leg import first_leg_arrival_context
 
 
@@ -163,6 +164,7 @@ async def execute_single_leg(
     except (TypeError, ValueError):
         max_candidates = len(parsed_routes)
     parsed_routes = parsed_routes[:max_candidates]
+    await ctx.emit_progress("finding_routes", "complete")
 
     route_ids, bus_route_ids = dependencies.candidates._collect_route_and_bus_ids(
         parsed_routes
@@ -200,6 +202,7 @@ async def execute_single_leg(
         finally:
             timings["incident_ms"] = (time.monotonic() - started) * 1000
 
+    await ctx.emit_progress("checking_live_conditions", "active")
     event_task = asyncio.create_task(collect_event_evidence()) if collect_crowd_evidence else None
     incident_context = dependencies.trip_incidents.build_candidate_stop_context(
         ctx.gtfs,
@@ -290,11 +293,12 @@ async def execute_single_leg(
             leg_telemetry["incident_cache_hit"] = (
                 cache_hit if isinstance(cache_hit, bool) else None
             )
-        scan_status = incident_scan_metadata.get("status")
         # Only independently corroborated, route-impacting evidence enters
         # ``incidents``. A partial scan or warning must never look like an
         # all-clear signal to the route advisor.
-        advisor_evidence_available = scan_status == "complete" and bool(incidents)
+        advisor_evidence_available = dependencies.trip_incidents.incident_scan_is_complete(
+            incident_scan_metadata
+        ) and bool(incidents)
     except asyncio.TimeoutError:
         if isinstance(leg_telemetry, dict):
             leg_telemetry["incident_status"] = "timeout"
@@ -308,6 +312,7 @@ async def execute_single_leg(
             leg_telemetry["incident_status"] = "failed"
             leg_telemetry["incident_cache_hit"] = False
         print(f"[agent-plan_trip] incident scan failed: {type(exc).__name__}")
+    await ctx.emit_progress("checking_live_conditions", "complete")
     observed_at = datetime.now(timezone.utc)
     evidence_envelopes = {
         "alerts": dependencies.evidence_envelope(
@@ -355,6 +360,13 @@ async def execute_single_leg(
     event_impacts = dependencies.current_payload(evidence_envelopes["events"], empty=[])
     incidents = dependencies.current_payload(evidence_envelopes["advisor"], empty=[])
 
+    scoring_started = time.monotonic()
+    scored = dependencies.scoring._score_routes(
+        parsed_routes,
+        relevant_alerts,
+        ticketmaster_event_impacts=event_impacts,
+    )
+    timings["scoring_ms"] = (time.monotonic() - scoring_started) * 1000
     judge_payload = dependencies.advisor_context.build_advisor_payload(
         routes=parsed_routes,
         service_alerts=relevant_alerts,
@@ -364,67 +376,27 @@ async def execute_single_leg(
         ticketmaster_event_impacts=event_impacts,
         evidence=evidence_envelopes,
         mode=dependencies.advisor_context.PlanningMode.INTELLIGENCE,
+        scored_candidates=scored,
     )
-    advisor_started = time.monotonic()
-    advisor_status = "complete"
-    advisor_fallback = False
-    try:
-        recommendation = await asyncio.wait_for(
-            dependencies.ai_advisor.collect_recommendation(judge_payload),
-            timeout=dependencies.advisor_timeout_seconds,
-        )
-    except asyncio.TimeoutError:
-        advisor_status = "timeout"
-        advisor_fallback = True
-        print(
-            "[agent-plan_trip] advisor timed out "
-            f"({dependencies.advisor_timeout_seconds:.2f}s)"
-        )
-        recommendation = "[ROUTE:0] Live reasoning timed out; showing the fastest option."
-    except Exception as exc:
-        advisor_status = "failed"
-        advisor_fallback = True
-        print(f"[agent-plan_trip] advisor unavailable type={type(exc).__name__}")
-        recommendation = "[ROUTE:0] Live reasoning was unavailable; showing the fastest option."
-    timings["advisor_ms"] = (time.monotonic() - advisor_started) * 1000
-    if isinstance(leg_telemetry, dict):
-        leg_telemetry["advisor_status"] = advisor_status
-        leg_telemetry["advisor_fallback"] = advisor_fallback
-    chosen_index, candidate_analysis = (
-        dependencies.advisor_context.parse_advisor_selection(
-            recommendation,
-            len(parsed_routes),
-        )
+    await ctx.emit_progress("comparing_options", "active")
+    selection = await select_agent_route(
+        payload=judge_payload,
+        candidate_count=len(parsed_routes),
+        scored=scored,
+        ctx=ctx,
+        dependencies=dependencies,
+        timings=timings,
+        leg_telemetry=leg_telemetry,
     )
-    scoring_started = time.monotonic()
-    scored = dependencies.scoring._score_routes(
-        parsed_routes,
-        relevant_alerts,
-        ticketmaster_event_impacts=event_impacts,
-    )
-    decision_reason = "advisor_tiebreak"
-    selection_log_reason = "advisor_selection"
+    chosen_index = selection.chosen_index
+    candidate_analysis = selection.candidate_analysis
+    decision_reason = "advisor_tiebreak" if not selection.fallback else "lowest_final_score"
+    selection_log_reason = "advisor_selection" if not selection.fallback else "advisor_fallback_score"
     scoring_event_impacts = [
         impact
         for impact in event_impacts
         if float(impact.get("risk_score") or 0) > 0
     ]
-    if scoring_event_impacts:
-        # Crowd avoidance is a hard evidence contract. The model may explain
-        # the evidence, but the actual route choice remains deterministic.
-        chosen_index = min(
-            scored,
-            key=lambda row: (
-                row["score"],
-                row["event_crowd_penalty"],
-                row["total_minutes"],
-                row["index"],
-            ),
-        )["index"]
-        decision_reason = "lowest_final_score"
-        selection_log_reason = "risk_adjusted_event_score"
-    timings["scoring_ms"] = (time.monotonic() - scoring_started) * 1000
-
     chosen_route = parsed_routes[chosen_index]
     enrichment_started = time.monotonic()
     await dependencies.enrichment._enrich_route(ctx.gtfs, chosen_route)
@@ -436,7 +408,7 @@ async def execute_single_leg(
         dependencies,
     )
     timings["enrichment_ms"] = (time.monotonic() - enrichment_started) * 1000
-    return dependencies.project(
+    projected = dependencies.project(
         tool_input=tool_input,
         ctx=ctx,
         timings=timings,
@@ -463,5 +435,8 @@ async def execute_single_leg(
         selection_log_reason=selection_log_reason,
         scoring_event_impacts=scoring_event_impacts,
         first_leg_arrival_context=first_leg_context,
+        advisor_recommendation=selection.recommendation,
     )
+    await ctx.emit_progress("comparing_options", "complete")
+    return projected
 __all__ = ("PlanTripDependencies", "execute_single_leg")

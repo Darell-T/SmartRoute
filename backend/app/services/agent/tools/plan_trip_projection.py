@@ -2,17 +2,104 @@
 
 from __future__ import annotations
 
+import re
 import secrets
 from typing import Any, Callable
 
 from app.services.agent.quick_escalation import effectively_tied_scores
 from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.trips.incidents import incident_scan_is_complete
 from app.services.trips.itinerary import build_canonical_itinerary
 from app.services.trips.recommendation_reasons import (
     build_recommendation_reasons,
     format_recommendation_reason,
 )
 from app.services.trips.selection_decision import build_route_selection_decision
+
+
+INCOMPLETE_INCIDENT_DISCLOSURE = "Current incident coverage is incomplete, so allow extra time."
+_INCOMPLETE_INCIDENT_DISCLOSURE_PATTERNS = (
+    r"\bcurrent\s+incident\s+coverage\s+is\s+incomplete(?:,\s*so\s*allow\s+extra\s+time)?\b",
+    r"\bincident\s+coverage\s+is\s+incomplete\b",
+    r"\bincident\s+(?:information|evidence)\s+(?:is|was)\s+unavailable\b",
+    r"\b(?:the\s+)?incident\s+scan\s+(?:has\s+)?timed\s+out\b",
+    r"\b(?:the\s+)?incident\s+scan\s+(?:is|was)\s+unavailable\b",
+    r"\b(?:could\s+not|couldn['’]t)\s+complete\s+(?:the\s+)?incident\s+scan\b",
+)
+_UNSAFE_INCIDENT_CLEAR_MARKERS = (
+    "no incidents",
+    "no reported incidents",
+    "no active incidents",
+    "all clear",
+    "no disruption",
+    "none blocking",
+    "none changing",
+)
+
+
+def _mentions_incomplete_incident_coverage(value: str) -> bool:
+    normalized = value.casefold()
+    return "incident" in normalized and any(
+        marker in normalized
+        for marker in (
+            "incomplete",
+            "unavailable",
+            "timed out",
+            "timeout",
+            "could not complete",
+            "couldn't complete",
+        )
+    )
+
+
+def _strip_incomplete_incident_disclosures(value: str) -> str:
+    """Remove known coverage-only clauses before chained aggregation.
+
+    Route trade-offs stay intact; only the small set of disclosure forms
+    emitted by the projection contract is removed so the chain can append one
+    canonical status sentence.
+    """
+    normalized = value
+    for pattern in _INCOMPLETE_INCIDENT_DISCLOSURE_PATTERNS:
+        normalized = re.sub(
+            rf"{pattern}(?:\s*[.!?])?",
+            "",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+    normalized = re.sub(r"\s+([,.;:!?])", r"\1", normalized)
+    normalized = re.sub(r"\s{2,}", " ", normalized)
+    return normalized.strip(" \t\r\n,;:")
+
+
+def _passenger_explanation(
+    recommendation: str,
+    incident_scan_metadata: dict,
+    *,
+    candidates_module: Any,
+    text_module: Any,
+) -> str:
+    """Keep incomplete incident evidence truthful without duplicate rider copy."""
+    explanation = text_module._safe_text(
+        text_module._sanitize_recommendation(
+            candidates_module._strip_model_control_blocks(recommendation)
+        ),
+        600,
+    )
+    incomplete_incidents = not incident_scan_is_complete(incident_scan_metadata)
+    unsafe_clear = any(
+        marker in explanation.casefold() for marker in _UNSAFE_INCIDENT_CLEAR_MARKERS
+    )
+    if incomplete_incidents and unsafe_clear:
+        return (
+            "I found the best available route from the current transit options. "
+            f"{INCOMPLETE_INCIDENT_DISCLOSURE}"
+        )
+    if not explanation:
+        explanation = "I found the best available route from the current transit options."
+    if incomplete_incidents and not _mentions_incomplete_incident_coverage(explanation):
+        explanation = f"{explanation} {INCOMPLETE_INCIDENT_DISCLOSURE}"
+    return explanation
 
 
 def project_single_leg(
@@ -37,7 +124,7 @@ def project_single_leg(
     evidence_envelopes: dict[str, Any],
     collect_crowd_evidence: bool,
     chosen_index: int,
-    candidate_analysis: list[dict],
+    candidate_analysis: dict[int, dict[str, str]],
     scored: list[dict],
     decision_reason: str,
     selection_log_reason: str,
@@ -50,6 +137,7 @@ def project_single_leg(
     scoring_module: Any,
     text_module: Any,
     route_card_event: Callable[..., Any],
+    advisor_recommendation: str = "",
 ) -> ToolResult:
     """Build the externally visible representations of one canonical trip."""
     display_candidates = candidates_module._build_route_candidates(
@@ -247,6 +335,19 @@ def project_single_leg(
             }
         )
 
+    passenger_explanation = _passenger_explanation(
+        advisor_recommendation,
+        incident_scan_metadata,
+        candidates_module=candidates_module,
+        text_module=text_module,
+    )
+    incident_coverage_incomplete = not incident_scan_is_complete(incident_scan_metadata)
+    passenger_explanation_core = (
+        _strip_incomplete_incident_disclosures(passenger_explanation)
+        if incident_coverage_incomplete
+        else passenger_explanation
+    )
+
     recommended_lines = digest[chosen_index]["lines"]
     return ToolResult(
         ok=True,
@@ -272,6 +373,9 @@ def project_single_leg(
             },
             "selected_route_index": chosen_index,
             "selection_decision": selection_decision,
+            "passenger_explanation": passenger_explanation,
+            "_passenger_explanation_core": passenger_explanation_core,
+            "_incident_coverage_incomplete": incident_coverage_incomplete,
             **(
                 {"quick_escalation_reason": "effectively_tied_final_scores"}
                 if effectively_tied_scores(scored)

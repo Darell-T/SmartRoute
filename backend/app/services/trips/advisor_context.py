@@ -140,6 +140,7 @@ def build_advisor_payload(
     stalled_trains: Iterable[object] | None = None,
     stalled_buses: Iterable[object] | None = None,
     ticketmaster_event_impacts: Iterable[object] | None = None,
+    scored_candidates: Iterable[Mapping[str, object]] | None = None,
     evidence: Mapping[str, EvidenceEnvelope[Any]] | None = None,
     mode: PlanningMode | str | None = PlanningMode.INTELLIGENCE,
 ) -> dict[str, Any]:
@@ -189,11 +190,66 @@ def build_advisor_payload(
             ),
         }
     )
+    if scored_candidates is not None:
+        payload["scored_candidates"] = _normalize_scored_candidates(scored_candidates)
     return payload
 
 
-def parse_advisor_selection(raw_recommendation: str, candidate_count: int) -> tuple[int, dict[int, dict[str, str]]]:
-    """Parse a model/recorded recommendation while preserving route-zero fallback."""
+def _normalize_scored_candidates(values: Iterable[Mapping[str, object]]) -> list[dict[str, int | float]]:
+    """Expose the bounded deterministic comparison view to an agent advisor.
+
+    This is evidence for the selected model, not a route-selection override.
+    The canonical route identities remain the zero-based ``routes`` indexes.
+    """
+    normalized: list[dict[str, int | float]] = []
+    for raw in values:
+        index = raw.get("index")
+        if not isinstance(index, int) or isinstance(index, bool) or index < 0:
+            continue
+        row: dict[str, int | float] = {"index": index}
+        for key in (
+            "rank",
+            "total_minutes",
+            "transfers",
+            "alert_count",
+            "event_crowd_penalty",
+            "score",
+        ):
+            value = raw.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                row[key] = value
+        normalized.append(row)
+    return sorted(normalized, key=lambda row: int(row["index"]))
+
+
+def parse_advisor_selection(
+    raw_recommendation: str,
+    candidate_count: int,
+    *,
+    strict: bool = False,
+) -> tuple[int, dict[int, dict[str, str]]]:
+    """Parse route control data, with strict agent validation when requested.
+
+    The default intentionally preserves REST/shadow route-zero fallback.
+    ``strict=True`` raises on malformed, absent, mismatched, or out-of-range
+    control data so the agent boundary can record a deterministic fallback.
+    """
+
+    if strict:
+        route_tags = re.findall(r"\[ROUTE:(\d+)\]", raw_recommendation or "")
+        if len(route_tags) != 1:
+            raise ValueError("route selection control marker must appear exactly once")
+        chosen_index = int(route_tags[0])
+        if not 0 <= chosen_index < candidate_count:
+            raise ValueError("route selection index is outside the candidate range")
+        analysis_selected_index, candidate_analysis = candidates._parse_candidate_analysis(
+            raw_recommendation,
+            candidate_count=candidate_count,
+            strict=True,
+        )
+        if analysis_selected_index != chosen_index:
+            raise ValueError("route selection markers disagree")
+        return chosen_index, candidate_analysis
 
     chosen_index = 0
     route_tag_match = re.search(r"\[ROUTE:(\d+)\]", raw_recommendation or "")

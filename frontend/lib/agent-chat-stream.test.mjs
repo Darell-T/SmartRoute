@@ -166,6 +166,23 @@ test("parses a route_card event with the full nested payload", async () => {
   assert.deepEqual(events, [{ type: "route_card", ...payload }]);
 });
 
+test("parses semantic progress stages and rejects malformed stage or status", async () => {
+  const chunk =
+    'event: progress\ndata: {"stage":"finding_routes","status":"active"}\n\n' +
+    'event: progress\ndata: {"stage":"checking_live_conditions","status":"complete"}\n\n' +
+    'event: progress\ndata: {"stage":"unknown","status":"active"}\n\n' +
+    'event: progress\ndata: {"stage":"comparing_options","status":"waiting"}\n\n';
+
+  await silenceConsoleWarn(async (calls) => {
+    const events = await collect(readerFromChunks([chunk]));
+    assert.deepEqual(events, [
+      { type: "progress", stage: "finding_routes", status: "active" },
+      { type: "progress", stage: "checking_live_conditions", status: "complete" },
+    ]);
+    assert.equal(calls.length, 2);
+  });
+});
+
 test("accepts a production-length MTA alert description on a route card", async () => {
   const description = `${"Service change details. ".repeat(200)}Structural maintenance`;
   const payload = {

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
-from typing import Any, Union
+from typing import Any, Literal, Union
 
 
 @dataclasses.dataclass(frozen=True)
@@ -32,6 +32,26 @@ class TokenEvent:
 
     def to_data(self) -> dict[str, Any]:
         return {"text": self.text}
+
+
+ProgressStage = Literal[
+    "finding_routes",
+    "checking_live_conditions",
+    "comparing_options",
+]
+ProgressStatus = Literal["active", "complete"]
+
+
+@dataclasses.dataclass(frozen=True)
+class ProgressEvent:
+    """Truthful semantic progress for a live route-planning tool call."""
+
+    stage: ProgressStage
+    status: ProgressStatus
+    type: str = "progress"
+
+    def to_data(self) -> dict[str, Any]:
+        return {"stage": self.stage, "status": self.status}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -204,6 +224,7 @@ class DoneEvent:
 AgentEvent = Union[
     MetaEvent,
     TokenEvent,
+    ProgressEvent,
     ToolStartEvent,
     ToolEndEvent,
     RouteCardEvent,

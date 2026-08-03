@@ -122,3 +122,59 @@ class AdvisorContextTests(unittest.TestCase):
 
         out_of_range, _ = parse_advisor_selection("[ROUTE:99]", 2)
         self.assertEqual(out_of_range, 0)
+
+    def test_strict_agent_selection_requires_one_complete_matching_control_contract(self):
+        raw = (
+            '[ROUTE:1][CANDIDATE_ANALYSIS]{"selected_route_index":1,'
+            '"candidate_analysis":['
+            '{"index":0,"is_recommended":false,"rejection_reason":"slower"},'
+            '{"index":1,"is_recommended":true,"recommendation_reason":"fewer transfers"}'
+            ']}[/CANDIDATE_ANALYSIS]'
+        )
+
+        selected, analysis = parse_advisor_selection(raw, 2, strict=True)
+
+        self.assertEqual(selected, 1)
+        self.assertEqual(analysis[0]["rejection_reason"], "slower")
+        self.assertEqual(analysis[1]["recommendation_reason"], "fewer transfers")
+
+    def test_strict_agent_selection_rejects_missing_malformed_or_invalid_controls(self):
+        complete_analysis = (
+            '[CANDIDATE_ANALYSIS]{"selected_route_index":0,'
+            '"candidate_analysis":['
+            '{"index":0,"is_recommended":true,"recommendation_reason":"fastest"},'
+            '{"index":1,"is_recommended":false,"rejection_reason":"slower"}'
+            ']}[/CANDIDATE_ANALYSIS]'
+        )
+        cases = {
+            "missing_route_marker": complete_analysis,
+            "out_of_range": "[ROUTE:2]" + complete_analysis,
+            "malformed_analysis": "[ROUTE:0][CANDIDATE_ANALYSIS]{oops}[/CANDIDATE_ANALYSIS]",
+            "missing_candidate_row": (
+                '[ROUTE:0][CANDIDATE_ANALYSIS]{"selected_route_index":0,'
+                '"candidate_analysis":[{"index":0,"is_recommended":true,'
+                '"recommendation_reason":"fastest"}]}[/CANDIDATE_ANALYSIS]'
+            ),
+        }
+        for name, raw in cases.items():
+            with self.subTest(name=name):
+                with self.assertRaises(ValueError):
+                    parse_advisor_selection(raw, 2, strict=True)
+
+    def test_intelligence_payload_can_include_normalized_scored_candidates(self):
+        payload = build_advisor_payload(
+            routes=_routes(),
+            service_alerts=[],
+            scored_candidates=[
+                {"index": 1, "rank": 2, "score": 32.5, "total_minutes": 28, "ignored": "x"},
+                {"index": 0, "rank": 1, "score": 20, "transfers": 0},
+            ],
+        )
+
+        self.assertEqual(
+            payload["scored_candidates"],
+            [
+                {"index": 0, "rank": 1, "score": 20, "transfers": 0},
+                {"index": 1, "rank": 2, "score": 32.5, "total_minutes": 28},
+            ],
+        )

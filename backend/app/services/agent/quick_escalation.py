@@ -1,4 +1,4 @@
-"""Deterministic, one-way Quick-to-Auto escalation policy."""
+"""Classify Quick-mode edge conditions without changing its model."""
 
 from __future__ import annotations
 

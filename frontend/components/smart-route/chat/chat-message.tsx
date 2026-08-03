@@ -118,7 +118,7 @@ function AssistantMessage({
                   size={64}
                   theme={theme}
                   speed={0.9}
-                  aria-label={isFindingRoutes ? "Searching for the best route" : "Thinking"}
+                  aria-label={isFindingRoutes ? "Searching for the best route" : "Deliberating"}
                   style={{ width: 34, height: 34 }}
                 />
               </motion.span>
@@ -126,7 +126,11 @@ function AssistantMessage({
           </AnimatePresence>
         </span>
         <div className="sr-chat-assistant-response__content">
-          <ChatWorkingPanel toolChips={turn.toolChips} isStreaming={turn.isStreaming} />
+          <ChatWorkingPanel
+            toolChips={turn.toolChips}
+            progress={turn.progress}
+            isStreaming={turn.isStreaming}
+          />
           {hasText && (
             <p className="sr-chat-message__prose" aria-live="polite">
               {displayedText}

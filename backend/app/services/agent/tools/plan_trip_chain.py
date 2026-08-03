@@ -8,6 +8,9 @@ from datetime import datetime, timedelta
 
 from app.services.agent import events as agent_events
 from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.plan_trip_projection import (
+    INCOMPLETE_INCIDENT_DISCLOSURE,
+)
 from app.services.trips.itinerary import build_chained_itinerary
 
 
@@ -194,6 +197,29 @@ async def execute_chained_trip(
         alerts=alerts,
         itinerary=chained,
     )
+    explanations: list[str] = []
+    incomplete_incident_coverage = False
+    for result in segment_results:
+        if not isinstance(result.data, dict):
+            continue
+        if "_passenger_explanation_core" in result.data:
+            explanation = str(result.data.get("_passenger_explanation_core") or "").strip()
+        else:
+            explanation = str(result.data.get("passenger_explanation") or "").strip()
+        if explanation:
+            explanations.append(explanation)
+        incomplete_incident_coverage = incomplete_incident_coverage or (
+            result.data.get("_incident_coverage_incomplete") is True
+        )
+    passenger_explanation = "\n\n".join(explanations)
+    if incomplete_incident_coverage:
+        if not passenger_explanation:
+            passenger_explanation = (
+                "I found the best available route from the current transit options."
+            )
+        passenger_explanation = (
+            f"{passenger_explanation.rstrip()} {INCOMPLETE_INCIDENT_DISCLOSURE}"
+        )
     return ToolResult(
         ok=True,
         data={
@@ -205,7 +231,8 @@ async def execute_chained_trip(
                     "transfers": int(chained["transfer_count"]),
                     "reason": summary["reason"],
                 }
-            ]
+            ],
+            "passenger_explanation": passenger_explanation,
         },
         summary=f"planned {len(recommended_events)} legs as one itinerary",
         events=[event],

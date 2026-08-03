@@ -304,6 +304,70 @@ test("manual retry reuses the failed turn instead of duplicating the user messag
   assert.equal(state.error, null);
 });
 
+test("semantic progress replaces the current stage, permits chained-leg cycles, and ignores late events", () => {
+  let state = applyAgentEvent(initialState(), { type: "turn_started", text: "to JFK" });
+  state = applyAgentEvent(state, { type: "meta", session_id: "s1", turn_id: "t1" });
+  state = applyAgentEvent(state, { type: "progress", stage: "finding_routes", status: "active" });
+  assert.deepEqual(state.messages[1].progress, { stage: "finding_routes", status: "active" });
+
+  state = applyAgentEvent(state, { type: "progress", stage: "checking_live_conditions", status: "active" });
+  assert.deepEqual(state.messages[1].progress, { stage: "checking_live_conditions", status: "active" });
+  state = applyAgentEvent(state, { type: "progress", stage: "finding_routes", status: "complete" });
+  assert.deepEqual(state.messages[1].progress, { stage: "checking_live_conditions", status: "active" });
+
+  state = applyAgentEvent(state, { type: "progress", stage: "checking_live_conditions", status: "complete" });
+  assert.equal(state.messages[1].progress, undefined);
+
+  state = applyAgentEvent(state, { type: "progress", stage: "finding_routes", status: "active" });
+  assert.deepEqual(state.messages[1].progress, { stage: "finding_routes", status: "active" });
+  state = applyAgentEvent(state, { type: "progress", stage: "finding_routes", status: "complete" });
+  state = applyAgentEvent(state, { type: "progress", stage: "comparing_options", status: "active" });
+  assert.deepEqual(state.messages[1].progress, { stage: "comparing_options", status: "active" });
+  state = applyAgentEvent(state, { type: "progress", stage: "comparing_options", status: "complete" });
+  assert.equal(state.messages[1].progress, undefined);
+
+  state = applyAgentEvent(state, { type: "done", session_id: "s1", turn_id: "t1", stop_reason: "end_turn", usage: {} });
+  state = applyAgentEvent(state, { type: "progress", stage: "comparing_options", status: "active" });
+  assert.equal(state.messages[1].progress, undefined);
+});
+
+test("terminal route results clear a working stage without changing the route contract", () => {
+  let state = applyAgentEvent(initialState(), { type: "turn_started", text: "to Coney Island" });
+  state = applyAgentEvent(state, { type: "progress", stage: "comparing_options", status: "active" });
+  state = applyAgentEvent(state, {
+    type: "route_card",
+    card_id: "rc-progress",
+    turn_id: "turn-progress",
+    role: "recommended",
+    origin: { label: "Home", lat: 40.7, lng: -73.9 },
+    destination: { label: "Coney Island", lat: 40.57, lng: -73.98 },
+    summary: { eta_minutes: 30, transfers: 0, lines: ["Q"], reason: "Direct" },
+    route: [],
+    alerts: [],
+  });
+  assert.equal(state.messages[1].progress, undefined);
+  assert.equal(state.messages[1].routeCards[0].card_id, "rc-progress");
+});
+
+test("failed route tool clears semantic progress so a retry cannot inherit stale work", () => {
+  let state = applyAgentEvent(initialState(), { type: "turn_started", text: "to JFK" });
+  state = applyAgentEvent(state, { type: "progress", stage: "finding_routes", status: "active" });
+  state = applyAgentEvent(state, {
+    type: "tool_start",
+    tool_call_id: "failed-trip",
+    tool: "plan_trip",
+    label: "Finding routes",
+  });
+  state = applyAgentEvent(state, {
+    type: "tool_end",
+    tool_call_id: "failed-trip",
+    tool: "plan_trip",
+    ok: false,
+    duration_ms: 100,
+  });
+  assert.equal(state.messages[1].progress, undefined);
+});
+
 test("dismissing an empty failed response preserves the original user message", () => {
   let state = applyAgentEvent(initialState(), { type: "turn_started", text: "hi" });
   state = applyAgentEvent(state, {

@@ -17,15 +17,39 @@ _CANDIDATE_ANALYSIS_PATTERN = re.compile(
 )
 
 
-def _parse_candidate_analysis(raw_text: str) -> tuple[int | None, dict[int, dict[str, str]]]:
-    match = _CANDIDATE_ANALYSIS_PATTERN.search(raw_text or "")
-    if not match:
+def _parse_candidate_analysis(
+    raw_text: str,
+    *,
+    candidate_count: int | None = None,
+    strict: bool = False,
+) -> tuple[int | None, dict[int, dict[str, str]]]:
+    """Parse the shared candidate-analysis marker.
+
+    REST and shadow evaluation retain the historical best-effort behavior.
+    Agent route turns opt into ``strict`` so malformed control data cannot
+    silently select a canonical route.
+    """
+    matches = list(_CANDIDATE_ANALYSIS_PATTERN.finditer(raw_text or ""))
+    if not matches:
+        if strict:
+            raise ValueError("candidate analysis control block is missing")
         return None, {}
+    if strict and len(matches) != 1:
+        raise ValueError("candidate analysis control block must appear exactly once")
 
     try:
-        payload = json.loads(match.group(1).strip())
-    except json.JSONDecodeError:
+        payload = json.loads(matches[0].group(1).strip())
+    except json.JSONDecodeError as exc:
+        if strict:
+            raise ValueError("candidate analysis is not valid JSON") from exc
         return None, {}
+    if not isinstance(payload, dict):
+        if strict:
+            raise ValueError("candidate analysis must be an object")
+        return None, {}
+
+    if strict:
+        return _parse_strict_candidate_analysis(payload, candidate_count)
 
     selected_index = payload.get("selected_route_index")
     try:
@@ -64,6 +88,56 @@ def _parse_candidate_analysis(raw_text: str) -> tuple[int | None, dict[int, dict
             }
 
     return parsed_selected, analysis
+
+
+def _parse_strict_candidate_analysis(
+    payload: dict,
+    candidate_count: int | None,
+) -> tuple[int, dict[int, dict[str, str]]]:
+    """Validate the agent-only route control contract without a second parser."""
+    if not isinstance(candidate_count, int) or isinstance(candidate_count, bool) or candidate_count < 1:
+        raise ValueError("candidate analysis requires a positive candidate count")
+    selected_index = payload.get("selected_route_index")
+    if not isinstance(selected_index, int) or isinstance(selected_index, bool):
+        raise ValueError("selected_route_index must be an integer")
+    if not 0 <= selected_index < candidate_count:
+        raise ValueError("selected_route_index is outside the candidate range")
+    rows = payload.get("candidate_analysis")
+    if not isinstance(rows, list) or len(rows) != candidate_count:
+        raise ValueError("candidate analysis must contain every candidate exactly once")
+
+    analysis: dict[int, dict[str, str]] = {}
+    recommended_indexes: list[int] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError("candidate analysis rows must be objects")
+        index = row.get("index")
+        recommended = row.get("is_recommended")
+        if not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < candidate_count:
+            raise ValueError("candidate analysis index is invalid")
+        if index in analysis:
+            raise ValueError("candidate analysis contains a duplicate index")
+        if not isinstance(recommended, bool):
+            raise ValueError("candidate analysis is_recommended must be boolean")
+
+        recommendation_reason = text._safe_text(row.get("recommendation_reason") or "").strip()
+        rejection_reason = text._safe_text(row.get("rejection_reason") or "").strip()
+        if recommended:
+            if index != selected_index or not recommendation_reason:
+                raise ValueError("selected candidate requires recommendation_reason")
+            recommended_indexes.append(index)
+        elif rejection_reason:
+            pass
+        else:
+            raise ValueError("unselected candidate requires rejection_reason")
+        analysis[index] = {
+            "recommendation_reason": recommendation_reason,
+            "rejection_reason": rejection_reason,
+        }
+
+    if set(analysis) != set(range(candidate_count)) or recommended_indexes != [selected_index]:
+        raise ValueError("candidate analysis recommendation does not match selected route")
+    return selected_index, analysis
 
 def _strip_model_control_blocks(raw_text: str) -> str:
     without_route = re.sub(r"\s*\[ROUTE:\d+\]\s*", "", raw_text or "")

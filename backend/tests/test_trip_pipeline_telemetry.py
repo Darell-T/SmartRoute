@@ -7,7 +7,8 @@ import json
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from app.services.agent import turn_stream
+from app.services.agent import policy as agent_policy
+from app.services.agent import turn_stream, turn_telemetry
 from app.services.agent.tools import plan_trip
 from tests._fake_http_tools import make_tool_ctx
 from tests.test_plan_trip_itinerary import _google_response, _leg
@@ -163,7 +164,7 @@ class TripPipelineTelemetryTests(unittest.IsolatedAsyncioTestCase):
         ).start()
         patch.object(
             plan_trip.ai_advisor,
-            "collect_recommendation",
+            "collect_agent_recommendation",
             new=AsyncMock(side_effect=RuntimeError("provider unavailable")),
         ).start()
         ctx = self._ctx()
@@ -178,7 +179,7 @@ class TripPipelineTelemetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(ctx.telemetry["plan_trip"]["advisor_fallback"], True)
 
     async def test_advisor_timeout_records_timeout_fallback(self):
-        async def slow_advisor(_payload):
+        async def slow_advisor(_payload, **_kwargs):
             await asyncio.sleep(1)
 
         patch.object(
@@ -193,7 +194,7 @@ class TripPipelineTelemetryTests(unittest.IsolatedAsyncioTestCase):
         ).start()
         patch.object(
             plan_trip.ai_advisor,
-            "collect_recommendation",
+            "collect_agent_recommendation",
             side_effect=slow_advisor,
         ).start()
         ctx = self._ctx()
@@ -224,7 +225,7 @@ class TripPipelineTelemetryTests(unittest.IsolatedAsyncioTestCase):
         ).start()
         patch.object(
             plan_trip.ai_advisor,
-            "collect_recommendation",
+            "collect_agent_recommendation",
             new=AsyncMock(side_effect=["[ROUTE:0]", RuntimeError("advisor down")]),
         ).start()
         ctx = self._ctx()
@@ -320,6 +321,52 @@ class TripPipelineTelemetryTests(unittest.IsolatedAsyncioTestCase):
             f"[trip-pipeline] {json.dumps(record, sort_keys=True, separators=(',', ':'))}",
             flush=True,
         )
+
+    def test_model_call_telemetry_uses_ordered_records_and_final_role_totals(self):
+        for mode in ("auto", "quick"):
+            with self.subTest(mode=mode):
+                policy = agent_policy.policy_for_mode(mode)
+                telemetry = {
+                    "mode": mode,
+                    "plan_trip": {
+                        "outcome": "success",
+                        "incident_status": "complete",
+                        "advisor_status": "complete",
+                    },
+                }
+                turn_telemetry.record_model_call(
+                    telemetry,
+                    role="conversation",
+                    provider="anthropic",
+                    model=policy.model,
+                    duration_ms=12,
+                    outcome="complete",
+                )
+                turn_telemetry.record_model_call(
+                    telemetry,
+                    role="route_selection",
+                    provider="anthropic",
+                    model=policy.model,
+                    duration_ms=8,
+                    outcome="complete",
+                )
+                with patch("builtins.print"):
+                    record = turn_stream._emit_trip_pipeline_timing(
+                        turn_id="t-models",
+                        stage_ms={"model_ms": 12, "total_ms": 20},
+                        telemetry=telemetry,
+                        first_route_card_ms=18,
+                    )
+
+                self.assertEqual([call["call_index"] for call in record["model_calls"]], [1, 2])
+                self.assertNotIn("call_count", record["model_calls"][0])
+                self.assertEqual(record["model_call_total"], 2)
+                self.assertEqual(record["outer_model_call_total"], 1)
+                self.assertEqual(record["route_selection_call_total"], 1)
+                self.assertEqual(
+                    [call["model"] for call in record["model_calls"]],
+                    [policy.model, policy.model],
+                )
 
 
 if __name__ == "__main__":

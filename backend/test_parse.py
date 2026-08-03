@@ -6,15 +6,14 @@ import asyncio
 import json
 from dotenv import load_dotenv
 
-load_dotenv()
-
-from app.services.directions import get_transit_route, parse_response
-
 ORIGIN = (40.6501, -73.9796)
 DEST = "Times Square, New York, NY"
 
 
 async def main():
+    load_dotenv()
+    from app.services.directions import get_transit_route, parse_response
+
     print(f"Origin: {ORIGIN}")
     print(f"Dest:   {DEST}\n")
 

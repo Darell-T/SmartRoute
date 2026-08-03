@@ -2,6 +2,7 @@ import type {
   AgentEvent,
   ArrivalCardEvent,
   ArrivalSourceStatus,
+  ProgressEvent,
   RouteCard,
 } from "./agent-chat-stream";
 
@@ -25,6 +26,7 @@ export interface AssistantTurn {
   text: string;
   toolChips: ToolChip[];
   routeCards: RouteCard[];
+  progress?: Omit<ProgressEvent, "type">;
   isStreaming: boolean;
   stopReason?:
     | "end_turn"
@@ -181,6 +183,7 @@ export function applyAgentEvent(state: ChatState, action: ChatReducerAction): Ch
           toolChips: [],
           routeCards: [],
           arrivals: undefined,
+          progress: undefined,
           isStreaming: true,
           stopReason: undefined,
           error: undefined,
@@ -214,6 +217,16 @@ export function applyAgentEvent(state: ChatState, action: ChatReducerAction): Ch
       };
     case "token":
       return updateLastAssistantTurn(state, (turn) => ({ ...turn, text: turn.text + action.text }));
+    case "progress":
+      return updateLastAssistantTurn(state, (turn) => {
+        if (!turn.isStreaming) return turn;
+        if (action.status === "active") {
+          return { ...turn, progress: { stage: action.stage, status: action.status } };
+        }
+        return turn.progress?.stage === action.stage
+          ? { ...turn, progress: undefined }
+          : turn;
+      });
     case "tool_start":
       return updateLastAssistantTurn(state, (turn) => {
         const nextChip: ToolChip = {
@@ -239,12 +252,13 @@ export function applyAgentEvent(state: ChatState, action: ChatReducerAction): Ch
         toolChips: turn.toolChips.map((chip) => chip.id === action.tool_call_id
           ? { ...chip, status: action.ok ? "ok" : "failed", durationMs: action.duration_ms, summary: action.summary }
           : chip),
+        ...(action.tool === "plan_trip" && !action.ok ? { progress: undefined } : {}),
       }));
     case "route_card": {
       const card = cardFromEvent(action);
       return updateLastAssistantTurn(state, (turn) => turn.routeCards.some((existing) => existing.card_id === card.card_id)
         ? turn
-        : { ...turn, routeCards: [...turn.routeCards, card] });
+        : { ...turn, routeCards: [...turn.routeCards, card], progress: undefined });
     }
     case "arrival_card":
       return updateLastAssistantTurn(state, (turn) => ({ ...turn, arrivals: arrivalsFromEvent(action) }));
@@ -255,6 +269,7 @@ export function applyAgentEvent(state: ChatState, action: ChatReducerAction): Ch
         ...updateLastAssistantTurn(state, (current) => ({
           ...current,
           error: { code: action.code, message: action.message, retryable: action.retryable },
+          progress: undefined,
         })),
         error: action.message,
       };
@@ -264,7 +279,7 @@ export function applyAgentEvent(state: ChatState, action: ChatReducerAction): Ch
       if (turn && (!turn.isStreaming || (turn.turnId && turn.turnId !== action.turn_id))) return state;
       return {
         ...updateLastAssistantTurn(state, (current) => ({
-          ...current, isStreaming: false, stopReason: action.stop_reason,
+          ...current, isStreaming: false, stopReason: action.stop_reason, progress: undefined,
         })),
         sessionId: action.session_id,
         isStreaming: false,
@@ -272,7 +287,7 @@ export function applyAgentEvent(state: ChatState, action: ChatReducerAction): Ch
     }
     case "stream_cancelled":
       return {
-        ...updateLastAssistantTurn(state, (turn) => ({ ...turn, isStreaming: false, stopReason: "cancelled" })),
+        ...updateLastAssistantTurn(state, (turn) => ({ ...turn, isStreaming: false, stopReason: "cancelled", progress: undefined })),
         isStreaming: false,
       };
     case "stream_error":
@@ -281,6 +296,7 @@ export function applyAgentEvent(state: ChatState, action: ChatReducerAction): Ch
           ...turn,
           isStreaming: false,
           stopReason: "dropped",
+          progress: undefined,
           error: turn.error ?? {
             code: action.code ?? "upstream_error",
             message: action.message,

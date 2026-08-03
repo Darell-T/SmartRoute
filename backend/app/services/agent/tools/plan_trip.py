@@ -14,6 +14,7 @@ import time
 from app.services import ai_advisor
 from app.services.evidence import current_payload, evidence_envelope
 from app.services.agent import events as agent_events
+from app.services.agent import policy as agent_policy
 from app.services.agent.tools._location import resolve_named_place
 from app.services.agent.tools._types import ToolContext, ToolResult
 from app.services.mta_feed import (
@@ -260,6 +261,13 @@ def _dependencies() -> _plan_trip_executor.PlanTripDependencies:
 
 async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
     """Validate waypoint budget, coordinate chained trips, or execute one leg."""
+    if not ctx.agent_model or not ctx.agent_explanation_style:
+        selected_policy = agent_policy.policy_for_mode(ctx.agent_mode or "auto")
+        ctx.agent_mode = selected_policy.mode
+        ctx.agent_model = ctx.agent_model or selected_policy.model
+        ctx.agent_explanation_style = (
+            ctx.agent_explanation_style or selected_policy.explanation_style
+        )
     depth = int(ctx.telemetry.get("_plan_trip_depth") or 0)
     owns_telemetry = depth == 0
     ctx.telemetry["_plan_trip_depth"] = depth + 1
@@ -291,24 +299,26 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
         waypoints, waypoint_error = _validated_waypoints(tool_input.get("waypoints"))
         if waypoint_error:
             result = ToolResult(ok=False, error=waypoint_error)
-        elif waypoints:
-            result = await _execute_chained_trip(tool_input, ctx, waypoints)
         else:
-            leg_telemetry = {
-                "incident_status": "not_started",
-                "incident_cache_hit": None,
-                "advisor_status": "not_started",
-                "advisor_fallback": False,
-            }
-            pipeline = ctx.telemetry.get("plan_trip")
-            if isinstance(pipeline, dict):
-                legs = pipeline.get("_legs")
-                if isinstance(legs, list):
-                    legs.append(leg_telemetry)
-            ctx.telemetry["_plan_trip_active_leg"] = leg_telemetry
-            result = await _plan_trip_executor.execute_single_leg(
-                tool_input, ctx, timings, dependencies=_dependencies(),
-            )
+            await ctx.emit_progress("finding_routes", "active")
+            if waypoints:
+                result = await _execute_chained_trip(tool_input, ctx, waypoints)
+            else:
+                leg_telemetry = {
+                    "incident_status": "not_started",
+                    "incident_cache_hit": None,
+                    "advisor_status": "not_started",
+                    "advisor_fallback": False,
+                }
+                pipeline = ctx.telemetry.get("plan_trip")
+                if isinstance(pipeline, dict):
+                    legs = pipeline.get("_legs")
+                    if isinstance(legs, list):
+                        legs.append(leg_telemetry)
+                ctx.telemetry["_plan_trip_active_leg"] = leg_telemetry
+                result = await _plan_trip_executor.execute_single_leg(
+                    tool_input, ctx, timings, dependencies=_dependencies(),
+                )
         return result
     finally:
         if previous_leg is None:
@@ -348,17 +358,19 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
                 "complete": 0,
                 "not_started": 1,
                 "disabled": 2,
-                "unknown": 3,
-                "partial": 4,
-                "timeout": 5,
-                "failed": 6,
+                "unavailable": 3,
+                "unknown": 4,
+                "partial": 5,
+                "timeout": 6,
+                "failed": 7,
             }
             advisor_severity = {
                 "complete": 0,
                 "not_started": 1,
                 "unknown": 2,
                 "timeout": 3,
-                "failed": 4,
+                "invalid": 4,
+                "failed": 5,
             }
             incident_statuses = [
                 str(leg.get("incident_status") or "unknown") for leg in legs
