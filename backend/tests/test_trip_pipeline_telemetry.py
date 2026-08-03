@@ -316,7 +316,10 @@ class TripPipelineTelemetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(record["leg_count"], 0)
         self.assertEqual(record["outer_model_ms"], 42)
         self.assertEqual(record["first_route_card_ms"], 79)
-        printed.assert_called_once()
+        printed.assert_called_once_with(
+            f"[trip-pipeline] {json.dumps(record, sort_keys=True, separators=(',', ':'))}",
+            flush=True,
+        )
 
 
 if __name__ == "__main__":

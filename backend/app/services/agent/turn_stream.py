@@ -120,7 +120,10 @@ def _emit_trip_pipeline_timing(
         ),
         "turn_total_ms": round(max(0.0, float(stage_ms.get("total_ms", 0.0)))),
     }
-    print(f"[trip-pipeline] {json.dumps(record, sort_keys=True, separators=(',', ':'))}")
+    print(
+        f"[trip-pipeline] {json.dumps(record, sort_keys=True, separators=(',', ':'))}",
+        flush=True,
+    )
     return record
 
 
@@ -417,7 +420,8 @@ async def stream_turn(
         f"scoring_ms={stage_ms['scoring_ms']:.0f} model_ms={model_ms_total:.0f} stream_finalize_ms={stage_ms['stream_finalize_ms']:.0f} "
         f"tools_ms={tools_ms_total:.0f} total_ms={total_ms:.0f} model_calls={model_call_count} model_call_count={model_call_count} "
         f"model_tool_uses={len(tool_calls_this_turn) + server_tool_call_count} provider_tool_executions={tool_ledger.total_executions + server_tool_call_count} "
-        f"retry_count={retry_count_total} in_tok={input_tokens} out_tok={output_tokens} stop={stop_reason_out}"
+        f"retry_count={retry_count_total} in_tok={input_tokens} out_tok={output_tokens} stop={stop_reason_out}",
+        flush=True,
     )
     yield agent_events.DoneEvent(
         session_id=session_id,
