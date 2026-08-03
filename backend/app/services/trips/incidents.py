@@ -20,9 +20,18 @@ from app.services.trips.incident_scan_cache import (
 TRIP_INCIDENT_SCAN_TIMEOUT_S = float(os.getenv("TRIP_INCIDENT_SCAN_TIMEOUT_S", "10.0"))
 _inflight_scans: dict[str, asyncio.Task[dict[str, Any]]] = {}
 _inflight_lock = asyncio.Lock()
+COMPLETE_INCIDENT_SCAN_STATUS = "complete"
 
 # Compatibility for internal callers/tests that use the prior private adapter.
 _normalize_advisor_incident = normalize_advisor_incident
+
+
+def incident_scan_is_complete(metadata: Mapping[str, object] | None) -> bool:
+    """Return true only for the scanner's fully completed evidence contract."""
+    return (
+        isinstance(metadata, Mapping)
+        and metadata.get("status") == COMPLETE_INCIDENT_SCAN_STATUS
+    )
 
 
 def _failure_metadata(reason: str) -> dict[str, Any]:
@@ -40,14 +49,14 @@ def _normalized_contract(raw: object) -> dict[str, Any]:
     if not isinstance(metadata, Mapping) or not isinstance(incidents, list):
         return {"incidents": [], "warnings": [], "scan_metadata": _failure_metadata("invalid scanner contract")}
     status = metadata.get("status")
-    if status not in {"complete", "partial", "failed", "disabled"}:
+    if status not in {COMPLETE_INCIDENT_SCAN_STATUS, "partial", "failed", "disabled"}:
         status = "failed"
     normalized = [normalize_advisor_incident(item) for item in incidents if isinstance(item, Mapping)]
     # Evidence may inform the advisor only after both configured search sources
     # completed and independent origins corroborate a route-impacting claim.
     advisor_incidents = [
         incident for incident in normalized
-        if status == "complete" and incident.get("advisor_eligible") is True
+        if status == COMPLETE_INCIDENT_SCAN_STATUS and incident.get("advisor_eligible") is True
     ]
     warnings = [incident for incident in normalized if incident not in advisor_incidents]
     sources = metadata.get("sources") if isinstance(metadata.get("sources"), Mapping) else {}
@@ -75,7 +84,7 @@ async def _scan_route_incidents_with_metadata(route_context: Iterable[object]) -
             "incidents": [],
             "warnings": [],
             "scan_metadata": {
-                "status": "complete",
+                "status": COMPLETE_INCIDENT_SCAN_STATUS,
                 "sources": {"attempted": [], "completed": []},
                 "warning_count": 0,
             },

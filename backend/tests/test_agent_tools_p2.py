@@ -296,6 +296,8 @@ class TimingLogLineTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         self.assertIn("model_calls=", line)
         self.assertIn("model_tool_uses=", line)
         self.assertIn("provider_tool_executions=", line)
+        self.assertEqual(line.count("model_tool_uses="), 1)
+        self.assertEqual(line.count("provider_tool_executions="), 1)
         self.assertIn("retry_count=", line)
         self.assertIn("total_ms=", line)
         self.assertIn("in_tok=", line)

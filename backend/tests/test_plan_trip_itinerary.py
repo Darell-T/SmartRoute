@@ -7,6 +7,7 @@ summary.eta_minutes / summary.transfers must come only from the itinerary
 from __future__ import annotations
 
 import asyncio
+import json
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
@@ -363,6 +364,140 @@ class PlanTripItineraryTests(unittest.IsolatedAsyncioTestCase):
             round(itinerary["total_duration_seconds"] / 60),
         )
 
+    async def test_waypoint_trip_reports_progress_for_each_sequential_leg(self):
+        progress: list[tuple[str, str]] = []
+
+        async def record_progress(stage: str, status: str) -> None:
+            progress.append((stage, status))
+
+        ctx = self._ctx()
+        ctx.progress_sink = record_progress
+        result = await plan_trip.execute(
+            {
+                "origin": "user",
+                "waypoints": ["Joe's Pizza"],
+                "destination": "Costco",
+            },
+            ctx,
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(self._get_route.await_count, 2)
+        self.assertEqual(
+            progress,
+            [
+                ("finding_routes", "active"),
+                ("finding_routes", "active"),
+                ("finding_routes", "complete"),
+                ("checking_live_conditions", "active"),
+                ("checking_live_conditions", "complete"),
+                ("comparing_options", "active"),
+                ("comparing_options", "complete"),
+                ("finding_routes", "active"),
+                ("finding_routes", "complete"),
+                ("checking_live_conditions", "active"),
+                ("checking_live_conditions", "complete"),
+                ("comparing_options", "active"),
+                ("comparing_options", "complete"),
+            ],
+        )
+
+    async def test_chained_explanation_discloses_incomplete_incidents_once(self):
+        with patch.object(
+            plan_trip.trip_incidents,
+            "scan_route_incidents",
+            new=AsyncMock(
+                return_value={
+                    "incidents": [],
+                    "scan_metadata": {"status": "timeout"},
+                }
+            ),
+        ):
+            result = await plan_trip.execute(
+                {
+                    "origin": "user",
+                    "waypoints": ["Joe's Pizza"],
+                    "destination": "Costco",
+                },
+                self._ctx(),
+            )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(
+            result.data["passenger_explanation"].casefold().count(
+                "incident coverage is incomplete"
+            ),
+            1,
+        )
+
+    async def test_chained_explanation_normalizes_truthful_incomplete_variants(self):
+        def advisor_response(prose: str) -> str:
+            return (
+                f"{prose} [ROUTE:0][CANDIDATE_ANALYSIS]"
+                + json.dumps(
+                    {
+                        "selected_route_index": 0,
+                        "candidate_analysis": [
+                            {
+                                "index": 0,
+                                "is_recommended": True,
+                                "recommendation_reason": "Direct ride.",
+                            },
+                            {
+                                "index": 1,
+                                "is_recommended": False,
+                                "rejection_reason": "Slower option.",
+                            },
+                        ],
+                    }
+                )
+                + "[/CANDIDATE_ANALYSIS]"
+            )
+
+        advisor_responses = [
+            advisor_response("Take the Q to Joe's Pizza. Incident coverage is incomplete."),
+            advisor_response("Take the B to Union Square. Incident information was unavailable."),
+            advisor_response("The incident scan timed out."),
+        ]
+        with (
+            patch.object(
+                plan_trip.trip_incidents,
+                "scan_route_incidents",
+                new=AsyncMock(
+                    side_effect=[
+                        {"incidents": [], "scan_metadata": {"status": "timeout"}},
+                        {"incidents": [], "scan_metadata": {"status": "unavailable"}},
+                        {"incidents": [], "scan_metadata": {"status": "partial"}},
+                    ]
+                ),
+            ),
+            patch.object(
+                plan_trip.ai_advisor,
+                "collect_agent_recommendation",
+                new=AsyncMock(side_effect=advisor_responses),
+            ),
+        ):
+            result = await plan_trip.execute(
+                {
+                    "origin": "user",
+                    "waypoints": ["Joe's Pizza", "Union Square"],
+                    "destination": "Costco",
+                },
+                self._ctx(),
+            )
+
+        self.assertTrue(result.ok)
+        explanation = result.data["passenger_explanation"]
+        self.assertIn("Take the Q to Joe's Pizza.", explanation)
+        self.assertIn("Take the B to Union Square.", explanation)
+        self.assertEqual(
+            explanation.casefold().count("incident coverage is incomplete"),
+            1,
+        )
+        self.assertNotIn("incident information was unavailable", explanation.casefold())
+        self.assertNotIn("incident scan timed out", explanation.casefold())
+        self.assertNotIn("no active incidents", explanation.casefold())
+
     async def test_invalid_waypoints_fail_before_location_or_route_providers(self):
         for waypoints in (["A", "B", "C", "D"], ["x" * 161]):
             with self.subTest(waypoints=waypoints):
@@ -514,7 +649,7 @@ class PlanTripItineraryTests(unittest.IsolatedAsyncioTestCase):
             (40.7128, -74.006),
         )
 
-    async def test_crowd_intent_searches_events_and_can_change_the_recommended_route(self):
+    async def test_crowd_intent_gives_scored_event_evidence_to_the_selected_agent(self):
         impacts = [
             {
                 "event_id": "evt-msg",
@@ -528,6 +663,33 @@ class PlanTripItineraryTests(unittest.IsolatedAsyncioTestCase):
                 "impact_scope": "station_crowding",
             }
         ]
+        captured = {}
+
+        async def choose_b(payload, *, model, explanation_style):
+            captured["payload"] = payload
+            return (
+                "The B avoids the event exposure on the Q. [ROUTE:1]"
+                "[CANDIDATE_ANALYSIS]"
+                + json.dumps(
+                    {
+                        "selected_route_index": 1,
+                        "candidate_analysis": [
+                            {
+                                "index": 0,
+                                "is_recommended": False,
+                                "rejection_reason": "Crowd exposure at the Garden.",
+                            },
+                            {
+                                "index": 1,
+                                "is_recommended": True,
+                                "recommendation_reason": "Avoids the event crowding.",
+                            },
+                        ],
+                    }
+                )
+                + "[/CANDIDATE_ANALYSIS]"
+            )
+
         with patch.object(
             plan_trip.crowd_evidence,
             "collect",
@@ -539,7 +701,11 @@ class PlanTripItineraryTests(unittest.IsolatedAsyncioTestCase):
                     {"grok_status": "complete"},
                 )
             ),
-        ) as collect:
+        ) as collect, patch.object(
+            plan_trip.ai_advisor,
+            "collect_agent_recommendation",
+            new=choose_b,
+        ):
             result = await plan_trip.execute(
                 {
                     "origin": "user",
@@ -551,6 +717,8 @@ class PlanTripItineraryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(result.ok)
         collect.assert_awaited_once()
+        scores = {row["index"]: row["score"] for row in captured["payload"]["scored_candidates"]}
+        self.assertGreater(scores[0], scores[1])
         recommended = next(event for event in result.events if event.role == "recommended")
         self.assertEqual(recommended.summary["lines"], ["B"])
         self.assertEqual(result.data["event_evidence"]["status"], "available")
@@ -563,7 +731,7 @@ class PlanTripItineraryTests(unittest.IsolatedAsyncioTestCase):
             decision,
         )
         self.assertEqual(recommended.selection_decision, decision)
-        self.assertEqual(decision["selection_reason"], "lowest_final_score")
+        self.assertEqual(decision["selection_reason"], "advisor_tiebreak")
         self.assertIn("crowd_evidence_considered", decision["hard_constraints_satisfied"])
         self.assertEqual(decision["evidence_ids"], [])
         active = next(

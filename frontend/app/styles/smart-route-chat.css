@@ -1533,6 +1533,14 @@
   color: var(--sr-chat-danger);
 }
 
+.sr-chat-tool-row__state-dot {
+  width: 5px;
+  height: 5px;
+  flex: 0 0 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--sr-chat-ink-dim) 72%, transparent);
+}
+
 .sr-chat-tool-row__spinner {
   animation: srSpin 0.8s linear infinite;
 }
@@ -2377,6 +2385,13 @@ button.sr-chat-route-card {
   font-weight: 610;
   letter-spacing: -0.01em;
 }
+.sr-chat-working-panel__semantic-stage {
+  display: inline-block;
+  min-height: 1.45em;
+  font-weight: 610;
+  letter-spacing: -0.01em;
+}
+
 
 .sr-chat-arrivals-card__body {
   display: flex;

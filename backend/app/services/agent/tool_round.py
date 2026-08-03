@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import re
 import time
@@ -89,7 +90,10 @@ def constrained_tool_input(
         normalized["max_candidates"] = mode_policy.max_route_candidates
         normalized["avoid_crowds"] = bool(normalized.get("avoid_crowds") or parsed_intent.avoid_crowds)
         if mode_policy.mode != "auto" or parsed_intent.avoid_crowds:
-            normalized["crowd_search_mode"] = mode_policy.mode
+            # A rider who explicitly asks to avoid crowds still receives the
+            # complete crowd-research path.  That research depth is separate
+            # from the conversational model, which remains Haiku in Quick.
+            normalized["crowd_search_mode"] = "auto" if parsed_intent.avoid_crowds else mode_policy.mode
         normalized["include_first_leg_arrivals"] = mode_policy.optional_enrichment
         if parsed_intent.requested_route_ids:
             normalized["required_route_ids"] = list(parsed_intent.requested_route_ids)
@@ -166,6 +170,9 @@ async def execute_tool_round(
     tool_registry: dict,
 ) -> AsyncIterator:
     """Emit a model tool round and its final synthetic tool-result message."""
+    ctx.agent_mode = mode_policy.mode
+    ctx.agent_model = mode_policy.model
+    ctx.agent_explanation_style = mode_policy.explanation_style
     tool_inputs = {
         block.id: constrained_tool_input(
             getattr(block, "name", ""), getattr(block, "input", {}) or {}, excluded_modes,
@@ -183,6 +190,7 @@ async def execute_tool_round(
 
     start_times = {block.id: time.monotonic() for block in tool_use_blocks}
     round_tasks: dict[str, asyncio.Task[ToolResult]] = {}
+    pending_calls: dict[str, tuple[str, dict]] = {}
     outcomes_by_key: dict[str, ToolResult] = {}
     first_block_id_by_key: dict[str, str] = {}
     for block in tool_use_blocks:
@@ -193,14 +201,85 @@ async def execute_tool_round(
         cached = tool_ledger.successful.get(key)
         if cached is not None:
             outcomes_by_key[key] = cached
-        elif key not in round_tasks:
-            round_tasks[key] = asyncio.create_task(tool_ledger.execute(name, tool_input, ctx, deadline_monotonic=deadline_monotonic))
-    if round_tasks:
-        outcomes_by_key.update(zip(round_tasks, await asyncio.gather(*round_tasks.values())))
+        elif key not in pending_calls:
+            pending_calls[key] = (name, tool_input)
+    if pending_calls:
+        progress_queue: asyncio.Queue[agent_events.ProgressEvent] = asyncio.Queue()
+        active_stages: set[str] = set()
+        last_progress: tuple[str, str] | None = None
+
+        async def publish_progress(stage: str, status: str) -> None:
+            nonlocal last_progress
+            if stage not in {
+                "finding_routes",
+                "checking_live_conditions",
+                "comparing_options",
+            } or status not in {"active", "complete"}:
+                return
+            progress = (stage, status)
+            if progress == last_progress:
+                return
+            if status == "complete" and stage not in active_stages:
+                return
+            if status == "active":
+                active_stages.add(stage)
+            else:
+                active_stages.remove(stage)
+            last_progress = progress
+            await progress_queue.put(agent_events.ProgressEvent(stage=stage, status=status))
+
+        previous_progress_sink = ctx.progress_sink
+        ctx.progress_sink = publish_progress
+        round_task: asyncio.Task[list[ToolResult]] | None = None
+        progress_wait_task: asyncio.Task[agent_events.ProgressEvent] | None = None
+        try:
+            for key, (name, tool_input) in pending_calls.items():
+                round_tasks[key] = asyncio.create_task(
+                    tool_ledger.execute(
+                        name,
+                        tool_input,
+                        ctx,
+                        deadline_monotonic=deadline_monotonic,
+                    )
+                )
+
+            async def gather_round() -> list[ToolResult]:
+                return await asyncio.gather(*round_tasks.values())
+
+            round_task = asyncio.create_task(gather_round())
+            while True:
+                progress_wait_task = asyncio.create_task(progress_queue.get())
+                done, _ = await asyncio.wait(
+                    {round_task, progress_wait_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if progress_wait_task in done:
+                    yield progress_wait_task.result()
+                    if round_task in done:
+                        break
+                    continue
+                progress_wait_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await progress_wait_task
+                break
+            outcomes_by_key.update(zip(round_tasks, await round_task))
+            while not progress_queue.empty():
+                yield progress_queue.get_nowait()
+        finally:
+            if progress_wait_task is not None and not progress_wait_task.done():
+                progress_wait_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await progress_wait_task
+            if round_task is not None and not round_task.done():
+                round_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await round_task
+            ctx.progress_sink = previous_progress_sink
     outcomes = [outcomes_by_key[tool_ledger.key(getattr(block, "name", ""), tool_inputs[block.id])] for block in tool_use_blocks]
 
     tool_result_content = []
     escalation_reason = None
+    terminal_plan_trip_result: ToolResult | None = None
     required_tools = set(parsed_intent.required_evidence.required_tools())
     for block, result in zip(tool_use_blocks, outcomes):
         name = getattr(block, "name", "")
@@ -228,10 +307,20 @@ async def execute_tool_round(
                     session_module.clear_pending_trip(session)
                 for event in result.events:
                     yield event
+            if name == "plan_trip" and any(
+                getattr(event, "type", None) == "route_card"
+                and getattr(event, "role", None) == "recommended"
+                for event in result.events
+            ):
+                terminal_plan_trip_result = result
         else:
             reason = result.error or "tool failed"
             tool_result_content.append({"type": "tool_result", "tool_use_id": block.id, "content": json.dumps({"source": name, "data": {"error": reason}, "untrusted": True}, default=str), "is_error": True})
             yield agent_events.ToolEndEvent(tool_call_id=block.id, tool=name, ok=False, duration_ms=duration_ms, summary=reason)
             if surface_side_effects and name == "plan_trip":
                 session_module.mark_pending_trip_failed(session, tool_input, reason)
-    yield {"__tool_result_message__": {"role": "user", "content": tool_result_content}, "__quick_escalation_reason__": escalation_reason}
+    yield {
+        "__tool_result_message__": {"role": "user", "content": tool_result_content},
+        "__quick_escalation_reason__": escalation_reason,
+        "__terminal_plan_trip_result__": terminal_plan_trip_result,
+    }

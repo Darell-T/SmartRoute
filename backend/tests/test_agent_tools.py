@@ -8,6 +8,7 @@ the whole `anthropic` module -- that's reserved for test_agent_loop.py,
 which needs to script the orchestrator model itself.
 """
 
+import json
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
@@ -57,6 +58,37 @@ def _google_response(*legs: dict) -> dict:
 
 
 NYC_COORDS = (40.7128, -74.0060)
+
+
+def _advisor_response(
+    prose: str,
+    *,
+    candidate_count: int,
+    selected_index: int = 0,
+) -> str:
+    rows = []
+    for index in range(candidate_count):
+        if index == selected_index:
+            rows.append(
+                {
+                    "index": index,
+                    "is_recommended": True,
+                    "recommendation_reason": "Best current trade-off.",
+                }
+            )
+        else:
+            rows.append(
+                {
+                    "index": index,
+                    "is_recommended": False,
+                    "rejection_reason": "Less suitable for this trip.",
+                }
+            )
+    analysis = {"selected_route_index": selected_index, "candidate_analysis": rows}
+    return (
+        f"{prose} [ROUTE:{selected_index}]"
+        f"[CANDIDATE_ANALYSIS]{json.dumps(analysis)}[/CANDIDATE_ANALYSIS]"
+    )
 
 
 class PlanTripToolTests(unittest.IsolatedAsyncioTestCase):
@@ -177,6 +209,61 @@ class PlanTripToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(recommended.turn_id, "t1")
         self.assertTrue(any(step.get("type") == "SUBWAY" for step in recommended.route))
 
+    async def test_successful_plan_trip_reports_monotonic_live_progress_stages(self):
+        stages = []
+
+        async def collect(stage, status):
+            stages.append((stage, status))
+
+        ctx = self._ctx(origin={"lat": 40.7, "lng": -73.9})
+        ctx.progress_sink = collect
+        result = await plan_trip.execute(
+            {"origin": "user", "destination": "Costco"}, ctx
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(
+            stages,
+            [
+                ("finding_routes", "active"),
+                ("finding_routes", "complete"),
+                ("checking_live_conditions", "active"),
+                ("checking_live_conditions", "complete"),
+                ("comparing_options", "active"),
+                ("comparing_options", "complete"),
+            ],
+        )
+
+    async def test_chained_plan_trip_reports_progress_for_each_sequential_leg(self):
+        stages = []
+
+        async def collect(stage, status):
+            stages.append((stage, status))
+
+        ctx = self._ctx(origin={"lat": 40.7, "lng": -73.9})
+        ctx.progress_sink = collect
+        result = await plan_trip.execute(
+            {
+                "origin": "user",
+                "destination": "Costco",
+                "waypoints": ["Union Square"],
+            },
+            ctx,
+        )
+
+        self.assertTrue(result.ok)
+        expected_cycle = [
+            ("finding_routes", "active"),
+            ("finding_routes", "complete"),
+            ("checking_live_conditions", "active"),
+            ("checking_live_conditions", "complete"),
+            ("comparing_options", "active"),
+            ("comparing_options", "complete"),
+        ]
+        self.assertEqual(stages, [("finding_routes", "active")] + expected_cycle * 2)
+        self.assertEqual(stages[7], ("finding_routes", "active"))
+        self.assertEqual(stages[-1], ("comparing_options", "complete"))
+
     async def test_no_routes_found_is_reported(self):
         self._get_route.return_value = {"routes": []}
         result = await plan_trip.execute(
@@ -225,20 +312,41 @@ class PlanTripToolTests(unittest.IsolatedAsyncioTestCase):
         }
         captured = {}
 
-        async def capture_advisor(payload):
+        async def capture_advisor(payload, *, model, explanation_style):
             captured["payload"] = payload
-            return "[ROUTE:0] Take the Q."
+            captured["model"] = model
+            captured["explanation_style"] = explanation_style
+            return _advisor_response(
+                "Take the Q.", candidate_count=len(payload["routes"])
+            )
 
-        with patch.object(plan_trip.ai_advisor, "collect_recommendation", new=capture_advisor):
+        ctx = self._ctx(origin={"lat": 40.7, "lng": -73.9})
+        with (
+            patch.object(
+                plan_trip.ai_advisor,
+                "collect_recommendation",
+                new=AsyncMock(side_effect=AssertionError("REST advisor must not run")),
+            ),
+            patch.object(plan_trip.ai_advisor, "collect_agent_recommendation", new=capture_advisor),
+        ):
             result = await plan_trip.execute(
                 {"origin": "user", "destination": "Costco"},
-                self._ctx(origin={"lat": 40.7, "lng": -73.9}),
+                ctx,
             )
 
         self.assertTrue(result.ok)
         self.assertEqual(captured["payload"]["incidents"], [])
         self.assertEqual(captured["payload"]["evidence"]["advisor"]["status"], "unavailable")
+        self.assertIn("incident coverage is incomplete", result.data["passenger_explanation"])
+        self.assertNotIn("[ROUTE:", result.data["passenger_explanation"])
+        self.assertNotIn("[CANDIDATE_ANALYSIS]", result.data["passenger_explanation"])
         self.assertEqual(result.data["incident_evidence"]["status"], "partial")
+        self.assertEqual(captured["model"], plan_trip.agent_policy.policy_for_mode("auto").model)
+        model_call = ctx.telemetry["model_calls"][0]
+        self.assertEqual(model_call["role"], "route_selection")
+        self.assertEqual(model_call["provider"], "anthropic")
+        self.assertEqual(model_call["model"], plan_trip.agent_policy.safe_model_label(captured["model"]))
+        self.assertEqual(model_call["outcome"], "complete")
 
     async def test_partial_empty_scan_is_not_presented_as_an_all_clear(self):
         self._scan_incidents.return_value = {
@@ -251,12 +359,15 @@ class PlanTripToolTests(unittest.IsolatedAsyncioTestCase):
         }
         captured = {}
 
-        async def capture_advisor(payload):
+        async def capture_advisor(payload, *, model, explanation_style):
             captured["payload"] = payload
-            return "[ROUTE:0] Take the Q."
+            return _advisor_response(
+                "No active incidents are affecting the Q.",
+                candidate_count=len(payload["routes"]),
+            )
 
         result = None
-        with patch.object(plan_trip.ai_advisor, "collect_recommendation", new=capture_advisor):
+        with patch.object(plan_trip.ai_advisor, "collect_agent_recommendation", new=capture_advisor):
             result = await plan_trip.execute(
                 {"origin": "user", "destination": "Costco"},
                 self._ctx(origin={"lat": 40.7, "lng": -73.9}),
@@ -265,15 +376,22 @@ class PlanTripToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.ok)
         self.assertEqual(captured["payload"]["incidents"], [])
         self.assertEqual(captured["payload"]["evidence"]["advisor"]["status"], "unavailable")
+        self.assertIn("incident coverage is incomplete", result.data["passenger_explanation"])
+        self.assertNotIn("no active incidents", result.data["passenger_explanation"].casefold())
+        self.assertNotIn("all clear", result.data["passenger_explanation"].casefold())
 
-    async def test_plan_trip_always_uses_shared_intelligence_advisor_mode(self):
+    async def test_plan_trip_uses_the_turn_selected_agent_model_and_style(self):
         captured = {}
 
-        async def capture_advisor(payload):
+        async def capture_advisor(payload, *, model, explanation_style):
             captured["payload"] = payload
-            return "[ROUTE:0] Take the Q."
+            captured["model"] = model
+            captured["explanation_style"] = explanation_style
+            return _advisor_response(
+                "Take the Q.", candidate_count=len(payload["routes"])
+            )
 
-        with patch.object(plan_trip.ai_advisor, "collect_recommendation", new=capture_advisor):
+        with patch.object(plan_trip.ai_advisor, "collect_agent_recommendation", new=capture_advisor):
             result = await plan_trip.execute(
                 {"origin": "user", "destination": "Costco"},
                 self._ctx(origin={"lat": 40.7, "lng": -73.9}),
@@ -282,6 +400,130 @@ class PlanTripToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.ok)
         self.assertEqual(captured["payload"]["planning_mode"], "intelligence")
         self.assertIn("route_candidate_labels", captured["payload"])
+        self.assertEqual(
+            [row["index"] for row in captured["payload"]["scored_candidates"]],
+            [0, 1],
+        )
+        self.assertEqual(captured["model"], plan_trip.agent_policy.policy_for_mode("auto").model)
+        self.assertEqual(captured["explanation_style"], "comparative")
+
+    async def test_valid_agent_selection_is_preserved_when_event_scoring_prefers_another_route(self):
+        async def event_evidence(*_args, **_kwargs):
+            return (
+                "available",
+                [
+                    {
+                        "event_id": "event-1",
+                        "title": "Crowded venue",
+                        "venue": "Test venue",
+                        "route_index": 0,
+                        "risk_score": 18.0,
+                        "scoring_authorized": True,
+                    }
+                ],
+                [],
+                {"grok_status": "complete"},
+            )
+
+        captured = {}
+
+        async def choose_first(payload, *, model, explanation_style):
+            captured["payload"] = payload
+            return _advisor_response(
+                "The Q is still the better fit for your request.",
+                candidate_count=len(payload["routes"]),
+                selected_index=0,
+            )
+
+        with (
+            patch.object(plan_trip.crowd_evidence, "collect", side_effect=event_evidence),
+            patch.object(plan_trip.ai_advisor, "collect_agent_recommendation", new=choose_first),
+        ):
+            result = await plan_trip.execute(
+                {"origin": "user", "destination": "Costco", "avoid_crowds": True},
+                self._ctx(origin={"lat": 40.7, "lng": -73.9}),
+            )
+
+        self.assertTrue(result.ok)
+        scores = {row["index"]: row["score"] for row in captured["payload"]["scored_candidates"]}
+        self.assertGreater(scores[0], scores[1])
+        self.assertEqual(result.data["selected_route_index"], 0)
+        self.assertEqual(
+            result.data["selection_decision"]["selection_reason"], "advisor_tiebreak"
+        )
+
+    async def test_invalid_agent_controls_use_deterministic_score_fallback_with_event_evidence(self):
+        async def event_evidence(*_args, **_kwargs):
+            return (
+                "available",
+                [
+                    {
+                        "event_id": "event-1",
+                        "title": "Crowded venue",
+                        "venue": "Test venue",
+                        "route_index": 0,
+                        "risk_score": 18.0,
+                        "scoring_authorized": True,
+                    }
+                ],
+                [],
+                {"grok_status": "complete"},
+            )
+
+        invalid_responses = {
+            "missing_marker": "Take the Q.",
+            "out_of_range": _advisor_response(
+                "Take the Q.", candidate_count=2, selected_index=2
+            ),
+            "malformed_analysis": "Take the Q. [ROUTE:0][CANDIDATE_ANALYSIS]{oops}[/CANDIDATE_ANALYSIS]",
+        }
+        for name, response in invalid_responses.items():
+            ctx = self._ctx(origin={"lat": 40.7, "lng": -73.9})
+            with self.subTest(name=name), patch.object(
+                plan_trip.crowd_evidence, "collect", side_effect=event_evidence
+            ), patch.object(
+                plan_trip.ai_advisor,
+                "collect_agent_recommendation",
+                new=AsyncMock(return_value=response),
+            ):
+                result = await plan_trip.execute(
+                    {"origin": "user", "destination": "Costco", "avoid_crowds": True},
+                    ctx,
+                )
+
+            self.assertTrue(result.ok)
+            self.assertEqual(result.data["selected_route_index"], 1)
+            self.assertEqual(ctx.telemetry["plan_trip"]["advisor_status"], "invalid")
+            self.assertIs(ctx.telemetry["plan_trip"]["advisor_fallback"], True)
+
+    async def test_quick_mode_uses_haiku_for_each_chained_leg(self):
+        calls = []
+
+        async def capture_advisor(payload, *, model, explanation_style):
+            calls.append((model, explanation_style, payload["planning_mode"]))
+            return _advisor_response(
+                "Take the Q.", candidate_count=len(payload["routes"])
+            )
+
+        policy = plan_trip.agent_policy.policy_for_mode("quick")
+        ctx = self._ctx(origin={"lat": 40.7, "lng": -73.9})
+        ctx.agent_mode = policy.mode
+        ctx.agent_model = policy.model
+        ctx.agent_explanation_style = policy.explanation_style
+        with patch.object(plan_trip.ai_advisor, "collect_agent_recommendation", new=capture_advisor):
+            result = await plan_trip.execute(
+                {
+                    "origin": "user",
+                    "destination": "Central Park",
+                    "waypoints": ["Union Square"],
+                },
+                ctx,
+            )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(calls, [(policy.model, "concise", "intelligence")] * 2)
+        self.assertNotEqual(policy.model, plan_trip.agent_policy.policy_for_mode("auto").model)
+        self.assertIn("Take the Q.", result.data["passenger_explanation"])
 
 
 class TransitSnapshotToolTests(unittest.IsolatedAsyncioTestCase):

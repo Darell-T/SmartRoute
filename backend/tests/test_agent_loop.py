@@ -390,6 +390,8 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(trace.initial_mode, "quick")
         self.assertEqual(trace.final_mode, "quick")
         self.assertIsNone(trace.escalation_reason)
+        self.assertEqual(trace.model_call_count, 1)
+        self.assertEqual(len(self.loop.client.messages.calls), 1)
 
     async def test_auto_crowd_avoidance_enables_bounded_crowd_research(self):
         trace = self.loop.TurnTrace()
@@ -422,7 +424,7 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(plan_input["crowd_search_mode"], "auto")
         self.assertNotIn("include_incident_scan", plan_input)
 
-    async def test_quick_crowd_request_escalates_before_planning(self):
+    async def test_quick_crowd_request_keeps_the_quick_model_for_planning(self):
         trace = self.loop.TurnTrace()
         rounds = [
             {
@@ -447,8 +449,13 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(trace.escalation_reason, "explicit_crowd_evidence")
-        self.assertEqual(trace.final_mode, "auto")
+        self.assertEqual(trace.final_mode, "quick")
         self.assertEqual(trace.tool_calls[0][1]["crowd_search_mode"], "auto")
+        self.assertEqual(
+            self.loop.client.messages.calls[0]["model"],
+            self.loop.agent_policy.policy_for_mode("quick").model,
+        )
+        self.assertEqual(len(self.loop.client.messages.calls), 1)
 
     async def test_explicit_route_request_is_injected_into_plan_trip(self):
         trace = self.loop.TurnTrace()
@@ -547,7 +554,7 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
             {"plan_trip", "accessibility_status", "web_search"},
         )
 
-    async def test_quick_escalates_once_and_reuses_tool_result_context(self):
+    async def test_quick_keeps_haiku_when_tool_output_requires_clarification(self):
         rounds = [
             {
                 "tool_use": [
@@ -579,15 +586,66 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(trace.initial_mode, "quick")
-        self.assertEqual(trace.final_mode, "auto")
+        self.assertEqual(trace.final_mode, "quick")
         self.assertEqual(
             trace.escalation_reason, "ambiguous_station_or_destination"
         )
         self.assertEqual(len(trace.tool_calls), 1)
         self.assertEqual(
             self.loop.client.messages.calls[1]["model"],
-            self.loop.agent_policy.policy_for_mode("auto").model,
+            self.loop.agent_policy.policy_for_mode("quick").model,
         )
+
+    async def test_quick_edge_conditions_never_substitute_sonnet(self):
+        cases = (
+            (
+                "required_tool_failure",
+                ToolResult(ok=False, error="provider unavailable"),
+            ),
+            (
+                "mandatory_constraints_unsatisfied",
+                ToolResult(ok=False, error="no transit route found"),
+            ),
+            (
+                "conflicting_mandatory_evidence",
+                ToolResult(ok=True, data={"conflicting_mandatory_evidence": True}),
+            ),
+            (
+                "effectively_tied_final_scores",
+                ToolResult(ok=True, data={"quick_escalation_reason": "effectively_tied_final_scores"}),
+            ),
+        )
+        quick_model = self.loop.agent_policy.policy_for_mode("quick").model
+        auto_model = self.loop.agent_policy.policy_for_mode("auto").model
+
+        for expected_reason, result in cases:
+            async def edge_plan_trip(_tool_input, _ctx, *, response=result):
+                return response
+
+            registry = _test_registry()
+            registry["plan_trip"] = ToolSpec(
+                schema={"name": "plan_trip"},
+                executor=edge_plan_trip,
+                label_fn=lambda _input: "Finding routes…",
+                timeout_s=5.0,
+            )
+            trace = self.loop.TurnTrace()
+            with self.subTest(reason=expected_reason):
+                await self._run(
+                    [
+                        {"tool_use": [{"id": "tu_1", "name": "plan_trip", "input": {"destination": "Costco"}}], "stop_reason": "tool_use"},
+                        {"text": ["I need one more detail."], "stop_reason": "end_turn"},
+                    ],
+                    message="Plan a trip to Costco",
+                    response_presentation="quick",
+                    tool_registry=registry,
+                    trace=trace,
+                )
+                models = [call["model"] for call in self.loop.client.messages.calls]
+                self.assertEqual(trace.escalation_reason, expected_reason)
+                self.assertEqual(trace.final_mode, "quick")
+                self.assertEqual(models, [quick_model, quick_model])
+                self.assertNotIn(auto_model, models)
 
     async def test_parallel_tools_return_single_tool_result_message(self):
         rounds = [
@@ -641,6 +699,101 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(route_cards[0].turn_id, "t1")
         self.assertEqual(session["route_cards"][0]["card_id"], "rc_test0001")
 
+    async def test_model_acknowledgement_precedes_terminal_plan_trip_without_another_model_round(self):
+        async def terminal_plan_trip(tool_input, ctx):
+            result = await _fake_plan_trip_tool(tool_input, ctx)
+            result.data["passenger_explanation"] = "Take the Q to B in about 20 minutes with no transfers."
+            return result
+
+        registry = _test_registry()
+        registry["plan_trip"] = ToolSpec(
+            schema={"name": "plan_trip"},
+            executor=terminal_plan_trip,
+            label_fn=lambda _input: "Finding routes…",
+            timeout_s=5.0,
+        )
+        rounds = [
+            {
+                "text": ["I'll compare your options for Costco."],
+                "tool_use": [{"id": "tu_1", "name": "plan_trip", "input": {"destination": "Costco"}}],
+                "stop_reason": "tool_use",
+            },
+            {"text": ["This must not be used"], "stop_reason": "end_turn"},
+        ]
+
+        events_out, session = await self._run(rounds, tool_registry=registry)
+
+        event_types = [event.type for event in events_out]
+        token_events = [event for event in events_out if event.type == "token"]
+        self.assertLess(event_types.index("meta"), event_types.index("token"))
+        self.assertLess(event_types.index("token"), event_types.index("tool_start"))
+        self.assertLess(event_types.index("tool_start"), event_types.index("tool_end"))
+        self.assertLess(event_types.index("tool_end"), event_types.index("route_card"))
+        route_card_index = event_types.index("route_card")
+        self.assertLess(route_card_index, event_types.index("token", route_card_index + 1))
+        self.assertEqual(event_types[-1], "done")
+        rider_text = "".join(event.text for event in events_out if event.type == "token")
+        self.assertEqual(
+            [event.text for event in token_events],
+            [
+                "I'll compare your options for Costco.",
+                "\n\nTake the Q to B in about 20 minutes with no transfers.",
+            ],
+        )
+        self.assertEqual(
+            rider_text,
+            "I'll compare your options for Costco.\n\nTake the Q to B in about 20 minutes with no transfers.",
+        )
+        self.assertNotIn("[ROUTE:", rider_text)
+        self.assertNotIn("CANDIDATE_ANALYSIS", rider_text)
+        self.assertEqual(session["history"][-1]["text"], rider_text)
+        self.assertEqual(len(self.loop.client.messages.calls), 1)
+
+    async def test_terminal_plan_trip_injects_input_grounded_acknowledgement_without_model_prose(self):
+        async def terminal_plan_trip(tool_input, ctx):
+            result = await _fake_plan_trip_tool(tool_input, ctx)
+            result.data["passenger_explanation"] = "Take the Q to B in about 20 minutes with no transfers."
+            return result
+
+        registry = _test_registry()
+        registry["plan_trip"] = ToolSpec(
+            schema={"name": "plan_trip"},
+            executor=terminal_plan_trip,
+            label_fn=lambda _input: "Finding routesâ€¦",
+            timeout_s=5.0,
+        )
+        rounds = [
+            {
+                "tool_use": [
+                    {
+                        "id": "tu_1",
+                        "name": "plan_trip",
+                        "input": {
+                            "destination": "Costco",
+                            "exclude_modes": ["BUS"],
+                            "routing_preference": "LESS_WALKING",
+                        },
+                    }
+                ],
+                "stop_reason": "tool_use",
+            },
+            {"text": ["This must not be used"], "stop_reason": "end_turn"},
+        ]
+
+        events_out, _session = await self._run(rounds, tool_registry=registry)
+
+        token_events = [event for event in events_out if event.type == "token"]
+        acknowledgement = token_events[0].text
+        event_types = [event.type for event in events_out]
+        self.assertLess(event_types.index("token"), event_types.index("tool_start"))
+        self.assertEqual(
+            acknowledgement,
+            "I'll plan your trip to Costco (without buses; with less walking).",
+        )
+        for unsupported_claim in ("route", "arrival", "incident", "service"):
+            self.assertNotIn(unsupported_claim, acknowledgement.casefold())
+        self.assertEqual(len(self.loop.client.messages.calls), 1)
+
     async def test_telemetry_emits_before_done_when_client_closes_at_terminal_event(self):
         async def telemetry_plan_trip(tool_input, ctx):
             ctx.telemetry["plan_trip"] = {
@@ -672,6 +825,7 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
             },
             {"text": ["Here you go"], "stop_reason": "end_turn"},
         ]
+        self.loop.client.messages.calls = []
         _discard_id, session = session_module.new_session()
         timeline = []
 
@@ -705,7 +859,9 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(telemetry_prints), 1)
         self.assertIs(telemetry_prints[0].kwargs.get("flush"), True)
         self.assertLess(timeline.index("telemetry"), timeline.index("done"))
-        self.assertEqual(session["history"][-1]["text"], "Here you go")
+        self.assertIn('"mode":"auto"', str(telemetry_prints[0].args[0]))
+        self.assertIn("I'd take the Q", session["history"][-1]["text"])
+        self.assertEqual(len(self.loop.client.messages.calls), 1)
 
     async def test_no_bus_language_is_enforced_at_the_plan_trip_boundary(self):
         rounds = [
@@ -1138,7 +1294,7 @@ class DeadlineTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(event.type == "tool_start" for event in events_out))
         self.assertTrue(any(event.type == "tool_end" and not event.ok for event in events_out))
 
-    async def test_grounded_route_card_survives_followup_deadline_with_one_terminal_done(self):
+    async def test_grounded_route_card_completes_without_a_followup_model_round(self):
         calls = 0
 
         async def scripted_stream(**stream_kwargs):
@@ -1167,9 +1323,9 @@ class DeadlineTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
             events_out, session = await self._run([], message="Plan a trip", tool_registry=_test_registry())
 
         self.assertLess(time.monotonic() - started, 0.5)
-        self.assertEqual(calls, 2)
+        self.assertEqual(calls, 1)
         self.assertEqual(len([event for event in events_out if event.type == "done"]), 1)
-        self.assertEqual(events_out[-1].stop_reason, "deadline")
+        self.assertEqual(events_out[-1].stop_reason, "end_turn")
         self.assertTrue(any(event.type == "route_card" and event.card_id == "rc_test0001" for event in events_out))
         self.assertTrue(any("takes about 20 min" in event.text for event in events_out if event.type == "token"))
         self.assertTrue(any(card["card_id"] == "rc_test0001" for card in session["route_cards"]))

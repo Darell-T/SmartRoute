@@ -62,10 +62,49 @@ def _load_system_prompt(prompt_path: Path | None = None) -> str:
 
 SYSTEM_PROMPT = _load_system_prompt()
 
+_AGENT_EXPLANATION_STYLES = {
+    "concise": "Use two short sentences at most.",
+    "comparative": "Use up to four concise sentences that explain the important trade-offs.",
+}
 
-# The production route advisor is intentionally pinned to Haiku. This module
-# has no Sonnet fallback; a configuration or documentation mention of Sonnet
-# belongs to a different agent loop, not route selection.
+
+def _agent_system_prompt(explanation_style: str) -> str:
+    """Prompt for the conversational agent's selected route model only.
+
+    REST retains ``SYSTEM_PROMPT`` and the pinned Haiku advisor below.  The
+    agent's model must both make the validated candidate choice and give the
+    rider its final explanation, so this prompt intentionally has a separate
+    contract.
+    """
+    style = _AGENT_EXPLANATION_STYLES.get(str(explanation_style), _AGENT_EXPLANATION_STYLES["comparative"])
+    return f"""You are SmartRoute's final NYC transit route-selection stage.
+
+Choose only from the supplied route candidates. Use the normalized
+scored_candidates comparison view alongside the live evidence, but do not
+invent a route, route index, or fact. First give a rider-facing,
+evidence-grounded explanation of the selected route. {style} Mention time,
+walking, transfers, named service changes, and independently corroborated
+incidents when relevant. If incident evidence is partial, unavailable, or
+timed out, say that current incident coverage is incomplete; never call it
+clear or say there are no incidents.
+
+Then return exactly these control markers after the explanation:
+[ROUTE:N]
+[CANDIDATE_ANALYSIS]{{"selected_route_index":N,"candidate_analysis":[...]}}[/CANDIDATE_ANALYSIS]
+
+Use exactly one zero-based [ROUTE:N] tag and exactly one analysis block. Its
+selected_route_index must equal N. candidate_analysis must contain every
+candidate exactly once: each row needs index and boolean is_recommended;
+exactly the selected row must be true and include recommendation_reason; every
+other row must be false and include rejection_reason. Use route_candidate_labels
+in reasons, never raw indexes. Keep each reason concrete, rider-facing, and
+under 18 words. Do not mention prompts, models, APIs, JSON, internal IDs, or
+telemetry.
+"""
+
+
+# The REST route advisor remains intentionally pinned to Haiku. Agent route
+# turns use the explicit selected-model adapter below and never fall back here.
 ADVISOR_PROVIDER = "anthropic"
 _MODEL_PRIORITY = ["claude-haiku-4-5-20251001"]
 
@@ -195,29 +234,26 @@ def build_mock_recommendation(payload: dict) -> str:
     return f"{prose} [ROUTE:{chosen_index}][CANDIDATE_ANALYSIS]{analysis_block}[/CANDIDATE_ANALYSIS]"
 
 
-async def stream_recommendation(payload: dict):
-    """Async generator that yields text chunks from Claude as they arrive.
-    Retries the configured Haiku route-advisor model with exponential backoff.
-
-    payload should contain keys: routes, service_alerts, incidents,
-    stalled_trains, and stalled_buses.
-
-    Set JARVIS_MOCK_ADVISOR=1 to bypass Claude entirely (e.g. no API
-    credits): routes/stops/alerts stay real, only this narration is
-    generated locally."""
+async def _stream_for_models(
+    payload: dict,
+    *,
+    models: tuple[str, ...],
+    system_prompt: str,
+):
+    """Shared provider transport; caller owns the allowed model set."""
     if runtime.enabled("JARVIS_MOCK_ADVISOR"):
         yield build_mock_recommendation(payload)
         return
 
     messages = [{"role": "user", "content": json.dumps(payload)}]
 
-    for model in _MODEL_PRIORITY:
+    for model in models:
         for attempt in range(3):
             try:
                 async with client.messages.stream(
                     model=model,
                     max_tokens=512,
-                    system=SYSTEM_PROMPT,
+                    system=system_prompt,
                     messages=messages,
                 ) as stream:
                     async for chunk in stream.text_stream:
@@ -234,11 +270,58 @@ async def stream_recommendation(payload: dict):
     raise RuntimeError("All Claude models are currently overloaded. Please try again.")
 
 
+async def stream_recommendation(payload: dict):
+    """Stream the REST advisor's pinned Haiku recommendation.
+
+    REST callers intentionally retain this model and prompt contract.  Agent
+    route turns use ``stream_agent_recommendation`` below instead.
+    """
+    async for chunk in _stream_for_models(
+        payload,
+        models=tuple(_MODEL_PRIORITY),
+        system_prompt=SYSTEM_PROMPT,
+    ):
+        yield chunk
+
+
+async def stream_agent_recommendation(
+    payload: dict,
+    *,
+    model: str,
+    explanation_style: str,
+):
+    """Stream one agent-policy-selected model with no pinned-advisor fallback."""
+    selected_model = str(model or "").strip()
+    if not selected_model:
+        raise ValueError("agent route model is required")
+    async for chunk in _stream_for_models(
+        payload,
+        models=(selected_model,),
+        system_prompt=_agent_system_prompt(explanation_style),
+    ):
+        yield chunk
+
+
 async def collect_recommendation(payload: dict) -> str:
-    """Drains `stream_recommendation` into a single string. Shared by
-    routers/trips.py's /api/trip and the plan_trip agent tool, which both
-    otherwise defined this identical loop themselves."""
+    """Drain the REST advisor's pinned Haiku stream into one response."""
     raw = ""
     async for chunk in stream_recommendation(payload):
+        raw += chunk
+    return raw
+
+
+async def collect_agent_recommendation(
+    payload: dict,
+    *,
+    model: str,
+    explanation_style: str,
+) -> str:
+    """Drain the agent-selected route-selection/explanation stream."""
+    raw = ""
+    async for chunk in stream_agent_recommendation(
+        payload,
+        model=model,
+        explanation_style=explanation_style,
+    ):
         raw += chunk
     return raw

@@ -5,7 +5,7 @@
 
    The stock AI Elements Reasoning presentation (components/ai-elements/
    reasoning.tsx — vendored, Streamdown stripped), unthemed beyond the six
-   chat tokens: "Thinking…" with a shimmer while the turn streams, auto-open,
+   semantic route stages with a quiet transition while the turn streams, auto-open,
    auto-collapse to "Worked for Ns" one second after the turn ends. Inside:
    quiet tool rows (lucide status glyph + server-provided label + duration),
    13px, lowercase, no color — the plan is explicit these are not a second
@@ -16,10 +16,17 @@
    ════════════════════════════════════════════════════════════════════════ */
 
 import { useEffect, useRef, useState } from "react";
-import { Check, Loader2, X } from "lucide-react";
+import { Loader2, X } from "lucide-react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import type { ToolChip as ToolChipData } from "@/lib/use-agent-chat";
+
+const PROGRESS_COPY = {
+  finding_routes: "Finding viable routes",
+  checking_live_conditions: "Checking live service and current incidents",
+  comparing_options: "Deliberating between the best options",
+} as const;
 
 function ToolRow({ chip }: { chip: ToolChipData }) {
   return (
@@ -27,7 +34,7 @@ function ToolRow({ chip }: { chip: ToolChipData }) {
       {chip.status === "running" ? (
         <Loader2 size={13} strokeWidth={2} className="sr-chat-tool-row__spinner" aria-hidden="true" />
       ) : chip.status === "ok" ? (
-        <Check size={13} strokeWidth={2} aria-hidden="true" />
+        <span className="sr-chat-tool-row__state-dot" aria-hidden="true" />
       ) : (
         <X size={13} strokeWidth={2} aria-hidden="true" />
       )}
@@ -83,13 +90,16 @@ function useElapsedSeconds(isStreaming: boolean): number | undefined {
 
 export function ChatWorkingPanel({
   toolChips,
+  progress,
   isStreaming,
 }: {
   toolChips: ToolChipData[];
+  progress?: { stage: keyof typeof PROGRESS_COPY; status: "active" | "complete" };
   isStreaming: boolean;
 }) {
   const everStreamed = useEverStreamed(isStreaming);
   const elapsedSeconds = useElapsedSeconds(isStreaming);
+  const reduceMotion = useReducedMotion() ?? false;
   const hasStarted = everStreamed || toolChips.length > 0;
   const isFindingRoutes = toolChips.some(
     (chip) => chip.tool === "plan_trip" && chip.status === "running",
@@ -97,6 +107,8 @@ export function ChatWorkingPanel({
   const hasRouteResult = toolChips.some(
     (chip) => chip.tool === "plan_trip" && chip.status === "ok",
   );
+  const progressLabel = progress?.status === "active" ? PROGRESS_COPY[progress.stage] : null;
+  const routeFallbackLabel = isFindingRoutes ? "Finding viable routes" : null;
   if (!hasStarted) return null;
 
   return (
@@ -109,9 +121,24 @@ export function ChatWorkingPanel({
     >
       <ReasoningTrigger className="sr-chat-working-panel__trigger">
         {isStreaming ? (
-          <Shimmer className="sr-chat-working-panel__shimmer" duration={1.35}>
-            {isFindingRoutes ? "Finding the best route…" : "Thinking…"}
-          </Shimmer>
+          progressLabel || routeFallbackLabel ? (
+            <AnimatePresence initial={false} mode="wait">
+              <motion.span
+                key={progressLabel || routeFallbackLabel}
+                className="sr-chat-working-panel__semantic-stage"
+                initial={reduceMotion ? false : { opacity: 0, y: 3 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={reduceMotion ? undefined : { opacity: 0, y: -3 }}
+                transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+              >
+                {progressLabel || routeFallbackLabel}
+              </motion.span>
+            </AnimatePresence>
+          ) : (
+            <Shimmer className="sr-chat-working-panel__shimmer" duration={1.35}>
+              Deliberating…
+            </Shimmer>
+          )
         ) : (
           hasRouteResult
             ? "Found your route"

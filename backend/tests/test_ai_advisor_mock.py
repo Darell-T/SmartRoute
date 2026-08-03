@@ -118,6 +118,43 @@ class MockAdvisorTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("[ROUTE:0]", text)
         self.assertIn("[CANDIDATE_ANALYSIS]", text)
 
+    async def test_agent_stream_uses_only_the_selected_model(self):
+        captured = {}
+
+        async def capture_transport(_payload, *, models, system_prompt):
+            captured["models"] = models
+            captured["system_prompt"] = system_prompt
+            yield "Take the Q. [ROUTE:0]"
+
+        with patch.object(self.advisor, "_stream_for_models", new=capture_transport):
+            chunks = []
+            async for chunk in self.advisor.stream_agent_recommendation(
+                _payload(),
+                model="claude-sonnet-4-5-20250929",
+                explanation_style="comparative",
+            ):
+                chunks.append(chunk)
+
+        self.assertEqual(captured["models"], ("claude-sonnet-4-5-20250929",))
+        self.assertNotEqual(captured["system_prompt"], self.advisor.SYSTEM_PROMPT)
+        self.assertIn("final NYC transit route-selection stage", captured["system_prompt"])
+        self.assertIn("exactly one zero-based [ROUTE:N] tag", captured["system_prompt"])
+        self.assertIn("candidate exactly once", captured["system_prompt"])
+
+    async def test_rest_stream_keeps_its_pinned_model_and_prompt(self):
+        captured = {}
+
+        async def capture_transport(_payload, *, models, system_prompt):
+            captured["models"] = models
+            captured["system_prompt"] = system_prompt
+            yield "[ROUTE:0]"
+
+        with patch.object(self.advisor, "_stream_for_models", new=capture_transport):
+            _chunks = [chunk async for chunk in self.advisor.stream_recommendation(_payload())]
+
+        self.assertEqual(captured["models"], tuple(self.advisor._MODEL_PRIORITY))
+        self.assertEqual(captured["system_prompt"], self.advisor.SYSTEM_PROMPT)
+
 
 if __name__ == "__main__":
     unittest.main()

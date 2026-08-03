@@ -77,6 +77,13 @@ class SystemPromptGuardTests(unittest.TestCase):
         self.assertIn("scoring", normalized)
         self.assertIn("severe disruptions", normalized)
 
+    def test_route_requests_receive_a_grounded_acknowledgement_instruction(self):
+        normalized = " ".join(agent_prompt.SYSTEM_PROMPT.lower().split())
+        self.assertIn("trip acknowledgement", normalized)
+        self.assertIn("acknowledges the rider's destination", normalized)
+        self.assertIn("compare live routes and current conditions", normalized)
+        self.assertIn("without claiming any route", normalized)
+
 
 class BuildTurnContextTests(unittest.TestCase):
     def test_includes_current_time(self):
