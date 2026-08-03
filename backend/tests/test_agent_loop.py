@@ -641,6 +641,72 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(route_cards[0].turn_id, "t1")
         self.assertEqual(session["route_cards"][0]["card_id"], "rc_test0001")
 
+    async def test_telemetry_emits_before_done_when_client_closes_at_terminal_event(self):
+        async def telemetry_plan_trip(tool_input, ctx):
+            ctx.telemetry["plan_trip"] = {
+                "outcome": "success",
+                "leg_count": 1,
+                "incident_status": "complete",
+                "incident_cache_hit": False,
+                "advisor_status": "complete",
+            }
+            return await _fake_plan_trip_tool(tool_input, ctx)
+
+        registry = _test_registry()
+        registry["plan_trip"] = ToolSpec(
+            schema={"name": "plan_trip"},
+            executor=telemetry_plan_trip,
+            label_fn=lambda _input: "Finding routes…",
+            timeout_s=5.0,
+        )
+        self.loop.client.messages._rounds = [
+            {
+                "tool_use": [
+                    {
+                        "id": "tu_telemetry",
+                        "name": "plan_trip",
+                        "input": {"destination": "Costco"},
+                    }
+                ],
+                "stop_reason": "tool_use",
+            },
+            {"text": ["Here you go"], "stop_reason": "end_turn"},
+        ]
+        _discard_id, session = session_module.new_session()
+        timeline = []
+
+        def record_print(*args, **_kwargs):
+            if args and str(args[0]).startswith("[trip-pipeline]"):
+                timeline.append("telemetry")
+
+        with (
+            patch.object(self.loop, "TOOL_REGISTRY", registry),
+            patch("builtins.print", side_effect=record_print) as printed,
+        ):
+            stream = self.loop.run_agent_turn(
+                session=session,
+                session_id=secrets.token_hex(8),
+                turn_id="t1",
+                message="Get me to Costco",
+                now_et="2026-07-15T21:00:00-04:00",
+            )
+            while True:
+                event = await anext(stream)
+                timeline.append(event.type)
+                if event.type == "done":
+                    break
+            await stream.aclose()
+
+        telemetry_prints = [
+            call
+            for call in printed.call_args_list
+            if call.args and str(call.args[0]).startswith("[trip-pipeline]")
+        ]
+        self.assertEqual(len(telemetry_prints), 1)
+        self.assertIs(telemetry_prints[0].kwargs.get("flush"), True)
+        self.assertLess(timeline.index("telemetry"), timeline.index("done"))
+        self.assertEqual(session["history"][-1]["text"], "Here you go")
+
     async def test_no_bus_language_is_enforced_at_the_plan_trip_boundary(self):
         rounds = [
             {"tool_use": [{"id": "tu_1", "name": "plan_trip", "input": {"destination": "Costco"}}], "stop_reason": "tool_use"},
