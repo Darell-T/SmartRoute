@@ -47,10 +47,10 @@ async def route_with_recovery(
     allowed_modes: list[str],
     routing_preference: str,
     departure_time: str | None,
-) -> dict:
+) -> list:
     """Try the rider's resolved label first, then privately recover by coords."""
     try:
-        return await directions_service.get_transit_route(
+        response = await directions_service.get_transit_route(
             (origin.latitude, origin.longitude),
             destination_query,
             None,
@@ -59,16 +59,23 @@ async def route_with_recovery(
             departure_time=departure_time,
         )
     except directions_service.GoogleRoutesError:
-        # This is an internal provider recovery, not a second rider operation.
-        # Keep the named destination attached to the resulting itinerary.
-        return await directions_service.get_transit_route(
-            (origin.latitude, origin.longitude),
-            destination_query,
-            (destination.latitude, destination.longitude),
-            allowed_travel_modes=allowed_modes,
-            routing_preference=routing_preference,
-            departure_time=departure_time,
-        )
+        pass
+    else:
+        routes = directions_service.parse_response(response)
+        if routes:
+            return routes
+
+    # This is an internal provider recovery, not a second rider operation.
+    # Keep the named destination attached to the resulting itinerary.
+    response = await directions_service.get_transit_route(
+        (origin.latitude, origin.longitude),
+        destination_query,
+        (destination.latitude, destination.longitude),
+        allowed_travel_modes=allowed_modes,
+        routing_preference=routing_preference,
+        departure_time=departure_time,
+    )
+    return directions_service.parse_response(response)
 
 
 async def derive_arrive_by_departure(
@@ -89,7 +96,7 @@ async def derive_arrive_by_departure(
     canonical.
     """
     target = parse_rfc3339(arrival_by, field="arrival_by")
-    probe = await route_with_recovery(
+    parsed = await route_with_recovery(
         directions_service=directions_service,
         origin=origin,
         destination=destination,
@@ -98,7 +105,6 @@ async def derive_arrive_by_departure(
         routing_preference=routing_preference,
         departure_time=target.isoformat(),
     )
-    parsed = directions_service.parse_response(probe)
     if not parsed:
         raise directions_service.GoogleRoutesError(
             "no_route",
