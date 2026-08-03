@@ -8,6 +8,7 @@ upstream service; callers may pass already-enriched intermediate stops.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
 from math import isfinite
 import re
 from typing import Any, Iterable, Mapping
@@ -31,6 +32,27 @@ def valid_coordinate_pair(latitude: object, longitude: object) -> tuple[float, f
 def _text(value: object) -> str | None:
     value = str(value or "").strip()
     return value or None
+
+
+def stop_reference(
+    stop_id: str | None,
+    stop_name: str | None,
+    latitude: float,
+    longitude: float,
+) -> str:
+    """Return a deterministic opaque reference for one physical stop.
+
+    Physical stop IDs are the preferred identity.  Some route providers omit
+    them, so the fallback includes the normalized name and five-decimal
+    coordinate pair used elsewhere to distinguish a physical platform.
+    """
+    physical_id = _text(stop_id)
+    if physical_id:
+        material = f"id:{physical_id.casefold()}"
+    else:
+        name = re.sub(r"[^a-z0-9]+", "", (_text(stop_name) or "").casefold())
+        material = f"point:{name}:{latitude:.5f}:{longitude:.5f}"
+    return "sr_" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
 
 
 def _coords(value: Mapping[str, Any] | None) -> tuple[float, float] | None:
@@ -78,9 +100,14 @@ class CandidateStopContext:
     def directions(self) -> list[str]:
         return sorted({item.direction for item in self.associations if item.direction})
 
+    @property
+    def stop_reference(self) -> str:
+        return stop_reference(self.stop_id, self.stop_name, self.latitude, self.longitude)
+
     def as_dict(self) -> dict[str, Any]:
         return {
             "stop_id": self.stop_id,
+            "stop_ref": self.stop_reference,
             "stop_name": self.stop_name,
             "latitude": self.latitude,
             "longitude": self.longitude,

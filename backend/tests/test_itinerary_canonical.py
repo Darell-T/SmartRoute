@@ -227,6 +227,36 @@ class BuildCanonicalItineraryTests(unittest.TestCase):
         self.assertEqual(result["legs"][2]["transfer_seconds"], 300)
         self.assertEqual(result["total_wait_seconds"] + result["legs"][2]["transfer_seconds"] >= 0, True)
 
+    def test_subway_to_airtrain_tram_is_one_transfer(self):
+        from app.services.trips.itinerary import build_canonical_itinerary
+
+        steps = [
+            _subway_step(
+                line="F",
+                departure_stop="34 St-Herald Sq",
+                arrival_stop="Sutphin Blvd",
+                departure_time_iso="2026-08-01T22:33:00-04:00",
+                arrival_time_iso="2026-08-01T23:10:00-04:00",
+                route_total_minutes=71,
+            ),
+            {
+                "type": "TRAM",
+                "route_id": "Jamaica AirTrain",
+                "departure_stop": "Jamaica",
+                "arrival_stop": "Terminal 1",
+                "departure_time_iso": "2026-08-01T23:31:00-04:00",
+                "arrival_time_iso": "2026-08-01T23:39:00-04:00",
+                "route_total_minutes": 71,
+            },
+        ]
+
+        result = build_canonical_itinerary(steps, origin="A", destination="JFK")
+
+        self.assertEqual(result["transfer_count"], 1)
+        self.assertEqual(result["legs"][1]["mode"], "TRAM")
+        self.assertEqual(result["legs"][1]["ride_seconds"], 8 * 60)
+        self.assertEqual(result["legs"][1]["transfer_seconds"], 21 * 60)
+
     def test_total_duration_falls_back_to_component_sum_without_route_total(self):
         from app.services.trips.itinerary import build_canonical_itinerary
 

@@ -89,22 +89,6 @@ def _arrival_stop_context(arrival: dict, stop_lookup: dict[str, dict]) -> dict |
     return stop_lookup.get(stop_id) or stop_lookup.get(stop_id.rstrip("NS"))
 
 
-async def _safe_nearby_bus_arrivals(lat: float, lng: float) -> tuple[list[dict], dict]:
-    try:
-        return await mta_feed.fetch_nearby_bus_arrivals(
-            lat,
-            lng,
-            radius_m=NEARBY_ARRIVAL_RADIUS_M,
-        )
-    except Exception as exc:
-        print(f"[live_feed] BusTime nearby arrivals failed: {type(exc).__name__}: {exc!r}")
-        return [], {
-            "bus_arrivals_supported": False,
-            "reason": type(exc).__name__,
-            "bus_arrival_count": 0,
-        }
-
-
 def _signal_text(value: object) -> str:
     return " ".join(str(value or "").split()).strip()
 
@@ -202,7 +186,6 @@ async def _build_live_snapshot(
     lat: float,
     lng: float,
     selected_route_ids: set[str] | None = None,
-    emit=None,
 ):
     global _LAST_EMPTY_VEHICLE_LOG
     _t0 = time.monotonic()
@@ -260,30 +243,19 @@ async def _build_live_snapshot(
     # first paint. Measured here so production telemetry can report it.
     arrivals_ms = round((time.monotonic() - _t0) * 1000)
 
-    # Progressive first paint: the nearby subway arrivals are ready now (and
-    # served from the warm feed cache), so push them immediately instead of
-    # making the rider wait on the slower vehicles/alerts/bus fan-out below.
-    # Only the FIRST snapshot for a location passes an
-    # emit callback; periodic refreshes send the full snapshot in one message.
-    if emit is not None:
-        await emit({
-            "nearest_stop": nearest_stop,
-            "stops": enriched_stops,
-            "arrivals": sorted(arrivals, key=lambda a: a.get("arrival_time") or 0)[:40],
-            "alerts": [],
-            "nearby_issues": [],
-            "vehicles": [],
-            "signals": None,
-            "updated_at": now,
-            "degraded": False,
-            "debug": {"partial": True, "arrivals_ms": arrivals_ms},
-            "partial": True,
-        })
-
     vehicle_route_ids = _expand_vehicle_route_scope(set(route_ids) | selected_route_ids)
 
-    bus_arrivals, bus_debug = await _safe_nearby_bus_arrivals(lat, lng)
-    arrivals.extend(bus_arrivals)
+    # BusTime is explicitly secondary. Primary snapshots include a fresh cached
+    # bus result when one exists, but never wait on BusTime discovery or fan-out.
+    cached_bus = mta_feed.cached_nearby_bus_update(
+        lat,
+        lng,
+        radius_m=NEARBY_ARRIVAL_RADIUS_M,
+    )
+    bus_arrivals = cached_bus.get("arrivals", []) if isinstance(cached_bus, dict) else []
+    bus_debug = cached_bus.get("debug", {}) if isinstance(cached_bus, dict) else {}
+    bus_status = cached_bus.get("status", "pending") if isinstance(cached_bus, dict) else "pending"
+    arrivals.extend(arrival for arrival in bus_arrivals if isinstance(arrival, dict))
     arrivals.sort(key=lambda a: a.get("arrival_time") or 0)
     vehicles = [
         dict(vehicle)
@@ -379,6 +351,7 @@ async def _build_live_snapshot(
         "nearby_issues": home_issues,
         "vehicles": vehicles,
         "signals": signals,
+        "bus_status": bus_status,
         "updated_at": network.updated_at,
         "degraded": False,
         "debug": {

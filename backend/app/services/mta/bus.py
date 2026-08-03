@@ -11,22 +11,23 @@ from app.services.mta.config import (
     BUS_URL,
     NYC_TZ,
 )
+from app.services.mta import bus_runtime
+
+NEARBY_STOPS_CACHE_TTL_S = 120
+STOP_MONITORING_CACHE_TTL_S = 15
 
 
 async def fetch_bus_positions(route_id) -> dict:
-    import httpx
-
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            BUS_URL,
-            params={
-                "key": os.getenv("MTA_BUS_API_KEY"),
-                "version": 2,
-                "LineRef": route_id,
-            },
-            timeout=10.0,
-        )
-        return response.json()
+    client = await bus_runtime.bus_client()
+    response = await client.get(
+        BUS_URL,
+        params={
+            "key": os.getenv("MTA_BUS_API_KEY"),
+            "version": 2,
+            "LineRef": route_id,
+        },
+    )
+    return response.json()
 
 
 def _bus_api_key() -> str | None:
@@ -123,6 +124,11 @@ def _bus_stop_record(stop: dict, distance_m: float) -> dict:
     }
 
 
+def _location_cache_key(lat: float, lng: float, radius_m: float) -> str:
+    # Nearby stops do not materially differ within roughly one city block.
+    return f"{lat:.3f}:{lng:.3f}:{round(radius_m):d}"
+
+
 async def fetch_nearby_bus_stops(
     lat: float,
     lng: float,
@@ -133,14 +139,21 @@ async def fetch_nearby_bus_stops(
     if not key:
         return [], {"bus_arrivals_supported": False, "reason": "missing_mta_bus_api_key"}
 
-    lat_span = max(0.002, radius_m / 111_320 * 2)
-    lon_scale = max(0.2, abs(math.cos(math.radians(lat))))
-    lon_span = max(0.002, radius_m / (111_320 * lon_scale) * 2)
+    cache_key = _location_cache_key(lat, lng, radius_m)
+    cached = bus_runtime.get_cached(bus_runtime.nearby_stops_cache, cache_key)
+    if isinstance(cached, list):
+        return [dict(stop) for stop in cached[:limit]], {
+            "bus_arrivals_supported": True,
+            "nearby_bus_stop_count": len(cached),
+            "nearby_stops_cache": "cached",
+        }
 
-    try:
-        import httpx
-
-        async with httpx.AsyncClient(timeout=8.0) as client:
+    async def refresh() -> tuple[list[dict], dict]:
+        lat_span = max(0.002, radius_m / 111_320 * 2)
+        lon_scale = max(0.2, abs(math.cos(math.radians(lat))))
+        lon_span = max(0.002, radius_m / (111_320 * lon_scale) * 2)
+        try:
+            client = await bus_runtime.bus_client()
             response = await client.get(
                 BUS_STOPS_FOR_LOCATION_URL,
                 params={
@@ -151,33 +164,42 @@ async def fetch_nearby_bus_stops(
                     "lonSpan": lon_span,
                 },
             )
-        if response.status_code != 200:
-            return [], {
-                "bus_arrivals_supported": False,
-                "reason": f"stops_for_location_http_{response.status_code}",
-            }
-        payload = response.json()
-    except Exception as exc:
-        return [], {"bus_arrivals_supported": False, "reason": type(exc).__name__}
+            if response.status_code != 200:
+                return [], {
+                    "bus_arrivals_supported": False,
+                    "reason": f"stops_for_location_http_{response.status_code}",
+                }
+            payload = response.json()
+        except Exception as exc:
+            return [], {"bus_arrivals_supported": False, "reason": type(exc).__name__}
 
-    from app.utils.geo import distance_meters
+        from app.utils.geo import distance_meters
 
-    stops = []
-    for stop in _stops_for_location_list(payload):
-        stop_lat = stop.get("lat")
-        stop_lon = stop.get("lon")
-        if stop_lat is None or stop_lon is None:
-            continue
-        distance_m = distance_meters(lat, lng, float(stop_lat), float(stop_lon))
-        if distance_m > radius_m:
-            continue
-        stops.append(_bus_stop_record(stop, distance_m))
+        stops = []
+        for stop in _stops_for_location_list(payload):
+            stop_lat = stop.get("lat")
+            stop_lon = stop.get("lon")
+            if stop_lat is None or stop_lon is None:
+                continue
+            distance_m = distance_meters(lat, lng, float(stop_lat), float(stop_lon))
+            if distance_m > radius_m:
+                continue
+            stops.append(_bus_stop_record(stop, distance_m))
 
-    stops.sort(key=lambda stop: stop["distance_m"])
-    return stops[:limit], {
-        "bus_arrivals_supported": True,
-        "nearby_bus_stop_count": len(stops),
-    }
+        stops.sort(key=lambda stop: stop["distance_m"])
+        bus_runtime.set_cached(
+            bus_runtime.nearby_stops_cache,
+            cache_key,
+            [dict(stop) for stop in stops],
+            NEARBY_STOPS_CACHE_TTL_S,
+        )
+        return stops[:limit], {
+            "bus_arrivals_supported": True,
+            "nearby_bus_stop_count": len(stops),
+            "nearby_stops_cache": "ready",
+        }
+
+    return await bus_runtime.share_inflight(f"nearby-stops:{cache_key}", refresh)
 
 
 async def fetch_bus_stop_monitoring(stop_id: str, visits: int = 4) -> dict:
@@ -186,9 +208,13 @@ async def fetch_bus_stop_monitoring(stop_id: str, visits: int = 4) -> dict:
         return {}
 
     monitoring_ref = _strip_mta_bus_prefix(stop_id)
-    import httpx
+    cache_key = f"{monitoring_ref}:{visits}"
+    cached = bus_runtime.get_cached(bus_runtime.stop_monitoring_cache, cache_key)
+    if isinstance(cached, dict):
+        return cached
 
-    async with httpx.AsyncClient(timeout=8.0) as client:
+    async def refresh() -> dict:
+        client = await bus_runtime.bus_client()
         response = await client.get(
             BUS_STOP_MONITORING_URL,
             params={
@@ -198,9 +224,20 @@ async def fetch_bus_stop_monitoring(stop_id: str, visits: int = 4) -> dict:
                 "MaximumStopVisits": visits,
             },
         )
-    if response.status_code != 200:
+        if response.status_code != 200:
+            return {}
+        payload = response.json()
+        if isinstance(payload, dict):
+            bus_runtime.set_cached(
+                bus_runtime.stop_monitoring_cache,
+                cache_key,
+                payload,
+                STOP_MONITORING_CACHE_TTL_S,
+            )
+            return payload
         return {}
-    return response.json()
+
+    return await bus_runtime.share_inflight(f"stop-monitoring:{cache_key}", refresh)
 
 
 def parse_bus_stop_monitoring(payload: dict, stop: dict) -> list[dict]:
@@ -253,41 +290,6 @@ def parse_bus_stop_monitoring(payload: dict, stop: dict) -> list[dict]:
     return arrivals
 
 
-async def fetch_nearby_bus_arrivals(
-    lat: float,
-    lng: float,
-    radius_m: float = 804.672,
-    stop_limit: int = 10,
-    visits_per_stop: int = 4,
-) -> tuple[list[dict], dict]:
-    stops, debug = await fetch_nearby_bus_stops(lat, lng, radius_m, stop_limit)
-    if not stops:
-        return [], {**debug, "bus_arrival_count": 0}
-
-    tasks = [fetch_bus_stop_monitoring(stop["stop_id"], visits_per_stop) for stop in stops]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    arrivals = []
-    failures = 0
-    for stop, result in zip(stops, results):
-        if isinstance(result, Exception):
-            failures += 1
-            continue
-        arrivals.extend(parse_bus_stop_monitoring(result, stop))
-
-    now = datetime.now(tz=NYC_TZ).timestamp()
-    arrivals = [
-        arrival for arrival in arrivals
-        if arrival.get("arrival_time") and arrival["arrival_time"] >= now - 60
-    ]
-    arrivals.sort(key=lambda arrival: arrival.get("arrival_time") or 0)
-    return arrivals, {
-        **debug,
-        "nearby_bus_stop_count": len(stops),
-        "bus_arrival_count": len(arrivals),
-        "bus_stop_monitoring_failures": failures,
-    }
-
-
 async def get_stalled_buses(route_ids: set) -> list:
     if not route_ids:
         return []
@@ -295,7 +297,6 @@ async def get_stalled_buses(route_ids: set) -> list:
     stalled_buses = []
     tasks = [fetch_bus_positions(line) for line in route_ids]
     results = await asyncio.gather(*tasks, return_exceptions=True)
-
     for result in results:
         if isinstance(result, Exception):
             print(f"[mta_feed] bus feed fetch error: {result}")
@@ -304,15 +305,8 @@ async def get_stalled_buses(route_ids: set) -> list:
 
     return stalled_buses
 
-
 def parse_stalled_bus_positions(payload: object) -> list[dict]:
-    """Extract stalled buses from one provider-shaped SIRI payload.
-
-    This is the pure parsing portion previously embedded in
-    :func:`get_stalled_buses`.  Keeping it separate lets deterministic replay
-    fixtures exercise the same SIRI interpretation without performing an MTA
-    BusTime request.
-    """
+    """Extract stalled buses from one provider-shaped SIRI payload."""
     if not isinstance(payload, dict):
         return []
     service_delivery = payload.get("Siri", {}).get("ServiceDelivery", {})

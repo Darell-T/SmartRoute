@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
 from dataclasses import replace
 from datetime import datetime
-from threading import Event
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock, patch
 
 from app.services.trips import crowd_search, crowd_search_provider
 from app.services.trips.crowd_hotspots import HotspotHit
@@ -143,38 +144,89 @@ class CrowdSearchNormalizationTests(unittest.TestCase):
         self.assertNotIn(self.area.hotspot_name, first)
         self.assertNotIn(str(self.area.latitude), first)
 
-    def test_web_and_x_provider_searches_start_concurrently(self):
-        both_started = Event()
-        started: list[str] = []
 
-        def fake_source_search(**kwargs):
-            started.append(kwargs["source_name"])
-            if len(started) == 2:
-                both_started.set()
-            self.assertTrue(both_started.wait(0.5))
-            return {
-                "status": "complete",
-                "events": [],
-                "completed_sources": [kwargs["source_name"]],
-            }
+
+class CrowdSearchProviderTests(unittest.IsolatedAsyncioTestCase):
+    async def test_one_async_request_configures_parallel_web_and_x_tools(self):
+        area = HotspotHit(
+            route_index=0,
+            hotspot_key="columbus_lincoln",
+            hotspot_name="Columbus Circle and Lincoln Center",
+            station_name="59 St-Columbus Circle",
+            latitude=40.768,
+            longitude=-73.982,
+            expected_at=datetime.fromisoformat("2026-07-25T20:30:00-04:00"),
+            route_id="A",
+        )
+        response = SimpleNamespace(
+            content='{"events":[]}',
+            tool_calls=["web_search", "x_search"],
+            citations=[],
+        )
+        chat = SimpleNamespace(append=Mock(), sample=AsyncMock(return_value=response))
+        client = SimpleNamespace(chat=SimpleNamespace(create=Mock(return_value=chat)))
 
         with (
-            patch.object(crowd_search_provider, "_CLIENT", object()),
-            patch.object(crowd_search_provider, "system", object()),
-            patch.object(crowd_search_provider, "user", object()),
-            patch.object(crowd_search_provider, "get_tool_call_type", object()),
-            patch.object(crowd_search_provider, "web_search", return_value="web"),
-            patch.object(crowd_search_provider, "x_search", return_value="x"),
+            patch.object(crowd_search_provider, "_CLIENT", client),
+            patch.object(crowd_search_provider, "system", side_effect=lambda value: value),
+            patch.object(crowd_search_provider, "user", side_effect=lambda value: value),
+            patch.object(crowd_search_provider, "web_search", return_value="web-tool"),
+            patch.object(crowd_search_provider, "x_search", return_value="x-tool"),
             patch.object(
                 crowd_search_provider,
-                "_run_source_search",
-                side_effect=fake_source_search,
+                "get_tool_call_type",
+                side_effect=lambda call: f"{call}_tool",
             ),
         ):
-            result = crowd_search_provider.run_search(
-                {self.area.hotspot_key: self.area},
-                self.area.expected_at,
+            result = await crowd_search_provider.run_search(
+                {area.hotspot_key: area},
+                area.expected_at,
             )
 
-        self.assertEqual(sorted(started), ["web_search", "x_search"])
         self.assertEqual(result["status"], "complete")
+        chat.sample.assert_awaited_once_with()
+        kwargs = client.chat.create.call_args.kwargs
+        self.assertTrue(kwargs["parallel_tool_calls"])
+        self.assertEqual(kwargs["max_turns"], 2)
+        self.assertEqual(len(kwargs["tools"]), 2)
+
+    async def test_cancellation_propagates_to_the_async_provider_call(self):
+        area = HotspotHit(
+            route_index=0,
+            hotspot_key="columbus_lincoln",
+            hotspot_name="Columbus Circle and Lincoln Center",
+            station_name="59 St-Columbus Circle",
+            latitude=40.768,
+            longitude=-73.982,
+            expected_at=datetime.fromisoformat("2026-07-25T20:30:00-04:00"),
+            route_id="A",
+        )
+        started = asyncio.Event()
+
+        async def pending_sample():
+            started.set()
+            await asyncio.Event().wait()
+
+        chat = SimpleNamespace(append=Mock(), sample=AsyncMock(side_effect=pending_sample))
+        client = SimpleNamespace(chat=SimpleNamespace(create=Mock(return_value=chat)))
+        with (
+            patch.object(crowd_search_provider, "_CLIENT", client),
+            patch.object(crowd_search_provider, "system", side_effect=lambda value: value),
+            patch.object(crowd_search_provider, "user", side_effect=lambda value: value),
+            patch.object(crowd_search_provider, "web_search", return_value="web-tool"),
+            patch.object(crowd_search_provider, "x_search", return_value="x-tool"),
+        ):
+            task = asyncio.create_task(
+                crowd_search_provider.run_search({area.hotspot_key: area}, area.expected_at)
+            )
+            await started.wait()
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+
+    async def test_lifecycle_close_releases_the_shared_client(self):
+        client = SimpleNamespace(close=AsyncMock())
+        with patch.object(crowd_search_provider, "_CLIENT", client):
+            await crowd_search_provider.close_crowd_search_client()
+
+        client.close.assert_awaited_once_with()

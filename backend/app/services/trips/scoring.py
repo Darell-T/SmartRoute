@@ -6,10 +6,11 @@ shared candidate display helpers.
 """
 
 from app.services.trips import event_crowd, text
+from app.services.trips.itinerary import TRANSIT_MODES
 
 
 def _step_minutes(step: dict) -> int:
-    if step.get("type") in ("SUBWAY", "BUS"):
+    if step.get("type") in TRANSIT_MODES:
         minutes = step.get("minutes_until_arrival")
         if isinstance(minutes, (int, float)):
             return max(1, round(minutes))
@@ -24,7 +25,7 @@ def _route_total_minutes(route: list[dict]) -> int:
     live_arrivals = [
         step.get("minutes_until_arrival")
         for step in route or []
-        if step.get("type") in ("SUBWAY", "BUS")
+        if step.get("type") in TRANSIT_MODES
         and isinstance(step.get("minutes_until_arrival"), (int, float))
     ]
     if live_arrivals:
@@ -32,7 +33,7 @@ def _route_total_minutes(route: list[dict]) -> int:
     return max(1, sum(_step_minutes(step) for step in route))
 
 def _route_transfer_count(route: list[dict]) -> int:
-    transit_steps = [step for step in route if step.get("type") in ("SUBWAY", "BUS")]
+    transit_steps = [step for step in route if step.get("type") in TRANSIT_MODES]
     return max(0, len(transit_steps) - 1)
 
 def _step_route_id(step: dict) -> str:
@@ -41,7 +42,7 @@ def _step_route_id(step: dict) -> str:
 def _route_lines(route: list[dict]) -> list[str]:
     lines: list[str] = []
     for step in route or []:
-        if step.get("type") not in ("SUBWAY", "BUS"):
+        if step.get("type") not in TRANSIT_MODES:
             continue
         line = _step_route_id(step)
         if line and line not in lines:

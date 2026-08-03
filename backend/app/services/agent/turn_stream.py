@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
@@ -72,6 +73,57 @@ def _stage_timings(trace: TurnTrace | None, intent_started: float) -> dict[str, 
     return stage_ms
 
 
+def _emit_trip_pipeline_timing(
+    *,
+    turn_id: str,
+    stage_ms: dict[str, float],
+    telemetry: dict[str, object],
+    first_route_card_ms: float | None,
+) -> dict[str, object] | None:
+    """Emit one allowlisted record without rider or provider request data."""
+    pipeline = telemetry.get("plan_trip")
+    if not isinstance(pipeline, dict):
+        return None
+
+    def duration(name: str) -> int:
+        value = pipeline.get(name, 0.0)
+        return round(max(0.0, float(value))) if isinstance(value, (int, float)) else 0
+
+    incident_status = str(pipeline.get("incident_status") or "unknown")
+    if incident_status not in {"not_started", "complete", "partial", "failed", "disabled", "timeout"}:
+        incident_status = "unknown"
+    advisor_status = str(pipeline.get("advisor_status") or "unknown")
+    if advisor_status not in {"not_started", "complete", "failed", "timeout"}:
+        advisor_status = "unknown"
+    cache_hit = pipeline.get("incident_cache_hit")
+    record: dict[str, object] = {
+        "event": "trip_pipeline_timing",
+        "turn_id": turn_id,
+        "outcome": "success" if pipeline.get("outcome") == "success" else "error",
+        "leg_count": max(0, int(pipeline.get("leg_count") or 0)),
+        "outer_model_ms": round(max(0.0, float(stage_ms.get("model_ms", 0.0)))),
+        "google_routes_ms": duration("google_routes_ms"),
+        "mta_evidence_ms": duration("mta_evidence_ms"),
+        "incident_ms": duration("incident_ms"),
+        "incident_cache_hit": cache_hit if isinstance(cache_hit, bool) else None,
+        "incident_status": incident_status,
+        "advisor_ms": duration("advisor_ms"),
+        "advisor_status": advisor_status,
+        "advisor_fallback": pipeline.get("advisor_fallback") is True,
+        "scoring_ms": duration("scoring_ms"),
+        "enrichment_ms": duration("enrichment_ms"),
+        "plan_trip_ms": duration("plan_trip_ms"),
+        "first_route_card_ms": (
+            round(max(0.0, first_route_card_ms))
+            if isinstance(first_route_card_ms, (int, float))
+            else None
+        ),
+        "turn_total_ms": round(max(0.0, float(stage_ms.get("total_ms", 0.0)))),
+    }
+    print(f"[trip-pipeline] {json.dumps(record, sort_keys=True, separators=(',', ':'))}")
+    return record
+
+
 async def _stream_model_round(
     *,
     dependencies: TurnDependencies,
@@ -131,6 +183,7 @@ async def stream_turn(
     text_parts: list[str] = []
     tool_calls_this_turn: list[tuple[str, dict]] = []
     recommended_route_card: agent_events.RouteCardEvent | None = None
+    first_route_card_ms: float | None = None
     deterministic_arrival = False
     tool_ledger = dependencies.make_ledger()
     excluded_modes = dependencies.rider_excluded_modes(message, session)
@@ -251,6 +304,8 @@ async def stream_turn(
                 else:
                     if isinstance(item, agent_events.RouteCardEvent) and item.role == "recommended":
                         recommended_route_card = item
+                        if first_route_card_ms is None:
+                            first_route_card_ms = (time.monotonic() - turn_start) * 1000
                     if isinstance(item, agent_events.ToolEndEvent) and not item.ok:
                         tool_failures += 1
                     yield item
@@ -340,6 +395,12 @@ async def stream_turn(
     stage_ms["total_ms"] = total_ms
     if trace is not None:
         trace.stage_ms = dict(stage_ms)
+    _emit_trip_pipeline_timing(
+        turn_id=turn_id,
+        stage_ms=stage_ms,
+        telemetry=ctx.telemetry,
+        first_route_card_ms=first_route_card_ms,
+    )
     required_tools = ",".join(parsed_intent.required_evidence.required_tools()) or "none"
     print(
         f"[agent] turn={turn_id} sess={session_id[:6]} rounds={round_num} "

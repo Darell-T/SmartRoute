@@ -18,6 +18,7 @@ from typing import Awaitable, Callable
 
 from app.services.agent.tools import (
     accessibility_status,
+    check_area_conditions,
     event_lookup,
     lookup_arrivals,
     lookup_facts,
@@ -55,6 +56,11 @@ def _transit_snapshot_label(tool_input: dict) -> str:
     if lines:
         return f"Checking alerts for {'/'.join(str(line) for line in lines)}…"
     return "Checking live transit conditions…"
+
+
+def _check_area_conditions_label(tool_input: dict) -> str:
+    area = str(tool_input.get("area") or "that area").strip()
+    return f"Checking conditions near {area}…"
 
 
 def _event_lookup_label(tool_input: dict) -> str:
@@ -153,6 +159,12 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
     "plan_trip": _spec(plan_trip.PLAN_TRIP_SCHEMA, plan_trip.execute, _plan_trip_label, 30.0),
     "transit_snapshot": _spec(
         transit_snapshot.TRANSIT_SNAPSHOT_SCHEMA, transit_snapshot.execute, _transit_snapshot_label, 8.0
+    ),
+    "check_area_conditions": _spec(
+        check_area_conditions.AREA_CONDITIONS_SCHEMA,
+        check_area_conditions.execute,
+        _check_area_conditions_label,
+        12.0,
     ),
     "event_lookup": _spec(event_lookup.EVENT_LOOKUP_SCHEMA, event_lookup.execute, _event_lookup_label, 8.0),
     "lookup_arrivals": _spec(

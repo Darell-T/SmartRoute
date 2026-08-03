@@ -16,6 +16,11 @@ from app.services.trips.recommendation_reasons import (
 from app.services.validation import production_shadow
 from app.services.validation.shadow import ShadowEvaluationStatus
 from app.services import admission
+from app.routers.trip_enrichment import (
+    EnrichRouteRequest,
+    _enrichment_steps_are_bounded,
+    enrich_route,
+)
 
 directions_service = importlib.import_module("app.services.directions")
 get_transit_route = directions_service.get_transit_route
@@ -73,6 +78,7 @@ async def plan_trip(request: Request, payload: TripRequest):
     t0 = time.monotonic()
     marks: dict[str, float] = {}  # stage -> cumulative seconds, for the timing log
     lease = None
+    incident_task: asyncio.Task[dict] | None = None
     try:
         if not _trip_payload_is_bounded(payload):
             raise HTTPException(status_code=400, detail="Invalid trip request")
@@ -149,6 +155,18 @@ async def plan_trip(request: Request, payload: TripRequest):
         # lazily when the rider selects them (POST /api/trip/enrich-route).
         route_ids, bus_route_ids = candidates._collect_route_and_bus_ids(parsed_response)
 
+        # Start the bounded, cacheable incident scan before collecting MTA
+        # context. Both are independent inputs to the advisor, so serializing
+        # them only increases route-card latency.
+        incident_context = trip_incidents.build_candidate_stop_context(
+            gtfs,
+            parsed_response,
+        )
+        incident_task = asyncio.create_task(
+            trip_incidents.scan_route_incidents(incident_context),
+            name="trip-incident-scan",
+        )
+
         # 4. Fetch the fast live context (alerts + stalled vehicles) in parallel.
         # return_exceptions keeps one slow upstream from 500-ing the whole trip.
         try:
@@ -179,18 +197,9 @@ async def plan_trip(request: Request, payload: TripRequest):
             stalled_buses = []
         marks["gather"] = time.monotonic() - t0
 
-        # 4b. Incident intelligence is an on-demand route-selection signal.
-        # Grok scans every station on every candidate route (board, alight, and
-        # intermediate stops) so Claude can account for incidents when choosing
-        # between candidates. This is intentionally not a detached background
-        # scan: if it times out or fails, the trip continues with [].
-        incident_context = trip_incidents.build_candidate_stop_context(gtfs, parsed_response)
-        # The lifecycle-owned store is a snapshot reader only.  No request path
-        # can construct a NY511 client or fetch the provider directly.
-        incident_scan = await trip_incidents._scan_route_incidents_with_metadata(
-            incident_context,
-            snapshot_store=getattr(request.app.state, "ny511_snapshot_store", None),
-        )
+        # 4b. The incident task covers every candidate's intermediate stops.
+        # It remains advisory-only and fails closed to no advisor evidence.
+        incident_scan = await incident_task
         incidents = incident_scan["incidents"]
         marks["incidents"] = time.monotonic() - t0
 
@@ -373,9 +382,7 @@ async def plan_trip(request: Request, payload: TripRequest):
             ),
             incident_count=len(incidents),
             scan_status=str(incident_scan["scan_metadata"].get("status") or "failed"),
-            snapshot_status=str(
-                incident_scan["scan_metadata"].get("snapshot_status") or "unavailable"
-            ),
+            snapshot_status="disabled",
             intelligence_latency_ms=round(
                 _d("advisor", "incidents") * 1000
             ),
@@ -390,144 +397,13 @@ async def plan_trip(request: Request, payload: TripRequest):
         print(f"[trip] UNHANDLED ERROR:\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail="Trip planning failed")
     finally:
+        if incident_task is not None and not incident_task.done():
+            incident_task.cancel()
+            try:
+                await incident_task
+            except asyncio.CancelledError:
+                pass
         await admission.release(lease)
 
 
-class EnrichRouteRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    steps: list[dict]
-
-
-_STEP_KEYS = frozenset({
-    "type", "start_point", "end_point", "polyline", "train_line", "line_color", "direction",
-    "departure_stop", "arrival_stop", "departure_coords", "arrival_coords", "minutes_until_train_arrives",
-    "minutes_until_arrival", "route_total_minutes", "stop_count", "route_id", "intermediate_stops",
-    "intermediate_stop_locations", "segment_index", "duration_minutes", "distance_meters",
-    "route_total_seconds", "departure_time_iso", "arrival_time_iso",
-})
-_STEP_TEXT_FIELDS = frozenset({
-    "route_id", "train_line", "line_color", "direction", "departure_stop", "arrival_stop",
-})
-_STEP_ISO_FIELDS = frozenset({"departure_time_iso", "arrival_time_iso"})
-
-
-def _bounded_point(value: object) -> bool:
-    if not isinstance(value, dict):
-        return False
-    if set(value) == {"lat", "lng"}:
-        lat, lng = value["lat"], value["lng"]
-    elif set(value) == {"latitude", "longitude"}:
-        lat, lng = value["latitude"], value["longitude"]
-    else:
-        return False
-    return (
-        isinstance(lat, (int, float))
-        and not isinstance(lat, bool)
-        and isinstance(lng, (int, float))
-        and not isinstance(lng, bool)
-        and math.isfinite(lat)
-        and math.isfinite(lng)
-        and 40.2 <= lat <= 41.2
-        and -74.6 <= lng <= -73.2
-    )
-
-
-def _bounded_stop_location(value: object) -> bool:
-    return (
-        isinstance(value, dict) and set(value) == {"name", "lat", "lng"}
-        and isinstance(value["name"], str) and len(value["name"]) <= 300
-        and _bounded_point({"lat": value["lat"], "lng": value["lng"]})
-    )
-
-
-def _enrichment_steps_are_bounded(steps: object) -> bool:
-    if not isinstance(steps, list) or len(steps) > 64:
-        return False
-    for step in steps:
-        if not isinstance(step, dict) or set(step) - _STEP_KEYS or not isinstance(step.get("type"), str) or step["type"] not in {"WALK", "SUBWAY", "BUS"}:
-            return False
-        for key, value in step.items():
-            if key in _STEP_TEXT_FIELDS and (
-                not isinstance(value, str) or len(value) > 300
-            ):
-                return False
-            if key in _STEP_ISO_FIELDS and (
-                not isinstance(value, str) or len(value) > 64
-            ):
-                return False
-            if key in {"minutes_until_train_arrives", "minutes_until_arrival"} and (
-                not isinstance(value, (int, float))
-                or isinstance(value, bool)
-                or not math.isfinite(value)
-                or not -1440 <= value <= 1440
-            ):
-                return False
-            if key in {"route_total_minutes", "duration_minutes"} and (
-                not isinstance(value, (int, float))
-                or isinstance(value, bool)
-                or not math.isfinite(value)
-                or not 0 <= value <= 1440
-            ):
-                return False
-            if key == "route_total_seconds" and (
-                not isinstance(value, (int, float))
-                or isinstance(value, bool)
-                or not math.isfinite(value)
-                or not 0 <= value <= 86_400
-            ):
-                return False
-            if key == "distance_meters" and (
-                not isinstance(value, (int, float))
-                or isinstance(value, bool)
-                or not math.isfinite(value)
-                or not 0 <= value <= 1_000_000
-            ):
-                return False
-            if key == "stop_count" and (
-                not isinstance(value, int)
-                or isinstance(value, bool)
-                or not 0 <= value <= 256
-            ):
-                return False
-            if key == "segment_index" and (
-                not isinstance(value, int)
-                or isinstance(value, bool)
-                or not 0 <= value <= 64
-            ):
-                return False
-            if key == "polyline" and (not isinstance(value, dict) or set(value) != {"encodedPolyline"} or not isinstance(value.get("encodedPolyline"), str) or len(value["encodedPolyline"]) > 8192):
-                return False
-            if key in {"start_point", "end_point", "departure_coords", "arrival_coords"} and not _bounded_point(value):
-                return False
-            if key == "intermediate_stops" and (not isinstance(value, list) or len(value) > 64 or any(not isinstance(item, str) or len(item) > 300 for item in value)):
-                return False
-            if key == "intermediate_stop_locations" and (not isinstance(value, list) or len(value) > 64 or any(not _bounded_stop_location(item) for item in value)):
-                return False
-    return True
-
-
-@router.post("/api/trip/enrich-route")
-async def enrich_route(request: Request, payload: EnrichRouteRequest):
-    """Lazily enrich an alternate route's legs (intermediate stop names +
-    coordinates) when the rider selects it. The initial /api/trip response only
-    enriches the chosen route to keep latency low; alternates come back with
-    can_enrich_on_select=true and call this on demand. Fail-open: the enriched
-    steps are returned (possibly with empty stop lists) and never 500."""
-    t0 = time.monotonic()
-    gtfs = getattr(request.app.state, "gtfs", None)
-    steps = payload.steps or []
-    if not _enrichment_steps_are_bounded(steps):
-        raise HTTPException(status_code=400, detail="Invalid route enrichment request")
-    _q0 = getattr(gtfs, "_query_count", 0) if gtfs else 0
-    try:
-        metrics = await enrichment._enrich_route(gtfs, steps)
-    except Exception as exc:
-        print(f"[enrich-route] failed, returning un-enriched: {exc!r}")
-        return {"steps": steps, "enriched": False}
-    print(
-        f"[enrich-route] subway_legs={metrics['subway_legs']} bus_legs={metrics['bus_legs']} "
-        f"legs_with_stops={metrics['subway_with_stops'] + metrics['bus_with_stops']} "
-        f"db_queries={(getattr(gtfs, '_query_count', 0) - _q0) if gtfs else 0} "
-        f"total={time.monotonic()-t0:.2f}s"
-    )
-    return {"steps": steps, "enriched": True}
+router.post("/api/trip/enrich-route")(enrich_route)

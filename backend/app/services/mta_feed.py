@@ -28,10 +28,15 @@ from app.services.mta.bus import (
     _strip_mta_bus_prefix,
     fetch_bus_positions,
     fetch_bus_stop_monitoring,
-    fetch_nearby_bus_arrivals,
     fetch_nearby_bus_stops,
     get_stalled_buses,
     parse_bus_stop_monitoring,
+)
+from app.services.mta.bus_runtime import close_bus_client, start_bus_client
+from app.services.mta.bus_updates import (
+    cached_nearby_bus_update,
+    fetch_nearby_bus_arrivals,
+    fetch_nearby_bus_update,
 )
 from app.services.mta.config import (
     ALERTS_URL,

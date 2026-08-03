@@ -12,6 +12,7 @@ SmartRouteIntent = Literal[
     "route_planning",
     "destination_discovery",
     "arrival_lookup",
+    "area_conditions",
     "simple_general",
     "transit_question",
     "unsupported",
@@ -65,6 +66,13 @@ _DISCOVERY_RE = re.compile(
     r"in\s+the\s+mood\s+for)\b.{0,72}\b(?:pizza|pancakes?|breakfast|brunch|"
     r"restaurant|food|eat|dinner|lunch|bar|cafe|coffee|bakery|dessert|"
     r"museum|park|show|venue|place|somewhere|go)\b",
+    re.IGNORECASE,
+)
+_AREA_CONDITIONS_RE = re.compile(
+    r"\b(?:what(?:'s|\s+is)\s+happening|is\s+it\s+safe|"
+    r"(?:check|show|are\s+there|is\s+there|any)\s+(?:current\s+)?(?:conditions?|incidents?|"
+    r"police\s+activity|fires?|emergencies?|shootings?|barricades?|closures?|"
+    r"protests?|parades?|rallies?|events?|crowds?))\b",
     re.IGNORECASE,
 )
 _GREETING_RE = re.compile(
@@ -177,6 +185,8 @@ def parse_intent(message: str) -> ParsedIntent:
             avoid_crowds,
             requested_route_ids=_requested_route_ids(text),
         )
+    if _AREA_CONDITIONS_RE.search(text):
+        return ParsedIntent("area_conditions", avoid_crowds)
     return ParsedIntent("transit_question", avoid_crowds)
 
 

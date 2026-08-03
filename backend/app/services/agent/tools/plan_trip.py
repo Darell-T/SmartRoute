@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import time
 
 from app.services import ai_advisor
 from app.services.evidence import current_payload, evidence_envelope
@@ -45,7 +46,7 @@ TRIP_CONTEXT_TIMEOUT_S = float(os.getenv("TRIP_CONTEXT_TIMEOUT_S", "2.0"))
 TRIP_ADVISOR_TIMEOUT_S = float(os.getenv("TRIP_ADVISOR_TIMEOUT_S", "8.0"))
 LIVE_EVIDENCE_TTL_S = 120
 EVENT_EVIDENCE_TTL_S = 300
-AGENT_GROK_BUDGET_S = float(os.getenv("AGENT_GROK_BUDGET_S", "6.0"))
+AGENT_GROK_BUDGET_S = float(os.getenv("AGENT_GROK_BUDGET_S", "10.0"))
 
 _ALL_MODES = ("SUBWAY", "BUS")
 MAX_WAYPOINTS = 3
@@ -114,14 +115,6 @@ PLAN_TRIP_SCHEMA = {
             "waypoint_dwell_minutes": {
                 "type": "number",
                 "description": "Optional dwell time at each intermediate stop. Defaults to 25 minutes when omitted.",
-            },
-            "include_incident_scan": {
-                "type": "boolean",
-                "description": (
-                    "Set true only when the rider specifically asks about "
-                    "incidents, safety, or something unusual on the line -- "
-                    "this scan is slow and must not run on ordinary requests."
-                ),
             },
             "avoid_crowds": {
                 "type": "boolean",
@@ -267,18 +260,145 @@ def _dependencies() -> _plan_trip_executor.PlanTripDependencies:
 
 async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
     """Validate waypoint budget, coordinate chained trips, or execute one leg."""
+    depth = int(ctx.telemetry.get("_plan_trip_depth") or 0)
+    owns_telemetry = depth == 0
+    ctx.telemetry["_plan_trip_depth"] = depth + 1
+    started = time.monotonic()
+    if owns_telemetry:
+        ctx.telemetry["plan_trip"] = {
+            "outcome": "error",
+            "incident_status": "not_started",
+            "incident_cache_hit": None,
+            "advisor_status": "not_started",
+            "advisor_fallback": False,
+            "_legs": [],
+        }
     timings = {
         "place_resolution_ms": 0.0,
         "route_provider_ms": 0.0,
         "mta_ms": 0.0,
         "ticketmaster_ms": 0.0,
+        "incident_ms": 0.0,
+        "advisor_ms": 0.0,
         "scoring_ms": 0.0,
+        "enrichment_ms": 0.0,
+        "plan_trip_ms": 0.0,
     }
-    waypoints, waypoint_error = _validated_waypoints(tool_input.get("waypoints"))
-    if waypoint_error:
-        return ToolResult(ok=False, error=waypoint_error)
-    if waypoints:
-        return await _execute_chained_trip(tool_input, ctx, waypoints)
-    return await _plan_trip_executor.execute_single_leg(
-        tool_input, ctx, timings, dependencies=_dependencies(),
-    )
+    result: ToolResult | None = None
+    leg_telemetry: dict[str, object] | None = None
+    previous_leg = ctx.telemetry.get("_plan_trip_active_leg")
+    try:
+        waypoints, waypoint_error = _validated_waypoints(tool_input.get("waypoints"))
+        if waypoint_error:
+            result = ToolResult(ok=False, error=waypoint_error)
+        elif waypoints:
+            result = await _execute_chained_trip(tool_input, ctx, waypoints)
+        else:
+            leg_telemetry = {
+                "incident_status": "not_started",
+                "incident_cache_hit": None,
+                "advisor_status": "not_started",
+                "advisor_fallback": False,
+            }
+            pipeline = ctx.telemetry.get("plan_trip")
+            if isinstance(pipeline, dict):
+                legs = pipeline.get("_legs")
+                if isinstance(legs, list):
+                    legs.append(leg_telemetry)
+            ctx.telemetry["_plan_trip_active_leg"] = leg_telemetry
+            result = await _plan_trip_executor.execute_single_leg(
+                tool_input, ctx, timings, dependencies=_dependencies(),
+            )
+        return result
+    finally:
+        if previous_leg is None:
+            ctx.telemetry.pop("_plan_trip_active_leg", None)
+        else:
+            ctx.telemetry["_plan_trip_active_leg"] = previous_leg
+        if leg_telemetry is not None:
+            leg_telemetry.update(
+                {
+                    "google_routes_ms": timings["route_provider_ms"],
+                    "mta_evidence_ms": timings["mta_ms"],
+                    "incident_ms": timings["incident_ms"],
+                    "advisor_ms": timings["advisor_ms"],
+                    "scoring_ms": timings["scoring_ms"],
+                    "enrichment_ms": timings["enrichment_ms"],
+                }
+            )
+        ctx.telemetry["_plan_trip_depth"] = depth
+        if owns_telemetry:
+            pipeline = ctx.telemetry["plan_trip"]
+            timings["plan_trip_ms"] = (time.monotonic() - started) * 1000
+            if result is not None:
+                for name in timings:
+                    if name == "plan_trip_ms":
+                        continue
+                    duration = result.timings.get(name)
+                    if isinstance(duration, (int, float)):
+                        timings[name] = max(0.0, float(duration))
+            legs = [
+                leg
+                for leg in pipeline.pop("_legs", [])
+                if isinstance(leg, dict)
+            ]
+            # Conservative ordering prevents a later successful leg from
+            # masking an earlier degraded leg in a chained itinerary.
+            incident_severity = {
+                "complete": 0,
+                "not_started": 1,
+                "disabled": 2,
+                "unknown": 3,
+                "partial": 4,
+                "timeout": 5,
+                "failed": 6,
+            }
+            advisor_severity = {
+                "complete": 0,
+                "not_started": 1,
+                "unknown": 2,
+                "timeout": 3,
+                "failed": 4,
+            }
+            incident_statuses = [
+                str(leg.get("incident_status") or "unknown") for leg in legs
+            ]
+            advisor_statuses = [
+                str(leg.get("advisor_status") or "unknown") for leg in legs
+            ]
+            cache_states = [leg.get("incident_cache_hit") for leg in legs]
+            cache_hit = (
+                False
+                if any(state is False for state in cache_states)
+                else True
+                if cache_states and all(state is True for state in cache_states)
+                else None
+            )
+            pipeline.update(
+                {
+                    "outcome": "success" if result is not None and result.ok else "error",
+                    "leg_count": len(legs),
+                    "incident_status": max(
+                        incident_statuses or ["not_started"],
+                        key=lambda status: incident_severity.get(status, 3),
+                    ),
+                    "incident_cache_hit": cache_hit,
+                    "advisor_status": max(
+                        advisor_statuses or ["not_started"],
+                        key=lambda status: advisor_severity.get(status, 2),
+                    ),
+                    "advisor_fallback": any(
+                        leg.get("advisor_fallback") is True for leg in legs
+                    ),
+                    "google_routes_ms": timings["route_provider_ms"],
+                    "mta_evidence_ms": timings["mta_ms"],
+                    "incident_ms": timings["incident_ms"],
+                    "advisor_ms": timings["advisor_ms"],
+                    "scoring_ms": timings["scoring_ms"],
+                    "enrichment_ms": timings["enrichment_ms"],
+                    "plan_trip_ms": timings["plan_trip_ms"],
+                }
+            )
+            if result is not None:
+                result.timings.update(timings)
+            ctx.telemetry.pop("_plan_trip_depth", None)

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 from datetime import datetime
@@ -52,7 +51,7 @@ async def search_hotspots(
             return {**value, "cache_hit": True}
     if not allow_live_search:
         return {"status": "not_required", "events": [], "completed_sources": []}
-    result = await asyncio.to_thread(_run_search, areas, travel_at)
+    result = await _run_search(areas, travel_at)
     if result.get("status") in {"complete", "partial"}:
         cache.cache_set(key, json.dumps(result, separators=(",", ":")), _CACHE_TTL_S)
     return {**result, "cache_hit": False}

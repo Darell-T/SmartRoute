@@ -77,6 +77,20 @@ class PlanTripToolTests(unittest.IsolatedAsyncioTestCase):
             "get_transit_route",
             new=AsyncMock(return_value=_google_response(_leg("Q", 5, 20), _leg("B", 3, 28))),
         ).start()
+        self._scan_incidents = patch.object(
+            plan_trip.trip_incidents,
+            "scan_route_incidents",
+            new=AsyncMock(
+                return_value={
+                    "incidents": [],
+                    "scan_metadata": {
+                        "status": "complete",
+                        "scanned_at": "2026-08-01T12:00:00Z",
+                        "cache_hit": False,
+                    },
+                }
+            ),
+        ).start()
         self.addCleanup(patch.stopall)
 
     def _ctx(self, origin=None, gtfs=None):
@@ -180,23 +194,77 @@ class PlanTripToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("timeout", result.error)
         self.assertNotIn("Traceback", result.error)
 
-    async def test_include_incident_scan_false_by_default_skips_grok(self):
-        with patch.object(plan_trip.trip_incidents, "_scan_route_incidents", new=AsyncMock(return_value=[])) as scan:
-            await plan_trip.execute(
-                {"origin": "user", "destination": "Costco"}, self._ctx(origin={"lat": 40.7, "lng": -73.9})
-            )
-            scan.assert_not_awaited()
+    async def test_route_planning_always_scans_the_normalized_incident_contract(self):
+        result = await plan_trip.execute(
+            {"origin": "user", "destination": "Costco"},
+            self._ctx(origin={"lat": 40.7, "lng": -73.9}),
+        )
 
-    async def test_include_incident_scan_true_invokes_grok_scan(self):
-        with patch.object(
-            plan_trip.trip_incidents, "_scan_route_incidents", new=AsyncMock(return_value=[{"location": "X"}])
-        ) as scan:
+        self._scan_incidents.assert_awaited_once()
+        self.assertEqual(result.data["incident_evidence"], {
+            "status": "complete",
+            "scanned_at": "2026-08-01T12:00:00Z",
+            "cache_hit": False,
+        })
+
+    async def test_partial_scan_with_incidents_does_not_reach_the_advisor(self):
+        incident = {
+            "location": "Atlantic Avenue",
+            "nearby_station": "Atlantic Av-Barclays Center",
+            "severity": "medium",
+            "description": "Station access is restricted.",
+            "advisor_eligible": True,
+        }
+        self._scan_incidents.return_value = {
+            "incidents": [incident],
+            "scan_metadata": {
+                "status": "partial",
+                "scanned_at": "2026-08-01T12:00:00Z",
+                "cache_hit": False,
+            },
+        }
+        captured = {}
+
+        async def capture_advisor(payload):
+            captured["payload"] = payload
+            return "[ROUTE:0] Take the Q."
+
+        with patch.object(plan_trip.ai_advisor, "collect_recommendation", new=capture_advisor):
             result = await plan_trip.execute(
-                {"origin": "user", "destination": "Costco", "include_incident_scan": True},
+                {"origin": "user", "destination": "Costco"},
                 self._ctx(origin={"lat": 40.7, "lng": -73.9}),
             )
-            scan.assert_awaited_once()
+
         self.assertTrue(result.ok)
+        self.assertEqual(captured["payload"]["incidents"], [])
+        self.assertEqual(captured["payload"]["evidence"]["advisor"]["status"], "unavailable")
+        self.assertEqual(result.data["incident_evidence"]["status"], "partial")
+
+    async def test_partial_empty_scan_is_not_presented_as_an_all_clear(self):
+        self._scan_incidents.return_value = {
+            "incidents": [],
+            "scan_metadata": {
+                "status": "partial",
+                "scanned_at": "2026-08-01T12:00:00Z",
+                "cache_hit": False,
+            },
+        }
+        captured = {}
+
+        async def capture_advisor(payload):
+            captured["payload"] = payload
+            return "[ROUTE:0] Take the Q."
+
+        result = None
+        with patch.object(plan_trip.ai_advisor, "collect_recommendation", new=capture_advisor):
+            result = await plan_trip.execute(
+                {"origin": "user", "destination": "Costco"},
+                self._ctx(origin={"lat": 40.7, "lng": -73.9}),
+            )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(captured["payload"]["incidents"], [])
+        self.assertEqual(captured["payload"]["evidence"]["advisor"]["status"], "unavailable")
 
     async def test_plan_trip_always_uses_shared_intelligence_advisor_mode(self):
         captured = {}

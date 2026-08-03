@@ -504,12 +504,7 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
             (
                 "Are there events at Barclays Center tonight?",
                 {
-                    "transit_snapshot",
-                    "event_lookup",
-                    "lookup_arrivals",
-                    "accessibility_status",
-                    "lookup_facts",
-                    "web_search",
+                    "check_area_conditions",
                 },
             ),
             (

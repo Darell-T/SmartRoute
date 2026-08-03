@@ -20,6 +20,7 @@ class ToolContext:
     turn_id: str = ""
     now_et: str = ""
     origin: dict | None = None
+    telemetry: dict[str, Any] = dataclasses.field(default_factory=dict)
 
 
 @dataclasses.dataclass

@@ -148,7 +148,12 @@ def _load_trips_module(bus_fetch):
         # Drop the trips router AND its services.trips submodules so they
         # re-import fresh inside this stub context so the bus-route dependency
         # binds at module load.
-        for _m in [k for k in list(sys.modules) if k == "app.routers.trips" or k.startswith("app.services.trips")]:
+        for _m in [
+            k
+            for k in list(sys.modules)
+            if k in {"app.routers.trips", "app.routers.trip_enrichment"}
+            or k.startswith("app.services.trips")
+        ]:
             sys.modules.pop(_m, None)
         module = importlib.import_module("app.routers.trips")
         module.admission.acquire = AsyncMock(return_value=module.admission.AdmissionLease("v1.test-principal-opaque-123456", "trip", "test-lease"))

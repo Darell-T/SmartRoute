@@ -4,15 +4,18 @@ import json
 import time
 import unittest
 import weakref
+from dataclasses import replace
 from types import MappingProxyType, SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from fastapi import WebSocketDisconnect
 
+from app.routers import live_feed as live_feed_router
 from app.routers import live_feed_socket
 from app.services.live_feed import network_snapshot as network_snapshot_module
 from app.services.live_feed import snapshot as rider_snapshot
 from app.services.live_feed.network_snapshot import NetworkSnapshot, NetworkSnapshotStore
+from app.services.mta import bus, bus_runtime, bus_updates
 
 
 def network_snapshot(generation: int, **overrides) -> NetworkSnapshot:
@@ -207,9 +210,9 @@ class RiderSnapshotSharingTests(unittest.IsolatedAsyncioTestCase):
                 return {}
 
         with patch.object(
-            rider_snapshot,
-            "_safe_nearby_bus_arrivals",
-            AsyncMock(return_value=([], {"bus_arrivals_supported": False})),
+            rider_snapshot.mta_feed,
+            "cached_nearby_bus_update",
+            return_value=None,
         ):
             result = await rider_snapshot._build_live_snapshot(
                 GTFS(), network, 40.73, -73.99
@@ -218,6 +221,163 @@ class RiderSnapshotSharingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["vehicles"][0]["route_name"], "Q train")
         self.assertNotIn("route_name", shared_vehicle)
         self.assertEqual(network.generation, 7)
+
+
+class BusUpdateOwnershipTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        await bus_runtime.close_bus_client()
+
+    async def asyncTearDown(self):
+        await bus_runtime.close_bus_client()
+
+    async def test_duplicate_bus_refreshes_share_one_inflight_request(self):
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        calls = 0
+
+        async def fetch(*_args):
+            nonlocal calls
+            calls += 1
+            entered.set()
+            await release.wait()
+            return [], {"bus_arrivals_supported": True}
+
+        with patch.object(bus_updates, "_fetch_nearby_bus_arrivals", side_effect=fetch):
+            first = asyncio.create_task(bus_updates.fetch_nearby_bus_update(40.7, -73.9))
+            second = asyncio.create_task(bus_updates.fetch_nearby_bus_update(40.7, -73.9))
+            await entered.wait()
+            self.assertEqual(calls, 1)
+            release.set()
+            left, right = await asyncio.gather(first, second)
+
+        self.assertEqual(left["status"], "ready")
+        self.assertEqual(right["status"], "ready")
+
+    async def test_expired_bus_cache_is_used_only_when_refresh_fails(self):
+        cache_key = bus_updates._arrival_cache_key(40.7, -73.9, 804.672, 10, 4)
+        bus_runtime.set_cached(
+            bus_runtime.nearby_arrivals_cache,
+            cache_key,
+            {
+                "arrivals": [{"mode": "bus", "route_id": "B35"}],
+                "fetched_at": 1,
+                "status": "ready",
+                "debug": {"bus_arrivals_supported": True},
+            },
+            ttl_s=-1,
+            stale_ttl_s=bus_updates.BUS_UPDATE_MAX_STALE_S,
+        )
+
+        with patch.object(
+            bus_updates,
+            "_fetch_nearby_bus_arrivals",
+            AsyncMock(side_effect=TimeoutError()),
+        ):
+            update = await bus_updates.fetch_nearby_bus_update(40.7, -73.9)
+
+        self.assertEqual(update["status"], "cached")
+        self.assertEqual(update["arrivals"][0]["route_id"], "B35")
+
+    async def test_stale_bus_fallback_expires_and_is_removed(self):
+        cache_key = bus_updates._arrival_cache_key(40.7, -73.9, 804.672, 10, 4)
+        bus_runtime.set_cached(
+            bus_runtime.nearby_arrivals_cache,
+            cache_key,
+            {"arrivals": [], "fetched_at": 1, "status": "ready", "debug": {}},
+            ttl_s=-bus_updates.BUS_UPDATE_MAX_STALE_S - 1,
+            stale_ttl_s=bus_updates.BUS_UPDATE_MAX_STALE_S,
+        )
+
+        self.assertIsNone(bus_runtime.get_last_cached(bus_runtime.nearby_arrivals_cache, cache_key))
+        self.assertNotIn(cache_key, bus_runtime.nearby_arrivals_cache)
+
+    async def test_bus_cache_lru_capacity_evicts_the_oldest_key(self):
+        store = bus_runtime.BoundedCache(2)
+        bus_runtime.set_cached(store, "first", {"id": 1}, 60)
+        bus_runtime.set_cached(store, "second", {"id": 2}, 60)
+        self.assertEqual(bus_runtime.get_cached(store, "first"), {"id": 1})
+        bus_runtime.set_cached(store, "third", {"id": 3}, 60)
+
+        self.assertNotIn("second", store)
+        self.assertEqual(set(store), {"first", "third"})
+
+    async def test_overlapping_stop_monitoring_requests_share_one_request(self):
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        calls = 0
+
+        async def get(*_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            entered.set()
+            await release.wait()
+            return SimpleNamespace(status_code=200, json=lambda: {"Siri": {}})
+
+        client = SimpleNamespace(get=get)
+        with patch.object(bus, "_bus_api_key", return_value="bus-key"), patch.object(
+            bus_runtime, "bus_client", AsyncMock(return_value=client)
+        ):
+            first = asyncio.create_task(bus.fetch_bus_stop_monitoring("MTA NYCT_308209", 4))
+            second = asyncio.create_task(bus.fetch_bus_stop_monitoring("308209", 4))
+            await entered.wait()
+            self.assertEqual(calls, 1)
+            release.set()
+            await asyncio.gather(first, second)
+
+        self.assertEqual(calls, 1)
+
+    async def test_overlapping_nearby_stop_discovery_shares_one_request(self):
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        calls = 0
+
+        async def get(*_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            entered.set()
+            await release.wait()
+            return SimpleNamespace(status_code=200, json=lambda: {"data": {"stops": []}})
+
+        client = SimpleNamespace(get=get)
+        with patch.object(bus, "_bus_api_key", return_value="bus-key"), patch.object(
+            bus_runtime, "bus_client", AsyncMock(return_value=client)
+        ):
+            first = asyncio.create_task(bus.fetch_nearby_bus_stops(40.7, -73.9, limit=4))
+            second = asyncio.create_task(bus.fetch_nearby_bus_stops(40.7, -73.9, limit=10))
+            await entered.wait()
+            self.assertEqual(calls, 1)
+            release.set()
+            await asyncio.gather(first, second)
+
+        self.assertEqual(calls, 1)
+
+    async def test_rest_returns_primary_snapshot_before_bus_refresh(self):
+        snapshot = {
+            "nearest_stop": None,
+            "stops": [],
+            "arrivals": [],
+            "alerts": [],
+            "vehicles": [],
+            "signals": None,
+            "bus_status": "pending",
+            "updated_at": 1,
+            "degraded": False,
+            "debug": {},
+        }
+        refresh = AsyncMock(return_value={"status": "unavailable", "arrivals": []})
+        payload = live_feed_router.LiveFeedRequest(lat=40.7, lng=-73.9)
+
+        with patch.object(
+            live_feed_router,
+            "_build_live_snapshot",
+            AsyncMock(return_value=snapshot),
+        ), patch.object(live_feed_router.mta_feed, "fetch_nearby_bus_update", refresh):
+            response = await live_feed_router._live_feed_impl(object(), payload)
+            self.assertEqual(response.status_code, 200)
+            refresh.assert_not_awaited()
+            await asyncio.sleep(0)
+
+        refresh.assert_awaited_once()
 
 
 class SocketOwnershipTests(unittest.IsolatedAsyncioTestCase):
@@ -257,7 +417,11 @@ class SocketOwnershipTests(unittest.IsolatedAsyncioTestCase):
                 "arrivals": [],
                 "vehicles": [],
                 "degraded": False,
+                "bus_status": "pending",
                 "debug": {},
+            }),
+            bus_update=AsyncMock(return_value={
+                "arrivals": [], "fetched_at": 0, "status": "unavailable"
             }),
             normalize=lambda values: set(values or []),
             location_log=lambda *_args: "location",
@@ -342,6 +506,151 @@ class SocketOwnershipTests(unittest.IsolatedAsyncioTestCase):
         await live_feed_socket.close_socket_safe(socket, 1000, WebSocketDisconnect)
         await live_feed_socket.close_socket_safe(socket, 1000, WebSocketDisconnect)
         self.assertEqual(socket.calls, 2)
+
+    async def test_disconnect_cancels_the_socket_owned_bus_waiter(self):
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        async def slow_bus(_lat, _lng):
+            try:
+                started.set()
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+        messages = iter([
+            {"type": "location", "lat": 40.7, "lng": -73.9},
+            WebSocketDisconnect(code=1000),
+        ])
+
+        async def receive(_socket):
+            value = next(messages)
+            if isinstance(value, Exception):
+                await started.wait()
+                raise value
+            return value
+
+        socket = self.Socket()
+        deps = self.dependencies(receive)
+        deps = replace(deps, bus_update=slow_bus)
+        await live_feed_socket.stream_live_feed(socket, 1, deps)
+
+        self.assertTrue(cancelled.is_set())
+
+    async def test_location_change_discards_the_previous_bus_generation(self):
+        first_started = asyncio.Event()
+        first_cancelled = asyncio.Event()
+        second_started = asyncio.Event()
+        release_disconnect = asyncio.Event()
+        calls = 0
+
+        async def bus_update(_lat, _lng):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                first_started.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    first_cancelled.set()
+                    raise
+            second_started.set()
+            return {"arrivals": [], "fetched_at": 2, "status": "ready"}
+
+        receive_count = 0
+
+        async def receive(_socket):
+            nonlocal receive_count
+            receive_count += 1
+            if receive_count == 1:
+                return {"type": "location", "lat": 40.7, "lng": -73.9}
+            if receive_count == 2:
+                await first_started.wait()
+                return {"type": "location", "lat": 40.8, "lng": -73.8}
+            await second_started.wait()
+            await release_disconnect.wait()
+            raise WebSocketDisconnect(code=1000)
+
+        async def send(_socket, payload):
+            if payload.get("type") == "bus_update":
+                release_disconnect.set()
+            return True
+
+        socket = self.Socket()
+        deps = replace(
+            self.dependencies(receive),
+            bus_update=bus_update,
+            send=AsyncMock(side_effect=send),
+        )
+        await live_feed_socket.stream_live_feed(socket, 1, deps)
+
+        self.assertTrue(first_cancelled.is_set())
+        bus_messages = [
+            call.args[1]
+            for call in deps.send.await_args_list
+            if call.args[1].get("type") == "bus_update"
+        ]
+        self.assertEqual([message["data"]["generation"] for message in bus_messages], [2])
+        self.assertEqual(
+            set(bus_messages[0]["data"]),
+            {"generation", "arrivals", "fetched_at", "status"},
+        )
+
+    async def test_same_tick_location_change_discards_completed_old_bus_update(self):
+        """A received location frame wins over a simultaneously completed bus task."""
+        first_started = asyncio.Event()
+        release_first = asyncio.Event()
+        second_finished = asyncio.Event()
+        release_disconnect = asyncio.Event()
+        calls = 0
+
+        async def bus_update(_lat, _lng):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                first_started.set()
+                await release_first.wait()
+                return {"arrivals": [{"route_id": "B1"}], "fetched_at": 1, "status": "ready"}
+            second_finished.set()
+            return {"arrivals": [{"route_id": "B2"}], "fetched_at": 2, "status": "ready"}
+
+        receive_count = 0
+
+        async def receive(_socket):
+            nonlocal receive_count
+            receive_count += 1
+            if receive_count == 1:
+                return {"type": "location", "lat": 40.7, "lng": -73.9}
+            if receive_count == 2:
+                await first_started.wait()
+                release_first.set()
+                await asyncio.sleep(0)
+                return {"type": "location", "lat": 40.8, "lng": -73.8}
+            await second_finished.wait()
+            await release_disconnect.wait()
+            raise WebSocketDisconnect(code=1000)
+
+        async def send(_socket, payload):
+            if payload.get("type") == "bus_update":
+                release_disconnect.set()
+            return True
+
+        socket = self.Socket()
+        deps = replace(
+            self.dependencies(receive),
+            bus_update=bus_update,
+            send=AsyncMock(side_effect=send),
+        )
+        await live_feed_socket.stream_live_feed(socket, 1, deps)
+
+        bus_messages = [
+            call.args[1]
+            for call in deps.send.await_args_list
+            if call.args[1].get("type") == "bus_update"
+        ]
+        self.assertEqual([message["data"]["generation"] for message in bus_messages], [2])
+        self.assertEqual(bus_messages[0]["data"]["arrivals"], [{"route_id": "B2"}])
 
 
 if __name__ == "__main__":

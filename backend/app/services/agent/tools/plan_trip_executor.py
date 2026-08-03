@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import math
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -11,6 +10,7 @@ from typing import Any, Awaitable, Callable
 
 from app.services.agent.tools._location import ResolvedPlace
 from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.plan_trip_first_leg import first_leg_arrival_context
 
 
 @dataclass(frozen=True)
@@ -61,10 +61,7 @@ async def execute_single_leg(
     if not destination_raw:
         return ToolResult(ok=False, error="destination is required")
 
-    excluded = {
-        str(mode).strip().upper()
-        for mode in (tool_input.get("exclude_modes") or [])
-    }
+    excluded = {str(mode).strip().upper() for mode in (tool_input.get("exclude_modes") or [])}
     allowed_modes = [mode for mode in ("SUBWAY", "BUS") if mode not in excluded]
     if not allowed_modes:
         return ToolResult(
@@ -174,10 +171,9 @@ async def execute_single_leg(
     avoid_crowds = bool(tool_input.get("avoid_crowds"))
     hotspot_hits = dependencies.crowd_hotspots.find_hotspot_hits(ctx.gtfs, parsed_routes)
     collect_crowd_evidence = avoid_crowds or bool(hotspot_hits)
-    allow_live_crowd_search = (
-        collect_crowd_evidence
-        and str(tool_input.get("crowd_search_mode") or "auto") == "auto"
-    )
+    allow_live_crowd_search = collect_crowd_evidence and str(
+        tool_input.get("crowd_search_mode") or "auto"
+    ) == "auto"
 
     async def collect_event_evidence() -> tuple[Any, list[dict], list[str], dict]:
         started = time.monotonic()
@@ -192,24 +188,26 @@ async def execute_single_leg(
         finally:
             timings["ticketmaster_ms"] = (time.monotonic() - started) * 1000
 
-    event_task = (
-        asyncio.create_task(collect_event_evidence())
-        if collect_crowd_evidence
-        else None
-    )
-    incident_task = None
-    if tool_input.get("include_incident_scan"):
-        incident_context = dependencies.trip_incidents.build_candidate_stop_context(
-            ctx.gtfs,
-            parsed_routes,
-        )
-        incident_task = asyncio.create_task(
-            asyncio.wait_for(
-                dependencies.trip_incidents._scan_route_incidents(incident_context),
+    async def collect_incident_evidence() -> dict[str, Any]:
+        started = time.monotonic()
+        try:
+            return await asyncio.wait_for(
+                dependencies.trip_incidents.scan_route_incidents(
+                    incident_context,
+                    travel_at=departure_time,
+                ),
                 timeout=dependencies.incident_timeout_seconds,
             )
-        )
+        finally:
+            timings["incident_ms"] = (time.monotonic() - started) * 1000
 
+    event_task = asyncio.create_task(collect_event_evidence()) if collect_crowd_evidence else None
+    incident_context = dependencies.trip_incidents.build_candidate_stop_context(
+        ctx.gtfs,
+        parsed_routes,
+    )
+    incident_task = asyncio.create_task(collect_incident_evidence())
+    leg_telemetry = ctx.telemetry.get("_plan_trip_active_leg")
     context_collection_timed_out = False
     mta_started = time.monotonic()
     try:
@@ -263,19 +261,54 @@ async def execute_single_leg(
             event_failures = [type(exc).__name__]
 
     incidents: list = []
+    incident_scan_metadata: dict = {
+        "status": "failed",
+        "sources": {"attempted": ["x_search", "web_search"], "completed": []},
+    }
     advisor_evidence_available = False
-    if incident_task is not None:
-        try:
-            incidents = await incident_task
-            advisor_evidence_available = True
-        except asyncio.TimeoutError:
-            print(
-                "[agent-plan_trip] incident scan timed out "
-                f"({dependencies.incident_timeout_seconds:.0f}s)"
+    try:
+        incident_scan = await incident_task
+        metadata = incident_scan.get("scan_metadata") if isinstance(incident_scan, dict) else None
+        if isinstance(incident_scan, dict) and isinstance(
+            incident_scan.get("incidents"), list
+        ):
+            # The scanner owns normalization, but preserve this transport
+            # boundary so a malformed or future caller cannot send a warning
+            # to the route advisor as actionable evidence.
+            incidents = [
+                incident
+                for incident in incident_scan["incidents"]
+                if isinstance(incident, dict)
+                and incident.get("advisor_eligible") is True
+            ]
+        if isinstance(metadata, dict):
+            incident_scan_metadata = metadata
+        if isinstance(leg_telemetry, dict):
+            leg_telemetry["incident_status"] = str(
+                incident_scan_metadata.get("status") or "failed"
             )
-        except Exception as exc:
-            print(f"[agent-plan_trip] incident scan failed: {type(exc).__name__}")
-
+            cache_hit = incident_scan_metadata.get("cache_hit")
+            leg_telemetry["incident_cache_hit"] = (
+                cache_hit if isinstance(cache_hit, bool) else None
+            )
+        scan_status = incident_scan_metadata.get("status")
+        # Only independently corroborated, route-impacting evidence enters
+        # ``incidents``. A partial scan or warning must never look like an
+        # all-clear signal to the route advisor.
+        advisor_evidence_available = scan_status == "complete" and bool(incidents)
+    except asyncio.TimeoutError:
+        if isinstance(leg_telemetry, dict):
+            leg_telemetry["incident_status"] = "timeout"
+            leg_telemetry["incident_cache_hit"] = False
+        print(
+            "[agent-plan_trip] incident scan timed out "
+            f"({dependencies.incident_timeout_seconds:.0f}s)"
+        )
+    except Exception as exc:
+        if isinstance(leg_telemetry, dict):
+            leg_telemetry["incident_status"] = "failed"
+            leg_telemetry["incident_cache_hit"] = False
+        print(f"[agent-plan_trip] incident scan failed: {type(exc).__name__}")
     observed_at = datetime.now(timezone.utc)
     evidence_envelopes = {
         "alerts": dependencies.evidence_envelope(
@@ -314,9 +347,6 @@ async def execute_single_leg(
             available=advisor_evidence_available,
         ),
     }
-    # These values are still current immediately after collection. Keeping the
-    # suppression at this boundary makes expiry deterministic if collection is
-    # later cached or replayed.
     relevant_alerts = dependencies.current_payload(evidence_envelopes["alerts"], empty=[])
     stalled = dependencies.current_payload(evidence_envelopes["subway_vehicles"], empty=[])
     stalled_buses = dependencies.current_payload(
@@ -326,7 +356,6 @@ async def execute_single_leg(
     event_impacts = dependencies.current_payload(evidence_envelopes["events"], empty=[])
     incidents = dependencies.current_payload(evidence_envelopes["advisor"], empty=[])
 
-    scoring_started = time.monotonic()
     judge_payload = dependencies.advisor_context.build_advisor_payload(
         routes=parsed_routes,
         service_alerts=relevant_alerts,
@@ -337,32 +366,43 @@ async def execute_single_leg(
         evidence=evidence_envelopes,
         mode=dependencies.advisor_context.PlanningMode.INTELLIGENCE,
     )
+    advisor_started = time.monotonic()
+    advisor_status = "complete"
+    advisor_fallback = False
     try:
         recommendation = await asyncio.wait_for(
             dependencies.ai_advisor.collect_recommendation(judge_payload),
             timeout=dependencies.advisor_timeout_seconds,
         )
     except asyncio.TimeoutError:
+        advisor_status = "timeout"
+        advisor_fallback = True
         print(
             "[agent-plan_trip] advisor timed out "
             f"({dependencies.advisor_timeout_seconds:.2f}s)"
         )
         recommendation = "[ROUTE:0] Live reasoning timed out; showing the fastest option."
     except Exception as exc:
+        advisor_status = "failed"
+        advisor_fallback = True
         print(f"[agent-plan_trip] advisor unavailable type={type(exc).__name__}")
         recommendation = "[ROUTE:0] Live reasoning was unavailable; showing the fastest option."
+    timings["advisor_ms"] = (time.monotonic() - advisor_started) * 1000
+    if isinstance(leg_telemetry, dict):
+        leg_telemetry["advisor_status"] = advisor_status
+        leg_telemetry["advisor_fallback"] = advisor_fallback
     chosen_index, candidate_analysis = (
         dependencies.advisor_context.parse_advisor_selection(
             recommendation,
             len(parsed_routes),
         )
     )
+    scoring_started = time.monotonic()
     scored = dependencies.scoring._score_routes(
         parsed_routes,
         relevant_alerts,
         ticketmaster_event_impacts=event_impacts,
     )
-    timings["scoring_ms"] = (time.monotonic() - scoring_started) * 1000
     decision_reason = "advisor_tiebreak"
     selection_log_reason = "advisor_selection"
     scoring_event_impacts = [
@@ -384,16 +424,19 @@ async def execute_single_leg(
         )["index"]
         decision_reason = "lowest_final_score"
         selection_log_reason = "risk_adjusted_event_score"
+    timings["scoring_ms"] = (time.monotonic() - scoring_started) * 1000
 
     chosen_route = parsed_routes[chosen_index]
+    enrichment_started = time.monotonic()
     await dependencies.enrichment._enrich_route(ctx.gtfs, chosen_route)
-    first_leg_arrival_context = await _first_leg_arrival_context(
+    first_leg_context = await first_leg_arrival_context(
         tool_input,
         ctx,
         origin_place,
         chosen_route,
         dependencies,
     )
+    timings["enrichment_ms"] = (time.monotonic() - enrichment_started) * 1000
     return dependencies.project(
         tool_input=tool_input,
         ctx=ctx,
@@ -411,6 +454,7 @@ async def execute_single_leg(
         event_impacts=event_impacts,
         event_failures=event_failures,
         crowd_search_metadata=crowd_search_metadata,
+        incident_scan_metadata=incident_scan_metadata,
         evidence_envelopes=evidence_envelopes,
         collect_crowd_evidence=collect_crowd_evidence,
         chosen_index=chosen_index,
@@ -419,77 +463,6 @@ async def execute_single_leg(
         decision_reason=decision_reason,
         selection_log_reason=selection_log_reason,
         scoring_event_impacts=scoring_event_impacts,
-        first_leg_arrival_context=first_leg_arrival_context,
+        first_leg_arrival_context=first_leg_context,
     )
-
-
-async def _first_leg_arrival_context(
-    tool_input: dict,
-    ctx: ToolContext,
-    origin_place: ResolvedPlace,
-    chosen_route: list[dict],
-    dependencies: PlanTripDependencies,
-) -> dict | None:
-    if not tool_input.get("include_first_leg_arrivals"):
-        return None
-    first_transit = next(
-        (step for step in chosen_route if step.get("type") in {"SUBWAY", "BUS"}),
-        None,
-    )
-    if not first_transit:
-        return None
-    departure_coords = first_transit.get("departure_coords") or {}
-    try:
-        latitude = float(departure_coords.get("latitude", departure_coords.get("lat")))
-        longitude = float(departure_coords.get("longitude", departure_coords.get("lng")))
-        walking_minutes = max(
-            0,
-            math.ceil(
-                dependencies.geo.distance_meters(
-                    origin_place.latitude,
-                    origin_place.longitude,
-                    latitude,
-                    longitude,
-                )
-                / 80
-            ),
-        )
-        from app.services.agent.tools import lookup_arrivals
-
-        result = await asyncio.wait_for(
-            lookup_arrivals.execute(
-                {
-                    "mode": str(first_transit.get("type") or "").lower(),
-                    "route_id": dependencies.scoring._step_route_id(first_transit),
-                    "stop_query": first_transit.get("departure_stop"),
-                    "direction": first_transit.get("direction"),
-                    "user_location": {
-                        "latitude": latitude,
-                        "longitude": longitude,
-                    },
-                    "walking_minutes": walking_minutes,
-                    "limit": 3,
-                },
-                ctx,
-            ),
-            timeout=3.0,
-        )
-        if (
-            result.ok
-            and isinstance(result.data, dict)
-            and isinstance(result.data.get("catchability"), dict)
-        ):
-            catchability = result.data["catchability"]
-            return {
-                "route_id": dependencies.scoring._step_route_id(first_transit),
-                "stop_name": first_transit.get("departure_stop"),
-                "source_status": result.data.get("source_status"),
-                "walking_minutes": catchability.get("walking_minutes"),
-                "catchable_arrival_minutes": catchability.get(
-                    "catchable_arrival_minutes"
-                ),
-                "arrival_minutes": catchability.get("arrival_minutes") or [],
-            }
-    except (asyncio.TimeoutError, TypeError, ValueError):
-        pass
-    return None
+__all__ = ("PlanTripDependencies", "execute_single_leg")
