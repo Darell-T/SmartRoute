@@ -478,6 +478,42 @@ class PlanTripItineraryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self._get_route.await_args_list[0].args[2])
         self.assertEqual(self._get_route.await_args_list[1].args[2], (40.7128, -74.006))
 
+    async def test_empty_named_destination_response_recovers_with_coordinates(self):
+        self._get_route.side_effect = [
+            {"routes": []},
+            _google_response(_leg("Q", 5, 20, duration_minutes=25)),
+        ]
+
+        result = await plan_trip.execute(
+            {"origin": "user", "destination": "Coney Island"},
+            self._ctx(),
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(self._get_route.await_count, 2)
+        self.assertIsNone(self._get_route.await_args_list[0].args[2])
+        self.assertEqual(
+            self._get_route.await_args_list[1].args[2],
+            (40.7128, -74.006),
+        )
+
+    async def test_empty_named_and_coordinate_responses_keep_normalized_failure(self):
+        self._get_route.side_effect = [{"routes": []}, {"routes": []}]
+
+        result = await plan_trip.execute(
+            {"origin": "user", "destination": "Coney Island"},
+            self._ctx(),
+        )
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error, "no transit route found between those points")
+        self.assertEqual(self._get_route.await_count, 2)
+        self.assertIsNone(self._get_route.await_args_list[0].args[2])
+        self.assertEqual(
+            self._get_route.await_args_list[1].args[2],
+            (40.7128, -74.006),
+        )
+
     async def test_crowd_intent_searches_events_and_can_change_the_recommended_route(self):
         impacts = [
             {

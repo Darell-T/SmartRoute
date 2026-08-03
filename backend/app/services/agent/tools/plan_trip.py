@@ -142,7 +142,7 @@ _summary_eta_minutes = _plan_trip_input.summary_eta_minutes
 _parse_rfc3339 = _plan_trip_input.parse_rfc3339
 
 
-async def _route_with_recovery(**kwargs) -> dict:
+async def _route_with_recovery(**kwargs) -> list:
     return await _plan_trip_input.route_with_recovery(
         directions_service=directions_service,
         **kwargs,

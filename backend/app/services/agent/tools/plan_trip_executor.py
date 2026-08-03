@@ -18,7 +18,7 @@ class PlanTripDependencies:
     """Runtime bindings kept in the facade so its public patch seams survive."""
 
     directions_service: Any
-    route_with_recovery: Callable[..., Awaitable[dict]]
+    route_with_recovery: Callable[..., Awaitable[list]]
     derive_arrive_by_departure: Callable[..., Awaitable[str]]
     resolve_named_place: Callable[
         ..., Awaitable[tuple[ResolvedPlace | None, str | None]]
@@ -123,7 +123,7 @@ async def execute_single_leg(
 
     route_started = time.monotonic()
     try:
-        response = await dependencies.route_with_recovery(
+        parsed_routes = await dependencies.route_with_recovery(
             origin=origin_place,
             destination=destination_place,
             destination_query=destination_raw,
@@ -136,7 +136,6 @@ async def execute_single_leg(
         return ToolResult(ok=False, error=f"routing failed ({exc.code})")
     timings["route_provider_ms"] = (time.monotonic() - route_started) * 1000
 
-    parsed_routes = dependencies.directions_service.parse_response(response)
     if not parsed_routes:
         return ToolResult(ok=False, error="no transit route found between those points")
     required_route_ids = {
