@@ -2,51 +2,36 @@
 
 from __future__ import annotations
 
-import asyncio
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable
+from typing import Any, Callable
 
-from app.services.agent.tools._location import ResolvedPlace
 from app.services.agent.tools._types import ToolContext, ToolResult
 from app.services.agent.tools.plan_trip_advisor import select_agent_route
 from app.services.agent.tools.plan_trip_first_leg import first_leg_arrival_context
+from app.services.agent.tools.plan_trip_prepare import (
+    PreparationDependencies,
+    prepare_single_leg,
+)
+from app.services.agent.turn_telemetry import record_phase_ms
 
 
 @dataclass(frozen=True)
-class PlanTripDependencies:
-    """Runtime bindings kept in the facade so its public patch seams survive."""
+class PlanTripDependencies(PreparationDependencies):
+    """Legacy full dependency contract for the nested-advisor ``plan_trip``.
 
-    directions_service: Any
-    route_with_recovery: Callable[..., Awaitable[list]]
-    derive_arrive_by_departure: Callable[..., Awaitable[str]]
-    resolve_named_place: Callable[
-        ..., Awaitable[tuple[ResolvedPlace | None, str | None]]
-    ]
-    collect_alerts: Callable[[], Awaitable[Any]]
-    collect_stalled_trains: Callable[[set[str]], Awaitable[Any]]
-    collect_stalled_buses: Callable[[set[str]], Awaitable[Any]]
-    parse_service_alerts: Callable[[Any], list]
-    filter_alerts_for_routes: Callable[[list, set[str]], list]
-    ai_advisor: Any
-    advisor_context: Any
-    candidates: Any
-    crowd_evidence: Any
-    crowd_hotspots: Any
+    Extends the narrow preparation type with exactly the extra bindings the
+    legacy executor/advisor stack reads: enrichment, geo, the advisor timeout,
+    and the optional advisor/projection bindings. The direct Live Map path
+    never constructs this type, so its import graph stays advisor-free.
+    """
+
     enrichment: Any
-    scoring: Any
-    trip_incidents: Any
     geo: Any
-    current_payload: Callable[..., list]
-    evidence_envelope: Callable[..., Any]
-    project: Callable[..., ToolResult]
-    route_service_ids: Callable[[list[dict]], set[str]]
-    context_timeout_seconds: float
     advisor_timeout_seconds: float
-    incident_timeout_seconds: float
-    live_evidence_ttl_seconds: int
-    event_evidence_ttl_seconds: int
+    ai_advisor: Any | None = None
+    advisor_context: Any | None = None
+    project: Callable[..., ToolResult] | None = None
 
 
 async def execute_single_leg(
@@ -56,381 +41,85 @@ async def execute_single_leg(
     *,
     dependencies: PlanTripDependencies,
 ) -> ToolResult:
-    """Resolve, route, enrich, score, then hand canonical facts to projection."""
-    origin_raw = str(tool_input.get("origin") or "")
-    destination_raw = str(tool_input.get("destination") or "").strip()
-    if not destination_raw:
-        return ToolResult(ok=False, error="destination is required")
-
-    excluded = {str(mode).strip().upper() for mode in (tool_input.get("exclude_modes") or [])}
-    allowed_modes = [mode for mode in ("SUBWAY", "BUS") if mode not in excluded]
-    if not allowed_modes:
-        return ToolResult(
-            ok=False,
-            error="no transit modes left after excluding all of them",
-        )
-
-    place_started = time.monotonic()
-    origin_place, origin_error = await dependencies.resolve_named_place(
-        origin_raw,
+    """Resolve, route, enrich, score, nested-select, then project the card."""
+    prepared = await prepare_single_leg(
+        tool_input,
         ctx,
-        missing_location_message=(
-            "I need your current location to plan from 'origin' -- share GPS "
-            "or give me an address instead."
-        ),
+        timings,
+        dependencies=dependencies,
+        emit_comparing_progress=True,
     )
-    if origin_place is None:
-        return ToolResult(ok=False, error=origin_error or "could not resolve the origin")
-    destination_place, destination_error = await dependencies.resolve_named_place(
-        destination_raw,
-        ctx,
-        missing_location_message=(
-            "I need your current location to plan from 'destination' -- share "
-            "GPS or give me an address instead."
-        ),
-    )
-    if destination_place is None:
-        return ToolResult(
-            ok=False,
-            error=destination_error or "could not find that destination in NYC",
-        )
-    timings["place_resolution_ms"] = (time.monotonic() - place_started) * 1000
+    if isinstance(prepared, ToolResult):
+        return prepared
 
-    routing_preference = tool_input.get("routing_preference") or "FEWER_TRANSFERS"
-    departure_time = tool_input.get("departure_time") or None
-    arrival_by = tool_input.get("arrival_by") or None
-    if departure_time and arrival_by:
-        return ToolResult(
-            ok=False,
-            error="use either departure_time or arrival_by, not both",
-        )
-    if arrival_by:
-        try:
-            departure_time = await dependencies.derive_arrive_by_departure(
-                origin=origin_place,
-                destination=destination_place,
-                destination_query=destination_raw,
-                arrival_by=str(arrival_by),
-                allowed_modes=allowed_modes,
-                routing_preference=routing_preference,
-            )
-        except ValueError as exc:
-            return ToolResult(ok=False, error=str(exc))
-        except dependencies.directions_service.GoogleRoutesError as exc:
-            return ToolResult(
-                ok=False,
-                error=f"could not estimate an arrive-by departure ({exc.code})",
-            )
-
-    route_started = time.monotonic()
-    try:
-        parsed_routes = await dependencies.route_with_recovery(
-            origin=origin_place,
-            destination=destination_place,
-            destination_query=destination_raw,
-            allowed_modes=allowed_modes,
-            routing_preference=routing_preference,
-            departure_time=departure_time,
-        )
-    except dependencies.directions_service.GoogleRoutesError as exc:
-        print(f"[agent-plan_trip] routing failed code={exc.code}")
-        return ToolResult(ok=False, error=f"routing failed ({exc.code})")
-    timings["route_provider_ms"] = (time.monotonic() - route_started) * 1000
-
-    if not parsed_routes:
-        return ToolResult(ok=False, error="no transit route found between those points")
-    required_route_ids = {
-        str(route_id).strip().upper()
-        for route_id in tool_input.get("required_route_ids") or []
-        if str(route_id).strip()
-    }
-    if required_route_ids:
-        parsed_routes = [
-            route
-            for route in parsed_routes
-            if required_route_ids.issubset(dependencies.route_service_ids(route))
-        ]
-        if not parsed_routes:
-            requested = "/".join(sorted(required_route_ids))
-            return ToolResult(
-                ok=False,
-                error=f"no route candidate used the requested {requested} service",
-            )
-    try:
-        max_candidates = max(
-            1,
-            int(tool_input.get("max_candidates") or len(parsed_routes)),
-        )
-    except (TypeError, ValueError):
-        max_candidates = len(parsed_routes)
-    parsed_routes = parsed_routes[:max_candidates]
-    await ctx.emit_progress("finding_routes", "complete")
-
-    route_ids, bus_route_ids = dependencies.candidates._collect_route_and_bus_ids(
-        parsed_routes
-    )
-    avoid_crowds = bool(tool_input.get("avoid_crowds"))
-    hotspot_hits = dependencies.crowd_hotspots.find_hotspot_hits(ctx.gtfs, parsed_routes)
-    collect_crowd_evidence = avoid_crowds or bool(hotspot_hits)
-    allow_live_crowd_search = collect_crowd_evidence and str(
-        tool_input.get("crowd_search_mode") or "auto"
-    ) == "auto"
-
-    async def collect_event_evidence() -> tuple[Any, list[dict], list[str], dict]:
-        started = time.monotonic()
-        try:
-            return await dependencies.crowd_evidence.collect(
-                parsed_routes,
-                ctx,
-                hotspot_hits=hotspot_hits,
-                explicit_crowd_request=avoid_crowds,
-                allow_live_search=allow_live_crowd_search,
-            )
-        finally:
-            timings["ticketmaster_ms"] = (time.monotonic() - started) * 1000
-
-    async def collect_incident_evidence() -> dict[str, Any]:
-        started = time.monotonic()
-        try:
-            return await asyncio.wait_for(
-                dependencies.trip_incidents.scan_route_incidents(
-                    incident_context,
-                    travel_at=departure_time,
-                ),
-                timeout=dependencies.incident_timeout_seconds,
-            )
-        finally:
-            timings["incident_ms"] = (time.monotonic() - started) * 1000
-
-    await ctx.emit_progress("checking_live_conditions", "active")
-    event_task = asyncio.create_task(collect_event_evidence()) if collect_crowd_evidence else None
-    incident_context = dependencies.trip_incidents.build_candidate_stop_context(
-        ctx.gtfs,
-        parsed_routes,
-    )
-    incident_task = asyncio.create_task(collect_incident_evidence())
-    leg_telemetry = ctx.telemetry.get("_plan_trip_active_leg")
-    context_collection_timed_out = False
-    mta_started = time.monotonic()
-    try:
-        raw_alerts, stalled, stalled_buses = await asyncio.wait_for(
-            asyncio.gather(
-                dependencies.collect_alerts(),
-                dependencies.collect_stalled_trains(route_ids),
-                dependencies.collect_stalled_buses(bus_route_ids),
-                return_exceptions=True,
-            ),
-            timeout=dependencies.context_timeout_seconds,
-        )
-    except asyncio.TimeoutError:
-        context_collection_timed_out = True
-        raw_alerts, stalled, stalled_buses = [], [], []
-    alerts_available = not context_collection_timed_out and not isinstance(
-        raw_alerts,
-        BaseException,
-    )
-    subway_vehicles_available = not context_collection_timed_out and not isinstance(
-        stalled,
-        BaseException,
-    )
-    bus_vehicles_available = not context_collection_timed_out and not isinstance(
-        stalled_buses,
-        BaseException,
-    )
-    raw_alerts = [] if isinstance(raw_alerts, BaseException) else raw_alerts
-    stalled = [] if isinstance(stalled, BaseException) else stalled
-    stalled_buses = [] if isinstance(stalled_buses, BaseException) else stalled_buses
-    timings["mta_ms"] = (time.monotonic() - mta_started) * 1000
-    parsed_alerts = dependencies.parse_service_alerts(raw_alerts) if raw_alerts else []
-    relevant_alerts = dependencies.filter_alerts_for_routes(parsed_alerts, route_ids)
-
-    event_evidence_status = "not_required"
-    event_impacts: list[dict] = []
-    event_failures: list[str] = []
-    crowd_search_metadata: dict = {"grok_status": "not_required"}
-    if event_task is not None:
-        try:
-            (
-                event_evidence_status,
-                event_impacts,
-                event_failures,
-                crowd_search_metadata,
-            ) = await event_task
-        except Exception as exc:
-            print(f"[agent-plan_trip] event enrichment failed: {type(exc).__name__}")
-            event_evidence_status = "provider_unavailable"
-            event_impacts = []
-            event_failures = [type(exc).__name__]
-
-    incidents: list = []
-    incident_scan_metadata: dict = {
-        "status": "failed",
-        "sources": {"attempted": ["x_search", "web_search"], "completed": []},
-    }
-    advisor_evidence_available = False
-    try:
-        incident_scan = await incident_task
-        metadata = incident_scan.get("scan_metadata") if isinstance(incident_scan, dict) else None
-        if isinstance(incident_scan, dict) and isinstance(
-            incident_scan.get("incidents"), list
-        ):
-            # The scanner owns normalization, but preserve this transport
-            # boundary so a malformed or future caller cannot send a warning
-            # to the route advisor as actionable evidence.
-            incidents = [
-                incident
-                for incident in incident_scan["incidents"]
-                if isinstance(incident, dict)
-                and incident.get("advisor_eligible") is True
-            ]
-        if isinstance(metadata, dict):
-            incident_scan_metadata = metadata
-        if isinstance(leg_telemetry, dict):
-            leg_telemetry["incident_status"] = str(
-                incident_scan_metadata.get("status") or "failed"
-            )
-            cache_hit = incident_scan_metadata.get("cache_hit")
-            leg_telemetry["incident_cache_hit"] = (
-                cache_hit if isinstance(cache_hit, bool) else None
-            )
-        # Only independently corroborated, route-impacting evidence enters
-        # ``incidents``. A partial scan or warning must never look like an
-        # all-clear signal to the route advisor.
-        advisor_evidence_available = dependencies.trip_incidents.incident_scan_is_complete(
-            incident_scan_metadata
-        ) and bool(incidents)
-    except asyncio.TimeoutError:
-        if isinstance(leg_telemetry, dict):
-            leg_telemetry["incident_status"] = "timeout"
-            leg_telemetry["incident_cache_hit"] = False
-        print(
-            "[agent-plan_trip] incident scan timed out "
-            f"({dependencies.incident_timeout_seconds:.0f}s)"
-        )
-    except Exception as exc:
-        if isinstance(leg_telemetry, dict):
-            leg_telemetry["incident_status"] = "failed"
-            leg_telemetry["incident_cache_hit"] = False
-        print(f"[agent-plan_trip] incident scan failed: {type(exc).__name__}")
-    await ctx.emit_progress("checking_live_conditions", "complete")
-    observed_at = datetime.now(timezone.utc)
-    evidence_envelopes = {
-        "alerts": dependencies.evidence_envelope(
-            "mta_service_alerts",
-            relevant_alerts,
-            observed_at=observed_at,
-            ttl_seconds=dependencies.live_evidence_ttl_seconds,
-            available=alerts_available,
-        ),
-        "subway_vehicles": dependencies.evidence_envelope(
-            "mta_subway_vehicle_positions",
-            stalled,
-            observed_at=observed_at,
-            ttl_seconds=dependencies.live_evidence_ttl_seconds,
-            available=subway_vehicles_available,
-        ),
-        "bus_vehicles": dependencies.evidence_envelope(
-            "mta_bus_vehicle_positions",
-            stalled_buses,
-            observed_at=observed_at,
-            ttl_seconds=dependencies.live_evidence_ttl_seconds,
-            available=bus_vehicles_available,
-        ),
-        "events": dependencies.evidence_envelope(
-            "crowd_events",
-            event_impacts,
-            observed_at=observed_at,
-            ttl_seconds=dependencies.event_evidence_ttl_seconds,
-            available=event_evidence_status != "provider_unavailable",
-        ),
-        "advisor": dependencies.evidence_envelope(
-            "route_incident_advisor",
-            incidents,
-            observed_at=observed_at,
-            ttl_seconds=dependencies.live_evidence_ttl_seconds,
-            available=advisor_evidence_available,
-        ),
-    }
-    relevant_alerts = dependencies.current_payload(evidence_envelopes["alerts"], empty=[])
-    stalled = dependencies.current_payload(evidence_envelopes["subway_vehicles"], empty=[])
-    stalled_buses = dependencies.current_payload(
-        evidence_envelopes["bus_vehicles"],
-        empty=[],
-    )
-    event_impacts = dependencies.current_payload(evidence_envelopes["events"], empty=[])
-    incidents = dependencies.current_payload(evidence_envelopes["advisor"], empty=[])
-
-    scoring_started = time.monotonic()
-    scored = dependencies.scoring._score_routes(
-        parsed_routes,
-        relevant_alerts,
-        ticketmaster_event_impacts=event_impacts,
-    )
-    timings["scoring_ms"] = (time.monotonic() - scoring_started) * 1000
     judge_payload = dependencies.advisor_context.build_advisor_payload(
-        routes=parsed_routes,
-        service_alerts=relevant_alerts,
-        incidents=incidents,
-        stalled_trains=stalled,
-        stalled_buses=stalled_buses,
-        ticketmaster_event_impacts=event_impacts,
-        evidence=evidence_envelopes,
+        routes=prepared.parsed_routes,
+        service_alerts=prepared.relevant_alerts,
+        incidents=prepared.incidents,
+        stalled_trains=prepared.stalled,
+        stalled_buses=prepared.stalled_buses,
+        ticketmaster_event_impacts=prepared.event_impacts,
+        evidence=prepared.evidence_envelopes,
         mode=dependencies.advisor_context.PlanningMode.INTELLIGENCE,
-        scored_candidates=scored,
+        scored_candidates=prepared.scored,
     )
-    await ctx.emit_progress("comparing_options", "active")
     selection = await select_agent_route(
         payload=judge_payload,
-        candidate_count=len(parsed_routes),
-        scored=scored,
+        candidate_count=len(prepared.parsed_routes),
+        scored=prepared.scored,
         ctx=ctx,
         dependencies=dependencies,
         timings=timings,
-        leg_telemetry=leg_telemetry,
+        leg_telemetry=prepared.leg_telemetry,
     )
     chosen_index = selection.chosen_index
     candidate_analysis = selection.candidate_analysis
     decision_reason = "advisor_tiebreak" if not selection.fallback else "lowest_final_score"
-    selection_log_reason = "advisor_selection" if not selection.fallback else "advisor_fallback_score"
+    selection_log_reason = (
+        "advisor_selection" if not selection.fallback else "advisor_fallback_score"
+    )
     scoring_event_impacts = [
         impact
-        for impact in event_impacts
+        for impact in prepared.event_impacts
         if float(impact.get("risk_score") or 0) > 0
     ]
-    chosen_route = parsed_routes[chosen_index]
+    chosen_route = prepared.parsed_routes[chosen_index]
     enrichment_started = time.monotonic()
     await dependencies.enrichment._enrich_route(ctx.gtfs, chosen_route)
     first_leg_context = await first_leg_arrival_context(
         tool_input,
         ctx,
-        origin_place,
+        prepared.origin_place,
         chosen_route,
         dependencies,
     )
     timings["enrichment_ms"] = (time.monotonic() - enrichment_started) * 1000
+    elapsed = (time.monotonic() - prepared.plan_origin) * 1000
+    timings["enrichment_complete_ms"] = elapsed
+    record_phase_ms(ctx.telemetry, "enrichment_complete_ms", elapsed)
     projected = dependencies.project(
         tool_input=tool_input,
         ctx=ctx,
         timings=timings,
-        parsed_routes=parsed_routes,
-        origin_raw=origin_raw,
-        destination_raw=destination_raw,
-        origin_place=origin_place,
-        destination_place=destination_place,
-        departure_time=departure_time,
-        arrival_by=arrival_by,
-        excluded=excluded,
-        relevant_alerts=relevant_alerts,
-        event_evidence_status=event_evidence_status,
-        event_impacts=event_impacts,
-        event_failures=event_failures,
-        crowd_search_metadata=crowd_search_metadata,
-        incident_scan_metadata=incident_scan_metadata,
-        evidence_envelopes=evidence_envelopes,
-        collect_crowd_evidence=collect_crowd_evidence,
+        parsed_routes=prepared.parsed_routes,
+        origin_raw=prepared.origin_raw,
+        destination_raw=prepared.destination_raw,
+        origin_place=prepared.origin_place,
+        destination_place=prepared.destination_place,
+        departure_time=prepared.departure_time,
+        arrival_by=prepared.arrival_by,
+        excluded=prepared.excluded,
+        relevant_alerts=prepared.relevant_alerts,
+        event_evidence_status=prepared.event_evidence_status,
+        event_impacts=prepared.event_impacts,
+        event_failures=prepared.event_failures,
+        crowd_search_metadata=prepared.crowd_search_metadata,
+        incident_scan_metadata=prepared.incident_scan_metadata,
+        evidence_envelopes=prepared.evidence_envelopes,
+        collect_crowd_evidence=prepared.collect_crowd_evidence,
         chosen_index=chosen_index,
         candidate_analysis=candidate_analysis,
-        scored=scored,
+        scored=prepared.scored,
         decision_reason=decision_reason,
         selection_log_reason=selection_log_reason,
         scoring_event_impacts=scoring_event_impacts,
@@ -439,4 +128,6 @@ async def execute_single_leg(
     )
     await ctx.emit_progress("comparing_options", "complete")
     return projected
+
+
 __all__ = ("PlanTripDependencies", "execute_single_leg")

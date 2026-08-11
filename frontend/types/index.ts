@@ -2,6 +2,7 @@ export type {
   Coordinates,
   DestinationSelection,
   LiveFeedResponse,
+  LiveFeedBusUpdate,
   LiveVehicle,
   LiveFeedIncident,
   NearbyTransitIssue,

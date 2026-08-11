@@ -183,6 +183,40 @@ test("parses semantic progress stages and rejects malformed stage or status", as
   });
 });
 
+test("accepts a JFK route card with an AirTrain tram leg", async () => {
+  const payload = {
+    card_id: "rc_jfk",
+    turn_id: "t1",
+    role: "recommended",
+    origin: { label: "Your location", lat: 40.7484, lng: -73.9857 },
+    destination: { label: "JFK Airport", lat: 40.6413, lng: -73.7781 },
+    summary: { eta_minutes: 71, transfers: 1, lines: ["F"], reason: "Fewest transfers" },
+    route: [
+      { type: "SUBWAY", route_id: "F" },
+      { type: "TRAM", route_id: "Jamaica AirTrain" },
+    ],
+    alerts: [],
+    itinerary: {
+      itinerary_id: "rc_jfk",
+      total_duration_seconds: 4260,
+      transfer_count: 1,
+      legs: [
+        { mode: "SUBWAY", service_id: "F", ride_seconds: 2220 },
+        { mode: "TRAM", service_id: "Jamaica AirTrain", ride_seconds: 480 },
+      ],
+    },
+  };
+
+  const events = await collect(readerFromChunks([
+    `event: route_card\ndata: ${JSON.stringify(payload)}\n\n`,
+  ]));
+
+  assert.equal(events.length, 1);
+  assert.equal(events[0].type, "route_card");
+  assert.equal(events[0].route[1].type, "TRAM");
+  assert.equal(events[0].itinerary.legs[1].mode, "TRAM");
+});
+
 test("accepts a production-length MTA alert description on a route card", async () => {
   const description = `${"Service change details. ".repeat(200)}Structural maintenance`;
   const payload = {

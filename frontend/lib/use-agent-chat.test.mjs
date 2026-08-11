@@ -9,6 +9,11 @@ import {
   runTurn,
   sessionStorageKey,
 } from "./use-agent-chat.ts";
+import {
+  isRoutePreparationTool,
+  isRouteResultTool,
+  isRouteWorkflowTool,
+} from "./agent-route-tools.ts";
 
 function initialState(overrides = {}) {
   return { messages: [], sessionId: null, isStreaming: false, error: null, ...overrides };
@@ -366,6 +371,105 @@ test("failed route tool clears semantic progress so a retry cannot inherit stale
     duration_ms: 100,
   });
   assert.equal(state.messages[1].progress, undefined);
+});
+
+test("canonical and legacy route tools classify for searching UI and route results", () => {
+  // prepare_route_options drives route-search/searching but is not itself a
+  // completed route result.
+  assert.equal(isRoutePreparationTool("prepare_route_options"), true);
+  assert.equal(isRouteResultTool("prepare_route_options"), false);
+  assert.equal(isRouteWorkflowTool("prepare_route_options"), true);
+
+  // present_route is a completed route result but not preparation/searching.
+  assert.equal(isRoutePreparationTool("present_route"), false);
+  assert.equal(isRouteResultTool("present_route"), true);
+  assert.equal(isRouteWorkflowTool("present_route"), true);
+
+  // plan_trip stays both preparation and route-result compatibility.
+  assert.equal(isRoutePreparationTool("plan_trip"), true);
+  assert.equal(isRouteResultTool("plan_trip"), true);
+  assert.equal(isRouteWorkflowTool("plan_trip"), true);
+
+  // Unrelated tools are none of the above.
+  assert.equal(isRoutePreparationTool("search_local_places"), false);
+  assert.equal(isRouteResultTool("search_local_places"), false);
+  assert.equal(isRouteWorkflowTool("search_local_places"), false);
+});
+
+test("failed canonical route preparation clears semantic progress so a retry cannot inherit stale work", () => {
+  let state = applyAgentEvent(initialState(), { type: "turn_started", text: "to JFK" });
+  state = applyAgentEvent(state, { type: "progress", stage: "finding_routes", status: "active" });
+  state = applyAgentEvent(state, {
+    type: "tool_start",
+    tool_call_id: "prep-1",
+    tool: "prepare_route_options",
+    label: "Finding routes",
+  });
+  state = applyAgentEvent(state, {
+    type: "tool_end",
+    tool_call_id: "prep-1",
+    tool: "prepare_route_options",
+    ok: false,
+    duration_ms: 120,
+  });
+  assert.equal(state.messages[1].progress, undefined);
+});
+
+test("successful route preparation alone neither clears nor finalizes semantic progress", () => {
+  let state = applyAgentEvent(initialState(), { type: "turn_started", text: "to JFK" });
+  state = applyAgentEvent(state, { type: "progress", stage: "finding_routes", status: "active" });
+  state = applyAgentEvent(state, {
+    type: "tool_start",
+    tool_call_id: "prep-ok",
+    tool: "prepare_route_options",
+    label: "Finding routes",
+  });
+  state = applyAgentEvent(state, {
+    type: "tool_end",
+    tool_call_id: "prep-ok",
+    tool: "prepare_route_options",
+    ok: true,
+    duration_ms: 500,
+  });
+  assert.deepEqual(state.messages[1].progress, { stage: "finding_routes", status: "active" });
+});
+
+test("failed route presentation clears semantic progress so a retry cannot inherit stale work", () => {
+  let state = applyAgentEvent(initialState(), { type: "turn_started", text: "to JFK" });
+  state = applyAgentEvent(state, { type: "progress", stage: "comparing_options", status: "active" });
+  state = applyAgentEvent(state, {
+    type: "tool_start",
+    tool_call_id: "present-1",
+    tool: "present_route",
+    label: "Presenting your route",
+  });
+  state = applyAgentEvent(state, {
+    type: "tool_end",
+    tool_call_id: "present-1",
+    tool: "present_route",
+    ok: false,
+    duration_ms: 90,
+  });
+  assert.equal(state.messages[1].progress, undefined);
+});
+
+test("an unrelated failed tool does not clear route progress", () => {
+  let state = applyAgentEvent(initialState(), { type: "turn_started", text: "to JFK" });
+  state = applyAgentEvent(state, { type: "progress", stage: "finding_routes", status: "active" });
+  state = applyAgentEvent(state, {
+    type: "tool_start",
+    tool_call_id: "places-1",
+    tool: "search_local_places",
+    label: "Finding nearby places",
+  });
+  state = applyAgentEvent(state, {
+    type: "tool_end",
+    tool_call_id: "places-1",
+    tool: "search_local_places",
+    ok: false,
+    duration_ms: 40,
+  });
+  assert.deepEqual(state.messages[1].progress, { stage: "finding_routes", status: "active" });
 });
 
 test("dismissing an empty failed response preserves the original user message", () => {

@@ -250,6 +250,8 @@ export interface RouteNote {
 }
 
 export interface RoutePlan {
+  /** Presentation origin only. Chat handoffs open directly into directions. */
+  entryContext?: "chat" | "map_search" | "deep_link" | "restored";
   headline: string;
   // Short, sanitized, passenger-facing reason shown in the recommendation card.
   rationale: string;

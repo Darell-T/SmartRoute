@@ -5,14 +5,10 @@ import { motion, useReducedMotion } from "motion/react";
 import { useState, useSyncExternalStore, type ComponentType, type SVGProps } from "react";
 import { Map as MapIcon } from "iconoir-react";
 import {
-  Bookmark,
-  CircleHelp,
   MessageCircle,
-  MessageSquareText,
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
-  Settings,
   SquarePen,
   Sun,
 } from "lucide-react";
@@ -38,8 +34,6 @@ type SidebarItemProps = {
   motionEffect?: IconMotion;
   active?: boolean;
   description?: string;
-  disabled?: boolean;
-  appearance?: "primary" | "secondary";
   onClick?: () => void;
 };
 
@@ -59,18 +53,30 @@ function AnimatedSidebarIcon({
   // Motion's media-query value is client-only. Keep the server's initial
   // attribute stable until hydration completes, then honor the preference.
   const reduceMotion = hydrated && prefersReducedMotion;
-  const transform = reduceMotion
-    ? { x: 0, y: 0, rotate: 0, scale: 1 }
-    : effect === "rotate"
-      ? { x: 0, y: 0, rotate: engaged ? 9 : 0, scale: engaged ? 1.025 : 1 }
-      : effect === "open"
-        ? { x: engaged ? 0.8 : 0, y: 0, rotate: 0, scale: engaged ? 1.025 : 1 }
-        : { x: 0, y: engaged ? -1 : 0, rotate: 0, scale: engaged ? 1.025 : 1 };
+  let transform: { x: number; y: number; rotate: number; scale: number };
+  if (reduceMotion) {
+    transform = { x: 0, y: 0, rotate: 0, scale: 1 };
+  } else if (effect === "rotate") {
+    transform = { x: 0, y: 0, rotate: engaged ? 9 : 0, scale: engaged ? 1.025 : 1 };
+  } else if (effect === "open") {
+    transform = { x: engaged ? 0.8 : 0, y: 0, rotate: 0, scale: engaged ? 1.025 : 1 };
+  } else {
+    transform = { x: 0, y: engaged ? -1 : 0, rotate: 0, scale: engaged ? 1.025 : 1 };
+  }
+
+  let iconState: "active" | "engaged" | "rest";
+  if (active) {
+    iconState = "active";
+  } else if (engaged) {
+    iconState = "engaged";
+  } else {
+    iconState = "rest";
+  }
 
   return (
     <motion.span
       className="sr-app-sidebar__animated-icon"
-      data-state={active ? "active" : engaged ? "engaged" : "rest"}
+      data-state={iconState}
       data-reduced-motion={reduceMotion ? "true" : "false"}
       animate={transform}
       transition={{
@@ -89,22 +95,11 @@ function SidebarItem({
   motionEffect = "lift",
   active = false,
   description,
-  disabled = false,
-  appearance = "primary",
   onClick,
 }: SidebarItemProps) {
-  const tooltipLabel = disabled ? `${label}, coming soon` : label;
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
-  const engaged = !disabled && (hovered || focused);
-  const tooltipCopy = disabled ? (
-    <span className="sr-app-sidebar__tooltip-copy">
-      <span>{label}</span>
-      <span>Coming soon</span>
-    </span>
-  ) : (
-    label
-  );
+  const engaged = hovered || focused;
 
   return (
     <Tooltip>
@@ -114,16 +109,13 @@ function SidebarItem({
           variant="ghost"
           className="sr-app-sidebar__item"
           data-active={active ? "true" : "false"}
-          data-disabled={disabled ? "true" : "false"}
-          data-appearance={appearance}
           aria-current={active ? "page" : undefined}
-          aria-disabled={disabled || undefined}
-          aria-label={tooltipLabel}
+          aria-label={label}
           onPointerEnter={() => setHovered(true)}
           onPointerLeave={() => setHovered(false)}
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
-          onClick={disabled ? undefined : onClick}
+          onClick={onClick}
         >
           <span className="sr-app-sidebar__item-icon" aria-hidden="true">
             <AnimatedSidebarIcon
@@ -142,7 +134,7 @@ function SidebarItem({
         </Button>
       </TooltipTrigger>
       <TooltipContent side="right" sideOffset={10} className="sr-app-sidebar__tooltip">
-        {tooltipCopy}
+        {label}
       </TooltipContent>
     </Tooltip>
   );
@@ -215,29 +207,6 @@ export function ChatSidebar({
           icon={SquarePen}
           motionEffect="open"
           onClick={onNewTrip}
-        />
-        <SidebarItem label="Favorites" icon={Bookmark} disabled />
-
-        <div className="sr-app-sidebar__nav-rule" aria-hidden="true" />
-
-        <SidebarItem
-          label="Feedback"
-          icon={MessageSquareText}
-          appearance="secondary"
-          disabled
-        />
-        <SidebarItem
-          label="Help"
-          icon={CircleHelp}
-          appearance="secondary"
-          disabled
-        />
-        <SidebarItem
-          label="Settings"
-          icon={Settings}
-          motionEffect="rotate"
-          appearance="secondary"
-          disabled
         />
       </nav>
 

@@ -59,6 +59,9 @@ def _load_live_feed_module():
 
     fake_mta_feed = types.ModuleType("app.services.mta_feed")
     fake_mta_feed.get_all_subway_vehicle_positions = AsyncMock(return_value=[])
+    fake_mta_feed.fetch_nearby_bus_update = AsyncMock(
+        return_value={"status": "unavailable"}
+    )
 
     with patch.dict(
         sys.modules,
@@ -439,6 +442,21 @@ class LiveFeedApiTests(unittest.IsolatedAsyncioTestCase):
         body = json.loads(response.body)
         self.assertEqual(response.status_code, 503)
         self.assertEqual(body["error"], "live feed temporarily unavailable")
+        self.assertNotIn("provider secret details", response.body.decode("utf-8"))
+
+    async def test_service_alerts_errors_return_503_redacted_json(self):
+        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(gtfs=object())))
+        with patch.object(
+            self.live_feed,
+            "_service_alerts_payload",
+            AsyncMock(side_effect=RuntimeError("provider secret details")),
+        ):
+            response = await self.live_feed.service_alerts(request)
+
+        body = json.loads(response.body)
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(body["alerts"], [])
+        self.assertEqual(body["error"], "service alerts temporarily unavailable")
         self.assertNotIn("provider secret details", response.body.decode("utf-8"))
 
     async def test_vehicles_unhandled_errors_return_503_redacted_json(self):

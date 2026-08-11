@@ -22,6 +22,43 @@ class TurnDeadlineReached(Exception):
     """Internal control flow that still reaches the turn's single DoneEvent."""
 
 
+_UNOFFERED_TOOL_ERROR = "tool not offered on this turn"
+
+# Server-owned execution gate: on a destination_discovery turn, a
+# prepare_route_options client-tool call must carry the opaque
+# destination_place_id issued by search_local_places / get_place_details.
+# A plain destination label alone is not routing authority on that intent
+# surface; the canonical resolver still validates session/set ownership and
+# expiry for any id that passes this presence gate. Route-planning turns
+# keep the ordinary canonical provider path unchanged.
+_DISCOVERY_PLACE_REQUIRED_ERROR = (
+    "destination place reference required on this discovery turn; "
+    "pass the destination_place_id of a search result place"
+)
+
+
+def _missing_discovery_destination_reference(
+    name: str,
+    tool_input: dict,
+    parsed_intent: intelligence.ParsedIntent,
+) -> str | None:
+    """Return the bounded rejection reason for a discovery-turn prepare call
+    that lacks a server-issued opaque destination place reference, else None.
+
+    The gate derives only from the server-owned ``ParsedIntent`` and the
+    actual tool call; a model-authored policy flag, webpage text, destination
+    label, or ``discovery_set_id`` alone never satisfies it.
+    """
+
+    if (
+        name == "prepare_route_options"
+        and parsed_intent.intent == "destination_discovery"
+        and not str((tool_input or {}).get("destination_place_id") or "").strip()
+    ):
+        return _DISCOVERY_PLACE_REQUIRED_ERROR
+    return None
+
+
 async def run_one_tool(
     name: str,
     tool_input: dict,
@@ -66,8 +103,42 @@ def rider_excluded_modes(message: str, session: dict) -> set[str]:
         rider_text,
     ):
         excluded.discard("BUS")
-    session.setdefault("slots", {}).setdefault("constraints", {})["exclude_modes"] = sorted(excluded)
+    if not intelligence.is_what_if_request(message):
+        session.setdefault("slots", {}).setdefault("constraints", {})["exclude_modes"] = sorted(excluded)
     return excluded
+
+
+def rider_excluded_route_ids(message: str, session: dict) -> tuple[str, ...]:
+    """Keep explicit rider route exclusions authoritative across follow-ups.
+
+    The effective set starts from the active server-owned slot exclusions,
+    applies this message's new exclusions, then removes this message's
+    explicit allowances ("allow the Q", "the Q is fine now"). Active
+    (non-what-if) constraints persist into ``slots.constraints`` using the
+    same server-owned convention as ``exclude_modes``; an empty effective
+    set removes the key. A what-if request contributes its constraints to
+    the current turn only and never mutates the active constraint set.
+    """
+
+    constraints = ((session.get("slots") or {}).get("constraints") or {})
+    excluded = list(
+        intelligence.normalize_route_ids(constraints.get("excluded_route_ids") or [])
+    )
+    for route_id in intelligence.extract_excluded_route_ids(message):
+        if route_id not in excluded:
+            excluded.append(route_id)
+    allowed = set(intelligence.extract_allowed_route_ids(message))
+    if allowed:
+        excluded = [route_id for route_id in excluded if route_id not in allowed]
+    if not intelligence.is_what_if_request(message):
+        constraints_slots = session.setdefault("slots", {}).setdefault(
+            "constraints", {}
+        )
+        if excluded:
+            constraints_slots["excluded_route_ids"] = list(excluded)
+        else:
+            constraints_slots.pop("excluded_route_ids", None)
+    return tuple(excluded)
 
 
 def constrained_tool_input(
@@ -77,9 +148,10 @@ def constrained_tool_input(
     *,
     mode_policy: agent_policy.AgentModePolicy,
     parsed_intent: intelligence.ParsedIntent,
+    excluded_route_ids: tuple[str, ...] = (),
 ) -> dict:
     normalized = dict(tool_input)
-    if name == "plan_trip":
+    if name in {"plan_trip", "prepare_route_options"}:
         if excluded_modes:
             requested = {
                 str(mode).strip().upper()
@@ -87,6 +159,32 @@ def constrained_tool_input(
                 if str(mode).strip()
             }
             normalized["exclude_modes"] = sorted(requested | excluded_modes)
+        allowed_routes = set(
+            intelligence.normalize_route_ids(
+                getattr(parsed_intent, "allowed_route_ids", ()) or ()
+            )
+        )
+        excluded_routes = set(intelligence.normalize_route_ids(excluded_route_ids))
+        excluded_routes.update(
+            getattr(parsed_intent, "excluded_route_ids", ()) or ()
+        )
+        excluded_routes.update(
+            intelligence.normalize_route_ids(
+                normalized.get("excluded_route_ids") or []
+            )
+        )
+        # An explicit rider allowance wins over every stale exclusion source,
+        # including parsed exclusions and model-supplied tool input.
+        excluded_routes -= allowed_routes
+        if excluded_routes:
+            normalized["excluded_route_ids"] = sorted(excluded_routes)
+        elif "excluded_route_ids" in normalized:
+            del normalized["excluded_route_ids"]
+        if name == "prepare_route_options" and getattr(parsed_intent, "what_if", False):
+            # Server-enforced what-if isolation: the rider message, not the
+            # model, decides that preparation is hypothetical, so a model
+            # that omits what_if can never overwrite active trip state.
+            normalized["what_if"] = True
         normalized["max_candidates"] = mode_policy.max_route_candidates
         normalized["avoid_crowds"] = bool(normalized.get("avoid_crowds") or parsed_intent.avoid_crowds)
         if mode_policy.mode != "auto" or parsed_intent.avoid_crowds:
@@ -94,7 +192,8 @@ def constrained_tool_input(
             # complete crowd-research path.  That research depth is separate
             # from the conversational model, which remains Haiku in Quick.
             normalized["crowd_search_mode"] = "auto" if parsed_intent.avoid_crowds else mode_policy.mode
-        normalized["include_first_leg_arrivals"] = mode_policy.optional_enrichment
+        if name in {"plan_trip", "prepare_route_options"}:
+            normalized["include_first_leg_arrivals"] = mode_policy.optional_enrichment
         if parsed_intent.requested_route_ids:
             normalized["required_route_ids"] = list(parsed_intent.requested_route_ids)
     elif name == "lookup_arrivals":
@@ -168,8 +267,22 @@ async def execute_tool_round(
     tool_ledger: TurnToolLedger,
     *,
     tool_registry: dict,
+    excluded_route_ids: tuple[str, ...] = (),
+    allowed_tool_names: frozenset[str] | None = None,
 ) -> AsyncIterator:
-    """Emit a model tool round and its final synthetic tool-result message."""
+    """Emit a model tool round and its final synthetic tool-result message.
+
+    ``allowed_tool_names`` is the exact per-turn offered surface. Every
+    registered client tool the model emits outside that surface is rejected
+    before the ledger, executor, provider, store, session, or pending-trip
+    paths, regardless of which registry object supplies the executor; the
+    model still receives a bounded error tool-result so the next round can
+    recover. On destination_discovery turns, a ``prepare_route_options``
+    call without an opaque ``destination_place_id`` is rejected by the same
+    before-ledger boundary with a distinct bounded reason; invented ids pass
+    the presence gate and fail in the canonical resolver. Unknown names keep
+    their existing bounded safe failure (never a production executor).
+    """
     ctx.agent_mode = mode_policy.mode
     ctx.agent_model = mode_policy.model
     ctx.agent_explanation_style = mode_policy.explanation_style
@@ -177,13 +290,29 @@ async def execute_tool_round(
         block.id: constrained_tool_input(
             getattr(block, "name", ""), getattr(block, "input", {}) or {}, excluded_modes,
             mode_policy=mode_policy, parsed_intent=parsed_intent,
+            excluded_route_ids=excluded_route_ids,
         )
         for block in tool_use_blocks
     }
+    rejected_results: dict[str, ToolResult] = {
+        block.id: ToolResult(ok=False, error=_UNOFFERED_TOOL_ERROR)
+        for block in tool_use_blocks
+        if allowed_tool_names is not None
+        and getattr(block, "name", "") not in allowed_tool_names
+        and getattr(block, "name", "") in tool_registry
+    }
+    for block in tool_use_blocks:
+        name = getattr(block, "name", "")
+        if block.id not in rejected_results:
+            reason = _missing_discovery_destination_reference(
+                name, tool_inputs[block.id], parsed_intent
+            )
+            if reason is not None:
+                rejected_results[block.id] = ToolResult(ok=False, error=reason)
     for block in tool_use_blocks:
         name = getattr(block, "name", "")
         tool_input = tool_inputs[block.id]
-        spec = tool_registry.get(name)
+        spec = tool_registry.get(name) if block.id not in rejected_results else None
         yield agent_events.ToolStartEvent(
             tool_call_id=block.id, tool=name, label=spec.label_fn(tool_input) if spec else f"Using {name}\u2026"
         )
@@ -194,6 +323,9 @@ async def execute_tool_round(
     outcomes_by_key: dict[str, ToolResult] = {}
     first_block_id_by_key: dict[str, str] = {}
     for block in tool_use_blocks:
+        if block.id in rejected_results:
+            # Rejected calls never touch the ledger, executor, or stores.
+            continue
         name = getattr(block, "name", "")
         tool_input = tool_inputs[block.id]
         key = tool_ledger.key(name, tool_input)
@@ -275,7 +407,14 @@ async def execute_tool_round(
                 with contextlib.suppress(asyncio.CancelledError):
                     await round_task
             ctx.progress_sink = previous_progress_sink
-    outcomes = [outcomes_by_key[tool_ledger.key(getattr(block, "name", ""), tool_inputs[block.id])] for block in tool_use_blocks]
+    outcomes = [
+        rejected_results[block.id]
+        if block.id in rejected_results
+        else outcomes_by_key[
+            tool_ledger.key(getattr(block, "name", ""), tool_inputs[block.id])
+        ]
+        for block in tool_use_blocks
+    ]
 
     tool_result_content = []
     escalation_reason = None
@@ -287,14 +426,17 @@ async def execute_tool_round(
         key = tool_ledger.key(name, tool_input)
         surface_side_effects = key in round_tasks and first_block_id_by_key[key] == block.id
         duration_ms = round((time.monotonic() - start_times[block.id]) * 1000)
-        tool_calls_this_turn.append((name, tool_input))
+        if block.id not in rejected_results:
+            tool_calls_this_turn.append((name, tool_input))
         if surface_side_effects:
             for stage, duration in result.timings.items():
                 if stage in stage_ms:
                     stage_ms[stage] += max(0.0, float(duration))
-        escalation_reason = escalation_reason or quick_escalation.reason_for_tool_result(
-            name, result, required=name in required_tools or name == "plan_trip"
-        )
+        route_tool = name in {"plan_trip", "prepare_route_options", "present_route"}
+        if block.id not in rejected_results:
+            escalation_reason = escalation_reason or quick_escalation.reason_for_tool_result(
+                name, result, required=name in required_tools or route_tool
+            )
         if result.ok:
             tool_result_content.append({"type": "tool_result", "tool_use_id": block.id, "content": json.dumps({"source": name, "data": result.data, "untrusted": True}, default=str)})
             yield agent_events.ToolEndEvent(tool_call_id=block.id, tool=name, ok=True, duration_ms=duration_ms, summary=result.summary or None)
@@ -303,11 +445,14 @@ async def execute_tool_round(
                     session_module.append_tool_summary(session, name, result.summary)
                 if result.session_route_cards:
                     session_module.add_route_cards(session, result.session_route_cards)
-                if name == "plan_trip":
+                if name in {"plan_trip", "present_route"}:
                     session_module.clear_pending_trip(session)
                 for event in result.events:
                     yield event
-            if name == "plan_trip" and any(
+            # Terminal only when a recommended route card is emitted. The
+            # legacy REST/internal plan_trip remains terminal; preparation is
+            # non-terminal so the conversational agent can call present_route.
+            if name in {"plan_trip", "present_route"} and any(
                 getattr(event, "type", None) == "route_card"
                 and getattr(event, "role", None) == "recommended"
                 for event in result.events
@@ -317,7 +462,7 @@ async def execute_tool_round(
             reason = result.error or "tool failed"
             tool_result_content.append({"type": "tool_result", "tool_use_id": block.id, "content": json.dumps({"source": name, "data": {"error": reason}, "untrusted": True}, default=str), "is_error": True})
             yield agent_events.ToolEndEvent(tool_call_id=block.id, tool=name, ok=False, duration_ms=duration_ms, summary=reason)
-            if surface_side_effects and name == "plan_trip":
+            if surface_side_effects and name in {"plan_trip", "prepare_route_options"}:
                 session_module.mark_pending_trip_failed(session, tool_input, reason)
     yield {
         "__tool_result_message__": {"role": "user", "content": tool_result_content},

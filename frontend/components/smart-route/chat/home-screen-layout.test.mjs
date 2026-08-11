@@ -18,6 +18,14 @@ const panelSource = readFileSync(
   new URL("./chat-panel.tsx", import.meta.url),
   "utf8",
 );
+const mobileShellCss = readFileSync(
+  new URL("../../../app/styles/smart-route-mobile-shell.css", import.meta.url),
+  "utf8",
+);
+const viewportSource = readFileSync(
+  new URL("../../../lib/use-mobile-visible-viewport.ts", import.meta.url),
+  "utf8",
+);
 
 test("desktop home surfaces share one responsive content width", () => {
   assert.match(
@@ -43,6 +51,35 @@ test("mobile interaction dock is safe-area aware and the rail collapses from com
   assert.match(panelSource, /chat\.messages\.length === 0/);
 });
 
+test("mobile chat has one visible-height owner and an in-flow three-track shell", () => {
+  assert.match(
+    mobileShellCss,
+    /height:\s*var\(--visible-viewport-height,\s*100dvh\)/,
+  );
+  assert.match(
+    mobileShellCss,
+    /grid-template-rows:\s*auto minmax\(0,\s*1fr\)/,
+  );
+  assert.match(
+    css,
+    /\.sr-chat-tab-inner\s*\{[\s\S]*?grid-template-rows:\s*minmax\(0,\s*1fr\) auto/,
+  );
+  assert.match(
+    css,
+    /\.sr-chat-tab-inner\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\)/,
+  );
+  assert.match(
+    css,
+    /\.sr-chat-thread,[\s\S]*?overflow-y:\s*auto;[\s\S]*?overscroll-behavior:\s*contain/,
+  );
+  assert.match(
+    css,
+    /\.sr-chat-interaction-dock\s*\{[\s\S]*?width:\s*100%;[\s\S]*?min-width:\s*0/,
+  );
+  assert.doesNotMatch(mobileShellCss, /mobile-viewport-offset-top/);
+  assert.match(viewportSource, /--visible-viewport-height/);
+});
+
 test("mobile suggestion affordance gains a left fade only after horizontal scrolling", () => {
   assert.match(welcomeSource, /data-scrolled=\{scrolledFromStart \? "true" : "false"\}/);
   assert.match(welcomeSource, /scrollLeft > 4/);
@@ -51,10 +88,10 @@ test("mobile suggestion affordance gains a left fade only after horizontal scrol
   assert.match(css, /scroll-snap-align:\s*start/);
 });
 
-test("Near You has no accordion chevrons and suggestion glyphs are animated", () => {
+test("Near You has no accordion chevrons and suggestion pills remain text-only", () => {
   assert.doesNotMatch(nearbySource, /Chevron|chevron/);
-  assert.match(welcomeSource, /startAnimation\(\)/);
-  assert.match(welcomeSource, /onHoverStart/);
+  assert.doesNotMatch(welcomeSource, /sr-chat-suggestion-icon/);
+  assert.doesNotMatch(welcomeSource, /onHoverStart/);
 });
 
 test("Near You distinguishes active refresh from an unavailable live feed", () => {

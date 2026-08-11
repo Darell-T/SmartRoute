@@ -237,9 +237,10 @@ class PromptGuardP2Tests(unittest.TestCase):
 
 
 class RegistryP2Tests(unittest.TestCase):
-    def test_nine_tools_present_all_strict(self):
+    def test_registry_tools_present_all_strict(self):
         expected = {
-            "plan_trip",
+            "prepare_route_options",
+            "present_route",
             "transit_snapshot",
             "event_lookup",
             "poi_search",
@@ -248,6 +249,8 @@ class RegistryP2Tests(unittest.TestCase):
             "lookup_facts",
             "lookup_arrivals",
             "check_area_conditions",
+            "search_local_places",
+            "get_place_details",
         }
         self.assertEqual(set(agent_tools.TOOL_REGISTRY.keys()), expected)
         for name, spec in agent_tools.TOOL_REGISTRY.items():

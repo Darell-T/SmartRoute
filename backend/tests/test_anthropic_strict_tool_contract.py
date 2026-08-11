@@ -87,7 +87,10 @@ class AnthropicStrictToolContractTests(unittest.TestCase):
         mode = policy.policy_for_mode("auto")
         parsed = intelligence.ParsedIntent(intent="destination_discovery", avoid_crowds=False)
         tools = loop._tools_for_intent(parsed, mode)
-        self.assertTrue(any(tool.get("name") == "plan_trip" for tool in tools))
+        names = {tool.get("name") for tool in tools}
+        self.assertTrue({"prepare_route_options", "present_route"}.issubset(names))
+        self.assertNotIn("plan_trip", names)
+        self.assertNotIn("poi_search", names)
         self.assertTrue(any(tool.get("name") == "web_search" for tool in tools))
         response = self._request(
             model=mode.model,

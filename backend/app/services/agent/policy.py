@@ -71,12 +71,12 @@ _SONNET_5_REQUEST_CAPABILITIES = ModelRequestCapabilities(
 def _sonnet_model() -> str:
     # AGENT_MODEL remains a backwards-compatible alias while deployments
     # migrate to the explicit Auto/Sonnet setting.
-    # Default to Sonnet 4.5 (not Sonnet 5) for lower request cost.
+    # Default Auto model for the Sonnet 4.6 latency experiment.
     return (
         os.getenv("AGENT_AUTO_MODEL", "").strip()
         or os.getenv("AGENT_SONNET_MODEL", "").strip()
         or os.getenv("AGENT_MODEL", "").strip()
-        or "claude-sonnet-4-5-20250929"
+        or "claude-sonnet-4-6"
     )
 
 

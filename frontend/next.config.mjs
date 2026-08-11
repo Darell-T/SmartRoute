@@ -3,15 +3,22 @@ import { fileURLToPath } from "url"
 import { createRequire } from "module"
 
 const require = createRequire(import.meta.url)
-const { loadEnvConfig } = require("@next/env")
+const { loadEnvConfig, updateInitialEnv } = require("@next/env")
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-// Next.js only reads .env from the app directory (frontend/) by default.
-// Load the monorepo root .env so a single project-root file works.
 const repoRoot = path.join(__dirname, "..")
-loadEnvConfig(repoRoot)
-// Then apply Next's usual env files under frontend/ (e.g. .env.local overrides).
-loadEnvConfig(__dirname)
+const development = process.env.NODE_ENV !== "production"
+
+// Load Next's standard frontend files first so they retain override priority.
+// Promote that result to @next/env's baseline, then force a root load that can
+// fill only variables the frontend environment did not define.
+const { combinedEnv: frontendEnv } = loadEnvConfig(__dirname, development)
+updateInitialEnv(frontendEnv)
+loadEnvConfig(repoRoot, development, console, true)
+
+if (process.env.NEXT_PUBLIC_APP_KEY?.trim()) {
+  throw new Error("APP_KEY must remain server-only; remove NEXT_PUBLIC_APP_KEY")
+}
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {

@@ -137,14 +137,33 @@ class PoiSearchTests(unittest.IsolatedAsyncioTestCase):
         self._env.start()
         self.addCleanup(self._env.stop)
 
-    def _place(self, name="Joe's Pizza", lat=40.7308, lng=-73.9973, open_now=True, address="7 Carmine St"):
+    def _place(
+        self,
+        name="Joe's Pizza",
+        lat=40.7308,
+        lng=-73.9973,
+        open_now=True,
+        address="7 Carmine St",
+        id=None,
+        price_level=None,
+        rating=None,
+        review_count=None,
+    ):
         entry = {
             "displayName": {"text": name},
             "formattedAddress": address,
             "location": {"latitude": lat, "longitude": lng},
         }
+        if id is not None:
+            entry["id"] = id
         if open_now is not None:
             entry["currentOpeningHours"] = {"openNow": open_now}
+        if price_level is not None:
+            entry["priceLevel"] = price_level
+        if rating is not None:
+            entry["rating"] = rating
+        if review_count is not None:
+            entry["userRatingCount"] = review_count
         return entry
 
     async def test_unconfigured_when_neither_key_set(self):
@@ -205,6 +224,106 @@ class PoiSearchTests(unittest.IsolatedAsyncioTestCase):
         result = await poi_search.execute({"query": "pizza", "near": "user"}, _ctx(origin=None))
         self.assertFalse(result.ok)
         self.assertIn("location", result.error.lower())
+
+
+    async def test_field_mask_requests_ranking_fields(self):
+        client_class = _recording_post_client({"places": [self._place()]})
+        with patch.object(_http.httpx, "AsyncClient", client_class):
+            await poi_search.execute({"query": "pizza"}, _ctx(origin={"lat": 40.7, "lng": -73.9}))
+        mask = client_class.requests[0]["headers"]["X-Goog-FieldMask"]
+        self.assertIn("places.id", mask)
+        self.assertIn("places.priceLevel", mask)
+        self.assertIn("places.rating", mask)
+        self.assertIn("places.userRatingCount", mask)
+
+    async def test_result_includes_provider_place_id(self):
+        payload = {
+            "places": [
+                self._place(name="Joe's Pizza", id="ChIJ-joe"),
+                self._place(name="No Id Pizza"),
+            ]
+        }
+        client_class = _recording_post_client(payload)
+        with patch.object(_http.httpx, "AsyncClient", client_class):
+            result = await poi_search.execute(
+                {"query": "pizza"}, _ctx(origin={"lat": 40.7, "lng": -73.9})
+            )
+        self.assertTrue(result.ok)
+        by_name = {place["name"]: place for place in result.data["results"]}
+        self.assertEqual(by_name["Joe's Pizza"]["place_id"], "ChIJ-joe")
+        self.assertIsNone(by_name["No Id Pizza"]["place_id"])
+
+    async def test_price_level_full_enums_are_normalized(self):
+        payload = {
+            "places": [
+                self._place(name="Free", price_level="PRICE_LEVEL_FREE"),
+                self._place(name="Inexpensive", price_level="PRICE_LEVEL_INEXPENSIVE"),
+                self._place(name="Moderate", price_level="PRICE_LEVEL_MODERATE"),
+                self._place(name="Expensive", price_level="PRICE_LEVEL_EXPENSIVE"),
+                self._place(name="Very Expensive", price_level="PRICE_LEVEL_VERY_EXPENSIVE"),
+            ]
+        }
+        client_class = _recording_post_client(payload)
+        with patch.object(_http.httpx, "AsyncClient", client_class):
+            result = await poi_search.execute(
+                {"query": "pizza", "max_results": 5}, _ctx(origin={"lat": 40.7, "lng": -73.9})
+            )
+        self.assertTrue(result.ok)
+        by_name = {place["name"]: place["price_level"] for place in result.data["results"]}
+        self.assertEqual(by_name["Free"], 0)
+        self.assertEqual(by_name["Inexpensive"], 1)
+        self.assertEqual(by_name["Moderate"], 2)
+        self.assertEqual(by_name["Expensive"], 3)
+        self.assertEqual(by_name["Very Expensive"], 4)
+
+    async def test_price_level_unspecified_unknown_and_numeric_values(self):
+        payload = {
+            "places": [
+                self._place(name="Unspecified", price_level="PRICE_LEVEL_UNSPECIFIED"),
+                self._place(name="Bogus", price_level="BOGUS_LEVEL"),
+                self._place(name="Numeric", price_level=4),
+            ]
+        }
+        client_class = _recording_post_client(payload)
+        with patch.object(_http.httpx, "AsyncClient", client_class):
+            result = await poi_search.execute(
+                {"query": "pizza"}, _ctx(origin={"lat": 40.7, "lng": -73.9})
+            )
+        self.assertTrue(result.ok)
+        by_name = {place["name"]: place["price_level"] for place in result.data["results"]}
+        self.assertIsNone(by_name["Unspecified"])
+        self.assertIsNone(by_name["Bogus"])
+        self.assertEqual(by_name["Numeric"], 4)
+
+    async def test_ranking_fields_are_normalized(self):
+        payload = {
+            "places": [
+                self._place(name="Ranked Place", price_level=2, rating=4.5, review_count=123)
+            ]
+        }
+        client_class = _recording_post_client(payload)
+        with patch.object(_http.httpx, "AsyncClient", client_class):
+            result = await poi_search.execute(
+                {"query": "pizza"}, _ctx(origin={"lat": 40.7, "lng": -73.9})
+            )
+        self.assertTrue(result.ok)
+        place = result.data["results"][0]
+        self.assertEqual(place["price_level"], 2)
+        self.assertEqual(place["rating"], 4.5)
+        self.assertEqual(place["review_count"], 123)
+
+    async def test_ranking_fields_are_none_when_absent(self):
+        payload = {"places": [self._place()]}
+        client_class = _recording_post_client(payload)
+        with patch.object(_http.httpx, "AsyncClient", client_class):
+            result = await poi_search.execute(
+                {"query": "pizza"}, _ctx(origin={"lat": 40.7, "lng": -73.9})
+            )
+        self.assertTrue(result.ok)
+        place = result.data["results"][0]
+        self.assertIsNone(place["price_level"])
+        self.assertIsNone(place["rating"])
+        self.assertIsNone(place["review_count"])
 
 
 class VenueCrowdWindowTests(unittest.IsolatedAsyncioTestCase):
@@ -355,11 +474,15 @@ class FixtureReplayTests(unittest.IsolatedAsyncioTestCase):
             written = json.loads(written_path.read_text())
             self.assertEqual(written, {"ok": True, "data": {"real": True}, "summary": "ran for real", "error": None})
 
-    async def test_plan_trip_and_transit_snapshot_go_through_the_same_hook(self):
+    async def test_route_preparation_and_transit_snapshot_share_fixture_hook(self):
         # Registered executors are wrapped closures, not the bare module
         # functions -- proves the hook applies uniformly, not just to the
         # P1 tools.
-        self.assertNotEqual(agent_tools.TOOL_REGISTRY["plan_trip"].executor, agent_tools.plan_trip.execute)
+        self.assertNotIn("plan_trip", agent_tools.TOOL_REGISTRY)
+        self.assertNotEqual(
+            agent_tools.TOOL_REGISTRY["prepare_route_options"].executor,
+            agent_tools.prepare_route_options.execute,
+        )
         self.assertNotEqual(
             agent_tools.TOOL_REGISTRY["transit_snapshot"].executor, agent_tools.transit_snapshot.execute
         )
@@ -370,7 +493,14 @@ class RegistryTests(unittest.TestCase):
         # The exact full-registry set (now 7 tools with P2's accessibility_status
         # and lookup_facts) is asserted once in test_agent_tools_p2.py's
         # RegistryP2Tests -- this only checks the P1 tools are still there.
-        expected = {"plan_trip", "transit_snapshot", "event_lookup", "poi_search", "venue_crowd_window"}
+        expected = {
+            "prepare_route_options",
+            "present_route",
+            "transit_snapshot",
+            "event_lookup",
+            "poi_search",
+            "venue_crowd_window",
+        }
         self.assertTrue(expected.issubset(agent_tools.TOOL_REGISTRY.keys()))
         for name, spec in agent_tools.TOOL_REGISTRY.items():
             self.assertTrue(spec.schema.get("strict"), name)

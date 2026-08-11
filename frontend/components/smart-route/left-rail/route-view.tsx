@@ -8,7 +8,7 @@ import { recommendedCandidateFromPlan, routeResultKey } from "./route-display-co
 import { DestinationInput } from "./route-view-actions";
 import { RouteErrorPanel, RoutePlanningReasoning } from "./route-view-state";
 import { AlternateRoutesCollapsible } from "./route-view-alternatives";
-import { RecommendedRouteCard } from "./route-view-itinerary";
+import { RecommendedRouteCard, RouteDirections } from "./route-view-itinerary";
 import { NearbyTransitPanel } from "./route-view-nearby";
 import type {
   Arrival,
@@ -62,6 +62,7 @@ export function RouteView({
   const isPlanning = routeStatus === "thinking";
   const isReady = routeStatus === "result";
   const isError = routeStatus === "error";
+  const isChatHandoff = isReady && plan.entryContext === "chat";
   const recommended = useMemo(
     () => (isReady ? recommendedCandidateFromPlan(plan) : null),
     [isReady, plan],
@@ -73,6 +74,7 @@ export function RouteView({
     routeStatus,
     plan,
     shouldReduceMotion,
+    enabled: !isChatHandoff,
   });
   // Public evaluation insights for the planning state, derived from the
   // live facts the rail already holds (station access, live arrivals,
@@ -92,11 +94,13 @@ export function RouteView({
 
   return (
     <div className="sr-route-panel">
-      <DestinationInput
-        search={search}
-        onDemoSubmit={() => onRouteStatusChange("thinking")}
-        onFocusChange={onSearchFocusChange}
-      />
+      {!isChatHandoff ? (
+        <DestinationInput
+          search={search}
+          onDemoSubmit={() => onRouteStatusChange("thinking")}
+          onFocusChange={onSearchFocusChange}
+        />
+      ) : null}
 
       <AnimatePresence mode="wait" initial={false}>
         {routeStatus === "standby" && (
@@ -124,7 +128,18 @@ export function RouteView({
           </motion.div>
         )}
 
-        {isReady && recommended && (
+        {isReady && recommended && isChatHandoff && (
+          <motion.div key="chat-directions" {...CONTENT_PHASE}>
+            <section className="sr-rail-section">
+              <RouteDirections
+                plan={plan}
+                destination={plan.journeyPlaces?.at(-1) ?? search?.inputValue}
+              />
+            </section>
+          </motion.div>
+        )}
+
+        {isReady && recommended && !isChatHandoff && (
           <motion.div key="results" {...CONTENT_PHASE}>
             <LayoutGroup id="sr-route-results">
               <section className="sr-rail-section">
@@ -205,13 +220,16 @@ function useScrollToRecommendedCard({
   routeStatus,
   plan,
   shouldReduceMotion,
+  enabled,
 }: {
   cardRef: RefObject<HTMLElement | null>;
   routeStatus: RouteRailStatus;
   plan: RoutePlan;
   shouldReduceMotion: boolean | null;
+  enabled: boolean;
 }) {
-  const resultKey = routeStatus === "result" ? routeResultKey(plan) : null;
+  const resultKey =
+    enabled && routeStatus === "result" ? routeResultKey(plan) : null;
   const previousRef = useRef<{ status: RouteRailStatus; key: string | null }>({
     status: routeStatus,
     key: resultKey,
@@ -219,6 +237,10 @@ function useScrollToRecommendedCard({
 
   useEffect(() => {
     const previous = previousRef.current;
+    if (!enabled) {
+      previousRef.current = { status: routeStatus, key: resultKey };
+      return;
+    }
     const enteredResult =
       routeStatus === "result" && previous.status !== "result";
     const planChangedInResult =
@@ -253,7 +275,7 @@ function useScrollToRecommendedCard({
 
     frame = window.requestAnimationFrame(waitForCard);
     return () => window.cancelAnimationFrame(frame);
-  }, [routeStatus, resultKey, cardRef, shouldReduceMotion]);
+  }, [routeStatus, resultKey, cardRef, shouldReduceMotion, enabled]);
 }
 
 function scrollRecommendedCardIntoView(

@@ -54,7 +54,16 @@ def runtime_mode_label() -> str:
 
 
 def validate_mock_safeguards() -> None:
-    """Reject deterministic fixtures in a production process before serving."""
+    """Reject local-only runtime modes in a production process before serving."""
 
-    if any(enabled(name) for name in ("AGENT_MOCK_MODE", "JARVIS_MOCK_ADVISOR")) and not allows_mock_modes():
+    local_modes_allowed = allows_mock_modes()
+    if any(enabled(name) for name in ("AGENT_MOCK_MODE", "JARVIS_MOCK_ADVISOR")) and not local_modes_allowed:
         raise RuntimeError("Mock agent modes require an explicit local or test runtime profile")
+    if enabled("AGENT_ALLOW_MEMORY_SESSIONS") and not local_modes_allowed:
+        raise RuntimeError(
+            "In-memory agent sessions require an explicit local or test runtime profile"
+        )
+    if os.getenv("AGENT_TOOL_FIXTURES", "").strip() and not local_modes_allowed:
+        raise RuntimeError("Agent tool fixture replay requires an explicit local or test runtime profile")
+    if enabled("AGENT_TOOL_FIXTURES_RECORD") and not local_modes_allowed:
+        raise RuntimeError("Agent tool fixture recording requires an explicit local or test runtime profile")

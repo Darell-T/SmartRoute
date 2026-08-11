@@ -2091,23 +2091,6 @@
   min-height: 24px;
 }
 
-.sr-ai-reasoning__cursor {
-  display: inline-block;
-  width: 1px;
-  height: 1em;
-  margin-left: 2px;
-  border-radius: 999px;
-  background: var(--sr-text-2);
-  vertical-align: -2px;
-  animation: srReasoningCaret 0.9s steps(2, start) infinite;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .sr-ai-reasoning__cursor {
-    animation: none;
-  }
-}
-
 .sr-recommended-route__footer {
   display: flex;
   align-items: center;
@@ -2681,17 +2664,6 @@
   }
   50% {
     opacity: 0.45;
-  }
-}
-
-@keyframes srReasoningCaret {
-  0%,
-  45% {
-    opacity: 1;
-  }
-  46%,
-  100% {
-    opacity: 0;
   }
 }
 

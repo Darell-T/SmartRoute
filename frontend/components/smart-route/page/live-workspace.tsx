@@ -26,7 +26,7 @@ type LiveWorkspaceMapProps = {
   frameRef: RefObject<HTMLElement | null>;
   routeData: TransitRouteData | null;
   destCoords: { lat: number; lng: number } | null;
-  onLocationUpdate: (coords: { lng: number; lat: number }) => void;
+  onLocationUpdate: (coords: { lng: number; lat: number; fallback?: true }) => void;
   onMapReady: (actions: MapActions) => void;
   onExpand: () => void;
   onRecenter: () => void;

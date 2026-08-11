@@ -31,19 +31,16 @@ import type { HomeNearbyModel } from "./near-you";
 
 const EXAMPLE_QUERIES: readonly ChatSuggestion[] = [
   {
-    label: "JFK by 6:30 PM",
-    query: "Get me to JFK by 6:30 PM with the fewest transfers",
-    icon: "airplane",
+    label: "Get me to JFK with fewer transfers and less walking",
+    query: "Get me to JFK with the fewest transfers and as little walking as possible.",
   },
   {
-    label: "Brooklyn to Midtown",
-    query: "Best route from Brooklyn to Midtown while avoiding current delays",
-    icon: "waypoints",
+    label: "Get me to Madison Square Garden and avoid event crowds",
+    query: "Get me to Madison Square Garden while avoiding event crowds and major service disruptions.",
   },
   {
-    label: "Coney Island, less walking",
-    query: "Plan a trip to Coney Island with less walking",
-    icon: "accessibility",
+    label: "Find me a good pizza spot that is easy to reach by subway",
+    query: "Find a good pizza spot that is easy to reach by subway from where I am.",
   },
 ];
 
@@ -121,7 +118,6 @@ export function ChatPanel({
                 key={index}
                 turn={turn}
                 theme={theme}
-                showCaret={chat.isStreaming && index === chat.messages.length - 1 && turn.role === "assistant"}
                 selectedCardId={chat.selectedCardId}
                 onSelectRouteCard={handleSelectRouteCard}
                 onSeeArrivalsOnMap={onOpenNearbyStation ?? (() => onOpenLiveMap())}

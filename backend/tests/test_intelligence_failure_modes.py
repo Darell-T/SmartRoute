@@ -1,214 +1,170 @@
-"""Failure, cache, and singleflight coverage for route incident scans."""
+"""Failure and coverage-truth checks for indexed incident evidence.
+
+The rider path performs one immediate index lookup. The retired request-time
+provider scan and scan cache must stay absent so broad xAI/Web research cannot
+drift back onto the critical path. Offline validation helpers remain separate.
+"""
 
 from __future__ import annotations
 
-import asyncio
-import json
 import unittest
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, patch
+from pathlib import Path
+from unittest.mock import patch
 
-from app.services.trips import incident_scan_cache, incidents
+from app.services import incident_index
+from app.services.trips import incident_index_adapter, incidents
 from app.services.trips.incident_context import (
     CandidateStopAssociation,
     CandidateStopContext,
 )
+from app.utils import cache
 
 
 def _context() -> list[CandidateStopContext]:
-    return [CandidateStopContext(
-        "D24",
-        "Church Av",
-        40.650,
-        -73.963,
-        [CandidateStopAssociation("candidate-0", mode="subway", route_id="Q")],
-    )]
+    return [
+        CandidateStopContext(
+            "D24",
+            "Church Av",
+            40.650,
+            -73.963,
+            [CandidateStopAssociation("candidate-0", mode="subway", route_id="Q")],
+        )
+    ]
 
 
-def _complete() -> dict:
-    return {
-        "incidents": [],
-        "scan_metadata": {
-            "status": "complete",
-            "sources": {"attempted": ["x_search", "web_search"], "completed": ["x_search", "web_search"]},
-        },
-    }
+class IncidentIndexFailureAndCoverageTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self._original_client = cache.redis_client
+        cache.redis_client = None
+        cache._mem.clear()
 
+    def tearDown(self) -> None:
+        cache.redis_client = self._original_client
+        cache._mem.clear()
 
-class IncidentScanFailureAndCacheTests(unittest.IsolatedAsyncioTestCase):
-    async def asyncSetUp(self) -> None:
-        incidents._inflight_scans.clear()
-        incident_scan_cache._local_fallback.clear()
-
-    async def asyncTearDown(self) -> None:
-        for task in list(incidents._inflight_scans.values()):
-            task.cancel()
-        await asyncio.gather(*incidents._inflight_scans.values(), return_exceptions=True)
-        incidents._inflight_scans.clear()
-        incident_scan_cache._local_fallback.clear()
-
-    async def test_timeout_returns_failed_contract_without_fabricated_evidence(self):
-        async def never_returns(_context):
-            await asyncio.Event().wait()
-
-        with patch.object(incidents, "TRIP_INCIDENT_SCAN_TIMEOUT_S", 0.001), patch.object(
-            incidents, "get_incidents", new=never_returns
-        ):
-            result = await incidents._scan_route_incidents_with_metadata(_context())
-
-        self.assertEqual(result["incidents"], [])
-        self.assertEqual(result["warnings"], [])
-        self.assertEqual(result["scan_metadata"]["status"], "failed")
-        self.assertEqual(result["scan_metadata"]["sources"]["errors"], ["timeout"])
-
-    async def test_single_source_rows_are_warnings_not_advisor_evidence(self):
-        row = {
-            "location": "Church Avenue",
-            "nearby_station": "Church Av",
-            "severity": "high",
-            "description": "Access restriction reported.",
-            "impact_scope": "station_access",
-            "affected_candidate_route_ids": ["candidate-0"],
-            "evidence": [{
-                "source_type": "x_search",
-                "source_url": "https://x.com/one-source/status/1",
-                "source_origin": "@one-source",
-                "observed_at": datetime.now(timezone.utc).isoformat(),
-            }],
-            "corroborated": False,
-            "advisor_eligible": False,
-        }
-        with patch.object(incidents, "get_incidents", new=AsyncMock(return_value={
-            "incidents": [row],
-            "scan_metadata": {"status": "complete", "sources": {"completed": ["x_search", "web_search"]}},
-        })):
-            result = await incidents._scan_route_incidents_with_metadata(_context())
-
-        self.assertEqual(result["incidents"], [])
-        self.assertEqual(len(result["warnings"]), 1)
-        self.assertEqual(result["scan_metadata"]["warning_count"], 1)
-
-    async def test_concurrent_callers_share_one_scan_and_one_inflight_task(self):
-        entered = asyncio.Event()
-        release = asyncio.Event()
-        calls = 0
-
-        async def scanner(_context):
-            nonlocal calls
-            calls += 1
-            entered.set()
-            await release.wait()
-            return _complete()
-
-        with patch.object(incidents, "load_cached_scan", return_value=None), patch.object(
-            incidents, "cache_scan_contract"
-        ), patch.object(incidents, "get_incidents", new=scanner):
-            first = asyncio.create_task(incidents.scan_route_incidents(_context()))
-            second = asyncio.create_task(incidents.scan_route_incidents(_context()))
-            await entered.wait()
-            self.assertEqual(calls, 1)
-            self.assertEqual(len(incidents._inflight_scans), 1)
-            release.set()
-            one, two = await asyncio.gather(first, second)
-
-        self.assertEqual(one["scan_metadata"]["status"], "complete")
-        self.assertEqual(two["scan_metadata"]["status"], "complete")
-        self.assertEqual(calls, 1)
-        self.assertEqual(incidents._inflight_scans, {})
-
-    async def test_cancelled_waiter_does_not_cancel_shared_scan(self):
-        entered = asyncio.Event()
-        release = asyncio.Event()
-        calls = 0
-
-        async def scanner(_context):
-            nonlocal calls
-            calls += 1
-            entered.set()
-            await release.wait()
-            return _complete()
-
-        with patch.object(incidents, "load_cached_scan", return_value=None), patch.object(
-            incidents, "cache_scan_contract"
-        ), patch.object(incidents, "get_incidents", new=scanner):
-            cancelled = asyncio.create_task(incidents.scan_route_incidents(_context()))
-            await entered.wait()
-            survivor = asyncio.create_task(incidents.scan_route_incidents(_context()))
-            cancelled.cancel()
-            with self.assertRaises(asyncio.CancelledError):
-                await cancelled
-            release.set()
-            result = await survivor
-
-        self.assertEqual(calls, 1)
-        self.assertEqual(result["scan_metadata"]["status"], "complete")
-
-    async def test_failed_scan_is_cached_as_short_backoff_not_an_all_clear(self):
-        stored: dict[str, tuple[str, int]] = {}
-
-        def set_cache(key: str, value: str, ttl: int) -> None:
-            stored[key] = (value, ttl)
-
-        with patch.object(incidents, "load_cached_scan", return_value=None), patch.object(
-            incident_scan_cache.cache, "redis_client", None
-        ), patch.object(
-            incident_scan_cache, "_local_set", side_effect=set_cache
-        ), patch.object(
-            incidents, "get_incidents", new=AsyncMock(side_effect=RuntimeError("provider failed"))
+    async def test_index_lookup_failure_degrades_without_any_cold_scan(self):
+        with patch.object(
+            incidents.incident_index,
+            "lookup_incidents",
+            side_effect=RuntimeError("cache unavailable"),
         ):
             result = await incidents.scan_route_incidents(_context())
 
-        self.assertEqual(result["scan_metadata"]["status"], "failed")
-        serialized, ttl = next(iter(stored.values()))
-        self.assertEqual(ttl, incident_scan_cache.FAILURE_BACKOFF_TTL_S)
-        self.assertEqual(json.loads(serialized)["incidents"], [])
-
-    async def test_local_cache_fallback_has_a_fixed_capacity(self):
-        result = _complete()
-        result["scan_metadata"]["scanned_at"] = datetime.now(timezone.utc).isoformat()
-        with patch.object(incident_scan_cache.cache, "redis_client", None):
-            for index in range(incident_scan_cache.LOCAL_FALLBACK_MAX_ENTRIES + 2):
-                incident_scan_cache.cache_scan_contract(f"incident-{index}", result)
-
+        self.assertEqual(result["incidents"], [])
+        self.assertEqual(result["warnings"], [])
+        metadata = result["scan_metadata"]
+        self.assertEqual(metadata["lookup_status"], "failed")
+        self.assertEqual(metadata["coverage_status"], "unavailable")
+        self.assertEqual(metadata["status"], "unavailable")
+        self.assertEqual(metadata["lookup_kind"], "index")
         self.assertEqual(
-            len(incident_scan_cache._local_fallback),
-            incident_scan_cache.LOCAL_FALLBACK_MAX_ENTRIES,
+            metadata["sources"],
+            {"attempted": ["incident_index"], "completed": []},
         )
-        self.assertNotIn("incident-0", incident_scan_cache._local_fallback)
+        self.assertFalse(incidents.incident_lookup_succeeded(metadata))
+        self.assertFalse(incidents.incident_scan_is_complete(metadata))
 
-    async def test_cached_evidence_rederives_the_citation_identity(self):
-        now = datetime.now(timezone.utc).isoformat()
-        normalized = incident_scan_cache.normalize_advisor_incident({
-            "location": "Church Avenue",
-            "nearby_station": "Church Av",
-            "severity": "high",
-            "description": "Access restriction reported.",
-            "impact_scope": "station_access",
-            "affected_candidate_route_ids": ["candidate-0"],
-            "advisor_eligible": True,
-            "evidence": [
-                {
-                    "source_type": "x_search",
-                    "source_url": "https://x.com/citydesk/status/1",
-                    "source_origin": "@citydesk",
-                    "source_identity": "web:spoofed.example",
-                    "observed_at": now,
-                },
-                {
-                    "source_type": "web_search",
-                    "source_url": "https://news.example.test/report",
-                    "source_origin": "Independent News",
-                    "source_identity": "x:spoofed",
-                    "observed_at": now,
-                },
-            ],
-        })
+    async def test_empty_context_is_unscanned_never_complete(self):
+        result = await incidents.scan_route_incidents([])
+        metadata = result["scan_metadata"]
+        self.assertEqual(result["incidents"], [])
+        self.assertEqual(metadata["status"], "unscanned")
+        self.assertEqual(metadata["coverage_status"], "unscanned")
+        self.assertEqual(metadata["lookup_kind"], "index")
+        self.assertFalse(incidents.incident_scan_is_complete(metadata))
 
-        self.assertEqual(
-            [entry["source_identity"] for entry in normalized["evidence"]],
-            ["x:citydesk", "web:news.example.test"],
+    async def test_current_coverage_with_empty_incidents_is_not_an_all_clear_claim(self):
+        incident_index.set_coverage(
+            {"coverage_id": "central-south-brooklyn", "coverage_status": "current"}
         )
-        self.assertTrue(normalized["advisor_eligible"])
+        result = await incidents.scan_route_incidents(_context())
+        metadata = result["scan_metadata"]
+        self.assertEqual(result["incidents"], [])
+        # Current is permitted only from an explicit current coverage record.
+        self.assertEqual(metadata["coverage_status"], "current")
+        self.assertEqual(metadata["status"], "complete")
+        self.assertTrue(incidents.incident_scan_is_complete(metadata))
+
+    async def test_partial_coverage_stays_incomplete_even_with_advisor_incidents(self):
+        incident_index.set_coverage(
+            {"coverage_id": "lower-manhattan", "coverage_status": "current"}
+        )
+        incident_index.set_coverage(
+            {"coverage_id": "downtown-northwest-brooklyn", "coverage_status": "current"}
+        )
+        incident_index.set_coverage(
+            {"coverage_id": "western-queens", "coverage_status": "unavailable"}
+        )
+        incident_index.upsert_incident(
+            {
+                "source": "x_search",
+                "source_id": "partial-1",
+                "state": "confirmed",
+                "advisor_eligible": True,
+                "impact_scope": "subway_operations",
+                "description": "Confirmed indexed incident.",
+                "affected_stop_ids": ["W4"],
+                "affected_route_ids": ["Q"],
+                "affected_batch_ids": ["lower-manhattan"],
+            }
+        )
+        overlap = CandidateStopContext(
+            "W4",
+            "Overlap",
+            40.72,
+            -73.96,
+            [CandidateStopAssociation("candidate-0", mode="subway", route_id="Q")],
+        )
+
+        result = await incidents.scan_route_incidents([overlap])
+
+        self.assertEqual(len(result["incidents"]), 1)
+        metadata = result["scan_metadata"]
+        self.assertEqual(metadata["coverage_status"], "partial")
+        self.assertEqual(metadata["status"], "partial")
+        self.assertTrue(incidents.incident_lookup_succeeded(metadata))
+        self.assertFalse(incidents.incident_scan_is_complete(metadata))
+
+    def test_metadata_helpers_distinguish_lookup_success_from_coverage_freshness(self):
+        current = {
+            "status": "complete",
+            "lookup_status": "complete",
+            "coverage_status": "current",
+        }
+        partial = {
+            "status": "partial",
+            "lookup_status": "complete",
+            "coverage_status": "partial",
+        }
+        self.assertTrue(incidents.incident_scan_is_complete(current))
+        self.assertTrue(incidents.incident_lookup_succeeded(current))
+        self.assertFalse(incidents.incident_scan_is_complete(partial))
+        self.assertTrue(incidents.incident_lookup_succeeded(partial))
+        self.assertFalse(incidents.incident_lookup_succeeded({"status": "complete"}))
+        self.assertFalse(incidents.incident_scan_is_complete(None))
+        self.assertFalse(incidents.incident_lookup_succeeded(None))
+
+    def test_normal_trip_incidents_modules_have_no_cold_scan_path(self):
+        for module in (incidents, incident_index_adapter):
+            source = Path(module.__file__).read_text(encoding="utf-8")
+            for forbidden in (
+                "incident_monitor",
+                "get_incidents",
+                "x_search",
+                "web_search",
+                "incident_scan_cache",
+                "_inflight_scans",
+                "asyncio",
+            ):
+                self.assertNotIn(forbidden, source)
+
+    def test_retired_request_time_incident_modules_are_absent(self):
+        services_root = Path(__file__).resolve().parents[1] / "app" / "services"
+        retired = (
+            services_root / "incident_monitor.py",
+            services_root / "trips" / "incident_scan_cache.py",
+        )
+        self.assertEqual([str(path) for path in retired if path.exists()], [])
 
 
 if __name__ == "__main__":

@@ -6,41 +6,21 @@
  * never recomputed by the card component.
  */
 
-import type {
-  CanonicalItinerary,
-  CanonicalItineraryLeg,
-  RecommendationReason,
-  RouteCard,
-} from "@/lib/agent-chat-stream";
+import type { RecommendationReason, RouteCard } from "@/lib/agent-chat-stream";
 import { formatNycRouteClock } from "@/lib/nyc-route-clock";
 import { SUBWAY_BULLET_ROUTES } from "@/components/smart-route/train-bullet";
+import {
+  buildEventsFromCanonicalItinerary,
+  canonicalPlaceLabel,
+  condensePreviewEvents,
+  durationMinutesFromSeconds,
+  formatDurationMinutes,
+  type ItineraryEvent,
+  type ItineraryEventKind,
+} from "./itinerary-event-adapter";
 
-export type ItineraryEventKind =
-  | "subway"
-  | "bus"
-  | "walk"
-  | "pickup"
-  | "waypoint"
-  | "transfer"
-  | "destination";
-
-export interface ItineraryEvent {
-  id: string;
-  kind: ItineraryEventKind;
-  routeIds: string[];
-  title: string;
-  subtitle?: string;
-  /** Exact canonical duration used by the presentation adapter before display rounding. */
-  durationSeconds?: number;
-  durationLabel?: string;
-  durationMinutes?: number;
-  fromLabel?: string;
-  toLabel?: string;
-  stopCount?: number;
-  /** Provider-owned ordered stop names, including endpoints when supplied. */
-  stops?: string[];
-  sourceLabel?: string;
-}
+export { condensePreviewEvents, formatDurationMinutes } from "./itinerary-event-adapter";
+export type { ItineraryEvent, ItineraryEventKind } from "./itinerary-event-adapter";
 
 export interface ItineraryViewModel {
   id: string;
@@ -64,16 +44,6 @@ export interface ItineraryViewModel {
 
 /** Retained for older callers. Semantic sections are not hard-truncated. */
 export const PREVIEW_EVENT_MAX = 5;
-const MIN_INFERRED_WALK_SECONDS = 90;
-
-export function formatDurationMinutes(totalMinutes: number): string {
-  if (!Number.isFinite(totalMinutes) || totalMinutes < 0) return "—";
-  const minutes = Math.round(totalMinutes);
-  if (minutes < 60) return `${minutes} min`;
-  const hours = Math.floor(minutes / 60);
-  const rest = minutes % 60;
-  return rest > 0 ? `${hours} hr ${rest} min` : `${hours} hr`;
-}
 
 export function formatClockTime(iso: string | undefined | null): string | null {
   return formatNycRouteClock(iso);
@@ -137,270 +107,6 @@ export function formatStructuredRecommendationReason(
     return "Lower exposure to nearby event crowds";
   }
   return null;
-}
-
-function durationMinutesFromSeconds(seconds: unknown): number | null {
-  if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0) {
-    return null;
-  }
-  return Math.round(seconds / 60);
-}
-
-function durationLabelFromMinutes(minutes: number | null): string | undefined {
-  return minutes == null ? undefined : formatDurationMinutes(minutes);
-}
-
-function durationLabelFromSeconds(seconds: number): string {
-  return formatDurationMinutes(Math.max(1, Math.round(seconds / 60)));
-}
-
-function canonicalStopLabel(stop: unknown): string | null {
-  if (typeof stop === "string" && stop.trim()) return stop.trim();
-  if (stop && typeof stop === "object" && !Array.isArray(stop)) {
-    const record = stop as Record<string, unknown>;
-    for (const key of ["name", "label", "display_name", "station_name"]) {
-      const value = record[key];
-      if (typeof value === "string" && value.trim()) return value.trim();
-    }
-  }
-  return null;
-}
-
-function canonicalPlaceLabel(place: unknown, fallback: string): string {
-  if (typeof place === "string" && place.trim()) return place.trim();
-  if (place && typeof place === "object" && !Array.isArray(place)) {
-    const record = place as Record<string, unknown>;
-    for (const key of ["display_name", "label", "name", "address"]) {
-      const value = record[key];
-      if (typeof value === "string" && value.trim()) return value.trim();
-    }
-  }
-  return fallback;
-}
-
-function canonicalLegDurationMinutes(leg: CanonicalItineraryLeg): number | null {
-  return leg.mode.trim().toUpperCase() === "WALK"
-    ? durationMinutesFromSeconds(leg.walk_seconds)
-    : durationMinutesFromSeconds(leg.ride_seconds);
-}
-
-function canonicalLegDurationSeconds(leg: CanonicalItineraryLeg): number | null {
-  const value =
-    leg.mode.trim().toUpperCase() === "WALK" ? leg.walk_seconds : leg.ride_seconds;
-  return typeof value === "number" && Number.isFinite(value) && value >= 0
-    ? value
-    : null;
-}
-
-function canonicalLegStops(leg: CanonicalItineraryLeg): string[] {
-  if (!Array.isArray(leg.stops)) return [];
-  return leg.stops
-    .map((stop) => canonicalStopLabel(stop))
-    .filter((stop): stop is string => Boolean(stop));
-}
-
-function appendCanonicalLegs(
-  events: ItineraryEvent[],
-  legs: CanonicalItineraryLeg[],
-  segmentDestination: string,
-  idPrefix: string,
-): void {
-  legs.forEach((leg, index) => {
-    const mode = leg.mode.trim().toUpperCase();
-    const stops = canonicalLegStops(leg);
-    const fromLabel = canonicalStopLabel(leg.board) ?? stops[0] ?? undefined;
-    const toLabel =
-      canonicalStopLabel(leg.alight) ?? stops.at(-1) ?? undefined;
-    const durationSeconds = canonicalLegDurationSeconds(leg);
-    const durationMinutes = canonicalLegDurationMinutes(leg);
-    const base = {
-      id: `${idPrefix}-${index}`,
-      title: toLabel || fromLabel || segmentDestination,
-      durationSeconds: durationSeconds ?? undefined,
-      durationMinutes: durationMinutes ?? undefined,
-      durationLabel: durationLabelFromMinutes(durationMinutes),
-      fromLabel,
-      toLabel,
-    };
-
-    if (mode === "WALK") {
-      events.push({ ...base, kind: "walk", routeIds: [] });
-      return;
-    }
-    if (mode !== "SUBWAY" && mode !== "BUS") return;
-
-    const serviceId =
-      typeof leg.service_id === "string" ? leg.service_id.trim().toUpperCase() : "";
-    events.push({
-      ...base,
-      kind: mode === "BUS" ? "bus" : "subway",
-      routeIds: serviceId ? [serviceId] : [],
-      stopCount:
-        typeof leg.stop_count === "number" && Number.isFinite(leg.stop_count)
-          ? Math.max(0, Math.round(leg.stop_count))
-          : undefined,
-      stops,
-    });
-  });
-}
-
-function eventBoundaryLabel(
-  event: ItineraryEvent | undefined,
-  edge: "start" | "end",
-): string | undefined {
-  if (!event) return undefined;
-  if (edge === "start") {
-    return event.fromLabel ?? (event.kind === "waypoint" ? event.title : undefined);
-  }
-  return event.toLabel ?? (event.kind === "waypoint" ? event.title : undefined);
-}
-
-function labelsMatch(a: string | undefined, b: string | undefined): boolean {
-  if (!a || !b) return false;
-  return a.trim().toLocaleLowerCase() === b.trim().toLocaleLowerCase();
-}
-
-function walkGroupDurationSeconds(events: ItineraryEvent[]): number {
-  return events.reduce((total, event) => {
-    if (
-      typeof event.durationSeconds === "number" &&
-      Number.isFinite(event.durationSeconds)
-    ) {
-      return total + Math.max(0, event.durationSeconds);
-    }
-    if (
-      typeof event.durationMinutes === "number" &&
-      Number.isFinite(event.durationMinutes)
-    ) {
-      return total + Math.max(0, event.durationMinutes) * 60;
-    }
-    return total;
-  }, 0);
-}
-
-/**
- * Convert provider/canonical legs into customer-facing semantic sections.
- *
- * Raw legs remain on RouteCard for map and rail detail. The chat card gets
- * one section per transit leg, waypoint/dwell event, or contiguous walk.
- */
-export function condensePreviewEvents(
-  events: ItineraryEvent[],
-  destinationLabel: string,
-  originLabel = "Your location",
-): ItineraryEvent[] {
-  const sections: ItineraryEvent[] = [];
-  let index = 0;
-
-  while (index < events.length) {
-    const event = events[index];
-    if (event.kind !== "walk") {
-      sections.push({ ...event });
-      index += 1;
-      continue;
-    }
-
-    let end = index + 1;
-    while (end < events.length && events[end].kind === "walk") end += 1;
-    const group = events.slice(index, end);
-    const durationSeconds = walkGroupDurationSeconds(group);
-
-    const explicitFrom = group.find((item) => item.fromLabel)?.fromLabel;
-    const explicitTo = [...group].reverse().find((item) => item.toLabel)?.toLabel;
-    const previous = sections.at(-1);
-    const next = events[end];
-    const fromLabel =
-      explicitFrom ??
-      eventBoundaryLabel(previous, "end") ??
-      (index === 0 ? originLabel : undefined);
-    const toLabel =
-      explicitTo ??
-      eventBoundaryLabel(next, "start") ??
-      (end === events.length ? destinationLabel : undefined);
-    const hasExplicitIdentity = Boolean(explicitFrom || explicitTo);
-    const isInternalSamePlaceTransfer = labelsMatch(fromLabel, toLabel);
-    const isUnlabeledMicroFragment =
-      !hasExplicitIdentity && durationSeconds < MIN_INFERRED_WALK_SECONDS;
-
-    if (
-      durationSeconds > 0 &&
-      !isInternalSamePlaceTransfer &&
-      !isUnlabeledMicroFragment &&
-      (fromLabel || toLabel)
-    ) {
-      const durationMinutes = Math.max(1, Math.round(durationSeconds / 60));
-      sections.push({
-        id: `${group[0].id}-walk-section`,
-        kind: "walk",
-        routeIds: [],
-        title: toLabel ?? fromLabel ?? "Walk",
-        fromLabel,
-        toLabel,
-        durationSeconds,
-        durationMinutes,
-        durationLabel: durationLabelFromSeconds(durationSeconds),
-      });
-    }
-
-    index = end;
-  }
-
-  return sections;
-}
-
-function buildEventsFromCanonicalItinerary(
-  itinerary: CanonicalItinerary,
-  originLabel: string,
-  destinationLabel: string,
-  idPrefix: string,
-): ItineraryEvent[] {
-  const events: ItineraryEvent[] = [];
-  const segments = Array.isArray(itinerary.segments) ? itinerary.segments : [];
-
-  if (segments.length > 0) {
-    const dwellBySegment = new Map(
-      (Array.isArray(itinerary.dwell_events) ? itinerary.dwell_events : [])
-        .filter((event) => event?.event_type === "dwell")
-        .map((event) => [event.after_segment_index, event]),
-    );
-
-    [...segments]
-      .sort((a, b) => a.segment_index - b.segment_index)
-      .forEach((segment, position) => {
-        const segmentDestination = canonicalPlaceLabel(
-          segment.destination,
-          position === segments.length - 1 ? destinationLabel : "Waypoint",
-        );
-        appendCanonicalLegs(
-          events,
-          Array.isArray(segment.legs) ? segment.legs : [],
-          segmentDestination,
-          `${idPrefix}-segment-${segment.segment_index}`,
-        );
-        const dwell = dwellBySegment.get(segment.segment_index);
-        if (!dwell) return;
-        const minutes = durationMinutesFromSeconds(dwell.duration_seconds);
-        events.push({
-          id: `${idPrefix}-dwell-${segment.segment_index}`,
-          kind: "waypoint",
-          routeIds: [],
-          title: canonicalPlaceLabel(dwell.waypoint, segmentDestination),
-          subtitle: minutes == null ? "Planned stop" : `${formatDurationMinutes(minutes)} stop`,
-          durationMinutes: minutes ?? undefined,
-          durationLabel: durationLabelFromMinutes(minutes),
-          sourceLabel: dwell.source === "user" ? "Requested stop" : "Planned stop",
-        });
-      });
-    return condensePreviewEvents(events, destinationLabel, originLabel);
-  }
-
-  appendCanonicalLegs(
-    events,
-    Array.isArray(itinerary.legs) ? itinerary.legs : [],
-    destinationLabel,
-    `${idPrefix}-direct`,
-  );
-  return condensePreviewEvents(events, destinationLabel, originLabel);
 }
 
 function isValidCard(card: RouteCard): boolean {

@@ -9,8 +9,31 @@
  * first, `done` always last — even after an `error`.
  */
 
-import type { RouteStep, ServiceAlert } from "@/types/api";
 import { parseAgentEvent } from "./agent-chat-event-validator";
+import type {
+  ArrivalSourceStatus,
+  RouteCardEvent,
+} from "./agent-route-card-contract";
+
+export type {
+  AgentRouteStep,
+  ArrivalSourceStatus,
+  CanonicalAccessibility,
+  CanonicalDwellEvent,
+  CanonicalItinerary,
+  CanonicalItineraryLeg,
+  CanonicalItineraryPlace,
+  CanonicalItinerarySegment,
+  CanonicalItineraryStop,
+  CanonicalTransferKind,
+  CanonicalTransferSemantics,
+  RecommendationReason,
+  RouteCard,
+  RouteCardEndpoint,
+  RouteCardEvent,
+  RouteCardSummary,
+  RouteSelectionDecision,
+} from "./agent-route-card-contract";
 
 export interface EvidenceEnvelope<T> {
   source: string;
@@ -59,212 +82,6 @@ export interface ToolEndEvent {
   duration_ms: number;
   summary?: string;
 }
-
-/** A route candidate endpoint (origin or destination). */
-export interface RouteCardEndpoint {
-  label: string;
-  lat: number;
-  lng: number;
-  name?: string;
-  address?: string | null;
-  place_id?: string | null;
-  source?: "places" | "geocoder" | "user" | "fallback" | string;
-}
-
-/** Compact digest the model reasoned over — mirrors `RouteCardEvent.summary`
- *  on the backend (`events.py`). */
-export interface RouteCardSummary {
-  eta_minutes: number;
-  transfers: number;
-  lines: string[];
-  reason: string;
-  first_leg_arrival?: {
-    route_id?: string;
-    stop_name?: string;
-    source_status?: ArrivalSourceStatus;
-    walking_minutes?: number;
-    catchable_arrival_minutes?: number | null;
-    arrival_minutes?: number[];
-  } | null;
-}
-
-/** One normalized leg inside a canonical itinerary (backend
- *  `build_canonical_itinerary`). UI may format seconds; it must not invent. */
-export interface CanonicalItineraryLeg {
-  mode: string;
-  service_id?: string | null;
-  board?: unknown;
-  alight?: unknown;
-  /** Provider-owned number of stops ridden on this leg. */
-  stop_count?: number | null;
-  /** Ordered provider/enrichment stop sequence, including endpoints when known. */
-  stops?: CanonicalItineraryStop[];
-  departure_at?: string | null;
-  arrival_at?: string | null;
-  walk_seconds?: number;
-  wait_seconds?: number;
-  ride_seconds?: number;
-  transfer_seconds?: number;
-  geometry?: unknown;
-  service_data_basis?: string;
-  [key: string]: unknown;
-}
-
-export interface CanonicalItineraryStop {
-  name: string;
-  lat?: number | null;
-  lng?: number | null;
-}
-
-/** A rider-facing endpoint retained by the canonical itinerary. */
-export interface CanonicalItineraryPlace {
-  display_name?: string | null;
-  label?: string | null;
-  name?: string | null;
-  address?: string | null;
-  place_id?: string | null;
-  lat?: number | null;
-  lng?: number | null;
-  latitude?: number | null;
-  longitude?: number | null;
-  dwell_minutes?: number | null;
-  dwell_source?: "default" | "user" | string | null;
-  [key: string]: unknown;
-}
-
-/** One ordered OD portion of a canonical chained journey. */
-export interface CanonicalItinerarySegment {
-  segment_index: number;
-  origin?: CanonicalItineraryPlace | RouteCardEndpoint | string | null;
-  destination?: CanonicalItineraryPlace | RouteCardEndpoint | string | null;
-  legs: CanonicalItineraryLeg[];
-  duration_seconds?: number;
-}
-
-/** Server-owned intermediate stop time. This is never a transit transfer. */
-export interface CanonicalDwellEvent {
-  event_type: "dwell";
-  after_segment_index: number;
-  waypoint: CanonicalItineraryPlace;
-  duration_seconds: number;
-  source: "default" | "user" | string;
-}
-
-/**
- * Seconds-based immutable itinerary from the backend normalizer
- * (`backend/app/services/trips/itinerary.py`). Optional on older servers;
- * when present, chat/map must prefer these fields over re-derived totals.
- */
-export interface CanonicalItinerary {
-  itinerary_id?: string;
-  origin?: unknown;
-  waypoints?: CanonicalItineraryPlace[];
-  destination?: unknown;
-  timezone?: string;
-  planning_mode?: string;
-  requested_departure?: string | null;
-  requested_arrival?: string | null;
-  generated_at?: string | null;
-  data_basis?: string;
-  data_freshness?: string | null;
-  departure_at?: string | null;
-  arrival_at?: string | null;
-  total_duration_seconds?: number;
-  total_walk_seconds?: number;
-  total_wait_seconds?: number;
-  total_in_vehicle_seconds?: number;
-  total_dwell_seconds?: number;
-  transfer_count?: number;
-  legs?: CanonicalItineraryLeg[];
-  /** Present for server-owned multi-stop journeys; preserves OD boundaries. */
-  segments?: CanonicalItinerarySegment[];
-  /** Present for multi-stop journeys; dwell is a distinct semantic event. */
-  dwell_events?: CanonicalDwellEvent[];
-  /** Typed facts for current payloads; strings are a legacy-session adapter. */
-  structured_recommendation_reasons?: Array<RecommendationReason | string>;
-  selection_decision?: RouteSelectionDecision;
-  [key: string]: unknown;
-}
-
-export interface RouteSelectionDecision {
-  selected_candidate_index: number;
-  selected_candidate_id: string;
-  base_score: number;
-  final_score: number;
-  hard_constraints_satisfied: string[];
-  penalties: Array<{
-    source: string;
-    amount: number;
-    reason: string;
-  }>;
-  selection_reason:
-    | "lowest_final_score"
-    | "hard_constraint"
-    | "advisor_tiebreak";
-  evidence_ids: string[];
-}
-
-export type RecommendationReason =
-  | {
-      code: "fastest";
-      difference_seconds?: number;
-    }
-  | {
-      code: "fewer_transfers";
-      transfer_difference: number;
-    }
-  | {
-      code: "avoids_active_disruption";
-    }
-  | {
-      code: "lower_event_crowd_exposure";
-      event_count: number;
-      provider_status: string;
-    };
-
-/** A single transit step, additively extended with the absolute departure /
- *  arrival timestamps future-departure turns need (design correction #1 in
- *  the plan: "future departures break the current step shape"). Everything
- *  else is byte-compatible with the existing `/api/trip` step shape so the
- *  map renderer draws these unchanged. */
-export interface AgentRouteStep extends RouteStep {
-  departure_time_iso?: string;
-  arrival_time_iso?: string;
-}
-
-/** `route_card` — one recommended or alternative itinerary. The full event
- *  payload minus the `type`/`turn_id` discriminants a card doesn't need to
- *  carry once attached to its turn (see `RouteCard` below). */
-export interface RouteCardEvent {
-  type: "route_card";
-  card_id: string;
-  turn_id: string;
-  role: "recommended" | "alternative";
-  origin: RouteCardEndpoint;
-  destination: RouteCardEndpoint;
-  summary: RouteCardSummary;
-  route: AgentRouteStep[];
-  alerts: ServiceAlert[];
-  leg_label?: string;
-  depart_iso?: string;
-  /** Canonical seconds-based itinerary when the server emits it (Task 2+). */
-  itinerary?: CanonicalItinerary;
-  /** One server-owned decision shared by narration, cards, map, and active trip. */
-  selection_decision?: RouteSelectionDecision;
-}
-
-/** `route_card` payload as attached to an assistant turn (same shape as the
- *  wire event — kept as a distinct name so UI code isn't coupled to "this is
- *  an SSE event" framing). */
-export type RouteCard = Omit<RouteCardEvent, "type">;
-
-export type ArrivalSourceStatus =
-  | "live"
-  | "scheduled"
-  | "stale"
-  | "provider_unavailable"
-  | "no_predictions"
-  | "stop_not_resolved";
 
 export interface ArrivalPrediction {
   expected_at: string;
@@ -365,7 +182,7 @@ export type AgentEvent =
   | ErrorEvent
   | DoneEvent;
 
-const KNOWN_EVENT_TYPES = new Set<AgentEvent["type"]>([
+const KNOWN_EVENT_TYPES: ReadonlySet<string> = new Set([
   "meta",
   "token",
   "progress",
@@ -423,7 +240,7 @@ function arrivalResolutionStatus(data: Record<string, unknown>): ArrivalResoluti
  *  when the frame doesn't match — a single bad frame must never crash the
  *  whole turn's stream. */
 function buildEvent(eventType: string, data: Record<string, unknown>): AgentEvent | null {
-  if (!KNOWN_EVENT_TYPES.has(eventType as AgentEvent["type"])) {
+  if (!KNOWN_EVENT_TYPES.has(eventType)) {
     warnSkip(`unknown event type "${eventType}"`, data);
     return null;
   }
@@ -431,7 +248,6 @@ function buildEvent(eventType: string, data: Record<string, unknown>): AgentEven
   if (parsed) return parsed;
   warnSkip(`"${eventType}" data failed nested contract validation`, data);
   return null;
-
 }
 
 /** Parses one `\n`-joined SSE frame (already split on the blank-line frame

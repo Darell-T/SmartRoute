@@ -25,6 +25,7 @@ class ModelCallCompleted:
     attempts: int
     web_search_ms: float = 0.0
     server_tool_call_count: int = 0
+    first_token_ms: float | None = None
 
 
 class _RiderTextSanitizer:
@@ -55,9 +56,24 @@ class _RiderTextSanitizer:
 
 
 def _web_result_ok(content: object) -> bool:
-    if isinstance(content, list):
-        return all(getattr(item, "type", "") != "web_search_tool_result_error" for item in content)
-    return getattr(content, "type", "") != "web_search_tool_result_error"
+    """True unless a web result block reports a server tool error.
+
+    Accepts both Anthropic SDK objects and dict-shaped test doubles. An empty
+    result list is a successful search (nothing to report), never a failure.
+    Malformed scalar content (such as None) is not a parseable result block
+    and fails safely instead of reading as a successful search.
+    """
+    items = content if isinstance(content, list) else [content]
+    for item in items:
+        if isinstance(item, dict):
+            item_type = item.get("type")
+        elif item is None or not hasattr(item, "type"):
+            return False
+        else:
+            item_type = getattr(item, "type")
+        if item_type == "web_search_tool_result_error":
+            return False
+    return True
 
 
 async def stream_model_call(
@@ -93,6 +109,8 @@ async def stream_model_call(
         web_started: dict[str, float] = {}
         web_search_ms = 0.0
         server_tool_calls = 0
+        call_started = time.monotonic()
+        first_token_ms: float | None = None
         try:
             async with asyncio.timeout(remaining_s):
                 async with client.messages.stream(**stream_kwargs) as stream:
@@ -138,6 +156,10 @@ async def stream_model_call(
                                 delta = getattr(event, "delta", None)
                                 if getattr(delta, "type", "") == "text_delta":
                                     saw_text = True
+                                    if first_token_ms is None:
+                                        first_token_ms = (
+                                            time.monotonic() - call_started
+                                        ) * 1000
                                     text = sanitizer.feed(str(getattr(delta, "text", "")))
                                     if text:
                                         yield agent_events.TokenEvent(text=text)
@@ -151,6 +173,8 @@ async def stream_model_call(
                     else:
                         async for delta in stream.text_stream:
                             saw_text = True
+                            if first_token_ms is None:
+                                first_token_ms = (time.monotonic() - call_started) * 1000
                             text = sanitizer.feed(str(delta))
                             if text:
                                 yield agent_events.TokenEvent(text=text)
@@ -176,6 +200,7 @@ async def stream_model_call(
                 attempts=attempt,
                 web_search_ms=web_search_ms,
                 server_tool_call_count=server_tool_calls,
+                first_token_ms=first_token_ms,
             )
             return
         except asyncio.CancelledError:

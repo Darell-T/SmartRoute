@@ -195,5 +195,65 @@ class EventCrowdCollectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(failures, [])
 
 
+class RouteScoreFormulaRegressionTests(unittest.TestCase):
+    """Single-leg score components are unchanged after helper extraction."""
+
+    def test_route_score_matches_shared_component_formula(self):
+        route = _route(total_minutes=30)
+        alerts = [{"header": "A disruption", "route_ids": ["A"]}]
+        impacts = [
+            {"event_id": "ev-1", "title": "Game", "route_index": 0, "risk_score": 5.0}
+        ]
+        scored = scoring._route_score(
+            route,
+            alerts,
+            route_index=0,
+            ticketmaster_event_impacts=impacts,
+            routing_preference="LESS_WALKING",
+            preferred_modes=["BUS"],
+        )
+        self.assertEqual(scored["total_minutes"], 30)
+        self.assertEqual(scored["transfers"], 0)
+        self.assertEqual(scored["alert_count"], 1)
+        self.assertEqual(scored["event_crowd_penalty"], 5.0)
+        self.assertEqual(scored["walking_penalty"], 0)
+        self.assertEqual(scored["preferred_mode_penalty"], 4)
+        self.assertEqual(
+            scored["score"],
+            scoring._component_score_total(
+                total_minutes=scored["total_minutes"],
+                transfers=scored["transfers"],
+                alert_count=scored["alert_count"],
+                event_crowd_penalty=scored["event_crowd_penalty"],
+                walking_penalty=scored["walking_penalty"],
+                preferred_mode_penalty=scored["preferred_mode_penalty"],
+            ),
+        )
+        self.assertEqual(scored["score"], 30 + 0 + 8 + 5.0 + 0 + 4)
+
+    def test_transfer_and_street_walk_components_unchanged(self):
+        route = [
+            {"type": "SUBWAY", "route_id": "A", "departure_stop": "a", "arrival_stop": "b"},
+            {"type": "WALK", "duration_seconds": 120},
+            {"type": "SUBWAY", "route_id": "B", "departure_stop": "b", "arrival_stop": "c"},
+        ]
+        scored = scoring._route_score(route, [], routing_preference="LESS_WALKING")
+        self.assertEqual(scored["transfers"], 1)
+        self.assertEqual(scored["street_walking_seconds"], 120)
+        self.assertEqual(scored["walking_penalty"], 4)
+        self.assertEqual(scored["event_crowd_penalty"], 0)
+        self.assertEqual(
+            scored["score"],
+            scoring._component_score_total(
+                total_minutes=scored["total_minutes"],
+                transfers=scored["transfers"],
+                alert_count=scored["alert_count"],
+                event_crowd_penalty=scored["event_crowd_penalty"],
+                walking_penalty=scored["walking_penalty"],
+                preferred_mode_penalty=scored["preferred_mode_penalty"],
+            ),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

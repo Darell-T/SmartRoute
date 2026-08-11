@@ -8,6 +8,7 @@ SelectionReason = Literal[
     "lowest_final_score",
     "hard_constraint",
     "advisor_tiebreak",
+    "outer_agent_selection",
 ]
 
 

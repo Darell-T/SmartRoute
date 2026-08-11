@@ -42,15 +42,22 @@ test("mobile navigation is a draggable full-canvas page with an interruptible sp
   assert.match(NAVIGATION_SOURCE, /<AnimatePresence initial=\{false\}>/);
   assert.match(NAVIGATION_SOURCE, /role="dialog"/);
   assert.match(NAVIGATION_SOURCE, /aria-modal="true"/);
+  assert.match(NAVIGATION_SOURCE, /FOCUSABLE_SELECTOR/);
+  assert.match(NAVIGATION_SOURCE, /event\.key === "Escape"/);
+  assert.match(NAVIGATION_SOURCE, /event\.shiftKey/);
+  assert.match(
+    STAGE_SOURCE,
+    /inert=\{navigationOpen \? true : undefined\}/,
+  );
 });
 
-test("mobile navigation preserves the existing sidebar icon language", () => {
+test("mobile navigation keeps only available destinations", () => {
   assert.match(NAVIGATION_SOURCE, /icon=\{MessageCircle\}/);
   assert.match(NAVIGATION_SOURCE, /icon=\{MapIcon\}/);
-  assert.match(NAVIGATION_SOURCE, /icon=\{Bookmark\}/);
-  assert.match(NAVIGATION_SOURCE, /icon=\{MessageSquareText\}/);
-  assert.match(NAVIGATION_SOURCE, /icon=\{CircleHelp\}/);
-  assert.match(NAVIGATION_SOURCE, /icon=\{Settings\}/);
+  assert.doesNotMatch(
+    NAVIGATION_SOURCE,
+    /Coming soon|Bookmark|MessageSquareText|CircleHelp|Settings|showLock/,
+  );
   assert.doesNotMatch(NAVIGATION_SOURCE, /BrainIcon|ZapIcon/);
 });
 
@@ -58,7 +65,13 @@ test("mobile chrome stays neutral and exposes reachable primary controls", () =>
   assert.match(TOP_BAR_SOURCE, /aria-label="Open navigation menu"/);
   assert.doesNotMatch(TOP_BAR_SOURCE, /Open transit map|Open chat/);
   assert.doesNotMatch(TOP_BAR_SOURCE, /MapIcon|MessageCircle/);
-  assert.match(STAGE_SOURCE, /aria-label="Close navigation"/);
+  assert.match(
+    STAGE_SOURCE,
+    /<motion\.div\s+className="sr-mobile-stage-dismiss"\s+aria-hidden="true"/,
+  );
+  assert.doesNotMatch(STAGE_SOURCE, /aria-label="Close navigation"/);
+  assert.doesNotMatch(STAGE_SOURCE, /motion\.button/);
+  assert.match(NAVIGATION_SOURCE, /aria-label="Close navigation"/);
   assert.doesNotMatch(NAVIGATION_SOURCE, /\bX\b|Close navigation menu/);
   assert.match(CSS_SOURCE, /touch-action:\s*none/);
   assert.match(CSS_SOURCE, /min-height:\s*52px/);
@@ -75,4 +88,17 @@ test("mobile chrome stays neutral and exposes reachable primary controls", () =>
 test("mobile branding is removed while the live transit map is active", () => {
   assert.match(PAGE_SOURCE, /showBrand=\{!isLivemapTab\}/);
   assert.match(TOP_BAR_SOURCE, /\{showBrand \? \(/);
+});
+
+test("live map workspace mounts on demand and stays mounted across tabs", () => {
+  assert.match(PAGE_SOURCE, /import dynamic from "next\/dynamic"/);
+  assert.match(PAGE_SOURCE, /const LiveWorkspace = dynamic\(/);
+  assert.match(PAGE_SOURCE, /ssr: false/);
+  assert.doesNotMatch(PAGE_SOURCE, /import \{ LiveWorkspace \} from/);
+  assert.match(PAGE_SOURCE, /const \[mapRequested, setMapRequested\] = useState\(false\);/);
+  assert.match(
+    PAGE_SOURCE,
+    /const openLiveMap = useCallback\(\(\) => \{\s*setMapRequested\(true\);/,
+  );
+  assert.match(PAGE_SOURCE, /\{mapRequested \? \(/);
 });

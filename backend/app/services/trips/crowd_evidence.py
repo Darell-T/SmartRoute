@@ -134,14 +134,19 @@ async def collect(
             timeout=_LIVE_SEARCH_DEADLINE_S,
         )
     )
-    done, pending = await asyncio.wait(
-        {ticketmaster_task, grok_task},
-        timeout=_LIVE_SEARCH_DEADLINE_S,
-    )
-    for task in pending:
-        task.cancel()
-    if pending:
-        await asyncio.gather(*pending, return_exceptions=True)
+    tasks = {ticketmaster_task, grok_task}
+    try:
+        done, pending = await asyncio.wait(
+            tasks,
+            timeout=_LIVE_SEARCH_DEADLINE_S,
+        )
+    finally:
+        # Caller cancellation while waiting must tear down both provider
+        # tasks too, not only the normal shared-deadline path.
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     ticketmaster_result = _task_outcome(ticketmaster_task, done)
     grok_outcome = _task_outcome(grok_task, done)

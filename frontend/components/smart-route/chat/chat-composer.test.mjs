@@ -43,6 +43,12 @@ const WORKING_PANEL_SOURCE = fs.readFileSync(
   fileURLToPath(new URL("./chat-working-panel.tsx", import.meta.url)),
   "utf8",
 );
+const ROUTE_VIEW_SOURCE = fs.readFileSync(
+  fileURLToPath(
+    new URL("../left-rail/route-view-itinerary.tsx", import.meta.url),
+  ),
+  "utf8",
+);
 
 test("composer exposes Auto and Quick through an accessible custom menu", () => {
   assert.match(COMPOSER_SOURCE, /<ResponseModeMenu/);
@@ -126,22 +132,22 @@ test("empty chat leads with nearby transit proof and compact Prompt Kit suggesti
   assert.match(WELCOME_SOURCE, /variant="outline"/);
   assert.doesNotMatch(WELCOME_SOURCE, /NavArrowRight/);
   assert.doesNotMatch(WELCOME_SOURCE, /Chevron/);
-  assert.match(PANEL_SOURCE, /JFK by 6:30 PM/);
-  assert.match(PANEL_SOURCE, /Brooklyn to Midtown/);
-  assert.match(PANEL_SOURCE, /Coney Island, less walking/);
+  assert.match(PANEL_SOURCE, /Get me to JFK with fewer transfers and less walking/);
+  assert.match(PANEL_SOURCE, /Get me to Madison Square Garden and avoid event crowds/);
+  assert.match(PANEL_SOURCE, /Find me a good pizza spot that is easy to reach by subway/);
   assert.match(SUGGESTION_SOURCE, /variant = "outline"/);
 
   assert.match(
     PANEL_SOURCE,
-    /Get me to JFK by 6:30 PM with the fewest transfers/,
+    /Get me to JFK with the fewest transfers and as little walking as possible/,
   );
   assert.match(
     PANEL_SOURCE,
-    /Best route from Brooklyn to Midtown while avoiding current delays/,
+    /Get me to Madison Square Garden while avoiding event crowds and major service disruptions/,
   );
   assert.match(
     PANEL_SOURCE,
-    /Plan a trip to Coney Island with less walking/,
+    /Find a good pizza spot that is easy to reach by subway from where I am/,
   );
   assert.match(PANEL_SOURCE, /fillDraftAndFocus/);
   assert.match(
@@ -150,14 +156,14 @@ test("empty chat leads with nearby transit proof and compact Prompt Kit suggesti
   );
 });
 
-test("mobile suggestions use animated transit glyphs and a focus-aware snap rail", () => {
-  assert.match(WELCOME_SOURCE, /components\/ui\/airplane/);
-  assert.match(WELCOME_SOURCE, /components\/ui\/waypoints/);
-  assert.match(WELCOME_SOURCE, /components\/ui\/accessibility/);
-  assert.match(PANEL_SOURCE, /icon: "airplane"/);
-  assert.match(PANEL_SOURCE, /icon: "waypoints"/);
-  assert.match(PANEL_SOURCE, /icon: "accessibility"/);
+test("suggestions stay text-only and use a focus-aware mobile snap rail", () => {
+  assert.doesNotMatch(WELCOME_SOURCE, /@\/components\/ui\//);
+  assert.doesNotMatch(WELCOME_SOURCE, /sr-chat-suggestion-icon/);
+  assert.doesNotMatch(PANEL_SOURCE, /\bicon:\s*["']/);
+  assert.doesNotMatch(CHAT_STYLE_SOURCE, /\.sr-chat-suggestion-icon/);
+  assert.match(WELCOME_SOURCE, /<span>\{suggestion\.label\}<\/span>/);
   assert.match(PANEL_SOURCE, /className="sr-chat-composer-dock"/);
+  assert.match(HOME_NEARBY_SOURCE, /model\.stationName \? \(/);
   assert.match(CHAT_STYLE_SOURCE, /scroll-snap-type: x mandatory/);
   assert.match(CHAT_STYLE_SOURCE, /scrollbar-width: none/);
   assert.match(CHAT_STYLE_SOURCE, /env\(safe-area-inset-bottom\)/);
@@ -172,12 +178,19 @@ test("mobile suggestions use animated transit glyphs and a focus-aware snap rail
   );
 });
 
+test("generated response text never renders a synthetic caret", () => {
+  assert.doesNotMatch(MESSAGE_SOURCE, /showCaret|sr-chat-caret/);
+  assert.doesNotMatch(PANEL_SOURCE, /showCaret/);
+  assert.doesNotMatch(ROUTE_VIEW_SOURCE, /sr-ai-reasoning__cursor/);
+  assert.doesNotMatch(CHAT_STYLE_SOURCE, /sr-chat-caret/);
+});
+
 test("generic working copy deliberates while semantic transit stages remain factual", () => {
   assert.match(WORKING_PANEL_SOURCE, /Finding viable routes/);
   assert.match(WORKING_PANEL_SOURCE, /Checking live service and current incidents/);
   assert.match(WORKING_PANEL_SOURCE, /Deliberating between the best options/);
-  assert.match(WORKING_PANEL_SOURCE, /<Shimmer[^>]*>[\s\S]*?Deliberating?/);
-  assert.doesNotMatch(WORKING_PANEL_SOURCE, /Thinking?/);
+  assert.match(WORKING_PANEL_SOURCE, /<Shimmer[^>]*>[\s\S]*?Deliberating…/);
+  assert.doesNotMatch(WORKING_PANEL_SOURCE, /Thinking…/);
   assert.match(
     MESSAGE_SOURCE,
     /aria-label=\{isFindingRoutes \? "Searching for the best route" : "Deliberating"\}/,

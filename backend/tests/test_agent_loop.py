@@ -25,6 +25,7 @@ import unittest
 from unittest.mock import patch
 
 from app.services.agent import session as session_module
+from app.services.agent import trip_state as trip_state_module
 from app.services.agent.tools import ToolContext, ToolResult, ToolSpec
 from app.services.agent import events as agent_events
 from app.utils import cache
@@ -86,6 +87,48 @@ async def _fake_plan_trip_tool(tool_input, ctx):
         summary="found 1 route",
         events=[event],
         session_route_cards=[{"card_id": "rc_test0001", "role": "recommended", "lines": ["Q"], "eta_minutes": 20}],
+    )
+
+
+async def _fake_prepare_route_options_tool(tool_input, ctx):
+    return ToolResult(
+        ok=True,
+        data={
+            "candidate_set_id": "cs_test_only",
+            "route_status": "good",
+            "presentation_allowed": True,
+            "candidates": [
+                {
+                    "candidate_id": "cd_test_only",
+                    "duration_minutes": 20,
+                    "transfers": 0,
+                    "transit_lines": ["Q"],
+                }
+            ],
+        },
+        summary="prepared one route option",
+    )
+
+
+async def _fake_present_route_tool(tool_input, ctx):
+    event = agent_events.RouteCardEvent(
+        card_id="rc_conversational",
+        turn_id=ctx.turn_id,
+        role="recommended",
+        origin={"label": "A", "lat": 40.7, "lng": -73.9},
+        destination={"label": "B", "lat": 40.8, "lng": -74.0},
+        summary={"eta_minutes": 20, "transfers": 0, "lines": ["Q"], "reason": "fits"},
+        route=[{"type": "SUBWAY", "route_id": "Q"}],
+        alerts=[],
+    )
+    return ToolResult(
+        ok=True,
+        data={"passenger_explanation": "Take the Q; it is the best fit."},
+        summary="presented one route",
+        events=[event],
+        session_route_cards=[
+            {"card_id": "rc_conversational", "role": "recommended", "lines": ["Q"], "eta_minutes": 20}
+        ],
     )
 
 
@@ -170,12 +213,46 @@ async def _fake_poi_tool(tool_input, ctx):
     )
 
 
+async def _fake_search_local_places_tool(tool_input, ctx):
+    return ToolResult(
+        ok=True,
+        data={
+            "discovery_set_id": "ds_test_only",
+            "places": [
+                {
+                    "place_id": "pl_di_fara",
+                    "ordinal": 1,
+                    "name": "Di Fara Pizza",
+                    "neighborhood": "Brooklyn",
+                    "category": "pizza",
+                    "open_status": "open",
+                    "baseline_score": 0.9,
+                    "address": "1424 Av J",
+                }
+            ],
+        },
+        summary="found one grounded place",
+    )
+
+
 def _test_registry() -> dict[str, ToolSpec]:
     return {
         "ok_tool": ToolSpec(schema={"name": "ok_tool"}, executor=_fake_ok_tool, label_fn=lambda i: "Doing the thing…", timeout_s=5.0),
         "fail_tool": ToolSpec(schema={"name": "fail_tool"}, executor=_fake_fail_tool, label_fn=lambda i: "Doing the failing thing…", timeout_s=5.0),
         "slow_tool": ToolSpec(schema={"name": "slow_tool"}, executor=_fake_slow_tool, label_fn=lambda i: "Doing the slow thing…", timeout_s=0.05),
         "plan_trip": ToolSpec(schema={"name": "plan_trip"}, executor=_fake_plan_trip_tool, label_fn=lambda i: "Finding routes…", timeout_s=5.0),
+        "prepare_route_options": ToolSpec(
+            schema={"name": "prepare_route_options"},
+            executor=_fake_prepare_route_options_tool,
+            label_fn=lambda i: "Preparing routes…",
+            timeout_s=5.0,
+        ),
+        "present_route": ToolSpec(
+            schema={"name": "present_route"},
+            executor=_fake_present_route_tool,
+            label_fn=lambda i: "Presenting the route…",
+            timeout_s=5.0,
+        ),
         "lookup_arrivals": ToolSpec(
             schema={"name": "lookup_arrivals"},
             executor=_fake_arrivals_tool,
@@ -188,7 +265,31 @@ def _test_registry() -> dict[str, ToolSpec]:
             label_fn=lambda i: "Finding places",
             timeout_s=5.0,
         ),
+        "search_local_places": ToolSpec(
+            schema={"name": "search_local_places"},
+            executor=_fake_search_local_places_tool,
+            label_fn=lambda i: "Finding places",
+            timeout_s=5.0,
+        ),
+        "get_place_details": ToolSpec(
+            schema={"name": "get_place_details"},
+            executor=_fake_search_local_places_tool,
+            label_fn=lambda i: "Checking place details",
+            timeout_s=5.0,
+        ),
     }
+
+
+def _offered_schemas_for_registry(registry: dict) -> list[dict]:
+    """Explicit offered surface for one fake-registry mechanics run.
+
+    Loop-mechanics tests inject fake ``ToolSpec`` executors through
+    ``_AgentLoopHelpers._run(tool_registry=...)``. Offering the injected
+    registry's own schemas on that run makes scripted fake tools genuinely
+    offered instead of bypassing the per-turn allowlist boundary.
+    """
+
+    return [spec.schema for spec in registry.values()]
 
 
 class _AgentLoopHelpers:
@@ -216,9 +317,27 @@ class _AgentLoopHelpers:
             # between unrelated tests.
             session_id = secrets.token_hex(8)
 
-        patcher = patch.object(self.loop, "TOOL_REGISTRY", tool_registry) if tool_registry is not None else None
-        if patcher is not None:
-            patcher.start()
+        patcher = (
+            patch.object(self.loop, "TOOL_REGISTRY", tool_registry)
+            if tool_registry is not None
+            else None
+        )
+        intent_patcher = (
+            patch.object(
+                self.loop,
+                "_tools_for_intent",
+                lambda *_args, **_kwargs: _offered_schemas_for_registry(
+                    tool_registry
+                ),
+            )
+            if tool_registry is not None
+            else None
+        )
+        active_patchers = [
+            active for active in (patcher, intent_patcher) if active is not None
+        ]
+        for active in active_patchers:
+            active.start()
         events_out = []
         try:
             async for event in self.loop.run_agent_turn(
@@ -235,8 +354,8 @@ class _AgentLoopHelpers:
             ):
                 events_out.append(event)
         finally:
-            if patcher is not None:
-                patcher.stop()
+            for active in active_patchers:
+                active.stop()
         return events_out, session
 
 
@@ -295,6 +414,13 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn("rc_b87e6f1a", session["history"][-1]["text"])
         self.assertNotIn("**", session["history"][-1]["text"])
+
+    def test_opaque_candidate_ids_do_not_reach_rider_prose(self):
+        sanitized = self.loop._sanitize_rider_text(
+            "Selected cd_test_only from cs_test_only."
+        )
+        self.assertNotIn("cd_test_only", sanitized)
+        self.assertNotIn("cs_test_only", sanitized)
 
     async def test_done_last_even_after_upstream_model_error(self):
         events_out, _ = await self._run([{"raise": True}])
@@ -457,7 +583,7 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(len(self.loop.client.messages.calls), 1)
 
-    async def test_explicit_route_request_is_injected_into_plan_trip(self):
+    async def test_explicit_route_request_is_injected_into_route_preparation(self):
         trace = self.loop.TurnTrace()
         rounds = [
             {
@@ -482,6 +608,87 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(trace.tool_calls[0][1]["required_route_ids"], ["Q"])
 
+    async def test_negative_route_request_injects_exclusions_not_required(self):
+        trace = self.loop.TurnTrace()
+        _discard_id, session = session_module.new_session()
+        session["active_trip"] = {"card_id": "rc_active", "role": "recommended"}
+        trip_state_module.update_trip_state(
+            session,
+            origin="Home",
+            destination="Work",
+            active_candidate_set_id="cs_active",
+            selected_candidate_id="cd_active",
+        )
+        rounds = [
+            {
+                "tool_use": [
+                    {
+                        "id": "tu_1",
+                        "name": "prepare_route_options",
+                        # The model omits what_if; the server must still
+                        # recognize the what-if turn from the rider message
+                        # and keep preparation isolated from active state.
+                        "input": {"destination": "Coney Island"},
+                    }
+                ],
+                "stop_reason": "tool_use",
+            },
+            {"text": ["OK."], "stop_reason": "end_turn"},
+        ]
+
+        _events, session = await self._run(
+            rounds,
+            message="What if I avoid the Q?",
+            session=session,
+            session_id="sess-what-if-avoid-q",
+            tool_registry=_test_registry(),
+            trace=trace,
+        )
+
+        tool_call = trace.tool_calls[0][1]
+        self.assertTrue(tool_call["what_if"])
+        self.assertEqual(tool_call["excluded_route_ids"], ["Q"])
+        self.assertNotIn("required_route_ids", tool_call)
+        # A what-if exclusion is temporary and never becomes an active slot.
+        self.assertNotIn(
+            "excluded_route_ids",
+            ((session.get("slots") or {}).get("constraints") or {}),
+        )
+        # Server-enforced what-if isolation keeps active candidate/trip state.
+        state = trip_state_module.get_trip_state(session)
+        self.assertEqual(state["active_candidate_set_id"], "cs_active")
+        self.assertEqual(state["selected_candidate_id"], "cd_active")
+        self.assertEqual(session["active_trip"]["card_id"], "rc_active")
+
+    async def test_active_route_exclusion_persists_across_followups(self):
+        trace = self.loop.TurnTrace()
+        rounds = [
+            {
+                "tool_use": [
+                    {
+                        "id": "tu_1",
+                        "name": "prepare_route_options",
+                        "input": {"destination": "Coney Island"},
+                    }
+                ],
+                "stop_reason": "tool_use",
+            },
+            {"text": ["OK."], "stop_reason": "end_turn"},
+        ]
+
+        _events, session = await self._run(
+            rounds,
+            message="Avoid the Q",
+            tool_registry=_test_registry(),
+            trace=trace,
+        )
+
+        self.assertEqual(trace.tool_calls[0][1]["excluded_route_ids"], ["Q"])
+        self.assertEqual(
+            session["slots"]["constraints"]["excluded_route_ids"],
+            ["Q"],
+        )
+
     async def test_intent_tool_profiles_stay_within_provider_schema_limit(self):
         def optional_parameter_count(schema):
             if not schema:
@@ -501,12 +708,44 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         cases = (
             (
                 "Plan a trip to Coney Island with less walking",
-                {"plan_trip", "accessibility_status", "web_search"},
+                {
+                    "get_place_details",
+                    "prepare_route_options",
+                    "present_route",
+                    "accessibility_status",
+                },
+            ),
+            (
+                "route me there please",
+                {
+                    "get_place_details",
+                    "prepare_route_options",
+                    "present_route",
+                    "accessibility_status",
+                },
             ),
             ("When is the next Q train?", {"lookup_arrivals"}),
             (
                 "Find a good pizza place",
-                {"poi_search", "plan_trip", "accessibility_status", "web_search"},
+                {
+                    "search_local_places",
+                    "get_place_details",
+                    "prepare_route_options",
+                    "present_route",
+                    "accessibility_status",
+                    "web_search",
+                },
+            ),
+            (
+                "lets get some L'Industrie now",
+                {
+                    "search_local_places",
+                    "get_place_details",
+                    "prepare_route_options",
+                    "present_route",
+                    "accessibility_status",
+                    "web_search",
+                },
             ),
             (
                 "Are there events at Barclays Center tonight?",
@@ -516,27 +755,39 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
             ),
             (
                 "How much is the subway fare?",
-                {
-                    "transit_snapshot",
-                    "event_lookup",
-                    "lookup_arrivals",
-                    "accessibility_status",
-                    "lookup_facts",
-                    "web_search",
-                },
+                {"lookup_facts"},
             ),
             ("Hello", set()),
         )
         for message, expected_tools in cases:
             with self.subTest(message=message):
                 parsed_intent = self.loop.intelligence.parse_intent(message)
-                schemas = self.loop._tools_for_intent(parsed_intent)
+                schemas = self.loop._tools_for_intent(
+                    parsed_intent, message=message
+                )
                 total = sum(
                     optional_parameter_count(schema.get("input_schema"))
                     for schema in schemas
                 )
-                self.assertLessEqual(total, 16)
-                self.assertLessEqual(len(schemas), 6)
+                # Repository compactness budget, not a provider hard maximum.
+                # Measured optional-parameter counts: route_planning 23
+                # (prepare_route_options 17, get_place_details 4,
+                # present_route 1, accessibility_status 1);
+                # destination_discovery 26 (the same 23 plus
+                # search_local_places 3 and web_search 0);
+                # transit-question facets are now smaller than the route
+                # profile and are asserted exactly below. The
+                # excluded_route_ids hard-constraint parameter on
+                # prepare_route_options is the +1 that raised both budgets
+                # from 22/25; every parameter stays explicit and strict.
+                schema_limit = 26 if parsed_intent.intent == "destination_discovery" else 23
+                self.assertLessEqual(total, schema_limit)
+                tool_limit = (
+                    6
+                    if parsed_intent.intent == "destination_discovery"
+                    else 4
+                )
+                self.assertLessEqual(len(schemas), tool_limit)
                 self.assertEqual(
                     expected_tools,
                     {schema["name"] for schema in schemas},
@@ -551,8 +802,297 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             {schema["name"] for schema in schemas},
-            {"plan_trip", "accessibility_status", "web_search"},
+            {
+                "get_place_details",
+                "prepare_route_options",
+                "present_route",
+                "accessibility_status",
+            },
         )
+
+    async def test_venue_crowd_window_is_transit_question_only(self):
+        transit_question = self.loop.intelligence.parse_intent(
+            "Is there a concert at Barclays tonight?"
+        )
+        transit_names = {
+            schema["name"]
+            for schema in self.loop._tools_for_intent(
+                transit_question,
+                message="Is there a concert at Barclays tonight?",
+            )
+        }
+        self.assertIn("venue_crowd_window", transit_names)
+        self.assertIn("event_lookup", transit_names)
+        for parsed in (
+            self.loop.intelligence.ParsedIntent(
+                intent="route_planning", avoid_crowds=False
+            ),
+            self.loop.intelligence.ParsedIntent(
+                intent="destination_discovery", avoid_crowds=False
+            ),
+        ):
+            with self.subTest(intent=parsed.intent):
+                names = {
+                    schema["name"] for schema in self.loop._tools_for_intent(parsed)
+                }
+                self.assertNotIn("venue_crowd_window", names)
+                self.assertNotIn("plan_trip", names)
+                self.assertNotIn("poi_search", names)
+
+    async def test_conversational_route_prepares_compares_and_presents_once(self):
+        trace = self.loop.TurnTrace()
+        events_out, session = await self._run(
+            [
+                {
+                    "tool_use": [
+                        {
+                            "id": "prepare-1",
+                            "name": "prepare_route_options",
+                            "input": {"destination": "Coney Island"},
+                        }
+                    ],
+                    "stop_reason": "tool_use",
+                },
+                {
+                    "tool_use": [
+                        {
+                            "id": "present-1",
+                            "name": "present_route",
+                            "input": {"candidate_id": "cd_test_only"},
+                        }
+                    ],
+                    "stop_reason": "tool_use",
+                },
+                {"text": ["This must not be requested."], "stop_reason": "end_turn"},
+            ],
+            message="Plan a route to Coney Island",
+            tool_registry=_test_registry(),
+            trace=trace,
+        )
+
+        self.assertEqual(
+            [name for name, _tool_input in trace.tool_calls],
+            ["prepare_route_options", "present_route"],
+        )
+        self.assertEqual(len(self.loop.client.messages.calls), 2)
+        route_cards = [event for event in events_out if event.type == "route_card"]
+        self.assertEqual([event.role for event in route_cards], ["recommended"])
+        self.assertEqual(len(session["route_cards"]), 1)
+        # The harness explicitly offers the injected fake-registry schemas;
+        # the real route-planning surface (which never offers the legacy
+        # REST plan_trip) is asserted on the real _tools_for_intent path.
+        self.assertEqual(
+            {schema["name"] for schema in self.loop.client.messages.calls[0]["tools"]},
+            set(_test_registry()),
+        )
+
+    async def test_route_rounds_keep_the_selected_outer_model(self):
+        rounds = [
+            {
+                "tool_use": [
+                    {
+                        "id": "prepare-1",
+                        "name": "prepare_route_options",
+                        "input": {"destination": "Coney Island"},
+                    }
+                ],
+                "stop_reason": "tool_use",
+            },
+            {
+                "tool_use": [
+                    {
+                        "id": "present-1",
+                        "name": "present_route",
+                        "input": {"candidate_id": "cd_test_only"},
+                    }
+                ],
+                "stop_reason": "tool_use",
+            },
+        ]
+        for mode in ("auto", "quick"):
+            with self.subTest(mode=mode):
+                trace = self.loop.TurnTrace()
+                await self._run(
+                    rounds,
+                    message="Plan a route to Coney Island",
+                    response_presentation=mode,
+                    tool_registry=_test_registry(),
+                    trace=trace,
+                )
+                expected_model = self.loop.agent_policy.policy_for_mode(mode).model
+                self.assertEqual(
+                    [call["model"] for call in self.loop.client.messages.calls],
+                    [expected_model, expected_model],
+                )
+                self.assertEqual(
+                    [name for name, _tool_input in trace.tool_calls],
+                    ["prepare_route_options", "present_route"],
+                )
+
+    async def test_what_if_preview_stays_temporary_until_a_later_acceptance(self):
+        _discard_id, session = session_module.new_session()
+        session["active_trip"] = {"card_id": "rc_active", "role": "recommended"}
+        trip_state_module.update_trip_state(
+            session,
+            origin="Home",
+            destination="Work",
+            active_candidate_set_id="cs_active",
+            selected_candidate_id="cd_active",
+        )
+        candidate_set_id = "cs_what_if"
+        candidate_id = "cd_what_if"
+
+        async def prepare_what_if(tool_input, ctx):
+            self.assertTrue(tool_input.get("what_if"))
+            trip_state_module.bind_temporary_candidate_set(
+                ctx.session,
+                candidate_set_id,
+                base_candidate_set_id="cs_active",
+            )
+            return ToolResult(
+                ok=True,
+                data={
+                    "candidate_set_id": candidate_set_id,
+                    "route_status": "good",
+                    "presentation_allowed": True,
+                    "candidates": [{"candidate_id": candidate_id}],
+                },
+                summary="prepared temporary route",
+            )
+
+        async def present_what_if(tool_input, ctx):
+            self.assertEqual(tool_input.get("candidate_id"), candidate_id)
+            commit = tool_input.get("commit_scenario") is True
+            if commit:
+                trip_state_module.commit_scenario(
+                    ctx.session,
+                    candidate_set_id=candidate_set_id,
+                    candidate_id=candidate_id,
+                    tool_input={"origin": "Home", "destination": "Airport"},
+                )
+            else:
+                trip_state_module.bind_temporary_selected_candidate(
+                    ctx.session,
+                    candidate_id,
+                )
+            event = agent_events.RouteCardEvent(
+                card_id="rc_what_if",
+                turn_id=ctx.turn_id,
+                role="recommended",
+                origin={"label": "Home", "lat": 40.7, "lng": -73.9},
+                destination={"label": "Airport", "lat": 40.64, "lng": -73.78},
+                summary={
+                    "eta_minutes": 45,
+                    "transfers": 1,
+                    "lines": ["A"],
+                    "reason": "fits",
+                },
+                route=[{"type": "SUBWAY", "route_id": "A"}],
+                alerts=[],
+            )
+            cards = (
+                [{"card_id": "rc_what_if", "role": "recommended"}]
+                if commit
+                else []
+            )
+            return ToolResult(
+                ok=True,
+                data={"passenger_explanation": "Take the A to the airport."},
+                summary="presented temporary route",
+                events=[event],
+                session_route_cards=cards,
+            )
+
+        registry = _test_registry()
+        registry["prepare_route_options"] = ToolSpec(
+            schema={"name": "prepare_route_options"},
+            executor=prepare_what_if,
+            label_fn=lambda _input: "Preparing routes",
+            timeout_s=5.0,
+        )
+        registry["present_route"] = ToolSpec(
+            schema={"name": "present_route"},
+            executor=present_what_if,
+            label_fn=lambda _input: "Presenting route",
+            timeout_s=5.0,
+        )
+
+        await self._run(
+            [
+                {
+                    "tool_use": [
+                        {
+                            "id": "prepare-what-if",
+                            "name": "prepare_route_options",
+                            "input": {
+                                "origin": "Home",
+                                "destination": "Airport",
+                                "what_if": True,
+                            },
+                        }
+                    ],
+                    "stop_reason": "tool_use",
+                },
+                {
+                    "tool_use": [
+                        {
+                            "id": "present-preview",
+                            "name": "present_route",
+                            "input": {"candidate_id": candidate_id},
+                        }
+                    ],
+                    "stop_reason": "tool_use",
+                },
+            ],
+            message="What if I went to the airport instead?",
+            session=session,
+            session_id="sess-what-if",
+            tool_registry=registry,
+        )
+        preview_state = trip_state_module.get_trip_state(session)
+        self.assertEqual(preview_state["active_candidate_set_id"], "cs_active")
+        self.assertEqual(preview_state["selected_candidate_id"], "cd_active")
+        self.assertEqual(preview_state["temporary_candidate_set_id"], candidate_set_id)
+        self.assertEqual(preview_state["temporary_selected_candidate_id"], candidate_id)
+        self.assertEqual(session["active_trip"]["card_id"], "rc_active")
+
+        await self._run(
+            [{"text": ["Keep my original trip."], "stop_reason": "end_turn"}],
+            message="Never mind",
+            session=session,
+            session_id="sess-what-if",
+            tool_registry=registry,
+        )
+        unchanged = trip_state_module.get_trip_state(session)
+        self.assertEqual(unchanged["active_candidate_set_id"], "cs_active")
+        self.assertEqual(unchanged["selected_candidate_id"], "cd_active")
+
+        await self._run(
+            [
+                {
+                    "tool_use": [
+                        {
+                            "id": "present-commit",
+                            "name": "present_route",
+                            "input": {
+                                "candidate_id": candidate_id,
+                                "commit_scenario": True,
+                            },
+                        }
+                    ],
+                    "stop_reason": "tool_use",
+                }
+            ],
+            message="Use the airport route instead",
+            session=session,
+            session_id="sess-what-if",
+            tool_registry=registry,
+        )
+        committed = trip_state_module.get_trip_state(session)
+        self.assertEqual(committed["active_candidate_set_id"], candidate_set_id)
+        self.assertEqual(committed["selected_candidate_id"], candidate_id)
+        self.assertIsNone(committed["temporary_candidate_set_id"])
+        self.assertEqual(session["active_trip"]["card_id"], "rc_what_if")
 
     async def test_quick_keeps_haiku_when_tool_output_requires_clarification(self):
         rounds = [
@@ -835,6 +1375,13 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(self.loop, "TOOL_REGISTRY", registry),
+            patch.object(
+                self.loop,
+                "_tools_for_intent",
+                lambda *_args, **_kwargs: _offered_schemas_for_registry(
+                    registry
+                ),
+            ),
             patch("builtins.print", side_effect=record_print) as printed,
         ):
             stream = self.loop.run_agent_turn(
@@ -1151,7 +1698,7 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
                                 "tool_use": [
                                     {
                                         "id": "poi-1",
-                                        "name": "poi_search",
+                                        "name": "search_local_places",
                                         "input": {
                                             "query": "pizza Brooklyn",
                                             "max_results": expected_limit,
@@ -1176,16 +1723,40 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
                     f"errors={[getattr(event, 'code', '') for event in events_out if event.type == 'error']} "
                     f"model_calls={len(self.loop.client.messages.calls)}",
                 )
-                self.assertEqual(trace.tool_calls[0][0], "poi_search")
+                self.assertEqual(trace.tool_calls[0][0], "search_local_places")
                 self.assertEqual(
                     trace.tool_calls[0][1]["max_results"],
                     expected_limit,
                 )
-                schemas = self.loop.client.messages.calls[0]["tools"]
+                # The harness explicitly offers the injected fake-registry
+                # schemas, so the real discovery surface (including the
+                # native web_search appended by the intent policy) is
+                # asserted on the real _tools_for_intent path.
+                self.assertIn(
+                    "search_local_places",
+                    {
+                        schema["name"]
+                        for schema in self.loop.client.messages.calls[0]["tools"]
+                    },
+                )
+                parsed_intent = self.loop.intelligence.parse_intent(
+                    "What is one of the best pizza places in Brooklyn?"
+                )
+                schemas = self.loop._tools_for_intent(
+                    parsed_intent,
+                    self.loop.agent_policy.policy_for_mode(mode),
+                )
                 names = {schema["name"] for schema in schemas}
                 self.assertEqual(
                     names,
-                    {"poi_search", "plan_trip", "accessibility_status", "web_search"},
+                    {
+                        "search_local_places",
+                        "get_place_details",
+                        "prepare_route_options",
+                        "present_route",
+                        "accessibility_status",
+                        "web_search",
+                    },
                 )
                 web_schema = next(
                     schema for schema in schemas if schema["name"] == "web_search"

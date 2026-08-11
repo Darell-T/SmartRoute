@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -11,6 +12,7 @@ from app.utils.stop_patterns import (  # noqa: E402
     StopPatternIndex,
     normalize_station_name,
 )
+from app.utils.gtfs_static import GTFSStaticData  # noqa: E402
 
 # Small synthetic network with an express/local branch + a reverse direction.
 #   Q local (nb):   A B C D E      (trip_count 100)
@@ -19,8 +21,8 @@ from app.utils.stop_patterns import (  # noqa: E402
 #   R:              B D             (trip_count 30)
 FIXTURE = {
     "stops": {
-        "A": {"name": "Alpha Av", "lat": 40.0, "lon": -73.0},
-        "B": {"name": "Beta St", "lat": 40.1, "lon": -73.1},
+        "A": {"name": "Alpha Av", "lat": 40.0, "lon": -73.0, "station_complex_id": "gtfs_transfer:A"},
+        "B": {"name": "Beta St", "lat": 40.1, "lon": -73.1, "station_complex_id": "gtfs_transfer:A"},
         "C": {"name": "Gamma Sq", "lat": 40.2, "lon": -73.2},
         "D": {"name": "Delta Pkwy", "lat": 40.3, "lon": -73.3},
         "E": {"name": "Epsilon Ctr", "lat": 40.4, "lon": -73.4},
@@ -106,6 +108,13 @@ class IndexTests(unittest.TestCase):
         )
         self.assertTrue(all(stop["route_ids"] == ["Q"] for stop in stops))
 
+    def test_route_and_location_indexes_resolve_directional_stop_ids(self):
+        self.assertEqual(self.idx.routes_for_stop("BN"), ["Q", "R"])
+        locations = self.idx.locations_for_stops(["BN", "missing"])
+        self.assertEqual(locations["BN"]["stop_name"], "Beta St")
+        self.assertEqual(locations["BN"]["parent_station"], "B")
+        self.assertNotIn("missing", locations)
+
     def test_route_segment_exposes_canonical_boarding_identifiers(self):
         segment = self.idx.resolve_route_segment(
             "q",
@@ -121,6 +130,92 @@ class IndexTests(unittest.TestCase):
                 "direction_id": 0,
             },
         )
+
+    def test_identity_for_stop_parent_and_directional_child(self):
+        # A canonical parent id is not a platform; its directional child is.
+        self.assertEqual(
+            self.idx.identity_for_stop("A"),
+            {
+                "parent_station": "A",
+                "station_complex_id": "gtfs_transfer:A",
+                "is_platform": False,
+            },
+        )
+        self.assertEqual(
+            self.idx.identity_for_stop("AN"),
+            {
+                "parent_station": "A",
+                "station_complex_id": "gtfs_transfer:A",
+                "is_platform": True,
+            },
+        )
+        self.assertEqual(self.idx.identity_for_stop("AS"), self.idx.identity_for_stop("AN"))
+
+    def test_identity_for_stop_unknown_and_empty(self):
+        # Unknown ids degrade to unknown identity; no I/O and no fabrication.
+        self.assertEqual(
+            self.idx.identity_for_stop("Q05"),
+            {"parent_station": None, "station_complex_id": None, "is_platform": False},
+        )
+        self.assertEqual(
+            self.idx.identity_for_stop("Q05N"),
+            {"parent_station": None, "station_complex_id": None, "is_platform": True},
+        )
+        self.assertEqual(self.idx.identity_for_stop(None)["parent_station"], None)
+        self.assertEqual(self.idx.identity_for_stop("")["parent_station"], None)
+        self.assertFalse(self.idx.identity_for_stop(123)["is_platform"])
+
+    def test_identity_for_stop_singleton_has_no_component(self):
+        self.assertEqual(self.idx.identity_for_stop("C")["station_complex_id"], None)
+
+    def test_all_parent_stops_contract(self):
+        parents = self.idx.all_parent_stops()
+        self.assertEqual(
+            [stop["stop_id"] for stop in parents],
+            ["A", "B", "C", "D", "E"],
+        )
+        self.assertEqual(
+            parents[0],
+            {
+                "stop_id": "A",
+                "stop_name": "Alpha Av",
+                "stop_lat": 40.0,
+                "stop_lon": -73.0,
+            },
+        )
+
+    def test_route_ids_for_parent_stop_synthetic(self):
+        self.assertEqual(self.idx.route_ids_for_parent_stop("A"), ["Q"])
+        self.assertEqual(self.idx.route_ids_for_parent_stop("B"), ["Q", "R"])
+        self.assertEqual(self.idx.route_ids_for_parent_stop("unknown"), [])
+        # Deterministic across calls.
+        self.assertEqual(
+            self.idx.route_ids_for_parent_stop("B"),
+            self.idx.route_ids_for_parent_stop("B"),
+        )
+
+    def test_stop_locations_parent_and_directional(self):
+        locations = self.idx.stop_locations(["AN", "A", "unknown", None, ""])
+        self.assertEqual(
+            locations["AN"],
+            {
+                "stop_name": "Alpha Av",
+                "lat": 40.0,
+                "lng": -73.0,
+                "parent_station": "A",
+            },
+        )
+        self.assertEqual(
+            locations["A"],
+            {
+                "stop_name": "Alpha Av",
+                "lat": 40.0,
+                "lng": -73.0,
+                "parent_station": "",
+            },
+        )
+        self.assertNotIn("unknown", locations)
+        self.assertEqual(self.idx.stop_locations([]), {})
 
     def test_miss_unknown_name(self):
         rows, meta = self.idx.get_intermediate_stops_with_coords("Q", "Nowhere", "Epsilon Ctr")
@@ -142,6 +237,33 @@ class IndexTests(unittest.TestCase):
         self.assertTrue(meta["hit"])
         self.assertEqual(rows[0]["name"], "Alpha Av")
         self.assertEqual(rows[-1]["name"], "Delta Pkwy")
+
+
+class GTFSStaticMemoryTests(unittest.TestCase):
+    def setUp(self):
+        self.gtfs = GTFSStaticData()
+        self.gtfs.set_pattern_index(StopPatternIndex(FIXTURE))
+        self.gtfs._query = Mock(side_effect=AssertionError("unexpected Postgres query"))
+
+    def test_live_feed_static_lookups_never_query_postgres(self):
+        parents = self.gtfs.get_all_parent_stops()
+        routes = self.gtfs.get_route_ids_for_parent_stop("B")
+        children = self.gtfs.get_child_stop_ids("B")
+        locations = self.gtfs.get_stop_locations(["BN", "missing"])
+        trip_context = self.gtfs.get_trip_stop_context(["realtime-trip"])
+
+        self.assertEqual([row["stop_id"] for row in parents], ["A", "B", "C", "D", "E"])
+        self.assertEqual(routes, ["Q", "R"])
+        self.assertEqual(children, ["BN", "BS"])
+        self.assertEqual(locations["BN"]["lat"], 40.1)
+        self.assertEqual(trip_context, {})
+        self.gtfs._query.assert_not_called()
+
+    def test_unknown_indexed_stops_do_not_fall_back_to_postgres(self):
+        self.assertEqual(self.gtfs.get_route_ids_for_parent_stop("missing"), [])
+        self.assertEqual(self.gtfs.get_child_stop_ids("missing"), [])
+        self.assertEqual(self.gtfs.get_stop_locations(["missing"]), {})
+        self.gtfs._query.assert_not_called()
 
 
 class RealArtifactTests(unittest.TestCase):
@@ -183,6 +305,106 @@ class RealArtifactTests(unittest.TestCase):
         self.assertEqual(segment["origin_stop_id"], "D28")
         self.assertEqual(segment["destination_stop_id"], "D43")
         self.assertEqual(segment["direction_id"], 1)
+
+    @unittest.skipUnless(
+        (Path(__file__).resolve().parent.parent / "app" / "data" / "stop_patterns.json").exists(),
+        "stop_patterns.json not built",
+    )
+    def test_real_artifact_links_explicit_transfer_components(self):
+        idx = StopPatternIndex.load(self.ARTIFACT)
+        # 14 St-Union Sq parents (635/L03/R20) share one explicit component.
+        for member in ("635", "L03", "R20"):
+            self.assertEqual(
+                idx.identity_for_stop(member)["station_complex_id"],
+                "gtfs_transfer:635",
+            )
+        # Times Sq-42 St / Port Authority parents share one explicit component.
+        for member in ("127", "725", "902", "A27", "R16"):
+            self.assertEqual(
+                idx.identity_for_stop(member)["station_complex_id"],
+                "gtfs_transfer:127",
+            )
+        # 34 St-Penn Station parents 128 and A28 share a NAME but have no
+        # explicit transfer relationship: they must NOT share an identity.
+        self.assertEqual(idx.identity_for_stop("128")["station_complex_id"], None)
+        self.assertEqual(idx.identity_for_stop("A28")["station_complex_id"], None)
+
+    @unittest.skipUnless(
+        (Path(__file__).resolve().parent.parent / "app" / "data" / "stop_patterns.json").exists(),
+        "stop_patterns.json not built",
+    )
+    def test_real_artifact_transfer_component_metadata(self):
+        artifact = json.loads(Path(self.ARTIFACT).read_text())
+        meta = artifact["transfer_components"]
+        self.assertEqual(meta["count"], 35)
+        self.assertEqual(meta["member_stop_count"], 87)
+        self.assertEqual(meta["identity_prefix"], "gtfs_transfer")
+        self.assertEqual(meta["source"], "transfers")
+
+    @unittest.skipUnless(
+        (Path(__file__).resolve().parent.parent / "app" / "data" / "stop_patterns.json").exists(),
+        "stop_patterns.json not built",
+    )
+    def test_all_parent_stops_contract_real_artifact(self):
+        idx = StopPatternIndex.load(self.ARTIFACT)
+        parents = idx.all_parent_stops()
+        self.assertEqual(len(parents), 496)
+        self.assertEqual(
+            [stop["stop_id"] for stop in parents],
+            sorted(stop["stop_id"] for stop in parents),
+        )
+        for stop in parents:
+            self.assertEqual(
+                set(stop),
+                {"stop_id", "stop_name", "stop_lat", "stop_lon"},
+            )
+            self.assertIsInstance(stop["stop_name"], str)
+            self.assertIsInstance(stop["stop_lat"], float)
+            self.assertIsInstance(stop["stop_lon"], float)
+        r16 = next(stop for stop in parents if stop["stop_id"] == "R16")
+        self.assertEqual(r16["stop_name"], "Times Sq-42 St")
+
+    @unittest.skipUnless(
+        (Path(__file__).resolve().parent.parent / "app" / "data" / "stop_patterns.json").exists(),
+        "stop_patterns.json not built",
+    )
+    def test_route_ids_for_parent_stop_real_artifact(self):
+        idx = StopPatternIndex.load(self.ARTIFACT)
+        self.assertEqual(idx.route_ids_for_parent_stop("R16"), ["N", "Q", "R", "W"])
+        self.assertEqual(idx.route_ids_for_parent_stop("D28"), ["B", "Q"])
+        self.assertEqual(idx.route_ids_for_parent_stop("zzz"), [])
+        # Every artifact parent is served by at least one pattern.
+        self.assertTrue(
+            all(idx.route_ids_for_parent_stop(sid) for sid in idx.stops)
+        )
+        # Deterministic ordering across calls.
+        self.assertEqual(
+            idx.route_ids_for_parent_stop("R16"),
+            idx.route_ids_for_parent_stop("R16"),
+        )
+
+    @unittest.skipUnless(
+        (Path(__file__).resolve().parent.parent / "app" / "data" / "stop_patterns.json").exists(),
+        "stop_patterns.json not built",
+    )
+    def test_stop_locations_parent_and_directional_real_artifact(self):
+        idx = StopPatternIndex.load(self.ARTIFACT)
+        r16 = idx.stops["R16"]
+        locations = idx.stop_locations(["R16N", "R16", "D28S", "zzz"])
+        self.assertEqual(
+            locations["R16N"],
+            {
+                "stop_name": r16["name"],
+                "lat": r16["lat"],
+                "lng": r16["lon"],
+                "parent_station": "R16",
+            },
+        )
+        self.assertEqual(locations["R16"]["parent_station"], "")
+        self.assertEqual(locations["R16"]["lat"], r16["lat"])
+        self.assertEqual(locations["R16"]["lng"], r16["lon"])
+        self.assertEqual(locations["D28S"]["parent_station"], "D28")
+        self.assertNotIn("zzz", locations)
 
     @unittest.skipUnless(
         (Path(__file__).resolve().parent.parent / "app" / "data" / "stop_patterns.json").exists(),

@@ -194,3 +194,56 @@ class CrowdEvidenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status, "no_relevant_events")
         self.assertEqual(failures, [])
         self.assertFalse(search.await_args.kwargs["allow_live_search"])
+
+    async def test_caller_cancellation_cancels_and_drains_both_provider_tasks(self):
+        ticketmaster_started = asyncio.Event()
+        ticketmaster_cleaned_up = asyncio.Event()
+        grok_started = asyncio.Event()
+        grok_cleaned_up = asyncio.Event()
+
+        async def blocking_ticketmaster(*_args, **_kwargs):
+            ticketmaster_started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                ticketmaster_cleaned_up.set()
+
+        async def blocking_grok(*_args, **_kwargs):
+            grok_started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                grok_cleaned_up.set()
+
+        with (
+            patch.object(
+                crowd_evidence.event_crowd,
+                "collect_route_event_evidence",
+                new=blocking_ticketmaster,
+            ),
+            patch.object(
+                crowd_evidence.crowd_search,
+                "search_hotspots",
+                new=blocking_grok,
+            ),
+            # The shared deadline must not fire while the test cancels.
+            patch.object(crowd_evidence, "_LIVE_SEARCH_DEADLINE_S", 60.0),
+        ):
+            collect_task = asyncio.create_task(
+                crowd_evidence.collect(
+                    [_route()],
+                    _Ctx(),
+                    hotspot_hits=[_hit()],
+                    explicit_crowd_request=True,
+                    allow_live_search=True,
+                )
+            )
+            await ticketmaster_started.wait()
+            await grok_started.wait()
+            collect_task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await collect_task
+
+        self.assertTrue(collect_task.cancelled())
+        self.assertTrue(ticketmaster_cleaned_up.is_set())
+        self.assertTrue(grok_cleaned_up.is_set())

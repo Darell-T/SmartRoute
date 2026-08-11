@@ -485,7 +485,8 @@
   font-size: 15px;
 }
 
-.sr-itinerary-card__bus-glyph {
+.sr-itinerary-card__bus-glyph,
+.sr-itinerary-card__rail-glyph {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -500,6 +501,18 @@
 .sr-chat-tab[data-sr-theme="light"] .sr-itinerary-card__bus-glyph {
   color: #245da9;
   background: color-mix(in srgb, #5f8fd9 18%, transparent);
+}
+
+.sr-itinerary-card__rail-glyph {
+  color: rgba(255, 255, 255, 0.88);
+  background: rgba(255, 255, 255, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+}
+
+.sr-chat-tab[data-sr-theme="light"] .sr-itinerary-card__rail-glyph {
+  color: rgba(15, 16, 18, 0.82);
+  background: rgba(15, 16, 18, 0.07);
+  box-shadow: inset 0 0 0 1px rgba(15, 16, 18, 0.12);
 }
 
 .sr-itinerary-card__bus-route {
@@ -949,11 +962,17 @@
   grid-template-rows: 52px minmax(98px, 1fr) 60px 56px;
 }
 
+.sr-home-nearby[data-arrivals-state="outside_service_area"] {
+  min-height: 164px;
+  grid-template-rows: 52px minmax(112px, 1fr);
+}
+
 .sr-home-nearby__header,
 .sr-home-nearby__arrival,
 .sr-home-nearby__condition,
 .sr-home-nearby__issue,
-.sr-home-nearby__arrival-fallback {
+.sr-home-nearby__arrival-fallback,
+.sr-home-nearby__service-area {
   min-width: 0;
 }
 
@@ -1234,24 +1253,24 @@
 
 .sr-chat-suggestion-motion {
   min-width: 0;
-  width: max-content;
+  width: auto;
   max-width: 100%;
+  flex: 1 1 0;
 }
 
 .sr-chat-suggestion-pill {
-  height: 44px;
-  min-height: 44px;
-  width: max-content;
+  height: 58px;
+  min-height: 58px;
+  width: 100%;
   max-width: 100%;
   justify-content: flex-start;
-  gap: 10px;
-  padding: 0 15px;
+  padding: 0 18px;
   border: 1px solid color-mix(in srgb, var(--sr-chat-ink) 9%, transparent);
   border-radius: 18px;
   background: color-mix(in srgb, var(--sr-chat-surface) 58%, transparent);
   box-shadow: none;
   color: color-mix(in srgb, var(--sr-chat-ink) 82%, transparent);
-  font-size: 15px;
+  font-size: clamp(13px, 0.84vw, 15px);
   font-weight: 480;
   line-height: 1.4;
   text-align: left;
@@ -1261,24 +1280,14 @@
     border-color 160ms var(--sr-motion-ease);
 }
 
-.sr-chat-suggestion-icon {
-  width: 18px;
-  height: 18px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 18px;
-}
-
-.sr-chat-suggestion-icon > svg {
-  display: block;
-  width: 18px;
-  height: 18px;
-}
-
-.sr-chat-suggestion-icon--accessibility > svg {
-  transform: scale(1.28);
-  transform-origin: center;
+.sr-chat-suggestion-pill > span:last-child {
+  min-width: 0;
+  display: -webkit-box;
+  overflow: hidden;
+  line-height: 1.25;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .sr-chat-suggestion-pill:hover,
@@ -1448,17 +1457,6 @@
   line-height: 1.4;
 }
 
-.sr-chat-caret {
-  display: inline-block;
-  width: 2px;
-  height: 1em;
-  margin-left: 2px;
-  border-radius: 999px;
-  background: var(--sr-chat-ink-dim);
-  vertical-align: -2px;
-  animation: srReasoningCaret 0.9s steps(2, start) infinite;
-}
-
 @keyframes srChatBubbleIn {
   from {
     opacity: 0;
@@ -1473,7 +1471,6 @@
 @media (prefers-reduced-motion: reduce) {
   .sr-chat-assistant-response,
   .sr-chat-assistant-response__orb,
-  .sr-chat-caret,
   .sr-chat-bubble {
     animation: none;
     transition: none;
@@ -2385,13 +2382,13 @@ button.sr-chat-route-card {
   font-weight: 610;
   letter-spacing: -0.01em;
 }
+
 .sr-chat-working-panel__semantic-stage {
   display: inline-block;
   min-height: 1.45em;
   font-weight: 610;
   letter-spacing: -0.01em;
 }
-
 
 .sr-chat-arrivals-card__body {
   display: flex;
@@ -2871,6 +2868,22 @@ button.sr-chat-arrivals-card__footer {
   line-height: 1.4;
 }
 
+.sr-home-nearby__service-area {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 24px;
+  border-top: 1px solid var(--sr-chat-hairline);
+  color: var(--sr-chat-ink-dim);
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.sr-home-nearby__service-area svg {
+  flex: 0 0 auto;
+}
+
 .sr-chat-turn-error p {
   margin: 0;
 }
@@ -3164,7 +3177,7 @@ button.sr-chat-arrivals-card__footer {
   }
 
   .sr-chat-suggestion-motion {
-    flex: 0 0 clamp(176px, 54vw, 210px);
+    flex: 0 0 clamp(204px, 56vw, 220px);
     width: auto;
     scroll-snap-align: start;
     scroll-snap-stop: normal;
@@ -3178,17 +3191,16 @@ button.sr-chat-arrivals-card__footer {
     border-radius: 18px;
     background: rgba(255, 255, 255, 0.055);
     border-color: rgba(255, 255, 255, 0.09);
+    font-size: 13px;
   }
 
   .sr-chat-suggestion-pill > span:last-child {
     min-width: 0;
+    display: block;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .sr-chat-suggestion-icon {
-    flex: 0 0 auto;
+    -webkit-line-clamp: unset;
   }
 
   .sr-chat-tab[data-sr-theme="light"] .sr-chat-suggestion-pill {
@@ -3200,6 +3212,11 @@ button.sr-chat-arrivals-card__footer {
     width: 100%;
     min-width: 0;
     flex: 0 0 auto;
+  }
+
+  .sr-home-nearby[data-arrivals-state="outside_service_area"] {
+    min-height: 150px;
+    grid-template-rows: 42px minmax(108px, 1fr);
   }
 
   .sr-chat-composer-beam {
@@ -3248,6 +3265,12 @@ button.sr-chat-arrivals-card__footer {
   .sr-home-nearby__arrival,
   .sr-home-nearby__arrival-fallback {
     min-height: 66px;
+  }
+
+  .sr-home-nearby__service-area {
+    gap: 10px;
+    padding: 14px 16px;
+    font-size: 12px;
   }
 
   .sr-home-nearby__condition {

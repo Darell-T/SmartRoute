@@ -262,6 +262,7 @@ async def stream_live_feed(
     bus_task: asyncio.Task[BusUpdate] | None = None
     bus_task_generation: int | None = None
     location_generation = 0
+    refresh_signal: asyncio.Event | None = None
 
     async def send_bus_update(task: asyncio.Task[BusUpdate], generation: int) -> bool:
         try:
@@ -299,6 +300,7 @@ async def stream_live_feed(
         while True:
             finished_bus_task: asyncio.Task[BusUpdate] | None = None
             finished_bus_generation: int | None = None
+            network_refreshed = False
             if location is None:
                 try:
                     message = await deps.receive(websocket)
@@ -308,7 +310,9 @@ async def stream_live_feed(
             else:
                 if recv_task is None:
                     recv_task = asyncio.ensure_future(deps.receive(websocket))
-                refresh_task = asyncio.ensure_future(deps.refresh_event().wait())
+                if refresh_signal is None:
+                    refresh_signal = deps.refresh_event()
+                refresh_task = asyncio.ensure_future(refresh_signal.wait())
                 waiting = {recv_task, refresh_task}
                 if bus_task is not None:
                     waiting.add(bus_task)
@@ -323,6 +327,9 @@ async def stream_live_feed(
                 if bus_task is not None and bus_task in done:
                     finished_bus_task, bus_task = bus_task, None
                     finished_bus_generation, bus_task_generation = bus_task_generation, None
+                if refresh_task in done:
+                    network_refreshed = True
+                    refresh_signal = None
                 if recv_task in done:
                     finished, recv_task = recv_task, None
                     try:
@@ -365,9 +372,19 @@ async def stream_live_feed(
                     return
                 if message is None:
                     continue
-            if location is None or time.monotonic() - last_sent < 1:
+            if location is None:
                 continue
+            since_last_snapshot = time.monotonic() - last_sent
+            if since_last_snapshot < 1:
+                if not network_refreshed:
+                    continue
+                await asyncio.sleep(1 - since_last_snapshot)
             try:
+                # Capture the generation signal before reading the snapshot.
+                # If publication races with projection, the old signal is set
+                # and the socket immediately follows with the newer generation.
+                if refresh_signal is None:
+                    refresh_signal = deps.refresh_event()
                 snapshot = await deps.snapshot(
                     gtfs,
                     location[0],

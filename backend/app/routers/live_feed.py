@@ -123,7 +123,21 @@ async def live_feed(request: Request, payload: LiveFeedRequest):
 @router.get("/api/service-alerts")
 async def service_alerts(request: Request):
     gtfs = getattr(request.app.state, "gtfs", None)
-    return JSONResponse(await _service_alerts_payload(gtfs))
+    try:
+        return JSONResponse(await _service_alerts_payload(gtfs))
+    except Exception as exc:
+        print(f"[service_alerts] snapshot unavailable: {type(exc).__name__}")
+        return JSONResponse(
+            {
+                "alerts": [],
+                "updated_at": int(time.time()),
+                "active_count": 0,
+                "affected_route_count": 0,
+                "source": "mta",
+                "error": "service alerts temporarily unavailable",
+            },
+            status_code=503,
+        )
 
 
 def _attach_alert_stop_names(alerts: list[dict], gtfs) -> None:

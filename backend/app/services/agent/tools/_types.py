@@ -20,6 +20,7 @@ class ToolContext:
 
     gtfs: Any = None
     session: dict | None = None
+    session_id: str = ""
     turn_id: str = ""
     now_et: str = ""
     origin: dict | None = None

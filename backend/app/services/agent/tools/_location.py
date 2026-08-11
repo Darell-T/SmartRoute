@@ -15,9 +15,12 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import math
 import re
+from typing import Any
 
 from app.services.agent.tools._types import ToolContext
+from app.services.agent import profile as profile_module
 from app.utils import geo
 
 
@@ -115,6 +118,187 @@ class ResolvedPlace:
 _COORDINATE_RE = re.compile(r"^-?\d+\.?\d*,\s*-?\d+\.?\d*$")
 
 
+async def resolve_discovery_place(
+    place_id: str,
+    ctx: ToolContext,
+    *,
+    discovery_set_id: str | None = None,
+) -> tuple[ResolvedPlace | None, str | None]:
+    """Resolve an opaque discovery place id to its stored canonical identity.
+
+    Coordinates and the provider place id come from the server-owned discovery
+    record, never from a model-retyped label. Unknown, expired, or
+    cross-session references fail safely.
+    """
+
+    from app.services.agent import discovery_store
+    from app.services.agent import trip_state as trip_state_module
+
+    value = str(place_id or "").strip()
+    if not discovery_store.is_opaque_place_id(value):
+        return None, "place reference is incomplete"
+    session_id = str(getattr(ctx, "session_id", None) or "").strip()
+    if not session_id:
+        return None, "session is required to resolve a place reference"
+    session = ctx.session if isinstance(ctx.session, dict) else {}
+    state = trip_state_module.get_trip_state(session)
+    set_id = str(
+        discovery_set_id or state.get("active_discovery_set_id") or ""
+    ).strip() or None
+    place, error = discovery_store.resolve_place_reference(
+        session_id=session_id,
+        discovery_set_id=set_id,
+        place_id=value,
+    )
+    if error or place is None:
+        return None, error or "place reference is unknown"
+    try:
+        latitude = float(place["latitude"])
+        longitude = float(place["longitude"])
+    except (TypeError, KeyError, ValueError):
+        return None, "stored place coordinates are unavailable"
+    if not (math.isfinite(latitude) and math.isfinite(longitude)):
+        return None, "stored place coordinates are invalid"
+    name = str(place.get("name") or "").strip()
+    return (
+        ResolvedPlace(
+            name=name or "Selected place",
+            latitude=latitude,
+            longitude=longitude,
+            source="discovery",
+            address=str(place.get("address") or "").strip() or None,
+            place_id=str(place.get("provider_place_id") or "").strip() or None,
+        ),
+        None,
+    )
+
+
+def _normalized_label(value: object) -> str:
+    return " ".join(str(value or "").casefold().split())
+
+
+def _active_discovery_set_id(tool_input: dict, ctx: ToolContext) -> str | None:
+    from app.services.agent import trip_state as trip_state_module
+
+    session = ctx.session if isinstance(ctx.session, dict) else {}
+    state = trip_state_module.get_trip_state(session)
+    return str(
+        tool_input.get("discovery_set_id") or state.get("active_discovery_set_id") or ""
+    ).strip() or None
+
+
+async def resolve_destination_reference(
+    tool_input: dict,
+    merged: dict,
+    ctx: ToolContext,
+) -> tuple[ResolvedPlace | None, str | None, str | None, str | None]:
+    """Resolve a server-owned destination place reference, if one is active.
+
+    Returns (resolved_place, opaque_place_id, error, discovery_set_id_used).
+    An explicit opaque destination_place_id in the tool input always wins
+    over any free-text destination, which is neither geocoded nor substituted.
+    Otherwise a session-selected place is applied only when the free-text
+    destination is empty or matches the stored name/address exactly -- a
+    server-side fallback for model drift; canonical routing still resolves
+    through the opaque id. ``discovery_set_id_used`` is the set that actually
+    participated in a successful canonical resolution (None otherwise) so
+    callers can bind it without ever rebinding an unused set string. When a
+    session-selected place exists but can no longer be resolved from its
+    active session-owned discovery set, a bounded domain error is returned
+    even when a non-empty destination label is also supplied -- a retyped
+    label never regains routing authority from a stale selection.
+    """
+
+    from app.services.agent import trip_state as trip_state_module
+
+    session = ctx.session if isinstance(ctx.session, dict) else {}
+    state = trip_state_module.get_trip_state(session)
+    set_id = _active_discovery_set_id(tool_input, ctx)
+    place_id = str(tool_input.get("destination_place_id") or "").strip()
+    if place_id:
+        place, error = await resolve_discovery_place(
+            place_id, ctx, discovery_set_id=set_id
+        )
+        if place is None:
+            return None, None, (
+                f"destination place reference is invalid: {error or 'unknown place'}"
+            ), None
+        return place, place_id, None, set_id
+    selected_place_id = str(state.get("selected_place_id") or "").strip()
+    if not selected_place_id:
+        return None, None, None, None
+    place, error = await resolve_discovery_place(
+        selected_place_id, ctx, discovery_set_id=set_id
+    )
+    if place is None:
+        destination_text = _normalized_label(merged.get("destination"))
+        if not destination_text:
+            return None, None, (
+                "the selected place is no longer available; search for it again"
+            ), None
+        # Finding B narrow boundary: with a non-empty destination label the
+        # bounded domain error fires only when the selected place cannot
+        # resolve from its OWN active session-owned discovery set -- a
+        # retyped label must never regain routing authority from a stale
+        # selection. An explicit tool-input set that merely does not contain
+        # the selected place is the documented "unused explicit set"
+        # contract: it never participates, the free-text destination
+        # proceeds, and no discovery context rebinds. A genuinely new
+        # destination is a new turn whose new-trip reset already cleared the
+        # obsolete selected-place context.
+        session_set_id = (
+            str(state.get("active_discovery_set_id") or "").strip() or None
+        )
+        if set_id == session_set_id:
+            return None, None, (
+                "the selected place is no longer available; search for it again"
+            ), None
+        return None, None, None, None
+    destination_text = _normalized_label(merged.get("destination"))
+    if not destination_text or destination_text == _normalized_label(place.name) or (
+        place.address and destination_text == _normalized_label(place.address)
+    ):
+        return place, selected_place_id, None, set_id
+    return None, None, None, None
+
+
+async def resolve_waypoint_places(
+    waypoints: list[str],
+    tool_input: dict,
+    ctx: ToolContext,
+) -> tuple[dict[str, ResolvedPlace], list[str], str | None, str | None]:
+    """Resolve opaque waypoint ids to stored identity; keep plain names as-is.
+
+    Returns (place_by_opaque_id, display_labels, error,
+    discovery_set_id_used). Display labels use the stored place name so opaque
+    ids never become rider-facing waypoint labels; the id-keyed map keeps
+    provider lookups on stored coordinates. ``discovery_set_id_used`` is the
+    set that actually resolved at least one opaque waypoint (None when no
+    opaque waypoint was resolved).
+    """
+
+    from app.services.agent import discovery_store
+
+    set_id = _active_discovery_set_id(tool_input, ctx)
+    resolved: dict[str, ResolvedPlace] = {}
+    labels: list[str] = []
+    for waypoint in waypoints:
+        if not discovery_store.is_opaque_place_id(waypoint):
+            labels.append(waypoint)
+            continue
+        place, error = await resolve_discovery_place(
+            waypoint, ctx, discovery_set_id=set_id
+        )
+        if place is None:
+            return {}, [], (
+                f"waypoint place reference is invalid: {error or 'unknown place'}"
+            ), None
+        resolved[waypoint] = place
+        labels.append(place.name)
+    used_set_id = set_id if resolved else None
+    return resolved, labels, None, used_set_id
+
+
 def known_place(raw_value: str) -> KnownPlace | None:
     return _KNOWN_PLACES.get(" ".join(str(raw_value or "").casefold().split()))
 
@@ -139,6 +323,13 @@ async def resolve_named_point(
     alias = known_place(value)
     if alias:
         return (alias.latitude, alias.longitude), None
+    saved, saved_error = profile_module.resolve_profile_place(ctx.session, value)
+    if saved_error:
+        return None, saved_error
+    if saved is not None:
+        return (float(saved["latitude"]), float(saved["longitude"])), None
+    if _normalized_label(value) in {"home", "work"}:
+        return None, f"saved {_normalized_label(value).title()} is unavailable"
     return await asyncio.to_thread(geo.geocode_address_with_reason, value)
 
 
@@ -166,6 +357,14 @@ async def resolve_named_place(
             None,
         )
 
+    from app.services.agent import discovery_store
+
+    if discovery_store.is_opaque_place_id(value):
+        place, error = await resolve_discovery_place(value, ctx)
+        if place is None:
+            return None, error or "unknown place reference"
+        return place, None
+
     alias = known_place(value)
     if alias:
         return (
@@ -179,6 +378,23 @@ async def resolve_named_place(
             ),
             None,
         )
+    saved, saved_error = profile_module.resolve_profile_place(ctx.session, value)
+    if saved_error:
+        return None, saved_error
+    if saved is not None:
+        return (
+            ResolvedPlace(
+                name=str(saved["label"]),
+                latitude=float(saved["latitude"]),
+                longitude=float(saved["longitude"]),
+                source="profile",
+                address=saved.get("address"),
+                place_id=saved.get("place_id"),
+            ),
+            None,
+        )
+    if _normalized_label(value) in {"home", "work"}:
+        return None, f"saved {_normalized_label(value).title()} is unavailable"
 
     coords, error = await asyncio.to_thread(geo.geocode_address_with_reason, value)
     if coords is None:
@@ -196,3 +412,16 @@ async def resolve_named_place(
         ),
         None,
     )
+
+
+__all__ = (
+    "KnownPlace",
+    "ResolvedPlace",
+    "canonical_display_name",
+    "known_place",
+    "resolve_discovery_place",
+    "resolve_destination_reference",
+    "resolve_named_place",
+    "resolve_named_point",
+    "resolve_waypoint_places",
+)

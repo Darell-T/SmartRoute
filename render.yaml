@@ -1,0 +1,31 @@
+# Render Blueprint: production infrastructure for SmartRoute.
+#
+# Only the incident-refresh cron service lives here. The FastAPI web service
+# is intentionally NOT declared in this file; it is managed separately so a
+# Blueprint sync cannot redefine or drift its configuration.
+#
+# The cron process runs `backend/scripts/run_incident_refresh.py` and writes
+# the shared incident index that the web service reads, so it requires the
+# same REDIS_URL. Cron expressions are evaluated in UTC; `0,30 * * * *` runs
+# at minute 0 and minute 30 of every hour.
+services:
+  - type: cron
+    name: smartroute-incident-refresh
+    runtime: python
+    rootDir: backend
+    schedule: "0,30 * * * *"
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python scripts/run_incident_refresh.py"
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.6
+      - key: SMARTROUTE_ENV
+        value: production
+      # Shared incident index + job lock/metadata. Without a real Redis the
+      # cron process would write an ephemeral in-memory cache the web service
+      # cannot see, so the CLI fails fast when this is missing.
+      - key: REDIS_URL
+        sync: false
+      - key: XAI_API_KEY
+        sync: false

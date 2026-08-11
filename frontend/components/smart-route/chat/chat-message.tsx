@@ -18,6 +18,7 @@ import type { ChatTheme } from "@/lib/use-chat-theme";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { ThinkingOrb } from "thinking-orbs";
 import { Message, MessageContent } from "@/components/prompt-kit/message";
+import { isRoutePreparationTool } from "@/lib/agent-route-tools";
 import { ChatWorkingPanel } from "./chat-working-panel";
 import { ChatRouteCardList } from "./chat-route-card";
 import { ChatArrivalsCard } from "./chat-arrivals-card";
@@ -45,7 +46,6 @@ function LocalArrivalsMessage({
 function AssistantMessage({
   turn,
   theme,
-  showCaret,
   selectedCardId,
   onSelectRouteCard,
   onSeeArrivalsOnMap,
@@ -54,7 +54,6 @@ function AssistantMessage({
 }: {
   turn: AssistantTurn;
   theme: ChatTheme;
-  showCaret: boolean;
   selectedCardId?: string | null;
   onSelectRouteCard?: (card: RouteCard) => void;
   onSeeArrivalsOnMap?: (arrivals: ArrivalsTurnPayload) => void;
@@ -65,7 +64,7 @@ function AssistantMessage({
   const reduceMotion = useReducedMotion() ?? false;
   const { displayedText, isCaughtUp } = useProgressiveText(turn.text, reduceMotion);
   const isFindingRoutes = turn.toolChips.some(
-    (chip) => chip.tool === "plan_trip" && chip.status === "running",
+    (chip) => isRoutePreparationTool(chip.tool) && chip.status === "running",
   );
   const orbState = isFindingRoutes ? "searching" : "composing";
   const showCards = !turn.isStreaming && hasText && isCaughtUp && turn.routeCards.length > 0;
@@ -134,9 +133,6 @@ function AssistantMessage({
           {hasText && (
             <p className="sr-chat-message__prose" aria-live="polite">
               {displayedText}
-              {showCaret && displayedText ? (
-                <span className="sr-chat-caret" aria-hidden="true" />
-              ) : null}
             </p>
           )}
           {showArrivals && turn.arrivals ? (
@@ -171,7 +167,6 @@ function AssistantMessage({
 export function ChatMessage({
   turn,
   theme,
-  showCaret = false,
   selectedCardId,
   onSelectRouteCard,
   onSeeArrivalsOnMap,
@@ -180,8 +175,6 @@ export function ChatMessage({
 }: {
   turn: ChatTurn;
   theme: ChatTheme;
-  /** True only for the last assistant turn while its stream is open. */
-  showCaret?: boolean;
   selectedCardId?: string | null;
   onSelectRouteCard?: (card: RouteCard) => void;
   onSeeArrivalsOnMap?: (arrivals: ArrivalsTurnPayload) => void;
@@ -202,7 +195,6 @@ export function ChatMessage({
     <AssistantMessage
       turn={turn}
       theme={theme}
-      showCaret={showCaret}
       selectedCardId={selectedCardId}
       onSelectRouteCard={onSelectRouteCard}
       onSeeArrivalsOnMap={onSeeArrivalsOnMap}

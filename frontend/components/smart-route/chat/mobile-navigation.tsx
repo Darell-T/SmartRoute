@@ -3,13 +3,8 @@
 import Image from "next/image";
 import { AnimatePresence, motion } from "motion/react";
 import {
-  Bookmark,
-  CircleHelp,
-  Lock,
   MessageCircle,
-  MessageSquareText,
   Moon,
-  Settings,
   SquarePen,
   Sun,
   type LucideIcon,
@@ -21,21 +16,32 @@ import type { ChatTheme } from "@/lib/use-chat-theme";
 
 type NavigationIcon = LucideIcon | ComponentType<SVGProps<SVGSVGElement>>;
 
+const FOCUSABLE_SELECTOR = [
+  "a[href]",
+  "button:not([disabled])",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  '[tabindex]:not([tabindex="-1"])',
+].join(",");
+
+function getFocusableElements(dialog: HTMLElement): HTMLElement[] {
+  return Array.from(dialog.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
+    (element) => !element.hidden,
+  );
+}
+
 function NavigationItem({
   label,
   description,
   icon: Icon,
   active = false,
-  disabled = false,
-  showLock = false,
   onClick,
 }: {
   label: string;
   description?: string;
   icon: NavigationIcon;
   active?: boolean;
-  disabled?: boolean;
-  showLock?: boolean;
   onClick?: () => void;
 }) {
   return (
@@ -43,12 +49,9 @@ function NavigationItem({
       type="button"
       className="sr-mobile-navigation__item"
       data-active={active ? "true" : "false"}
-      data-disabled={disabled ? "true" : "false"}
-      data-locked={showLock ? "true" : "false"}
       aria-current={active ? "page" : undefined}
-      aria-disabled={disabled || undefined}
-      onClick={disabled ? undefined : onClick}
-      whileTap={disabled ? undefined : { scale: 0.985 }}
+      onClick={onClick}
+      whileTap={{ scale: 0.985 }}
     >
       <span className="sr-mobile-navigation__item-icon" aria-hidden="true">
         <Icon width={22} height={22} strokeWidth={1.85} />
@@ -61,14 +64,6 @@ function NavigationItem({
           </span>
         ) : null}
       </span>
-      {showLock ? (
-        <Lock
-          className="sr-mobile-navigation__item-lock"
-          size={17}
-          strokeWidth={1.8}
-          aria-hidden="true"
-        />
-      ) : null}
     </motion.button>
   );
 }
@@ -92,6 +87,7 @@ export function MobileNavigation({
   onNewTrip: () => void;
   onToggleTheme: () => void;
 }) {
+  const dialogRef = useRef<HTMLElement>(null);
   const newTripButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -101,7 +97,29 @@ export function MobileNavigation({
       newTripButtonRef.current?.focus();
     });
     const handleKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") {
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab" || !dialogRef.current) return;
+
+      const focusableElements = getFocusableElements(dialogRef.current);
+      const firstElement = focusableElements[0];
+      const lastElement = focusableElements.at(-1);
+      if (!firstElement || !lastElement) {
+        event.preventDefault();
+        return;
+      }
+
+      const activeElement = document.activeElement;
+      const focusEscaped = !dialogRef.current.contains(activeElement);
+      if (event.shiftKey && (activeElement === firstElement || focusEscaped)) {
+        event.preventDefault();
+        lastElement.focus();
+      } else if (!event.shiftKey && (activeElement === lastElement || focusEscaped)) {
+        event.preventDefault();
+        firstElement.focus();
+      }
     };
     document.addEventListener("keydown", handleKeyDown);
     return () => {
@@ -119,6 +137,7 @@ export function MobileNavigation({
     <AnimatePresence initial={false}>
       {open ? (
         <motion.aside
+          ref={dialogRef}
           id="sr-mobile-navigation"
           className="sr-mobile-navigation"
           data-theme={theme}
@@ -145,6 +164,14 @@ export function MobileNavigation({
                 aria-hidden="true"
               />
               <span>SmartRoute</span>
+            </button>
+            <button
+              type="button"
+              className="sr-mobile-navigation__close"
+              aria-label="Close navigation"
+              onClick={onClose}
+            >
+              Close
             </button>
           </div>
 
@@ -176,20 +203,6 @@ export function MobileNavigation({
               active={activeTab === "livemap"}
               onClick={() => choose(onOpenLiveMap)}
             />
-            <NavigationItem
-              label="Favorites"
-              description="Coming soon"
-              icon={Bookmark}
-              disabled
-              showLock
-            />
-
-            <div className="sr-mobile-navigation__rule" aria-hidden="true" />
-
-            <NavigationItem label="Feedback" icon={MessageSquareText} disabled />
-            <NavigationItem label="Help" icon={CircleHelp} disabled />
-            <NavigationItem label="Settings" icon={Settings} disabled />
-
             <div className="sr-mobile-navigation__rule" aria-hidden="true" />
 
             <motion.button

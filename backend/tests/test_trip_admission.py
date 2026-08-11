@@ -7,6 +7,7 @@ from fastapi import HTTPException
 
 from app.routers import trips
 from app.services import admission
+from app.services.trips.direct_plan import DirectTripError
 
 
 PRINCIPAL = "v1.test-principal-opaque-123456"
@@ -38,39 +39,54 @@ class TripAdmissionTests(unittest.IsolatedAsyncioTestCase):
                 changed = {**step, key: value}
                 self.assertFalse(trips._enrichment_steps_are_bounded([changed]))
     async def test_missing_principal_rejects_before_route_provider(self):
-        with patch.object(trips, "get_transit_route", new_callable=AsyncMock) as route:
+        with patch.object(
+            trips.direct_plan, "plan_direct_trip", new_callable=AsyncMock
+        ) as plan:
             with self.assertRaises(HTTPException) as error:
                 await trips.plan_trip(_request(None), _payload())
         self.assertEqual(error.exception.status_code, 403)
-        route.assert_not_awaited()
+        plan.assert_not_awaited()
 
     async def test_admission_denial_rejects_before_route_provider(self):
-        with patch.object(trips.admission, "acquire", new_callable=AsyncMock, side_effect=admission.AdmissionDenied(429, "rate_limited", 1)), patch.object(
-            trips, "get_transit_route", new_callable=AsyncMock
-        ) as route:
+        with patch.object(
+            trips.admission,
+            "acquire",
+            new_callable=AsyncMock,
+            side_effect=admission.AdmissionDenied(429, "rate_limited", 1),
+        ), patch.object(
+            trips.direct_plan, "plan_direct_trip", new_callable=AsyncMock
+        ) as plan:
             with self.assertRaises(HTTPException) as error:
                 await trips.plan_trip(_request(), _payload())
         self.assertEqual(error.exception.status_code, 429)
-        route.assert_not_awaited()
+        plan.assert_not_awaited()
 
     async def test_admitted_provider_error_releases_lease_once(self):
         lease = admission.AdmissionLease(PRINCIPAL, "trip", "test-lease")
-        with patch.object(trips.admission, "acquire", new_callable=AsyncMock, return_value=lease), patch.object(
-            trips.admission, "release", new_callable=AsyncMock
-        ) as release, patch.object(
-            trips, "get_transit_route", new_callable=AsyncMock, side_effect=RuntimeError("Google Routes API unavailable")
-        ) as route:
+        with patch.object(
+            trips.admission, "acquire", new_callable=AsyncMock, return_value=lease
+        ), patch.object(trips.admission, "release", new_callable=AsyncMock) as release, patch.object(
+            trips.direct_plan,
+            "plan_direct_trip",
+            new_callable=AsyncMock,
+            side_effect=DirectTripError(502, "Upstream routing provider error"),
+        ) as plan:
             with self.assertRaises(HTTPException):
                 await trips.plan_trip(_request(), _payload())
-        route.assert_awaited_once()
+        plan.assert_awaited_once()
         release.assert_awaited_once_with(lease)
 
     async def test_cancellation_releases_lease_once(self):
         lease = admission.AdmissionLease(PRINCIPAL, "trip", "test-cancel")
-        with patch.object(trips.admission, "acquire", new_callable=AsyncMock, return_value=lease), patch.object(
+        with patch.object(
+            trips.admission, "acquire", new_callable=AsyncMock, return_value=lease
+        ), patch.object(
             trips.admission, "release", new_callable=AsyncMock
         ) as release, patch.object(
-            trips, "get_transit_route", new_callable=AsyncMock, side_effect=asyncio.CancelledError
+            trips.direct_plan,
+            "plan_direct_trip",
+            new_callable=AsyncMock,
+            side_effect=asyncio.CancelledError,
         ):
             with self.assertRaises(asyncio.CancelledError):
                 await trips.plan_trip(_request(), _payload())

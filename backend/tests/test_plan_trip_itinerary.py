@@ -454,11 +454,17 @@ class PlanTripItineraryTests(unittest.IsolatedAsyncioTestCase):
                 + "[/CANDIDATE_ANALYSIS]"
             )
 
-        advisor_responses = [
-            advisor_response("Take the Q to Joe's Pizza. Incident coverage is incomplete."),
-            advisor_response("Take the B to Union Square. Incident information was unavailable."),
-            advisor_response("The incident scan timed out."),
-        ]
+        advisor_responses = iter(
+            [
+                advisor_response("Take the Q to Joe's Pizza. Incident coverage is incomplete."),
+                advisor_response("Take the B to Union Square. Incident information was unavailable."),
+                advisor_response("The incident scan timed out."),
+            ]
+        )
+
+        async def stream_advisor(_payload, **_kwargs):
+            yield next(advisor_responses)
+
         with (
             patch.object(
                 plan_trip.trip_incidents,
@@ -473,8 +479,8 @@ class PlanTripItineraryTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch.object(
                 plan_trip.ai_advisor,
-                "collect_agent_recommendation",
-                new=AsyncMock(side_effect=advisor_responses),
+                "stream_agent_recommendation",
+                new=stream_advisor,
             ),
         ):
             result = await plan_trip.execute(
@@ -667,7 +673,7 @@ class PlanTripItineraryTests(unittest.IsolatedAsyncioTestCase):
 
         async def choose_b(payload, *, model, explanation_style):
             captured["payload"] = payload
-            return (
+            yield (
                 "The B avoids the event exposure on the Q. [ROUTE:1]"
                 "[CANDIDATE_ANALYSIS]"
                 + json.dumps(
@@ -703,7 +709,7 @@ class PlanTripItineraryTests(unittest.IsolatedAsyncioTestCase):
             ),
         ) as collect, patch.object(
             plan_trip.ai_advisor,
-            "collect_agent_recommendation",
+            "stream_agent_recommendation",
             new=choose_b,
         ):
             result = await plan_trip.execute(

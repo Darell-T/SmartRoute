@@ -109,6 +109,21 @@ test("route result excludes alternatives when the active canonical candidate has
   assert.doesNotMatch(markup, /candidate-4/);
 });
 
+test("chat Open on map handoff renders directions only without replanning UI", () => {
+  const markup = renderRouteView({
+    plan: { ...canonicalPlan, entryContext: "chat" },
+  });
+
+  assert.match(markup, /aria-label="Route directions"/);
+  assert.match(markup, /Wait at Fulton St/);
+  assert.match(markup, /Wall St/);
+  assert.doesNotMatch(markup, /Finding routes/);
+  assert.doesNotMatch(markup, /The A has the fastest verified arrival/);
+  assert.doesNotMatch(markup, /Recommended/);
+  assert.doesNotMatch(markup, /Other routes/);
+  assert.doesNotMatch(markup, /aria-expanded="false"/);
+});
+
 test("canonical transfer count wins while legacy display fallback remains stable", () => {
   const fallback = recommendedCandidateFromPlan(canonicalPlan);
   assert.deepEqual(fallback, { walkMinutes: 3, transfers: 0 });

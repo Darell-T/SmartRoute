@@ -51,6 +51,27 @@ class QuickEscalationPolicyTests(unittest.TestCase):
             reason_for_tool_result("event_lookup", failed, required=False)
         )
 
+    def test_required_discovery_and_route_tool_failures_escalate_generically(self):
+        for tool_name in ("search_local_places", "prepare_route_options", "present_route"):
+            with self.subTest(tool_name=tool_name):
+                failed = ToolResult(ok=False, error="provider unavailable")
+                self.assertEqual(
+                    reason_for_tool_result(tool_name, failed, required=True),
+                    "required_tool_failure",
+                )
+
+    def test_specific_markers_win_over_required_discovery_and_route_failure(self):
+        unresolved = ToolResult(ok=False, error="could not resolve the destination")
+        constrained = ToolResult(ok=False, error="no transit route found")
+        self.assertEqual(
+            reason_for_tool_result("search_local_places", unresolved, required=True),
+            "unresolved_place",
+        )
+        self.assertEqual(
+            reason_for_tool_result("prepare_route_options", constrained, required=True),
+            "mandatory_constraints_unsatisfied",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

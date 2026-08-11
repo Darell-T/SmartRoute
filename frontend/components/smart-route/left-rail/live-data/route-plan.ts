@@ -8,6 +8,7 @@ import {
 } from "./route-reason-copy";
 import {
   detailStepsFromCanonicalItinerary,
+  isTransitStep,
   mergeConsecutiveWalks,
   routeStepToRailStep,
   stripFromSteps,
@@ -35,9 +36,7 @@ export function buildPlan(
   nowMs = Date.now(),
   routeEntryContext: "chat" | "map_search" | "deep_link" | "restored" = "map_search",
 ): RoutePlan {
-  const transitStep = routeSteps?.find(
-    (step) => step.type === "SUBWAY" || step.type === "BUS",
-  );
+  const transitStep = routeSteps?.find(isTransitStep);
   const line = transitStep?.train_line || transitStep?.route_id || "";
   const merged = mergeConsecutiveWalks(routeSteps ?? []);
   const steps: RoutePlan["steps"] = merged.map(routeStepToRailStep);
@@ -100,9 +99,7 @@ export function buildPlan(
   // Transfers: prefer candidate score_breakdown (from itinerary.transfer_count
   // via agentRoutePlanFromCards). Recompute only when absent.
   // Recompute rule: transit-vehicle boardings minus one; walks never count.
-  const transitLegs = merged.filter(
-    (step) => step.type === "SUBWAY" || step.type === "BUS",
-  );
+  const transitLegs = merged.filter(isTransitStep);
   const fromCandidate = activeRouteCandidate?.score_breakdown?.transfers;
   const transferCount =
     typeof fromCandidate === "number" && Number.isFinite(fromCandidate)
@@ -113,8 +110,8 @@ export function buildPlan(
   // walk consumes the whole wait, it's simply "now".
   const firstWalkMinutes =
     merged[0]?.type === "WALK" &&
-    typeof merged[0].minutes_until_arrival === "number"
-      ? Math.max(0, Math.round(merged[0].minutes_until_arrival))
+    typeof merged[0].duration_minutes === "number"
+      ? Math.max(0, Math.round(merged[0].duration_minutes))
       : 0;
   const departsIn = transitStep?.minutes_until_train_arrives;
   const nextDepartureMinutes =
@@ -131,6 +128,7 @@ export function buildPlan(
   }
 
   return {
+    entryContext: routeEntryContext,
     headline: publicRecommendationText(switchHeadline) || defaultHeadline,
     rationale: !activeRouteCandidate
       ? "Nearby arrivals are live within a half-mile radius."

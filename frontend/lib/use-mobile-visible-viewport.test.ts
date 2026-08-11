@@ -32,6 +32,7 @@ test("visible viewport variables track iOS height and offset with one scheduled 
   } as unknown as HTMLElement;
 
   const cleanup = installMobileViewportVariables(targetWindow, root);
+  assert.equal(values.get("--visible-viewport-height"), "844px");
   assert.equal(values.get("--mobile-visible-height"), "844px");
   assert.equal(values.get("--mobile-viewport-offset-top"), "0px");
 
@@ -44,6 +45,7 @@ test("visible viewport variables track iOS height and offset with one scheduled 
   frames.delete(frameId);
   frame(0);
 
+  assert.equal(values.get("--visible-viewport-height"), "420px");
   assert.equal(values.get("--mobile-visible-height"), "420px");
   assert.equal(values.get("--mobile-viewport-offset-top"), "92px");
   assert.equal(values.get("--visual-viewport-height"), "420px");
@@ -69,6 +71,7 @@ test("visible viewport falls back to innerHeight when visualViewport is absent",
   } as unknown as HTMLElement;
 
   const cleanup = installMobileViewportVariables(targetWindow, root);
+  assert.equal(values.get("--visible-viewport-height"), "667px");
   assert.equal(values.get("--mobile-visible-height"), "667px");
   assert.equal(values.get("--mobile-viewport-offset-top"), "0px");
   cleanup();

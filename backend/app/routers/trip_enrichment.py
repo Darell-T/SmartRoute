@@ -66,7 +66,16 @@ def _enrichment_steps_are_bounded(steps: object) -> bool:
             not isinstance(step, dict)
             or set(step) - _STEP_KEYS
             or not isinstance(step.get("type"), str)
-            or step["type"] not in {"WALK", "SUBWAY", "BUS"}
+            or step["type"]
+            not in {
+                "WALK",
+                "SUBWAY",
+                "BUS",
+                "RAIL",
+                "TRAIN",
+                "LIGHT_RAIL",
+                "TRAM",
+            }
         ):
             return False
         for key, value in step.items():

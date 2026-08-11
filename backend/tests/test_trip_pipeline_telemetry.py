@@ -92,26 +92,25 @@ class TripPipelineTelemetryTests(unittest.IsolatedAsyncioTestCase):
         ):
             self.assertGreaterEqual(pipeline[field], 0)
 
-    async def test_incident_timeout_is_distinct_from_provider_failure(self):
-        async def slow_scan(*_args, **_kwargs):
-            await asyncio.sleep(1)
-
+    async def test_incident_index_failure_degrades_to_failed_without_failing_route(self):
         patch.object(
             plan_trip.trip_incidents,
             "scan_route_incidents",
-            side_effect=slow_scan,
+            new=AsyncMock(side_effect=RuntimeError("incident index unavailable")),
         ).start()
         ctx = self._ctx()
 
-        with patch.object(plan_trip, "AGENT_GROK_BUDGET_S", 0.001):
-            result = await plan_trip.execute(
-                {"origin": "user", "destination": "Central Park"},
-                ctx,
-            )
+        result = await plan_trip.execute(
+            {"origin": "user", "destination": "Central Park"},
+            ctx,
+        )
 
         self.assertTrue(result.ok)
-        self.assertEqual(ctx.telemetry["plan_trip"]["incident_status"], "timeout")
-        self.assertIs(ctx.telemetry["plan_trip"]["incident_cache_hit"], False)
+        pipeline = ctx.telemetry["plan_trip"]
+        self.assertEqual(pipeline["incident_status"], "failed")
+        self.assertIs(pipeline["incident_cache_hit"], False)
+        self.assertGreaterEqual(pipeline["incident_ms"], 0)
+        self.assertEqual(pipeline["advisor_status"], "complete")
 
     async def test_incident_duration_is_not_inflated_by_slower_event_evidence(self):
         async def slow_events(*_args, **_kwargs):
@@ -162,10 +161,16 @@ class TripPipelineTelemetryTests(unittest.IsolatedAsyncioTestCase):
                 }
             ),
         ).start()
+
+        async def failing_stream(_payload, **_kwargs):
+            raise RuntimeError("provider unavailable")
+            if False:  # pragma: no cover - make this an async generator
+                yield ""
+
         patch.object(
             plan_trip.ai_advisor,
-            "collect_agent_recommendation",
-            new=AsyncMock(side_effect=RuntimeError("provider unavailable")),
+            "stream_agent_recommendation",
+            side_effect=failing_stream,
         ).start()
         ctx = self._ctx()
 
@@ -181,6 +186,8 @@ class TripPipelineTelemetryTests(unittest.IsolatedAsyncioTestCase):
     async def test_advisor_timeout_records_timeout_fallback(self):
         async def slow_advisor(_payload, **_kwargs):
             await asyncio.sleep(1)
+            if False:  # pragma: no cover - make this an async generator
+                yield ""
 
         patch.object(
             plan_trip.trip_incidents,
@@ -194,7 +201,7 @@ class TripPipelineTelemetryTests(unittest.IsolatedAsyncioTestCase):
         ).start()
         patch.object(
             plan_trip.ai_advisor,
-            "collect_agent_recommendation",
+            "stream_agent_recommendation",
             side_effect=slow_advisor,
         ).start()
         ctx = self._ctx()
@@ -207,7 +214,88 @@ class TripPipelineTelemetryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(result.ok)
         self.assertEqual(ctx.telemetry["plan_trip"]["advisor_status"], "timeout")
-        self.assertIs(ctx.telemetry["plan_trip"]["advisor_fallback"], True)
+
+    async def test_phase_marks_are_recorded_without_sensitive_content(self):
+        patch.object(
+            plan_trip.trip_incidents,
+            "scan_route_incidents",
+            new=AsyncMock(
+                return_value={
+                    "incidents": [],
+                    "scan_metadata": {"status": "complete", "cache_hit": True},
+                }
+            ),
+        ).start()
+        ctx = self._ctx()
+
+        result = await plan_trip.execute(
+            {"origin": "user", "destination": "Central Park"},
+            ctx,
+        )
+
+        self.assertTrue(result.ok)
+        phases = ctx.telemetry.get("phases")
+        self.assertIsInstance(phases, dict)
+        for field in (
+            "place_resolution_complete_ms",
+            "google_routes_complete_ms",
+            "mta_context_complete_ms",
+            "incident_start_ms",
+            "incident_complete_ms",
+            "advisor_request_start_ms",
+            "enrichment_complete_ms",
+        ):
+            self.assertIn(field, phases)
+            self.assertGreaterEqual(phases[field], 0)
+        pipeline = ctx.telemetry["plan_trip"]
+        self.assertGreaterEqual(pipeline.get("selection_parse_ms", 0), 0)
+        emitted = turn_telemetry.emit_trip_pipeline_timing(
+            turn_id="t-phase",
+            stage_ms={"model_ms": 12.0, "total_ms": 99.0},
+            telemetry=ctx.telemetry,
+            first_route_card_ms=88.0,
+        )
+        self.assertIsNotNone(emitted)
+        blob = json.dumps(emitted)
+        self.assertNotIn("Central Park", blob)
+        self.assertNotIn("40.7", blob)
+        self.assertNotIn("prompt", blob.casefold())
+        self.assertIn("phases", emitted)
+
+    def test_safe_usage_extraction_ignores_missing_and_non_numeric_fields(self):
+        usage = type(
+            "Usage",
+            (),
+            {
+                "input_tokens": 11,
+                "output_tokens": "bad",
+                "cache_read_input_tokens": 3,
+                "thinking_tokens": None,
+            },
+        )()
+        safe = turn_telemetry.extract_safe_usage(usage)
+        self.assertEqual(safe, {"input_tokens": 11, "cache_read_input_tokens": 3})
+        self.assertEqual(turn_telemetry.extract_safe_usage(None), {})
+        self.assertEqual(turn_telemetry.extract_safe_usage({"input_tokens": 4}), {"input_tokens": 4})
+
+    def test_record_model_call_keeps_only_allowlisted_fields(self):
+        telemetry: dict = {}
+        turn_telemetry.record_model_call(
+            telemetry,
+            role="conversation",
+            provider="anthropic",
+            model="claude-sonnet-4-6",
+            duration_ms=12.4,
+            outcome="complete",
+            first_token_ms=3.2,
+            usage={"input_tokens": 9, "output_tokens": 2, "secret": "nope"},
+        )
+        call = telemetry["model_calls"][0]
+        self.assertEqual(call["model"], "claude-sonnet-4-6")
+        self.assertEqual(call["first_token_ms"], 3)
+        self.assertEqual(call["input_tokens"], 9)
+        self.assertEqual(call["output_tokens"], 2)
+        self.assertNotIn("secret", call)
 
     async def test_chained_trip_uses_conservative_status_aggregation(self):
         patch.object(
@@ -219,14 +307,30 @@ class TripPipelineTelemetryTests(unittest.IsolatedAsyncioTestCase):
                         "incidents": [],
                         "scan_metadata": {"status": "complete", "cache_hit": True},
                     },
-                    asyncio.TimeoutError(),
+                    RuntimeError("incident index unavailable"),
                 ]
             ),
         ).start()
+
+        responses = iter(
+            [
+                "[ROUTE:0][CANDIDATE_ANALYSIS]"
+                '{"selected_route_index":0,"candidate_analysis":[{"index":0,"is_recommended":true,"recommendation_reason":"ok"}]}'
+                "[/CANDIDATE_ANALYSIS]",
+                RuntimeError("advisor down"),
+            ]
+        )
+
+        async def stream_side_effect(_payload, **_kwargs):
+            item = next(responses)
+            if isinstance(item, Exception):
+                raise item
+            yield item
+
         patch.object(
             plan_trip.ai_advisor,
-            "collect_agent_recommendation",
-            new=AsyncMock(side_effect=["[ROUTE:0]", RuntimeError("advisor down")]),
+            "stream_agent_recommendation",
+            side_effect=stream_side_effect,
         ).start()
         ctx = self._ctx()
 
@@ -242,7 +346,7 @@ class TripPipelineTelemetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.ok)
         pipeline = ctx.telemetry["plan_trip"]
         self.assertEqual(pipeline["leg_count"], 2)
-        self.assertEqual(pipeline["incident_status"], "timeout")
+        self.assertEqual(pipeline["incident_status"], "failed")
         self.assertIs(pipeline["incident_cache_hit"], False)
         self.assertEqual(pipeline["advisor_status"], "failed")
         self.assertIs(pipeline["advisor_fallback"], True)

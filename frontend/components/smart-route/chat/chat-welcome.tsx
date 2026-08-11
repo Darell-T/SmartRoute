@@ -1,44 +1,15 @@
 "use client";
 
 import { motion, useReducedMotion } from "motion/react";
-import type {
-  ForwardRefExoticComponent,
-  HTMLAttributes,
-  KeyboardEvent,
-  RefAttributes,
-} from "react";
+import type { KeyboardEvent } from "react";
 import { useRef, useState } from "react";
 import { PromptSuggestion } from "@/components/prompt-kit/prompt-suggestion";
-import { AccessibilityIcon } from "@/components/ui/accessibility";
-import { AirplaneIcon } from "@/components/ui/airplane";
-import { WaypointsIcon } from "@/components/ui/waypoints";
 import { HomeNearYou } from "./home-near-you";
 import type { HomeNearbyModel } from "./near-you";
 
 export type ChatSuggestion = {
   label: string;
   query: string;
-  icon: "airplane" | "waypoints" | "accessibility";
-};
-
-interface AnimatedSuggestionIconHandle {
-  startAnimation: () => void;
-  stopAnimation: () => void;
-}
-
-type AnimatedSuggestionIcon = ForwardRefExoticComponent<
-  HTMLAttributes<HTMLDivElement> &
-    { size?: number } &
-    RefAttributes<AnimatedSuggestionIconHandle>
->;
-
-const SUGGESTION_ICONS: Record<
-  ChatSuggestion["icon"],
-  AnimatedSuggestionIcon
-> = {
-  airplane: AirplaneIcon,
-  waypoints: WaypointsIcon,
-  accessibility: AccessibilityIcon,
 };
 
 export function ChatWelcome({
@@ -133,19 +104,12 @@ function AnimatedSuggestion({
   reduceMotion: boolean;
   onSelect: (query: string) => void;
 }) {
-  const iconRef = useRef<AnimatedSuggestionIconHandle>(null);
-  const Icon = SUGGESTION_ICONS[suggestion.icon];
-
   return (
     <motion.div
       className="sr-chat-suggestion-motion"
       tabIndex={-1}
       whileHover={reduceMotion ? undefined : { y: -1 }}
       whileTap={reduceMotion ? undefined : { scale: 0.985 }}
-      onHoverStart={() => {
-        if (!reduceMotion) iconRef.current?.startAnimation();
-      }}
-      onHoverEnd={() => iconRef.current?.stopAnimation()}
       transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
     >
       <PromptSuggestion
@@ -155,12 +119,6 @@ function AnimatedSuggestion({
         aria-label={suggestion.query}
         onClick={() => onSelect(suggestion.query)}
       >
-        <Icon
-          ref={iconRef}
-          className={`sr-chat-suggestion-icon sr-chat-suggestion-icon--${suggestion.icon}`}
-          size={18}
-          aria-hidden="true"
-        />
         <span>{suggestion.label}</span>
       </PromptSuggestion>
     </motion.div>
