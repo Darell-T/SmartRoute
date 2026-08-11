@@ -21,6 +21,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import type { ToolChip as ToolChipData } from "@/lib/use-agent-chat";
+import { isRoutePreparationTool, isRouteResultTool } from "@/lib/agent-route-tools";
 
 const PROGRESS_COPY = {
   finding_routes: "Finding viable routes",
@@ -102,10 +103,10 @@ export function ChatWorkingPanel({
   const reduceMotion = useReducedMotion() ?? false;
   const hasStarted = everStreamed || toolChips.length > 0;
   const isFindingRoutes = toolChips.some(
-    (chip) => chip.tool === "plan_trip" && chip.status === "running",
+    (chip) => isRoutePreparationTool(chip.tool) && chip.status === "running",
   );
   const hasRouteResult = toolChips.some(
-    (chip) => chip.tool === "plan_trip" && chip.status === "ok",
+    (chip) => isRouteResultTool(chip.tool) && chip.status === "ok",
   );
   const progressLabel = progress?.status === "active" ? PROGRESS_COPY[progress.stage] : null;
   const routeFallbackLabel = isFindingRoutes ? "Finding viable routes" : null;

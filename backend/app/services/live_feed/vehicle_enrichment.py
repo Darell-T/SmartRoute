@@ -74,6 +74,14 @@ def _interpolate_stop_segment(start: dict, end: dict, progress: float):
     }
 
 
+def _segment_has_coordinates(start: dict, end: dict) -> bool:
+    return all(
+        isinstance(stop.get(axis), (int, float))
+        for stop in (start, end)
+        for axis in ("lat", "lng")
+    )
+
+
 def _attach_trip_segment(vehicle: dict, trip_stops: list[dict], arrival_lookup: dict[tuple[str, str], int], now: int):
     idx = _find_trip_stop_index(
         trip_stops,
@@ -101,6 +109,9 @@ def _attach_trip_segment(vehicle: dict, trip_stops: list[dict], arrival_lookup: 
         end = nxt
         progress = 0.0
     else:
+        return False
+
+    if not _segment_has_coordinates(start, end):
         return False
 
     estimate = _interpolate_stop_segment(start, end, progress)

@@ -51,7 +51,11 @@ def _log_fetch_summary(context: str, message: str):
 
 
 async def fetch_feeds_with_metadata(
-    routes: list, log_context: str | None = None, force_refresh: bool = False
+    routes: list,
+    log_context: str | None = None,
+    force_refresh: bool = False,
+    *,
+    cache_result: bool = True,
 ) -> list[dict]:
     from app.utils.cache import cache_get, cache_set
 
@@ -77,7 +81,11 @@ async def fetch_feeds_with_metadata(
     urls_to_fetch = []
 
     for feed_request in feed_requests:
-        cached = None if force_refresh else cache_get(feed_request["url"])
+        cached = (
+            None
+            if force_refresh
+            else cache_get(feed_request["url"], fail_open=True)
+        )
         if cached:
             results.append({
                 **feed_request,
@@ -108,7 +116,8 @@ async def fetch_feeds_with_metadata(
                     f"[mta_feed] feed {url} returned {response.status_code}",
                 )
                 continue
-            cache_set(url, response.content, 30)
+            if cache_result:
+                cache_set(url, response.content, 30, fail_open=True)
             results.append({
                 **feed_request,
                 "content": response.content,
@@ -166,6 +175,7 @@ def parse_bytes(rawBytes: bytes) -> list:
                     "route_id": route_id,
                     "trip_id": trip_id,
                     "stop_id": stop_id,
+                    "stop_sequence": stop.stop_sequence or None,
                     "arrival_time": stop.arrival.time if stop.arrival.time else None,
                     "delay": stop.arrival.delay,
                     "direction": direction,

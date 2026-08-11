@@ -41,6 +41,8 @@ backend/app/services/ai_advisor_system_prompt.txt
 # Common ignores
 node_modules/
 .next/
+.pnpm-store/
+/tmp/
 .DS_Store
 # TypeScript build info
 *.tsbuildinfo
@@ -102,6 +104,7 @@ frontend/public/qa-visual-map.html
 # Local browser profiles + python cache (QA/screenshot scratch)
 .tmp-chrome-*/
 .pytest_cache/
+.pytest-basetemp-*/
 
 # Deterministic route-intelligence reports are private local evaluation output.
 backend/validation-results.json

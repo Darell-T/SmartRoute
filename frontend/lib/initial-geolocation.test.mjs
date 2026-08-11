@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { requestInitialLocation } from "./initial-geolocation.ts";
+import {
+  locationStateForCoordinates,
+  nextLocationState,
+  requestInitialLocation,
+} from "./initial-geolocation.ts";
 
 test("initial geolocation falls back when unavailable and ignores late callbacks after cleanup", async () => {
   const values = [];
   const cleanup = requestInitialLocation(undefined, { lat: 40.7, lng: -73.9 }, (value) => values.push(value));
   await Promise.resolve();
-  assert.deepEqual(values, [{ lat: 40.7, lng: -73.9 }]);
+  assert.deepEqual(values, [{ status: "fallback_nyc", coordinates: { lat: 40.7, lng: -73.9 } }]);
   let success;
   const lateCleanup = requestInitialLocation({ getCurrentPosition(next) { success = next; } }, { lat: 1, lng: 2 }, (value) => values.push(value));
   lateCleanup();
@@ -20,10 +24,10 @@ test("initial geolocation applies success and error fallback", () => {
   let success; let failure;
   requestInitialLocation({ getCurrentPosition(ok, bad) { success = ok; failure = bad; } }, { lat: 1, lng: 2 }, (value) => values.push(value));
   success({ coords: { latitude: 40.71, longitude: -73.91 } });
-  assert.deepEqual(values, [{ lat: 40.71, lng: -73.91 }]);
+  assert.deepEqual(values, [{ status: "precise_nyc", coordinates: { lat: 40.71, lng: -73.91 } }]);
   requestInitialLocation({ getCurrentPosition(_ok, bad) { failure = bad; } }, { lat: 1, lng: 2 }, (value) => values.push(value));
   failure();
-  assert.deepEqual(values.at(-1), { lat: 1, lng: 2 });
+  assert.deepEqual(values.at(-1), { status: "outside_service_area" });
 });
 
 test("initial geolocation cleanup cancels its timeout before a Strict Mode-style remount", () => {
@@ -63,6 +67,55 @@ test("initial geolocation cleanup cancels its timeout before a Strict Mode-style
   secondSuccess({ coords: { latitude: 30, longitude: 40 } });
   secondCleanup();
 
-  assert.deepEqual(values, [{ lat: 30, lng: 40 }]);
+  assert.deepEqual(values, [{ status: "outside_service_area" }]);
   assert.equal(timers[1].cleared, true);
+});
+
+test("initial geolocation does not let a late precise callback replace its fallback", () => {
+  const values = [];
+  const timers = [];
+  let success;
+  requestInitialLocation(
+    { getCurrentPosition(next) { success = next; } },
+    { lat: 40.7484, lng: -73.9857 },
+    (value) => values.push(value),
+    (callback) => {
+      const timer = { callback };
+      timers.push(timer);
+      return timer;
+    },
+    () => {},
+  );
+
+  timers[0].callback();
+  success({ coords: { latitude: 40.71, longitude: -73.91 } });
+
+  assert.deepEqual(values, [{
+    status: "fallback_nyc",
+    coordinates: { lat: 40.7484, lng: -73.9857 },
+  }]);
+});
+
+test("initial geolocation keeps a precise location outside NYC out of transit requests", () => {
+  assert.deepEqual(
+    locationStateForCoordinates({ lat: 40.7128, lng: -74.006 }),
+    { status: "precise_nyc", coordinates: { lat: 40.7128, lng: -74.006 } },
+  );
+  assert.deepEqual(
+    locationStateForCoordinates({ lat: 42.3601, lng: -71.0589 }),
+    { status: "outside_service_area" },
+  );
+});
+
+test("a map fallback cannot overwrite a precise or out-of-service-area location", () => {
+  const fallback = locationStateForCoordinates(
+    { lat: 40.7484, lng: -73.9857 },
+    "fallback",
+  );
+  const precise = locationStateForCoordinates({ lat: 40.71, lng: -73.91 });
+  const outside = locationStateForCoordinates({ lat: 42.3601, lng: -71.0589 });
+
+  assert.deepEqual(nextLocationState(precise, fallback), precise);
+  assert.deepEqual(nextLocationState(outside, fallback), outside);
+  assert.deepEqual(nextLocationState(fallback, precise), precise);
 });

@@ -25,14 +25,15 @@ const TOOLTIP_SOURCE = fs.readFileSync(
 );
 
 test("sidebar icons share one restrained 20px outline system", () => {
-  assert.match(SOURCE, /data-state=\{active \? "active" : engaged \? "engaged" : "rest"\}/);
+  assert.match(SOURCE, /data-state=\{iconState\}/);
+  assert.match(SOURCE, /let iconState: "active" \| "engaged" \| "rest";/);
   assert.match(SOURCE, /<Icon width=\{20\} height=\{20\} strokeWidth=\{1\.85\}/);
   assert.doesNotMatch(SOURCE, /animated-icon-layer--filled/);
   assert.doesNotMatch(SOURCE, /fill="currentColor"/);
 });
 
 test("pointer and keyboard engagement use the same state and reduced motion is honored", () => {
-  assert.match(SOURCE, /const engaged = !disabled && \(hovered \|\| focused\)/);
+  assert.match(SOURCE, /const engaged = hovered \|\| focused/);
   assert.match(SOURCE, /onPointerEnter=\{\(\) => setHovered\(true\)\}/);
   assert.match(SOURCE, /onFocus=\{\(\) => setFocused\(true\)\}/);
   assert.match(SOURCE, /duration: reduceMotion \? 0 : 0\.19/);
@@ -49,14 +50,13 @@ test("sidebar defers the client reduced-motion preference until hydration", () =
   assert.match(SOURCE, /const reduceMotion = hydrated && prefersReducedMotion/);
 });
 
-test("sidebar retains active-page and tooltip semantics", () => {
+test("sidebar retains active-page and tooltip semantics without future destinations", () => {
   assert.match(SOURCE, /aria-current=\{active \? "page" : undefined\}/);
-  assert.match(SOURCE, /aria-label=\{tooltipLabel\}/);
+  assert.match(SOURCE, /aria-label=\{label\}/);
   assert.match(SOURCE, /<TooltipContent side="right"/);
-  assert.match(SOURCE, /aria-disabled=\{disabled \|\| undefined\}/);
-  assert.match(SOURCE, /<span>Coming soon<\/span>/);
-  assert.match(SOURCE, /onClick=\{disabled \? undefined : onClick\}/);
-  assert.doesNotMatch(SOURCE, /disabled=\{disabled\}/);
+  assert.match(SOURCE, /onClick=\{onClick\}/);
+  assert.doesNotMatch(SOURCE, /Coming soon|Favorites|Feedback|Help|Settings/);
+  assert.doesNotMatch(SOURCE, /data-disabled|aria-disabled/);
   assert.doesNotMatch(TOOLTIP_SOURCE, /TooltipPrimitive\.Arrow/);
 });
 

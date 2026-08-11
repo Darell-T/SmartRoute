@@ -5,11 +5,19 @@ offline build groups GTFS trips into distinct stop patterns
 (route_id, direction_id, ordered parent stop ids) and emits a small JSON the
 backend loads once at startup.
 
+Transfer components: explicit cross-stop transfers.txt relationships are
+projected into the same artifact as deterministic ``gtfs_transfer:<id>``
+component identities on the member parent stops. This is the no-request-DB
+deployment projection of canonical GTFS; it is NOT the numeric MTA Subway
+Stations CSV Complex ID.
+
 Sources (pick one):
   --sqlite PATH    read stops/routes/trips/stop_times from a local SQLite GTFS db
-                   (the dev path; direction_id is overlaid from --trips-txt).
+                   (the dev path; direction_id is overlaid from --trips-txt;
+                   transfers come from the local transfers table).
   --zip PATH       read stops.txt/routes.txt/trips.txt/stop_times.txt from a
-                   GTFS .zip (the canonical/reproducible path; has direction_id).
+                   GTFS .zip (the canonical/reproducible path; has direction_id
+                   and transfers.txt).
   (default)        download the MTA supplemented GTFS zip and build from it.
 
 Output: backend/app/data/stop_patterns.json
@@ -46,18 +54,72 @@ def _pattern_signature(route_id: str, direction, stop_ids: list[str]) -> str:
     return hashlib.sha1(raw.encode()).hexdigest()[:16]
 
 
+def derive_transfer_components(
+    stops_by_id: dict[str, dict],
+    transfer_rows: list[tuple[str, str]],
+) -> dict[str, str]:
+    """Parent stop id -> deterministic GTFS transfer-component identity.
+
+    Connected components are derived ONLY from explicit cross-stop transfer
+    relationships whose endpoints are known parent stops. Self rows and rows
+    with unknown endpoints are ignored; nothing is inferred from station
+    names, coordinates, route overlap, or min_transfer_time. Each multi-parent
+    component gets an opaque, source-qualified identity
+    ``gtfs_transfer:<lowest member id>`` (sorted members, so deterministic).
+    Singleton stops get no identity -- never a fabricated complex.
+    """
+    edges: set[tuple[str, str]] = set()
+    adjacency: dict[str, set[str]] = defaultdict(set)
+    for raw_from, raw_to in transfer_rows:
+        from_id = strip_dir(raw_from or "")
+        to_id = strip_dir(raw_to or "")
+        if not from_id or not to_id or from_id == to_id:
+            continue
+        if from_id not in stops_by_id or to_id not in stops_by_id:
+            continue
+        edge = tuple(sorted((from_id, to_id)))
+        if edge in edges:
+            continue
+        edges.add(edge)
+        adjacency[from_id].add(to_id)
+        adjacency[to_id].add(from_id)
+
+    components: dict[str, str] = {}
+    visited: set[str] = set()
+    for start in sorted(stops_by_id):
+        if start in visited or start not in adjacency:
+            continue
+        members: list[str] = []
+        stack = [start]
+        while stack:
+            node = stack.pop()
+            if node in visited:
+                continue
+            visited.add(node)
+            members.append(node)
+            stack.extend(adjacency[node] - visited)
+        if len(members) > 1:
+            identity = f"gtfs_transfer:{min(members)}"
+            for member in members:
+                components[member] = identity
+    return components
+
+
 def build_patterns(
     stops_by_id: dict[str, dict],
     routes_short: dict[str, str],
     trip_meta: dict[str, tuple],
     trip_sequences: dict[str, list[str]],
     min_trip_count: int = 1,
+    transfer_components: dict[str, str] | None = None,
 ) -> dict:
     """Pure core: group trips into distinct stop patterns. Inputs:
       stops_by_id     {parent_stop_id: {"name","lat","lon"}}
       routes_short    {route_id: route_short_name}
       trip_meta       {trip_id: (route_id, direction_id|None)}
       trip_sequences  {trip_id: [platform_stop_id, ... ordered by stop_sequence]}
+      transfer_components  optional {parent_stop_id: gtfs_transfer:<id>} map
+                           from derive_transfer_components()
     Returns the artifact dict. Patterns below min_trip_count are dropped."""
     # Group by (route_id, ordered parent stop ids). The ordered ids already
     # encode direction (northbound is the reverse of southbound), so direction_id
@@ -107,12 +169,15 @@ def build_patterns(
     # Most-frequent patterns first (stable, helps the runtime tie-break).
     patterns.sort(key=lambda p: (-p["trip_count"], p["route_id"]))
 
-    stops = {
-        sid: stops_by_id[sid]
-        for sid in sorted(used_stop_ids)
-        if sid in stops_by_id
-    }
-    return {
+    stops = {}
+    for sid in sorted(used_stop_ids):
+        if sid not in stops_by_id:
+            continue
+        if transfer_components and sid in transfer_components:
+            stops[sid] = {**stops_by_id[sid], "station_complex_id": transfer_components[sid]}
+        else:
+            stops[sid] = stops_by_id[sid]
+    artifact = {
         "source": "gtfs_supplemented",
         "route_count": len({p["route_id"] for p in patterns}),
         "pattern_count": len(patterns),
@@ -120,6 +185,14 @@ def build_patterns(
         "stops": stops,
         "patterns": patterns,
     }
+    if transfer_components:
+        artifact["transfer_components"] = {
+            "count": len(set(transfer_components.values())),
+            "member_stop_count": len(transfer_components),
+            "identity_prefix": "gtfs_transfer",
+            "source": "transfers",
+        }
+    return artifact
 
 
 # --------------------------------------------------------------------------
@@ -175,8 +248,15 @@ def load_from_sqlite(sqlite_path: Path, trips_txt: Path | None):
     )
     for trip_id, stop_id, _seq in rows:
         trip_sequences[trip_id].append(stop_id)
+
+    transfer_rows = [
+        (from_id, to_id)
+        for from_id, to_id in cur.execute(
+            "SELECT from_stop_id, to_stop_id FROM transfers"
+        )
+    ]
     con.close()
-    return stops_by_id, routes_short, trip_meta, dict(trip_sequences)
+    return stops_by_id, routes_short, trip_meta, dict(trip_sequences), transfer_rows
 
 
 def load_from_zip(zip_path: Path):
@@ -184,6 +264,7 @@ def load_from_zip(zip_path: Path):
     routes_short: dict[str, str] = {}
     trip_meta: dict[str, tuple] = {}
     trip_sequences: dict[str, list[tuple]] = defaultdict(list)
+    transfer_rows: list[tuple[str, str]] = []
     with zipfile.ZipFile(zip_path) as zf:
         with zf.open("stops.txt") as f:
             for row in csv.DictReader(io.TextIOWrapper(f, "utf-8")):
@@ -224,9 +305,16 @@ def load_from_zip(zip_path: Path):
                 except (TypeError, ValueError, KeyError):
                     continue
                 trip_sequences[tid].append((seq, row.get("stop_id", "")))
+        # transfers.txt is canonical input: a zip without it must fail loudly
+        # instead of silently building an artifact with no complex metadata.
+        with zf.open("transfers.txt") as f:
+            for row in csv.DictReader(io.TextIOWrapper(f, "utf-8")):
+                transfer_rows.append(
+                    (row.get("from_stop_id", ""), row.get("to_stop_id", ""))
+                )
     # Order each trip by stop_sequence -> [stop_id]
     ordered = {tid: [sid for _s, sid in sorted(pairs)] for tid, pairs in trip_sequences.items()}
-    return stops_by_id, routes_short, trip_meta, ordered
+    return stops_by_id, routes_short, trip_meta, ordered, transfer_rows
 
 
 def _download_zip() -> Path:
@@ -251,16 +339,29 @@ def main():
 
     if args.sqlite:
         print(f"Loading from SQLite {args.sqlite} (+ direction from {args.trips_txt}) ...")
-        stops, routes, trips, seqs = load_from_sqlite(args.sqlite, args.trips_txt)
+        stops, routes, trips, seqs, transfer_rows = load_from_sqlite(args.sqlite, args.trips_txt)
     else:
         zip_path = args.zip or _download_zip()
         print(f"Loading from zip {zip_path} ...")
-        stops, routes, trips, seqs = load_from_zip(zip_path)
+        stops, routes, trips, seqs, transfer_rows = load_from_zip(zip_path)
         if not args.zip:
             zip_path.unlink(missing_ok=True)
 
     print(f"Parsed: stops={len(stops)} routes={len(routes)} trips={len(trips)} trip_seqs={len(seqs)}")
-    artifact = build_patterns(stops, routes, trips, seqs, min_trip_count=args.min_trip_count)
+    components = derive_transfer_components(stops, transfer_rows)
+    component_ids = set(components.values())
+    print(
+        f"Transfers: rows={len(transfer_rows)} components="
+        f"{len(component_ids)} multi-parent, {len(components)} member stops"
+    )
+    artifact = build_patterns(
+        stops,
+        routes,
+        trips,
+        seqs,
+        min_trip_count=args.min_trip_count,
+        transfer_components=components,
+    )
     have_dir = sum(1 for p in artifact["patterns"] if p["direction_id"] is not None)
     print(
         f"Built: patterns={artifact['pattern_count']} routes={artifact['route_count']} "

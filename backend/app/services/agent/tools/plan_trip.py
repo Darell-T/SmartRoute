@@ -40,6 +40,7 @@ from app.services.agent.tools import plan_trip_chain as _plan_trip_chain
 from app.services.agent.tools import plan_trip_executor as _plan_trip_executor
 from app.services.agent.tools import plan_trip_input as _plan_trip_input
 from app.services.agent.tools import plan_trip_projection as _plan_trip_projection
+from app.services.agent.tools import route_presentation_dependencies as _route_presentation
 
 directions_service = importlib.import_module("app.services.directions")
 
@@ -47,7 +48,6 @@ TRIP_CONTEXT_TIMEOUT_S = float(os.getenv("TRIP_CONTEXT_TIMEOUT_S", "2.0"))
 TRIP_ADVISOR_TIMEOUT_S = float(os.getenv("TRIP_ADVISOR_TIMEOUT_S", "8.0"))
 LIVE_EVIDENCE_TTL_S = 120
 EVENT_EVIDENCE_TTL_S = 300
-AGENT_GROK_BUDGET_S = float(os.getenv("AGENT_GROK_BUDGET_S", "10.0"))
 
 _ALL_MODES = ("SUBWAY", "BUS")
 MAX_WAYPOINTS = 3
@@ -164,30 +164,10 @@ def _validated_waypoints(value: object) -> tuple[list[str], str | None]:
 
 
 def _first_boarding_context(gtfs, step: dict, walking_minutes: int) -> dict:
-    route_id = scoring._step_route_id(step).strip().upper()
-    context = {
-        "route_id": route_id,
-        "mode": str(step.get("type") or "").lower(),
-        "stop_name": step.get("departure_stop"),
-        "coordinates": step.get("departure_coords"),
-        "direction_label": step.get("direction"),
-        "walking_minutes": walking_minutes,
-    }
-    pattern_index = getattr(gtfs, "_pattern_index", None) if gtfs else None
-    resolve = getattr(pattern_index, "resolve_route_segment", None)
-    if not callable(resolve):
-        return context
-    resolved = resolve(
-        route_id, step.get("departure_stop"), step.get("arrival_stop"),
-        step.get("departure_coords"), step.get("arrival_coords"),
+    """Delegate to the neutral presentation binding shared with present_route."""
+    return _route_presentation.first_boarding_context(
+        gtfs, step, walking_minutes,
     )
-    if resolved:
-        context.update({
-            "stop_id": resolved.get("origin_stop_id"),
-            "direction_id": resolved.get("direction_id"),
-            "destination_stop_id": resolved.get("destination_stop_id"),
-        })
-    return context
 
 
 def _route_service_ids(route: list[dict]) -> set[str]:
@@ -214,16 +194,8 @@ async def _execute_chained_trip(
 
 
 def _project_single_leg(**kwargs) -> ToolResult:
-    return _plan_trip_projection.project_single_leg(
-        **kwargs,
-        point_label=_point_label,
-        summary_eta_minutes=_summary_eta_minutes,
-        first_boarding_context=_first_boarding_context,
-        candidates_module=candidates,
-        scoring_module=scoring,
-        text_module=text,
-        route_card_event=agent_events.RouteCardEvent,
-    )
+    """Delegate to the neutral advisor-free projection binding."""
+    return _route_presentation._project_single_leg(**kwargs)
 
 
 def _dependencies() -> _plan_trip_executor.PlanTripDependencies:
@@ -253,7 +225,6 @@ def _dependencies() -> _plan_trip_executor.PlanTripDependencies:
         route_service_ids=_route_service_ids,
         context_timeout_seconds=TRIP_CONTEXT_TIMEOUT_S,
         advisor_timeout_seconds=TRIP_ADVISOR_TIMEOUT_S,
-        incident_timeout_seconds=AGENT_GROK_BUDGET_S,
         live_evidence_ttl_seconds=LIVE_EVIDENCE_TTL_S,
         event_evidence_ttl_seconds=EVENT_EVIDENCE_TTL_S,
     )
@@ -288,6 +259,8 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
         "ticketmaster_ms": 0.0,
         "incident_ms": 0.0,
         "advisor_ms": 0.0,
+        "advisor_first_token_ms": 0.0,
+        "selection_parse_ms": 0.0,
         "scoring_ms": 0.0,
         "enrichment_ms": 0.0,
         "plan_trip_ms": 0.0,
@@ -332,6 +305,8 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
                     "mta_evidence_ms": timings["mta_ms"],
                     "incident_ms": timings["incident_ms"],
                     "advisor_ms": timings["advisor_ms"],
+                    "advisor_first_token_ms": timings.get("advisor_first_token_ms"),
+                    "selection_parse_ms": timings.get("selection_parse_ms", 0.0),
                     "scoring_ms": timings["scoring_ms"],
                     "enrichment_ms": timings["enrichment_ms"],
                 }
@@ -406,6 +381,8 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
                     "mta_evidence_ms": timings["mta_ms"],
                     "incident_ms": timings["incident_ms"],
                     "advisor_ms": timings["advisor_ms"],
+                    "advisor_first_token_ms": timings.get("advisor_first_token_ms"),
+                    "selection_parse_ms": timings.get("selection_parse_ms", 0.0),
                     "scoring_ms": timings["scoring_ms"],
                     "enrichment_ms": timings["enrichment_ms"],
                     "plan_trip_ms": timings["plan_trip_ms"],

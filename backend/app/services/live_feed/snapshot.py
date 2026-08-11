@@ -89,6 +89,49 @@ def _arrival_stop_context(arrival: dict, stop_lookup: dict[str, dict]) -> dict |
     return stop_lookup.get(stop_id) or stop_lookup.get(stop_id.rstrip("NS"))
 
 
+def _realtime_trip_stop_context(
+    trip_updates,
+    relevant_trip_ids: set[str],
+    stop_locations: dict[str, dict],
+) -> dict[str, list[dict]]:
+    """Build a bounded fallback when a complete static trip chain is absent."""
+
+    context: dict[str, list[dict]] = {}
+    seen: set[tuple[str, str, int | None]] = set()
+    for update in trip_updates:
+        trip_id = str(update.get("trip_id") or "")
+        stop_id = str(update.get("stop_id") or "")
+        if not trip_id or trip_id not in relevant_trip_ids or not stop_id:
+            continue
+        sequence = update.get("stop_sequence")
+        sequence = sequence if isinstance(sequence, int) else None
+        identity = (trip_id, stop_id, sequence)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        location = stop_locations.get(stop_id) or stop_locations.get(
+            stop_id.rstrip("NS")
+        )
+        context.setdefault(trip_id, []).append(
+            {
+                "stop_id": stop_id,
+                "stop_sequence": sequence,
+                "stop_name": location.get("stop_name") if location else None,
+                "lat": location.get("lat") if location else None,
+                "lng": location.get("lng") if location else None,
+                "parent_station": (
+                    location.get("parent_station")
+                    if location
+                    else stop_id.rstrip("NS")
+                ),
+            }
+        )
+    for stops in context.values():
+        if all(stop.get("stop_sequence") is not None for stop in stops):
+            stops.sort(key=lambda stop: stop["stop_sequence"])
+    return context
+
+
 def _signal_text(value: object) -> str:
     return " ".join(str(value or "").split()).strip()
 
@@ -238,9 +281,9 @@ async def _build_live_snapshot(
         arrivals.append(record)
     arrival_lookup = network.arrival_lookup
 
-    # Time-to-first-arrivals: everything above (nearest stops + the nearby
-    # subway feed, served from the warm cache) is all the rider waits on for the
-    # first paint. Measured here so production telemetry can report it.
+    # Time-to-first-arrivals: nearest-stop resolution and filtering of the
+    # process-owned network generation are the only primary work before paint.
+    # Measured here so production telemetry can report it.
     arrivals_ms = round((time.monotonic() - _t0) * 1000)
 
     vehicle_route_ids = _expand_vehicle_route_scope(set(route_ids) | selected_route_ids)
@@ -278,12 +321,31 @@ async def _build_live_snapshot(
         observed_at=now,
     )
 
-    stop_ids = [v.get("stop_id") for v in vehicles if v.get("stop_id")]
-    stop_locations = gtfs.get_stop_locations(stop_ids)
-    trip_stop_context = gtfs.get_trip_stop_context([
-        *(arrival.get("trip_id") for arrival in arrivals if arrival.get("trip_id")),
-        *(v.get("trip_id") for v in vehicles if v.get("trip_id")),
-    ])
+    relevant_trip_ids = {
+        str(trip_id)
+        for trip_id in [
+            *(arrival.get("trip_id") for arrival in arrivals),
+            *(vehicle.get("trip_id") for vehicle in vehicles),
+        ]
+        if trip_id
+    }
+    stop_ids = {
+        str(stop_id)
+        for stop_id in [
+            *(vehicle.get("stop_id") for vehicle in vehicles),
+            *(update.get("stop_id") for update in trip_updates),
+        ]
+        if stop_id
+    }
+    stop_locations = gtfs.get_stop_locations(list(stop_ids))
+    # Rider snapshots must never perform a static trip lookup. The relevant
+    # GTFS-RT records already live in the shared network snapshot and provide
+    # the bounded context available for this refresh generation.
+    trip_stop_context = _realtime_trip_stop_context(
+        trip_updates,
+        relevant_trip_ids,
+        stop_locations,
+    )
     for arrival in arrivals:
         vehicle_enrichment._attach_terminal_stop(
             arrival,

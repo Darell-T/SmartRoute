@@ -83,7 +83,7 @@ export function MobileStage({
     };
   }, [navigationOpen, reduceMotion, stageX, travelDistance]);
 
-  function startDismissDrag(event: ReactPointerEvent<HTMLButtonElement>) {
+  function startDismissDrag(event: ReactPointerEvent<HTMLDivElement>) {
     stageAnimationRef.current?.stop();
     stageAnimationRef.current = null;
     dragOriginRef.current = stageX.get();
@@ -98,7 +98,7 @@ export function MobileStage({
   }
 
   function handleDismissPointerMove(
-    event: ReactPointerEvent<HTMLButtonElement>,
+    event: ReactPointerEvent<HTMLDivElement>,
   ) {
     if (activePointerRef.current !== event.pointerId) {
       return;
@@ -150,7 +150,7 @@ export function MobileStage({
   }
 
   function handleDismissPointerUp(
-    event: ReactPointerEvent<HTMLButtonElement>,
+    event: ReactPointerEvent<HTMLDivElement>,
   ) {
     if (activePointerRef.current !== event.pointerId) return;
     activePointerRef.current = null;
@@ -163,7 +163,7 @@ export function MobileStage({
   }
 
   function handleDismissPointerCancel(
-    event: ReactPointerEvent<HTMLButtonElement>,
+    event: ReactPointerEvent<HTMLDivElement>,
   ) {
     if (activePointerRef.current !== event.pointerId) return;
     activePointerRef.current = null;
@@ -198,6 +198,7 @@ export function MobileStage({
         className="sr-mobile-stage"
         data-navigation-open={navigationOpen ? "true" : "false"}
         aria-hidden={navigationOpen ? true : undefined}
+        inert={navigationOpen ? true : undefined}
         style={{ x: stageX }}
       >
         {children}
@@ -205,10 +206,9 @@ export function MobileStage({
 
       <AnimatePresence initial={false}>
         {navigationOpen ? (
-          <motion.button
-            type="button"
+          <motion.div
             className="sr-mobile-stage-dismiss"
-            aria-label="Close navigation"
+            aria-hidden="true"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}

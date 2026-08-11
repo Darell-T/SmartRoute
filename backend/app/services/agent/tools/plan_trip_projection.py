@@ -8,7 +8,10 @@ from typing import Any, Callable
 
 from app.services.agent.quick_escalation import effectively_tied_scores
 from app.services.agent.tools._types import ToolContext, ToolResult
-from app.services.trips.incidents import incident_scan_is_complete
+from app.services.trips.incidents import (
+    INCOMPLETE_INCIDENT_DISCLOSURE,
+    incident_scan_is_complete,
+)
 from app.services.trips.itinerary import build_canonical_itinerary
 from app.services.trips.recommendation_reasons import (
     build_recommendation_reasons,
@@ -17,7 +20,6 @@ from app.services.trips.recommendation_reasons import (
 from app.services.trips.selection_decision import build_route_selection_decision
 
 
-INCOMPLETE_INCIDENT_DISCLOSURE = "Current incident coverage is incomplete, so allow extra time."
 _INCOMPLETE_INCIDENT_DISCLOSURE_PATTERNS = (
     r"\bcurrent\s+incident\s+coverage\s+is\s+incomplete(?:,\s*so\s*allow\s+extra\s+time)?\b",
     r"\bincident\s+coverage\s+is\s+incomplete\b",
@@ -138,6 +140,8 @@ def project_single_leg(
     text_module: Any,
     route_card_event: Callable[..., Any],
     advisor_recommendation: str = "",
+    include_alternatives: bool = True,
+    itinerary_overrides: dict[int, dict] | None = None,
 ) -> ToolResult:
     """Build the externally visible representations of one canonical trip."""
     display_candidates = candidates_module._build_route_candidates(
@@ -207,9 +211,13 @@ def project_single_leg(
     digest: list[dict] = []
     events: list[Any] = []
     session_cards: list[dict] = []
-    for index, route in enumerate(parsed_routes):
+    route_indexes = (
+        list(range(len(parsed_routes))) if include_alternatives else [chosen_index]
+    )
+    for index in route_indexes:
         card_id = card_ids[index]
         is_recommended = index == chosen_index
+        route = parsed_routes[index]
         candidate = display_candidates[index]
         lines = candidate["score_breakdown"]["transit_lines"]
         reason = (
@@ -225,15 +233,19 @@ def project_single_leg(
         ][:3]
         first_step = route[0] if route else {}
         last_step = route[-1] if route else {}
-        itinerary = build_canonical_itinerary(
-            route,
-            origin=origin_point,
-            destination=destination_point,
-            planning_mode=planning_mode,
-            requested_departure=departure_time,
-            requested_arrival=str(arrival_by) if arrival_by else None,
-            reasons=structured_reasons if is_recommended else [],
-            itinerary_id=card_id,
+        itinerary = (
+            dict(itinerary_overrides[index])
+            if itinerary_overrides and index in itinerary_overrides
+            else build_canonical_itinerary(
+                route,
+                origin=origin_point,
+                destination=destination_point,
+                planning_mode=planning_mode,
+                requested_departure=departure_time,
+                requested_arrival=str(arrival_by) if arrival_by else None,
+                reasons=structured_reasons if is_recommended else [],
+                itinerary_id=card_id,
+            )
         )
         if is_recommended:
             itinerary["selection_decision"] = selection_decision
@@ -348,7 +360,10 @@ def project_single_leg(
         else passenger_explanation
     )
 
-    recommended_lines = digest[chosen_index]["lines"]
+    recommended_digest = next(
+        item for item in digest if item.get("card_id") == card_ids[chosen_index]
+    )
+    recommended_lines = recommended_digest["lines"]
     return ToolResult(
         ok=True,
         data={
@@ -361,7 +376,18 @@ def project_single_leg(
             },
             "incident_evidence": {
                 key: incident_scan_metadata[key]
-                for key in ("status", "scanned_at", "cache_hit", "sources")
+                for key in (
+                    "status",
+                    "scanned_at",
+                    "cache_hit",
+                    "sources",
+                    "lookup_status",
+                    "coverage_status",
+                    "lookup_kind",
+                    "requested_coverage_ids",
+                    "warning_count",
+                    "lookup_latency_ms",
+                )
                 if key in incident_scan_metadata
             },
             "evidence": {

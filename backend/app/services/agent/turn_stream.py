@@ -7,19 +7,26 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from app.services.agent import budget
+from app.services.agent import contextual_replan
+from app.services.agent import discovery_followup
 from app.services.agent import events as agent_events
 from app.services.agent import intelligence
 from app.services.agent import model_stream
 from app.services.agent import policy as agent_policy
 from app.services.agent import prompt as agent_prompt
 from app.services.agent import quick_escalation
+from app.services.agent import scenario_followup
 from app.services.agent import session as session_module
+from app.services.agent import trip_state as trip_state_module
 from app.services.agent.tool_round import TurnDeadlineReached
 from app.services.agent.tools import ToolContext
+from app.services.agent.turn_finalization import finalize_turn
+from app.services.agent.turn_text import fallback_route_acknowledgement, terminal_route_text
 from app.services.agent.turn_telemetry import (
     emit_trip_pipeline_timing as _emit_trip_pipeline_timing,
+    extract_safe_usage,
     record_model_call,
+    record_phase_ms,
 )
 from app.services.agent.turn_ledger import TurnToolLedger
 
@@ -45,6 +52,7 @@ class TurnDependencies:
     required_arrival_input: Callable[..., dict | None]
     arrival_response: Callable[[dict], tuple[str, str]]
     rider_excluded_modes: Callable[[str, dict], set[str]]
+    rider_excluded_route_ids: Callable[[str, dict], tuple[str, ...]]
     execute_tool_round: Callable[..., AsyncIterator]
 
 
@@ -74,60 +82,6 @@ def _stage_timings(trace: TurnTrace | None, intent_started: float) -> dict[str, 
             if stage in stage_ms:
                 stage_ms[stage] = max(0.0, float(duration))
     return stage_ms
-
-
-def _terminal_plan_trip_text(
-    result: object,
-    *,
-    route_card: agent_events.RouteCardEvent | None,
-    route_card_text_fallback: Callable[[agent_events.RouteCardEvent], str],
-    sanitize_rider_text: Callable[[str], str],
-) -> str:
-    data = getattr(result, "data", None)
-    text = data.get("passenger_explanation") if isinstance(data, dict) else ""
-    if not isinstance(text, str) or not text.strip():
-        text = route_card_text_fallback(route_card) if route_card is not None else ""
-    return sanitize_rider_text(str(text)).strip()
-
-
-def _fallback_plan_trip_acknowledgement(
-    tool_use_blocks: list,
-    *,
-    sanitize_rider_text: Callable[[str], str],
-) -> str | None:
-    """Provide one safe acknowledgement when a route tool call has no prose."""
-    for block in tool_use_blocks:
-        if getattr(block, "name", "") != "plan_trip":
-            continue
-        raw_input = getattr(block, "input", None)
-        if not isinstance(raw_input, dict):
-            continue
-        destination_value = raw_input.get("destination")
-        if not isinstance(destination_value, str):
-            continue
-        destination = sanitize_rider_text(" ".join(destination_value.split())).strip()
-        if not destination:
-            continue
-        details: list[str] = []
-        excluded = raw_input.get("exclude_modes")
-        blocked_modes = {
-            str(mode).strip().upper()
-            for mode in (excluded if isinstance(excluded, (list, tuple, set)) else ())
-        }
-        if "BUS" in blocked_modes:
-            details.append("without buses")
-        if "SUBWAY" in blocked_modes:
-            details.append("without subways")
-        preference = str(raw_input.get("routing_preference") or "").upper()
-        if preference == "FEWER_TRANSFERS":
-            details.append("with fewer transfers")
-        elif preference == "LESS_WALKING":
-            details.append("with less walking")
-        if raw_input.get("avoid_crowds") is True:
-            details.append("using your crowd-avoidance preference")
-        suffix = f" ({'; '.join(details)})" if details else ""
-        return f"I'll plan your trip to {destination}{suffix}."
-    return None
 
 
 async def _stream_model_round(
@@ -173,14 +127,37 @@ async def stream_turn(
     escalation_reason: str | None = None
     intent_started = time.monotonic()
     parsed_intent = intelligence.parse_intent(message)
+    scenario_action = scenario_followup.detect_scenario_action(session, message)
+    authoritative_replan = contextual_replan.has_authoritative_endpoints(
+        session, message
+    )
     if mode_policy.mode == "quick" and parsed_intent.avoid_crowds:
         escalation_reason = "explicit_crowd_evidence"
     stage_ms = _stage_timings(trace, intent_started)
-    turn_tools = dependencies.tools_for_intent(parsed_intent, mode_policy)
-    if intelligence.is_new_trip_request(message):
-        session_module.reset_for_new_trip(session)
+    turn_tools = dependencies.tools_for_intent(parsed_intent, mode_policy, scenario_action=scenario_action, session=session, message=message)
+    # Exact per-turn offered surface re-checked before any executor work.
+    allowed_tool_names = frozenset(schema["name"] for schema in turn_tools)
+    if scenario_action is scenario_followup.ScenarioAction.REJECT:
+        # Discard before context building so the turn truthfully reports no
+        # temporary scenario; the stored candidate record stays untouched.
+        trip_state_module.discard_scenario(session)
+    if intelligence.is_new_trip_request(
+        message
+    ) and not contextual_replan.is_contextual_replan(session, message):
+        # A discovery-result handoff keeps the real active discovery set for
+        # get_place_details; everything else still resets for the new trip.
+        discovery_followup.reset_preserving_discovery(session, message)
+    if not intelligence.is_what_if_request(message):
+        trip_state_module.apply_natural_feedback(session, message)
     messages = dependencies.messages_from_history(session.get("history") or [])
-    context_block = agent_prompt.build_turn_context(session, ctx.now_et, ctx.origin, selected_card_id, response_presentation)
+    context_block = agent_prompt.build_turn_context(
+        session,
+        ctx.now_et,
+        ctx.origin,
+        selected_card_id,
+        response_presentation,
+        session_id=ctx.session_id,
+    )
     messages.append({"role": "user", "content": f"{message}\n\n{context_block}"})
     session_module.append_history(session, "user", message)
 
@@ -195,6 +172,7 @@ async def stream_turn(
     deterministic_arrival = False
     tool_ledger = dependencies.make_ledger()
     excluded_modes = dependencies.rider_excluded_modes(message, session)
+    excluded_route_ids = dependencies.rider_excluded_route_ids(message, session)
 
     try:
         if parsed_intent.intent == "arrival_lookup":
@@ -256,12 +234,37 @@ async def stream_turn(
                 needs_wrapup = True
                 stop_reason_out = "max_rounds"
                 break
+            request_options = None
+            if authoritative_replan and round_num == 1:
+                # A resolvable accepted-trip replan must enter the canonical
+                # backend preparation boundary. The model supplies constraints
+                # but never has to reproduce server-owned endpoint addresses.
+                request_options = {
+                    "tool_choice": {
+                        "type": "tool",
+                        "name": "prepare_route_options",
+                        "disable_parallel_tool_use": True,
+                    }
+                }
             stream_kwargs = dependencies.build_stream_kwargs(
-                force_final=False, messages=messages, system_blocks=dependencies.system_blocks(), mode_policy=mode_policy, tools=turn_tools
+                force_final=False,
+                messages=messages,
+                system_blocks=dependencies.system_blocks(),
+                mode_policy=mode_policy,
+                tools=turn_tools,
+                request_options=request_options,
             )
             model_call_start = time.monotonic()
+            if round_num == 1:
+                stage_ms["conversation_request_start_ms"] = (model_call_start - turn_start) * 1000
+                record_phase_ms(
+                    ctx.telemetry,
+                    "conversation_request_start_ms",
+                    stage_ms["conversation_request_start_ms"],
+                )
             model_outcome: model_stream.ModelCallCompleted | None = None
             model_prose_this_round = False
+            conversation_first_token_ms: float | None = None
             async for model_event in _stream_model_round(
                 dependencies=dependencies, stream_kwargs=stream_kwargs, log_tag="model call", mode_policy=mode_policy, deadline_monotonic=deadline_monotonic
             ):
@@ -270,9 +273,9 @@ async def stream_turn(
                     continue
                 if isinstance(model_event, agent_events.TokenEvent):
                     text_parts.append(model_event.text)
-                    model_prose_this_round = model_prose_this_round or bool(
-                        model_event.text.strip()
-                    )
+                    model_prose_this_round = model_prose_this_round or bool(model_event.text.strip())
+                    if conversation_first_token_ms is None and model_event.text.strip():
+                        conversation_first_token_ms = (time.monotonic() - model_call_start) * 1000
                 if isinstance(model_event, agent_events.ToolEndEvent) and not model_event.ok:
                     tool_failures += 1
                 yield model_event
@@ -286,6 +289,26 @@ async def stream_turn(
             retry_count_total += max(0, model_outcome.attempts - 1)
             model_duration_ms = (time.monotonic() - model_call_start) * 1000
             model_ms_total += model_duration_ms
+            first_token = model_outcome.first_token_ms
+            if first_token is None:
+                first_token = conversation_first_token_ms
+            if round_num == 1 and isinstance(first_token, (int, float)):
+                stage_ms["conversation_first_token_ms"] = (
+                    stage_ms.get("conversation_request_start_ms", 0.0) + float(first_token)
+                )
+                record_phase_ms(
+                    ctx.telemetry,
+                    "conversation_first_token_ms",
+                    stage_ms["conversation_first_token_ms"],
+                )
+            if round_num == 1:
+                stage_ms["conversation_complete_ms"] = (time.monotonic() - turn_start) * 1000
+                record_phase_ms(
+                    ctx.telemetry,
+                    "conversation_complete_ms",
+                    stage_ms["conversation_complete_ms"],
+                )
+            usage = getattr(final_message, "usage", None) if final_message is not None else None
             record_model_call(
                 ctx.telemetry,
                 role="conversation",
@@ -293,6 +316,8 @@ async def stream_turn(
                 model=mode_policy.model,
                 duration_ms=model_duration_ms,
                 outcome="complete" if error_event is None else error_event.code,
+                first_token_ms=first_token,
+                usage=usage,
             )
             if error_event is not None:
                 yield error_event
@@ -300,21 +325,26 @@ async def stream_turn(
                 break
             if final_message is None:
                 raise RuntimeError("model stream completed without a final message")
-            usage = getattr(final_message, "usage", None)
-            input_tokens += int(getattr(usage, "input_tokens", 0) or 0)
-            output_tokens += int(getattr(usage, "output_tokens", 0) or 0)
+            usage_safe = extract_safe_usage(usage)
+            input_tokens += usage_safe.get("input_tokens", 0)
+            output_tokens += usage_safe.get("output_tokens", 0)
             messages.append({"role": "assistant", "content": final_message.content})
             tool_use_blocks = [block for block in final_message.content if getattr(block, "type", None) == "tool_use"]
+            if getattr(final_message, "stop_reason", "") == "pause_turn":
+                # Server-side web search is still running: keep the assistant
+                # content unchanged and continue; max rounds bound repeats.
+                continue
             if final_message.stop_reason != "tool_use" or not tool_use_blocks:
                 stop_reason_out = "end_turn"
                 break
             has_plan_trip_tool = any(
-                getattr(block, "name", "") == "plan_trip" for block in tool_use_blocks
+                getattr(block, "name", "") in {"plan_trip", "prepare_route_options"}
+                for block in tool_use_blocks
             )
             if has_plan_trip_tool and model_prose_this_round:
                 plan_trip_acknowledged = True
             elif has_plan_trip_tool and not plan_trip_acknowledged:
-                acknowledgement = _fallback_plan_trip_acknowledgement(
+                acknowledgement = fallback_route_acknowledgement(
                     tool_use_blocks,
                     sanitize_rider_text=dependencies.sanitize_rider_text,
                 )
@@ -329,6 +359,7 @@ async def stream_turn(
             async for item in dependencies.execute_tool_round(
                 tool_use_blocks, ctx, session, tool_calls_this_turn, excluded_modes, mode_policy, parsed_intent,
                 stage_ms, deadline_monotonic, tool_ledger, tool_registry=dependencies.tool_registry,
+                excluded_route_ids=excluded_route_ids, allowed_tool_names=allowed_tool_names,
             ):
                 if isinstance(item, dict) and "__tool_result_message__" in item:
                     tool_result_message = item["__tool_result_message__"]
@@ -337,16 +368,35 @@ async def stream_turn(
                     if mode_policy.mode == "quick" and escalation_reason is None and reason:
                         escalation_reason = str(reason)
                 else:
+                    if (
+                        isinstance(item, agent_events.ToolStartEvent)
+                        and item.tool in {"plan_trip", "prepare_route_options"}
+                        and "plan_trip_tool_start_ms" not in stage_ms
+                    ):
+                        stage_ms["plan_trip_tool_start_ms"] = (
+                            time.monotonic() - turn_start
+                        ) * 1000
+                        record_phase_ms(
+                            ctx.telemetry,
+                            "plan_trip_tool_start_ms",
+                            stage_ms["plan_trip_tool_start_ms"],
+                        )
                     if isinstance(item, agent_events.RouteCardEvent) and item.role == "recommended":
                         recommended_route_card = item
                         if first_route_card_ms is None:
                             first_route_card_ms = (time.monotonic() - turn_start) * 1000
+                            stage_ms["route_card_emit_ms"] = first_route_card_ms
+                            record_phase_ms(
+                                ctx.telemetry,
+                                "route_card_emit_ms",
+                                first_route_card_ms,
+                            )
                     if isinstance(item, agent_events.ToolEndEvent) and not item.ok:
                         tool_failures += 1
                     yield item
             tools_ms_total += (time.monotonic() - tool_round_start) * 1000
             if terminal_plan_trip_result is not None:
-                terminal_text = _terminal_plan_trip_text(
+                terminal_text = terminal_route_text(
                     terminal_plan_trip_result,
                     route_card=recommended_route_card,
                     route_card_text_fallback=dependencies.route_card_text_fallback,
@@ -366,9 +416,7 @@ async def stream_turn(
 
         if needs_wrapup and time.monotonic() < deadline_monotonic:
             messages.append({"role": "user", "content": dependencies.wrap_up_instruction})
-            stream_kwargs = dependencies.build_stream_kwargs(
-                force_final=True, messages=messages, system_blocks=dependencies.system_blocks(), mode_policy=mode_policy, tools=turn_tools
-            )
+            stream_kwargs = dependencies.build_stream_kwargs(force_final=True, messages=messages, system_blocks=dependencies.system_blocks(), mode_policy=mode_policy, tools=turn_tools)
             model_call_start = time.monotonic()
             model_outcome = None
             async for model_event in _stream_model_round(
@@ -392,6 +440,7 @@ async def stream_turn(
             retry_count_total += max(0, model_outcome.attempts - 1)
             model_duration_ms = (time.monotonic() - model_call_start) * 1000
             model_ms_total += model_duration_ms
+            wrapup_usage = getattr(model_outcome.final_message, "usage", None) if model_outcome.final_message is not None else None
             record_model_call(
                 ctx.telemetry,
                 role="conversation_wrapup",
@@ -399,6 +448,8 @@ async def stream_turn(
                 model=mode_policy.model,
                 duration_ms=model_duration_ms,
                 outcome="complete" if error_event is None else error_event.code,
+                first_token_ms=model_outcome.first_token_ms,
+                usage=wrapup_usage,
             )
             if error_event is not None:
                 yield error_event
@@ -415,7 +466,10 @@ async def stream_turn(
             fallback_text = dependencies.route_card_text_fallback(recommended_route_card)
             text_parts.append(fallback_text)
             yield agent_events.TokenEvent(text=fallback_text)
-        if stop_reason_out == "end_turn" and not any(name == "plan_trip" for name, _tool_input in tool_calls_this_turn):
+        route_tool_names = {"plan_trip", "prepare_route_options", "present_route"}
+        if stop_reason_out == "end_turn" and not any(
+            name in route_tool_names for name, _tool_input in tool_calls_this_turn
+        ):
             resume_offer = session_module.consume_resume_offer(session)
             if resume_offer:
                 prefix = "\n\n" if text_parts else ""
@@ -430,57 +484,38 @@ async def stream_turn(
     finally:
         finalize_started = time.monotonic()
         final_text = "".join(text_parts)
-        if final_text:
-            session_module.append_history(session, "assistant", final_text)
-        session_module.extract_slots(session, tool_calls_this_turn)
-        if trace is not None:
-            trace.tool_calls = list(tool_calls_this_turn)
-            trace.final_text = final_text
-            trace.initial_mode = initial_mode
-            trace.final_mode = mode_policy.mode
-            trace.escalation_reason = escalation_reason
-            trace.model_call_count = model_call_count
-            trace.tool_call_count = len(tool_calls_this_turn) + server_tool_call_count
-            trace.model_tool_use_count = len(tool_calls_this_turn) + server_tool_call_count
-            trace.provider_tool_execution_count = tool_ledger.total_executions + server_tool_call_count
-            trace.retry_count = retry_count_total
-        budget.record_usage_cost(input_tokens, output_tokens)
-        stage_ms["stream_finalize_ms"] = (time.monotonic() - finalize_started) * 1000
-
-    total_ms = (time.monotonic() - turn_start) * 1000
-    stage_ms["model_ms"] = model_ms_total
-    stage_ms["evidence_ms"] = max(stage_ms["evidence_ms"], stage_ms["mta_ms"] + stage_ms["ticketmaster_ms"])
-    stage_ms["total_ms"] = total_ms
-    if trace is not None:
-        trace.stage_ms = dict(stage_ms)
-    _emit_trip_pipeline_timing(
-        turn_id=turn_id,
-        stage_ms=stage_ms,
-        telemetry=ctx.telemetry,
-        first_route_card_ms=first_route_card_ms,
-    )
-    required_tools = ",".join(parsed_intent.required_evidence.required_tools()) or "none"
-    recorded_model_calls = ctx.telemetry.get("model_calls")
-    total_model_call_count = (
-        len(recorded_model_calls) if isinstance(recorded_model_calls, list) else 0
-    )
-    print(
-        f"[agent] turn={turn_id} sess={session_id[:6]} rounds={round_num} "
-        f"mode={initial_mode} final_mode={mode_policy.mode} escalation={escalation_reason or 'none'} "
-        f"model={agent_policy.safe_model_label(mode_policy.model)} candidate_budget={mode_policy.max_route_candidates} "
-        f"retries={mode_policy.retry_count} required_tools={required_tools} optional_enrichment={int(mode_policy.optional_enrichment)} "
-        f"model_tool_uses={len(tool_calls_this_turn) + server_tool_call_count} provider_tool_executions={tool_ledger.total_executions + server_tool_call_count} "
-        f"tool_failures={tool_failures} intent_ms={stage_ms['intent_ms']:.0f} session_load_ms={stage_ms['session_load_ms']:.0f} "
-        f"place_resolution_ms={stage_ms['place_resolution_ms']:.0f} web_search_ms={stage_ms['web_search_ms']:.0f} "
-        f"place_normalization_ms={stage_ms['place_normalization_ms']:.0f} route_provider_ms={stage_ms['route_provider_ms']:.0f} "
-        f"evidence_ms={stage_ms['evidence_ms']:.0f} mta_ms={stage_ms['mta_ms']:.0f} ticketmaster_ms={stage_ms['ticketmaster_ms']:.0f} "
-        f"arrival_lookup_ms={stage_ms['arrival_lookup_ms']:.0f} stop_resolution_ms={stage_ms['stop_resolution_ms']:.0f} "
-        f"feed_fetch_ms={stage_ms['feed_fetch_ms']:.0f} feed_parse_ms={stage_ms['feed_parse_ms']:.0f} render_ms={stage_ms['render_ms']:.0f} "
-        f"scoring_ms={stage_ms['scoring_ms']:.0f} model_ms={model_ms_total:.0f} stream_finalize_ms={stage_ms['stream_finalize_ms']:.0f} "
-        f"tools_ms={tools_ms_total:.0f} total_ms={total_ms:.0f} outer_model_calls={model_call_count} total_model_calls={total_model_call_count} "
-        f"retry_count={retry_count_total} in_tok={input_tokens} out_tok={output_tokens} stop={stop_reason_out}",
-        flush=True,
-    )
+        finalize_turn(
+            session=session,
+            tool_calls=tool_calls_this_turn,
+            final_text=final_text,
+            trace=trace,
+            initial_mode=initial_mode,
+            final_mode=mode_policy.mode,
+            model=mode_policy.model,
+            max_route_candidates=mode_policy.max_route_candidates,
+            optional_enrichment=mode_policy.optional_enrichment,
+            retry_policy_count=mode_policy.retry_count,
+            escalation_reason=escalation_reason,
+            model_call_count=model_call_count,
+            server_tool_call_count=server_tool_call_count,
+            retry_count_total=retry_count_total,
+            tool_ledger=tool_ledger,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            stage_ms=stage_ms,
+            turn_start=turn_start,
+            finalize_started=finalize_started,
+            turn_id=turn_id,
+            session_id=session_id,
+            telemetry=ctx.telemetry,
+            first_route_card_ms=first_route_card_ms,
+            parsed_intent=parsed_intent,
+            round_num=round_num,
+            tool_failures=tool_failures,
+            model_ms_total=model_ms_total,
+            tools_ms_total=tools_ms_total,
+            stop_reason=stop_reason_out,
+        )
     yield agent_events.DoneEvent(
         session_id=session_id,
         turn_id=turn_id,

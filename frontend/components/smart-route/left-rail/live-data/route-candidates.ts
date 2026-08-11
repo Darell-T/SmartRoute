@@ -1,4 +1,5 @@
 import type { RouteCandidate, RouteStep as ApiRouteStep } from "@/types/api";
+import { isTransitStep } from "@/lib/route-planning";
 import type { Alternative } from "../types";
 import { cleanDestinationLabel, formatClockAt } from "./formatters";
 import { stripFromSteps } from "./route-steps";
@@ -49,19 +50,14 @@ export function candidateDelta(candidate: RouteCandidate, active: RouteCandidate
 }
 
 export function firstTransitStep(steps: ApiRouteStep[] | undefined): ApiRouteStep | undefined {
-  // Local rather than importing lib/route-planning: this file is exercised
-  // by the node --test runner, which cannot resolve extensionless VALUE
-  // imports from .ts (type-only imports are erased and fine).
-  return steps?.find((step) => step.type === "SUBWAY" || step.type === "BUS");
+  return steps?.find(isTransitStep);
 }
 
 /* Route signature for dedup: mode sequence, route ids, boarding stops, and
    final arrival. Candidates that only differ in departure time collapse to
    the same signature. */
 export function candidateSignature(candidate: RouteCandidate | null | undefined): string {
-  const transitSteps = (candidate?.steps ?? []).filter(
-    (step) => step.type === "SUBWAY" || step.type === "BUS",
-  );
+  const transitSteps = (candidate?.steps ?? []).filter(isTransitStep);
   const legs = transitSteps.map((step) =>
     [
       step.type,
@@ -76,7 +72,7 @@ export function candidateSignature(candidate: RouteCandidate | null | undefined)
 export function transitRouteIdsFromSteps(steps: ApiRouteStep[] | undefined): string[] {
   const ids: string[] = [];
   for (const step of steps ?? []) {
-    if (step.type !== "SUBWAY" && step.type !== "BUS") continue;
+    if (!isTransitStep(step)) continue;
     const id = (step.route_id || step.train_line || "").trim().toUpperCase();
     if (id && !ids.includes(id)) ids.push(id);
   }
@@ -100,9 +96,7 @@ function alternativeCardFields(
   | "toStop"
   | "strip"
 > {
-  const transitSteps = (candidate.steps ?? []).filter(
-    (step) => step.type === "SUBWAY" || step.type === "BUS",
-  );
+  const transitSteps = (candidate.steps ?? []).filter(isTransitStep);
   const first = transitSteps[0];
   const last = transitSteps[transitSteps.length - 1];
   const totalMinutes = candidateEtaMinutes(candidate) ?? undefined;

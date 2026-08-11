@@ -210,7 +210,11 @@ class CheckAreaConditionsTests(unittest.IsolatedAsyncioTestCase):
 
         scan.assert_not_awaited()
         search.assert_awaited_once()
-        self.assertEqual(result.data["incident_evidence"]["status"], "failed")
+        self.assertEqual(result.data["incident_evidence"]["status"], "unscanned")
+        self.assertEqual(result.data["incident_evidence"]["lookup_status"], "unscanned")
+        self.assertEqual(result.data["incident_evidence"]["coverage_status"], "unscanned")
+        self.assertEqual(result.data["incident_evidence"]["lookup_kind"], "index")
+        self.assertNotIn("all_clear", result.data["incident_evidence"])
         self.assertEqual(result.data["event_evidence"]["status"], "complete")
 
     async def test_no_nearby_transit_stop_converts_an_event_provider_error_to_unavailable_evidence(self):
@@ -230,8 +234,173 @@ class CheckAreaConditionsTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.ok)
         scan.assert_not_awaited()
         search.assert_awaited_once()
-        self.assertEqual(result.data["incident_evidence"]["status"], "failed")
+        self.assertEqual(result.data["incident_evidence"]["status"], "unscanned")
         self.assertEqual(result.data["event_evidence"]["status"], "unavailable")
+
+    async def test_truthful_stale_unavailable_and_unscanned_statuses_are_preserved(self):
+        place = ResolvedPlace("Barclays Center", 40.6826, -73.9754, "fallback")
+        for status in ("stale", "unavailable", "unscanned", "complete", "partial", "failed"):
+            with self.subTest(status=status):
+                scan = AsyncMock(
+                    return_value={
+                        "incidents": [],
+                        "warnings": [],
+                        "scan_metadata": {
+                            "status": status,
+                            "lookup_status": "complete",
+                            "coverage_status": status,
+                            "lookup_kind": "index",
+                            "requested_coverage_ids": ["lower-manhattan"],
+                            "warning_count": 0,
+                            "cache_hit": False,
+                            "sources": {
+                                "attempted": ["incident_index"],
+                                "completed": ["incident_index"],
+                            },
+                        },
+                    }
+                )
+                search = AsyncMock(
+                    return_value={"status": "unavailable", "events": [], "completed_sources": []}
+                )
+                with (
+                    patch.object(
+                        check_area_conditions,
+                        "resolve_named_place",
+                        new=AsyncMock(return_value=(place, None)),
+                    ),
+                    patch.object(
+                        check_area_conditions.trip_incidents,
+                        "scan_route_incidents",
+                        new=scan,
+                    ),
+                    patch.object(check_area_conditions.crowd_search, "search_hotspots", new=search),
+                ):
+                    result = await check_area_conditions.execute(
+                        {"area": "Barclays Center"}, _ctx()
+                    )
+
+                self.assertTrue(result.ok)
+                evidence = result.data["incident_evidence"]
+                self.assertEqual(evidence["status"], status)
+                self.assertEqual(evidence["lookup_status"], "complete")
+                self.assertEqual(evidence["coverage_status"], status)
+                self.assertEqual(evidence["lookup_kind"], "index")
+                self.assertEqual(evidence["requested_coverage_ids"], ["lower-manhattan"])
+                self.assertEqual(evidence["warning_count"], 0)
+                self.assertEqual(evidence["sources"]["completed"], ["incident_index"])
+                self.assertNotIn("all_clear", evidence)
+
+    async def test_confirmed_and_unconfirmed_warnings_remain_distinguishable(self):
+        place = ResolvedPlace("Barclays Center", 40.6826, -73.9754, "fallback")
+        confirmed = {
+            "incident_id": "inc_confirmed",
+            "state": "confirmed",
+            "corroborated": True,
+            "location": "Atlantic Avenue",
+            "severity": "high",
+            "description": "Emergency response affecting an entrance.",
+            "source": "mta_alerts + x_search",
+        }
+        x_only = {
+            "incident_id": "inc_x_only",
+            "state": "unconfirmed",
+            "corroborated": False,
+            "location": "Flatbush Avenue",
+            "severity": "medium",
+            "description": "Unconfirmed social report.",
+            "source": "x_search",
+        }
+        scan = AsyncMock(
+            return_value={
+                "incidents": [],
+                "warnings": [confirmed, x_only],
+                "scan_metadata": {
+                    "status": "partial",
+                    "lookup_status": "complete",
+                    "coverage_status": "partial",
+                    "lookup_kind": "index",
+                    "requested_coverage_ids": ["downtown-northwest-brooklyn"],
+                    "warning_count": 2,
+                    "cache_hit": False,
+                    "sources": {
+                        "attempted": ["incident_index"],
+                        "completed": ["incident_index"],
+                    },
+                },
+            }
+        )
+        search = AsyncMock(
+            return_value={"status": "unavailable", "events": [], "completed_sources": []}
+        )
+        with (
+            patch.object(
+                check_area_conditions,
+                "resolve_named_place",
+                new=AsyncMock(return_value=(place, None)),
+            ),
+            patch.object(check_area_conditions.trip_incidents, "scan_route_incidents", new=scan),
+            patch.object(check_area_conditions.crowd_search, "search_hotspots", new=search),
+        ):
+            result = await check_area_conditions.execute({"area": "Barclays Center"}, _ctx())
+
+        self.assertTrue(result.ok)
+        by_location = {row["location"]: row for row in result.data["incidents"]}
+        self.assertEqual(set(by_location), {"Atlantic Avenue", "Flatbush Avenue"})
+        self.assertEqual(by_location["Atlantic Avenue"]["state"], "confirmed")
+        self.assertTrue(by_location["Atlantic Avenue"]["corroborated"])
+        self.assertEqual(by_location["Flatbush Avenue"]["state"], "unconfirmed")
+        self.assertFalse(by_location["Flatbush Avenue"]["corroborated"])
+        self.assertEqual(result.data["incident_evidence"]["warning_count"], 2)
+        self.assertNotIn("all_clear", result.data["incident_evidence"])
+
+    async def test_incidents_and_warnings_combine_and_dedupe_by_identity(self):
+        place = ResolvedPlace("Barclays Center", 40.6826, -73.9754, "fallback")
+        incident = {
+            "incident_id": "inc_dup",
+            "state": "confirmed",
+            "corroborated": True,
+            "location": "Atlantic Avenue",
+            "severity": "high",
+            "description": "Emergency response.",
+            "source": "mta_alerts",
+        }
+        scan = AsyncMock(
+            return_value={
+                "incidents": [incident],
+                "warnings": [dict(incident)],
+                "scan_metadata": {
+                    "status": "complete",
+                    "lookup_status": "complete",
+                    "coverage_status": "current",
+                    "lookup_kind": "index",
+                    "requested_coverage_ids": [],
+                    "warning_count": 1,
+                    "cache_hit": False,
+                    "sources": {
+                        "attempted": ["incident_index"],
+                        "completed": ["incident_index"],
+                    },
+                },
+            }
+        )
+        search = AsyncMock(
+            return_value={"status": "unavailable", "events": [], "completed_sources": []}
+        )
+        with (
+            patch.object(
+                check_area_conditions,
+                "resolve_named_place",
+                new=AsyncMock(return_value=(place, None)),
+            ),
+            patch.object(check_area_conditions.trip_incidents, "scan_route_incidents", new=scan),
+            patch.object(check_area_conditions.crowd_search, "search_hotspots", new=search),
+        ):
+            result = await check_area_conditions.execute({"area": "Barclays Center"}, _ctx())
+
+        self.assertTrue(result.ok)
+        self.assertEqual(len(result.data["incidents"]), 1)
+        self.assertEqual(result.data["incidents"][0]["location"], "Atlantic Avenue")
 
 
 if __name__ == "__main__":

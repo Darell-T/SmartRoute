@@ -1,11 +1,43 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   appendRequestSearch,
   fetchBackendText,
   readJsonBody,
 } from "./backend-proxy-core.ts";
+
+const FRONTEND_ROOT = path.dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
+
+test("Next configuration rejects a public-prefixed application secret", () => {
+  const publicSecret = "must-not-appear-in-output";
+  const environment = { ...process.env, NEXT_PUBLIC_APP_KEY: publicSecret };
+  const result = spawnSync(
+    process.execPath,
+    ["--input-type=module", "-e", "await import('./next.config.mjs')"],
+    { cwd: FRONTEND_ROOT, encoding: "utf8", env: environment },
+  );
+  const output = `${result.stdout}${result.stderr}`;
+
+  assert.notEqual(result.status, 0);
+  assert.match(output, /APP_KEY must remain server-only/);
+  assert.doesNotMatch(output, new RegExp(publicSecret));
+});
+
+test("Next configuration still loads when the application secret is server-only", () => {
+  const environment = { ...process.env };
+  delete environment.NEXT_PUBLIC_APP_KEY;
+  const result = spawnSync(
+    process.execPath,
+    ["--input-type=module", "-e", "await import('./next.config.mjs')"],
+    { cwd: FRONTEND_ROOT, encoding: "utf8", env: environment },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+});
 
 test("readJsonBody distinguishes malformed JSON from an empty body", async () => {
   const malformed = await readJsonBody(

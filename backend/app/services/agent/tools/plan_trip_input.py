@@ -38,6 +38,21 @@ def parse_rfc3339(value: object, *, field: str) -> datetime:
     return parsed
 
 
+def _address_resolution_failure(error) -> bool:
+    """Only explicit destination-resolution failures may retry by coords.
+
+    Authentication, quota, timeout, network, and provider errors are raised
+    unchanged so one failing provider request can never become two.
+    """
+    code = str(getattr(error, "code", "") or "")
+    if code not in {"http_400", "http_404", "request_failed"}:
+        return False
+    summary = str(getattr(error, "provider_summary", "") or str(error)).lower()
+    return any(
+        marker in summary for marker in ("address", "destination", "geocod")
+    )
+
+
 async def route_with_recovery(
     *,
     directions_service,
@@ -58,8 +73,9 @@ async def route_with_recovery(
             routing_preference=routing_preference,
             departure_time=departure_time,
         )
-    except directions_service.GoogleRoutesError:
-        pass
+    except directions_service.GoogleRoutesError as exc:
+        if not _address_resolution_failure(exc):
+            raise
     else:
         routes = directions_service.parse_response(response)
         if routes:

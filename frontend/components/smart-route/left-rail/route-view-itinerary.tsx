@@ -106,6 +106,21 @@ export function RecommendedRouteCard({
   );
 }
 
+export function RouteDirections({
+  plan,
+  destination,
+}: {
+  plan: RoutePlan;
+  destination?: string;
+}) {
+  return (
+    <RouteDetailsChain
+      steps={plan.detailSteps ?? []}
+      destination={destination}
+    />
+  );
+}
+
 function CandidateStatusBadge({ status }: { status: "winner" | "selected" }) {
   const label = status === "winner" ? "Recommended" : "Selected";
   return (
@@ -200,9 +215,6 @@ function TypedRouteReasoning({ text }: { text: string }) {
             bulletSize={15}
           />
         </span>
-        {isTyping && (
-          <span className="sr-ai-reasoning__cursor" aria-hidden="true" />
-        )}
       </p>
     </div>
   );

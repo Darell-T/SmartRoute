@@ -1,3 +1,4 @@
+import { isRouteWorkflowTool } from "./agent-route-tools";
 import type {
   AgentEvent,
   ArrivalCardEvent,
@@ -252,7 +253,7 @@ export function applyAgentEvent(state: ChatState, action: ChatReducerAction): Ch
         toolChips: turn.toolChips.map((chip) => chip.id === action.tool_call_id
           ? { ...chip, status: action.ok ? "ok" : "failed", durationMs: action.duration_ms, summary: action.summary }
           : chip),
-        ...(action.tool === "plan_trip" && !action.ok ? { progress: undefined } : {}),
+        ...(isRouteWorkflowTool(action.tool) && !action.ok ? { progress: undefined } : {}),
       }));
     case "route_card": {
       const card = cardFromEvent(action);

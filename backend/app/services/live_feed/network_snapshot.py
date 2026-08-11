@@ -97,8 +97,9 @@ async def build_network_snapshot(generation: int) -> NetworkSnapshot:
             ALL_SUBWAY_ROUTES,
             "network_snapshot",
             force_refresh=True,
+            cache_result=False,
         ),
-        fetch_service_alerts(force_refresh=True),
+        fetch_service_alerts(force_refresh=True, cache_result=False),
         return_exceptions=True,
     )
     if isinstance(feed_result, Exception) or not feed_result:
@@ -125,6 +126,7 @@ class NetworkSnapshotStore:
         self._lock = asyncio.Lock()
         self._refresh_event = asyncio.Event()
         self._next_generation = 1
+        self._last_demand_at: float | None = None
 
     @property
     def current(self) -> NetworkSnapshot | None:
@@ -132,6 +134,18 @@ class NetworkSnapshotStore:
 
     def refresh_event(self) -> asyncio.Event:
         return self._refresh_event
+
+    def note_demand(self) -> None:
+        """Record that a rider-facing caller needs live network updates."""
+        self._last_demand_at = time.monotonic()
+
+    def has_recent_demand(self, max_idle_seconds: float) -> bool:
+        """Return whether a rider-facing caller was active within the window."""
+        last_demand = self._last_demand_at
+        return (
+            last_demand is not None
+            and time.monotonic() - last_demand <= max_idle_seconds
+        )
 
     async def refresh(self) -> NetworkSnapshot:
         async with self._lock:
@@ -143,8 +157,12 @@ class NetworkSnapshotStore:
                 self._inflight = task
         return await asyncio.shield(task)
 
-    async def get_or_refresh(self) -> NetworkSnapshot:
-        return self._current or await self.refresh()
+    async def get_or_refresh(self, max_age_seconds: float = 30) -> NetworkSnapshot:
+        self.note_demand()
+        current = self._current
+        if current is not None and time.time() - current.updated_at <= max_age_seconds:
+            return current
+        return await self.refresh()
 
     async def _build_and_publish(self, generation: int) -> NetworkSnapshot:
         task = asyncio.current_task()
@@ -168,6 +186,7 @@ class NetworkSnapshotStore:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
         self._current = None
+        self._last_demand_at = None
         self._refresh_event.set()
 
 

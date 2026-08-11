@@ -7,6 +7,10 @@ shared candidate display helpers.
 
 from app.services.trips import event_crowd, text
 from app.services.trips.itinerary import TRANSIT_MODES
+from app.services.trips.transfer_semantics import (
+    route_accessibility,
+    route_walking_totals,
+)
 
 
 def _step_minutes(step: dict) -> int:
@@ -64,22 +68,74 @@ def _route_alert_hits(route: list[dict], alerts: list[dict] | None) -> list[str]
                 hits.append(title)
     return hits
 
+
+def _component_score_total(
+    *,
+    total_minutes: int,
+    transfers: int,
+    alert_count: int,
+    event_crowd_penalty: float,
+    walking_penalty: int,
+    preferred_mode_penalty: int,
+) -> float:
+    """Single authoritative route score formula.
+
+    Shared by single-leg ``_route_score`` and the multi-stop aggregate rows in
+    ``route_option_assembly`` so every score is exactly explainable from the
+    component fields of the row that reports it.
+    """
+    return (
+        total_minutes
+        + transfers * 4
+        + alert_count * 8
+        + event_crowd_penalty
+        + walking_penalty
+        + preferred_mode_penalty
+    )
+
+
 def _route_score(
     route: list[dict],
     alerts: list[dict] | None,
     *,
     route_index: int = 0,
     ticketmaster_event_impacts: list[dict] | None = None,
+    routing_preference: str = "FEWER_TRANSFERS",
+    preferred_modes: list[str] | set[str] | None = None,
 ) -> dict:
     total_minutes = _route_total_minutes(route)
     transfers = _route_transfer_count(route)
     alert_hits = _route_alert_hits(route, alerts)
     transit_count = len(_route_lines(route))
+    street_walking_seconds, in_station_transfer_seconds = route_walking_totals(route)
     event_penalty = event_crowd.route_event_penalty(
         route_index,
         ticketmaster_event_impacts or [],
     )
-    score = total_minutes + transfers * 4 + len(alert_hits) * 8 + event_penalty
+    walking_penalty = (
+        round(street_walking_seconds / 60) * 2
+        if routing_preference == "LESS_WALKING"
+        else 0
+    )
+    preferred = {
+        _normalized_mode(mode)
+        for mode in preferred_modes or []
+        if str(mode).strip()
+    }
+    route_modes = {
+        _normalized_mode(step.get("type"))
+        for step in route
+        if _normalized_mode(step.get("type")) in {"SUBWAY", "BUS", "RAIL"}
+    }
+    preferred_mode_penalty = 4 if preferred and not route_modes.intersection(preferred) else 0
+    score = _component_score_total(
+        total_minutes=total_minutes,
+        transfers=transfers,
+        alert_count=len(alert_hits),
+        event_crowd_penalty=event_penalty,
+        walking_penalty=walking_penalty,
+        preferred_mode_penalty=preferred_mode_penalty,
+    )
     return {
         "total_minutes": total_minutes,
         "transfers": transfers,
@@ -88,12 +144,21 @@ def _route_score(
         "score": score,
         "alerts": alert_hits[:2],
         "event_crowd_penalty": event_penalty,
+        "street_walking_seconds": street_walking_seconds,
+        "in_station_transfer_seconds": in_station_transfer_seconds,
+        "walk_minutes": round(street_walking_seconds / 60),
+        "walking_penalty": walking_penalty,
+        "preferred_mode_penalty": preferred_mode_penalty,
+        "accessibility_status": route_accessibility(route),
     }
 
 def _score_routes(
     routes: list[list[dict]],
     alerts: list[dict] | None,
     ticketmaster_event_impacts: list[dict] | None = None,
+    *,
+    routing_preference: str = "FEWER_TRANSFERS",
+    preferred_modes: list[str] | set[str] | None = None,
 ) -> list[dict]:
     scored = []
     for index, route in enumerate(routes):
@@ -102,6 +167,8 @@ def _score_routes(
             alerts,
             route_index=index,
             ticketmaster_event_impacts=ticketmaster_event_impacts,
+            routing_preference=routing_preference,
+            preferred_modes=preferred_modes,
         )
         scored.append({"index": index, **score})
     scored.sort(
@@ -119,3 +186,8 @@ def _score_routes(
 
 def _score_by_index(scored_routes: list[dict]) -> dict[int, dict]:
     return {int(row["index"]): row for row in scored_routes}
+
+
+def _normalized_mode(value: object) -> str:
+    mode = str(value or "").strip().upper()
+    return "RAIL" if mode in {"TRAIN", "LIGHT_RAIL", "TRAM"} else mode

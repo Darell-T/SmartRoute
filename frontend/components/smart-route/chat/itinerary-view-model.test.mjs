@@ -87,6 +87,23 @@ test("canonical bus leg renders as bus with its server route id", () => {
   assert.deepEqual(model.events[0].routeIds, ["B63"]);
 });
 
+test("canonical AirTrain tram leg remains a visible rail transfer", () => {
+  const model = buildItineraryViewModel({
+    ...card,
+    itinerary: {
+      ...card.itinerary,
+      transfer_count: 1,
+      legs: [
+        { mode: "SUBWAY", ride_seconds: 600, service_id: "F" },
+        { mode: "TRAM", ride_seconds: 480, service_id: "Jamaica AirTrain" },
+      ],
+    },
+  });
+  assert.deepEqual(model.events.map((event) => event.kind), ["subway", "rail"]);
+  assert.deepEqual(model.events[1].routeIds, ["JAMAICA AIRTRAIN"]);
+  assert.equal(model.metaParts[0], "1 transfer");
+});
+
 test("consecutive canonical transit legs retain transfer presentation", () => {
   const model = buildItineraryViewModel({
     ...card,

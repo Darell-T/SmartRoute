@@ -36,6 +36,7 @@ export function HomeNearYou({
       data-arrivals-state={model.arrivalsState}
       data-arrival-count={model.arrivals.length}
       data-has-issue={model.issue ? "true" : "false"}
+      data-location-state={model.locationState}
       aria-labelledby="sr-home-nearby-title"
     >
       <header className="sr-home-nearby__header">
@@ -45,17 +46,24 @@ export function HomeNearYou({
           strokeWidth={1.8}
           aria-hidden="true"
         />
-        <h3 id="sr-home-nearby-title">Near you</h3>
-        <span className="sr-home-nearby__separator" aria-hidden="true">
-          ·
-        </span>
-        <span className="sr-home-nearby__station">
-          {model.stationName ?? "Current location"}
-        </span>
+        <h3 id="sr-home-nearby-title">{model.locationLabel}</h3>
+        {model.stationName ? (
+          <>
+            <span className="sr-home-nearby__separator" aria-hidden="true">
+              ·
+            </span>
+            <span className="sr-home-nearby__station">{model.stationName}</span>
+          </>
+        ) : null}
       </header>
 
       <div className="sr-home-nearby__arrivals">
-        {model.arrivalsState === "ready" ? (
+        {model.arrivalsState === "outside_service_area" ? (
+          <div className="sr-home-nearby__service-area" role="status">
+            <RadioTower size={18} strokeWidth={1.7} aria-hidden="true" />
+            <span>{model.locationNotice}</span>
+          </div>
+        ) : model.arrivalsState === "ready" ? (
           model.arrivals.map((arrival) => (
             <button
               key={arrival.id}
@@ -115,16 +123,18 @@ export function HomeNearYou({
         )}
       </div>
 
-      <div
-        className="sr-home-nearby__condition"
-        data-state={model.condition.state}
-        role={model.condition.state === "alert" ? "status" : undefined}
-      >
-        <ConditionIcon size={18} strokeWidth={1.7} aria-hidden="true" />
-        <span title={model.condition.label}>{model.condition.label}</span>
-      </div>
+      {model.arrivalsState !== "outside_service_area" ? (
+        <div
+          className="sr-home-nearby__condition"
+          data-state={model.condition.state}
+          role={model.condition.state === "alert" ? "status" : undefined}
+        >
+          <ConditionIcon size={18} strokeWidth={1.7} aria-hidden="true" />
+          <span title={model.condition.label}>{model.condition.label}</span>
+        </div>
+      ) : null}
 
-      {model.issue ? (
+      {model.arrivalsState !== "outside_service_area" && model.issue ? (
         <button
           type="button"
           className="sr-home-nearby__issue"

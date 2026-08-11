@@ -35,6 +35,11 @@ _STATION_TOKEN_MAP = {
 }
 
 
+def _parent_stop_id(stop_id: str) -> str:
+    """Platform stop id -> parent station id (e.g. 'Q05N' -> 'Q05')."""
+    return (stop_id or "").rstrip("NS")
+
+
 def normalize_station_name(value) -> str:
     if not isinstance(value, str):
         return ""
@@ -82,11 +87,35 @@ class StopPatternIndex:
         # Index patterns by BOTH route_id and route_short_name; pre-build a
         # {stop_id: position} map per pattern for O(1) lookups.
         self.route_patterns: dict[str, list] = {}
+        routes_by_stop: dict[str, set[str]] = {}
         for p in self.patterns:
             aug = {**p, "pos": {sid: i for i, sid in enumerate(p["stop_ids"])}}
+            public_route = str(
+                p.get("route_short_name") or p.get("route_id") or ""
+            ).upper()
+            if public_route:
+                for stop_id in p.get("stop_ids") or []:
+                    routes_by_stop.setdefault(str(stop_id), set()).add(public_route)
             for key in {p.get("route_id"), p.get("route_short_name")}:
                 if key:
                     self.route_patterns.setdefault(str(key), []).append(aug)
+        self.routes_by_stop = {
+            stop_id: frozenset(routes)
+            for stop_id, routes in routes_by_stop.items()
+        }
+        self._routes_by_parent_stop = {
+            stop_id: sorted(routes)
+            for stop_id, routes in routes_by_stop.items()
+        }
+        self._all_parent_stops = [
+            {
+                "stop_id": stop_id,
+                "stop_name": info.get("name"),
+                "stop_lat": info.get("lat"),
+                "stop_lon": info.get("lon"),
+            }
+            for stop_id, info in sorted(self.stops.items())
+        ]
 
     @classmethod
     def load(cls, path=None) -> "StopPatternIndex":
@@ -96,13 +125,37 @@ class StopPatternIndex:
     def ids_for_name(self, name: str) -> frozenset:
         return self.name_index.get(normalize_station_name(name), frozenset())
 
+    def identity_for_stop(self, stop_id) -> dict:
+        if not isinstance(stop_id, str) or not stop_id:
+            return {
+                "parent_station": None,
+                "station_complex_id": None,
+                "is_platform": False,
+            }
+        parent = _parent_stop_id(stop_id)
+        info = self.stops.get(parent)
+        if info is None:
+            return {
+                "parent_station": None,
+                "station_complex_id": None,
+                "is_platform": parent != stop_id,
+            }
+        return {
+            "parent_station": parent,
+            "station_complex_id": info.get("station_complex_id"),
+            "is_platform": parent != stop_id,
+        }
+
     def stops_for_routes(self, route_ids=None) -> list[dict]:
         """Return parent stops served by the requested routes from memory."""
 
+        if route_ids is None:
+            routes_by_stop = self.routes_by_stop
+            return self._stop_rows(routes_by_stop)
         requested = (
             {str(route_id).strip().upper() for route_id in route_ids}
             if route_ids is not None
-            else {str(route_id).upper() for route_id in self.route_patterns}
+            else set()
         )
         routes_by_stop: dict[str, set[str]] = {}
         for route_id in sorted(requested):
@@ -112,6 +165,11 @@ class StopPatternIndex:
                 ).upper()
                 for stop_id in pattern.get("stop_ids") or []:
                     routes_by_stop.setdefault(str(stop_id), set()).add(public_route)
+
+        return self._stop_rows(routes_by_stop)
+
+    def _stop_rows(self, routes_by_stop) -> list[dict]:
+        """Project cached route ownership into the existing stop-row contract."""
 
         return [
             {
@@ -124,6 +182,68 @@ class StopPatternIndex:
             for stop_id, routes in sorted(routes_by_stop.items())
             if stop_id in self.stops
         ]
+
+    def all_parent_stops(self) -> list[dict]:
+        return self._all_parent_stops
+
+    def route_ids_for_parent_stop(self, parent_stop_id: str) -> list[str]:
+        return self._routes_by_parent_stop.get(str(parent_stop_id).strip(), [])
+
+    def stop_locations(self, stop_ids) -> dict[str, dict]:
+        if not stop_ids:
+            return {}
+        locations: dict[str, dict] = {}
+        for raw_stop_id in stop_ids:
+            stop_id = str(raw_stop_id or "").strip()
+            if not stop_id:
+                continue
+            parent = _parent_stop_id(stop_id)
+            info = self.stops.get(parent)
+            if info is None:
+                continue
+            parent_record = {
+                "stop_name": info.get("name"),
+                "lat": info.get("lat"),
+                "lng": info.get("lon"),
+                "parent_station": "",
+            }
+            locations.setdefault(parent, parent_record)
+            if parent != stop_id:
+                locations[stop_id] = {
+                    "stop_name": info.get("name"),
+                    "lat": info.get("lat"),
+                    "lng": info.get("lon"),
+                    "parent_station": parent,
+                }
+        return locations
+
+    def routes_for_stop(self, stop_id: str) -> list[str]:
+        key = str(stop_id or "").strip()
+        if key not in self.stops and key[-1:] in {"N", "S"}:
+            key = key[:-1]
+        return sorted(self.routes_by_stop.get(key, ()))
+
+    def stop_location(self, stop_id: str) -> tuple[str, dict] | None:
+        key = str(stop_id or "").strip()
+        if key not in self.stops and key[-1:] in {"N", "S"}:
+            key = key[:-1]
+        info = self.stops.get(key)
+        return (key, info) if info else None
+
+    def locations_for_stops(self, stop_ids) -> dict[str, dict]:
+        locations = {}
+        for raw_stop_id in stop_ids:
+            resolved = self.stop_location(raw_stop_id)
+            if resolved is None:
+                continue
+            parent_id, info = resolved
+            record = {
+                "stop_name": info["name"], "lat": info["lat"],
+                "lng": info["lon"], "parent_station": parent_id,
+            }
+            locations[str(raw_stop_id)] = record
+            locations.setdefault(parent_id, record)
+        return locations
 
     def resolve_route_segment(
         self,

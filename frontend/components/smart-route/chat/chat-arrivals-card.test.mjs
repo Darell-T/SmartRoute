@@ -11,7 +11,7 @@ const CHAT_CSS = readFileSync(
   "utf8",
 );
 const ITINERARY_SOURCE = readFileSync(
-  new URL("./recommended-itinerary-card.tsx", import.meta.url),
+  new URL("./itinerary-card-legs.tsx", import.meta.url),
   "utf8",
 );
 const WALKING_ICON_SOURCE = readFileSync(

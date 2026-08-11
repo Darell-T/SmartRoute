@@ -14,16 +14,38 @@ fresh model context each turn (see agent/loop.py).
 from __future__ import annotations
 
 import json
+import math
 import os
 import secrets
 import time
 
 from app.utils import cache
+from app.services.agent import intelligence
+from app.services.agent import profile as profile_module
+from app.services.agent import trip_state as trip_state_module
 
 SESSION_KEY_PREFIX = "agent:sess:"
 SCHEMA_VERSION = 2
 
 AGENT_SESSION_TTL_S = float(os.getenv("AGENT_SESSION_TTL_S", "1800"))
+
+# One active chat turn per session is enforced with a per-session lease keyed
+# separately from the session blob. The lease TTL must outlive a bounded live
+# turn (the configured run_agent_turn deadline, default 50s in loop.py) plus
+# cleanup margin so a live turn can never outlast its own lease; process
+# death eventually releases the lease through the TTL. The 120s floor keeps
+# it comfortably above the admission lease TTL for short deadlines.
+SESSION_LEASE_KEY_PREFIX = "agent:sess-lease:"
+AGENT_TURN_DEADLINE_S = float(os.getenv("AGENT_TURN_DEADLINE_S", "50"))
+
+
+def _session_lease_ttl_s(turn_deadline_s: float) -> int:
+    # ceil so a fractional configured deadline is never truncated below
+    # deadline + the cleanup margin.
+    return max(120, math.ceil(turn_deadline_s + 70))
+
+
+SESSION_LEASE_TTL_S = _session_lease_ttl_s(AGENT_TURN_DEADLINE_S)
 
 MAX_HISTORY_MESSAGES = 12
 MAX_HISTORY_BYTES = 6 * 1024
@@ -35,6 +57,33 @@ def _session_key(session_id: str) -> str:
     return f"{SESSION_KEY_PREFIX}{session_id}"
 
 
+def _session_lease_key(session_id: str) -> str:
+    return f"{SESSION_LEASE_KEY_PREFIX}{session_id}"
+
+
+def acquire_session_lease(session_id: str) -> str | None:
+    """Atomically claim the one-active-turn-per-session lease.
+
+    Returns an opaque ownership token, or None when another turn is already
+    running for this session. Built on the shared atomic cache primitive
+    (cache_add) so the guarantee holds across processes under Redis and with
+    in-memory parity in dev/tests. The token is never exposed to clients.
+    """
+    token = secrets.token_urlsafe(24)
+    if not cache.cache_add(_session_lease_key(session_id), token, SESSION_LEASE_TTL_S):
+        return None
+    return token
+
+
+def release_session_lease(session_id: str, token: str | None) -> bool:
+    """Ownership-safe release via compare-and-delete: only the current
+    owner's token removes the lease, so a stale turn can never delete a
+    newer turn's lease. No-op (False) for a missing or None token."""
+    if not token:
+        return False
+    return cache.cache_delete_if_value(_session_lease_key(session_id), token)
+
+
 def new_session_id() -> str:
     return secrets.token_urlsafe(24)
 
@@ -43,6 +92,7 @@ def new_session() -> tuple[str, dict]:
     """Mint a fresh session id + the blob shape saved under it."""
     session_id = new_session_id()
     now = time.time()
+    profile = profile_module.empty_profile()
     session = {
         "v": SCHEMA_VERSION,
         "created_at": now,
@@ -52,6 +102,8 @@ def new_session() -> tuple[str, dict]:
         "route_cards": [],
         "active_trip": None,
         "pending_trip": {"status": "none", "resume_offered": False},
+        "profile": profile,
+        "trip_state": trip_state_module.empty_trip_state(profile["preferences"]),
         "history": [],
     }
     return session_id, session
@@ -77,6 +129,8 @@ def load_session(session_id: str) -> dict | None:
         session["v"] = SCHEMA_VERSION
         session.setdefault("active_trip", None)
         session.setdefault("pending_trip", {"status": "none", "resume_offered": False})
+    profile_module.get_profile(session)
+    trip_state_module.get_trip_state(session)
     return session
 
 
@@ -184,15 +238,32 @@ def consume_resume_offer(session: dict) -> str | None:
     return f"Do you want me to retry {summary}?"
 
 
-def reset_for_new_trip(session: dict) -> None:
-    """Drop stale trip constraints without erasing ordinary conversation."""
+def reset_for_new_trip(
+    session: dict,
+    *,
+    preserve_active_discovery_set: bool = False,
+) -> None:
+    """Drop stale trip constraints without erasing ordinary conversation.
+
+    ``preserve_active_discovery_set`` keeps only the server-owned active
+    discovery set id so an unambiguous discovery-result handoff ("Take me to
+    the second one.") can resolve against the real store on the next turn;
+    route slots, cards, pending trip, and all other trip-state fields still
+    reset.
+    """
 
     slots = session.setdefault("slots", {})
+    slots.pop("origin", None)
     slots.pop("destination", None)
     slots.pop("time_anchor", None)
     slots.pop("constraints", None)
     session["active_trip"] = None
+    session["route_cards"] = []
     clear_pending_trip(session)
+    trip_state_module.reset_for_new_trip(
+        session,
+        preserve_active_discovery_set=preserve_active_discovery_set,
+    )
 
 
 def next_turn_id(session: dict) -> str:
@@ -205,7 +276,14 @@ def extract_slots(session: dict, tool_calls: list[tuple[str, dict]]) -> None:
     calls -- never from model prose, which can drift from what really ran."""
     slots = session.setdefault("slots", {})
     for name, tool_input in tool_calls:
-        if name != "plan_trip" or not isinstance(tool_input, dict):
+        if name not in {"plan_trip", "prepare_route_options"} or not isinstance(tool_input, dict):
+            continue
+        if name == "prepare_route_options" and (
+            tool_input.get("what_if") is True
+            or tool_input.get("scenario") == "what_if"
+        ):
+            # A hypothetical preparation is intentionally isolated from the
+            # active trip; present_route commits it only on explicit intent.
             continue
         origin = tool_input.get("origin")
         if origin:
@@ -216,9 +294,18 @@ def extract_slots(session: dict, tool_calls: list[tuple[str, dict]]) -> None:
         exclude_modes = tool_input.get("exclude_modes")
         if exclude_modes is not None:
             slots.setdefault("constraints", {})["exclude_modes"] = list(exclude_modes)
+        excluded_route_ids = tool_input.get("excluded_route_ids")
+        if excluded_route_ids is not None:
+            slots.setdefault("constraints", {})["excluded_route_ids"] = list(
+                intelligence.normalize_route_ids(excluded_route_ids)
+            )
         routing_preference = tool_input.get("routing_preference")
         if routing_preference:
             slots.setdefault("constraints", {})["routing_preference"] = routing_preference
         departure_time = tool_input.get("departure_time")
         if departure_time:
             slots["time_anchor"] = departure_time
+        # The canonical prepare_route_options executor owns trip-state
+        # mutation (route fields, active candidate set, selected candidate).
+        # Finalization mirrors only conversational slots, so a non-presentable
+        # active replan can never overwrite the preserved accepted selection.

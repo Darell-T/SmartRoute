@@ -31,9 +31,16 @@ export interface HomeNearbyArrival {
 }
 
 export interface HomeNearbyModel {
+  locationState:
+    | "pending"
+    | "precise_nyc"
+    | "fallback_nyc"
+    | "outside_service_area";
+  locationLabel: string;
+  locationNotice: string | null;
   stationName: string | null;
   arrivals: HomeNearbyArrival[];
-  arrivalsState: "loading" | "ready" | "unavailable";
+  arrivalsState: "loading" | "ready" | "unavailable" | "outside_service_area";
   condition: {
     state: "clear" | "alert" | "loading" | "unavailable";
     label: string;
@@ -51,6 +58,7 @@ interface BuildHomeNearbyModelInput {
   serviceAlertsUnavailable: boolean;
   nearbyIssues?: NearbyTransitIssue[];
   hasPlannedRoute?: boolean;
+  locationState?: HomeNearbyModel["locationState"];
   nowMs?: number;
 }
 
@@ -125,8 +133,22 @@ export function buildHomeNearbyModel({
   serviceAlertsUnavailable,
   nearbyIssues = [],
   hasPlannedRoute = false,
+  locationState = "precise_nyc",
   nowMs,
 }: BuildHomeNearbyModelInput): HomeNearbyModel {
+  if (locationState === "outside_service_area") {
+    return {
+      locationState,
+      locationLabel: "NYC transit only",
+      locationNotice:
+        "SmartRoute currently covers NYC transit. Tell me an NYC starting point to plan a trip.",
+      stationName: null,
+      arrivals: [],
+      arrivalsState: "outside_service_area",
+      condition: { state: "unavailable", label: "NYC service area" },
+      issue: null,
+    };
+  }
   const arrivals: HomeNearbyArrival[] = [];
   const seen = new Set<string>();
 
@@ -158,13 +180,16 @@ export function buildHomeNearbyModel({
   ]);
   const alert = relevantAlert(data.alerts, nearbyRoutes);
 
-  const condition: HomeNearbyModel["condition"] = alert
-    ? { state: "alert", label: conciseAlertSummary(alert) }
-    : serviceAlertsLoading
-      ? { state: "loading", label: "Checking nearby service status" }
-      : serviceAlertsUnavailable
-        ? { state: "unavailable", label: "Service status unavailable" }
-        : { state: "clear", label: "No active service changes nearby" };
+  let condition: HomeNearbyModel["condition"];
+  if (alert) {
+    condition = { state: "alert", label: conciseAlertSummary(alert) };
+  } else if (serviceAlertsLoading) {
+    condition = { state: "loading", label: "Checking nearby service status" };
+  } else if (serviceAlertsUnavailable) {
+    condition = { state: "unavailable", label: "Service status unavailable" };
+  } else {
+    condition = { state: "clear", label: "No active service changes nearby" };
+  }
   const issue = selectHomeNearbyIssue({
     issues: nearbyIssues,
     nearbyRouteIds: Array.from(nearbyRoutes),
@@ -172,18 +197,33 @@ export function buildHomeNearbyModel({
     nowMs,
   });
 
+  let stationName: string | null;
+  if (locationState === "fallback_nyc") {
+    stationName = "34 St–Herald Sq";
+  } else if (locationState === "pending") {
+    stationName = "Locating you…";
+  } else {
+    stationName = data.nearbyTransitGroups[0]?.name ?? nearestStopName?.trim() ?? null;
+  }
+
+  let arrivalsState: HomeNearbyModel["arrivalsState"];
+  if (arrivals.length > 0) {
+    arrivalsState = "ready";
+  } else if (arrivalsLoading) {
+    arrivalsState = "loading";
+  } else if (arrivalsUnavailable) {
+    arrivalsState = "unavailable";
+  } else {
+    arrivalsState = "loading";
+  }
+
   return {
-    stationName:
-      data.nearbyTransitGroups[0]?.name ?? nearestStopName?.trim() ?? null,
+    locationState,
+    locationLabel: locationState === "fallback_nyc" ? "Starting area" : "Near you",
+    locationNotice: null,
+    stationName,
     arrivals,
-    arrivalsState:
-      arrivals.length > 0
-        ? "ready"
-        : arrivalsLoading
-          ? "loading"
-          : arrivalsUnavailable
-            ? "unavailable"
-            : "loading",
+    arrivalsState,
     condition,
     issue,
   };

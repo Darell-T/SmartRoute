@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { EnrichRouteSchema } from "./route.ts";
+import { EnrichRouteSchema } from "./schema.ts";
 
 const step = { type: "SUBWAY", route_id: "A", train_line: "A", line_color: "#0039A6", direction: "Downtown", departure_stop: "Jay St", arrival_stop: "59 St", departure_time_iso: "2026-07-27T12:00:00-04:00", arrival_time_iso: "2026-07-27T12:20:00-04:00", minutes_until_train_arrives: -1, minutes_until_arrival: 19, route_total_minutes: 20, route_total_seconds: 1200, duration_minutes: 18, distance_meters: 4300, stop_count: 5, segment_index: 1, start_point: { lat: 40.692, lng: -73.987 }, end_point: { lat: 40.764, lng: -73.98 }, departure_coords: { latitude: 40.692, longitude: -73.987 }, arrival_coords: { latitude: 40.764, longitude: -73.98 }, polyline: { encodedPolyline: "abc" }, intermediate_stops: ["Canal St"], intermediate_stop_locations: [{ name: "Canal St", lat: 40.72, lng: -74.0 }] };
 

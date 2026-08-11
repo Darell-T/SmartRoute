@@ -4,7 +4,10 @@ import type {
   CanonicalItineraryLeg,
 } from "@/lib/agent-chat-stream";
 import type { RouteDetailStep, RouteStep, RouteStripSegment } from "../types";
+import { isTransitStep } from "@/lib/route-planning";
 import { cleanDestinationLabel } from "./formatters";
+
+export { isTransitStep };
 
 export function routeStepToRailStep(step: ApiRouteStep, index: number): RouteStep {
   if (step.type === "WALK") {
@@ -14,7 +17,10 @@ export function routeStepToRailStep(step: ApiRouteStep, index: number): RouteSte
       action: "Walk",
       title: "Walk",
       detail: walkTarget ? `To ${walkTarget}` : "Continue on foot",
-      duration: typeof step.minutes_until_arrival === "number" ? `${Math.round(step.minutes_until_arrival)} min` : "walk",
+      duration:
+        typeof step.duration_minutes === "number"
+          ? `${Math.round(step.duration_minutes)} min`
+          : "walk",
     };
   }
 
@@ -34,7 +40,10 @@ export function routeStepToRailStep(step: ApiRouteStep, index: number): RouteSte
       ? `Departs in ${Math.max(1, Math.round(departsIn))} min`
       : undefined,
     live: hasLiveDeparture || undefined,
-    duration: typeof step.minutes_until_arrival === "number" ? `${Math.round(step.minutes_until_arrival)} min` : "live",
+    duration:
+      typeof step.duration_minutes === "number"
+        ? `${Math.round(step.duration_minutes)} min`
+        : "live",
   };
 }
 
@@ -48,10 +57,18 @@ export function mergeConsecutiveWalks(steps: ApiRouteStep[]): ApiRouteStep[] {
   for (const step of steps) {
     const prev = out[out.length - 1];
     if (step.type === "WALK" && prev?.type === "WALK") {
+      const durations = [prev.duration_minutes, step.duration_minutes].filter(
+        (minutes): minutes is number =>
+          typeof minutes === "number" && Number.isFinite(minutes),
+      );
       out[out.length - 1] = {
         ...prev,
         arrival_stop: step.arrival_stop || prev.arrival_stop,
         minutes_until_arrival: step.minutes_until_arrival ?? prev.minutes_until_arrival,
+        duration_minutes:
+          durations.length > 0
+            ? durations.reduce((total, minutes) => total + minutes, 0)
+            : undefined,
       };
     } else {
       out.push(step);
@@ -68,8 +85,8 @@ export function stripFromSteps(steps: ApiRouteStep[] | undefined): RouteStripSeg
       ? {
           kind: "walk" as const,
           minutes:
-            typeof step.minutes_until_arrival === "number"
-              ? Math.max(1, Math.round(step.minutes_until_arrival))
+            typeof step.duration_minutes === "number"
+              ? Math.max(1, Math.round(step.duration_minutes))
               : undefined,
         }
       : {
@@ -87,7 +104,7 @@ function walkDetailTitle(
 ): string {
   if (isLast) return "Walk to destination";
   if (target) {
-    if (nextStep?.type === "SUBWAY") {
+    if (nextStep && isTransitStep(nextStep) && nextStep.type !== "BUS") {
       return /station$/i.test(target)
         ? `Walk to ${target}`
         : `Walk to ${target} station`;
@@ -102,9 +119,7 @@ function walkDetailTitle(
    The UI adds the Start and Arrive endpoint rows. */
 export function detailStepsFromSteps(steps: ApiRouteStep[] | undefined): RouteDetailStep[] {
   const merged = mergeConsecutiveWalks(steps ?? []);
-  const transits = merged.filter(
-    (step) => step.type === "SUBWAY" || step.type === "BUS",
-  );
+  const transits = merged.filter(isTransitStep);
   const out: RouteDetailStep[] = [];
   let transitIndex = 0;
 
@@ -114,8 +129,8 @@ export function detailStepsFromSteps(steps: ApiRouteStep[] | undefined): RouteDe
       const isLast = index === merged.length - 1;
       const nextStep = merged[index + 1];
       const minutes =
-        typeof step.minutes_until_arrival === "number"
-          ? Math.max(1, Math.round(step.minutes_until_arrival))
+        typeof step.duration_minutes === "number"
+          ? Math.max(1, Math.round(step.duration_minutes))
           : undefined;
       out.push({
         kind: "walk",
@@ -155,8 +170,8 @@ export function detailStepsFromSteps(steps: ApiRouteStep[] | undefined): RouteDe
           ? step.intermediate_stops.length + 1
           : undefined;
     const rideMinutes =
-      typeof step.minutes_until_arrival === "number"
-        ? Math.max(1, Math.round(step.minutes_until_arrival))
+      typeof step.duration_minutes === "number"
+        ? Math.max(1, Math.round(step.duration_minutes))
         : undefined;
     const next = transits[transitIndex + 1];
     const nextRouteId = next
@@ -211,6 +226,29 @@ function canonicalLegMinutes(leg: CanonicalItineraryLeg | undefined): number | u
 }
 
 /**
+ * Decorate raw steps with canonical leg minutes when the itinerary carries
+ * direct legs (single-origin trips). Cumulative provider ETAs
+ * (`minutes_until_arrival`) are never ride durations: canonical walk and
+ * ride seconds win for the map rail's timing rows.
+ */
+function decorateDirectLegSteps(
+  steps: ApiRouteStep[] | undefined,
+  legs: CanonicalItineraryLeg[] | undefined,
+): ApiRouteStep[] {
+  const canonicalLegs = Array.isArray(legs) ? legs : [];
+  const walkLegs = canonicalLegs.filter((leg) => leg.mode.toUpperCase() === "WALK");
+  const transitLegs = canonicalLegs.filter((leg) => leg.mode.toUpperCase() !== "WALK");
+  let walkIndex = 0;
+  let transitIndex = 0;
+  return (steps ?? []).map((step) => {
+    const leg =
+      step.type === "WALK" ? walkLegs[walkIndex++] : transitLegs[transitIndex++];
+    const minutes = canonicalLegMinutes(leg);
+    return minutes === undefined ? step : { ...step, duration_minutes: minutes };
+  });
+}
+
+/**
  * Build rail details from the same canonical OD segments used by the chat
  * card. This is deliberately not a frontend itinerary merger: raw provider
  * steps are only decorated with their matching canonical leg duration.
@@ -221,7 +259,7 @@ export function detailStepsFromCanonicalItinerary(
 ): RouteDetailStep[] {
   const segments = itinerary?.segments;
   if (!Array.isArray(segments) || segments.length === 0) {
-    return detailStepsFromSteps(steps);
+    return detailStepsFromSteps(decorateDirectLegSteps(steps, itinerary?.legs));
   }
 
   const dwellBySegment = new Map(
@@ -247,7 +285,7 @@ export function detailStepsFromCanonicalItinerary(
       .filter((step) => step.segment_index === segment.segment_index)
       .map((step, index) => {
         const minutes = canonicalLegMinutes(segment.legs[index]);
-        return minutes === undefined ? step : { ...step, minutes_until_arrival: minutes };
+        return minutes === undefined ? step : { ...step, duration_minutes: minutes };
       });
     result.push(...detailStepsFromSteps(rawSegmentSteps));
 

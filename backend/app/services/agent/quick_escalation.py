@@ -60,6 +60,11 @@ def reason_for_tool_result(
         return "unresolved_place"
     if any(marker in error for marker in _CONSTRAINT_FAILURE_MARKERS):
         return "mandatory_constraints_unsatisfied"
-    if required and tool_name in {"plan_trip", "poi_search", "lookup_arrivals"}:
+    # The required flag already encodes the evidence contract: tool_round
+    # derives it from required evidence or the canonical route tools, and the
+    # arrival path passes required=True. A stale tool-name allowlist here
+    # would miss production tools (search_local_places, prepare_route_options,
+    # present_route), so honor the flag directly.
+    if required:
         return "required_tool_failure"
     return None

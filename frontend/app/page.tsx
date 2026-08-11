@@ -1,10 +1,16 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MotionConfig } from "motion/react";
 import type { TransitRouteData } from "@/types";
 import { DEFAULT_LOCATION } from "@/lib/api";
-import { requestInitialLocation } from "@/lib/initial-geolocation";
+import {
+  locationStateForCoordinates,
+  nextLocationState,
+  requestInitialLocation,
+  type InitialLocationState,
+} from "@/lib/initial-geolocation";
 import { useLiveFeed } from "@/lib/use-live-feed";
 import { useServiceAlerts } from "@/lib/use-service-alerts";
 import { useMobileVisibleViewport } from "@/lib/use-mobile-visible-viewport";
@@ -29,11 +35,18 @@ import { MobileStage } from "@/components/smart-route/chat/mobile-stage";
 import { MobileTopBar } from "@/components/smart-route/chat/mobile-top-bar";
 import { buildHomeNearbyModel } from "@/components/smart-route/chat/near-you";
 
-import { LiveWorkspace } from "@/components/smart-route/page/live-workspace";
 import { useMobileRailSheet } from "@/components/smart-route/page/use-mobile-rail-sheet";
 import { useRoutePlanningController } from "@/components/smart-route/page/use-route-planning-controller";
 
 import { type AppTab, type MapActions } from "./page-parts";
+
+const LiveWorkspace = dynamic(
+  () =>
+    import("@/components/smart-route/page/live-workspace").then(
+      (module) => module.LiveWorkspace,
+    ),
+  { ssr: false },
+);
 
 export default function SmartRoutePage() {
   return (
@@ -45,11 +58,16 @@ export default function SmartRoutePage() {
 
 function SmartRoutePageContent() {
   useMobileVisibleViewport();
-  const [userLocation, setUserLocation] = useState<{
-    lng: number;
-    lat: number;
-  } | null>(null);
+  const [locationState, setLocationState] = useState<InitialLocationState>({
+    status: "pending",
+  });
+  const userLocation =
+    locationState.status === "precise_nyc" ||
+    locationState.status === "fallback_nyc"
+      ? locationState.coordinates
+      : null;
   const [activeTab, setActiveTab] = useState<AppTab>("chat");
+  const [mapRequested, setMapRequested] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const [newTripKey, setNewTripKey] = useState(0);
@@ -182,6 +200,7 @@ function SmartRoutePageContent() {
           Boolean(serviceAlerts.error) && serviceAlerts.alerts.length === 0,
         nearbyIssues: liveFeed.nearbyIssues,
         hasPlannedRoute: Boolean(activeRouteCandidate),
+        locationState: locationState.status,
         nowMs: liveFeed.nowMs,
       }),
     [
@@ -195,6 +214,7 @@ function SmartRoutePageContent() {
       liveFeed.nearbyIssues,
       liveFeed.nowMs,
       activeRouteCandidate,
+      locationState.status,
     ],
   );
 
@@ -214,7 +234,7 @@ function SmartRoutePageContent() {
     return requestInitialLocation(
       navigator.geolocation,
       DEFAULT_LOCATION,
-      setUserLocation,
+      setLocationState,
     );
   }, []);
 
@@ -230,8 +250,13 @@ function SmartRoutePageContent() {
   }, []);
 
   const handleLocationUpdate = useCallback(
-    (coords: { lng: number; lat: number }) => {
-      setUserLocation(coords);
+    (coords: { lng: number; lat: number; fallback?: true }) => {
+      setLocationState((current) =>
+        nextLocationState(
+          current,
+          locationStateForCoordinates(coords, coords.fallback ? "fallback" : "precise"),
+        ),
+      );
     },
     [],
   );
@@ -256,7 +281,10 @@ function SmartRoutePageContent() {
   const chat = useAgentChat({ getOrigin: () => userLocation });
   const { theme, toggleTheme } = useSmartRouteTheme();
 
-  const openLiveMap = useCallback(() => setActiveTab("livemap"), []);
+  const openLiveMap = useCallback(() => {
+    setMapRequested(true);
+    setActiveTab("livemap");
+  }, []);
   const openChat = useCallback(() => setActiveTab("chat"), []);
   const closeMobileNavigation = useCallback(() => {
     setMobileNavigationOpen(false);
@@ -275,16 +303,16 @@ function SmartRoutePageContent() {
   const handleOpenNearbyStation = useCallback(
     (arrivals: ArrivalsTurnPayload) => {
       if (!arrivals.stationCoordinates) {
-        setActiveTab("livemap");
+        openLiveMap();
         return;
       }
       routePlanning.handleSearchSubmit(`${arrivals.stationName} station`, {
         label: `${arrivals.stationName} station`,
         coordinates: arrivals.stationCoordinates,
       });
-      setActiveTab("livemap");
+      openLiveMap();
     },
-    [routePlanning],
+    [openLiveMap, routePlanning],
   );
 
   // Card tap -> the same route model used by manual planning. This lets the
@@ -305,9 +333,9 @@ function SmartRoutePageContent() {
       );
       if (!plan) return;
       routePlanning.handleLoadExternalRoutes(plan);
-      setActiveTab("livemap");
+      openLiveMap();
     },
-    [chat.messages, routePlanning],
+    [chat.messages, openLiveMap, routePlanning],
   );
 
   const isLivemapTab = activeTab === "livemap";
@@ -367,22 +395,24 @@ function SmartRoutePageContent() {
               overflow: "hidden",
             }}
           >
-            <LiveWorkspace
-              mobileRail={mobileRail}
-              routePlanning={routePlanning}
-              leftRailData={leftRailData}
-              routeStatus={routeStatus}
-              hasActiveRoute={Boolean(summary)}
-              liveMap={{
-                frameRef: liveMapFrameRef,
-                routeData,
-                destCoords,
-                onLocationUpdate: handleLocationUpdate,
-                onMapReady: handleMapReady,
-                onExpand: () => void toggleFullscreen(liveMapFrameRef.current),
-                onRecenter: () => mapActionsRef.current?.recenter(),
-              }}
-            />
+            {mapRequested ? (
+              <LiveWorkspace
+                mobileRail={mobileRail}
+                routePlanning={routePlanning}
+                leftRailData={leftRailData}
+                routeStatus={routeStatus}
+                hasActiveRoute={Boolean(summary)}
+                liveMap={{
+                  frameRef: liveMapFrameRef,
+                  routeData,
+                  destCoords,
+                  onLocationUpdate: handleLocationUpdate,
+                  onMapReady: handleMapReady,
+                  onExpand: () => void toggleFullscreen(liveMapFrameRef.current),
+                  onRecenter: () => mapActionsRef.current?.recenter(),
+                }}
+              />
+            ) : null}
           </div>
 
           <div

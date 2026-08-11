@@ -42,7 +42,7 @@ The app is intentionally product-first: a dark NYC map, a compact left rail, sta
 ## Features
 
 - **Real-time subway route planning:** Compare transit routes using live arrivals, route details, walking legs, and transfer context.
-- **Incident-aware recommendations:** Fold nearby incident scans, service alerts, and stalled vehicle context into route ranking.
+- **Incident-aware recommendations:** Fold nearby incident evidence, service alerts, and stalled vehicle context into route ranking.
 - **Station-grouped nearby transit:** Show nearby stations as parent groups with route bullets, destinations, and grouped arrival times.
 - **Compact bus support:** Keep bus rows visually distinct from subway bullets while preserving nearby transit context.
 - **Issue-first service alerts:** Surface important nearby disruptions first, then group broader alerts by line family.
@@ -186,91 +186,111 @@ Do not commit real secrets. Use local `.env` files and hosting provider environm
 | `NEXT_PUBLIC_MAPBOX_TOKEN` | Frontend search | Yes for destination search | Mapbox token for destination autocomplete and retrieval. |
 | `GOOGLE_ROUTES_API_KEY` | Backend | Yes for trip planning | Google Routes API key for transit route candidates. |
 | `ANTHROPIC_API_KEY` | Backend | Yes for hosted recommendation reasoning | Provider key used by the route recommendation service. |
-| `AGENT_AUTO_MODEL` | Backend | Optional | Anthropic model for Auto chat mode; defaults to the repository's Sonnet configuration. `AGENT_MODEL` remains a backwards-compatible alias. |
+| `AGENT_AUTO_MODEL` | Backend | Optional | Anthropic model for Auto chat mode; defaults to `claude-sonnet-4-6`. `AGENT_MODEL` remains a backwards-compatible alias. |
 | `AGENT_QUICK_MODEL` | Backend | Optional | Anthropic model for Quick chat mode; defaults to the repository's Haiku configuration. |
 | `AGENT_AUTO_MAX_ROUTE_CANDIDATES` | Backend | Optional | Auto candidate budget; defaults to `5`. |
 | `AGENT_QUICK_MAX_ROUTE_CANDIDATES` | Backend | Optional | Quick candidate budget; defaults to `2`. |
 | `AGENT_MOCK_MODE` | Backend | Optional | Set to `1` locally to stream deterministic chat preview data without model, route, or transit-provider requests. Never enable in production. |
 | `AGENT_MOCK_STEP_DELAY_MS` | Backend | Optional | Delay between simulated chat events; defaults to `280` for realistic UI testing. |
+| `AGENT_TOOL_FIXTURES` | Backend | Local/test only | Directory of recorded agent tool fixtures for deterministic replay (eval harness). Startup rejects a non-empty value outside an explicit local/test runtime profile, including Render. Never set in production. |
+| `AGENT_TOOL_FIXTURES_RECORD` | Backend | Local/test only | Set to `1` to record real agent tool results into `AGENT_TOOL_FIXTURES` for later replay. Startup rejects it outside an explicit local/test runtime profile, including Render. |
 | `SMARTROUTE_SYSTEM_PROMPT` | Backend | Optional | Preferred environment override for the route-ranking system prompt. |
 | `SYSTEM_PROMPT` | Backend | Optional | Supported prompt override alias. |
-| `XAI_API_KEY` | Backend | Optional | Enables external incident scanning when configured. |
-| `XAI_INCIDENT_TIMEOUT_S` | Backend | Optional | Bounded xAI incident-request timeout; defaults to `12` seconds and is clamped from `1` to `30`. |
-| `NY511_API_KEY` | Backend | Optional | Server-side 511NY v2 event-feed key. When omitted, only the official 511NY source is disabled. |
-| `NY511_ENABLED` | Backend | Optional | Enables scheduled 511NY snapshots; defaults to `true` but still requires `NY511_API_KEY`. |
-| `NY511_API_BASE_URL` | Backend | Optional | Official 511NY v2 event URL. Must remain an HTTPS `511ny.org` URL with no credentials or query string. |
-| `NY511_POLL_INTERVAL_SECONDS` | Backend | Optional | Scheduled snapshot refresh interval; defaults to `300` seconds and is clamped to at least `60`. |
-| `NY511_REQUEST_TIMEOUT_SECONDS` | Backend | Optional | Per-attempt 511NY request timeout; defaults to `10` seconds. |
-| `NY511_STALE_AFTER_SECONDS` | Backend | Optional | Age after which the last successful 511NY snapshot is marked `stale`; defaults to `900` seconds. |
-| `NY511_MAX_STALE_SECONDS` | Backend | Optional | Age after which a 511NY snapshot is no longer used and becomes `unavailable`; defaults to `3600` seconds. |
-| `NY511_NYC_BUFFER_DEGREES` | Backend | Optional | Small NYC-envelope buffer for bridge, tunnel, and border-corridor events; defaults to `0.05` and is capped at `0.25`. |
-| `TRIP_INCIDENT_SCAN_TIMEOUT_S` | Backend | Optional | End-to-end regular trip incident-scan budget; defaults to `25` seconds. |
-| `AGENT_GROK_BUDGET_S` | Backend | Optional | Incident-scan budget used only by the agent `plan_trip` tool; defaults to `6` seconds. |
+| `XAI_API_KEY` | Backend | Server-only | Shared server-side xAI key for two distinct boundaries: (1) background-only broad incident scouting by the incident-refresh cron service, and (2) optional bounded route-crowd X/Web research on eligible rider requests. Never expose as `NEXT_PUBLIC_*`. |
+| `XAI_INCIDENT_MODEL` | Backend | Optional | xAI model for the background incident scout; defaults to `grok-4-1-fast-reasoning`. |
+| `XAI_INCIDENT_TIMEOUT_S` | Backend | Optional | Bounded xAI incident-request timeout for the background cron job; defaults to `12` seconds and is clamped from `1` to `30`. |
+| `GROK_CROWD_SEARCH_ENABLED` | Backend | Optional | Enables the bounded route-crowd X/Web research boundary; defaults to enabled. |
+| `XAI_CROWD_MODEL` | Backend | Optional | xAI model for bounded route-crowd X/Web research; defaults to `grok-4-1-fast-reasoning`. |
+| `CROWD_SEARCH_TIMEOUT_S` | Backend | Optional | Route-crowd research request timeout; defaults to `6` seconds and is clamped from `1` to `6`. |
+| `INCIDENT_JOB_CRON_SECRET` | Backend | Optional | Secret for the manual/internal HTTP trigger `POST /api/internal/incident-refresh` (header `X-Cron-Secret`). Omit it to keep that route a `404`; the Render cron service runs the CLI directly and does not need it. |
+| `NY511_API_KEY` | Backend | Dormant | Legacy 511NY v2 event-feed key. The 511 module is dormant: not wired into the app lifecycle, routing, or the background incident-index target architecture (it was not deleted). |
+| `NY511_ENABLED` | Backend | Dormant | Legacy 511NY module enable switch; the dormant module itself defaults to `true`, so example and deployed config must set `false` to fail closed. The module is not wired into any lifecycle or job. |
+| `NY511_API_BASE_URL` | Backend | Dormant | Legacy official 511NY v2 event URL. Must remain an HTTPS `511ny.org` URL with no credentials or query string. |
+| `NY511_POLL_INTERVAL_SECONDS` | Backend | Dormant | Legacy snapshot refresh interval; defaults to `300` seconds and is clamped to at least `60`. |
+| `NY511_REQUEST_TIMEOUT_SECONDS` | Backend | Dormant | Legacy per-attempt 511NY request timeout; defaults to `10` seconds. |
+| `NY511_STALE_AFTER_SECONDS` | Backend | Dormant | Legacy age after which the last successful 511NY snapshot is marked `stale`; defaults to `900` seconds. |
+| `NY511_MAX_STALE_SECONDS` | Backend | Dormant | Legacy age after which a 511NY snapshot is no longer used and becomes `unavailable`; defaults to `3600` seconds. |
+| `NY511_NYC_BUFFER_DEGREES` | Backend | Dormant | Legacy small NYC-envelope buffer for bridge, tunnel, and border-corridor events; defaults to `0.05` and is capped at `0.25`. |
 | `TICKETMASTER_API_KEY` | Backend | Optional | Server-side Ticketmaster Discovery v2 key. Without it, only event lookup is unavailable. |
 | `TICKETMASTER_ENABLED` | Backend | Optional | Enables Ticketmaster event lookup when a key is configured; defaults to `true`. |
 | `TICKETMASTER_SEARCH_RADIUS_MILES` | Backend | Optional | NYC event-search radius; defaults to `25` miles and is capped at `30`. |
 | `EVENT_LOOKUP_TIMEOUT_S` | Backend | Optional | Ticketmaster request timeout; defaults to `6` seconds and is capped at `15`. |
 | `MTA_BUS_API_KEY` | Backend | Optional for buses | MTA BusTime SIRI key for bus monitoring. |
 | `DATABASE_URL` | Backend | Optional | PostgreSQL connection string for GTFS-related background/database paths. |
-| `REDIS_URL` | Backend | Required for production chat/admission | Shared session and admission store. It is optional only for local/test or non-chat paths; missing or unreachable Redis makes protected chat/admission return `503` outside those profiles. |
-| `AGENT_ALLOW_MEMORY_SESSIONS` | Backend | Local/test only | Set to `1` only with an explicit local/test runtime profile to permit non-durable memory sessions. Never set it in production. |
+| `REDIS_URL` | Backend | Required for production chat/admission and incident cron | Shared session and admission store, and the shared incident index: the incident-refresh cron process writes through this Redis and the web service reads it. It is optional only for local/test or non-chat paths; missing or unreachable Redis makes protected chat/admission return `503` outside those profiles, and the cron CLI fails fast when it is missing. |
+| `AGENT_ALLOW_MEMORY_SESSIONS` | Backend | Local/test only | Set to `1` only with an explicit local/test runtime profile to permit non-durable memory sessions. Startup rejects it in production or on Render. |
 | `CORS_ORIGIN_REGEX` | Backend | Optional | Regex for allowed preview origins. Production origin is configured in backend code. |
 | `GTFS_DB_FALLBACK` | Backend | Optional | Enables a local GTFS fallback path when set to `1`. |
 | `BACKEND_VERBOSE_LOGS` | Backend | Optional | Enables extra backend feed logs when set to `1`. |
 
-Advanced tuning variables also exist for provider and trip-stage timeouts, including `GOOGLE_ROUTES_TIMEOUT_S`, `GOOGLE_ROUTES_RETRIES`, `GOOGLE_ROUTES_ALTERNATIVES`, `TRIP_CONTEXT_TIMEOUT_S`, `TRIP_ADVISOR_TIMEOUT_S`, `TRIP_GTFS_ENRICH_TIMEOUT_S`, and `DATABASE_STATEMENT_TIMEOUT_MS`.
+Advanced tuning variables also exist for provider and trip-stage timeouts, including `GOOGLE_ROUTES_TIMEOUT_S`, `GOOGLE_ROUTES_RETRIES`, `GOOGLE_ROUTES_ALTERNATIVES`, `DIRECT_TRIP_DEADLINE_S` (the model-free `/api/trip` ceiling, default `15` seconds), `REDIS_CONNECT_TIMEOUT_S`, `REDIS_READ_TIMEOUT_S`, `INCIDENT_LOOKUP_TIMEOUT_S`, `TRIP_CONTEXT_TIMEOUT_S`, `TRIP_GTFS_ENRICH_TIMEOUT_S`, and `DATABASE_STATEMENT_TIMEOUT_MS`. `TRIP_ADVISOR_TIMEOUT_S` is legacy rollback-only: it applies only to the nested advisor of the unregistered `plan_trip` facade, not to the canonical `prepare_route_options` / `present_route` path.
 
 ## City incident intelligence
 
 SmartRoute enriches a route choice with independent incident signals while keeping
-the normal route request path bounded. The official 511NY v2 event feed is fetched
-by a lifecycle-owned backend poller, not once per rider or per stop. Its default
-cadence is five minutes. Each successful response is normalized, de-duplicated by
-official event ID, and reduced to NYC: the five borough counties are retained, known
-non-NYC counties are excluded, and an intentionally small configured geographic
-buffer permits nearby bridge, tunnel, and border-corridor events.
+the normal route request path bounded. A dedicated background job owns every
+provider boundary: it collects one official MTA incident snapshot and scouts the
+ten canonical NYC batches with xAI X/web search on a 30-minute cadence, then
+normalizes and de-duplicates the results into a **shared incident index** stored
+in Redis. Coverage metadata is written explicitly per batch; an empty lookup
+never implies all-clear.
 
-The latest successful snapshot is process-local. A failed refresh never replaces a
-good snapshot. It is `fresh` through `NY511_STALE_AFTER_SECONDS`, remains available
-but marked `stale` through `NY511_MAX_STALE_SECONDS`, and becomes `unavailable` after
-that maximum age. A valid empty upstream response is still a fresh, successful
-snapshot. Missing keys, invalid 511NY configuration, a disabled source, or an
-unavailable snapshot do not block routing, MTA context, vehicle detection, X/web
-investigation, or Ticketmaster lookup.
+Rider requests never scan incident providers. `prepare_route_options` and
+`check_area_conditions` each perform immediate synchronous shared-index
+lookups scoped to nearby actual GTFS stops (or the candidate stop context),
+reading the bounded shared index, with no upstream X/web/provider research,
+provider retries, or background work enqueued on the request path. Each lookup
+returns the bounded incident records plus a payload-free lookup contract:
 
-For a route request, SmartRoute derives a de-duplicated stop context only from the
-candidate routes. The controlled local Grok tool,
-`search_cached_511ny_incidents`, can inspect only that context and its candidate
-route IDs. Backend code calculates geometry-aware proximity and enforces a maximum
-radius of **0.5 miles**; the tool accepts no URL, credential, arbitrary location, or
-larger radius. It returns concise matched evidence and snapshot metadata. A nearby
-roadway event is labeled as possible bus/walking or station-access context rather
-than automatically being treated as a subway disruption.
-
-Grok keeps both X and web search available alongside the cached official-source tool.
-The bounded scan distinguishes its internal result status from the advisor-facing
-incident list:
-
-| Scan status | Meaning |
+| Lookup status | Meaning |
 |---|---|
-| `complete` | A valid structured incident response was produced from a fresh snapshot, with no recorded scan error, after X search, web search, and the cached 511NY tool all completed. `{"incidents": []}` here is a successful clear result. |
-| `partial` | The expected evidence set was incomplete (including a stale or unavailable 511NY snapshot), an input was capped, or a source/tool recorded an error. A total-tool or tool-round limit is also `partial` when it ends the scan after at least one source completed. It is not an all-clear. |
-| `failed` | The investigation could not initialize, could not produce valid structured output, or the enclosing route-scan budget expired. A total-tool or tool-round limit with no completed source is also `failed`. The route continues without treating the empty list as proof of no incidents. |
-| `disabled` | The optional xAI integration is not configured or unavailable. The route continues using its other context. |
+| `complete` | The lookup itself succeeded (independent of coverage freshness). A specific unexpired indexed incident stays usable while an unrelated coverage batch is stale. |
+| `partial` | Usable coverage is mixed with missing, stale, or unavailable coverage; not an all-clear. |
+| `stale` | Requested coverage expired without a successful refresh; individually unexpired indexed incidents remain usable. |
+| `unavailable` | No usable official source and no usable scout result for the requested coverage. |
+| `unscanned` | The area was never covered by the background index (for example, no nearby transit stop context exists to scope a lookup). |
+| `failed` | The index lookup itself failed. The route continues without treating an empty list as proof of no incidents. |
 
-Only the pre-existing, normalized bare incident list is given to the route advisor,
-so the 511NY/Grok scan metadata does not alter its compatibility contract. Request
-metadata is used only for bounded scan handling and server logging; the system never
-sends raw 511NY payloads, hidden model reasoning, or API keys to the client or
-advisor.
+Records carry a canonical `state` (`confirmed` only from an authoritative
+official source or an independently corroborated scout) and a `corroborated`
+flag, so X-only or unconfirmed reports can never masquerade as confirmed.
+Request metadata is used only for bounded scan handling and server logging; the
+system never sends raw provider payloads, hidden model reasoning, or API keys to
+the client or advisor.
 
-Before that five-field advisor list is produced, SmartRoute conservatively removes
-resolved or stale evidence and de-duplicates only incident reports it can establish
-as related through source IDs, compatible times, proximity or shared corridor/stop
-context, and meaningful description overlap. Joined source attribution remains
-bounded in the final `source` field. Existing MTA service alerts and stalled
-subway/bus-vehicle observations are intentionally kept as separate advisor signals;
-this incident merge does not collapse those arrays into the Grok/511NY incident list.
+The optional bounded route-crowd X/Web research boundary is separate: it runs
+only on eligible rider requests where crowd collection is required (an
+explicit crowd-avoidance request or route hotspot hits) and live search is
+allowed (Auto mode), with a five-minute cache and a hard deadline. It never
+performs broad incident research.
+
+### Background incident scheduler
+
+The root `render.yaml` declares exactly one cron service,
+`smartroute-incident-refresh` (`type: cron`, `runtime: python`, `rootDir:
+backend`), which runs `python scripts/run_incident_refresh.py` every 30 minutes
+(UTC schedule `0,30 * * * *`) after `pip install -r requirements.txt`. The CLI
+performs exactly one refresh cycle, prints only bounded payload-free metrics,
+returns a nonzero exit code for failed or unhandled runs, and always releases
+the xAI transport on exit.
+
+The cron process writes the same Redis index the web service reads, so
+`REDIS_URL` is required in both services; the CLI fails fast when it is missing
+because an ephemeral in-memory cache in the cron process would be invisible to
+riders. `SMARTROUTE_ENV=production`, `REDIS_URL`, and `XAI_API_KEY` are declared
+for the cron service (the two keys are `sync: false`). An optional
+`INCIDENT_JOB_CRON_SECRET` enables a manual/internal HTTP trigger at
+`POST /api/internal/incident-refresh` (header `X-Cron-Secret`); with no secret
+configured that route returns `404`, and a failed cycle returns `503` without
+exposing metrics or error details. The web service closes the shared scout
+transport during lifespan shutdown.
+
+### Legacy 511NY module (dormant)
+
+The 511NY integration is **dormant and not deleted**: it is not wired into the
+application lifecycle, routing, or the background incident-index target
+architecture. Its environment entries remain only for provenance; do not treat
+them as active configuration.
 
 ### Production readiness
 
@@ -288,10 +308,11 @@ endpoint with a server-side key, an explicit NYC `latlong`, miles radius, bounde
 pagination, local distance filtering, event ID de-duplication, and bounded timeout.
 It does not invent start times for date-only/TBA/TBD events, excludes cancelled
 events from crowd predictions, and withholds crowd windows for postponed or
-rescheduled entries. For an explicit crowd-avoidance trip, `plan_trip` now searches
-bounded route hubs concurrently, associates normalized events to each candidate by
-distance and travel window, and applies a capped deterministic crowd penalty before
-the recommendation is emitted. A missing or failed provider remains distinct from a
+rescheduled entries. For an explicit crowd-avoidance trip, `prepare_route_options`
+searches bounded route hubs concurrently, associates normalized events to each
+candidate by distance and travel window, and applies a capped deterministic
+crowd penalty before the outer agent selects a candidate and `present_route`
+emits the recommendation. A missing or failed provider remains distinct from a
 successful search with no relevant events and never prevents route planning. Adding
 `TICKETMASTER_API_KEY` enables this server-side evidence path; no frontend key is
 used.
@@ -406,7 +427,7 @@ SmartRoute uses public transit data and third-party routing/context providers:
 - MTA BusTime SIRI for bus monitoring.
 - NYC OpenData subway geometry for generated visual map artifacts.
 - Google Routes for transit route candidates.
-- External incident scanning when configured.
+- Background incident intelligence (official MTA sources plus xAI X/web scout) via the shared incident index.
 
 SmartRoute is not affiliated with or endorsed by the MTA.
 
@@ -414,7 +435,7 @@ SmartRoute is not affiliated with or endorsed by the MTA.
 
 - Realtime transit feeds can be incomplete, delayed, or temporarily unavailable.
 - Route recommendations are advisory and should be checked against official MTA updates for high-stakes trips.
-- Incident scanning depends on external provider availability and may miss or delay local events.
+- Incident intelligence depends on external provider availability and may miss or delay local events.
 - Some map artifacts are optimized for readable display rather than canonical track geometry.
 - Hosted AI, routing, search, and tile providers introduce quota and latency constraints.
 - Full live rerouting would require more aggressive polling, push infrastructure, and provider cost management.

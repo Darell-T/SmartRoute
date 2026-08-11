@@ -6,7 +6,7 @@ export interface Coordinates {
 }
 
 export interface RouteStep {
-  type: "WALK" | "SUBWAY" | "BUS";
+  type: "WALK" | "SUBWAY" | "BUS" | "RAIL" | "TRAIN" | "LIGHT_RAIL" | "TRAM";
   start_point?: Coordinates;
   end_point?: Coordinates;
   polyline?: { encodedPolyline: string };
@@ -238,6 +238,10 @@ export interface LiveFeedResponse {
   signals?: LiveSystemSignals | null;
   incidents?: LiveFeedIncident[];
   nearby_issues?: NearbyTransitIssue[];
+  /** Socket-local generation used to reject a stale secondary bus update. */
+  bus_generation?: number;
+  /** A primary snapshot never waits for BusTime; cached buses may be included. */
+  bus_status?: "pending" | "cached" | "ready" | "unavailable";
   updated_at: number;
   degraded?: boolean;
   debug?: {
@@ -258,6 +262,13 @@ export interface LiveFeedResponse {
     vehicle_count: number;
     vehicle_scope?: "nearest_routes" | "all_subway" | "all_subway_with_stop_id_fallback" | "nearest_plus_selected" | string;
   };
+}
+
+export interface LiveFeedBusUpdate {
+  generation: number;
+  arrivals: LiveArrival[];
+  fetched_at: number;
+  status: "ready" | "cached" | "unavailable";
 }
 
 export interface ServiceAlertDetail extends ServiceAlert {

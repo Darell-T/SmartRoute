@@ -187,6 +187,31 @@ test("home nearby model stays in loading until arrivals explicitly fail", () => 
   });
 });
 
+test("home nearby labels the fallback and keeps an outside location out of the live module", () => {
+  const fallback = buildHomeNearbyModel({
+    data: DEMO_RAIL_DATA,
+    arrivalsLoading: false,
+    arrivalsUnavailable: false,
+    serviceAlertsLoading: false,
+    serviceAlertsUnavailable: false,
+    locationState: "fallback_nyc",
+  });
+  assert.equal(fallback.locationLabel, "Starting area");
+  assert.equal(fallback.stationName, "34 St–Herald Sq");
+
+  const outside = buildHomeNearbyModel({
+    data: DEMO_RAIL_DATA,
+    arrivalsLoading: false,
+    arrivalsUnavailable: false,
+    serviceAlertsLoading: false,
+    serviceAlertsUnavailable: false,
+    locationState: "outside_service_area",
+  });
+  assert.equal(outside.arrivalsState, "outside_service_area");
+  assert.deepEqual(outside.arrivals, []);
+  assert.match(outside.locationNotice ?? "", /NYC transit/);
+});
+
 test("home nearby model bounds provider alert copy to one concise summary", () => {
   const result = buildHomeNearbyModel({
     data: {

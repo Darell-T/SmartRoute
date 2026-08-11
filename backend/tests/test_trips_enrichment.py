@@ -27,7 +27,13 @@ BUS_LOCATED = [
 ]
 
 
-def _load_trips_module(bus_fetch):
+def _load_trips_module(bus_fetch, *, routes=None):
+    # app.routers.trips now imports route_constraints from the agent tools
+    # package. Import that package under the REAL environment first: re-running
+    # app.services.agent.tools.__init__ under the faked fastapi below would fail
+    # (transit_snapshot -> app.routers.live_feed needs WebSocket/JSONResponse).
+    import app.services.agent.tools.route_option_assembly  # noqa: F401
+
     fake_fastapi = types.ModuleType("fastapi")
 
     class _FakeAPIRouter:
@@ -68,6 +74,10 @@ def _load_trips_module(bus_fetch):
             "route_id": "G",
             "departure_stop": "Church Av",
             "arrival_stop": "Fort Hamilton Pkwy",
+            # Deterministic selection picks the lowest (minutes, transfers,
+            # index): route 0 at 5 min beats route 1 at 9 min, so the chosen
+            # route stays the subway+bus candidate the enrichment tests assert.
+            "route_total_minutes": 5,
         }
         bus_step = {
             "type": "BUS",
@@ -76,33 +86,31 @@ def _load_trips_module(bus_fetch):
             "arrival_stop": "AV A/3 ST",
             "departure_coords": {"latitude": 40.700, "longitude": -73.990},
             "arrival_coords": {"latitude": 40.703, "longitude": -73.9905},
+            "route_total_minutes": 5,
         }
         return subway_step, bus_step
 
     def _fake_parse_response(*args, **kwargs):
+        if routes is not None:
+            return routes
         s0, b0 = _route_steps()
         s1, _ = _route_steps()
+        s1["route_total_minutes"] = 9
         return [[s0, b0], [s1]]
 
     async def _fake_get_transit_route(*args, **kwargs):
         return {"routes": []}
 
+    class _FakeGoogleRoutesError(Exception):
+        def __init__(self, code, message, *, provider_status=None, provider_summary=None):
+            super().__init__(message)
+            self.code = code
+            self.provider_status = provider_status
+            self.provider_summary = provider_summary
+
     fake_directions.get_transit_route = _fake_get_transit_route
     fake_directions.parse_response = _fake_parse_response
-
-    fake_ai_advisor = types.ModuleType("app.services.ai_advisor")
-
-    async def _fake_stream_recommendation(payload):
-        yield "Take the G, sir. [ROUTE:0]"
-
-    fake_ai_advisor.stream_recommendation = _fake_stream_recommendation
-
-    fake_incident_monitor = types.ModuleType("app.services.incident_monitor")
-
-    async def _fake_get_incidents(*args, **kwargs):
-        return {"incidents": []}
-
-    fake_incident_monitor.get_incidents = _fake_get_incidents
+    fake_directions.GoogleRoutesError = _FakeGoogleRoutesError
 
     fake_mta_feed = types.ModuleType("app.services.mta_feed")
 
@@ -129,35 +137,52 @@ def _load_trips_module(bus_fetch):
 
     fake_bus_routes.slice_route_stops = _fake_slice_route_stops
 
-    fake_anthropic = types.ModuleType("anthropic")
-    fake_anthropic.AsyncAnthropic = lambda api_key=None: SimpleNamespace(api_key=api_key)
-
     with patch.dict(
         sys.modules,
         {
             "fastapi": fake_fastapi,
             "pydantic": fake_pydantic,
-            "anthropic": fake_anthropic,
             "app.services.directions": fake_directions,
-            "app.services.ai_advisor": fake_ai_advisor,
-            "app.services.incident_monitor": fake_incident_monitor,
             "app.services.mta_feed": fake_mta_feed,
             "app.services.bus_routes": fake_bus_routes,
         },
     ):
-        # Drop the trips router AND its services.trips submodules so they
-        # re-import fresh inside this stub context so the bus-route dependency
-        # binds at module load.
+        # Drop the trips router, its services.trips submodules, and the direct
+        # preparation dependency factory so they re-import fresh inside this
+        # stub context and bind the fake provider modules at module load.
         for _m in [
             k
             for k in list(sys.modules)
-            if k in {"app.routers.trips", "app.routers.trip_enrichment"}
+            if k
+            in {
+                "app.routers.trips",
+                "app.routers.trip_enrichment",
+                "app.services.agent.tools.plan_trip_dependencies",
+            }
             or k.startswith("app.services.trips")
         ]:
             sys.modules.pop(_m, None)
         module = importlib.import_module("app.routers.trips")
-        module.admission.acquire = AsyncMock(return_value=module.admission.AdmissionLease("v1.test-principal-opaque-123456", "trip", "test-lease"))
-        module.admission.release = AsyncMock()
+        real_admission = module.admission
+        module.admission = SimpleNamespace(
+            acquire=AsyncMock(
+                return_value=real_admission.AdmissionLease(
+                    "v1.test-principal-opaque-123456",
+                    "trip",
+                    "test-lease",
+                )
+            ),
+            release=AsyncMock(),
+            AdmissionDenied=real_admission.AdmissionDenied,
+            principal_from_request=real_admission.principal_from_request,
+        )
+        # Expose the injected fakes so focused tests can slow/fail them the
+        # same way the router-level tests used to patch module attributes.
+        module._test_fakes = {
+            "directions": fake_directions,
+            "mta_feed": fake_mta_feed,
+            "bus_routes": fake_bus_routes,
+        }
         return module
 
 
@@ -194,8 +219,8 @@ def _payload(trips):
         origin_lat=40.7,
         origin_lng=-73.99,
         destination="Test Dest",
-        destination_lat=None,
-        destination_lng=None,
+        destination_lat=40.70,
+        destination_lng=-73.98,
     )
 
 
@@ -293,7 +318,7 @@ class TripEnrichmentTests(unittest.IsolatedAsyncioTestCase):
             "bus_with_stops": 0,
         })
 
-        with patch.object(trips.enrichment, "_enrich_route", enrich):
+        with patch.object(trips.direct_plan.enrichment, "_enrich_route", enrich):
             result = await trips.enrich_route(
                 _request_with_gtfs(), trips.EnrichRouteRequest(steps=[step])
             )
@@ -333,7 +358,7 @@ class TripEnrichmentTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         rejected_enrich = AsyncMock()
-        with patch.object(trips.enrichment, "_enrich_route", rejected_enrich):
+        with patch.object(trips.direct_plan.enrichment, "_enrich_route", rejected_enrich):
             for invalid_step in invalid_steps:
                 with self.subTest(invalid_step=invalid_step), self.assertRaises(trips.HTTPException):
                     await trips.enrich_route(
@@ -341,6 +366,34 @@ class TripEnrichmentTests(unittest.IsolatedAsyncioTestCase):
                         trips.EnrichRouteRequest(steps=[invalid_step]),
                     )
         rejected_enrich.assert_not_awaited()
+
+    async def test_enrich_route_accepts_rail_modes_without_rejecting_them(self):
+        async def bus_fetch(route_id):
+            return {"canned": BUS_LOCATED}
+
+        trips = _load_trips_module(bus_fetch)
+        tram_step = {
+            "type": "TRAM",
+            "route_id": "R32",
+            "train_line": "R32",
+            "direction": "To Terminal 8",
+            "departure_stop": "Jamaica",
+            "arrival_stop": "Airport",
+            "start_point": {"lat": 40.7, "lng": -73.8},
+            "end_point": {"lat": 40.65, "lng": -73.78},
+        }
+        enrich = AsyncMock(return_value={
+            "subway_legs": 0,
+            "bus_legs": 0,
+            "subway_with_stops": 0,
+            "bus_with_stops": 0,
+        })
+        with patch.object(trips.direct_plan.enrichment, "_enrich_route", enrich):
+            result = await trips.enrich_route(
+                _request_with_gtfs(), trips.EnrichRouteRequest(steps=[tram_step])
+            )
+        self.assertTrue(result["enriched"])
+        enrich.assert_awaited_once()
 
     async def test_oba_failure_degrades_to_empty_without_breaking_trip(self):
         async def bus_fetch(route_id):
@@ -354,49 +407,12 @@ class TripEnrichmentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bus["intermediate_stops"], [])
         self.assertIn("recommendation", result)
 
-    async def test_advisor_failure_falls_back_without_breaking_trip(self):
-        async def bus_fetch(route_id):
-            return {"canned": BUS_LOCATED}
-
-        trips = _load_trips_module(bus_fetch)
-
-        async def _boom(payload):
-            raise RuntimeError("advisor down")
-            yield  # unreachable; marks this an async generator
-
-        # The advisor blowing up (timeout, no credits, overload) must NOT 500
-        # the trip -- it falls back to the mock recommendation and still ships.
-        trips.stream_recommendation = _boom
-        result = await trips.plan_trip(_request_with_gtfs(), _payload(trips))
-        self.assertIsInstance(result, dict)
-        self.assertIn("recommendation", result)
-        self.assertTrue(result["route"], "chosen route still returned")
-
-    async def test_slow_advisor_degrades_without_hanging_trip(self):
-        async def bus_fetch(route_id):
-            return {"canned": BUS_LOCATED}
-
-        trips = _load_trips_module(bus_fetch)
-        trips.TRIP_ADVISOR_TIMEOUT_S = 0.01
-
-        async def _slow_advisor(payload):
-            await asyncio.sleep(0.1)
-            yield "Take the G, sir. [ROUTE:0]"
-
-        trips.stream_recommendation = _slow_advisor
-        started = time.monotonic()
-        result = await trips.plan_trip(_request_with_gtfs(), _payload(trips))
-
-        self.assertLess(time.monotonic() - started, 0.08)
-        self.assertIn("could not complete live reasoning", result["recommendation"])
-        self.assertTrue(result["route"], "chosen route still returned")
-
     async def test_slow_gtfs_enrichment_degrades_without_hanging_trip(self):
         async def bus_fetch(route_id):
             return {"canned": BUS_LOCATED}
 
         trips = _load_trips_module(bus_fetch)
-        trips.enrichment.TRIP_GTFS_ENRICH_TIMEOUT_S = 0.01
+        trips.direct_plan.enrichment.TRIP_GTFS_ENRICH_TIMEOUT_S = 0.01
         started = time.monotonic()
         result = await trips.plan_trip(_request_with_slow_gtfs(), _payload(trips))
 
@@ -417,9 +433,10 @@ class TripEnrichmentTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.1)
             return []
 
-        trips.fetch_service_alerts = _slow_context
-        trips.get_stalled_trains = _slow_context
-        trips.get_stalled_buses = _slow_context
+        mta_feed = trips._test_fakes["mta_feed"]
+        mta_feed.fetch_service_alerts = _slow_context
+        mta_feed.get_stalled_trains = _slow_context
+        mta_feed.get_stalled_buses = _slow_context
         started = time.monotonic()
         result = await trips.plan_trip(_request_with_gtfs(), _payload(trips))
 

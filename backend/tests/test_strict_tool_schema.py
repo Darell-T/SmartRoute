@@ -38,13 +38,24 @@ class StrictToolSchemaTests(unittest.TestCase):
                     assert_strict_tool_schemas_compatible(custom)
                     names = {tool.get("name") for tool in custom}
                     if parsed.intent == "route_planning":
-                        self.assertIn("plan_trip", names)
+                        self.assertEqual(
+                            names,
+                            {
+                                "get_place_details",
+                                "prepare_route_options",
+                                "present_route",
+                                "accessibility_status",
+                            },
+                        )
                         self.assertIn("accessibility_status", names)
                     if parsed.intent == "arrival_lookup":
                         self.assertIn("lookup_arrivals", names)
                     if parsed.intent == "destination_discovery":
-                        self.assertIn("poi_search", names)
-                        self.assertIn("plan_trip", names)
+                        self.assertIn("search_local_places", names)
+                        self.assertNotIn("poi_search", names)
+                        self.assertIn("prepare_route_options", names)
+                        self.assertIn("present_route", names)
+                        self.assertNotIn("plan_trip", names)
                     if parsed.intent == "area_conditions":
                         self.assertEqual(names, {"check_area_conditions"})
                         self.assertEqual(
@@ -83,13 +94,13 @@ class StrictToolSchemaTests(unittest.TestCase):
                 [{"name": "plan_trip", "strict": True, "input_schema": bad}]
             )
 
-    def test_default_auto_model_is_sonnet_four_five(self):
+    def test_default_auto_model_is_sonnet_four_six(self):
         with patch.dict(os.environ, {}, clear=False):
             for key in ("AGENT_AUTO_MODEL", "AGENT_SONNET_MODEL", "AGENT_MODEL"):
                 os.environ.pop(key, None)
             self.assertEqual(
                 policy.policy_for_mode("auto").model,
-                "claude-sonnet-4-5-20250929",
+                "claude-sonnet-4-6",
             )
 
 

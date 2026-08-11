@@ -4,7 +4,11 @@ import pathlib
 import sys
 import unittest
 from datetime import datetime
+from types import SimpleNamespace
+from unittest.mock import patch
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+import redis
 
 
 BACKEND_ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -22,11 +26,19 @@ except ZoneInfoNotFoundError:
     NYC_TZ = None
 
 if gtfs_realtime_pb2 is not None and NYC_TZ is not None:
-    from app.services.mta import alerts as mta_alerts, bus as mta_bus, subway as mta_subway
+    from app.services.mta import (
+        alerts as mta_alerts,
+        bus as mta_bus,
+        feeds as mta_feeds,
+        subway as mta_subway,
+    )
 else:
     mta_alerts = None
     mta_bus = None
+    mta_feeds = None
     mta_subway = None
+
+from app.utils import cache as cache_module
 
 
 def _localized_timestamp(year: int, month: int, day: int, hour: int) -> int:
@@ -73,6 +85,112 @@ def _new_feed() -> gtfs_realtime_pb2.FeedMessage:
     feed.header.gtfs_realtime_version = "2.0"
     feed.header.timestamp = 1_778_595_600
     return feed
+
+
+class _RejectingRedis:
+    def get(self, _key):
+        raise redis.exceptions.ResponseError("sensitive provider details")
+
+    def setex(self, _key, _ttl, _value):
+        raise redis.exceptions.ResponseError("sensitive provider details")
+
+
+class OptionalProviderCacheTests(unittest.TestCase):
+    def setUp(self):
+        cache_module._mem.clear()
+        cache_module._last_fail_open_log = 0.0
+
+    def tearDown(self):
+        cache_module._mem.clear()
+
+    def test_fail_open_cache_uses_process_memory_when_redis_rejects_requests(self):
+        with patch.object(cache_module, "redis_client", _RejectingRedis()):
+            cache_module.cache_set("mta:test", b"feed", 30, fail_open=True)
+            self.assertEqual(
+                cache_module.cache_get("mta:test", fail_open=True),
+                b"feed",
+            )
+
+    def test_default_cache_behavior_remains_strict(self):
+        with patch.object(cache_module, "redis_client", _RejectingRedis()):
+            with self.assertRaises(redis.exceptions.ResponseError):
+                cache_module.cache_get("session:test")
+            with self.assertRaises(redis.exceptions.ResponseError):
+                cache_module.cache_set("session:test", b"state", 30)
+
+
+@unittest.skipIf(mta_feeds is None, "GTFS realtime dependencies are unavailable")
+class MtaProviderCacheResilienceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_successful_mta_fetches_survive_redis_quota_errors(self):
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+            async def get(self, _url):
+                return SimpleNamespace(status_code=200, content=b"provider-feed")
+
+        cache_module._mem.clear()
+        with patch.object(
+            cache_module,
+            "redis_client",
+            _RejectingRedis(),
+        ), patch("httpx.AsyncClient", return_value=FakeClient()):
+            feeds = await mta_feeds.fetch_feeds_with_metadata(
+                ["Q"],
+                force_refresh=True,
+            )
+            alerts = await mta_alerts.fetch_service_alerts(force_refresh=True)
+
+        self.assertEqual([feed["content"] for feed in feeds], [b"provider-feed"])
+        self.assertEqual(alerts, b"provider-feed")
+
+    async def test_process_owned_snapshot_fetches_can_skip_redis_writes(self):
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+            async def get(self, _url):
+                return SimpleNamespace(status_code=200, content=b"provider-feed")
+
+        with patch("httpx.AsyncClient", return_value=FakeClient()), patch.object(
+            cache_module,
+            "cache_set",
+        ) as cache_set:
+            feeds = await mta_feeds.fetch_feeds_with_metadata(
+                ["Q"],
+                force_refresh=True,
+                cache_result=False,
+            )
+            alerts = await mta_alerts.fetch_service_alerts(
+                force_refresh=True,
+                cache_result=False,
+            )
+
+        self.assertEqual([feed["content"] for feed in feeds], [b"provider-feed"])
+        self.assertEqual(alerts, b"provider-feed")
+        cache_set.assert_not_called()
+
+    def test_trip_update_parser_preserves_stop_sequence(self):
+        feed = _new_feed()
+        entity = feed.entity.add()
+        entity.id = "trip-update"
+        trip_update = entity.trip_update
+        trip_update.trip.trip_id = "trip-1"
+        trip_update.trip.route_id = "Q"
+        stop = trip_update.stop_time_update.add()
+        stop.stop_id = "Q01N"
+        stop.stop_sequence = 17
+        stop.arrival.time = 1_778_595_900
+
+        parsed = mta_feeds.parse_bytes(feed.SerializeToString())
+
+        self.assertEqual(parsed[0]["stop_sequence"], 17)
 
 
 @unittest.skipIf(

@@ -1,9 +1,23 @@
 import type { RouteCandidate, RouteStep, ServiceAlert, TripResponse } from "@/types";
 
+/** Rail-capable transit step types accepted across the card, API, and map. */
+export const TRANSIT_STEP_TYPES: ReadonlySet<RouteStep["type"]> = new Set([
+  "SUBWAY",
+  "BUS",
+  "RAIL",
+  "TRAIN",
+  "LIGHT_RAIL",
+  "TRAM",
+]);
+
+export function isTransitStep(step: RouteStep): boolean {
+  return TRANSIT_STEP_TYPES.has(step.type);
+}
+
 export function deriveTransitRouteIds(steps: RouteStep[] = []) {
   const ids = new Set<string>();
   for (const step of steps) {
-    if (step.type !== "SUBWAY" && step.type !== "BUS") continue;
+    if (!isTransitStep(step)) continue;
     const id = (step.route_id || step.train_line || "").trim().toUpperCase();
     if (id) ids.add(id);
   }
@@ -42,13 +56,9 @@ export function routeCandidateLabel(steps: RouteStep[] = []) {
   const ids = deriveTransitRouteIds(steps);
   const transferStep = steps.find(
     (step, index) =>
-      index > 0 &&
-      (step.type === "SUBWAY" || step.type === "BUS") &&
-      Boolean(step.departure_stop),
+      index > 0 && isTransitStep(step) && Boolean(step.departure_stop),
   );
-  const firstTransit = steps.find(
-    (step) => step.type === "SUBWAY" || step.type === "BUS",
-  );
+  const firstTransit = steps.find(isTransitStep);
   const via = transferStep?.departure_stop || firstTransit?.departure_stop || "direct";
   const label = ids.length ? ids.join("/") : "Walk";
   return `${label} via ${via}`;

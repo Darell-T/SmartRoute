@@ -9,5 +9,5 @@ split by responsibility:
 - ``scoring``    -- route scoring + route-step accessors (depends on ``text``)
 - ``enrichment`` -- gtfs/bus leg enrichment (independent)
 - ``candidates`` -- model-output parsing + candidate building (``scoring``, ``text``)
-- ``incidents``  -- on-demand Grok incident scan for route advisor context
+- ``incidents``  -- bounded lookup against the background-refreshed index
 """

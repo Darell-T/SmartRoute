@@ -159,6 +159,31 @@ class PlanTripToolTests(unittest.IsolatedAsyncioTestCase):
         _args, kwargs = self._get_route.call_args
         self.assertEqual(kwargs["departure_time"], "2026-07-16T22:00:00-04:00")
 
+    async def test_omitted_origin_resolves_to_rider_gps_without_reverse_geocoding(self):
+        # Audit proof: rider_location is exposed to the route-preparation
+        # tool/state layer via ToolContext.origin, so origin "user" resolves
+        # to GPS coordinates deterministically -- no model-copied lat/lng
+        # prose and no reverse geocoding of the current location.
+        result = await plan_trip.execute(
+            {"origin": "user", "destination": "Barclays Center"},
+            self._ctx(origin={"lat": 40.7, "lng": -73.9}),
+        )
+        self.assertTrue(result.ok)
+        self._geocode.assert_not_called()
+        _args, _kwargs = self._get_route.call_args
+        self.assertEqual(_args[0], (40.7, -73.9))
+        recommended = next(event for event in result.events if event.role == "recommended")
+        self.assertEqual(recommended.origin["label"], "Your location")
+
+    async def test_explicit_origin_is_never_overridden_by_rider_location(self):
+        await plan_trip.execute(
+            {"origin": "350 5th Ave", "destination": "Costco"},
+            self._ctx(origin={"lat": 40.7, "lng": -73.9}),
+        )
+        self._geocode.assert_any_call("350 5th Ave")
+        _args, _kwargs = self._get_route.call_args
+        self.assertEqual(_args[0], NYC_COORDS)
+
     async def test_origin_user_without_gps_asks_for_location(self):
         result = await plan_trip.execute({"origin": "user", "destination": "Costco"}, self._ctx(origin=None))
         self.assertFalse(result.ok)
@@ -294,6 +319,54 @@ class PlanTripToolTests(unittest.IsolatedAsyncioTestCase):
             "cache_hit": False,
         })
 
+    async def test_incident_evidence_projects_bounded_index_metadata_without_records(self):
+        self._scan_incidents.return_value = {
+            "incidents": [
+                {
+                    "incident_id": "inc_secret",
+                    "location": "Atlantic Avenue",
+                    "severity": "high",
+                    "description": "Should never appear in evidence.",
+                    "advisor_eligible": True,
+                }
+            ],
+            "scan_metadata": {
+                "status": "partial",
+                "scanned_at": "2026-08-01T12:00:00Z",
+                "cache_hit": True,
+                "sources": {
+                    "attempted": ["incident_index"],
+                    "completed": ["incident_index"],
+                },
+                "lookup_status": "complete",
+                "coverage_status": "partial",
+                "lookup_kind": "index",
+                "requested_coverage_ids": ["lower-manhattan"],
+                "warning_count": 1,
+                "lookup_latency_ms": 4.2,
+            },
+        }
+        result = await plan_trip.execute(
+            {"origin": "user", "destination": "Costco"},
+            self._ctx(origin={"lat": 40.7, "lng": -73.9}),
+        )
+
+        self.assertTrue(result.ok)
+        evidence = result.data["incident_evidence"]
+        self.assertEqual(evidence["status"], "partial")
+        self.assertEqual(evidence["scanned_at"], "2026-08-01T12:00:00Z")
+        self.assertIs(evidence["cache_hit"], True)
+        self.assertEqual(evidence["sources"]["completed"], ["incident_index"])
+        self.assertEqual(evidence["lookup_status"], "complete")
+        self.assertEqual(evidence["coverage_status"], "partial")
+        self.assertEqual(evidence["lookup_kind"], "index")
+        self.assertEqual(evidence["requested_coverage_ids"], ["lower-manhattan"])
+        self.assertEqual(evidence["warning_count"], 1)
+        self.assertEqual(evidence["lookup_latency_ms"], 4.2)
+        self.assertNotIn("incidents", evidence)
+        self.assertNotIn("inc_secret", json.dumps(evidence))
+        self.assertNotIn("Atlantic Avenue", json.dumps(evidence))
+
     async def test_partial_scan_with_incidents_does_not_reach_the_advisor(self):
         incident = {
             "location": "Atlantic Avenue",
@@ -316,7 +389,7 @@ class PlanTripToolTests(unittest.IsolatedAsyncioTestCase):
             captured["payload"] = payload
             captured["model"] = model
             captured["explanation_style"] = explanation_style
-            return _advisor_response(
+            yield _advisor_response(
                 "Take the Q.", candidate_count=len(payload["routes"])
             )
 
@@ -327,7 +400,7 @@ class PlanTripToolTests(unittest.IsolatedAsyncioTestCase):
                 "collect_recommendation",
                 new=AsyncMock(side_effect=AssertionError("REST advisor must not run")),
             ),
-            patch.object(plan_trip.ai_advisor, "collect_agent_recommendation", new=capture_advisor),
+            patch.object(plan_trip.ai_advisor, "stream_agent_recommendation", new=capture_advisor),
         ):
             result = await plan_trip.execute(
                 {"origin": "user", "destination": "Costco"},
@@ -361,13 +434,13 @@ class PlanTripToolTests(unittest.IsolatedAsyncioTestCase):
 
         async def capture_advisor(payload, *, model, explanation_style):
             captured["payload"] = payload
-            return _advisor_response(
+            yield _advisor_response(
                 "No active incidents are affecting the Q.",
                 candidate_count=len(payload["routes"]),
             )
 
         result = None
-        with patch.object(plan_trip.ai_advisor, "collect_agent_recommendation", new=capture_advisor):
+        with patch.object(plan_trip.ai_advisor, "stream_agent_recommendation", new=capture_advisor):
             result = await plan_trip.execute(
                 {"origin": "user", "destination": "Costco"},
                 self._ctx(origin={"lat": 40.7, "lng": -73.9}),
@@ -387,11 +460,11 @@ class PlanTripToolTests(unittest.IsolatedAsyncioTestCase):
             captured["payload"] = payload
             captured["model"] = model
             captured["explanation_style"] = explanation_style
-            return _advisor_response(
+            yield _advisor_response(
                 "Take the Q.", candidate_count=len(payload["routes"])
             )
 
-        with patch.object(plan_trip.ai_advisor, "collect_agent_recommendation", new=capture_advisor):
+        with patch.object(plan_trip.ai_advisor, "stream_agent_recommendation", new=capture_advisor):
             result = await plan_trip.execute(
                 {"origin": "user", "destination": "Costco"},
                 self._ctx(origin={"lat": 40.7, "lng": -73.9}),
@@ -429,7 +502,7 @@ class PlanTripToolTests(unittest.IsolatedAsyncioTestCase):
 
         async def choose_first(payload, *, model, explanation_style):
             captured["payload"] = payload
-            return _advisor_response(
+            yield _advisor_response(
                 "The Q is still the better fit for your request.",
                 candidate_count=len(payload["routes"]),
                 selected_index=0,
@@ -437,7 +510,7 @@ class PlanTripToolTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(plan_trip.crowd_evidence, "collect", side_effect=event_evidence),
-            patch.object(plan_trip.ai_advisor, "collect_agent_recommendation", new=choose_first),
+            patch.object(plan_trip.ai_advisor, "stream_agent_recommendation", new=choose_first),
         ):
             result = await plan_trip.execute(
                 {"origin": "user", "destination": "Costco", "avoid_crowds": True},
@@ -479,12 +552,16 @@ class PlanTripToolTests(unittest.IsolatedAsyncioTestCase):
         }
         for name, response in invalid_responses.items():
             ctx = self._ctx(origin={"lat": 40.7, "lng": -73.9})
+
+            async def stream_invalid(_payload, *, model, explanation_style, _response=response):
+                yield _response
+
             with self.subTest(name=name), patch.object(
                 plan_trip.crowd_evidence, "collect", side_effect=event_evidence
             ), patch.object(
                 plan_trip.ai_advisor,
-                "collect_agent_recommendation",
-                new=AsyncMock(return_value=response),
+                "stream_agent_recommendation",
+                new=stream_invalid,
             ):
                 result = await plan_trip.execute(
                     {"origin": "user", "destination": "Costco", "avoid_crowds": True},
@@ -501,7 +578,7 @@ class PlanTripToolTests(unittest.IsolatedAsyncioTestCase):
 
         async def capture_advisor(payload, *, model, explanation_style):
             calls.append((model, explanation_style, payload["planning_mode"]))
-            return _advisor_response(
+            yield _advisor_response(
                 "Take the Q.", candidate_count=len(payload["routes"])
             )
 
@@ -510,7 +587,7 @@ class PlanTripToolTests(unittest.IsolatedAsyncioTestCase):
         ctx.agent_mode = policy.mode
         ctx.agent_model = policy.model
         ctx.agent_explanation_style = policy.explanation_style
-        with patch.object(plan_trip.ai_advisor, "collect_agent_recommendation", new=capture_advisor):
+        with patch.object(plan_trip.ai_advisor, "stream_agent_recommendation", new=capture_advisor):
             result = await plan_trip.execute(
                 {
                     "origin": "user",

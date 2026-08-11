@@ -15,6 +15,7 @@ import {
 import { flyToRoute, stopRotation } from "@/components/map/camera";
 import { addStationBadge, clearBadges } from "@/components/map/station-badges";
 import { buildTrips, getLineColor } from "@/components/map/route-layers";
+import { isTransitStep } from "@/lib/route-planning";
 import { ensureBuildingsLayer } from "@/components/map/buildings-layer";
 import {
   buildSubwayLaneFeaturesFromVisual,
@@ -93,7 +94,7 @@ function applyDarkMapTheme(mapInstance: maplibregl.Map): void {
 }
 
 interface SmartRouteMapProps {
-  onLocationUpdate?: (coords: { lng: number; lat: number }) => void;
+  onLocationUpdate?: (coords: { lng: number; lat: number; fallback?: true }) => void;
   routeData?: TransitRouteData | null;
   destCoords?: { lat: number; lng: number } | null;
   mobileSheetState?: string;
@@ -314,8 +315,12 @@ export function SmartRouteMap({
       lng: number;
       lat: number;
       accuracyMeters?: number | null;
-    }) {
-      onLocationUpdateRef.current?.(coords);
+    }, fallback = false) {
+      onLocationUpdateRef.current?.({
+        lng: coords.lng,
+        lat: coords.lat,
+        fallback: fallback ? true : undefined,
+      });
       originRef.current = [coords.lng, coords.lat];
       originAccuracyRef.current =
         typeof coords.accuracyMeters === "number" &&
@@ -364,12 +369,12 @@ export function SmartRouteMap({
             // eslint-disable-next-line no-console
             console.warn("Geolocation unavailable:", error.message);
           }
-          handlePosition({ ...DEFAULT_LOCATION, accuracyMeters: null });
+          handlePosition({ ...DEFAULT_LOCATION, accuracyMeters: null }, true);
         },
         { enableHighAccuracy: true, maximumAge: 10000, timeout: 5000 },
       );
     } else {
-      handlePosition(DEFAULT_LOCATION);
+      handlePosition(DEFAULT_LOCATION, true);
     }
 
     return () => {
@@ -521,9 +526,10 @@ export function SmartRouteMap({
       setRouteStopData(m, steps);
       // Only the first boarding stop gets a pill. The destination is already
       // carried by the arrival pin, so a final station pill adds clutter.
-      const transitSteps = steps.filter(
-        (s) => s.type === "SUBWAY" || s.type === "BUS",
-      );
+      // Rail modes (LIRR, Metro-North, PATH, light rail, tram) get the same
+      // boarding pill as subway/bus; only the first transit boarding stop is
+      // marked, and non-subway modes render as a colored letter badge.
+      const transitSteps = steps.filter(isTransitStep);
       const boardingStop =
         transitSteps.length > 0
           ? {
@@ -541,10 +547,12 @@ export function SmartRouteMap({
         if (badgeKeys.has(key)) continue;
         badgeKeys.add(key);
         const color =
-          step.type === "SUBWAY"
-            ? step.line_color || getLineColor(step.train_line || "")
-            : "#0057B8";
-        const letter = step.train_line || (step.type === "BUS" ? "BUS" : "?");
+          step.type === "BUS"
+            ? "#0057B8"
+            : step.line_color || getLineColor(step.train_line || "");
+        const letter =
+          step.train_line ||
+          (step.type === "BUS" ? "BUS" : step.route_id || "?");
         const mk = addStationBadge(
           m,
           coords,

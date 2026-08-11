@@ -1,7 +1,7 @@
 """poi_search tool: finds a point of interest (store, restaurant, business)
 in NYC via Google Places API (New) `places:searchText`, for the multi-stop
 procedure ("pizza first") -- resolves a rider-named stop into a concrete
-place before plan_trip routes a leg to it.
+place that route preparation can consume as a leg target.
 
 Results are hard-filtered to NYC_BOUNDS (same defense as geo.py's geocoder)
 before they ever reach the model, since Places (New) has no built-in region
@@ -17,11 +17,12 @@ import time
 from app.services.agent.tools._http import fetch_json
 from app.services.agent.tools._location import resolve_named_point
 from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.discovery_store import normalize_price_level
 from app.services.trips import text
 from app.utils import geo
 
 PLACES_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
-PLACES_FIELD_MASK = "places.displayName,places.formattedAddress,places.location,places.currentOpeningHours.openNow"
+PLACES_FIELD_MASK = "places.id,places.displayName,places.formattedAddress,places.location,places.currentOpeningHours.openNow,places.priceLevel,places.rating,places.userRatingCount"
 POI_SEARCH_TIMEOUT_S = float(os.getenv("POI_SEARCH_TIMEOUT_S", "6.0"))
 
 _POI_RADIUS_M = 3000.0
@@ -43,7 +44,7 @@ POI_SEARCH_SCHEMA = {
         "Search for a point of interest (store, restaurant, business) in "
         "NYC by name or category, returning nearby matches with address and "
         "open-now status. Use this to resolve an intermediate stop (e.g. "
-        "'pizza first') before planning a leg there with plan_trip."
+        "'pizza first') before prepare_route_options plans a leg there."
     ),
     "strict": True,
     "input_schema": {
@@ -87,8 +88,8 @@ async def _resolve_bias(near_raw: str, ctx: ToolContext) -> tuple[tuple[float, f
         return (_NYC_CENTER_LAT, _NYC_CENTER_LNG, _NYC_WIDE_RADIUS_M), None
     # Raw coordinates skip geo.py's NYC-bounds check deliberately -- a
     # rider-supplied 'near' point only biases the search radius, it is never
-    # itself validated as an NYC destination the way plan_trip's origin/
-    # destination are.
+    # itself validated as an NYC destination the way route preparation's
+    # origin/destination are.
     if _COORD_RE.match(value):
         lat_str, lng_str = value.split(",")
         return (float(lat_str.strip()), float(lng_str.strip()), _POI_RADIUS_M), None
@@ -175,9 +176,13 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
                 {
                     "name": text._safe_text((place.get("displayName") or {}).get("text"), 80),
                     "address": text._safe_text(place.get("formattedAddress"), 120),
+                    "place_id": str(place.get("id") or "").strip() or None,
                     "lat": place_lat,
                     "lng": place_lng,
                     "open_now": opening_hours.get("openNow") if "openNow" in opening_hours else None,
+                    "price_level": normalize_price_level(place.get("priceLevel")),
+                    "rating": place.get("rating"),
+                    "review_count": place.get("userRatingCount"),
                 }
             )
     except (KeyError, TypeError, AttributeError) as exc:

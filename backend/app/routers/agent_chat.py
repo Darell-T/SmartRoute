@@ -91,6 +91,28 @@ def _log_sess(session_id: str) -> str:
     return session_id[:6] if session_id else ""
 
 
+def _session_busy_error() -> HTTPException:
+    # Bounded retryable rejection for a second simultaneous turn on the same
+    # session. Short Retry-After only; never leaks the lock token or any
+    # session contents.
+    return HTTPException(
+        status_code=503,
+        detail="That conversation is still processing a previous message. Please wait a moment and try again.",
+        headers={"Retry-After": "1"},
+    )
+
+
+async def _release_turn_leases(session_id: str, session_lease_token: str | None, lease: admission.AdmissionLease) -> None:
+    """Release the per-session turn lease, then the admission lease. Nested
+    finally guarantees both are attempted exactly once even when one raises;
+    the last raised exception propagates if both fail."""
+    try:
+        if session_lease_token is not None:
+            session_module.release_session_lease(session_id, session_lease_token)
+    finally:
+        await admission.release(lease)
+
+
 async def _expired_session_stream(session_id: str):
     turn_id = "t0"
     yield agent_events.sse_format(agent_events.MetaEvent(session_id=session_id, turn_id=turn_id))
@@ -121,6 +143,7 @@ async def _sse_stream(
     response_presentation: str,
     trace: agent_loop.TurnTrace,
     lease: admission.AdmissionLease,
+    session_lease_token: str | None = None,
 ):
     agen = agent_loop.run_agent_turn(
         session=session,
@@ -134,6 +157,10 @@ async def _sse_stream(
         response_presentation=response_presentation,
         trace=trace,
     )
+    # The currently in-flight `agen.__anext__()` task, if any. Tracked across
+    # the stream's whole lifetime so cleanup can always cancel and drain it
+    # before touching the session.
+    next_event: asyncio.Future | None = None
     try:
         while True:
             next_event = asyncio.ensure_future(agen.__anext__())
@@ -150,13 +177,47 @@ async def _sse_stream(
                 event = next_event.result()
             except StopAsyncIteration:
                 return
+            next_event = None  # this __anext__ finished; nothing is pending
             yield agent_events.sse_format(event)
     finally:
-        # Always persist, including on client disconnect / task cancellation --
-        # whatever route cards, history, and slots accumulated before the
-        # drop should survive for the rider's next message.
-        session_module.save_session(session_id, session)
-        await admission.release(lease)
+        try:
+            # Cancel any still-pending __anext__ and await it so CancelledError
+            # reaches run_agent_turn and its finally (turn finalization, which
+            # mutates history/telemetry) completes before we persist the
+            # session. Only the expected child conditions are suppressed: a
+            # caller cancellation stays in flight and keeps propagating after
+            # this finally.
+            if next_event is not None:
+                next_event.cancel()
+            try:
+                if next_event is not None:
+                    await next_event
+            except StopAsyncIteration:
+                pass
+            except asyncio.CancelledError:
+                pass
+            # No __anext__ is running now; close the generator explicitly so
+            # its finally also runs when it was suspended at a yield. No-op
+            # when the cancellation above already closed it.
+            try:
+                await agen.aclose()
+            except (asyncio.CancelledError, StopAsyncIteration):
+                pass
+        finally:
+            # Always persist, including on client disconnect / task
+            # cancellation -- whatever route cards, history, and slots
+            # accumulated before the drop should survive for the rider's next
+            # message. Nested finallys keep both releases protected even if
+            # the save itself raises: the admission lease exactly once, then
+            # the per-session turn lease so the next request for this session
+            # can proceed.
+            try:
+                session_module.save_session(session_id, session)
+            finally:
+                try:
+                    await admission.release(lease)
+                finally:
+                    session_module.release_session_lease(session_id, session_lease_token)
 
 
 @router.post("/api/agent/chat")
@@ -183,23 +244,49 @@ async def agent_chat(request: Request, payload: AgentChatRequest):
             headers={"Retry-After": str(exc.retry_after_s)},
         ) from None
 
+    session_lease_token: str | None = None
     session_load_started = time.monotonic()
+    expired_session = False
     try:
         if payload.session_id:
-            session = session_module.load_session(payload.session_id)
-            if session is None:
-                await admission.release(lease)
-                return StreamingResponse(
-                    _expired_session_stream(payload.session_id),
-                    media_type="text/event-stream",
-                    headers=_SSE_HEADERS,
-                )
             session_id = payload.session_id
+            # One active chat turn per session: claim the turn lease before
+            # loading so a busy same-session request fails fast with a
+            # retryable response before any load, next-turn, model/tool, or
+            # state-mutation work.
+            session_lease_token = session_module.acquire_session_lease(session_id)
+            if session_lease_token is None:
+                raise _session_busy_error()
+            session = session_module.load_session(session_id)
+            if session is None:
+                expired_session = True
         else:
             session_id, session = session_module.new_session()
+            # Claim immediately after minting and before next_turn_id: the
+            # client learns the session id from early SSE metadata while turn
+            # 1 is still running, so a follow-up must serialize against this
+            # turn from the start.
+            session_lease_token = session_module.acquire_session_lease(session_id)
+            if session_lease_token is None:
+                raise _session_busy_error()
     except BaseException:
-        await admission.release(lease)
+        if session_lease_token is not None:
+            await _release_turn_leases(session_id, session_lease_token, lease)
+        else:
+            # Busy rejection or a mint failure before the claim: only the
+            # admission lease is held.
+            await admission.release(lease)
         raise
+    if expired_session:
+        # Release both leases before streaming the expired error. This runs
+        # outside the setup try so a raising release can never trigger a
+        # second cleanup attempt from the handler above.
+        await _release_turn_leases(session_id, session_lease_token, lease)
+        return StreamingResponse(
+            _expired_session_stream(session_id),
+            media_type="text/event-stream",
+            headers=_SSE_HEADERS,
+        )
     try:
         trace = agent_loop.TurnTrace(
             stage_ms={"session_load_ms": (time.monotonic() - session_load_started) * 1000}
@@ -216,10 +303,11 @@ async def agent_chat(request: Request, payload: AgentChatRequest):
         )
         response = StreamingResponse(
             _sse_stream(request, session_id, session, turn_id, payload.message, now_et, gtfs,
-                        origin, payload.selected_card_id, payload.response_presentation, trace, lease),
+                        origin, payload.selected_card_id, payload.response_presentation, trace, lease,
+                        session_lease_token),
             media_type="text/event-stream", headers=_SSE_HEADERS,
         )
     except BaseException:
-        await admission.release(lease)
+        await _release_turn_leases(session_id, session_lease_token, lease)
         raise
     return response

@@ -13,6 +13,8 @@ from app import runtime
 
 WINDOW_S, LEASE_TTL_S = 60, 120
 REQUESTS_PER_PRINCIPAL, REQUESTS_GLOBAL = 20, 240
+REDIS_CONNECT_TIMEOUT_S = float(os.getenv("REDIS_CONNECT_TIMEOUT_S", "0.5"))
+REDIS_READ_TIMEOUT_S = float(os.getenv("REDIS_READ_TIMEOUT_S", "1.0"))
 # The app holds two legitimate long-lived streams per rider (live feed and
 # service alerts). Keep two additional slots for a trip/chat request and brief
 # reconnect overlap so the streams cannot lock the rest of the product out.
@@ -49,7 +51,12 @@ def principal_from_request(raw: str | None) -> str:
 def _client() -> redis.Redis | None:
     global _redis_client
     if _redis_client is None and os.getenv("REDIS_URL"):
-        _redis_client = redis.from_url(os.environ["REDIS_URL"], decode_responses=True)
+        _redis_client = redis.from_url(
+            os.environ["REDIS_URL"],
+            decode_responses=True,
+            socket_connect_timeout=REDIS_CONNECT_TIMEOUT_S,
+            socket_timeout=REDIS_READ_TIMEOUT_S,
+        )
     return _redis_client
 
 

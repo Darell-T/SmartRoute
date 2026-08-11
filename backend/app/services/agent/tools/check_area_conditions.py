@@ -1,9 +1,10 @@
 """Bounded current-condition evidence for one rider-named NYC area.
 
 This is intentionally not a second route planner. It resolves one specific
-area, scopes incident evidence to nearby actual GTFS stops, and uses the
-existing Grok X/web crowd-search boundary for nearby crowd-driving events.
-The two kinds of evidence stay separate so one cannot imply the other.
+area, scopes incident evidence to nearby actual GTFS stops, and reads the
+shared background incident index (never a request-time provider scan). The
+existing Grok X/web crowd-search boundary still supplies nearby crowd-driving
+events. The two kinds of evidence stay separate so one cannot imply the other.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from datetime import datetime, timezone
 from typing import Any, Mapping
 from zoneinfo import ZoneInfo
 
+from app.services.agent.tools import area_condition_incidents
 from app.services.agent.tools._location import resolve_named_place
 from app.services.agent.tools._types import ToolContext, ToolResult
 from app.services.trips import crowd_search, incidents as trip_incidents, text
@@ -27,7 +29,6 @@ _NYC_TZ = ZoneInfo("America/New_York")
 _MAX_NEARBY_STOPS = 5
 _AREA_STOP_RADIUS_M = 2_000
 _MAX_EVENTS = 5
-_MAX_INCIDENTS = 5
 _BROAD_AREA_INPUTS = frozenset(
     {
         "nyc", "new york", "new york city", "the city", "city", "citywide",
@@ -56,8 +57,8 @@ AREA_CONDITIONS_SCHEMA = {
     "description": (
         "Check current reported incident and crowd-driving event evidence near one "
         "specific NYC station, neighborhood, or landmark. Returns incidents and "
-        "events separately; it does not assess safety or plan a route. Use plan_trip "
-        "for any directions request."
+        "events separately; it does not assess safety or plan a route. Use "
+        "prepare_route_options for any directions request, then present_route."
     ),
     "strict": True,
     "input_schema": {
@@ -153,26 +154,6 @@ def _nearby_stop_context(
     return contexts
 
 
-def _safe_incidents(value: object) -> list[dict[str, str]]:
-    incidents: list[dict[str, str]] = []
-    for row in value if isinstance(value, list) else []:
-        if not isinstance(row, Mapping):
-            continue
-        severity = str(row.get("severity") or "medium").casefold()
-        incidents.append(
-            {
-                "location": text._safe_text(row.get("location"), 100),
-                "nearby_station": text._safe_text(row.get("nearby_station"), 80),
-                "severity": severity if severity in {"low", "medium", "high", "critical"} else "medium",
-                "description": text._safe_text(row.get("description"), 220),
-                "source": text._safe_text(row.get("source"), 60),
-            }
-        )
-        if len(incidents) >= _MAX_INCIDENTS:
-            break
-    return incidents
-
-
 def _safe_events(value: object) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     for row in value if isinstance(value, list) else []:
@@ -192,36 +173,6 @@ def _safe_events(value: object) -> list[dict[str, Any]]:
         if len(events) >= _MAX_EVENTS:
             break
     return events
-
-
-def _safe_sources(value: object) -> dict[str, list[str]] | None:
-    if not isinstance(value, Mapping):
-        return None
-    result: dict[str, list[str]] = {}
-    for key in ("completed", "errors"):
-        values = value.get(key)
-        if isinstance(values, list):
-            result[key] = [
-                text._safe_text(item, 80) for item in values[:6] if text._safe_text(item, 80)
-            ]
-    return result or None
-
-
-def _incident_evidence(value: object) -> dict[str, Any]:
-    metadata = value.get("scan_metadata") if isinstance(value, Mapping) else None
-    metadata = metadata if isinstance(metadata, Mapping) else {}
-    status = str(metadata.get("status") or "failed")
-    evidence: dict[str, Any] = {
-        "status": status if status in {"complete", "partial", "failed", "disabled"} else "failed",
-    }
-    if isinstance(metadata.get("scanned_at"), str):
-        evidence["scanned_at"] = metadata["scanned_at"]
-    if isinstance(metadata.get("cache_hit"), bool):
-        evidence["cache_hit"] = metadata["cache_hit"]
-    sources = _safe_sources(metadata.get("sources"))
-    if sources is not None:
-        evidence["sources"] = sources
-    return evidence
 
 
 def _event_evidence(value: object, *, travel_at: datetime) -> dict[str, Any]:
@@ -289,7 +240,17 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
     if incident_task is None:
         incident_result: object = {
             "incidents": [],
-            "scan_metadata": {"status": "failed"},
+            "warnings": [],
+            "scan_metadata": {
+                "status": "unscanned",
+                "lookup_status": "unscanned",
+                "coverage_status": "unscanned",
+                "lookup_kind": "index",
+                "requested_coverage_ids": [],
+                "warning_count": 0,
+                "cache_hit": False,
+                "sources": {"attempted": ["incident_index"], "completed": []},
+            },
         }
         try:
             event_result: object = await event_task
@@ -306,13 +267,21 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
     if isinstance(event_result, BaseException):
         event_result = {"status": "unavailable", "events": [], "completed_sources": []}
 
+    incident_rows = incident_result.get("incidents") if isinstance(incident_result, Mapping) else None
+    warning_rows = incident_result.get("warnings") if isinstance(incident_result, Mapping) else None
+
     return ToolResult(
         ok=True,
         data={
             "area": area_name,
-            "incidents": _safe_incidents(incident_result.get("incidents") if isinstance(incident_result, Mapping) else []),
+            "incidents": area_condition_incidents.display_incidents(
+                [
+                    *(incident_rows if isinstance(incident_rows, list) else []),
+                    *(warning_rows if isinstance(warning_rows, list) else []),
+                ]
+            ),
             "events": _safe_events(event_result.get("events") if isinstance(event_result, Mapping) else []),
-            "incident_evidence": _incident_evidence(incident_result),
+            "incident_evidence": area_condition_incidents.incident_evidence(incident_result),
             "event_evidence": _event_evidence(event_result, travel_at=travel_at),
         },
         summary=(

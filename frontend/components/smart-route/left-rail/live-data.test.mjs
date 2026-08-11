@@ -614,7 +614,12 @@ test("route candidates become clickable alternatives; active one excluded", () =
 test("plan rationale surfaces sanitized model route reasoning with fallback", () => {
   const nowMs = 1_700_000_000_000;
   const steps = [
-    { type: "WALK", arrival_stop: "Church Av", minutes_until_arrival: 3 },
+    {
+      type: "WALK",
+      arrival_stop: "Church Av",
+      minutes_until_arrival: 3,
+      duration_minutes: 3,
+    },
     {
       type: "SUBWAY",
       route_id: "Q",
@@ -719,7 +724,12 @@ test("plan rationale surfaces sanitized model route reasoning with fallback", ()
 test("plan carries strip, detail steps, leave-by, and correct transfer count", () => {
   const nowMs = 1_700_000_000_000;
   const steps = [
-    { type: "WALK", arrival_stop: "Church Av", minutes_until_arrival: 3 },
+    {
+      type: "WALK",
+      arrival_stop: "Church Av",
+      minutes_until_arrival: 3,
+      duration_minutes: 3,
+    },
     {
       type: "SUBWAY",
       route_id: "Q",
@@ -728,6 +738,7 @@ test("plan carries strip, detail steps, leave-by, and correct transfer count", (
       arrival_stop: "14 St-Union Sq",
       direction: "Manhattan-bound to 96 St",
       minutes_until_arrival: 24,
+      duration_minutes: 17,
       minutes_until_train_arrives: 7,
       stop_count: 7,
     },
@@ -739,9 +750,15 @@ test("plan carries strip, detail steps, leave-by, and correct transfer count", (
       arrival_stop: "Burke Av",
       direction: "Uptown to Nereid Av",
       minutes_until_arrival: 44,
+      duration_minutes: 20,
       stop_count: 12,
     },
-    { type: "WALK", arrival_stop: "Adee Av", minutes_until_arrival: 5 },
+    {
+      type: "WALK",
+      arrival_stop: "Adee Av",
+      minutes_until_arrival: 5,
+      duration_minutes: 5,
+    },
   ];
   const candidate = {
     id: "c0",
@@ -795,7 +812,7 @@ test("plan carries strip, detail steps, leave-by, and correct transfer count", (
   assert.equal(boardQ?.subtitle, "Manhattan-bound to 96 St");
   assert.equal(boardQ?.note, "Departs in 7 min");
   const rideQ = data.plan.detailSteps?.[2];
-  assert.equal(rideQ?.rideMeta, "Ride 7 stops · 24 min");
+  assert.equal(rideQ?.rideMeta, "Ride 7 stops · 17 min");
   assert.equal(rideQ?.transferTo, "5", "ride hands off to the next boarding");
   assert.equal(
     data.plan.detailSteps?.[data.plan.detailSteps.length - 1]?.title,
@@ -1393,4 +1410,157 @@ test("nearby display rows expose prediction freshness, distance, and usefulness 
   const scheduled = data.arrivals.find((arrival) => arrival.line === "F");
   assert.equal(scheduled?.predictionFreshness, "scheduled");
   assert.equal(scheduled?.predictionType, "scheduled");
+});
+
+test("rail and tram modes flow through the plan end to end", () => {
+  const nowMs = 1_700_000_000_000;
+  const steps = [
+    {
+      type: "WALK",
+      arrival_stop: "Jamaica LIRR",
+      minutes_until_arrival: 4,
+      duration_minutes: 4,
+    },
+    {
+      type: "RAIL",
+      route_id: "LIRR",
+      train_line: "LIRR",
+      departure_stop: "Penn Station",
+      arrival_stop: "Jamaica LIRR",
+      direction: "Far Rockaway",
+      minutes_until_arrival: 22,
+      duration_minutes: 18,
+      minutes_until_train_arrives: 6,
+      stop_count: 3,
+    },
+    {
+      type: "TRAM",
+      route_id: "R32",
+      train_line: "R32",
+      departure_stop: "Jamaica LIRR",
+      arrival_stop: "Airport",
+      direction: "To Terminal 8",
+      minutes_until_arrival: 30,
+      duration_minutes: 8,
+      minutes_until_train_arrives: 2,
+    },
+    {
+      type: "WALK",
+      arrival_stop: "Terminal 8",
+      minutes_until_arrival: 6,
+      duration_minutes: 6,
+    },
+  ];
+  const candidate = {
+    id: "rail",
+    index: 0,
+    steps,
+    is_recommended: true,
+    total_minutes: 62,
+  };
+  const data = buildLeftRailData({
+    nowMs,
+    routeSteps: steps,
+    routeCandidates: [candidate],
+    activeRouteCandidate: candidate,
+  });
+
+  assert.equal(data.plan.transferCount, 1, "rail boardings count toward transfers");
+  assert.equal(data.plan.pickedLine, "LIRR", "first rail step supplies the plan line");
+  assert.equal(data.plan.headsign, "Far Rockaway", "rail headsign flows to the plan");
+  assert.equal(
+    data.plan.nextDepartureMinutes,
+    6,
+    "rail departure countdown flows to the plan",
+  );
+  assert.deepEqual(
+    data.plan.strip?.map((segment) =>
+      segment.kind === "walk"
+        ? `walk:${segment.minutes}`
+        : `${segment.mode}:${segment.routeId}`,
+    ),
+    ["walk:4", "subway:LIRR", "subway:R32", "walk:6"],
+    "rail legs render as ride segments in the strip",
+  );
+  assert.equal(
+    data.plan.detailSteps?.[0]?.title,
+    "Walk to Jamaica LIRR station",
+    "approach walk names the rail boarding point as a station",
+  );
+  assert.equal(
+    data.plan.detailSteps?.[1]?.title,
+    "Board the LIRR train",
+    "rail board row renders as a train",
+  );
+  assert.equal(data.plan.detailSteps?.[2]?.rideMeta, "Ride 3 stops · 18 min");
+  assert.equal(
+    data.plan.detailSteps?.[3]?.title,
+    "Board the R32 train",
+    "tram board row renders as a train",
+  );
+  const railStep = data.plan.steps.find((step) => step.line === "LIRR");
+  assert.equal(railStep?.note, "Departs in 6 min", "rail live departure note reaches the steps");
+  assert.equal(railStep?.live, true);
+});
+
+test("direct-leg canonical timings replace cumulative step clocks in plan details", () => {
+  const nowMs = 1_700_000_000_000;
+  const steps = [
+    { type: "WALK", arrival_stop: "Church Av", minutes_until_arrival: 3 },
+    {
+      type: "SUBWAY",
+      route_id: "Q",
+      train_line: "Q",
+      departure_stop: "Church Av",
+      arrival_stop: "14 St-Union Sq",
+      direction: "Manhattan-bound to 96 St",
+      minutes_until_arrival: 24,
+      stop_count: 7,
+    },
+    {
+      type: "SUBWAY",
+      route_id: "5",
+      train_line: "5",
+      departure_stop: "14 St-Union Sq",
+      arrival_stop: "Burke Av",
+      direction: "Uptown to Nereid Av",
+      minutes_until_arrival: 44,
+      stop_count: 12,
+    },
+    { type: "WALK", arrival_stop: "Adee Av", minutes_until_arrival: 5 },
+  ];
+  const candidate = {
+    id: "direct",
+    index: 0,
+    steps,
+    is_recommended: true,
+    total_minutes: 23,
+    itinerary: {
+      itinerary_id: "direct",
+      origin: { label: "Your location" },
+      destination: { display_name: "Burke Av" },
+      total_duration_seconds: 1380,
+      transfer_count: 1,
+      legs: [
+        { mode: "WALK", walk_seconds: 180 },
+        { mode: "SUBWAY", ride_seconds: 300 },
+        { mode: "SUBWAY", ride_seconds: 600 },
+        { mode: "WALK", walk_seconds: 300 },
+      ],
+    },
+  };
+  const data = buildLeftRailData({
+    nowMs,
+    routeSteps: steps,
+    routeCandidates: [candidate],
+    activeRouteCandidate: candidate,
+  });
+
+  assert.deepEqual(
+    data.plan.detailSteps.filter((step) => step.kind === "ride").map((step) => step.rideMeta),
+    ["Ride 7 stops · 5 min", "Ride 12 stops · 10 min"],
+    "canonical leg seconds win over cumulative provider minutes_until_arrival",
+  );
+  const walkTitles = data.plan.detailSteps.filter((step) => step.kind === "walk").map((step) => step.subtitle);
+  assert.deepEqual(walkTitles, ["About 3 min", "About 5 min"], "walk rows keep canonical walk minutes");
 });

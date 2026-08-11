@@ -5,6 +5,7 @@
 
 import polyline from "@mapbox/polyline";
 import type { RouteStep } from "@/types";
+import { isTransitStep } from "@/lib/route-planning";
 
 const BUS_COLOR = "#0057B8";
 const FALLBACK_COLOR = "#8B939E";
@@ -106,7 +107,7 @@ export function buildTransitPathFeatures(
   const features: GeoJSON.Feature<GeoJSON.LineString, TransitPathProps>[] = [];
 
   for (const step of steps ?? []) {
-    if (step.type !== "SUBWAY" && step.type !== "BUS") continue;
+    if (!isTransitStep(step)) continue;
     const encoded = step.polyline?.encodedPolyline;
     if (!encoded) continue;
     const coordinates = decode(encoded).filter(
@@ -140,7 +141,7 @@ export function buildRouteStopFeatures(
   const features: GeoJSON.Feature<GeoJSON.Point, RouteStopProps>[] = [];
 
   for (const step of steps ?? []) {
-    if (step.type !== "SUBWAY" && step.type !== "BUS") continue;
+    if (!isTransitStep(step)) continue;
     const color = colorFor(step);
     const line = (step.train_line || step.route_id || "").toUpperCase();
 

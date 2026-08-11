@@ -8,9 +8,7 @@ from datetime import datetime, timedelta
 
 from app.services.agent import events as agent_events
 from app.services.agent.tools._types import ToolContext, ToolResult
-from app.services.agent.tools.plan_trip_projection import (
-    INCOMPLETE_INCIDENT_DISCLOSURE,
-)
+from app.services.trips.incidents import INCOMPLETE_INCIDENT_DISCLOSURE
 from app.services.trips.itinerary import build_chained_itinerary
 
 

@@ -6,10 +6,14 @@ from app.services.mta.config import ALERTS_URL, NYC_TZ
 from app.services.mta.feeds import parse_feed_message
 
 
-async def fetch_service_alerts(force_refresh: bool = False) -> bytes:
+async def fetch_service_alerts(
+    force_refresh: bool = False,
+    *,
+    cache_result: bool = True,
+) -> bytes:
     from app.utils.cache import cache_get, cache_set
 
-    cached = None if force_refresh else cache_get(ALERTS_URL)
+    cached = None if force_refresh else cache_get(ALERTS_URL, fail_open=True)
     if cached:
         return cached
 
@@ -21,7 +25,8 @@ async def fetch_service_alerts(force_refresh: bool = False) -> bytes:
         if response.status_code != 200:
             print(f"[mta_feed] alerts feed returned {response.status_code}")
             return b""
-        cache_set(ALERTS_URL, response.content, 60)
+        if cache_result:
+            cache_set(ALERTS_URL, response.content, 60, fail_open=True)
         return response.content
     except Exception as exc:
         print(f"[mta_feed] alerts feed failed: {type(exc).__name__}: {exc!r}")

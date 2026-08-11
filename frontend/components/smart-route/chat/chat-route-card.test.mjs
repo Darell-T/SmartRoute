@@ -9,6 +9,11 @@ const CARD_SOURCE = fs.readFileSync(
   fileURLToPath(new URL("./recommended-itinerary-card.tsx", import.meta.url)),
   "utf8",
 );
+const LEG_SOURCE = fs.readFileSync(
+  fileURLToPath(new URL("./itinerary-card-legs.tsx", import.meta.url)),
+  "utf8",
+);
+const CARD_RENDER_SOURCE = `${CARD_SOURCE}\n${LEG_SOURCE}`;
 const CHAT_CSS_SOURCE = fs.readFileSync(
   fileURLToPath(
     new URL("../../../app/styles/smart-route-chat.css", import.meta.url),
@@ -42,16 +47,16 @@ test("recommendation card keeps transit details collapsed by default", () => {
     CARD_SOURCE,
     /useState<Set<string>>\(\(\) => new Set\(\)\)/,
   );
-  assert.match(CARD_SOURCE, /aria-expanded=\{expanded\}/);
-  assert.match(CARD_SOURCE, /onClick=\{onToggle\}/);
+  assert.match(LEG_SOURCE, /aria-expanded=\{expanded\}/);
+  assert.match(LEG_SOURCE, /onClick=\{onToggle\}/);
   assert.match(CARD_SOURCE, /<motion\.article[\s\S]*?\blayout\b/);
 });
 
 test("recommendation card preserves total duration and route-colored chains", () => {
   assert.match(CARD_SOURCE, /model\.durationLabel/);
   assert.match(CARD_SOURCE, /model\.metaParts\.map/);
-  assert.match(CARD_SOURCE, /getRouteColor\(event\.routeIds\[0\]/);
-  assert.match(CARD_SOURCE, /duration: 0\.3, ease: LAYOUT_EASE/);
+  assert.match(LEG_SOURCE, /getRouteColor\(event\.routeIds\[0\]/);
+  assert.match(LEG_SOURCE, /duration: 0\.3, ease: LAYOUT_EASE/);
   assert.match(
     CHAT_CSS_SOURCE,
     /\.sr-itinerary-card__chain-marker--start,[\s\S]*?background: var\(--sr-route-color\)/,
@@ -68,11 +73,11 @@ test("chat card omits the redundant recommendation badge without changing recomm
 });
 
 test("bus legs use a compact bus glyph, plain route text, and the shared chain", () => {
-  assert.match(CARD_SOURCE, /className="sr-itinerary-card__bus-glyph"/);
-  assert.match(CARD_SOURCE, /className="sr-itinerary-card__bus-route"/);
-  assert.match(CARD_SOURCE, /event\.kind === "bus"/);
-  assert.match(CARD_SOURCE, /className="sr-itinerary-card__chain-track"/);
-  assert.doesNotMatch(CARD_SOURCE, /<TrainBullet line=\{normalized\} size=\{34\}/);
+  assert.match(CARD_RENDER_SOURCE, /className="sr-itinerary-card__bus-glyph"/);
+  assert.match(CARD_RENDER_SOURCE, /className="sr-itinerary-card__bus-route"/);
+  assert.match(CARD_RENDER_SOURCE, /event\.kind === "bus"/);
+  assert.match(CARD_RENDER_SOURCE, /className="sr-itinerary-card__chain-track"/);
+  assert.doesNotMatch(CARD_RENDER_SOURCE, /<TrainBullet line=\{normalized\} size=\{34\}/);
 });
 
 test("Open on map remains a direct keyboard-accessible action", () => {

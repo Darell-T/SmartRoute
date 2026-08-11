@@ -1,122 +1,66 @@
-"""Candidate-scoped incident scan orchestration for trip planning."""
+"""Candidate-scoped incident evidence from the deterministic incident index.
+
+Normal rider routing performs exactly one immediate batched index lookup,
+bounded and off the async event loop: no provider scan, X/web search, retry,
+or background queue runs on the request path. The background incident job owns
+provider boundaries and writes the index; coverage truth comes only from
+explicit coverage records. Pure context matching and record projection live in
+incident_index_adapter.
+"""
 
 from __future__ import annotations
 
-import asyncio
-import os
-from datetime import datetime, timezone
+import time
+from datetime import datetime
 from typing import Any, Iterable, Mapping
 
-from app.services.incident_monitor import get_incidents
+from app.services import incident_index
 from app.services.trips.incident_context import CandidateStopContext, extract_candidate_stop_context
-from app.services.trips.incident_scan_cache import (
-    cache_scan_contract,
-    incident_cache_key,
-    load_cached_scan,
-    normalize_advisor_incident,
-)
+from app.services.trips.incident_index_adapter import extract_lookup_context, project_records
 
-
-TRIP_INCIDENT_SCAN_TIMEOUT_S = float(os.getenv("TRIP_INCIDENT_SCAN_TIMEOUT_S", "10.0"))
-_inflight_scans: dict[str, asyncio.Task[dict[str, Any]]] = {}
-_inflight_lock = asyncio.Lock()
 COMPLETE_INCIDENT_SCAN_STATUS = "complete"
 
-# Compatibility for internal callers/tests that use the prior private adapter.
-_normalize_advisor_incident = normalize_advisor_incident
+# Single canonical rider disclosure for incomplete incident coverage. The
+# agent projection and the direct Live Map path both import this exact
+# sentence so the two projection surfaces can never drift apart.
+INCOMPLETE_INCIDENT_DISCLOSURE = (
+    "Current incident coverage is incomplete, so allow extra time."
+)
+
+_LEGACY_STATUS = {
+    "current": "complete",
+    "partial": "partial",
+    "stale": "stale",
+    "unavailable": "unavailable",
+    "unscanned": "unscanned",
+}
 
 
 def incident_scan_is_complete(metadata: Mapping[str, object] | None) -> bool:
-    """Return true only for the scanner's fully completed evidence contract."""
-    return (
-        isinstance(metadata, Mapping)
-        and metadata.get("status") == COMPLETE_INCIDENT_SCAN_STATUS
-    )
+    """Coverage is fully current only when the legacy status is complete."""
+    return isinstance(metadata, Mapping) and metadata.get("status") == COMPLETE_INCIDENT_SCAN_STATUS
 
 
-def _failure_metadata(reason: str) -> dict[str, Any]:
+def incident_lookup_succeeded(metadata: Mapping[str, object] | None) -> bool:
+    """Indexed evidence is safe to consume once the lookup itself succeeded.
+    Independent of overall coverage freshness: a specific unexpired confirmed
+    indexed incident stays usable while an unrelated coverage batch is stale.
+    """
+    return isinstance(metadata, Mapping) and metadata.get("lookup_status") == COMPLETE_INCIDENT_SCAN_STATUS
+
+
+def _base_metadata(coverage_ids: list[str], warning_count: int, *, completed: bool) -> dict[str, Any]:
+    """Truthful, payload-free lookup sources: the index was the only source."""
     return {
-        "status": "failed",
-        "sources": {"attempted": ["x_search", "web_search"], "completed": [], "errors": [reason]},
-    }
-
-
-def _normalized_contract(raw: object) -> dict[str, Any]:
-    if not isinstance(raw, Mapping):
-        return {"incidents": [], "warnings": [], "scan_metadata": _failure_metadata("invalid scanner contract")}
-    metadata = raw.get("scan_metadata")
-    incidents = raw.get("incidents")
-    if not isinstance(metadata, Mapping) or not isinstance(incidents, list):
-        return {"incidents": [], "warnings": [], "scan_metadata": _failure_metadata("invalid scanner contract")}
-    status = metadata.get("status")
-    if status not in {COMPLETE_INCIDENT_SCAN_STATUS, "partial", "failed", "disabled"}:
-        status = "failed"
-    normalized = [normalize_advisor_incident(item) for item in incidents if isinstance(item, Mapping)]
-    # Evidence may inform the advisor only after both configured search sources
-    # completed and independent origins corroborate a route-impacting claim.
-    advisor_incidents = [
-        incident for incident in normalized
-        if status == COMPLETE_INCIDENT_SCAN_STATUS and incident.get("advisor_eligible") is True
-    ]
-    warnings = [incident for incident in normalized if incident not in advisor_incidents]
-    sources = metadata.get("sources") if isinstance(metadata.get("sources"), Mapping) else {}
-    normalized_metadata: dict[str, Any] = {
-        "status": status,
+        "lookup_kind": "index",
+        "requested_coverage_ids": coverage_ids,
+        "warning_count": warning_count,
+        "cache_hit": False,
         "sources": {
-            "attempted": list(sources.get("attempted") or ["x_search", "web_search"]),
-            "completed": list(sources.get("completed") or []),
+            "attempted": ["incident_index"],
+            "completed": ["incident_index"] if completed else [],
         },
-        "warning_count": len(warnings),
     }
-    errors = sources.get("errors")
-    if isinstance(errors, list) and errors:
-        normalized_metadata["sources"]["errors"] = [str(error)[:120] for error in errors[:3]]
-    rounds = metadata.get("tool_rounds")
-    if isinstance(rounds, int) and not isinstance(rounds, bool):
-        normalized_metadata["tool_rounds"] = max(0, min(rounds, 2))
-    return {"incidents": advisor_incidents, "warnings": warnings, "scan_metadata": normalized_metadata}
-
-
-async def _scan_route_incidents_with_metadata(route_context: Iterable[object]) -> dict[str, Any]:
-    context = list(route_context or [])
-    if not context:
-        return {
-            "incidents": [],
-            "warnings": [],
-            "scan_metadata": {
-                "status": COMPLETE_INCIDENT_SCAN_STATUS,
-                "sources": {"attempted": [], "completed": []},
-                "warning_count": 0,
-            },
-        }
-    try:
-        raw = await asyncio.wait_for(get_incidents(context), timeout=TRIP_INCIDENT_SCAN_TIMEOUT_S)
-    except asyncio.CancelledError:
-        raise
-    except asyncio.TimeoutError:
-        print(f"[trip] incident scan timed out ({TRIP_INCIDENT_SCAN_TIMEOUT_S:.0f}s)")
-        return {"incidents": [], "warnings": [], "scan_metadata": _failure_metadata("timeout")}
-    except Exception:
-        print("[trip] incident scan failed; continuing without evidence")
-        return {"incidents": [], "warnings": [], "scan_metadata": _failure_metadata("provider failure")}
-    return _normalized_contract(raw)
-
-
-async def _scan_and_cache(key: str, context: list[object]) -> dict[str, Any]:
-    try:
-        result = await _scan_route_incidents_with_metadata(context)
-        metadata = result.get("scan_metadata")
-        if isinstance(metadata, Mapping):
-            metadata = dict(metadata)
-            metadata["scanned_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-            metadata["cache_hit"] = False
-            result = {**result, "scan_metadata": metadata}
-        cache_scan_contract(key, result)
-        return result
-    finally:
-        async with _inflight_lock:
-            if _inflight_scans.get(key) is asyncio.current_task():
-                _inflight_scans.pop(key, None)
 
 
 async def scan_route_incidents(
@@ -124,22 +68,42 @@ async def scan_route_incidents(
     *,
     travel_at: datetime | str | None = None,
 ) -> dict[str, Any]:
-    """Share one scan per corridor/time bucket and cache only normalized data."""
-    context = list(route_context or [])
-    key = incident_cache_key(context, travel_at)
-    if not key:
-        return await _scan_route_incidents_with_metadata(context)
-    cached = load_cached_scan(key)
-    if cached is not None:
-        return cached
-    async with _inflight_lock:
-        task = _inflight_scans.get(key)
-        if task is None:
-            task = asyncio.create_task(_scan_and_cache(key, context), name="route-incident-scan")
-            _inflight_scans[key] = task
-    # A rider cancellation or per-request timeout must not cancel a shared scan
-    # that can still populate the bounded cache for the next rider.
-    return await asyncio.shield(task)
+    """One immediate incident-index lookup; never scans providers."""
+    del travel_at  # indexed coverage is not travel-time dependent
+    rows, stop_ids, route_ids, coverage_ids = extract_lookup_context(route_context or [])
+    started = time.monotonic()
+    try:
+        result = await incident_index.lookup_incidents_async(
+            stop_ids=stop_ids,
+            route_ids=route_ids,
+            coverage_ids=coverage_ids,
+        )
+    except Exception as exc:
+        print(f"[trip] incident index lookup failed: {type(exc).__name__}")
+        return {
+            "incidents": [],
+            "warnings": [],
+            "scan_metadata": {
+                **_base_metadata(coverage_ids, 0, completed=False),
+                "status": "unavailable",
+                "lookup_status": "failed",
+                "coverage_status": "unavailable",
+            },
+        }
+    latency_ms = (time.monotonic() - started) * 1000
+    coverage_status = str(result.get("coverage_status") or "unscanned")
+    incidents, warnings = project_records(result.get("incidents") or [], rows)
+    return {
+        "incidents": incidents,
+        "warnings": warnings,
+        "scan_metadata": {
+            **_base_metadata(coverage_ids, len(warnings), completed=True),
+            "status": _LEGACY_STATUS.get(coverage_status, "unscanned"),
+            "lookup_status": COMPLETE_INCIDENT_SCAN_STATUS,
+            "coverage_status": coverage_status,
+            "lookup_latency_ms": round(latency_ms, 3),
+        },
+    }
 
 
 def build_candidate_stop_context(gtfs: Any, routes: list[list[dict]]) -> list[CandidateStopContext]:

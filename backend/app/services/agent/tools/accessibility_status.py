@@ -79,10 +79,11 @@ ACCESSIBILITY_STATUS_SCHEMA = {
 
 
 def _normalize_station(value: object) -> str:
-    """Loose station-name normalizer in the spirit of
-    `incident_monitor._station_key` (casefold, strip separators, expand a
-    few common abbreviations) -- kept local rather than imported so this
-    tool doesn't couple to the Grok incident-scan module's internals."""
+    """Loose local station-name normalizer.
+
+    It casefolds, strips separators, and expands a few common abbreviations
+    without coupling accessibility checks to incident-collection internals.
+    """
     raw = " ".join(str(value or "").split()).strip().casefold()
     if not raw:
         return ""

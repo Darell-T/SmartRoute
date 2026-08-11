@@ -16,6 +16,7 @@ import anthropic
 
 from app import runtime
 from app.services.agent import budget
+from app.services.agent import discovery_followup
 from app.services.agent import events as agent_events
 from app.services.agent import intelligence
 from app.services.agent import model_request
@@ -23,6 +24,7 @@ from app.services.agent import model_stream  # Compatibility patch point for loo
 from app.services.agent import mock_turn
 from app.services.agent import policy as agent_policy
 from app.services.agent import prompt as agent_prompt
+from app.services.agent import scenario_followup
 from app.services.agent import session as session_module
 from app.services.agent import tool_round
 from app.services.agent import turn_stream
@@ -70,6 +72,7 @@ _mock_token_chunks = mock_turn.mock_token_chunks
 _stream_mock_turn = mock_turn.stream_mock_turn
 _TurnDeadlineReached = tool_round.TurnDeadlineReached
 _rider_excluded_modes = tool_round.rider_excluded_modes
+_rider_excluded_route_ids = tool_round.rider_excluded_route_ids
 _constrained_tool_input = tool_round.constrained_tool_input
 _required_arrival_input = tool_round.required_arrival_input
 _arrival_response = tool_round.arrival_response
@@ -117,7 +120,13 @@ async def _execute_tool_round(*args, **kwargs) -> AsyncIterator:
 
 
 def _system_blocks() -> list[dict]:
-    return [{"type": "text", "text": agent_prompt.SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}]
+    return [
+        {
+            "type": "text",
+            "text": agent_prompt.active_system_prompt(),
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
 
 
 def _messages_from_history(history: list[dict]) -> list[dict]:
@@ -138,6 +147,7 @@ def _build_stream_kwargs(
     system_blocks: list[dict],
     mode_policy: agent_policy.AgentModePolicy,
     tools: list[dict],
+    request_options: dict | None = None,
 ) -> dict:
     return model_request.build_stream_kwargs(
         force_final=force_final,
@@ -145,6 +155,7 @@ def _build_stream_kwargs(
         system_blocks=system_blocks,
         mode_policy=mode_policy,
         tools=tools,
+        request_options=request_options,
     )
 
 
@@ -153,6 +164,7 @@ def _web_search_tool(mode_policy: agent_policy.AgentModePolicy) -> dict:
         "type": "web_search_20250305",
         "name": "web_search",
         "max_uses": 2 if mode_policy.mode == "quick" else 3,
+        "allowed_callers": ["direct"],
         "user_location": {
             "type": "approximate",
             "city": "New York City",
@@ -163,23 +175,80 @@ def _web_search_tool(mode_policy: agent_policy.AgentModePolicy) -> dict:
     }
 
 
+# Canonical route profile and its discovery superset; the state-aware
+# discovery follow-up actions reuse these exact surfaces (never a shadow set).
+_ROUTE_TOOL_NAMES = frozenset(
+    {
+        "get_place_details",
+        "prepare_route_options",
+        "present_route",
+        "accessibility_status",
+    }
+)
+_DISCOVERY_TOOL_NAMES = _ROUTE_TOOL_NAMES | {"search_local_places"}
+
+
+def _tool_schemas(*names: str) -> list[dict]:
+    """Return registered schemas for the given tool names in registry order."""
+
+    wanted = frozenset(names)
+    return [schema for schema in TOOLS if schema.get("name") in wanted]
+
+
 def _tools_for_intent(
     parsed_intent: intelligence.ParsedIntent,
     mode_policy: agent_policy.AgentModePolicy | None = None,
+    scenario_action: scenario_followup.ScenarioAction | None = None,
+    session: dict | None = None,
+    message: object | None = None,
 ) -> list[dict]:
     mode_policy = mode_policy or agent_policy.policy_for_mode("auto")
+    if scenario_action is scenario_followup.ScenarioAction.ACCEPT:
+        # Acceptance never re-prepares: the live preview is already bound and
+        # the model only needs the canonical present_route contract.
+        return _tool_schemas("present_route")
+    if scenario_action is scenario_followup.ScenarioAction.REJECT:
+        # Rejection is a grounded conversational acknowledgement with no
+        # route, web, discovery, incident, or other tool surface.
+        return []
+    followup_action = discovery_followup.detect_followup_action(session, message)
+    if followup_action is discovery_followup.DiscoveryFollowupAction.SELECT:
+        # Pure discovery-result reference: resolve exactly the one selected
+        # place; no search, route, status, or web surface this turn.
+        return _tool_schemas("get_place_details")
+    if followup_action is discovery_followup.DiscoveryFollowupAction.SEARCH_AGAIN:
+        # Exact "Okay, search again." recovery against the same session's
+        # active discovery-set reference: the one structured client search
+        # tool. The real executor binds a fresh server-owned set and clears
+        # any stale selected-place association; no route/status/web surface
+        # and no reactivation of the expired set.
+        return _tool_schemas("search_local_places")
+    if followup_action in {
+        discovery_followup.DiscoveryFollowupAction.ROUTE_SELECTED,
+        discovery_followup.DiscoveryFollowupAction.ADD_WAYPOINT,
+        discovery_followup.DiscoveryFollowupAction.REMOVE_ONLY_WAYPOINT,
+    }:
+        # Navigation pronoun / waypoint mutation on the already-accepted
+        # trip: the canonical route profile with no discovery search or
+        # web/status surface.
+        return _tool_schemas(*_ROUTE_TOOL_NAMES)
     tool_names_by_intent = {
-        "route_planning": {"plan_trip", "accessibility_status"},
-        "destination_discovery": {"poi_search", "plan_trip", "accessibility_status"},
+        "route_planning": _ROUTE_TOOL_NAMES,
+        "destination_discovery": _DISCOVERY_TOOL_NAMES,
         "arrival_lookup": {"lookup_arrivals"},
         "area_conditions": {"check_area_conditions"},
-        "transit_question": {"transit_snapshot", "event_lookup", "lookup_arrivals", "accessibility_status", "lookup_facts"},
+        "transit_question": intelligence.transit_question_tool_names(message),
         "simple_general": set(),
         "unsupported": set(),
     }
     included = tool_names_by_intent.get(parsed_intent.intent, set())
-    tools = [schema for schema in TOOLS if schema.get("name") in included]
-    if parsed_intent.intent in {"destination_discovery", "route_planning", "transit_question"}:
+    tools = _tool_schemas(*included)
+    if parsed_intent.intent == "destination_discovery" or (
+        parsed_intent.intent == "transit_question" and "web_search" in included
+    ):
+        # Structured discovery tools stay first; the single native server-side
+        # web_search is appended last for current reporting grounded tools
+        # cannot answer. Route planning never receives web search.
         tools.append(_web_search_tool(mode_policy))
     return tools
 
@@ -209,11 +278,13 @@ def _route_card_text_fallback(card: agent_events.RouteCardEvent) -> str:
 
 _INTERNAL_CARD_REFERENCE = re.compile(r"\b(?:route\s+)?card\s+[`'\"]?(?:rc|mock)[_-][A-Za-z0-9_-]+[`'\"]?\s*(?:[\u2014\u2013-]\s*)?", re.IGNORECASE)
 _OPAQUE_CARD_ID = re.compile(r"\b(?:rc|mock)[_-][A-Za-z0-9_-]{4,}\b", re.IGNORECASE)
+_OPAQUE_CANDIDATE_ID = re.compile(r"\b(?:cd|cs)_[A-Za-z0-9_-]{4,}\b", re.IGNORECASE)
 
 
 def _sanitize_rider_text(text: str) -> str:
     sanitized = _INTERNAL_CARD_REFERENCE.sub("", text)
     sanitized = _OPAQUE_CARD_ID.sub("the route", sanitized)
+    sanitized = _OPAQUE_CANDIDATE_ID.sub("the route", sanitized)
     sanitized = re.sub(r"\*\*(.*?)\*\*", r"\1", sanitized, flags=re.DOTALL)
     sanitized = re.sub(r"__(.*?)__", r"\1", sanitized, flags=re.DOTALL)
     sanitized = re.sub(r"`([^`]+)`", r"\1", sanitized)
@@ -237,6 +308,7 @@ def _turn_dependencies() -> turn_stream.TurnDependencies:
         required_arrival_input=_required_arrival_input,
         arrival_response=_arrival_response,
         rider_excluded_modes=_rider_excluded_modes,
+        rider_excluded_route_ids=_rider_excluded_route_ids,
         execute_tool_round=_execute_tool_round,
     )
 
@@ -305,7 +377,14 @@ async def run_agent_turn(
         for event in _rejection_events(session_id, turn_id, "rate_limited", "SmartRoute is busy helping other riders -- try again shortly.", True):
             yield event
         return
-    ctx = ToolContext(gtfs=gtfs, session=session, turn_id=turn_id, now_et=now_et, origin=origin)
+    ctx = ToolContext(
+        gtfs=gtfs,
+        session=session,
+        session_id=session_id,
+        turn_id=turn_id,
+        now_et=now_et,
+        origin=origin,
+    )
     async with sem:
         async for event in _stream_turn(
             session=session, session_id=session_id, turn_id=turn_id, message=message, ctx=ctx,

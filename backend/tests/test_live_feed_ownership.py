@@ -6,12 +6,13 @@ import unittest
 import weakref
 from dataclasses import replace
 from types import MappingProxyType, SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from fastapi import WebSocketDisconnect
 
 from app.routers import live_feed as live_feed_router
 from app.routers import live_feed_socket
+from app import main as app_main
 from app.services.live_feed import network_snapshot as network_snapshot_module
 from app.services.live_feed import snapshot as rider_snapshot
 from app.services.live_feed.network_snapshot import NetworkSnapshot, NetworkSnapshotStore
@@ -74,6 +75,32 @@ class NetworkSnapshotNormalizationTests(unittest.TestCase):
 
 
 class NetworkSnapshotStoreTests(unittest.IsolatedAsyncioTestCase):
+    async def test_process_snapshot_fetches_do_not_write_provider_cache(self):
+        expected = network_snapshot(1)
+        with patch.object(
+            network_snapshot_module,
+            "fetch_feeds_with_metadata",
+            new=AsyncMock(return_value=[{"content": b"feed"}]),
+        ) as feeds, patch.object(
+            network_snapshot_module,
+            "fetch_service_alerts",
+            new=AsyncMock(return_value=b"alerts"),
+        ) as alerts, patch.object(
+            network_snapshot_module,
+            "_normalize_network_data",
+            return_value=expected,
+        ):
+            result = await network_snapshot_module.build_network_snapshot(1)
+
+        self.assertIs(result, expected)
+        feeds.assert_awaited_once_with(
+            network_snapshot_module.ALL_SUBWAY_ROUTES,
+            "network_snapshot",
+            force_refresh=True,
+            cache_result=False,
+        )
+        alerts.assert_awaited_once_with(force_refresh=True, cache_result=False)
+
     async def test_concurrent_refresh_callers_share_one_build(self):
         entered = asyncio.Event()
         release = asyncio.Event()
@@ -170,6 +197,74 @@ class NetworkSnapshotStoreTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
+    async def test_stale_first_request_refreshes_and_records_demand(self):
+        calls = 0
+
+        async def builder(generation):
+            nonlocal calls
+            calls += 1
+            return network_snapshot(generation)
+
+        store = NetworkSnapshotStore(builder)
+        store._current = network_snapshot(1, updated_at=int(time.time()) - 60)
+
+        refreshed = await store.get_or_refresh(max_age_seconds=30)
+
+        self.assertEqual(calls, 1)
+        self.assertEqual(refreshed.generation, 1)
+        self.assertTrue(store.has_recent_demand(45))
+
+    async def test_fresh_request_reuses_current_without_building(self):
+        builder = AsyncMock()
+        store = NetworkSnapshotStore(builder)
+        current = network_snapshot(4)
+        store._current = current
+
+        result = await store.get_or_refresh(max_age_seconds=30)
+
+        self.assertIs(result, current)
+        builder.assert_not_awaited()
+        self.assertTrue(store.has_recent_demand(45))
+
+
+class RealtimeWarmLoopTests(unittest.IsolatedAsyncioTestCase):
+    async def test_idle_loop_does_not_refresh_network(self):
+        store = SimpleNamespace(
+            has_recent_demand=Mock(return_value=False),
+            refresh=AsyncMock(),
+        )
+        sleep = AsyncMock(side_effect=asyncio.CancelledError)
+
+        with patch.object(app_main, "network_snapshot_store", store), patch.object(
+            app_main.asyncio,
+            "sleep",
+            new=sleep,
+        ):
+            with self.assertRaises(asyncio.CancelledError):
+                await app_main._realtime_warm_loop()
+
+        store.has_recent_demand.assert_called_once_with(
+            app_main.REALTIME_ACTIVE_WINDOW_S
+        )
+        store.refresh.assert_not_awaited()
+        sleep.assert_awaited_once_with(app_main.REALTIME_REFRESH_INTERVAL_S)
+
+    async def test_active_loop_refreshes_once_before_sleeping(self):
+        store = SimpleNamespace(
+            has_recent_demand=Mock(return_value=True),
+            refresh=AsyncMock(return_value=network_snapshot(1)),
+        )
+
+        with patch.object(app_main, "network_snapshot_store", store), patch.object(
+            app_main.asyncio,
+            "sleep",
+            new=AsyncMock(side_effect=asyncio.CancelledError),
+        ):
+            with self.assertRaises(asyncio.CancelledError):
+                await app_main._realtime_warm_loop()
+
+        store.refresh.assert_awaited_once_with()
+
 
 class RiderSnapshotSharingTests(unittest.IsolatedAsyncioTestCase):
     async def test_rider_filtering_does_not_mutate_shared_network_records(self):
@@ -207,7 +302,7 @@ class RiderSnapshotSharingTests(unittest.IsolatedAsyncioTestCase):
                 return {}
 
             def get_trip_stop_context(self, _trip_ids):
-                return {}
+                raise AssertionError("rider snapshots must not query static trip context")
 
         with patch.object(
             rider_snapshot.mta_feed,
@@ -221,6 +316,60 @@ class RiderSnapshotSharingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["vehicles"][0]["route_name"], "Q train")
         self.assertNotIn("route_name", shared_vehicle)
         self.assertEqual(network.generation, 7)
+
+    def test_realtime_trip_context_is_ordered_and_uses_static_stop_facts(self):
+        updates = (
+            {"trip_id": "trip-1", "stop_id": "Q02N", "stop_sequence": 2},
+            {"trip_id": "trip-1", "stop_id": "Q01N", "stop_sequence": 1},
+            {"trip_id": "other", "stop_id": "R01S", "stop_sequence": 1},
+        )
+        locations = {
+            "Q01": {
+                "stop_name": "Canal St",
+                "lat": 40.72,
+                "lng": -74.0,
+                "parent_station": "Q01",
+            },
+            "Q02": {
+                "stop_name": "Times Sq",
+                "lat": 40.75,
+                "lng": -73.99,
+                "parent_station": "Q02",
+            },
+        }
+
+        context = rider_snapshot._realtime_trip_stop_context(
+            updates,
+            {"trip-1"},
+            locations,
+        )
+
+        self.assertEqual(
+            [stop["stop_name"] for stop in context["trip-1"]],
+            ["Canal St", "Times Sq"],
+        )
+        self.assertNotIn("other", context)
+
+    def test_vehicle_segment_skips_incomplete_static_coordinates(self):
+        vehicle = {
+            "trip_id": "trip-1",
+            "stop_id": "Q02N",
+            "status": "IN_TRANSIT_TO",
+        }
+        stops = [
+            {"stop_id": "Q01N", "stop_name": "Known", "lat": None, "lng": None},
+            {"stop_id": "Q02N", "stop_name": "Target", "lat": 40.7, "lng": -73.9},
+        ]
+
+        attached = rider_snapshot.vehicle_enrichment._attach_trip_segment(
+            vehicle,
+            stops,
+            {},
+            1_000,
+        )
+
+        self.assertFalse(attached)
+        self.assertNotIn("lat", vehicle)
 
 
 class BusUpdateOwnershipTests(unittest.IsolatedAsyncioTestCase):
@@ -474,6 +623,63 @@ class SocketOwnershipTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(socket.accepted, 0)
         self.assertEqual(socket.close_codes, [1008])
         self.assertEqual(set(asyncio.all_tasks()), baseline)
+
+    async def test_refresh_event_pushes_a_new_snapshot_without_reconnecting(self):
+        refresh_event = asyncio.Event()
+        disconnect = asyncio.Event()
+        receive_count = 0
+        snapshot_count = 0
+
+        async def receive(_socket):
+            nonlocal receive_count
+            receive_count += 1
+            if receive_count == 1:
+                return {"type": "location", "lat": 40.7, "lng": -73.9}
+            await disconnect.wait()
+            raise WebSocketDisconnect(code=1000)
+
+        async def snapshot(*_args, **_kwargs):
+            nonlocal snapshot_count, refresh_event
+            snapshot_count += 1
+            if snapshot_count == 1:
+                previous = refresh_event
+                refresh_event = asyncio.Event()
+                previous.set()
+            return {
+                "nearest_stop": None,
+                "arrivals": [],
+                "vehicles": [],
+                "degraded": False,
+                "bus_status": "cached",
+                "debug": {"network_generation": snapshot_count},
+            }
+
+        sent = []
+
+        async def send(_socket, payload):
+            sent.append(payload)
+            if payload.get("type") == "snapshot" and len(sent) > 1:
+                disconnect.set()
+            return True
+
+        socket = self.Socket()
+        deps = replace(
+            self.dependencies(receive),
+            refresh_event=lambda: refresh_event,
+            snapshot=snapshot,
+            send=send,
+        )
+        await asyncio.wait_for(
+            live_feed_socket.stream_live_feed(socket, 1, deps),
+            timeout=2,
+        )
+
+        snapshots = [message for message in sent if message.get("type") == "snapshot"]
+        self.assertEqual(
+            [message["data"]["debug"]["network_generation"] for message in snapshots],
+            [1, 2],
+        )
+        self.assertEqual(socket.accepted, 1)
 
     async def test_lease_failure_closes_once_during_unified_cleanup(self):
         async def failed_guard(_lease, _stopped, lease_failed, owner):

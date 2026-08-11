@@ -308,6 +308,9 @@ class GTFSStaticData:
         )
     
     def get_all_parent_stops(self):
+        index = self.__dict__.get("_pattern_index")
+        if index is not None:
+            return index.all_parent_stops()
         # location_type column is TEXT (raw GTFS value, "1" for parent stations).
         # Column is stop_lon (REAL) per the migration — not stop_long.
         return self._query(
@@ -338,6 +341,9 @@ class GTFSStaticData:
         return result
 
     def get_route_ids_for_parent_stop(self, parent_stop_id: str):
+        index = self.__dict__.get("_pattern_index")
+        if index is not None:
+            return index.route_ids_for_parent_stop(parent_stop_id)
         rows = self._query(
             """
             SELECT DISTINCT t.route_id
@@ -353,8 +359,11 @@ class GTFSStaticData:
 
     def get_child_stop_ids(self, parent_stop_id: str):
         index = self.__dict__.get("_pattern_index")
-        if index is not None and parent_stop_id in index.stops:
-            return [f"{parent_stop_id}N", f"{parent_stop_id}S"]
+        if index is not None:
+            return (
+                [f"{parent_stop_id}N", f"{parent_stop_id}S"]
+                if parent_stop_id in index.stops else []
+            )
         rows = self._query(
             "SELECT stop_id FROM stops WHERE parent_station = %s",
             (parent_stop_id,),
@@ -373,6 +382,10 @@ class GTFSStaticData:
     def get_stop_locations(self, stop_ids: list[str]):
         if not stop_ids:
             return {}
+
+        index = self.__dict__.get("_pattern_index")
+        if index is not None:
+            return index.stop_locations(stop_ids)
 
         candidate_ids = set()
         for stop_id in stop_ids:
@@ -403,6 +416,9 @@ class GTFSStaticData:
         if not trip_ids:
             return {}
 
+        # Realtime updates, not this pattern artifact, own per-trip sequences.
+        if self.__dict__.get("_pattern_index") is not None:
+            return {}
         rows = self._query(
             """
             SELECT

@@ -1,6 +1,14 @@
-"""Tool registry for the conversational transit agent (plan_trip,
-transit_snapshot from P0; event_lookup, poi_search, venue_crowd_window from
-P1; accessibility_status, lookup_facts from P2).
+"""Tool registry for the rider-facing conversational transit agent.
+
+The conversational route surface selects ``prepare_route_options`` and
+``present_route``. The legacy nested-selector ``plan_trip`` facade is not a
+registered production tool.
+
+Other tools include transit_snapshot from P0; event_lookup, poi_search,
+venue_crowd_window from P1; accessibility_status and lookup_facts from P2; and
+search_local_places / get_place_details from Phase 2A. poi_search stays
+registered as an internal provider boundary behind search_local_places and is
+never exposed to the outer model.
 
 `TOOL_REGISTRY` maps a tool name to its schema, async executor, SSE
 `tool_start` label function, and per-tool timeout. `TOOLS` is the plain list
@@ -22,8 +30,11 @@ from app.services.agent.tools import (
     event_lookup,
     lookup_arrivals,
     lookup_facts,
-    plan_trip,
+    place_reference,
     poi_search,
+    prepare_route_options,
+    present_route,
+    search_local_places,
     transit_snapshot,
     venue_crowd_window,
 )
@@ -39,13 +50,6 @@ class ToolSpec:
     executor: ToolExecutor
     label_fn: Callable[[dict], str]
     timeout_s: float
-
-
-def _plan_trip_label(tool_input: dict) -> str:
-    destination = str(tool_input.get("destination") or "your destination").strip()
-    excluded = [str(m).strip().lower() for m in (tool_input.get("exclude_modes") or [])]
-    suffix = f" (no {', '.join(excluded)})" if excluded else ""
-    return f"Finding routes to {destination}{suffix}…"
 
 
 def _transit_snapshot_label(tool_input: dict) -> str:
@@ -94,6 +98,18 @@ def _lookup_facts_label(tool_input: dict) -> str:
     return f"Looking up {topic}…"
 
 
+def _prepare_route_options_label(tool_input: dict) -> str:
+    destination_place_id = str(tool_input.get("destination_place_id") or "").strip()
+    destination = str(tool_input.get("destination") or "your destination").strip()
+    if destination_place_id or destination.startswith("pl_"):
+        return "Preparing routes to your selected place…"
+    return f"Preparing routes to {destination}…"
+
+
+def _present_route_label(tool_input: dict) -> str:
+    return "Presenting the recommended route…"
+
+
 # ---- Fixture replay (eval harness hook -- plan doc section 7 Layer 2) ----
 #
 # AGENT_TOOL_FIXTURES=<dir>: every tool call is intercepted here and replayed
@@ -102,7 +118,7 @@ def _lookup_facts_label(tool_input: dict) -> str:
 # silently) on a missing fixture. AGENT_TOOL_FIXTURES_RECORD=1: run the real
 # executor AND write its result to that path before returning, to (re)record
 # fixtures against live API keys. Wrapping happens once here, at registry
-# build time, so plan_trip/transit_snapshot get the hook without either
+# build time, so route/transit tools get the hook without either
 # module knowing fixtures exist.
 
 
@@ -156,7 +172,18 @@ def _spec(schema: dict, executor: ToolExecutor, label_fn: Callable[[dict], str],
 
 
 TOOL_REGISTRY: dict[str, ToolSpec] = {
-    "plan_trip": _spec(plan_trip.PLAN_TRIP_SCHEMA, plan_trip.execute, _plan_trip_label, 30.0),
+    "prepare_route_options": _spec(
+        prepare_route_options.PREPARE_ROUTE_OPTIONS_SCHEMA,
+        prepare_route_options.execute,
+        _prepare_route_options_label,
+        30.0,
+    ),
+    "present_route": _spec(
+        present_route.PRESENT_ROUTE_SCHEMA,
+        present_route.execute,
+        _present_route_label,
+        12.0,
+    ),
     "transit_snapshot": _spec(
         transit_snapshot.TRANSIT_SNAPSHOT_SCHEMA, transit_snapshot.execute, _transit_snapshot_label, 8.0
     ),
@@ -184,6 +211,18 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
         8.0,
     ),
     "lookup_facts": _spec(lookup_facts.LOOKUP_FACTS_SCHEMA, lookup_facts.execute, _lookup_facts_label, 2.0),
+    "search_local_places": _spec(
+        search_local_places.SEARCH_LOCAL_PLACES_SCHEMA,
+        search_local_places.execute,
+        lambda tool_input: f"Finding {str(tool_input.get('query') or 'places').strip()} nearby…",
+        10.0,
+    ),
+    "get_place_details": _spec(
+        place_reference.GET_PLACE_DETAILS_SCHEMA,
+        place_reference.execute,
+        lambda tool_input: "Checking place details…",
+        8.0,
+    ),
 }
 
 TOOLS: list[dict] = [spec.schema for spec in TOOL_REGISTRY.values()]

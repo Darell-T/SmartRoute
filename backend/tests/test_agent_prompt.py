@@ -5,6 +5,9 @@ import json
 import unittest
 
 from app.services.agent import prompt as agent_prompt
+from app.services.agent import discovery_store
+from app.services.agent import profile
+from app.services.agent import trip_state
 
 
 class SystemPromptGuardTests(unittest.TestCase):
@@ -19,7 +22,8 @@ class SystemPromptGuardTests(unittest.TestCase):
 
     def test_grounding_invariants_clause_present(self):
         self.assertIn("GROUNDING INVARIANTS", agent_prompt.SYSTEM_PROMPT)
-        self.assertIn("plan_trip", agent_prompt.SYSTEM_PROMPT)
+        self.assertIn("prepare_route_options", agent_prompt.SYSTEM_PROMPT)
+        self.assertIn("present_route", agent_prompt.SYSTEM_PROMPT)
         self.assertIn("event_lookup", agent_prompt.SYSTEM_PROMPT)
         self.assertIn("estimate", agent_prompt.SYSTEM_PROMPT.lower())
 
@@ -31,7 +35,8 @@ class SystemPromptGuardTests(unittest.TestCase):
 
     def test_multi_stop_procedure_clause_present(self):
         self.assertIn("MULTI-STOP PROCEDURE", agent_prompt.SYSTEM_PROMPT)
-        self.assertIn("poi_search", agent_prompt.SYSTEM_PROMPT)
+        self.assertIn("search_local_places", agent_prompt.SYSTEM_PROMPT)
+        self.assertNotIn("poi_search", agent_prompt.SYSTEM_PROMPT)
         self.assertIn("dwell", agent_prompt.SYSTEM_PROMPT.lower())
         self.assertIn("25 minutes", agent_prompt.SYSTEM_PROMPT)
 
@@ -84,6 +89,20 @@ class SystemPromptGuardTests(unittest.TestCase):
         self.assertIn("compare live routes and current conditions", normalized)
         self.assertIn("without claiming any route", normalized)
 
+    def test_prompt_instructs_excluded_route_followups(self):
+        normalized = " ".join(agent_prompt.SYSTEM_PROMPT.lower().split())
+        self.assertIn("excluded_route_ids", agent_prompt.SYSTEM_PROMPT)
+        self.assertIn("avoid the q", normalized)
+        self.assertIn("never treat an avoided line as required", normalized)
+        self.assertIn("stays hypothetical until the rider explicitly commits it", normalized)
+
+    def test_prompt_requires_server_owned_endpoint_precedence_before_clarification(self):
+        normalized = " ".join(agent_prompt.SYSTEM_PROMPT.lower().split())
+        self.assertIn("server-owned context before clarification", normalized)
+        self.assertIn("current gps is a sufficient origin", normalized)
+        self.assertIn("never invent home or work", normalized)
+        self.assertIn("never let current location replace an explicitly supplied origin", normalized)
+
 
 class BuildTurnContextTests(unittest.TestCase):
     def test_includes_current_time(self):
@@ -99,6 +118,44 @@ class BuildTurnContextTests(unittest.TestCase):
     def test_omits_rider_location_when_absent(self):
         block = agent_prompt.build_turn_context({}, "now", None, None)
         self.assertNotIn("rider_location", block)
+
+    def test_includes_saved_place_labels_without_coordinates_or_addresses(self):
+        session: dict = {}
+        profile.save_place(
+            session,
+            {
+                "label": "Apartment",
+                "address": "123 Private St",
+                "latitude": 40.7128,
+                "longitude": -74.0060,
+                "place_id": "provider-secret-id",
+            },
+            slot="home",
+        )
+        profile.save_place(
+            session,
+            {
+                "label": "Office",
+                "address": "456 Private Ave",
+                "latitude": 40.7500,
+                "longitude": -73.9900,
+            },
+            slot="work",
+        )
+
+        block = agent_prompt.build_turn_context(session, "now")
+
+        saved_line = next(
+            line for line in block.splitlines() if line.startswith("saved_places:")
+        )
+        self.assertEqual(
+            json.loads(saved_line[len("saved_places: "):]),
+            {"home": "Apartment", "work": "Office"},
+        )
+        self.assertNotIn("123 Private St", saved_line)
+        self.assertNotIn("456 Private Ave", saved_line)
+        self.assertNotIn("40.7128", saved_line)
+        self.assertNotIn("provider-secret-id", saved_line)
 
     def test_includes_known_slots(self):
         session = {"slots": {"origin": "user", "destination": "Costco"}}
@@ -143,6 +200,41 @@ class BuildTurnContextTests(unittest.TestCase):
         self.assertIn("response_presentation: auto", automatic)
         self.assertIn("response_presentation: quick", quick)
         self.assertIn("response_presentation: auto", invalid)
+
+    def test_trip_digest_waypoints_use_stored_names_not_opaque_ids(self):
+        set_id = discovery_store.store_discovery_set(
+            session_id="sess-prompt",
+            places=[
+                {
+                    "name": "Di Fara Pizza",
+                    "address": "1424 Av J",
+                }
+            ],
+            query="pizza",
+        )
+        record = discovery_store.load_discovery_set(set_id, session_id="sess-prompt")
+        place_id = record["places"][0]["place_id"]
+        session: dict = {}
+        trip_state.bind_discovery_set(session, set_id)
+        trip_state.update_trip_state(
+            session,
+            destination="Di Fara Pizza",
+            waypoints=[place_id],
+        )
+        block = agent_prompt.build_turn_context(
+            session,
+            "now",
+            None,
+            None,
+            session_id="sess-prompt",
+        )
+        trip_line = next(
+            line for line in block.splitlines() if line.startswith("trip_state:")
+        )
+        parsed = json.loads(trip_line[len("trip_state: "):])
+        self.assertEqual(parsed["waypoints"], ["Di Fara Pizza"])
+        self.assertNotIn(place_id, trip_line)
+        self.assertIn("active_discovery", block)
 
 
 if __name__ == "__main__":

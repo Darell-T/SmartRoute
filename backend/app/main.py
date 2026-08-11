@@ -28,20 +28,20 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Securit
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security.api_key import APIKeyHeader
-from app.routers import trips, live_feed, subway, agent_chat
+from app.routers import trips, live_feed, subway, agent_chat, incident_job
 from app.services.live_feed.network_snapshot import network_snapshot_store
-from app.services.incident_monitor import close_incident_client
+from app.services.incident_scout_transport import close_incident_scout_client
 from app.services.mta_feed import close_bus_client, start_bus_client
 from app.services.trips.crowd_search_provider import close_crowd_search_client
 from app.utils.gtfs_static import GTFSStaticData, close_pool, init_pool
 from app.models.migrate_gtfs import migrate
 
-# How often the background loop force-refreshes the realtime MTA caches. Shorter
-# than the feed TTL (30s) so user-facing snapshots always hit a warm, fresh
-# cache instead of paying upstream fetch latency. The instance only runs this
-# while it is awake (Render spins down idle free instances on no inbound
-# traffic), so it does not poll 24/7 when nobody is using the app.
-REALTIME_WARM_INTERVAL_S = 15
+# Active riders share one process-owned realtime snapshot. Poll no faster than
+# the upstream feed cadence, and stop polling shortly after the last REST or
+# WebSocket consumer leaves so an always-on Render instance does not download
+# and parse the full network indefinitely while idle.
+REALTIME_REFRESH_INTERVAL_S = 30
+REALTIME_ACTIVE_WINDOW_S = 45
 
 
 api_key_header = APIKeyHeader(name = "X-App-Key")
@@ -75,14 +75,18 @@ async def _gtfs_refresh_loop():
 
 
 async def _realtime_warm_loop():
-    # One process owner fetches and parses network-wide realtime data. Sockets
-    # only filter the latest completed generation for their rider location.
+    # The first rider request refreshes stale state itself. While riders remain
+    # active, this owner publishes later generations for all sockets to share.
     while True:
-        try:
-            await network_snapshot_store.refresh()
-        except Exception as exc:
-            print(f"[live_feed] network snapshot refresh failed: {type(exc).__name__}")
-        await asyncio.sleep(REALTIME_WARM_INTERVAL_S)
+        if network_snapshot_store.has_recent_demand(REALTIME_ACTIVE_WINDOW_S):
+            try:
+                await network_snapshot_store.refresh()
+            except Exception as exc:
+                print(
+                    "[live_feed] network snapshot refresh failed: "
+                    f"{type(exc).__name__}"
+                )
+        await asyncio.sleep(REALTIME_REFRESH_INTERVAL_S)
 
 
 async def _init_pool_bg():
@@ -138,7 +142,7 @@ async def lifespan(app: FastAPI):
             pass
     await network_snapshot_store.close()
     await close_bus_client()
-    await close_incident_client()
+    await close_incident_scout_client()
     await close_crowd_search_client()
     close_pool()
 
@@ -186,6 +190,8 @@ protected_api.include_router(subway.router)
 protected_api.include_router(agent_chat.router)
 app.include_router(protected_api)
 app.include_router(live_feed.ws_router)
+# Cron secret auth only; not behind X-App-Key so Render cron can call it.
+app.include_router(incident_job.router)
 
 @app.get("/health", dependencies=[])
 @app.head("/health", dependencies=[])
@@ -206,19 +212,35 @@ async def _session_store_ready() -> bool:
         return False
 
 
+def _readiness_failure(reason: str) -> JSONResponse:
+    return JSONResponse(
+        {
+            "status": "not_ready",
+            "reason": reason,
+            "runtime_mode": runtime.runtime_mode_label(),
+        },
+        status_code=503,
+    )
+
+
 @app.get("/ready", dependencies=[])
 @app.head("/ready", dependencies=[])
 async def readiness():
-    """Readiness for chat sessions; optional providers are not startup gates."""
+    """Readiness for the durable state and static config required to plan trips."""
     if not getattr(app.state, "startup_complete", False):
-        return JSONResponse({"status": "not_ready", "reason": "startup", "runtime_mode": runtime.runtime_mode_label()}, status_code=503)
-    if not os.getenv("REDIS_URL") and not agent_chat.AGENT_ALLOW_MEMORY_SESSIONS:
-        return JSONResponse(
-            {"status": "not_ready", "reason": "redis_session_store", "runtime_mode": runtime.runtime_mode_label()}, status_code=503
-        )
-    if os.getenv("REDIS_URL") and not await _session_store_ready():
-        return JSONResponse(
-            {"status": "not_ready", "reason": "redis_session_store_unreachable", "runtime_mode": runtime.runtime_mode_label()},
-            status_code=503,
-        )
-    return {"status": "ready", "chat_sessions": "durable" if os.getenv("REDIS_URL") else "local", "runtime_mode": runtime.runtime_mode_label()}
+        return _readiness_failure("startup")
+    if not os.getenv("GOOGLE_ROUTES_API_KEY", "").strip():
+        return _readiness_failure("routes_provider_config")
+    redis_configured = bool(os.getenv("REDIS_URL", "").strip())
+    memory_sessions_allowed = (
+        agent_chat.AGENT_ALLOW_MEMORY_SESSIONS and runtime.allows_mock_modes()
+    )
+    if not redis_configured and not memory_sessions_allowed:
+        return _readiness_failure("redis_session_store")
+    if redis_configured and not await _session_store_ready():
+        return _readiness_failure("redis_session_store_unreachable")
+    return {
+        "status": "ready",
+        "chat_sessions": "durable" if redis_configured else "local",
+        "runtime_mode": runtime.runtime_mode_label(),
+    }

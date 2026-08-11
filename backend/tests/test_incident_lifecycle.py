@@ -25,8 +25,8 @@ class LiveRuntimeLifecycleTests(unittest.IsolatedAsyncioTestCase):
         ) as start_bus, patch.object(
             main, "close_bus_client", AsyncMock()
         ) as close_bus, patch.object(
-            main, "close_incident_client", AsyncMock()
-        ) as close_incidents, patch.object(
+            main, "close_incident_scout_client", AsyncMock()
+        ) as close_scout, patch.object(
             main, "close_crowd_search_client", AsyncMock()
         ) as close_crowd, patch.object(
             main.network_snapshot_store, "close", AsyncMock()
@@ -44,5 +44,9 @@ class LiveRuntimeLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(app.state.startup_complete)
         close_snapshot.assert_awaited_once_with()
         close_bus.assert_awaited_once_with()
-        close_incidents.assert_awaited_once_with()
+        close_scout.assert_awaited_once_with()
         close_crowd.assert_awaited_once_with()
+        # The dormant request-time incident_monitor client is no longer
+        # imported or closed by the application lifecycle.
+        self.assertFalse(hasattr(main, "close_incident_client"))
+        self.assertTrue(callable(main.close_incident_scout_client))
