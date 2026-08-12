@@ -12,6 +12,7 @@ services:
   - type: cron
     name: smartroute-incident-refresh
     runtime: python
+    region: ohio
     rootDir: backend
     schedule: "0,30 * * * *"
     buildCommand: "pip install -r requirements.txt"
