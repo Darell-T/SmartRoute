@@ -76,10 +76,13 @@ def upsert_incident(incident: dict[str, Any], *, ttl_seconds: int = DEFAULT_TTL_
         ttl_seconds=ttl_seconds,
     )
     cache.cache_set(key, json.dumps(record, separators=(",", ":"), default=str), int(ttl_seconds))
-    if isinstance(existing, dict):
-        for key in _index_keys_for(existing):
-            _update_index(key, incident_id, ttl_seconds, remove=True)
-    for key in _index_keys_for(record):
+    previous_index_keys = (
+        set(_index_keys_for(existing)) if isinstance(existing, dict) else set()
+    )
+    current_index_keys = set(_index_keys_for(record))
+    for key in previous_index_keys - current_index_keys:
+        _update_index(key, incident_id, ttl_seconds, remove=True)
+    for key in current_index_keys - previous_index_keys:
         _update_index(key, incident_id, ttl_seconds, remove=False)
     return incident_id
 

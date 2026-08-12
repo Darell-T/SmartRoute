@@ -175,8 +175,11 @@ def _web_search_tool(mode_policy: agent_policy.AgentModePolicy) -> dict:
     }
 
 
-# Canonical route profile and its discovery superset; the state-aware
-# discovery follow-up actions reuse these exact surfaces (never a shadow set).
+# Canonical route profile and the initial discovery surface. Discovery does
+# not expose get_place_details: search_local_places already returns canonical
+# opaque place IDs that prepare_route_options resolves directly. Descriptive
+# or ordinal references on later turns receive get_place_details through the
+# state-aware SELECT surface below.
 _ROUTE_TOOL_NAMES = frozenset(
     {
         "get_place_details",
@@ -185,7 +188,9 @@ _ROUTE_TOOL_NAMES = frozenset(
         "accessibility_status",
     }
 )
-_DISCOVERY_TOOL_NAMES = _ROUTE_TOOL_NAMES | {"search_local_places"}
+_DISCOVERY_TOOL_NAMES = (
+    _ROUTE_TOOL_NAMES - {"get_place_details"}
+) | {"search_local_places"}
 
 
 def _tool_schemas(*names: str) -> list[dict]:

@@ -729,7 +729,6 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
                 "Find a good pizza place",
                 {
                     "search_local_places",
-                    "get_place_details",
                     "prepare_route_options",
                     "present_route",
                     "accessibility_status",
@@ -740,7 +739,6 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
                 "lets get some L'Industrie now",
                 {
                     "search_local_places",
-                    "get_place_details",
                     "prepare_route_options",
                     "present_route",
                     "accessibility_status",
@@ -757,6 +755,19 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
                 "How much is the subway fare?",
                 {"lookup_facts"},
             ),
+            (
+                "How much is the fare, is the Q delayed, is the elevator "
+                "accessible, what events are at Barclays, and what are the "
+                "latest news reports?",
+                {
+                    "transit_snapshot",
+                    "event_lookup",
+                    "venue_crowd_window",
+                    "accessibility_status",
+                    "lookup_facts",
+                    "web_search",
+                },
+            ),
             ("Hello", set()),
         )
         for message, expected_tools in cases:
@@ -769,29 +780,56 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
                     optional_parameter_count(schema.get("input_schema"))
                     for schema in schemas
                 )
-                # Repository compactness budget, not a provider hard maximum.
-                # Measured optional-parameter counts: route_planning 23
+                # Anthropic rejects a request before its first token when the
+                # offered custom schemas exceed 24 optional parameters.
+                # Measured counts: route_planning 23
                 # (prepare_route_options 17, get_place_details 4,
                 # present_route 1, accessibility_status 1);
-                # destination_discovery 26 (the same 23 plus
-                # search_local_places 3 and web_search 0);
+                # destination_discovery 22 (route execution 19 plus
+                # search_local_places 3 and web_search 0). Later discovery
+                # references receive get_place_details on their own surface.
                 # transit-question facets are now smaller than the route
-                # profile and are asserted exactly below. The
-                # excluded_route_ids hard-constraint parameter on
-                # prepare_route_options is the +1 that raised both budgets
-                # from 22/25; every parameter stays explicit and strict.
-                schema_limit = 26 if parsed_intent.intent == "destination_discovery" else 23
-                self.assertLessEqual(total, schema_limit)
-                tool_limit = (
-                    6
-                    if parsed_intent.intent == "destination_discovery"
-                    else 4
-                )
-                self.assertLessEqual(len(schemas), tool_limit)
+                # profile and are asserted exactly below.
+                self.assertLessEqual(total, 24)
                 self.assertEqual(
                     expected_tools,
                     {schema["name"] for schema in schemas},
                 )
+
+        simple_intent = types.SimpleNamespace(intent="simple_general")
+        followup_surfaces = [
+            self.loop._tools_for_intent(
+                simple_intent,
+                scenario_action=action,
+            )
+            for action in (
+                self.loop.scenario_followup.ScenarioAction.ACCEPT,
+                self.loop.scenario_followup.ScenarioAction.REJECT,
+            )
+        ]
+        for action in self.loop.discovery_followup.DiscoveryFollowupAction:
+            with patch.object(
+                self.loop.discovery_followup,
+                "detect_followup_action",
+                return_value=action,
+            ):
+                followup_surfaces.append(
+                    self.loop._tools_for_intent(
+                        simple_intent,
+                        session={},
+                        message="test",
+                    )
+                )
+        for schemas in followup_surfaces:
+            total = sum(
+                optional_parameter_count(schema.get("input_schema"))
+                for schema in schemas
+            )
+            self.assertLessEqual(
+                total,
+                24,
+                [schema.get("name") for schema in schemas],
+            )
 
     async def test_route_planning_uses_a_minimal_tool_profile(self):
         parsed_intent = self.loop.intelligence.parse_intent(
@@ -1751,7 +1789,6 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
                     names,
                     {
                         "search_local_places",
-                        "get_place_details",
                         "prepare_route_options",
                         "present_route",
                         "accessibility_status",

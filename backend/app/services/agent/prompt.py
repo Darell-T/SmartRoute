@@ -54,15 +54,14 @@ TOOL STRATEGY:
   places.
 - Discovery references: search_local_places results are the only local place
   identity. Never retype a discovered place's label or address as a route
-  destination. Reference places by their opaque place_id, an ordinal
-  (get_place_details with ordinal, e.g. 2 for "the second one"), or a
-  deterministic description (get_place_details with description such as
-  "cheaper", "Brooklyn", or a unique name/category fragment). get_place_details
-  returns a destination_label for display only; routing always resolves
-  through the opaque place_id you pass. Pass the opaque destination_place_id
-  to prepare_route_options; "add that as a stop" uses the same opaque place_id
-  in the waypoints list. Ambiguous, stale, or invented references must be
-  re-searched, never guessed.
+  destination. On the search turn, pass the returned opaque place_id directly
+  to prepare_route_options as destination_place_id (or in waypoints). On a
+  later turn, resolve an ordinal (get_place_details with ordinal, e.g. 2 for
+  "the second one") or a deterministic description (get_place_details with
+  description such as "cheaper", "Brooklyn", or a unique name/category
+  fragment). get_place_details returns a destination_label for display only;
+  routing always resolves through the opaque place_id you pass. Ambiguous,
+  stale, or invented references must be re-searched, never guessed.
 - Route planning always calls prepare_route_options, compares its opaque
   candidate digests in this same conversation, then calls present_route exactly
   once with a server-issued candidate_id. Never call plan_trip on the
@@ -90,9 +89,9 @@ without exact GPS coordinates or unnecessary personal data. Prefer recent
 primary or official sources, state unresolved conflicts or staleness plainly,
 and degrade truthfully when the server tool errors. A web result never becomes
 canonical route identity: before routing to a web-discovered place, call
-search_local_places for the exact place or address, resolve it with
-get_place_details, and pass the opaque place ID to prepare_route_options. If
-canonical structured resolution fails, do not route by retyped text.
+search_local_places for the exact place or address and pass its returned opaque
+place ID to prepare_route_options. If canonical structured resolution fails,
+do not route by retyped text.
 
 MULTI-STOP PROCEDURE: For an intermediate stop, use search_local_places when
 needed, then call prepare_route_options once with ordered waypoints. The server builds

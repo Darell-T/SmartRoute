@@ -44,7 +44,7 @@ class _SharedRedis:
 
 
 class AdmissionTests(unittest.IsolatedAsyncioTestCase):
-    async def test_two_streams_leave_capacity_for_normal_requests(self):
+    async def test_websocket_lease_uses_longer_orphan_recovery_ttl(self):
         admission._memory_leases.clear()
         admission._memory_requests.clear()
         principal = "v1.principal-one-123456"
@@ -53,13 +53,30 @@ class AdmissionTests(unittest.IsolatedAsyncioTestCase):
         ), patch.object(
             admission.runtime, "allows_mock_modes", return_value=True
         ):
-            leases = [
-                await admission.acquire(principal, kind)
-                for kind in ("ws", "ws", "trip", "chat")
-            ]
+            request_lease = await admission.acquire(principal, "chat")
+            socket_lease = await admission.acquire(principal, "ws")
+
+        self.assertEqual(request_lease.ttl_s, admission.LEASE_TTL_S)
+        self.assertEqual(socket_lease.ttl_s, admission.WEBSOCKET_LEASE_TTL_S)
+        self.assertGreater(socket_lease.ttl_s, request_lease.ttl_s)
+
+    async def test_saturated_socket_pool_does_not_block_normal_requests(self):
+        admission._memory_leases.clear()
+        admission._memory_requests.clear()
+        principal = "v1.principal-one-123456"
+        with patch.object(admission, "_redis_client", None), patch.dict(
+            "os.environ", {"REDIS_URL": ""}
+        ), patch.object(
+            admission.runtime, "allows_mock_modes", return_value=True
+        ), patch.object(admission, "WEBSOCKET_CONCURRENT_PER_PRINCIPAL", 2):
+            socket_leases = [await admission.acquire(principal, "ws") for _ in range(2)]
             with self.assertRaises(admission.AdmissionDenied):
                 await admission.acquire(principal, "ws")
-            for lease in leases:
+            request_leases = [
+                await admission.acquire(principal, kind)
+                for kind in ("trip", "chat")
+            ]
+            for lease in socket_leases + request_leases:
                 await admission.release(lease)
 
     async def test_orphaned_lease_prunes_while_another_refreshes(self):
@@ -70,7 +87,11 @@ class AdmissionTests(unittest.IsolatedAsyncioTestCase):
         ), patch.object(admission, "CONCURRENT_PER_PRINCIPAL", 2):
             first = await admission.acquire("v1.principal-one-123456", "trip")
             second = await admission.acquire("v1.principal-one-123456", "chat")
-            admission._memory_leases[first.token] = (first.principal, 0)
+            admission._memory_leases[first.token] = (
+                first.principal,
+                admission._admission_pool(first.kind),
+                0,
+            )
             self.assertTrue(await admission.refresh(second))
             third = await admission.acquire("v1.principal-one-123456", "ws")
             await admission.release(third)
@@ -90,15 +111,20 @@ class AdmissionTests(unittest.IsolatedAsyncioTestCase):
             second = await admission.acquire("v1.principal-two-123456", "chat")
             await admission.release(second)
 
-    async def test_shared_redis_rate_limit_spans_kinds_and_principals(self):
+    async def test_shared_redis_rate_limits_are_separate_by_pool(self):
         shared = _SharedRedis()
-        with patch.object(admission, "_redis_client", shared), patch.object(admission, "REQUESTS_PER_PRINCIPAL", 1), patch.object(admission, "REQUESTS_GLOBAL", 2):
-            await admission.acquire("v1.principal-one-123456", "trip")
+        principal = "v1.principal-one-123456"
+        with patch.object(admission, "_redis_client", shared), patch.object(
+            admission, "REQUESTS_PER_PRINCIPAL", 1
+        ), patch.object(admission, "REQUESTS_GLOBAL", 2), patch.object(
+            admission, "WEBSOCKET_CONNECTIONS_PER_PRINCIPAL", 1
+        ):
+            await admission.acquire(principal, "trip")
             with self.assertRaises(admission.AdmissionDenied):
-                await admission.acquire("v1.principal-one-123456", "chat")
-            await admission.acquire("v1.principal-two-123456", "ws")
+                await admission.acquire(principal, "chat")
+            await admission.acquire(principal, "ws")
             with self.assertRaises(admission.AdmissionDenied):
-                await admission.acquire("v1.principal-three-123456", "trip")
+                await admission.acquire(principal, "ws")
 
     async def test_redis_loss_fails_closed_outside_local_test(self):
         with patch.object(admission, "_redis_client", None), patch.dict("os.environ", {"REDIS_URL": ""}), patch.object(

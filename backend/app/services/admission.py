@@ -12,13 +12,17 @@ import redis
 from app import runtime
 
 WINDOW_S, LEASE_TTL_S = 60, 120
+# WebSockets release their leases when they close, so expiry is only the
+# orphan-recovery boundary. A longer expiry avoids refreshing two healthy,
+# long-lived rider streams every 40 seconds while still reclaiming abandoned
+# connections within a bounded period.
+WEBSOCKET_LEASE_TTL_S = 600
 REQUESTS_PER_PRINCIPAL, REQUESTS_GLOBAL = 20, 240
+WEBSOCKET_CONNECTIONS_PER_PRINCIPAL, WEBSOCKET_CONNECTIONS_GLOBAL = 30, 600
 REDIS_CONNECT_TIMEOUT_S = float(os.getenv("REDIS_CONNECT_TIMEOUT_S", "0.5"))
 REDIS_READ_TIMEOUT_S = float(os.getenv("REDIS_READ_TIMEOUT_S", "1.0"))
-# The app holds two legitimate long-lived streams per rider (live feed and
-# service alerts). Keep two additional slots for a trip/chat request and brief
-# reconnect overlap so the streams cannot lock the rest of the product out.
 CONCURRENT_PER_PRINCIPAL, CONCURRENT_GLOBAL = 4, 48
+WEBSOCKET_CONCURRENT_PER_PRINCIPAL, WEBSOCKET_CONCURRENT_GLOBAL = 6, 200
 _PRINCIPAL_PATTERN = re.compile(r"^v1\.[A-Za-z0-9_-]{16,64}$")
 
 
@@ -34,11 +38,12 @@ class AdmissionLease:
     principal: str
     kind: str
     token: str
+    ttl_s: int = LEASE_TTL_S
 
 
 _redis_client: redis.Redis | None = None
 _memory_requests: dict[str, tuple[int, float]] = {}
-_memory_leases: dict[str, tuple[str, float]] = {}
+_memory_leases: dict[str, tuple[str, str, float]] = {}
 _memory_nonces: dict[str, float] = {}
 
 
@@ -68,7 +73,7 @@ def _prune_memory(now: float) -> None:
     for key, (_count, expires) in list(_memory_requests.items()):
         if now >= expires:
             _memory_requests.pop(key, None)
-    for token, (_principal, expires) in list(_memory_leases.items()):
+    for token, (_principal, _pool, expires) in list(_memory_leases.items()):
         if now >= expires:
             _memory_leases.pop(token, None)
     for nonce, expires in list(_memory_nonces.items()):
@@ -76,22 +81,58 @@ def _prune_memory(now: float) -> None:
             _memory_nonces.pop(nonce, None)
 
 
+def _lease_ttl_s(kind: str) -> int:
+    return WEBSOCKET_LEASE_TTL_S if kind == "ws" else LEASE_TTL_S
+
+
+def _admission_pool(kind: str) -> str:
+    return "websocket" if kind == "ws" else "request"
+
+
+def _limits(kind: str) -> tuple[int, int, int, int]:
+    if kind == "ws":
+        return (
+            WEBSOCKET_CONNECTIONS_PER_PRINCIPAL,
+            WEBSOCKET_CONNECTIONS_GLOBAL,
+            WEBSOCKET_CONCURRENT_PER_PRINCIPAL,
+            WEBSOCKET_CONCURRENT_GLOBAL,
+        )
+    return (
+        REQUESTS_PER_PRINCIPAL,
+        REQUESTS_GLOBAL,
+        CONCURRENT_PER_PRINCIPAL,
+        CONCURRENT_GLOBAL,
+    )
+
+
 def _memory_acquire(principal: str, kind: str, token: str) -> AdmissionLease:
     now = time.monotonic()
     _prune_memory(now)
-    request_keys = (_key("request", principal), _key("request"))
-    for key, limit in zip(request_keys, (REQUESTS_PER_PRINCIPAL, REQUESTS_GLOBAL), strict=True):
+    pool = _admission_pool(kind)
+    principal_rate, global_rate, principal_concurrency, global_concurrency = _limits(
+        kind
+    )
+    request_keys = (_key(f"rate:{pool}", principal), _key(f"rate:{pool}"))
+    for key, limit in zip(request_keys, (principal_rate, global_rate), strict=True):
         count, expires = _memory_requests.get(key, (0, now + WINDOW_S))
         if count >= limit:
             raise AdmissionDenied(429, "rate_limited", max(1, int(expires - now)))
-    principal_active = sum(1 for owner, _expires in _memory_leases.values() if owner == principal)
-    if principal_active >= CONCURRENT_PER_PRINCIPAL or len(_memory_leases) >= CONCURRENT_GLOBAL:
+    principal_active = 0
+    global_active = 0
+    for owner, lease_pool, _expires in _memory_leases.values():
+        if lease_pool != pool:
+            continue
+        global_active += 1
+        if owner == principal:
+            principal_active += 1
+    if principal_active >= principal_concurrency or global_active >= global_concurrency:
         raise AdmissionDenied(503, "busy", 1)
     for key in request_keys:
         count, expires = _memory_requests.get(key, (0, now + WINDOW_S))
         _memory_requests[key] = (count + 1, expires)
-    _memory_leases[token] = (principal, now + LEASE_TTL_S)
-    return AdmissionLease(principal, kind, token)
+    ttl_s = _lease_ttl_s(kind)
+    _memory_leases[token] = (principal, pool, now + ttl_s)
+    return AdmissionLease(principal, kind, token, ttl_s)
 
 
 _ACQUIRE = """
@@ -125,14 +166,35 @@ async def acquire(principal: str, kind: str) -> AdmissionLease:
             return _memory_acquire(principal, kind, token)
         raise AdmissionDenied(503, "admission_unavailable", 1)
     now = int(time.time())
+    ttl_s = _lease_ttl_s(kind)
+    pool = _admission_pool(kind)
+    principal_rate, global_rate, principal_concurrency, global_concurrency = _limits(
+        kind
+    )
     try:
-        result = await asyncio.to_thread(client.eval, _ACQUIRE, 4, _key("request", principal), _key("request"), _key("leases", principal), _key("leases"), REQUESTS_PER_PRINCIPAL, REQUESTS_GLOBAL, CONCURRENT_PER_PRINCIPAL, CONCURRENT_GLOBAL, WINDOW_S, now, now + LEASE_TTL_S, token)
+        result = await asyncio.to_thread(
+            client.eval,
+            _ACQUIRE,
+            4,
+            _key(f"rate:{pool}", principal),
+            _key(f"rate:{pool}"),
+            _key(f"leases:{pool}", principal),
+            _key(f"leases:{pool}"),
+            principal_rate,
+            global_rate,
+            principal_concurrency,
+            global_concurrency,
+            WINDOW_S,
+            now,
+            now + ttl_s,
+            token,
+        )
     except Exception:
         raise AdmissionDenied(503, "admission_unavailable", 1) from None
     code, retry = int(result[0]), int(result[1])
     if code:
         raise AdmissionDenied(429 if code < 3 else 503, "rate_limited" if code < 3 else "busy", max(1, retry))
-    return AdmissionLease(principal, kind, token)
+    return AdmissionLease(principal, kind, token, ttl_s)
 
 
 async def release(lease: AdmissionLease | None) -> None:
@@ -142,8 +204,16 @@ async def release(lease: AdmissionLease | None) -> None:
     if client is None:
         _memory_leases.pop(lease.token, None)
         return
+    pool = _admission_pool(lease.kind)
     try:
-        await asyncio.to_thread(client.eval, _RELEASE, 2, _key("leases", lease.principal), _key("leases"), lease.token)
+        await asyncio.to_thread(
+            client.eval,
+            _RELEASE,
+            2,
+            _key(f"leases:{pool}", lease.principal),
+            _key(f"leases:{pool}"),
+            lease.token,
+        )
     except Exception:
         return
 
@@ -152,13 +222,34 @@ async def refresh(lease: AdmissionLease) -> bool:
     client = _client()
     if client is None:
         record = _memory_leases.get(lease.token)
-        if record is None or record[0] != lease.principal or record[1] <= time.monotonic():
+        if (
+            record is None
+            or record[0] != lease.principal
+            or record[1] != _admission_pool(lease.kind)
+            or record[2] <= time.monotonic()
+        ):
             return False
-        _memory_leases[lease.token] = (lease.principal, time.monotonic() + LEASE_TTL_S)
+        _memory_leases[lease.token] = (
+            lease.principal,
+            record[1],
+            time.monotonic() + lease.ttl_s,
+        )
         return True
     now = int(time.time())
+    pool = _admission_pool(lease.kind)
     try:
-        return bool(await asyncio.to_thread(client.eval, _REFRESH, 2, _key("leases", lease.principal), _key("leases"), now, now + LEASE_TTL_S, lease.token))
+        return bool(
+            await asyncio.to_thread(
+                client.eval,
+                _REFRESH,
+                2,
+                _key(f"leases:{pool}", lease.principal),
+                _key(f"leases:{pool}"),
+                now,
+                now + lease.ttl_s,
+                lease.token,
+            )
+        )
     except Exception:
         return False
 

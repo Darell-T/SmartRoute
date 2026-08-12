@@ -13,6 +13,9 @@ from app.utils import cache
 
 class ReadinessTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
+        main._redis_functional_probe_client_id = None
+        main._redis_functional_probe_checked_at = 0.0
+        main._redis_functional_probe_result = False
         self.routes_config = patch.dict(
             os.environ,
             {"GOOGLE_ROUTES_API_KEY": "test-google-routes-key"},
@@ -22,11 +25,48 @@ class ReadinessTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self.routes_config.stop)
 
     async def test_session_store_probe_calls_successful_ping_off_event_loop(self):
+        eval_calls = []
+
         class Client:
             def ping(self):
                 return True
+
+            def eval(self, script, key_count):
+                eval_calls.append((script, key_count))
+                return 1
+
         with patch.object(cache, "redis_client", Client()):
             self.assertTrue(await main._session_store_ready())
+        self.assertEqual(eval_calls, [(main._REDIS_FUNCTIONAL_PROBE, 0)])
+
+    async def test_session_store_probe_rejects_quota_blocked_commands(self):
+        class Client:
+            def ping(self):
+                return True
+
+            def eval(self, _script, _key_count):
+                raise RuntimeError("max requests limit exceeded")
+
+        with patch.object(cache, "redis_client", Client()):
+            self.assertFalse(await main._session_store_ready())
+
+    async def test_successful_functional_probe_is_cached(self):
+        class Client:
+            def __init__(self):
+                self.eval_calls = 0
+
+            def ping(self):
+                return True
+
+            def eval(self, _script, _key_count):
+                self.eval_calls += 1
+                return 1
+
+        client = Client()
+        with patch.object(cache, "redis_client", client):
+            self.assertTrue(await main._session_store_ready())
+            self.assertTrue(await main._session_store_ready())
+        self.assertEqual(client.eval_calls, 1)
 
     async def test_session_store_probe_rejects_raised_ping(self):
         class Client:

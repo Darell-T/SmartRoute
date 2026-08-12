@@ -40,7 +40,7 @@ async def _verify_ws_ticket(ticket: str, path: str) -> tuple[str | None, bool]:
 _WS_CONNECTION_COUNTER = 0
 MAX_WS_MESSAGE_BYTES = 4 * 1024
 MAX_SELECTED_ROUTE_IDS = 12
-LEASE_GUARD_INTERVAL_S = max(1, admission.LEASE_TTL_S // 3)
+LEASE_GUARD_INTERVAL_S = max(1, admission.WEBSOCKET_LEASE_TTL_S // 3)
 
 
 async def _send_json_safe(websocket: WebSocket, payload: dict) -> bool:
