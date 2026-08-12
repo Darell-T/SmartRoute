@@ -9,6 +9,7 @@ incident_scout_normalization.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from dataclasses import dataclass
@@ -55,16 +56,38 @@ def _bounded_timeout() -> float:
         return 12.0
 
 
-_client = (
-    AsyncClient(api_key=os.getenv("XAI_API_KEY"), timeout=_bounded_timeout())
-    if AsyncClient is not None and os.getenv("XAI_API_KEY")
-    else None
-)
+_client = None
+_client_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _configured_api_key() -> str:
+    return os.getenv("XAI_API_KEY", "").strip()
+
+
+def _get_client() -> Any | None:
+    """Create the async gRPC client on the event loop that will use it.
+
+    ``xai_sdk.AsyncClient`` creates its ``grpc.aio`` channel immediately.
+    Constructing it at module import binds that channel before ``asyncio.run``
+    creates the cron loop, so every request fails on a foreign event loop.
+    """
+    global _client, _client_loop
+    api_key = _configured_api_key()
+    if AsyncClient is None or not api_key:
+        return None
+
+    loop = asyncio.get_running_loop()
+    if _client is None:
+        _client = AsyncClient(api_key=api_key, timeout=_bounded_timeout())
+        _client_loop = loop
+    elif _client_loop is not loop:
+        raise RuntimeError("incident scout client used from a different event loop")
+    return _client
 
 
 def has_client() -> bool:
-    """True when the optional shared transport client is configured."""
-    return _client is not None
+    """True when the optional transport can be created on the active loop."""
+    return AsyncClient is not None and bool(_configured_api_key())
 
 
 X_PROMPT = """You are SmartRoute's background NYC incident scout. Search X only
@@ -189,9 +212,10 @@ def _completed_sources(response: object) -> set[str]:
 
 async def _run_x_search(batch: IncidentBatch, *, now: datetime) -> ScoutSearchResult:
     """One X-only server-side-tool request for one coarse batch."""
-    if _client is None or not all((system, user, x_search)):
+    active_client = _get_client()
+    if active_client is None or not all((system, user, x_search)):
         return ScoutSearchResult("", (), False)
-    chat = _client.chat.create(
+    chat = active_client.chat.create(
         model=_MODEL,
         tools=[x_search(from_date=now - SIX_HOURS, to_date=now)],
         temperature=0.0, max_turns=1, max_tokens=_X_OUTPUT_MAX_TOKENS,
@@ -212,9 +236,10 @@ async def _run_web_search(
     claims: tuple[dict[str, Any], ...], *, now: datetime
 ) -> ScoutSearchResult:
     """One Web-only server-side-tool request covering all accepted claims."""
-    if _client is None or not all((system, user, web_search)):
+    active_client = _get_client()
+    if active_client is None or not all((system, user, web_search)):
         return ScoutSearchResult("", (), False)
-    chat = _client.chat.create(
+    chat = active_client.chat.create(
         model=_MODEL,
         tools=[
             web_search(
@@ -242,8 +267,9 @@ async def _run_web_search(
 
 async def close_incident_scout_client() -> None:
     """Release the shared async transport for later lifespan wiring."""
-    global _client
+    global _client, _client_loop
     active = _client
     _client = None
+    _client_loop = None
     if active is not None:
         await active.close()
