@@ -60,6 +60,26 @@ class TripIncidentIndexTests(unittest.IsolatedAsyncioTestCase):
         cache.redis_client = self._original_client
         cache._mem.clear()
 
+    async def test_repeated_upsert_only_changes_new_index_memberships(self) -> None:
+        incident = {
+            "source": "mta_alerts",
+            "source_id": "stable-indexes",
+            "affected_route_ids": ["Q"],
+            "affected_stop_ids": ["D24"],
+        }
+        incident_index.upsert_incident(incident)
+
+        with patch.object(
+            incident_index,
+            "_update_index",
+            wraps=incident_index._update_index,
+        ) as update_index:
+            incident_index.upsert_incident({**incident, "description": "new details"})
+            update_index.assert_not_called()
+            incident_index.upsert_incident({**incident, "affected_route_ids": ["B"]})
+
+        self.assertEqual(update_index.call_count, 2)
+
     async def test_one_immediate_index_lookup_with_correct_tokens(self) -> None:
         calls: list[dict] = []
         real_lookup = incident_index.lookup_incidents_async

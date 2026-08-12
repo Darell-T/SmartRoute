@@ -1,5 +1,6 @@
-import os
 import asyncio
+import os
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -42,6 +43,17 @@ from app.models.migrate_gtfs import migrate
 # and parse the full network indefinitely while idle.
 REALTIME_REFRESH_INTERVAL_S = 30
 REALTIME_ACTIVE_WINDOW_S = 45
+
+# Render polls readiness frequently. PING is deliberately cheap but does not
+# prove that quota-enforced Redis commands used by admission and sessions are
+# available. Cache a functional EVAL probe so readiness detects that failure
+# without turning health checks into a material source of Redis usage.
+REDIS_FUNCTIONAL_PROBE_SUCCESS_TTL_S = 300
+REDIS_FUNCTIONAL_PROBE_FAILURE_TTL_S = 15
+_redis_functional_probe_client_id: int | None = None
+_redis_functional_probe_checked_at = 0.0
+_redis_functional_probe_result = False
+_REDIS_FUNCTIONAL_PROBE = "return 1"
 
 
 api_key_header = APIKeyHeader(name = "X-App-Key")
@@ -201,15 +213,50 @@ async def health():
 
 
 async def _session_store_ready() -> bool:
-    """Bound the Redis probe so readiness never occupies an event-loop worker."""
+    """Verify Redis connectivity and periodically exercise a real command."""
     from app.utils import cache
 
-    if cache.redis_client is None:
+    client = cache.redis_client
+    if client is None:
         return False
     try:
-        return bool(await asyncio.wait_for(asyncio.to_thread(cache.redis_client.ping), timeout=0.25))
+        ping_ok = bool(
+            await asyncio.wait_for(asyncio.to_thread(client.ping), timeout=0.25)
+        )
     except Exception:
         return False
+    if not ping_ok:
+        return False
+
+    global _redis_functional_probe_client_id
+    global _redis_functional_probe_checked_at
+    global _redis_functional_probe_result
+
+    now = time.monotonic()
+    client_id = id(client)
+    if _redis_functional_probe_result:
+        ttl_s = REDIS_FUNCTIONAL_PROBE_SUCCESS_TTL_S
+    else:
+        ttl_s = REDIS_FUNCTIONAL_PROBE_FAILURE_TTL_S
+    if (
+        _redis_functional_probe_client_id == client_id
+        and now - _redis_functional_probe_checked_at < ttl_s
+    ):
+        return _redis_functional_probe_result
+
+    try:
+        functional = bool(
+            await asyncio.wait_for(
+                asyncio.to_thread(client.eval, _REDIS_FUNCTIONAL_PROBE, 0),
+                timeout=0.25,
+            )
+        )
+    except Exception:
+        functional = False
+    _redis_functional_probe_client_id = client_id
+    _redis_functional_probe_checked_at = now
+    _redis_functional_probe_result = functional
+    return functional
 
 
 def _readiness_failure(reason: str) -> JSONResponse:

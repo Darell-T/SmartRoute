@@ -204,6 +204,16 @@ class LiveFeedApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(owner.cancelled() or owner.cancelling())
         self.assertTrue(lease_failed.is_set())
 
+    def test_websocket_lease_guard_refreshes_at_one_third_of_socket_ttl(self):
+        self.assertEqual(
+            self.live_feed.LEASE_GUARD_INTERVAL_S,
+            self.live_feed.admission.WEBSOCKET_LEASE_TTL_S // 3,
+        )
+        self.assertGreater(
+            self.live_feed.LEASE_GUARD_INTERVAL_S,
+            self.live_feed.admission.LEASE_TTL_S // 3,
+        )
+
     async def test_lease_guard_does_not_own_socket_close(self):
         owner = asyncio.create_task(asyncio.sleep(60))
         lease = self.live_feed.admission.AdmissionLease("v1.test-principal-opaque-123456", "ws", "lease")
