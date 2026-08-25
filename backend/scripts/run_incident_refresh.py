@@ -23,8 +23,8 @@ _BACKEND_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _BACKEND_ROOT not in sys.path:
     sys.path.insert(0, _BACKEND_ROOT)
 
-from app.services import background_incident_job  # noqa: E402
-from app.services.incident_scout_transport import close_incident_scout_client  # noqa: E402
+from app.services.incidents import refresh  # noqa: E402
+from app.services.incidents.scout_provider import close_incident_scout_client  # noqa: E402
 
 # Explicit allowlist of payload-free metrics the CLI prints. The job's own
 # metrics are already bounded (counts, statuses, canonical batch ids), but the
@@ -61,7 +61,7 @@ def print_metrics(metrics: Mapping[str, Any]) -> None:
 async def run_once() -> int:
     """Run exactly one refresh cycle and return a process exit code."""
     try:
-        metrics = await background_incident_job.run_background_incident_refresh()
+        metrics = await refresh.run_background_incident_refresh()
     except asyncio.CancelledError:
         raise
     except Exception:

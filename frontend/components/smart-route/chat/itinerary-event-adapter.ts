@@ -11,6 +11,7 @@ export type ItineraryEventKind =
   | "bus"
   | "rail"
   | "walk"
+  | "wait"
   | "pickup"
   | "waypoint"
   | "transfer"
@@ -213,6 +214,26 @@ function appendCanonicalLegs(
       kind = "rail";
     } else {
       kind = "subway";
+    }
+    const waitSeconds =
+      typeof leg.wait_seconds === "number" &&
+      Number.isFinite(leg.wait_seconds) &&
+      leg.wait_seconds > 0
+        ? leg.wait_seconds
+        : 0;
+    if (waitSeconds > 0) {
+      const waitMinutes = durationMinutesFromSeconds(waitSeconds);
+      events.push({
+        id: `${idPrefix}-${index}-wait`,
+        kind: "wait",
+        routeIds: serviceId ? [serviceId] : [],
+        title: serviceId ? `Wait for ${serviceId}` : "Wait to board",
+        subtitle: fromLabel,
+        durationSeconds: waitSeconds,
+        durationMinutes: waitMinutes ?? undefined,
+        durationLabel: durationLabelFromMinutes(waitMinutes),
+        fromLabel,
+      });
     }
     events.push({
       ...base,

@@ -8,18 +8,10 @@ import types
 import unittest
 
 from app.services.agent import events as agent_events
-from app.services.agent import policy as agent_policy
-from app.services.agent.tool_round import execute_tool_round
+from app.services.agent.model import policy as agent_policy
+from app.services.agent.turn.tool_round import execute_tool_round
 from app.services.agent.tools import ToolSpec
 from app.services.agent.tools._types import ToolContext, ToolResult
-
-
-def _parsed_intent() -> types.SimpleNamespace:
-    return types.SimpleNamespace(
-        avoid_crowds=False,
-        requested_route_ids=[],
-        required_evidence=types.SimpleNamespace(required_tools=lambda: ()),
-    )
 
 
 def _block() -> types.SimpleNamespace:
@@ -30,9 +22,29 @@ def _block() -> types.SimpleNamespace:
     )
 
 
+def _search_block() -> types.SimpleNamespace:
+    return types.SimpleNamespace(
+        id="search-1",
+        name="discover_places",
+        input={
+            "operation": "search",
+            "query": "coffee",
+            "scope": {"kind": "current_location", "values": []},
+            "open_now": None,
+            "max_results": 5,
+            "candidate_names": [],
+        },
+    )
+
+
+def _terminal_block(name: str) -> types.SimpleNamespace:
+    return types.SimpleNamespace(id=f"{name}-1", name=name, input={})
+
+
 class _Ledger:
     def __init__(self, executor):
         self.successful = {}
+        self.reusable_results = {}
         self._executor = executor
 
     def key(self, name, tool_input):
@@ -63,7 +75,6 @@ async def _collect_round(executor, *, ctx=None):
         [],
         set(),
         agent_policy.policy_for_mode("auto"),
-        _parsed_intent(),
         {},
         time.monotonic() + 5,
         _Ledger(executor),
@@ -136,6 +147,105 @@ class AgentProgressTransportTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(asyncio.CancelledError):
             await _collect_round(executor, ctx=ctx)
         self.assertIsNone(ctx.progress_sink)
+
+    async def test_server_owned_refinement_drives_public_discovery(self):
+        captured = {}
+
+        async def executor(tool_input, _ctx):
+            captured.update(tool_input)
+            return ToolResult(ok=True, data={"places": []})
+
+        registry = {
+            "discover_places": ToolSpec(
+                schema={"name": "discover_places"},
+                executor=executor,
+                label_fn=lambda value: (
+                    f"Searching for {value['query']} across "
+                    f"{' and '.join(value['scope'].get('values') or [])}"
+                ),
+                timeout_s=5,
+            )
+        }
+        ctx = ToolContext(
+            session={},
+            discovery_refinement={
+                "operation": "search",
+                "query": "pizza",
+                "scope": {
+                    "kind": "boroughs",
+                    "values": ["Manhattan", "Brooklyn"],
+                },
+                "open_now": None,
+                "max_results": 5,
+                "candidate_names": [],
+            },
+        )
+        items = []
+        async for item in execute_tool_round(
+            [_search_block()],
+            ctx,
+            {},
+            [],
+            set(),
+            agent_policy.policy_for_mode("auto"),
+            {},
+            time.monotonic() + 5,
+            _Ledger(executor),
+            tool_registry=registry,
+            allowed_tool_names=frozenset({"discover_places"}),
+        ):
+            items.append(item)
+
+        start = next(item for item in items if isinstance(item, agent_events.ToolStartEvent))
+        self.assertEqual(
+            start.label,
+            "Searching for pizza across Manhattan and Brooklyn",
+        )
+        self.assertEqual(captured["query"], "pizza")
+        self.assertEqual(
+            captured["scope"],
+            {"kind": "boroughs", "values": ["Manhattan", "Brooklyn"]},
+        )
+
+    async def test_presenters_and_completion_do_not_emit_activity_events(self):
+        async def executor(_tool_input, _ctx):
+            return ToolResult(ok=True, data={})
+
+        for name in ("present_places", "present_transit", "present_route", "complete_turn"):
+            with self.subTest(name=name):
+                registry = {
+                    name: ToolSpec(
+                        schema={"name": name},
+                        executor=executor,
+                        label_fn=lambda _value: "Internal handoff",
+                        timeout_s=5,
+                    )
+                }
+                items = []
+                async for item in execute_tool_round(
+                    [_terminal_block(name)],
+                    ToolContext(session={}),
+                    {},
+                    [],
+                    set(),
+                    agent_policy.policy_for_mode("auto"),
+                    {},
+                    time.monotonic() + 5,
+                    _Ledger(executor),
+                    tool_registry=registry,
+                    allowed_tool_names=frozenset({name}),
+                ):
+                    items.append(item)
+
+                self.assertFalse(
+                    any(
+                        isinstance(
+                            item,
+                            (agent_events.ToolStartEvent, agent_events.ToolEndEvent),
+                        )
+                        for item in items
+                    )
+                )
 
 
 class ProgressEventTests(unittest.TestCase):

@@ -65,3 +65,20 @@ test("light mode strengthens the existing orb without changing its dimensions", 
     /\.sr-chat-tab\[data-sr-theme="light"\][\s\S]*?\.sr-chat-assistant-response__orb\[data-visible="true"\][\s\S]*?filter:\s*brightness\(0\.74\) contrast\(1\.38\)/,
   );
 });
+
+test("nearby alerts use a theme-aware danger color instead of low-contrast amber", () => {
+  assert.match(CHAT_CSS, /--sr-chat-danger:\s*#fb7185;/);
+  assert.match(CHAT_CSS, /--sr-chat-danger:\s*#b4233c;/);
+  assert.match(
+    CHAT_CSS,
+    /\.sr-home-nearby__condition\[data-state="alert"\]\s*\{[\s\S]*?color:\s*var\(--sr-chat-danger\);/,
+  );
+  assert.match(
+    CHAT_CSS,
+    /\.sr-home-nearby__issue\s*\{[\s\S]*?color:\s*var\(--sr-chat-danger\);/,
+  );
+  assert.doesNotMatch(
+    CHAT_CSS,
+    /\.sr-home-nearby__condition\[data-state="alert"\]\s*\{[\s\S]*?var\(--sr-amber\)/,
+  );
+});

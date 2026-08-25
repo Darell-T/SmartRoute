@@ -1149,9 +1149,9 @@ export function ensureSubwayNetworkLayers(
           // is the fallback for segment-level cross-color spread (v2), which
           // can't set a whole-feature lane_slot_semantic (see the property's
           // comment in subway-network.ts's buildSubwayLaneFeaturesFromVisual);
-          // without it, those features all sort as 0 and collapse to the
-          // color-rank tiebreak, which used to let one color systematically
-          // paint over its neighbor wherever their baked offset ran thin.
+          // without it, those features all sort as 0 and collapse to a
+          // color-rank tiebreak that can paint one line over its neighbor
+          // wherever their baked offset runs thin.
           // visual_z_order stays the tiny last-resort tiebreak for exact ties.
           "line-sort-key": [
             "+",

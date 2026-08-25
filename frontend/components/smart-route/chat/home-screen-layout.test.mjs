@@ -76,8 +76,12 @@ test("mobile chat has one visible-height owner and an in-flow three-track shell"
     css,
     /\.sr-chat-interaction-dock\s*\{[\s\S]*?width:\s*100%;[\s\S]*?min-width:\s*0/,
   );
-  assert.doesNotMatch(mobileShellCss, /mobile-viewport-offset-top/);
+  assert.match(
+    mobileShellCss,
+    /inset:\s*var\(--mobile-viewport-offset-top,\s*0px\) 0 auto/,
+  );
   assert.match(viewportSource, /--visible-viewport-height/);
+  assert.match(viewportSource, /--mobile-viewport-offset-top/);
 });
 
 test("mobile suggestion affordance gains a left fade only after horizontal scrolling", () => {
@@ -88,10 +92,15 @@ test("mobile suggestion affordance gains a left fade only after horizontal scrol
   assert.match(css, /scroll-snap-align:\s*start/);
 });
 
-test("Near You has no accordion chevrons and suggestion pills remain text-only", () => {
+test("Near You has no accordion chevrons and suggestions stay text-only", () => {
   assert.doesNotMatch(nearbySource, /Chevron|chevron/);
+  assert.doesNotMatch(welcomeSource, /AirplaneIcon|UsersRoundIcon|SoupIcon/);
   assert.doesNotMatch(welcomeSource, /sr-chat-suggestion-icon/);
-  assert.doesNotMatch(welcomeSource, /onHoverStart/);
+  assert.match(
+    css,
+    /\.sr-chat-suggestion-pill\s*\{[\s\S]*?border:\s*0;[\s\S]*?background:\s*transparent;/,
+  );
+  assert.doesNotMatch(css, /sr-chat-suggestion-(?:separator|dot)/);
 });
 
 test("Near You distinguishes active refresh from an unavailable live feed", () => {
@@ -104,6 +113,60 @@ test("Near You distinguishes active refresh from an unavailable live feed", () =
     css,
     /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.sr-home-nearby__loading-spinner\s*\{[\s\S]*?animation:\s*none;/,
   );
+});
+
+test("Near You is borderless and spacing-led with no container or divider borders", () => {
+  const nearbyBlocks = [...css.matchAll(/\.sr-home-nearby\s*\{([^}]*)\}/g)];
+  assert.ok(nearbyBlocks.length >= 2);
+  for (const [, body] of nearbyBlocks) {
+    assert.match(body, /(?:gap|row-gap):/);
+    assert.doesNotMatch(
+      body,
+      /(?:overflow|min-height|grid-template-rows):/,
+    );
+  }
+  assert.match(
+    nearbyBlocks[0][1],
+    /width:\s*min\(calc\(100% - 32px\),\s*var\(--sr-home-content-width\)\)/,
+  );
+  assert.match(
+    css,
+    /@media \(max-width:\s*720px\)[\s\S]*?\.sr-home-nearby\s*\{[^}]*width:\s*100%;/,
+  );
+  assert.match(nearbyBlocks[0][1], /border:\s*0;/);
+  assert.match(nearbyBlocks[0][1], /border-radius:\s*0;/);
+  assert.match(nearbyBlocks[0][1], /background:\s*transparent;/);
+  assert.match(css, /\.sr-home-nearby__arrivals\s*\{[^}]*column-gap:/);
+  assert.match(css, /\.sr-home-nearby__skeletons\s*\{[^}]*column-gap:/);
+  assert.doesNotMatch(
+    css,
+    /\.sr-home-nearby__(?:arrivals|condition|issue|service-area)\s*\{[^}]*border-top:/,
+  );
+  assert.doesNotMatch(
+    css,
+    /\.sr-home-nearby__(?:arrival|skeleton-arrival)\s*\+\s*\.sr-home-nearby__(?:arrival|skeleton-arrival)\s*\{[^}]*border-left:/,
+  );
+  assert.match(
+    css,
+    /\.sr-home-nearby__arrival:hover,\s*\.sr-home-nearby__arrival:focus-visible\s*\{[^}]*transform:\s*translateY\(-2px\);/,
+  );
+  assert.doesNotMatch(
+    css,
+    /\.sr-home-nearby__arrival:hover,\s*\.sr-home-nearby__arrival:focus-visible\s*\{[^}]*background:/,
+  );
+  assert.match(
+    css,
+    /\.sr-home-nearby__arrival:focus-visible\s*\{[^}]*outline:/,
+  );
+});
+
+test("submitted messages use the accessible blue bubble token", () => {
+  const bubble = css.match(/\.sr-chat-bubble\s*\{([^}]*)\}/)?.[1];
+  assert.ok(bubble);
+  assert.match(css, /--sr-chat-user-bubble:\s*#0071e3;/);
+  assert.match(bubble, /background:\s*var\(--sr-chat-user-bubble\);/);
+  assert.match(bubble, /color:\s*#fff;/);
+  assert.match(bubble, /border-radius:\s*18px 18px 6px 18px;/);
 });
 
 test("desktop shortcuts use a restrained responsive gap while mobile remains compact", () => {

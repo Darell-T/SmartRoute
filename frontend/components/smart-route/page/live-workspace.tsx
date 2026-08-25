@@ -6,6 +6,7 @@ import {
   LeftRail,
   type LeftRailProps,
   type RouteRailStatus,
+  type TabId,
 } from "@/components/smart-route/left-rail";
 import { MapMiniControls } from "@/components/smart-route/map-mini-controls";
 import type { MapActions } from "@/app/page-parts";
@@ -19,6 +20,8 @@ type LiveWorkspaceProps = {
   leftRailData: LeftRailProps["data"];
   routeStatus: RouteRailStatus;
   hasActiveRoute: boolean;
+  leftRailTab?: TabId;
+  onLeftRailTabChange?: (tab: TabId) => void;
   liveMap: LiveWorkspaceMapProps;
 };
 
@@ -34,6 +37,7 @@ type LiveWorkspaceMapProps = {
 
 export function LiveWorkspace({
   mobileRail, routePlanning, leftRailData, routeStatus, hasActiveRoute,
+  leftRailTab, onLeftRailTabChange,
   liveMap,
 }: LiveWorkspaceProps) {
   const [routeSearchFocused, setRouteSearchFocused] = useState(false);
@@ -104,6 +108,8 @@ export function LiveWorkspace({
           <LeftRail
             width={420}
             routeStatus={routeStatus}
+            tab={leftRailTab}
+            onTabChange={onLeftRailTabChange}
             data={leftRailData}
             onSelectAlternative={routePlanning.handleSelectAlternative}
             search={{

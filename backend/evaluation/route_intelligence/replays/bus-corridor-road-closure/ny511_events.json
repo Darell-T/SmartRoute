@@ -1,0 +1,16 @@
+[
+  {
+    "ID": "closure-b35",
+    "Latitude": 40.65025,
+    "Longitude": -73.96305,
+    "County": "Kings",
+    "EventType": "Road closure",
+    "EventSubType": "Full closure",
+    "Severity": "High",
+    "Description": "Road closure blocks the B35 corridor at Church Avenue.",
+    "RoadwayName": "Church Avenue",
+    "IsFullClosure": true,
+    "Reported": "2026-07-22T20:30:00Z",
+    "PlannedEndDate": "2026-07-22T23:30:00Z"
+  }
+]

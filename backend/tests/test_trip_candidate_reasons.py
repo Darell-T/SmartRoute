@@ -1,6 +1,6 @@
 import unittest
 
-from app.services.trips import candidates, scoring
+from app.services.trips import candidates, direct_plan, scoring
 
 
 def _subway_route(line: str, total_minutes: int) -> list[dict]:
@@ -32,6 +32,84 @@ def _candidate_reasons(
 
 
 class TripCandidateReasonTests(unittest.TestCase):
+    def test_finalized_score_keeps_vehicle_signals_unconfirmed_and_deduplicated(self):
+        route = _subway_route("Q", 20)
+
+        score = scoring.finalized_route_score(
+            route=route,
+            itinerary=None,
+            alerts=[],
+            incidents=[],
+            vehicle_claims=[
+                {"route_id": "Q", "status": "stopped"},
+                {"route": "Q", "progress_status": "stopped"},
+                {"route_id": "R", "ProgressStatus": "layover"},
+                {"status": "stopped"},
+                "untrusted",
+            ],
+            event_impacts=[],
+        )
+
+        self.assertEqual(score["vehicle_signal_count"], 1)
+        self.assertEqual(score["unconfirmed_vehicle_impacts"], ["possible delay signal on Q"])
+        self.assertEqual(score["service_condition_penalty"], 4.0)
+    def test_candidate_reason_cannot_reuse_stale_model_duration(self):
+        route = _subway_route("Q", 46)
+        rows = candidates._build_route_candidates(
+            [route],
+            chosen_index=0,
+            candidate_analysis={
+                0: {
+                    "recommendation_reason": "Fastest route at 44 min with no reported service alerts.",
+                    "rejection_reason": "",
+                }
+            },
+            scored_routes=[
+                {
+                    "index": 0,
+                    "total_minutes": 46,
+                    "transfers": 0,
+                    "alert_count": 0,
+                    "score": 46,
+                    "rank": 1,
+                }
+            ],
+        )
+
+        self.assertNotIn("44 min", rows[0]["recommendation_reason"])
+        self.assertIn("46 min", rows[0]["recommendation_reason"])
+
+    def test_recommendation_reasons_surface_less_walking_before_alert_absence(self):
+        reasons = direct_plan.build_recommendation_reasons(
+            {
+                "total_minutes": 46,
+                "transfers": 1,
+                "walk_minutes": 4,
+                "walking_penalty": 8,
+                "alert_count": 0,
+                "event_crowd_penalty": 0,
+                "score": 54,
+            },
+            [
+                {
+                    "total_minutes": 44,
+                    "transfers": 2,
+                    "walk_minutes": 12,
+                    "walking_penalty": 24,
+                    "alert_count": 0,
+                    "event_crowd_penalty": 0,
+                    "score": 76,
+                }
+            ],
+        )
+
+        self.assertEqual(reasons[0]["code"], "less_walking")
+        self.assertEqual(reasons[1]["code"], "fewer_transfers")
+        self.assertEqual(
+            direct_plan.format_recommendation_reason(reasons[0]),
+            "Uses 8 fewer minutes of walking (4 min on foot).",
+        )
+
     def test_airtrain_tram_counts_as_a_transfer_and_route_line(self):
         route = _subway_route("F", 71)
         route.append(
@@ -51,7 +129,7 @@ class TripCandidateReasonTests(unittest.TestCase):
         self.assertEqual(score["transfers"], 1)
         self.assertEqual(scoring._route_lines(route), ["F", "JAMAICA AIRTRAIN"])
 
-    def test_candidate_fallback_recommends_fastest_with_no_reported_alerts(self):
+    def test_candidate_fallback_recommends_fastest_without_using_alert_absence(self):
         rows = _candidate_reasons(
             [_subway_route("Q", 20), _subway_route("B", 28)],
             chosen_index=0,
@@ -60,7 +138,7 @@ class TripCandidateReasonTests(unittest.TestCase):
 
         self.assertEqual(
             rows[0]["recommendation_reason"],
-            "Fastest route at 20 min with no reported service alerts.",
+            "Fastest route at 20 min.",
         )
 
     def test_candidate_fallback_explains_slower_alternate_with_named_alert(self):

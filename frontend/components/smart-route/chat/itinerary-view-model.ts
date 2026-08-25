@@ -100,11 +100,20 @@ export function formatStructuredRecommendationReason(
       ? `Uses ${difference} fewer ${difference === 1 ? "transfer" : "transfers"}`
       : null;
   }
+  if (structured.code === "less_walking") {
+    return "Less walking than the other options";
+  }
   if (structured.code === "avoids_active_disruption") {
     return "Avoids active service alerts on another option";
   }
   if (structured.code === "lower_event_crowd_exposure") {
     return "Lower exposure to nearby event crowds";
+  }
+  if (structured.code === "accessibility") {
+    return "Meets the accessibility requirement";
+  }
+  if (structured.code === "reasonable_local_option") {
+    return "Nearby option with a reasonable overall trip";
   }
   return null;
 }

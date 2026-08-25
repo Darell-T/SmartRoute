@@ -12,14 +12,10 @@ backend/data/gtfs_static/trips.txt
 backend/data/gtfs_supplemented/stop_times.txt
 data/
 backend/data/
-# Fix B: the precomputed stop-pattern artifact is small and MUST ship to the
-# server (loaded into memory at startup), so re-include it past the data/ rule.
+# The precomputed stop-pattern artifact is loaded at startup and ships with the
+# backend.
 !backend/app/data/
 !backend/app/data/stop_patterns.json
-# Fix C: the agent's curated static facts file is source, not runtime data --
-# re-include it past the data/ rule the same way as stop_patterns.json above.
-!backend/app/services/agent/data/
-!backend/app/services/agent/data/transit_facts.md
 .gtfs-cache/
 .worktrees/
 
@@ -36,8 +32,6 @@ next.user-config.*
 .env*
 !.env.example
 
-# Local ATLAS prompt override
-backend/app/services/ai_advisor_system_prompt.txt
 # Common ignores
 node_modules/
 .next/
@@ -90,21 +84,35 @@ frontend/scripts/qa/tmp/
 frontend/scripts/qa/output/
 frontend/scripts/qa/screenshots/
 
-# Private local prototypes, browser QA, and release evidence tooling.
+# Private local prototypes and browser QA tooling.
 frontend/app/dev/
-frontend/playwright.config.ts
 frontend/scripts/qa/
-frontend/scripts/release/
-frontend/tests/release/
 frontend/scripts/build/script-inventory.ts
 frontend/scripts/script-inventory.json
-frontend/scripts/build/visual-network/REFACTOR-HANDOFF.md
 frontend/public/qa-visual-map.html
 
 # Local browser profiles + python cache (QA/screenshot scratch)
 .tmp-chrome-*/
 .pytest_cache/
 .pytest-basetemp-*/
+.pytest-*/
+.pytest_tmp/
+**/.pytest-*/
+.ruff_cache/
+.coverage
+.coverage.*
+.coverage-*
+htmlcov/
+
+# Local provider ledgers and diagnostics are generated during opt-in checks.
+/.anthropic-live-*.json
+**/.anthropic-live-*.json
+/.live-*-diagnostic.txt
+**/.live-*-diagnostic.txt
+/.final-*-handoff.txt
+/.final-review-diagnostic.txt
+/.route-*-handoff.txt
+/backend/.live-*-diagnostic.txt
 
 # Deterministic route-intelligence reports are private local evaluation output.
 backend/validation-results.json
@@ -114,47 +122,26 @@ backend/validation-ablations.json
 backend/test-results/
 
 # Private local agent evaluation and replay tooling.
-backend/evals/
+backend/evaluation/agent/
 backend/tests/replays/
-backend/app/services/validation/comparison.py
-backend/app/services/validation/failure_modes.py
-backend/app/services/validation/metrics.py
-backend/app/services/validation/replay.py
-backend/app/services/validation/reporting.py
-backend/scripts/provider_fault_jitter_cases.py
-backend/scripts/provider_fault_jitter_validation.py
-backend/scripts/release_validation.py
-backend/scripts/release_validation_advisories.py
-backend/scripts/release_validation_browser.py
-backend/scripts/release_validation_transport.py
-backend/scripts/replay_route_intelligence.py
-backend/scripts/review_shadow_decisions.py
 backend/scripts/run_agent_replay_validation.py
-backend/scripts/run_anthropic_agent_smoke.py
-backend/scripts/run_live_511ny_validation.py
-backend/scripts/run_live_advisor_validation.py
-backend/scripts/run_live_crowd_search_validation.py
-backend/scripts/run_live_ticketmaster_validation.py
 backend/tests/test_agent_evals.py
-backend/tests/test_intelligence_ablation.py
-backend/tests/test_intelligence_comparison.py
-backend/tests/test_intelligence_golden.py
-backend/tests/test_intelligence_metrics.py
-backend/tests/test_intelligence_replay.py
-backend/tests/test_intelligence_reporting.py
-backend/tests/test_live_validation_scripts.py
-backend/tests/test_provider_fault_jitter_validation.py
-backend/tests/test_release_validation.py
 
-# Only README screenshot PNGs may be tracked under docs/
+# Track current documentation. Other generated material under docs stays local
+# except for intentional PNG assets. Historical working records stay local.
 docs/*
+!docs/*.md
+docs/SMARTROUTE_INTERVIEW_HANDBOOK.md
 !docs/assets/
 docs/assets/*
 !docs/assets/*.png
+
+# Platform-local Playwright visual snapshots are not CI evidence.
+frontend/tests/release/*.spec.ts-snapshots/
 
 # Internal agent/session material (not for the deployed repo)
 .superpowers/
 .claude/
 
 # Generated per-run by the eval harness fixture router (debug manifest)
-backend/evals/fixtures/*/index.json
+backend/evaluation/agent/fixtures/*/index.json

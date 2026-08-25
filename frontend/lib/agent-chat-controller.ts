@@ -12,7 +12,6 @@ export type AgentChatTransport = (
 ) => AsyncGenerator<AgentEvent>;
 
 export interface SessionRecoveryOptions {
-  canRecoverSession: boolean;
   discardSession: () => void;
 }
 
@@ -58,6 +57,11 @@ export async function* fetchAgentChatEvents(
   yield* parseSseStream(res.body.getReader());
 }
 
+function isRiderVisibleOutput(event: AgentEvent): boolean {
+  if (event.type === "token") return event.text.trim().length > 0;
+  return event.type === "route_card" || event.type === "arrival_card";
+}
+
 export async function runTurn(
   transport: AgentChatTransport,
   request: AgentChatRequestBody,
@@ -66,77 +70,115 @@ export async function runTurn(
   inFlightRef: MutableRef<boolean>,
   abortControllerRef: MutableRef<AbortController | null>,
   recovery: SessionRecoveryOptions = {
-    canRecoverSession: false,
     discardSession: () => undefined,
   },
 ): Promise<void> {
   let receivedDone = false;
   let recoveryAttempted = false;
+  let failureRetryAttempted = false;
   let activeRequest = request;
   try {
     while (true) {
-      const buffered: AgentEvent[] = [];
-      let sessionExpired = false;
-      receivedDone = false;
+      let sawRiderOutput = false;
+      try {
+        const buffered: AgentEvent[] = [];
+        let sessionExpired = false;
+        let retryableFailure = false;
+        receivedDone = false;
 
-      for await (const event of transport(activeRequest, controller.signal)) {
-        if (buffered.length === 0 && event.type === "meta") {
-          buffered.push(event);
-          continue;
-        }
-        if (event.type === "error" && event.code === "session_expired") {
-          sessionExpired = true;
-          buffered.push(event);
-          continue;
-        }
-        if (sessionExpired) {
-          buffered.push(event);
+        for await (const event of transport(activeRequest, controller.signal)) {
+          if (isRiderVisibleOutput(event)) sawRiderOutput = true;
+          if (
+            event.type === "error" &&
+            event.retryable &&
+            event.code !== "session_expired"
+          ) {
+            retryableFailure = true;
+          }
+          if (buffered.length === 0 && event.type === "meta") {
+            buffered.push(event);
+            continue;
+          }
+          if (event.type === "error" && event.code === "session_expired") {
+            sessionExpired = true;
+            buffered.push(event);
+            continue;
+          }
+          if (sessionExpired) {
+            buffered.push(event);
+            if (event.type === "done") receivedDone = true;
+            continue;
+          }
+          for (const pending of buffered.splice(0)) dispatch(pending);
           if (event.type === "done") receivedDone = true;
+          dispatch(event);
+        }
+
+        if (
+          sessionExpired && !recoveryAttempted && !controller.signal.aborted
+        ) {
+          recoveryAttempted = true;
+          failureRetryAttempted = true;
+          recovery.discardSession();
+          // The new backend session cannot resolve a card owned by the
+          // expired session. Preserve the rider's message and location, but
+          // let the fresh turn resolve its own authoritative context.
+          activeRequest = {
+            ...request,
+            session_id: undefined,
+            selected_card_id: undefined,
+          };
           continue;
         }
-        for (const pending of buffered.splice(0)) dispatch(pending);
-        if (event.type === "done") receivedDone = true;
-        dispatch(event);
-      }
 
-      if (
-        sessionExpired && recovery.canRecoverSession && !recoveryAttempted && !controller.signal.aborted
-      ) {
-        recoveryAttempted = true;
-        recovery.discardSession();
-        activeRequest = { ...request, session_id: undefined };
-        continue;
-      }
+        for (const pending of buffered) dispatch(pending);
 
-      for (const pending of buffered) dispatch(pending);
-      if (!receivedDone && !controller.signal.aborted) {
+        const dropped = !receivedDone && !controller.signal.aborted;
+        const canRetryFailure =
+          !controller.signal.aborted &&
+          !sawRiderOutput &&
+          !failureRetryAttempted &&
+          (retryableFailure || dropped);
+        if (canRetryFailure) {
+          failureRetryAttempted = true;
+          dispatch({ type: "turn_retry_started" });
+          continue;
+        }
+        if (dropped) {
+          dispatch({
+            type: "stream_error",
+            message: "The connection to SmartRoute dropped before it finished responding.",
+          });
+        }
+        break;
+      } catch (err) {
+        if (controller.signal.aborted) {
+          dispatch({ type: "stream_cancelled" });
+          break;
+        }
+        const transportFailure =
+          err instanceof AgentChatTransportError
+            ? err
+            : new AgentChatTransportError(
+                "SmartRoute couldn’t complete this request.",
+                500,
+                true,
+                null,
+              );
+        if (!failureRetryAttempted && !sawRiderOutput && transportFailure.retryable) {
+          failureRetryAttempted = true;
+          dispatch({ type: "turn_retry_started" });
+          continue;
+        }
         dispatch({
           type: "stream_error",
-          message: "The connection to SmartRoute dropped before it finished responding.",
+          message: transportFailure.message,
+          code: `transport_${transportFailure.status}`,
+          retryable: transportFailure.retryable,
+          correlationId: transportFailure.correlationId ?? undefined,
         });
+        break;
       }
-      break;
-    }
-  } catch (err) {
-    if (controller.signal.aborted) {
-      dispatch({ type: "stream_cancelled" });
-    } else {
-      const transportFailure =
-        err instanceof AgentChatTransportError
-          ? err
-          : new AgentChatTransportError(
-              "SmartRoute couldn’t complete this request.",
-              500,
-              true,
-              null,
-            );
-      dispatch({
-        type: "stream_error",
-        message: transportFailure.message,
-        code: `transport_${transportFailure.status}`,
-        retryable: transportFailure.retryable,
-        correlationId: transportFailure.correlationId ?? undefined,
-      });
     }
   } finally {
     inFlightRef.current = false;

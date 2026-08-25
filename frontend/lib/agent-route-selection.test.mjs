@@ -88,8 +88,12 @@ test("chained segment indexes are passed through unchanged", () => {
   assert.deepEqual(plan?.candidates[0].itinerary?.segments.map((segment) => segment.segment_index), [4, 9]);
 });
 
-test("chat entry context and server selection decision remain intact", () => {
-  const decision = { selected_candidate_id: "rc_1", reason_codes: ["fastest"] };
+test("chat entry context and passenger-safe selection decision remain intact", () => {
+  const decision = {
+    selection_reason: "outer_agent_selection",
+    reason_code: "fastest",
+    selection_source: "model",
+  };
   const plan = agentRoutePlanFromCards([{ ...card, itinerary: { ...card.itinerary, selection_decision: decision } }], "rc_1");
   assert.equal(plan?.entryContext, "chat");
   assert.deepEqual(plan?.candidates[0].itinerary?.selection_decision, decision);

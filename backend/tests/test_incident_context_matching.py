@@ -4,15 +4,16 @@ import unittest
 
 from pydantic import BaseModel
 
-from app.services.trips.incident_context import extract_candidate_stop_context
-from app.services.trips.incident_matching import (
+from app.services.trips.route_incidents.context import extract_candidate_stop_context
+from app.services.trips.route_incidents.matching import (
     Cached511NYSearchTool,
     MAX_SEARCH_RADIUS_MILES,
     MILES_TO_METERS,
+    _geometry_components,
     incident_points,
     match_cached_incidents,
 )
-from app.services.trips.incident_merge import merge_incident_evidence
+from app.services.trips.route_incidents.merge import merge_incident_evidence
 
 
 class _IncidentModel(BaseModel):
@@ -31,6 +32,70 @@ class _SnapshotModel(BaseModel):
     source_record_count: int = 0
     nyc_record_count: int = 0
     source_origin: str | None = None
+
+
+class IncidentGeometryTests(unittest.TestCase):
+    def test_geojson_components_preserve_independent_shapes(self):
+        self.assertEqual(_geometry_components(None), [])
+        self.assertEqual(
+            _geometry_components(
+                {
+                    "type": "GeometryCollection",
+                    "geometries": [
+                        {"type": "Point", "coordinates": [-73.9, 40.7]},
+                        {
+                            "type": "LineString",
+                            "coordinates": [[-73.8, 40.8], [-73.7, 40.9]],
+                        },
+                        {"type": "Point", "coordinates": ["bad"]},
+                    ],
+                }
+            ),
+            [[(40.7, -73.9)], [(40.8, -73.8), (40.9, -73.7)]],
+        )
+        self.assertEqual(
+            _geometry_components(
+                {
+                    "type": "MultiPoint",
+                    "coordinates": [[-73.6, 40.6], [-73.5, 40.5]],
+                }
+            ),
+            [[(40.6, -73.6), (40.5, -73.5)]],
+        )
+        self.assertEqual(
+            _geometry_components(
+                {
+                    "type": "MultiLineString",
+                    "coordinates": [
+                        [[-73.4, 40.4], [-73.3, 40.3]],
+                        [["bad"]],
+                    ],
+                }
+            ),
+            [[(40.4, -73.4), (40.3, -73.3)]],
+        )
+        self.assertEqual(
+            _geometry_components(
+                {
+                    "type": "Polygon",
+                    "coordinates": [[[-73.2, 40.2], [-73.1, 40.1]]],
+                }
+            ),
+            [[(40.2, -73.2), (40.1, -73.1)]],
+        )
+        self.assertEqual(
+            _geometry_components(
+                {
+                    "type": "MultiPolygon",
+                    "coordinates": [
+                        [[[-73.0, 40.0], [-72.9, 39.9]]],
+                        "invalid polygon",
+                    ],
+                }
+            ),
+            [[(40.0, -73.0), (39.9, -72.9)]],
+        )
+        self.assertEqual(_geometry_components({"type": "unknown"}), [])
 
 
 def _routes():

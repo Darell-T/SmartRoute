@@ -27,6 +27,9 @@ export interface LeftRailProps {
   routeStatus?: RouteRailStatus;
   onRouteStatusChange?: (status: RouteRailStatus) => void;
   initialTab?: TabId;
+  /** When supplied, the parent owns the selected Route/Alerts tab. */
+  tab?: TabId;
+  onTabChange?: (tab: TabId) => void;
   data: {
     station: Station;
     health: NetworkHealth;
@@ -72,17 +75,25 @@ export function LeftRail({
   routeStatus,
   onRouteStatusChange,
   initialTab = "route",
+  tab,
+  onTabChange,
   data,
   onSelectAlternative,
   search,
   onRouteSearchFocusChange,
   onRailInteraction,
 }: LeftRailProps) {
-  const [tab, setTab] = useState<TabId>(initialTab);
+  const [internalTab, setInternalTab] = useState<TabId>(initialTab);
   const [preferredWay, setPreferredWay] = useState<ArrivalFilter>("uptown");
   const [internalRouteState, setInternalRouteState] =
     useState<RouteRailStatus>(routeStatus ?? "standby");
   const effectiveRouteState = routeStatus ?? internalRouteState;
+  const activeTab = tab ?? internalTab;
+
+  function handleTabChange(next: TabId) {
+    if (tab === undefined) setInternalTab(next);
+    onTabChange?.(next);
+  }
 
   function setRouteState(next: RouteRailStatus) {
     setInternalRouteState(next);
@@ -119,12 +130,12 @@ export function LeftRail({
         }}
       >
         <RailHeader
-          tab={tab}
-          onTabChange={setTab}
+          tab={activeTab}
+          onTabChange={handleTabChange}
           onInteraction={onRailInteraction}
         />
-        <div key={tab} className="sr-fade-in">
-          {tab === "route" && (
+        <div key={activeTab} className="sr-fade-in">
+          {activeTab === "route" && (
             <RouteView
               station={data.station}
               health={data.health}
@@ -144,7 +155,7 @@ export function LeftRail({
               onRequestRailExpand={onRailInteraction}
             />
           )}
-          {tab === "alerts" && (
+          {activeTab === "alerts" && (
             <AlertsView
               alerts={data.alerts}
               feed={data.feed}

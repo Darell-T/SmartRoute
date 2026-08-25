@@ -1,18 +1,12 @@
 """Tool registry for the rider-facing conversational transit agent.
 
-The conversational route surface selects ``prepare_route_options`` and
-``present_route``. The legacy nested-selector ``plan_trip`` facade is not a
-registered production tool.
+The public vocabulary is stable while each model round receives only the
+tools valid for current server-owned turn state. Internal leaf executors stay
+registered for dispatch and are never model-offered. The legacy nested-
+selector ``plan_trip`` facade is not a public production tool.
 
-Other tools include transit_snapshot from P0; event_lookup, poi_search,
-venue_crowd_window from P1; accessibility_status and lookup_facts from P2; and
-search_local_places / get_place_details from Phase 2A. poi_search stays
-registered as an internal provider boundary behind search_local_places and is
-never exposed to the outer model.
-
-`TOOL_REGISTRY` maps a tool name to its schema, async executor, SSE
-`tool_start` label function, and per-tool timeout. `TOOLS` is the plain list
-of json schemas for the Anthropic `tools=` request parameter.
+`TOOL_REGISTRY` is the offered public surface. `INTERNAL_TOOL_REGISTRY`
+holds leaf executors. `TOOLS` is the offered schema list for Anthropic.
 """
 
 from __future__ import annotations
@@ -21,29 +15,30 @@ import dataclasses
 import hashlib
 import json
 import os
+from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Awaitable, Callable
+from typing import Any, Awaitable, Callable
 
+from app.services.agent.public_surface import offered_custom_tools
 from app.services.agent.tools import (
+    complete_turn,
+    declare_goals,
+)
+from app.services.agent.tools.places import discover_places, place_reference, present_places
+from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.route import prepare_route_options, present_route
+from app.services.agent.tools.transit import (
     accessibility_status,
     check_area_conditions,
-    event_lookup,
+    check_transit,
     lookup_arrivals,
     lookup_facts,
-    place_reference,
-    poi_search,
-    prepare_route_options,
-    present_route,
-    search_local_places,
+    present_transit,
     transit_snapshot,
-    venue_crowd_window,
+    venue_crowd_window as venues,
 )
-from app.services.agent.strict_tool_schema import assert_strict_tool_schemas_compatible
-from app.services.agent.tools._types import ToolContext, ToolResult
 
 ToolExecutor = Callable[[dict, ToolContext], Awaitable[ToolResult]]
-
-
 @dataclasses.dataclass
 class ToolSpec:
     schema: dict
@@ -79,11 +74,6 @@ def _lookup_arrivals_label(tool_input: dict) -> str:
     return f"Checking {route} arrivals{suffix}..."
 
 
-def _poi_search_label(tool_input: dict) -> str:
-    query = str(tool_input.get("query") or "places").strip()
-    return f"Finding {query} nearby…"
-
-
 def _venue_crowd_window_label(tool_input: dict) -> str:
     return "Estimating post-event crowds…"
 
@@ -108,6 +98,72 @@ def _prepare_route_options_label(tool_input: dict) -> str:
 
 def _present_route_label(tool_input: dict) -> str:
     return "Presenting the recommended route…"
+
+
+def _discover_places_label(tool_input: dict) -> str:
+    scope = tool_input.get("scope") if isinstance(tool_input.get("scope"), dict) else {}
+    kind = str(scope.get("kind") or "")
+    values = [str(item).strip() for item in (scope.get("values") or []) if str(item).strip()]
+    if kind == "current_location":
+        where = "near you"
+    elif kind == "named_area" and values:
+        where = f"in {values[0]}"
+    elif kind == "boroughs" and values:
+        where = f"in {' and '.join(values)}"
+    else:
+        where = "in NYC"
+    query = str(tool_input.get("query") or "places").strip()
+    if str(tool_input.get("operation") or "") == "verify":
+        return f"Verifying {query} {where}…"
+    return f"Searching verified places {where}…"
+
+
+def _present_places_label(tool_input: dict) -> str:
+    return "Presenting verified places…"
+
+
+def _check_transit_label(tool_input: dict) -> str:
+    operation = str(tool_input.get("operation") or "").strip()
+    routes = [
+        str(item).strip().upper()
+        for item in (tool_input.get("route_ids") or [])
+        if str(item).strip()
+    ]
+    route = routes[0] if routes else ""
+    if operation == "arrivals":
+        stop = str(tool_input.get("stop_query") or "").strip()
+        direction = str(tool_input.get("direction") or "").strip()
+        head = " ".join(part for part in (direction, route) if part)
+        suffix = f" at {stop}" if stop else ""
+        target = head or "arrivals"
+        return f"Checking {target}{suffix}…"
+    if operation == "accessibility":
+        station = str(tool_input.get("station") or "that station").strip()
+        return f"Checking accessibility at {station}…"
+    if operation == "area_conditions":
+        area = str(tool_input.get("area") or "that area").strip()
+        return f"Checking conditions near {area}…"
+    if operation == "event_schedule":
+        query = str(tool_input.get("event_query") or "that event").strip()
+        return f"Checking {query} schedule…"
+    if operation == "fact":
+        topic = str(tool_input.get("topic") or "that").strip()
+        return f"Looking up {topic}…"
+    if route:
+        return f"Checking {route} service…"
+    return "Checking live transit conditions…"
+
+
+def _complete_turn_label(tool_input: dict) -> str:
+    return "Finishing your answer…"
+
+
+def _declare_goals_label(tool_input: dict) -> str:
+    return "Thinking through your request…"
+
+
+def _present_transit_label(tool_input: dict) -> str:
+    return "Presenting verified transit information…"
 
 
 # ---- Fixture replay (eval harness hook -- plan doc section 7 Layer 2) ----
@@ -167,11 +223,84 @@ def _with_fixture_replay(tool_name: str, executor: ToolExecutor) -> ToolExecutor
 
 def _spec(schema: dict, executor: ToolExecutor, label_fn: Callable[[dict], str], timeout_s: float) -> ToolSpec:
     return ToolSpec(
-        schema=schema, executor=_with_fixture_replay(schema["name"], executor), label_fn=label_fn, timeout_s=timeout_s
+        schema=schema,
+        executor=_with_fixture_replay(schema["name"], executor),
+        label_fn=label_fn,
+        timeout_s=timeout_s,
     )
 
 
+INTERNAL_TOOL_REGISTRY: dict[str, ToolSpec] = {
+    "transit_snapshot": _spec(
+        transit_snapshot.TRANSIT_SNAPSHOT_SCHEMA, transit_snapshot.execute, _transit_snapshot_label, 8.0
+    ),
+    "check_area_conditions": _spec(
+        check_area_conditions.AREA_CONDITIONS_SCHEMA,
+        check_area_conditions.execute,
+        _check_area_conditions_label,
+        12.0,
+    ),
+    "event_lookup": _spec(
+        check_transit.EVENT_LOOKUP_SCHEMA,
+        check_transit.execute_event_lookup,
+        _event_lookup_label,
+        8.0,
+    ),
+    "lookup_arrivals": _spec(
+        lookup_arrivals.LOOKUP_ARRIVALS_SCHEMA,
+        lookup_arrivals.execute,
+        _lookup_arrivals_label,
+        12.0,
+    ),
+    "venue_crowd_window": _spec(
+        venues.VENUE_CROWD_WINDOW_SCHEMA, venues.execute, _venue_crowd_window_label, 2.0
+    ),
+    "accessibility_status": _spec(
+        accessibility_status.ACCESSIBILITY_STATUS_SCHEMA,
+        accessibility_status.execute,
+        _accessibility_status_label,
+        8.0,
+    ),
+    "lookup_facts": _spec(lookup_facts.LOOKUP_FACTS_SCHEMA, lookup_facts.execute, _lookup_facts_label, 2.0),
+    "get_place_details": _spec(
+        place_reference.GET_PLACE_DETAILS_SCHEMA,
+        place_reference.execute,
+        lambda tool_input: "Checking place details…",
+        8.0,
+    ),
+}
+
 TOOL_REGISTRY: dict[str, ToolSpec] = {
+    "declare_goals": _spec(
+        declare_goals.DECLARE_GOALS_SCHEMA,
+        declare_goals.execute,
+        _declare_goals_label,
+        2.0,
+    ),
+    "discover_places": _spec(
+        discover_places.DISCOVER_PLACES_SCHEMA,
+        discover_places.execute,
+        _discover_places_label,
+        10.0,
+    ),
+    "present_places": _spec(
+        present_places.PRESENT_PLACES_SCHEMA,
+        present_places.execute,
+        _present_places_label,
+        6.0,
+    ),
+    "present_transit": _spec(
+        present_transit.PRESENT_TRANSIT_SCHEMA,
+        present_transit.execute,
+        _present_transit_label,
+        6.0,
+    ),
+    "check_transit": _spec(
+        check_transit.CHECK_TRANSIT_SCHEMA,
+        check_transit.execute,
+        _check_transit_label,
+        12.0,
+    ),
     "prepare_route_options": _spec(
         prepare_route_options.PREPARE_ROUTE_OPTIONS_SCHEMA,
         prepare_route_options.execute,
@@ -184,50 +313,88 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
         _present_route_label,
         12.0,
     ),
-    "transit_snapshot": _spec(
-        transit_snapshot.TRANSIT_SNAPSHOT_SCHEMA, transit_snapshot.execute, _transit_snapshot_label, 8.0
-    ),
-    "check_area_conditions": _spec(
-        check_area_conditions.AREA_CONDITIONS_SCHEMA,
-        check_area_conditions.execute,
-        _check_area_conditions_label,
-        12.0,
-    ),
-    "event_lookup": _spec(event_lookup.EVENT_LOOKUP_SCHEMA, event_lookup.execute, _event_lookup_label, 8.0),
-    "lookup_arrivals": _spec(
-        lookup_arrivals.LOOKUP_ARRIVALS_SCHEMA,
-        lookup_arrivals.execute,
-        _lookup_arrivals_label,
-        12.0,
-    ),
-    "poi_search": _spec(poi_search.POI_SEARCH_SCHEMA, poi_search.execute, _poi_search_label, 8.0),
-    "venue_crowd_window": _spec(
-        venue_crowd_window.VENUE_CROWD_WINDOW_SCHEMA, venue_crowd_window.execute, _venue_crowd_window_label, 2.0
-    ),
-    "accessibility_status": _spec(
-        accessibility_status.ACCESSIBILITY_STATUS_SCHEMA,
-        accessibility_status.execute,
-        _accessibility_status_label,
-        8.0,
-    ),
-    "lookup_facts": _spec(lookup_facts.LOOKUP_FACTS_SCHEMA, lookup_facts.execute, _lookup_facts_label, 2.0),
-    "search_local_places": _spec(
-        search_local_places.SEARCH_LOCAL_PLACES_SCHEMA,
-        search_local_places.execute,
-        lambda tool_input: f"Finding {str(tool_input.get('query') or 'places').strip()} nearby…",
-        10.0,
-    ),
-    "get_place_details": _spec(
-        place_reference.GET_PLACE_DETAILS_SCHEMA,
-        place_reference.execute,
-        lambda tool_input: "Checking place details…",
-        8.0,
+    "complete_turn": _spec(
+        complete_turn.COMPLETE_TURN_SCHEMA,
+        complete_turn.execute,
+        _complete_turn_label,
+        4.0,
     ),
 }
 
-TOOLS: list[dict] = [spec.schema for spec in TOOL_REGISTRY.values()]
-# Fail closed at import if a strict custom tool reintroduces unsupported
-# Anthropic JSON Schema keywords (e.g. maxItems under strict: true).
+# Executors remain reachable by name for internal dispatch and fixtures.
+COMBINED_TOOL_REGISTRY: dict[str, ToolSpec] = {**INTERNAL_TOOL_REGISTRY, **TOOL_REGISTRY}
+TOOLS: list[dict] = offered_custom_tools(spec.schema for spec in TOOL_REGISTRY.values())
+
+_UNSUPPORTED_STRICT_KEYWORDS = frozenset(
+    {
+        "maxItems",
+        "maxLength",
+        "minLength",
+        "minimum",
+        "maximum",
+        "exclusiveMinimum",
+        "exclusiveMaximum",
+        "multipleOf",
+        "pattern",
+        "uniqueItems",
+        "contains",
+        "propertyNames",
+        "minProperties",
+        "maxProperties",
+    }
+)
+
+
+def iter_unsupported_strict_keyword_paths(
+    schema: Any, *, path: str = "$"
+) -> list[str]:
+    findings: list[str] = []
+    if isinstance(schema, Mapping):
+        for key, value in schema.items():
+            child = f"{path}.{key}"
+            if key in _UNSUPPORTED_STRICT_KEYWORDS:
+                findings.append(child)
+            elif key == "minItems" and value not in (0, 1):
+                findings.append(child)
+            findings.extend(iter_unsupported_strict_keyword_paths(value, path=child))
+    elif isinstance(schema, list):
+        for index, item in enumerate(schema):
+            findings.extend(
+                iter_unsupported_strict_keyword_paths(item, path=f"{path}[{index}]")
+            )
+    return findings
+
+
+def assert_strict_tool_schemas_compatible(tools: Iterable[Mapping[str, Any]]) -> None:
+    problems: list[str] = []
+    for tool in tools:
+        if not tool.get("strict"):
+            continue
+        name = str(tool.get("name") or "<unnamed>")
+        input_schema = tool.get("input_schema")
+        if not isinstance(input_schema, Mapping):
+            problems.append(f"{name}: missing object input_schema")
+            continue
+        for finding in iter_unsupported_strict_keyword_paths(input_schema):
+            problems.append(f"{name}: {finding}")
+    if problems:
+        joined = "; ".join(problems)
+        raise AssertionError(
+            "strict custom tool schema uses Anthropic-unsupported keywords: "
+            f"{joined}"
+        )
+
+
 assert_strict_tool_schemas_compatible(TOOLS)
 
-__all__ = ["TOOL_REGISTRY", "TOOLS", "ToolSpec", "ToolContext", "ToolResult"]
+__all__ = [
+    "COMBINED_TOOL_REGISTRY",
+    "INTERNAL_TOOL_REGISTRY",
+    "TOOL_REGISTRY",
+    "TOOLS",
+    "ToolSpec",
+    "ToolContext",
+    "ToolResult",
+    "assert_strict_tool_schemas_compatible",
+    "iter_unsupported_strict_keyword_paths",
+]

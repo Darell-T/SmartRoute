@@ -18,7 +18,7 @@ import type { ChatTheme } from "@/lib/use-chat-theme";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { ThinkingOrb } from "thinking-orbs";
 import { Message, MessageContent } from "@/components/prompt-kit/message";
-import { isRoutePreparationTool } from "@/lib/agent-route-tools";
+import { isSearchActivityTool } from "@/lib/agent-route-tools";
 import { ChatWorkingPanel } from "./chat-working-panel";
 import { ChatRouteCardList } from "./chat-route-card";
 import { ChatArrivalsCard } from "./chat-arrivals-card";
@@ -49,6 +49,7 @@ function AssistantMessage({
   selectedCardId,
   onSelectRouteCard,
   onSeeArrivalsOnMap,
+  onViewAlerts,
   onRetry,
   onDismissError,
 }: {
@@ -57,18 +58,24 @@ function AssistantMessage({
   selectedCardId?: string | null;
   onSelectRouteCard?: (card: RouteCard) => void;
   onSeeArrivalsOnMap?: (arrivals: ArrivalsTurnPayload) => void;
+  onViewAlerts?: () => void;
   onRetry?: () => void;
   onDismissError?: () => void;
 }) {
   const hasText = turn.text.length > 0;
   const reduceMotion = useReducedMotion() ?? false;
   const { displayedText, isCaughtUp } = useProgressiveText(turn.text, reduceMotion);
-  const isFindingRoutes = turn.toolChips.some(
-    (chip) => isRoutePreparationTool(chip.tool) && chip.status === "running",
+  const isSearching = turn.toolChips.some(
+    (chip) => isSearchActivityTool(chip.tool) && chip.status === "running",
   );
-  const orbState = isFindingRoutes ? "searching" : "composing";
+  const orbState = isSearching ? "searching" : "composing";
   const showCards = !turn.isStreaming && hasText && isCaughtUp && turn.routeCards.length > 0;
   const showArrivals = !turn.isStreaming && isCaughtUp && Boolean(turn.arrivals);
+  const showAlertsAction =
+    !turn.isStreaming &&
+    isCaughtUp &&
+    turn.transitStatusAction === "view_alerts" &&
+    Boolean(onViewAlerts);
 
   if (turn.error) {
     return (
@@ -117,7 +124,7 @@ function AssistantMessage({
                   size={64}
                   theme={theme}
                   speed={0.9}
-                  aria-label={isFindingRoutes ? "Searching for the best route" : "Deliberating"}
+                  aria-label={isSearching ? "Searching current sources" : "Deliberating"}
                   style={{ width: 34, height: 34 }}
                 />
               </motion.span>
@@ -125,9 +132,15 @@ function AssistantMessage({
           </AnimatePresence>
         </span>
         <div className="sr-chat-assistant-response__content">
+          {turn.notice ? (
+            <p className="sr-chat-session-notice" role="status">
+              {turn.notice}
+            </p>
+          ) : null}
           <ChatWorkingPanel
             toolChips={turn.toolChips}
             progress={turn.progress}
+            reasoning={turn.reasoning}
             isStreaming={turn.isStreaming}
           />
           {hasText && (
@@ -135,6 +148,15 @@ function AssistantMessage({
               {displayedText}
             </p>
           )}
+          {showAlertsAction ? (
+            <button
+              type="button"
+              className="sr-chat-transit-action"
+              onClick={onViewAlerts}
+            >
+              View alerts
+            </button>
+          ) : null}
           {showArrivals && turn.arrivals ? (
             <ChatArrivalsCard
               arrivals={turn.arrivals}
@@ -170,6 +192,7 @@ export function ChatMessage({
   selectedCardId,
   onSelectRouteCard,
   onSeeArrivalsOnMap,
+  onViewAlerts,
   onRetry,
   onDismissError,
 }: {
@@ -178,6 +201,7 @@ export function ChatMessage({
   selectedCardId?: string | null;
   onSelectRouteCard?: (card: RouteCard) => void;
   onSeeArrivalsOnMap?: (arrivals: ArrivalsTurnPayload) => void;
+  onViewAlerts?: () => void;
   onRetry?: () => void;
   onDismissError?: () => void;
 }) {
@@ -198,6 +222,7 @@ export function ChatMessage({
       selectedCardId={selectedCardId}
       onSelectRouteCard={onSelectRouteCard}
       onSeeArrivalsOnMap={onSeeArrivalsOnMap}
+      onViewAlerts={onViewAlerts}
       onRetry={onRetry}
       onDismissError={onDismissError}
     />

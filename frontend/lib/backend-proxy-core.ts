@@ -1,3 +1,45 @@
+export const PROD_API_FALLBACK = "https://jarvis-mta-assistant.onrender.com";
+const LOCAL_API_FALLBACK = "http://localhost:8000";
+const BLOCKED_VERCEL_BACKEND_HOSTS = new Set([
+  "localhost",
+  "127.0.0.1",
+  "0.0.0.0",
+  "::1",
+  "::",
+]);
+
+export interface BackendEnvironment {
+  [key: string]: string | undefined;
+  API_URL?: string;
+  NEXT_PUBLIC_API_URL?: string;
+  VERCEL?: string;
+}
+
+/**
+ * Resolve the server-side FastAPI base while keeping local targets out of
+ * deployed Vercel requests. Invalid production configuration falls back to
+ * the established Render service so a stale build-time override cannot make
+ * every server-side proxy request point at the deployer's machine.
+ */
+export function resolveBackendBaseUrl(environment: BackendEnvironment = process.env): string {
+  const configured = environment.API_URL ?? environment.NEXT_PUBLIC_API_URL;
+  if (configured && (!environment.VERCEL || isAllowedVercelBackendBase(configured))) {
+    return configured.replace(/\/+$/, "");
+  }
+  return environment.VERCEL ? PROD_API_FALLBACK : LOCAL_API_FALLBACK;
+}
+
+function isAllowedVercelBackendBase(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+    const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+    return !BLOCKED_VERCEL_BACKEND_HOSTS.has(hostname);
+  } catch {
+    return false;
+  }
+}
+
 export type JsonBodyReadResult =
   | { ok: true; empty: false; value: unknown }
   | { ok: true; empty: true; value: undefined }

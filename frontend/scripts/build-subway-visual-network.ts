@@ -33,7 +33,6 @@ import { parseZipEntries } from "./build/visual-network/inputs/gtfs-ingest.ts";
 import { buildGtfsTopologyStage } from "./build/visual-network/inputs/gtfs-topology-stage.ts";
 import {
   HAUSDORFF_MAX_M,
-  JUNCTION_BRIDGE_MAX_M,
   LANE_WIDTH_METERS,
   RESAMPLE_INTERVAL_M,
   geometryStats,
@@ -172,13 +171,9 @@ if (!existsSync(STATIONS_GEOJSON_PATH)) {
 // reroutes, and yard moves while keeping the everyday + peak service variants.
 const MIN_TRIPS_PER_BRANCH = 5;
 const OPEN_DATA_MIN_FRAGMENT_LENGTH_M = 15;
-// JUNCTION_BRIDGE_MAX_M (legacy buildJunctionBridges gap-bridge max, 90m) is
-// owned by visual-network/shared/geometry-utils.ts and imported above.
-// Max distance for promoting a branch_transition. Distinct from
-// JUNCTION_BRIDGE_MAX_M (legacy buildJunctionBridges). The audit in Phase 3a
-// showed all production-quality transitions are <= ~5m at junction stations,
-// plus a long-tail outlier at 42.85m (G at Fulton St) that we drop for now.
-// 35m gives ample headroom for legitimate transitions while excluding outliers.
+// Production-quality branch transitions are at most about 5m at junction
+// stations. The 35m limit leaves headroom while excluding the 42.85m G train
+// outlier at Fulton St.
 const BRANCH_TRANSITION_MAX_M = 35;
 // Fix 3: per-slot lane width baked into geometry at build time. The constants
 // are owned by visual-network/shared/geometry-utils.ts and imported here. Pushed 12->18m
@@ -275,7 +270,7 @@ const SAME_COLOR_SNAP_DIST_M = 14;
 // boundaries (base-vs-member geometry differs by up to the overlap tolerance).
 const BRIDGE_MIN_GAP_M = 6;            // endpoints closer than this are already joined
 const BRIDGE_MAX_GAP_M = 28;          // never bridge wider than this (avoid chord-cutting real gaps)
-const BRIDGE_SUBSET_CONNECTOR_MAX_GAP_M = JUNCTION_BRIDGE_MAX_M;
+const BRIDGE_SUBSET_CONNECTOR_MAX_GAP_M = 90;
 
 // Same-color collapse: same-color features whose vertices fall within this of a
 // longer same-color line are snapped onto it (rendered as one line). Tuned a bit

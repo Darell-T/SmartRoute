@@ -1,4 +1,12 @@
-import { createChatState, type ChatState } from "./agent-chat-state";
+import { parseAgentEvent } from "./agent-chat-event-validator";
+import type { ArrivalCardEvent, RouteCard } from "./agent-chat-stream";
+import {
+  arrivalsFromEvent,
+  createChatState,
+  type AssistantTurn,
+  type ChatState,
+  type ChatTurn,
+} from "./agent-chat-state";
 
 const LEGACY_SESSION_STORAGE_KEY = "sr-agent-session";
 const SESSION_RECORD_VERSION = 2;
@@ -109,4 +117,161 @@ export function clearPersistedSession(): void {
 
 export function initChatState(): ChatState {
   return createChatState(readPersistedSessionId(safeSessionStorage()));
+}
+
+export interface SessionSnapshotHistoryEntry {
+  role: "user" | "assistant";
+  text: string;
+  turn_id?: string;
+}
+
+/** Read-only transcript projection returned by the backend snapshot route. */
+export interface SessionSnapshot {
+  session_id: string;
+  history: SessionSnapshotHistoryEntry[];
+  route_cards: RouteCard[];
+  arrival_cards: ArrivalCardEvent[];
+}
+
+export type SessionSnapshotResult =
+  | { status: "ok"; turns: ChatTurn[] }
+  | { status: "expired" }
+  | { status: "unavailable" };
+
+export type SessionSnapshotTransport = (sessionId: string) => Promise<Response>;
+
+const SNAPSHOT_ENDPOINT = "/api/agent/chat/session";
+const RESET_ENDPOINT = "/api/agent/chat/session/reset";
+
+async function defaultSnapshotTransport(sessionId: string): Promise<Response> {
+  return fetch(SNAPSHOT_ENDPOINT, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId }),
+  });
+}
+
+function parseSnapshot(data: unknown): SessionSnapshot | null {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+  const record = data as Record<string, unknown>;
+  if (typeof record.session_id !== "string" || record.session_id.length === 0) return null;
+  const history: SessionSnapshotHistoryEntry[] = [];
+  if (Array.isArray(record.history)) {
+    for (const entry of record.history) {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+      const item = entry as Record<string, unknown>;
+      if (
+        (item.role !== "user" && item.role !== "assistant") ||
+        typeof item.text !== "string"
+      ) {
+        return null;
+      }
+      history.push({
+        role: item.role,
+        text: item.text,
+        ...(typeof item.turn_id === "string" ? { turn_id: item.turn_id } : {}),
+      });
+    }
+  }
+  const routeCards: RouteCard[] = [];
+  if (Array.isArray(record.route_cards)) {
+    for (const card of record.route_cards) {
+      // Cards are revalidated at this boundary exactly like live SSE events;
+      // an invalid card is dropped rather than poisoning the whole transcript.
+      const parsed = parseAgentEvent("route_card", card);
+      if (!parsed || parsed.type !== "route_card") continue;
+      const { type: _type, ...rest } = parsed;
+      routeCards.push(rest);
+    }
+  }
+  const arrivalCards: ArrivalCardEvent[] = [];
+  if (Array.isArray(record.arrival_cards)) {
+    for (const card of record.arrival_cards) {
+      const parsed = parseAgentEvent("arrival_card", card);
+      if (parsed?.type === "arrival_card") arrivalCards.push(parsed);
+    }
+  }
+  return {
+    session_id: record.session_id,
+    history,
+    route_cards: routeCards,
+    arrival_cards: arrivalCards,
+  };
+}
+
+/**
+ * Rebuilds the visible transcript from a backend snapshot. Canonical cards
+ * attach to the assistant turn that produced them by turn id.
+ */
+export function buildTurnsFromSnapshot(snapshot: SessionSnapshot): ChatTurn[] {
+  const turns: ChatTurn[] = [];
+  for (const entry of snapshot.history) {
+    if (entry.role === "user") {
+      turns.push({ role: "user", text: entry.text });
+    } else {
+      turns.push({
+        role: "assistant",
+        turnId: entry.turn_id ?? "",
+        text: entry.text,
+        reasoning: "",
+        toolChips: [],
+        routeCards: [],
+        isStreaming: false,
+      });
+    }
+  }
+  const assistantByTurnId = new Map(
+    turns
+      .filter((turn): turn is AssistantTurn => turn.role === "assistant")
+      .map((turn) => [turn.turnId, turn]),
+  );
+  for (const card of snapshot.route_cards) {
+    const turn = assistantByTurnId.get(card.turn_id);
+    if (turn) turn.routeCards.push(card);
+  }
+  for (const card of snapshot.arrival_cards) {
+    const turn = assistantByTurnId.get(card.turn_id);
+    if (turn) turn.arrivals = arrivalsFromEvent(card);
+  }
+  return turns;
+}
+
+/** Best-effort server wipe. Local New Trip never waits on the network. */
+export async function resetSession(sessionId: string): Promise<void> {
+  try {
+    await fetch(RESET_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId }),
+      keepalive: true,
+    });
+  } catch {
+    // The browser state is already reset; the old opaque id is no longer used.
+  }
+}
+
+/**
+ * Fetches and validates the backend transcript snapshot for a persisted
+ * session id. A stable 404 means the session expired; other failures keep the
+ * opaque id so a transient restore outage does not discard server context.
+ */
+export async function fetchSessionSnapshot(
+  sessionId: string,
+  transport: SessionSnapshotTransport = defaultSnapshotTransport,
+): Promise<SessionSnapshotResult> {
+  let response: Response;
+  try {
+    response = await transport(sessionId);
+  } catch {
+    return { status: "unavailable" };
+  }
+  if (response.status === 404) return { status: "expired" };
+  if (!response.ok) return { status: "unavailable" };
+  try {
+    const snapshot = parseSnapshot(await response.json());
+    if (!snapshot) return { status: "unavailable" };
+    return { status: "ok", turns: buildTurnsFromSnapshot(snapshot) };
+  } catch {
+    return { status: "unavailable" };
+  }
 }

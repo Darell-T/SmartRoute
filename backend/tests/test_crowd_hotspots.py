@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from app.services.trips import crowd_hotspots
+from app.services.trips.crowds import hotspots as crowd_hotspots
 
 
 class _PatternIndex:

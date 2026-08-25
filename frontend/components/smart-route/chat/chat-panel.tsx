@@ -31,16 +31,16 @@ import type { HomeNearbyModel } from "./near-you";
 
 const EXAMPLE_QUERIES: readonly ChatSuggestion[] = [
   {
-    label: "Get me to JFK with fewer transfers and less walking",
-    query: "Get me to JFK with the fewest transfers and as little walking as possible.",
+    label: "JFK · fewer transfers",
+    query: "Get me to JFK with fewer transfers.",
   },
   {
-    label: "Get me to Madison Square Garden and avoid event crowds",
-    query: "Get me to Madison Square Garden while avoiding event crowds and major service disruptions.",
+    label: "MSG · avoid crowds",
+    query: "Get me to Madison Square Garden and avoid crowds.",
   },
   {
-    label: "Find me a good pizza spot that is easy to reach by subway",
-    query: "Find a good pizza spot that is easy to reach by subway from where I am.",
+    label: "Ramen · best route now",
+    query: "Find a good ramen spot and route me there by subway.",
   },
 ];
 
@@ -49,6 +49,7 @@ export function ChatPanel({
   theme,
   nearby,
   onOpenLiveMap,
+  onViewAlerts,
   onSelectRouteCard,
   onOpenNearbyStation,
 }: {
@@ -56,6 +57,7 @@ export function ChatPanel({
   theme: ChatTheme;
   nearby: HomeNearbyModel;
   onOpenLiveMap: () => void;
+  onViewAlerts?: () => void;
   onSelectRouteCard?: (card: RouteCard) => void;
   onOpenNearbyStation?: (arrivals: ArrivalsTurnPayload) => void;
 }) {
@@ -121,6 +123,7 @@ export function ChatPanel({
                 selectedCardId={chat.selectedCardId}
                 onSelectRouteCard={handleSelectRouteCard}
                 onSeeArrivalsOnMap={onOpenNearbyStation ?? (() => onOpenLiveMap())}
+                onViewAlerts={onViewAlerts}
                 onRetry={index === chat.messages.length - 1 ? chat.retryLast : undefined}
                 onDismissError={
                   index === chat.messages.length - 1 ? chat.dismissError : undefined

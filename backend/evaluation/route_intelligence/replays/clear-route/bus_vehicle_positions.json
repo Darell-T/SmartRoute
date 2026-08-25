@@ -1,0 +1,20 @@
+{
+  "Siri": {
+    "ServiceDelivery": {
+      "VehicleMonitoringDelivery": [
+        {
+          "VehicleActivity": [
+            {
+              "RecordedAtTime": "2026-07-22T21:30:00Z",
+              "MonitoredVehicleJourney": {
+                "LineRef": "MTA NYCT_M7",
+                "ProgressRate": "normalProgress",
+                "VehicleLocation": {"Latitude": 40.7505, "Longitude": -73.9934}
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

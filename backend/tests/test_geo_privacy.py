@@ -1,10 +1,13 @@
+import importlib
 import unittest
 from unittest.mock import Mock, patch
 
-import requests
+import httpx
 
-from app.routers import live_feed
-from app.utils import geo
+from app.services import geography as geo
+from app.services.live_feed import snapshot as live_snapshot
+
+live_feed = importlib.import_module("app.routers.live_feed.router")
 
 
 class GeocodePrivacyTests(unittest.TestCase):
@@ -20,13 +23,19 @@ class GeocodePrivacyTests(unittest.TestCase):
         response = Mock()
         response.raise_for_status.return_value = None
         response.json.return_value = {"features": []}
-        with patch("requests.get", return_value=response), patch("builtins.print") as printed:
+        with patch("httpx.Client.get", return_value=response), patch("builtins.print") as printed:
             geo.geocode_address_with_reason("350 5th Ave, New York")
         output = " ".join(str(call.args[0]) for call in printed.call_args_list)
         self.assertNotIn("350 5th", output)
         self.assertIn("outcome=no_result", output)
 
-        with patch("requests.get", side_effect=requests.RequestException("https://provider/?address=350+5th")), patch(
+        with patch(
+            "httpx.Client.get",
+            side_effect=httpx.RequestError(
+                "https://provider/?address=350+5th",
+                request=httpx.Request("GET", "https://provider/"),
+            ),
+        ), patch(
             "builtins.print"
         ) as printed:
             _coords, error = geo.geocode_address_with_reason("350 5th Ave, New York")
@@ -34,7 +43,7 @@ class GeocodePrivacyTests(unittest.TestCase):
         self.assertEqual(error, "Geocoding service is temporarily unavailable.")
         self.assertNotIn("350 5th", output)
         self.assertNotIn("https://", output)
-        self.assertIn("error_type=RequestException", output)
+        self.assertIn("error_type=RequestError", output)
 
     def test_verbose_socket_location_log_omits_precise_input_and_exception_text(self):
         address = "350 5th Ave, New York"
@@ -42,8 +51,9 @@ class GeocodePrivacyTests(unittest.TestCase):
         with patch.dict("os.environ", {"BACKEND_VERBOSE_LOGS": "1"}), patch(
             "builtins.print"
         ) as printed:
-            live_feed._vlog(live_feed._location_verbose_log(7, {"Q", "B"}))
-            print(live_feed._socket_failure_log("ws_live_feed", requests.RequestException("https://provider/secret")))
+            live_feed._vlog(live_snapshot._location_verbose_log(7, {"Q", "B"}))
+            print(live_snapshot._socket_failure_log("ws_live_feed", httpx.RequestError(
+                "https://provider/secret", request=httpx.Request("GET", "https://provider/"))))
         output = " ".join(str(call.args[0]) for call in printed.call_args_list)
         self.assertNotIn(address, output)
         self.assertNotIn(str(latitude), output)

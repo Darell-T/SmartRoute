@@ -10,7 +10,6 @@ import importlib
 import sys
 import types
 import unittest
-from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -42,9 +41,9 @@ def _load_gtfs_module():
             "psycopg2.extras": fake_extras_mod,
         },
     ):
-        if "app.utils.gtfs_static" in sys.modules:
-            return importlib.reload(sys.modules["app.utils.gtfs_static"])
-        return importlib.import_module("app.utils.gtfs_static")
+        if "app.services.mta.static_gtfs.store" in sys.modules:
+            return importlib.reload(sys.modules["app.services.mta.static_gtfs.store"])
+        return importlib.import_module("app.services.mta.static_gtfs.store")
 
 
 STOPS = {

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import unittest
 
-from app.services.agent import model_request, policy
+from app.services.agent.model import policy
+from app.services.agent.model import request as model_request
+from app.services.agent.tools import TOOLS
 
 
 def _auto_policy(model: str = "claude-sonnet-5") -> policy.AgentModePolicy:
@@ -10,12 +12,14 @@ def _auto_policy(model: str = "claude-sonnet-5") -> policy.AgentModePolicy:
         mode="auto",
         model=model,
         max_route_candidates=5,
+        max_presented_places=5,
         retry_count=2,
         max_output_tokens=900,
-        wrapup_output_tokens=300,
+        output_effort="medium",
         max_rounds=5,
         explanation_style="comparative",
         optional_enrichment=True,
+        web_research_timeout_s=6.0,
     )
 
 
@@ -35,13 +39,24 @@ class _StructuredProviderError(Exception):
 
 
 class AgentModelRequestTests(unittest.TestCase):
+    def test_public_request_does_not_enable_provider_grammar_compilation(self):
+        kwargs = model_request.build_stream_kwargs(
+            messages=[{"role": "user", "content": "Find pizza"}],
+            system_blocks=[{"type": "text", "text": "system"}],
+            mode_policy=_auto_policy(),
+            tools=TOOLS,
+        )
+
+        self.assertEqual(len(kwargs["tools"]), 8)
+        self.assertTrue(all("strict" not in tool for tool in kwargs["tools"]))
+        self.assertEqual(kwargs["tool_choice"], {"type": "any"})
+
     def test_sonnet_five_omits_incompatible_request_fields(self):
         kwargs = model_request.build_stream_kwargs(
-            force_final=False,
             messages=[{"role": "user", "content": "hello"}],
             system_blocks=[{"type": "text", "text": "system"}],
             mode_policy=_auto_policy(),
-            tools=[{"name": "plan_trip"}],
+            tools=[{"name": "discover_places"}],
             request_options={
                 "thinking": {"type": "enabled", "budget_tokens": 2048},
                 "temperature": 0.2,
@@ -53,23 +68,35 @@ class AgentModelRequestTests(unittest.TestCase):
         self.assertNotIn("temperature", kwargs)
         self.assertNotIn("top_p", kwargs)
         self.assertNotIn("top_k", kwargs)
-        self.assertEqual(kwargs["tools"], [{"name": "plan_trip"}])
+        self.assertEqual(kwargs["output_config"], {"effort": "medium"})
+        self.assertEqual(kwargs["tools"], [{"name": "discover_places"}])
 
     def test_sonnet_five_rejects_assistant_prefill_before_provider_call(self):
         with self.assertRaisesRegex(ValueError, "assistant prefill"):
             model_request.build_stream_kwargs(
-                force_final=False,
                 messages=[{"role": "assistant", "content": "prefix"}],
                 system_blocks=[],
                 mode_policy=_auto_policy(),
                 tools=[],
             )
 
+    def test_sonnet_five_allows_explicit_server_tool_pause_continuation(self):
+        kwargs = model_request.build_stream_kwargs(
+            messages=[{"role": "assistant", "content": [{"type": "server_tool_use"}]}],
+            system_blocks=[],
+            mode_policy=_auto_policy(),
+            tools=[{"type": "web_search_20250305", "name": "web_search"}],
+            allow_server_tool_continuation=True,
+        )
+
+        self.assertEqual(kwargs["messages"][-1]["role"], "assistant")
+        self.assertEqual(kwargs["tools"][0]["name"], "web_search")
+
     def test_request_diagnostics_report_shape_only(self):
         kwargs = {
             "model": "claude-sonnet-5",
             "messages": [{"role": "user", "content": "private rider text"}],
-            "tools": [{"name": "plan_trip", "description": "private schema"}],
+            "tools": [{"name": "discover_places", "description": "private schema"}],
             "max_tokens": 900,
         }
         diagnostics = model_request.request_diagnostics(kwargs)

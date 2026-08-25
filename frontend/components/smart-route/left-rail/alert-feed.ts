@@ -23,6 +23,5 @@ export {
 } from "./alert-feed-normalizer";
 export {
   groupAlertThreads,
-  latestAlertUpdateLabel,
   sortAlertFeedItems,
 } from "./alert-feed-threading";

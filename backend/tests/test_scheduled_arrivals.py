@@ -4,7 +4,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from app.services.agent.tools.scheduled_arrivals import ScheduledArrivalIndex
+from app.services.mta.static_gtfs.scheduled_arrivals import ScheduledArrivalIndex
 
 
 NYC = ZoneInfo("America/New_York")

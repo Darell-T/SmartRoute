@@ -24,7 +24,7 @@
   }
 
   .sr-mobile-stage {
-    inset: 0 0 auto;
+    inset: var(--mobile-viewport-offset-top, 0px) 0 auto;
     height: var(--visible-viewport-height, 100dvh);
     display: grid;
     grid-template-rows: auto minmax(0, 1fr);

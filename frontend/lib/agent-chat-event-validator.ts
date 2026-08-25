@@ -8,6 +8,7 @@ import type {
   ArrivalResolutionStatus,
   ArrivalSourceStatus,
   ProgressEvent,
+  TransitStatusActionEvent,
 } from "./agent-chat-stream";
 import type {
   AgentRouteStep,
@@ -167,12 +168,58 @@ function alert(value: unknown): ServiceAlert | null {
 }
 
 function selection(value: unknown): RouteSelectionDecision | null {
-  if (!record(value) || !integer(value.selected_candidate_index, 0, 64) || !nonEmptyText(value.selected_candidate_id)
-    || !finite(value.base_score) || !finite(value.final_score) || !textList(value.hard_constraints_satisfied, 64)
-    || !textList(value.evidence_ids, 64) || !Array.isArray(value.penalties) || value.penalties.length > 64
-    || (value.selection_reason !== "lowest_final_score" && value.selection_reason !== "hard_constraint" && value.selection_reason !== "advisor_tiebreak" && value.selection_reason !== "outer_agent_selection")
-    || !value.penalties.every((item) => record(item) && nonEmptyText(item.source) && finite(item.amount) && nonEmptyText(item.reason))) return null;
-  return { selected_candidate_index: value.selected_candidate_index, selected_candidate_id: value.selected_candidate_id, base_score: value.base_score, final_score: value.final_score, hard_constraints_satisfied: value.hard_constraints_satisfied, penalties: value.penalties.map((item) => ({ source: item.source, amount: item.amount, reason: item.reason })), selection_reason: value.selection_reason, evidence_ids: value.evidence_ids };
+  const publicFields = new Set([
+    "selection_reason",
+    "reason_code",
+    "selection_source",
+  ]);
+  if (
+    !record(value) ||
+    Object.keys(value).some((field) => !publicFields.has(field)) ||
+    !selectionReason(value.selection_reason) ||
+    !optional(value.reason_code, routeReasonCode) ||
+    !selectionSource(value.selection_source)
+  ) {
+    return null;
+  }
+  return {
+    selection_reason: value.selection_reason,
+    ...(value.reason_code === null || routeReasonCode(value.reason_code)
+      ? { reason_code: value.reason_code }
+      : {}),
+    selection_source: value.selection_source,
+  };
+}
+
+function selectionReason(
+  value: unknown,
+): value is RouteSelectionDecision["selection_reason"] {
+  return (
+    value === "outer_agent_selection" ||
+    value === "deterministic_fallback"
+  );
+}
+
+function selectionSource(
+  value: unknown,
+): value is NonNullable<RouteSelectionDecision["selection_source"]> {
+  return value === "model" || value === "deterministic_fallback";
+}
+
+function routeReasonCode(
+  value: unknown,
+): value is NonNullable<RouteSelectionDecision["reason_code"]> {
+  return (
+    value === "fastest" ||
+    value === "less_walking" ||
+    value === "fewer_transfers" ||
+    value === "avoids_active_disruption" ||
+    value === "lower_event_crowd_exposure" ||
+    value === "meets_hard_constraints" ||
+    value === "accessibility" ||
+    value === "coverage_gap" ||
+    value === "reasonable_local_option"
+  );
 }
 
 function place(value: unknown): CanonicalItineraryPlace | null {
@@ -282,7 +329,24 @@ function dwellEvent(value: unknown): CanonicalDwellEvent | null {
 function recommendationReason(value: unknown): value is RecommendationReason | string {
   if (nonEmptyText(value)) return true;
   if (!record(value)) return false;
-  return (value.code === "fastest" && optional(value.difference_seconds, (item): item is number => integer(item, 0, MAX_SECONDS))) || (value.code === "fewer_transfers" && integer(value.transfer_difference, 0, 64)) || value.code === "avoids_active_disruption" || (value.code === "lower_event_crowd_exposure" && integer(value.event_count, 0, 64) && nonEmptyText(value.provider_status));
+  if (!optional(value.crowd_evidence_status, nonEmptyText)) return false;
+  return (
+    (value.code === "fastest" &&
+      optional(value.difference_seconds, (item): item is number =>
+        integer(item, 0, MAX_SECONDS),
+      )) ||
+    value.code === "less_walking" ||
+    (value.code === "fewer_transfers" &&
+      integer(value.transfer_difference, 0, 64)) ||
+    value.code === "avoids_active_disruption" ||
+    (value.code === "lower_event_crowd_exposure" &&
+      integer(value.event_count, 0, 64) &&
+      nonEmptyText(value.provider_status)) ||
+    value.code === "meets_hard_constraints" ||
+    value.code === "accessibility" ||
+    value.code === "coverage_gap" ||
+    value.code === "reasonable_local_option"
+  );
 }
 
 function progressStage(value: unknown): value is ProgressEvent["stage"] {
@@ -342,10 +406,16 @@ function arrival(value: RecordValue): ArrivalCardEvent | null {
   return { type: "arrival_card", turn_id: value.turn_id, route_id: value.route_id, stop: { ...(typeof stop.id === "string" ? { id: stop.id } : {}), ...(typeof stop.name === "string" ? { name: stop.name } : {}), ...(stop.distance_meters === null || finite(stop.distance_meters) ? { distance_meters: stop.distance_meters } : {}), ...(stop.latitude === null || finite(stop.latitude) ? { latitude: stop.latitude } : {}), ...(stop.longitude === null || finite(stop.longitude) ? { longitude: stop.longitude } : {}) }, directions: directions.filter((item): item is ArrivalDirection => item !== null), updated_at: value.updated_at, source_status: value.source_status, resolution_status: value.resolution_status, ...(arrivalEvidence ? { evidence: arrivalEvidence } : {}), ...(arrivalCatchability ? { catchability: arrivalCatchability } : {}), ...(arrivalAmbiguity ? { ambiguity: arrivalAmbiguity } : {}) };
 }
 
+function transitStatusAction(value: RecordValue): TransitStatusActionEvent | null {
+  if (!nonEmptyText(value.turn_id) || value.action !== "view_alerts") return null;
+  return { type: "transit_status_action", turn_id: value.turn_id, action: "view_alerts" };
+}
+
 export function parseAgentEvent(eventType: string, data: unknown): AgentEvent | null {
   if (!record(data)) return null;
   if (eventType === "meta" && nonEmptyText(data.session_id) && nonEmptyText(data.turn_id)) return { type: "meta", session_id: data.session_id, turn_id: data.turn_id };
   if (eventType === "token" && text(data.text, 32_768)) return { type: "token", text: data.text };
+  if (eventType === "reasoning" && text(data.text, 32_768)) return { type: "reasoning", text: data.text };
   if (eventType === "progress" && progressStage(data.stage) && progressStatus(data.status)) return { type: "progress", stage: data.stage, status: data.status };
   if (eventType === "tool_start" && nonEmptyText(data.tool_call_id) && nonEmptyText(data.tool) && nonEmptyText(data.label)) return { type: "tool_start", tool_call_id: data.tool_call_id, tool: data.tool, label: data.label };
   if (eventType === "tool_end" && nonEmptyText(data.tool_call_id) && nonEmptyText(data.tool) && typeof data.ok === "boolean" && bounded(data.duration_ms, 0, 300_000) && optional(data.summary, text)) return { type: "tool_end", tool_call_id: data.tool_call_id, tool: data.tool, ok: data.ok, duration_ms: data.duration_ms, ...(typeof data.summary === "string" ? { summary: data.summary } : {}) };
@@ -358,6 +428,7 @@ export function parseAgentEvent(eventType: string, data: unknown): AgentEvent | 
     return { type: "route_card", card_id: data.card_id, turn_id: data.turn_id, role: data.role, origin, destination, summary: cardSummary, route: route.filter((item): item is AgentRouteStep => item !== null), alerts: alerts.filter((item): item is ServiceAlert => item !== null), ...(typeof data.leg_label === "string" ? { leg_label: data.leg_label } : {}), ...(typeof data.depart_iso === "string" ? { depart_iso: data.depart_iso } : {}), ...(cardItinerary ? { itinerary: cardItinerary } : {}), ...(cardSelection ? { selection_decision: cardSelection } : {}) };
   }
   if (eventType === "arrival_card") return arrival(data);
+  if (eventType === "transit_status_action") return transitStatusAction(data);
   if (eventType === "error" && errorCode(data.code) && nonEmptyText(data.message) && typeof data.retryable === "boolean") return { type: "error", code: data.code, message: data.message, retryable: data.retryable };
   if (eventType === "done" && nonEmptyText(data.session_id) && nonEmptyText(data.turn_id) && stopReason(data.stop_reason) && record(data.usage) && optional(data.usage.input_tokens, (item): item is number => integer(item, 0, 10_000_000)) && optional(data.usage.output_tokens, (item): item is number => integer(item, 0, 10_000_000)) && (data.terminal_state === undefined || terminalState(data.terminal_state))) return { type: "done", session_id: data.session_id, turn_id: data.turn_id, stop_reason: data.stop_reason, ...(terminalState(data.terminal_state) ? { terminal_state: data.terminal_state } : {}), usage: data.usage };
   return null;

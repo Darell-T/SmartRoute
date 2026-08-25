@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import re
 import time
 from datetime import datetime
 from typing import Any, Literal
 
-from app.services.agent import intelligence
 from app.services.agent import profile as profile_module
+from app.services.trips.preparation.input import normalize_route_ids
 
 PlanningMode = Literal["leave_now", "depart_at", "arrive_by"]
 MAX_WAYPOINTS = 3
@@ -104,53 +103,13 @@ def preference_patch_from_tool_input(tool_input: dict[str, Any]) -> dict[str, An
     routing_preference = str(tool_input.get("routing_preference") or "").upper()
     if routing_preference == "LESS_WALKING":
         patch["walking_preference"] = "less_walking"
+        patch["prefer_fewer_transfers"] = False
     elif routing_preference == "FEWER_TRANSFERS":
         patch["prefer_fewer_transfers"] = True
+        patch["walking_preference"] = "any"
     if tool_input.get("avoid_stairs") is True:
         patch["accessibility_required"] = True
     return patch
-
-
-def apply_natural_feedback(session: dict, message: object) -> dict[str, Any]:
-    """Convert explicit rider feedback into bounded profile preferences only."""
-
-    text = str(message or "").casefold()
-    patch: dict[str, Any] = {}
-    if re.search(
-        r"\b(?:avoid|no|without)\s+(?:the\s+)?bus(?:es)?\b|"
-        r"\bhate\s+bus(?:es)?\b",
-        text,
-    ):
-        patch["preferred_modes"] = ["SUBWAY"]
-    elif re.search(
-        r"\b(?:i(?:'d| would)?\s+rather\s+take|prefer|take)"
-        r"(?:\s+the)?\s+bus(?:es)?\b",
-        text,
-    ):
-        patch["preferred_modes"] = ["BUS"]
-    elif re.search(r"\bbus(?:es)?\s+(?:are|is)\s+(?:ok|okay|fine)\b", text):
-        patch["preferred_modes"] = []
-    if re.search(
-        r"\b(?:avoid|no|without)\s+stairs?\b|\bwheelchair\b|\bstroller\b|\bcart\b",
-        text,
-    ):
-        patch.update({"avoid_stairs": True, "accessibility_required": True})
-    if re.search(
-        r"\b(?:less|avoid|limit|not much)\s+walking\b|\bshort(?:er)?\s+walk",
-        text,
-    ):
-        patch["walking_preference"] = "less_walking"
-    if re.search(r"\bfewer\s+transfers?\b|\bno\s+transfers?\b", text):
-        patch["prefer_fewer_transfers"] = True
-    if re.search(
-        r"\b(?:avoid|less|fewer)\s+(?:the\s+)?crowds?\b|\bavoid\s+busy\b",
-        text,
-    ):
-        patch["avoid_crowds"] = True
-    if not patch:
-        return get_trip_state(session)
-    profile_module.update_preferences(session, patch)
-    return apply_preference_patch(session, patch)
 
 
 def set_destination(session: dict, destination: str) -> dict[str, Any]:
@@ -312,7 +271,7 @@ def commit_scenario(
         state["preferences"] = profile_module.normalize_preferences(
             {**(state.get("preferences") or {}), **preference_patch}
         )
-    excluded_route_ids = intelligence.normalize_route_ids(
+    excluded_route_ids = normalize_route_ids(
         tool_input.get("excluded_route_ids") or []
     )
     if excluded_route_ids:
@@ -439,7 +398,6 @@ def _optional_timestamp(value: object) -> str | None:
 
 __all__ = (
     "PlanningMode",
-    "apply_natural_feedback",
     "apply_preference_patch",
     "bind_candidate_set",
     "bind_discovery_context",

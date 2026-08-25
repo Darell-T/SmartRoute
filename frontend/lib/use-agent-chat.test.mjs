@@ -4,6 +4,8 @@ import test from "node:test";
 import {
   applyAgentEvent,
   buildAgentChatRequest,
+  buildTurnsFromSnapshot,
+  fetchSessionSnapshot,
   persistSessionId,
   readPersistedSessionId,
   runTurn,
@@ -13,6 +15,7 @@ import {
   isRoutePreparationTool,
   isRouteResultTool,
   isRouteWorkflowTool,
+  isSearchActivityTool,
 } from "./agent-route-tools.ts";
 
 function initialState(overrides = {}) {
@@ -57,13 +60,35 @@ test("chat_reset clears the active conversation and session", () => {
   });
 });
 
+test("session_restarted preserves visible history and marks the replayed turn", () => {
+  let state = applyAgentEvent(initialState(), {
+    type: "turn_started",
+    text: "How is the Q?",
+  });
+
+  state = applyAgentEvent(state, { type: "session_discarded" });
+  state = applyAgentEvent(state, {
+    type: "session_restarted",
+    message: "Earlier context expired, so this request is starting a fresh session.",
+  });
+
+  assert.equal(state.sessionId, null);
+  assert.equal(state.messages[0].text, "How is the Q?");
+  assert.equal(
+    state.messages[1].notice,
+    "Earlier context expired, so this request is starting a fresh session.",
+  );
+});
+
 test("a full happy-path event sequence assembles the expected final turn state", () => {
   let state = initialState();
   const events = [
     { type: "turn_started", text: "heading to Costco, no bus" },
     { type: "meta", session_id: "sess-1", turn_id: "turn-1" },
+    { type: "reasoning", text: "I should compare the verified candidates." },
     { type: "token", text: "Here's " },
     { type: "token", text: "your route." },
+    { type: "reasoning", text: "The route facts support one option." },
     { type: "tool_start", tool_call_id: "c1", tool: "plan_trip", label: "Finding routes to Costco…" },
     { type: "tool_end", tool_call_id: "c1", tool: "plan_trip", ok: true, duration_ms: 812, summary: "3 candidates" },
     {
@@ -89,6 +114,10 @@ test("a full happy-path event sequence assembles the expected final turn state",
   assert.equal(assistantTurn.role, "assistant");
   assert.equal(assistantTurn.turnId, "turn-1");
   assert.equal(assistantTurn.text, "Here's your route.");
+  assert.equal(
+    assistantTurn.reasoning,
+    "I should compare the verified candidates.\nThe route facts support one option.",
+  );
   assert.equal(assistantTurn.isStreaming, false);
   assert.equal(assistantTurn.stopReason, "end_turn");
 
@@ -105,6 +134,27 @@ test("a full happy-path event sequence assembles the expected final turn state",
   assert.equal(assistantTurn.routeCards.length, 1);
   assert.equal(assistantTurn.routeCards[0].card_id, "rc_1");
   assert.equal(assistantTurn.routeCards[0].role, "recommended");
+});
+
+test("transit-status action is carried by its typed event and ignores stale turns", () => {
+  let state = applyAgentEvent(initialState(), { type: "turn_started", text: "Are any trains delayed?" });
+  state = applyAgentEvent(state, { type: "meta", session_id: "sess-1", turn_id: "turn-1" });
+  state = applyAgentEvent(state, {
+    type: "transit_status_action",
+    turn_id: "old-turn",
+    action: "view_alerts",
+  });
+  assert.equal(state.messages[1].transitStatusAction, undefined);
+
+  state = applyAgentEvent(state, {
+    type: "transit_status_action",
+    turn_id: "turn-1",
+    action: "view_alerts",
+  });
+  assert.equal(state.messages[1].transitStatusAction, "view_alerts");
+
+  state = applyAgentEvent(state, { type: "turn_retry_started" });
+  assert.equal(state.messages[1].transitStatusAction, undefined);
 });
 
 test("tool_end for an unknown tool_call_id leaves existing chips untouched", () => {
@@ -396,6 +446,33 @@ test("canonical and legacy route tools classify for searching UI and route resul
   assert.equal(isRouteWorkflowTool("search_local_places"), false);
 });
 
+test("searching UI activates only for real retrieval capability tools", () => {
+  for (const tool of [
+    "search_local_places",
+    "prepare_route_options",
+    "transit_snapshot",
+    "lookup_arrivals",
+    "event_lookup",
+    "web_search",
+  ]) {
+    assert.equal(isSearchActivityTool(tool), true, tool);
+  }
+  assert.equal(isSearchActivityTool("present_route"), false);
+  assert.equal(isSearchActivityTool(""), false);
+});
+
+test("duplicate reasoning events reconcile idempotently", () => {
+  let state = applyAgentEvent(initialState(), {
+    type: "turn_started",
+    text: "find pizza",
+  });
+  const event = { type: "reasoning", text: "Reviewing your place request…" };
+  state = applyAgentEvent(state, event);
+  state = applyAgentEvent(state, event);
+
+  assert.equal(state.messages.at(-1).reasoning, "Reviewing your place request…");
+});
+
 test("failed canonical route preparation clears semantic progress so a retry cannot inherit stale work", () => {
   let state = applyAgentEvent(initialState(), { type: "turn_started", text: "to JFK" });
   state = applyAgentEvent(state, { type: "progress", stage: "finding_routes", status: "active" });
@@ -470,6 +547,32 @@ test("an unrelated failed tool does not clear route progress", () => {
     duration_ms: 40,
   });
   assert.deepEqual(state.messages[1].progress, { stage: "finding_routes", status: "active" });
+});
+
+test("failed steps preserve contextual activity without diagnostic timing", () => {
+  let state = applyAgentEvent(initialState(), {
+    type: "turn_started",
+    text: "Find a place and route me there",
+  });
+  state = applyAgentEvent(state, {
+    type: "tool_start",
+    tool_call_id: "places-validation-1",
+    tool: "present_places",
+    label: "Reviewing verified places",
+  });
+  state = applyAgentEvent(state, {
+    type: "tool_end",
+    tool_call_id: "places-validation-1",
+    tool: "present_places",
+    ok: false,
+    duration_ms: 7,
+    summary: "That step could not be completed",
+  });
+
+  const chip = state.messages[1].toolChips[0];
+  assert.equal(chip.status, "failed");
+  assert.equal(chip.label, "Reviewing verified places");
+  assert.equal(chip.durationMs, undefined);
 });
 
 test("dismissing an empty failed response preserves the original user message", () => {
@@ -686,7 +789,7 @@ test("arrival_card attaches production arrival evidence to the streaming assista
   assert.match(turn.arrivals.stationGuidance, /0\.2 mi away/);
 });
 
-test("arrival clarification suppresses generic errors and accepts only one terminal event", () => {
+test("arrival clarification stays prose-only and accepts only one terminal event", () => {
   let state = applyAgentEvent(initialState(), {
     type: "turn_started",
     text: "When does the next Q arrive?",
@@ -732,6 +835,7 @@ test("arrival clarification suppresses generic errors and accepts only one termi
   assert.equal(assistant.error, undefined);
   assert.equal(assistant.stopReason, "clarification_required");
   assert.equal(assistant.isStreaming, false);
+  assert.equal(assistant.arrivals, undefined);
 });
 
 test("a stale fresh-load session is recreated once without redispatching the failed attempt", async () => {
@@ -773,6 +877,7 @@ test("a stale fresh-load session is recreated once without redispatching the fai
   const request = {
     session_id: "stale",
     message: "Plan my trip",
+    selected_card_id: "expired-card",
     response_presentation: "auto",
   };
 
@@ -783,19 +888,20 @@ test("a stale fresh-load session is recreated once without redispatching the fai
     (action) => actions.push(action),
     inFlightRef,
     abortControllerRef,
-    { canRecoverSession: true, discardSession: () => { discarded += 1; } },
+    { discardSession: () => { discarded += 1; } },
   );
 
   assert.equal(attempts.length, 2);
   assert.equal(attempts[0].message, attempts[1].message);
   assert.equal(attempts[1].session_id, undefined);
+  assert.equal(attempts[1].selected_card_id, undefined);
   assert.equal(discarded, 1);
   assert.deepEqual(actions.map((action) => action.type), ["meta", "token", "done"]);
   assert.equal(actions.filter((action) => action.type === "done").length, 1);
 });
 
-test("session recreation is capped at one attempt and visible history is not discarded", async () => {
-  async function run(canRecoverSession) {
+test("session recreation is capped at one attempt even when visible history exists", async () => {
+  async function run() {
     let attempts = 0;
     let discarded = 0;
     const actions = [];
@@ -829,22 +935,16 @@ test("session recreation is capped at one attempt and visible history is not dis
       { current: true },
       { current: controller },
       {
-        canRecoverSession,
         discardSession: () => { discarded += 1; },
       },
     );
     return { attempts, discarded, actions };
   }
 
-  const fresh = await run(true);
-  assert.equal(fresh.attempts, 2);
-  assert.equal(fresh.discarded, 1);
-  assert.equal(fresh.actions.filter((action) => action.type === "error").length, 1);
-
-  const visible = await run(false);
-  assert.equal(visible.attempts, 1);
-  assert.equal(visible.discarded, 0);
-  assert.equal(visible.actions.find((action) => action.type === "error").code, "session_expired");
+  const result = await run();
+  assert.equal(result.attempts, 2);
+  assert.equal(result.discarded, 1);
+  assert.equal(result.actions.filter((action) => action.type === "error").length, 1);
 });
 
 test("a failed replacement request produces one terminal connection error", async () => {
@@ -884,7 +984,7 @@ test("a failed replacement request produces one terminal connection error", asyn
     (action) => actions.push(action),
     { current: true },
     { current: controller },
-    { canRecoverSession: true, discardSession: () => undefined },
+    { discardSession: () => undefined },
   );
 
   assert.equal(attempts, 2);
@@ -919,4 +1019,331 @@ test("chat requests carry response presentation without changing route inputs", 
     automatic,
   );
   assert.equal(quick.message, "Take me to Costco");
+});
+
+test("runTurn retries once when a retryable error arrives with no rider output", async () => {
+  let attempts = 0;
+  const actions = [];
+  const transport = async function* () {
+    attempts += 1;
+    yield { type: "meta", session_id: "sess-1", turn_id: `t${attempts}` };
+    if (attempts === 1) {
+      yield {
+        type: "error",
+        code: "deadline",
+        message: "The response took too long. Please try again.",
+        retryable: true,
+      };
+      yield {
+        type: "done",
+        session_id: "sess-1",
+        turn_id: "t1",
+        stop_reason: "deadline",
+        usage: {},
+      };
+      return;
+    }
+    yield { type: "token", text: "The Q is the best fit." };
+    yield {
+      type: "done",
+      session_id: "sess-1",
+      turn_id: "t2",
+      stop_reason: "end_turn",
+      usage: {},
+    };
+  };
+  const controller = new AbortController();
+
+  await runTurn(
+    transport,
+    { message: "Get me to Barclays", response_presentation: "auto" },
+    controller,
+    (action) => actions.push(action),
+    { current: true },
+    { current: controller },
+  );
+
+  assert.equal(attempts, 2);
+  assert.deepEqual(
+    actions.map((action) => action.type),
+    ["meta", "error", "done", "turn_retry_started", "meta", "token", "done"],
+  );
+});
+
+test("runTurn does not retry after a token has already been shown", async () => {
+  let attempts = 0;
+  const actions = [];
+  const transport = async function* () {
+    attempts += 1;
+    yield { type: "meta", session_id: "sess-1", turn_id: "t1" };
+    yield { type: "token", text: "I'll compare live routes." };
+    yield {
+      type: "error",
+      code: "upstream_error",
+      message: "Live trip planning is temporarily unavailable.",
+      retryable: true,
+    };
+    yield {
+      type: "done",
+      session_id: "sess-1",
+      turn_id: "t1",
+      stop_reason: "error",
+      usage: {},
+    };
+  };
+  const controller = new AbortController();
+
+  await runTurn(
+    transport,
+    { message: "Get me to Barclays", response_presentation: "auto" },
+    controller,
+    (action) => actions.push(action),
+    { current: true },
+    { current: controller },
+  );
+
+  assert.equal(attempts, 1);
+  assert.equal(actions.filter((action) => action.type === "turn_retry_started").length, 0);
+});
+
+test("runTurn retries a dropped connection once when no tokens arrived", async () => {
+  let attempts = 0;
+  const actions = [];
+  const transport = async function* () {
+    attempts += 1;
+    yield { type: "meta", session_id: "sess-1", turn_id: `t${attempts}` };
+    if (attempts === 1) return;
+    yield { type: "token", text: "The next Q is in 4 minutes." };
+    yield {
+      type: "done",
+      session_id: "sess-1",
+      turn_id: "t2",
+      stop_reason: "end_turn",
+      usage: {},
+    };
+  };
+  const controller = new AbortController();
+
+  await runTurn(
+    transport,
+    { message: "When is the next Q?", response_presentation: "auto" },
+    controller,
+    (action) => actions.push(action),
+    { current: true },
+    { current: controller },
+  );
+
+  assert.equal(attempts, 2);
+  assert.ok(actions.some((action) => action.type === "turn_retry_started"));
+  assert.equal(actions.at(-1)?.type, "done");
+});
+
+
+function validCard(cardId, turnId, role = "recommended") {
+  return {
+    card_id: cardId,
+    turn_id: turnId,
+    role,
+    origin: { label: "Your location", lat: 40.7484, lng: -73.9857 },
+    destination: { label: "Costco", lat: 40.7549, lng: -73.9872 },
+    summary: { eta_minutes: 18, transfers: 0, lines: ["Q"], reason: "fastest" },
+    route: [{ type: "SUBWAY", route_id: "Q" }],
+    alerts: [],
+  };
+}
+
+function validSnapshot(overrides = {}) {
+  return {
+    session_id: "sess-1",
+    history: [
+      { role: "user", text: "to Costco" },
+      { role: "assistant", text: "Here is your route.", turn_id: "t1" },
+    ],
+    route_cards: [validCard("rc_1", "t1")],
+    arrival_cards: [],
+    ...overrides,
+  };
+}
+
+test("session_restored replaces state with the snapshot transcript", () => {
+  const turns = [
+    { role: "user", text: "to Costco" },
+    {
+      role: "assistant", turnId: "t1", text: "Here is your route.", reasoning: "",
+      toolChips: [], routeCards: [], isStreaming: false,
+    },
+  ];
+  const state = applyAgentEvent(
+    initialState({
+      sessionId: "sess-old",
+      error: "old error",
+    }),
+    { type: "session_restored", sessionId: "sess-1", turns },
+  );
+
+  assert.deepEqual(state, {
+    messages: turns,
+    sessionId: "sess-1",
+    isStreaming: false,
+    error: null,
+  });
+});
+
+test("session_restored cannot overwrite a turn that started while restore was pending", () => {
+  const active = applyAgentEvent(initialState({ sessionId: "sess-1" }), {
+    type: "turn_started",
+    text: "new request",
+  });
+  const restored = applyAgentEvent(active, {
+    type: "session_restored",
+    sessionId: "sess-1",
+    turns: [{ role: "user", text: "old request" }],
+  });
+  assert.deepEqual(restored, active);
+});
+
+test("buildTurnsFromSnapshot rebuilds the transcript and attaches cards by turn id", () => {
+  const snapshot = validSnapshot({
+    history: [
+      { role: "user", text: "to Costco" },
+      { role: "assistant", text: "Here is your route.", turn_id: "t1" },
+      { role: "user", text: "and back?" },
+      { role: "assistant", text: "Same route works.", turn_id: "t2" },
+    ],
+    route_cards: [validCard("rc_1", "t1"), validCard("rc_2", "t2", "alternative")],
+  });
+
+  const turns = buildTurnsFromSnapshot(snapshot);
+
+  assert.equal(turns.length, 4);
+  assert.equal(turns[0].role, "user");
+  assert.equal(turns[1].role, "assistant");
+  assert.equal(turns[1].turnId, "t1");
+  assert.deepEqual(
+    turns[1].routeCards.map((card) => card.card_id),
+    ["rc_1"],
+  );
+  assert.equal(turns[2].role, "user");
+  assert.deepEqual(
+    turns[3].routeCards.map((card) => card.card_id),
+    ["rc_2"],
+  );
+});
+
+test("buildTurnsFromSnapshot drops cards without a matching transcript turn", () => {
+  const snapshot = validSnapshot({
+    history: [
+      { role: "user", text: "to Costco" },
+      { role: "assistant", text: "Here is your route.", turn_id: "t1" },
+      { role: "assistant", text: "Older turn without a stored turn id." },
+    ],
+    route_cards: [
+      validCard("rc_1", "t1"),
+      validCard("rc_orphan", "t9"),
+      validCard("rc_unmatched", "t99"),
+    ],
+  });
+
+  const turns = buildTurnsFromSnapshot(snapshot);
+
+  assert.deepEqual(turns[1].routeCards.map((card) => card.card_id), ["rc_1"]);
+  // No card is attached to the assistant entry lacking a turn id.
+  assert.deepEqual(turns[2].routeCards, []);
+});
+
+test("buildTurnsFromSnapshot restores an arrivals card on its producing turn", () => {
+  const snapshot = validSnapshot({
+    route_cards: [],
+    arrival_cards: [{
+      type: "arrival_card",
+      turn_id: "t1",
+      route_id: "Q",
+      stop: { name: "Church Av", latitude: 40.64, longitude: -73.96 },
+      directions: [{
+        id: "downtown",
+        label: "Downtown / Brooklyn-bound",
+        arrivals: [{ expected_at: "2026-08-13T12:05:00-04:00", minutes: 5, realtime: true }],
+      }],
+      updated_at: "2026-08-13T12:00:00-04:00",
+      source_status: "live",
+      resolution_status: "resolved",
+    }],
+  });
+
+  const turns = buildTurnsFromSnapshot(snapshot);
+  assert.equal(turns[1].arrivals.routeId, "Q");
+  assert.equal(turns[1].arrivals.stationName, "Church Av");
+  assert.deepEqual(turns[1].arrivals.groups[0].minutes, [5]);
+});
+
+test("fetchSessionSnapshot returns expired for a 404", async () => {
+  const result = await fetchSessionSnapshot(
+    "sess-1",
+    async () => new Response(JSON.stringify({ detail: "session_expired" }), { status: 404 }),
+  );
+
+  assert.deepEqual(result, { status: "expired" });
+});
+
+test("fetchSessionSnapshot rebuilds turns from a valid snapshot", async () => {
+  const result = await fetchSessionSnapshot(
+    "sess-1",
+    async () => new Response(JSON.stringify(validSnapshot()), { status: 200 }),
+  );
+
+  assert.equal(result.status, "ok");
+  assert.equal(result.turns.length, 2);
+  assert.equal(result.turns[0].role, "user");
+  assert.deepEqual(
+    result.turns[1].routeCards.map((card) => card.card_id),
+    ["rc_1"],
+  );
+});
+
+test("fetchSessionSnapshot drops invalid cards but keeps the transcript", async () => {
+  const snapshot = validSnapshot({
+    route_cards: [
+      validCard("rc_ok", "t1"),
+      { card_id: "rc_bad", turn_id: "t1", role: "recommended" },
+    ],
+  });
+  const result = await fetchSessionSnapshot(
+    "sess-1",
+    async () => new Response(JSON.stringify(snapshot), { status: 200 }),
+  );
+
+  assert.equal(result.status, "ok");
+  assert.deepEqual(
+    result.turns[1].routeCards.map((card) => card.card_id),
+    ["rc_ok"],
+  );
+});
+
+test("fetchSessionSnapshot treats malformed snapshots as unavailable", async () => {
+  for (const payload of [
+    { session_id: "sess-1", history: [{ role: "weird", text: "x" }], route_cards: [] },
+    { session_id: "sess-1", history: [{ role: "user", text: 42 }], route_cards: [] },
+    { session_id: "", history: [], route_cards: [] },
+    "not json at all",
+  ]) {
+    const result = await fetchSessionSnapshot(
+      "sess-1",
+      async () => new Response(JSON.stringify(payload), { status: 200 }),
+    );
+    assert.deepEqual(result, { status: "unavailable" }, JSON.stringify(payload));
+  }
+});
+
+test("fetchSessionSnapshot treats transport and server failures as unavailable", async () => {
+  const failing = [
+    async () => new Response("boom", { status: 500 }),
+    async () => new Response("oops", { status: 503 }),
+    async () => {
+      throw new TypeError("network down");
+    },
+  ];
+  for (const transport of failing) {
+    const result = await fetchSessionSnapshot("sess-1", transport);
+    assert.deepEqual(result, { status: "unavailable" });
+  }
 });

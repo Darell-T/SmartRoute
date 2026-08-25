@@ -76,25 +76,6 @@ export function sortAlertFeedItems(items: AlertFeedItem[]): AlertFeedItem[] {
   );
 }
 
-export function latestAlertUpdateLabel(
-  items: AlertFeedItem[],
-): string | undefined {
-  let best = Infinity;
-  for (const item of items) {
-    best = Math.min(best, timeRank(item.timestampLabel));
-  }
-  if (!Number.isFinite(best) || best >= 999) {
-    return undefined;
-  }
-  if (best === 0) {
-    return "Updated just now";
-  }
-
-  return best < 60
-    ? `Updated ${best} min ago`
-    : `Updated ${Math.round(best / 60)} hr ago`;
-}
-
 function issueSignature(item: AlertFeedItem): string {
   const source = `${item.summary ?? ""} ${item.title} ${item.context ?? ""}`;
   const near = source.match(

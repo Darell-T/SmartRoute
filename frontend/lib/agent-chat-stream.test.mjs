@@ -39,6 +39,7 @@ function silenceConsoleWarn(fn) {
 test("parses a full meta/token/done sequence delivered in one chunk", async () => {
   const chunk =
     'event: meta\ndata: {"session_id":"s1","turn_id":"t1"}\n\n' +
+    'event: reasoning\ndata: {"text":"I should compare verified candidates."}\n\n' +
     'event: token\ndata: {"text":"Hello"}\n\n' +
     'event: done\ndata: {"session_id":"s1","turn_id":"t1","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":2}}\n\n';
 
@@ -46,6 +47,7 @@ test("parses a full meta/token/done sequence delivered in one chunk", async () =
 
   assert.deepEqual(events, [
     { type: "meta", session_id: "s1", turn_id: "t1" },
+    { type: "reasoning", text: "I should compare verified candidates." },
     { type: "token", text: "Hello" },
     {
       type: "done",
@@ -166,6 +168,25 @@ test("parses a route_card event with the full nested payload", async () => {
   assert.deepEqual(events, [{ type: "route_card", ...payload }]);
 });
 
+test("parses the typed transit-status Alerts action without reading assistant prose", async () => {
+  const payload = { turn_id: "t1", action: "view_alerts" };
+  const events = await collect(readerFromChunks([
+    `event: transit_status_action\ndata: ${JSON.stringify(payload)}\n\n`,
+  ]));
+
+  assert.deepEqual(events, [{ type: "transit_status_action", ...payload }]);
+});
+
+test("rejects unknown transit-status actions", async () => {
+  await silenceConsoleWarn(async (calls) => {
+    const events = await collect(readerFromChunks([
+      'event: transit_status_action\ndata: {"turn_id":"t1","action":"open_route"}\n\n',
+    ]));
+    assert.deepEqual(events, []);
+    assert.equal(calls.length, 1);
+  });
+});
+
 test("parses semantic progress stages and rejects malformed stage or status", async () => {
   const chunk =
     'event: progress\ndata: {"stage":"finding_routes","status":"active"}\n\n' +
@@ -283,14 +304,19 @@ test("round-trips every production route and canonical itinerary field without d
     departure_at: "2026-07-25T14:15:00Z", arrival_at: "2026-07-25T14:20:00Z", walk_seconds: 300, wait_seconds: 0,
     ride_seconds: 0, transfer_seconds: 0, geometry: { encodedPolyline: "def" }, service_data_basis: "mixed", segment_index: 1,
   };
+  const selectionDecision = {
+    selection_reason: "outer_agent_selection",
+    reason_code: "fastest",
+    selection_source: "model",
+  };
   const payload = {
     card_id: "full", turn_id: "turn", role: "recommended",
     origin: { label: "Home", lat: 40.7, lng: -73.9 }, destination: { label: "Work", lat: 40.8, lng: -73.8 },
     summary: { eta_minutes: 20, transfers: 0, lines: ["Q"], reason: "fast", first_leg_arrival: { route_id: "Q", stop_name: "Canal", source_status: "live", walking_minutes: 2, catchable_arrival_minutes: 5, arrival_minutes: [5] } },
     route: [{ type: "SUBWAY", start_point: { latitude: 40.7, longitude: -73.9 }, end_point: { latitude: 40.8, longitude: -73.8 }, polyline: { encodedPolyline: "abc" }, train_line: "Q", line_color: "FCCC0A", direction: "North", departure_stop: "Canal", arrival_stop: "Atlantic", departure_coords: { latitude: 40.7, longitude: -73.9 }, arrival_coords: { latitude: 40.8, longitude: -73.8 }, minutes_until_train_arrives: 3, minutes_until_arrival: 20, route_total_minutes: 20, route_total_seconds: 1200, duration_minutes: 18, distance_meters: 4200, stop_count: 3, route_id: "Q", intermediate_stops: ["Canal", "Atlantic"], intermediate_stop_locations: [{ name: "Canal", lat: 40.72, lng: -74 }], segment_index: 0, departure_time_iso: "2026-07-25T14:00:00Z", arrival_time_iso: "2026-07-25T14:20:00Z" }],
     alerts: [{ header: "Service change", description: "Use the next train", routeIds: ["Q"], route_ids: ["Q"] }],
-    itinerary: { itinerary_id: "itin", origin: { display_name: "Home", lat: 40.7, lng: -73.9 }, waypoints: [{ display_name: "Pickup", lat: 40.75, lng: -73.95, dwell_minutes: 5, dwell_source: "user" }], destination: { display_name: "Work", lat: 40.8, lng: -73.8 }, timezone: "America/New_York", planning_mode: "leave_now", requested_departure: null, requested_arrival: null, generated_at: "2026-07-25T14:00:00Z", data_basis: "mixed", data_freshness: "2026-07-25T14:00:00Z", departure_at: "2026-07-25T14:00:00Z", arrival_at: "2026-07-25T14:20:00Z", total_duration_seconds: 1500, total_walk_seconds: 300, total_wait_seconds: 60, total_in_vehicle_seconds: 540, total_dwell_seconds: 300, transfer_count: 0, legs: [firstLeg, secondLeg], segments: [{ segment_index: 0, origin: { display_name: "Home", lat: 40.7, lng: -73.9 }, destination: { display_name: "Pickup", lat: 40.75, lng: -73.95 }, legs: [firstLeg], duration_seconds: 600 }, { segment_index: 1, origin: { display_name: "Pickup", lat: 40.75, lng: -73.95 }, destination: { display_name: "Work", lat: 40.8, lng: -73.8 }, legs: [secondLeg], duration_seconds: 600 }], dwell_events: [{ event_type: "dwell", after_segment_index: 0, waypoint: { display_name: "Pickup", lat: 40.75, lng: -73.95, dwell_minutes: 5, dwell_source: "user" }, duration_seconds: 300, source: "user" }], structured_recommendation_reasons: [{ code: "fastest", difference_seconds: 120 }, { code: "lower_event_crowd_exposure", event_count: 2, provider_status: "available" }], selection_decision: { selected_candidate_index: 0, selected_candidate_id: "candidate", base_score: 20, final_score: 20, hard_constraints_satisfied: ["transit"], penalties: [{ source: "transfers", amount: 0, reason: "none" }], selection_reason: "lowest_final_score", evidence_ids: ["mta:1"] } },
-    selection_decision: { selected_candidate_index: 0, selected_candidate_id: "candidate", base_score: 20, final_score: 20, hard_constraints_satisfied: ["transit"], penalties: [{ source: "transfers", amount: 0, reason: "none" }], selection_reason: "lowest_final_score", evidence_ids: ["mta:1"] },
+    itinerary: { itinerary_id: "itin", origin: { display_name: "Home", lat: 40.7, lng: -73.9 }, waypoints: [{ display_name: "Pickup", lat: 40.75, lng: -73.95, dwell_minutes: 5, dwell_source: "user" }], destination: { display_name: "Work", lat: 40.8, lng: -73.8 }, timezone: "America/New_York", planning_mode: "leave_now", requested_departure: null, requested_arrival: null, generated_at: "2026-07-25T14:00:00Z", data_basis: "mixed", data_freshness: "2026-07-25T14:00:00Z", departure_at: "2026-07-25T14:00:00Z", arrival_at: "2026-07-25T14:20:00Z", total_duration_seconds: 1500, total_walk_seconds: 300, total_wait_seconds: 60, total_in_vehicle_seconds: 540, total_dwell_seconds: 300, transfer_count: 0, legs: [firstLeg, secondLeg], segments: [{ segment_index: 0, origin: { display_name: "Home", lat: 40.7, lng: -73.9 }, destination: { display_name: "Pickup", lat: 40.75, lng: -73.95 }, legs: [firstLeg], duration_seconds: 600 }, { segment_index: 1, origin: { display_name: "Pickup", lat: 40.75, lng: -73.95 }, destination: { display_name: "Work", lat: 40.8, lng: -73.8 }, legs: [secondLeg], duration_seconds: 600 }], dwell_events: [{ event_type: "dwell", after_segment_index: 0, waypoint: { display_name: "Pickup", lat: 40.75, lng: -73.95, dwell_minutes: 5, dwell_source: "user" }, duration_seconds: 300, source: "user" }], structured_recommendation_reasons: [{ code: "fastest", difference_seconds: 120 }, { code: "lower_event_crowd_exposure", event_count: 2, provider_status: "available" }], selection_decision: selectionDecision },
+    selection_decision: selectionDecision,
   };
   const events = await collect(readerFromChunks([`event: route_card\ndata: ${JSON.stringify(payload)}\n\n`]));
   assert.deepEqual(events, [{ type: "route_card", ...payload }]);
@@ -453,7 +479,11 @@ test("mutation corpus rejects each malformed nested family without losing a late
     route: [{ type: "SUBWAY", departure_coords: { latitude: 40.7, longitude: -73.9 }, arrival_coords: { lat: 40.8, lng: -73.8 }, intermediate_stop_locations: [{ name: "Canal", lat: 40.72, lng: -74 }] }],
     alerts: [{ header: "Service change", route_ids: ["Q"] }],
     itinerary: { itinerary_id: "itin", total_duration_seconds: 1200, transfer_count: 0, legs: [{ mode: "SUBWAY", ride_seconds: 1000, stops: [{ name: "Canal", lat: 40.72, lng: -74 }] }] },
-    selection_decision: { selected_candidate_index: 0, selected_candidate_id: "candidate", base_score: 20, final_score: 20, hard_constraints_satisfied: ["transit"], penalties: [], selection_reason: "lowest_final_score", evidence_ids: [] },
+    selection_decision: {
+      selection_reason: "outer_agent_selection",
+      reason_code: "fastest",
+      selection_source: "model",
+    },
   };
   const arrival = {
     turn_id: "turn", route_id: "Q", stop: { id: "Q01", latitude: 40.7, longitude: -73.9 }, directions: [{ id: "north", label: "Northbound", arrivals: [{ expected_at: "2026-07-25T14:00:00Z", minutes: 3, realtime: true }] }], updated_at: "2026-07-25T14:00:00Z", source_status: "live", resolution_status: "resolved",
@@ -472,8 +502,8 @@ test("mutation corpus rejects each malformed nested family without losing a late
     { ...routeCard, itinerary: "malformed" },
     { ...routeCard, itinerary: { ...routeCard.itinerary, legs: [{ mode: "", ride_seconds: 2 }] } },
     { ...routeCard, selection_decision: null },
-    { ...routeCard, selection_decision: { ...routeCard.selection_decision, selected_candidate_index: -1 } },
-    { ...routeCard, selection_decision: { ...routeCard.selection_decision, penalties: [{ source: "x", amount: "bad", reason: "x" }] } },
+    { ...routeCard, selection_decision: { ...routeCard.selection_decision, selection_source: "invented" } },
+    { ...routeCard, selection_decision: { ...routeCard.selection_decision, base_score: 20 } },
     { ...arrival, source_status: "invented" },
     { ...arrival, stop: { latitude: 99, longitude: -73.9 } },
     { ...arrival, directions: [{ id: "north", label: "Northbound", arrivals: [{ expected_at: "", minutes: 3, realtime: true }] }] },

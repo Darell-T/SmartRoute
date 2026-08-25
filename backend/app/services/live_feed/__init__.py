@@ -1,8 +1,9 @@
-"""Live-feed snapshot builders.
+"""Live-feed service ownership.
 
-The ``live_feed`` router (``app.routers.live_feed``) keeps the HTTP + WebSocket
-endpoints, the ticket auth, the warm-cache refresh signalling, and the
-``_build_live_snapshot`` orchestrator (the perf-critical hot path). The pure
-builder helpers it calls live here, split by responsibility. ``vehicle_enrichment``
-is the first: stdlib-only segment-estimate math with no upstream dependencies.
+``snapshot`` owns the rider-specific response projection, nearby issue
+derivation, and vehicle-enrichment orchestration. ``network_snapshot`` owns
+the process-wide realtime generation, while ``vehicle_enrichment`` remains a
+separate helper for bounded segment and stop context. The router package owns
+HTTP/WebSocket transport and authentication; this package intentionally has no
+eager exports.
 """

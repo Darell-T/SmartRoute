@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  authoritativeChatOrigin,
   locationStateForCoordinates,
   nextLocationState,
   requestInitialLocation,
@@ -118,4 +119,20 @@ test("a map fallback cannot overwrite a precise or out-of-service-area location"
   assert.deepEqual(nextLocationState(precise, fallback), precise);
   assert.deepEqual(nextLocationState(outside, fallback), outside);
   assert.deepEqual(nextLocationState(fallback, precise), precise);
+});
+
+test("only a precise device location is authoritative for chat routing", () => {
+  const precise = locationStateForCoordinates({ lat: 40.71, lng: -73.91 });
+  const fallback = locationStateForCoordinates(
+    { lat: 40.7484, lng: -73.9857 },
+    "fallback",
+  );
+
+  assert.deepEqual(authoritativeChatOrigin(precise), {
+    lat: 40.71,
+    lng: -73.91,
+  });
+  assert.equal(authoritativeChatOrigin(fallback), null);
+  assert.equal(authoritativeChatOrigin({ status: "pending" }), null);
+  assert.equal(authoritativeChatOrigin({ status: "outside_service_area" }), null);
 });

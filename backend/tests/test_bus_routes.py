@@ -1,11 +1,11 @@
 """stops-for-route parsing and board/exit slicing.
 
-Pure-function tests for app.services.bus_routes -- no network. Covers both
+Pure-function tests for app.services.mta.bus -- no network. Covers both
 OneBusAway payload flavors, group selection by travel direction, the snap
 distance cap, and Google->OBA route id normalization.
 """
 
-from app.services.bus_routes import (
+from app.services.mta.bus import (
     normalize_google_bus_route_id,
     parse_stops_for_route,
     slice_route_stops,

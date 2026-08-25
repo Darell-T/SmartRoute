@@ -1,11 +1,7 @@
 "use client";
 
-import { Navigation } from "lucide-react";
 import { useMemo } from "react";
-import {
-  latestAlertUpdateLabel,
-  normalizeAlertFeedItems,
-} from "./alert-feed";
+import { normalizeAlertFeedItems } from "./alert-feed";
 import { AlertCard } from "./alert-featured-card";
 import { AlertEmptyState, AlertLineGroupList } from "./alert-line-list";
 import {
@@ -34,7 +30,6 @@ export function AlertsView({
       ),
     [alerts, feed],
   );
-  const updatedLabel = useMemo(() => latestAlertUpdateLabel(items), [items]);
   const { featured, rest } = useMemo(
     () => partitionAlertItems(items, nearbyRouteIds, FEATURED_LIMIT),
     [items, nearbyRouteIds],
@@ -45,18 +40,6 @@ export function AlertsView({
     <section className="sr-alerts-panel">
       <section className="sr-rail-section sr-alerts-header">
         <h1 className="sr-rail-title">Service alerts</h1>
-        {updatedLabel && (
-          <p className="sr-alerts-updated">
-            <Navigation
-              className="sr-alerts-updated__icon"
-              size={12}
-              strokeWidth={0}
-              fill="currentColor"
-              aria-hidden="true"
-            />
-            {updatedLabel}
-          </p>
-        )}
       </section>
       <section className="sr-rail-section sr-alert-feed">
         <div className="sr-alerts-scroll">

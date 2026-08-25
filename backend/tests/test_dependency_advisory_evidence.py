@@ -6,8 +6,8 @@ import json
 from datetime import date
 from pathlib import Path
 
-from scripts import build_dependency_advisory_evidence as builder
-from scripts import release_advisory_policy as policy_module
+from scripts.release import dependency_advisory_evidence as builder
+from scripts.release import advisory_policy as policy_module
 
 
 def _write(path: Path, value: object) -> Path:

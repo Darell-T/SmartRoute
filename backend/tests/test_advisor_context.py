@@ -2,7 +2,7 @@
 
 import unittest
 
-from app.services.trips.advisor_context import (
+from evaluation.route_intelligence.advisor_context import (
     PlanningMode,
     build_advisor_payload,
     normalize_ticketmaster_event_impacts,

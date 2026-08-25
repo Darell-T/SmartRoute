@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 import unittest
 
-from app.services.live_feed.nearby_issues import build_nearby_transit_issues
+from app.services.live_feed.snapshot import build_nearby_transit_issues
 
 
 class FakeGtfs:

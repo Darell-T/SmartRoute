@@ -1,13 +1,13 @@
-"""Layer-1 tests for the P1 agent tools (event_lookup, poi_search,
+"""Layer-1 tests for the P1 agent tools (event_lookup, search_local_places,
 venue_crowd_window), the venues.py static data module, and the fixture-replay
 dispatch hook in tools/__init__.py.
 
 Follows test_agent_tools.py's convention: real imports work in this
 environment, so only the actual I/O boundary each tool touches (httpx) is
-mocked -- never the whole module. httpx itself is mocked the same way
-tests/test_directions.py does it: `patch.object(_http.httpx, "AsyncClient",
-<fake client class>)` (both tools' fetches go through the shared
-`app.services.agent.tools._http.fetch_json`, so patching `AsyncClient` there
+mocked -- never the whole module. The shared HTTP boundary is patched with
+`patch.object(_http.httpx, "AsyncClient", <fake client class>)` (both tools'
+fetches go through the shared
+`app.services.agent.tools.provider_http.fetch_json`, so patching `AsyncClient` there
 covers either one), never a live network call. The fake client classes
 themselves live in tests/_fake_http_tools.py, shared with test_agent_tools_p2.py.
 """
@@ -22,10 +22,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.services.agent import tools as agent_tools
-from app.services.agent import venues
-from app.services.agent.tools import _http, event_lookup, poi_search, venue_crowd_window
+from app.services.agent.tools.transit import venue_crowd_window as venues
+from app.services.agent.tools.transit import check_transit
+from app.services.agent.tools.places import search_local_places
+from app.services.agent.tools import provider_http as _http
 from app.services.agent.tools._types import ToolResult
-from app.utils import cache
+from app.services import cache
+from app.services.trips.crowds import event_provider
 from tests._fake_http_tools import make_tool_ctx as _ctx
 from tests._fake_http_tools import recording_get_client as _recording_get_client
 from tests._fake_http_tools import recording_post_client as _recording_post_client
@@ -62,19 +65,19 @@ class EventLookupTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_unconfigured_key_returns_clean_error(self):
         with patch.dict(os.environ, {"TICKETMASTER_API_KEY": ""}, clear=False):
-            result = await event_lookup.execute({"query": "Knicks"}, _ctx())
+            result = await check_transit.execute_event_lookup({"query": "Knicks"}, _ctx())
         self.assertFalse(result.ok)
         self.assertEqual(result.error, "event lookup is not configured")
 
     async def test_query_required(self):
-        result = await event_lookup.execute({"query": ""}, _ctx())
+        result = await check_transit.execute_event_lookup({"query": ""}, _ctx())
         self.assertFalse(result.ok)
 
     async def test_successful_parse_and_duration_heuristic(self):
         payload = {"_embedded": {"events": [_ticketmaster_event()]}}
         client_class = _recording_get_client(payload)
         with patch.object(_http.httpx, "AsyncClient", client_class):
-            result = await event_lookup.execute({"query": "Knicks"}, _ctx())
+            result = await check_transit.execute_event_lookup({"query": "Knicks"}, _ctx())
         self.assertTrue(result.ok)
         event = result.data["events"][0]
         self.assertEqual(event["name"], "Knicks vs Celtics")
@@ -90,14 +93,16 @@ class EventLookupTests(unittest.IsolatedAsyncioTestCase):
         payload = {"_embedded": {"events": [_ticketmaster_event(venue_name="Some Random Bar")]}}
         client_class = _recording_get_client(payload)
         with patch.object(_http.httpx, "AsyncClient", client_class):
-            result = await event_lookup.execute({"query": "local show"}, _ctx())
+            result = await check_transit.execute_event_lookup({"query": "local show"}, _ctx())
         self.assertIsNone(result.data["events"][0]["venue_key"])
 
     async def test_date_maps_to_utc_day_bounds_params(self):
         payload = {"_embedded": {"events": []}}
         client_class = _recording_get_client(payload)
         with patch.object(_http.httpx, "AsyncClient", client_class):
-            await event_lookup.execute({"query": "Knicks", "date": "2026-07-16"}, _ctx())
+            await check_transit.execute_event_lookup(
+                {"query": "Knicks", "date": "2026-07-16"}, _ctx()
+            )
         params = client_class.requests[0]["params"]
         self.assertIn("startDateTime", params)
         self.assertIn("endDateTime", params)
@@ -108,8 +113,8 @@ class EventLookupTests(unittest.IsolatedAsyncioTestCase):
         payload = {"_embedded": {"events": [_ticketmaster_event()]}}
         client_class = _recording_get_client(payload)
         with patch.object(_http.httpx, "AsyncClient", client_class):
-            first = await event_lookup.execute({"query": "Knicks"}, _ctx())
-            second = await event_lookup.execute({"query": "Knicks"}, _ctx())
+            first = await check_transit.execute_event_lookup({"query": "Knicks"}, _ctx())
+            second = await check_transit.execute_event_lookup({"query": "Knicks"}, _ctx())
         self.assertTrue(first.ok)
         self.assertTrue(second.ok)
         self.assertEqual(len(client_class.requests), 1)
@@ -118,14 +123,14 @@ class EventLookupTests(unittest.IsolatedAsyncioTestCase):
     async def test_malformed_response_is_reported_without_traceback(self):
         client_class = _recording_get_client({"_embedded": {"events": "not-a-list"}})
         with patch.object(_http.httpx, "AsyncClient", client_class):
-            result = await event_lookup.execute({"query": "Knicks"}, _ctx())
+            result = await check_transit.execute_event_lookup({"query": "Knicks"}, _ctx())
         self.assertFalse(result.ok)
         self.assertNotIn("Traceback", result.error or "")
 
     async def test_non_dict_events_payload_is_reported(self):
         client_class = _recording_get_client({"_embedded": {"events": [None]}})
         with patch.object(_http.httpx, "AsyncClient", client_class):
-            result = await event_lookup.execute({"query": "Knicks"}, _ctx())
+            result = await check_transit.execute_event_lookup({"query": "Knicks"}, _ctx())
         self.assertFalse(result.ok)
 
 
@@ -168,7 +173,7 @@ class PoiSearchTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_unconfigured_when_neither_key_set(self):
         with patch.dict(os.environ, {"GOOGLE_PLACES_API_KEY": "", "GOOGLE_ROUTES_API_KEY": ""}, clear=False):
-            result = await poi_search.execute({"query": "pizza"}, _ctx(origin={"lat": 40.7, "lng": -73.9}))
+            result = await search_local_places.execute({"query": "pizza"}, _ctx(origin={"lat": 40.7, "lng": -73.9}))
         self.assertFalse(result.ok)
         self.assertEqual(result.error, "place search is not configured")
 
@@ -177,7 +182,7 @@ class PoiSearchTests(unittest.IsolatedAsyncioTestCase):
         client_class = _recording_post_client(payload)
         with patch.dict(os.environ, {"GOOGLE_PLACES_API_KEY": "", "GOOGLE_ROUTES_API_KEY": "routes-key"}, clear=False):
             with patch.object(_http.httpx, "AsyncClient", client_class):
-                result = await poi_search.execute({"query": "pizza"}, _ctx(origin={"lat": 40.7, "lng": -73.9}))
+                result = await search_local_places.execute({"query": "pizza"}, _ctx(origin={"lat": 40.7, "lng": -73.9}))
         self.assertTrue(result.ok)
         self.assertEqual(client_class.requests[0]["headers"]["X-Goog-Api-Key"], "routes-key")
 
@@ -186,7 +191,7 @@ class PoiSearchTests(unittest.IsolatedAsyncioTestCase):
         client_class = _recording_post_client(payload)
         with patch.dict(os.environ, {"GOOGLE_ROUTES_API_KEY": "routes-key"}, clear=False):
             with patch.object(_http.httpx, "AsyncClient", client_class):
-                await poi_search.execute({"query": "pizza"}, _ctx(origin={"lat": 40.7, "lng": -73.9}))
+                await search_local_places.execute({"query": "pizza"}, _ctx(origin={"lat": 40.7, "lng": -73.9}))
         self.assertEqual(client_class.requests[0]["headers"]["X-Goog-Api-Key"], "places-key")
 
     async def test_results_outside_nyc_bounds_are_dropped(self):
@@ -198,7 +203,7 @@ class PoiSearchTests(unittest.IsolatedAsyncioTestCase):
         }
         client_class = _recording_post_client(payload)
         with patch.object(_http.httpx, "AsyncClient", client_class):
-            result = await poi_search.execute({"query": "pizza"}, _ctx(origin={"lat": 40.7, "lng": -73.9}))
+            result = await search_local_places.execute({"query": "pizza"}, _ctx(origin={"lat": 40.7, "lng": -73.9}))
         self.assertTrue(result.ok)
         names = [r["name"] for r in result.data["results"]]
         self.assertEqual(names, ["In NYC"])
@@ -207,21 +212,21 @@ class PoiSearchTests(unittest.IsolatedAsyncioTestCase):
         payload = {"places": [self._place(name=f"Place {i}") for i in range(10)]}
         client_class = _recording_post_client(payload)
         with patch.object(_http.httpx, "AsyncClient", client_class):
-            result = await poi_search.execute(
+            result = await search_local_places.execute(
                 {"query": "pizza", "max_results": 999}, _ctx(origin={"lat": 40.7, "lng": -73.9})
             )
-        self.assertEqual(client_class.requests[0]["json"]["maxResultCount"], 5)
-        self.assertLessEqual(len(result.data["results"]), 5)
+        self.assertEqual(client_class.requests[0]["json"]["maxResultCount"], 8)
+        self.assertLessEqual(len(result.data["results"]), 8)
 
     async def test_open_now_is_none_when_absent(self):
         payload = {"places": [self._place(open_now=None)]}
         client_class = _recording_post_client(payload)
         with patch.object(_http.httpx, "AsyncClient", client_class):
-            result = await poi_search.execute({"query": "pizza"}, _ctx(origin={"lat": 40.7, "lng": -73.9}))
+            result = await search_local_places.execute({"query": "pizza"}, _ctx(origin={"lat": 40.7, "lng": -73.9}))
         self.assertIsNone(result.data["results"][0]["open_now"])
 
     async def test_near_user_without_gps_asks_for_location(self):
-        result = await poi_search.execute({"query": "pizza", "near": "user"}, _ctx(origin=None))
+        result = await search_local_places.execute({"query": "pizza", "near": "user"}, _ctx(origin=None))
         self.assertFalse(result.ok)
         self.assertIn("location", result.error.lower())
 
@@ -229,7 +234,7 @@ class PoiSearchTests(unittest.IsolatedAsyncioTestCase):
     async def test_field_mask_requests_ranking_fields(self):
         client_class = _recording_post_client({"places": [self._place()]})
         with patch.object(_http.httpx, "AsyncClient", client_class):
-            await poi_search.execute({"query": "pizza"}, _ctx(origin={"lat": 40.7, "lng": -73.9}))
+            await search_local_places.execute({"query": "pizza"}, _ctx(origin={"lat": 40.7, "lng": -73.9}))
         mask = client_class.requests[0]["headers"]["X-Goog-FieldMask"]
         self.assertIn("places.id", mask)
         self.assertIn("places.priceLevel", mask)
@@ -245,7 +250,7 @@ class PoiSearchTests(unittest.IsolatedAsyncioTestCase):
         }
         client_class = _recording_post_client(payload)
         with patch.object(_http.httpx, "AsyncClient", client_class):
-            result = await poi_search.execute(
+            result = await search_local_places.execute(
                 {"query": "pizza"}, _ctx(origin={"lat": 40.7, "lng": -73.9})
             )
         self.assertTrue(result.ok)
@@ -265,7 +270,7 @@ class PoiSearchTests(unittest.IsolatedAsyncioTestCase):
         }
         client_class = _recording_post_client(payload)
         with patch.object(_http.httpx, "AsyncClient", client_class):
-            result = await poi_search.execute(
+            result = await search_local_places.execute(
                 {"query": "pizza", "max_results": 5}, _ctx(origin={"lat": 40.7, "lng": -73.9})
             )
         self.assertTrue(result.ok)
@@ -286,7 +291,7 @@ class PoiSearchTests(unittest.IsolatedAsyncioTestCase):
         }
         client_class = _recording_post_client(payload)
         with patch.object(_http.httpx, "AsyncClient", client_class):
-            result = await poi_search.execute(
+            result = await search_local_places.execute(
                 {"query": "pizza"}, _ctx(origin={"lat": 40.7, "lng": -73.9})
             )
         self.assertTrue(result.ok)
@@ -303,7 +308,7 @@ class PoiSearchTests(unittest.IsolatedAsyncioTestCase):
         }
         client_class = _recording_post_client(payload)
         with patch.object(_http.httpx, "AsyncClient", client_class):
-            result = await poi_search.execute(
+            result = await search_local_places.execute(
                 {"query": "pizza"}, _ctx(origin={"lat": 40.7, "lng": -73.9})
             )
         self.assertTrue(result.ok)
@@ -316,7 +321,7 @@ class PoiSearchTests(unittest.IsolatedAsyncioTestCase):
         payload = {"places": [self._place()]}
         client_class = _recording_post_client(payload)
         with patch.object(_http.httpx, "AsyncClient", client_class):
-            result = await poi_search.execute(
+            result = await search_local_places.execute(
                 {"query": "pizza"}, _ctx(origin={"lat": 40.7, "lng": -73.9})
             )
         self.assertTrue(result.ok)
@@ -328,7 +333,7 @@ class PoiSearchTests(unittest.IsolatedAsyncioTestCase):
 
 class VenueCrowdWindowTests(unittest.IsolatedAsyncioTestCase):
     async def test_window_arithmetic_from_offsets(self):
-        result = await venue_crowd_window.execute(
+        result = await venues.execute(
             {"venue": "msg", "event_end_iso": "2026-07-16T22:00:00-04:00"}, _ctx()
         )
         self.assertTrue(result.ok)
@@ -341,7 +346,7 @@ class VenueCrowdWindowTests(unittest.IsolatedAsyncioTestCase):
         expected = {"msg", "barclays", "yankee_stadium", "citi_field", "penn_station", "port_authority"}
         self.assertEqual(set(venues.VENUE_CROWD_TABLE.keys()), expected)
         for venue_key in expected:
-            result = await venue_crowd_window.execute(
+            result = await venues.execute(
                 {"venue": venue_key, "event_end_iso": "2026-07-16T22:00:00-04:00"}, _ctx()
             )
             self.assertTrue(result.ok, venue_key)
@@ -349,23 +354,23 @@ class VenueCrowdWindowTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(result.data["lines"])
 
     async def test_unparseable_time_is_an_error(self):
-        result = await venue_crowd_window.execute({"venue": "msg", "event_end_iso": "not-a-time"}, _ctx())
+        result = await venues.execute({"venue": "msg", "event_end_iso": "not-a-time"}, _ctx())
         self.assertFalse(result.ok)
 
     async def test_naive_datetime_is_rejected(self):
-        result = await venue_crowd_window.execute(
+        result = await venues.execute(
             {"venue": "msg", "event_end_iso": "2026-07-16T22:00:00"}, _ctx()
         )
         self.assertFalse(result.ok)
 
     async def test_unknown_venue_is_an_error(self):
-        result = await venue_crowd_window.execute(
+        result = await venues.execute(
             {"venue": "not_a_venue", "event_end_iso": "2026-07-16T22:00:00-04:00"}, _ctx()
         )
         self.assertFalse(result.ok)
 
     async def test_is_heuristic_always_true(self):
-        result = await venue_crowd_window.execute(
+        result = await venues.execute(
             {"venue": "barclays", "event_end_iso": "2026-07-16T22:00:00-04:00"}, _ctx()
         )
         self.assertIs(result.data["is_heuristic"], True)
@@ -383,17 +388,23 @@ class VenuesModuleTests(unittest.TestCase):
             (("", "", ""), "3h"),
         ]
         for classification, expected_suffix in cases:
-            _duration, basis = venues.estimate_event_duration(*classification)
+            _duration, basis = event_provider.estimate_event_duration(*classification)
             self.assertIn(expected_suffix, basis, classification)
 
     def test_venue_name_aliases_normalize(self):
-        self.assertEqual(venues.normalize_venue_name("Madison Square Garden"), "msg")
-        self.assertEqual(venues.normalize_venue_name("The Garden"), "msg")
-        self.assertEqual(venues.normalize_venue_name("MSG"), "msg")
-        self.assertEqual(venues.normalize_venue_name("Barclays Center"), "barclays")
-        self.assertEqual(venues.normalize_venue_name("Citi Field"), "citi_field")
-        self.assertIsNone(venues.normalize_venue_name("Some Random Bar"))
-        self.assertIsNone(venues.normalize_venue_name(None))
+        self.assertEqual(
+            event_provider.normalize_venue_name("Madison Square Garden"), "msg"
+        )
+        self.assertEqual(event_provider.normalize_venue_name("The Garden"), "msg")
+        self.assertEqual(event_provider.normalize_venue_name("MSG"), "msg")
+        self.assertEqual(
+            event_provider.normalize_venue_name("Barclays Center"), "barclays"
+        )
+        self.assertEqual(
+            event_provider.normalize_venue_name("Citi Field"), "citi_field"
+        )
+        self.assertIsNone(event_provider.normalize_venue_name("Some Random Bar"))
+        self.assertIsNone(event_provider.normalize_venue_name(None))
 
 
 class FixtureReplayTests(unittest.IsolatedAsyncioTestCase):
@@ -484,7 +495,8 @@ class FixtureReplayTests(unittest.IsolatedAsyncioTestCase):
             agent_tools.prepare_route_options.execute,
         )
         self.assertNotEqual(
-            agent_tools.TOOL_REGISTRY["transit_snapshot"].executor, agent_tools.transit_snapshot.execute
+            agent_tools.INTERNAL_TOOL_REGISTRY["transit_snapshot"].executor,
+            agent_tools.transit_snapshot.execute,
         )
 
 
@@ -498,19 +510,17 @@ class RegistryTests(unittest.TestCase):
             "present_route",
             "transit_snapshot",
             "event_lookup",
-            "poi_search",
             "venue_crowd_window",
         }
-        self.assertTrue(expected.issubset(agent_tools.TOOL_REGISTRY.keys()))
-        for name, spec in agent_tools.TOOL_REGISTRY.items():
+        self.assertTrue(expected.issubset(agent_tools.COMBINED_TOOL_REGISTRY.keys()))
+        for name, spec in agent_tools.COMBINED_TOOL_REGISTRY.items():
             self.assertTrue(spec.schema.get("strict"), name)
             self.assertFalse(spec.schema["input_schema"].get("additionalProperties", True), name)
             self.assertGreater(spec.timeout_s, 0, name)
 
     def test_per_tool_timeouts(self):
-        self.assertEqual(agent_tools.TOOL_REGISTRY["event_lookup"].timeout_s, 8.0)
-        self.assertEqual(agent_tools.TOOL_REGISTRY["poi_search"].timeout_s, 8.0)
-        self.assertEqual(agent_tools.TOOL_REGISTRY["venue_crowd_window"].timeout_s, 2.0)
+        self.assertEqual(agent_tools.INTERNAL_TOOL_REGISTRY["event_lookup"].timeout_s, 8.0)
+        self.assertEqual(agent_tools.INTERNAL_TOOL_REGISTRY["venue_crowd_window"].timeout_s, 2.0)
 
 
 if __name__ == "__main__":

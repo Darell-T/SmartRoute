@@ -6,14 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from app.services.trips.itinerary import TRANSIT_MODES
-from app.services.trips.transfer_station_identity import (
-    endpoint_fields,
-    endpoint_id,
-    endpoint_identity,
-    endpoint_label,
-    stop_details,
-)
-from app.utils import geo
+from app.services import geography as geo
 
 WALK_SPEED_MPS = 1.4
 
@@ -299,10 +292,183 @@ def _route_id(step: dict | None) -> str | None:
     return value or None
 
 
+def endpoint_fields(step: dict, route_id: str | None, gtfs: Any) -> dict[str, Any]:
+    """Annotate one transit step with canonical endpoint ids when available."""
+    result: dict[str, Any] = {}
+    resolver = getattr(
+        getattr(gtfs, "_pattern_index", None), "resolve_route_segment", None
+    )
+    if callable(resolver) and route_id:
+        try:
+            resolved = resolver(
+                route_id,
+                step.get("departure_stop"),
+                step.get("arrival_stop"),
+                step.get("departure_coords"),
+                step.get("arrival_coords"),
+            )
+        except (AttributeError, TypeError, ValueError):
+            resolved = None
+        if isinstance(resolved, dict):
+            origin_id = resolved.get("origin_stop_id")
+            destination_id = resolved.get("destination_stop_id")
+            # Resolver ids are canonical parent station ids. Keep explicit
+            # platform ids authoritative and mark inferred ids as parents.
+            if origin_id and not endpoint_id(step, "departure"):
+                result["departure_stop_id"] = origin_id
+                result["departure_stop_is_parent"] = True
+            if destination_id and not endpoint_id(step, "arrival"):
+                result["arrival_stop_id"] = destination_id
+                result["arrival_stop_is_parent"] = True
+            result.setdefault("direction_id", resolved.get("direction_id"))
+    return {key: value for key, value in result.items() if value not in (None, "")}
+
+
+def endpoint_id(step: dict | None, side: str) -> str | None:
+    if not isinstance(step, dict):
+        return None
+    value = str(step.get(f"{side}_stop_id") or "").strip()
+    return value or None
+
+
+def endpoint_identity(step: dict | None, side: str, gtfs: Any) -> dict[str, Any]:
+    """Resolve one endpoint's canonical station identity."""
+    result: dict[str, Any] = {
+        "stop_id": endpoint_id(step, side),
+        "is_parent": False,
+        "parent": None,
+        "complex": None,
+    }
+    if not isinstance(step, dict):
+        return result
+    result["parent"] = str(step.get(f"{side}_parent_station") or "").strip() or None
+    result["complex"] = str(
+        step.get(f"{side}_station_complex_id")
+        or step.get(f"{side}_complex_id")
+        or ""
+    ).strip() or None
+    stop_id = result["stop_id"]
+    if not stop_id:
+        return result
+
+    marker = step.get(f"{side}_stop_is_parent")
+    if marker is True:
+        result["is_parent"] = True
+        if result["parent"] is None:
+            result["parent"] = stop_id
+        index = getattr(
+            getattr(gtfs, "_pattern_index", None), "identity_for_stop", None
+        )
+        if callable(index):
+            identity = index(stop_id)
+            result["parent"] = result["parent"] or identity.get("parent_station")
+            result["complex"] = result["complex"] or identity.get(
+                "station_complex_id"
+            )
+        return result
+
+    index = getattr(
+        getattr(gtfs, "_pattern_index", None), "identity_for_stop", None
+    )
+    if callable(index):
+        identity = index(stop_id)
+        known = identity.get("parent_station")
+        if known:
+            result["parent"] = result["parent"] or known
+            result["complex"] = result["complex"] or identity.get(
+                "station_complex_id"
+            )
+            result["is_parent"] = not identity.get("is_platform", False)
+        else:
+            # Unknown indexed stops cannot claim same_platform.
+            result["is_parent"] = True
+        return result
+
+    details = stop_details(gtfs, stop_id)
+    result["parent"] = (
+        result["parent"]
+        or str(
+            details.get("parent_station") or details.get("parent_stop_id") or ""
+        ).strip()
+        or None
+    )
+    result["complex"] = (
+        result["complex"]
+        or str(
+            details.get("station_complex_id") or details.get("complex_id") or ""
+        ).strip()
+        or None
+    )
+    is_parent = stop_id == stop_id.rstrip("NS")
+    result["is_parent"] = is_parent
+    if is_parent and result["parent"] is None:
+        result["parent"] = stop_id
+    return result
+
+
+def stop_details(gtfs: Any, stop_id: str) -> dict[str, Any]:
+    """Return canonical stop details from the attached index or legacy GTFS."""
+    if not stop_id:
+        return {}
+    index = getattr(
+        getattr(gtfs, "_pattern_index", None), "identity_for_stop", None
+    )
+    if callable(index):
+        identity = index(stop_id)
+        parent = identity.get("parent_station")
+        if not parent:
+            return {}
+        details: dict[str, Any] = {
+            "parent_station": parent,
+            "station_complex_id": identity.get("station_complex_id"),
+        }
+        info = getattr(gtfs._pattern_index, "stops", {}).get(parent)
+        if isinstance(info, dict):
+            details["name"] = info.get("name")
+            details["stop_name"] = info.get("name")
+            details["station_name"] = info.get("name")
+        return details
+    getter = getattr(gtfs, "get_stop_locations", None)
+    if not callable(getter):
+        return {}
+    try:
+        result = getter([stop_id])
+    except (AttributeError, TypeError, ValueError):
+        return {}
+    if not isinstance(result, dict):
+        return {}
+    return result.get(stop_id) or result.get(stop_id.rstrip("NS")) or {}
+
+
+def endpoint_label(step: dict | None, side: str, gtfs: Any) -> str | None:
+    if not isinstance(step, dict):
+        return None
+    for key in (
+        f"{side}_station_name",
+        f"{side}_stop_name",
+        f"{side}_stop",
+        f"{side}_station",
+    ):
+        value = str(step.get(key) or "").strip()
+        if value:
+            return value
+    details = stop_details(gtfs, endpoint_id(step, side) or "")
+    for key in ("station_name", "stop_name", "name"):
+        value = str(details.get(key) or "").strip()
+        if value:
+            return value
+    return None
+
+
 __all__ = (
+    "endpoint_fields",
+    "endpoint_id",
+    "endpoint_identity",
+    "endpoint_label",
     "normalize_route",
     "normalize_routes",
     "route_accessibility",
     "route_transfer_facts",
     "route_walking_totals",
+    "stop_details",
 )

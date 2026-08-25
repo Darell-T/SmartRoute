@@ -2,10 +2,7 @@
 
 import { useId, useMemo, useState } from "react";
 import { motion, useReducedMotion } from "motion/react";
-import { BorderBeam } from "border-beam";
 import { Map as MapIcon } from "iconoir-react";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faArrowRightArrowLeft } from "@fortawesome/free-solid-svg-icons";
 import type { RouteCard as RouteCardData } from "@/lib/agent-chat-stream";
 import {
   buildItineraryViewModel,
@@ -52,108 +49,96 @@ function ItineraryCardShell({
   };
 
   return (
-    <BorderBeam
-      size="pulse-inner"
-      colorVariant="mono"
-      theme="auto"
-      staticColors
-      strength={0.32}
-      brightness={0.9}
-      duration={4.8}
-      active={!reduceMotion}
-      borderRadius={16}
-      className="sr-itinerary-card-beam"
+    <motion.article
+      layout
+      className="sr-itinerary-card"
+      data-selected={isSelected ? "true" : "false"}
+      data-has-final-walk={
+        model.events.at(-1)?.kind === "walk" ? "true" : "false"
+      }
+      aria-labelledby={titleId}
+      initial={reduceMotion ? false : { opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={
+        reduceMotion
+          ? { duration: 0 }
+          : {
+              layout: { duration: 0.26, ease: LAYOUT_EASE },
+              opacity: { duration: 0.22, delay: landDelayMs / 1000 },
+              y: { duration: 0.26, delay: landDelayMs / 1000, ease: LAYOUT_EASE },
+            }
+      }
     >
-      <motion.article
-        layout
-        className="sr-itinerary-card"
-        data-selected={isSelected ? "true" : "false"}
-        data-has-final-walk={
-          model.events.at(-1)?.kind === "walk" ? "true" : "false"
-        }
-        aria-labelledby={titleId}
-        initial={reduceMotion ? false : { opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={
-          reduceMotion
-            ? { duration: 0 }
-            : {
-                layout: { duration: 0.3, ease: LAYOUT_EASE },
-                opacity: { duration: 0.26, delay: landDelayMs / 1000 },
-                y: { duration: 0.3, delay: landDelayMs / 1000, ease: LAYOUT_EASE },
-              }
-        }
-      >
-        <header className="sr-itinerary-card__header">
-          <JourneyTitle names={model.placeNames} id={titleId} />
-          {model.arrivalLabel ? (
-            <p className="sr-itinerary-card__arrive">
-              Arrive around {model.arrivalLabel}
-            </p>
-          ) : null}
-          {model.firstLegArrivalLabel ? (
-            <p className="sr-itinerary-card__arrive">
-              {model.firstLegArrivalLabel}
-            </p>
-          ) : null}
-        </header>
-
-        <div className="sr-itinerary-card__hero" aria-label="Trip summary">
-          <p className="sr-itinerary-card__duration">
-            <span className="sr-itinerary-card__duration-value">
-              {model.durationLabel}
-            </span>
+      <header className="sr-itinerary-card__header">
+        <JourneyTitle names={model.placeNames} id={titleId} />
+        {model.arrivalLabel || model.firstLegArrivalLabel ? (
+          <p className="sr-itinerary-card__arrive">
+            {model.arrivalLabel ? `Arrive around ${model.arrivalLabel}` : null}
+            {model.arrivalLabel && model.firstLegArrivalLabel ? (
+              <span className="sr-itinerary-card__meta-sep" aria-hidden="true">
+                {" "}·{" "}
+              </span>
+            ) : null}
+            {model.firstLegArrivalLabel}
           </p>
-          <p className="sr-itinerary-card__meta">
-            <FontAwesomeIcon
-              icon={faArrowRightArrowLeft}
-              className="sr-itinerary-card__meta-icon"
-              aria-hidden="true"
-            />
-            <span>
+        ) : null}
+      </header>
+
+      <div className="sr-itinerary-card__hero">
+        <p className="sr-itinerary-card__summary" aria-label="Trip summary">
+          <span className="sr-itinerary-card__duration-value">
+            {model.durationLabel}
+          </span>
+          {model.metaParts.length > 0 ? (
+            <span className="sr-itinerary-card__meta">
+              <span className="sr-itinerary-card__meta-sep" aria-hidden="true">
+                {" "}·{" "}
+              </span>
               {model.metaParts.map((part, index) => (
                 <span key={part}>
                   {index > 0 ? (
-                    <span className="sr-itinerary-card__meta-sep" aria-hidden="true">
-                      {" "}
-                      ·{" "}
+                    <span
+                      className="sr-itinerary-card__meta-sep"
+                      aria-hidden="true"
+                    >
+                      {" "}·{" "}
                     </span>
                   ) : null}
                   {part}
                 </span>
               ))}
             </span>
-          </p>
-        </div>
+          ) : null}
+        </p>
+      </div>
 
-        <div className="sr-itinerary-card__legs">
-          {model.events.map((event) => (
-            <ItineraryLeg
-              key={event.id}
-              event={event}
-              expanded={expandedLegIds.has(event.id)}
-              onToggle={() => toggleLeg(event.id)}
-              reduceMotion={reduceMotion}
-            />
-          ))}
-        </div>
+      <div className="sr-itinerary-card__legs">
+        {model.events.map((event) => (
+          <ItineraryLeg
+            key={event.id}
+            event={event}
+            expanded={expandedLegIds.has(event.id)}
+            onToggle={() => toggleLeg(event.id)}
+            reduceMotion={reduceMotion}
+          />
+        ))}
+      </div>
 
-        <footer className="sr-itinerary-card__actions">
-          <motion.button
-            type="button"
-            className="sr-itinerary-card__map-btn"
-            aria-label={model.primaryActionLabel}
-            disabled={!onPrimaryAction}
-            onClick={onPrimaryAction}
-            whileTap={reduceMotion || !onPrimaryAction ? undefined : { scale: 0.985 }}
-            transition={{ duration: reduceMotion ? 0 : 0.12 }}
-          >
-            <MapIcon width={20} height={20} strokeWidth={1.6} aria-hidden="true" />
-            <span>{model.primaryActionLabel}</span>
-          </motion.button>
-        </footer>
-      </motion.article>
-    </BorderBeam>
+      <footer className="sr-itinerary-card__actions">
+        <motion.button
+          type="button"
+          className="sr-itinerary-card__map-btn"
+          aria-label={model.primaryActionLabel}
+          disabled={!onPrimaryAction}
+          onClick={onPrimaryAction}
+          whileTap={reduceMotion || !onPrimaryAction ? undefined : { scale: 0.985 }}
+          transition={{ duration: reduceMotion ? 0 : 0.12 }}
+        >
+          <MapIcon width={20} height={20} strokeWidth={1.6} aria-hidden="true" />
+          <span>{model.primaryActionLabel}</span>
+        </motion.button>
+      </footer>
+    </motion.article>
   );
 }
 

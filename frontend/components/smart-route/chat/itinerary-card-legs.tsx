@@ -1,6 +1,6 @@
 import type { CSSProperties } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { Bus, NavArrowDown, Train } from "iconoir-react";
+import { Bus, Clock, NavArrowDown, Train } from "iconoir-react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faArrowRightArrowLeft,
@@ -62,7 +62,7 @@ function RouteGlyph({
     const looksLikeBus = /[A-Z]{1,3}\d/.test(normalized) || normalized.length > 2;
     if (!looksLikeBus) warnUnsupportedRouteId(normalized);
   }
-  return <TrainBullet line={normalized} size={30} />;
+  return <TrainBullet line={normalized} size={24} />;
 }
 
 function intermediateStops(event: ItineraryEvent): string[] {
@@ -220,17 +220,21 @@ function TransitLeg({
 function WalkingLeg({ event }: { event: ItineraryEvent }) {
   return (
     <section className="sr-itinerary-card__walk" aria-label="Walking directions">
-      <span className="sr-itinerary-card__walk-icon" aria-hidden="true"><WalkingIcon /></span>
+      <span className="sr-itinerary-card__walk-icon" aria-hidden="true">
+        <WalkingIcon />
+      </span>
       <div className="sr-itinerary-card__walk-copy">
         <div className="sr-itinerary-card__walk-heading">
           <span>{event.fromLabel ?? "Walk"}</span>
           <span className="sr-itinerary-card__leg-arrow" aria-hidden="true">→</span>
           <span>{event.toLabel ?? event.title}</span>
         </div>
-        {event.durationLabel ? (
-          <p className="sr-itinerary-card__walk-meta">{event.durationLabel}</p>
-        ) : null}
       </div>
+      {event.durationLabel ? (
+        <span className="sr-itinerary-card__walk-duration">
+          {event.durationLabel}
+        </span>
+      ) : null}
     </section>
   );
 }
@@ -245,6 +249,27 @@ function TransferLeg({ event }: { event: ItineraryEvent }) {
         <div className="sr-itinerary-card__leg-heading"><span>{event.title}</span></div>
         {event.subtitle ? <p className="sr-itinerary-card__walk-meta">{event.subtitle}</p> : null}
       </div>
+    </section>
+  );
+}
+
+function WaitLeg({ event }: { event: ItineraryEvent }) {
+  return (
+    <section className="sr-itinerary-card__walk" aria-label="Wait before boarding">
+      <span className="sr-itinerary-card__walk-icon" aria-hidden="true">
+        <Clock width={17} height={17} strokeWidth={1.8} />
+      </span>
+      <div className="sr-itinerary-card__walk-copy">
+        <div className="sr-itinerary-card__walk-heading">
+          <span>{event.title}</span>
+          {event.subtitle ? <span> at {event.subtitle}</span> : null}
+        </div>
+      </div>
+      {event.durationLabel ? (
+        <span className="sr-itinerary-card__walk-duration">
+          {event.durationLabel}
+        </span>
+      ) : null}
     </section>
   );
 }
@@ -287,6 +312,7 @@ export function ItineraryLeg({
     );
   }
   if (event.kind === "walk") return <WalkingLeg event={event} />;
+  if (event.kind === "wait") return <WaitLeg event={event} />;
   if (event.kind === "transfer") return <TransferLeg event={event} />;
   if (event.kind === "waypoint" || event.kind === "pickup") {
     return <WaypointStop event={event} />;

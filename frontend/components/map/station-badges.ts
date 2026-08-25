@@ -15,8 +15,8 @@ export function addStationBadge(
   isSubway: boolean = true,
 ): maplibregl.Marker {
   const el = document.createElement("div");
-  // Neutral chip — avoids the legacy cyan HUD border so the custom 2D
-  // basemap reads cleanly. ~12% fewer pixels per chip vs. old design.
+  // A neutral border keeps the badge legible without competing with official
+  // line colors or the custom basemap.
   // Liquid glass, matching the left rail's recipe (blur 16 / saturate, a warm
   // translucent fill with a top-left refraction, a 1px specular top inset, and
   // a soft drop shadow) so the on-map badges read as the same material as the

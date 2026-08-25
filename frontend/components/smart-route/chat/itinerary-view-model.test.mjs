@@ -104,6 +104,23 @@ test("canonical AirTrain tram leg remains a visible rail transfer", () => {
   assert.equal(model.metaParts[0], "1 transfer");
 });
 
+test("canonical boarding wait is an explicit itinerary row before transit", () => {
+  const model = buildItineraryViewModel({
+    ...card,
+    itinerary: {
+      ...card.itinerary,
+      total_wait_seconds: 1260,
+      legs: [
+        card.itinerary.legs[0],
+        { ...card.itinerary.legs[1], wait_seconds: 1260 },
+      ],
+    },
+  });
+  assert.deepEqual(model.events.map((event) => event.kind), ["walk", "wait", "subway"]);
+  assert.equal(model.events[1].title, "Wait for A");
+  assert.equal(model.events[1].durationLabel, "21 min");
+});
+
 test("consecutive canonical transit legs retain transfer presentation", () => {
   const model = buildItineraryViewModel({
     ...card,

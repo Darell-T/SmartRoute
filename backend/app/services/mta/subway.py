@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import asyncio
 import os
 from datetime import datetime
 
 from app.services.mta.config import NYC_TZ, get_route_color, route_to_feed
-from app.services.mta.feeds import _gtfs_realtime_pb2, fetch_feeds, fetch_feeds_with_metadata
+from app.services.mta.feeds import _gtfs_realtime_pb2, fetch_feeds
 
 
 def _vehicle_status_name(vehicle) -> str:
@@ -140,23 +139,6 @@ def _log_vehicle_diagnostics(debug: dict):
         )
 
 
-async def get_all_subway_vehicle_positions(
-    route_ids: set[str] | list[str] | None = None,
-    debug: bool = False,
-    include_stop_only: bool = False,
-) -> list:
-    requested_routes = list(route_ids) if route_ids else list(route_to_feed.keys())
-    requested_set = {route for route in requested_routes if route in route_to_feed}
-    raw_feeds = await fetch_feeds_with_metadata(
-        requested_routes,
-        "vehicles_all" if route_ids is None else "vehicles_scoped",
-    )
-    return await asyncio.to_thread(
-        _build_subway_vehicle_positions,
-        raw_feeds, requested_set, route_ids, debug, include_stop_only,
-    )
-
-
 def _build_subway_vehicle_positions(raw_feeds, requested_set, route_ids, debug, include_stop_only):
     all_positions = []
     feed_diagnostics: list[dict] = []
@@ -275,4 +257,3 @@ def detect_stalled_trains(
                 "stalled_minutes": round((now_timestamp - timestamp) / 60),
             })
     return stalled
-

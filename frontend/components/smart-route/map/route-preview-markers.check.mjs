@@ -67,3 +67,13 @@ assert.match(
   /anchor:\s*"bottom"[\s\S]*offset:\s*\[0,\s*0\]/,
   "MapLibre should anchor the destination pin bottom directly on the destination coordinate",
 );
+assert.match(
+  mapSource,
+  /\[destLng,\s*destLat,\s*mapStyleVersion\]/,
+  "destination marker should resynchronize after the asynchronous map style becomes ready",
+);
+assert.match(
+  mapSource,
+  /destMarker\.current\.setLngLat\(\[destLng,\s*destLat\]\)/,
+  "an existing destination marker should stay attached by updating its canonical coordinates",
+);

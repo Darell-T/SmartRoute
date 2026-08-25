@@ -1,0 +1,13 @@
+[
+  {
+    "ID": "official-signal-1",
+    "Latitude": 40.74961,
+    "Longitude": -73.98791,
+    "County": "New York",
+    "EventType": "Station access restriction",
+    "Severity": "High",
+    "Description": "Signal obstruction near Herald Square delays Q trains.",
+    "Reported": "2026-07-22T21:15:00Z",
+    "PlannedEndDate": "2026-07-22T23:30:00Z"
+  }
+]

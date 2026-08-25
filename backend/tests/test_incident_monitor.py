@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from app.services.trips import incidents
+from app.services.trips.route_incidents import scan as incidents
 
 
 class RetiredIncidentMonitorTests(unittest.TestCase):

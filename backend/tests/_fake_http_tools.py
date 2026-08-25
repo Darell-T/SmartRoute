@@ -1,8 +1,8 @@
 """Shared scaffolding for the agent tool tests (test_agent_tools*.py): a
 `ToolContext` factory and a fake httpx client used to mock each P1/P2 tool's
-single external GET/POST call without a live network request -- the same
-approach tests/test_directions.py uses, applied through the shared
-`app.services.agent.tools._http.fetch_json` helper every tool's fetch now
+single external GET/POST call without a live network request. The shared
+HTTP boundary is patched through the
+`app.services.agent.tools.provider_http.fetch_json` helper every tool's fetch now
 goes through (patch `_http.httpx.AsyncClient`, not the calling tool's own
 `httpx` attribute).
 """

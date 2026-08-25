@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 
-from app.services.ny511 import (
+from app.services.incidents.ny511 import (
     DEFAULT_API_URL,
     NY511Client,
     NY511FetchError,
@@ -204,7 +204,7 @@ class ClientTests(IsolatedAsyncioTestCase):
                 type(self).calls.append((url, params))
                 return Response()
 
-        with patch("app.services.ny511.httpx.AsyncClient", Client):
+        with patch("app.services.incidents.ny511.httpx.AsyncClient", Client):
             result = await NY511Client(_settings()).fetch_events()
         self.assertEqual(result, [_event()])
         self.assertEqual(Client.calls, [(DEFAULT_API_URL, {"key": "not-a-real-key", "format": "json"})])
@@ -220,7 +220,7 @@ class ClientTests(IsolatedAsyncioTestCase):
             async def get(self, *_args, **_kwargs):
                 type(self).calls += 1
                 return Response()
-        with patch("app.services.ny511.httpx.AsyncClient", Client):
+        with patch("app.services.incidents.ny511.httpx.AsyncClient", Client):
             with self.assertRaisesRegex(NY511FetchError, "HTTP 403"):
                 await NY511Client(_settings()).fetch_events()
         self.assertEqual(Client.calls, 1)
@@ -236,7 +236,7 @@ class ClientTests(IsolatedAsyncioTestCase):
             async def get(self, *_args, **_kwargs):
                 type(self).calls += 1
                 return Response()
-        with patch("app.services.ny511.httpx.AsyncClient", Client):
+        with patch("app.services.incidents.ny511.httpx.AsyncClient", Client):
             with self.assertRaises(NY511FetchError) as raised:
                 await NY511Client(_settings()).fetch_events()
         self.assertEqual(Client.calls, 1)
@@ -252,7 +252,7 @@ class ClientTests(IsolatedAsyncioTestCase):
             async def __aenter__(self): return self
             async def __aexit__(self, *_args): return False
             async def get(self, *_args, **_kwargs): return Response(type(self).statuses.pop(0))
-        with patch("app.services.ny511.httpx.AsyncClient", Client), patch("app.services.ny511.asyncio.sleep", new=AsyncMock()) as sleep:
+        with patch("app.services.incidents.ny511.httpx.AsyncClient", Client), patch("app.services.incidents.ny511.asyncio.sleep", new=AsyncMock()) as sleep:
             with self.assertRaisesRegex(NY511FetchError, "HTTP 503"):
                 await NY511Client(_settings()).fetch_events()
         self.assertEqual(sleep.await_count, 2)
@@ -267,7 +267,7 @@ class ClientTests(IsolatedAsyncioTestCase):
             async def __aenter__(self): return self
             async def __aexit__(self, *_args): return False
             async def get(self, *_args, **_kwargs): return Response()
-        with patch("app.services.ny511.httpx.AsyncClient", Client), patch("app.services.ny511.asyncio.sleep", new=AsyncMock()) as sleep:
+        with patch("app.services.incidents.ny511.httpx.AsyncClient", Client), patch("app.services.incidents.ny511.asyncio.sleep", new=AsyncMock()) as sleep:
             with self.assertRaises(NY511FetchError) as raised:
                 await NY511Client(_settings(api_key="super-secret")).fetch_events()
         self.assertEqual(sleep.await_args_list[0].args, (60.0,))
@@ -283,7 +283,7 @@ class ClientTests(IsolatedAsyncioTestCase):
             async def get(self, *_args, **_kwargs):
                 type(self).calls += 1
                 raise httpx.ReadTimeout("slow", request=httpx.Request("GET", "https://example.test"))
-        with patch("app.services.ny511.httpx.AsyncClient", Client), patch("app.services.ny511.asyncio.sleep", new=AsyncMock()) as sleep:
+        with patch("app.services.incidents.ny511.httpx.AsyncClient", Client), patch("app.services.incidents.ny511.asyncio.sleep", new=AsyncMock()) as sleep:
             with self.assertRaisesRegex(NY511FetchError, "timed out"):
                 await NY511Client(_settings()).fetch_events()
         self.assertEqual(Client.calls, 3)
@@ -298,8 +298,8 @@ class ClientTests(IsolatedAsyncioTestCase):
             async def get(self, *_args, **_kwargs):
                 type(self).calls += 1
                 raise httpx.ReadTimeout("slow", request=httpx.Request("GET", "https://example.test"))
-        with patch("app.services.ny511.httpx.AsyncClient", Client), patch(
-            "app.services.ny511.asyncio.sleep", new=AsyncMock()
+        with patch("app.services.incidents.ny511.httpx.AsyncClient", Client), patch(
+            "app.services.incidents.ny511.asyncio.sleep", new=AsyncMock()
         ) as sleep:
             with self.assertRaisesRegex(NY511FetchError, "timed out"):
                 await NY511Client(_settings(), max_attempts=1).fetch_events()
@@ -315,7 +315,7 @@ class ClientTests(IsolatedAsyncioTestCase):
             async def get(self, *_args, **_kwargs):
                 type(self).calls += 1
                 raise httpx.ConnectError("provider detail key=secret", request=httpx.Request("GET", "https://example.test"))
-        with patch("app.services.ny511.httpx.AsyncClient", Client), patch("app.services.ny511.asyncio.sleep", new=AsyncMock()):
+        with patch("app.services.incidents.ny511.httpx.AsyncClient", Client), patch("app.services.incidents.ny511.asyncio.sleep", new=AsyncMock()):
             with self.assertRaises(NY511FetchError) as raised:
                 await NY511Client(_settings()).fetch_events()
         self.assertEqual(Client.calls, 3)
@@ -330,7 +330,7 @@ class ClientTests(IsolatedAsyncioTestCase):
             async def __aenter__(self): return self
             async def __aexit__(self, *_args): return False
             async def get(self, *_args, **_kwargs): return Response()
-        with patch("app.services.ny511.httpx.AsyncClient", Client):
+        with patch("app.services.incidents.ny511.httpx.AsyncClient", Client):
             with self.assertRaisesRegex(NY511FetchError, "malformed JSON"):
                 await NY511Client(_settings()).fetch_events()
 
@@ -343,7 +343,7 @@ class ClientTests(IsolatedAsyncioTestCase):
             async def __aenter__(self): return self
             async def __aexit__(self, *_args): return False
             async def get(self, *_args, **_kwargs): return Response()
-        with patch("app.services.ny511.httpx.AsyncClient", Client):
+        with patch("app.services.incidents.ny511.httpx.AsyncClient", Client):
             with self.assertRaisesRegex(NY511FetchError, "unexpected event schema"):
                 await NY511Client(_settings()).fetch_events()
 

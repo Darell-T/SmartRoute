@@ -133,7 +133,7 @@ test("canonical transfer count wins while legacy display fallback remains stable
   assert.doesNotMatch(markup, /0 transfers/);
 });
 
-test("standby route view preserves nearby direction controls and live arrival markup", () => {
+test("standby route view preserves nearby direction controls without arrival signal icons", () => {
   const markup = renderRouteView({
     routeStatus: "standby",
     plan: { ...canonicalPlan, alternatives: [] },
@@ -166,7 +166,7 @@ test("standby route view preserves nearby direction controls and live arrival ma
   assert.match(markup, /aria-checked="true"/);
   assert.match(markup, /Jay St-MetroTech/);
   assert.match(markup, /Inwood-207 St/);
-  assert.match(markup, /aria-label="Live arrival prediction"/);
+  assert.doesNotMatch(markup, /aria-label="Live arrival prediction"/);
 });
 
 test("route view keeps explicit controls and motion-safe state on the intended elements", () => {

@@ -35,6 +35,33 @@ def _subway_steps(
 
 
 class BuildChainedItineraryTests(unittest.TestCase):
+    def test_missing_boundary_walks_are_restored_from_endpoint_coordinates(self):
+        from app.services.trips.itinerary import build_canonical_itinerary
+
+        itinerary = build_canonical_itinerary(
+            [
+                {
+                    "type": "SUBWAY",
+                    "route_id": "Q",
+                    "departure_stop": "Church Av",
+                    "arrival_stop": "Canal St",
+                    "departure_coords": {"latitude": 40.6505, "longitude": -73.9626},
+                    "arrival_coords": {"latitude": 40.7195, "longitude": -74.0019},
+                    "route_total_seconds": 1_800,
+                }
+            ],
+            origin={"label": "Your location", "lat": 40.648, "lng": -73.958},
+            destination={"label": "Supreme Pizza", "lat": 40.721, "lng": -73.995},
+        )
+
+        self.assertEqual(
+            [leg["mode"] for leg in itinerary["legs"]],
+            ["WALK", "SUBWAY", "WALK"],
+        )
+        self.assertGreater(itinerary["legs"][0]["street_walking_seconds"], 0)
+        self.assertGreater(itinerary["legs"][-1]["street_walking_seconds"], 0)
+        self.assertEqual(itinerary["destination"]["label"], "Supreme Pizza")
+
     def test_two_segments_default_25_min_dwell(self):
         from app.services.trips.itinerary import build_chained_itinerary
 

@@ -56,6 +56,12 @@ export interface TokenEvent {
   text: string;
 }
 
+/** `reasoning` — rider-safe deliberation, kept separate from prose. */
+export interface ReasoningEvent {
+  type: "reasoning";
+  text: string;
+}
+
 export type ProgressStage = "finding_routes" | "checking_live_conditions" | "comparing_options";
 export type ProgressStatus = "active" | "complete";
 export interface ProgressEvent {
@@ -130,6 +136,15 @@ export interface ArrivalCardEvent {
   ambiguity?: Array<{ stop_id?: string; stop_name?: string }>;
 }
 
+/** `transit_status_action` — a server-owned passenger action offered by a
+ * current transit-status response. The UI must not infer this from prose. */
+export type TransitStatusAction = "view_alerts";
+export interface TransitStatusActionEvent {
+  type: "transit_status_action";
+  turn_id: string;
+  action: TransitStatusAction;
+}
+
 /** `error` — codes match `backend/app/services/agent/events.py`. */
 export type AgentErrorCode =
   | "rate_limited"
@@ -174,22 +189,26 @@ export interface DoneEvent {
 export type AgentEvent =
   | MetaEvent
   | TokenEvent
+  | ReasoningEvent
   | ProgressEvent
   | ToolStartEvent
   | ToolEndEvent
   | RouteCardEvent
   | ArrivalCardEvent
+  | TransitStatusActionEvent
   | ErrorEvent
   | DoneEvent;
 
 const KNOWN_EVENT_TYPES: ReadonlySet<string> = new Set([
   "meta",
   "token",
+  "reasoning",
   "progress",
   "tool_start",
   "tool_end",
   "route_card",
   "arrival_card",
+  "transit_status_action",
   "error",
   "done",
 ]);

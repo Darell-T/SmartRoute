@@ -1,143 +1,15 @@
-"""Parse ATLAS's control blocks and build the route-candidate list.
+"""Build deterministic route candidates and rider-facing comparison copy."""
 
-Depends on ``scoring`` (route scores) and ``text`` (sanitization). The model
-emits a ``[CANDIDATE_ANALYSIS]{...}[/CANDIDATE_ANALYSIS]`` block; this module
-parses it and, when the model omits a reason, falls back to a computed
-time/transfer/alert comparison (display copy only -- never changes selection).
-"""
-
-import json
 import re
 
 from app.services.trips import scoring, text
+from app.services.mta.static_gtfs.stop_patterns import normalize_station_name
 
 _CANDIDATE_ANALYSIS_PATTERN = re.compile(
     r"\[CANDIDATE_ANALYSIS\](.*?)\[/CANDIDATE_ANALYSIS\]",
     re.IGNORECASE | re.DOTALL,
 )
 
-
-def _parse_candidate_analysis(
-    raw_text: str,
-    *,
-    candidate_count: int | None = None,
-    strict: bool = False,
-) -> tuple[int | None, dict[int, dict[str, str]]]:
-    """Parse the shared candidate-analysis marker.
-
-    REST and shadow evaluation retain the historical best-effort behavior.
-    Agent route turns opt into ``strict`` so malformed control data cannot
-    silently select a canonical route.
-    """
-    matches = list(_CANDIDATE_ANALYSIS_PATTERN.finditer(raw_text or ""))
-    if not matches:
-        if strict:
-            raise ValueError("candidate analysis control block is missing")
-        return None, {}
-    if strict and len(matches) != 1:
-        raise ValueError("candidate analysis control block must appear exactly once")
-
-    try:
-        payload = json.loads(matches[0].group(1).strip())
-    except json.JSONDecodeError as exc:
-        if strict:
-            raise ValueError("candidate analysis is not valid JSON") from exc
-        return None, {}
-    if not isinstance(payload, dict):
-        if strict:
-            raise ValueError("candidate analysis must be an object")
-        return None, {}
-
-    if strict:
-        return _parse_strict_candidate_analysis(payload, candidate_count)
-
-    selected_index = payload.get("selected_route_index")
-    try:
-        parsed_selected = int(selected_index) if selected_index is not None else None
-    except (TypeError, ValueError):
-        parsed_selected = None
-
-    rows = payload.get("candidate_analysis")
-    if not isinstance(rows, list):
-        return parsed_selected, {}
-
-    analysis: dict[int, dict[str, str]] = {}
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        try:
-            index = int(row.get("index"))
-        except (TypeError, ValueError):
-            continue
-        is_recommended = bool(row.get("is_recommended"))
-        generic_reason = row.get("reason") or ""
-        recommendation_reason = text._safe_text(
-            row.get("recommendation_reason")
-            or (generic_reason if is_recommended else "")
-            or ""
-        )
-        rejection_reason = text._safe_text(
-            row.get("rejection_reason")
-            or (generic_reason if not is_recommended else "")
-            or ""
-        )
-        if recommendation_reason or rejection_reason:
-            analysis[index] = {
-                "recommendation_reason": recommendation_reason,
-                "rejection_reason": rejection_reason,
-            }
-
-    return parsed_selected, analysis
-
-
-def _parse_strict_candidate_analysis(
-    payload: dict,
-    candidate_count: int | None,
-) -> tuple[int, dict[int, dict[str, str]]]:
-    """Validate the agent-only route control contract without a second parser."""
-    if not isinstance(candidate_count, int) or isinstance(candidate_count, bool) or candidate_count < 1:
-        raise ValueError("candidate analysis requires a positive candidate count")
-    selected_index = payload.get("selected_route_index")
-    if not isinstance(selected_index, int) or isinstance(selected_index, bool):
-        raise ValueError("selected_route_index must be an integer")
-    if not 0 <= selected_index < candidate_count:
-        raise ValueError("selected_route_index is outside the candidate range")
-    rows = payload.get("candidate_analysis")
-    if not isinstance(rows, list) or len(rows) != candidate_count:
-        raise ValueError("candidate analysis must contain every candidate exactly once")
-
-    analysis: dict[int, dict[str, str]] = {}
-    recommended_indexes: list[int] = []
-    for row in rows:
-        if not isinstance(row, dict):
-            raise ValueError("candidate analysis rows must be objects")
-        index = row.get("index")
-        recommended = row.get("is_recommended")
-        if not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < candidate_count:
-            raise ValueError("candidate analysis index is invalid")
-        if index in analysis:
-            raise ValueError("candidate analysis contains a duplicate index")
-        if not isinstance(recommended, bool):
-            raise ValueError("candidate analysis is_recommended must be boolean")
-
-        recommendation_reason = text._safe_text(row.get("recommendation_reason") or "").strip()
-        rejection_reason = text._safe_text(row.get("rejection_reason") or "").strip()
-        if recommended:
-            if index != selected_index or not recommendation_reason:
-                raise ValueError("selected candidate requires recommendation_reason")
-            recommended_indexes.append(index)
-        elif rejection_reason:
-            pass
-        else:
-            raise ValueError("unselected candidate requires rejection_reason")
-        analysis[index] = {
-            "recommendation_reason": recommendation_reason,
-            "rejection_reason": rejection_reason,
-        }
-
-    if set(analysis) != set(range(candidate_count)) or recommended_indexes != [selected_index]:
-        raise ValueError("candidate analysis recommendation does not match selected route")
-    return selected_index, analysis
 
 def _strip_model_control_blocks(raw_text: str) -> str:
     without_route = re.sub(r"\s*\[ROUTE:\d+\]\s*", "", raw_text or "")
@@ -157,11 +29,25 @@ def _build_fallback_candidate_reason(
     route_alert = text._safe_text(route_alerts[0], 72) if route_alerts else ""
     chosen_alert = text._safe_text(chosen_alerts[0], 72) if chosen_alerts else ""
     if is_recommended:
-        if route_score.get("alert_count", 0) == 0:
-            return (
-                f"Fastest route at {route_score['total_minutes']} min with "
-                "no reported service alerts."
+        material_factors: list[str] = []
+        event_penalty = float(route_score.get("event_crowd_penalty") or 0)
+        walking_penalty = float(route_score.get("walking_penalty") or 0)
+        if walking_penalty > 0:
+            walk_minutes = max(0, int(route_score.get("walk_minutes") or 0))
+            material_factors.append(
+                f"preferred for less walking ({walk_minutes} min on foot)"
             )
+        if event_penalty > 0:
+            material_factors.append("relevant event crowd exposure")
+        if material_factors:
+            duration = int(route_score.get("total_minutes") or 0)
+            return (
+                f"Recommended at {duration} min; "
+                + " and ".join(material_factors[:2])
+                + "."
+            )
+        if route_score.get("alert_count", 0) == 0:
+            return f"Fastest route at {route_score['total_minutes']} min."
         if route_alert:
             return (
                 f"Fastest route despite an alert: {route_alert}."
@@ -211,7 +97,10 @@ def _build_route_candidates(
     candidates = []
     for index, route in enumerate(routes):
         is_recommended = index == chosen_index
-        analysis = candidate_analysis.get(index, {})
+        # Candidate-analysis prose is model-authored and may contain stale
+        # alternate duration/walking/transfer facts.  It remains useful for
+        # validating the model's choice, but the rider-facing reason must be
+        # derived from this server-owned score row instead.
         route_score = scores.get(index, scoring._route_score(route, []))
         fallback = _build_fallback_candidate_reason(
             route,
@@ -234,22 +123,27 @@ def _build_route_candidates(
                     "transfers": route_score["transfers"],
                     "active_alerts": route_score["alert_count"],
                     "transit_lines": scoring._route_lines(route),
+                    "walking_minutes": route_score.get("walk_minutes", 0),
+                    "street_walking_seconds": route_score.get(
+                        "street_walking_seconds", 0
+                    ),
+                    "in_station_transfer_seconds": route_score.get(
+                        "in_station_transfer_seconds", 0
+                    ),
+                    "event_crowd_penalty": route_score.get(
+                        "event_crowd_penalty", 0
+                    ),
+                    "accessibility_status": route_score.get(
+                        "accessibility_status", "unknown"
+                    ),
                 },
                 # Only the chosen route is enriched on the initial response;
                 # alternates carry empty intermediate-stop lists and are filled
                 # in lazily via POST /api/trip/enrich-route when selected.
                 "enriched": is_recommended,
                 "can_enrich_on_select": not is_recommended,
-                "recommendation_reason": (
-                    analysis.get("recommendation_reason") or fallback
-                    if is_recommended
-                    else None
-                ),
-                "rejection_reason": (
-                    analysis.get("rejection_reason") or fallback
-                    if not is_recommended
-                    else None
-                ),
+                "recommendation_reason": fallback if is_recommended else None,
+                "rejection_reason": fallback if not is_recommended else None,
             }
         )
     return candidates
@@ -331,3 +225,42 @@ def _build_route_candidate_labels(routes: list[list[dict]]) -> list[dict]:
         }
         for index, route in enumerate(routes)
     ]
+
+
+def route_family_signature(route: list[dict]) -> tuple[tuple[str, str, str, str], ...]:
+    """Return the stable transit-family and transfer-topology identity."""
+
+    signature = []
+    for step in route or []:
+        if (
+            not isinstance(step, dict)
+            or str(step.get("type") or "").upper() not in {"SUBWAY", "BUS"}
+        ):
+            continue
+        mode = str(step.get("type") or "").upper()
+        route_id = str(step.get("route_id") or step.get("train_line") or "").strip().upper()
+        boarding = step.get("departure_stop_id") or step.get("departure_stop")
+        alighting = step.get("arrival_stop_id") or step.get("arrival_stop")
+        signature.append(
+            (
+                mode,
+                route_id,
+                normalize_station_name(str(boarding or "")),
+                normalize_station_name(str(alighting or "")),
+            )
+        )
+    return tuple(signature)
+
+
+def dedupe_route_families(routes: list[list[dict]]) -> list[list[dict]]:
+    """Keep the first provider route for each structural family."""
+
+    seen = set()
+    unique = []
+    for route in routes:
+        signature = route_family_signature(route)
+        if signature in seen:
+            continue
+        seen.add(signature)
+        unique.append(route)
+    return unique

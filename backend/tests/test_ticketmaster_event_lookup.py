@@ -17,8 +17,11 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
-from app.services.agent.tools import _http, event_lookup, venue_crowd_window
-from app.utils import cache
+from app.services.agent.tools.transit import venue_crowd_window as venues
+from app.services.agent.tools.transit import check_transit
+from app.services.agent.tools import provider_http as _http
+from app.services.trips.crowds import event_provider
+from app.services import cache
 from tests._fake_http_tools import make_tool_ctx as _ctx
 from tests._fake_http_tools import recording_get_client as _recording_get_client
 
@@ -53,7 +56,7 @@ def _event(
 class TicketmasterEventLookupTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         cache._mem.clear()
-        event_lookup._inflight_locks.clear()
+        event_provider._inflight_locks.clear()
         self._env = patch.dict(
             os.environ,
             {
@@ -68,8 +71,10 @@ class TicketmasterEventLookupTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_request_uses_official_endpoint_and_bounded_nyc_geo_filter(self):
         fetch = AsyncMock(return_value=({"_embedded": {"events": [_event()]}}, None))
-        with patch.object(event_lookup, "fetch_json", fetch):
-            result = await event_lookup.execute({"query": "Knicks", "date": "2026-07-16"}, _ctx())
+        with patch.object(event_provider, "fetch_json", fetch):
+            result = await check_transit.execute_event_lookup(
+                {"query": "Knicks", "date": "2026-07-16"}, _ctx()
+            )
 
         self.assertTrue(result.ok)
         args, kwargs = fetch.await_args
@@ -99,8 +104,8 @@ class TicketmasterEventLookupTests(unittest.IsolatedAsyncioTestCase):
                 None,
             )
         )
-        with patch.object(event_lookup, "fetch_json", fetch):
-            result = await event_lookup.execute(
+        with patch.object(event_provider, "fetch_json", fetch):
+            result = await check_transit.execute_event_lookup(
                 {
                     "query": "",
                     "date": "2026-07-16",
@@ -118,23 +123,25 @@ class TicketmasterEventLookupTests(unittest.IsolatedAsyncioTestCase):
     async def test_radius_is_clamped_to_a_safe_upper_bound(self):
         fetch = AsyncMock(return_value=({"_embedded": {"events": []}}, None))
         with patch.dict(os.environ, {"TICKETMASTER_SEARCH_RADIUS_MILES": "900"}, clear=False):
-            with patch.object(event_lookup, "fetch_json", fetch):
-                await event_lookup.execute({"query": "concert"}, _ctx())
+            with patch.object(event_provider, "fetch_json", fetch):
+                await check_transit.execute_event_lookup({"query": "concert"}, _ctx())
         self.assertEqual(fetch.await_args.kwargs["params"]["radius"], "30")
 
     async def test_non_finite_radius_falls_back_to_the_safe_default(self):
         fetch = AsyncMock(return_value=({"_embedded": {"events": []}}, None))
         with patch.dict(os.environ, {"TICKETMASTER_SEARCH_RADIUS_MILES": "nan"}, clear=False):
-            with patch.object(event_lookup, "fetch_json", fetch):
-                await event_lookup.execute({"query": "concert"}, _ctx())
+            with patch.object(event_provider, "fetch_json", fetch):
+                await check_transit.execute_event_lookup({"query": "concert"}, _ctx())
         self.assertEqual(fetch.await_args.kwargs["params"]["radius"], "25")
 
     async def test_empty_or_missing_embedded_events_is_a_clean_empty_result(self):
         for payload in ({}, {"_embedded": {}}, {"_embedded": {"events": []}}):
             cache._mem.clear()
             fetch = AsyncMock(return_value=(payload, None))
-            with patch.object(event_lookup, "fetch_json", fetch):
-                result = await event_lookup.execute({"query": "concert"}, _ctx())
+            with patch.object(event_provider, "fetch_json", fetch):
+                result = await check_transit.execute_event_lookup(
+                    {"query": "concert"}, _ctx()
+                )
             self.assertTrue(result.ok)
             self.assertEqual(result.data, {"events": []})
 
@@ -143,8 +150,8 @@ class TicketmasterEventLookupTests(unittest.IsolatedAsyncioTestCase):
         missing_venue["_embedded"] = {}
         invalid_coordinates = _event("evt-bad-coordinates", venue={"name": "Citi Field", "location": {"latitude": "x"}})
         fetch = AsyncMock(return_value=({"_embedded": {"events": [missing_venue, invalid_coordinates]}}, None))
-        with patch.object(event_lookup, "fetch_json", fetch):
-            result = await event_lookup.execute({"query": "baseball"}, _ctx())
+        with patch.object(event_provider, "fetch_json", fetch):
+            result = await check_transit.execute_event_lookup({"query": "baseball"}, _ctx())
         first, second = result.data["events"]
         self.assertIsNone(first["venue_name"])
         self.assertIsNone(first["venue_latitude"])
@@ -161,16 +168,16 @@ class TicketmasterEventLookupTests(unittest.IsolatedAsyncioTestCase):
             venue={"name": "TD Garden", "location": {"latitude": "42.3663", "longitude": "-71.0622"}},
         )
         fetch = AsyncMock(return_value=({"_embedded": {"events": [metlife_style, boston]}}, None))
-        with patch.object(event_lookup, "fetch_json", fetch):
-            result = await event_lookup.execute({"query": "game"}, _ctx())
+        with patch.object(event_provider, "fetch_json", fetch):
+            result = await check_transit.execute_event_lookup({"query": "game"}, _ctx())
         self.assertEqual([event["event_id"] for event in result.data["events"]], ["nearby-metlife"])
 
     async def test_recognized_venue_includes_static_station_and_line_association(self):
         known = _event("msg")
         unknown = _event("unknown", venue={"name": "Some NYC Hall", "location": {"latitude": "40.72", "longitude": "-74.0"}})
         fetch = AsyncMock(return_value=({"_embedded": {"events": [known, unknown]}}, None))
-        with patch.object(event_lookup, "fetch_json", fetch):
-            result = await event_lookup.execute({"query": "concert"}, _ctx())
+        with patch.object(event_provider, "fetch_json", fetch):
+            result = await check_transit.execute_event_lookup({"query": "concert"}, _ctx())
         msg, unknown_result = result.data["events"]
         self.assertEqual(msg["nearby_stations"], ["34 St-Penn Station"])
         self.assertEqual(msg["nearby_lines"], ["1", "2", "3", "A", "C", "E"])
@@ -185,12 +192,12 @@ class TicketmasterEventLookupTests(unittest.IsolatedAsyncioTestCase):
             ("date-only", {"localDate": "2026-07-16"}),
         ]
         for event_id, start in cases:
-            parsed = event_lookup._parse_event(_event(event_id, start=start))
+            parsed = event_provider._parse_event(_event(event_id, start=start))
             self.assertIsNone(parsed["start_iso"], event_id)
             self.assertIsNone(parsed["estimated_end_iso"], event_id)
 
     def test_local_event_time_is_converted_using_the_reported_timezone(self):
-        parsed = event_lookup._parse_event(
+        parsed = event_provider._parse_event(
             _event("local-time", start={"localDate": "2026-07-16", "localTime": "20:00:00"})
         )
         self.assertEqual(parsed["start_iso"], "2026-07-17T00:00:00Z")
@@ -205,8 +212,8 @@ class TicketmasterEventLookupTests(unittest.IsolatedAsyncioTestCase):
                 ]
             }
         }
-        with patch.object(event_lookup, "fetch_json", AsyncMock(return_value=(payload, None))):
-            result = await event_lookup.execute({"query": "Knicks"}, _ctx())
+        with patch.object(event_provider, "fetch_json", AsyncMock(return_value=(payload, None))):
+            result = await check_transit.execute_event_lookup({"query": "Knicks"}, _ctx())
         self.assertEqual([event["event_id"] for event in result.data["events"]], ["postponed", "rescheduled"])
         self.assertTrue(all(event["estimated_end_iso"] is None for event in result.data["events"]))
 
@@ -216,15 +223,15 @@ class TicketmasterEventLookupTests(unittest.IsolatedAsyncioTestCase):
             ({"page": {"totalPages": 2}, "_embedded": {"events": [_event("one"), _event("two")]}}, None),
         ]
         fetch = AsyncMock(side_effect=responses)
-        with patch.object(event_lookup, "fetch_json", fetch):
-            result = await event_lookup.execute({"query": "Knicks"}, _ctx())
+        with patch.object(event_provider, "fetch_json", fetch):
+            result = await check_transit.execute_event_lookup({"query": "Knicks"}, _ctx())
         self.assertEqual(fetch.await_count, 2)
         self.assertEqual([call.kwargs["params"]["page"] for call in fetch.await_args_list], ["0", "1"])
         self.assertEqual([event["event_id"] for event in result.data["events"]], ["one", "two"])
 
     async def test_malformed_payload_is_sanitized(self):
-        with patch.object(event_lookup, "fetch_json", AsyncMock(return_value=({"_embedded": {"events": "bad"}}, None))):
-            result = await event_lookup.execute({"query": "concert"}, _ctx())
+        with patch.object(event_provider, "fetch_json", AsyncMock(return_value=({"_embedded": {"events": "bad"}}, None))):
+            result = await check_transit.execute_event_lookup({"query": "concert"}, _ctx())
         self.assertFalse(result.ok)
         self.assertEqual(result.error, "event lookup returned an unexpected response")
 
@@ -234,7 +241,9 @@ class TicketmasterEventLookupTests(unittest.IsolatedAsyncioTestCase):
             client_class = _recording_get_client({}, status_code=status_code)
             with patch("builtins.print") as print_mock:
                 with patch.object(_http.httpx, "AsyncClient", client_class):
-                    result = await event_lookup.execute({"query": f"event-{status_code}"}, _ctx())
+                    result = await check_transit.execute_event_lookup(
+                        {"query": f"event-{status_code}"}, _ctx()
+                    )
             self.assertFalse(result.ok)
             self.assertEqual(
                 result.error,
@@ -259,7 +268,7 @@ class TicketmasterEventLookupTests(unittest.IsolatedAsyncioTestCase):
                 raise httpx.TimeoutException("timeout")
 
         with patch.object(_http.httpx, "AsyncClient", _TimeoutClient):
-            result = await event_lookup.execute({"query": "concert"}, _ctx())
+            result = await check_transit.execute_event_lookup({"query": "concert"}, _ctx())
         self.assertFalse(result.ok)
         self.assertEqual(result.error, "event lookup timed out")
 
@@ -272,10 +281,10 @@ class TicketmasterEventLookupTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0)
             return {"_embedded": {"events": [_event()]}}, None
 
-        with patch.object(event_lookup, "fetch_json", side_effect=delayed_fetch):
+        with patch.object(event_provider, "fetch_json", side_effect=delayed_fetch):
             first, second = await asyncio.gather(
-                event_lookup.execute({"query": "Knicks"}, _ctx()),
-                event_lookup.execute({"query": "Knicks"}, _ctx()),
+                check_transit.execute_event_lookup({"query": "Knicks"}, _ctx()),
+                check_transit.execute_event_lookup({"query": "Knicks"}, _ctx()),
             )
         self.assertTrue(first.ok)
         self.assertTrue(second.ok)
@@ -283,16 +292,18 @@ class TicketmasterEventLookupTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_cache_key_includes_effective_search_radius(self):
         fetch = AsyncMock(return_value=({"_embedded": {"events": [_event()]}}, None))
-        with patch.object(event_lookup, "fetch_json", fetch):
-            await event_lookup.execute({"query": "Knicks"}, _ctx())
+        with patch.object(event_provider, "fetch_json", fetch):
+            await check_transit.execute_event_lookup({"query": "Knicks"}, _ctx())
             with patch.dict(os.environ, {"TICKETMASTER_SEARCH_RADIUS_MILES": "5"}, clear=False):
-                await event_lookup.execute({"query": "Knicks"}, _ctx())
+                await check_transit.execute_event_lookup({"query": "Knicks"}, _ctx())
         self.assertEqual(fetch.await_count, 2)
 
     async def test_disabled_state_does_not_attempt_a_request(self):
         with patch.dict(os.environ, {"TICKETMASTER_ENABLED": "false"}, clear=False):
-            with patch.object(event_lookup, "fetch_json") as fetch:
-                result = await event_lookup.execute({"query": "Knicks"}, _ctx())
+            with patch.object(event_provider, "fetch_json") as fetch:
+                result = await check_transit.execute_event_lookup(
+                    {"query": "Knicks"}, _ctx()
+                )
         self.assertFalse(result.ok)
         self.assertEqual(result.error, "event lookup is disabled")
         fetch.assert_not_called()
@@ -300,7 +311,7 @@ class TicketmasterEventLookupTests(unittest.IsolatedAsyncioTestCase):
 
 class VenueCrowdWindowTimingTests(unittest.IsolatedAsyncioTestCase):
     async def test_confirmed_event_gets_conservative_pre_and_post_event_windows(self):
-        result = await venue_crowd_window.execute(
+        result = await venues.execute(
             {
                 "venue": "msg",
                 "event_start_iso": "2026-07-16T19:00:00-04:00",
@@ -326,7 +337,7 @@ class VenueCrowdWindowTimingTests(unittest.IsolatedAsyncioTestCase):
             ("onsale", "time_tba"),
             ("onsale", "date_only"),
         ):
-            result = await venue_crowd_window.execute(
+            result = await venues.execute(
                 {
                     "venue": "msg",
                     "event_start_iso": "2026-07-16T19:00:00-04:00",
@@ -351,7 +362,7 @@ class TicketmasterLiveSmokeTest(unittest.IsolatedAsyncioTestCase):
             self.fail("BLOCKED: TICKETMASTER_API_KEY is not configured after live opt-in")
         cache._mem.clear()
         with patch("builtins.print") as print_mock:
-            result = await event_lookup.execute(
+            result = await check_transit.execute_event_lookup(
                 {
                     "query": "New York",
                     "date": datetime.now(ZoneInfo("America/New_York")).date().isoformat(),

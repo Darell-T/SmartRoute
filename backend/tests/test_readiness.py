@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 os.environ.setdefault("APP_KEY", "test-app-key")
 os.environ.setdefault("ANTHROPIC_API_KEY", "test-anthropic-key")
 from app import main
-from app.utils import cache
+from app.services import cache
 
 
 class ReadinessTests(unittest.IsolatedAsyncioTestCase):

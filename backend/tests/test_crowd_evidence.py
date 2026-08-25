@@ -5,8 +5,8 @@ import unittest
 from datetime import datetime
 from unittest.mock import AsyncMock, patch
 
-from app.services.trips import crowd_evidence
-from app.services.trips.crowd_hotspots import HotspotHit
+from app.services.trips.crowds import evidence as crowd_evidence
+from app.services.trips.crowds.hotspots import HotspotHit
 
 
 def _route() -> list[dict]:
@@ -194,6 +194,34 @@ class CrowdEvidenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status, "no_relevant_events")
         self.assertEqual(failures, [])
         self.assertFalse(search.await_args.kwargs["allow_live_search"])
+
+    async def test_partial_candidate_coverage_survives_optional_live_search(self):
+        search = AsyncMock(
+            return_value={
+                "status": "not_required",
+                "events": [],
+                "completed_sources": [],
+            }
+        )
+        with (
+            patch.object(
+                crowd_evidence.event_crowd,
+                "collect_route_event_evidence",
+                new=AsyncMock(return_value=("partial", [], [])),
+            ),
+            patch.object(crowd_evidence.crowd_search, "search_hotspots", new=search),
+        ):
+            status, impacts, failures, _metadata = await crowd_evidence.collect(
+                [_route()],
+                _Ctx(),
+                hotspot_hits=[_hit()],
+                explicit_crowd_request=False,
+                allow_live_search=False,
+            )
+
+        self.assertEqual(status, "partial")
+        self.assertEqual(impacts, [])
+        self.assertEqual(failures, [])
 
     async def test_caller_cancellation_cancels_and_drains_both_provider_tasks(self):
         ticketmaster_started = asyncio.Event()

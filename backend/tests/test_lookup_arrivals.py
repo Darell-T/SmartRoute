@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import time
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from app.services.agent.tools import lookup_arrivals
+from app.services.agent.tools.transit import lookup_arrivals
 from app.services.agent.tools._types import ToolContext
 from app.services.mta.feeds import _gtfs_realtime_pb2
 
@@ -105,7 +104,7 @@ class SubwayArrivalLookupTests(unittest.IsolatedAsyncioTestCase):
             for index, payload in enumerate(payloads)
         ]
         with patch.object(
-            lookup_arrivals.mta_feed,
+            lookup_arrivals.mta_realtime,
             "fetch_feeds_with_metadata",
             AsyncMock(return_value=metadata),
         ), patch.object(lookup_arrivals.time, "time", return_value=NOW):
@@ -140,6 +139,7 @@ class SubwayArrivalLookupTests(unittest.IsolatedAsyncioTestCase):
                     "stop_id": "D28",
                     "stop_name": "Newkirk Plaza",
                     "direction_id": 1,
+                    "semantic_direction": "downtown",
                     "coordinates": {"latitude": 40.6351, "longitude": -73.9628},
                 }
             }
@@ -163,6 +163,58 @@ class SubwayArrivalLookupTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(result.data["stop"]["name"], "Prospect Park")
 
+    async def test_raw_coordinate_query_uses_nearest_applicable_stop(self):
+        session = {
+            "active_trip": {
+                "first_boarding": {
+                    "route_id": "Q",
+                    "stop_id": "D28",
+                    "stop_name": "Newkirk Plaza",
+                    "coordinates": {"latitude": 40.6351, "longitude": -73.9628},
+                }
+            }
+        }
+        result = await self._run(
+            {
+                "route_id": "Q",
+                "stop_query": "40.6615,-73.9624",
+            },
+            [_feed([("D26N", NOW + 240)])],
+            ctx=_ctx(session=session),
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.data["stop"]["name"], "Prospect Park")
+        self.assertEqual(result.data["stop"]["id"], "D26")
+
+    async def test_current_location_source_ignores_coordinate_like_station_text(self):
+        result = await self._run(
+            {
+                "route_id": "Q",
+                "stop_source": "current_location",
+                "stop_query": "closest Q train stop to 40.6615,-73.9624",
+            },
+            [_feed([("D26N", NOW + 240)])],
+            ctx=_ctx(origin={"lat": 40.6615, "lng": -73.9624}),
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.data["stop"]["name"], "Prospect Park")
+
+    async def test_named_station_source_never_falls_back_to_current_location(self):
+        result = await self._run(
+            {
+                "route_id": "Q",
+                "stop_source": "named_station",
+                "stop_query": "Not A Real Station",
+            },
+            [_feed([("D26N", NOW + 240)])],
+            ctx=_ctx(origin={"lat": 40.6615, "lng": -73.9624}),
+        )
+
+        self.assertEqual(result.outcome, "needs_clarification")
+        self.assertEqual(result.data["source_status"], "stop_not_resolved")
+
     async def test_active_trip_boarding_takes_priority_over_location(self):
         session = {
             "active_trip": {
@@ -184,6 +236,60 @@ class SubwayArrivalLookupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([group["id"] for group in result.data["directions"]], ["downtown"])
         self.assertEqual(result.data["catchability"]["catchable_arrival_minutes"], 7)
 
+    async def test_terminal_label_cannot_override_active_trip_direction_for_catchability(self):
+        session = {
+            "active_trip": {
+                "first_boarding": {
+                    "route_id": "Q",
+                    "stop_name": "Newkirk Plaza",
+                    "direction_id": 1,
+                    "semantic_direction": "downtown",
+                    "direction_label": "Coney Island-Stillwell Av",
+                    "coordinates": {"latitude": 40.6351, "longitude": -73.9628},
+                    "walking_minutes": 2,
+                }
+            }
+        }
+
+        result = await self._run(
+            {
+                "route_id": "Q",
+                "direction": "Coney Island-Stillwell Av",
+            },
+            [
+                _feed(
+                    [
+                        ("D28N", NOW + 300),
+                        ("D28S", NOW + 720),
+                        ("D28S", NOW + 900),
+                        ("D28S", NOW + 1020),
+                    ]
+                )
+            ],
+            ctx=_ctx(session=session),
+        )
+
+        self.assertEqual([group["id"] for group in result.data["directions"]], ["downtown"])
+        self.assertEqual(result.data["catchability"]["arrival_minutes"], [12, 15, 17])
+        self.assertEqual(result.data["catchability"]["catchable_arrival_minutes"], 12)
+
+    async def test_unresolved_subway_direction_withholds_catchability(self):
+        result = await self._run(
+            {
+                "route_id": "Q",
+                "stop_query": "Newkirk Plaza",
+                "direction": "Coney Island-Stillwell Av",
+                "walking_minutes": 2,
+            },
+            [_feed([("D28N", NOW + 300), ("D28S", NOW + 720)])],
+        )
+
+        self.assertEqual(
+            {group["id"] for group in result.data["directions"]},
+            {"uptown", "downtown"},
+        )
+        self.assertNotIn("catchability", result.data)
+
     async def test_active_q_at_church_uses_persisted_stop_when_database_is_unavailable(self):
         session = {
             "active_trip": {
@@ -192,6 +298,7 @@ class SubwayArrivalLookupTests(unittest.IsolatedAsyncioTestCase):
                     "stop_id": "D28",
                     "stop_name": "Church Av",
                     "direction_id": 1,
+                    "semantic_direction": "downtown",
                     "direction_label": "Coney Island-Stillwell Av",
                     "destination_stop_id": "D43",
                     "coordinates": {"latitude": 40.6505, "longitude": -73.9624},
@@ -339,9 +446,15 @@ class BusArrivalLookupTests(unittest.IsolatedAsyncioTestCase):
             },
         ]
         with patch.object(
-            lookup_arrivals.mta_feed,
-            "fetch_nearby_bus_arrivals",
-            AsyncMock(return_value=(rows, {"bus_arrivals_supported": True})),
+            lookup_arrivals.mta_realtime,
+            "fetch_nearby_bus_update",
+            AsyncMock(
+                return_value={
+                    "arrivals": rows,
+                    "debug": {"bus_arrivals_supported": True},
+                    "status": "ready",
+                }
+            ),
         ), patch.object(lookup_arrivals.time, "time", return_value=NOW):
             result = await lookup_arrivals.execute(
                 {

@@ -31,14 +31,11 @@ export function applyPhase3cLaneContinuityStage({
   branchTransitionsGeoJsonPath,
   branchTransitionMaxM,
 }: Phase3cLaneContinuityStageInput): void {
-  // ----- Phase 3b: branch transition promotion -----
-  // The branch_transition features replace the legacy buildJunctionBridges
-  // output. We promote only transitions <= BRANCH_TRANSITION_MAX_M to skip the
-  // long-tail outlier (G @ Fulton St) flagged by the Phase 3a audit.
+  // Promote branch transitions only within BRANCH_TRANSITION_MAX_M. This skips
+  // the known long-tail G transition at Fulton St.
   //
-  // This block runs AFTER buildBundleArtifacts has returned, so the lane-offset
-  // baking loop inside that function has already completed. Mutating
-  // bundleLaneFeatures here is safe ONLY because every promoted transition is
+  // This block runs after buildBundleArtifacts has baked lane offsets. Mutating
+  // bundleLaneFeatures here is safe because every promoted transition is
   // emitted with lane_slot: 0 and lane_offset_baked: true -- no geometric
   // re-baking is required. Do not add lanes with non-zero lane_slot in this
   // block without re-running the baking loop on them.

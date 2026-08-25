@@ -27,9 +27,9 @@ def _load_ai_advisor():
     fake_anthropic.APIStatusError = _FakeAPIStatusError
 
     with patch.dict(sys.modules, {"anthropic": fake_anthropic}):
-        if "app.services.ai_advisor" in sys.modules:
-            return importlib.reload(sys.modules["app.services.ai_advisor"])
-        return importlib.import_module("app.services.ai_advisor")
+        if "evaluation.route_intelligence.advisor" in sys.modules:
+            return importlib.reload(sys.modules["evaluation.route_intelligence.advisor"])
+        return importlib.import_module("evaluation.route_intelligence.advisor")
 
 
 def _payload():
