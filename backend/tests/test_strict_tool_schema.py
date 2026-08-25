@@ -6,12 +6,15 @@ import os
 import unittest
 from unittest.mock import patch
 
-from app.services.agent import intelligence, loop, policy
-from app.services.agent.strict_tool_schema import (
+from app.services.agent import loop, public_surface
+from app.services.agent.model import policy
+from app.services.agent.tools import (
     assert_strict_tool_schemas_compatible,
     iter_unsupported_strict_keyword_paths,
 )
-from app.services.agent.tools import TOOL_REGISTRY, TOOLS, plan_trip
+from app.services.agent.tools import TOOL_REGISTRY, TOOLS
+from app.services.agent.tools.route.present_route import PRESENT_ROUTE_SCHEMA
+from app.services.agent.tools.route.prepare_route_options import PREPARE_ROUTE_OPTIONS_SCHEMA
 
 
 class StrictToolSchemaTests(unittest.TestCase):
@@ -22,58 +25,37 @@ class StrictToolSchemaTests(unittest.TestCase):
             self.assertIn("input_schema", spec.schema)
             self.assertEqual(spec.schema["name"], name)
 
-    def test_auto_and_quick_intent_profiles_are_strict_compatible(self):
-        intents = (
-            intelligence.ParsedIntent(intent="route_planning", avoid_crowds=False),
-            intelligence.ParsedIntent(intent="destination_discovery", avoid_crowds=False),
-            intelligence.ParsedIntent(intent="arrival_lookup", avoid_crowds=False),
-            intelligence.ParsedIntent(intent="area_conditions", avoid_crowds=False),
-            intelligence.ParsedIntent(intent="transit_question", avoid_crowds=False),
+    def test_destination_branch_schema_covers_route_dependent_choice(self):
+        description = " ".join(
+            PREPARE_ROUTE_OPTIONS_SCHEMA["input_schema"]["properties"][
+                "destination_place_ids"
+            ]["description"].casefold().split()
         )
-        for parsed in intents:
-            for mode in ("auto", "quick"):
-                with self.subTest(intent=parsed.intent, mode=mode):
-                    tools = loop._tools_for_intent(parsed, policy.policy_for_mode(mode))
-                    custom = [tool for tool in tools if tool.get("strict")]
-                    assert_strict_tool_schemas_compatible(custom)
-                    names = {tool.get("name") for tool in custom}
-                    if parsed.intent == "route_planning":
-                        self.assertEqual(
-                            names,
-                            {
-                                "get_place_details",
-                                "prepare_route_options",
-                                "present_route",
-                                "accessibility_status",
-                            },
-                        )
-                        self.assertIn("accessibility_status", names)
-                    if parsed.intent == "arrival_lookup":
-                        self.assertIn("lookup_arrivals", names)
-                    if parsed.intent == "destination_discovery":
-                        self.assertIn("search_local_places", names)
-                        self.assertNotIn("poi_search", names)
-                        self.assertIn("prepare_route_options", names)
-                        self.assertIn("present_route", names)
-                        self.assertNotIn("plan_trip", names)
-                    if parsed.intent == "area_conditions":
-                        self.assertEqual(names, {"check_area_conditions"})
-                        self.assertEqual(
-                            {tool.get("name") for tool in tools},
-                            {"check_area_conditions"},
-                        )
+        self.assertIn("route-dependent delegated destination choice", description)
+        self.assertIn("least walking", description)
+        self.assertIn("fewer transfers", description)
+        self.assertIn("even when the rider does not explicitly ask to compare", description)
+        self.assertIn("route-independent place-only criteria", description)
+        self.assertNotIn(
+            "use this when the rider asks smartroute to compare verified locations",
+            description,
+        )
 
-    def test_plan_trip_required_fields_remain(self):
-        schema = plan_trip.PLAN_TRIP_SCHEMA
-        self.assertEqual(schema["name"], "plan_trip")
-        self.assertTrue(schema["strict"])
-        props = schema["input_schema"]["properties"]
-        self.assertIn("origin", props)
-        self.assertIn("destination", props)
-        self.assertIn("waypoints", props)
-        self.assertEqual(schema["input_schema"]["required"], ["origin", "destination"])
-        self.assertNotIn("maxItems", props["waypoints"])
-        self.assertNotIn("maxLength", props["waypoints"].get("items") or {})
+    def test_auto_and_quick_intent_profiles_are_strict_compatible(self):
+        expected = set(public_surface.INITIAL_TOOL_NAMES)
+        expected_strict: set[str] = set()
+        for mode in ("auto", "quick"):
+            with self.subTest(mode=mode):
+                tools = loop._tools_for_state(policy.policy_for_mode(mode))
+                assert_strict_tool_schemas_compatible(tools)
+                names = {tool.get("name") for tool in tools}
+                strict_names = {
+                    tool.get("name") for tool in tools if tool.get("strict")
+                }
+                self.assertEqual(names, expected)
+                self.assertEqual(strict_names, expected_strict)
+                self.assertNotIn("poi_search", names)
+                self.assertNotIn("plan_trip", names)
 
     def test_recursive_scanner_flags_max_items(self):
         bad = {
@@ -94,14 +76,36 @@ class StrictToolSchemaTests(unittest.TestCase):
                 [{"name": "plan_trip", "strict": True, "input_schema": bad}]
             )
 
-    def test_default_auto_model_is_sonnet_four_six(self):
+    def test_default_auto_model_is_sonnet_five(self):
         with patch.dict(os.environ, {}, clear=False):
             for key in ("AGENT_AUTO_MODEL", "AGENT_SONNET_MODEL", "AGENT_MODEL"):
                 os.environ.pop(key, None)
             self.assertEqual(
                 policy.policy_for_mode("auto").model,
-                "claude-sonnet-4-6",
+                "claude-sonnet-5",
             )
+
+    def test_present_route_framing_contract_requires_supported_qualitative_reason(self):
+        properties = PRESENT_ROUTE_SCHEMA["input_schema"]["properties"]
+        lead_in = properties["lead_in"]["description"].casefold()
+        reason_code = properties["reason_code"]["description"].casefold()
+        self.assertIn("every successful route needs one", lead_in)
+        self.assertIn("unqualified request", lead_in)
+        self.assertIn("qualitative transfer, walking, disruption, crowd", lead_in)
+        self.assertIn("no digits", lead_in)
+        self.assertIn("name the supported factor directly", lead_in)
+        self.assertIn("no comparative factor or explicit rider constraint", lead_in)
+        self.assertIn("options were close", lead_in)
+        self.assertIn("nothing had a clear edge", lead_in)
+        self.assertIn("covers what the rider asked for", lead_in)
+        self.assertIn("expose backend language", lead_in)
+        self.assertIn("canonical itinerary supports it", lead_in)
+        self.assertIn("hard validity alone does not prove route shape", lead_in)
+        self.assertIn("every successful route presentation requires one", reason_code)
+        self.assertIn(
+            "fits, satisfies constraints, is best, is practical, or satisfies the trip",
+            reason_code,
+        )
 
 
 if __name__ == "__main__":

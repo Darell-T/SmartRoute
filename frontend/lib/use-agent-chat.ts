@@ -31,16 +31,29 @@ import {
   type UserTurn,
 } from "./agent-chat-state";
 import {
+  buildTurnsFromSnapshot,
   clearPersistedSession,
+  fetchSessionSnapshot,
   initChatState,
   persistSessionId,
   readPersistedSessionId,
+  resetSession,
   safeSessionStorage,
   sessionStorageKey,
 } from "./agent-chat-session";
 import type { ResponsePresentationMode } from "./response-presentation";
 
-export { applyAgentEvent, buildAgentChatRequest, persistSessionId, readPersistedSessionId, runTurn, sessionStorageKey };
+export {
+  applyAgentEvent,
+  buildAgentChatRequest,
+  buildTurnsFromSnapshot,
+  fetchSessionSnapshot,
+  persistSessionId,
+  readPersistedSessionId,
+  resetSession,
+  runTurn,
+  sessionStorageKey,
+};
 export type {
   AgentChatRequestBody,
   AgentChatTransport,
@@ -94,14 +107,40 @@ export function useAgentChat(options: UseAgentChatOptions = {}): UseAgentChatRes
   // only ever touched from event handlers, never during render.
   const inFlightRef = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const restoreGenerationRef = useRef(0);
   const lastRequestRef = useRef<{
     request: AgentChatRequestBody;
-    canRecoverSession: boolean;
   } | null>(null);
 
   useEffect(() => {
     persistSessionId(safeSessionStorage(), state.sessionId);
   }, [state.sessionId]);
+
+  // Page-refresh restore: a still-valid persisted session id is hydrated with
+  // the backend transcript (text turns + canonical cards) so the rider
+  // sees the same conversation the agent remembers. Expired sessions discard
+  // the persisted id; transient failures leave the server session intact.
+  useEffect(() => {
+    const sessionId = state.sessionId;
+    if (!sessionId || state.messages.length > 0) return;
+    const generation = ++restoreGenerationRef.current;
+    void fetchSessionSnapshot(sessionId)
+      .then((result) => {
+        if (restoreGenerationRef.current !== generation) return;
+        if (result.status === "ok") {
+          dispatch({ type: "session_restored", sessionId, turns: result.turns });
+        } else if (result.status === "expired") {
+          clearPersistedSession();
+          dispatch({ type: "session_discarded" });
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      if (restoreGenerationRef.current === generation) {
+        restoreGenerationRef.current += 1;
+      }
+    };
+  }, [state.sessionId, state.messages.length]);
 
   function send(
     text: string,
@@ -123,16 +162,17 @@ export function useAgentChat(options: UseAgentChatOptions = {}): UseAgentChatRes
 
     lastRequestRef.current = {
       request,
-      canRecoverSession: state.messages.length === 0,
     };
-    startTurn(request, { type: "turn_started", text: trimmed }, state.messages.length === 0);
+    startTurn(request, { type: "turn_started", text: trimmed });
   }
 
   function startTurn(
     request: AgentChatRequestBody,
     action: ChatReducerAction,
-    canRecoverSession: boolean,
   ): void {
+    // A live turn supersedes any in-flight refresh restore: its snapshot
+    // result must not overwrite the turn the rider just started.
+    restoreGenerationRef.current += 1;
     inFlightRef.current = true;
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -146,10 +186,13 @@ export function useAgentChat(options: UseAgentChatOptions = {}): UseAgentChatRes
       inFlightRef,
       abortControllerRef,
       {
-        canRecoverSession,
         discardSession: () => {
           persistSessionId(safeSessionStorage(), null);
           dispatch({ type: "session_discarded" });
+          dispatch({
+            type: "session_restarted",
+            message: "Earlier context expired, so this request is starting a fresh session.",
+          });
         },
       },
     );
@@ -161,7 +204,6 @@ export function useAgentChat(options: UseAgentChatOptions = {}): UseAgentChatRes
     startTurn(
       previous.request,
       { type: "turn_retry_started" },
-      previous.canRecoverSession,
     );
   }
 
@@ -175,6 +217,8 @@ export function useAgentChat(options: UseAgentChatOptions = {}): UseAgentChatRes
   }
 
   function reset(): void {
+    const sessionId = state.sessionId;
+    restoreGenerationRef.current += 1;
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
     inFlightRef.current = false;
@@ -183,6 +227,7 @@ export function useAgentChat(options: UseAgentChatOptions = {}): UseAgentChatRes
     lastRequestRef.current = null;
     clearPersistedSession();
     dispatch({ type: "chat_reset" });
+    if (sessionId) void resetSession(sessionId);
   }
 
   function selectCard(cardId: string): void {
@@ -214,4 +259,3 @@ export function useAgentChat(options: UseAgentChatOptions = {}): UseAgentChatRes
     appendLocalTurn,
   };
 }
-

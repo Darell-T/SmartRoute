@@ -7,8 +7,10 @@ from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
-from app.services.trips import crowd_search, crowd_search_provider
-from app.services.trips.crowd_hotspots import HotspotHit
+from app.services.trips.crowds import search as crowd_search
+from app.services.trips.crowds import search_normalization
+from app.services.trips.crowds import search_provider as crowd_search_provider
+from app.services.trips.crowds.hotspots import HotspotHit
 
 
 class CrowdSearchNormalizationTests(unittest.TestCase):
@@ -27,7 +29,7 @@ class CrowdSearchNormalizationTests(unittest.TestCase):
 
     def test_official_web_event_is_scoring_authorized(self):
         source = "https://www.lincolncenter.org/venue/calendar"
-        events = crowd_search.normalize_search_payload(
+        events = search_normalization.normalize_search_payload(
             {
                 "events": [
                     {
@@ -52,7 +54,7 @@ class CrowdSearchNormalizationTests(unittest.TestCase):
 
     def test_independent_x_is_corroborative_and_cannot_score(self):
         source = "https://x.com/randomaccount/status/123"
-        events = crowd_search.normalize_search_payload(
+        events = search_normalization.normalize_search_payload(
             {
                 "events": [
                     {
@@ -75,7 +77,7 @@ class CrowdSearchNormalizationTests(unittest.TestCase):
 
     def test_official_evidence_without_a_location_cannot_score(self):
         source = "https://www.lincolncenter.org/venue/calendar"
-        events = crowd_search.normalize_search_payload(
+        events = search_normalization.normalize_search_payload(
             {
                 "events": [
                     {
@@ -95,7 +97,7 @@ class CrowdSearchNormalizationTests(unittest.TestCase):
         self.assertFalse(events[0]["scoring_authorized"])
 
     def test_uncited_or_unknown_hotspot_output_is_dropped(self):
-        events = crowd_search.normalize_search_payload(
+        events = search_normalization.normalize_search_payload(
             {
                 "events": [
                     {
@@ -115,7 +117,9 @@ class CrowdSearchNormalizationTests(unittest.TestCase):
         self.assertEqual(events, [])
 
     def test_prompt_injection_does_not_format_json_contract_braces(self):
-        rendered = crowd_search._PROMPT.replace("{areas}", "columbus_lincoln")
+        rendered = crowd_search_provider.PROMPT.replace(
+            "{areas}", "columbus_lincoln"
+        )
 
         self.assertIn('{"events":[', rendered)
         self.assertIn("columbus_lincoln", rendered)
@@ -145,8 +149,116 @@ class CrowdSearchNormalizationTests(unittest.TestCase):
         self.assertNotIn(str(self.area.latitude), first)
 
 
+class CrowdSearchCacheTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.area = HotspotHit(
+            route_index=0,
+            hotspot_key="columbus_lincoln",
+            hotspot_name="Columbus Circle and Lincoln Center",
+            station_name="59 St-Columbus Circle",
+            latitude=40.768,
+            longitude=-73.982,
+            expected_at=datetime.fromisoformat("2026-07-25T20:30:00-04:00"),
+            route_id="A",
+        )
+
+    async def test_empty_or_disabled_search_does_not_call_provider(self):
+        with (
+            patch.object(crowd_search.cache, "cache_get", return_value=None),
+            patch.object(crowd_search, "_run_search", new_callable=AsyncMock) as provider,
+        ):
+            empty = await crowd_search.search_hotspots(
+                [], travel_at=self.area.expected_at, allow_live_search=True
+            )
+            disabled = await crowd_search.search_hotspots(
+                [self.area],
+                travel_at=self.area.expected_at,
+                allow_live_search=False,
+            )
+
+        self.assertEqual(empty["status"], "not_required")
+        self.assertEqual(disabled["status"], "not_required")
+        provider.assert_not_awaited()
+
+    async def test_valid_cache_returns_without_calling_provider(self):
+        cached = '{"status":"complete","events":[],"completed_sources":["web"]}'
+        with (
+            patch.object(crowd_search.cache, "cache_get", return_value=cached),
+            patch.object(crowd_search, "_run_search", new_callable=AsyncMock) as provider,
+        ):
+            result = await crowd_search.search_hotspots(
+                [self.area],
+                travel_at=self.area.expected_at,
+                allow_live_search=True,
+            )
+
+        self.assertTrue(result["cache_hit"])
+        self.assertEqual(result["completed_sources"], ["web"])
+        provider.assert_not_awaited()
+
+    async def test_invalid_cache_falls_through_and_caches_partial_result(self):
+        provider_result = {
+            "status": "partial",
+            "events": [],
+            "completed_sources": ["web"],
+        }
+        with (
+            patch.object(crowd_search.cache, "cache_get", return_value="not-json"),
+            patch.object(crowd_search.cache, "cache_set") as cache_set,
+            patch.object(
+                crowd_search,
+                "_run_search",
+                new_callable=AsyncMock,
+                return_value=provider_result,
+            ) as provider,
+        ):
+            result = await crowd_search.search_hotspots(
+                [self.area],
+                travel_at=self.area.expected_at,
+                allow_live_search=True,
+            )
+
+        self.assertFalse(result["cache_hit"])
+        provider.assert_awaited_once()
+        cache_set.assert_called_once()
+        self.assertEqual(cache_set.call_args.args[2], 300)
+
+
 
 class CrowdSearchProviderTests(unittest.IsolatedAsyncioTestCase):
+    def test_citation_urls_accept_supported_shapes_and_drop_invalid_values(self):
+        response = SimpleNamespace(
+            citations=[
+                "https://example.com/direct",
+                {"url": "https://example.com/mapping"},
+                {"href": "http://example.com/href"},
+                "javascript:alert(1)",
+                3,
+            ],
+            inline_citations=[
+                SimpleNamespace(url="https://example.com/object"),
+                SimpleNamespace(href="not-a-url"),
+            ],
+        )
+
+        self.assertEqual(
+            crowd_search_provider._citation_urls(response),
+            {
+                "https://example.com/direct",
+                "https://example.com/mapping",
+                "http://example.com/href",
+                "https://example.com/object",
+            },
+        )
+
+    async def test_disabled_provider_returns_bounded_unavailable_result(self):
+        with patch.dict("os.environ", {"GROK_CROWD_SEARCH_ENABLED": "0"}):
+            result = await crowd_search_provider.run_search({}, datetime.now().astimezone())
+
+        self.assertEqual(result["status"], "unavailable")
+        self.assertEqual(result["failure_phase"], "disabled")
+        self.assertEqual(result["events"], [])
+
     async def test_one_async_request_configures_parallel_web_and_x_tools(self):
         area = HotspotHit(
             route_index=0,

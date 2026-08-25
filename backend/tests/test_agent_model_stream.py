@@ -4,9 +4,10 @@ import asyncio
 import time
 import types
 import unittest
+from unittest import mock
 
 from app.services.agent import events
-from app.services.agent import model_stream
+from app.services.agent.model import stream as model_stream
 
 
 def _event(event_type: str, **values):
@@ -92,6 +93,17 @@ class _Messages:
         return self._stream
 
 
+class _SequenceMessages:
+    def __init__(self, streams):
+        self._streams = list(streams)
+        self.calls = 0
+
+    def stream(self, **_kwargs):
+        stream = self._streams[self.calls]
+        self.calls += 1
+        return stream
+
+
 class _NoFirstByteStream:
     async def __aenter__(self):
         return self
@@ -123,7 +135,117 @@ class _RetryableFailureStream:
         return False
 
 
+class _AckThenSlowCompletionStream:
+    """First token immediately, then a pause longer than the first-byte timeout."""
+
+    def __init__(self, pause_s: float):
+        self._pause_s = pause_s
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return False
+
+    async def __aiter__(self):
+        yield _event("content_block_start", index=0, content_block=_event("text"))
+        yield _event(
+            "content_block_delta",
+            index=0,
+            delta=_event("text_delta", text="I'll route you to Sottocasa. "),
+        )
+        await asyncio.sleep(self._pause_s)
+        yield _event("content_block_stop", index=0)
+        yield _event("content_block_start", index=1, content_block=_event("text"))
+        yield _event(
+            "content_block_delta",
+            index=1,
+            delta=_event("text_delta", text="Comparing live routes now."),
+        )
+        yield _event("content_block_stop", index=1)
+
+    async def get_final_message(self):
+        return types.SimpleNamespace(
+            content=[],
+            stop_reason="tool_use",
+            usage=types.SimpleNamespace(input_tokens=8, output_tokens=12),
+        )
+
+
 class ModelStreamTests(unittest.IsolatedAsyncioTestCase):
+    async def test_stream_that_acked_may_finish_after_first_byte_timeout(self):
+        messages = _Messages(_AckThenSlowCompletionStream(pause_s=0.08))
+        with mock.patch.object(model_stream, "MODEL_ATTEMPT_TIMEOUT_S", 0.03):
+            items = [
+                item
+                async for item in model_stream.stream_model_call(
+                    client=types.SimpleNamespace(messages=messages),
+                    stream_kwargs={},
+                    log_tag="test",
+                    retry_count=0,
+                    sanitize_text=lambda value: value,
+                    deadline_monotonic=time.monotonic() + 0.4,
+                )
+            ]
+        tokens = [
+            item.text for item in items if isinstance(item, events.TokenEvent)
+        ]
+        outcome = next(
+            item for item in items if isinstance(item, model_stream.ModelCallCompleted)
+        )
+        self.assertIsNone(outcome.error)
+        self.assertIn("I'll route you to Sottocasa. ", tokens)
+        self.assertIn("Comparing live routes now.", tokens)
+
+    async def test_silent_attempt_timeout_retries_within_turn(self):
+        release = asyncio.Event()
+        release.set()
+        messages = _SequenceMessages(
+            [_NoFirstByteStream(), _RawStream(release=release)]
+        )
+        with mock.patch.object(model_stream, "MODEL_ATTEMPT_TIMEOUT_S", 0.01):
+            items = [
+                item
+                async for item in model_stream.stream_model_call(
+                    client=types.SimpleNamespace(messages=messages),
+                    stream_kwargs={},
+                    log_tag="test",
+                    retry_count=1,
+                    sanitize_text=lambda value: value,
+                    deadline_monotonic=time.monotonic() + 0.2,
+                )
+            ]
+        outcome = next(
+            item for item in items if isinstance(item, model_stream.ModelCallCompleted)
+        )
+        self.assertIsNone(outcome.error)
+        self.assertEqual(outcome.attempts, 2)
+        self.assertEqual(messages.calls, 2)
+
+    async def test_timeout_after_streamed_text_does_not_retry(self):
+        release = asyncio.Event()
+        messages = _SequenceMessages(
+            [_RawStream(release=release), _RawStream(release=release)]
+        )
+        with mock.patch.object(model_stream, "MODEL_ATTEMPT_TIMEOUT_S", 0.01):
+            items = [
+                item
+                async for item in model_stream.stream_model_call(
+                    client=types.SimpleNamespace(messages=messages),
+                    stream_kwargs={},
+                    log_tag="test",
+                    retry_count=1,
+                    sanitize_text=lambda value: value,
+                    deadline_monotonic=time.monotonic() + 0.2,
+                )
+            ]
+        outcome = next(
+            item for item in items if isinstance(item, model_stream.ModelCallCompleted)
+        )
+        self.assertEqual(outcome.error.code, "deadline")
+        self.assertEqual(outcome.attempts, 1)
+        self.assertEqual(messages.calls, 1)
+
     async def test_deadline_before_first_byte_is_typed_and_bounded(self):
         client = types.SimpleNamespace(messages=_Messages(_NoFirstByteStream()))
         started = time.monotonic()

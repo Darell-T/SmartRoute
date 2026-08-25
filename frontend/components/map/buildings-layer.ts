@@ -1,15 +1,8 @@
 import type maplibregl from "maplibre-gl";
 
-// 3D buildings rendered as a NATIVE MapLibre fill-extrusion layer.
-//
-// Previously these were a deck.gl MVTLayer in the interleaved overlay, which
-// (a) maintained a second tile pipeline fetched/tessellated independently of
-// the basemap, and (b) re-rendered every frame in sync with every MapLibre
-// repaint. Both showed up as pan jank (worst-frame ~34ms -> ~19ms with
-// buildings off in profiling). MapLibre's fill-extrusion uploads tile
-// geometry once and renders it in the basemap's own GL pass, so it is far
-// cheaper during pan and over new tiles -- and it stays always-visible (no
-// gesture flicker). Tiles are the same MapTiler "building" MVT source.
+// Render 3D buildings in MapLibre's native GL pass. A separate interleaved
+// tile and tessellation pipeline adds per-frame work during pan. Native
+// fill-extrusion uploads each tile once and stays visible during gestures.
 
 const BUILDINGS_SOURCE_ID = "sr-buildings-src";
 export const BUILDINGS_LAYER_ID = "sr-buildings";
@@ -27,7 +20,7 @@ function mapTilerBuildingTiles() {
 
 // Top = exaggerated render_height (falls back to height, then a 24m default),
 // floored at 8m so trivial footprints still read as blocks. Base = the
-// building's min height (usually 0). Mirrors the old deck buildingHeight().
+// building's min height (usually 0).
 const HEIGHT_EXPR: maplibregl.ExpressionSpecification = [
   "max",
   8,

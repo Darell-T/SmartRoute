@@ -34,6 +34,17 @@ class TokenEvent:
         return {"text": self.text}
 
 
+@dataclasses.dataclass(frozen=True)
+class ReasoningEvent:
+    """A bounded rider-safe deliberation summary, never private model thought."""
+
+    text: str
+    type: str = "reasoning"
+
+    def to_data(self) -> dict[str, Any]:
+        return {"text": self.text}
+
+
 ProgressStage = Literal[
     "finding_routes",
     "checking_live_conditions",
@@ -99,7 +110,7 @@ class RouteCardEvent:
     leg_label: str | None = None
     depart_iso: str | None = None
     # Canonical seconds-based itinerary (Task 2+). Optional for back-compat
-    # with mocks / older session digests; plan_trip always populates it.
+    # with mocks / older session digests; canonical route preparation populates it.
     itinerary: dict | None = None
     selection_decision: dict | None = None
     type: str = "route_card"
@@ -184,6 +195,27 @@ class ArrivalCardEvent:
         return data
 
 
+TransitStatusAction = Literal["view_alerts"]
+
+
+@dataclasses.dataclass(frozen=True)
+class TransitStatusActionEvent:
+    """A typed passenger action attached to a completed transit-status result.
+
+    The event is intentionally narrower than a generic UI command.  The
+    transit presenter/turn stream decides when current-status evidence makes
+    the Alerts surface useful; the client only renders the matching action
+    and never infers it from the assistant's prose.
+    """
+
+    turn_id: str
+    action: TransitStatusAction = "view_alerts"
+    type: str = "transit_status_action"
+
+    def to_data(self) -> dict[str, Any]:
+        return {"turn_id": self.turn_id, "action": self.action}
+
+
 @dataclasses.dataclass(frozen=True)
 class ErrorEvent:
     code: str  # rate_limited|budget_exceeded|session_expired|invalid_request|provider_configuration|upstream_error|deadline|internal
@@ -224,11 +256,13 @@ class DoneEvent:
 AgentEvent = Union[
     MetaEvent,
     TokenEvent,
+    ReasoningEvent,
     ProgressEvent,
     ToolStartEvent,
     ToolEndEvent,
     RouteCardEvent,
     ArrivalCardEvent,
+    TransitStatusActionEvent,
     ErrorEvent,
     DoneEvent,
 ]

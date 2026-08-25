@@ -132,22 +132,22 @@ test("empty chat leads with nearby transit proof and compact Prompt Kit suggesti
   assert.match(WELCOME_SOURCE, /variant="outline"/);
   assert.doesNotMatch(WELCOME_SOURCE, /NavArrowRight/);
   assert.doesNotMatch(WELCOME_SOURCE, /Chevron/);
-  assert.match(PANEL_SOURCE, /Get me to JFK with fewer transfers and less walking/);
-  assert.match(PANEL_SOURCE, /Get me to Madison Square Garden and avoid event crowds/);
-  assert.match(PANEL_SOURCE, /Find me a good pizza spot that is easy to reach by subway/);
+  assert.match(PANEL_SOURCE, /JFK · fewer transfers/);
+  assert.match(PANEL_SOURCE, /MSG · avoid crowds/);
+  assert.match(PANEL_SOURCE, /Ramen · best route now/);
   assert.match(SUGGESTION_SOURCE, /variant = "outline"/);
 
   assert.match(
     PANEL_SOURCE,
-    /Get me to JFK with the fewest transfers and as little walking as possible/,
+    /Get me to JFK with fewer transfers\./,
   );
   assert.match(
     PANEL_SOURCE,
-    /Get me to Madison Square Garden while avoiding event crowds and major service disruptions/,
+    /Get me to Madison Square Garden and avoid crowds\./,
   );
   assert.match(
     PANEL_SOURCE,
-    /Find a good pizza spot that is easy to reach by subway from where I am/,
+    /Find a good ramen spot and route me there by subway\./,
   );
   assert.match(PANEL_SOURCE, /fillDraftAndFocus/);
   assert.match(
@@ -156,11 +156,15 @@ test("empty chat leads with nearby transit proof and compact Prompt Kit suggesti
   );
 });
 
-test("suggestions stay text-only and use a focus-aware mobile snap rail", () => {
-  assert.doesNotMatch(WELCOME_SOURCE, /@\/components\/ui\//);
+test("suggestions are text-only and use a focus-aware mobile snap rail", () => {
   assert.doesNotMatch(WELCOME_SOURCE, /sr-chat-suggestion-icon/);
-  assert.doesNotMatch(PANEL_SOURCE, /\bicon:\s*["']/);
+  assert.doesNotMatch(PANEL_SOURCE, /\bicon:\s*/);
   assert.doesNotMatch(CHAT_STYLE_SOURCE, /\.sr-chat-suggestion-icon/);
+  assert.match(
+    CHAT_STYLE_SOURCE,
+    /\.sr-chat-suggestion-pill\s*\{[\s\S]*?border:\s*0;[\s\S]*?background:\s*transparent;/,
+  );
+  assert.doesNotMatch(CHAT_STYLE_SOURCE, /sr-chat-suggestion-(?:separator|dot)/);
   assert.match(WELCOME_SOURCE, /<span>\{suggestion\.label\}<\/span>/);
   assert.match(PANEL_SOURCE, /className="sr-chat-composer-dock"/);
   assert.match(HOME_NEARBY_SOURCE, /model\.stationName \? \(/);
@@ -185,17 +189,24 @@ test("generated response text never renders a synthetic caret", () => {
   assert.doesNotMatch(CHAT_STYLE_SOURCE, /sr-chat-caret/);
 });
 
-test("generic working copy deliberates while semantic transit stages remain factual", () => {
+test("thinking stays neutral until a real search capability starts", () => {
   assert.match(WORKING_PANEL_SOURCE, /Finding viable routes/);
   assert.match(WORKING_PANEL_SOURCE, /Checking live service and current incidents/);
   assert.match(WORKING_PANEL_SOURCE, /Deliberating between the best options/);
-  assert.match(WORKING_PANEL_SOURCE, /<Shimmer[^>]*>[\s\S]*?Deliberating…/);
+  assert.match(WORKING_PANEL_SOURCE, /<Shimmer[^>]*>[\s\S]*?\{streamingLabel\}/);
+  assert.match(WORKING_PANEL_SOURCE, /isSearchActivityTool\(chip\.tool\)/);
   assert.doesNotMatch(WORKING_PANEL_SOURCE, /Thinking…/);
   assert.match(
     MESSAGE_SOURCE,
-    /aria-label=\{isFindingRoutes \? "Searching for the best route" : "Deliberating"\}/,
+    /aria-label=\{isSearching \? "Searching current sources" : "Deliberating"\}/,
   );
   assert.doesNotMatch(WORKING_PANEL_SOURCE, /CheckCircle|CircleCheck|CheckIcon/);
+  assert.match(WORKING_PANEL_SOURCE, /sr-chat-working-panel__reasoning/);
+  assert.match(CHAT_STYLE_SOURCE, /\.sr-chat-working-panel__reasoning\s*\{/);
+  assert.match(
+    CHAT_STYLE_SOURCE,
+    /\.sr-chat-working-panel__reasoning\s*\{[\s\S]*?color:\s*var\(--sr-chat-ink-dim\)/,
+  );
 });
 
 test("failed chat turns have one compact manual recovery surface", () => {

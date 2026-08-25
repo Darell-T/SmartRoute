@@ -8,11 +8,11 @@ from unittest.mock import Mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.utils.stop_patterns import (  # noqa: E402
+from app.services.mta.static_gtfs.stop_patterns import (  # noqa: E402
     StopPatternIndex,
     normalize_station_name,
 )
-from app.utils.gtfs_static import GTFSStaticData  # noqa: E402
+from app.services.mta.static_gtfs.store import GTFSStaticData  # noqa: E402
 
 # Small synthetic network with an express/local branch + a reverse direction.
 #   Q local (nb):   A B C D E      (trip_count 100)
@@ -38,6 +38,25 @@ FIXTURE = {
          "trip_count": 30, "signature": "r1", "stop_ids": ["B", "D"]},
     ],
 }
+
+DISTINCT_TRANSFER_FIXTURE = json.loads(json.dumps(FIXTURE))
+DISTINCT_TRANSFER_FIXTURE["stops"]["BN"] = {
+    "name": "Beta St",
+    "lat": 40.1005,
+    "lon": -73.1005,
+    "station_complex_id": "gtfs_transfer:A",
+}
+DISTINCT_TRANSFER_FIXTURE["patterns"].insert(
+    3,
+    {
+        "route_id": "R",
+        "route_short_name": "R",
+        "direction_id": 0,
+        "trip_count": 40,
+        "signature": "r-distinct-transfer",
+        "stop_ids": ["BN", "D"],
+    },
+)
 
 
 class NormalizeTests(unittest.TestCase):
@@ -129,6 +148,60 @@ class IndexTests(unittest.TestCase):
                 "destination_stop_id": "D",
                 "direction_id": 0,
             },
+        )
+
+    def test_suggest_one_transfer_validates_shared_complex_and_egress_gain(self):
+        suggestion = self.idx.suggest_one_transfer(
+            "Q",
+            "Alpha Av",
+            "Epsilon Ctr",
+            {"lat": 40.3, "lon": -73.3},
+            allowed_modes=["SUBWAY", "BUS"],
+        )
+
+        self.assertIsNotNone(suggestion)
+        self.assertEqual(suggestion["continuation_route_id"], "R")
+        self.assertEqual(suggestion["transfer_stop_id"], "B")
+        self.assertEqual(suggestion["continuation_transfer_stop_id"], "B")
+        self.assertEqual(suggestion["transfer_station_complex_id"], "gtfs_transfer:A")
+        self.assertGreater(suggestion["egress_distance_improvement_meters"], 250)
+
+    def test_suggest_one_transfer_fails_closed_for_order_complex_gain_and_exclusions(self):
+        self.assertIsNone(
+            self.idx.suggest_one_transfer("Q", "Alpha Av", "Beta St", {"lat": 40.3, "lon": -73.3})
+        )
+        no_complex = json.loads(json.dumps(FIXTURE))
+        no_complex["stops"]["B"].pop("station_complex_id")
+        self.assertIsNone(
+            StopPatternIndex(no_complex).suggest_one_transfer(
+                "Q", "Alpha Av", "Epsilon Ctr", {"lat": 40.3, "lon": -73.3}
+            )
+        )
+        self.assertIsNone(
+            self.idx.suggest_one_transfer("Q", "Alpha Av", "Epsilon Ctr", {"lat": 40.4, "lon": -73.4})
+        )
+        self.assertIsNone(
+            self.idx.suggest_one_transfer(
+                "Q", "Alpha Av", "Epsilon Ctr", {"lat": 40.3, "lon": -73.3},
+                excluded_route_ids={"R"},
+            )
+        )
+        self.assertIsNone(
+            self.idx.suggest_one_transfer(
+                "Q", "Alpha Av", "Epsilon Ctr", {"lat": 40.3, "lon": -73.3},
+                excluded_modes={"SUBWAY"},
+            )
+        )
+
+    def test_suggest_one_transfer_returns_continuation_member_coordinates(self):
+        suggestion = StopPatternIndex(DISTINCT_TRANSFER_FIXTURE).suggest_one_transfer(
+            "Q", "Alpha Av", "Epsilon Ctr", {"lat": 40.3, "lon": -73.3}
+        )
+        self.assertEqual(suggestion["transfer_stop_id"], "B")
+        self.assertEqual(suggestion["continuation_transfer_stop_id"], "BN")
+        self.assertNotEqual(
+            suggestion["transfer_stop_coords"],
+            suggestion["continuation_transfer_stop_coords"],
         )
 
     def test_identity_for_stop_parent_and_directional_child(self):

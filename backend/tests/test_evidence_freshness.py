@@ -4,7 +4,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 from app.services.evidence import current_payload, evidence_envelope
-from app.services.trips import advisor_context
+from evaluation.route_intelligence import advisor_context
 
 
 NOW = datetime.now(timezone.utc)

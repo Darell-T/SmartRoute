@@ -5,6 +5,7 @@ import type {
   ArrivalSourceStatus,
   ProgressEvent,
   RouteCard,
+  TransitStatusActionEvent,
 } from "./agent-chat-stream";
 
 export interface ToolChip {
@@ -25,6 +26,7 @@ export interface AssistantTurn {
   role: "assistant";
   turnId: string;
   text: string;
+  reasoning: string;
   toolChips: ToolChip[];
   routeCards: RouteCard[];
   progress?: Omit<ProgressEvent, "type">;
@@ -43,8 +45,11 @@ export interface AssistantTurn {
     retryable: boolean;
     correlationId?: string;
   };
+  notice?: string;
   local?: boolean;
   arrivals?: ArrivalsTurnPayload;
+  /** Server-owned action offered by a transit-status presentation. */
+  transitStatusAction?: TransitStatusActionEvent["action"];
 }
 
 export type ChatTurn = UserTurn | AssistantTurn;
@@ -77,6 +82,8 @@ export type ChatReducerAction =
   | AgentEvent
   | { type: "chat_reset" }
   | { type: "session_discarded" }
+  | { type: "session_restarted"; message: string }
+  | { type: "session_restored"; sessionId: string; turns: ChatTurn[] }
   | { type: "turn_started"; text: string }
   | { type: "turn_retry_started" }
   | { type: "turn_error_dismissed" }
@@ -99,6 +106,16 @@ function lastAssistantTurn(messages: ChatTurn[]): AssistantTurn | null {
   return last && last.role === "assistant" ? last : null;
 }
 
+function appendUniqueReasoning(reasoning: string, text: string): string {
+  const nextLine = text.trim();
+  if (!nextLine) return reasoning;
+  const alreadyPresent = reasoning
+    .split("\n")
+    .some((line) => line.trim() === nextLine);
+  if (alreadyPresent) return reasoning;
+  return reasoning ? `${reasoning}\n${text}` : text;
+}
+
 function updateLastAssistantTurn(
   state: ChatState,
   update: (turn: AssistantTurn) => AssistantTurn,
@@ -115,7 +132,7 @@ function cardFromEvent(event: Extract<AgentEvent, { type: "route_card" }>): Rout
   return card;
 }
 
-function arrivalsFromEvent(event: ArrivalCardEvent): ArrivalsTurnPayload {
+export function arrivalsFromEvent(event: ArrivalCardEvent): ArrivalsTurnPayload {
   const distance = event.stop.distance_meters;
   const walking = event.catchability?.walking_minutes;
   const guidance = [
@@ -151,6 +168,22 @@ export function applyAgentEvent(state: ChatState, action: ChatReducerAction): Ch
       return createChatState(null);
     case "session_discarded":
       return { ...state, sessionId: null };
+    case "session_restarted":
+      return updateLastAssistantTurn(state, (turn) => ({
+        ...turn,
+        notice: action.message,
+      }));
+    case "session_restored": {
+      // A live turn may have started before the snapshot resolved; the
+      // restore must never overwrite what the rider is already watching.
+      if (state.messages.length > 0) return state;
+      return {
+        messages: action.turns,
+        sessionId: action.sessionId,
+        isStreaming: false,
+        error: null,
+      };
+    }
     case "turn_started": {
       const priorMessages = (() => {
         const prior = lastAssistantTurn(state.messages);
@@ -166,7 +199,7 @@ export function applyAgentEvent(state: ChatState, action: ChatReducerAction): Ch
       })();
       const userTurn: UserTurn = { role: "user", text: action.text };
       const assistantTurn: AssistantTurn = {
-        role: "assistant", turnId: "", text: "", toolChips: [], routeCards: [], isStreaming: true,
+        role: "assistant", turnId: "", text: "", reasoning: "", toolChips: [], routeCards: [], isStreaming: true,
       };
       return {
         ...state,
@@ -181,9 +214,11 @@ export function applyAgentEvent(state: ChatState, action: ChatReducerAction): Ch
           ...turn,
           turnId: "",
           text: "",
+          reasoning: "",
           toolChips: [],
           routeCards: [],
           arrivals: undefined,
+          transitStatusAction: undefined,
           progress: undefined,
           isStreaming: true,
           stopReason: undefined,
@@ -218,6 +253,11 @@ export function applyAgentEvent(state: ChatState, action: ChatReducerAction): Ch
       };
     case "token":
       return updateLastAssistantTurn(state, (turn) => ({ ...turn, text: turn.text + action.text }));
+    case "reasoning":
+      return updateLastAssistantTurn(state, (turn) => ({
+        ...turn,
+        reasoning: appendUniqueReasoning(turn.reasoning, action.text),
+      }));
     case "progress":
       return updateLastAssistantTurn(state, (turn) => {
         if (!turn.isStreaming) return turn;
@@ -251,7 +291,16 @@ export function applyAgentEvent(state: ChatState, action: ChatReducerAction): Ch
       return updateLastAssistantTurn(state, (turn) => ({
         ...turn,
         toolChips: turn.toolChips.map((chip) => chip.id === action.tool_call_id
-          ? { ...chip, status: action.ok ? "ok" : "failed", durationMs: action.duration_ms, summary: action.summary }
+          ? {
+            ...chip,
+            status: action.ok ? "ok" : "failed",
+            durationMs: action.ok ? action.duration_ms : undefined,
+            summary: action.summary,
+            // The start label is the only rider-facing activity copy. A tool
+            // receipt can contain counts, provider wording, or execution
+            // details, so it must never replace the contextual label.
+            label: chip.label,
+          }
           : chip),
         ...(isRouteWorkflowTool(action.tool) && !action.ok ? { progress: undefined } : {}),
       }));
@@ -262,7 +311,27 @@ export function applyAgentEvent(state: ChatState, action: ChatReducerAction): Ch
         : { ...turn, routeCards: [...turn.routeCards, card], progress: undefined });
     }
     case "arrival_card":
+      if (
+        action.source_status === "stop_not_resolved" ||
+        action.source_status === "provider_unavailable" ||
+        action.source_status === "no_predictions" ||
+        action.resolution_status === "ambiguous" ||
+        action.resolution_status === "location_required" ||
+        action.resolution_status === "provider_unavailable" ||
+        action.resolution_status === "no_predictions" ||
+        !action.directions.some((group) => group.arrivals.length > 0)
+      ) {
+        return state;
+      }
       return updateLastAssistantTurn(state, (turn) => ({ ...turn, arrivals: arrivalsFromEvent(action) }));
+    case "transit_status_action": {
+      const turn = lastAssistantTurn(state.messages);
+      if (!turn || (turn.turnId && turn.turnId !== action.turn_id)) return state;
+      return updateLastAssistantTurn(state, (current) => ({
+        ...current,
+        transitStatusAction: action.action,
+      }));
+    }
     case "error": {
       const turn = lastAssistantTurn(state.messages);
       if (turn?.arrivals) return state;
@@ -278,12 +347,18 @@ export function applyAgentEvent(state: ChatState, action: ChatReducerAction): Ch
     case "done": {
       const turn = lastAssistantTurn(state.messages);
       if (turn && (!turn.isStreaming || (turn.turnId && turn.turnId !== action.turn_id))) return state;
+      const clarification = action.stop_reason === "clarification_required";
       return {
         ...updateLastAssistantTurn(state, (current) => ({
-          ...current, isStreaming: false, stopReason: action.stop_reason, progress: undefined,
+          ...current,
+          isStreaming: false,
+          stopReason: action.stop_reason,
+          progress: undefined,
+          ...(clarification ? { error: undefined } : {}),
         })),
         sessionId: action.session_id,
         isStreaming: false,
+        ...(clarification ? { error: null } : {}),
       };
     }
     case "stream_cancelled":
@@ -313,6 +388,7 @@ export function applyAgentEvent(state: ChatState, action: ChatReducerAction): Ch
         role: "assistant",
         turnId: action.turnId,
         text: action.text,
+        reasoning: "",
         toolChips: [],
         routeCards: [],
         isStreaming: false,

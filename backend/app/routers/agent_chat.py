@@ -24,7 +24,7 @@ from app.services.agent import events as agent_events
 from app.services.agent import loop as agent_loop
 from app.services.agent import session as session_module
 from app.services import admission
-from app.utils.geo import NYC_BOUNDS
+from app.services.geography import NYC_BOUNDS
 
 router = APIRouter()
 
@@ -85,6 +85,15 @@ class AgentChatRequest(BaseModel):
         if value is not None and len(value) > 64:
             raise ValueError("card identifier is too long")
         return value
+
+
+class SessionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    session_id: str = Field(..., min_length=1, max_length=128)
+
+
+def _sessions_available() -> bool:
+    return bool(os.getenv("REDIS_URL")) or AGENT_ALLOW_MEMORY_SESSIONS
 
 
 def _log_sess(session_id: str) -> str:
@@ -161,6 +170,7 @@ async def _sse_stream(
     # the stream's whole lifetime so cleanup can always cancel and drain it
     # before touching the session.
     next_event: asyncio.Future | None = None
+    response_succeeded = False
     try:
         while True:
             next_event = asyncio.ensure_future(agen.__anext__())
@@ -178,6 +188,11 @@ async def _sse_stream(
             except StopAsyncIteration:
                 return
             next_event = None  # this __anext__ finished; nothing is pending
+            if isinstance(event, agent_events.DoneEvent):
+                response_succeeded = event.stop_reason in {
+                    "end_turn",
+                    "clarification_required",
+                }
             yield agent_events.sse_format(event)
     finally:
         try:
@@ -204,15 +219,16 @@ async def _sse_stream(
             except (asyncio.CancelledError, StopAsyncIteration):
                 pass
         finally:
-            # Always persist, including on client disconnect / task
-            # cancellation -- whatever route cards, history, and slots
-            # accumulated before the drop should survive for the rider's next
-            # message. Nested finallys keep both releases protected even if
-            # the save itself raises: the admission lease exactly once, then
-            # the per-session turn lease so the next request for this session
-            # can proceed.
+            # Persist diagnostic mutations even when a turn fails or the
+            # client disconnects, but preserve the expiry earned at prompt
+            # admission. Only a terminal rider-facing success starts a new
+            # inactivity window.
             try:
-                session_module.save_session(session_id, session)
+                session_module.save_session(
+                    session_id,
+                    session,
+                    refresh_ttl=response_succeeded,
+                )
             finally:
                 try:
                     await admission.release(lease)
@@ -222,7 +238,7 @@ async def _sse_stream(
 
 @router.post("/api/agent/chat")
 async def agent_chat(request: Request, payload: AgentChatRequest):
-    if not os.getenv("REDIS_URL") and not AGENT_ALLOW_MEMORY_SESSIONS:
+    if not _sessions_available():
         raise HTTPException(
             status_code=503,
             detail=(
@@ -288,16 +304,26 @@ async def agent_chat(request: Request, payload: AgentChatRequest):
             headers=_SSE_HEADERS,
         )
     try:
+        incoming_origin = (
+            {"lat": payload.origin.lat, "lng": payload.origin.lng}
+            if payload.origin
+            else None
+        )
+        origin = session_module.update_current_location(session, incoming_origin)
+        # An accepted rider prompt starts a fresh inactivity window before
+        # model or provider work begins. The normal terminal save below then
+        # resets the same 30-minute window after the completed response.
+        session_module.save_session(session_id, session)
         trace = agent_loop.TurnTrace(
             stage_ms={"session_load_ms": (time.monotonic() - session_load_started) * 1000}
         )
         gtfs = getattr(request.app.state, "gtfs", None)
         turn_id = session_module.next_turn_id(session)
         now_et = datetime.now(ZoneInfo("America/New_York")).isoformat()
-        origin = {"lat": payload.origin.lat, "lng": payload.origin.lng} if payload.origin else None
+        origin_source = "request" if incoming_origin else "session" if origin else "missing"
         print(
             f"[agent-chat] sess[{_log_sess(session_id)}] turn={turn_id} "
-            f"msg_len={len(payload.message)} origin_present={'yes' if origin else 'no'} "
+            f"msg_len={len(payload.message)} origin_source={origin_source} "
             f"selected_card={'yes' if payload.selected_card_id else 'no'}"
             f" presentation={payload.response_presentation}"
         )
@@ -311,3 +337,24 @@ async def agent_chat(request: Request, payload: AgentChatRequest):
         await _release_turn_leases(session_id, session_lease_token, lease)
         raise
     return response
+
+
+@router.post("/api/agent/chat/session")
+async def agent_chat_session_snapshot(payload: SessionRequest):
+    """Restore the complete rider-visible transcript for one live session."""
+    if not _sessions_available():
+        raise HTTPException(status_code=503, detail="Chat sessions are unavailable.")
+    session = session_module.load_session(payload.session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session_expired")
+    snapshot = session_module.transcript_snapshot(session)
+    return {"session_id": payload.session_id, **snapshot}
+
+
+@router.post("/api/agent/chat/session/reset")
+async def agent_chat_session_reset(payload: SessionRequest):
+    """End a conversation; idempotent so New Trip can always clear locally."""
+    if not _sessions_available():
+        raise HTTPException(status_code=503, detail="Chat sessions are unavailable.")
+    session_module.delete_session(payload.session_id)
+    return {"ok": True}

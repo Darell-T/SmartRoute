@@ -9,9 +9,19 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Awaitable, Callable
+from enum import Enum
 from typing import Any
 
 from app.services.agent.events import ProgressStage, ProgressStatus
+
+
+class ToolOutcome(str, Enum):
+    """Passenger-relevant result of one completed capability execution."""
+
+    READY = "ready"
+    NEEDS_CLARIFICATION = "needs_clarification"
+    UNAVAILABLE = "unavailable"
+    FAILED = "failed"
 
 
 @dataclasses.dataclass
@@ -30,6 +40,12 @@ class ToolContext:
     agent_mode: str = ""
     agent_model: str = ""
     agent_explanation_style: str = ""
+    # Exact discovery refinements are resolved from the active server-owned
+    # discovery set. The model still chooses the capability, but it cannot
+    # replace the durable query or rider-authorized geographic scope.
+    discovery_refinement: dict[str, Any] | None = None
+    rider_message: str = ""
+    turn_evidence: Any = None
     progress_sink: Callable[[ProgressStage, ProgressStatus], Awaitable[None]] | None = None
 
     async def emit_progress(self, stage: ProgressStage, status: ProgressStatus) -> None:
@@ -56,3 +72,25 @@ class ToolResult:
     events: list = dataclasses.field(default_factory=list)
     session_route_cards: list = dataclasses.field(default_factory=list)
     timings: dict[str, float] = dataclasses.field(default_factory=dict)
+    terminal: bool = False
+    terminal_path: str | None = None
+    # Precise model-facing recovery detail that must not cross the public
+    # activity-event boundary (for example, validator field names).
+    internal_diagnostic: bool = False
+    outcome: ToolOutcome | str | None = None
+
+    def __post_init__(self) -> None:
+        if self.outcome is None:
+            self.outcome = ToolOutcome.READY if self.ok else ToolOutcome.FAILED
+        elif not isinstance(self.outcome, ToolOutcome):
+            self.outcome = ToolOutcome(str(self.outcome))
+
+    @property
+    def evidence_ready(self) -> bool:
+        return self.outcome == ToolOutcome.READY
+
+    @property
+    def reusable_within_turn(self) -> bool:
+        """Whether an identical call should reuse this deterministic outcome."""
+
+        return self.outcome != ToolOutcome.FAILED

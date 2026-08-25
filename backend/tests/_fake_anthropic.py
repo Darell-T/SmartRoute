@@ -56,7 +56,7 @@ class FakeStreamContext:
             raise RuntimeError(self._round_spec.get("raise_message", "simulated upstream failure"))
         return self
 
-    async def __aexit__(self, *exc_info):
+    async def __aexit__(self, *_exc_info):
         return False
 
     async def _iter_text(self):
@@ -145,7 +145,7 @@ def reload_agent_loop_module(*, rounds: list[dict] | None = None, env: dict | No
     NOTE: deliberately not `with patch.dict(sys.modules, {...}):` here --
     patch.dict on sys.modules snapshots and restores the *entire* dict on
     exit, which would also undo every submodule loop.py's own import graph
-    newly registers during this call (app.services.agent.budget/events/...,
+    newly registers during this call (app.services.agent.model.budget/events/...,
     anthropic's own submodules), leaving them absent from sys.modules even
     though the loaded objects are still reachable and reload() then fails to
     find them by name. Swap just the "anthropic" key by hand instead.

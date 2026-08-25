@@ -1,0 +1,13 @@
+{
+  "stalled_trains": [],
+  "stalled_buses": [
+    {
+      "route_id": "B35",
+      "location": {
+        "Latitude": 40.6502,
+        "Longitude": -73.963
+      },
+      "time_recorded": "2026-07-22T21:20:00Z"
+    }
+  ]
+}

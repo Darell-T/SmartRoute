@@ -200,11 +200,6 @@ function StationArrivalRow({ arrival }: { arrival: NearbyGroupedArrival }) {
             className="sr-arrival-countdown"
           />
         </strong>
-        <PredictionStatus
-          predictionType={arrival.predictionType}
-          predictionFreshness={arrival.predictionFreshness}
-          alertSeverity={arrival.alertSeverity}
-        />
       </span>
     </motion.li>
   );
@@ -248,11 +243,6 @@ function ArrivalRow({ arrival }: { arrival: Arrival }) {
             className="sr-arrival-countdown"
           />
         </strong>
-        <PredictionStatus
-          predictionType={arrival.predictionType}
-          predictionFreshness={arrival.predictionFreshness}
-          alertSeverity={arrival.alertSeverity}
-        />
       </span>
     </motion.li>
   );

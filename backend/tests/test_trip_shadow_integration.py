@@ -8,8 +8,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from app.services.validation import production_shadow
-from app.services.validation.shadow import (
+from evaluation.route_intelligence import trip_shadow
+from evaluation.route_intelligence.shadow import (
     CounterfactualBaselineEvaluation,
     ShadowEvaluationStatus,
 )
@@ -20,7 +20,7 @@ class TripShadowIntegrationTests(unittest.IsolatedAsyncioTestCase):
         displayed = {"selected_route_index": 1, "route": [{"private": "geometry"}]}
         evaluator = AsyncMock()
         with patch.dict(os.environ, {}, clear=True):
-            result = await production_shadow.run_trip_shadow(
+            result = await trip_shadow.run_trip_shadow(
                 displayed,
                 baseline_evaluator=evaluator,
                 production_route_id="candidate-1",
@@ -43,13 +43,13 @@ class TripShadowIntegrationTests(unittest.IsolatedAsyncioTestCase):
             with patch.dict(
                 os.environ,
                 {
-                    "ROUTE_SHADOW_VALIDATION_ENABLED": "true",
-                    "ROUTE_SHADOW_LOG_PATH": str(path),
-                    "ROUTE_SHADOW_SAMPLE_RATE": "1",
+                    "EVALUATION_SHADOW_ENABLED": "true",
+                    "EVALUATION_SHADOW_LOG_PATH": str(path),
+                    "EVALUATION_SHADOW_SAMPLE_RATE": "1",
                 },
                 clear=True,
             ):
-                result = await production_shadow.run_trip_shadow(
+                result = await trip_shadow.run_trip_shadow(
                     displayed,
                     baseline_evaluator=AsyncMock(
                         return_value=CounterfactualBaselineEvaluation("candidate-0")
@@ -83,9 +83,9 @@ class TripShadowIntegrationTests(unittest.IsolatedAsyncioTestCase):
         displayed = {"selected_route_index": 0}
         evaluator = AsyncMock()
         with patch.dict(
-            os.environ, {"ROUTE_SHADOW_VALIDATION_ENABLED": "true"}, clear=True
+            os.environ, {"EVALUATION_SHADOW_ENABLED": "true"}, clear=True
         ):
-            result = await production_shadow.run_trip_shadow(
+            result = await trip_shadow.run_trip_shadow(
                 displayed,
                 baseline_evaluator=evaluator,
                 production_route_id="candidate-0",
@@ -108,13 +108,13 @@ class TripShadowIntegrationTests(unittest.IsolatedAsyncioTestCase):
             with patch.dict(
                 os.environ,
                 {
-                    "ROUTE_SHADOW_VALIDATION_ENABLED": "true",
-                    "ROUTE_SHADOW_LOG_PATH": str(path),
-                    "ROUTE_SHADOW_SAMPLE_RATE": "0",
+                    "EVALUATION_SHADOW_ENABLED": "true",
+                    "EVALUATION_SHADOW_LOG_PATH": str(path),
+                    "EVALUATION_SHADOW_SAMPLE_RATE": "0",
                 },
                 clear=True,
             ):
-                result = await production_shadow.run_trip_shadow(
+                result = await trip_shadow.run_trip_shadow(
                     displayed,
                     baseline_evaluator=evaluator,
                     production_route_id="candidate-0",
@@ -130,7 +130,7 @@ class TripShadowIntegrationTests(unittest.IsolatedAsyncioTestCase):
         evaluator.assert_not_awaited()
 
     def test_counterfactual_parser_rejects_route_zero_fallback_and_accepts_full_schema(self):
-        failed = production_shadow.parse_counterfactual_baseline("Q looks fastest", 2)
+        failed = trip_shadow.parse_counterfactual_baseline("Q looks fastest", 2)
         self.assertEqual(failed.status, ShadowEvaluationStatus.FAILED)
         raw = (
             '[ROUTE:1][CANDIDATE_ANALYSIS]'
@@ -139,12 +139,12 @@ class TripShadowIntegrationTests(unittest.IsolatedAsyncioTestCase):
             '{"index":1,"is_recommended":true,"recommendation_reason":"better"}]}'
             '[/CANDIDATE_ANALYSIS]'
         )
-        complete = production_shadow.parse_counterfactual_baseline(raw, 2)
+        complete = trip_shadow.parse_counterfactual_baseline(raw, 2)
         self.assertEqual(complete.selected_route_id, "candidate-1")
         self.assertEqual(complete.status, ShadowEvaluationStatus.COMPLETE)
 
     def test_source_counts_are_allowlisted(self):
-        counts = production_shadow.safe_source_counts(
+        counts = trip_shadow.safe_source_counts(
             incidents=[
                 {"source": "grok_x, 511ny"},
                 {"source": "https://provider.test/?api_key=secret"},
@@ -158,7 +158,7 @@ class TripShadowIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("secret", repr(counts))
 
     def test_fallback_production_choice_is_not_counted_as_route_change(self):
-        from app.services.validation.shadow import build_shadow_record
+        from evaluation.route_intelligence.shadow import build_shadow_record
 
         record = build_shadow_record(
             evidence_kind="live_shadow",

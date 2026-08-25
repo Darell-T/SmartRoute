@@ -4,19 +4,13 @@ from __future__ import annotations
 
 import unittest
 
-from app.services.agent.tools import plan_trip_projection
-from app.services.trips import candidates, text
+from app.services.agent.tools.route import route_projection
 
 
 class IncidentCoverageProjectionTests(unittest.TestCase):
     @staticmethod
     def _project(prose: str, metadata: dict | None) -> str:
-        return plan_trip_projection._passenger_explanation(
-            prose,
-            metadata or {},
-            candidates_module=candidates,
-            text_module=text,
-        )
+        return route_projection.passenger_explanation(prose, metadata or {})
 
     def test_complete_incident_scan_does_not_add_an_incomplete_disclosure(self):
         explanation = self._project(

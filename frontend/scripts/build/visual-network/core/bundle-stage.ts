@@ -1,16 +1,11 @@
-// Bundle stage — extracted verbatim from build-subway-visual-network.ts.
 // Groups corridor features into physical bundles, assigns deterministic lane
-// slots, bakes per-lane offset geometry, and emits bundle / bundle_lane /
-// unbundled / bundle_gap features. This is a behavior-preserving extraction:
-// the function bodies are byte-identical to the orchestrator originals.
-import type { LineFeature, Position } from "../shared/types.ts";
+// slots, bakes per-lane offset geometry, and emits bundle, bundle_lane,
+// unbundled, and bundle_gap features.
+import type { LineFeature } from "../shared/types.ts";
 import { orderColorsForBundle } from "../../lane-order.ts";
 import { offsetPolylineBySlotRamp } from "../../cross-color-spread.ts";
 import {
-  JUNCTION_BRIDGE_MAX_M,
   LANE_WIDTH_METERS,
-  M_PER_DEG_LAT,
-  distanceMeters,
   offsetPolylineByLaneSlot,
 } from "../shared/geometry-utils.ts";
 import {
@@ -66,141 +61,6 @@ function adjacentRouteIdsAtAnchor(anchorFeatureIndex: Map<any, any>, anchorId: s
     .filter(({ feature }: any) => feature.properties.corridor_id !== ownCorridorId)
     .map(({ feature }: any) => feature);
   return unionRouteIds(adjacent);
-}
-
-// Gap bridging (Fix 1) — constant moved up.
-
-function buildJunctionBridges(bundleLaneFeatures: any[], bundleGapFeatures: any[]) {
-  // Spatial-grid index of bundle_lane endpoints by color so we can find
-  // bridge candidates by GEOMETRIC PROXIMITY (anchor identity is not
-  // enough — bundle gaps exist precisely because no adjacent feature
-  // shares the same anchor by id).
-  //   cellKey = `${cellX}|${cellY}|${color}`
-  //   value = list of { coord, feature, endpointKind }
-  // Cell size = JUNCTION_BRIDGE_MAX_M so a 3×3 neighborhood lookup
-  // captures every candidate within snap distance.
-  const cellDeg = JUNCTION_BRIDGE_MAX_M / M_PER_DEG_LAT;
-  const endpointIndex = new Map();
-  function endpointIndexInsert(coord: Position, color: string, feature: any, endpointKind: string) {
-    const cx = Math.floor(coord[0] / cellDeg);
-    const cy = Math.floor(coord[1] / cellDeg);
-    const k = cx + "|" + cy + "|" + color;
-    if (!endpointIndex.has(k)) endpointIndex.set(k, []);
-    endpointIndex.get(k).push({ coord, feature, endpointKind });
-  }
-  for (const lane of bundleLaneFeatures) {
-    const p = lane.properties;
-    const coords = lane.geometry.coordinates;
-    if (!Array.isArray(coords) || coords.length < 2) continue;
-    const color = String(p.color ?? "");
-    if (!color) continue;
-    endpointIndexInsert(coords[0], color, lane, "from");
-    endpointIndexInsert(coords[coords.length - 1], color, lane, "to");
-  }
-  function endpointIndexLookup(coord: Position, color: string) {
-    const cx = Math.floor(coord[0] / cellDeg);
-    const cy = Math.floor(coord[1] / cellDeg);
-    const out = [];
-    for (let dx = -1; dx <= 1; dx += 1) {
-      for (let dy = -1; dy <= 1; dy += 1) {
-        const k = (cx + dx) + "|" + (cy + dy) + "|" + color;
-        const bucket = endpointIndex.get(k);
-        if (bucket) for (const e of bucket) out.push(e);
-      }
-    }
-    return out;
-  }
-
-  const bridges = [];
-  const bridged = new Set();
-  let bridgeNumber = 1;
-
-  for (const gap of bundleGapFeatures) {
-    const p = gap.properties;
-    const color = String(p.color ?? "");
-    if (!color) continue;
-    const gapCoord = gap.geometry.coordinates;
-    if (!Array.isArray(gapCoord) || gapCoord.length !== 2) continue;
-
-    // Find the closest same-color bundle_lane endpoint that's NOT one of
-    // the gap's own corridor endpoints.
-    const candidates = endpointIndexLookup(gapCoord as Position, color);
-    let bestEndpoint = null;
-    let bestDist = Infinity;
-    for (const cand of candidates) {
-      if (cand.feature.properties.corridor_id === p.corridor_id) continue;
-      const d = distanceMeters(gapCoord as Position, cand.coord);
-      if (d > JUNCTION_BRIDGE_MAX_M) continue;
-      if (d < bestDist) { bestDist = d; bestEndpoint = cand; }
-    }
-    if (!bestEndpoint) continue;
-
-    // Avoid duplicate bridges: pair-key independent of order.
-    const pairKey = [
-      p.corridor_id ?? p.bundle_id ?? "?",
-      bestEndpoint.feature.properties.corridor_id
-        ?? bestEndpoint.feature.properties.bundle_id ?? "?",
-      color,
-    ]
-      .sort()
-      .join("|");
-    if (bridged.has(pairKey)) continue;
-    bridged.add(pairKey);
-
-    const colorRouteIds = Array.isArray(p.color_route_ids)
-      ? p.color_route_ids
-      : [];
-    const routeIds = Array.isArray(p.route_ids) ? p.route_ids : [];
-    // Inherit lane slot from the target endpoint's bundle_lane so the
-    // bridge sits visually on the same parallel slot.
-    const laneSlot = Number(bestEndpoint.feature.properties.lane_slot ?? 0);
-
-    bridges.push({
-      type: "Feature",
-      geometry: { type: "LineString", coordinates: [gapCoord, bestEndpoint.coord] },
-      properties: {
-        visual_feature_type: "bundle_lane",
-        bridge: true,
-        bridge_id: `bridge-${String(bridgeNumber++).padStart(5, "0")}`,
-        bundle_id: p.bundle_id ?? null,
-        corridor_id: p.corridor_id ?? null,
-        route_id: colorRouteIds[0] ?? routeIds[0] ?? "",
-        representative_route_id: colorRouteIds[0] ?? routeIds[0] ?? "",
-        route_ids: routeIds,
-        color_route_ids: colorRouteIds,
-        color,
-        lane_slot: laneSlot,
-        lane_group_id:
-          bestEndpoint.feature.properties.lane_group_id ??
-          bestEndpoint.feature.properties.bundle_id ?? null,
-        lane_slot_source: "bridge",
-        lane_order_basis:
-          bestEndpoint.feature.properties.lane_order_basis ?? [color],
-        lane_order_override_applied: false,
-        bundle_lane_count:
-          bestEndpoint.feature.properties.bundle_lane_count ?? 1,
-        bundle_lane_slots:
-          bestEndpoint.feature.properties.bundle_lane_slots ?? { [color]: laneSlot },
-        from_anchor_id: p.anchor_id,
-        to_anchor_id: p.anchor_id,
-        anchor_id: p.anchor_id,
-        bridge_distance_m: Number(bestDist.toFixed(2)),
-        source_shape_ids: [],
-        source_edge_ids: [],
-        member_corridor_ids: [
-          p.corridor_id,
-          bestEndpoint.feature.properties.corridor_id,
-        ].filter(Boolean),
-        spine_id: null,
-        base_spine_hash: null,
-        physical_bundle_id: null,
-        physical_bundle_spine_hash: null,
-        physical_bundle_member_count: null,
-        physical_bundle_confidence: null,
-      },
-    });
-  }
-  return bridges;
 }
 
 export function buildBundleArtifacts(features: LineFeature[], spinesByCorridorId: Map<any, any>) {
@@ -481,20 +341,8 @@ export function buildBundleArtifacts(features: LineFeature[], spinesByCorridorId
     }
   }
 
-  // TODO(phase 3c): delete buildJunctionBridges entirely.
-  // Legacy buildJunctionBridges removed in Phase 3b. The new branch-transition
-  // promotion happens OUTSIDE buildBundleArtifacts (after it returns) so the
-  // transition logic operates on the final bundle_lane set, not intermediate
-  // state. The buildJunctionBridges function definition is kept in this file
-  // for now but is no longer called. To remove entirely, delete the function
-  // (around line 2225) plus the import dependencies it touches.
-
-  // Fix 3: bake the lane_slot offset into each bundle_lane's geometry so
-  // the runtime doesn't need MapLibre's per-segment line-offset (which
-  // breaks at corners). Keep the original lane_slot as metadata under
-  // lane_slot_semantic and set lane_slot/render_lane_slot to 0 in the
-  // output so the existing line-offset paint expression produces 0 for
-  // these features.
+  // Bake lane offsets into geometry because MapLibre line-offset breaks at
+  // corners. Retain the semantic slot as metadata and zero the runtime slot.
   for (const lane of bundleLaneFeatures) {
     // Continuous-materialization lanes already have their lane offset baked into
     // geometry by materializePhysicalBundles; never re-bake it (that was the

@@ -3,6 +3,8 @@ import httpx
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
+from app.services.geography import distance_meters
+from app.services.mta.static_gtfs.stop_patterns import normalize_station_name
 
 
 ROUTES_URL = "https://routes.googleapis.com/directions/v2:computeRoutes"
@@ -244,6 +246,133 @@ def parse_response(response: dict) -> list:
     return routes
 
 
+async def get_transfer_route_pair(
+    *,
+    origin_coords,
+    transfer_name: str,
+    transfer_coords,
+    continuation_transfer_coords,
+    destination_query: str,
+    destination_coords,
+    allowed_travel_modes: list[str],
+    routing_preference: str,
+    departure_time: str | None,
+    first_service: str,
+    second_service: str,
+) -> list[dict] | None:
+    """Fetch and validate the two provider segments for one transfer."""
+    first_response = await get_transit_route(
+        origin_coords,
+        transfer_name,
+        transfer_coords,
+        allowed_travel_modes=allowed_travel_modes,
+        routing_preference=routing_preference,
+        departure_time=departure_time,
+    )
+    first = _route_at_transfer(
+        parse_response(first_response), first_service, transfer_name,
+        transfer_coords, True,
+    )
+    if first is None:
+        return None
+    first_arrival = _last_time(first, "arrival_time_iso")
+    if not first_arrival:
+        return None
+    second_response = await get_transit_route(
+        transfer_coords,
+        destination_query,
+        destination_coords,
+        allowed_travel_modes=allowed_travel_modes,
+        routing_preference=routing_preference,
+        departure_time=first_arrival,
+    )
+    second = _route_at_transfer(
+        parse_response(second_response), second_service, transfer_name,
+        continuation_transfer_coords, False,
+    )
+    if second is None:
+        return None
+    totals = [_route_total_seconds(first), _route_total_seconds(second)]
+    if any(total is None for total in totals):
+        return None
+    total = sum(totals)
+    combined = [dict(step) for step in [*first, *second]]
+    for step in combined:
+        step["route_total_seconds"] = total
+        step["route_total_minutes"] = round(total / 60)
+    return combined
+
+
+def _route_at_transfer(routes, service, transfer_name, transfer_coords, arrival):
+    expected = normalize_station_name(transfer_name)
+    for route in routes or []:
+        transit = [
+            step for step in route
+            if str(step.get("type") or "").upper() in {"SUBWAY", "BUS"}
+        ]
+        if not transit:
+            continue
+        if any(
+            str(step.get("route_id") or step.get("train_line") or "").upper()
+            != str(service).upper()
+            for step in transit
+        ):
+            continue
+        step = transit[-1] if arrival else transit[0]
+        actual_service = str(
+            step.get("route_id") or step.get("train_line") or ""
+        ).upper()
+        actual_stop = step.get("arrival_stop" if arrival else "departure_stop")
+        point = step.get("arrival_coords" if arrival else "departure_coords")
+        if (
+            actual_service == str(service).upper()
+            and normalize_station_name(str(actual_stop or "")) == expected
+            and _nearby_coords(point, transfer_coords)
+        ):
+            return route
+    return None
+
+
+def _nearby_coords(point, target) -> bool:
+    if not isinstance(point, dict):
+        return False
+    lat = point.get("latitude", point.get("lat"))
+    lon = point.get("longitude", point.get("lng", point.get("lon")))
+    if isinstance(target, dict):
+        target_lat = target.get("latitude", target.get("lat"))
+        target_lon = target.get("longitude", target.get("lon", target.get("lng")))
+    elif isinstance(target, (tuple, list)) and len(target) == 2:
+        target_lat, target_lon = target
+    else:
+        return False
+    if not all(isinstance(value, (int, float)) for value in (lat, lon, target_lat, target_lon)):
+        return False
+    return distance_meters(float(lat), float(lon), float(target_lat), float(target_lon)) <= 250
+
+
+def _last_time(route, key: str) -> str | None:
+    for step in reversed(route):
+        value = step.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
+
+
+def _route_total_seconds(route) -> int | None:
+    for step in route:
+        value = step.get("route_total_seconds")
+        if (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and value >= 0
+        ):
+            return int(value)
+        value = step.get("route_total_minutes")
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
+            return int(value * 60)
+    return None
+
+
 def _parse_leg_steps(leg: dict) -> list:
     steps = []
     route_total_minutes = _duration_to_minutes(leg.get("duration"))
@@ -297,7 +426,7 @@ def _parse_leg_steps(leg: dict) -> list:
 
                 }
                 steps.append(transit_step)
-            
+
             if step["travelMode"] == "WALK":
                 steps.append({
                     "type": step["travelMode"],

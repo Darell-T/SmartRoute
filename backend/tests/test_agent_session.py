@@ -4,9 +4,10 @@
 agnostic, so this exercises the same code paths Redis would."""
 
 import unittest
+import time
 
 from app.services.agent import session as agent_session
-from app.utils import cache
+from app.services import cache
 
 
 class SessionLifecycleTests(unittest.TestCase):
@@ -18,6 +19,7 @@ class SessionLifecycleTests(unittest.TestCase):
         self.assertTrue(session_id)
         self.assertEqual(session["v"], agent_session.SCHEMA_VERSION)
         self.assertEqual(session["turn_seq"], 0)
+        self.assertIsNone(session["current_location"])
         self.assertEqual(session["slots"], {})
         self.assertEqual(session["route_cards"], [])
         self.assertEqual(session["history"], [])
@@ -64,10 +66,61 @@ class SessionLifecycleTests(unittest.TestCase):
         refreshed_expiry = cache._mem[key][1]
         self.assertGreater(refreshed_expiry, first_expiry - 1000)
 
+    def test_save_without_refresh_preserves_existing_expiry(self):
+        session_id, session = agent_session.new_session()
+        agent_session.save_session(session_id, session)
+
+        core_key = agent_session._session_key(session_id)
+        transcript_key = agent_session._transcript_key(session_id)
+        preserved_expiry = time.monotonic() + 100
+        for key in (core_key, transcript_key):
+            value, _expiry = cache._mem[key]
+            cache._mem[key] = (value, preserved_expiry)
+
+        session["history"].append({"role": "assistant", "text": "failed turn"})
+        agent_session.save_session(session_id, session, refresh_ttl=False)
+
+        self.assertEqual(cache._mem[core_key][1], preserved_expiry)
+        self.assertEqual(cache._mem[transcript_key][1], preserved_expiry)
+        self.assertEqual(
+            agent_session.load_session(session_id)["history"][-1]["text"],
+            "failed turn",
+        )
+
     def test_next_turn_id_increments(self):
         _session_id, session = agent_session.new_session()
         self.assertEqual(agent_session.next_turn_id(session), "t1")
         self.assertEqual(agent_session.next_turn_id(session), "t2")
+
+    def test_current_location_reuses_and_replaces_valid_device_fixes(self):
+        _session_id, session = agent_session.new_session()
+        first = {"lat": 40.6494, "lng": -73.9631}
+        newer = {"lat": 40.6502, "lng": -73.9496}
+
+        self.assertEqual(agent_session.update_current_location(session, first), first)
+        self.assertEqual(agent_session.update_current_location(session, None), first)
+        self.assertEqual(agent_session.update_current_location(session, newer), newer)
+        self.assertEqual(agent_session.current_location(session), newer)
+
+    def test_invalid_location_never_erases_a_valid_session_fix(self):
+        _session_id, session = agent_session.new_session()
+        valid = {"lat": 40.6494, "lng": -73.9631}
+        agent_session.update_current_location(session, valid)
+
+        self.assertEqual(
+            agent_session.update_current_location(
+                session,
+                {"lat": float("nan"), "lng": -73.9},
+            ),
+            valid,
+        )
+        self.assertEqual(
+            agent_session.update_current_location(
+                session,
+                {"lat": 35.0, "lng": -100.0},
+            ),
+            valid,
+        )
 
 
 class SessionCapTests(unittest.TestCase):
@@ -117,16 +170,16 @@ class SessionCapTests(unittest.TestCase):
 
 
 class SlotExtractionTests(unittest.TestCase):
-    def test_extracts_origin_destination_from_plan_trip_call(self):
+    def test_extracts_origin_destination_from_route_preparation(self):
         _session_id, session = agent_session.new_session()
-        agent_session.extract_slots(session, [("plan_trip", {"origin": "user", "destination": "Costco"})])
+        agent_session.extract_slots(session, [("prepare_route_options", {"origin": "user", "destination": "Costco"})])
         self.assertEqual(session["slots"]["origin"], "user")
         self.assertEqual(session["slots"]["destination"], "Costco")
 
     def test_extracts_exclude_modes_into_constraints(self):
         _session_id, session = agent_session.new_session()
         agent_session.extract_slots(
-            session, [("plan_trip", {"origin": "user", "destination": "Costco", "exclude_modes": ["BUS"]})]
+            session, [("prepare_route_options", {"origin": "user", "destination": "Costco", "exclude_modes": ["BUS"]})]
         )
         self.assertEqual(session["slots"]["constraints"]["exclude_modes"], ["BUS"])
 
@@ -134,11 +187,11 @@ class SlotExtractionTests(unittest.TestCase):
         _session_id, session = agent_session.new_session()
         agent_session.extract_slots(
             session,
-            [("plan_trip", {"origin": "user", "destination": "MSG", "departure_time": "2026-07-16T22:00:00-04:00"})],
+            [("prepare_route_options", {"origin": "user", "destination": "MSG", "departure_time": "2026-07-16T22:00:00-04:00"})],
         )
         self.assertEqual(session["slots"]["time_anchor"], "2026-07-16T22:00:00-04:00")
 
-    def test_non_plan_trip_calls_do_not_touch_slots(self):
+    def test_non_route_preparation_calls_do_not_touch_slots(self):
         _session_id, session = agent_session.new_session()
         agent_session.extract_slots(session, [("transit_snapshot", {"near": "user"})])
         self.assertEqual(session["slots"], {})
@@ -148,8 +201,8 @@ class SlotExtractionTests(unittest.TestCase):
         agent_session.extract_slots(
             session,
             [
-                ("plan_trip", {"origin": "user", "destination": "Costco"}),
-                ("plan_trip", {"origin": "user", "destination": "MSG"}),
+                ("prepare_route_options", {"origin": "user", "destination": "Costco"}),
+                ("prepare_route_options", {"origin": "user", "destination": "MSG"}),
             ],
         )
         self.assertEqual(session["slots"]["destination"], "MSG")

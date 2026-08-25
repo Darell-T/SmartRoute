@@ -1,3 +1,7 @@
+# Environment, telemetry, and configuration gates intentionally run before the
+# rest of the application import graph is loaded.
+# ruff: noqa: E402
+
 import asyncio
 import os
 import time
@@ -15,7 +19,11 @@ _repo_root = _backend_dir.parent
 load_dotenv(_repo_root / ".env", override=True)
 load_dotenv(_backend_dir / ".env", override=True)
 
-from app.services.agent import policy as agent_policy
+from app import observability
+
+observability.initialize()
+
+from app.services.agent.model import policy as agent_policy
 from app import runtime
 
 agent_policy.validate_agent_configuration()
@@ -29,13 +37,13 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Securit
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security.api_key import APIKeyHeader
-from app.routers import trips, live_feed, subway, agent_chat, incident_job
+from app.routers import trips, live_feed, subway, agent_chat, incident_refresh
 from app.services.live_feed.network_snapshot import network_snapshot_store
-from app.services.incident_scout_transport import close_incident_scout_client
-from app.services.mta_feed import close_bus_client, start_bus_client
-from app.services.trips.crowd_search_provider import close_crowd_search_client
-from app.utils.gtfs_static import GTFSStaticData, close_pool, init_pool
-from app.models.migrate_gtfs import migrate
+from app.services.incidents.scout_provider import close_incident_scout_client
+from app.services.mta.bus_runtime import close_bus_client, start_bus_client
+from app.services.trips.crowds.search_provider import close_crowd_search_client
+from app.services.mta.static_gtfs.store import GTFSStaticData, close_pool, init_pool
+from app.services.mta.static_gtfs.migration import migrate
 
 # Active riders share one process-owned realtime snapshot. Poll no faster than
 # the upstream feed cadence, and stop polling shortly after the last REST or
@@ -102,9 +110,9 @@ async def _realtime_warm_loop():
 
 
 async def _init_pool_bg():
-    # Bring up the (optional) DB pool WITHOUT blocking startup: a slow/unreachable
-    # Postgres takes connect_timeout x minconn seconds, which used to wedge the
-    # worker. Trip enrichment no longer needs it (Fix B), so do it in background.
+    # Creating minconn connections can block for connect_timeout x minconn when
+    # Postgres is slow or unreachable. Trip enrichment uses the static index, so
+    # the optional pool can initialize without delaying application startup.
     try:
         await asyncio.to_thread(init_pool)
         print("[startup] DB pool ready (optional; trip enrichment is static)")
@@ -114,13 +122,13 @@ async def _init_pool_bg():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Fix B: trip enrichment resolves stop sequences from the in-memory static
-    # pattern index, NOT the remote Postgres. Startup must not depend on the DB.
+    # Trip enrichment resolves stop sequences from the in-memory static pattern
+    # index. Application startup must not depend on the optional database.
     gtfs = GTFSStaticData()
     # Load the precomputed stop-pattern artifact once. On failure, enrichment
     # degrades to empty stop lists rather than touching the remote DB.
     try:
-        from app.utils.stop_patterns import StopPatternIndex
+        from app.services.mta.static_gtfs.stop_patterns import StopPatternIndex
         gtfs.set_pattern_index(StopPatternIndex.load())
         print(
             f"[startup] stop-pattern index loaded: {len(gtfs._pattern_index.patterns)} "
@@ -157,6 +165,7 @@ async def lifespan(app: FastAPI):
     await close_incident_scout_client()
     await close_crowd_search_client()
     close_pool()
+    await asyncio.to_thread(observability.shutdown)
 
 
 app = FastAPI(lifespan=lifespan)
@@ -203,7 +212,7 @@ protected_api.include_router(agent_chat.router)
 app.include_router(protected_api)
 app.include_router(live_feed.ws_router)
 # Cron secret auth only; not behind X-App-Key so Render cron can call it.
-app.include_router(incident_job.router)
+app.include_router(incident_refresh.router)
 
 @app.get("/health", dependencies=[])
 @app.head("/health", dependencies=[])
@@ -214,7 +223,7 @@ async def health():
 
 async def _session_store_ready() -> bool:
     """Verify Redis connectivity and periodically exercise a real command."""
-    from app.utils import cache
+    from app.services import cache
 
     client = cache.redis_client
     if client is None:

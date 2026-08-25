@@ -1,6 +1,6 @@
 import unittest
 
-from app.utils.geo import find_nearest_stops
+from app.services.geography import find_nearest_stops
 
 
 class FakeGTFS:

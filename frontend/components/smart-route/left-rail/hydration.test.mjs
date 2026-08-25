@@ -18,6 +18,23 @@ test("left rail route view does not render an inline client clock during SSR", (
   );
 });
 
+test("left rail exposes a controlled tab seam without mirroring props in an effect", () => {
+  const source = fs.readFileSync(
+    path.join(ROOT, "components/smart-route/left-rail/left-rail.tsx"),
+    "utf8",
+  );
+
+  assert.match(source, /tab\?: TabId/);
+  assert.match(source, /onTabChange\?: \(tab: TabId\) => void/);
+  assert.match(source, /const activeTab = tab \?\? internalTab/);
+  assert.match(source, /if \(tab === undefined\) setInternalTab\(next\)/);
+  assert.doesNotMatch(
+    source,
+    /useEffect\([^)]*setInternalTab/s,
+    "controlled tab changes should be rendered directly instead of copied into state by an effect",
+  );
+});
+
 test("left rail uses restrained transit product surfaces", () => {
   const routeView = [
     "route-view.tsx",
@@ -34,6 +51,10 @@ test("left rail uses restrained transit product surfaces", () => {
       ),
     )
     .join("\n");
+  const nearbyView = fs.readFileSync(
+    path.join(ROOT, "components/smart-route/left-rail/route-view-nearby.tsx"),
+    "utf8",
+  );
   const alertsView = [
     "alerts-view.tsx",
     "alert-featured-card.tsx",
@@ -252,10 +273,10 @@ test("left rail uses restrained transit product surfaces", () => {
     /sr-live-console\[data-mobile-sheet-state="small"\][\s\S]*\.sr-map-mini-controls[\s\S]*bottom: calc\(var\(--sr-mobile-sheet-px, 124px\) \+ 1rem\)/,
     "the recenter control should move above the compact mobile search shelf",
   );
-  assert.match(
-    routeView,
-    /function PredictionSignalIcon/,
-    "arrival rows should use a meaningful signal-bars prediction icon",
+  assert.doesNotMatch(
+    nearbyView,
+    /<PredictionStatus/,
+    "nearby arrival rows should not add a redundant prediction signal icon",
   );
   assert.match(
     routeView,
@@ -409,6 +430,11 @@ test("left rail uses restrained transit product surfaces", () => {
     /sr-alert-card smart-route-liquid-card/,
     "featured alert cards must not reuse the route-result liquid-glass material",
   );
+  assert.doesNotMatch(
+    alertsView,
+    /sr-alerts-updated|latestAlertUpdateLabel|<Navigation/,
+    "the Alerts rail should not add a freshness label or paper-plane icon",
+  );
   assert.match(
     alertsView,
     /className="sr-alert-detail"/,
@@ -531,6 +557,21 @@ test("left rail uses restrained transit product surfaces", () => {
     railCss,
     /\.sr-alert-line-row__summary:hover\s+\.sr-alert-line-row__title\s*\{[^}]*color:\s*#fff/s,
     "service-alert titles should not turn white on light surfaces",
+  );
+  assert.match(
+    railCss,
+    /data-sr-theme="light"[^}]*\.sr-rail-tabs button:hover:not\(:disabled\)[\s\S]*color:\s*var\(--sr-text-1\)/,
+    "light-mode rail tabs should keep a theme-owned readable hover foreground",
+  );
+  assert.match(
+    railCss,
+    /\.sr-alert-card__summary--full\s*\{[^}]*color:\s*color-mix\(in srgb, var\(--sr-fg\) 76%, transparent\)/s,
+    "featured alert body copy should derive contrast from the active theme foreground",
+  );
+  assert.doesNotMatch(
+    railCss,
+    /\.sr-alerts-updated(?:__icon)?\s*\{/,
+    "removed alert freshness UI should not leave dead styling",
   );
   assert.match(
     shimmer,

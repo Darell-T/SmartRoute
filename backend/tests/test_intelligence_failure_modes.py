@@ -11,13 +11,16 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from app.services import incident_index
-from app.services.trips import incident_index_adapter, incidents
-from app.services.trips.incident_context import (
+from app.services.incidents import index as incident_index
+from app.services.trips.route_incidents import (
+    index_adapter as incident_index_adapter,
+    scan as incidents,
+)
+from app.services.trips.route_incidents.context import (
     CandidateStopAssociation,
     CandidateStopContext,
 )
-from app.utils import cache
+from app.services import cache
 
 
 def _context() -> list[CandidateStopContext]:

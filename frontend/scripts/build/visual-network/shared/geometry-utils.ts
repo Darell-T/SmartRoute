@@ -5,9 +5,6 @@ export const MITER_LENGTH_CAP_RATIO = 2; // fall back to bevel above this miter 
 export const M_PER_DEG_LAT = 111_320;
 export const RESAMPLE_INTERVAL_M = 25;
 export const HAUSDORFF_MAX_M = 15;
-// Legacy buildJunctionBridges (Fix 1) gap-bridge max distance; paired with the
-// branch-transition promotion in the orchestrator.
-export const JUNCTION_BRIDGE_MAX_M = 90;
 
 export function metersPerDegLng(lat: number) {
   return 111_320 * Math.cos((lat * Math.PI) / 180);

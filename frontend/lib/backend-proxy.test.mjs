@@ -8,6 +8,7 @@ import {
   appendRequestSearch,
   fetchBackendText,
   readJsonBody,
+  resolveBackendBaseUrl,
 } from "./backend-proxy-core.ts";
 
 const FRONTEND_ROOT = path.dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
@@ -37,6 +38,30 @@ test("Next configuration still loads when the application secret is server-only"
   );
 
   assert.equal(result.status, 0, result.stderr);
+});
+
+test("Vercel falls back from stale local or non-HTTP backend overrides", () => {
+  const environments = [
+    { NEXT_PUBLIC_API_URL: "http://localhost:8000" },
+    { API_URL: "http://127.0.0.1:8000" },
+    { API_URL: "http://[::1]:8000" },
+    { API_URL: "ftp://backend.example" },
+  ];
+
+  for (const environment of environments) {
+    assert.equal(
+      resolveBackendBaseUrl({ ...environment, VERCEL: "1" }),
+      "https://jarvis-mta-assistant.onrender.com",
+      JSON.stringify(environment),
+    );
+  }
+});
+
+test("local development preserves the configured local backend", () => {
+  assert.equal(
+    resolveBackendBaseUrl({ NEXT_PUBLIC_API_URL: "http://localhost:8000" }),
+    "http://localhost:8000",
+  );
 });
 
 test("readJsonBody distinguishes malformed JSON from an empty body", async () => {

@@ -1,19 +1,21 @@
 from __future__ import annotations
 
+import json
 import pathlib
 import sys
 import unittest
-from datetime import datetime
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import redis
 
-
 BACKEND_ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
+
+from app.services import cache as cache_module  # noqa: E402
 
 try:
     from google.transit import gtfs_realtime_pb2
@@ -37,9 +39,6 @@ else:
     mta_bus = None
     mta_feeds = None
     mta_subway = None
-
-from app.utils import cache as cache_module
-
 
 def _localized_timestamp(year: int, month: int, day: int, hour: int) -> int:
     if NYC_TZ is None:
@@ -87,6 +86,23 @@ def _new_feed() -> gtfs_realtime_pb2.FeedMessage:
     return feed
 
 
+class _HttpClient:
+    def __init__(self, content=None, error=None):
+        self.content = content
+        self.error = error
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+    async def get(self, _url):
+        if self.error:
+            raise self.error
+        return SimpleNamespace(status_code=200, content=self.content)
+
+
 class _RejectingRedis:
     def get(self, _key):
         raise redis.exceptions.ResponseError("sensitive provider details")
@@ -95,49 +111,72 @@ class _RejectingRedis:
         raise redis.exceptions.ResponseError("sensitive provider details")
 
 
-class OptionalProviderCacheTests(unittest.TestCase):
-    def setUp(self):
-        cache_module._mem.clear()
-        cache_module._last_fail_open_log = 0.0
-
-    def tearDown(self):
-        cache_module._mem.clear()
-
-    def test_fail_open_cache_uses_process_memory_when_redis_rejects_requests(self):
-        with patch.object(cache_module, "redis_client", _RejectingRedis()):
-            cache_module.cache_set("mta:test", b"feed", 30, fail_open=True)
-            self.assertEqual(
-                cache_module.cache_get("mta:test", fail_open=True),
-                b"feed",
-            )
-
-    def test_default_cache_behavior_remains_strict(self):
-        with patch.object(cache_module, "redis_client", _RejectingRedis()):
-            with self.assertRaises(redis.exceptions.ResponseError):
-                cache_module.cache_get("session:test")
-            with self.assertRaises(redis.exceptions.ResponseError):
-                cache_module.cache_set("session:test", b"state", 30)
-
-
 @unittest.skipIf(mta_feeds is None, "GTFS realtime dependencies are unavailable")
 class MtaProviderCacheResilienceTests(unittest.IsolatedAsyncioTestCase):
+    def _seed_alert_cache(self, metadata=None):
+        cache_module.cache_set(mta_alerts.ALERTS_URL, b"cached-feed", 60, fail_open=True)
+        if metadata is not None:
+            cache_module.cache_set(
+                mta_alerts._ALERTS_METADATA_KEY,
+                json.dumps(metadata),
+                60,
+                fail_open=True,
+            )
+
+    async def _fetch_alerts(self, client):
+        with patch("httpx.AsyncClient", return_value=client):
+            return await mta_alerts.fetch_service_alerts(
+                force_refresh=True, with_metadata=True
+            )
+
+    async def test_current_alert_read_bypasses_cache_and_records_live_timestamp(self):
+        self._seed_alert_cache()
+        result = await self._fetch_alerts(_HttpClient(b"fresh-feed"))
+        self.assertEqual(result["content"], b"fresh-feed")
+        self.assertEqual(result["freshness"], "live")
+        self.assertTrue(result["observed_at"])
+        metadata = json.loads(cache_module.cache_get(mta_alerts._ALERTS_METADATA_KEY, fail_open=True))
+        self.assertEqual(
+            metadata["content_sha256"], mta_alerts._content_digest(b"fresh-feed")
+        )
+
+    async def test_current_alert_read_uses_timestamped_stale_cache_on_provider_failure(self):
+        self._seed_alert_cache(
+            {
+                "observed_at": "2026-08-22T12:00:00+00:00",
+                "content_sha256": mta_alerts._content_digest(b"cached-feed"),
+            }
+        )
+        result = await self._fetch_alerts(
+            _HttpClient(error=OSError("provider unavailable"))
+        )
+        self.assertEqual(result["content"], b"cached-feed")
+        self.assertEqual(result["freshness"], "stale")
+        self.assertEqual(result["observed_at"], "2026-08-22T12:00:00+00:00")
+
+    async def test_stale_cache_without_matching_metadata_has_no_observation_time(self):
+        for metadata in (
+            {},
+            {
+                "observed_at": "2026-08-22T12:00:00+00:00",
+                "content_sha256": mta_alerts._content_digest(b"different-feed"),
+            },
+        ):
+            with self.subTest(metadata=metadata):
+                self._seed_alert_cache(metadata)
+                result = await self._fetch_alerts(
+                    _HttpClient(error=OSError("provider unavailable"))
+                )
+                self.assertEqual(result["freshness"], "stale")
+                self.assertIsNone(result["observed_at"])
+
     async def test_successful_mta_fetches_survive_redis_quota_errors(self):
-        class FakeClient:
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *_args):
-                return None
-
-            async def get(self, _url):
-                return SimpleNamespace(status_code=200, content=b"provider-feed")
-
         cache_module._mem.clear()
         with patch.object(
             cache_module,
             "redis_client",
             _RejectingRedis(),
-        ), patch("httpx.AsyncClient", return_value=FakeClient()):
+        ), patch("httpx.AsyncClient", return_value=_HttpClient(b"provider-feed")):
             feeds = await mta_feeds.fetch_feeds_with_metadata(
                 ["Q"],
                 force_refresh=True,
@@ -148,17 +187,7 @@ class MtaProviderCacheResilienceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(alerts, b"provider-feed")
 
     async def test_process_owned_snapshot_fetches_can_skip_redis_writes(self):
-        class FakeClient:
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *_args):
-                return None
-
-            async def get(self, _url):
-                return SimpleNamespace(status_code=200, content=b"provider-feed")
-
-        with patch("httpx.AsyncClient", return_value=FakeClient()), patch.object(
+        with patch("httpx.AsyncClient", return_value=_HttpClient(b"provider-feed")), patch.object(
             cache_module,
             "cache_set",
         ) as cache_set:
@@ -198,6 +227,71 @@ class MtaProviderCacheResilienceTests(unittest.IsolatedAsyncioTestCase):
     "gtfs-realtime-bindings or timezone data is not installed",
 )
 class MtaFeedServiceAlertParserTests(unittest.TestCase):
+    def test_planned_q_express_to_local_preserves_typed_provenance(self):
+        now = _localized_timestamp(2026, 5, 12, 10)
+        feed = _new_feed()
+        entity = feed.entity.add()
+        entity.id = "lmm:planned_work:33095"
+        alert = entity.alert
+        period = alert.active_period.add()
+        period.start = now - 600
+        period.end = now + 3600
+        header = alert.header_text.translation.add()
+        header.language = "en"
+        header.text = "Q trains run local"
+        description = alert.description_text.translation.add()
+        description.language = "en"
+        description.text = (
+            "In Manhattan, Q runs local in both directions between "
+            "57 St-7 Av and Canal St"
+        )
+        for direction_id, stop_id in ((0, "Q01N"), (1, "Q01S")):
+            selector = alert.informed_entity.add()
+            selector.route_id = "Q"
+            selector.stop_id = stop_id
+            selector.direction_id = direction_id
+
+        parsed = mta_alerts._parse_service_alerts(
+            feed.SerializeToString(),
+            include_same_day=False,
+            now_timestamp=now,
+        )
+
+        self.assertEqual(len(parsed), 1)
+        result = parsed[0]
+        self.assertEqual(result["source"], "mta_service_alerts")
+        self.assertEqual(result["source_id"], "lmm:planned_work:33095")
+        self.assertEqual(result["alert_id"], "lmm:planned_work:33095")
+        self.assertEqual(result["route_ids"], ["Q"])
+        self.assertEqual(result["stop_ids"], ["Q01N", "Q01S"])
+        self.assertEqual(result["direction_ids"], ["0", "1"])
+        self.assertEqual(result["direction_scope"], "both_directions")
+        self.assertEqual(result["planned_status"], "planned")
+        self.assertEqual(result["change_type"], "express_to_local")
+        self.assertIs(result["service_operating"], True)
+        self.assertIs(result["material_disruption"], False)
+        self.assertEqual(result["effective_start"], now - 600)
+        self.assertEqual(result["effective_end"], now + 3600)
+        self.assertEqual(
+            result["effective_window"],
+            {"start": now - 600, "end": now + 3600},
+        )
+        self.assertEqual(
+            result["affected_segments"],
+            [
+                {"route_id": "Q", "stop_id": "Q01N", "direction_id": "0"},
+                {"route_id": "Q", "stop_id": "Q01S", "direction_id": "1"},
+            ],
+        )
+        self.assertEqual(
+            result["feed_observed_at"],
+            datetime.fromtimestamp(feed.header.timestamp, tz=timezone.utc).isoformat(),
+        )
+        self.assertEqual(
+            result["local_verified_at"],
+            datetime.fromtimestamp(now, tz=timezone.utc).isoformat(),
+        )
+
     def test_default_parser_keeps_currently_active_alerts_only(self):
         now = _localized_timestamp(2026, 5, 12, 10)
         feed = _new_feed()
@@ -285,14 +379,6 @@ class MtaFeedServiceAlertParserTests(unittest.TestCase):
         )
 
     def test_partial_feed_without_header_is_tolerated_as_empty(self):
-        """Keep the current parser's defensive handling explicit.
-
-        `ParseFromString` accepts provider bytes that omit the proto2-required
-        header. Production parsing intentionally returns no alerts from such an
-        empty partial feed rather than failing the whole route request. Valid
-        test fixtures must still use `_new_feed` so setup errors are not
-        mistaken for parser behavior.
-        """
         partial_feed = gtfs_realtime_pb2.FeedMessage()
 
         alerts = mta_alerts._parse_service_alerts(

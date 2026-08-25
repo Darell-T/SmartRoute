@@ -7,7 +7,7 @@ intermediate stop names + coordinates. Strictly fail-open per leg.
 import asyncio
 import os
 
-from app.services.bus_routes import fetch_bus_route_stop_groups, slice_route_stops
+from app.services.mta.bus import fetch_bus_route_stop_groups, slice_route_stops
 
 # The per-leg GTFS stop enrichment runs a GROUP BY over all of a route's
 # stop_times on a remote Postgres; 1.25s was too tight and timed out, dropping

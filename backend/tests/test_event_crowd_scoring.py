@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
 
 from app.services.agent.tools._types import ToolResult
-from app.services.trips import event_crowd, scoring
+from app.services.trips import scoring, selection_decision
+from app.services.trips.crowds import event as event_crowd
+from app.services.trips.preparation import evidence as route_option_evidence
 
 
 def _route(
@@ -11,6 +14,9 @@ def _route(
     stop_name: str = "34 St-Penn Station",
     latitude: float = 40.7505,
     longitude: float = -73.9934,
+    arrival_stop: str = "Jay St-MetroTech",
+    arrival_latitude: float = 40.6923,
+    arrival_longitude: float = -73.9873,
     expected_at: str = "2026-07-25T23:15:00+00:00",
     total_minutes: int = 30,
 ) -> list[dict]:
@@ -19,9 +25,12 @@ def _route(
             "type": "SUBWAY",
             "route_id": "A",
             "departure_stop": stop_name,
-            "arrival_stop": "Jay St-MetroTech",
+            "arrival_stop": arrival_stop,
             "departure_coords": {"latitude": latitude, "longitude": longitude},
-            "arrival_coords": {"latitude": 40.6923, "longitude": -73.9873},
+            "arrival_coords": {
+                "latitude": arrival_latitude,
+                "longitude": arrival_longitude,
+            },
             "departure_time_iso": expected_at,
             "arrival_time_iso": "2026-07-25T23:40:00+00:00",
             "route_total_minutes": total_minutes,
@@ -151,10 +160,70 @@ class EventCrowdAssociationTests(unittest.TestCase):
         )
 
         self.assertEqual(impacts[0]["risk_score"], 0)
+        self.assertIsNone(impacts[0]["crowd_level"])
         self.assertEqual(event_crowd.route_event_penalty(0, impacts), 0)
 
 
 class EventCrowdCollectionTests(unittest.IsolatedAsyncioTestCase):
+    def test_hub_selection_represents_each_bounded_candidate(self):
+        routes = [
+            _route(
+                stop_name=f"Origin {index}",
+                latitude=40.70 + index * 0.01,
+                arrival_stop=f"Destination {index}",
+                arrival_latitude=40.71 + index * 0.01,
+            )
+            for index in range(5)
+        ]
+
+        hubs = event_crowd.search_hubs(routes)
+
+        self.assertLessEqual(len(hubs), event_crowd._MAX_SEARCH_HUBS)
+        self.assertEqual({hub.route_index for hub in hubs}, set(range(5)))
+
+    def test_hub_selection_round_robins_secondary_points(self):
+        routes = [
+            [
+                _route(
+                    stop_name="Origin A",
+                    latitude=40.70,
+                    arrival_stop="Transfer A",
+                    arrival_latitude=40.705,
+                )[0],
+                _route(
+                    stop_name="Transfer A",
+                    latitude=40.705,
+                    arrival_stop="Destination A",
+                    arrival_latitude=40.71,
+                )[0],
+            ],
+            [
+                _route(
+                    stop_name="Origin B",
+                    latitude=40.72,
+                    arrival_stop="Transfer B",
+                    arrival_latitude=40.725,
+                )[0],
+                _route(
+                    stop_name="Transfer B",
+                    latitude=40.725,
+                    arrival_stop="Destination B",
+                    arrival_latitude=40.73,
+                )[0],
+            ],
+        ]
+
+        hubs = event_crowd.search_hubs(routes)
+
+        self.assertEqual(
+            [hub.name for hub in hubs[:2]],
+            ["Destination A", "Destination B"],
+        )
+        self.assertEqual(
+            {hub.route_index for hub in hubs[2:]},
+            {0, 1},
+        )
+
     async def test_provider_failure_and_no_relevant_events_are_distinct(self):
         async def unavailable(_tool_input, _ctx):
             return ToolResult(ok=False, error="event lookup timed out")
@@ -194,9 +263,179 @@ class EventCrowdCollectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(impacts), 1)
         self.assertEqual(failures, [])
 
+    async def test_mixed_event_lookup_with_relevant_impact_is_partial(self):
+        travel_time = event_crowd._parse_time("2026-07-25T23:15:00Z")
+        search_points = [
+            event_crowd.RoutePoint(
+                0,
+                "34 St-Penn Station",
+                40.7505,
+                -73.9934,
+                travel_time,
+                "A",
+            ),
+            event_crowd.RoutePoint(
+                0,
+                "Jay St-MetroTech",
+                40.6923,
+                -73.9873,
+                travel_time,
+                "A",
+            ),
+        ]
+
+        async def mixed(tool_input, _ctx):
+            if float(tool_input["latitude"]) == 40.7505:
+                return ToolResult(ok=True, data={"events": [_event()]})
+            return ToolResult(ok=False, error="second event hub timed out")
+
+        class Ctx:
+            now_et = "2026-07-25T19:15:00-04:00"
+
+        status, impacts, failures = await event_crowd.collect_route_event_evidence(
+            [_route()],
+            Ctx(),
+            lookup=mixed,
+            search_points=search_points,
+        )
+
+        self.assertEqual(status, "partial")
+        self.assertEqual(len(impacts), 1)
+        self.assertEqual(failures, ["second event hub timed out"])
+        coverage = route_option_evidence.coverage_for_prepared(
+            SimpleNamespace(
+                event_evidence_status=status,
+                incident_scan_metadata={},
+                evidence_envelopes={},
+            )
+        )
+        self.assertEqual(coverage["events"], "partial")
+
+    async def test_mixed_event_lookup_without_impact_is_partial(self):
+        travel_time = event_crowd._parse_time("2026-07-25T23:15:00Z")
+        search_points = [
+            event_crowd.RoutePoint(
+                0,
+                "34 St-Penn Station",
+                40.7505,
+                -73.9934,
+                travel_time,
+                "A",
+            ),
+            event_crowd.RoutePoint(
+                0,
+                "Jay St-MetroTech",
+                40.6923,
+                -73.9873,
+                travel_time,
+                "A",
+            ),
+        ]
+
+        async def mixed(tool_input, _ctx):
+            if float(tool_input["latitude"]) == 40.7505:
+                return ToolResult(ok=True, data={"events": []})
+            return ToolResult(ok=False, error="second event hub timed out")
+
+        class Ctx:
+            now_et = "2026-07-25T19:15:00-04:00"
+
+        status, impacts, failures = await event_crowd.collect_route_event_evidence(
+            [_route()],
+            Ctx(),
+            lookup=mixed,
+            search_points=search_points,
+        )
+
+        self.assertEqual(status, "partial")
+        self.assertEqual(impacts, [])
+        self.assertEqual(failures, ["second event hub timed out"])
+
+    async def test_unrepresentable_candidate_makes_coverage_partial(self):
+        async def empty(_tool_input, _ctx):
+            return ToolResult(ok=True, data={"events": []})
+
+        class Ctx:
+            now_et = "2026-07-25T19:15:00-04:00"
+
+        status, impacts, failures = await event_crowd.collect_route_event_evidence(
+            [_route(), [{"type": "WALK", "duration_seconds": 300}]],
+            Ctx(),
+            lookup=empty,
+        )
+
+        self.assertEqual(status, "partial")
+        self.assertEqual(impacts, [])
+        self.assertEqual(failures, [])
+
+        selected = {
+            "hard_constraints_satisfied": True,
+            "soft_preferences": {
+                "avoid_crowds": True,
+                "routing_preference": "FEWER_TRANSFERS",
+                "routing_preference_source": "internal_default",
+            },
+            "evidence_coverage": {"events": status},
+            "event_evidence_status": status,
+            "event_or_crowd_impacts": [],
+        }
+        alternative = {
+            "hard_constraints_satisfied": True,
+            "soft_preferences": selected["soft_preferences"],
+            "evidence_coverage": {"events": status},
+            "event_evidence_status": status,
+            "event_or_crowd_impacts": [{"risk_score": 8.0}],
+        }
+        evaluation = selection_decision.evaluate_candidate_decision(
+            {"candidates": [{"digest": selected}, {"digest": alternative}]},
+            {"digest": selected},
+        )
+        self.assertNotIn(
+            "lower_event_crowd_exposure",
+            evaluation["supported_reason_codes"],
+        )
+        self.assertTrue(evaluation["crowd_limitation_required"])
+
+    async def test_failed_candidate_hub_makes_aggregate_partial(self):
+        routes = [
+            _route(arrival_latitude=40.72),
+            _route(
+                stop_name="Second origin",
+                latitude=40.80,
+                arrival_stop="Second destination",
+                arrival_latitude=40.81,
+            ),
+        ]
+
+        async def mixed(tool_input, _ctx):
+            if float(tool_input["latitude"]) == 40.81:
+                return ToolResult(ok=False, error="candidate hub timed out")
+            return ToolResult(ok=True, data={"events": []})
+
+        class Ctx:
+            now_et = "2026-07-25T19:15:00-04:00"
+
+        status, impacts, failures = await event_crowd.collect_route_event_evidence(
+            routes,
+            Ctx(),
+            lookup=mixed,
+        )
+
+        self.assertEqual(status, "partial")
+        self.assertEqual(impacts, [])
+        self.assertEqual(failures, ["candidate hub timed out"])
+
 
 class RouteScoreFormulaRegressionTests(unittest.TestCase):
     """Single-leg score components are unchanged after helper extraction."""
+
+    def test_route_score_uses_canonical_seconds_over_rounded_minutes(self):
+        route = _route(total_minutes=44)
+        route[0]["route_total_seconds"] = 46 * 60
+
+        scored = scoring._route_score(route, [])
+
+        self.assertEqual(scored["total_minutes"], 46)
 
     def test_route_score_matches_shared_component_formula(self):
         route = _route(total_minutes=30)
@@ -253,6 +492,82 @@ class RouteScoreFormulaRegressionTests(unittest.TestCase):
                 preferred_mode_penalty=scored["preferred_mode_penalty"],
             ),
         )
+
+    def test_alert_impact_is_weighted_by_rider_relevant_severity(self):
+        route = _route(total_minutes=30)
+
+        elevator = scoring._route_score(
+            route,
+            [{"header": "Elevator outage", "route_ids": ["A"]}],
+        )
+        minor = scoring._route_score(
+            route,
+            [{"header": "Minor delays", "route_ids": ["A"]}],
+        )
+        suspended = scoring._route_score(
+            route,
+            [{"header": "Service suspended", "route_ids": ["A"]}],
+        )
+
+        self.assertEqual(elevator["alert_penalty"], 0)
+        self.assertEqual(minor["alert_penalty"], 4)
+        self.assertEqual(suspended["alert_penalty"], 24)
+        self.assertLess(elevator["score"], minor["score"])
+        self.assertLess(minor["score"], suspended["score"])
+
+    def test_planned_operating_service_change_is_not_a_material_alert(self):
+        route = _route(total_minutes=30)
+        planned_local = {
+            "source": "mta_service_alerts",
+            "source_id": "lmm:planned_work:33095",
+            "alert_id": "lmm:planned_work:33095",
+            "route_ids": ["A"],
+            "planned_status": "planned",
+            "change_type": "express_to_local",
+            "service_operating": True,
+            "material_disruption": False,
+            "header": "A express trains run local",
+            "description": "A runs local in both directions",
+        }
+
+        planned = scoring._route_score(route, [planned_local])
+        self.assertEqual(planned["alert_count"], 0)
+        self.assertEqual(planned["alert_penalty"], 0)
+
+        suspended = scoring._route_score(
+            route,
+            [
+                {
+                    **planned_local,
+                    "header": "A service suspended",
+                    "service_operating": False,
+                    "material_disruption": True,
+                }
+            ],
+        )
+        self.assertEqual(suspended["alert_count"], 1)
+        self.assertEqual(suspended["alert_penalty"], 24)
+
+        severe = scoring._route_score(
+            route,
+            [
+                {
+                    **planned_local,
+                    "header": "A severe delay",
+                    "service_operating": "unknown",
+                    "material_disruption": True,
+                }
+            ],
+        )
+        self.assertEqual(severe["alert_count"], 1)
+        self.assertEqual(severe["alert_penalty"], 16)
+
+        legacy = scoring._route_score(
+            route,
+            [{"header": "Unknown A service notice", "route_ids": ["A"]}],
+        )
+        self.assertEqual(legacy["alert_count"], 1)
+        self.assertEqual(legacy["alert_penalty"], 8)
 
 
 if __name__ == "__main__":

@@ -623,37 +623,37 @@ export function SmartRouteMap({
       duration: 760,
       maxZoom: 15.4,
     });
-  }, [routeData, destLng, destLat, mobileSheetState]);
+  }, [routeData, destLng, destLat, mobileSheetState, mapStyleVersion]);
 
   useEffect(() => {
     if (!map.current || !mapReadyRef.current) return;
 
-    if (destMarker.current) {
-      destMarker.current.remove();
-      destMarker.current = null;
-    }
-
     if (destLng == null || destLat == null || !isFinite(destLng) || !isFinite(destLat)) {
+      destMarker.current?.remove();
+      destMarker.current = null;
       return;
     }
 
-    const el = createDestinationPin();
+    if (destMarker.current) {
+      destMarker.current.setLngLat([destLng, destLat]);
+      return;
+    }
 
     destMarker.current = new maplibregl.Marker({
-      element: el,
+      element: createDestinationPin(),
       anchor: "bottom",
       offset: [0, 0],
     })
       .setLngLat([destLng, destLat])
       .addTo(map.current);
+  }, [destLng, destLat, mapStyleVersion]);
 
+  useEffect(() => {
     return () => {
-      if (destMarker.current) {
-        destMarker.current.remove();
-        destMarker.current = null;
-      }
+      destMarker.current?.remove();
+      destMarker.current = null;
     };
-  }, [destLng, destLat]);
+  }, []);
 
   // A chained itinerary has real intermediate destinations, not transfer
   // stations. Render them separately from ordinary route-stop dots and retain

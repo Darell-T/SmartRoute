@@ -7,10 +7,9 @@ duration (not minutes_until_arrival), walk haversine estimate, transfer_count.
 from __future__ import annotations
 
 import unittest
-from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from app.utils import geo
+from app.services import geography as geo
 
 ET = ZoneInfo("America/New_York")
 
@@ -150,6 +149,49 @@ class BuildCanonicalItineraryTests(unittest.TestCase):
         self.assertEqual(subway_leg["alight"], "Canal St")
         self.assertEqual(subway_leg["departure_at"], "2026-07-23T09:10:00-04:00")
         self.assertEqual(subway_leg["arrival_at"], "2026-07-23T09:22:00-04:00")
+
+    def test_transit_leg_retains_direction_and_entity_identity(self):
+        from app.services.trips.itinerary import build_canonical_itinerary
+
+        step = _subway_step(
+            line="B",
+            departure_stop="Church Av",
+            arrival_stop="7 Av",
+            departure_time_iso="2026-07-23T09:10:00-04:00",
+            arrival_time_iso="2026-07-23T09:22:00-04:00",
+        )
+        step.update(
+            {
+                "direction": "uptown",
+                "headsign": "Bedford Park Blvd",
+                "destination_stop_name": "Bedford Park Blvd",
+                "departure_stop_id": "D25",
+                "arrival_stop_id": "D24",
+                "departure_entity_type": "SUBWAY_STATION",
+                "arrival_entity_type": "SUBWAY_STATION",
+                "intermediate_stop_locations": [
+                    {
+                        "id": "D26",
+                        "name": "Prospect Park",
+                        "entity_type": "SUBWAY_STATION",
+                        "lat": 40.66,
+                        "lng": -73.96,
+                    }
+                ],
+            }
+        )
+
+        leg = build_canonical_itinerary([step], origin="A", destination="B")["legs"][0]
+
+        self.assertEqual(leg["direction"], "uptown")
+        self.assertEqual(leg["headsign"], "Bedford Park Blvd")
+        self.assertEqual(leg["destination_stop_name"], "Bedford Park Blvd")
+        self.assertEqual(leg["board_stop_id"], "D25")
+        self.assertEqual(leg["alight_stop_id"], "D24")
+        self.assertEqual(leg["board_entity_type"], "SUBWAY_STATION")
+        self.assertEqual(leg["alight_entity_type"], "SUBWAY_STATION")
+        self.assertEqual(leg["stops"][0]["id"], "D26")
+        self.assertEqual(leg["stops"][0]["entity_type"], "SUBWAY_STATION")
 
     def test_departure_arrival_at_from_absolute_iso(self):
         from app.services.trips.itinerary import build_canonical_itinerary
@@ -386,6 +428,58 @@ class BuildCanonicalItineraryTests(unittest.TestCase):
             [{"name": "Prospect Park"}, {"name": "7 Av"}, {"name": "Canal St"}],
         )
         self.assertIsNone(result["legs"][0]["stop_count"])
+
+    def test_canonical_stops_normalize_located_and_name_only_variants(self):
+        from app.services.trips.itinerary import _canonical_stops_for_step
+
+        self.assertEqual(
+            _canonical_stops_for_step(
+                {
+                    "intermediate_stop_locations": [
+                        None,
+                        {"name": ""},
+                        {
+                            "name": "  Parkside Av  ",
+                            "stop_id": "D25",
+                            "type": "station",
+                            "parent_stop_id": "D25-parent",
+                            "complex_id": "complex-25",
+                            "lat": 40.655,
+                            "lng": -73.9625,
+                        },
+                    ]
+                }
+            ),
+            [
+                {
+                    "name": "Parkside Av",
+                    "id": "D25",
+                    "entity_type": "station",
+                    "parent_station": "D25-parent",
+                    "station_complex_id": "complex-25",
+                    "lat": 40.655,
+                    "lng": -73.9625,
+                }
+            ],
+        )
+        self.assertEqual(
+            _canonical_stops_for_step(
+                {
+                    "intermediate_stop_locations": [{"name": ""}],
+                    "intermediate_stops": [
+                        "  Prospect Park ",
+                        3,
+                        {"stop_name": "7 Av", "id": "D26"},
+                        {"name": ""},
+                    ],
+                }
+            ),
+            [
+                {"name": "Prospect Park"},
+                {"name": "7 Av", "id": "D26"},
+            ],
+        )
+        self.assertEqual(_canonical_stops_for_step({"intermediate_stops": None}), [])
 
 
 if __name__ == "__main__":

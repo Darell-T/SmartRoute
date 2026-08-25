@@ -54,11 +54,10 @@ def _load_live_feed_module():
     fake_pydantic.BaseModel = _FakeBaseModel
     fake_pydantic.ConfigDict = dict
 
-    fake_geo = types.ModuleType("app.utils.geo")
+    fake_geo = types.ModuleType("app.services.geography")
     fake_geo.find_nearest_stops = lambda *_args, **_kwargs: []
 
-    fake_mta_feed = types.ModuleType("app.services.mta_feed")
-    fake_mta_feed.get_all_subway_vehicle_positions = AsyncMock(return_value=[])
+    fake_mta_feed = types.ModuleType("app.services.mta.realtime")
     fake_mta_feed.fetch_nearby_bus_update = AsyncMock(
         return_value={"status": "unavailable"}
     )
@@ -69,15 +68,21 @@ def _load_live_feed_module():
             "fastapi": fake_fastapi,
             "fastapi.responses": fake_responses,
             "pydantic": fake_pydantic,
-            "app.utils.geo": fake_geo,
-            "app.services.mta_feed": fake_mta_feed,
+            "app.services.geography": fake_geo,
+            "app.services.mta.realtime": fake_mta_feed,
         },
     ):
         # Re-import the live_feed router and helpers fresh so the stubbed
         # realtime dependencies bind at module load.
-        for _m in [k for k in list(sys.modules) if k == "app.routers.live_feed" or k.startswith("app.services.live_feed")]:
+        for _m in [
+            k
+            for k in list(sys.modules)
+            if k == "app.routers.live_feed"
+            or k.startswith("app.routers.live_feed.")
+            or k.startswith("app.services.live_feed")
+        ]:
             sys.modules.pop(_m, None)
-        return importlib.import_module("app.routers.live_feed")
+        return importlib.import_module("app.routers.live_feed.router")
 
 
 def _mint_ticket(
@@ -432,7 +437,11 @@ class LiveFeedApiTests(unittest.IsolatedAsyncioTestCase):
             self.live_feed.admission, "acquire", AsyncMock(return_value=lease)
         ), patch.object(
             self.live_feed.admission, "release", AsyncMock()
-        ) as release, patch.object(self.live_feed, "_build_live_snapshot", snapshot):
+        ) as release, patch.object(
+            self.live_feed._live_feed_snapshot,
+            "build_live_snapshot",
+            snapshot,
+        ):
             await self.live_feed.live_feed_socket(socket)
         self.assertEqual(socket.codes, [1008])
         snapshot.assert_not_awaited()

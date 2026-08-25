@@ -194,21 +194,3 @@ def cached_nearby_bus_update(
         "arrivals": [dict(arrival) for arrival in cached.get("arrivals", [])],
         "status": "cached",
     }
-
-
-async def fetch_nearby_bus_arrivals(
-    lat: float,
-    lng: float,
-    radius_m: float = 804.672,
-    stop_limit: int = 10,
-    visits_per_stop: int = 4,
-) -> tuple[list[dict], dict]:
-    """Compatibility facade used by arrival tools outside the live feed."""
-    update = await fetch_nearby_bus_update(
-        lat,
-        lng,
-        radius_m,
-        stop_limit,
-        visits_per_stop,
-    )
-    return update["arrivals"], update["debug"]

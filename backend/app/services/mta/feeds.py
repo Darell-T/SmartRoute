@@ -57,7 +57,7 @@ async def fetch_feeds_with_metadata(
     *,
     cache_result: bool = True,
 ) -> list[dict]:
-    from app.utils.cache import cache_get, cache_set
+    from app.services.cache import cache_get, cache_set
 
     requested_routes = {str(route).upper() for route in routes}
     unique_suffixes = set()

@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
-from app.services.validation.shadow import (
+from evaluation.route_intelligence.shadow import (
     EvidenceKind,
     CounterfactualBaselineEvaluation,
     InMemoryShadowSink,

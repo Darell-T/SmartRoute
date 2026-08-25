@@ -32,7 +32,6 @@ def _load_trips_module(bus_fetch, *, routes=None):
     # package. Import that package under the REAL environment first: re-running
     # app.services.agent.tools.__init__ under the faked fastapi below would fail
     # (transit_snapshot -> app.routers.live_feed needs WebSocket/JSONResponse).
-    import app.services.agent.tools.route_option_assembly  # noqa: F401
 
     fake_fastapi = types.ModuleType("fastapi")
 
@@ -112,7 +111,7 @@ def _load_trips_module(bus_fetch, *, routes=None):
     fake_directions.parse_response = _fake_parse_response
     fake_directions.GoogleRoutesError = _FakeGoogleRoutesError
 
-    fake_mta_feed = types.ModuleType("app.services.mta_feed")
+    fake_mta_feed = types.ModuleType("app.services.mta.realtime")
 
     async def _fake_fetch_service_alerts(*args, **kwargs):
         return []
@@ -129,7 +128,7 @@ def _load_trips_module(bus_fetch, *, routes=None):
     fake_mta_feed.parse_service_alerts = lambda *a, **k: []
     fake_mta_feed.filter_alerts_for_routes = lambda *a, **k: []
 
-    fake_bus_routes = types.ModuleType("app.services.bus_routes")
+    fake_bus_routes = types.ModuleType("app.services.mta.bus")
     fake_bus_routes.fetch_bus_route_stop_groups = bus_fetch
 
     def _fake_slice_route_stops(parsed, board_coords, exit_coords, max_snap_m=250):
@@ -143,8 +142,8 @@ def _load_trips_module(bus_fetch, *, routes=None):
             "fastapi": fake_fastapi,
             "pydantic": fake_pydantic,
             "app.services.directions": fake_directions,
-            "app.services.mta_feed": fake_mta_feed,
-            "app.services.bus_routes": fake_bus_routes,
+            "app.services.mta.realtime": fake_mta_feed,
+            "app.services.mta.bus": fake_bus_routes,
         },
     ):
         # Drop the trips router, its services.trips submodules, and the direct
@@ -156,8 +155,7 @@ def _load_trips_module(bus_fetch, *, routes=None):
             if k
             in {
                 "app.routers.trips",
-                "app.routers.trip_enrichment",
-                "app.services.agent.tools.plan_trip_dependencies",
+                "app.services.agent.tools.route.preparation_adapter",
             }
             or k.startswith("app.services.trips")
         ]:

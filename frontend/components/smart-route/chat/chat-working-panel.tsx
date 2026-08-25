@@ -21,13 +21,49 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import type { ToolChip as ToolChipData } from "@/lib/use-agent-chat";
-import { isRoutePreparationTool, isRouteResultTool } from "@/lib/agent-route-tools";
+import { isHiddenActivityTool, isSearchActivityTool } from "@/lib/agent-route-tools";
 
 const PROGRESS_COPY = {
   finding_routes: "Finding viable routes",
   checking_live_conditions: "Checking live service and current incidents",
   comparing_options: "Deliberating between the best options",
 } as const;
+
+export function workingPanelTriggerLabel({
+  isStreaming,
+  reasoning,
+  progress,
+  toolChips,
+}: {
+  isStreaming: boolean;
+  reasoning: string;
+  progress?: { stage: keyof typeof PROGRESS_COPY; status: "active" | "complete" };
+  toolChips: ToolChipData[];
+}): string {
+  const progressLabel = progress?.status === "active" ? PROGRESS_COPY[progress.stage] : null;
+  const activeSearch = toolChips.findLast(
+    (chip) => isSearchActivityTool(chip.tool) && chip.status === "running",
+  );
+  if (progressLabel) return progressLabel;
+  if (activeSearch) return activeSearch.label || "Thinking through your request…";
+  const intentLabel = reasoning.split("\n")[0]?.trim();
+  if (intentLabel) return intentLabel;
+  return isStreaming ? "Thinking through your request…" : "Done";
+}
+
+export function workingPanelDetailText(reasoning: string, triggerLabel: string): string {
+  const seen = new Set<string>();
+  const trigger = triggerLabel.trim();
+  return reasoning
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => {
+      if (!line || line === trigger || seen.has(line)) return false;
+      seen.add(line);
+      return true;
+    })
+    .join("\n");
+}
 
 function ToolRow({ chip }: { chip: ToolChipData }) {
   return (
@@ -92,24 +128,30 @@ function useElapsedSeconds(isStreaming: boolean): number | undefined {
 export function ChatWorkingPanel({
   toolChips,
   progress,
+  reasoning,
   isStreaming,
 }: {
   toolChips: ToolChipData[];
   progress?: { stage: keyof typeof PROGRESS_COPY; status: "active" | "complete" };
+  reasoning: string;
   isStreaming: boolean;
 }) {
   const everStreamed = useEverStreamed(isStreaming);
   const elapsedSeconds = useElapsedSeconds(isStreaming);
   const reduceMotion = useReducedMotion() ?? false;
-  const hasStarted = everStreamed || toolChips.length > 0;
-  const isFindingRoutes = toolChips.some(
-    (chip) => isRoutePreparationTool(chip.tool) && chip.status === "running",
+  const hasStarted = everStreamed || toolChips.length > 0 || reasoning.length > 0;
+  const streamingLabel = workingPanelTriggerLabel({
+    isStreaming,
+    reasoning,
+    progress,
+    toolChips,
+  });
+  const detailText = workingPanelDetailText(reasoning, streamingLabel);
+  const visibleToolChips = toolChips.filter(
+    (chip) =>
+      !isHiddenActivityTool(chip.tool)
+      && !(chip.status === "running" && chip.label === streamingLabel),
   );
-  const hasRouteResult = toolChips.some(
-    (chip) => isRouteResultTool(chip.tool) && chip.status === "ok",
-  );
-  const progressLabel = progress?.status === "active" ? PROGRESS_COPY[progress.stage] : null;
-  const routeFallbackLabel = isFindingRoutes ? "Finding viable routes" : null;
   if (!hasStarted) return null;
 
   return (
@@ -122,34 +164,37 @@ export function ChatWorkingPanel({
     >
       <ReasoningTrigger className="sr-chat-working-panel__trigger">
         {isStreaming ? (
-          progressLabel || routeFallbackLabel ? (
+          progress?.status === "active" || toolChips.some(
+            (chip) => isSearchActivityTool(chip.tool) && chip.status === "running",
+          ) ? (
             <AnimatePresence initial={false} mode="wait">
               <motion.span
-                key={progressLabel || routeFallbackLabel}
+                key={streamingLabel}
                 className="sr-chat-working-panel__semantic-stage"
                 initial={reduceMotion ? false : { opacity: 0, y: 3 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={reduceMotion ? undefined : { opacity: 0, y: -3 }}
                 transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
               >
-                {progressLabel || routeFallbackLabel}
+                {streamingLabel}
               </motion.span>
             </AnimatePresence>
           ) : (
             <Shimmer className="sr-chat-working-panel__shimmer" duration={1.35}>
-              Deliberating…
+              {streamingLabel}
             </Shimmer>
           )
         ) : (
-          hasRouteResult
-            ? "Found your route"
-            : elapsedSeconds
-              ? `Thought for ${elapsedSeconds}s`
-              : "Done"
+          elapsedSeconds
+            ? `Thought for ${elapsedSeconds}s`
+            : "Done"
         )}
       </ReasoningTrigger>
       <ReasoningContent className="sr-chat-working-panel__content">
-        {toolChips.map((chip) => (
+        {detailText ? (
+          <p className="sr-chat-working-panel__reasoning">{detailText}</p>
+        ) : null}
+        {visibleToolChips.map((chip) => (
           <ToolRow key={chip.id} chip={chip} />
         ))}
       </ReasoningContent>

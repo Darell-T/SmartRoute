@@ -6,6 +6,7 @@ import { MotionConfig } from "motion/react";
 import type { TransitRouteData } from "@/types";
 import { DEFAULT_LOCATION } from "@/lib/api";
 import {
+  authoritativeChatOrigin,
   locationStateForCoordinates,
   nextLocationState,
   requestInitialLocation,
@@ -26,7 +27,10 @@ import {
   agentRoutePlanFromCards,
   normalizeRouteCoordinate,
 } from "@/lib/agent-route-selection";
-import { type RouteRailStatus } from "@/components/smart-route/left-rail";
+import {
+  type RouteRailStatus,
+  type TabId,
+} from "@/components/smart-route/left-rail";
 import { buildLeftRailData } from "@/components/smart-route/left-rail/live-data";
 import { ChatPanel } from "@/components/smart-route/chat/chat-panel";
 import { ChatSidebar } from "@/components/smart-route/chat/chat-sidebar";
@@ -66,8 +70,10 @@ function SmartRoutePageContent() {
     locationState.status === "fallback_nyc"
       ? locationState.coordinates
       : null;
+  const chatOrigin = authoritativeChatOrigin(locationState);
   const [activeTab, setActiveTab] = useState<AppTab>("chat");
   const [mapRequested, setMapRequested] = useState(false);
+  const [leftRailTab, setLeftRailTab] = useState<TabId>("route");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const [newTripKey, setNewTripKey] = useState(0);
@@ -278,10 +284,15 @@ function SmartRoutePageContent() {
     }
   }
 
-  const chat = useAgentChat({ getOrigin: () => userLocation });
+  const chat = useAgentChat({ getOrigin: () => chatOrigin });
   const { theme, toggleTheme } = useSmartRouteTheme();
 
   const openLiveMap = useCallback(() => {
+    setMapRequested(true);
+    setActiveTab("livemap");
+  }, []);
+  const openAlerts = useCallback(() => {
+    setLeftRailTab("alerts");
     setMapRequested(true);
     setActiveTab("livemap");
   }, []);
@@ -297,6 +308,7 @@ function SmartRoutePageContent() {
     chat.reset();
     routePlanning.handleClearRoute();
     setNewTripKey((key) => key + 1);
+    setLeftRailTab("route");
     setActiveTab("chat");
   }, [chat, routePlanning]);
 
@@ -333,6 +345,7 @@ function SmartRoutePageContent() {
       );
       if (!plan) return;
       routePlanning.handleLoadExternalRoutes(plan);
+      setLeftRailTab("route");
       openLiveMap();
     },
     [chat.messages, openLiveMap, routePlanning],
@@ -402,6 +415,8 @@ function SmartRoutePageContent() {
                 leftRailData={leftRailData}
                 routeStatus={routeStatus}
                 hasActiveRoute={Boolean(summary)}
+                leftRailTab={leftRailTab}
+                onLeftRailTabChange={setLeftRailTab}
                 liveMap={{
                   frameRef: liveMapFrameRef,
                   routeData,
@@ -428,6 +443,7 @@ function SmartRoutePageContent() {
               theme={theme}
               nearby={homeNearby}
               onOpenLiveMap={openLiveMap}
+              onViewAlerts={openAlerts}
               onSelectRouteCard={handleSelectRouteCard}
               onOpenNearbyStation={handleOpenNearbyStation}
             />
@@ -437,4 +453,3 @@ function SmartRoutePageContent() {
     </MotionConfig>
   );
 }
-

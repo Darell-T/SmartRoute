@@ -1,0 +1,11 @@
+{
+  "stalled_trains": [
+    {
+      "route_id": "Q",
+      "stop_id": "D24N",
+      "status": "STOPPED_AT",
+      "stalled_minutes": 10
+    }
+  ],
+  "stalled_buses": []
+}

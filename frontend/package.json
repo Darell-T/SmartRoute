@@ -13,7 +13,8 @@
     "build:artifact-manifest": "tsx scripts/build-artifact-manifest.ts",
     "build:transit-artifacts": "npm run build:network && npm run build:visual-network && npm run build:station-anchors && npm run build:artifact-manifest",
     "test:station-anchors": "tsx --test scripts/build/tests/station-anchors.test.ts",
-    "test:unit": "tsx --test app/api/trip/enrich-route/route.test.mjs lib/backend-proxy.test.mjs lib/backend-stream-proxy.test.mjs lib/use-mobile-visible-viewport.test.ts lib/live-feed-connection.test.mjs lib/use-destination-search.test.mjs lib/initial-geolocation.test.mjs lib/use-live-feed.test.mjs lib/ws-ticket.test.mjs lib/request-principal.test.mjs lib/use-service-alerts.test.mjs lib/agent-chat-stream.test.mjs lib/agent-route-card-validation.test.mjs lib/use-agent-chat.test.mjs lib/response-presentation.test.mjs lib/agent-route-selection.test.mjs lib/smart-route.test.mjs lib/nyc-route-clock.test.mjs components/smart-route/chat/use-progressive-text.test.mjs components/smart-route/chat/near-you.test.ts components/smart-route/chat/nearby-issue.test.ts components/smart-route/chat/home-screen-layout.test.mjs components/smart-route/chat/itinerary-view-model.test.mjs components/smart-route/chat/chat-arrivals-card.test.mjs components/smart-route/chat/chat-route-card.test.mjs components/smart-route/chat/chat-sidebar.test.mjs components/smart-route/chat/chat-composer.test.mjs components/smart-route/chat/mobile-navigation.test.mjs components/smart-route/left-rail/alert-feed.test.mjs components/smart-route/left-rail/alert-row-selection.test.mjs components/smart-route/left-rail/live-data.test.mjs components/smart-route/left-rail/route-view.characterization.test.mjs components/smart-route/left-rail/hydration.test.mjs scripts/build/tests/station-anchors.test.ts",
+    "test:unit": "tsx --test app/api/trip/enrich-route/route.test.mjs lib/backend-proxy.test.mjs lib/backend-stream-proxy.test.mjs lib/use-mobile-visible-viewport.test.ts lib/live-feed-connection.test.mjs lib/use-destination-search.test.mjs lib/initial-geolocation.test.mjs lib/use-live-feed.test.mjs lib/ws-ticket.test.mjs lib/request-principal.test.mjs lib/use-service-alerts.test.mjs lib/agent-chat-stream.test.mjs lib/agent-route-card-validation.test.mjs lib/use-agent-chat.test.mjs lib/response-presentation.test.mjs lib/agent-route-selection.test.mjs lib/smart-route.test.mjs lib/nyc-route-clock.test.mjs components/smart-route/chat/use-progressive-text.test.mjs components/smart-route/chat/near-you.test.ts components/smart-route/chat/nearby-issue.test.ts components/smart-route/chat/home-screen-layout.test.mjs components/smart-route/chat/itinerary-view-model.test.mjs components/smart-route/chat/chat-arrivals-card.test.mjs components/smart-route/chat/chat-route-card.test.mjs components/smart-route/chat/chat-sidebar.test.mjs components/smart-route/chat/chat-composer.test.mjs components/smart-route/chat/chat-working-panel.test.mjs components/smart-route/chat/mobile-navigation.test.mjs components/smart-route/left-rail/alert-feed.test.mjs components/smart-route/left-rail/alert-row-selection.test.mjs components/smart-route/left-rail/live-data.test.mjs components/smart-route/left-rail/route-view.characterization.test.mjs components/smart-route/left-rail/hydration.test.mjs scripts/build/tests/station-anchors.test.ts scripts/release/build-browser-evidence.test.ts",
+    "test:release:ci": "playwright test --grep-invert @visual",
     "check:station-overlay": "node components/map/subway-station-overlay.check.mjs",
     "check:subway-palette": "node components/map/subway-palette.check.mjs",
     "check:subway-renderer": "node components/map/subway-renderer.check.mjs",
@@ -26,19 +27,13 @@
     "start": "next start"
   },
   "dependencies": {
-    "@deck.gl/core": "^9.3.0",
-    "@deck.gl/layers": "^9.3.0",
-    "@deck.gl/mapbox": "^9.3.0",
     "@fortawesome/fontawesome-svg-core": "^7.3.0",
     "@fortawesome/free-solid-svg-icons": "^7.3.0",
     "@fortawesome/react-fontawesome": "^3.3.1",
     "@mapbox/polyline": "^1.2.1",
-    "@mdi/js": "^7.4.47",
-    "@mdi/react": "^1.6.1",
     "@number-flow/react": "^0.6.1",
     "@radix-ui/react-collapsible": "^1.1.15",
     "@radix-ui/react-tooltip": "^1.2.12",
-    "@types/three": "^0.183.1",
     "@vercel/analytics": "1.6.1",
     "border-beam": "^1.3.0",
     "clsx": "^2.1.1",
@@ -51,7 +46,6 @@
     "react-dom": "19.2.4",
     "tailwind-merge": "^3.3.1",
     "thinking-orbs": "^0.1.1",
-    "three": "^0.183.2",
     "use-stick-to-bottom": "^1.1.6",
     "zod": "^3.24.1"
   },
@@ -73,6 +67,7 @@
     }
   },
   "devDependencies": {
+    "@playwright/test": "1.62.0",
     "@tailwindcss/postcss": "^4.2.0",
     "@types/mapbox__polyline": "^1.0.5",
     "@types/node": "^22",

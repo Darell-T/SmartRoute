@@ -1,6 +1,6 @@
-"""Layer-1 tests for the P2 agent tools (accessibility_status, lookup_facts),
+"""Layer-1 tests for P2 leaf tools and the model-led public capability surface,
 the transit_facts.md data file, the P2 prompt clause, the per-turn timing log
-line in loop.py, and the full 7-tool registry.
+line in loop.py, and the full eight-capability registry.
 
 Follows test_agent_tools_p1.py's conventions: real imports, only the actual
 I/O boundary each tool touches (httpx) is mocked -- never the whole module.
@@ -16,14 +16,53 @@ from datetime import date
 from contextlib import redirect_stdout
 from unittest.mock import patch
 
-from app.services.agent import prompt as agent_prompt
+from app.services.agent.model import prompt as agent_prompt
 from app.services.agent import tools as agent_tools
-from app.services.agent.tools import _http, accessibility_status, lookup_facts
-from app.utils import cache
+from app.services.agent.tools import (
+    ToolSpec,
+    provider_http as _http,
+    declare_goals,
+)
+from app.services.agent.tools.transit import accessibility_status, lookup_facts
+from app.services import cache
 from tests._fake_http_tools import make_tool_ctx as _ctx
 from tests._fake_http_tools import recording_get_client as _recording_get_client
 
 from tests.test_agent_loop import _AgentLoopHelpers, _load_agent_loop, _test_registry
+
+
+def _model_led_test_registry() -> dict[str, ToolSpec]:
+    return {
+        **_test_registry(),
+        "declare_goals": ToolSpec(
+            schema=declare_goals.DECLARE_GOALS_SCHEMA,
+            executor=declare_goals.execute,
+            label_fn=lambda _input: "Understanding the request…",
+            timeout_s=2.0,
+        ),
+    }
+
+
+def _general_round(*tool_calls: dict) -> dict:
+    return {
+        "tool_use": [
+            {
+                "id": "tu_goals",
+                "name": "declare_goals",
+                "input": {
+                    "goals": [
+                        {
+                            "goal_key": "response",
+                            "kind": "general_response",
+                            "depends_on": [],
+                        }
+                    ]
+                },
+            },
+            *tool_calls,
+        ],
+        "stop_reason": "tool_use",
+    }
 
 
 def _outage(
@@ -75,14 +114,14 @@ class AccessibilityStatusTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.ok)
         self.assertEqual(len(result.data["elevator_outages"]), 1)
 
-    async def test_no_match_is_a_positive_signal_not_an_error(self):
+    async def test_no_match_is_unavailable_not_a_positive_signal(self):
         payload = {"outages": [_outage(station="34 St-Penn Station")]}
         client_class = _recording_get_client(payload)
         with patch.object(_http.httpx, "AsyncClient", client_class):
             result = await accessibility_status.execute({"station": "Coney Island-Stillwell Av"}, _ctx())
-        self.assertTrue(result.ok)
-        self.assertEqual(result.data["elevator_outages"], [])
-        self.assertIn("no elevator outages", result.summary)
+        self.assertFalse(result.ok)
+        self.assertEqual(result.outcome, "unavailable")
+        self.assertIn("no accessibility record matched", result.error)
 
     async def test_elevators_vs_escalators_split(self):
         payload = {
@@ -155,8 +194,8 @@ class AccessibilityStatusTests(unittest.IsolatedAsyncioTestCase):
         client_class = _recording_get_client({"unexpected": "shape"})
         with patch.object(_http.httpx, "AsyncClient", client_class):
             result = await accessibility_status.execute({"station": "34 St-Penn Station"}, _ctx())
-        self.assertTrue(result.ok)
-        self.assertEqual(result.data["elevator_outages"], [])
+        self.assertFalse(result.ok)
+        self.assertEqual(result.outcome, "unavailable")
 
 
 class LookupFactsTests(unittest.IsolatedAsyncioTestCase):
@@ -232,8 +271,8 @@ class TransitFactsFileTests(unittest.TestCase):
 class PromptGuardP2Tests(unittest.TestCase):
     def test_factual_grounding_clause_present(self):
         self.assertIn("FACTUAL GROUNDING", agent_prompt.SYSTEM_PROMPT)
-        self.assertIn("lookup_facts", agent_prompt.SYSTEM_PROMPT)
-        self.assertIn("accessibility_status", agent_prompt.SYSTEM_PROMPT)
+        self.assertIn("check_transit fact", agent_prompt.SYSTEM_PROMPT)
+        self.assertIn("accessibility", agent_prompt.SYSTEM_PROMPT)
 
 
 class RegistryP2Tests(unittest.TestCase):
@@ -243,24 +282,33 @@ class RegistryP2Tests(unittest.TestCase):
             "present_route",
             "transit_snapshot",
             "event_lookup",
-            "poi_search",
             "venue_crowd_window",
             "accessibility_status",
             "lookup_facts",
             "lookup_arrivals",
             "check_area_conditions",
-            "search_local_places",
             "get_place_details",
         }
-        self.assertEqual(set(agent_tools.TOOL_REGISTRY.keys()), expected)
-        for name, spec in agent_tools.TOOL_REGISTRY.items():
+        self.assertEqual(
+            set(agent_tools.COMBINED_TOOL_REGISTRY.keys()),
+            expected
+            | {
+                "declare_goals",
+                "discover_places",
+                "present_places",
+                "check_transit",
+                "present_transit",
+                "complete_turn",
+            },
+        )
+        for name, spec in agent_tools.COMBINED_TOOL_REGISTRY.items():
             self.assertTrue(spec.schema.get("strict"), name)
             self.assertFalse(spec.schema["input_schema"].get("additionalProperties", True), name)
             self.assertGreater(spec.timeout_s, 0, name)
 
     def test_p2_tool_timeouts(self):
-        self.assertEqual(agent_tools.TOOL_REGISTRY["accessibility_status"].timeout_s, 8.0)
-        self.assertEqual(agent_tools.TOOL_REGISTRY["lookup_facts"].timeout_s, 2.0)
+        self.assertEqual(agent_tools.INTERNAL_TOOL_REGISTRY["accessibility_status"].timeout_s, 8.0)
+        self.assertEqual(agent_tools.INTERNAL_TOOL_REGISTRY["lookup_facts"].timeout_s, 2.0)
 
 
 class TimingLogLineTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
@@ -275,7 +323,20 @@ class TimingLogLineTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         buf = io.StringIO()
         with redirect_stdout(buf):
             await self._run(
-                [{"text": ["ok, taking the Q"], "stop_reason": "end_turn"}],
+                [
+                    _general_round(
+                        {
+                            "id": "tu_done",
+                            "name": "complete_turn",
+                            "input": {
+                                "goal_keys": ["response"],
+                                "outcome": "answer",
+                                "message": "ok, taking the Q",
+                            },
+                        }
+                    )
+                ],
+                tool_registry=_model_led_test_registry(),
                 session_id="timing-log-session",
             )
         lines = [line for line in buf.getvalue().splitlines() if line.startswith("[agent] turn=")]
@@ -283,8 +344,8 @@ class TimingLogLineTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         line = lines[0]
         self.assertIn("sess=timing", line)
         self.assertIn("rounds=1", line)
-        self.assertIn("model_tool_uses=0", line)
-        self.assertIn("provider_tool_executions=0", line)
+        self.assertIn("model_tool_uses=2", line)
+        self.assertIn("provider_tool_executions=1", line)
         self.assertIn("model_ms=", line)
         self.assertIn("tools_ms=", line)
         self.assertIn("intent_ms=", line)
@@ -311,15 +372,32 @@ class TimingLogLineTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
     async def test_timing_log_counts_tools(self):
         buf = io.StringIO()
         rounds = [
-            {"tool_use": [{"id": "tu_1", "name": "ok_tool", "input": {}}], "stop_reason": "tool_use"},
-            {"text": ["done"], "stop_reason": "end_turn"},
+            _general_round({"id": "tu_1", "name": "ok_tool", "input": {}}),
+            {
+                "tool_use": [
+                    {
+                        "id": "tu_2",
+                        "name": "complete_turn",
+                        "input": {
+                            "goal_keys": ["response"],
+                            "outcome": "answer",
+                            "message": "done",
+                        },
+                    }
+                ],
+                "stop_reason": "tool_use",
+            },
         ]
         with redirect_stdout(buf):
-            await self._run(rounds, tool_registry=_test_registry(), session_id="timing-log-tools")
+            await self._run(
+                rounds,
+                tool_registry=_model_led_test_registry(),
+                session_id="timing-log-tools",
+            )
         line = next(line for line in buf.getvalue().splitlines() if line.startswith("[agent] turn="))
         self.assertIn("rounds=2", line)
-        self.assertIn("model_tool_uses=1", line)
-        self.assertIn("provider_tool_executions=1", line)
+        self.assertIn("model_tool_uses=3", line)
+        self.assertIn("provider_tool_executions=2", line)
 
 
 if __name__ == "__main__":

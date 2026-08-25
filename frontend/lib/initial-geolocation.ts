@@ -52,6 +52,12 @@ export function nextLocationState(
   return update;
 }
 
+export function authoritativeChatOrigin(
+  location: InitialLocationState,
+): Coordinates | null {
+  return location.status === "precise_nyc" ? location.coordinates : null;
+}
+
 export function requestInitialLocation(
   geolocation: GeolocationLike | undefined,
   fallback: Coordinates,

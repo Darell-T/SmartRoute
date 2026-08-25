@@ -138,7 +138,7 @@ test("validates nested transfer semantics without dropping later terminal events
   });
 });
 
-test("accepts a complete route_card with outer_agent_selection through the stream", async () => {
+test("accepts a complete route_card with deterministic fallback provenance", async () => {
   const payload = {
     card_id: "rc_outer",
     turn_id: "t1",
@@ -152,14 +152,9 @@ test("accepts a complete route_card with outer_agent_selection through the strea
     ],
     alerts: [],
     selection_decision: {
-      selected_candidate_index: 0,
-      selected_candidate_id: "rc_outer",
-      base_score: 23,
-      final_score: 23,
-      hard_constraints_satisfied: ["at_least_one_transit_mode"],
-      penalties: [],
-      selection_reason: "outer_agent_selection",
-      evidence_ids: [],
+      selection_reason: "deterministic_fallback",
+      reason_code: "coverage_gap",
+      selection_source: "deterministic_fallback",
     },
     itinerary: {
       itinerary_id: "rc_outer",
@@ -170,14 +165,9 @@ test("accepts a complete route_card with outer_agent_selection through the strea
         { mode: "SUBWAY", service_id: "Q", ride_seconds: 1200 },
       ],
       selection_decision: {
-        selected_candidate_index: 0,
-        selected_candidate_id: "rc_outer",
-        base_score: 23,
-        final_score: 23,
-        hard_constraints_satisfied: ["at_least_one_transit_mode"],
-        penalties: [],
-        selection_reason: "outer_agent_selection",
-        evidence_ids: [],
+        selection_reason: "deterministic_fallback",
+        reason_code: "coverage_gap",
+        selection_source: "deterministic_fallback",
       },
     },
   };
@@ -189,8 +179,10 @@ test("accepts a complete route_card with outer_agent_selection through the strea
     const events = await collect(readerFromChunks([frames]));
     assert.equal(events.length, 2);
     assert.equal(events[0].type, "route_card");
-    assert.equal(events[0].selection_decision.selection_reason, "outer_agent_selection");
-    assert.equal(events[0].itinerary.selection_decision.selection_reason, "outer_agent_selection");
+    assert.equal(events[0].selection_decision.selection_reason, "deterministic_fallback");
+    assert.equal(events[0].selection_decision.reason_code, "coverage_gap");
+    assert.equal(events[0].selection_decision.selection_source, "deterministic_fallback");
+    assert.equal(events[0].itinerary.selection_decision.selection_reason, "deterministic_fallback");
     assert.deepEqual(events[1], {
       type: "done",
       session_id: "s1",
@@ -198,6 +190,71 @@ test("accepts a complete route_card with outer_agent_selection through the strea
       stop_reason: "end_turn",
       usage: {},
     });
-    assert.equal(calls.length, 0, "valid outer_agent_selection card must not be dropped");
+    assert.equal(calls.length, 0, "valid fallback card must not be dropped");
+  });
+});
+
+test("rejects private route selection fields at both passenger boundaries", async () => {
+  const safeDecision = {
+    selection_reason: "outer_agent_selection",
+    reason_code: "fewer_transfers",
+    selection_source: "model",
+  };
+  const base = {
+    card_id: "rc_safe",
+    turn_id: "t1",
+    role: "recommended",
+    origin: { label: "Your location", lat: 40.7484, lng: -73.9857 },
+    destination: { label: "Barclays Center", lat: 40.6826, lng: -73.9754 },
+    summary: { eta_minutes: 23, transfers: 0, lines: ["Q"], reason: "Direct route" },
+    route: [{ type: "SUBWAY", route_id: "Q", duration_minutes: 20 }],
+    alerts: [],
+    selection_decision: safeDecision,
+    itinerary: {
+      itinerary_id: "itin_safe",
+      total_duration_seconds: 1380,
+      transfer_count: 0,
+      legs: [{ mode: "SUBWAY", service_id: "Q", ride_seconds: 1200 }],
+      selection_decision: safeDecision,
+    },
+  };
+  const privateFields = {
+    selected_candidate_index: 0,
+    selected_candidate_id: "cd_private",
+    base_score: 23,
+    final_score: 23,
+    hard_constraints_satisfied: ["at_least_one_transit_mode"],
+    penalties: [],
+    evidence_ids: ["private:evidence"],
+  };
+  const payloads = [];
+  for (const [field, value] of Object.entries(privateFields)) {
+    payloads.push({
+      ...base,
+      selection_decision: { ...safeDecision, [field]: value },
+    });
+    payloads.push({
+      ...base,
+      itinerary: {
+        ...base.itinerary,
+        selection_decision: { ...safeDecision, [field]: value },
+      },
+    });
+  }
+  const frames = payloads
+    .map((payload) => `event: route_card\ndata: ${JSON.stringify(payload)}\n\n`)
+    .join("")
+    + 'event: done\ndata: {"session_id":"s1","turn_id":"t1","stop_reason":"end_turn","usage":{}}\n\n';
+
+  await silenceConsoleWarn(async (calls) => {
+    const events = await collect(readerFromChunks([frames]));
+    assert.deepEqual(events, [{
+      type: "done",
+      session_id: "s1",
+      turn_id: "t1",
+      stop_reason: "end_turn",
+      usage: {},
+    }]);
+    assert.equal(calls.length, payloads.length);
   });
 });

@@ -18,9 +18,8 @@ import {
   faMapPin,
   faPersonWalking,
   faRightFromBracket,
+  faTrain,
 } from "@fortawesome/free-solid-svg-icons";
-import MdiIcon from "@mdi/react";
-import { mdiTrain } from "@mdi/js";
 import type { CSSProperties, ReactNode } from "react";
 import {
   RAIL_TONE_COLORS,
@@ -319,12 +318,10 @@ export function StepIcon({
     case "board":
     case "ride":
       return (
-        <MdiIcon
-          path={mdiTrain}
-          size={`${size}px`}
-          color={color ?? STEP_ICON_COLORS.secondary}
+        <FontAwesomeIcon
+          icon={faTrain}
           data-step-icon="train"
-          style={{ display: "block", flexShrink: 0 }}
+          style={iconStyle(color ?? STEP_ICON_COLORS.secondary)}
           aria-hidden="true"
         />
       );

@@ -149,29 +149,39 @@ export interface CanonicalItinerary {
 }
 
 export interface RouteSelectionDecision {
-  selected_candidate_index: number;
-  selected_candidate_id: string;
-  base_score: number;
-  final_score: number;
-  hard_constraints_satisfied: string[];
-  penalties: Array<{ source: string; amount: number; reason: string }>;
   selection_reason:
-    | "lowest_final_score"
-    | "hard_constraint"
-    | "advisor_tiebreak"
-    | "outer_agent_selection";
-  evidence_ids: string[];
+    | "outer_agent_selection"
+    | "deterministic_fallback";
+  reason_code?: RouteReasonCode | null;
+  selection_source: "model" | "deterministic_fallback";
 }
 
-export type RecommendationReason =
+export type RouteReasonCode =
+  | "fastest"
+  | "less_walking"
+  | "fewer_transfers"
+  | "avoids_active_disruption"
+  | "lower_event_crowd_exposure"
+  | "meets_hard_constraints"
+  | "accessibility"
+  | "coverage_gap"
+  | "reasonable_local_option";
+
+export type RecommendationReason = (
   | { code: "fastest"; difference_seconds?: number }
+  | { code: "less_walking" }
   | { code: "fewer_transfers"; transfer_difference: number }
   | { code: "avoids_active_disruption" }
   | {
       code: "lower_event_crowd_exposure";
       event_count: number;
       provider_status: string;
-    };
+    }
+  | { code: "meets_hard_constraints" }
+  | { code: "accessibility" }
+  | { code: "coverage_gap" }
+  | { code: "reasonable_local_option" }
+) & { crowd_evidence_status?: string };
 
 export interface AgentRouteStep extends RouteStep {
   departure_time_iso?: string;

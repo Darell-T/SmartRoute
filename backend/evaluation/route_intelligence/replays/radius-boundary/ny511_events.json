@@ -1,0 +1,38 @@
+[
+  {
+    "ID": "radius-inside",
+    "Latitude": 40.7496,
+    "Longitude": -73.97834764668076,
+    "County": "New York",
+    "EventType": "Collision",
+    "Severity": "High",
+    "Description": "Vehicle collision within threshold.",
+    "RoadwayName": "Eighth Avenue",
+    "Reported": "2026-07-22T20:30:00Z",
+    "PlannedEndDate": "2026-07-22T23:30:00Z"
+  },
+  {
+    "ID": "radius-boundary",
+    "Latitude": 40.7496,
+    "Longitude": -73.97834763712841,
+    "County": "New York",
+    "EventType": "Construction",
+    "Severity": "High",
+    "Description": "Construction activity precisely at threshold.",
+    "RoadwayName": "Seventh Avenue",
+    "Reported": "2026-07-22T20:31:00Z",
+    "PlannedEndDate": "2026-07-22T23:30:00Z"
+  },
+  {
+    "ID": "radius-outside",
+    "Latitude": 40.7496,
+    "Longitude": -73.97834762757604,
+    "County": "New York",
+    "EventType": "Disabled vehicle",
+    "Severity": "High",
+    "Description": "Disabled vehicle beyond threshold.",
+    "RoadwayName": "Sixth Avenue",
+    "Reported": "2026-07-22T20:32:00Z",
+    "PlannedEndDate": "2026-07-22T23:30:00Z"
+  }
+]

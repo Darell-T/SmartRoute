@@ -1,8 +1,6 @@
 "use client";
 
-// Mapbox destination autocomplete, extracted from LiveMapSearchCommand so
-// the left rail's SearchBlock (the single search entry point now) can reuse
-// the debounce / session-token / suggest / retrieve flow.
+// Mapbox destination autocomplete shared by the left rail search.
 
 import {
   startTransition,

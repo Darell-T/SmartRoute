@@ -1,5 +1,6 @@
 import asyncio
 import gc
+import importlib
 import json
 import time
 import unittest
@@ -10,13 +11,14 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from fastapi import WebSocketDisconnect
 
-from app.routers import live_feed as live_feed_router
-from app.routers import live_feed_socket
 from app import main as app_main
 from app.services.live_feed import network_snapshot as network_snapshot_module
 from app.services.live_feed import snapshot as rider_snapshot
 from app.services.live_feed.network_snapshot import NetworkSnapshot, NetworkSnapshotStore
 from app.services.mta import bus, bus_runtime, bus_updates
+
+live_feed_router = importlib.import_module("app.routers.live_feed.router")
+live_feed_socket = importlib.import_module("app.routers.live_feed.socket")
 
 
 def network_snapshot(generation: int, **overrides) -> NetworkSnapshot:
@@ -305,7 +307,7 @@ class RiderSnapshotSharingTests(unittest.IsolatedAsyncioTestCase):
                 raise AssertionError("rider snapshots must not query static trip context")
 
         with patch.object(
-            rider_snapshot.mta_feed,
+            rider_snapshot.mta_realtime,
             "cached_nearby_bus_update",
             return_value=None,
         ):
@@ -517,10 +519,10 @@ class BusUpdateOwnershipTests(unittest.IsolatedAsyncioTestCase):
         payload = live_feed_router.LiveFeedRequest(lat=40.7, lng=-73.9)
 
         with patch.object(
-            live_feed_router,
-            "_build_live_snapshot",
+            live_feed_router._live_feed_snapshot,
+            "build_live_snapshot",
             AsyncMock(return_value=snapshot),
-        ), patch.object(live_feed_router.mta_feed, "fetch_nearby_bus_update", refresh):
+        ), patch.object(live_feed_router.mta_realtime, "fetch_nearby_bus_update", refresh):
             response = await live_feed_router._live_feed_impl(object(), payload)
             self.assertEqual(response.status_code, 200)
             refresh.assert_not_awaited()

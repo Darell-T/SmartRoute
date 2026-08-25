@@ -1,14 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { resolveBackendBaseUrl } from "./backend-proxy-core";
 import { safeChatFailure } from "./chat-failure-copy";
 import { requestPrincipal } from "./request-principal";
 
-const PROD_API_FALLBACK = "https://jarvis-mta-assistant.onrender.com";
-const backendBase =
-  process.env.API_URL ??
-  process.env.NEXT_PUBLIC_API_URL ??
-  (process.env.VERCEL ? PROD_API_FALLBACK : "http://localhost:8000");
+const backendBase = resolveBackendBaseUrl();
 const backendHost = safeBackendHost(backendBase);
 const CONNECT_TIMEOUT_MS = 10_000;
 const REQUEST_ID_HEADER = "X-SmartRoute-Request-Id";

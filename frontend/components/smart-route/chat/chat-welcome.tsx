@@ -108,9 +108,9 @@ function AnimatedSuggestion({
     <motion.div
       className="sr-chat-suggestion-motion"
       tabIndex={-1}
-      whileHover={reduceMotion ? undefined : { y: -1 }}
+      whileHover={reduceMotion ? undefined : { y: -2, scale: 1.005 }}
       whileTap={reduceMotion ? undefined : { scale: 0.985 }}
-      transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+      transition={{ type: "spring", stiffness: 360, damping: 28, mass: 0.35 }}
     >
       <PromptSuggestion
         variant="outline"
