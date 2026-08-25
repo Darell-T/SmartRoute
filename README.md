@@ -19,10 +19,10 @@ It can find a destination, compare transit routes, explain current conditions,
 show nearby arrivals, and carry the same accepted trip into the map and route
 steps.
 
-The recommendation is not a free-form model answer. The backend prepares
-canonical route candidates and verified evidence. The Agent interprets the
-rider, manages multi-step goals, and selects among eligible candidates. Chat,
-the route card, route steps, and the map render the same server-owned trip.
+The recommendation is not a free-form model answer. The backend builds real
+route options from live and scheduled data. The assistant figures out what
+the rider wants and picks among those options. Chat, the route card, route
+steps, and the map all show the same trip.
 
 > The Agent understands the rider. The backend owns truth and execution.
 
@@ -30,8 +30,7 @@ the route card, route steps, and the map render the same server-owned trip.
 
 - An Agent-led conversational flow that understands compound requests,
   follow-ups, saved references, and explicit route constraints.
-- One backend-owned canonical itinerary shared by chat, route cards, route
-  steps, and the map.
+- One shared trip shown in chat, the route card, route steps, and the map.
 - Live subway and bus context from GTFS realtime, MTA alerts, and BusTime.
 - Stalled-train evidence from stale GTFS realtime vehicle timestamps and
   stalled-bus evidence from BusTime `noProgress` status outside layovers.
@@ -66,7 +65,7 @@ Rider request and session context
 Providers, GTFS, realtime feeds, indexed incidents
               |
               v
- Canonical candidates and evidence
+ Route options and live evidence
               |
               v
   Agent chooses a valid option
@@ -83,9 +82,9 @@ The Agent uses eight model-visible capabilities:
 `prepare_route_options`, `present_places`, `present_transit`, `present_route`,
 and `complete_turn`. Internal provider helpers are not model-visible.
 
-`POST /api/trip` builds a model-free direct plan. `POST /api/agent/chat` adds
-Agent-led goal interpretation and selection while reusing backend-owned route
-preparation and canonical itinerary facts.
+`POST /api/trip` builds a plan without the assistant. `POST /api/agent/chat`
+lets the assistant interpret the request and choose a route, while still
+using the same backend trip facts.
 
 Use the [documentation map](docs/README.md) to find the backend architecture,
 agent pipeline, production contracts, and release checks.
@@ -96,7 +95,7 @@ SmartRoute distinguishes conditions that should not be treated as the same
 kind of failure:
 
 - Physical infeasibility cannot be overridden. A suspended required segment or
-  invalid itinerary remains blocked.
+  invalid trip remains blocked.
 - Rider-owned constraints can be changed by the rider. If the rider withdraws
   an avoid-line or walking preference, the active trip is reevaluated.
 - Operational advisories can make a route less desirable without making it
@@ -114,8 +113,8 @@ mechanism when the Agent cannot return a valid choice.
 |---|---|
 | Next.js frontend | Chat streaming, route cards, left rail, map, and API proxies |
 | FastAPI routers | Admission, authentication, REST, SSE, and WebSocket boundaries |
-| Conversational Agent | Goals, capability loop, Agent state, evidence obligations, and canonical presentation |
-| Trip services | Model-neutral route preparation, constraints, candidate facts, evidence association, fallback selection, and canonical itinerary |
+| Conversational Agent | Goals, capability loop, Agent state, evidence obligations, and the shared trip shown in the UI |
+| Trip services | Route preparation, constraints, candidate facts, evidence association, fallback selection, and the planned trip |
 | Transit and provider services | MTA, GTFS, GTFS realtime, BusTime, and provider normalization |
 | Live-feed services | Arrivals, alerts, vehicles, and nearby transit context |
 | Background refresh | Bounded city incident collection into the shared Redis index |
@@ -148,7 +147,7 @@ Deployment:
 
 The repository protects these product invariants:
 
-- One canonical itinerary owns duration, transfers, walking, stops, and timing.
+- One shared trip owns duration, transfers, walking, stops, and timing.
 - Missing evidence stays unknown and never becomes a false all-clear.
 - Raw model prose cannot finish unresolved grounded work.
 - Accepted unchanged advisories cannot create a repeated consent loop.
@@ -219,7 +218,7 @@ backend/
   app/routers/                 FastAPI and WebSocket entry points
   app/services/agent/          Conversational runtime, state, model boundary, evidence, and completion
   app/services/agent/tools/    Model-visible capability adapters and Agent-specific execution
-  app/services/trips/          Model-neutral route preparation, constraints, scoring, and canonical itinerary
+  app/services/trips/          Route preparation, constraints, scoring, and the planned trip
   app/services/mta/            MTA / GTFS / BusTime provider normalization and realtime data
   app/services/live_feed/      Current arrivals, vehicles, and service snapshots
   app/services/incidents/      Incident collection, normalization, indexing, and refresh
