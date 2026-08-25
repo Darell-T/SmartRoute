@@ -91,21 +91,41 @@ agent pipeline, production contracts, and release checks.
 
 ## Route intelligence
 
-SmartRoute distinguishes conditions that should not be treated as the same
-kind of failure:
+SmartRoute does more than choose the shortest route a provider returns. The
+backend builds and checks real route options, then the Agent compares them
+against what the rider asked for and what is happening on the network right now.
 
-- Physical infeasibility cannot be overridden. A suspended required segment or
-  invalid trip remains blocked.
-- Rider-owned constraints can be changed by the rider. If the rider withdraws
-  an avoid-line or walking preference, the active trip is reevaluated.
-- Operational advisories can make a route less desirable without making it
-  impossible. A rider may select a viable delayed or crowded route and still
-  receive the warning.
+A route can be evaluated using:
 
-Every candidate is finalized against one evidence snapshot before selection.
-The Agent receives an unordered factor comparison without numeric scores or
-rank labels. Private deterministic ranking remains a fallback and validation
-mechanism when the Agent cannot return a valid choice.
+- total travel time, walking, and transfers;
+- how close a destination is to the rider;
+- preferences like avoiding a line or minimizing walking;
+- current MTA service changes and realtime conditions;
+- stalled-train and stalled-bus signals;
+- incidents affecting the trip;
+- event and crowd exposure;
+- accessibility needs;
+- how complete and recent the available data is.
+
+The Agent sees those facts directly instead of being handed a hidden score or
+pre-ranked winner. That lets it reason about tradeoffs instead of blindly picking
+the numerically shortest route.
+
+For example, a destination might save a few minutes of walking but require going
+far across the city. SmartRoute can recognize that the overall trip is worse and
+prefer a closer option that still matches the rider's priorities.
+
+The backend still enforces the hard rules. An impossible route or a required
+segment that is not running stays blocked. Rider preferences can be changed
+during the conversation, while routes with delays, local service, crowd exposure,
+or other issues can still be used when they are actually viable.
+
+Each route is checked against the same set of live conditions before the Agent
+makes a choice, so the recommendation, route card, directions, and map all stay
+in sync.
+
+If the Agent cannot make a valid choice, SmartRoute falls back to deterministic
+ranking instead of inventing a route.
 
 ## Architecture
 
