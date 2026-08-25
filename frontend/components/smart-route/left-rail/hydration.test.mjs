@@ -530,13 +530,18 @@ test("left rail uses restrained transit product surfaces", () => {
   );
   assert.match(
     railCss,
-    /background:\s*rgba\(16,\s*185,\s*129,\s*0\.22\)/,
-    "active direction pill uses the transit-green fill",
+    /\.sr-tab-underline\s*\{[^}]*background:\s*rgba\(99,\s*99,\s*102,\s*0\.55\)[^}]*border:\s*1px solid var\(--sr-hairline-bright\)/s,
+    "Route/Alerts selected segment uses the elevated selected-surface recipe",
   );
   assert.match(
     railCss,
-    /border:\s*1px solid rgba\(52,\s*211,\s*153,\s*0\.45\)/,
-    "active direction pill uses the transit-green border",
+    /\.sr-toggle-pill\s*\{[^}]*border:\s*1px solid var\(--sr-hairline-bright\)[^}]*background:\s*rgba\(99,\s*99,\s*102,\s*0\.55\)/s,
+    "Uptown/Downtown selected pill shares the Route/Alerts selected-surface recipe",
+  );
+  assert.match(
+    railCss,
+    /\.sr-tab-shell\[data-sr-theme="light"\] \.sr-tab-underline,\s*\.sr-tab-shell\[data-sr-theme="light"\] \.sr-toggle-pill/,
+    "light-mode Route/Alerts and direction-toggle selected surfaces stay one shared rule",
   );
   assert.match(
     railCss,
