@@ -24,6 +24,10 @@
   font-feature-settings: "tnum";
   font-variant-numeric: tabular-nums;
   -webkit-font-smoothing: antialiased;
+  /* One iMessage blue for outgoing bubbles in both themes. Light mode
+     previously omitted this token, so the bubble background dropped while
+     the text stayed white. */
+  --sr-chat-user-bubble: #0071e3;
 }
 
 .sr-chat-tab[data-sr-theme="dark"] {
@@ -32,7 +36,6 @@
   --sr-chat-ink: rgba(255, 255, 255, 0.95);
   --sr-chat-ink-dim: rgba(255, 255, 255, 0.61);
   --sr-chat-accent: #e5e7eb;
-  --sr-chat-user-bubble: #0071e3;
   --sr-chat-danger: #fb7185;
 
   --sr-chat-hairline: rgba(255, 255, 255, 0.08);
@@ -461,7 +464,7 @@
   width: 24px;
   height: 24px;
   border-radius: 0;
-  color: var(--sr-chat-ink-dim);
+  color: var(--sr-chat-ink);
   background: transparent;
   font-size: 15px;
 }
@@ -471,17 +474,12 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
-  border-radius: 7px;
+  width: 16px;
+  height: 16px;
+  border-radius: 0;
   color: var(--sr-chat-ink);
-  background: color-mix(in srgb, var(--sr-route-color, #5f8fd9) 12%, transparent);
+  background: transparent;
   box-shadow: none;
-}
-
-.sr-itinerary-card__rail-glyph {
-  color: var(--sr-chat-ink-dim);
-  background: color-mix(in srgb, var(--sr-chat-ink) 8%, transparent);
 }
 
 .sr-itinerary-card__bus-route {
@@ -1386,6 +1384,13 @@
   white-space: pre-wrap;
   word-break: break-word;
   animation: srChatBubbleIn 160ms var(--sr-motion-ease) both;
+}
+
+.sr-chat-bubble:hover,
+.sr-chat-bubble:focus,
+.sr-chat-bubble:focus-visible {
+  background: var(--sr-chat-user-bubble);
+  color: #fff;
 }
 
 .sr-chat-message__prose {
@@ -2819,11 +2824,25 @@ button.sr-chat-arrivals-card__footer {
   box-shadow: 0 5px 16px rgba(0, 0, 0, 0.22);
 }
 
-.sr-chat-tab[data-sr-theme="light"] .sr-chat-send-button[data-ready="true"] {
+.sr-chat-send-button[data-ready="true"]:not(:disabled):hover,
+.sr-chat-send-button[data-ready="true"]:not(:disabled):active {
   background: #ffffff;
-  border-color: rgba(12, 14, 15, 0.18);
   color: #101214;
+}
+
+.sr-chat-tab[data-sr-theme="light"] .sr-chat-send-button[data-ready="true"] {
+  background: #101214;
+  border-color: #101214;
+  color: #ffffff;
   box-shadow: 0 5px 16px rgba(20, 22, 24, 0.14);
+}
+
+.sr-chat-tab[data-sr-theme="light"]
+  .sr-chat-send-button[data-ready="true"]:not(:disabled):hover,
+.sr-chat-tab[data-sr-theme="light"]
+  .sr-chat-send-button[data-ready="true"]:not(:disabled):active {
+  background: #101214;
+  color: #ffffff;
 }
 
 .sr-chat-send-button[data-mode="stop"] {

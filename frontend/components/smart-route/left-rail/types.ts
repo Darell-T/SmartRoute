@@ -222,6 +222,8 @@ export interface RouteDetailStep {
   fromStop?: string;
   toStop?: string;
   rideMeta?: string;
+  /** Canonical intermediate stop names. Empty when the itinerary omitted them. */
+  stops?: string[];
   transferTo?: string;
   transferMode?: "subway" | "bus";
 }

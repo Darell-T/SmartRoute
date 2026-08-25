@@ -280,9 +280,9 @@ type StepType =
   | "arrive";
 
 const STEP_ICON_COLORS = {
-  primary: "rgba(255,255,255,.92)",
-  secondary: "rgba(255,255,255,.68)",
-  neutral: "rgba(255,255,255,.86)",
+  primary: "var(--sr-fg)",
+  secondary: "var(--sr-fg)",
+  neutral: "var(--sr-fg-2)",
   marker: "#ef3b5d",
 } as const;
 

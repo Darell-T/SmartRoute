@@ -10,7 +10,7 @@ facts, and conversational guidance without letting the model invent the trip.
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
 ![MapLibre](https://img.shields.io/badge/MapLibre_GL-396cb2?logo=maplibre&logoColor=white)
 
-![SmartRoute route recommendation](docs/assets/route_found.png)
+![Chat in light mode](docs/assets/chat.png)
 
 ## What SmartRoute does
 
@@ -45,13 +45,11 @@ the route card, route steps, and the map render the same server-owned trip.
 
 ## Product views
 
-| Route steps | Alternate routes |
+| Home | Transit map |
 |---|---|
-| ![Detailed trip steps](docs/assets/route_steps.png) | ![Alternate route comparison](docs/assets/alt_routes.png) |
+| ![Home in light mode](docs/assets/home_nearby.png) | ![Transit map in light mode](docs/assets/transit_map.png) |
 
-| Nearby arrivals | Service alerts |
-|---|---|
-| ![Nearby arrivals](docs/assets/nearby_arrivals.png) | ![Nearby service alerts](docs/assets/nearby_alerts.png) |
+![Service alerts in light mode](docs/assets/service_alerts.png)
 
 ## How it works
 

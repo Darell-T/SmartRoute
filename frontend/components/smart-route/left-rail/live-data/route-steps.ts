@@ -97,6 +97,28 @@ export function stripFromSteps(steps: ApiRouteStep[] | undefined): RouteStripSeg
   );
 }
 
+function namedIntermediateStops(
+  step: ApiRouteStep,
+  leg?: CanonicalItineraryLeg,
+): string[] {
+  const fromStep = Array.isArray(step.intermediate_stops)
+    ? step.intermediate_stops
+        .map((name) => (typeof name === "string" ? name.trim() : ""))
+        .filter(Boolean)
+    : [];
+  const fromLeg = Array.isArray(leg?.stops)
+    ? leg.stops
+        .map((stop) => (typeof stop.name === "string" ? stop.name.trim() : ""))
+        .filter(Boolean)
+    : [];
+  const names = fromStep.length > 0 ? fromStep : fromLeg;
+  const board = cleanDestinationLabel(step.departure_stop);
+  const alight = cleanDestinationLabel(step.arrival_stop);
+  if (board && names[0] === board) names.shift();
+  if (alight && names.at(-1) === alight) names.pop();
+  return names;
+}
+
 function walkDetailTitle(
   target: string,
   nextStep: ApiRouteStep | undefined,
@@ -177,6 +199,7 @@ export function detailStepsFromSteps(steps: ApiRouteStep[] | undefined): RouteDe
     const nextRouteId = next
       ? (next.route_id || next.train_line || "").toUpperCase()
       : undefined;
+    const stops = namedIntermediateStops(step);
     out.push({
       kind: "ride",
       routeId,
@@ -192,6 +215,7 @@ export function detailStepsFromSteps(steps: ApiRouteStep[] | undefined): RouteDe
       ]
         .filter(Boolean)
         .join(" · "),
+      ...(stops.length > 0 ? { stops } : {}),
       transferTo: nextRouteId || undefined,
       transferMode: next
         ? next.type === "BUS"
@@ -244,7 +268,12 @@ function decorateDirectLegSteps(
     const leg =
       step.type === "WALK" ? walkLegs[walkIndex++] : transitLegs[transitIndex++];
     const minutes = canonicalLegMinutes(leg);
-    return minutes === undefined ? step : { ...step, duration_minutes: minutes };
+    const stops = namedIntermediateStops(step, leg);
+    return {
+      ...step,
+      ...(minutes === undefined ? {} : { duration_minutes: minutes }),
+      ...(stops.length > 0 ? { intermediate_stops: stops } : {}),
+    };
   });
 }
 
@@ -284,8 +313,14 @@ export function detailStepsFromCanonicalItinerary(
     const rawSegmentSteps = (steps ?? [])
       .filter((step) => step.segment_index === segment.segment_index)
       .map((step, index) => {
-        const minutes = canonicalLegMinutes(segment.legs[index]);
-        return minutes === undefined ? step : { ...step, duration_minutes: minutes };
+        const leg = segment.legs[index];
+        const minutes = canonicalLegMinutes(leg);
+        const stops = namedIntermediateStops(step, leg);
+        return {
+          ...step,
+          ...(minutes === undefined ? {} : { duration_minutes: minutes }),
+          ...(stops.length > 0 ? { intermediate_stops: stops } : {}),
+        };
       });
     result.push(...detailStepsFromSteps(rawSegmentSteps));
 

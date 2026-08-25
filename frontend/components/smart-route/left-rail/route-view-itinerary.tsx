@@ -2,6 +2,7 @@
 
 import { Fragment, useEffect, useState, type RefObject } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { BusChip, LocationPin, RouteBullet, StepIcon, TransitText } from "./atoms";
 import { InlineArrivalCountdown } from "./arrival-countdown";
 import { SUBWAY_BULLET_ROUTES } from "@/components/smart-route/train-bullet";
@@ -295,8 +296,21 @@ function RouteDetailsChain({
   steps: RouteDetailStep[];
   destination?: string;
 }) {
-  // Start → walk → board → ride → walk → Arrive stays in backend order.
+  const [expandedRideIds, setExpandedRideIds] = useState<Set<number>>(
+    () => new Set(),
+  );
+  const reduceMotion = useReducedMotion() ?? false;
   const cleanedDestination = destination?.trim();
+
+  const toggleRide = (index: number) => {
+    setExpandedRideIds((current) => {
+      const next = new Set(current);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
+  };
+
   return (
     <ol className="sr-detail-chain" aria-label="Route directions">
       <li className="sr-detail-step">
@@ -337,6 +351,10 @@ function RouteDetailsChain({
               ? "#38445c"
               : (step.routeId && LINE_COLORS[step.routeId]) ||
                 "var(--sr-rule-bright)";
+          const rideStops = step.stops ?? [];
+          const canExpand = rideStops.length > 0;
+          const expanded = expandedRideIds.has(index);
+          const stopListId = `sr-ride-stops-${index}`;
           return (
             <li key={index} className="sr-detail-ride">
               <span
@@ -346,9 +364,60 @@ function RouteDetailsChain({
               />
               <span className="sr-detail-ride__copy">
                 {step.fromStop && <strong>{step.fromStop}</strong>}
-                {step.rideMeta && (
-                  <span className="sr-detail-ride__meta">{step.rideMeta}</span>
-                )}
+                {step.rideMeta ? (
+                  canExpand ? (
+                    <button
+                      type="button"
+                      className="sr-detail-ride__disclosure"
+                      aria-expanded={expanded}
+                      aria-controls={stopListId}
+                      onClick={() => toggleRide(index)}
+                    >
+                      <span>{step.rideMeta}</span>
+                      <motion.span
+                        className="sr-detail-ride__chevron"
+                        animate={{ rotate: expanded ? 180 : 0 }}
+                        transition={
+                          reduceMotion
+                            ? { duration: 0 }
+                            : { duration: 0.3, ease: [0.22, 1, 0.36, 1] }
+                        }
+                      >
+                        <ChevronDown
+                          size={14}
+                          strokeWidth={1.8}
+                          aria-hidden="true"
+                        />
+                      </motion.span>
+                    </button>
+                  ) : (
+                    <span className="sr-detail-ride__meta">{step.rideMeta}</span>
+                  )
+                ) : null}
+                <AnimatePresence initial={false}>
+                  {expanded && rideStops.length > 0 ? (
+                    <motion.ol
+                      id={stopListId}
+                      className="sr-detail-ride__stops"
+                      initial={reduceMotion ? false : { opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: "auto" }}
+                      exit={
+                        reduceMotion ? undefined : { opacity: 0, height: 0 }
+                      }
+                      transition={
+                        reduceMotion
+                          ? { duration: 0 }
+                          : { duration: 0.3, ease: [0.22, 1, 0.36, 1] }
+                      }
+                    >
+                      {rideStops.map((stop, stopIndex) => (
+                        <li key={`${stopListId}-${stop}-${stopIndex}`}>
+                          {stop}
+                        </li>
+                      ))}
+                    </motion.ol>
+                  ) : null}
+                </AnimatePresence>
                 {step.toStop && <strong>{step.toStop}</strong>}
                 {step.transferTo && (
                   <small className="sr-detail-ride__transfer">
