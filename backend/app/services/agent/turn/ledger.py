@@ -106,16 +106,19 @@ class ToolProgressRelay:
     async def stream_until(self, round_task: asyncio.Future) -> AsyncIterator:
         while not round_task.done():
             progress_task = asyncio.create_task(self.queue.get())
-            done, _ = await asyncio.wait(
-                {round_task, progress_task},
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            if progress_task in done:
-                yield progress_task.result()
-                continue
-            progress_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await progress_task
+            try:
+                done, _ = await asyncio.wait(
+                    {round_task, progress_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if progress_task in done:
+                    yield progress_task.result()
+                    continue
+            finally:
+                if not progress_task.done():
+                    progress_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await progress_task
         while not self.queue.empty():
             yield self.queue.get_nowait()
 
