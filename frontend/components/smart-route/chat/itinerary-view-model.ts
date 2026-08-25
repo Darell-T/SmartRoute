@@ -19,7 +19,11 @@ import {
   type ItineraryEventKind,
 } from "./itinerary-event-adapter";
 
-export { condensePreviewEvents, formatDurationMinutes } from "./itinerary-event-adapter";
+export {
+  condensePreviewEvents,
+  formatDurationMinutes,
+  intermediateStopNames,
+} from "./itinerary-event-adapter";
 export type { ItineraryEvent, ItineraryEventKind } from "./itinerary-event-adapter";
 
 export interface ItineraryViewModel {

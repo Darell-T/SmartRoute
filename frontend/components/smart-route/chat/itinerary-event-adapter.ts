@@ -116,6 +116,17 @@ function canonicalLegStops(leg: CanonicalItineraryLeg): string[] {
     .filter((stop): stop is string => Boolean(stop));
 }
 
+export function intermediateStopNames(event: {
+  stops?: string[];
+  fromLabel?: string;
+  toLabel?: string;
+}): string[] {
+  const stops = [...(event.stops ?? [])];
+  if (event.fromLabel && stops[0] === event.fromLabel) stops.shift();
+  if (event.toLabel && stops.at(-1) === event.toLabel) stops.pop();
+  return stops;
+}
+
 function transferRouteIds(semantics: CanonicalTransferSemantics): string[] {
   const routeId = semantics.to_route_id?.trim().toUpperCase();
   return routeId ? [routeId] : [];

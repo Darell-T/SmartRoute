@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { Bus, Clock, NavArrowDown, Train } from "iconoir-react";
+import { BusFront } from "lucide-react";
+import { Clock, NavArrowDown, Train } from "iconoir-react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faArrowRightArrowLeft,
@@ -11,6 +12,7 @@ import {
   SUBWAY_BULLET_ROUTES,
   TrainBullet,
 } from "@/components/smart-route/train-bullet";
+import { intermediateStopNames } from "./itinerary-event-adapter";
 import { warnUnsupportedRouteId, type ItineraryEvent } from "./itinerary-view-model";
 import { WalkingIcon } from "./walking-icon";
 
@@ -47,7 +49,7 @@ function RouteGlyph({
   if (kind === "bus") {
     return (
       <span className="sr-itinerary-card__bus-glyph" aria-hidden="true">
-        <Bus width={17} height={17} strokeWidth={1.8} fill="currentColor" />
+        <BusFront size={16} strokeWidth={1.8} />
       </span>
     );
   }
@@ -66,10 +68,7 @@ function RouteGlyph({
 }
 
 function intermediateStops(event: ItineraryEvent): string[] {
-  const stops = [...(event.stops ?? [])];
-  if (event.fromLabel && stops[0] === event.fromLabel) stops.shift();
-  if (event.toLabel && stops.at(-1) === event.toLabel) stops.pop();
-  return stops;
+  return intermediateStopNames(event);
 }
 
 function StopChain({
