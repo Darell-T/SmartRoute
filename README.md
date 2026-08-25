@@ -97,15 +97,15 @@ against what the rider asked for and what is happening on the network right now.
 
 A route can be evaluated using:
 
-- total travel time, walking, and transfers;
-- how close a destination is to the rider;
-- preferences like avoiding a line or minimizing walking;
-- current MTA service changes and realtime conditions;
-- stalled-train and stalled-bus signals;
-- incidents affecting the trip;
-- event and crowd exposure;
-- accessibility needs;
-- how complete and recent the available data is.
+- total travel time, walking, and transfers
+- how close a destination is to the rider
+- preferences like avoiding a line or minimizing walking
+- current MTA service changes and realtime conditions
+- stalled-train and stalled-bus signals
+- incidents affecting the trip
+- event and crowd exposure
+- accessibility needs
+- how complete and recent the available data is
 
 The Agent sees those facts directly instead of being handed a hidden score or
 pre-ranked winner. That lets it reason about tradeoffs instead of blindly picking
