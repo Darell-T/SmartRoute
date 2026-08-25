@@ -10,7 +10,7 @@ facts, and conversational guidance without letting the model invent the trip.
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
 ![MapLibre](https://img.shields.io/badge/MapLibre_GL-396cb2?logo=maplibre&logoColor=white)
 
-![Chat in light mode](docs/assets/chat.png)
+![Home in light mode](docs/assets/home_nearby.png)
 
 ## What SmartRoute does
 
@@ -44,9 +44,9 @@ steps, and the map all show the same trip.
 
 ## Product views
 
-| Home | Transit map |
+| Chat | Transit map |
 |---|---|
-| ![Home in light mode](docs/assets/home_nearby.png) | ![Transit map in light mode](docs/assets/transit_map.png) |
+| ![Chat in light mode](docs/assets/chat.png) | ![Transit map in light mode](docs/assets/transit_map.png) |
 
 ![Service alerts in light mode](docs/assets/service_alerts.png)
 
