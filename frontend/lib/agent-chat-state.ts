@@ -1,6 +1,7 @@
 import { isRouteWorkflowTool } from "./agent-route-tools";
 import type {
   AgentEvent,
+  AgentSource,
   ArrivalCardEvent,
   ArrivalSourceStatus,
   ProgressEvent,
@@ -29,6 +30,7 @@ export interface AssistantTurn {
   reasoning: string;
   toolChips: ToolChip[];
   routeCards: RouteCard[];
+  sources?: AgentSource[];
   progress?: Omit<ProgressEvent, "type">;
   isStreaming: boolean;
   stopReason?:
@@ -217,6 +219,7 @@ export function applyAgentEvent(state: ChatState, action: ChatReducerAction): Ch
           reasoning: "",
           toolChips: [],
           routeCards: [],
+          sources: undefined,
           arrivals: undefined,
           transitStatusAction: undefined,
           progress: undefined,
@@ -258,6 +261,13 @@ export function applyAgentEvent(state: ChatState, action: ChatReducerAction): Ch
         ...turn,
         reasoning: appendUniqueReasoning(turn.reasoning, action.text),
       }));
+    case "sources":
+      return updateLastAssistantTurn(state, (turn) => {
+        if (!turn.isStreaming) return turn;
+        const byUrl = new Map(turn.sources?.map((source) => [source.url, source]));
+        for (const source of action.sources) byUrl.set(source.url, source);
+        return { ...turn, sources: [...byUrl.values()] };
+      });
     case "progress":
       return updateLastAssistantTurn(state, (turn) => {
         if (!turn.isStreaming) return turn;

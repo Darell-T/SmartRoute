@@ -177,6 +177,47 @@ test("parses the typed transit-status Alerts action without reading assistant pr
   assert.deepEqual(events, [{ type: "transit_status_action", ...payload }]);
 });
 
+test("parses, normalizes, and deduplicates trusted Damn Lines sources", async () => {
+  const payload = {
+    sources: [
+      { title: "Damn Lines", url: "https://DAMNLINES.com/camera/l-industrie#live" },
+      { title: "Duplicate", url: "https://damnlines.com/camera/l-industrie#history" },
+      { title: "Damn Lines", url: "https://www.damnlines.com/data/line-index" },
+    ],
+  };
+  const events = await collect(readerFromChunks([
+    `event: sources\ndata: ${JSON.stringify(payload)}\n\n`,
+  ]));
+
+  assert.deepEqual(events, [{
+    type: "sources",
+    sources: [
+      { title: "Damn Lines", url: "https://damnlines.com/camera/l-industrie" },
+      { title: "Damn Lines", url: "https://www.damnlines.com/data/line-index" },
+    ],
+  }]);
+});
+
+test("rejects untrusted source protocols, hosts, paths, and malformed records", async () => {
+  const invalidSources = [
+    { title: "Damn Lines", url: "http://damnlines.com/camera/l-industrie" },
+    { title: "Damn Lines", url: "https://damnlines.com.example/camera/l-industrie" },
+    { title: "Damn Lines", url: "https://damnlines.com:444/camera/l-industrie" },
+    { title: "Damn Lines", url: "https://damnlines.com/docs/api" },
+    { title: "", url: "https://damnlines.com/camera/l-industrie" },
+    { title: "Damn Lines" },
+  ];
+  const frames = invalidSources
+    .map((source) => `event: sources\ndata: ${JSON.stringify({ sources: [source] })}\n\n`)
+    .join("");
+
+  await silenceConsoleWarn(async (calls) => {
+    const events = await collect(readerFromChunks([frames]));
+    assert.deepEqual(events, []);
+    assert.equal(calls.length, invalidSources.length);
+  });
+});
+
 test("rejects unknown transit-status actions", async () => {
   await silenceConsoleWarn(async (calls) => {
     const events = await collect(readerFromChunks([

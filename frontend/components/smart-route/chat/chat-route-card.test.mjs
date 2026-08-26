@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { renderToStaticMarkup } from "react-dom/server";
 
+import { Sources } from "../../prompt-kit/source.tsx";
 import { recommendedCardsForChat } from "./recommended-card-selection.ts";
 
 const CARD_SOURCE = fs.readFileSync(
@@ -173,4 +175,21 @@ test("transit status exposes View alerts only from the typed action flag", () =>
   assert.match(CHAT_PANEL_SOURCE, /onViewAlerts\?: \(\) => void/);
   assert.match(CHAT_PANEL_SOURCE, /onViewAlerts=\{onViewAlerts\}/);
   assert.match(CHAT_CSS_SOURCE, /\.sr-chat-transit-action\s*\{/);
+});
+
+test("Damn Lines attribution renders as one accessible disclosure after assistant prose", () => {
+  const markup = renderToStaticMarkup(Sources({
+    sources: [{ title: "Damn Lines", url: "https://damnlines.com/camera/l-industrie" }],
+  }));
+
+  assert.match(markup, /<details class="sr-chat-sources">/);
+  assert.match(markup, /<summary[^>]*>Source: Damn Lines<\/summary>/);
+  assert.match(markup, /href="https:\/\/damnlines\.com\/camera\/l-industrie"/);
+  assert.match(markup, /target="_blank"/);
+  assert.match(markup, /rel="noopener noreferrer"/);
+  assert.equal(CHAT_MESSAGE_SOURCE.match(/<Sources\b/g)?.length, 1);
+  assert.ok(
+    CHAT_MESSAGE_SOURCE.indexOf("<Sources") > CHAT_MESSAGE_SOURCE.indexOf("{displayedText}"),
+    "source disclosure must render after assistant prose",
+  );
 });

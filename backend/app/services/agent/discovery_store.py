@@ -20,6 +20,12 @@ PRESENTED_ENTITY_REGISTRY_FIELD = entity_registry.REGISTRY_FIELD
 
 _PLACE_ID_PREFIX = "pl_"
 _ALLOWED_RANKING_FACTORS = ("rating", "review_volume", "open_bonus", "price_level")
+_QUEUE_CONTEXT_MODES = frozenset({"ignore", "heads_up", "decision", "historical"})
+_DEFAULT_QUEUE_CONTEXT: dict[str, Any] = {
+    "mode": "ignore",
+    "max_wait_minutes": None,
+}
+_CONTINUATION_TOKEN_RE = re.compile(r"^target_[0-4]$")
 
 _PLACES_PRICE_LEVELS = {
     "PRICE_LEVEL_UNSPECIFIED": None,
@@ -115,6 +121,37 @@ def _finite_number_or_none(value: object) -> float | None:
     return value if value is None or _is_finite_number(value) else None
 
 
+def sanitized_queue_context(value: object) -> dict[str, Any] | None:
+    """Validate the current discovery decision's private queue instructions."""
+
+    if not isinstance(value, dict) or set(value) != {
+        "mode",
+        "max_wait_minutes",
+    }:
+        return None
+    mode = value.get("mode")
+    if not isinstance(mode, str) or mode not in _QUEUE_CONTEXT_MODES:
+        return None
+    max_wait = value.get("max_wait_minutes")
+    if max_wait is not None and (
+        not _is_finite_number(max_wait) or float(max_wait) < 0
+    ):
+        return None
+    return {"mode": mode, "max_wait_minutes": max_wait}
+
+
+def _sanitized_continuation_tokens(value: object) -> dict[str, str]:
+    tokens = value if isinstance(value, dict) else {}
+    return {
+        key: token[:4096]
+        for key, raw_token in tokens.items()
+        if isinstance(key, str)
+        and _CONTINUATION_TOKEN_RE.fullmatch(key)
+        and isinstance(raw_token, str)
+        and (token := raw_token.strip())
+    }
+
+
 def _sanitized_option(place: dict[str, Any]) -> dict[str, Any]:
     option = {
         "place_id": place.get("place_id"),
@@ -196,6 +233,8 @@ def store_discovery_set(
     search_scope: dict[str, Any] | None = None,
     requested_count: int | None = None,
     coverage: dict[str, Any] | None = None,
+    queue_context: dict[str, Any] | None = None,
+    continuation_tokens: dict[str, str] | None = None,
     ttl_seconds: int = DEFAULT_TTL_S,
 ) -> str:
     set_id = new_discovery_set_id()
@@ -248,9 +287,17 @@ def store_discovery_set(
         "search_scope": _sanitized_search_scope(search_scope),
         "requested_count": _bounded_count(requested_count),
         "coverage": _sanitized_coverage(coverage),
+        "queue_context": sanitized_queue_context(queue_context)
+        or dict(_DEFAULT_QUEUE_CONTEXT),
+        "continuation_tokens": _sanitized_continuation_tokens(continuation_tokens),
         "places": normalized,
     }
-    cache.cache_set(_key(set_id), json.dumps(record, separators=(",", ":"), default=str), int(ttl_seconds), fail_open=True)
+    cache.cache_set(
+        _key(set_id),
+        json.dumps(record, separators=(",", ":"), default=str),
+        int(ttl_seconds),
+        fail_open=True,
+    )
     return set_id
 
 
@@ -321,7 +368,11 @@ def _sanitized_search_scope(value: object) -> dict[str, Any]:
             for area in (scope.get("values") or [])
             if str(area).strip()
         ][:1]
-        return {"kind": "named_area", "values": values} if values else {"kind": "nyc", "values": []}
+        return (
+            {"kind": "named_area", "values": values}
+            if values
+            else {"kind": "nyc", "values": []}
+        )
     if kind == "areas":
         areas = [
             str(area).strip()[:80]
@@ -337,7 +388,9 @@ def _sanitized_search_scope(value: object) -> dict[str, Any]:
     return {"kind": "citywide"}
 
 
-def load_discovery_set(discovery_set_id: str, *, session_id: str) -> dict[str, Any] | None:
+def load_discovery_set(
+    discovery_set_id: str, *, session_id: str
+) -> dict[str, Any] | None:
     if not discovery_set_id or not session_id:
         return None
     raw = cache.cache_get(_key(discovery_set_id), fail_open=True)
@@ -428,7 +481,9 @@ def resolve_place_reference(
     record = load_discovery_set(discovery_set_id, session_id=session_id)
     if record is None:
         return None, "discovery set is unknown, expired, or not owned by this session"
-    places = [place for place in (record.get("places") or []) if isinstance(place, dict)]
+    places = [
+        place for place in (record.get("places") or []) if isinstance(place, dict)
+    ]
     if place_id:
         for place in places:
             if str(place.get("place_id") or "") == place_id:
@@ -492,7 +547,9 @@ def sanitized_discovery_context(
         "search_scope": (
             record.get("search_scope") if record is not None else {"kind": "citywide"}
         ),
-        "requested_count": record.get("requested_count") if record is not None else None,
+        "requested_count": record.get("requested_count")
+        if record is not None
+        else None,
         "coverage": (
             record.get("coverage") if record is not None else {"status": "complete"}
         ),

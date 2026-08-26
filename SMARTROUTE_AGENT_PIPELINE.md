@@ -98,6 +98,22 @@ system prompt, hidden reasoning, or raw provider data to the rider.
 `discover_places` calls the place adapter and stores a discovery set.
 `present_places` accepts an ID from that set and emits verified place results.
 
+`discover_places.queue_context` controls optional queue evidence for the
+current destination decision. Google Places remains the place and branch
+authority. A manual Google Place ID registry identifies the physical venues
+that Damn Lines supports. `ignore` performs no queue work. `heads_up` checks
+only selected places during presentation. `decision` lets the Agent consider
+normalized queue evidence before it selects a destination. `historical`
+answers an explicit past-pattern question. This remains part of
+`discover_places`; it does not add a ninth model-visible tool.
+
+Current queue observations retain the provider capture time and never change
+route duration. Historical patterns refresh outside the request path and stay
+distinct from live evidence. `present_places` owns the passenger wording and a
+structured Damn Lines source event. The frontend renders that source after the
+conversation text. Maps, route cards, route steps, and itinerary facts do not
+receive queue data.
+
 The session keeps place identities for later turns. "The second one" refers to
 the latest compatible list. A duplicate name or missing list causes
 clarification instead of a guess.

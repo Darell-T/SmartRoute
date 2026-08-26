@@ -1,6 +1,7 @@
 import type {
   AgentErrorCode,
   AgentEvent,
+  AgentSource,
   AgentStopReason,
   ArrivalCardEvent,
   ArrivalDirection,
@@ -35,6 +36,9 @@ const MAX_TEXT = 300;
 const MAX_ALERT_DESCRIPTION = 16_384;
 const MAX_LIST = 256;
 const MAX_SECONDS = 86_400;
+const MAX_SOURCES = 8;
+const MAX_SOURCE_TITLE = 100;
+const MAX_SOURCE_URL = 2_048;
 
 const record = (value: unknown): value is RecordValue => typeof value === "object" && value !== null && !Array.isArray(value);
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
@@ -45,6 +49,54 @@ const bounded = (value: unknown, min: number, max: number): value is number => f
 const optional = <T>(value: unknown, parse: (candidate: unknown) => candidate is T): value is T | undefined => value === undefined || parse(value);
 const nullable = <T>(value: unknown, parse: (candidate: unknown) => candidate is T): value is T | undefined | null => value === undefined || value === null || parse(value);
 const textList = (value: unknown, max = MAX_LIST): value is string[] => Array.isArray(value) && value.length <= max && value.every((item) => nonEmptyText(item));
+
+function normalizedDamnLinesUrl(value: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+  const allowedHost = url.hostname === "damnlines.com" || url.hostname === "www.damnlines.com";
+  const allowedPath = url.pathname.startsWith("/camera/")
+    || url.pathname === "/data/line-index"
+    || url.pathname === "/average-wait-times";
+  if (
+    url.protocol !== "https:"
+    || !allowedHost
+    || !allowedPath
+    || url.port
+    || url.username
+    || url.password
+  ) {
+    return null;
+  }
+  url.hash = "";
+  return url.toString();
+}
+
+function sources(value: RecordValue): Extract<AgentEvent, { type: "sources" }> | null {
+  if (!Array.isArray(value.sources) || value.sources.length === 0 || value.sources.length > MAX_SOURCES) {
+    return null;
+  }
+  const parsed: AgentSource[] = [];
+  const seen = new Set<string>();
+  for (const candidate of value.sources) {
+    if (
+      !record(candidate)
+      || !nonEmptyText(candidate.title, MAX_SOURCE_TITLE)
+      || !nonEmptyText(candidate.url, MAX_SOURCE_URL)
+    ) {
+      return null;
+    }
+    const url = normalizedDamnLinesUrl(candidate.url);
+    if (!url) return null;
+    if (seen.has(url)) continue;
+    seen.add(url);
+    parsed.push({ title: candidate.title.trim(), url });
+  }
+  return parsed.length > 0 ? { type: "sources", sources: parsed } : null;
+}
 
 function arrivalSourceStatus(value: unknown): value is ArrivalSourceStatus {
   return value === "live" || value === "scheduled" || value === "stale" || value === "provider_unavailable" || value === "no_predictions" || value === "stop_not_resolved";
@@ -416,6 +468,7 @@ export function parseAgentEvent(eventType: string, data: unknown): AgentEvent | 
   if (eventType === "meta" && nonEmptyText(data.session_id) && nonEmptyText(data.turn_id)) return { type: "meta", session_id: data.session_id, turn_id: data.turn_id };
   if (eventType === "token" && text(data.text, 32_768)) return { type: "token", text: data.text };
   if (eventType === "reasoning" && text(data.text, 32_768)) return { type: "reasoning", text: data.text };
+  if (eventType === "sources") return sources(data);
   if (eventType === "progress" && progressStage(data.stage) && progressStatus(data.status)) return { type: "progress", stage: data.stage, status: data.status };
   if (eventType === "tool_start" && nonEmptyText(data.tool_call_id) && nonEmptyText(data.tool) && nonEmptyText(data.label)) return { type: "tool_start", tool_call_id: data.tool_call_id, tool: data.tool, label: data.label };
   if (eventType === "tool_end" && nonEmptyText(data.tool_call_id) && nonEmptyText(data.tool) && typeof data.ok === "boolean" && bounded(data.duration_ms, 0, 300_000) && optional(data.summary, text)) return { type: "tool_end", tool_call_id: data.tool_call_id, tool: data.tool, ok: data.ok, duration_ms: data.duration_ms, ...(typeof data.summary === "string" ? { summary: data.summary } : {}) };

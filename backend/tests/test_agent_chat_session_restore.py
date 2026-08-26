@@ -79,6 +79,41 @@ class SessionTranscriptTests(unittest.TestCase):
         self.assertEqual([entry["role"] for entry in snapshot["history"]], ["user", "assistant"])
         self.assertEqual(len(snapshot["route_cards"]), 1)
         self.assertEqual(len(snapshot["arrival_cards"]), 1)
+        self.assertEqual(snapshot["sources"], [])
+
+    def test_snapshot_restores_trusted_sources_for_the_producing_turn(self):
+        _session_id, session = session_module.new_session()
+        session_module.append_history(session, "assistant", "Here is the wait.", turn_id="t1")
+        session_module.add_visible_events(
+            session,
+            [
+                events.SourcesEvent(
+                    turn_id="t1",
+                    sources=(
+                        {
+                            "title": "Damn Lines: L'industrie Pizzeria",
+                            "url": "https://damnlines.com/camera/lindustrie-pizzeria",
+                        },
+                    ),
+                )
+            ],
+        )
+
+        snapshot = session_module.transcript_snapshot(session)
+        self.assertEqual(
+            snapshot["sources"],
+            [
+                {
+                    "turn_id": "t1",
+                    "sources": [
+                        {
+                            "title": "Damn Lines: L'industrie Pizzeria",
+                            "url": "https://damnlines.com/camera/lindustrie-pizzeria",
+                        }
+                    ],
+                }
+            ],
+        )
 
     def test_retry_after_empty_failure_does_not_duplicate_visible_user_turn(self):
         _session_id, session = session_module.new_session()

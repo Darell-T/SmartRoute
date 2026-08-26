@@ -131,6 +131,8 @@ backend/tests/test_agent_evals.py
 # except for intentional PNG assets. Historical working records stay local.
 docs/*
 !docs/*.md
+!docs/adr/
+!docs/adr/*.md
 docs/SMARTROUTE_INTERVIEW_HANDBOOK.md
 !docs/assets/
 docs/assets/*

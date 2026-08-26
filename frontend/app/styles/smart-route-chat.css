@@ -1404,6 +1404,45 @@
   word-break: break-word;
 }
 
+.sr-chat-sources {
+  align-self: flex-start;
+  margin: 0;
+  color: var(--sr-chat-ink-dim);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.sr-chat-sources__summary {
+  cursor: pointer;
+  list-style-position: inside;
+  transition: color 140ms var(--sr-motion-ease);
+}
+
+.sr-chat-sources__summary:hover,
+.sr-chat-sources__summary:focus-visible {
+  color: var(--sr-chat-ink);
+}
+
+.sr-chat-sources__summary:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--sr-chat-ink) 34%, transparent);
+  outline-offset: 2px;
+}
+
+.sr-chat-sources__list {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.sr-chat-sources__link {
+  color: inherit;
+  text-underline-offset: 2px;
+}
+
+.sr-chat-sources__link:hover,
+.sr-chat-sources__link:focus-visible {
+  color: var(--sr-chat-ink);
+}
+
 .sr-chat-transit-action {
   align-self: flex-start;
   min-height: 32px;
