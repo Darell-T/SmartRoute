@@ -2,20 +2,20 @@
 
 from __future__ import annotations
 
-import math
 import logging
+import math
 import os
 import re
 import time
 
-from app.services.agent.tools.places import geography as conversational_geography
+from app.services import geography as geo
 from app.services.agent import discovery_store
 from app.services.agent.discovery_store import normalize_price_level
-from app.services.agent.tools.provider_http import fetch_json
-from app.services.agent.tools.location_resolution import resolve_named_point
 from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.location_resolution import resolve_named_point
+from app.services.agent.tools.places import geography as conversational_geography
+from app.services.agent.tools.provider_http import fetch_json
 from app.services.trips import text
-from app.services import geography as geo
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -23,7 +23,7 @@ PLACES_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
 PLACES_FIELD_MASK = (
     "places.id,places.displayName,places.formattedAddress,places.location,"
     "places.addressComponents,places.currentOpeningHours.openNow,"
-    "places.priceLevel,places.rating,places.userRatingCount"
+    "places.priceLevel,places.rating,places.userRatingCount,nextPageToken"
 )
 POI_SEARCH_TIMEOUT_S = float(os.getenv("POI_SEARCH_TIMEOUT_S", "6.0"))
 
@@ -82,7 +82,9 @@ def baseline_ranking(place: dict) -> dict[str, object]:
 
 
 def _resolve_api_key() -> str | None:
-    return os.getenv("GOOGLE_PLACES_API_KEY") or os.getenv("GOOGLE_ROUTES_API_KEY") or None
+    return (
+        os.getenv("GOOGLE_PLACES_API_KEY") or os.getenv("GOOGLE_ROUTES_API_KEY") or None
+    )
 
 
 async def _resolve_bias(
@@ -124,7 +126,9 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
         return ToolResult(ok=False, error="query is required", timings=timings)
     api_key = _resolve_api_key()
     if not api_key:
-        return ToolResult(ok=False, error="place search is not configured", timings=timings)
+        return ToolResult(
+            ok=False, error="place search is not configured", timings=timings
+        )
 
     resolution_started = time.monotonic()
     bias, error = await _resolve_bias(str(tool_input.get("near") or ""), ctx)
@@ -137,22 +141,26 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
         )
     lat, lng, radius_m = bias
     max_results = _clamp_provider_results(tool_input.get("max_results"))
+    request_body = {
+        "textQuery": query,
+        "locationBias": {
+            "circle": {
+                "center": {"latitude": lat, "longitude": lng},
+                "radius": radius_m,
+            }
+        },
+        "pageSize": max_results,
+    }
+    page_token = tool_input.get("page_token")
+    if isinstance(page_token, str) and page_token.strip():
+        request_body["pageToken"] = page_token.strip()[:4096]
     payload, error = await fetch_json(
         "POST",
         PLACES_SEARCH_URL,
         timeout_s=POI_SEARCH_TIMEOUT_S,
         log_tag="agent-place-search",
         what="place search",
-        json_body={
-            "textQuery": query,
-            "locationBias": {
-                "circle": {
-                    "center": {"latitude": lat, "longitude": lng},
-                    "radius": radius_m,
-                }
-            },
-            "maxResultCount": max_results,
-        },
+        json_body=request_body,
         headers={
             "Content-Type": "application/json",
             "X-Goog-Api-Key": api_key,
@@ -214,7 +222,19 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
     timings["place_normalization_ms"] = (
         time.monotonic() - normalization_started
     ) * 1000
-    return ToolResult(ok=True, data={"results": results}, timings=timings)
+    next_page_token = (payload or {}).get("nextPageToken")
+    if not isinstance(next_page_token, str) or not next_page_token.strip():
+        next_page_token = None
+    return ToolResult(
+        ok=True,
+        data={
+            "results": results,
+            "next_page_token": (
+                next_page_token.strip()[:4096] if next_page_token else None
+            ),
+        },
+        timings=timings,
+    )
 
 
 async def _provider_search(tool_input: dict, ctx: ToolContext) -> ToolResult:
@@ -222,11 +242,8 @@ async def _provider_search(tool_input: dict, ctx: ToolContext) -> ToolResult:
 
     try:
         result = await execute(tool_input, ctx)
-    except Exception as exc:
-        _LOGGER.warning(
-            "place discovery provider failed type=%s",
-            type(exc).__name__,
-        )
+    except Exception:
+        _LOGGER.warning("place discovery provider failed")
         return ToolResult(ok=False, error="place search is temporarily unavailable")
     if isinstance(result, ToolResult):
         return result
@@ -254,7 +271,9 @@ def _coverage(
         else (str(area or "NYC").strip() or "NYC")
         for area in areas
     ]
-    unavailable = [area for area, result in zip(labels, results) if not result.ok]
+    unavailable = [
+        area for area, result in zip(labels, results, strict=False) if not result.ok
+    ]
     return {
         "status": "partial" if unavailable else "complete",
         "searched_areas": list(dict.fromkeys(labels)),
@@ -298,7 +317,9 @@ def _search_targets(scope: dict) -> list[dict[str, str | None]]:
     return [{"near": None, "label": ""}]
 
 
-def _normalize_discovery_place(place: dict, query: str, search_area: str) -> dict | None:
+def _normalize_discovery_place(
+    place: dict, query: str, search_area: str
+) -> dict | None:
     if not isinstance(place, dict):
         return None
     address = place.get("address") or place.get("formatted_address") or ""
@@ -328,7 +349,9 @@ def _normalize_discovery_place(place: dict, query: str, search_area: str) -> dic
         "neighborhood": place.get("neighborhood") or "",
         "borough": borough,
         "category": place.get("category") or query,
-        "open_status": "open" if open_now is True else ("closed" if open_now is False else "unknown"),
+        "open_status": "open"
+        if open_now is True
+        else ("closed" if open_now is False else "unknown"),
         "price_level": place.get("price_level"),
         "rating": place.get("rating"),
         "review_count": place.get("review_count") or place.get("user_rating_count"),

@@ -13,6 +13,7 @@ from __future__ import annotations
 import dataclasses
 import json
 from typing import Any, Literal, Union
+from urllib.parse import urlsplit, urlunsplit
 
 
 @dataclasses.dataclass(frozen=True)
@@ -43,6 +44,64 @@ class ReasoningEvent:
 
     def to_data(self) -> dict[str, Any]:
         return {"text": self.text}
+
+
+def _trusted_source(source: dict[str, str]) -> dict[str, str] | None:
+    title = str(source.get("title") or "").strip()
+    raw_url = str(source.get("url") or "").strip()
+    if not title or len(title) > 100 or not raw_url or len(raw_url) > 2048:
+        return None
+    try:
+        parsed = urlsplit(raw_url)
+        port = parsed.port
+    except ValueError:
+        return None
+    host = (parsed.hostname or "").casefold()
+    allowed_path = (
+        parsed.path.startswith("/camera/")
+        or parsed.path == "/data/line-index"
+        or parsed.path == "/average-wait-times"
+    )
+    if (
+        parsed.scheme != "https"
+        or host not in {"damnlines.com", "www.damnlines.com"}
+        or not allowed_path
+        or port is not None
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        return None
+    url = urlunsplit(("https", host, parsed.path, parsed.query, ""))
+    return {"title": title, "url": url}
+
+
+@dataclasses.dataclass(frozen=True)
+class SourcesEvent:
+    """Trusted attribution for canonical facts emitted in one assistant turn."""
+
+    turn_id: str
+    sources: tuple[dict[str, str], ...]
+    type: str = "sources"
+
+    def __post_init__(self) -> None:
+        if not str(self.turn_id or "").strip():
+            raise ValueError("turn_id is required")
+        normalized: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for source in self.sources:
+            trusted = _trusted_source(source)
+            if trusted is None:
+                raise ValueError("source is not trusted")
+            if trusted["url"] in seen:
+                continue
+            seen.add(trusted["url"])
+            normalized.append(trusted)
+        if not normalized or len(normalized) > 8:
+            raise ValueError("one through eight unique sources are required")
+        object.__setattr__(self, "sources", tuple(normalized))
+
+    def to_data(self) -> dict[str, Any]:
+        return {"sources": [dict(source) for source in self.sources]}
 
 
 ProgressStage = Literal[
@@ -257,6 +316,7 @@ AgentEvent = Union[
     MetaEvent,
     TokenEvent,
     ReasoningEvent,
+    SourcesEvent,
     ProgressEvent,
     ToolStartEvent,
     ToolEndEvent,

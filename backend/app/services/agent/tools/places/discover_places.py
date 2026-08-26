@@ -1,23 +1,29 @@
 """Public discover_places capability over the Google Places boundary."""
+
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
+from collections.abc import Awaitable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
-from app.services.agent.tools.places import geography as conversational_geography
+from app.services import geography as geo
 from app.services.agent import discovery_store
 from app.services.agent import trip_state as trip_state_module
-from app.services.agent.tools.places import search_local_places
 from app.services.agent.tools._types import ToolContext, ToolOutcome, ToolResult
+from app.services.agent.tools.places import damn_lines
+from app.services.agent.tools.places import geography as conversational_geography
+from app.services.agent.tools.places import search_local_places
 from app.services.agent.turn.contract import GoalKind
-from app.services import geography as geo
-
 
 _DISCOVERY_GOAL_KINDS = frozenset(
     {GoalKind.PLACE_RECOMMENDATION, GoalKind.DESTINATION_SELECTION, GoalKind.ROUTE}
 )
+_LOGGER = logging.getLogger(__name__)
+_MISSING = object()
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +35,7 @@ class DiscoveryRequest:
     max_results: int
     open_now: bool | None
     exclude_presented: bool
+    queue_context: dict[str, Any]
     session_id: str
 
 
@@ -65,6 +72,9 @@ def validate_request(
     )
     if isinstance(exclude_presented, ToolResult):
         return exclude_presented
+    queue_context = _validated_queue_context(tool_input.get("queue_context", _MISSING))
+    if isinstance(queue_context, ToolResult):
+        return queue_context
     return DiscoveryRequest(
         operation=operation,
         query=query,
@@ -73,6 +83,7 @@ def validate_request(
         max_results=_clamp_max_results(tool_input.get("max_results")),
         open_now=open_now,
         exclude_presented=exclude_presented,
+        queue_context=queue_context,
         session_id=session_id,
     )
 
@@ -113,7 +124,7 @@ def _validated_candidate_names(
     return names
 
 
-def _validated_open_now(value: object) -> bool | None | ToolResult:
+def _validated_open_now(value: object) -> bool | ToolResult | None:
     if value is not None and not isinstance(value, bool):
         return ToolResult(
             ok=False,
@@ -142,6 +153,22 @@ def _validated_exclude_presented(
             internal_diagnostic=True,
         )
     return value
+
+
+def _validated_queue_context(value: object) -> dict[str, Any] | ToolResult:
+    if value is _MISSING:
+        return {"mode": "ignore", "max_wait_minutes": None}
+    context = discovery_store.sanitized_queue_context(value)
+    if context is None:
+        return ToolResult(
+            ok=False,
+            error=(
+                "queue_context requires only a valid mode and a non-negative "
+                "finite max_wait_minutes number or null"
+            ),
+            internal_diagnostic=True,
+        )
+    return context
 
 
 def _operation(value: object) -> str | None:
@@ -224,6 +251,19 @@ DISCOVER_PLACES_SCHEMA = {
                 "type": "boolean",
                 "description": "For search only, omit places already presented in this session.",
             },
+            "queue_context": {
+                "type": "object",
+                "properties": {
+                    "mode": {
+                        "type": "string",
+                        "enum": ["ignore", "heads_up", "decision", "historical"],
+                    },
+                    "max_wait_minutes": {"type": ["number", "null"]},
+                },
+                "required": ["mode", "max_wait_minutes"],
+                "additionalProperties": False,
+                "description": "Queue relevance for only this destination decision.",
+            },
             "goal_key": {
                 "type": "string",
                 "description": "Turn goal associated with this discovery request.",
@@ -241,6 +281,7 @@ DISCOVER_PLACES_SCHEMA = {
             "max_results",
             "candidate_names",
             "exclude_presented",
+            "queue_context",
             "goal_key",
             "activity_label",
         ],
@@ -249,7 +290,9 @@ DISCOVER_PLACES_SCHEMA = {
 }
 
 
-def _validate_goal_key(tool_input: dict, ctx: ToolContext) -> tuple[str | None, ToolResult | None]:
+def _validate_goal_key(
+    tool_input: dict, ctx: ToolContext
+) -> tuple[str | None, ToolResult | None]:
     evidence = getattr(ctx, "turn_evidence", None)
     contract = getattr(evidence, "turn_contract", None)
     if contract is None:
@@ -297,6 +340,7 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
             max_results=request.max_results,
             ctx=ctx,
             session_id=request.session_id,
+            queue_context=request.queue_context,
         )
     return await _search(
         query=request.query,
@@ -306,6 +350,7 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
         exclude_presented=request.exclude_presented,
         ctx=ctx,
         session_id=request.session_id,
+        queue_context=request.queue_context,
     )
 
 
@@ -318,22 +363,36 @@ async def _search(
     exclude_presented: bool,
     ctx: ToolContext,
     session_id: str,
+    queue_context: dict[str, Any],
 ) -> ToolResult:
     targets = search_local_places._search_targets(scope)
+    prior_tokens = (
+        _matching_continuation_tokens(
+            ctx=ctx,
+            session_id=session_id,
+            query=query,
+            scope=scope,
+        )
+        if exclude_presented
+        else {}
+    )
     per_target = max(1, math.ceil(max_results / max(1, len(targets))))
     if scope["kind"] == "current_location" or exclude_presented:
         # Fetch the bounded local pool before applying the rider-facing cap so
         # distance can narrow the candidate pool without choosing a route.
         per_target = max(per_target, discovery_store.MAX_PLACES)
-    results = await asyncio.gather(
-        *(
-            search_local_places._provider_search(
-                {"query": query, "near": target["near"], "max_results": per_target},
-                ctx,
-            )
-            for target in targets
-        )
-    )
+    requests: list[Awaitable[ToolResult]] = []
+    for index, target in enumerate(targets):
+        provider_request = {
+            "query": query,
+            "near": target["near"],
+            "max_results": per_target,
+        }
+        token = prior_tokens.get(_target_key(index))
+        if token:
+            provider_request["page_token"] = token
+        requests.append(search_local_places._provider_search(provider_request, ctx))
+    results = await _provider_results(requests)
     if not any(result.ok for result in results):
         return ToolResult(
             ok=False,
@@ -344,7 +403,7 @@ async def _search(
     coverage = search_local_places._coverage(targets, results)
     if scope["kind"] in {"boroughs", "nyc"}:
         missing: list[str] = []
-        for target, result in zip(targets, results):
+        for target, result in zip(targets, results, strict=False):
             if not result.ok:
                 continue
             has_match = any(
@@ -355,12 +414,10 @@ async def _search(
                 missing.append(str(target.get("label") or ""))
         if missing:
             unavailable = list(
-                dict.fromkeys(
-                    [*(coverage.get("unavailable_areas") or []), *missing]
-                )
+                dict.fromkeys([*(coverage.get("unavailable_areas") or []), *missing])
             )
             coverage.update(status="partial", unavailable_areas=unavailable)
-    return _persist(
+    return await _persist(
         source_places=source,
         query=query,
         scope=scope,
@@ -374,6 +431,8 @@ async def _search(
         requested_count=max_results,
         coverage=coverage,
         exclude_presented=exclude_presented,
+        queue_context=queue_context,
+        continuation_tokens=_response_continuation_tokens(results),
     )
 
 
@@ -386,6 +445,7 @@ async def _verify(
     max_results: int,
     ctx: ToolContext,
     session_id: str,
+    queue_context: dict[str, Any],
 ) -> ToolResult:
     targets = search_local_places._search_targets(scope) or [
         {"near": None, "label": ""}
@@ -398,7 +458,7 @@ async def _verify(
                 ctx,
             )
             searches.append((name, target, pending))
-    results = await asyncio.gather(*(item[2] for item in searches))
+    results = await _provider_results([item[2] for item in searches])
     if not any(result.ok for result in results):
         return ToolResult(
             ok=False,
@@ -407,8 +467,8 @@ async def _verify(
         )
     source: list[tuple[dict, str]] = []
     unverified: list[str] = []
-    by_name: dict[str, tuple[dict, str] | None] = {name: None for name in names}
-    for (name, target, _pending), result in zip(searches, results):
+    by_name: dict[str, tuple[dict, str] | None] = dict.fromkeys(names)
+    for (name, target, _pending), result in zip(searches, results, strict=False):
         if not result.ok:
             continue
         if by_name[name] is not None:
@@ -427,7 +487,7 @@ async def _verify(
             unverified.append(name)
             continue
         source.append(match)
-    return _persist(
+    return await _persist(
         source_places=source,
         query=query or names[0],
         scope=scope,
@@ -444,6 +504,8 @@ async def _verify(
             results,
         ),
         exclude_presented=False,
+        queue_context=queue_context,
+        continuation_tokens={},
     )
 
 
@@ -453,7 +515,7 @@ def _interleaved_sources(
     scope: dict[str, Any],
 ) -> list[tuple[dict, str]]:
     buckets: list[list[tuple[dict, str]]] = []
-    for target, result in zip(targets, results):
+    for target, result in zip(targets, results, strict=False):
         if not result.ok:
             buckets.append([])
             continue
@@ -467,13 +529,11 @@ def _interleaved_sources(
         )
     source: list[tuple[dict, str]] = []
     for index in range(max((len(bucket) for bucket in buckets), default=0)):
-        for bucket in buckets:
-            if index < len(bucket):
-                source.append(bucket[index])
+        source.extend(bucket[index] for bucket in buckets if index < len(bucket))
     return source
 
 
-def _persist(
+async def _persist(
     *,
     source_places: list[tuple[dict, str]],
     query: str,
@@ -488,6 +548,8 @@ def _persist(
     requested_count: int,
     coverage: dict[str, Any],
     exclude_presented: bool,
+    queue_context: dict[str, Any],
+    continuation_tokens: dict[str, str],
 ) -> ToolResult:
     presented = {
         str(entry.get("canonical_identity") or "")
@@ -497,7 +559,9 @@ def _persist(
     normalized_places: list[dict] = []
     seen: set[tuple[str, str]] = set()
     for place, search_area in source_places:
-        ranked = search_local_places._normalize_discovery_place(place, query, search_area)
+        ranked = search_local_places._normalize_discovery_place(
+            place, query, search_area
+        )
         if ranked is None:
             continue
         if open_now is True and ranked["open_status"] == "closed":
@@ -557,16 +621,25 @@ def _persist(
         search_scope=scope,
         requested_count=requested_count,
         coverage=coverage,
+        queue_context=queue_context,
+        continuation_tokens=continuation_tokens,
     )
     record = discovery_store.load_discovery_set(set_id, session_id=session_id) or {}
+    stored_places = [
+        place for place in record.get("places") or [] if isinstance(place, dict)
+    ]
     model_places = []
-    for place in (record.get("places") or []):
-        if not isinstance(place, dict):
-            continue
+    for place in stored_places:
         model_place = search_local_places._model_place(place)
         model_place.pop("latitude", None)
         model_place.pop("longitude", None)
         model_places.append(model_place)
+    model_places, queue_max_wait = await _queue_digest(
+        model_places,
+        stored_places,
+        queue_context,
+        ctx,
+    )
     if isinstance(ctx.session, dict):
         trip_state_module.bind_discovery_set(ctx.session, set_id)
     evidence = getattr(ctx, "turn_evidence", None)
@@ -577,29 +650,244 @@ def _persist(
             place_count=len(model_places),
             operation=operation,
         )
+    data: dict[str, Any] = {
+        "discovery_set_id": set_id,
+        "query": query,
+        "scope": scope,
+        "operation": operation,
+        "places": model_places,
+        "unverified_names": unverified_names,
+        "requested_count": requested_count,
+        "coverage": coverage,
+    }
+    if queue_max_wait is not None:
+        data["queue_max_wait_minutes"] = queue_max_wait
     return ToolResult(
         ok=True,
-        data={
-            "discovery_set_id": set_id,
-            "query": query,
-            "scope": scope,
-            "operation": operation,
-            "places": model_places,
-            "unverified_names": unverified_names,
-            "requested_count": requested_count,
-            "coverage": coverage,
-        },
+        data=data,
         summary="Place search completed",
         timings=timings,
     )
 
 
+def _observation_time(value: object) -> datetime:
+    raw = str(value or "").strip()
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        parsed = None
+    if parsed is not None and parsed.tzinfo is not None:
+        return parsed
+    return datetime.now(UTC)
+
+
+async def _queue_digest(
+    model_places: list[dict[str, Any]],
+    stored_places: list[dict[str, Any]],
+    queue_context: dict[str, Any],
+    ctx: ToolContext,
+) -> tuple[list[dict[str, Any]], float | None]:
+    mode = str(queue_context.get("mode") or "ignore")
+    if mode in {"ignore", "heads_up"}:
+        return model_places, None
+
+    when = _observation_time(getattr(ctx, "now_et", None))
+    damn_lines.schedule_history_warmup(now=when)
+    stored_by_id = {
+        str(place.get("place_id") or ""): place for place in stored_places
+    }
+    supported_ids = [
+        place_id
+        for place in stored_places
+        if (place_id := str(place.get("provider_place_id") or "").strip())
+        and damn_lines.get_supported_venue(place_id) is not None
+    ]
+    observations: dict[str, damn_lines.QueueObservation] = {}
+    provider_available = False
+    if mode != "historical" and supported_ids:
+        try:
+            current = await damn_lines.get_current_observations(
+                supported_ids, now=when
+            )
+            observations = current.observations
+            provider_available = current.provider_available
+        except Exception:
+            observations = {}
+            provider_available = False
+
+    enriched: list[dict[str, Any]] = []
+    for model in model_places:
+        stored = stored_by_id.get(str(model.get("place_id") or ""), {})
+        item = dict(model)
+        item["queue_evidence"] = _place_queue_evidence(
+            stored,
+            observations=observations,
+            mode=mode,
+            when=when,
+            provider_available=provider_available,
+        )
+        enriched.append(item)
+
+    max_wait = queue_context.get("max_wait_minutes")
+    queue_max = max_wait if mode == "decision" and max_wait is not None else None
+    return enriched, queue_max
+
+
+def _place_queue_evidence(
+    stored: dict[str, Any],
+    *,
+    observations: dict[str, damn_lines.QueueObservation],
+    mode: str,
+    when: datetime,
+    provider_available: bool,
+) -> dict[str, Any]:
+    place_id = str(stored.get("provider_place_id") or "").strip()
+    if damn_lines.get_supported_venue(place_id) is None:
+        return {"coverage": "unmonitored"}
+    if mode == "historical":
+        pattern = _historical_pattern(place_id, when)
+        return (
+            _historical_evidence(pattern)
+            if pattern is not None
+            else {"coverage": "supported", "evidence_kind": "unavailable"}
+        )
+    observation = observations.get(place_id)
+    if observation is not None:
+        evidence: dict[str, Any] = {
+            "coverage": "supported",
+            "evidence_kind": "current",
+            "captured_at": observation.captured_at.isoformat(),
+        }
+        if observation.people_count is not None:
+            evidence["people_count"] = observation.people_count
+        if observation.wait_minutes is not None:
+            evidence["wait_minutes"] = observation.wait_minutes
+        return evidence
+    if stored.get("open_status") == "open":
+        pattern = _historical_pattern(place_id, when)
+        if pattern is not None:
+            return {**_historical_evidence(pattern), "current_available": False}
+    return {
+        "coverage": "supported",
+        "evidence_kind": "unavailable",
+        "current_available": False,
+        "provider_available": provider_available,
+    }
+
+
+def _historical_pattern(
+    place_id: str, when: datetime
+) -> damn_lines.HistoricalQueuePattern | None:
+    try:
+        return damn_lines.get_historical_pattern(place_id, when, now=when)
+    except (TypeError, ValueError):
+        return None
+
+
+def _historical_evidence(
+    pattern: damn_lines.HistoricalQueuePattern,
+) -> dict[str, Any]:
+    return {
+        "coverage": "supported",
+        "evidence_kind": "historical",
+        "weekday": pattern.weekday,
+        "hour": pattern.hour,
+        "people_mean": pattern.people_mean,
+        "wait_minutes_mean": pattern.wait_minutes_mean,
+        "sample_count": pattern.sample_count,
+        "comparable_dates": pattern.comparable_dates,
+        "date_from": pattern.date_from.isoformat(),
+        "date_to": pattern.date_to.isoformat(),
+    }
+
+
+def _target_key(index: int) -> str:
+    return f"target_{index}"
+
+
+def _matching_continuation_tokens(
+    *,
+    ctx: ToolContext,
+    session_id: str,
+    query: str,
+    scope: dict[str, Any],
+) -> dict[str, str]:
+    if not isinstance(ctx.session, dict):
+        return {}
+    active_set_id = trip_state_module.get_trip_state(ctx.session).get(
+        "active_discovery_set_id"
+    )
+    record = (
+        discovery_store.load_discovery_set(active_set_id, session_id=session_id)
+        if isinstance(active_set_id, str)
+        else None
+    )
+    if not record:
+        return {}
+    same_query = " ".join(str(record.get("query") or "").casefold().split()) == (
+        " ".join(query.casefold().split())
+    )
+    same_scope = record.get("search_scope") == discovery_store._sanitized_search_scope(
+        scope
+    )
+    if not same_query or not same_scope:
+        return {}
+    tokens = record.get("continuation_tokens")
+    return {
+        key: token
+        for key, token in (tokens.items() if isinstance(tokens, dict) else ())
+        if isinstance(key, str) and isinstance(token, str) and token
+    }
+
+
+def _response_continuation_tokens(
+    results: list[ToolResult],
+) -> dict[str, str]:
+    tokens: dict[str, str] = {}
+    for index, result in enumerate(results[:5]):
+        data = result.data if isinstance(result.data, dict) else {}
+        token = data.get("next_page_token")
+        if result.ok and isinstance(token, str) and token:
+            tokens[_target_key(index)] = token
+    return tokens
+
+
+async def _provider_results(
+    requests: list[Awaitable[ToolResult]],
+) -> list[ToolResult]:
+    raw_results = await asyncio.gather(*requests, return_exceptions=True)
+    results: list[ToolResult] = []
+    for result in raw_results:
+        if isinstance(result, Exception):
+            _LOGGER.warning(
+                "place discovery provider failed type=%s",
+                type(result).__name__,
+            )
+            results.append(
+                ToolResult(
+                    ok=False,
+                    error="place search is temporarily unavailable",
+                )
+            )
+            continue
+        if isinstance(result, BaseException):
+            raise result
+        results.append(result)
+    return results
+
+
 def _name_matches(requested: str, place: dict) -> bool:
     wanted = discovery_store._normalized_name(requested)
-    actual = discovery_store._normalized_name(place.get("name") or place.get("display_name"))
+    actual = discovery_store._normalized_name(
+        place.get("name") or place.get("display_name")
+    )
     if not wanted or not actual:
         return False
-    return actual == wanted or actual.startswith(wanted + " ") or wanted.startswith(actual + " ")
+    return (
+        actual == wanted
+        or actual.startswith(wanted + " ")
+        or wanted.startswith(actual + " ")
+    )
 
 
 def _project_current_location_relevance(
@@ -621,8 +909,7 @@ def _project_current_location_relevance(
     if not measured:
         return places
     selected = {
-        id(place)
-        for _distance, _index, place in sorted(measured)[:max_results]
+        id(place) for _distance, _index, place in sorted(measured)[:max_results]
     }
     remaining = max_results - len(selected)
     selected.update(id(place) for _index, place in unknown[:remaining])
@@ -647,9 +934,7 @@ def _coordinates(value: object) -> tuple[float, float] | None:
 
 def _rider_distance_meters(place: dict, ctx: ToolContext) -> float | None:
     origin = _coordinates(ctx.origin)
-    point = _coordinates(
-        {"lat": place.get("latitude"), "lng": place.get("longitude")}
-    )
+    point = _coordinates({"lat": place.get("latitude"), "lng": place.get("longitude")})
     if origin is None or point is None:
         return None
     return round(geo.distance_meters(*origin, *point), 1)

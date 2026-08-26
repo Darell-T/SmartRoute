@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import math
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from app.services.agent import discovery_store
 from app.services.agent import events as agent_events
@@ -14,12 +16,14 @@ from app.services.agent.passenger_output import (
 )
 from app.services.agent import trip_state as trip_state_module
 from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.places import damn_lines
 from app.services.agent.turn.contract import GoalKind, GoalState
 
 
 _PLACE_GOAL_KINDS = frozenset({GoalKind.PLACE_RECOMMENDATION, GoalKind.DESTINATION_SELECTION})
 REASON_CODES = ("top_pick", "highest_rating", "most_reviewed", "budget_friendly", "open_now", "preference_match")
 OBJECTIVE_REASONS = frozenset({"top_pick", "highest_rating", "most_reviewed", "budget_friendly", "open_now"})
+_NYC = ZoneInfo("America/New_York")
 PRESENT_PLACES_SCHEMA = {
     "name": "present_places",
     "description": "Present verified recommendations or one previously shown place's details.",
@@ -79,7 +83,7 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
     selected = _selected_places(tool_input, owned, ctx)
     if isinstance(selected, ToolResult):
         return selected
-    return _emit_place_presentation(selected, ctx)
+    return await _emit_place_presentation(selected, ctx)
 
 
 def _place_goal_key(tool_input: dict, ctx: ToolContext) -> str | None:
@@ -351,7 +355,9 @@ def _selected_places(
     return owned
 
 
-def _emit_place_presentation(owned: dict[str, Any], ctx: ToolContext) -> ToolResult:
+async def _emit_place_presentation(
+    owned: dict[str, Any], ctx: ToolContext
+) -> ToolResult:
     selections = owned["selections"]
     set_id = owned["set_id"]
     presented = [
@@ -374,6 +380,11 @@ def _emit_place_presentation(owned: dict[str, Any], ctx: ToolContext) -> ToolRes
     limit = 5 if str(getattr(ctx, "agent_mode", "") or "auto") != "quick" else 3
     selections = selections[:limit]
     details_only = owned["presentation_mode"] == "details"
+    queue_text, queue_sources = await _queue_presentation(
+        selections,
+        record=owned["record"],
+        ctx=ctx,
+    )
     if isinstance(ctx.session, dict):
         selections = discovery_store.record_presented_places(
             ctx.session,
@@ -403,6 +414,21 @@ def _emit_place_presentation(owned: dict[str, Any], ctx: ToolContext) -> ToolRes
     # but only server-owned continuation state may offer more work.
     follow_up = ""
     ctx.telemetry["place_presentation_emitted"] = True
+    canonical_events: list[agent_events.AgentEvent] = []
+    if not details_only:
+        canonical_events.append(agent_events.TokenEvent(text=text))
+    if queue_text:
+        canonical_events.append(agent_events.TokenEvent(text=f"\n\n{queue_text}"))
+    if queue_sources:
+        canonical_events.append(
+            agent_events.SourcesEvent(
+                turn_id=ctx.turn_id,
+                sources=tuple(
+                    {"title": source.title, "url": source.url}
+                    for source in queue_sources
+                ),
+            )
+        )
     return ToolResult(
         ok=True,
         data={
@@ -414,11 +440,170 @@ def _emit_place_presentation(owned: dict[str, Any], ctx: ToolContext) -> ToolRes
         },
         summary="Place options ready",
         events=framed_events(
-            [] if details_only else [agent_events.TokenEvent(text=text)],
+            canonical_events,
             lead_in,
             follow_up,
         ),
     )
+
+
+async def _queue_presentation(
+    selections: list[dict[str, Any]],
+    *,
+    record: dict[str, Any],
+    ctx: ToolContext,
+) -> tuple[str, tuple[damn_lines.QueueSource, ...]]:
+    queue_context = discovery_store.sanitized_queue_context(
+        record.get("queue_context")
+    )
+    mode = str((queue_context or {}).get("mode") or "ignore")
+    if mode == "ignore":
+        return "", ()
+
+    when = _presentation_time(ctx.now_et)
+    damn_lines.schedule_history_warmup(now=when)
+    supported_ids = [
+        place_id
+        for place in selections
+        if (place_id := str(place.get("provider_place_id") or "").strip())
+        and damn_lines.get_supported_venue(place_id) is not None
+    ]
+    observations: dict[str, damn_lines.QueueObservation] = {}
+    if supported_ids and mode != "historical":
+        try:
+            current = await damn_lines.get_current_observations(
+                supported_ids, now=when
+            )
+            observations = current.observations
+        except Exception:
+            observations = {}
+
+    notes: list[str] = []
+    sourced_ids: list[str] = []
+    for place in selections:
+        name = str(place.get("name") or "this place").strip()
+        place_id = str(place.get("provider_place_id") or "").strip()
+        supported = damn_lines.get_supported_venue(place_id) is not None
+        if not supported:
+            if mode in {"decision", "historical"}:
+                notes.append(f"There is no queue coverage for {name}.")
+            continue
+
+        if mode == "historical":
+            pattern = _historical_pattern(place_id, when)
+            notes.append(
+                _historical_note(name, pattern)
+                if pattern is not None
+                else f"There is no historical queue information for {name}."
+            )
+            sourced_ids.append(place_id)
+            continue
+
+        observation = observations.get(place_id)
+        if observation is not None:
+            notes.append(_current_queue_note(name, observation))
+            sourced_ids.append(place_id)
+            continue
+
+        pattern = (
+            _historical_pattern(place_id, when)
+            if place.get("open_status") == "open"
+            else None
+        )
+        if pattern is not None:
+            notes.append(
+                f"There is no live queue information for {name}. "
+                f"{_historical_note(name, pattern)}"
+            )
+            sourced_ids.append(place_id)
+        elif mode == "decision":
+            notes.append(f"There is no live queue information for {name}.")
+            sourced_ids.append(place_id)
+
+    return "\n".join(notes), damn_lines.source_for_places(sourced_ids)
+
+
+def _presentation_time(value: object) -> datetime:
+    raw = str(value or "").strip()
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if parsed.tzinfo is not None:
+            return parsed.astimezone(_NYC)
+    except ValueError:
+        pass
+    return datetime.now(_NYC)
+
+
+def _historical_pattern(
+    place_id: str, when: datetime
+) -> damn_lines.HistoricalQueuePattern | None:
+    try:
+        return damn_lines.get_historical_pattern(place_id, when, now=when)
+    except (TypeError, ValueError):
+        return None
+
+
+def _current_queue_note(
+    name: str, observation: damn_lines.QueueObservation
+) -> str:
+    observed = _clock_time(observation.captured_at.astimezone(_NYC))
+    wait = observation.wait_minutes
+    people = observation.people_count
+    if wait is not None:
+        note = (
+            f"The latest estimated wait for {name} was about "
+            f"{_number(wait)} minutes"
+        )
+        if people is not None:
+            note += f", with {people} people in line"
+        return f"{note}, as of {observed}."
+    return f"The latest line count for {name} was {people} people as of {observed}."
+
+
+def _historical_note(
+    name: str, pattern: damn_lines.HistoricalQueuePattern
+) -> str:
+    hour = _hour_time(pattern.hour)
+    wait = pattern.wait_minutes_mean
+    people = pattern.people_mean
+    if pattern.comparable_dates == 1:
+        prefix = f"On {_calendar_date(pattern.date_from)} around {hour}, "
+        if wait is not None:
+            note = f"an estimated wait of about {_number(wait)} minutes was recorded for {name}"
+        else:
+            note = f"an average line count of {_number(people)} people was recorded for {name}"
+    else:
+        weekday = pattern.date_from.strftime("%A")
+        prefix = (
+            f"Across {pattern.comparable_dates} recorded {weekday} periods "
+            f"around {hour}, "
+        )
+        if wait is not None:
+            note = f"the historical average wait for {name} was about {_number(wait)} minutes"
+        else:
+            note = f"the historical average line count for {name} was {_number(people)} people"
+    if wait is not None and people is not None:
+        note += f", with an average of {_number(people)} people in line"
+    return f"{prefix}{note}."
+
+
+def _number(value: float | None) -> str:
+    if value is None:
+        return "0"
+    return f"{round(value, 1):.1f}".rstrip("0").rstrip(".")
+
+
+def _clock_time(value: datetime) -> str:
+    return value.strftime("%I:%M %p").lstrip("0")
+
+
+def _hour_time(hour: int) -> str:
+    suffix = "AM" if hour < 12 else "PM"
+    return f"{hour % 12 or 12} {suffix}"
+
+
+def _calendar_date(value) -> str:
+    return f"{value.strftime('%B')} {value.day}"
 
 
 def render_place_list(

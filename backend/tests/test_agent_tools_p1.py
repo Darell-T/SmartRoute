@@ -215,7 +215,7 @@ class PoiSearchTests(unittest.IsolatedAsyncioTestCase):
             result = await search_local_places.execute(
                 {"query": "pizza", "max_results": 999}, _ctx(origin={"lat": 40.7, "lng": -73.9})
             )
-        self.assertEqual(client_class.requests[0]["json"]["maxResultCount"], 8)
+        self.assertEqual(client_class.requests[0]["json"]["pageSize"], 8)
         self.assertLessEqual(len(result.data["results"]), 8)
 
     async def test_open_now_is_none_when_absent(self):

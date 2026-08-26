@@ -81,6 +81,8 @@ def discover_search_input(query: str, *, borough: str | None = "Brooklyn") -> di
         "open_now": None,
         "max_results": 8,
         "candidate_names": [],
+        "exclude_presented": False,
+        "queue_context": {"mode": "ignore", "max_wait_minutes": None},
     }
 
 

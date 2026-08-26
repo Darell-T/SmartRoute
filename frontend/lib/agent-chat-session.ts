@@ -1,5 +1,5 @@
 import { parseAgentEvent } from "./agent-chat-event-validator";
-import type { ArrivalCardEvent, RouteCard } from "./agent-chat-stream";
+import type { AgentSource, ArrivalCardEvent, RouteCard } from "./agent-chat-stream";
 import {
   arrivalsFromEvent,
   createChatState,
@@ -131,6 +131,12 @@ export interface SessionSnapshot {
   history: SessionSnapshotHistoryEntry[];
   route_cards: RouteCard[];
   arrival_cards: ArrivalCardEvent[];
+  sources?: SessionSnapshotSources[];
+}
+
+export interface SessionSnapshotSources {
+  turn_id: string;
+  sources: AgentSource[];
 }
 
 export type SessionSnapshotResult =
@@ -191,11 +197,28 @@ function parseSnapshot(data: unknown): SessionSnapshot | null {
       if (parsed?.type === "arrival_card") arrivalCards.push(parsed);
     }
   }
+  const snapshotSources: SessionSnapshotSources[] = [];
+  if (Array.isArray(record.sources)) {
+    for (const item of record.sources) {
+      if (item === null || item === undefined) continue;
+      const turnId = Object.getOwnPropertyDescriptor(item, "turn_id")?.value;
+      const sourceItems = Object.getOwnPropertyDescriptor(item, "sources")?.value;
+      const parsedTurn = parseAgentEvent("meta", {
+        session_id: "snapshot",
+        turn_id: turnId,
+      });
+      const parsedSources = parseAgentEvent("sources", { sources: sourceItems });
+      if (parsedTurn?.type === "meta" && parsedSources?.type === "sources") {
+        snapshotSources.push({ turn_id: parsedTurn.turn_id, sources: parsedSources.sources });
+      }
+    }
+  }
   return {
     session_id: record.session_id,
     history,
     route_cards: routeCards,
     arrival_cards: arrivalCards,
+    sources: snapshotSources,
   };
 }
 
@@ -232,6 +255,10 @@ export function buildTurnsFromSnapshot(snapshot: SessionSnapshot): ChatTurn[] {
   for (const card of snapshot.arrival_cards) {
     const turn = assistantByTurnId.get(card.turn_id);
     if (turn) turn.arrivals = arrivalsFromEvent(card);
+  }
+  for (const item of snapshot.sources ?? []) {
+    const turn = assistantByTurnId.get(item.turn_id);
+    if (turn) turn.sources = item.sources;
   }
   return turns;
 }

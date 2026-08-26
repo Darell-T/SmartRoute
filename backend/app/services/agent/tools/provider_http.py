@@ -9,6 +9,8 @@ wrap the reason into whatever return shape their own executor needs
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
+
 import httpx
 
 
@@ -22,6 +24,7 @@ async def fetch_json(
     params: dict | None = None,
     json_body: dict | None = None,
     headers: dict | None = None,
+    on_response: Callable[[int, Mapping[str, str]], None] | None = None,
 ) -> tuple[dict | list | None, str | None]:
     """GET or POST `url` and return its parsed JSON body. `log_tag` (for
     example, ``agent-place-search``) prefixes the diagnostic line on failure;
@@ -41,6 +44,8 @@ async def fetch_json(
                 response = await client.get(url, **kwargs)
             else:
                 response = await client.post(url, json=json_body, **kwargs)
+            if on_response is not None:
+                on_response(response.status_code, response.headers)
             response.raise_for_status()
             return response.json(), None
     except httpx.TimeoutException:

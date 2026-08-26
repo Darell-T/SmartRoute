@@ -7,6 +7,7 @@ import re
 from copy import deepcopy
 
 from app.services import cache
+from app.services.agent import events as agent_events
 
 TRANSCRIPT_KEY_PREFIX = "agent:transcript:"
 REVOKED_KEY_PREFIX = "agent:sess-revoked:"
@@ -38,6 +39,7 @@ def empty() -> dict:
         "history": [],
         "route_cards": [],
         "arrival_cards": [],
+        "sources": [],
     }
 
 
@@ -68,6 +70,7 @@ def attach_loaded(session_id: str, session: dict) -> None:
     transcript.setdefault("history", [])
     transcript.setdefault("route_cards", [])
     transcript.setdefault("arrival_cards", [])
+    transcript["sources"] = _valid_source_entries(transcript.get("sources"))
     session[SESSION_FIELD] = transcript
 
 
@@ -102,7 +105,11 @@ def add_visible_events(session: dict, events: list) -> None:
     transcript = ensure(session)
     for event in events:
         event_type = getattr(event, "type", None)
-        payload = event.to_data() if event_type in {"route_card", "arrival_card"} else None
+        payload = (
+            event.to_data()
+            if event_type in {"route_card", "arrival_card", "sources"}
+            else None
+        )
         if event_type == "route_card" and payload is not None:
             cards = transcript.setdefault("route_cards", [])
             if not any(card.get("card_id") == payload.get("card_id") for card in cards):
@@ -115,6 +122,22 @@ def add_visible_events(session: dict, events: list) -> None:
                 for card in cards
             ):
                 cards.append(payload)
+        elif event_type == "sources" and payload is not None:
+            turn_id = str(getattr(event, "turn_id", "") or "").strip()
+            entries = transcript.setdefault("sources", [])
+            existing = next(
+                (entry for entry in entries if entry.get("turn_id") == turn_id),
+                None,
+            )
+            if existing is None:
+                entries.append({"turn_id": turn_id, "sources": payload["sources"]})
+            else:
+                merged = [*existing.get("sources", []), *payload["sources"]]
+                validated = agent_events.SourcesEvent(
+                    turn_id=turn_id,
+                    sources=tuple(merged),
+                )
+                existing["sources"] = validated.to_data()["sources"]
 
 
 def snapshot(session: dict) -> dict:
@@ -123,7 +146,26 @@ def snapshot(session: dict) -> dict:
         "history": [dict(entry) for entry in transcript.get("history") or []],
         "route_cards": [dict(card) for card in transcript.get("route_cards") or []],
         "arrival_cards": [dict(card) for card in transcript.get("arrival_cards") or []],
+        "sources": _valid_source_entries(transcript.get("sources")),
     }
+
+
+def _valid_source_entries(value: object) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    entries: list[dict] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        try:
+            event = agent_events.SourcesEvent(
+                turn_id=str(item.get("turn_id") or ""),
+                sources=tuple(item.get("sources") or ()),
+            )
+        except (AttributeError, TypeError, ValueError):
+            continue
+        entries.append({"turn_id": event.turn_id, **event.to_data()})
+    return entries
 
 
 def active_accepted_route_card(session: object) -> dict | None:

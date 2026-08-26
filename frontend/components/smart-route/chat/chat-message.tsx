@@ -18,6 +18,7 @@ import type { ChatTheme } from "@/lib/use-chat-theme";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { ThinkingOrb } from "thinking-orbs";
 import { Message, MessageContent } from "@/components/prompt-kit/message";
+import { Sources } from "@/components/prompt-kit/source";
 import { isSearchActivityTool } from "@/lib/agent-route-tools";
 import { ChatWorkingPanel } from "./chat-working-panel";
 import { ChatRouteCardList } from "./chat-route-card";
@@ -76,6 +77,7 @@ function AssistantMessage({
     isCaughtUp &&
     turn.transitStatusAction === "view_alerts" &&
     Boolean(onViewAlerts);
+  const showSources = !turn.isStreaming && isCaughtUp && Boolean(turn.sources?.length);
 
   if (turn.error) {
     return (
@@ -133,9 +135,9 @@ function AssistantMessage({
         </span>
         <div className="sr-chat-assistant-response__content">
           {turn.notice ? (
-            <p className="sr-chat-session-notice" role="status">
+            <output className="sr-chat-session-notice">
               {turn.notice}
-            </p>
+            </output>
           ) : null}
           <ChatWorkingPanel
             toolChips={turn.toolChips}
@@ -148,6 +150,7 @@ function AssistantMessage({
               {displayedText}
             </p>
           )}
+          {showSources && turn.sources ? <Sources sources={turn.sources} /> : null}
           {showAlertsAction ? (
             <button
               type="button"

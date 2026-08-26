@@ -213,6 +213,18 @@ class SystemPromptGuardTests(unittest.TestCase):
         self.assertNotIn("share evidence requirements, scoring", normalized)
         self.assertIn("severe disruptions", normalized)
 
+    def test_queue_evidence_stays_inside_existing_place_capabilities(self):
+        self.assertIn("QUEUE EVIDENCE", agent_prompt.SYSTEM_PROMPT)
+        normalized = " ".join(agent_prompt.SYSTEM_PROMPT.lower().split())
+        self.assertIn("not another capability", normalized)
+        self.assertIn("queue_context", normalized)
+        self.assertIn("present_places owns every rider-facing queue number", normalized)
+        self.assertNotIn("damn_lines", normalized)
+        self.assertIn("never invent a global threshold", normalized)
+        self.assertIn("join-now estimate", normalized)
+        self.assertIn("keep plausible physical branches as separate candidates", normalized)
+        self.assertNotIn("ask which location", normalized)
+
     def test_activity_copy_is_contextual_but_runtime_gated(self):
         normalized = " ".join(agent_prompt.SYSTEM_PROMPT.lower().split())
         self.assertIn("short activity_label", normalized)
@@ -273,7 +285,8 @@ class SystemPromptGuardTests(unittest.TestCase):
         self.assertIn("new named destination", normalized)
         self.assertIn("supersedes the accepted trip destination", normalized)
         self.assertIn("destination_source=current_turn", normalized)
-        self.assertIn("ask which location the rider means", normalized)
+        self.assertIn("keep plausible physical branches as separate candidates", normalized)
+        self.assertIn("never switch branches without permission", normalized)
 
     def test_transit_framing_is_natural_but_canonical_facts_stay_owned(self):
         normalized = " ".join(agent_prompt.SYSTEM_PROMPT.lower().split())

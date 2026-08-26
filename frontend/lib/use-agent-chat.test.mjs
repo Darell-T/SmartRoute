@@ -157,6 +157,40 @@ test("transit-status action is carried by its typed event and ignores stale turn
   assert.equal(state.messages[1].transitStatusAction, undefined);
 });
 
+test("sources attach only to the active assistant turn and deduplicate by URL", () => {
+  let state = applyAgentEvent(initialState(), { type: "turn_started", text: "Pizza nearby" });
+  state = applyAgentEvent(state, { type: "meta", session_id: "sess-1", turn_id: "turn-1" });
+  state = applyAgentEvent(state, {
+    type: "sources",
+    sources: [{ title: "Damn Lines", url: "https://damnlines.com/camera/l-industrie" }],
+  });
+  state = applyAgentEvent(state, {
+    type: "sources",
+    sources: [{ title: "Damn Lines", url: "https://damnlines.com/camera/l-industrie" }],
+  });
+
+  assert.deepEqual(state.messages[1].sources, [
+    { title: "Damn Lines", url: "https://damnlines.com/camera/l-industrie" },
+  ]);
+
+  state = applyAgentEvent(state, {
+    type: "done",
+    session_id: "sess-1",
+    turn_id: "turn-1",
+    stop_reason: "end_turn",
+    usage: {},
+  });
+  const completed = state;
+  state = applyAgentEvent(state, {
+    type: "sources",
+    sources: [{ title: "Damn Lines", url: "https://damnlines.com/camera/late-event" }],
+  });
+  assert.deepEqual(state, completed);
+
+  state = applyAgentEvent(state, { type: "turn_started", text: "Another place" });
+  assert.equal(state.messages[3].sources, undefined);
+});
+
 test("tool_end for an unknown tool_call_id leaves existing chips untouched", () => {
   let state = applyAgentEvent(initialState(), { type: "turn_started", text: "hi" });
   state = applyAgentEvent(state, { type: "tool_start", tool_call_id: "c1", tool: "plan_trip", label: "Finding routes…" });
@@ -1274,6 +1308,39 @@ test("buildTurnsFromSnapshot restores an arrivals card on its producing turn", (
   assert.equal(turns[1].arrivals.routeId, "Q");
   assert.equal(turns[1].arrivals.stationName, "Church Av");
   assert.deepEqual(turns[1].arrivals.groups[0].minutes, [5]);
+});
+
+test("buildTurnsFromSnapshot restores validated sources on their producing turn", async () => {
+  const result = await fetchSessionSnapshot(
+    "sess-1",
+    async () => new Response(JSON.stringify(validSnapshot({
+      sources: [{
+        turn_id: "t1",
+        sources: [
+          { title: "Damn Lines", url: "https://damnlines.com/camera/l-industrie" },
+          { title: "Untrusted", url: "https://example.com/camera/l-industrie" },
+        ],
+      }, {
+        turn_id: "t1",
+        sources: [{ title: "Damn Lines", url: "https://damnlines.com/average-wait-times" }],
+      }],
+    })), { status: 200 }),
+  );
+
+  assert.equal(result.status, "ok");
+  assert.deepEqual(result.turns[1].sources, [
+    { title: "Damn Lines", url: "https://damnlines.com/average-wait-times" },
+  ]);
+});
+
+test("snapshot restore remains compatible when older transcripts omit sources", async () => {
+  const result = await fetchSessionSnapshot(
+    "sess-1",
+    async () => new Response(JSON.stringify(validSnapshot()), { status: 200 }),
+  );
+
+  assert.equal(result.status, "ok");
+  assert.equal(result.turns[1].sources, undefined);
 });
 
 test("fetchSessionSnapshot returns expired for a 404", async () => {
