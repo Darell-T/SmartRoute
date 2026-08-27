@@ -13,9 +13,11 @@ import asyncio
 import json
 import os
 import time
-from datetime import datetime, timezone
-from typing import Any, Iterable
+from collections.abc import Iterable
+from datetime import UTC, datetime
+from typing import Any
 
+from app.services import cache
 from app.services.incidents.normalization import (
     ALLOWED_COVERAGE,
     ALLOWED_STATES,
@@ -28,7 +30,6 @@ from app.services.incidents.normalization import (
     normalize_incident_record,
     record_is_expired,
 )
-from app.services import cache
 
 INCIDENT_PREFIX = "incident:idx:"
 COVERAGE_PREFIX = "incident:cov:"
@@ -51,7 +52,7 @@ _INDEX_PREFIXES = {
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _as_list(raw: Iterable[str] | None) -> list[str]:
@@ -177,7 +178,7 @@ def lookup_incidents(
     record_keys = [f"{INCIDENT_PREFIX}{incident_id}" for incident_id in unique_ids]
     record_blobs = cache.cache_get_many(record_keys)
     incidents: list[dict[str, Any]] = []
-    for incident_id, key in zip(unique_ids, record_keys, strict=True):
+    for _incident_id, key in zip(unique_ids, record_keys, strict=True):
         record = _parse_json(record_blobs.get(key))
         if not isinstance(record, dict):
             continue

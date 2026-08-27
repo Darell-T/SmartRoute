@@ -193,7 +193,7 @@ def _validated_preferences(raw: dict[str, Any]) -> dict[str, Any]:
     if tolerance is None:
         result["walking_tolerance_minutes"] = None
     elif isinstance(tolerance, (int, float)) and not isinstance(tolerance, bool):
-        result["walking_tolerance_minutes"] = max(0, min(180, int(round(tolerance))))
+        result["walking_tolerance_minutes"] = max(0, min(180, round(tolerance)))
     modes = raw.get("preferred_modes")
     if isinstance(modes, list):
         result["preferred_modes"] = [

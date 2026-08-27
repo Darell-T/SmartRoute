@@ -12,19 +12,20 @@ pending task leaks.
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
+import pytest
 from app.routers import agent_chat
 from app.services import admission
 from app.services.agent import events as agent_events
-
 
 PRINCIPAL = "v1.test-principal-opaque-123456"
 SESSION_ID = "sess-test-0001"
 TURN_ID = "turn-test-1"
 LEASE = admission.AdmissionLease(PRINCIPAL, "chat", "lease-token-1")
+PROVIDER_FAILURE = "provider blew up"
 
 
 def _request(*, disconnected: bool = False):
@@ -34,23 +35,25 @@ def _request(*, disconnected: bool = False):
 
 
 def _args(session: dict, *, request=None):
-    return dict(
-        request=request if request is not None else _request(),
-        session_id=SESSION_ID,
-        session=session,
-        turn_id=TURN_ID,
-        message="hello",
-        now_et="2026-08-09T12:00:00-04:00",
-        gtfs=None,
-        origin=None,
-        selected_card_id=None,
-        response_presentation="auto",
-        trace=None,
-        lease=LEASE,
-    )
+    return {
+        "request": request if request is not None else _request(),
+        "session_id": SESSION_ID,
+        "session": session,
+        "turn_id": TURN_ID,
+        "message": "hello",
+        "now_et": "2026-08-09T12:00:00-04:00",
+        "gtfs": None,
+        "origin": None,
+        "selected_card_id": None,
+        "response_presentation": "auto",
+        "trace": None,
+        "lease": LEASE,
+    }
 
 
-def _pending_generator(session: dict, order: list[str], *, started=None, pending_s: float):
+def _pending_generator(
+    session: dict, order: list[str], *, started=None, pending_s: float
+):
     """Real async generator that blocks mid-turn and records its finally."""
 
     async def agen():
@@ -90,25 +93,46 @@ class AgentChatStreamCleanupTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(agent_chat, "HEARTBEAT_INTERVAL_S", 0.005),
-            patch.object(agent_chat.agent_loop, "run_agent_turn", new=lambda **kw: agen),
-            patch.object(agent_chat.session_module, "save_session", Mock(side_effect=lambda _sid, _sess, **_kwargs: order.append("save"))) as save,
-            patch.object(agent_chat.admission, "release", AsyncMock(side_effect=lambda _lease: order.append("release"))) as release,
+            patch.object(
+                agent_chat.agent_loop, "run_agent_turn", new=lambda **_kw: agen
+            ),
+            patch.object(
+                agent_chat.session_module,
+                "save_session",
+                Mock(side_effect=lambda _sid, _sess, **_kwargs: order.append("save")),
+            ) as save,
+            patch.object(
+                agent_chat.admission,
+                "release",
+                AsyncMock(side_effect=lambda _lease: order.append("release")),
+            ) as release,
         ):
-            chunks = [chunk async for chunk in agent_chat._sse_stream(**_args(session, request=request))]
+            chunks = [
+                chunk
+                async for chunk in agent_chat._sse_stream(
+                    **_args(session, request=request)
+                )
+            ]
 
         # The heartbeat fired while the second __anext__ was pending, the
         # stream detected the disconnect, and cleanup drained the generator
         # before persisting.
-        self.assertEqual(chunks, [agent_events.sse_format(agent_events.MetaEvent(session_id=SESSION_ID, turn_id=TURN_ID))])
-        self.assertTrue(request.is_disconnected.await_count >= 1)
-        self.assertEqual(order, ["finalize", "save", "release"])
+        assert chunks == [
+            agent_events.sse_format(
+                agent_events.MetaEvent(session_id=SESSION_ID, turn_id=TURN_ID)
+            )
+        ]
+        assert request.is_disconnected.await_count >= 1
+        assert order == ["finalize", "save", "release"]
         # The finalizer's mutation was visible to the save (finalize ran first).
-        self.assertEqual(save.call_args.args[0], SESSION_ID)
-        self.assertEqual(save.call_args.args[1]["finalized_at"], "yes")
-        self.assertFalse(save.call_args.kwargs["refresh_ttl"])
+        assert save.call_args.args[0] == SESSION_ID
+        assert save.call_args.args[1]["finalized_at"] == "yes"
+        assert not save.call_args.kwargs["refresh_ttl"]
         save.assert_called_once()
         release.assert_awaited_once_with(LEASE)
-        self.assertIsNone(agen.ag_frame, "generator must be closed after disconnect cleanup")
+        assert agen.ag_frame is None, (
+            "generator must be closed after disconnect cleanup"
+        )
         await _assert_no_owned_pending_tasks(baseline)
 
     async def test_caller_cancellation_drains_child_and_preserves_cancelled_error(self):
@@ -119,9 +143,19 @@ class AgentChatStreamCleanupTests(unittest.IsolatedAsyncioTestCase):
         agen = _pending_generator(session, order, started=started, pending_s=5)
 
         with (
-            patch.object(agent_chat.agent_loop, "run_agent_turn", new=lambda **kw: agen),
-            patch.object(agent_chat.session_module, "save_session", Mock(side_effect=lambda _sid, _sess, **_kwargs: order.append("save"))) as save,
-            patch.object(agent_chat.admission, "release", AsyncMock(side_effect=lambda _lease: order.append("release"))) as release,
+            patch.object(
+                agent_chat.agent_loop, "run_agent_turn", new=lambda **_kw: agen
+            ),
+            patch.object(
+                agent_chat.session_module,
+                "save_session",
+                Mock(side_effect=lambda _sid, _sess, **_kwargs: order.append("save")),
+            ) as save,
+            patch.object(
+                agent_chat.admission,
+                "release",
+                AsyncMock(side_effect=lambda _lease: order.append("release")),
+            ) as release,
         ):
             # _sse_stream is an async generator; run the consumer that iterates
             # it (mirrors StreamingResponse's task) and cancel that task.
@@ -132,15 +166,17 @@ class AgentChatStreamCleanupTests(unittest.IsolatedAsyncioTestCase):
             stream_task = asyncio.ensure_future(_consume())
             await started.wait()  # generator is inside the pending __anext__
             stream_task.cancel()
-            with self.assertRaises(asyncio.CancelledError):
+            with pytest.raises(asyncio.CancelledError):
                 await stream_task
-        self.assertTrue(stream_task.cancelled())
-        self.assertEqual(order, ["finalize", "save", "release"])
-        self.assertEqual(save.call_args.args[1]["finalized_at"], "yes")
-        self.assertFalse(save.call_args.kwargs["refresh_ttl"])
+        assert stream_task.cancelled()
+        assert order == ["finalize", "save", "release"]
+        assert save.call_args.args[1]["finalized_at"] == "yes"
+        assert not save.call_args.kwargs["refresh_ttl"]
         save.assert_called_once()
         release.assert_awaited_once_with(LEASE)
-        self.assertIsNone(agen.ag_frame, "generator must be closed after caller cancellation")
+        assert agen.ag_frame is None, (
+            "generator must be closed after caller cancellation"
+        )
         await _assert_no_owned_pending_tasks(baseline)
 
     async def test_normal_exhaustion_saves_once_and_releases_once(self):
@@ -156,21 +192,30 @@ class AgentChatStreamCleanupTests(unittest.IsolatedAsyncioTestCase):
                 order.append("finalize")
 
         with (
-            patch.object(agent_chat.agent_loop, "run_agent_turn", new=lambda **kw: agen()),
-            patch.object(agent_chat.session_module, "save_session", Mock(side_effect=lambda _sid, _sess, **_kwargs: order.append("save"))) as save,
-            patch.object(agent_chat.admission, "release", AsyncMock(side_effect=lambda _lease: order.append("release"))) as release,
+            patch.object(
+                agent_chat.agent_loop, "run_agent_turn", new=lambda **_kw: agen()
+            ),
+            patch.object(
+                agent_chat.session_module,
+                "save_session",
+                Mock(side_effect=lambda _sid, _sess, **_kwargs: order.append("save")),
+            ) as save,
+            patch.object(
+                agent_chat.admission,
+                "release",
+                AsyncMock(side_effect=lambda _lease: order.append("release")),
+            ) as release,
         ):
             chunks = [chunk async for chunk in agent_chat._sse_stream(**_args(session))]
 
-        self.assertEqual(
-            chunks,
-            [
-                agent_events.sse_format(agent_events.MetaEvent(session_id=SESSION_ID, turn_id=TURN_ID)),
-                agent_events.sse_format(agent_events.TokenEvent(text="done talking")),
-            ],
-        )
-        self.assertEqual(order, ["finalize", "save", "release"])
-        self.assertFalse(save.call_args.kwargs["refresh_ttl"])
+        assert chunks == [
+            agent_events.sse_format(
+                agent_events.MetaEvent(session_id=SESSION_ID, turn_id=TURN_ID)
+            ),
+            agent_events.sse_format(agent_events.TokenEvent(text="done talking")),
+        ]
+        assert order == ["finalize", "save", "release"]
+        assert not save.call_args.kwargs["refresh_ttl"]
         save.assert_called_once()
         release.assert_awaited_once_with(LEASE)
         await _assert_no_owned_pending_tasks(baseline)
@@ -183,23 +228,33 @@ class AgentChatStreamCleanupTests(unittest.IsolatedAsyncioTestCase):
         async def agen():
             try:
                 yield agent_events.MetaEvent(session_id=SESSION_ID, turn_id=TURN_ID)
-                raise RuntimeError("provider blew up")
+                raise RuntimeError(PROVIDER_FAILURE)
             finally:
                 session["finalized_at"] = "yes"
                 order.append("finalize")
 
         with (
-            patch.object(agent_chat.agent_loop, "run_agent_turn", new=lambda **kw: agen()),
-            patch.object(agent_chat.session_module, "save_session", Mock(side_effect=lambda _sid, _sess, **_kwargs: order.append("save"))) as save,
-            patch.object(agent_chat.admission, "release", AsyncMock(side_effect=lambda _lease: order.append("release"))) as release,
+            patch.object(
+                agent_chat.agent_loop, "run_agent_turn", new=lambda **_kw: agen()
+            ),
+            patch.object(
+                agent_chat.session_module,
+                "save_session",
+                Mock(side_effect=lambda _sid, _sess, **_kwargs: order.append("save")),
+            ) as save,
+            patch.object(
+                agent_chat.admission,
+                "release",
+                AsyncMock(side_effect=lambda _lease: order.append("release")),
+            ) as release,
+            pytest.raises(RuntimeError),
         ):
-            with self.assertRaises(RuntimeError):
-                async for _chunk in agent_chat._sse_stream(**_args(session)):
-                    pass
+            async for _chunk in agent_chat._sse_stream(**_args(session)):
+                pass
 
-        self.assertEqual(order, ["finalize", "save", "release"])
-        self.assertEqual(save.call_args.args[1]["finalized_at"], "yes")
-        self.assertFalse(save.call_args.kwargs["refresh_ttl"])
+        assert order == ["finalize", "save", "release"]
+        assert save.call_args.args[1]["finalized_at"] == "yes"
+        assert not save.call_args.kwargs["refresh_ttl"]
         save.assert_called_once()
         release.assert_awaited_once_with(LEASE)
         await _assert_no_owned_pending_tasks(baseline)

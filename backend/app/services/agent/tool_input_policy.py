@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from app.services.agent.model import policy as agent_policy
 from app.services.agent import public_surface
+from app.services.agent.model import policy as agent_policy
 from app.services.agent.tools import ToolContext
 from app.services.agent.turn.contract import GoalKind, GoalState
 from app.services.trips.preparation.input import normalize_route_ids
@@ -255,10 +255,10 @@ def constrained_tool_input(
 
 
 __all__ = [
-    "authoritative_discovery_input",
-    "constrained_tool_input",
     "CURRENT_DESTINATION_REQUIRED_ERROR",
     "DESTINATION_SOURCE_REQUIRED_ERROR",
+    "authoritative_discovery_input",
+    "constrained_tool_input",
     "goal_error",
     "missing_verified_destination",
     "rider_excluded_modes",

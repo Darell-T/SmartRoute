@@ -11,7 +11,7 @@ companion official-normalization test module.
 from __future__ import annotations
 
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.services.incidents.official import (
     SOURCE_ALERTS,
@@ -31,8 +31,14 @@ except ModuleNotFoundError:
 FIXED_NOW = 1_800_000_000.0
 
 
+class StalledDetectorUnavailableError(RuntimeError):
+    def __init__(self, now_timestamp: object) -> None:
+        super().__init__("stalled detector unavailable")
+        self.now_timestamp = now_timestamp
+
+
 def _iso(epoch: float) -> str:
-    return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat()
+    return datetime.fromtimestamp(epoch, tz=UTC).isoformat()
 
 
 def _new_feed() -> gtfs_realtime_pb2.FeedMessage:
@@ -146,14 +152,14 @@ class CollectOfficialIncidentsTests(unittest.IsolatedAsyncioTestCase):
     async def test_current_alert_feed_with_zero_alerts_is_current(self):
         alert_bytes = _new_feed().SerializeToString()
         snapshot = await self._collect(alert_bytes=alert_bytes)
-        self.assertEqual(snapshot.incidents, ())
-        self.assertEqual(snapshot.source_status[SOURCE_ALERTS], STATUS_CURRENT)
-        self.assertEqual(snapshot.source_status[SOURCE_GTFS_RT], STATUS_UNAVAILABLE)
+        assert snapshot.incidents == ()
+        assert snapshot.source_status[SOURCE_ALERTS] == STATUS_CURRENT
+        assert snapshot.source_status[SOURCE_GTFS_RT] == STATUS_UNAVAILABLE
 
     async def test_all_feed_groups_usable_is_current(self):
         snapshot = await self._collect(groups=_feed_group_dicts())
-        self.assertEqual(snapshot.source_status[SOURCE_GTFS_RT], STATUS_CURRENT)
-        self.assertEqual(snapshot.incidents, ())
+        assert snapshot.source_status[SOURCE_GTFS_RT] == STATUS_CURRENT
+        assert snapshot.incidents == ()
 
     async def test_partial_feed_keeps_usable_incidents(self):
         vehicle_bytes = _vehicle_feed(
@@ -166,20 +172,20 @@ class CollectOfficialIncidentsTests(unittest.IsolatedAsyncioTestCase):
             missing_suffixes={"si"},
         )
         snapshot = await self._collect(groups=groups)
-        self.assertEqual(snapshot.source_status[SOURCE_GTFS_RT], STATUS_PARTIAL)
-        self.assertEqual(len(snapshot.incidents), 1)
-        self.assertEqual(snapshot.incidents[0]["affected_route_ids"], ["Q"])
-        self.assertEqual(snapshot.incidents[0]["affected_stop_ids"], ["D25N"])
+        assert snapshot.source_status[SOURCE_GTFS_RT] == STATUS_PARTIAL
+        assert len(snapshot.incidents) == 1
+        assert snapshot.incidents[0]["affected_route_ids"] == ["Q"]
+        assert snapshot.incidents[0]["affected_stop_ids"] == ["D25N"]
 
     async def test_zero_usable_feeds_is_unavailable(self):
         empty = await self._collect(groups=[])
-        self.assertEqual(empty.source_status[SOURCE_GTFS_RT], STATUS_UNAVAILABLE)
-        self.assertEqual(empty.incidents, ())
+        assert empty.source_status[SOURCE_GTFS_RT] == STATUS_UNAVAILABLE
+        assert empty.incidents == ()
         malformed_only = await self._collect(
             groups=[{"suffix": "nqrw", "content": b"\xff\xfe garbage"}]
         )
-        self.assertEqual(malformed_only.source_status[SOURCE_GTFS_RT], STATUS_UNAVAILABLE)
-        self.assertEqual(malformed_only.incidents, ())
+        assert malformed_only.source_status[SOURCE_GTFS_RT] == STATUS_UNAVAILABLE
+        assert malformed_only.incidents == ()
 
     async def test_empty_feed_group_bytes_are_not_usable(self):
         groups = _feed_group_dicts()
@@ -187,21 +193,21 @@ class CollectOfficialIncidentsTests(unittest.IsolatedAsyncioTestCase):
             if group["suffix"] == "ace":
                 group["content"] = b""
         snapshot = await self._collect(groups=groups)
-        self.assertEqual(snapshot.source_status[SOURCE_GTFS_RT], STATUS_PARTIAL)
-        self.assertEqual(snapshot.incidents, ())
+        assert snapshot.source_status[SOURCE_GTFS_RT] == STATUS_PARTIAL
+        assert snapshot.incidents == ()
 
     async def test_only_empty_feed_group_is_unavailable(self):
         snapshot = await self._collect(groups=[{"suffix": "nqrw", "content": b""}])
-        self.assertEqual(snapshot.source_status[SOURCE_GTFS_RT], STATUS_UNAVAILABLE)
-        self.assertEqual(snapshot.incidents, ())
+        assert snapshot.source_status[SOURCE_GTFS_RT] == STATUS_UNAVAILABLE
+        assert snapshot.incidents == ()
 
     async def test_non_list_parser_result_is_not_usable(self):
         snapshot = await self._collect(
             groups=_feed_group_dicts(),
             parse_positions=lambda _: {"not": "a list"},
         )
-        self.assertEqual(snapshot.source_status[SOURCE_GTFS_RT], STATUS_UNAVAILABLE)
-        self.assertEqual(snapshot.incidents, ())
+        assert snapshot.source_status[SOURCE_GTFS_RT] == STATUS_UNAVAILABLE
+        assert snapshot.incidents == ()
 
     async def test_invalid_parser_result_keeps_valid_groups(self):
         vehicle_bytes = _vehicle_feed(
@@ -225,9 +231,9 @@ class CollectOfficialIncidentsTests(unittest.IsolatedAsyncioTestCase):
             groups=_feed_group_dicts(vehicle_suffix="nqrw", vehicle_bytes=vehicle_bytes),
             parse_positions=selective_parser,
         )
-        self.assertEqual(snapshot.source_status[SOURCE_GTFS_RT], STATUS_PARTIAL)
-        self.assertEqual(len(snapshot.incidents), 1)
-        self.assertEqual(snapshot.incidents[0]["affected_route_ids"], ["Q"])
+        assert snapshot.source_status[SOURCE_GTFS_RT] == STATUS_PARTIAL
+        assert len(snapshot.incidents) == 1
+        assert snapshot.incidents[0]["affected_route_ids"] == ["Q"]
 
     async def test_detector_exception_keeps_alerts_and_marks_gtfs_unavailable(self):
         alert_bytes = _alert_feed(
@@ -238,18 +244,16 @@ class CollectOfficialIncidentsTests(unittest.IsolatedAsyncioTestCase):
         ).SerializeToString()
 
         def failing_detector(_positions, _route_ids, *, now_timestamp):
-            raise RuntimeError("stalled detector unavailable")
+            raise StalledDetectorUnavailableError(now_timestamp)
 
         snapshot = await self._collect(
             alert_bytes=alert_bytes,
             groups=_feed_group_dicts(vehicle_suffix="nqrw", vehicle_bytes=vehicle_bytes),
             detect_stalled=failing_detector,
         )
-        self.assertEqual(snapshot.source_status[SOURCE_ALERTS], STATUS_CURRENT)
-        self.assertEqual(snapshot.source_status[SOURCE_GTFS_RT], STATUS_UNAVAILABLE)
-        self.assertEqual(
-            [incident["source"] for incident in snapshot.incidents], [SOURCE_ALERTS]
-        )
+        assert snapshot.source_status[SOURCE_ALERTS] == STATUS_CURRENT
+        assert snapshot.source_status[SOURCE_GTFS_RT] == STATUS_UNAVAILABLE
+        assert [incident["source"] for incident in snapshot.incidents] == [SOURCE_ALERTS]
 
     async def test_detector_non_list_result_marks_gtfs_unavailable_and_keeps_alerts(self):
         alert_bytes = _alert_feed(
@@ -263,13 +267,11 @@ class CollectOfficialIncidentsTests(unittest.IsolatedAsyncioTestCase):
             snapshot = await self._collect(
                 alert_bytes=alert_bytes,
                 groups=groups,
-                detect_stalled=lambda _positions, _route_ids, *, now_timestamp, result=invalid_result: result,
+                detect_stalled=lambda _positions, _route_ids, *, now_timestamp, result=invalid_result: (now_timestamp, result)[-1],
             )
-            self.assertEqual(snapshot.source_status[SOURCE_ALERTS], STATUS_CURRENT)
-            self.assertEqual(snapshot.source_status[SOURCE_GTFS_RT], STATUS_UNAVAILABLE)
-            self.assertEqual(
-                [incident["source"] for incident in snapshot.incidents], [SOURCE_ALERTS]
-            )
+            assert snapshot.source_status[SOURCE_ALERTS] == STATUS_CURRENT
+            assert snapshot.source_status[SOURCE_GTFS_RT] == STATUS_UNAVAILABLE
+            assert [incident["source"] for incident in snapshot.incidents] == [SOURCE_ALERTS]
 
     async def test_empty_and_malformed_alerts_unavailable_while_gtfs_works(self):
         vehicle_bytes = _vehicle_feed(
@@ -278,12 +280,12 @@ class CollectOfficialIncidentsTests(unittest.IsolatedAsyncioTestCase):
         groups = _feed_group_dicts(vehicle_suffix="nqrw", vehicle_bytes=vehicle_bytes)
 
         empty_alerts = await self._collect(alert_bytes=b"", groups=groups)
-        self.assertEqual(empty_alerts.source_status[SOURCE_ALERTS], STATUS_UNAVAILABLE)
-        self.assertEqual(empty_alerts.source_status[SOURCE_GTFS_RT], STATUS_CURRENT)
-        self.assertEqual(len(empty_alerts.incidents), 1)
-        self.assertEqual(empty_alerts.incidents[0]["source"], SOURCE_GTFS_RT)
+        assert empty_alerts.source_status[SOURCE_ALERTS] == STATUS_UNAVAILABLE
+        assert empty_alerts.source_status[SOURCE_GTFS_RT] == STATUS_CURRENT
+        assert len(empty_alerts.incidents) == 1
+        assert empty_alerts.incidents[0]["source"] == SOURCE_GTFS_RT
 
         malformed_alerts = await self._collect(alert_bytes=b"\xff\xfe not a protobuf", groups=groups)
-        self.assertEqual(malformed_alerts.source_status[SOURCE_ALERTS], STATUS_UNAVAILABLE)
-        self.assertEqual(malformed_alerts.source_status[SOURCE_GTFS_RT], STATUS_CURRENT)
-        self.assertEqual(len(malformed_alerts.incidents), 1)
+        assert malformed_alerts.source_status[SOURCE_ALERTS] == STATUS_UNAVAILABLE
+        assert malformed_alerts.source_status[SOURCE_GTFS_RT] == STATUS_CURRENT
+        assert len(malformed_alerts.incidents) == 1

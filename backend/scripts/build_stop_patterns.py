@@ -33,6 +33,7 @@ import sqlite3
 import tempfile
 import zipfile
 from collections import Counter, defaultdict
+from contextlib import suppress
 from pathlib import Path
 
 SUPPLEMENTED_URL = "https://rrgtfsfeeds.s3.amazonaws.com/gtfs_supplemented.zip"
@@ -50,7 +51,45 @@ def strip_dir(stop_id: str) -> str:
 
 def _pattern_signature(route_id: str, direction, stop_ids: list[str]) -> str:
     raw = f"{route_id}|{direction if direction is not None else ''}|{','.join(stop_ids)}"
-    return hashlib.sha1(raw.encode()).hexdigest()[:16]
+    # ponytail: SHA-1 is a stable artifact identifier, not a security digest.
+    # Keep the existing 16-hex prefix so stop_patterns.json identities stay
+    # unchanged; switch to SHA-256 if those identities are ever versioned.
+    return hashlib.sha1(raw.encode(), usedforsecurity=False).hexdigest()[:16]
+
+
+def _transfer_adjacency(
+    stops_by_id: dict[str, dict],
+    transfer_rows: list[tuple[str, str]],
+) -> dict[str, set[str]]:
+    edges: set[tuple[str, str]] = set()
+    adjacency: dict[str, set[str]] = defaultdict(set)
+    for raw_from, raw_to in transfer_rows:
+        from_id = strip_dir(raw_from or "")
+        to_id = strip_dir(raw_to or "")
+        if not from_id or not to_id or from_id == to_id:
+            continue
+        if from_id not in stops_by_id or to_id not in stops_by_id:
+            continue
+        edge = tuple(sorted((from_id, to_id)))
+        if edge in edges:
+            continue
+        edges.add(edge)
+        adjacency[from_id].add(to_id)
+        adjacency[to_id].add(from_id)
+    return adjacency
+
+
+def _component_members(start: str, adjacency: dict[str, set[str]], visited: set[str]) -> list[str]:
+    members: list[str] = []
+    stack = [start]
+    while stack:
+        node = stack.pop()
+        if node in visited:
+            continue
+        visited.add(node)
+        members.append(node)
+        stack.extend(adjacency[node] - visited)
+    return members
 
 
 def derive_transfer_components(
@@ -67,41 +106,97 @@ def derive_transfer_components(
     ``gtfs_transfer:<lowest member id>`` (sorted members, so deterministic).
     Singleton stops get no identity -- never a fabricated complex.
     """
-    edges: set[tuple[str, str]] = set()
-    adjacency: dict[str, set[str]] = defaultdict(set)
-    for raw_from, raw_to in transfer_rows:
-        from_id = strip_dir(raw_from or "")
-        to_id = strip_dir(raw_to or "")
-        if not from_id or not to_id or from_id == to_id:
-            continue
-        if from_id not in stops_by_id or to_id not in stops_by_id:
-            continue
-        edge = tuple(sorted((from_id, to_id)))
-        if edge in edges:
-            continue
-        edges.add(edge)
-        adjacency[from_id].add(to_id)
-        adjacency[to_id].add(from_id)
-
+    adjacency = _transfer_adjacency(stops_by_id, transfer_rows)
     components: dict[str, str] = {}
     visited: set[str] = set()
     for start in sorted(stops_by_id):
         if start in visited or start not in adjacency:
             continue
-        members: list[str] = []
-        stack = [start]
-        while stack:
-            node = stack.pop()
-            if node in visited:
-                continue
-            visited.add(node)
-            members.append(node)
-            stack.extend(adjacency[node] - visited)
+        members = _component_members(start, adjacency, visited)
         if len(members) > 1:
             identity = f"gtfs_transfer:{min(members)}"
             for member in members:
                 components[member] = identity
     return components
+
+
+def _parent_sequence(seq: list[str]) -> list[str]:
+    ordered: list[str] = []
+    for sid in seq:
+        pid = strip_dir(sid)
+        if pid and (not ordered or ordered[-1] != pid):
+            ordered.append(pid)
+    return ordered
+
+
+def _aggregate_patterns(
+    trip_meta: dict[str, tuple],
+    trip_sequences: dict[str, list[str]],
+) -> dict[tuple, dict]:
+    agg: dict[tuple, dict] = {}
+    for trip_id, seq in trip_sequences.items():
+        meta = trip_meta.get(trip_id)
+        if not meta:
+            continue
+        route_id, direction = meta
+        ordered = _parent_sequence(seq)
+        if len(ordered) < 2:
+            continue
+        key = (route_id, tuple(ordered))
+        entry = agg.get(key)
+        if entry is None:
+            entry = agg[key] = {
+                "route_id": route_id,
+                "stop_ids": ordered,
+                "trip_count": 0,
+                "directions": Counter(),
+            }
+        entry["trip_count"] += 1
+        if direction is not None:
+            entry["directions"][direction] += 1
+    return agg
+
+
+def _pattern_rows(
+    agg: dict[tuple, dict],
+    routes_short: dict[str, str],
+    min_trip_count: int,
+) -> tuple[list[dict], set[str]]:
+    patterns = []
+    used_stop_ids: set[str] = set()
+    for (route_id, _ids), entry in agg.items():
+        if entry["trip_count"] < min_trip_count:
+            continue
+        stop_ids = entry["stop_ids"]
+        dirs = entry["directions"]
+        direction = dirs.most_common(1)[0][0] if dirs else None
+        patterns.append({
+            "route_id": route_id,
+            "route_short_name": routes_short.get(route_id, route_id),
+            "direction_id": direction,
+            "trip_count": entry["trip_count"],
+            "signature": _pattern_signature(route_id, direction, stop_ids),
+            "stop_ids": stop_ids,
+        })
+        used_stop_ids.update(stop_ids)
+    patterns.sort(key=lambda p: (-p["trip_count"], p["route_id"]))
+    return patterns, used_stop_ids
+
+
+def _artifact_stops(
+    used_stop_ids: set[str],
+    stops_by_id: dict[str, dict],
+    transfer_components: dict[str, str] | None,
+) -> dict[str, dict]:
+    stops = {}
+    for sid in sorted(used_stop_ids):
+        if sid not in stops_by_id:
+            continue
+        if transfer_components and sid in transfer_components:
+            stops[sid] = {**stops_by_id[sid], "station_complex_id": transfer_components[sid]}
+        else:
+            stops[sid] = stops_by_id[sid]
+    return stops
 
 
 def build_patterns(
@@ -124,58 +219,10 @@ def build_patterns(
     # encode direction (northbound is the reverse of southbound), so direction_id
     # is kept only as metadata -- the dominant value among the grouped trips.
     # This avoids splitting a pattern when the direction overlay is partial.
-    agg: dict[tuple, dict] = {}
-    for trip_id, seq in trip_sequences.items():
-        meta = trip_meta.get(trip_id)
-        if not meta:
-            continue
-        route_id, direction = meta
-        # Strip to parent ids and drop consecutive duplicates (defensive).
-        ordered: list[str] = []
-        for sid in seq:
-            pid = strip_dir(sid)
-            if pid and (not ordered or ordered[-1] != pid):
-                ordered.append(pid)
-        if len(ordered) < 2:
-            continue
-        key = (route_id, tuple(ordered))
-        entry = agg.get(key)
-        if entry is None:
-            entry = agg[key] = {"route_id": route_id, "stop_ids": ordered,
-                                "trip_count": 0, "directions": Counter()}
-        entry["trip_count"] += 1
-        if direction is not None:
-            entry["directions"][direction] += 1
-
-    patterns = []
-    used_stop_ids: set[str] = set()
-    for (route_id, _ids), entry in agg.items():
-        if entry["trip_count"] < min_trip_count:
-            continue
-        stop_ids = entry["stop_ids"]
-        dirs = entry["directions"]
-        direction = dirs.most_common(1)[0][0] if dirs else None
-        patterns.append({
-            "route_id": route_id,
-            "route_short_name": routes_short.get(route_id, route_id),
-            "direction_id": direction,
-            "trip_count": entry["trip_count"],
-            "signature": _pattern_signature(route_id, direction, stop_ids),
-            "stop_ids": stop_ids,
-        })
-        used_stop_ids.update(stop_ids)
-
-    # Most-frequent patterns first (stable, helps the runtime tie-break).
-    patterns.sort(key=lambda p: (-p["trip_count"], p["route_id"]))
-
-    stops = {}
-    for sid in sorted(used_stop_ids):
-        if sid not in stops_by_id:
-            continue
-        if transfer_components and sid in transfer_components:
-            stops[sid] = {**stops_by_id[sid], "station_complex_id": transfer_components[sid]}
-        else:
-            stops[sid] = stops_by_id[sid]
+    patterns, used_stop_ids = _pattern_rows(
+        _aggregate_patterns(trip_meta, trip_sequences), routes_short, min_trip_count
+    )
+    stops = _artifact_stops(used_stop_ids, stops_by_id, transfer_components)
     artifact = {
         "source": "gtfs_supplemented",
         "route_count": len({p["route_id"] for p in patterns}),
@@ -207,10 +254,8 @@ def _parse_trip_directions(trips_txt: Path | None) -> dict[str, int]:
             tid = row.get("trip_id")
             d = row.get("direction_id")
             if tid and d not in (None, ""):
-                try:
+                with suppress(ValueError):
                     out[tid] = int(d)
-                except ValueError:
-                    pass
     return out
 
 
@@ -258,61 +303,78 @@ def load_from_sqlite(sqlite_path: Path, trips_txt: Path | None):
     return stops_by_id, routes_short, trip_meta, dict(trip_sequences), transfer_rows
 
 
-def load_from_zip(zip_path: Path):
+def _zip_rows(zf: zipfile.ZipFile, name: str):
+    with zf.open(name) as handle:
+        yield from csv.DictReader(io.TextIOWrapper(handle, "utf-8"))
+
+
+def _zip_stops(zf: zipfile.ZipFile) -> dict[str, dict]:
     stops_by_id: dict[str, dict] = {}
-    routes_short: dict[str, str] = {}
-    trip_meta: dict[str, tuple] = {}
-    trip_sequences: dict[str, list[tuple]] = defaultdict(list)
-    transfer_rows: list[tuple[str, str]] = []
-    with zipfile.ZipFile(zip_path) as zf:
-        with zf.open("stops.txt") as f:
-            for row in csv.DictReader(io.TextIOWrapper(f, "utf-8")):
-                pid = strip_dir(row.get("stop_id", ""))
-                if not pid or pid in stops_by_id:
-                    continue
-                try:
-                    stops_by_id[pid] = {
-                        "name": row.get("stop_name"),
-                        "lat": float(row["stop_lat"]),
-                        "lon": float(row["stop_lon"]),
-                    }
-                except (TypeError, ValueError, KeyError):
-                    continue
+    for row in _zip_rows(zf, "stops.txt"):
+        pid = strip_dir(row.get("stop_id", ""))
+        if not pid or pid in stops_by_id:
+            continue
         try:
-            with zf.open("routes.txt") as f:
-                for row in csv.DictReader(io.TextIOWrapper(f, "utf-8")):
-                    rid = row.get("route_id")
-                    if rid:
-                        routes_short[rid] = row.get("route_short_name") or rid
-        except KeyError:
-            pass
-        with zf.open("trips.txt") as f:
-            for row in csv.DictReader(io.TextIOWrapper(f, "utf-8")):
-                tid = row.get("trip_id")
-                if not tid:
-                    continue
-                d = row.get("direction_id")
-                direction = int(d) if d not in (None, "") and d.isdigit() else None
-                trip_meta[tid] = (row.get("route_id"), direction)
-        with zf.open("stop_times.txt") as f:
-            for row in csv.DictReader(io.TextIOWrapper(f, "utf-8")):
-                tid = row.get("trip_id")
-                if not tid:
-                    continue
-                try:
-                    seq = int(row["stop_sequence"])
-                except (TypeError, ValueError, KeyError):
-                    continue
-                trip_sequences[tid].append((seq, row.get("stop_id", "")))
+            stops_by_id[pid] = {
+                "name": row.get("stop_name"),
+                "lat": float(row["stop_lat"]),
+                "lon": float(row["stop_lon"]),
+            }
+        except (TypeError, ValueError, KeyError):
+            continue
+    return stops_by_id
+
+
+def _zip_routes(zf: zipfile.ZipFile) -> dict[str, str]:
+    routes_short: dict[str, str] = {}
+    try:
+        for row in _zip_rows(zf, "routes.txt"):
+            rid = row.get("route_id")
+            if rid:
+                routes_short[rid] = row.get("route_short_name") or rid
+    except KeyError:
+        return routes_short
+    return routes_short
+
+
+def _zip_trips(zf: zipfile.ZipFile) -> dict[str, tuple]:
+    trip_meta: dict[str, tuple] = {}
+    for row in _zip_rows(zf, "trips.txt"):
+        tid = row.get("trip_id")
+        if not tid:
+            continue
+        d = row.get("direction_id")
+        direction = int(d) if d not in (None, "") and d.isdigit() else None
+        trip_meta[tid] = (row.get("route_id"), direction)
+    return trip_meta
+
+
+def _zip_stop_times(zf: zipfile.ZipFile) -> dict[str, list[str]]:
+    trip_sequences: dict[str, list[tuple]] = defaultdict(list)
+    for row in _zip_rows(zf, "stop_times.txt"):
+        tid = row.get("trip_id")
+        if not tid:
+            continue
+        try:
+            seq = int(row["stop_sequence"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        trip_sequences[tid].append((seq, row.get("stop_id", "")))
+    return {tid: [sid for _s, sid in sorted(pairs)] for tid, pairs in trip_sequences.items()}
+
+
+def load_from_zip(zip_path: Path):
+    with zipfile.ZipFile(zip_path) as zf:
+        stops_by_id = _zip_stops(zf)
+        routes_short = _zip_routes(zf)
+        trip_meta = _zip_trips(zf)
+        ordered = _zip_stop_times(zf)
         # transfers.txt is canonical input: a zip without it must fail loudly
         # instead of silently building an artifact with no complex metadata.
-        with zf.open("transfers.txt") as f:
-            for row in csv.DictReader(io.TextIOWrapper(f, "utf-8")):
-                transfer_rows.append(
-                    (row.get("from_stop_id", ""), row.get("to_stop_id", ""))
-                )
-    # Order each trip by stop_sequence -> [stop_id]
-    ordered = {tid: [sid for _s, sid in sorted(pairs)] for tid, pairs in trip_sequences.items()}
+        transfer_rows = [
+            (row.get("from_stop_id", ""), row.get("to_stop_id", ""))
+            for row in _zip_rows(zf, "transfers.txt")
+        ]
     return stops_by_id, routes_short, trip_meta, ordered, transfer_rows
 
 

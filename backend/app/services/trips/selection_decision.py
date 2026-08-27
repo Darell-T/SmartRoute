@@ -413,7 +413,7 @@ def _dominates_for_preference(
     if any(
         alternative_value > selected_value
         for alternative_value, selected_value in zip(
-            alternative_values, selected_values
+            alternative_values, selected_values, strict=False
         )
     ):
         return False

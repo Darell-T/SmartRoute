@@ -2,24 +2,23 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 import unittest
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
-from app.services import evidence
-from app.services.incidents import index as incident_index
-from app.services.mta import realtime as mta_realtime
+from app.services import cache, evidence
 from app.services.agent import candidate_store, trip_state
+from app.services.agent.tools._types import ToolContext, ToolOutcome, ToolResult
 from app.services.agent.tools.transit import (
     check_transit,
     lookup_arrivals,
     present_transit,
     transit_snapshot,
 )
-from app.services.agent.tools._types import ToolContext, ToolOutcome, ToolResult
 from app.services.agent.turn.contract import GoalKind, OutcomeGoal, TurnContract
 from app.services.agent.turn.evidence import TurnEvidence
-from app.services import cache
+from app.services.incidents import index as incident_index
+from app.services.mta import realtime as mta_realtime
 
 
 def _base_input(**overrides):
@@ -68,7 +67,7 @@ def _candidate_session(
 ) -> dict:
     alert = alert or _q_alert()
     if envelope is None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         envelope = evidence.evidence_envelope(
             "mta_service_alerts",
             [alert],
@@ -105,8 +104,8 @@ def _serialized_alert_envelope(
     status: str = "stale",
     valid_until: datetime | None = None,
 ) -> dict:
-    expires = valid_until or (datetime.now(timezone.utc) - timedelta(seconds=30))
-    observed = datetime.now(timezone.utc) - timedelta(minutes=2)
+    expires = valid_until or (datetime.now(UTC) - timedelta(seconds=30))
+    observed = datetime.now(UTC) - timedelta(minutes=2)
     return {
         "source": "mta_service_alerts",
         "observedAt": observed.isoformat(),
@@ -189,10 +188,10 @@ class CheckTransitTests(unittest.IsolatedAsyncioTestCase):
             result = await check_transit.execute(
                 _base_input(direction="uptown"), ctx
             )
-        self.assertTrue(result.ok)
+        assert result.ok
         snap.assert_awaited_once()
         arrivals.assert_not_called()
-        self.assertTrue(evidence.transit_evidence)
+        assert evidence.transit_evidence
 
     async def test_stalled_train_scope_keeps_delay_and_unconfirmed_train_signal(self):
         status = ToolResult(
@@ -227,19 +226,19 @@ class CheckTransitTests(unittest.IsolatedAsyncioTestCase):
                 ToolContext(session_id="s"),
             )
 
-        self.assertTrue(result.ok, result.error)
+        assert result.ok, result.error
         evidence = result.data["evidence"]
-        self.assertEqual(evidence["concerns"], ["stalled_train", "delay"])
-        self.assertEqual(evidence["confirmed_matching_alerts"][0]["header"], "Q delay")
-        self.assertEqual(evidence["unconfirmed_signals"][0]["kind"], "stalled_train")
+        assert evidence["concerns"] == ["stalled_train", "delay"]
+        assert evidence["confirmed_matching_alerts"][0]["header"] == "Q delay"
+        assert evidence["unconfirmed_signals"][0]["kind"] == "stalled_train"
 
     async def test_arrivals_requires_route_id(self):
         result = await check_transit.execute(
             _base_input(operation="arrivals", route_ids=[]),
             ToolContext(session_id="s"),
         )
-        self.assertFalse(result.ok)
-        self.assertIn("route_id", result.error or "")
+        assert not result.ok
+        assert "route_id" in (result.error or "")
 
     async def test_multi_route_arrivals_merge_grounded_results(self):
         lookup_results = [
@@ -264,11 +263,11 @@ class CheckTransitTests(unittest.IsolatedAsyncioTestCase):
                 ToolContext(session_id="multi-arrivals", turn_id="t1"),
             )
 
-        self.assertTrue(result.ok, result.error)
-        self.assertEqual(lookup.await_count, 2)
-        self.assertIn("evidence_set_id", result.data)
-        self.assertEqual(len(result.data["result"]["results"]), 2)
-        self.assertEqual(result.timings["lookup_ms"], 5.0)
+        assert result.ok, result.error
+        assert lookup.await_count == 2
+        assert "evidence_set_id" in result.data
+        assert len(result.data["result"]["results"]) == 2
+        assert result.timings["lookup_ms"] == 5.0
 
     async def test_multi_route_arrivals_propagate_leaf_failure(self):
         with patch.object(
@@ -290,8 +289,8 @@ class CheckTransitTests(unittest.IsolatedAsyncioTestCase):
                 ToolContext(session_id="multi-arrivals"),
             )
 
-        self.assertFalse(result.ok)
-        self.assertEqual(result.error, "provider unavailable")
+        assert not result.ok
+        assert result.error == "provider unavailable"
 
     async def test_multi_route_arrivals_keep_clarification_when_none_are_grounded(self):
         with patch.object(
@@ -321,9 +320,9 @@ class CheckTransitTests(unittest.IsolatedAsyncioTestCase):
                 ToolContext(session_id="multi-arrivals"),
             )
 
-        self.assertTrue(result.ok)
-        self.assertEqual(result.outcome, ToolOutcome.NEEDS_CLARIFICATION)
-        self.assertNotIn("evidence_set_id", result.data)
+        assert result.ok
+        assert result.outcome == ToolOutcome.NEEDS_CLARIFICATION
+        assert "evidence_set_id" not in result.data
 
     async def test_event_and_venue_operations_are_wrapped_as_grounded_evidence(self):
         event_result = ToolResult(ok=True, data={"events": [{"name": "Concert"}]})
@@ -356,8 +355,8 @@ class CheckTransitTests(unittest.IsolatedAsyncioTestCase):
                 ToolContext(session_id="events"),
             )
 
-        self.assertIn("evidence_set_id", event.data)
-        self.assertIn("evidence_set_id", venue.data)
+        assert "evidence_set_id" in event.data
+        assert "evidence_set_id" in venue.data
 
     async def test_unresolved_arrival_attempt_does_not_count_as_grounding(self):
         evidence = TurnEvidence()
@@ -386,11 +385,11 @@ class CheckTransitTests(unittest.IsolatedAsyncioTestCase):
                 ToolContext(session_id="s", turn_evidence=evidence),
             )
 
-        self.assertTrue(result.ok)
-        self.assertEqual(result.outcome, ToolOutcome.NEEDS_CLARIFICATION)
-        self.assertNotIn("evidence_set_id", result.data)
-        self.assertEqual(result.events, [])
-        self.assertFalse(evidence.transit_evidence)
+        assert result.ok
+        assert result.outcome == ToolOutcome.NEEDS_CLARIFICATION
+        assert "evidence_set_id" not in result.data
+        assert result.events == []
+        assert not evidence.transit_evidence
 
     async def test_destination_headsign_resolves_against_active_trip_and_scopes_signal(self):
         status = ToolResult(
@@ -441,11 +440,11 @@ class CheckTransitTests(unittest.IsolatedAsyncioTestCase):
                 _base_input(direction="Coney Island-Stillwell Av"), ctx
             )
 
-        self.assertTrue(result.ok)
+        assert result.ok
         evidence = result.data["evidence"]
-        self.assertEqual(evidence["direction_scope"]["resolved"], "downtown")
-        self.assertTrue(evidence["direction_scope"]["authoritative"])
-        self.assertEqual(evidence["unconfirmed_signals"][0]["direction"], "downtown")
+        assert evidence["direction_scope"]["resolved"] == "downtown"
+        assert evidence["direction_scope"]["authoritative"]
+        assert evidence["unconfirmed_signals"][0]["direction"] == "downtown"
 
     async def test_service_status_uses_bus_stalled_source_for_bus_routes(self):
         status = ToolResult(
@@ -489,12 +488,12 @@ class CheckTransitTests(unittest.IsolatedAsyncioTestCase):
                 ToolContext(session_id="s"),
             )
 
-        self.assertTrue(result.ok)
+        assert result.ok
         stalled_trains.assert_not_awaited()
         stalled_buses.assert_awaited_once_with({"M15"})
         evidence = result.data["evidence"]
-        self.assertEqual(evidence["source_coverage"]["bustime"], "partial")
-        self.assertEqual(evidence["unconfirmed_signals"][0]["route_id"], "M15")
+        assert evidence["source_coverage"]["bustime"] == "partial"
+        assert evidence["unconfirmed_signals"][0]["route_id"] == "M15"
 
     async def test_unresolved_destination_returns_structured_direction_clarification(self):
         result = await check_transit.execute(
@@ -502,10 +501,10 @@ class CheckTransitTests(unittest.IsolatedAsyncioTestCase):
             ToolContext(session_id="s"),
         )
 
-        self.assertTrue(result.ok)
-        self.assertEqual(result.data["status"], "clarification_required")
-        self.assertEqual(result.data["clarification"]["kind"], "transit_direction")
-        self.assertIn("uptown or downtown", result.data["clarification"]["question"])
+        assert result.ok
+        assert result.data["status"] == "clarification_required"
+        assert result.data["clarification"]["kind"] == "transit_direction"
+        assert "uptown or downtown" in result.data["clarification"]["question"]
 
     async def test_route_status_without_resolved_direction_runs_linewide_check(self):
         status = ToolResult(
@@ -524,10 +523,10 @@ class CheckTransitTests(unittest.IsolatedAsyncioTestCase):
                 _base_input(direction=None), ToolContext(session_id="s")
             )
 
-        self.assertTrue(result.ok)
-        self.assertNotEqual(result.data.get("status"), "clarification_required")
+        assert result.ok
+        assert result.data.get("status") != "clarification_required"
         collect.assert_awaited_once()
-        self.assertIsNone(collect.await_args.args[1]["direction"])
+        assert collect.await_args.args[1]["direction"] is None
 
     async def test_systemwide_status_does_not_require_direction(self):
         status = ToolResult(
@@ -549,8 +548,8 @@ class CheckTransitTests(unittest.IsolatedAsyncioTestCase):
                 _base_input(route_ids=[], direction=None), ToolContext(session_id="s")
             )
 
-        self.assertTrue(result.ok)
-        self.assertIn("evidence", result.data)
+        assert result.ok
+        assert "evidence" in result.data
         snapshot.assert_awaited_once()
 
     async def test_service_status_reuses_current_nonselected_candidate_evidence(self):
@@ -576,20 +575,14 @@ class CheckTransitTests(unittest.IsolatedAsyncioTestCase):
                 _base_input(direction="uptown"), ctx
             )
 
-        self.assertTrue(result.ok, result.error)
+        assert result.ok, result.error
         snapshot.assert_not_awaited()
         fetch.assert_not_awaited()
         stalled.assert_not_awaited()
         incidents.assert_not_called()
         evidence_payload = result.data["evidence"]
-        self.assertEqual(
-            evidence_payload["confirmed_matching_alerts"][0]["source_id"],
-            "lmm:planned_work:33095",
-        )
-        self.assertEqual(
-            evidence_payload["freshness"]["origin"],
-            "accepted_candidate_evidence",
-        )
+        assert evidence_payload["confirmed_matching_alerts"][0]["source_id"] == "lmm:planned_work:33095"
+        assert evidence_payload["freshness"]["origin"] == "accepted_candidate_evidence"
 
     async def test_reused_candidate_evidence_projects_only_requested_route_facts(self):
         session = _candidate_session(
@@ -630,17 +623,11 @@ class CheckTransitTests(unittest.IsolatedAsyncioTestCase):
             ToolContext(session_id="reuse-facts", session=session),
         )
 
-        self.assertTrue(result.ok, result.error)
+        assert result.ok, result.error
         evidence_payload = result.data["evidence"]
-        self.assertEqual(
-            [row["incident_id"] for row in evidence_payload["incidents"]],
-            ["incident-q"],
-        )
-        self.assertEqual(
-            [row["route_id"] for row in evidence_payload["unconfirmed_signals"]],
-            ["Q"],
-        )
-        self.assertFalse(evidence_payload["unconfirmed_signals"][0]["confirmed"])
+        assert [row["incident_id"] for row in evidence_payload["incidents"]] == ["incident-q"]
+        assert [row["route_id"] for row in evidence_payload["unconfirmed_signals"]] == ["Q"]
+        assert not evidence_payload["unconfirmed_signals"][0]["confirmed"]
 
     async def test_candidate_evidence_ownership_and_freshness_fail_closed(self):
         cases = (
@@ -684,7 +671,7 @@ class CheckTransitTests(unittest.IsolatedAsyncioTestCase):
                     result = await check_transit.execute(
                         _base_input(direction="uptown"), ctx
                     )
-                self.assertTrue(result.ok)
+                assert result.ok
                 snapshot.assert_awaited_once()
 
     async def test_stale_candidate_evidence_compares_same_and_new_alert_ids(self):
@@ -726,10 +713,10 @@ class CheckTransitTests(unittest.IsolatedAsyncioTestCase):
                     result = await check_transit.execute(
                         _base_input(direction="uptown"), ctx
                     )
-                self.assertTrue(result.ok, result.error)
+                assert result.ok, result.error
                 snapshot.assert_awaited_once()
                 marker = result.data["evidence"]["freshness"].get("continuity")
-                self.assertEqual(marker, {"comparable": True, "changed": changed})
+                assert marker == {"comparable": True, "changed": changed}
 
     async def test_nonofficial_candidate_alert_does_not_become_official(self):
         social_alert = {
@@ -759,9 +746,9 @@ class CheckTransitTests(unittest.IsolatedAsyncioTestCase):
                 _base_input(direction="uptown"),
                 ToolContext(session_id="nonofficial", session=session),
             )
-        self.assertTrue(result.ok)
+        assert result.ok
         snapshot.assert_awaited_once()
-        self.assertEqual(result.data["evidence"]["confirmed_matching_alerts"], [])
+        assert result.data["evidence"]["confirmed_matching_alerts"] == []
 
     async def test_explicit_direction_overrides_candidate_direction(self):
         session = _direction_candidate_session("explicit-direction")
@@ -774,8 +761,8 @@ class CheckTransitTests(unittest.IsolatedAsyncioTestCase):
                 ToolContext(session_id="explicit-direction", session=session),
             )
 
-        self.assertTrue(result.ok)
-        self.assertEqual(collect.await_args.args[1]["direction"], "downtown")
+        assert result.ok
+        assert collect.await_args.args[1]["direction"] == "downtown"
 
     async def test_explicit_headsign_resolves_against_exact_candidate_leg(self):
         session = _direction_candidate_session(
@@ -790,8 +777,8 @@ class CheckTransitTests(unittest.IsolatedAsyncioTestCase):
                 ToolContext(session_id="explicit-headsign", session=session),
             )
 
-        self.assertTrue(result.ok)
-        self.assertEqual(collect.await_args.args[1]["direction"], "downtown")
+        assert result.ok
+        assert collect.await_args.args[1]["direction"] == "downtown"
 
     async def test_explicit_headsign_never_substitutes_candidate_direction(self):
         cases = (
@@ -815,11 +802,9 @@ class CheckTransitTests(unittest.IsolatedAsyncioTestCase):
                         ToolContext(session_id=session_id, session=session),
                     )
 
-                self.assertTrue(result.ok)
-                self.assertEqual(result.data["status"], "clarification_required")
-                self.assertEqual(
-                    result.data["clarification"]["kind"], "transit_direction"
-                )
+                assert result.ok
+                assert result.data["status"] == "clarification_required"
+                assert result.data["clarification"]["kind"] == "transit_direction"
                 collect.assert_not_awaited()
 
     async def test_nonselected_q_candidate_direction_is_used_and_presentable(self):
@@ -845,16 +830,16 @@ class CheckTransitTests(unittest.IsolatedAsyncioTestCase):
                 ToolContext(session_id="candidate-direction", session=session),
             )
 
-        self.assertTrue(result.ok)
-        self.assertEqual(collect.await_args.args[1]["direction"], "uptown")
+        assert result.ok
+        assert collect.await_args.args[1]["direction"] == "uptown"
         presented = await present_transit.execute(
             {"evidence_set_id": result.data["evidence_set_id"], "goal_key": "status"},
             ToolContext(session_id="candidate-direction", session=session),
         )
-        self.assertTrue(presented.ok, presented.error)
+        assert presented.ok, presented.error
         passenger_text = presented.data["passenger_text"]
-        self.assertIn("Official planned service change", passenger_text)
-        self.assertNotIn("does not confirm the requested direction", passenger_text)
+        assert "Official planned service change" in passenger_text
+        assert "does not confirm the requested direction" not in passenger_text
 
     async def test_accepted_active_trip_direction_is_fallback(self):
         session = {
@@ -871,8 +856,8 @@ class CheckTransitTests(unittest.IsolatedAsyncioTestCase):
                 ToolContext(session_id="accepted-direction", session=session),
             )
 
-        self.assertTrue(result.ok)
-        self.assertEqual(collect.await_args.args[1]["direction"], "downtown")
+        assert result.ok
+        assert collect.await_args.args[1]["direction"] == "downtown"
 
     async def test_conflicting_candidate_directions_do_not_guess(self):
         session = _direction_candidate_session(
@@ -887,9 +872,9 @@ class CheckTransitTests(unittest.IsolatedAsyncioTestCase):
                 ToolContext(session_id="conflicting-directions", session=session),
             )
 
-        self.assertTrue(result.ok)
-        self.assertNotEqual(result.data.get("status"), "clarification_required")
-        self.assertIsNone(collect.await_args.args[1]["direction"])
+        assert result.ok
+        assert result.data.get("status") != "clarification_required"
+        assert collect.await_args.args[1]["direction"] is None
 
     async def test_arrivals_without_resolved_direction_clarifies(self):
         with patch.object(lookup_arrivals, "execute", new=AsyncMock()) as lookup:
@@ -898,9 +883,9 @@ class CheckTransitTests(unittest.IsolatedAsyncioTestCase):
                 ToolContext(session_id="unresolved-arrivals"),
             )
 
-        self.assertTrue(result.ok)
-        self.assertEqual(result.data["status"], "clarification_required")
-        self.assertEqual(result.data["clarification"]["kind"], "transit_direction")
+        assert result.ok
+        assert result.data["status"] == "clarification_required"
+        assert result.data["clarification"]["kind"] == "transit_direction"
         lookup.assert_not_awaited()
 
 

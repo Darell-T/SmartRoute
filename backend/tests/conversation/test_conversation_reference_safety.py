@@ -39,6 +39,7 @@ from __future__ import annotations
 from app.services.agent import discovery_store
 from app.services.agent import trip_state as trip_state_module
 from app.services.agent.tools.places import present_places
+
 from tests.conversation.conversation_matrix_harness import (
     _turn_round,
     complete_turn_round,
@@ -97,9 +98,6 @@ class ExpiredSetSelectionFailsSafelyTests(_ReferenceSafetyBase):
     async def test_e1_case1_expired_selection_auto(self):
         await self._transcript("auto")
 
-    async def test_e1_case1_expired_selection_quick(self):
-        await self._transcript("quick")
-
 
 class RecoveryOfferGateTests(_ReferenceSafetyBase):
     """E1-CASE2 (Auto + Quick): exact recovery must offer the search path."""
@@ -111,14 +109,8 @@ class RecoveryOfferGateTests(_ReferenceSafetyBase):
     async def test_e1_case2_recovery_offer_gate_auto(self):
         await self._case2_recovery("auto")
 
-    async def test_e1_case2_recovery_offer_gate_quick(self):
-        await self._case2_recovery("quick")
-
     async def test_e1_case2_control_new_search_creates_fresh_set_auto(self):
         await self._case2_control("auto")
-
-    async def test_e1_case2_control_new_search_creates_fresh_set_quick(self):
-        await self._case2_control("quick")
 
 
 class StaleSelectedPlaceTests(_ReferenceSafetyBase):
@@ -131,14 +123,8 @@ class StaleSelectedPlaceTests(_ReferenceSafetyBase):
     async def test_e1_case3_stale_selected_take_me_there_auto(self):
         await self._case3_stale_navigation("auto")
 
-    async def test_e1_case3_stale_selected_take_me_there_quick(self):
-        await self._case3_stale_navigation("quick")
-
     async def test_e1_case3_stale_label_only_loop_auto(self):
         await self._case3_stale_label_only_loop("auto")
-
-    async def test_e1_case3_stale_label_only_loop_quick(self):
-        await self._case3_stale_label_only_loop("quick")
 
 
 class NewRouteAfterPriorDiscoveryTests(_ReferenceSafetyBase):
@@ -158,8 +144,7 @@ class NewRouteAfterPriorDiscoveryTests(_ReferenceSafetyBase):
             mode="auto", session=session, session_id=session_id,
             message=REFERENCE_MESSAGE, rounds=rounds_ref, turn_id="t2",
             prepare_leg=discovery_leg_for(place2))
-        self.assertEqual(ev_ref.state["selected_place_id"], place2["place_id"],
-                         f"{scenario_id} prior discovery binds a selected place")
+        assert ev_ref.state["selected_place_id"] == place2["place_id"], f"{scenario_id} prior discovery binds a selected place"
         rounds = [
             _turn_round(
                 "prepare_route_options",
@@ -177,17 +162,9 @@ class NewRouteAfterPriorDiscoveryTests(_ReferenceSafetyBase):
             message="Take me to Barclays Center", rounds=rounds, turn_id="t3",
             prepare_leg=make_leg(destination="Barclays Center"))
         names = [name for name, _input in ev.trace.tool_calls]
-        self.assertEqual(
-            names[:2],
-            ["declare_goals", "prepare_route_options"],
-            f"{scenario_id} normal route preparation runs; executed={names}",
-        )
-        self.assertEqual(ev.mocks["prepare_single_leg"].await_count, 1,
-                         f"{scenario_id} provider path reached for the new "
-                         f"explicit destination; "
-                         f"actual={ev.mocks['prepare_single_leg'].await_count}")
-        self.assertEqual(ev.state["destination"], "Barclays Center",
-                         f"{scenario_id} canonical destination committed")
+        assert names[:2] == ["declare_goals", "prepare_route_options"], f"{scenario_id} normal route preparation runs; executed={names}"
+        assert ev.mocks["prepare_single_leg"].await_count == 1, f"{scenario_id} provider path reached for the new " f"explicit destination; " f"actual={ev.mocks['prepare_single_leg'].await_count}"
+        assert ev.state["destination"] == "Barclays Center", f"{scenario_id} canonical destination committed"
         self._assert_policy(scenario_id, "auto", ev)
 
 
@@ -221,13 +198,11 @@ class InventedReferenceTests(_ReferenceSafetyBase):
             },
             ctx,
         )
-        self.assertFalse(result.ok, "E1-CASE4 invented place id must fail")
-        self.assertIn(PLACE_ID_UNKNOWN_MARKER, result.error or "",
-                      f"E1-CASE4 error={result.error!r}")
+        assert not result.ok, "E1-CASE4 invented place id must fail"
+        assert PLACE_ID_UNKNOWN_MARKER in (result.error or ""), f"E1-CASE4 error={result.error!r}"
         state = trip_state_module.get_trip_state(session)
-        self.assertEqual(state["selected_place_id"], None, "E1-CASE4 binds nothing")
-        self.assertEqual(state["active_discovery_set_id"], set_id,
-                         "E1-CASE4 real active set untouched")
+        assert state["selected_place_id"] is None, "E1-CASE4 binds nothing"
+        assert state["active_discovery_set_id"] == set_id, "E1-CASE4 real active set untouched"
 
     async def test_e1_case4_invented_set_id_binds_nothing(self):
         session_id, session = self._new_session("auto")
@@ -246,13 +221,11 @@ class InventedReferenceTests(_ReferenceSafetyBase):
             },
             ctx,
         )
-        self.assertFalse(result.ok, "E1-CASE4 invented set id must fail")
-        self.assertIn(EXPIRED_ERROR_MARKER, result.error or "",
-                      f"E1-CASE4 error={result.error!r}")
+        assert not result.ok, "E1-CASE4 invented set id must fail"
+        assert EXPIRED_ERROR_MARKER in (result.error or ""), f"E1-CASE4 error={result.error!r}"
         state = trip_state_module.get_trip_state(session)
-        self.assertEqual(state["selected_place_id"], None, "E1-CASE4 binds nothing")
-        self.assertEqual(state["active_discovery_set_id"], set_id,
-                         "E1-CASE4 real active set untouched")
+        assert state["selected_place_id"] is None, "E1-CASE4 binds nothing"
+        assert state["active_discovery_set_id"] == set_id, "E1-CASE4 real active set untouched"
 
     async def test_e1_case4_invented_place_id_loop_auto(self):
         session, session_id, set_id, record = await self._fresh_discovery(
@@ -264,14 +237,8 @@ class InventedReferenceTests(_ReferenceSafetyBase):
             prepare_leg=discovery_leg_for(record["places"][0]))
         names = [name for name, _input in ev.trace.tool_calls]
         end_map = self._tool_ends(ev)
-        self.assertEqual(ev.offered, DISCOVERY_REFERENCE_TOOL_PROFILE,
-                         f"E1C4 offered={sorted(ev.offered)}; executed={names}; "
-                         f"tool_ends={end_map}")
-        self.assertEqual(
-            names,
-            ["declare_goals", "present_places"],
-            "E1C4 executor sequence",
-        )
+        assert ev.offered == DISCOVERY_REFERENCE_TOOL_PROFILE, f"E1C4 offered={sorted(ev.offered)}; executed={names}; " f"tool_ends={end_map}"
+        assert names == ["declare_goals", "present_places"], "E1C4 executor sequence"
         details_attempt = next(
             (
                 attempt
@@ -280,18 +247,17 @@ class InventedReferenceTests(_ReferenceSafetyBase):
             ),
             None,
         )
-        self.assertTrue(
-            details_attempt is not None and details_attempt["ok"] is False,
+        assert details_attempt is not None, (
             f"E1C4 invented id must fail safely; "
-            f"attempts={ev.trace.capability_attempts}",
+            f"attempts={ev.trace.capability_attempts}"
         )
-        self.assertNotIn(
-            PLACE_ID_UNKNOWN_MARKER,
-            ev.trace.final_text,
+        assert details_attempt["ok"] is False, (
+            f"E1C4 invented id must fail safely; "
+            f"attempts={ev.trace.capability_attempts}"
         )
-        self.assertEqual(ev.state["selected_place_id"], None, "E1C4 binds no place")
-        self.assertEqual(ev.state["active_discovery_set_id"], set_id,
-                         "E1C4 set stays active")
+        assert PLACE_ID_UNKNOWN_MARKER not in ev.trace.final_text
+        assert ev.state["selected_place_id"] is None, "E1C4 binds no place"
+        assert ev.state["active_discovery_set_id"] == set_id, "E1C4 set stays active"
         self._assert_no_route_surface("E1C4", ev)
         self._assert_no_text_leak("E1C4", ev)
         self._assert_policy("E1C4", "auto", ev)
@@ -315,16 +281,11 @@ class CrossSessionReferenceTests(_ReferenceSafetyBase):
         _sid, session_b = new_session()
         ctx_b = self._tool_ctx(session_b, other_id)
         result = await present_places.execute(tool_input_factory(record), ctx_b)
-        self.assertFalse(result.ok, "E1-CASE5 cross-session must be rejected")
-        self.assertIn(CROSS_SESSION_ERROR_MARKER, result.error or "",
-                      f"E1-CASE5 error={result.error!r}")
+        assert not result.ok, "E1-CASE5 cross-session must be rejected"
+        assert CROSS_SESSION_ERROR_MARKER in (result.error or ""), f"E1-CASE5 error={result.error!r}"
         state_b = trip_state_module.get_trip_state(session_b)
-        self.assertEqual((state_b["active_discovery_set_id"],
-                          state_b["selected_place_id"]), (None, None),
-                         "E1-CASE5 no session B mutation")
-        self.assertIsNotNone(
-            discovery_store.load_discovery_set(set_id, session_id=owner_id),
-            "E1-CASE5 session A set untouched")
+        assert (state_b["active_discovery_set_id"], state_b["selected_place_id"]) == (None, None), "E1-CASE5 no session B mutation"
+        assert discovery_store.load_discovery_set(set_id, session_id=owner_id) is not None, "E1-CASE5 session A set untouched"
 
     async def test_e1_case5_cross_session_set_rejected(self):
         await self._rejected_in_b(lambda record: {
@@ -358,21 +319,11 @@ class CrossSessionReferenceTests(_ReferenceSafetyBase):
             )],
             turn_id="t1")
         names = [name for name, _input in ev.trace.tool_calls]
-        self.assertEqual(
-            ev.offered, TRANSIT_QUESTION_TOOL_PROFILE,
-            f"E1-CASE5 no active set still offers the model-led initial surface; "
-            f"actual={sorted(ev.offered)}; "
-            f"executed={names}")
-        self.assertNotIn("present_places", ev.offered, "E1-CASE5 no presenter")
-        self.assertIn("discover_places", ev.offered, "E1-CASE5 initial search capability remains available")
-        self.assertEqual(
-            names,
-            ["declare_goals", "complete_turn"],
-            "E1-CASE5 terminal only",
-        )
-        self.assertEqual((ev.state["active_discovery_set_id"],
-                          ev.state["selected_place_id"]), (None, None),
-                         "E1-CASE5 no session mutation without an active set")
+        assert ev.offered == TRANSIT_QUESTION_TOOL_PROFILE, f"E1-CASE5 no active set still offers the model-led initial surface; " f"actual={sorted(ev.offered)}; " f"executed={names}"
+        assert "present_places" not in ev.offered, "E1-CASE5 no presenter"
+        assert "discover_places" in ev.offered, "E1-CASE5 initial search capability remains available"
+        assert names == ["declare_goals", "complete_turn"], "E1-CASE5 terminal only"
+        assert (ev.state["active_discovery_set_id"], ev.state["selected_place_id"]) == (None, None), "E1-CASE5 no session mutation without an active set"
         self._assert_no_route_surface(
             "E1-CASE5", ev,
             forbidden=("prepare_route_options", "present_route",
@@ -389,15 +340,13 @@ class SupersededSetTests(_ReferenceSafetyBase):
 
     async def _transcript_default_latest(self, mode: str):
         scenario_id = f"E1C6-{mode}"
-        session, session_id, set_a, record_a = await self._fresh_discovery(
+        session, session_id, set_a, _record_a = await self._fresh_discovery(
             mode=mode, scenario_id=scenario_id, message=DISCOVERY_MESSAGE)
         session, session_id, set_b, record_b = await self._search_turn(
             mode=mode, scenario_id=scenario_id, session=session,
             session_id=session_id, message=COFFEE_MESSAGE, turn_id="t2")
-        self.assertNotEqual(set_a, set_b,
-                            f"{scenario_id} two searches create two real sets")
-        self.assertEqual(trip_state_module.get_trip_state(session)["selected_place_id"],
-                         None, f"{scenario_id} a new search clears the previous selection")
+        assert set_a != set_b, f"{scenario_id} two searches create two real sets"
+        assert trip_state_module.get_trip_state(session)["selected_place_id"] is None, f"{scenario_id} a new search clears the previous selection"
         rounds = [present_one_round("tu-ref", set_b, record_b["places"][1]["place_id"])]
         ev = await self._scripted_turn(
             mode=mode, session=session, session_id=session_id,
@@ -405,14 +354,8 @@ class SupersededSetTests(_ReferenceSafetyBase):
             prepare_leg=discovery_leg_for(record_b["places"][0]))
         names = [name for name, _input in ev.trace.tool_calls]
         end_map = self._tool_ends(ev)
-        self.assertEqual(ev.offered, DISCOVERY_REFERENCE_TOOL_PROFILE,
-                         f"{scenario_id} selection offers the model-led initial surface; "
-                         f"actual={sorted(ev.offered)}; executed={names}; tool_ends={end_map}")
-        self.assertEqual(
-            names,
-            ["declare_goals", "present_places"],
-            f"{scenario_id} sequence",
-        )
+        assert ev.offered == DISCOVERY_REFERENCE_TOOL_PROFILE, f"{scenario_id} selection offers the model-led initial surface; " f"actual={sorted(ev.offered)}; executed={names}; tool_ends={end_map}"
+        assert names == ["declare_goals", "present_places"], f"{scenario_id} sequence"
         details_attempt = next(
             (
                 attempt
@@ -421,15 +364,16 @@ class SupersededSetTests(_ReferenceSafetyBase):
             ),
             None,
         )
-        self.assertTrue(
-            details_attempt is not None and details_attempt["ok"] is True,
+        assert details_attempt is not None, (
             f"{scenario_id} latest-set ordinal must resolve; "
-            f"attempts={ev.trace.capability_attempts}",
+            f"attempts={ev.trace.capability_attempts}"
         )
-        self.assertEqual(ev.state["active_discovery_set_id"], set_b,
-                         f"{scenario_id} default reference targets only the latest active set")
-        self.assertEqual(ev.state["selected_place_id"], record_b["places"][1]["place_id"],
-                         f"{scenario_id} resolved place is B's stored ordinal-2")
+        assert details_attempt["ok"] is True, (
+            f"{scenario_id} latest-set ordinal must resolve; "
+            f"attempts={ev.trace.capability_attempts}"
+        )
+        assert ev.state["active_discovery_set_id"] == set_b, f"{scenario_id} default reference targets only the latest active set"
+        assert ev.state["selected_place_id"] == record_b["places"][1]["place_id"], f"{scenario_id} resolved place is B's stored ordinal-2"
         # Canonical place identity is stable across repeated searches in one
         # session. Prove latest-set authority through the session registry,
         # rather than treating a reused opaque id as evidence of an A-set
@@ -443,23 +387,14 @@ class SupersededSetTests(_ReferenceSafetyBase):
             ),
             key=lambda entry: int(entry.get("presentation_sequence") or 0),
         )
-        self.assertEqual(
-            latest_reference["discovery_set_id"], set_b,
-            f"{scenario_id} reference resolves from the latest presented set",
-        )
-        self.assertEqual(
-            latest_reference["place_id"], record_b["places"][1]["place_id"],
-            f"{scenario_id} latest registry identity matches B",
-        )
+        assert latest_reference["discovery_set_id"] == set_b, f"{scenario_id} reference resolves from the latest presented set"
+        assert latest_reference["place_id"] == record_b["places"][1]["place_id"], f"{scenario_id} latest registry identity matches B"
         self._assert_no_route_surface(scenario_id, ev)
         self._assert_no_text_leak(scenario_id, ev)
         self._assert_policy(scenario_id, mode, ev)
 
     async def test_e1_case6_default_reference_targets_latest_auto(self):
         await self._transcript_default_latest("auto")
-
-    async def test_e1_case6_default_reference_targets_latest_quick(self):
-        await self._transcript_default_latest("quick")
 
     async def test_e1_case6_explicit_old_set_records_contract(self):
         """Record the current contract: an explicit old-set reference wins."""
@@ -486,26 +421,14 @@ class SupersededSetTests(_ReferenceSafetyBase):
             },
             ctx,
         )
-        self.assertTrue(result.ok,
-                        f"E1-CASE6 explicit old-set must resolve; error={result.error!r}")
-        self.assertEqual(
-            (result.data or {}).get("presented"),
-            [
-                {
-                    "place_id": record_a["places"][1]["place_id"],
-                    "reason": "preference_match",
-                }
-            ],
-            "E1-CASE6 explicit A resolves A's stored ordinal-2",
-        )
+        assert result.ok, f"E1-CASE6 explicit old-set must resolve; error={result.error!r}"
+        assert (result.data or {}).get("presented") == [{"place_id": record_a["places"][1]["place_id"], "reason": "preference_match"}], "E1-CASE6 explicit A resolves A's stored ordinal-2"
         state = trip_state_module.get_trip_state(session)
         # The public presenter validates an explicitly supplied set but does
         # not rebind a newer active context.  Public model turns can only
         # expose the presenter for the active, session-owned set.
-        self.assertEqual(state["active_discovery_set_id"], set_b,
-                         "E1-CASE6 newer active set remains the route context")
-        self.assertEqual(state["selected_place_id"], record_a["places"][1]["place_id"],
-                         "E1-CASE6 explicit old set binds its place")
+        assert state["active_discovery_set_id"] == set_b, "E1-CASE6 newer active set remains the route context"
+        assert state["selected_place_id"] == record_a["places"][1]["place_id"], "E1-CASE6 explicit old set binds its place"
 
     async def test_e1_case6_explicit_expired_old_set_rejected(self):
         """An expired explicit old-set reference must bind nothing at all."""
@@ -535,15 +458,11 @@ class SupersededSetTests(_ReferenceSafetyBase):
                 },
                 ctx,
             )
-        self.assertFalse(result.ok,
-                         "E1-CASE6 expired explicit old set must be rejected")
-        self.assertIn(EXPIRED_ERROR_MARKER, result.error or "",
-                      f"E1-CASE6 error={result.error!r}")
+        assert not result.ok, "E1-CASE6 expired explicit old set must be rejected"
+        assert EXPIRED_ERROR_MARKER in (result.error or ""), f"E1-CASE6 error={result.error!r}"
         state = trip_state_module.get_trip_state(session)
-        self.assertEqual(state["active_discovery_set_id"], set_b,
-                         "E1-CASE6 stale explicit A binds nothing; B stays active")
-        self.assertEqual(state["selected_place_id"], None,
-                         "E1-CASE6 stale explicit A selects nothing")
+        assert state["active_discovery_set_id"] == set_b, "E1-CASE6 stale explicit A binds nothing; B stays active"
+        assert state["selected_place_id"] is None, "E1-CASE6 stale explicit A selects nothing"
 
 
 class SessionIsolationTests(_ReferenceSafetyBase):
@@ -559,8 +478,7 @@ class SessionIsolationTests(_ReferenceSafetyBase):
             mode=mode, scenario_id=scenario_id, message=DISCOVERY_MESSAGE)
         session_b, sid_b, set_b, record_b = await self._fresh_discovery(
             mode=mode, scenario_id=scenario_id, message=DISCOVERY_MESSAGE)
-        self.assertNotEqual(set_a, set_b,
-                            f"{scenario_id} separate sessions get separate sets")
+        assert set_a != set_b, f"{scenario_id} separate sessions get separate sets"
         rounds = [present_one_round("tu-ref", set_a, record_a["places"][1]["place_id"])]
         ev_a = await self._scripted_turn(
             mode=mode, session=session_a, session_id=sid_a,
@@ -572,28 +490,16 @@ class SessionIsolationTests(_ReferenceSafetyBase):
             rounds=[present_one_round("tu-ref", set_b, record_b["places"][1]["place_id"])],
             turn_id="t2",
             prepare_leg=discovery_leg_for(record_b["places"][0]))
-        self.assertEqual(ev_a.state["active_discovery_set_id"], set_a,
-                         f"{scenario_id} A keeps its own set")
-        self.assertEqual(ev_a.state["selected_place_id"],
-                         record_a["places"][1]["place_id"],
-                         f"{scenario_id} A binds its own ordinal-2")
-        self.assertEqual(ev_b.state["active_discovery_set_id"], set_b,
-                         f"{scenario_id} B keeps its own set")
-        self.assertEqual(ev_b.state["selected_place_id"],
-                         record_b["places"][1]["place_id"],
-                         f"{scenario_id} B binds its own ordinal-2")
-        self.assertNotEqual(record_a["places"][1]["place_id"],
-                            record_b["places"][1]["place_id"],
-                            f"{scenario_id} opaque place ids are per-set")
-        self.assertNotIn(set_b, ev_a.state["active_discovery_set_id"] or "",
-                         f"{scenario_id} no A leak")
-        self.assertNotIn(set_a, ev_b.state["active_discovery_set_id"] or "",
-                         f"{scenario_id} no B leak")
+        assert ev_a.state["active_discovery_set_id"] == set_a, f"{scenario_id} A keeps its own set"
+        assert ev_a.state["selected_place_id"] == record_a["places"][1]["place_id"], f"{scenario_id} A binds its own ordinal-2"
+        assert ev_b.state["active_discovery_set_id"] == set_b, f"{scenario_id} B keeps its own set"
+        assert ev_b.state["selected_place_id"] == record_b["places"][1]["place_id"], f"{scenario_id} B binds its own ordinal-2"
+        assert record_a["places"][1]["place_id"] != record_b["places"][1]["place_id"], f"{scenario_id} opaque place ids are per-set"
+        assert set_b not in (ev_a.state["active_discovery_set_id"] or ""), f"{scenario_id} no A leak"
+        assert set_a not in (ev_b.state["active_discovery_set_id"] or ""), f"{scenario_id} no B leak"
         for label, state in (("A", ev_a.state), ("B", ev_b.state)):
             self._assert_pristine_trip_state(f"{scenario_id}-{label}", state)
-            self.assertEqual(state["preferences"],
-                             trip_state_module.empty_trip_state()["preferences"],
-                             f"{scenario_id}-{label} preferences untouched")
+            assert state["preferences"] == trip_state_module.empty_trip_state()["preferences"], f"{scenario_id}-{label} preferences untouched"
         for ev in (ev_a, ev_b):
             self._assert_no_route_surface(scenario_id, ev)
             self._assert_no_text_leak(scenario_id, ev)
@@ -601,9 +507,6 @@ class SessionIsolationTests(_ReferenceSafetyBase):
 
     async def test_e1_case7_sessions_stay_distinct_auto(self):
         await self._transcript("auto")
-
-    async def test_e1_case7_sessions_stay_distinct_quick(self):
-        await self._transcript("quick")
 
 
 __all__ = ()

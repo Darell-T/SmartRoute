@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import dataclasses
 import re
+from collections.abc import Iterable, Mapping
 from datetime import datetime
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 
 @dataclasses.dataclass(frozen=True)
@@ -94,7 +95,7 @@ def _parse_time(value: object) -> datetime | None:
     if not isinstance(value, str) or not value.strip():
         return None
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value)
     except ValueError:
         return None
     return parsed if parsed.tzinfo is not None else None

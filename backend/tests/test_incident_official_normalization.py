@@ -10,7 +10,7 @@ source test module.
 from __future__ import annotations
 
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.services.incidents.official import (
     SOURCE_ALERTS,
@@ -41,7 +41,7 @@ _CANONICAL_KEYS = {
 
 
 def _iso(epoch: float) -> str:
-    return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat()
+    return datetime.fromtimestamp(epoch, tz=UTC).isoformat()
 
 
 class AlertNormalizationTests(unittest.TestCase):
@@ -68,33 +68,23 @@ class AlertNormalizationTests(unittest.TestCase):
             },
             attempted_at,
         )
-        self.assertEqual(first["source"], SOURCE_ALERTS)
-        self.assertEqual(first["source_id"], "alert-1")
-        self.assertEqual(first["state"], "confirmed")
-        self.assertIs(first["advisor_eligible"], True)
-        self.assertEqual(first["impact_scope"], "subway_operations")
-        self.assertEqual(first["description"], "A trains run with delays near Jay St")
-        self.assertEqual(set(first["affected_route_ids"]), {"A", "B"})
-        self.assertEqual(len(first["affected_route_ids"]), 2)
-        self.assertEqual(len(first["affected_stop_ids"]), 24)
-        self.assertEqual(first["expires_at"], float(FIXED_NOW + 3600))
-        self.assertEqual(first["observed_at"], _iso(FIXED_NOW - 600))
-        self.assertEqual(first["last_verified_at"], attempted_at)
-        self.assertEqual(
-            first["source_records"],
-            [
-                {
-                    "source": SOURCE_ALERTS,
-                    "source_id": "alert-1",
-                    "source_url": ALERTS_URL,
-                    "observed_at": _iso(FIXED_NOW - 600),
-                }
-            ],
-        )
-        self.assertEqual(second["description"], "C header only")
-        self.assertIsNone(second["expires_at"])
-        self.assertEqual(second["observed_at"], attempted_at)
-        self.assertTrue(attempted_at.endswith("+00:00"))
+        assert first["source"] == SOURCE_ALERTS
+        assert first["source_id"] == "alert-1"
+        assert first["state"] == "confirmed"
+        assert first["advisor_eligible"] is True
+        assert first["impact_scope"] == "subway_operations"
+        assert first["description"] == "A trains run with delays near Jay St"
+        assert set(first["affected_route_ids"]) == {"A", "B"}
+        assert len(first["affected_route_ids"]) == 2
+        assert len(first["affected_stop_ids"]) == 24
+        assert first["expires_at"] == float(FIXED_NOW + 3600)
+        assert first["observed_at"] == _iso(FIXED_NOW - 600)
+        assert first["last_verified_at"] == attempted_at
+        assert first["source_records"] == [{"source": SOURCE_ALERTS, "source_id": "alert-1", "source_url": ALERTS_URL, "observed_at": _iso(FIXED_NOW - 600)}]
+        assert second["description"] == "C header only"
+        assert second["expires_at"] is None
+        assert second["observed_at"] == attempted_at
+        assert attempted_at.endswith("+00:00")
 
     def test_start_and_end_timing_semantics(self):
         expected_attempted = _iso(FIXED_NOW)
@@ -136,24 +126,14 @@ class AlertNormalizationTests(unittest.TestCase):
             case["alert_id"]: normalize_alert(case, expected_attempted) for case in parsed
         }
         valid = incidents["a1"]
-        self.assertEqual(valid["observed_at"], _iso(FIXED_NOW - 600))
-        self.assertEqual(valid["expires_at"], float(FIXED_NOW + 3600))
-        self.assertEqual(valid["last_verified_at"], expected_attempted)
-        self.assertEqual(
-            valid["source_records"],
-            [
-                {
-                    "source": SOURCE_ALERTS,
-                    "source_id": "a1",
-                    "source_url": ALERTS_URL,
-                    "observed_at": _iso(FIXED_NOW - 600),
-                }
-            ],
-        )
+        assert valid["observed_at"] == _iso(FIXED_NOW - 600)
+        assert valid["expires_at"] == float(FIXED_NOW + 3600)
+        assert valid["last_verified_at"] == expected_attempted
+        assert valid["source_records"] == [{"source": SOURCE_ALERTS, "source_id": "a1", "source_url": ALERTS_URL, "observed_at": _iso(FIXED_NOW - 600)}]
         for alert_id in ("a2", "a3", "a4"):
             incident = incidents[alert_id]
-            self.assertEqual(incident["observed_at"], expected_attempted)
-            self.assertIsNone(incident["expires_at"])
+            assert incident["observed_at"] == expected_attempted
+            assert incident["expires_at"] is None
 
 
 class StalledNormalizationTests(unittest.TestCase):
@@ -178,19 +158,19 @@ class StalledNormalizationTests(unittest.TestCase):
         ]
         incidents_a = normalize_stalled(stalled, positions, attempted_at, now=FIXED_NOW)
         incidents_b = normalize_stalled(stalled, positions, attempted_at, now=FIXED_NOW)
-        self.assertEqual(len(incidents_a), 1)
+        assert len(incidents_a) == 1
         incident = incidents_a[0]
-        self.assertEqual(incident["source"], SOURCE_GTFS_RT)
-        self.assertTrue(incident["source_id"].startswith("stalled-"))
-        self.assertEqual(incident["state"], "unconfirmed")
-        self.assertIs(incident["advisor_eligible"], False)
-        self.assertEqual(incident["impact_scope"], "subway_operations")
-        self.assertEqual(incident["affected_route_ids"], ["Q"])
-        self.assertEqual(incident["affected_stop_ids"], ["D24N"])
-        self.assertEqual(incident["expires_at"], FIXED_NOW + STALLED_EXPIRY_S)
-        self.assertIn("stale", incident["description"].lower())
-        self.assertIn("Q", incident["description"])
-        self.assertEqual(incidents_a, incidents_b)
+        assert incident["source"] == SOURCE_GTFS_RT
+        assert incident["source_id"].startswith("stalled-")
+        assert incident["state"] == "unconfirmed"
+        assert incident["advisor_eligible"] is False
+        assert incident["impact_scope"] == "subway_operations"
+        assert incident["affected_route_ids"] == ["Q"]
+        assert incident["affected_stop_ids"] == ["D24N"]
+        assert incident["expires_at"] == FIXED_NOW + STALLED_EXPIRY_S
+        assert "stale" in incident["description"].lower()
+        assert "Q" in incident["description"]
+        assert incidents_a == incidents_b
 
 
 class DeterministicIdentityTests(unittest.TestCase):
@@ -217,9 +197,9 @@ class DeterministicIdentityTests(unittest.TestCase):
             self._alert_incident("other", description="other"),
         ]
         deduped = dedupe_incidents(incidents)
-        self.assertEqual(len(deduped), 2)
-        self.assertEqual([i["source_id"] for i in deduped], ["dup-1", "other"])
-        self.assertEqual(deduped, dedupe_incidents(incidents))
+        assert len(deduped) == 2
+        assert [i["source_id"] for i in deduped] == ["dup-1", "other"]
+        assert deduped == dedupe_incidents(incidents)
 
     def test_same_source_id_across_sources_stays_distinct(self):
         stalled = {
@@ -237,8 +217,8 @@ class DeterministicIdentityTests(unittest.TestCase):
             "affected_stop_ids": ["D24N"],
         }
         deduped = dedupe_incidents([self._alert_incident("dup-1"), stalled])
-        self.assertEqual(len(deduped), 2)
-        self.assertEqual({i["source"] for i in deduped}, {SOURCE_ALERTS, SOURCE_GTFS_RT})
+        assert len(deduped) == 2
+        assert {i["source"] for i in deduped} == {SOURCE_ALERTS, SOURCE_GTFS_RT}
 
 
 class CanonicalShapeTests(unittest.TestCase):
@@ -271,22 +251,18 @@ class CanonicalShapeTests(unittest.TestCase):
             normalize_alert(raw_alert, attempted_at),
             normalize_stalled([raw_position], [raw_position], attempted_at, now=FIXED_NOW)[0],
         ]
-        self.assertEqual(len(incidents), 2)
+        assert len(incidents) == 2
         for incident in incidents:
-            self.assertTrue(set(incident) <= _CANONICAL_KEYS, incident)
+            assert set(incident) <= _CANONICAL_KEYS, incident
             for key, value in incident.items():
                 if key in {"affected_route_ids", "affected_stop_ids"}:
-                    self.assertTrue(all(isinstance(item, str) for item in value))
+                    assert all(isinstance(item, str) for item in value)
                 elif key == "source_records":
                     for record in value:
-                        self.assertLessEqual(
-                            set(record), {"source", "source_id", "source_url", "observed_at"}
-                        )
-                        self.assertTrue(all(isinstance(item, str) for item in record.values()))
+                        assert set(record) <= {"source", "source_id", "source_url", "observed_at"}
+                        assert all(isinstance(item, str) for item in record.values())
                 else:
-                    self.assertNotIsInstance(
-                        value, (dict, list, tuple, set, bytes, bytearray)
-                    )
+                    assert not isinstance(value, (dict, list, tuple, set, bytes, bytearray))
         alert_incident, stalled_incident = incidents
-        self.assertNotIn("nested", alert_incident)
-        self.assertNotIn("nested", stalled_incident)
+        assert "nested" not in alert_incident
+        assert "nested" not in stalled_incident

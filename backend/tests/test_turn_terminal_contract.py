@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 from app.services.agent import discovery_store
 from app.services.agent.model import stream as model_stream
 from app.services.agent.tools.places import discover_places
+
 from tests.conversation.conversation_discovery_fixtures import poi_result
 from tests.conversation.conversation_matrix_harness import (
     _turn_round,
@@ -127,7 +128,7 @@ class CompleteTurnGroundingLoopTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_q_status_answer_without_check_transit_is_rejected(self):
-        events, trace = await self._turn(
+        _events, trace = await self._turn(
             "Are there delays on the Q?",
             [
                 complete_turn_round("tu-lie", "No delays."),
@@ -138,11 +139,11 @@ class CompleteTurnGroundingLoopTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ],
         )
-        self.assertFalse(_capability_oks(trace, "complete_turn")[0])
-        self.assertNotIn("no delays", (trace.final_text or "").casefold())
+        assert not _capability_oks(trace, "complete_turn")[0]
+        assert "no delays" not in (trace.final_text or "").casefold()
 
     async def test_pizza_recommendations_without_discover_are_rejected(self):
-        events, trace = await self._turn(
+        _events, trace = await self._turn(
             "Find good pizza in Manhattan.",
             [
                 complete_turn_round("tu-lie", "Try Joe's Pizza on Carmine."),
@@ -153,11 +154,11 @@ class CompleteTurnGroundingLoopTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ],
         )
-        self.assertFalse(_capability_oks(trace, "complete_turn")[0])
-        self.assertNotIn("joe's", (trace.final_text or "").casefold())
+        assert not _capability_oks(trace, "complete_turn")[0]
+        assert "joe's" not in (trace.final_text or "").casefold()
 
     async def test_explicit_discovery_scope_cannot_be_replaced_by_clarification(self):
-        events, trace = await self._turn(
+        _events, trace = await self._turn(
             "Find good pizza in Manhattan.",
             [
                 complete_turn_round(
@@ -167,8 +168,8 @@ class CompleteTurnGroundingLoopTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ],
         )
-        self.assertFalse(_capability_oks(trace, "complete_turn")[0])
-        self.assertNotIn("which neighborhood", (trace.final_text or "").casefold())
+        assert not _capability_oks(trace, "complete_turn")[0]
+        assert "which neighborhood" not in (trace.final_text or "").casefold()
 
     async def test_route_answer_cannot_replace_canonical_route_workflow(self):
         events, trace = await self._turn(
@@ -180,9 +181,9 @@ class CompleteTurnGroundingLoopTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ],
         )
-        self.assertFalse(_capability_oks(trace, "complete_turn")[0])
-        self.assertNotIn("take the q", (trace.final_text or "").casefold())
-        self.assertFalse(any(event.type == "route_card" for event in events))
+        assert not _capability_oks(trace, "complete_turn")[0]
+        assert "take the q" not in (trace.final_text or "").casefold()
+        assert not any(event.type == "route_card" for event in events)
 
     async def test_successful_discovery_cannot_complete_with_clarification(self):
         set_id, place_ids = discovery_id_tokens("sess-term", "t1")
@@ -195,9 +196,11 @@ class CompleteTurnGroundingLoopTests(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(return_value=poi_result()),
             ),
             patch.object(discovery_store, "new_discovery_set_id", return_value=set_id),
-            patch.object(discovery_store, "new_place_id", side_effect=lambda: next(ids)),
+            patch.object(
+                discovery_store, "new_place_id", side_effect=lambda: next(ids)
+            ),
         ):
-            events, trace = await run_turn(
+            _events, trace = await run_turn(
                 self.loop,
                 session=session,
                 session_id="sess-term",
@@ -220,9 +223,9 @@ class CompleteTurnGroundingLoopTests(unittest.IsolatedAsyncioTestCase):
                 trace=self.loop.TurnTrace(),
             )
         names = [name for name, _input in trace.tool_calls]
-        self.assertEqual(names[:3], ["declare_goals", "discover_places", "complete_turn"])
-        self.assertFalse(_capability_oks(trace, "complete_turn")[0])
-        self.assertIn("present_places", names)
+        assert names[:3] == ["declare_goals", "discover_places", "complete_turn"]
+        assert not _capability_oks(trace, "complete_turn")[0]
+        assert "present_places" in names
 
     async def test_unsupported_superlative_is_truthfully_downgraded(self):
         set_id, place_ids = discovery_id_tokens("sess-term", "t1")
@@ -233,9 +236,7 @@ class CompleteTurnGroundingLoopTests(unittest.IsolatedAsyncioTestCase):
             "tu-invalid-superlative",
             {
                 "discovery_set_id": set_id,
-                "selections": [
-                    {"place_id": place_ids[1], "reason": "most_reviewed"}
-                ],
+                "selections": [{"place_id": place_ids[1], "reason": "most_reviewed"}],
                 "research_used": False,
             },
         )
@@ -246,9 +247,11 @@ class CompleteTurnGroundingLoopTests(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(return_value=poi_result()),
             ),
             patch.object(discovery_store, "new_discovery_set_id", return_value=set_id),
-            patch.object(discovery_store, "new_place_id", side_effect=lambda: next(ids)),
+            patch.object(
+                discovery_store, "new_place_id", side_effect=lambda: next(ids)
+            ),
         ):
-            events, trace = await run_turn(
+            _events, trace = await run_turn(
                 self.loop,
                 session=session,
                 session_id="sess-term",
@@ -277,11 +280,11 @@ class CompleteTurnGroundingLoopTests(unittest.IsolatedAsyncioTestCase):
                 trace=self.loop.TurnTrace(),
             )
 
-        self.assertTrue(_capability_oks(trace, "present_places")[0])
-        self.assertNotIn("most_reviewed", trace.final_text)
-        self.assertNotIn("stored facts", trace.final_text.casefold())
-        self.assertIn("B Pizza", trace.final_text)
-        self.assertNotIn("matches your request", trace.final_text.casefold())
+        assert _capability_oks(trace, "present_places")[0]
+        assert "most_reviewed" not in trace.final_text
+        assert "stored facts" not in trace.final_text.casefold()
+        assert "B Pizza" in trace.final_text
+        assert "matches your request" not in trace.final_text.casefold()
 
 
 class WebLifecycleLoopTests(unittest.IsolatedAsyncioTestCase):
@@ -300,7 +303,9 @@ class WebLifecycleLoopTests(unittest.IsolatedAsyncioTestCase):
         async def inject_web(**kwargs):
             calls["n"] += 1
             async for item in real(**kwargs):
-                if calls["n"] == 2 and isinstance(item, model_stream.ModelCallCompleted):
+                if calls["n"] == 2 and isinstance(
+                    item, model_stream.ModelCallCompleted
+                ):
                     yield dataclasses.replace(
                         item,
                         web_used=True,
@@ -319,9 +324,11 @@ class WebLifecycleLoopTests(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(return_value=poi_result()),
             ),
             patch.object(discovery_store, "new_discovery_set_id", return_value=set_id),
-            patch.object(discovery_store, "new_place_id", side_effect=lambda: next(ids)),
+            patch.object(
+                discovery_store, "new_place_id", side_effect=lambda: next(ids)
+            ),
         ):
-            events, trace = await run_turn(
+            _events, trace = await run_turn(
                 self.loop,
                 session=session,
                 session_id="sess-web",
@@ -344,15 +351,16 @@ class WebLifecycleLoopTests(unittest.IsolatedAsyncioTestCase):
         first_names = [tool.get("name") for tool in recorded[0]["tools"]]
         second_names = [tool.get("name") for tool in recorded[1]["tools"]]
         third_names = [tool.get("name") for tool in recorded[2]["tools"]]
-        self.assertNotIn("web_search", first_names)
-        self.assertIn("web_search", second_names)
+        assert "web_search" not in first_names
+        assert "web_search" in second_names
         # Anthropic requires an exact tool-surface replay for the paused
         # server-tool continuation. Web is consumed only after that response
         # completes; the presenter then proves the successful result carried
         # across the protocol boundary.
-        self.assertIn("web_search", third_names)
-        self.assertTrue(_capability_oks(trace, "present_places")[0])
-        self.assertTrue(trace.terminal_resolution["terminal"])
+        assert "web_search" in third_names
+        assert _capability_oks(trace, "present_places")[0]
+        assert trace.terminal_resolution["terminal"]
+
 
 if __name__ == "__main__":
     unittest.main()

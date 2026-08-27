@@ -5,9 +5,9 @@ Pure functions over Google-parsed route step dicts. Depends only on ``text``
 shared candidate display helpers.
 """
 
+from app.services.mta.alerts import is_material_service_alert
 from app.services.trips import text
 from app.services.trips.crowds import event as event_crowd
-from app.services.mta.alerts import is_material_service_alert
 from app.services.trips.itinerary import TRANSIT_MODES
 from app.services.trips.transfer_semantics import (
     route_accessibility,
@@ -449,6 +449,6 @@ def _nonnegative_int(value: object, *, default: int = 0) -> int:
     try:
         if value is None or isinstance(value, bool):
             return max(0, int(default))
-        return max(0, int(round(float(value))))
+        return max(0, round(float(value)))
     except (TypeError, ValueError, OverflowError):
         return max(0, int(default))

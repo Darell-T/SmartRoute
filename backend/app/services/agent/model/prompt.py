@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import json
+from contextlib import suppress
 
-from app.services.agent import candidate_store
-from app.services.agent import discovery_store
+from app.services.agent import candidate_store, discovery_store, public_surface
 from app.services.agent import profile as profile_module
-from app.services.agent import public_surface
 from app.services.agent import session as session_module
 from app.services.agent import trip_state as trip_state_module
-
 
 SINGLE_AGENT_SYSTEM_PROMPT = """You are SmartRoute, a conversational NYC transit and local-movement agent.
 You interpret each rider turn, use the authoritative session context, and
@@ -203,6 +201,9 @@ QUEUE EVIDENCE:
   statement, and source. Do not repeat, rewrite, predict, or calculate with
   those facts. A current wait is a join-now estimate, not a wait at arrival,
   and it does not include order fulfillment. Never add it to route time.
+- When queue evidence affects a dependent destination-and-route choice, call
+  present_places with only the selected place before present_route. This emits
+  the canonical queue disclosure and source without showing a shortlist.
 - A missing venue-registry match means only that queue coverage is unknown.
   Never infer that an unmonitored place is less popular, less crowded, or has
   a shorter line. Current and historical evidence are not equivalent. An exact
@@ -373,12 +374,10 @@ def build_turn_context(
     presentation = "quick" if response_presentation == "quick" else "auto"
     lines = [f"now: {now_et}", f"response_presentation: {presentation}"]
     if origin and origin.get("lat") is not None and origin.get("lng") is not None:
-        try:
+        with suppress(TypeError, ValueError):
             lines.append(
                 f"rider_location: {float(origin['lat']):.4f},{float(origin['lng']):.4f}"
             )
-        except (TypeError, ValueError):
-            pass
     profile = profile_module.get_profile(session if isinstance(session, dict) else {})
     saved_place_labels: dict[str, object] = {}
     for slot in ("home", "work"):

@@ -4,6 +4,7 @@ import json
 import math
 import os
 import time
+from contextlib import suppress
 
 from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
@@ -12,13 +13,27 @@ from pydantic import BaseModel, ConfigDict
 from app.routers.live_feed import socket as _live_feed_socket
 from app.routers.live_feed import ticket as _live_feed_ticket
 from app.services import admission
-from app.services.mta import realtime as mta_realtime
-from app.services.live_feed.network_snapshot import network_snapshot_store
 from app.services.live_feed import snapshot as _live_feed_snapshot
-
+from app.services.live_feed.network_snapshot import network_snapshot_store
+from app.services.mta import realtime as mta_realtime
 
 router = APIRouter()
 ws_router = APIRouter()
+_background_bus_tasks: set[asyncio.Task] = set()
+
+
+def _remember_background_task(task: asyncio.Task) -> None:
+    _background_bus_tasks.add(task)
+    task.add_done_callback(_background_bus_tasks.discard)
+
+
+async def close_background_bus_tasks() -> None:
+    tasks = list(_background_bus_tasks)
+    for task in tasks:
+        task.cancel()
+    for task in tasks:
+        with suppress(asyncio.CancelledError):
+            await task
 
 
 async def _verify_ws_ticket(ticket: str, path: str) -> tuple[str | None, bool]:
@@ -221,7 +236,7 @@ async def _live_feed_impl(gtfs, payload: LiveFeedRequest):
     )
     # The REST contract is primary subway data only. Warm an optional BusTime
     # result for the next request without adding its latency to this response.
-    asyncio.create_task(
+    bus_refresh = asyncio.create_task(
         mta_realtime.fetch_nearby_bus_update(
             payload.lat,
             payload.lng,
@@ -229,6 +244,7 @@ async def _live_feed_impl(gtfs, payload: LiveFeedRequest):
         ),
         name="live-feed-rest-bus-refresh",
     )
+    _remember_background_task(bus_refresh)
     return JSONResponse(
         {
             "nearest_stop": snapshot["nearest_stop"],

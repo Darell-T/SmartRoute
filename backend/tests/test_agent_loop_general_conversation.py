@@ -5,6 +5,7 @@ from copy import deepcopy
 
 from app.services.agent import candidate_store
 from app.services.agent import trip_state as trip_state_module
+
 from tests.agent_loop_reliability_support import AgentLoopReliabilityTestCase
 from tests.test_agent_loop import (
     _declared_general_round,
@@ -16,8 +17,8 @@ class AgentLoopGeneralConversationTests(AgentLoopReliabilityTestCase):
     async def test_general_conversation_uses_model_declared_complete_turn(self):
         cases = {
             "hello": "Hi — I can plan NYC subway and bus trips, check arrivals, and explain service changes.",
-            "thanks": "You’re welcome.",
-            "help": "Tell me where you’re starting and going, or ask about a train or bus arrival.",
+            "thanks": "You're welcome.",
+            "help": "Tell me where you're starting and going, or ask about a train or bus arrival.",
             "tell me a joke": "SmartRoute is for NYC transit help. I can plan a subway or bus trip, compare routes, or check arrivals.",
         }
         for message, expected in cases.items():
@@ -28,23 +29,34 @@ class AgentLoopGeneralConversationTests(AgentLoopReliabilityTestCase):
                     message=message,
                     trace=trace,
                 )
-                self.assertEqual("".join(e.text for e in events_out if e.type == "token"), expected)
-                self.assertEqual(trace.model_call_count, 1)
-                self.assertEqual(trace.tool_call_count, 2)
-                self.assertEqual(len(self.loop.client.messages.calls), 1)
+                assert (
+                    "".join(e.text for e in events_out if e.type == "token") == expected
+                )
+                assert trace.model_call_count == 1
+                assert trace.tool_call_count == 2
+                assert len(self.loop.client.messages.calls) == 1
 
     async def test_general_paraphrases_stay_model_led(self):
-        for message in ("good morning", "thank you so much", "what can you do", "write me a poem"):
+        for message in (
+            "good morning",
+            "thank you so much",
+            "what can you do",
+            "write me a poem",
+        ):
             with self.subTest(message=message):
                 trace = self.loop.TurnTrace()
                 events_out, _session = await self._run(
-                    [_declared_general_round("I can help with an NYC trip or transit question.")],
+                    [
+                        _declared_general_round(
+                            "I can help with an NYC trip or transit question."
+                        )
+                    ],
                     message=message,
                     trace=trace,
                 )
-                self.assertTrue(any(event.type == "token" for event in events_out))
-                self.assertEqual(trace.model_call_count, 1)
-                self.assertEqual(trace.tool_call_count, 2)
+                assert any(event.type == "token" for event in events_out)
+                assert trace.model_call_count == 1
+                assert trace.tool_call_count == 2
 
     def _accepted_route_session(self, *, include_q: bool) -> tuple[dict, str]:
         candidates = [
@@ -118,11 +130,11 @@ class AgentLoopGeneralConversationTests(AgentLoopReliabilityTestCase):
             trace=trace,
             tool_registry=_model_led_registry(),
         )
-        self.assertEqual(
-            [name for name, _tool_input in trace.tool_calls],
-            ["declare_goals", "complete_turn"],
-        )
-        self.assertEqual(trace.tool_call_count, 2)
+        assert [name for name, _tool_input in trace.tool_calls] == [
+            "declare_goals",
+            "complete_turn",
+        ]
+        assert trace.tool_call_count == 2
         return events_out, returned_session
 
     def _assert_comparison_context(self, *, include_q: bool) -> str:
@@ -133,13 +145,13 @@ class AgentLoopGeneralConversationTests(AgentLoopReliabilityTestCase):
             if line.startswith("accepted_route_comparison:")
         )
         comparison = json.loads(line.split(": ", 1)[1])
-        self.assertEqual(
-            [option["lines"] for option in comparison["options"]],
-            [["B"], ["Q"] if include_q else ["F"]],
-        )
-        self.assertNotIn("cd_b", line)
-        self.assertNotIn("cd_q", line)
-        self.assertNotIn('"score"', line)
+        assert [option["lines"] for option in comparison["options"]] == [
+            ["B"],
+            ["Q"] if include_q else ["F"],
+        ]
+        assert "cd_b" not in line
+        assert "cd_q" not in line
+        assert '"score"' not in line
         return context
 
     async def test_why_not_q_without_prepared_q_keeps_route_unchanged(self):
@@ -160,16 +172,15 @@ class AgentLoopGeneralConversationTests(AgentLoopReliabilityTestCase):
         )
         context = self._assert_comparison_context(include_q=False)
         visible = "".join(event.text for event in events_out if event.type == "token")
-        self.assertIn("not among the prepared alternatives", visible)
-        self.assertIn("accepted route", visible)
-        self.assertIn("accepted_route_comparison", context)
-        self.assertEqual(
-            before_record,
-            candidate_store.load_candidate_set(set_id, session_id="sess-why-q"),
+        assert "not among the prepared alternatives" in visible
+        assert "accepted route" in visible
+        assert "accepted_route_comparison" in context
+        assert before_record == candidate_store.load_candidate_set(
+            set_id, session_id="sess-why-q"
         )
-        self.assertEqual(before_state, trip_state_module.get_trip_state(session))
-        self.assertEqual(before_cards, session["route_cards"])
-        self.assertEqual(before_trip, session["active_trip"])
+        assert before_state == trip_state_module.get_trip_state(session)
+        assert before_cards == session["route_cards"]
+        assert before_trip == session["active_trip"]
 
     async def test_why_not_q_compares_prepared_alternative_without_replanning(self):
         session, set_id = self._accepted_route_session(include_q=True)
@@ -188,14 +199,13 @@ class AgentLoopGeneralConversationTests(AgentLoopReliabilityTestCase):
         )
         context = self._assert_comparison_context(include_q=True)
         visible = "".join(event.text for event in events_out if event.type == "token")
-        self.assertIn("B route", visible)
-        self.assertIn("Q alternative", visible)
-        self.assertIn("walking", visible)
-        self.assertIn("accepted_route_comparison", context)
-        self.assertEqual(
-            before_record,
-            candidate_store.load_candidate_set(set_id, session_id="sess-why-q"),
+        assert "B route" in visible
+        assert "Q alternative" in visible
+        assert "walking" in visible
+        assert "accepted_route_comparison" in context
+        assert before_record == candidate_store.load_candidate_set(
+            set_id, session_id="sess-why-q"
         )
-        self.assertEqual(before_state, trip_state_module.get_trip_state(session))
-        self.assertEqual(before_cards, session["route_cards"])
-        self.assertEqual(before_trip, session["active_trip"])
+        assert before_state == trip_state_module.get_trip_state(session)
+        assert before_cards == session["route_cards"]
+        assert before_trip == session["active_trip"]

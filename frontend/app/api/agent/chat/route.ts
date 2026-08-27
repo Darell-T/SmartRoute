@@ -62,7 +62,6 @@ export async function POST(req: NextRequest) {
       code: issue.code,
       message: issue.message,
     }));
-    console.warn("[agent-chat] rejected invalid request", issues);
     return NextResponse.json(
       {
         error:

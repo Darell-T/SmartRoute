@@ -248,7 +248,7 @@ An empty result does not prove that a route is clear when a source is missing.
 
 | Path | Contents |
 |---|---|
-| `evaluation/route_intelligence/` | Deterministic replays, comparison, metrics, reports, and shadow records |
+| `evaluation/route_intelligence/` | Deterministic replays, comparison, metrics, and reports |
 | `scripts/live_checks/` | Explicit provider smoke commands |
 | `scripts/release/` | Release checks and provider fault cases |
 | `scripts/run_incident_refresh.py` | One deployed incident refresh cycle |

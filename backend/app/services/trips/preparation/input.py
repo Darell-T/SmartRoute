@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
 import re
 import time
+from datetime import datetime, timedelta
 from typing import Any
 
+from app.services.mta.static_gtfs.stop_patterns import normalize_station_name
 from app.services.trips import candidates, text
 from app.services.trips.location import ResolvedPlace, canonical_display_name
-from app.services.mta.static_gtfs.stop_patterns import normalize_station_name
 
 MAX_ROUTE_ID_LENGTH = 12
 MAX_NORMALIZED_ROUTE_IDS = 16
@@ -66,7 +66,7 @@ def parse_rfc3339(value: object, *, field: str) -> datetime:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field} is required")
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value)
     except ValueError as exc:
         raise ValueError(f"{field} must be RFC3339 with a timezone offset") from exc
     if parsed.tzinfo is None or parsed.utcoffset() is None:

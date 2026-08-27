@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
+from app.services.agent.tools.transit import evidence_binding as _binding
 from app.services.agent.tools.transit.direction import (
     DirectionResolution,
     direction_matches,
@@ -13,31 +14,62 @@ from app.services.agent.tools.transit.direction import (
 )
 from app.services.agent.tools.transit.evidence_matching import (
     arrival_coverage as _arrival_coverage,
+)
+from app.services.agent.tools.transit.evidence_matching import (
     concern_match as _concern_match,
+)
+from app.services.agent.tools.transit.evidence_matching import (
     concerns as _concerns,
+)
+from app.services.agent.tools.transit.evidence_matching import (
     confirmed as _confirmed,
+)
+from app.services.agent.tools.transit.evidence_matching import (
     coverage as _coverage,
+)
+from app.services.agent.tools.transit.evidence_matching import (
     normalized_route_ids as _routes,
+)
+from app.services.agent.tools.transit.evidence_matching import (
     normalized_text as _text,
+)
+from app.services.agent.tools.transit.evidence_matching import (
     route_match as _route_match,
+)
+from app.services.agent.tools.transit.evidence_matching import (
     unique_evidence_values as _unique,
 )
 from app.services.agent.tools.transit.evidence_projection import (
     operation_facts as _operation_facts,
+)
+from app.services.agent.tools.transit.evidence_projection import (
     row_direction as _row_direction,
+)
+from app.services.agent.tools.transit.evidence_projection import (
     safe_accessibility as _safe_accessibility,
+)
+from app.services.agent.tools.transit.evidence_projection import (
     safe_alert as _safe_alert,
+)
+from app.services.agent.tools.transit.evidence_projection import (
     safe_incident as _safe_incident,
+)
+from app.services.agent.tools.transit.evidence_projection import (
     safe_result as _safe_result,
+)
+from app.services.agent.tools.transit.evidence_projection import (
     safe_stop as _safe_stop,
+)
+from app.services.agent.tools.transit.evidence_projection import (
     safe_unconfirmed_signal,
 )
-from app.services.agent.tools.transit import evidence_binding as _binding
 from app.services.agent.tools.transit.evidence_store import (
     TransitEvidenceSet,
-    load_evidence_set as load_evidence_set,
     new_evidence_set_id,
     store_evidence_set,
+)
+from app.services.agent.tools.transit.evidence_store import (
+    load_evidence_set as load_evidence_set,
 )
 
 bind_accessibility_target = _binding.bind_accessibility_target
@@ -410,7 +442,7 @@ def _source_observations(row: dict[str, Any]) -> dict[str, str]:
     # timestamp is still useful to make the evidence boundary explicit; the
     # operation's coverage remains authoritative for whether it is usable.
     return (
-        {"accessibility": datetime.now(timezone.utc).isoformat()}
+        {"accessibility": datetime.now(UTC).isoformat()}
         if "station_matched" in row
         else {}
     )

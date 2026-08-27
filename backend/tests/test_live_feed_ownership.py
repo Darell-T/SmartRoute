@@ -7,18 +7,35 @@ import unittest
 import weakref
 from dataclasses import replace
 from types import MappingProxyType, SimpleNamespace
+from typing import ClassVar
 from unittest.mock import AsyncMock, Mock, patch
 
-from fastapi import WebSocketDisconnect
-
+import pytest
 from app import main as app_main
 from app.services.live_feed import network_snapshot as network_snapshot_module
 from app.services.live_feed import snapshot as rider_snapshot
-from app.services.live_feed.network_snapshot import NetworkSnapshot, NetworkSnapshotStore
+from app.services.live_feed.network_snapshot import (
+    NetworkSnapshot,
+    NetworkSnapshotStore,
+)
 from app.services.mta import bus, bus_runtime, bus_updates
+from fastapi import WebSocketDisconnect
 
 live_feed_router = importlib.import_module("app.routers.live_feed.router")
 live_feed_socket = importlib.import_module("app.routers.live_feed.socket")
+
+
+class TemporaryProviderError(RuntimeError):
+    pass
+
+
+class ForbiddenTripContextError(AssertionError):
+    pass
+
+
+class AlreadyClosingError(RuntimeError):
+    def __init__(self, code: int) -> None:
+        super().__init__(f"already closing ({code})")
 
 
 def network_snapshot(generation: int, **overrides) -> NetworkSnapshot:
@@ -68,12 +85,9 @@ class NetworkSnapshotNormalizationTests(unittest.TestCase):
             )
 
         for record in (*snapshot.alerts, *snapshot.service_alerts):
-            self.assertEqual(record["route_ids"], ("Q",))
-            self.assertEqual(record["stop_ids"], ("Q01",))
-            self.assertEqual(
-                json.loads(json.dumps(dict(record)))["route_ids"],
-                ["Q"],
-            )
+            assert record["route_ids"] == ("Q",)
+            assert record["stop_ids"] == ("Q01",)
+            assert json.loads(json.dumps(dict(record)))["route_ids"] == ["Q"]
 
 
 class NetworkSnapshotStoreTests(unittest.IsolatedAsyncioTestCase):
@@ -94,7 +108,7 @@ class NetworkSnapshotStoreTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await network_snapshot_module.build_network_snapshot(1)
 
-        self.assertIs(result, expected)
+        assert result is expected
         feeds.assert_awaited_once_with(
             network_snapshot_module.ALL_SUBWAY_ROUTES,
             "network_snapshot",
@@ -125,14 +139,14 @@ class NetworkSnapshotStoreTests(unittest.IsolatedAsyncioTestCase):
         store = NetworkSnapshotStore(builder)
         callers = [asyncio.create_task(store.refresh()) for _ in range(12)]
         await entered.wait()
-        self.assertEqual(calls, 1)
-        self.assertEqual(active_builds, 1)
+        assert calls == 1
+        assert active_builds == 1
         release.set()
         results = await asyncio.gather(*callers)
 
-        self.assertTrue(all(result is results[0] for result in results))
-        self.assertEqual(active_builds, 0)
-        self.assertEqual(peak_active_builds, 1)
+        assert all(result is results[0] for result in results)
+        assert active_builds == 0
+        assert peak_active_builds == 1
 
     async def test_failure_preserves_current_and_next_refresh_retries(self):
         attempts = 0
@@ -141,19 +155,19 @@ class NetworkSnapshotStoreTests(unittest.IsolatedAsyncioTestCase):
             nonlocal attempts
             attempts += 1
             if attempts == 2:
-                raise RuntimeError("temporary provider failure")
+                raise TemporaryProviderError
             return network_snapshot(generation)
 
         store = NetworkSnapshotStore(builder)
         first = await store.refresh()
-        with self.assertRaises(RuntimeError):
+        with pytest.raises(RuntimeError):
             await store.refresh()
-        self.assertIs(store.current, first)
+        assert store.current is first
 
         recovered = await store.refresh()
-        self.assertIs(store.current, recovered)
-        self.assertGreater(recovered.generation, first.generation)
-        self.assertEqual(attempts, 3)
+        assert store.current is recovered
+        assert recovered.generation > first.generation
+        assert attempts == 3
 
     async def test_store_retains_only_current_generation_and_one_signal(self):
         async def builder(generation):
@@ -166,16 +180,16 @@ class NetworkSnapshotStoreTests(unittest.IsolatedAsyncioTestCase):
         second_signal = store.refresh_event()
         second = await store.refresh()
 
-        self.assertTrue(first_signal.is_set())
-        self.assertTrue(second_signal.is_set())
-        self.assertFalse(store.refresh_event().is_set())
-        self.assertIs(store.current, second)
-        self.assertFalse(any("history" in key for key in store.__dict__))
+        assert first_signal.is_set()
+        assert second_signal.is_set()
+        assert not store.refresh_event().is_set()
+        assert store.current is second
+        assert not any("history" in key for key in store.__dict__)
 
         del first
         await asyncio.sleep(0)
         gc.collect()
-        self.assertIsNone(first_ref())
+        assert first_ref() is None
 
     async def test_slow_consumer_reads_latest_without_accumulated_updates(self):
         generations = []
@@ -189,15 +203,10 @@ class NetworkSnapshotStoreTests(unittest.IsolatedAsyncioTestCase):
         for _ in range(5):
             await store.refresh()
 
-        self.assertTrue(consumer_signal.is_set())
-        self.assertEqual(store.current.generation, 5)
-        self.assertEqual(generations, [1, 2, 3, 4, 5])
-        self.assertFalse(
-            any(
-                isinstance(value, asyncio.Queue)
-                for value in store.__dict__.values()
-            )
-        )
+        assert consumer_signal.is_set()
+        assert store.current.generation == 5
+        assert generations == [1, 2, 3, 4, 5]
+        assert not any(isinstance(value, asyncio.Queue) for value in store.__dict__.values())
 
     async def test_stale_first_request_refreshes_and_records_demand(self):
         calls = 0
@@ -212,9 +221,9 @@ class NetworkSnapshotStoreTests(unittest.IsolatedAsyncioTestCase):
 
         refreshed = await store.get_or_refresh(max_age_seconds=30)
 
-        self.assertEqual(calls, 1)
-        self.assertEqual(refreshed.generation, 1)
-        self.assertTrue(store.has_recent_demand(45))
+        assert calls == 1
+        assert refreshed.generation == 1
+        assert store.has_recent_demand(45)
 
     async def test_fresh_request_reuses_current_without_building(self):
         builder = AsyncMock()
@@ -224,9 +233,9 @@ class NetworkSnapshotStoreTests(unittest.IsolatedAsyncioTestCase):
 
         result = await store.get_or_refresh(max_age_seconds=30)
 
-        self.assertIs(result, current)
+        assert result is current
         builder.assert_not_awaited()
-        self.assertTrue(store.has_recent_demand(45))
+        assert store.has_recent_demand(45)
 
 
 class RealtimeWarmLoopTests(unittest.IsolatedAsyncioTestCase):
@@ -237,13 +246,16 @@ class RealtimeWarmLoopTests(unittest.IsolatedAsyncioTestCase):
         )
         sleep = AsyncMock(side_effect=asyncio.CancelledError)
 
-        with patch.object(app_main, "network_snapshot_store", store), patch.object(
-            app_main.asyncio,
-            "sleep",
-            new=sleep,
+        with (
+            patch.object(app_main, "network_snapshot_store", store),
+            patch.object(
+                app_main.asyncio,
+                "sleep",
+                new=sleep,
+            ),
+            pytest.raises(asyncio.CancelledError),
         ):
-            with self.assertRaises(asyncio.CancelledError):
-                await app_main._realtime_warm_loop()
+            await app_main._realtime_warm_loop()
 
         store.has_recent_demand.assert_called_once_with(
             app_main.REALTIME_ACTIVE_WINDOW_S
@@ -257,13 +269,16 @@ class RealtimeWarmLoopTests(unittest.IsolatedAsyncioTestCase):
             refresh=AsyncMock(return_value=network_snapshot(1)),
         )
 
-        with patch.object(app_main, "network_snapshot_store", store), patch.object(
-            app_main.asyncio,
-            "sleep",
-            new=AsyncMock(side_effect=asyncio.CancelledError),
+        with (
+            patch.object(app_main, "network_snapshot_store", store),
+            patch.object(
+                app_main.asyncio,
+                "sleep",
+                new=AsyncMock(side_effect=asyncio.CancelledError),
+            ),
+            pytest.raises(asyncio.CancelledError),
         ):
-            with self.assertRaises(asyncio.CancelledError):
-                await app_main._realtime_warm_loop()
+            await app_main._realtime_warm_loop()
 
         store.refresh.assert_awaited_once_with()
 
@@ -304,7 +319,7 @@ class RiderSnapshotSharingTests(unittest.IsolatedAsyncioTestCase):
                 return {}
 
             def get_trip_stop_context(self, _trip_ids):
-                raise AssertionError("rider snapshots must not query static trip context")
+                raise ForbiddenTripContextError
 
         with patch.object(
             rider_snapshot.mta_realtime,
@@ -315,9 +330,9 @@ class RiderSnapshotSharingTests(unittest.IsolatedAsyncioTestCase):
                 GTFS(), network, 40.73, -73.99
             )
 
-        self.assertEqual(result["vehicles"][0]["route_name"], "Q train")
-        self.assertNotIn("route_name", shared_vehicle)
-        self.assertEqual(network.generation, 7)
+        assert result["vehicles"][0]["route_name"] == "Q train"
+        assert "route_name" not in shared_vehicle
+        assert network.generation == 7
 
     def test_realtime_trip_context_is_ordered_and_uses_static_stop_facts(self):
         updates = (
@@ -346,11 +361,8 @@ class RiderSnapshotSharingTests(unittest.IsolatedAsyncioTestCase):
             locations,
         )
 
-        self.assertEqual(
-            [stop["stop_name"] for stop in context["trip-1"]],
-            ["Canal St", "Times Sq"],
-        )
-        self.assertNotIn("other", context)
+        assert [stop["stop_name"] for stop in context["trip-1"]] == ["Canal St", "Times Sq"]
+        assert "other" not in context
 
     def test_vehicle_segment_skips_incomplete_static_coordinates(self):
         vehicle = {
@@ -370,8 +382,8 @@ class RiderSnapshotSharingTests(unittest.IsolatedAsyncioTestCase):
             1_000,
         )
 
-        self.assertFalse(attached)
-        self.assertNotIn("lat", vehicle)
+        assert not attached
+        assert "lat" not in vehicle
 
 
 class BusUpdateOwnershipTests(unittest.IsolatedAsyncioTestCase):
@@ -397,12 +409,12 @@ class BusUpdateOwnershipTests(unittest.IsolatedAsyncioTestCase):
             first = asyncio.create_task(bus_updates.fetch_nearby_bus_update(40.7, -73.9))
             second = asyncio.create_task(bus_updates.fetch_nearby_bus_update(40.7, -73.9))
             await entered.wait()
-            self.assertEqual(calls, 1)
+            assert calls == 1
             release.set()
             left, right = await asyncio.gather(first, second)
 
-        self.assertEqual(left["status"], "ready")
-        self.assertEqual(right["status"], "ready")
+        assert left["status"] == "ready"
+        assert right["status"] == "ready"
 
     async def test_expired_bus_cache_is_used_only_when_refresh_fails(self):
         cache_key = bus_updates._arrival_cache_key(40.7, -73.9, 804.672, 10, 4)
@@ -426,8 +438,8 @@ class BusUpdateOwnershipTests(unittest.IsolatedAsyncioTestCase):
         ):
             update = await bus_updates.fetch_nearby_bus_update(40.7, -73.9)
 
-        self.assertEqual(update["status"], "cached")
-        self.assertEqual(update["arrivals"][0]["route_id"], "B35")
+        assert update["status"] == "cached"
+        assert update["arrivals"][0]["route_id"] == "B35"
 
     async def test_stale_bus_fallback_expires_and_is_removed(self):
         cache_key = bus_updates._arrival_cache_key(40.7, -73.9, 804.672, 10, 4)
@@ -439,18 +451,18 @@ class BusUpdateOwnershipTests(unittest.IsolatedAsyncioTestCase):
             stale_ttl_s=bus_updates.BUS_UPDATE_MAX_STALE_S,
         )
 
-        self.assertIsNone(bus_runtime.get_last_cached(bus_runtime.nearby_arrivals_cache, cache_key))
-        self.assertNotIn(cache_key, bus_runtime.nearby_arrivals_cache)
+        assert bus_runtime.get_last_cached(bus_runtime.nearby_arrivals_cache, cache_key) is None
+        assert cache_key not in bus_runtime.nearby_arrivals_cache
 
     async def test_bus_cache_lru_capacity_evicts_the_oldest_key(self):
         store = bus_runtime.BoundedCache(2)
         bus_runtime.set_cached(store, "first", {"id": 1}, 60)
         bus_runtime.set_cached(store, "second", {"id": 2}, 60)
-        self.assertEqual(bus_runtime.get_cached(store, "first"), {"id": 1})
+        assert bus_runtime.get_cached(store, "first") == {"id": 1}
         bus_runtime.set_cached(store, "third", {"id": 3}, 60)
 
-        self.assertNotIn("second", store)
-        self.assertEqual(set(store), {"first", "third"})
+        assert "second" not in store
+        assert set(store) == {"first", "third"}
 
     async def test_overlapping_stop_monitoring_requests_share_one_request(self):
         entered = asyncio.Event()
@@ -471,11 +483,11 @@ class BusUpdateOwnershipTests(unittest.IsolatedAsyncioTestCase):
             first = asyncio.create_task(bus.fetch_bus_stop_monitoring("MTA NYCT_308209", 4))
             second = asyncio.create_task(bus.fetch_bus_stop_monitoring("308209", 4))
             await entered.wait()
-            self.assertEqual(calls, 1)
+            assert calls == 1
             release.set()
             await asyncio.gather(first, second)
 
-        self.assertEqual(calls, 1)
+        assert calls == 1
 
     async def test_overlapping_nearby_stop_discovery_shares_one_request(self):
         entered = asyncio.Event()
@@ -496,11 +508,11 @@ class BusUpdateOwnershipTests(unittest.IsolatedAsyncioTestCase):
             first = asyncio.create_task(bus.fetch_nearby_bus_stops(40.7, -73.9, limit=4))
             second = asyncio.create_task(bus.fetch_nearby_bus_stops(40.7, -73.9, limit=10))
             await entered.wait()
-            self.assertEqual(calls, 1)
+            assert calls == 1
             release.set()
             await asyncio.gather(first, second)
 
-        self.assertEqual(calls, 1)
+        assert calls == 1
 
     async def test_rest_returns_primary_snapshot_before_bus_refresh(self):
         snapshot = {
@@ -524,7 +536,7 @@ class BusUpdateOwnershipTests(unittest.IsolatedAsyncioTestCase):
             AsyncMock(return_value=snapshot),
         ), patch.object(live_feed_router.mta_realtime, "fetch_nearby_bus_update", refresh):
             response = await live_feed_router._live_feed_impl(object(), payload)
-            self.assertEqual(response.status_code, 200)
+            assert response.status_code == 200
             refresh.assert_not_awaited()
             await asyncio.sleep(0)
 
@@ -533,7 +545,7 @@ class BusUpdateOwnershipTests(unittest.IsolatedAsyncioTestCase):
 
 class SocketOwnershipTests(unittest.IsolatedAsyncioTestCase):
     class Socket:
-        query_params = {"ticket": "valid"}
+        query_params: ClassVar[dict] = {"ticket": "valid"}
         url = SimpleNamespace(path="/ws/live-feed")
         app = SimpleNamespace(state=SimpleNamespace(gtfs=object()))
 
@@ -591,8 +603,8 @@ class SocketOwnershipTests(unittest.IsolatedAsyncioTestCase):
                 WebSocketDisconnect(code=1000),
             ])
 
-            async def receive(_socket):
-                value = next(messages)
+            async def receive(_socket, pending=messages):
+                value = next(pending)
                 if isinstance(value, Exception):
                     raise value
                 return value
@@ -606,10 +618,10 @@ class SocketOwnershipTests(unittest.IsolatedAsyncioTestCase):
             )
 
         await asyncio.sleep(0)
-        self.assertEqual(set(asyncio.all_tasks()), baseline)
-        self.assertEqual(release.await_count, 20)
-        self.assertTrue(all(socket.accepted == 1 for socket in sockets))
-        self.assertTrue(all(socket.close_codes == [] for socket in sockets))
+        assert set(asyncio.all_tasks()) == baseline
+        assert release.await_count == 20
+        assert all(socket.accepted == 1 for socket in sockets)
+        assert all(socket.close_codes == [] for socket in sockets)
 
     async def test_auth_rejection_starts_no_connection_tasks(self):
         baseline = set(asyncio.all_tasks())
@@ -622,9 +634,9 @@ class SocketOwnershipTests(unittest.IsolatedAsyncioTestCase):
         await live_feed_socket.stream_live_feed(socket, 1, deps)
         await asyncio.sleep(0)
 
-        self.assertEqual(socket.accepted, 0)
-        self.assertEqual(socket.close_codes, [1008])
-        self.assertEqual(set(asyncio.all_tasks()), baseline)
+        assert socket.accepted == 0
+        assert socket.close_codes == [1008]
+        assert set(asyncio.all_tasks()) == baseline
 
     async def test_refresh_event_pushes_a_new_snapshot_without_reconnecting(self):
         refresh_event = asyncio.Event()
@@ -677,11 +689,8 @@ class SocketOwnershipTests(unittest.IsolatedAsyncioTestCase):
         )
 
         snapshots = [message for message in sent if message.get("type") == "snapshot"]
-        self.assertEqual(
-            [message["data"]["debug"]["network_generation"] for message in snapshots],
-            [1, 2],
-        )
-        self.assertEqual(socket.accepted, 1)
+        assert [message["data"]["debug"]["network_generation"] for message in snapshots] == [1, 2]
+        assert socket.accepted == 1
 
     async def test_lease_failure_closes_once_during_unified_cleanup(self):
         async def failed_guard(_lease, _stopped, lease_failed, owner):
@@ -698,7 +707,7 @@ class SocketOwnershipTests(unittest.IsolatedAsyncioTestCase):
             self.dependencies(receive, guard=failed_guard),
         )
 
-        self.assertEqual(socket.close_codes, [1013])
+        assert socket.close_codes == [1013]
 
     async def test_close_helper_is_safe_when_cleanup_runs_twice(self):
         class AlreadyClosingSocket:
@@ -708,12 +717,12 @@ class SocketOwnershipTests(unittest.IsolatedAsyncioTestCase):
             async def close(self, code):
                 self.calls += 1
                 if self.calls > 1:
-                    raise RuntimeError("already closing")
+                    raise AlreadyClosingError(code)
 
         socket = AlreadyClosingSocket()
         await live_feed_socket.close_socket_safe(socket, 1000, WebSocketDisconnect)
         await live_feed_socket.close_socket_safe(socket, 1000, WebSocketDisconnect)
-        self.assertEqual(socket.calls, 2)
+        assert socket.calls == 2
 
     async def test_disconnect_cancels_the_socket_owned_bus_waiter(self):
         started = asyncio.Event()
@@ -744,7 +753,7 @@ class SocketOwnershipTests(unittest.IsolatedAsyncioTestCase):
         deps = replace(deps, bus_update=slow_bus)
         await live_feed_socket.stream_live_feed(socket, 1, deps)
 
-        self.assertTrue(cancelled.is_set())
+        assert cancelled.is_set()
 
     async def test_location_change_discards_the_previous_bus_generation(self):
         first_started = asyncio.Event()
@@ -793,17 +802,14 @@ class SocketOwnershipTests(unittest.IsolatedAsyncioTestCase):
         )
         await live_feed_socket.stream_live_feed(socket, 1, deps)
 
-        self.assertTrue(first_cancelled.is_set())
+        assert first_cancelled.is_set()
         bus_messages = [
             call.args[1]
             for call in deps.send.await_args_list
             if call.args[1].get("type") == "bus_update"
         ]
-        self.assertEqual([message["data"]["generation"] for message in bus_messages], [2])
-        self.assertEqual(
-            set(bus_messages[0]["data"]),
-            {"generation", "arrivals", "fetched_at", "status"},
-        )
+        assert [message["data"]["generation"] for message in bus_messages] == [2]
+        assert set(bus_messages[0]["data"]) == {"generation", "arrivals", "fetched_at", "status"}
 
     async def test_same_tick_location_change_discards_completed_old_bus_update(self):
         """A received location frame wins over a simultaneously completed bus task."""
@@ -857,8 +863,8 @@ class SocketOwnershipTests(unittest.IsolatedAsyncioTestCase):
             for call in deps.send.await_args_list
             if call.args[1].get("type") == "bus_update"
         ]
-        self.assertEqual([message["data"]["generation"] for message in bus_messages], [2])
-        self.assertEqual(bus_messages[0]["data"]["arrivals"], [{"route_id": "B2"}])
+        assert [message["data"]["generation"] for message in bus_messages] == [2]
+        assert bus_messages[0]["data"]["arrivals"] == [{"route_id": "B2"}]
 
 
 if __name__ == "__main__":

@@ -6,12 +6,15 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from app.services.mta.alerts import project_service_alert
-from app.services.agent.tools.transit.direction import normalize_direction, stop_id_direction
+from app.services.agent.tools.transit.direction import (
+    normalize_direction,
+    stop_id_direction,
+)
 from app.services.agent.tools.transit.evidence_matching import (
     normalized_route_ids,
     normalized_text,
 )
+from app.services.mta.alerts import project_service_alert
 
 
 def safe_result(
@@ -270,7 +273,7 @@ def _event_start_text(value: object) -> str:
     if not raw:
         return ""
     try:
-        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(raw)
         if parsed.tzinfo is not None:
             parsed = parsed.astimezone(ZoneInfo("America/New_York"))
     except ValueError:

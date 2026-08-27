@@ -10,14 +10,21 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 
 from app.services.agent import events as agent_events
-from app.services.agent.passenger_output import pop_activity_label
-from app.services.agent.model import policy as agent_policy
 from app.services.agent import public_surface
 from app.services.agent import session as session_module
+from app.services.agent.model import policy as agent_policy
+from app.services.agent.model.output_projection import project_tool_result_data
+from app.services.agent.passenger_output import pop_activity_label
 from app.services.agent.tool_input_policy import (
     authoritative_discovery_input as _authoritative_discovery_input,
+)
+from app.services.agent.tool_input_policy import (
     constrained_tool_input,
+)
+from app.services.agent.tool_input_policy import (
     goal_error as _goal_error,
+)
+from app.services.agent.tool_input_policy import (
     missing_verified_destination as _missing_verified_destination,
 )
 from app.services.agent.tools import ToolContext, ToolResult
@@ -27,7 +34,7 @@ from app.services.agent.turn.ledger import (
     TurnToolLedger,
     run_one_tool,
 )
-from app.services.agent.model.output_projection import project_tool_result_data
+
 
 class TurnDeadlineReached(Exception):
     """Internal control flow that still reaches the turn's single DoneEvent."""
@@ -243,7 +250,7 @@ class _ToolRoundExecution:
             round_task = asyncio.gather(*self.round_tasks.values())
             async for progress in relay.stream_until(round_task):
                 yield progress
-            self.outcomes_by_key.update(zip(self.round_tasks, await round_task))
+            self.outcomes_by_key.update(zip(self.round_tasks, await round_task, strict=False))
         finally:
             if round_task is not None and not round_task.done():
                 round_task.cancel()
@@ -284,7 +291,7 @@ class _ToolRoundExecution:
     async def _surface_results(self) -> AsyncIterator:
         outcomes = self._outcomes()
         content = []
-        for block, result in zip(self.blocks, outcomes):
+        for block, result in zip(self.blocks, outcomes, strict=False):
             result_content, events = self._record_result(block, result)
             content.append(result_content)
             for event in events:
@@ -297,7 +304,7 @@ class _ToolRoundExecution:
             ),
             "__tool_outcomes__": [
                 (block.name, self.tool_inputs[block.id], result)
-                for block, result in zip(self.blocks, outcomes)
+                for block, result in zip(self.blocks, outcomes, strict=False)
             ],
         }
 

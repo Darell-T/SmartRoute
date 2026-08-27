@@ -332,7 +332,7 @@ def _walking_limit(tool_input: dict[str, Any]) -> int | None:
     for key in ("max_walking_minutes", "walking_tolerance_minutes"):
         value = tool_input.get(key)
         if isinstance(value, (int, float)) and not isinstance(value, bool):
-            return max(0, min(180, int(round(value))))
+            return max(0, min(180, round(value)))
     return None
 
 

@@ -39,13 +39,14 @@ class ModelCallCompleted:
     web_timed_out: bool = False
     web_used: bool = False
     web_succeeded: bool = False
+    web_sources: tuple[dict[str, str], ...] = ()
 
 
 @dataclasses.dataclass
 class _AttemptState:
     """Mutable observations from one provider stream attempt."""
 
-    sanitizer: "_RiderTextSanitizer"
+    sanitizer: _RiderTextSanitizer
     call_started: float
     saw_text: bool = False
     saw_provider_event: bool = False
@@ -90,6 +91,7 @@ class _AttemptCompleted:
             web_search_ms=self.state.web_search_ms,
             server_tool_call_count=self.state.server_tool_calls,
             first_token_ms=self.state.first_token_ms,
+            web_sources=_web_sources(self.final_message),
             **self.state.web_flags(timed_out=self.web_timed_out),
         )
 
@@ -193,10 +195,49 @@ def _web_result_ok(content: object) -> bool:
         elif item is None or not hasattr(item, "type"):
             return False
         else:
-            item_type = getattr(item, "type")
+            item_type = item.type
         if item_type == "web_search_tool_result_error":
             return False
     return True
+
+
+def _field(value: object, name: str) -> object | None:
+    if isinstance(value, dict):
+        return value.get(name)
+    return getattr(value, name, None)
+
+
+def _web_sources(final_message: object | None) -> tuple[dict[str, str], ...]:
+    """Extract the original pages cited by Anthropic native web search."""
+
+    content = _field(final_message, "content") if final_message is not None else None
+    if not isinstance(content, (list, tuple)):
+        return ()
+
+    sources: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for block in content:
+        if _field(block, "type") != "text":
+            continue
+        citations = _field(block, "citations")
+        if not isinstance(citations, (list, tuple)):
+            continue
+        for citation in citations:
+            if _field(citation, "type") != "web_search_result_location":
+                continue
+            candidate = agent_events.normalized_source(
+                {
+                    "title": str(_field(citation, "title") or "Web source"),
+                    "url": str(_field(citation, "url") or ""),
+                }
+            )
+            if candidate is None or candidate["url"] in seen:
+                continue
+            seen.add(candidate["url"])
+            sources.append(candidate)
+            if len(sources) == 8:
+                return tuple(sources)
+    return tuple(sources)
 
 
 async def _stream_provider_events(

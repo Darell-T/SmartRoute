@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any, Generic, Literal, TypeVar
 
 EvidenceStatus = Literal["current", "stale", "unavailable"]
@@ -15,14 +15,14 @@ def parse_timestamp(value: object) -> datetime | None:
         parsed = value
     elif isinstance(value, str) and value.strip():
         try:
-            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            parsed = datetime.fromisoformat(value)
         except ValueError:
             return None
     else:
         return None
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         return None
-    return parsed.astimezone(timezone.utc)
+    return parsed.astimezone(UTC)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -34,7 +34,7 @@ class EvidenceEnvelope(Generic[T]):
     available: bool = True
 
     def status_at(self, now: datetime | None = None) -> EvidenceStatus:
-        current_time = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        current_time = (now or datetime.now(UTC)).astimezone(UTC)
         if not self.available:
             return "unavailable"
         if self.valid_until is not None and current_time > self.valid_until:
@@ -73,7 +73,7 @@ def evidence_envelope(
     valid_until: object = None,
     available: bool = True,
 ) -> EvidenceEnvelope[T]:
-    observed = parse_timestamp(observed_at) or datetime.now(timezone.utc)
+    observed = parse_timestamp(observed_at) or datetime.now(UTC)
     expires = parse_timestamp(valid_until)
     if expires is None and ttl_seconds is not None:
         expires = observed + timedelta(seconds=max(0, float(ttl_seconds)))

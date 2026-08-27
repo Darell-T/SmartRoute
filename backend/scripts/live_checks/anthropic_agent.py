@@ -10,10 +10,9 @@ from pathlib import Path
 from typing import Any
 
 import anthropic
-from dotenv import load_dotenv
-
 from app.services.agent.model import policy
 from app.services.agent.model import request as model_request
+from dotenv import load_dotenv
 
 
 def _arguments() -> argparse.Namespace:
@@ -43,7 +42,7 @@ async def certify() -> dict[str, Any]:
             "auto_model_accessible": auto.model in model_ids,
             "quick_model_accessible": quick.model in model_ids,
         }
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 unexpected provider failures reduce to an error class
         details = model_request.provider_error_details(exc)
         return {
             "status": "failed",
@@ -65,7 +64,7 @@ async def certify() -> dict[str, Any]:
             ),
             timeout=15.0,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 unexpected provider failures reduce to an error class
         details = model_request.provider_error_details(exc)
         return {
             "status": "failed",

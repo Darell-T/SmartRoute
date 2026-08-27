@@ -6,15 +6,16 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from app.services.agent.tools.transit import evidence as transit_evidence
-from app.services.agent.tools.transit import check_transit, present_transit
+from app.services import cache
 from app.services.agent.tools._types import ToolContext, ToolResult
 from app.services.agent.tools.route.route_projection import first_boarding_context
+from app.services.agent.tools.transit import check_transit, present_transit
+from app.services.agent.tools.transit import evidence as transit_evidence
 from app.services.agent.turn.contract import GoalKind, OutcomeGoal, TurnContract
 from app.services.agent.turn.evidence import TurnEvidence
-from app.services.trips.itinerary import build_canonical_itinerary
-from app.services import cache
 from app.services.mta.static_gtfs.stop_patterns import StopPatternIndex
+from app.services.trips.itinerary import build_canonical_itinerary
+
 from tests.agent_evidence_binding_test_support import transit_input
 
 
@@ -44,8 +45,8 @@ class AgentTransitDirectionReliabilityTests(unittest.IsolatedAsyncioTestCase):
         boarding = first_boarding_context(
             SimpleNamespace(_pattern_index=index), step, 0
         )
-        self.assertEqual(boarding["stop_order"]["origin_stop_id"], "D28")
-        self.assertEqual(boarding["stop_order"]["destination_stop_id"], "D25")
+        assert boarding["stop_order"]["origin_stop_id"] == "D28"
+        assert boarding["stop_order"]["destination_stop_id"] == "D25"
         from app.services.trips.itinerary import build_canonical_itinerary
 
         itinerary = build_canonical_itinerary(
@@ -97,23 +98,14 @@ class AgentTransitDirectionReliabilityTests(unittest.IsolatedAsyncioTestCase):
                 context,
             )
 
-        self.assertTrue(result.ok)
-        self.assertNotEqual(
-            (result.data or {}).get("status"),
-            "clarification_required",
-            "the accepted itinerary already resolves the B direction",
-        )
+        assert result.ok
+        assert (result.data or {}).get("status") != "clarification_required", "the accepted itinerary already resolves the B direction"
         collect_status.assert_awaited_once()
         fields = collect_status.await_args.args[1]
-        self.assertEqual(fields["direction"], "uptown")
+        assert fields["direction"] == "uptown"
         evidence = (result.data or {}).get("evidence") or {}
-        self.assertEqual(
-            evidence.get("direction_scope", {}).get("resolved"), "uptown"
-        )
-        self.assertEqual(
-            evidence.get("confirmed_matching_alerts", [])[0].get("header"),
-            "B service change",
-        )
+        assert evidence.get("direction_scope", {}).get("resolved") == "uptown"
+        assert evidence.get("confirmed_matching_alerts", [])[0].get("header") == "B service change"
 
     async def test_explicit_headsign_precedes_accepted_trip_direction(self):
         """An explicit destination/headsign remains the rider's first choice."""
@@ -185,15 +177,10 @@ class AgentTransitDirectionReliabilityTests(unittest.IsolatedAsyncioTestCase):
         ) as collect_status:
             result = await check_transit.execute(tool_input, context)
 
-        self.assertTrue(result.ok)
-        self.assertEqual(
-            collect_status.await_args.args[1]["direction"], "bedford park blvd"
-        )
+        assert result.ok
+        assert collect_status.await_args.args[1]["direction"] == "bedford park blvd"
         evidence = (result.data or {}).get("evidence") or {}
-        self.assertEqual(
-            evidence.get("confirmed_matching_alerts", [])[0].get("header"),
-            "B service change",
-        )
+        assert evidence.get("confirmed_matching_alerts", [])[0].get("header") == "B service change"
 
     async def test_accepted_seven_headsign_does_not_become_uptown_or_downtown(self):
         index = StopPatternIndex.load()
@@ -215,7 +202,7 @@ class AgentTransitDirectionReliabilityTests(unittest.IsolatedAsyncioTestCase):
         boarding = first_boarding_context(
             SimpleNamespace(_pattern_index=index), step, 0
         )
-        self.assertNotIn("semantic_direction", boarding)
+        assert "semantic_direction" not in boarding
         context = ToolContext(
             session_id="seven-headsign-session",
             session={"active_trip": {"first_boarding": boarding}},
@@ -247,11 +234,9 @@ class AgentTransitDirectionReliabilityTests(unittest.IsolatedAsyncioTestCase):
                 context,
             )
 
-        self.assertTrue(result.ok)
+        assert result.ok
         collect_status.assert_awaited_once()
-        self.assertEqual(
-            collect_status.await_args.args[1]["direction"], "flushing-main st"
-        )
+        assert collect_status.await_args.args[1]["direction"] == "flushing-main st"
 
     def test_static_northbound_pattern_derivation_is_not_b_specific(self):
         index = StopPatternIndex.load()
@@ -279,7 +264,7 @@ class AgentTransitDirectionReliabilityTests(unittest.IsolatedAsyncioTestCase):
         )
         from app.services.agent.tools.transit.direction import accepted_trip_direction
 
-        self.assertEqual(accepted_trip_direction(context, ["Q"]), "uptown")
+        assert accepted_trip_direction(context, ["Q"]) == "uptown"
 
     def test_accepted_l_headsign_remains_route_scoped_label(self):
         index = StopPatternIndex.load()
@@ -301,7 +286,7 @@ class AgentTransitDirectionReliabilityTests(unittest.IsolatedAsyncioTestCase):
         boarding = first_boarding_context(
             SimpleNamespace(_pattern_index=index), step, 0
         )
-        self.assertNotIn("semantic_direction", boarding)
+        assert "semantic_direction" not in boarding
         context = SimpleNamespace(
             session={"active_trip": {"first_boarding": boarding}},
             gtfs=SimpleNamespace(_pattern_index=index),
@@ -309,8 +294,8 @@ class AgentTransitDirectionReliabilityTests(unittest.IsolatedAsyncioTestCase):
         from app.services.agent.tools.transit.direction import accepted_trip_direction
 
         direction = accepted_trip_direction(context, ["L"])
-        self.assertEqual(direction, "canarsie-rockaway pkwy")
-        self.assertNotIn(direction, {"uptown", "downtown"})
+        assert direction == "canarsie-rockaway pkwy"
+        assert direction not in {"uptown", "downtown"}
 
     async def test_raw_numeric_subway_direction_id_does_not_imply_semantics(self):
         itinerary = {
@@ -350,11 +335,9 @@ class AgentTransitDirectionReliabilityTests(unittest.IsolatedAsyncioTestCase):
                 ),
             )
 
-        self.assertTrue(result.ok)
-        self.assertNotEqual(
-            (result.data or {}).get("status"), "clarification_required"
-        )
-        self.assertIsNone(collect_status.await_args.args[1]["direction"])
+        assert result.ok
+        assert (result.data or {}).get("status") != "clarification_required"
+        assert collect_status.await_args.args[1]["direction"] is None
 
     async def test_partial_incident_coverage_preserves_verified_route_facts(self):
         """Known alert/vehicle facts stay usable when incident coverage is partial."""
@@ -389,9 +372,9 @@ class AgentTransitDirectionReliabilityTests(unittest.IsolatedAsyncioTestCase):
                 ],
             },
         )
-        self.assertEqual(evidence["source_coverage"]["alerts"], "current")
-        self.assertEqual(evidence["source_coverage"]["gtfs_rt"], "current")
-        self.assertEqual(evidence["source_coverage"]["incidents"], "partial")
+        assert evidence["source_coverage"]["alerts"] == "current"
+        assert evidence["source_coverage"]["gtfs_rt"] == "current"
+        assert evidence["source_coverage"]["incidents"] == "partial"
 
         turn_evidence = TurnEvidence()
         turn_evidence.bind_contract(
@@ -412,12 +395,12 @@ class AgentTransitDirectionReliabilityTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-        self.assertTrue(result.ok)
+        assert result.ok
         passenger_text = str((result.data or {}).get("passenger_text") or "")
-        self.assertIn("B service change", passenger_text)
-        self.assertIn("possible stalled train", passenger_text.casefold())
-        self.assertIn("check part", passenger_text.casefold())
-        self.assertNotIn("can't confirm", passenger_text.casefold())
+        assert "B service change" in passenger_text
+        assert "possible stalled train" in passenger_text.casefold()
+        assert "check part" in passenger_text.casefold()
+        assert "can't confirm" not in passenger_text.casefold()
 
     def test_route_bound_findings_survive_current_and_partial_coverage(self):
         for incident_coverage in ("current", "partial"):
@@ -450,13 +433,8 @@ class AgentTransitDirectionReliabilityTests(unittest.IsolatedAsyncioTestCase):
                     },
                 )
 
-                self.assertEqual(
-                    evidence["confirmed_matching_alerts"][0]["header"],
-                    "B service change",
-                )
-                self.assertEqual(
-                    evidence["unconfirmed_signals"][0]["route_id"], "B"
-                )
+                assert evidence["confirmed_matching_alerts"][0]["header"] == "B service change"
+                assert evidence["unconfirmed_signals"][0]["route_id"] == "B"
 
 
 

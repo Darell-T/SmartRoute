@@ -6,8 +6,10 @@ import asyncio
 import math
 import re
 
+from app.services import geography as geo
 from app.services.agent import profile as profile_module
 from app.services.agent.tools._types import ToolContext
+from app.services.mta.static_gtfs.stop_patterns import normalize_station_name
 from app.services.trips.location import (
     KnownPlace,
     ResolvedPlace,
@@ -15,8 +17,6 @@ from app.services.trips.location import (
     known_place,
     parse_coordinates,
 )
-from app.services import geography as geo
-from app.services.mta.static_gtfs.stop_patterns import normalize_station_name
 
 
 def _normalized_label(value: object) -> str:
@@ -443,8 +443,8 @@ __all__ = (
     "canonical_display_name",
     "known_place",
     "parse_coordinates",
-    "resolve_discovery_place",
     "resolve_destination_reference",
+    "resolve_discovery_place",
     "resolve_named_place",
     "resolve_named_point",
     "resolve_waypoint_places",

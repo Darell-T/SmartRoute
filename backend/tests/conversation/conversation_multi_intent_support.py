@@ -22,9 +22,9 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from app.services.agent import discovery_store
-from app.services.agent.tools.transit import evidence as transit_evidence
 from app.services.agent import trip_state as trip_state_module
-from tests.conversation.conversation_multi_intent_fixtures import _model_led_rounds
+from app.services.agent.tools.transit import evidence as transit_evidence
+
 from tests.conversation.conversation_matrix_harness import (
     clear_caches,
     new_session,
@@ -32,6 +32,7 @@ from tests.conversation.conversation_matrix_harness import (
     run_turn,
     seed_accepted_active_trip,
 )
+from tests.conversation.conversation_multi_intent_fixtures import _model_led_rounds
 
 LEAK_MARKERS = ("pl_", "ds_", "cd_", "cs_", "rc_", "ChIJ", "tu-")
 _STATE_KEYS = (
@@ -318,23 +319,13 @@ class _MultiIntentBase(unittest.IsolatedAsyncioTestCase):
 
     # ---- assertion helpers ------------------------------------------------
     def _assert_offered_exact(self, ev, expected, sid):
-        self.assertEqual(
-            ev.offered, expected,
-            f"{sid}: offer exactly {sorted(expected)}; {ev.compact()}",
-        )
+        assert ev.offered == expected, f"{sid}: offer exactly {sorted(expected)}; {ev.compact()}"
 
     def _assert_declared_goals(self, ev, expected, sid):
-        self.assertEqual(
-            ev.declared_goals,
-            tuple(expected),
-            f"{sid}: explicit model-led goal contract; {ev.compact()}",
-        )
+        assert ev.declared_goals == tuple(expected), f"{sid}: explicit model-led goal contract; {ev.compact()}"
 
     def _assert_state_valid_presenter(self, ev, presenter, sid):
-        self.assertTrue(
-            any(presenter in profile for profile in ev.offered_profiles[1:]),
-            f"{sid}: {presenter} must become state-valid after evidence",
-        )
+        assert any(presenter in profile for profile in ev.offered_profiles[1:]), f"{sid}: {presenter} must become state-valid after evidence"
 
     def _assert_policy(
         self,
@@ -346,157 +337,82 @@ class _MultiIntentBase(unittest.IsolatedAsyncioTestCase):
         stop_reason="end_turn",
     ):
         _expected_mode, expected_model = policy_model(self.loop, mode)
-        self.assertEqual(
-            ev.models, (expected_model,) * model_calls,
-            f"{sid}: policy models; {ev.compact()}",
-        )
-        self.assertEqual(
-            ev.model_call_count, model_calls,
-            f"{sid}: model call count; {ev.compact()}",
-        )
-        self.assertEqual(
-            ev.stop_reason, stop_reason,
-            f"{sid}: terminal stop reason; {ev.compact()}",
-        )
+        assert ev.models == (expected_model,) * model_calls, f"{sid}: policy models; {ev.compact()}"
+        assert ev.model_call_count == model_calls, f"{sid}: model call count; {ev.compact()}"
+        assert ev.stop_reason == stop_reason, f"{sid}: terminal stop reason; {ev.compact()}"
 
     def _assert_executed(self, ev, expected, sid):
         names = [name for name, _input in ev.tool_calls]
-        self.assertEqual(names, list(expected), f"{sid}: tool sequence; {ev.compact()}")
+        assert names == list(expected), f"{sid}: tool sequence; {ev.compact()}"
         for name in expected:
-            self.assertEqual(
-                names.count(name), 1,
-                f"{sid}: exactly one {name}; {ev.compact()}",
-            )
+            assert names.count(name) == 1, f"{sid}: exactly one {name}; {ev.compact()}"
 
     def _assert_rejected(self, ev, name, sid, *, zero_spies=None):
         """F1 enforcement: bounded rejection with zero side effects."""
-        self.assertNotIn(
-            name, [tool for tool, _input in ev.tool_calls],
-            f"{sid}: rejected {name} never reaches ledger; {ev.compact()}",
-        )
+        assert name not in [tool for tool, _input in ev.tool_calls], f"{sid}: rejected {name} never reaches ledger; {ev.compact()}"
         if zero_spies is None:
             zero_spies = tuple(ev.spies)
         counts = {key: ev.spies[key].await_count for key in zero_spies}
-        self.assertEqual(
-            counts, {key: 0 for key in zero_spies},
-            f"{sid}: rejected {name} never reaches provider; {ev.compact()}",
-        )
-        self.assertNotIn(
-            name, [tool for tool, _call_id in ev.tool_starts],
-            f"{sid}: rejected {name} emits no false in-flight activity; {ev.compact()}",
-        )
+        assert counts == dict.fromkeys(zero_spies, 0), f"{sid}: rejected {name} never reaches provider; {ev.compact()}"
+        assert name not in [tool for tool, _call_id in ev.tool_starts], f"{sid}: rejected {name} emits no false in-flight activity; {ev.compact()}"
         ends = {t: (ok, summary, cid) for t, ok, summary, cid in ev.tool_ends}
-        self.assertIn(name, ends, f"{sid}: rejected {name} ToolEnd; {ev.compact()}")
+        assert name in ends, f"{sid}: rejected {name} ToolEnd; {ev.compact()}"
         ok, summary, _call_id = ends[name]
-        self.assertFalse(ok, f"{sid}: rejected {name} ToolEnd failure")
-        self.assertTrue(
-            "not offered" in summary or "not available" in summary,
-            f"{sid}: rejected {name} bounded error; {ev.compact()}",
-        )
-        self.assertNotIn(
-            name, ev.state_after["history_tool_summaries"],
-            f"{sid}: rejected {name} no summary",
-        )
+        assert not ok, f"{sid}: rejected {name} ToolEnd failure"
+        assert "not offered" in summary or "not available" in summary, f"{sid}: rejected {name} bounded error; {ev.compact()}"
+        assert name not in ev.state_after["history_tool_summaries"], f"{sid}: rejected {name} no summary"
 
     def _assert_no_forbidden(self, ev, forbidden, sid):
         executed = {name for name, _input in ev.tool_calls}
-        self.assertEqual(
-            executed & set(forbidden), set(),
-            f"{sid}: forbidden tools executed; {ev.compact()}",
-        )
+        assert executed & set(forbidden) == set(), f"{sid}: forbidden tools executed; {ev.compact()}"
 
     def _assert_no_card(self, ev, sid):
-        self.assertEqual(ev.cards, (), f"{sid}: unexpected card")
-        self.assertEqual(
-            ev.stored_candidate_set_ids, (),
-            f"{sid}: no candidate set may store; {ev.compact()}",
-        )
+        assert ev.cards == (), f"{sid}: unexpected card"
+        assert ev.stored_candidate_set_ids == (), f"{sid}: no candidate set may store; {ev.compact()}"
 
     def _assert_one_card(self, ev, sid, *, expected_selected):
-        self.assertEqual(len(ev.cards), 1, f"{sid}: exactly one card; {ev.compact()}")
-        self.assertEqual(
-            len(ev.stored_candidate_set_ids), 1,
-            f"{sid}: exactly one candidate set; {ev.compact()}",
-        )
+        assert len(ev.cards) == 1, f"{sid}: exactly one card; {ev.compact()}"
+        assert len(ev.stored_candidate_set_ids) == 1, f"{sid}: exactly one candidate set; {ev.compact()}"
         state = ev.state_after["trip_state"]
-        self.assertEqual(
-            state["active_candidate_set_id"], ev.stored_candidate_set_ids[0],
-            f"{sid}: active candidate set committed",
-        )
-        self.assertEqual(
-            state["selected_candidate_id"], expected_selected,
-            f"{sid}: selected candidate committed",
-        )
+        assert state["active_candidate_set_id"] == ev.stored_candidate_set_ids[0], f"{sid}: active candidate set committed"
+        assert state["selected_candidate_id"] == expected_selected, f"{sid}: selected candidate committed"
         lowered = ev.final_text.casefold()
         for marker in LEAK_MARKERS:
-            self.assertNotIn(marker, lowered, f"{sid}: rider text leaked {marker}")
+            assert marker not in lowered, f"{sid}: rider text leaked {marker}"
 
     def _assert_seed_preserved(self, ev, sid):
         seed = ev.seed
-        self.assertIsNotNone(seed, f"{sid}: probe requires a seed")
+        assert seed is not None, f"{sid}: probe requires a seed"
         state = ev.state_after["trip_state"]
-        self.assertEqual(
-            state["active_candidate_set_id"], seed.candidate_set_id,
-            f"{sid}: accepted candidate set preserved",
-        )
-        self.assertEqual(
-            state["selected_candidate_id"], seed.candidate_id,
-            f"{sid}: accepted selected candidate preserved",
-        )
-        self.assertEqual(
-            state["destination"], seed.destination,
-            f"{sid}: accepted destination preserved",
-        )
-        self.assertEqual(
-            ev.state_after["active_trip"], seed.card,
-            f"{sid}: active trip card preserved",
-        )
-        self.assertEqual(
-            [card["card_id"] for card in ev.state_after["route_cards"]],
-            [seed.card_id],
-            f"{sid}: route cards preserved",
-        )
+        assert state["active_candidate_set_id"] == seed.candidate_set_id, f"{sid}: accepted candidate set preserved"
+        assert state["selected_candidate_id"] == seed.candidate_id, f"{sid}: accepted selected candidate preserved"
+        assert state["destination"] == seed.destination, f"{sid}: accepted destination preserved"
+        assert ev.state_after["active_trip"] == seed.card, f"{sid}: active trip card preserved"
+        assert [card["card_id"] for card in ev.state_after["route_cards"]] == [seed.card_id], f"{sid}: route cards preserved"
 
     def _assert_discovery_bound(self, ev, sid):
         set_id = ev.state_after["trip_state"]["active_discovery_set_id"]
-        self.assertTrue(
-            bool(set_id) and set_id.startswith("ds_"),
-            f"{sid}: real discovery set; {ev.compact()}",
-        )
+        assert set_id, f"{sid}: real discovery set; {ev.compact()}"
+        assert set_id.startswith("ds_"), f"{sid}: real discovery set; {ev.compact()}"
         record = ev.discovery_record
-        self.assertIsNotNone(record, f"{sid}: stored discovery record")
-        self.assertEqual(
-            [place["ordinal"] for place in record["places"]], [1, 2, 3],
-            f"{sid}: stored ordinals",
-        )
-        self.assertEqual(
-            record["places"][1]["name"], "B Pizza",
-            f"{sid}: ordinal 2 stored name",
-        )
+        assert record is not None, f"{sid}: stored discovery record"
+        assert [place["ordinal"] for place in record["places"]] == [1, 2, 3], f"{sid}: stored ordinals"
+        assert record["places"][1]["name"] == "B Pizza", f"{sid}: ordinal 2 stored name"
 
     def _assert_no_discovery(self, ev, sid):
-        self.assertEqual(
-            ev.discovery_store_calls, (),
-            f"{sid}: no discovery set may bind; {ev.compact()}",
-        )
+        assert ev.discovery_store_calls == (), f"{sid}: no discovery set may bind; {ev.compact()}"
         state = ev.state_after["trip_state"]
-        self.assertIsNone(
-            state["active_discovery_set_id"],
-            f"{sid}: no active discovery set; {ev.compact()}",
-        )
-        self.assertIsNone(
-            state["selected_place_id"],
-            f"{sid}: no selected place; {ev.compact()}",
-        )
+        assert state["active_discovery_set_id"] is None, f"{sid}: no active discovery set; {ev.compact()}"
+        assert state["selected_place_id"] is None, f"{sid}: no selected place; {ev.compact()}"
 
 
 __all__ = (
     "LEAK_MARKERS",
     "MultiIntentEvidence",
+    "_MultiIntentBase",
+    "_preamble_normalized",
     "fail_loud_spy",
     "run_multi_probe",
     "session_projection",
     "state_projection",
-    "_MultiIntentBase",
-    "_preamble_normalized",
 )

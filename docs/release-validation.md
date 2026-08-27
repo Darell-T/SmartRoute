@@ -16,7 +16,6 @@ $env:TICKETMASTER_LIVE_SMOKE_TEST='0'
 $env:TELEMETRY_DEV_API_KEY=''
 $env:SMARTROUTE_RUN_LIVE_TESTS='0'
 $env:RUN_LIVE_TESTS='0'
-$env:EVALUATION_SHADOW_ENABLED='false'
 ```
 
 Use a workspace-local temporary directory. The Windows system temporary

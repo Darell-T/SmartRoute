@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.services.mta.config import ALERTS_URL, NYC_TZ
 from app.services.mta.feeds import parse_feed_message
-
 
 _ALERTS_METADATA_KEY = f"{ALERTS_URL}:metadata"
 _ALERT_SOURCE = "mta_service_alerts"
@@ -49,21 +48,20 @@ async def fetch_service_alerts(
     from app.services.cache import cache_get, cache_set
     cached = cache_get(ALERTS_URL, fail_open=True)
     cached_observed_at = _cached_observed_at(cache_get, cached)
-    if cached:
-        if not force_refresh:
-            result = {
-                "content": cached,
-                "freshness": "cached",
-                "observed_at": cached_observed_at,
-            }
-            return result if with_metadata else cached
+    if cached and not force_refresh:
+        result = {
+            "content": cached,
+            "freshness": "cached",
+            "observed_at": cached_observed_at,
+        }
+        return result if with_metadata else cached
     try:
         import httpx
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(ALERTS_URL)
         if response.status_code != 200:
             raise RuntimeError(f"HTTP {response.status_code}")
-        observed_at = datetime.now(timezone.utc).isoformat()
+        observed_at = datetime.now(UTC).isoformat()
         if cache_result:
             cache_set(ALERTS_URL, response.content, 60, fail_open=True)
             cache_set(
@@ -97,17 +95,15 @@ async def fetch_service_alerts(
 
 
 def _period_bounds(period) -> tuple[int | None, int | None]:
-    start = period.start if period.start else None
-    end = period.end if period.end else None
+    start = period.start or None
+    end = period.end or None
     return start, end
 
 
 def _period_is_active(start: int | None, end: int | None, now: float) -> bool:
     if start and now < start:
         return False
-    if end and end > 0 and now > end:
-        return False
-    return True
+    return not (end and end > 0 and now > end)
 
 
 def _period_is_today_or_unexpired(start: int | None, end: int | None, now: float) -> bool:
@@ -272,7 +268,7 @@ def _epoch_iso(value: object) -> str | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
         return None
     try:
-        return datetime.fromtimestamp(float(value), tz=timezone.utc).isoformat()
+        return datetime.fromtimestamp(float(value), tz=UTC).isoformat()
     except (OverflowError, OSError, ValueError):
         return None
 
@@ -351,7 +347,7 @@ def _parse_service_alerts(
 ) -> list:
     feed = parse_feed_message(rawBytes)
     now = now_timestamp if now_timestamp is not None else datetime.now(tz=NYC_TZ).timestamp()
-    feed_observed_at = _epoch_iso(feed.header.timestamp if feed.header.timestamp else None)
+    feed_observed_at = _epoch_iso(feed.header.timestamp or None)
     local_verified_at = _epoch_iso(now)
     alerts = []
     for entity in feed.entity:

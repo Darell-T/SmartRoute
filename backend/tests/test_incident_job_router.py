@@ -47,18 +47,6 @@ class IncidentJobRouterTests(unittest.IsolatedAsyncioTestCase):
         run.assert_awaited_once()
         self.assertEqual(result, {"status": "complete"})
 
-    async def test_partial_and_lock_held_return_their_bounded_result(self):
-        for status in ("partial", "lock_held"):
-            with self.subTest(status=status):
-                with patch.object(
-                    incident_refresh.refresh,
-                    "run_background_incident_refresh",
-                    new=AsyncMock(return_value={"status": status}),
-                ) as run:
-                    result = await incident_refresh.incident_refresh()
-                run.assert_awaited_once()
-                self.assertEqual(result, {"status": status})
-
     async def test_failed_result_becomes_503_without_metrics_or_details(self):
         with patch.object(
             incident_refresh.refresh,

@@ -11,8 +11,8 @@ import dataclasses
 import importlib
 from typing import Any
 
-from app.services.agent.tools.location_resolution import resolve_named_place
 from app.services.agent.tools._types import ToolResult
+from app.services.agent.tools.location_resolution import resolve_named_place
 from app.services.agent.turn.finalization import record_phase_ms
 from app.services.trips.preparation import dependencies as _shared
 from app.services.trips.preparation.context import RoutePreparationFailure
@@ -27,12 +27,14 @@ from app.services.trips.preparation.input import (
     route_with_recovery,
 )
 from app.services.trips.preparation.prepare import (
-    PreparedLeg,
     PreparationDependencies,
+    PreparedLeg,
+)
+from app.services.trips.preparation.prepare import (
     prepare_single_leg as _prepare_single_leg,
 )
 from app.services.trips.transfer_semantics import normalize_routes
-
+import contextlib
 
 directions_service = importlib.import_module("app.services.directions")
 mta_realtime = importlib.import_module("app.services.mta.realtime")
@@ -94,10 +96,8 @@ async def prepare_single_leg(*args: Any, **kwargs: Any) -> PreparedLeg | ToolRes
                 normalize_routes=normalize_routes,
             )
         else:
-            try:
+            with contextlib.suppress(AttributeError, TypeError):
                 dependencies.normalize_routes = normalize_routes
-            except (AttributeError, TypeError):
-                pass
     result = await _prepare_single_leg(*args, **kwargs)
     return _as_tool_result(result)
 
@@ -106,8 +106,8 @@ __all__ = (
     "EVENT_EVIDENCE_TTL_S",
     "LIVE_EVIDENCE_TTL_S",
     "TRIP_CONTEXT_TIMEOUT_S",
-    "PreparedLeg",
     "PreparationDependencies",
+    "PreparedLeg",
     "build_preparation_dependencies",
     "new_preparation_timings",
     "normalize_routes",

@@ -3,9 +3,10 @@
 # ruff: noqa: E402
 
 import asyncio
+import logging
 import os
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -23,8 +24,9 @@ from app import observability
 
 observability.initialize()
 
-from app.services.agent.model import policy as agent_policy
 from app import runtime
+from app.services.agent.model import policy as agent_policy
+from app.services.agent.tools.places import damn_lines
 
 agent_policy.validate_agent_configuration()
 
@@ -37,13 +39,14 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Securit
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security.api_key import APIKeyHeader
-from app.routers import trips, live_feed, subway, agent_chat, incident_refresh
-from app.services.live_feed.network_snapshot import network_snapshot_store
+
+from app.routers import agent_chat, incident_refresh, live_feed, subway, trips
 from app.services.incidents.scout_provider import close_incident_scout_client
+from app.services.live_feed.network_snapshot import network_snapshot_store
 from app.services.mta.bus_runtime import close_bus_client, start_bus_client
-from app.services.trips.crowds.search_provider import close_crowd_search_client
-from app.services.mta.static_gtfs.store import GTFSStaticData, close_pool, init_pool
 from app.services.mta.static_gtfs.migration import migrate
+from app.services.mta.static_gtfs.store import GTFSStaticData, close_pool, init_pool
+from app.services.trips.crowds.search_provider import close_crowd_search_client
 
 # Active riders share one process-owned realtime snapshot. Poll no faster than
 # the upstream feed cadence, and stop polling shortly after the last REST or
@@ -51,6 +54,8 @@ from app.services.mta.static_gtfs.migration import migrate
 # and parse the full network indefinitely while idle.
 REALTIME_REFRESH_INTERVAL_S = 30
 REALTIME_ACTIVE_WINDOW_S = 45
+QUEUE_HISTORY_CHECK_INTERVAL_S = 60 * 60
+_LOGGER = logging.getLogger(__name__)
 
 # Render polls readiness frequently. PING is deliberately cheap but does not
 # prove that quota-enforced Redis commands used by admission and sessions are
@@ -109,6 +114,15 @@ async def _realtime_warm_loop():
         await asyncio.sleep(REALTIME_REFRESH_INTERVAL_S)
 
 
+async def _queue_history_refresh_loop() -> None:
+    while True:
+        try:
+            await damn_lines.warm_history()
+        except (RuntimeError, TypeError, ValueError):
+            _LOGGER.exception("Damn Lines history refresh failed")
+        await asyncio.sleep(QUEUE_HISTORY_CHECK_INTERVAL_S)
+
+
 async def _init_pool_bg():
     # Creating minconn connections can block for connect_timeout x minconn when
     # Postgres is slow or unreachable. Trip enrichment uses the static index, so
@@ -150,16 +164,17 @@ async def lifespan(app: FastAPI):
     app.state.pool_task = asyncio.create_task(_init_pool_bg())
     refresh_task = asyncio.create_task(_gtfs_refresh_loop())
     warm_task = asyncio.create_task(_realtime_warm_loop())
+    queue_history_task = asyncio.create_task(_queue_history_refresh_loop())
     app.state.startup_complete = True
     yield
     app.state.startup_complete = False
     refresh_task.cancel()
     warm_task.cancel()
-    for task in (refresh_task, warm_task):
-        try:
+    queue_history_task.cancel()
+    for task in (refresh_task, warm_task, queue_history_task):
+        with suppress(asyncio.CancelledError):
             await task
-        except asyncio.CancelledError:
-            pass
+    await live_feed.close_background_bus_tasks()
     await network_snapshot_store.close()
     await close_bus_client()
     await close_incident_scout_client()

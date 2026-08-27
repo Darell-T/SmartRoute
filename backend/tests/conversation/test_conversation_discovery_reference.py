@@ -298,8 +298,5 @@ class DiscoverySelectionRouteTranscriptTests(_DiscoveryReferenceBase):
     async def test_c_disc_05_selection_then_route_auto(self):
         await self._transcript("auto", "C-DISC-05")
 
-    async def test_c_disc_06_selection_then_route_quick(self):
-        await self._transcript("quick", "C-DISC-06")
-
 
 __all__ = ()

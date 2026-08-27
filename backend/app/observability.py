@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import logging
 import os
 import re
 from collections.abc import Iterator, Mapping
@@ -12,10 +13,11 @@ from typing import Any
 _SDK: Any = None
 _MAX_TEXT = 80
 _TRACE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+_LOGGER = logging.getLogger(__name__)
 
 
 class _NoopSpan:
-    def __enter__(self) -> "_NoopSpan":
+    def __enter__(self) -> _NoopSpan:
         return self
 
     def __exit__(self, _type: object, _value: object, _traceback: object) -> None:
@@ -32,7 +34,9 @@ def _env(name: str, default: str) -> str:
     return os.getenv(name, default).strip() or default
 
 
-def initialize(*, span_exporter: object | None = None, api_key: str | None = None) -> None:
+def initialize(
+    *, span_exporter: object | None = None, api_key: str | None = None
+) -> None:
     global _SDK
     try:
         import telemetry_dev
@@ -63,12 +67,12 @@ def shutdown() -> None:
         return
     try:
         sdk.flush(timeout_s=1.0)
-    except BaseException:
-        pass
+    except Exception:
+        _LOGGER.debug("telemetry flush failed during shutdown")
     try:
         sdk.shutdown(timeout_s=1.0)
-    except BaseException:
-        pass
+    except Exception:
+        _LOGGER.debug("telemetry shutdown failed")
 
 
 def _text(value: object, *, default: str = "unknown") -> str:
@@ -146,14 +150,18 @@ def start_turn(ctx: Any, *, turn_id: str, mode: str) -> Any:
 def _finish(span: Any, attributes: Mapping[str, object]) -> None:
     try:
         span.end(attributes=dict(attributes))
-    except BaseException:
-        pass
+    except Exception:
+        _LOGGER.debug("telemetry span end failed")
 
 
 def finish_turn(span: Any, telemetry: Mapping[str, object]) -> None:
     attributes: dict[str, object] = {
-        "smartroute.outcome": _text(telemetry.get("turn_resolution"), default="incomplete"),
-        "smartroute.selection_source": _text(telemetry.get("selection_source"), default="none"),
+        "smartroute.outcome": _text(
+            telemetry.get("turn_resolution"), default="incomplete"
+        ),
+        "smartroute.selection_source": _text(
+            telemetry.get("selection_source"), default="none"
+        ),
     }
     goal_states = telemetry.get("goal_states")
     if isinstance(goal_states, Mapping):

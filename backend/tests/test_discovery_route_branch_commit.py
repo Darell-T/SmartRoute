@@ -12,12 +12,12 @@ from unittest.mock import AsyncMock, patch
 
 from app.services.agent import candidate_store, discovery_store, trip_state
 from app.services.agent import session as session_module
+from app.services.agent.tools.location_resolution import ResolvedPlace
 from app.services.agent.tools.route import (
     prepare_route_options,
     prepare_route_persistence,
     present_route,
 )
-from app.services.agent.tools.location_resolution import ResolvedPlace
 
 from tests.discovery_route_handoff_test_support import (
     DiscoveryRouteHandoffTestMixin,
@@ -45,30 +45,9 @@ class DiscoveryRouteBranchCommitTests(DiscoveryRouteHandoffTestMixin, unittest.I
             ({"lat": 40.70, "lng": -74.00}, "pl_coordinate"),
         ]
 
-        self.assertEqual(
-            prepare_route_persistence._destination_identity(
-                provider_destination,
-                options=provider_options,
-                fallback_id=None,
-            ),
-            "pl_second",
-        )
-        self.assertEqual(
-            prepare_route_persistence._destination_identity(
-                coordinate_destination,
-                options=coordinate_options,
-                fallback_id=None,
-            ),
-            "pl_coordinate",
-        )
-        self.assertEqual(
-            prepare_route_persistence._destination_identity(
-                coordinate_destination,
-                options=[("unmatched", "pl_other"), ({"lat": "bad"}, "pl_bad")],
-                fallback_id="pl_fallback",
-            ),
-            "pl_fallback",
-        )
+        assert prepare_route_persistence._destination_identity(provider_destination, options=provider_options, fallback_id=None) == "pl_second"
+        assert prepare_route_persistence._destination_identity(coordinate_destination, options=coordinate_options, fallback_id=None) == "pl_coordinate"
+        assert prepare_route_persistence._destination_identity(coordinate_destination, options=[("unmatched", "pl_other"), ({"lat": "bad"}, "pl_bad")], fallback_id="pl_fallback") == "pl_fallback"
 
     async def test_multi_branch_commit_uses_selected_digest_opaque_id(self):
         ctx = _ctx()
@@ -79,13 +58,9 @@ class DiscoveryRouteBranchCommitTests(DiscoveryRouteHandoffTestMixin, unittest.I
         destinations = [first, duplicate, second]
 
         async def provider_prepare(
-            tool_input,
-            tool_ctx,
-            timings,
-            *,
-            resolved_origin=None,
+            *_args,
             resolved_destination=None,
-            **kwargs,
+            **_kwargs,
         ):
             prepared = _prepared_leg()
             alternate_route = [
@@ -127,35 +102,21 @@ class DiscoveryRouteBranchCommitTests(DiscoveryRouteHandoffTestMixin, unittest.I
                 ctx,
             )
 
-        self.assertTrue(prepared_result.ok, prepared_result.error)
+        assert prepared_result.ok, prepared_result.error
         candidates = prepared_result.data["candidates"]
-        self.assertEqual(
-            [candidate["destination_place_id"] for candidate in candidates],
-            [place["place_id"] for place in destinations],
-        )
+        assert [candidate["destination_place_id"] for candidate in candidates] == [place["place_id"] for place in destinations]
         candidate_set = candidate_store.load_candidate_set(
             prepared_result.data["candidate_set_id"],
             session_id=ctx.session_id,
         )
-        self.assertIsNone(candidate_set["destination_place_id"])
-        self.assertEqual(
-            [
-                entry["digest"]["destination_place_id"]
-                for entry in candidate_set["candidates"]
-            ],
-            [place["place_id"] for place in destinations],
-        )
+        assert candidate_set["destination_place_id"] is None
+        assert [entry["digest"]["destination_place_id"] for entry in candidate_set["candidates"]] == [place["place_id"] for place in destinations]
         for candidate, entry, destination in zip(
-            candidates, candidate_set["candidates"], destinations
+            candidates, candidate_set["candidates"], destinations, strict=False
         ):
-            self.assertEqual(candidate["candidate_id"], entry["candidate_id"])
-            self.assertEqual(
-                entry["destination_place"]["place_id"], destination["place_id"]
-            )
-            self.assertEqual(
-                entry["digest"]["_canonical_itinerary"]["destination"]["place_id"],
-                destination["place_id"],
-            )
+            assert candidate["candidate_id"] == entry["candidate_id"]
+            assert entry["destination_place"]["place_id"] == destination["place_id"]
+            assert entry["digest"]["_canonical_itinerary"]["destination"]["place_id"] == destination["place_id"]
 
         selected = candidates[2]
         route_result = await present_route.execute(
@@ -167,38 +128,20 @@ class DiscoveryRouteBranchCommitTests(DiscoveryRouteHandoffTestMixin, unittest.I
             },
             ctx,
         )
-        self.assertTrue(route_result.ok, route_result.error)
+        assert route_result.ok, route_result.error
         card_event = next(event for event in route_result.events if event.type == "route_card")
-        self.assertEqual(card_event.destination["place_id"], second["place_id"])
-        self.assertEqual(
-            card_event.itinerary["destination"]["place_id"], second["place_id"]
-        )
-        self.assertEqual(
-            route_result.session_route_cards[0]["canonical_itinerary"]["destination"][
-                "place_id"
-            ],
-            second["place_id"],
-        )
+        assert card_event.destination["place_id"] == second["place_id"]
+        assert card_event.itinerary["destination"]["place_id"] == second["place_id"]
+        assert route_result.session_route_cards[0]["canonical_itinerary"]["destination"]["place_id"] == second["place_id"]
         session_module.add_route_cards(ctx.session, route_result.session_route_cards)
-        self.assertEqual(
-            ctx.session["active_trip"]["destination"]["place_id"],
-            second["place_id"],
-        )
-        self.assertEqual(
-            trip_state.get_trip_state(ctx.session)["selected_place_id"],
-            second["place_id"],
-        )
+        assert ctx.session["active_trip"]["destination"]["place_id"] == second["place_id"]
+        assert trip_state.get_trip_state(ctx.session)["selected_place_id"] == second["place_id"]
         presented_set = candidate_store.load_candidate_set(
             prepared_result.data["candidate_set_id"],
             session_id=ctx.session_id,
         )
-        self.assertEqual(
-            presented_set["selected_candidate_id"], selected["candidate_id"]
-        )
-        self.assertEqual(
-            presented_set["candidates"][2]["digest"]["destination_place_id"],
-            second["place_id"],
-        )
+        assert presented_set["selected_candidate_id"] == selected["candidate_id"]
+        assert presented_set["candidates"][2]["digest"]["destination_place_id"] == second["place_id"]
 
     async def test_multi_branch_invalid_digest_fails_before_reservation(self):
         ctx = _ctx()
@@ -208,13 +151,9 @@ class DiscoveryRouteBranchCommitTests(DiscoveryRouteHandoffTestMixin, unittest.I
         first, second = record["places"][0], record["places"][2]
 
         async def provider_prepare(
-            tool_input,
-            tool_ctx,
-            timings,
-            *,
-            resolved_origin=None,
+            *_args,
             resolved_destination=None,
-            **kwargs,
+            **_kwargs,
         ):
             prepared = _prepared_leg()
             if resolved_destination is not None:
@@ -239,7 +178,7 @@ class DiscoveryRouteBranchCommitTests(DiscoveryRouteHandoffTestMixin, unittest.I
                 ctx,
             )
 
-        self.assertTrue(prepared_result.ok, prepared_result.error)
+        assert prepared_result.ok, prepared_result.error
         candidate_set_id = prepared_result.data["candidate_set_id"]
         candidate = prepared_result.data["candidates"][0]
         stored = candidate_store.load_candidate_set(
@@ -269,15 +208,15 @@ class DiscoveryRouteBranchCommitTests(DiscoveryRouteHandoffTestMixin, unittest.I
                 ctx,
             )
 
-        self.assertFalse(result.ok)
-        self.assertIn("not bound to the session discovery place", result.error)
+        assert not result.ok
+        assert "not bound to the session discovery place" in result.error
         mark_presented.assert_not_called()
         unchanged = candidate_store.load_candidate_set(
             candidate_set_id,
             session_id=ctx.session_id,
         )
-        self.assertFalse(unchanged["presented"])
-        self.assertIsNone(unchanged["selected_candidate_id"])
+        assert not unchanged["presented"]
+        assert unchanged["selected_candidate_id"] is None
 
     async def test_unpresented_older_destination_id_is_rejected_without_rebinding(self):
         ctx = _ctx()
@@ -292,13 +231,9 @@ class DiscoveryRouteBranchCommitTests(DiscoveryRouteHandoffTestMixin, unittest.I
         captured: dict = {}
 
         async def fake_prepare(
-            tool_input,
-            tool_ctx,
-            timings,
-            *,
-            resolved_origin=None,
+            *_args,
             resolved_destination=None,
-            **kwargs,
+            **_kwargs,
         ):
             captured["resolved_destination"] = resolved_destination
             prepared = _prepared_leg()
@@ -320,14 +255,14 @@ class DiscoveryRouteBranchCommitTests(DiscoveryRouteHandoffTestMixin, unittest.I
                 },
                 ctx,
             )
-        self.assertFalse(result.ok)
-        self.assertIn("destination place reference is invalid", result.error)
+        assert not result.ok
+        assert "destination place reference is invalid" in result.error
         # An opaque id from an older set is not authorized unless it was
         # actually presented; a stale legacy set id must not bypass that rule.
-        self.assertEqual(captured, {})
+        assert captured == {}
         state = trip_state.get_trip_state(ctx.session)
-        self.assertEqual(state["active_discovery_set_id"], set_b)
-        self.assertEqual(state["selected_place_id"], selected_place_id)
+        assert state["active_discovery_set_id"] == set_b
+        assert state["selected_place_id"] == selected_place_id
 
     async def test_unused_explicit_set_with_free_text_does_not_rebind(self):
         ctx = _ctx()
@@ -346,18 +281,18 @@ class DiscoveryRouteBranchCommitTests(DiscoveryRouteHandoffTestMixin, unittest.I
                 {"destination": "Barclays Center", "discovery_set_id": set_a},
                 ctx,
             )
-        self.assertTrue(result.ok)
+        assert result.ok
         # The explicit set never participated in canonical resolution, so the
         # active discovery context stays exactly as it was.
         state = trip_state.get_trip_state(ctx.session)
-        self.assertEqual(state["active_discovery_set_id"], set_b)
-        self.assertEqual(state["selected_place_id"], place_b)
+        assert state["active_discovery_set_id"] == set_b
+        assert state["selected_place_id"] == place_b
         record_payload = candidate_store.load_candidate_set(
             result.data["candidate_set_id"],
             session_id="sess-test",
         )
-        self.assertIsNone(record_payload["discovery_set_id"])
-        self.assertIsNone(record_payload["destination_place_id"])
+        assert record_payload["discovery_set_id"] is None
+        assert record_payload["destination_place_id"] is None
 
     async def test_unpresented_older_waypoint_ids_are_rejected_without_rebinding(self):
         ctx = _ctx()
@@ -374,12 +309,10 @@ class DiscoveryRouteBranchCommitTests(DiscoveryRouteHandoffTestMixin, unittest.I
 
         async def fake_prepare(
             tool_input,
-            tool_ctx,
-            timings,
-            *,
+            *_args,
             resolved_origin=None,
             resolved_destination=None,
-            **kwargs,
+            **_kwargs,
         ):
             captured.append(dict(tool_input))
             prepared = _prepared_leg()
@@ -404,11 +337,11 @@ class DiscoveryRouteBranchCommitTests(DiscoveryRouteHandoffTestMixin, unittest.I
                 },
                 ctx,
             )
-        self.assertFalse(result.ok)
-        self.assertIn("waypoint place reference is invalid", result.error)
+        assert not result.ok
+        assert "waypoint place reference is invalid" in result.error
         # Invalid older waypoint ids fail before route-provider execution and
         # cannot rebind the active discovery context or selected place.
-        self.assertEqual(captured, [])
+        assert captured == []
         state = trip_state.get_trip_state(ctx.session)
-        self.assertEqual(state["active_discovery_set_id"], set_b)
-        self.assertEqual(state["selected_place_id"], selected_place_id)
+        assert state["active_discovery_set_id"] == set_b
+        assert state["selected_place_id"] == selected_place_id

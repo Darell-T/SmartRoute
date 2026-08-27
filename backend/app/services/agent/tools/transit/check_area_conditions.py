@@ -12,19 +12,23 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import re
-from datetime import datetime, timezone
-from typing import Any, Mapping
+from collections.abc import Mapping
+from datetime import UTC, datetime
+from typing import Any
 from zoneinfo import ZoneInfo
 
-from app.services.agent.tools.location_resolution import resolve_named_place
+from app.services import geography as geo
 from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.location_resolution import resolve_named_place
+from app.services.geography import find_nearest_stops
 from app.services.trips import text
 from app.services.trips.crowds import search as crowd_search
-from app.services.trips.route_incidents import scan as trip_incidents
 from app.services.trips.crowds.hotspots import HotspotHit
-from app.services.trips.route_incidents.context import CandidateStopAssociation, CandidateStopContext
-from app.services import geography as geo
-from app.services.geography import find_nearest_stops
+from app.services.trips.route_incidents import scan as trip_incidents
+from app.services.trips.route_incidents.context import (
+    CandidateStopAssociation,
+    CandidateStopContext,
+)
 
 _NYC_TZ = ZoneInfo("America/New_York")
 _MAX_NEARBY_STOPS = 5
@@ -93,7 +97,7 @@ def _parse_at(value: object, ctx: ToolContext) -> tuple[datetime | None, str | N
     raw = str(value or "").strip() or str(ctx.now_et or "").strip()
     if raw:
         try:
-            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            parsed = datetime.fromisoformat(raw)
         except ValueError:
             if value:
                 return None, "at must be an RFC3339 timestamp with a timezone offset"
@@ -270,7 +274,7 @@ def _event_evidence(value: object, *, travel_at: datetime) -> dict[str, Any]:
     evidence: dict[str, Any] = {
         "status": status if status in {"complete", "partial", "unavailable"} else "unavailable",
         "travel_at": travel_at.isoformat(),
-        "checked_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "checked_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
     }
     if isinstance(result.get("cache_hit"), bool):
         evidence["cache_hit"] = result["cache_hit"]

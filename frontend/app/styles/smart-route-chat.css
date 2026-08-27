@@ -1405,6 +1405,10 @@
 }
 
 .sr-chat-sources {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
   align-self: flex-start;
   margin: 0;
   color: var(--sr-chat-ink-dim);
@@ -1412,35 +1416,80 @@
   line-height: 1.4;
 }
 
-.sr-chat-sources__summary {
-  cursor: pointer;
-  list-style-position: inside;
-  transition: color 140ms var(--sr-motion-ease);
+.sr-chat-sources__label {
+  color: var(--sr-chat-ink-dim);
 }
 
-.sr-chat-sources__summary:hover,
-.sr-chat-sources__summary:focus-visible {
+.sr-chat-sources__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sr-chat-sources__trigger {
+  display: inline-flex;
+  max-width: 180px;
+  height: 22px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px 0 4px;
+  overflow: hidden;
+  color: var(--sr-chat-ink-dim);
+  text-decoration: none;
+  background: color-mix(in srgb, var(--sr-chat-ink) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--sr-chat-ink) 8%, transparent);
+  border-radius: 999px;
+  transition:
+    color 140ms var(--sr-motion-ease),
+    background-color 140ms var(--sr-motion-ease),
+    border-color 140ms var(--sr-motion-ease);
+}
+
+.sr-chat-sources__trigger:hover,
+.sr-chat-sources__trigger:focus-visible {
   color: var(--sr-chat-ink);
+  background: color-mix(in srgb, var(--sr-chat-ink) 11%, transparent);
+  border-color: color-mix(in srgb, var(--sr-chat-ink) 14%, transparent);
 }
 
-.sr-chat-sources__summary:focus-visible {
+.sr-chat-sources__trigger:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--sr-chat-ink) 34%, transparent);
   outline-offset: 2px;
 }
 
-.sr-chat-sources__list {
-  margin: 6px 0 0;
-  padding-left: 18px;
+.sr-chat-sources__trigger span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.sr-chat-sources__link {
+.sr-chat-sources__favicon {
+  flex: 0 0 auto;
+  border-radius: 50%;
+}
+
+.sr-chat-sources__google-attribution {
+  color: color-mix(in srgb, var(--sr-chat-ink) 72%, transparent);
+  white-space: nowrap;
+}
+
+.sr-chat-sources__google-attribution a {
   color: inherit;
+  font-weight: 600;
   text-underline-offset: 2px;
 }
 
-.sr-chat-sources__link:hover,
-.sr-chat-sources__link:focus-visible {
+.sr-chat-sources__google-attribution a:hover,
+.sr-chat-sources__google-attribution a:focus-visible {
   color: var(--sr-chat-ink);
+}
+
+.sr-chat-sources__google-attribution a:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--sr-chat-ink) 34%, transparent);
+  outline-offset: 2px;
 }
 
 .sr-chat-transit-action {

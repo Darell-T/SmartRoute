@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import unittest
 
-from app.services.agent.tools.transit import evidence as transit_evidence
-from app.services.agent.tools.transit.direction import DirectionResolution
+from app.services import cache
 from app.services.agent.events import (
     ArrivalCardEvent,
     TokenEvent,
     TransitStatusActionEvent,
 )
-from app.services.agent.tools.transit import present_transit
 from app.services.agent.tools._types import ToolContext
-from app.services import cache
+from app.services.agent.tools.transit import evidence as transit_evidence
+from app.services.agent.tools.transit import present_transit
+from app.services.agent.tools.transit.direction import DirectionResolution
 
 
 class PresentTransitTests(unittest.IsolatedAsyncioTestCase):
@@ -37,11 +37,11 @@ class PresentTransitTests(unittest.IsolatedAsyncioTestCase):
             ToolContext(session_id="s1", turn_id="t1"),
         )
 
-        self.assertTrue(result.ok)
-        self.assertFalse(result.terminal)
-        self.assertEqual(result.data["presentation_outcome"]["goal_key"], "status")
-        self.assertIn("Q delays", result.data["passenger_text"])
-        self.assertIsInstance(result.events[0], TokenEvent)
+        assert result.ok
+        assert not result.terminal
+        assert result.data["presentation_outcome"]["goal_key"] == "status"
+        assert "Q delays" in result.data["passenger_text"]
+        assert isinstance(result.events[0], TokenEvent)
 
     async def test_planned_q_local_change_is_presented_without_disruption_claim(self) -> None:
         for requested_direction in ("uptown", "downtown"):
@@ -87,13 +87,13 @@ class PresentTransitTests(unittest.IsolatedAsyncioTestCase):
                     ),
                 )
 
-                self.assertTrue(result.ok, result.error)
+                assert result.ok, result.error
                 passenger_text = result.data["passenger_text"]
-                self.assertIn("Official planned service change", passenger_text)
-                self.assertIn("runs local", passenger_text)
-                self.assertNotIn("does not confirm the requested direction", passenger_text)
+                assert "Official planned service change" in passenger_text
+                assert "runs local" in passenger_text
+                assert "does not confirm the requested direction" not in passenger_text
                 for false_claim in ("delay", "outage", "disruption", "impact"):
-                    self.assertNotIn(false_claim, passenger_text.casefold())
+                    assert false_claim not in passenger_text.casefold()
 
     async def test_unplanned_severe_alert_keeps_conservative_official_alert_wording(self) -> None:
         set_id, _payload = transit_evidence.build_evidence_set(
@@ -131,9 +131,9 @@ class PresentTransitTests(unittest.IsolatedAsyncioTestCase):
         )
 
         passenger_text = result.data["passenger_text"]
-        self.assertIn("Official alert", passenger_text)
-        self.assertIn("Q severe delays", passenger_text)
-        self.assertNotIn("Official planned service change", passenger_text)
+        assert "Official alert" in passenger_text
+        assert "Q severe delays" in passenger_text
+        assert "Official planned service change" not in passenger_text
 
     async def test_changed_alert_evidence_is_explained_once_without_exposing_ids(self) -> None:
         set_id, _payload = transit_evidence.build_evidence_set(
@@ -171,13 +171,10 @@ class PresentTransitTests(unittest.IsolatedAsyncioTestCase):
             ToolContext(session_id="changed-alert", turn_id="t1"),
         )
 
-        self.assertTrue(result.ok, result.error)
+        assert result.ok, result.error
         passenger_text = result.data["passenger_text"]
-        self.assertIn(
-            "Official alert evidence has changed since the route was prepared.",
-            passenger_text,
-        )
-        self.assertNotIn("lmm:alert:new", passenger_text)
+        assert "Official alert evidence has changed since the route was prepared." in passenger_text
+        assert "lmm:alert:new" not in passenger_text
 
     async def test_systemwide_planned_q_change_keeps_distinct_wording(self) -> None:
         set_id, _payload = transit_evidence.build_evidence_set(
@@ -213,10 +210,10 @@ class PresentTransitTests(unittest.IsolatedAsyncioTestCase):
         )
 
         passenger_text = result.data["passenger_text"]
-        self.assertIn("Official planned service change", passenger_text)
-        self.assertIn("runs local", passenger_text)
+        assert "Official planned service change" in passenger_text
+        assert "runs local" in passenger_text
         for false_claim in ("delay", "outage", "disruption", "impact"):
-            self.assertNotIn(false_claim, passenger_text.casefold())
+            assert false_claim not in passenger_text.casefold()
 
     async def test_transit_output_contains_canonical_facts_without_follow_up(self) -> None:
         set_id, _payload = transit_evidence.build_evidence_set(
@@ -240,11 +237,11 @@ class PresentTransitTests(unittest.IsolatedAsyncioTestCase):
             ToolContext(session_id="s1", turn_id="t1"),
         )
 
-        self.assertTrue(result.ok)
-        self.assertIn("official alert", result.events[0].text)
-        self.assertEqual(result.data["follow_up"], "")
-        self.assertEqual(len(result.events), 1)
-        self.assertEqual(result.events[0].text, result.data["passenger_text"])
+        assert result.ok
+        assert "official alert" in result.events[0].text
+        assert result.data["follow_up"] == ""
+        assert len(result.events) == 1
+        assert result.events[0].text == result.data["passenger_text"]
 
     async def test_invalid_transit_framing_is_rejected_before_presentation(self) -> None:
         result = await present_transit.execute(
@@ -256,9 +253,9 @@ class PresentTransitTests(unittest.IsolatedAsyncioTestCase):
             ToolContext(session_id="s1", turn_id="t1"),
         )
 
-        self.assertFalse(result.ok)
-        self.assertTrue(result.internal_diagnostic)
-        self.assertIn("follow_up", result.error or "")
+        assert not result.ok
+        assert result.internal_diagnostic
+        assert "follow_up" in (result.error or "")
 
     async def test_systemwide_status_lists_affected_services_without_checked_route_dump(self) -> None:
         set_id, _payload = transit_evidence.build_evidence_set(
@@ -280,18 +277,13 @@ class PresentTransitTests(unittest.IsolatedAsyncioTestCase):
             ToolContext(session_id="s1", turn_id="t1"),
         )
 
-        self.assertTrue(result.ok)
+        assert result.ok
         text = result.data["passenger_text"]
-        self.assertIn("Affected services right now:", text)
-        self.assertIn("Q: Q delays", text)
-        self.assertIn("B: B rerouted", text)
-        self.assertNotIn("the requested route", text)
-        self.assertTrue(
-            any(
-                isinstance(event, TransitStatusActionEvent)
-                for event in result.events
-            )
-        )
+        assert "Affected services right now:" in text
+        assert "Q: Q delays" in text
+        assert "B: B rerouted" in text
+        assert "the requested route" not in text
+        assert any(isinstance(event, TransitStatusActionEvent) for event in result.events)
 
     async def test_systemwide_status_keeps_possible_stalled_vehicle_visible(self) -> None:
         set_id, _payload = transit_evidence.build_evidence_set(
@@ -318,10 +310,8 @@ class PresentTransitTests(unittest.IsolatedAsyncioTestCase):
         )
 
         text = result.data["passenger_text"]
-        self.assertIn("Possible stalled train on Q (not confirmed)", text)
-        self.assertTrue(
-            any(isinstance(event, TransitStatusActionEvent) for event in result.events)
-        )
+        assert "Possible stalled train on Q (not confirmed)" in text
+        assert any(isinstance(event, TransitStatusActionEvent) for event in result.events)
 
     async def test_route_specific_status_does_not_offer_systemwide_alerts_action(self) -> None:
         set_id, _payload = transit_evidence.build_evidence_set(
@@ -343,12 +333,7 @@ class PresentTransitTests(unittest.IsolatedAsyncioTestCase):
             ToolContext(session_id="s1", turn_id="t1"),
         )
 
-        self.assertFalse(
-            any(
-                isinstance(event, TransitStatusActionEvent)
-                for event in result.events
-            )
-        )
+        assert not any(isinstance(event, TransitStatusActionEvent) for event in result.events)
 
     async def test_unresolved_direction_is_not_presented_as_verified(self) -> None:
         set_id, _payload = transit_evidence.build_evidence_set(
@@ -363,9 +348,9 @@ class PresentTransitTests(unittest.IsolatedAsyncioTestCase):
             ToolContext(session_id="s1", turn_id="t1"),
         )
 
-        self.assertTrue(result.ok)
-        self.assertNotIn("downtown Q", result.data["passenger_text"])
-        self.assertIn("can't confirm", result.data["passenger_text"])
+        assert result.ok
+        assert "downtown Q" not in result.data["passenger_text"]
+        assert "can't confirm" in result.data["passenger_text"]
 
     async def test_current_official_no_alerts_explains_unscanned_incidents(self) -> None:
         set_id, _payload = transit_evidence.build_evidence_set(
@@ -394,11 +379,11 @@ class PresentTransitTests(unittest.IsolatedAsyncioTestCase):
         )
 
         text = result.data["passenger_text"]
-        self.assertIn("matching official alert", text)
-        self.assertIn("stalled train", text)
-        self.assertIn("couldn't fully check the recent incident reports", text)
-        self.assertNotIn("unscanned", text)
-        self.assertNotIn("I can't confirm the current status", text)
+        assert "matching official alert" in text
+        assert "stalled train" in text
+        assert "couldn't fully check the recent incident reports" in text
+        assert "unscanned" not in text
+        assert "I can't confirm the current status" not in text
 
     async def test_event_schedule_uses_rider_language_and_model_framing(self) -> None:
         set_id, _payload = transit_evidence.build_evidence_set(
@@ -430,16 +415,16 @@ class PresentTransitTests(unittest.IsolatedAsyncioTestCase):
             ToolContext(session_id="s1", turn_id="t1"),
         )
 
-        self.assertTrue(result.ok, result.error)
+        assert result.ok, result.error
         visible = "".join(
             event.text for event in result.events if isinstance(event, TokenEvent)
         )
-        self.assertTrue(visible.startswith("There are a couple of things happening nearby."))
-        self.assertIn("Jonas Brothers", visible)
-        self.assertIn("Madison Square Garden", visible)
-        self.assertIn("Aug 20 at 7:30 PM", visible)
-        self.assertNotIn("Current events:", visible)
-        self.assertNotIn("Event:", visible)
+        assert visible.startswith("There are a couple of things happening nearby.")
+        assert "Jonas Brothers" in visible
+        assert "Madison Square Garden" in visible
+        assert "Aug 20 at 7:30 PM" in visible
+        assert "Current events:" not in visible
+        assert "Event:" not in visible
 
     async def test_systemwide_current_official_result_precedes_supplemental_caveat(self) -> None:
         set_id, _payload = transit_evidence.build_evidence_set(
@@ -461,10 +446,10 @@ class PresentTransitTests(unittest.IsolatedAsyncioTestCase):
         )
 
         text = result.data["passenger_text"]
-        self.assertIn("No affected service was identified", text)
-        self.assertIn("couldn't fully check the recent incident reports", text)
-        self.assertNotIn("unscanned", text)
-        self.assertNotIn("I can't confirm current systemwide", text)
+        assert "No affected service was identified" in text
+        assert "couldn't fully check the recent incident reports" in text
+        assert "unscanned" not in text
+        assert "I can't confirm current systemwide" not in text
 
     async def test_unavailable_official_alerts_do_not_claim_no_alerts(self) -> None:
         set_id, _payload = transit_evidence.build_evidence_set(
@@ -493,11 +478,11 @@ class PresentTransitTests(unittest.IsolatedAsyncioTestCase):
         )
 
         text = result.data["passenger_text"]
-        self.assertIn("can't confirm", text)
-        self.assertIn("official MTA alerts weren't available", text)
-        self.assertNotIn("coverage is unavailable", text)
-        self.assertNotIn("No matching official alert", text)
-        self.assertNotIn("..", text)
+        assert "can't confirm" in text
+        assert "official MTA alerts weren't available" in text
+        assert "coverage is unavailable" not in text
+        assert "No matching official alert" not in text
+        assert ".." not in text
 
     async def test_current_status_keeps_verified_direction_in_wording(self) -> None:
         set_id, _payload = transit_evidence.build_evidence_set(
@@ -526,8 +511,8 @@ class PresentTransitTests(unittest.IsolatedAsyncioTestCase):
         )
 
         text = result.data["passenger_text"]
-        self.assertIn("downtown Q", text)
-        self.assertNotIn("uptown", text)
+        assert "downtown Q" in text
+        assert "uptown" not in text
 
     async def test_directionless_alert_does_not_gain_directional_scope(self) -> None:
         set_id, _payload = transit_evidence.build_evidence_set(
@@ -558,9 +543,9 @@ class PresentTransitTests(unittest.IsolatedAsyncioTestCase):
         )
 
         text = result.data["passenger_text"]
-        self.assertNotIn("..", text)
-        self.assertIn("Q delays", text)
-        self.assertIn("does not confirm the requested direction", text)
+        assert ".." not in text
+        assert "Q delays" in text
+        assert "does not confirm the requested direction" in text
 
     async def test_status_presentation_names_confirmed_incident_evidence(self) -> None:
         set_id, _payload = transit_evidence.build_evidence_set(
@@ -597,8 +582,8 @@ class PresentTransitTests(unittest.IsolatedAsyncioTestCase):
             ToolContext(session_id="s1", turn_id="t1"),
         )
 
-        self.assertIn("Confirmed incident", result.data["passenger_text"])
-        self.assertIn("Near Newkirk Plaza", result.data["passenger_text"])
+        assert "Confirmed incident" in result.data["passenger_text"]
+        assert "Near Newkirk Plaza" in result.data["passenger_text"]
 
     async def test_status_presentation_labels_possible_stalled_vehicle_as_unconfirmed(self) -> None:
         set_id, _payload = transit_evidence.build_evidence_set(
@@ -635,8 +620,8 @@ class PresentTransitTests(unittest.IsolatedAsyncioTestCase):
         )
 
         text = result.data["passenger_text"]
-        self.assertIn("possible stalled train", text)
-        self.assertIn("isn't confirmed", text)
+        assert "possible stalled train" in text
+        assert "isn't confirmed" in text
 
     async def test_complete_status_check_does_not_reduce_result_to_alerts_only(self) -> None:
         set_id, _payload = transit_evidence.build_evidence_set(
@@ -665,9 +650,9 @@ class PresentTransitTests(unittest.IsolatedAsyncioTestCase):
         )
 
         text = result.data["passenger_text"]
-        self.assertIn("official alert", text)
-        self.assertIn("confirmed incident", text)
-        self.assertIn("stalled train", text)
+        assert "official alert" in text
+        assert "confirmed incident" in text
+        assert "stalled train" in text
 
     async def test_arrival_presentation_emits_canonical_arrival_event(self) -> None:
         set_id, _payload = transit_evidence.build_evidence_set(
@@ -686,9 +671,9 @@ class PresentTransitTests(unittest.IsolatedAsyncioTestCase):
             ToolContext(session_id="s1", turn_id="t1"),
         )
 
-        self.assertTrue(result.ok)
-        self.assertTrue(any(isinstance(event, ArrivalCardEvent) for event in result.events))
-        self.assertEqual(result.data["presentation_outcome"]["operation"], "arrivals")
+        assert result.ok
+        assert any(isinstance(event, ArrivalCardEvent) for event in result.events)
+        assert result.data["presentation_outcome"]["operation"] == "arrivals"
 
     async def test_no_arrivals_stays_prose_only_instead_of_emitting_stub_card(self) -> None:
         set_id, _payload = transit_evidence.build_evidence_set(
@@ -708,10 +693,10 @@ class PresentTransitTests(unittest.IsolatedAsyncioTestCase):
             ToolContext(session_id="s1", turn_id="t1"),
         )
 
-        self.assertTrue(result.ok)
-        self.assertIn("No upcoming arrivals", result.data["passenger_text"])
-        self.assertFalse(any(isinstance(event, ArrivalCardEvent) for event in result.events))
-        self.assertTrue(any(isinstance(event, TokenEvent) for event in result.events))
+        assert result.ok
+        assert "No upcoming arrivals" in result.data["passenger_text"]
+        assert not any(isinstance(event, ArrivalCardEvent) for event in result.events)
+        assert any(isinstance(event, TokenEvent) for event in result.events)
 
     async def test_stale_arrivals_without_predictions_stay_prose_only(self) -> None:
         set_id, _payload = transit_evidence.build_evidence_set(
@@ -731,10 +716,10 @@ class PresentTransitTests(unittest.IsolatedAsyncioTestCase):
             ToolContext(session_id="s1", turn_id="t1"),
         )
 
-        self.assertTrue(result.ok)
-        self.assertIn("out of date", result.data["passenger_text"])
-        self.assertFalse(any(isinstance(event, ArrivalCardEvent) for event in result.events))
-        self.assertTrue(any(isinstance(event, TokenEvent) for event in result.events))
+        assert result.ok
+        assert "out of date" in result.data["passenger_text"]
+        assert not any(isinstance(event, ArrivalCardEvent) for event in result.events)
+        assert any(isinstance(event, TokenEvent) for event in result.events)
 
     async def test_downtown_presentation_cannot_describe_uptown_as_catchable(self) -> None:
         set_id, _payload = transit_evidence.build_evidence_set(
@@ -774,9 +759,9 @@ class PresentTransitTests(unittest.IsolatedAsyncioTestCase):
         )
 
         event = next(event for event in result.events if isinstance(event, ArrivalCardEvent))
-        self.assertEqual([group["id"] for group in event.directions], ["downtown"])
-        self.assertEqual(event.catchability["catchable_arrival_minutes"], 9)
-        self.assertNotIn("uptown", repr(event.to_data()))
+        assert [group["id"] for group in event.directions] == ["downtown"]
+        assert event.catchability["catchable_arrival_minutes"] == 9
+        assert "uptown" not in repr(event.to_data())
 
 
 if __name__ == "__main__":

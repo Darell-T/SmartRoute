@@ -11,7 +11,6 @@ import dataclasses
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-
 ProgressSink = Callable[[str, str], Awaitable[None]]
 
 

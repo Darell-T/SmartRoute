@@ -15,8 +15,8 @@ import psycopg2
 import psycopg2.pool
 from psycopg2.extras import RealDictCursor
 
-from app.services.mta.static_gtfs.stop_patterns import normalize_station_name
 from app.services.mta.static_gtfs.scheduled_arrivals import ScheduledArrivalIndex
+from app.services.mta.static_gtfs.stop_patterns import normalize_station_name
 
 # DATABASE_URL points at a remote Postgres; without a connect timeout and TCP
 # keepalives a dead peer leaves connections blocked indefinitely.

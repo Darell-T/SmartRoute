@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 from app.services.trips.preparation.prepare import PreparedLeg
 
@@ -282,9 +283,7 @@ def merge_coverage(legs: list[PreparedLeg]) -> dict[str, str]:
                 result.setdefault(key, value)
                 continue
             current = result.get(key)
-            if current in {None, "not_required"}:
-                result[key] = value
-            elif _STATUS_ORDER.get(value, 4) > _STATUS_ORDER.get(current, 0):
+            if current in {None, "not_required"} or _STATUS_ORDER.get(value, 4) > _STATUS_ORDER.get(current, 0):
                 result[key] = value
     return result
 
@@ -470,11 +469,11 @@ __all__ = (
     "candidate_evidence_for_route",
     "coverage_for_prepared",
     "merge_candidate_evidence",
-    "merge_evidence_envelopes",
+    "merge_coverage",
     "merge_event_status",
+    "merge_evidence_envelopes",
     "merge_incident_metadata",
     "merge_incident_metadata_values",
-    "merge_coverage",
     "merge_serialized_envelopes",
     "serialize_evidence_envelopes",
     "sum_timings",

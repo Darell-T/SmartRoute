@@ -8,11 +8,19 @@ import surface.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Callable
+from datetime import UTC, datetime
+from typing import Any
 
 from app.services.agent import candidate_store, trip_state
+from app.services.agent.tools._types import ToolContext, ToolOutcome, ToolResult
+from app.services.agent.tools.transit import (
+    accessibility_status,
+    check_area_conditions,
+    lookup_arrivals,
+    lookup_facts,
+)
 from app.services.agent.tools.transit import evidence as transit_evidence
 from app.services.agent.tools.transit import venue_crowd_window as venues
 from app.services.agent.tools.transit.direction import (
@@ -23,11 +31,6 @@ from app.services.agent.tools.transit.direction import (
     resolve_direction,
     resolve_model_direction,
 )
-from app.services.agent.tools.transit import accessibility_status
-from app.services.agent.tools.transit import check_area_conditions
-from app.services.agent.tools.transit import lookup_arrivals
-from app.services.agent.tools.transit import lookup_facts
-from app.services.agent.tools._types import ToolContext, ToolOutcome, ToolResult
 from app.services.agent.tools.transit.transit_snapshot import collect_service_status
 from app.services.trips.crowds import event_provider
 
@@ -363,7 +366,7 @@ async def accessibility(
             **result.data,
             "source": "mta_accessibility",
             "freshness": "current",
-            "observed_at": datetime.now(timezone.utc).isoformat(),
+            "observed_at": datetime.now(UTC).isoformat(),
             **({"binding": binding} if binding is not None else {}),
         }
     bound_routes = (

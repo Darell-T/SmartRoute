@@ -12,11 +12,12 @@ import asyncio
 import json
 import secrets
 import time
-from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
+from typing import Any
 
+from app.services import cache
 from app.services.incidents import index as incident_index
-from app.services.incidents.scout import ScoutBatchResult, scout_incident_batch
 from app.services.incidents.batches import INCIDENT_BATCHES, IncidentBatch
 from app.services.incidents.official import (
     SOURCE_ALERTS,
@@ -27,7 +28,7 @@ from app.services.incidents.official import (
     OfficialIncidentSnapshot,
     collect_official_incidents,
 )
-from app.services import cache
+from app.services.incidents.scout import ScoutBatchResult, scout_incident_batch
 
 JOB_LOCK_KEY = "incident:job:lock"
 JOB_LOCK_TTL_S = 25 * 60  # safely below the 30-minute cron cadence.
@@ -52,7 +53,7 @@ def release_job_lock(token: str | None = None) -> bool:
 
 
 def _epoch_to_iso(epoch: float) -> str:
-    return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+    return datetime.fromtimestamp(epoch, tz=UTC).isoformat().replace("+00:00", "Z")
 
 
 def _duration_ms(started: float, monotonic: Callable[[], float] | None) -> float:

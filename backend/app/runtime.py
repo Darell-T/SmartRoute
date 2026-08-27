@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 
-
 _PRODUCTION_PROFILES = frozenset({"production", "prod"})
 _LOCAL_TEST_PROFILES = frozenset({"local", "development", "dev", "test", "testing"})
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})

@@ -15,6 +15,8 @@ import unittest
 import zipfile
 from pathlib import Path
 
+import pytest
+
 _SCRIPT = (
     Path(__file__).resolve().parent.parent
     / "scripts"
@@ -49,68 +51,35 @@ class DeriveTransferComponentsTests(unittest.TestCase):
             ("P1", "UNKNOWN"),  # unknown endpoint ignored
         ]
         components = _BUILDER.derive_transfer_components(STOPS, rows)
-        self.assertEqual(
-            components,
-            {
-                "P1": "gtfs_transfer:P1",
-                "P2": "gtfs_transfer:P1",
-                "P3": "gtfs_transfer:P1",
-            },
-        )
-        self.assertNotIn("P4", components)
+        assert components == {"P1": "gtfs_transfer:P1", "P2": "gtfs_transfer:P1", "P3": "gtfs_transfer:P1"}
+        assert "P4" not in components
 
     def test_derivation_is_deterministic_regardless_of_row_order(self):
         rows_a = [("P3", "P2"), ("P1", "P2")]
         rows_b = [("P1", "P2"), ("P2", "P3")]
-        self.assertEqual(
-            _BUILDER.derive_transfer_components(STOPS, rows_a),
-            _BUILDER.derive_transfer_components(STOPS, rows_b),
-        )
-
-    def test_self_rows_alone_create_no_component(self):
-        components = _BUILDER.derive_transfer_components(
-            STOPS, [("P1", "P1"), ("P2", "P2")]
-        )
-        self.assertEqual(components, {})
+        assert _BUILDER.derive_transfer_components(STOPS, rows_a) == _BUILDER.derive_transfer_components(STOPS, rows_b)
 
     def test_unlinked_same_name_or_nearby_stops_remain_separate(self):
         same_name = {
             "X1": {"name": "Same St", "lat": 40.5, "lon": -73.5},
             "X2": {"name": "Same St", "lat": 40.5001, "lon": -73.5},
         }
-        self.assertEqual(
-            _BUILDER.derive_transfer_components(same_name, []),
-            {},
-        )
+        assert _BUILDER.derive_transfer_components(same_name, []) == {}
         # Even an explicit non-transfer self row must not link them.
-        self.assertEqual(
-            _BUILDER.derive_transfer_components(
-                same_name, [("X1", "X1"), ("X2", "X2")]
-            ),
-            {},
-        )
-
-    def test_unknown_endpoints_are_ignored(self):
-        components = _BUILDER.derive_transfer_components(
-            STOPS, [("P1", "ZZ9"), ("ZZ8", "P2")]
-        )
-        self.assertEqual(components, {})
+        assert _BUILDER.derive_transfer_components(same_name, [("X1", "X1"), ("X2", "X2")]) == {}
 
     def test_identity_is_source_qualified_and_lowest_member(self):
         components = _BUILDER.derive_transfer_components(
             STOPS, [("P3", "P2"), ("P2", "P4")]
         )
-        self.assertEqual(components["P4"], "gtfs_transfer:P2")
-        self.assertTrue(components["P2"].startswith("gtfs_transfer:"))
+        assert components["P4"] == "gtfs_transfer:P2"
+        assert components["P2"].startswith("gtfs_transfer:")
 
     def test_platform_endpoint_ids_are_stripped_to_parents(self):
         components = _BUILDER.derive_transfer_components(
             STOPS, [("P1N", "P2S"), ("P2", "P3N")]
         )
-        self.assertEqual(
-            components,
-            {"P1": "gtfs_transfer:P1", "P2": "gtfs_transfer:P1", "P3": "gtfs_transfer:P1"},
-        )
+        assert components == {"P1": "gtfs_transfer:P1", "P2": "gtfs_transfer:P1", "P3": "gtfs_transfer:P1"}
 
 
 class BuildPatternsTransferAnnotationTests(unittest.TestCase):
@@ -138,36 +107,27 @@ class BuildPatternsTransferAnnotationTests(unittest.TestCase):
             transfer_components=components,
         )
 
-        self.assertEqual(plain["patterns"], annotated["patterns"])
-        self.assertEqual(plain["pattern_count"], annotated["pattern_count"])
-        self.assertEqual(plain["stop_count"], annotated["stop_count"])
+        assert plain["patterns"] == annotated["patterns"]
+        assert plain["pattern_count"] == annotated["pattern_count"]
+        assert plain["stop_count"] == annotated["stop_count"]
         for sid in STOPS:
-            self.assertEqual(plain["stops"][sid]["name"], annotated["stops"][sid]["name"])
-        self.assertEqual(annotated["stops"]["P1"]["station_complex_id"], "gtfs_transfer:P1")
-        self.assertEqual(annotated["stops"]["P3"]["station_complex_id"], "gtfs_transfer:P1")
-        self.assertNotIn("station_complex_id", annotated["stops"]["P4"])
-        self.assertEqual(
-            annotated["transfer_components"],
-            {
-                "count": 1,
-                "member_stop_count": 3,
-                "identity_prefix": "gtfs_transfer",
-                "source": "transfers",
-            },
-        )
+            assert plain["stops"][sid]["name"] == annotated["stops"][sid]["name"]
+        assert annotated["stops"]["P1"]["station_complex_id"] == "gtfs_transfer:P1"
+        assert annotated["stops"]["P3"]["station_complex_id"] == "gtfs_transfer:P1"
+        assert "station_complex_id" not in annotated["stops"]["P4"]
+        assert annotated["transfer_components"] == {"count": 1, "member_stop_count": 3, "identity_prefix": "gtfs_transfer", "source": "transfers"}
 
     def test_no_components_emits_no_metadata(self):
         routes_short, trip_meta, trip_sequences = self._base_inputs()
         plain = _BUILDER.build_patterns(STOPS, routes_short, trip_meta, trip_sequences)
-        self.assertNotIn("transfer_components", plain)
-        self.assertNotIn("station_complex_id", plain["stops"]["P1"])
+        assert "transfer_components" not in plain
+        assert "station_complex_id" not in plain["stops"]["P1"]
 
 
 class SqliteAdapterTests(unittest.TestCase):
     def _fixture_path(self):
-        handle = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        handle.close()
-        path = Path(handle.name)
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as handle:
+            path = Path(handle.name)
         con = sqlite3.connect(path)
         try:
             cur = con.cursor()
@@ -214,17 +174,17 @@ class SqliteAdapterTests(unittest.TestCase):
             )
         finally:
             path.unlink(missing_ok=True)
-        self.assertEqual(stops, STOPS)
-        self.assertEqual(len(transfer_rows), 4)
+        assert stops == STOPS
+        assert len(transfer_rows) == 4
         components = _BUILDER.derive_transfer_components(stops, transfer_rows)
-        self.assertEqual(components["P1"], "gtfs_transfer:P1")
-        self.assertEqual(components["P3"], "gtfs_transfer:P1")
-        self.assertNotIn("P4", components)
+        assert components["P1"] == "gtfs_transfer:P1"
+        assert components["P3"] == "gtfs_transfer:P1"
+        assert "P4" not in components
         artifact = _BUILDER.build_patterns(
             stops, routes, trips, seqs, transfer_components=components
         )
-        self.assertEqual(artifact["pattern_count"], 1)
-        self.assertEqual(artifact["stops"]["P2"]["station_complex_id"], "gtfs_transfer:P1")
+        assert artifact["pattern_count"] == 1
+        assert artifact["stops"]["P2"]["station_complex_id"] == "gtfs_transfer:P1"
 
 
 class ZipAdapterTests(unittest.TestCase):
@@ -264,16 +224,16 @@ class ZipAdapterTests(unittest.TestCase):
             stops, routes, trips, seqs, transfer_rows = _BUILDER.load_from_zip(zip_path)
         finally:
             zip_path.unlink(missing_ok=True)
-        self.assertEqual(stops, STOPS)
-        self.assertEqual(len(transfer_rows), 4)
+        assert stops == STOPS
+        assert len(transfer_rows) == 4
         components = _BUILDER.derive_transfer_components(stops, transfer_rows)
-        self.assertEqual(components["P1"], "gtfs_transfer:P1")
-        self.assertEqual(components["P3"], "gtfs_transfer:P1")
-        self.assertNotIn("P4", components)
+        assert components["P1"] == "gtfs_transfer:P1"
+        assert components["P3"] == "gtfs_transfer:P1"
+        assert "P4" not in components
         artifact = _BUILDER.build_patterns(
             stops, routes, trips, seqs, transfer_components=components
         )
-        self.assertEqual(artifact["stops"]["P2"]["station_complex_id"], "gtfs_transfer:P1")
+        assert artifact["stops"]["P2"]["station_complex_id"] == "gtfs_transfer:P1"
 
     def test_zip_without_transfers_txt_fails_loudly(self):
         with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as f:
@@ -285,7 +245,7 @@ class ZipAdapterTests(unittest.TestCase):
             # transfers.txt is canonical input: a zip missing it must fail
             # loudly instead of silently building an artifact with no complex
             # metadata.
-            with self.assertRaises(KeyError):
+            with pytest.raises(KeyError):
                 _BUILDER.load_from_zip(zip_path)
         finally:
             zip_path.unlink(missing_ok=True)

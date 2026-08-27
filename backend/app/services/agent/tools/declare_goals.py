@@ -11,7 +11,6 @@ from app.services.agent.turn.contract import (
     TurnContract,
 )
 
-
 DECLARE_GOALS_SCHEMA = {
     "name": "declare_goals",
     "description": (

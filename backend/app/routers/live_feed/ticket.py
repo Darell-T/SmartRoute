@@ -5,7 +5,8 @@ from __future__ import annotations
 import hashlib
 import hmac
 import re
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 
 async def verify_ticket(

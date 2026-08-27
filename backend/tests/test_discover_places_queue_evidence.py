@@ -7,6 +7,7 @@ import unittest
 from datetime import UTC, date, datetime
 from unittest.mock import AsyncMock, Mock, patch
 
+import pytest
 from app.services import cache
 from app.services.agent import discovery_store
 from app.services.agent.tools._types import ToolContext, ToolResult
@@ -107,13 +108,9 @@ class DiscoverQueueEvidenceTests(unittest.IsolatedAsyncioTestCase):
         cache._mem.clear()
         damn_lines._current_refresh_task = None
         damn_lines._history_refresh_task = None
-        damn_lines._warmup_tasks = set()
         damn_lines._history_loaded = False
         damn_lines._history_last_success = None
         damn_lines._history_index = {}
-        warmup = patch.object(damn_lines, "schedule_history_warmup")
-        warmup.start()
-        self.addCleanup(warmup.stop)
 
     async def test_ignore_and_heads_up_do_not_enrich_discovery_digest(self):
         for mode in ("ignore", "heads_up"):
@@ -393,7 +390,7 @@ class DiscoverQueueEvidenceTests(unittest.IsolatedAsyncioTestCase):
                 "get_current_observations",
                 new=current,
             ),
-            self.assertRaises(asyncio.CancelledError),
+            pytest.raises(asyncio.CancelledError),
         ):
             await _discover(
                 _ctx(),

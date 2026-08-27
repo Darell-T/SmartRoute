@@ -7,24 +7,25 @@ import math
 import time
 from typing import Any
 
-from app.services.agent import candidate_store
-from app.services.agent import discovery_store
+from app.services.agent import candidate_store, discovery_store
 from app.services.agent import trip_state as trip_state_module
 from app.services.agent.tools._types import ToolContext, ToolOutcome, ToolResult
 from app.services.agent.tools.location_resolution import ResolvedPlace
-from app.services.agent.tools.route.prepare_route_branches import aggregate_destination_ids
+from app.services.agent.tools.route.preparation_adapter import PreparedLeg
+from app.services.agent.tools.route.prepare_route_branches import (
+    aggregate_destination_ids,
+)
+from app.services.agent.turn.finalization import record_phase_ms
 from app.services.trips.preparation.constraints import (
     ROUTE_STATUSES,
     candidate_digest,
     route_status,
 )
-from app.services.trips.preparation.prepare import AggregatePreparation
 from app.services.trips.preparation.evidence import (
     coverage_for_prepared,
     serialize_evidence_envelopes,
 )
-from app.services.agent.tools.route.preparation_adapter import PreparedLeg
-from app.services.agent.turn.finalization import record_phase_ms
+from app.services.trips.preparation.prepare import AggregatePreparation
 from app.services.trips.route_incidents.scan import incident_scan_is_complete
 
 
@@ -263,7 +264,7 @@ def bind_canonical_destination_identities(
         destinations = [aggregate.destination_place]
 
     normalized: list[ResolvedPlace] = []
-    for index, destination in enumerate(destinations):
+    for _index, destination in enumerate(destinations):
         opaque_id = _destination_identity(
             destination,
             options=options,

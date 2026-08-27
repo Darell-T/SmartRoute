@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 import os
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -15,7 +15,7 @@ from app.services.incidents.batches import INCIDENT_BATCHES
 from app.services.incidents.scout_normalization import claim_ref_for, per_post_source_id
 
 BATCH = INCIDENT_BATCHES[1]  # midtown-manhattan
-NOW = datetime(2026, 8, 2, 16, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 8, 2, 16, 0, tzinfo=UTC)
 X_URL = "https://x.com/nycdesk/status/1234567890"
 X_ID = per_post_source_id(X_URL)
 WEB_URL = "https://news.example.test/report"
@@ -23,40 +23,29 @@ WEB_URL = "https://news.example.test/report"
 
 class ResponseExtractionTests(unittest.TestCase):
     def test_response_text_handles_plain_and_sdk_shapes(self):
-        self.assertEqual(
-            transport.response_text(SimpleNamespace(content='{"incidents": []}')),
-            '{"incidents": []}',
-        )
-        self.assertEqual(
-            transport.response_text(
-                SimpleNamespace(outputs=[SimpleNamespace(message=SimpleNamespace(content="x"))])
-            ),
-            "x",
-        )
-        self.assertEqual(transport.response_text(SimpleNamespace()), "")
+        assert transport.response_text(SimpleNamespace(content='{"incidents": []}')) == '{"incidents": []}'
+        assert transport.response_text(SimpleNamespace(outputs=[SimpleNamespace(message=SimpleNamespace(content="x"))])) == "x"
+        assert transport.response_text(SimpleNamespace()) == ""
 
     def test_response_citations_are_canonical_sorted_and_bounded(self):
         response = SimpleNamespace(
             citations=["https://x.com/B/status/2?utm=1", "https://X.com/A/status/1"],
             inline_citations=[{"url": "HTTPS://X.COM/A/status/1"}],
         )
-        self.assertEqual(
-            transport.response_citations(response),
-            ("https://x.com/A/status/1", "https://x.com/B/status/2?utm=1"),
-        )
-        self.assertEqual(transport.response_citations(SimpleNamespace(citations=[])), ())
+        assert transport.response_citations(response) == ("https://x.com/A/status/1", "https://x.com/B/status/2?utm=1")
+        assert transport.response_citations(SimpleNamespace(citations=[])) == ()
 
 
 class PromptRenderingTests(unittest.TestCase):
     def test_x_prompt_has_single_brace_json_and_bounded_batch_context(self):
         prompt = transport.render_x_prompt(BATCH)
-        self.assertIn('{"incidents":[{"location"', prompt)
-        self.assertIn('Use {"incidents":[]}', prompt)
-        self.assertNotIn("{{", prompt)
-        self.assertNotIn("}}", prompt)
-        self.assertIn("Midtown Manhattan", prompt)
-        self.assertIn("midtown", prompt)
-        self.assertIn("bounds=40.7300,-74.0200,40.7900,-73.9400", prompt)
+        assert '{"incidents":[{"location"' in prompt
+        assert 'Use {"incidents":[]}' in prompt
+        assert "{{" not in prompt
+        assert "}}" not in prompt
+        assert "Midtown Manhattan" in prompt
+        assert "midtown" in prompt
+        assert "bounds=40.7300,-74.0200,40.7900,-73.9400" in prompt
 
     def test_web_prompt_has_single_brace_json_and_no_x_context(self):
         claim = {
@@ -71,15 +60,15 @@ class PromptRenderingTests(unittest.TestCase):
             "corridor_ids": [],
         }
         prompt = transport.render_web_prompt((claim,))
-        self.assertIn('{"corroborations":[{"claim_ref"', prompt)
-        self.assertIn('Use {"corroborations":[]}', prompt)
-        self.assertNotIn("{{", prompt)
-        self.assertNotIn("}}", prompt)
-        self.assertIn(claim_ref_for(X_ID), prompt)
-        self.assertIn("Lexington Avenue", prompt)
-        self.assertNotIn("https://", prompt)
-        self.assertNotIn("x:nycdesk", prompt)
-        self.assertNotIn("source_id", prompt)
+        assert '{"corroborations":[{"claim_ref"' in prompt
+        assert 'Use {"corroborations":[]}' in prompt
+        assert "{{" not in prompt
+        assert "}}" not in prompt
+        assert claim_ref_for(X_ID) in prompt
+        assert "Lexington Avenue" in prompt
+        assert "https://" not in prompt
+        assert "x:nycdesk" not in prompt
+        assert "source_id" not in prompt
 
     def test_sanitized_claims_never_include_x_provenance(self):
         claim = {
@@ -96,22 +85,22 @@ class PromptRenderingTests(unittest.TestCase):
             "source_id": X_ID,
         }
         sanitized = transport.sanitized_claims((claim,))
-        self.assertEqual(len(sanitized), 1)
-        self.assertNotIn("source_url", sanitized[0])
-        self.assertNotIn("source_id", sanitized[0])
-        self.assertEqual(sanitized[0]["claim_ref"], claim_ref_for(X_ID))
+        assert len(sanitized) == 1
+        assert "source_url" not in sanitized[0]
+        assert "source_id" not in sanitized[0]
+        assert sanitized[0]["claim_ref"] == claim_ref_for(X_ID)
 
     def test_has_client_reflects_configuration(self):
         with patch.object(transport, "AsyncClient", None):
-            self.assertFalse(transport.has_client())
+            assert not transport.has_client()
         with patch.object(transport, "AsyncClient", object()), patch.dict(
             os.environ, {"XAI_API_KEY": ""}
         ):
-            self.assertFalse(transport.has_client())
+            assert not transport.has_client()
         with patch.object(transport, "AsyncClient", object()), patch.dict(
             os.environ, {"XAI_API_KEY": "configured"}
         ):
-            self.assertTrue(transport.has_client())
+            assert transport.has_client()
 
 
 class TransportConstructionTests(unittest.IsolatedAsyncioTestCase):
@@ -143,24 +132,24 @@ class TransportConstructionTests(unittest.IsolatedAsyncioTestCase):
                 stack.enter_context(patch_ctx)
             result = await transport._run_x_search(BATCH, now=NOW)
             x_kwargs = dict(transport.x_search.call_args.kwargs)
-        self.assertTrue(result.tool_completed)
-        self.assertEqual(result.citations, (X_URL,))
+        assert result.tool_completed
+        assert result.citations == (X_URL,)
         chat.sample.assert_awaited_once_with()
         client.chat.create.assert_called_once()
         kwargs = client.chat.create.call_args.kwargs
-        self.assertEqual(kwargs["tools"], ["x-tool"])
-        self.assertEqual(kwargs["max_turns"], 1)
-        self.assertEqual(transport._X_OUTPUT_MAX_TOKENS, 1_800)
-        self.assertLessEqual(transport._X_OUTPUT_MAX_TOKENS, 2_000)
-        self.assertEqual(kwargs["max_tokens"], transport._X_OUTPUT_MAX_TOKENS)
-        self.assertEqual(kwargs["temperature"], 0.0)
-        self.assertEqual(kwargs["response_format"], "json_object")
-        self.assertEqual(x_kwargs["to_date"], NOW)
-        self.assertEqual(x_kwargs["to_date"] - x_kwargs["from_date"], timedelta(hours=6))
+        assert kwargs["tools"] == ["x-tool"]
+        assert kwargs["max_turns"] == 1
+        assert transport._X_OUTPUT_MAX_TOKENS == 1800
+        assert transport._X_OUTPUT_MAX_TOKENS <= 2000
+        assert kwargs["max_tokens"] == transport._X_OUTPUT_MAX_TOKENS
+        assert kwargs["temperature"] == 0.0
+        assert kwargs["response_format"] == "json_object"
+        assert x_kwargs["to_date"] == NOW
+        assert x_kwargs["to_date"] - x_kwargs["from_date"] == timedelta(hours=6)
         prompt = chat.append.call_args_list[0].args[0]
-        self.assertIn("Midtown Manhattan", prompt)
-        self.assertIn("midtown", prompt)
-        self.assertNotIn("{{", prompt)
+        assert "Midtown Manhattan" in prompt
+        assert "midtown" in prompt
+        assert "{{" not in prompt
 
     async def test_web_transport_single_tool_nyc_location_sanitized_prompt(self):
         claim = {
@@ -187,23 +176,23 @@ class TransportConstructionTests(unittest.IsolatedAsyncioTestCase):
                 stack.enter_context(patch_ctx)
             result = await transport._run_web_search((claim,), now=NOW)
             web_kwargs = dict(transport.web_search.call_args.kwargs)
-        self.assertTrue(result.tool_completed)
+        assert result.tool_completed
         kwargs = client.chat.create.call_args.kwargs
-        self.assertEqual(kwargs["tools"], ["web-tool"])
-        self.assertEqual(kwargs["max_turns"], 1)
-        self.assertEqual(transport._WEB_OUTPUT_MAX_TOKENS, 800)
-        self.assertLessEqual(transport._WEB_OUTPUT_MAX_TOKENS, 1_500)
-        self.assertEqual(kwargs["max_tokens"], transport._WEB_OUTPUT_MAX_TOKENS)
-        self.assertEqual(kwargs["temperature"], 0.0)
-        self.assertEqual(web_kwargs["user_location_country"], "US")
-        self.assertEqual(web_kwargs["user_location_city"], "New York")
-        self.assertEqual(web_kwargs["user_location_region"], "NY")
-        self.assertEqual(web_kwargs["user_location_timezone"], "America/New_York")
+        assert kwargs["tools"] == ["web-tool"]
+        assert kwargs["max_turns"] == 1
+        assert transport._WEB_OUTPUT_MAX_TOKENS == 800
+        assert transport._WEB_OUTPUT_MAX_TOKENS <= 1500
+        assert kwargs["max_tokens"] == transport._WEB_OUTPUT_MAX_TOKENS
+        assert kwargs["temperature"] == 0.0
+        assert web_kwargs["user_location_country"] == "US"
+        assert web_kwargs["user_location_city"] == "New York"
+        assert web_kwargs["user_location_region"] == "NY"
+        assert web_kwargs["user_location_timezone"] == "America/New_York"
         prompt = chat.append.call_args_list[0].args[0]
-        self.assertIn(claim_ref_for(X_ID), prompt)
-        self.assertNotIn("https://", prompt)
-        self.assertNotIn("x:nycdesk", prompt)
-        self.assertNotIn("{{", prompt)
+        assert claim_ref_for(X_ID) in prompt
+        assert "https://" not in prompt
+        assert "x:nycdesk" not in prompt
+        assert "{{" not in prompt
 
     async def test_transport_without_client_returns_not_completed(self):
         with patch.object(transport, "AsyncClient", None), patch.object(
@@ -211,10 +200,10 @@ class TransportConstructionTests(unittest.IsolatedAsyncioTestCase):
         ):
             x_result = await transport._run_x_search(BATCH, now=NOW)
             web_result = await transport._run_web_search((), now=NOW)
-        self.assertFalse(x_result.tool_completed)
-        self.assertFalse(web_result.tool_completed)
-        self.assertEqual(x_result.response_text, "")
-        self.assertEqual(web_result.response_text, "")
+        assert not x_result.tool_completed
+        assert not web_result.tool_completed
+        assert x_result.response_text == ""
+        assert web_result.response_text == ""
 
     async def test_close_releases_the_shared_client(self):
         client = SimpleNamespace(close=AsyncMock())
@@ -222,8 +211,8 @@ class TransportConstructionTests(unittest.IsolatedAsyncioTestCase):
             transport, "_client_loop", asyncio.get_running_loop()
         ):
             await transport.close_incident_scout_client()
-            self.assertIsNone(transport._client)
-            self.assertIsNone(transport._client_loop)
+            assert transport._client is None
+            assert transport._client_loop is None
         client.close.assert_awaited_once_with()
 
     async def test_client_is_created_lazily_on_the_running_event_loop(self):
@@ -239,9 +228,9 @@ class TransportConstructionTests(unittest.IsolatedAsyncioTestCase):
         ), patch.object(transport, "_client_loop", None), patch.dict(
             os.environ, {"XAI_API_KEY": "configured"}
         ):
-            self.assertIs(transport._get_client(), client)
-            self.assertEqual(created_on, [asyncio.get_running_loop()])
-            self.assertIs(transport._client_loop, asyncio.get_running_loop())
+            assert transport._get_client() is client
+            assert created_on == [asyncio.get_running_loop()]
+            assert transport._client_loop is asyncio.get_running_loop()
             await transport.close_incident_scout_client()
 
         client.close.assert_awaited_once_with()

@@ -5,8 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from app.services.trips.itinerary import TRANSIT_MODES
 from app.services import geography as geo
+from app.services.trips.itinerary import TRANSIT_MODES
 
 WALK_SPEED_MPS = 1.4
 
@@ -245,16 +245,16 @@ def _normalize_accessibility(value: object) -> str:
 def _walk_seconds(step: dict) -> int:
     value = step.get("duration_seconds")
     if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return max(0, int(round(value)))
+        return max(0, round(value))
     dep = _parse_time(step.get("departure_time_iso"))
     arr = _parse_time(step.get("arrival_time_iso"))
     if dep is not None and arr is not None:
-        return max(0, int(round((arr - dep).total_seconds())))
+        return max(0, round((arr - dep).total_seconds()))
     start = _coords(step.get("start_point"))
     end = _coords(step.get("end_point"))
     if start is None or end is None:
         return 0
-    return max(0, int(round(geo.distance_meters(*start, *end) / WALK_SPEED_MPS)))
+    return max(0, round(geo.distance_meters(*start, *end) / WALK_SPEED_MPS))
 
 
 def _coords(value: object) -> tuple[float, float] | None:
@@ -272,7 +272,7 @@ def _parse_time(value: object) -> datetime | None:
     if not isinstance(value, str) or not value.strip():
         return None
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return datetime.fromisoformat(value)
     except ValueError:
         return None
 

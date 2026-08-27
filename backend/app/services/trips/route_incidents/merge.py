@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 import re
-from typing import Any, Iterable, Mapping
+from collections.abc import Iterable, Mapping
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
+from app.services.geography import distance_meters
 from app.services.trips.route_incidents.context import valid_coordinate_pair
 from app.services.trips.route_incidents.matching import _as_mapping
-from app.services.geography import distance_meters
-
 
 _OFFICIAL_SOURCES = {"511ny", "mta", "mta_alert", "vehicle"}
 # "Closed" often describes an active roadway closure.  Only unambiguously
@@ -22,14 +22,14 @@ def _parse_time(value: object) -> datetime | None:
         result = value
     elif isinstance(value, str):
         try:
-            result = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            result = datetime.fromisoformat(value)
         except ValueError:
             return None
     else:
         return None
     if result.tzinfo is None or result.utcoffset() is None:
         return None
-    return result.astimezone(timezone.utc)
+    return result.astimezone(UTC)
 
 
 def _source(item: Mapping[str, Any]) -> str:
@@ -60,7 +60,7 @@ def filter_current_incidents(
     incidents: Iterable[object], *, now: datetime | None = None, social_max_age_hours: float = 6.0
 ) -> list[dict[str, Any]]:
     """Drop resolved/expired items and stale non-official reports."""
-    current_time = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    current_time = (now or datetime.now(UTC)).astimezone(UTC)
     max_age = timedelta(hours=max(0.0, social_max_age_hours))
     filtered: list[dict[str, Any]] = []
     for incident in incidents or []:

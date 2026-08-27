@@ -10,16 +10,18 @@ untrusted per the system prompt's injection-defense clause.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
-from app.services.incidents import index as incident_index
-from app.services.mta import realtime as mta_realtime
-from app.services.agent.tools.transit import evidence as transit_evidence
-from app.services.agent.tools.transit import evidence_binding as transit_evidence_binding
-from app.services.agent.tools.location_resolution import resolve_named_point
 from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.location_resolution import resolve_named_point
+from app.services.agent.tools.transit import evidence as transit_evidence
+from app.services.agent.tools.transit import (
+    evidence_binding as transit_evidence_binding,
+)
+from app.services.incidents import index as incident_index
 from app.services.live_feed.snapshot import build_live_snapshot as _build_live_snapshot
+from app.services.mta import realtime as mta_realtime
 from app.services.mta.alerts import project_service_alert
 from app.services.trips import text
 
@@ -123,7 +125,7 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
         data = {
             "source": "smartroute_live_feed",
             "freshness": "live",
-            "observed_at": datetime.now(timezone.utc).isoformat(),
+            "observed_at": datetime.now(UTC).isoformat(),
             "nearest_stop": _safe_stop(snapshot.get("nearest_stop")),
             "arrivals": [_safe_arrival(a) for a in arrivals[:ARRIVAL_LIMIT]],
             "alerts": [_safe_alert(a) for a in alerts[:ALERT_LIMIT]],

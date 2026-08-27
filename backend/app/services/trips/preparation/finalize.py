@@ -5,13 +5,13 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
-from app.services.trips.preparation.prepare import AggregatePreparation
-from app.services.trips.preparation.constraints import route_constraints
 from app.services.trips import scoring
 from app.services.trips.itinerary import (
     build_canonical_itinerary,
     build_chained_itinerary,
 )
+from app.services.trips.preparation.constraints import route_constraints
+from app.services.trips.preparation.prepare import AggregatePreparation
 
 
 def finalize_aggregate(

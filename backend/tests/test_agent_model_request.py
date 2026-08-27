@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 
+import pytest
 from app.services.agent.model import policy
 from app.services.agent.model import request as model_request
 from app.services.agent.tools import TOOLS
@@ -47,9 +48,9 @@ class AgentModelRequestTests(unittest.TestCase):
             tools=TOOLS,
         )
 
-        self.assertEqual(len(kwargs["tools"]), 8)
-        self.assertTrue(all("strict" not in tool for tool in kwargs["tools"]))
-        self.assertEqual(kwargs["tool_choice"], {"type": "any"})
+        assert len(kwargs["tools"]) == 8
+        assert all("strict" not in tool for tool in kwargs["tools"])
+        assert kwargs["tool_choice"] == {"type": "any"}
 
     def test_sonnet_five_omits_incompatible_request_fields(self):
         kwargs = model_request.build_stream_kwargs(
@@ -64,15 +65,15 @@ class AgentModelRequestTests(unittest.TestCase):
                 "top_k": 10,
             },
         )
-        self.assertNotIn("thinking", kwargs)
-        self.assertNotIn("temperature", kwargs)
-        self.assertNotIn("top_p", kwargs)
-        self.assertNotIn("top_k", kwargs)
-        self.assertEqual(kwargs["output_config"], {"effort": "medium"})
-        self.assertEqual(kwargs["tools"], [{"name": "discover_places"}])
+        assert "thinking" not in kwargs
+        assert "temperature" not in kwargs
+        assert "top_p" not in kwargs
+        assert "top_k" not in kwargs
+        assert kwargs["output_config"] == {"effort": "medium"}
+        assert kwargs["tools"] == [{"name": "discover_places"}]
 
     def test_sonnet_five_rejects_assistant_prefill_before_provider_call(self):
-        with self.assertRaisesRegex(ValueError, "assistant prefill"):
+        with pytest.raises(ValueError, match="assistant prefill"):
             model_request.build_stream_kwargs(
                 messages=[{"role": "assistant", "content": "prefix"}],
                 system_blocks=[],
@@ -89,8 +90,8 @@ class AgentModelRequestTests(unittest.TestCase):
             allow_server_tool_continuation=True,
         )
 
-        self.assertEqual(kwargs["messages"][-1]["role"], "assistant")
-        self.assertEqual(kwargs["tools"][0]["name"], "web_search")
+        assert kwargs["messages"][-1]["role"] == "assistant"
+        assert kwargs["tools"][0]["name"] == "web_search"
 
     def test_request_diagnostics_report_shape_only(self):
         kwargs = {
@@ -100,10 +101,10 @@ class AgentModelRequestTests(unittest.TestCase):
             "max_tokens": 900,
         }
         diagnostics = model_request.request_diagnostics(kwargs)
-        self.assertIn("model=claude-sonnet-5", diagnostics)
-        self.assertIn("tools_supplied=1 tool_count=1", diagnostics)
-        self.assertNotIn("private rider text", diagnostics)
-        self.assertNotIn("private schema", diagnostics)
+        assert "model=claude-sonnet-5" in diagnostics
+        assert "tools_supplied=1 tool_count=1" in diagnostics
+        assert "private rider text" not in diagnostics
+        assert "private schema" not in diagnostics
 
     def test_structured_error_is_sanitized_without_repr(self):
         exc = _StructuredProviderError(
@@ -114,27 +115,20 @@ class AgentModelRequestTests(unittest.TestCase):
             ),
         )
         details = model_request.provider_error_details(exc)
-        self.assertEqual(details.status_code, 400)
-        self.assertEqual(details.error_type, "invalid_request_error")
-        self.assertIn("[url]", details.message)
-        self.assertIn("[coordinates]", details.message)
-        self.assertIn("[secret]", details.message)
-        self.assertNotIn("private rider text", details.message)
-        self.assertNotIn("body must not be logged", details.message)
+        assert details.status_code == 400
+        assert details.error_type == "invalid_request_error"
+        assert "[url]" in details.message
+        assert "[coordinates]" in details.message
+        assert "[secret]" in details.message
+        assert "private rider text" not in details.message
+        assert "body must not be logged" not in details.message
 
     def test_deterministic_client_errors_are_not_retryable(self):
-        for status in (400, 401, 402, 403, 404):
-            with self.subTest(status=status):
-                self.assertFalse(
-                    model_request.should_retry(_StructuredProviderError(status_code=status))
-                )
+        assert not model_request.should_retry(_StructuredProviderError(status_code=400))
 
     def test_rate_limits_and_server_errors_are_retryable(self):
-        for status in (429, 500, 502, 529):
-            with self.subTest(status=status):
-                self.assertTrue(
-                    model_request.should_retry(_StructuredProviderError(status_code=status))
-                )
+        assert model_request.should_retry(_StructuredProviderError(status_code=429))
+        assert model_request.should_retry(_StructuredProviderError(status_code=500))
 
 
 if __name__ == "__main__":

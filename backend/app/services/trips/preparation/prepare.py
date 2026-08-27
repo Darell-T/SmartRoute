@@ -8,15 +8,20 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass, field as dataclass_field
-from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from dataclasses import field as dataclass_field
+from datetime import UTC, datetime
+from typing import Any
 
 from app.services.trips.location import ResolvedPlace
-from app.services.trips.preparation.input import parse_rfc3339, prepare_structural_candidates
 from app.services.trips.preparation.context import (
     RoutePreparationContext,
     RoutePreparationFailure,
+)
+from app.services.trips.preparation.input import (
+    parse_rfc3339,
+    prepare_structural_candidates,
 )
 from app.services.trips.transfer_semantics import normalize_routes
 
@@ -352,7 +357,7 @@ async def prepare_single_leg(
                 ),
                 timeout=dependencies.context_timeout_seconds,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             context_collection_timed_out = True
             raw_alerts, stalled, stalled_buses = [], [], []
         alerts_available = not context_collection_timed_out and not isinstance(
@@ -441,7 +446,7 @@ async def prepare_single_leg(
             print(f"[agent-plan_trip] incident index lookup failed: {type(exc).__name__}")
         mark("incident_complete_ms")
         await ctx.emit_progress("checking_live_conditions", "complete")
-        observed_at = datetime.now(timezone.utc)
+        observed_at = datetime.now(UTC)
         evidence_envelopes = {
             "alerts": dependencies.evidence_envelope(
                 "mta_service_alerts",

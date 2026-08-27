@@ -24,7 +24,8 @@ def test_fixed_seed_provider_fault_validation_uses_only_offline_production_seams
 
 def test_provider_fault_validation_failure_never_reports_pass(monkeypatch) -> None:
     async def failed_validation():
-        raise RuntimeError("simulated assertion failure")
+        message = "simulated assertion failure"
+        raise RuntimeError(message)
 
     monkeypatch.setattr(validation, "_validate", failed_validation)
 

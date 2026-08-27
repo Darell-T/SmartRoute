@@ -11,7 +11,6 @@ from collections.abc import Iterable
 from app.services.agent import events as agent_events
 from app.services.agent.turn.contract import GoalKind, GoalState
 
-
 ACTIVITY_LABEL_FIELD = "activity_label"
 MAX_ACTIVITY_LABEL_CHARS = 100
 MAX_PRESENTATION_FRAMING_CHARS = 240
@@ -296,11 +295,7 @@ def truthful_failure_text(evidence: object) -> str:
         unresolved is not None
         and unresolved[0] == GoalKind.ROUTE
         and unresolved[1] != GoalState.BLOCKED_WAITING_FOR_RIDER
-    ):
-        route_text = _precise_route_failure_text(evidence)
-        if route_text is not None:
-            return route_text
-    elif unresolved is None and _route_goal_is_unresolved(evidence):
+    ) or (unresolved is None and _route_goal_is_unresolved(evidence)):
         route_text = _precise_route_failure_text(evidence)
         if route_text is not None:
             return route_text

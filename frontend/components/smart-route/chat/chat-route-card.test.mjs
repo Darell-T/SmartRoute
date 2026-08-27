@@ -177,14 +177,24 @@ test("transit status exposes View alerts only from the typed action flag", () =>
   assert.match(CHAT_CSS_SOURCE, /\.sr-chat-transit-action\s*\{/);
 });
 
-test("Damn Lines attribution renders as one accessible disclosure after assistant prose", () => {
+test("source attribution uses PromptKit-style favicon triggers after assistant prose", () => {
   const markup = renderToStaticMarkup(Sources({
-    sources: [{ title: "Damn Lines", url: "https://damnlines.com/camera/l-industrie" }],
+    sources: [
+      { title: "Google Maps", url: "https://www.google.com/maps" },
+      { title: "Damn Lines", url: "https://damnlines.com/camera/l-industrie" },
+    ],
   }));
 
-  assert.match(markup, /<details class="sr-chat-sources">/);
-  assert.match(markup, /<summary[^>]*>Source: Damn Lines<\/summary>/);
+  assert.match(markup, /<div class="sr-chat-sources" aria-label="Sources">/);
+  assert.match(markup, />Source<\/span>/);
   assert.match(markup, /href="https:\/\/damnlines\.com\/camera\/l-industrie"/);
+  assert.match(markup, /title="Damn Lines"/);
+  assert.match(markup, /www\.google\.com\/s2\/favicons\?sz=64&amp;domain_url=https%3A%2F%2Fdamnlines\.com%2Fcamera%2Fl-industrie/);
+  assert.match(markup, /class="sr-chat-sources__favicon"/);
+  assert.match(markup, /class="sr-chat-sources__google-attribution"/);
+  assert.match(markup, /Place data by/);
+  assert.match(markup, /href="https:\/\/www\.google\.com\/maps"/);
+  assert.equal(markup.match(/class="sr-chat-sources__favicon"/g)?.length, 1);
   assert.match(markup, /target="_blank"/);
   assert.match(markup, /rel="noopener noreferrer"/);
   assert.equal(CHAT_MESSAGE_SOURCE.match(/<Sources\b/g)?.length, 1);

@@ -136,7 +136,7 @@ class TurnContract:
         object.__setattr__(self, "goals", goals)
 
     @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "TurnContract":
+    def from_payload(cls, payload: Mapping[str, Any]) -> TurnContract:
         if not isinstance(payload, Mapping) or set(payload) != {"goals"}:
             raise ContractValidationError("payload must contain only goals")
         raw_goals = payload["goals"]

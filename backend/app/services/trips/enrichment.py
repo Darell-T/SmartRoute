@@ -46,7 +46,7 @@ async def _enrich_subway_legs(gtfs, steps: list[dict]) -> dict:
         *(_enrich_subway_step_with_gtfs(gtfs, step) for step in subway_steps),
         return_exceptions=True,
     )
-    for step, result in zip(subway_steps, results):
+    for step, result in zip(subway_steps, results, strict=False):
         if isinstance(result, asyncio.TimeoutError):
             print(
                 f"[trip] subway stop enrichment timed out "
@@ -89,7 +89,7 @@ async def _enrich_bus_legs(steps: list[dict]) -> dict:
         )
         groups_by_route = {
             rid: result
-            for rid, result in zip(bus_route_ids, results)
+            for rid, result in zip(bus_route_ids, results, strict=False)
             if isinstance(result, dict)
         }
         for step in bus_steps:

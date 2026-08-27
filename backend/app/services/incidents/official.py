@@ -8,11 +8,13 @@ boundaries and reports explicit source status; no request path calls this module
 from __future__ import annotations
 
 import hashlib
+import logging
 import math
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable
+from datetime import UTC, datetime
+from typing import Any
 
 from app.services.incidents.normalization import (
     bounded_ids,
@@ -23,12 +25,18 @@ from app.services.incidents.normalization import (
 )
 from app.services.mta.alerts import (
     fetch_service_alerts as _fetch_service_alerts,
+)
+from app.services.mta.alerts import (
     parse_service_alerts as _parse_service_alerts,
 )
 from app.services.mta.config import ALERTS_URL, ALL_SUBWAY_ROUTES, route_to_feed
-from app.services.mta.feeds import fetch_feeds_with_metadata as _fetch_feeds_with_metadata
+from app.services.mta.feeds import (
+    fetch_feeds_with_metadata as _fetch_feeds_with_metadata,
+)
 from app.services.mta.subway import (
     detect_stalled_trains as _detect_stalled_trains,
+)
+from app.services.mta.subway import (
     parse_vehicle_positions as _parse_vehicle_positions,
 )
 
@@ -38,11 +46,14 @@ SOURCE_GTFS_RT = "mta_gtfs_rt"
 # telemetry alone is not proof of a stalled train.
 STALLED_EXPIRY_S = 600
 _MAX_OFFICIAL_INCIDENTS = 64
+_LOGGER = logging.getLogger(__name__)
 _ROUTE_LIST_BOUND = 24
 _STOP_LIST_BOUND = 24
 _ALERT_ID_BOUND = 120
 _NUMBERED_SUFFIX = "numbered"
-StalledDetector = Callable[[list[dict[str, Any]], set[str], float], list[dict[str, Any]]]
+StalledDetector = Callable[
+    [list[dict[str, Any]], set[str], float], list[dict[str, Any]]
+]
 
 
 def expected_feed_groups() -> set[str]:
@@ -155,7 +166,11 @@ def canonical_incident(
 def provenance(
     source: str, source_id: str, observed_at: str, *, url: str | None = None
 ) -> list[dict[str, str]]:
-    record: dict[str, str] = {"source": source, "source_id": source_id, "observed_at": observed_at}
+    record: dict[str, str] = {
+        "source": source,
+        "source_id": source_id,
+        "observed_at": observed_at,
+    }
     if url:
         record["source_url"] = url
     return sanitize_source_records([record])
@@ -181,7 +196,7 @@ def epoch_to_iso(value: object) -> str | None:
     if epoch is None:
         return None
     try:
-        return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat()
+        return datetime.fromtimestamp(epoch, tz=UTC).isoformat()
     except (OverflowError, ValueError, OSError):
         return None
 
@@ -234,6 +249,7 @@ def dedupe_incidents(incidents: list[dict[str, Any]]) -> tuple[dict[str, Any], .
             break
     return tuple(out)
 
+
 STATUS_CURRENT = "current"
 STATUS_PARTIAL = "partial"
 STATUS_UNAVAILABLE = "unavailable"
@@ -266,7 +282,7 @@ async def collect_official_incidents(
     ``detect_stalled(positions, route_ids, now_timestamp)`` -> stalled dicts;
     ``clock()`` -> epoch seconds. Sources are independent."""
     now = clock() if clock is not None else time.time()
-    attempted_at = datetime.fromtimestamp(now, tz=timezone.utc).isoformat()
+    attempted_at = datetime.fromtimestamp(now, tz=UTC).isoformat()
     alert_bytes = await _fetch_source(
         fetch_alerts,
         lambda: _fetch_service_alerts(force_refresh=True),
@@ -276,7 +292,11 @@ async def collect_official_incidents(
         alert_bytes, parse_alerts, attempted_at
     )
     gtfs_incidents, gtfs_status = await _collect_gtfs_incidents(
-        fetch_feed_groups, parse_positions, detect_stalled, now=now, attempted_at=attempted_at
+        fetch_feed_groups,
+        parse_positions,
+        detect_stalled,
+        now=now,
+        attempted_at=attempted_at,
     )
     return OfficialIncidentSnapshot(
         incidents=dedupe_incidents(alert_incidents + gtfs_incidents),
@@ -345,7 +365,9 @@ async def _collect_gtfs_incidents(
     expected = expected_feed_groups()
     if not expected:
         return [], STATUS_UNAVAILABLE
-    parser = parse_positions if parse_positions is not None else _parse_vehicle_positions
+    parser = (
+        parse_positions if parse_positions is not None else _parse_vehicle_positions
+    )
     positions: list[dict[str, Any]] = []
     usable: set[str] = set()
     for group in groups:
@@ -358,8 +380,12 @@ async def _collect_gtfs_incidents(
             continue
         try:
             parsed = parser(bytes(content))
-        except Exception:
-            # One malformed group never discards other usable groups.
+        except Exception as exc:
+            _LOGGER.warning(
+                "Skipping malformed GTFS-RT group suffix=%s reason=%s",
+                suffix,
+                type(exc).__name__,
+            )
             continue
         if not isinstance(parsed, list):
             # A parser result must be a list; anything else is unusable.

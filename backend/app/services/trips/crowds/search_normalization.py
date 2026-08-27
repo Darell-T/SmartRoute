@@ -5,8 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Iterable, Mapping
 from datetime import datetime
-from typing import Any, Iterable, Mapping
+from typing import Any
 from urllib.parse import urlparse
 
 from app.services.trips.crowds.hotspots import HotspotHit
@@ -93,7 +94,7 @@ def _parse_time(value: object) -> str | None:
     if not isinstance(value, str) or not value.strip():
         return None
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value)
     except ValueError:
         return None
     return parsed.isoformat() if parsed.tzinfo is not None else None

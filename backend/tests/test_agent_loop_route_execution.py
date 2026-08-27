@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-
 from app.services.agent import session as session_module
 from app.services.agent import trip_state as trip_state_module
 from app.services.agent.tools import ToolResult, ToolSpec
+
 from tests.agent_loop_reliability_support import AgentLoopReliabilityTestCase
 from tests.test_agent_loop import (
     _complete_round,
@@ -38,10 +38,7 @@ class AgentLoopRouteExecutionTests(AgentLoopReliabilityTestCase):
             trace=trace,
         )
 
-        self.assertEqual(
-            _trace_tool_input(trace, "prepare_route_options")["required_route_ids"],
-            ["Q"],
-        )
+        assert _trace_tool_input(trace, "prepare_route_options")["required_route_ids"] == ["Q"]
 
     async def test_model_declared_what_if_exclusion_stays_temporary(self):
         trace = self.loop.TurnTrace()
@@ -90,19 +87,16 @@ class AgentLoopRouteExecutionTests(AgentLoopReliabilityTestCase):
         )
 
         tool_call = _trace_tool_input(trace, "prepare_route_options")
-        self.assertTrue(tool_call["what_if"])
-        self.assertEqual(tool_call["excluded_route_ids"], ["Q"])
-        self.assertNotIn("required_route_ids", tool_call)
+        assert tool_call["what_if"]
+        assert tool_call["excluded_route_ids"] == ["Q"]
+        assert "required_route_ids" not in tool_call
         # A what-if exclusion is temporary and never becomes an active slot.
-        self.assertNotIn(
-            "excluded_route_ids",
-            ((session.get("slots") or {}).get("constraints") or {}),
-        )
+        assert "excluded_route_ids" not in ((session.get("slots") or {}).get("constraints") or {})
         # Server-enforced what-if isolation keeps active candidate/trip state.
         state = trip_state_module.get_trip_state(session)
-        self.assertEqual(state["active_candidate_set_id"], "cs_active")
-        self.assertEqual(state["selected_candidate_id"], "cd_active")
-        self.assertEqual(session["active_trip"]["card_id"], "rc_active")
+        assert state["active_candidate_set_id"] == "cs_active"
+        assert state["selected_candidate_id"] == "cd_active"
+        assert session["active_trip"]["card_id"] == "rc_active"
 
     async def test_named_discovery_handoff_routes_without_reresolving_place(self):
         from app.services.agent import discovery_store
@@ -135,8 +129,8 @@ class AgentLoopRouteExecutionTests(AgentLoopReliabilityTestCase):
         registry = _model_led_registry()
 
         async def prepare_named(tool_input, ctx):
-            self.assertNotIn("destination", tool_input)
-            self.assertEqual(tool_input.get("destination_place_id"), mike_id)
+            assert "destination" not in tool_input
+            assert tool_input.get("destination_place_id") == mike_id
             trip_state_module.bind_discovery_context(
                 ctx.session,
                 discovery_set_id=set_id,
@@ -168,26 +162,12 @@ class AgentLoopRouteExecutionTests(AgentLoopReliabilityTestCase):
             trace=trace,
         )
 
-        self.assertEqual(
-            [name for name, _tool_input in trace.tool_calls],
-            ["declare_goals", "prepare_route_options", "present_route"],
-        )
-        self.assertEqual(
-            [
-                call.get("tool_choice")
-                for call in self.loop.client.messages.calls
-            ],
-            [
-                {"type": "tool", "name": "declare_goals"},
-                {"type": "tool", "name": "present_route"},
-            ],
-        )
+        assert [name for name, _tool_input in trace.tool_calls] == ["declare_goals", "prepare_route_options", "present_route"]
+        assert [call.get("tool_choice") for call in self.loop.client.messages.calls] == [{"type": "tool", "name": "declare_goals"}, {"type": "tool", "name": "present_route"}]
         state = trip_state_module.get_trip_state(final_session)
-        self.assertEqual(state["active_discovery_set_id"], set_id)
-        self.assertEqual(state["selected_place_id"], mike_id)
-        self.assertEqual(
-            [event.type for event in events_out].count("route_card"), 1
-        )
+        assert state["active_discovery_set_id"] == set_id
+        assert state["selected_place_id"] == mike_id
+        assert [event.type for event in events_out].count("route_card") == 1
 
     async def test_accepted_trip_alternative_requires_real_prepare_then_present(self):
         _discard_id, session = session_module.new_session()
@@ -201,7 +181,7 @@ class AgentLoopRouteExecutionTests(AgentLoopReliabilityTestCase):
         registry = _model_led_registry()
 
         async def prepare_alternative(tool_input, ctx):
-            self.assertTrue(tool_input.get("what_if"))
+            assert tool_input.get("what_if")
             trip_state_module.bind_temporary_candidate_set(
                 ctx.session,
                 "cs_alternative",
@@ -240,39 +220,21 @@ class AgentLoopRouteExecutionTests(AgentLoopReliabilityTestCase):
             trace=trace,
         )
 
-        self.assertEqual(
-            [name for name, _tool_input in trace.tool_calls],
-            ["declare_goals", "prepare_route_options", "present_route"],
-        )
-        self.assertEqual(
-            [
-                call.get("tool_choice")
-                for call in self.loop.client.messages.calls
-            ],
-            [
-                {"type": "tool", "name": "declare_goals"},
-                {"type": "tool", "name": "present_route"},
-            ],
-        )
+        assert [name for name, _tool_input in trace.tool_calls] == ["declare_goals", "prepare_route_options", "present_route"]
+        assert [call.get("tool_choice") for call in self.loop.client.messages.calls] == [{"type": "tool", "name": "declare_goals"}, {"type": "tool", "name": "present_route"}]
         rider_text = "".join(
             event.text for event in events_out if event.type == "token"
         )
-        self.assertNotIn("prepare_route_options", rider_text)
-        self.assertNotIn("candidate_id", rider_text)
-        self.assertNotIn("moment for the results", rider_text)
+        assert "prepare_route_options" not in rider_text
+        assert "candidate_id" not in rider_text
+        assert "moment for the results" not in rider_text
         deliberation = "".join(
             event.text for event in events_out if event.type == "reasoning"
         )
-        self.assertIn("Thinking through your request", deliberation)
-        self.assertNotIn("prepare_route_options", deliberation)
-        self.assertEqual(
-            trip_state_module.get_trip_state(session)["active_candidate_set_id"],
-            "cs_active",
-        )
-        self.assertEqual(
-            [event.type for event in events_out].count("route_card"),
-            1,
-        )
+        assert "Thinking through your request" in deliberation
+        assert "prepare_route_options" not in deliberation
+        assert trip_state_module.get_trip_state(session)["active_candidate_set_id"] == "cs_active"
+        assert [event.type for event in events_out].count("route_card") == 1
 
     async def test_route_prose_cannot_replace_canonical_tool_execution(self):
         trace = self.loop.TurnTrace()
@@ -295,17 +257,10 @@ class AgentLoopRouteExecutionTests(AgentLoopReliabilityTestCase):
         rider_text = "".join(
             event.text for event in events_out if event.type == "token"
         )
-        self.assertEqual(
-            rider_text,
-            "I couldn't complete that request in this turn, so I don't have "
-            "a verified result to share.",
-        )
-        self.assertNotIn("2 train", rider_text)
-        self.assertEqual(trace.tool_calls, [])
-        self.assertEqual(
-            [call["tool_choice"] for call in self.loop.client.messages.calls],
-            [{"type": "any"}] * len(self.loop.client.messages.calls),
-        )
+        assert rider_text == "I couldn't complete that request in this turn, so I don't have " "a verified result to share."
+        assert "2 train" not in rider_text
+        assert trace.tool_calls == []
+        assert [call["tool_choice"] for call in self.loop.client.messages.calls] == [{"type": "any"}] * len(self.loop.client.messages.calls)
 
     async def test_quick_keeps_sonnet_when_route_preparation_requires_clarification(self):
         rounds = [
@@ -336,16 +291,10 @@ class AgentLoopRouteExecutionTests(AgentLoopReliabilityTestCase):
             trace=trace,
         )
 
-        self.assertEqual(trace.initial_mode, "quick")
-        self.assertEqual(trace.final_mode, "quick")
-        self.assertEqual(
-            [name for name, _input in trace.tool_calls],
-            ["prepare_route_options", "complete_turn"],
-        )
-        self.assertEqual(
-            self.loop.client.messages.calls[1]["model"],
-            self.loop.agent_policy.policy_for_mode("quick").model,
-        )
+        assert trace.initial_mode == "quick"
+        assert trace.final_mode == "quick"
+        assert [name for name, _input in trace.tool_calls] == ["prepare_route_options", "complete_turn"]
+        assert self.loop.client.messages.calls[1]["model"] == self.loop.agent_policy.policy_for_mode("quick").model
 
     async def test_model_declared_no_bus_is_enforced_at_route_preparation_boundary(self):
         rounds = [
@@ -365,8 +314,5 @@ class AgentLoopRouteExecutionTests(AgentLoopReliabilityTestCase):
             trace=trace,
         )
 
-        self.assertEqual(
-            _trace_tool_input(trace, "prepare_route_options")["exclude_modes"],
-            ["BUS"],
-        )
-        self.assertEqual(session["slots"]["constraints"]["exclude_modes"], ["BUS"])
+        assert _trace_tool_input(trace, "prepare_route_options")["exclude_modes"] == ["BUS"]
+        assert session["slots"]["constraints"]["exclude_modes"] == ["BUS"]

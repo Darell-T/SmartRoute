@@ -60,10 +60,7 @@ def bounded_int(value: object) -> int:
 
 def bounded_ids(raw: object, limit: int, *, upper: bool = False) -> list[str]:
     """Normalize an ID sequence; a scalar string is one value, never characters."""
-    if isinstance(raw, str):
-        items = [raw]
-    else:
-        items = raw or ()
+    items = [raw] if isinstance(raw, str) else raw or ()
     out: list[str] = []
     for item in items:
         text = " ".join(str(item).split()).strip()
@@ -136,10 +133,7 @@ def source_identity_pairs(incident: dict[str, Any]) -> list[tuple[str, str]]:
 
 
 def _unique_sorted_ids(raw: object) -> list[str]:
-    if isinstance(raw, str):
-        items = [raw]
-    else:
-        items = raw or ()
+    items = [raw] if isinstance(raw, str) else raw or ()
     return sorted({text for text in (identity_text(item) for item in items) if text})
 
 

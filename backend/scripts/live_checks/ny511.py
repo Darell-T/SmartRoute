@@ -12,8 +12,16 @@ import argparse
 import asyncio
 from typing import Any
 
-from app.services.incidents.ny511 import NY511Client, NY511Poller, NY511Settings, SnapshotStore
-from app.services.trips.route_incidents.context import CandidateStopAssociation, CandidateStopContext
+from app.services.incidents.ny511 import (
+    NY511Client,
+    NY511Poller,
+    NY511Settings,
+    SnapshotStore,
+)
+from app.services.trips.route_incidents.context import (
+    CandidateStopAssociation,
+    CandidateStopContext,
+)
 from app.services.trips.route_incidents.matching import Cached511NYSearchTool
 
 

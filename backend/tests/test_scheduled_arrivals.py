@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from app.services.mta.static_gtfs.scheduled_arrivals import ScheduledArrivalIndex
-
 
 NYC = ZoneInfo("America/New_York")
 NOW = datetime(2027, 1, 15, 23, 55, tzinfo=NYC)
@@ -14,7 +13,7 @@ NOW = datetime(2027, 1, 15, 23, 55, tzinfo=NYC)
 def _artifact() -> dict:
     return {
         "timezone": "America/New_York",
-        "valid_until": (NOW + timedelta(days=30)).astimezone(timezone.utc).isoformat(),
+        "valid_until": (NOW + timedelta(days=30)).astimezone(UTC).isoformat(),
         "services": {
             "weekday": {
                 "start_date": "20270101",
@@ -69,29 +68,29 @@ class ScheduledArrivalIndexTests(unittest.TestCase):
             route_id="Q",
             stop_ids={"D28N", "D28S"},
             direction="downtown",
-            now=NOW.astimezone(timezone.utc),
+            now=NOW.astimezone(UTC),
             limit=3,
         )
-        self.assertEqual(result["status"], "scheduled")
-        self.assertEqual(len(result["predictions"]), 1)
+        assert result["status"] == "scheduled"
+        assert len(result["predictions"]) == 1
         expected = datetime.fromtimestamp(
             result["predictions"][0]["arrival_time"], NYC
         )
-        self.assertEqual((expected.day, expected.hour, expected.minute), (16, 0, 10))
+        assert (expected.day, expected.hour, expected.minute) == (16, 0, 10)
 
     def test_calendar_exception_and_frequency_expansion_are_applied(self):
         result = ScheduledArrivalIndex(_artifact()).lookup(
             route_id="Q",
             stop_ids={"D28N"},
             direction="uptown",
-            now=NOW.astimezone(timezone.utc),
+            now=NOW.astimezone(UTC),
             limit=3,
         )
         times = [
             datetime.fromtimestamp(row["arrival_time"], NYC).minute
             for row in result["predictions"]
         ]
-        self.assertEqual(times, [0, 10, 20])
+        assert times == [0, 10, 20]
 
     def test_removed_service_exception_suppresses_trip(self):
         artifact = _artifact()
@@ -100,25 +99,25 @@ class ScheduledArrivalIndexTests(unittest.TestCase):
             route_id="Q",
             stop_ids={"D28S"},
             direction="downtown",
-            now=NOW.astimezone(timezone.utc),
+            now=NOW.astimezone(UTC),
             limit=3,
         )
-        self.assertEqual(result["predictions"], [])
+        assert result["predictions"] == []
 
     def test_stale_artifact_is_not_served(self):
         artifact = _artifact()
         artifact["valid_until"] = (
             NOW - timedelta(seconds=1)
-        ).astimezone(timezone.utc).isoformat()
+        ).astimezone(UTC).isoformat()
         result = ScheduledArrivalIndex(artifact).lookup(
             route_id="Q",
             stop_ids={"D28S"},
             direction=None,
-            now=NOW.astimezone(timezone.utc),
+            now=NOW.astimezone(UTC),
             limit=3,
         )
-        self.assertEqual(result["status"], "stale")
-        self.assertEqual(result["predictions"], [])
+        assert result["status"] == "stale"
+        assert result["predictions"] == []
 
 
 if __name__ == "__main__":

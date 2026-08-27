@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+import logging
+from datetime import UTC, datetime
 
-from app.services.mta.feeds import parse_feed_message
-from app.services.agent.tools.location_resolution import parse_coordinates
+from google.protobuf.message import DecodeError
+
 from app.services.agent.tools._types import ToolContext, ToolOutcome, ToolResult
+from app.services.agent.tools.location_resolution import parse_coordinates
 from app.services.agent.tools.transit.lookup_arrivals_common import (
     FEED_STALE_AFTER_S,
     _active_boarding,
@@ -21,6 +23,9 @@ from app.services.agent.tools.transit.lookup_arrivals_common import (
     canonical_station_query,
 )
 from app.services.geography import distance_meters
+from app.services.mta.feeds import parse_feed_message
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _served_stops(gtfs: object, route_id: str) -> list[dict]:
@@ -118,7 +123,7 @@ async def _scheduled_fallback(
             route_id=route_id,
             stop_ids=sorted(child_ids),
             direction=requested_direction,
-            now=datetime.fromtimestamp(now, timezone.utc),
+            now=datetime.fromtimestamp(now, UTC),
             limit=limit,
         )
     except Exception:
@@ -282,13 +287,13 @@ async def execute(
     )
     predictions: list[dict] = []
     feed_timestamps: list[int] = []
-    for item, rows in zip(metadata, parsed):
+    for item, rows in zip(metadata, parsed, strict=False):
         try:
             feed = parse_feed_message(item["content"])
             if feed.header.timestamp:
                 feed_timestamps.append(int(feed.header.timestamp))
-        except Exception:
-            pass
+        except (DecodeError, TypeError, ValueError) as exc:
+            _LOGGER.debug("subway feed timestamp unreadable: %s", type(exc).__name__)
         if isinstance(rows, BaseException):
             continue
         for row in rows:

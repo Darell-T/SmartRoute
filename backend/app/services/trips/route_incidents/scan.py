@@ -11,12 +11,19 @@ incident_index_adapter.
 from __future__ import annotations
 
 import time
+from collections.abc import Iterable, Mapping
 from datetime import datetime
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 from app.services.incidents import index as incident_index
-from app.services.trips.route_incidents.context import CandidateStopContext, extract_candidate_stop_context
-from app.services.trips.route_incidents.index_adapter import extract_lookup_context, project_records
+from app.services.trips.route_incidents.context import (
+    CandidateStopContext,
+    extract_candidate_stop_context,
+)
+from app.services.trips.route_incidents.index_adapter import (
+    extract_lookup_context,
+    project_records,
+)
 
 COMPLETE_INCIDENT_SCAN_STATUS = "complete"
 

@@ -8,10 +8,10 @@ from typing import Any
 
 from app.services.agent import candidate_store, public_surface
 from app.services.agent import trip_state as trip_state_module
-from app.services.agent.tools.location_resolution import ResolvedPlace
 from app.services.agent.tools._types import ToolContext, ToolResult
-from app.services.trips.preparation.constraints import route_constraints
+from app.services.agent.tools.location_resolution import ResolvedPlace
 from app.services.agent.turn.contract import GoalKind, GoalState
+from app.services.trips.preparation.constraints import route_constraints
 
 
 @dataclass(frozen=True)

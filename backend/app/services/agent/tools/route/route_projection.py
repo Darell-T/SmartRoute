@@ -23,6 +23,7 @@ from app.services.agent.model.output_projection import (
 from app.services.agent.tools._types import ToolContext, ToolResult
 from app.services.agent.tools.route.present_route_state import is_destination_comparison
 from app.services.agent.tools.route.route_input import point_label, summary_eta_minutes
+from app.services.mta.static_gtfs.stop_patterns import normalize_station_name
 from app.services.trips import candidates, scoring, text
 from app.services.trips.route_incidents.scan import (
     INCOMPLETE_INCIDENT_DISCLOSURE,
@@ -30,7 +31,6 @@ from app.services.trips.route_incidents.scan import (
     incident_scan_is_complete,
 )
 from app.services.trips.selection_record import build_route_selection_decision
-from app.services.mta.static_gtfs.stop_patterns import normalize_station_name
 
 _INCOMPLETE_PATTERNS = (
     r"\bcurrent\s+incident\s+coverage\s+is\s+incomplete(?:,\s*so\s*allow\s+extra\s+time)?\b",
@@ -640,7 +640,7 @@ def reconcile_first_boarding_timing(
     if first_transit_index is None:
         return itinerary
 
-    boarding_offset_seconds = max(0, int(round(float(catchable) * 60)))
+    boarding_offset_seconds = max(0, round(float(catchable) * 60))
     access_seconds = sum(
         _leg_component_seconds(leg) for leg in legs[:first_transit_index]
     )
@@ -702,7 +702,7 @@ def _leg_component_seconds(leg: dict) -> int:
 
 def _parse_clock(value: object) -> datetime | None:
     try:
-        parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(str(value or ""))
     except ValueError:
         return None
     return parsed if parsed.tzinfo is not None and parsed.utcoffset() is not None else None

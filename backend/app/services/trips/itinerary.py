@@ -78,7 +78,7 @@ def build_canonical_itinerary(
     elif route_total_minutes is not None:
         # Compatibility for older parsed routes. New directions parsing emits
         # route_total_seconds so provider precision is retained end to end.
-        total_duration_seconds = max(0, int(round(route_total_minutes * 60)))
+        total_duration_seconds = max(0, round(route_total_minutes * 60))
     else:
         total_duration_seconds = (
             total_walk + total_wait + total_in_vehicle + total_transfer + total_dwell
@@ -314,16 +314,13 @@ def _resolve_dwell(segment: dict) -> tuple[int, str]:
     raw_source = segment.get("dwell_source")
     if "dwell_minutes" in segment and segment.get("dwell_minutes") is not None:
         try:
-            minutes = int(round(float(segment["dwell_minutes"])))
+            minutes = round(float(segment["dwell_minutes"]))
         except (TypeError, ValueError):
             minutes = DEFAULT_DWELL_MINUTES
             source = "default"
         else:
             minutes = max(0, minutes)
-            if raw_source in ("default", "user"):
-                source = str(raw_source)
-            else:
-                source = "user"
+            source = str(raw_source) if raw_source in ("default", "user") else "user"
             return minutes, source
     else:
         minutes = DEFAULT_DWELL_MINUTES
@@ -473,7 +470,7 @@ def _first_route_total_seconds(steps: list[dict]) -> int | None:
     for step in steps:
         value = step.get("route_total_seconds")
         if isinstance(value, (int, float)) and value >= 0:
-            return int(round(value))
+            return round(value)
     return None
 
 
@@ -564,7 +561,7 @@ def build_legs(steps: list[dict], *, data_basis: str) -> list[dict]:
         if isinstance(raw_stop_count, (int, float)) and not isinstance(
             raw_stop_count, bool
         ):
-            stop_count = max(0, int(round(raw_stop_count)))
+            stop_count = max(0, round(raw_stop_count))
         else:
             stop_count = None
 
@@ -723,7 +720,7 @@ def _walk_seconds_for_step(
     if None in (lat1, lon1, lat2, lon2):
         return 0
     meters = geo.distance_meters(float(lat1), float(lon1), float(lat2), float(lon2))
-    return max(0, int(round(meters / _WALK_SPEED_MPS)))
+    return max(0, round(meters / _WALK_SPEED_MPS))
 
 
 def _lat_lon(point: dict) -> tuple[float | None, float | None]:
@@ -760,7 +757,7 @@ def _parse_iso(value: Any) -> datetime | None:
 
 
 def _seconds_between(start: datetime, end: datetime) -> int:
-    return max(0, int(round((end - start).total_seconds())))
+    return max(0, round((end - start).total_seconds()))
 
 
 def _iso_or_none(raw: Any, parsed: datetime | None) -> str | None:

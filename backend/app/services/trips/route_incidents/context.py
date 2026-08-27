@@ -7,11 +7,12 @@ upstream service; callers may pass already-enriched intermediate stops.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import hashlib
-from math import isfinite
 import re
-from typing import Any, Iterable, Mapping
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field
+from math import isfinite
+from typing import Any
 
 
 def valid_coordinate_pair(latitude: object, longitude: object) -> tuple[float, float] | None:

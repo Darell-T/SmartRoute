@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.services.agent.turn import completion as turn_completion
 from app.services.agent import events as agent_events
 from app.services.agent import trip_state as trip_state_module
 from app.services.agent.passenger_output import validated_terminal_message
 from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.turn import completion as turn_completion
 from app.services.agent.turn.contract import GoalKind, GoalState, TurnContract
 
 COMPLETE_TURN_SCHEMA = {

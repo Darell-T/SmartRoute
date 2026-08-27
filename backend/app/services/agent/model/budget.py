@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.services import cache
 
@@ -77,7 +77,7 @@ def check_session_rate_limit(session_id: str) -> bool:
 
 
 def _today_key() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return datetime.now(UTC).strftime("%Y-%m-%d")
 
 
 def _spend_cache_key() -> str:
@@ -109,7 +109,7 @@ def record_usage_cost(input_tokens: int, output_tokens: int) -> float:
     if cost <= 0:
         return 0.0
     key = _spend_cache_key()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     seconds_left_today = 86400 - (now.hour * 3600 + now.minute * 60 + now.second)
     ttl = max(60, seconds_left_today)
     try:

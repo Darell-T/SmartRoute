@@ -5,23 +5,24 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from app.services import geography as geo
 from app.services.agent import candidate_store, discovery_store
+from app.services.agent.tools._types import ToolContext, ToolResult
 from app.services.agent.tools.location_resolution import (
     ResolvedPlace,
     resolve_destination_reference,
 )
-from app.services.agent.tools._types import ToolContext, ToolResult
 from app.services.agent.tools.route.preparation_adapter import (
+    PreparedLeg,
     build_preparation_dependencies,
     new_preparation_timings,
+    prepare_single_leg,
 )
-from app.services.agent.tools.route.preparation_adapter import PreparedLeg, prepare_single_leg
 from app.services.trips.preparation.combine import combine_prepared_chains
 from app.services.trips.preparation.prepare import (
     AggregatePreparation,
     PreparedChain,
 )
-from app.services import geography as geo
 
 MAX_DESTINATION_OPTIONS = 8
 

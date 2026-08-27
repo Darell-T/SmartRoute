@@ -107,7 +107,7 @@ def request_diagnostics(kwargs: Mapping[str, Any]) -> str:
         f"model={agent_policy.safe_model_label(str(kwargs.get('model') or ''))} "
         f"tools_supplied={int('tools' in kwargs)} tool_count={tool_count} "
         f"thinking_supplied={int('thinking' in kwargs)} sampling_fields={sampling} "
-        f"effort={str((kwargs.get('output_config') or {}).get('effort') or 'default')} "
+        f"effort={(kwargs.get('output_config') or {}).get('effort') or 'default'!s} "
         f"max_tokens={int(kwargs.get('max_tokens') or 0)}"
     )
 

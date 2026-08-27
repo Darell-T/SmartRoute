@@ -1,20 +1,21 @@
 """Tests for the unflagged prepare_route_options / present_route path."""
 
 from __future__ import annotations
+
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
-from app.services.agent import candidate_store, loop
+
+from app.services.agent import candidate_store, loop, trip_state
 from app.services.agent.model import policy
 from app.services.agent.public_surface import INITIAL_TOOL_NAMES
+from app.services.agent.tools._types import ToolResult
 from app.services.agent.tools.route import (
     prepare_route_options,
     present_route,
 )
-from app.services.agent.tools._types import ToolResult
 from app.services.agent.tools.route.preparation_adapter import prepare_single_leg
 from app.services.trips.preparation.constraints import route_status
-from app.services.agent import trip_state
 
 from tests.single_agent_route_test_support import (
     _ctx,
@@ -46,20 +47,19 @@ class SingleAgentRouteAvailabilityTests(unittest.IsolatedAsyncioTestCase):
                 },
                 ctx,
             )
-        self.assertTrue(result.ok)
-        self.assertEqual(result.data["route_status"], "no_hard_constraint_match")
-        self.assertFalse(result.data["presentation_allowed"])
-        self.assertEqual(result.data["candidates"], [])
-        self.assertEqual(result.data["candidate_count"], 0)
+        assert result.ok
+        assert result.data["route_status"] == "no_hard_constraint_match"
+        assert not result.data["presentation_allowed"]
+        assert result.data["candidates"] == []
+        assert result.data["candidate_count"] == 0
         stored = candidate_store.load_candidate_set(
             result.data["candidate_set_id"],
             session_id=ctx.session_id,
         )
-        self.assertIsNotNone(stored)
-        self.assertEqual(
-            stored["candidates"][0]["digest"]["hard_constraint_violations"],
-            ["excluded_route"],
-        )
+        assert stored is not None
+        assert stored["candidates"][0]["digest"]["hard_constraint_violations"] == [
+            "excluded_route"
+        ]
 
     async def test_present_route_rejects_excluded_stored_candidate(self):
         ctx = _ctx()
@@ -118,25 +118,25 @@ class SingleAgentRouteAvailabilityTests(unittest.IsolatedAsyncioTestCase):
                 _present_route_input("cd_q"),
                 ctx,
             )
-        self.assertFalse(result.ok)
-        self.assertIn("hard constraints", result.error or "")
+        assert not result.ok
+        assert "hard constraints" in (result.error or "")
 
     def test_route_status_does_not_force_degraded_or_insufficient_candidates(self):
-        self.assertEqual(
+        assert (
             route_status(
                 candidates=[{"hard_constraints_satisfied": False}],
                 coverage={"mta": "current"},
                 incident_impacts=[],
-            ),
-            "no_hard_constraint_match",
+            )
+            == "no_hard_constraint_match"
         )
-        self.assertEqual(
+        assert (
             route_status(
                 candidates=[{"hard_constraints_satisfied": True}],
                 coverage={"mta": "unavailable", "incidents": "unscanned"},
                 incident_impacts=[],
-            ),
-            "insufficient_coverage",
+            )
+            == "insufficient_coverage"
         )
 
     async def test_prepare_returns_typed_nonpresentable_status_when_modes_are_exhausted(
@@ -160,9 +160,9 @@ class SingleAgentRouteAvailabilityTests(unittest.IsolatedAsyncioTestCase):
                 },
                 ctx,
             )
-        self.assertTrue(result.ok)
-        self.assertEqual(result.data["route_status"], "no_hard_constraint_match")
-        self.assertFalse(result.data["presentation_allowed"])
+        assert result.ok
+        assert result.data["route_status"] == "no_hard_constraint_match"
+        assert not result.data["presentation_allowed"]
 
     async def test_prepare_nonfatal_active_keeps_accepted_selection_bound(self):
         """Active nonfatal prepare stores an audit set without moving selection."""
@@ -198,20 +198,20 @@ class SingleAgentRouteAvailabilityTests(unittest.IsolatedAsyncioTestCase):
                 },
                 ctx,
             )
-        self.assertTrue(result.ok)
-        self.assertEqual(result.data["route_status"], "no_hard_constraint_match")
-        self.assertFalse(result.data["presentation_allowed"])
+        assert result.ok
+        assert result.data["route_status"] == "no_hard_constraint_match"
+        assert not result.data["presentation_allowed"]
         state = trip_state.get_trip_state(ctx.session)
-        self.assertEqual(state["active_candidate_set_id"], set_id)
-        self.assertEqual(state["selected_candidate_id"], "cd_accepted")
-        self.assertEqual(state["temporary_candidate_set_id"], None)
+        assert state["active_candidate_set_id"] == set_id
+        assert state["selected_candidate_id"] == "cd_accepted"
+        assert state["temporary_candidate_set_id"] is None
         audit = candidate_store.load_candidate_set(
             result.data["candidate_set_id"],
             session_id=ctx.session_id,
         )
-        self.assertIsNotNone(audit)
-        self.assertNotEqual(audit["candidate_set_id"], set_id)
-        self.assertFalse(audit["presented"])
+        assert audit is not None
+        assert audit["candidate_set_id"] != set_id
+        assert not audit["presented"]
 
     async def test_prepare_rejects_invalid_timing_before_provider_work(self):
         result = await prepare_single_leg(
@@ -223,13 +223,13 @@ class SingleAgentRouteAvailabilityTests(unittest.IsolatedAsyncioTestCase):
             {},
             dependencies=SimpleNamespace(),
         )
-        self.assertFalse(result.ok)
-        self.assertIn("RFC3339", result.error or "")
+        assert not result.ok
+        assert "RFC3339" in (result.error or "")
 
     def test_route_tools_use_initial_model_led_surface_without_legacy_plan_trip(self):
         names = {
             tool.get("name")
             for tool in loop._tools_for_state(policy.policy_for_mode("auto"))
         }
-        self.assertEqual(names, set(INITIAL_TOOL_NAMES))
-        self.assertNotIn("plan_trip", names)
+        assert names == set(INITIAL_TOOL_NAMES)
+        assert "plan_trip" not in names

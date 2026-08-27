@@ -73,7 +73,6 @@ class DamnLinesTestCase(unittest.IsolatedAsyncioTestCase):
         self.env_patch.start()
         damn_lines._current_refresh_task = None
         damn_lines._history_refresh_task = None
-        damn_lines._warmup_tasks = set()
         damn_lines._history_loaded = False
         damn_lines._history_last_success = None
         damn_lines._history_index = {}
@@ -146,7 +145,7 @@ class DamnLinesTestCase(unittest.IsolatedAsyncioTestCase):
             LINDUSTRIE_ID, 5, 9, NOW - timedelta(minutes=6)
         )
         self.store[damn_lines._CURRENT_CACHE_KEY] = damn_lines._encode_current(
-            {LINDUSTRIE_ID: stale}
+            {LINDUSTRIE_ID: stale}, NOW - timedelta(minutes=6)
         )
         with patch.object(
             damn_lines,
@@ -159,6 +158,20 @@ class DamnLinesTestCase(unittest.IsolatedAsyncioTestCase):
         assert result.observations == {}
         assert result.provider_available
         fetch.assert_awaited_once()
+
+    async def test_valid_partial_snapshot_does_not_refetch_missing_venue(self) -> None:
+        observation = damn_lines.QueueObservation(
+            LINDUSTRIE_ID, 5, 9, NOW - timedelta(minutes=1)
+        )
+        self.store[damn_lines._CURRENT_CACHE_KEY] = damn_lines._encode_current(
+            {LINDUSTRIE_ID: observation}, NOW - timedelta(minutes=1)
+        )
+        with patch.object(damn_lines, "fetch_json", new_callable=AsyncMock) as fetch:
+            result = await damn_lines.get_current_observations([JOHNS_ID], now=NOW)
+
+        assert result.observations == {}
+        assert result.provider_available
+        fetch.assert_not_awaited()
 
     async def test_concurrent_refreshes_share_one_request(self) -> None:
         started = asyncio.Event()
@@ -373,15 +386,6 @@ class DamnLinesTestCase(unittest.IsolatedAsyncioTestCase):
             await damn_lines.warm_history(now=NOW)
 
         refresh.assert_awaited_once_with(now=NOW)
-
-    def test_history_warmup_is_a_noop_without_an_api_key(self) -> None:
-        with (
-            patch.dict(os.environ, {"DAMNLINES_API_KEY": ""}, clear=False),
-            patch.object(damn_lines, "warm_history", new_callable=AsyncMock) as warm,
-        ):
-            damn_lines.schedule_history_warmup(now=NOW)
-        warm.assert_not_called()
-
 
 class DamnLinesCacheParsingTests(unittest.TestCase):
     def test_corrupt_history_record_is_ignored_without_poisoning_valid_record(self) -> None:

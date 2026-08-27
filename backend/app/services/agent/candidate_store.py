@@ -17,8 +17,8 @@ from typing import Any
 
 from redis.exceptions import RedisError, WatchError
 
-from app.services.mta.alerts import is_material_service_alert, project_service_alert
 from app.services import cache
+from app.services.mta.alerts import is_material_service_alert, project_service_alert
 
 CANDIDATE_SET_PREFIX = "agent:cset:"
 DEFAULT_TTL_S = 900

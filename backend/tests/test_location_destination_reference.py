@@ -17,16 +17,17 @@ from __future__ import annotations
 import unittest
 from unittest.mock import AsyncMock, patch
 
+from app.services import cache
 from app.services.agent import (
     candidate_store,
     discovery_store,
     presented_entity_registry,
     trip_state,
 )
-from app.services.agent.tools.route import prepare_route_options
-from app.services.agent.tools.location_resolution import resolve_destination_reference
 from app.services.agent.tools._types import ToolContext
-from app.services import cache
+from app.services.agent.tools.location_resolution import resolve_destination_reference
+from app.services.agent.tools.route import prepare_route_options
+
 from tests.conversation.conversation_matrix_harness import make_leg
 
 
@@ -80,13 +81,13 @@ class DestinationReferenceBoundaryTests(unittest.IsolatedAsyncioTestCase):
         trip_state.bind_selected_place(ctx.session, place["place_id"])
         resolved, place_id, error, used_set = await resolve_destination_reference(
             {}, {"destination": ""}, ctx)
-        self.assertIsNone(error, f"error={error!r}")
-        self.assertEqual(place_id, place["place_id"])
-        self.assertEqual(used_set, set_id)
-        self.assertEqual(resolved.name, "B Pizza")
-        self.assertEqual(resolved.latitude, 40.72)
-        self.assertEqual(resolved.place_id, place["place_id"])
-        self.assertEqual(resolved.provider_place_id, "ChIJ-bbb")
+        assert error is None, f"error={error!r}"
+        assert place_id == place["place_id"]
+        assert used_set == set_id
+        assert resolved.name == "B Pizza"
+        assert resolved.latitude == 40.72
+        assert resolved.place_id == place["place_id"]
+        assert resolved.provider_place_id == "ChIJ-bbb"
 
     async def test_live_selected_place_matching_label_canonicalizes_through_opaque_id(self):
         ctx = _ctx()
@@ -99,13 +100,11 @@ class DestinationReferenceBoundaryTests(unittest.IsolatedAsyncioTestCase):
                     await resolve_destination_reference(
                         {}, {"destination": label}, ctx)
                 )
-                self.assertIsNone(error, f"error={error!r}")
-                self.assertEqual(place_id, place["place_id"],
-                                 "matching label resolves through the opaque id")
-                self.assertEqual(used_set, set_id)
-                self.assertEqual(resolved.name, "B Pizza",
-                                 "stored identity wins, never a re-geocoded label")
-                self.assertEqual(resolved.latitude, 40.72)
+                assert error is None, f"error={error!r}"
+                assert place_id == place["place_id"], "matching label resolves through the opaque id"
+                assert used_set == set_id
+                assert resolved.name == "B Pizza", "stored identity wins, never a re-geocoded label"
+                assert resolved.latitude == 40.72
 
     async def test_live_selected_place_non_matching_label_uses_normal_free_text_path(self):
         ctx = _ctx()
@@ -114,10 +113,10 @@ class DestinationReferenceBoundaryTests(unittest.IsolatedAsyncioTestCase):
         trip_state.bind_selected_place(ctx.session, place["place_id"])
         resolved, place_id, error, used_set = await resolve_destination_reference(
             {}, {"destination": "Brooklyn Bridge"}, ctx)
-        self.assertIsNone(resolved)
-        self.assertIsNone(place_id)
-        self.assertIsNone(error)
-        self.assertIsNone(used_set)
+        assert resolved is None
+        assert place_id is None
+        assert error is None
+        assert used_set is None
 
     async def test_presented_name_resolves_after_a_later_search_becomes_active(self):
         ctx = _ctx()
@@ -153,16 +152,16 @@ class DestinationReferenceBoundaryTests(unittest.IsolatedAsyncioTestCase):
             {}, {"destination": "Prince Street Pizza"}, ctx
         )
 
-        self.assertIsNone(error)
-        self.assertEqual(resolved.name, "Prince Street Pizza")
-        self.assertEqual(resolved.place_id, old_place["place_id"])
-        self.assertEqual(resolved.provider_place_id, "ChIJ-prince")
-        self.assertEqual(place_id, old_place["place_id"])
-        self.assertEqual(used_set, first_set)
-        self.assertNotEqual(used_set, second_set)
+        assert error is None
+        assert resolved.name == "Prince Street Pizza"
+        assert resolved.place_id == old_place["place_id"]
+        assert resolved.provider_place_id == "ChIJ-prince"
+        assert place_id == old_place["place_id"]
+        assert used_set == first_set
+        assert used_set != second_set
         state = trip_state.get_trip_state(ctx.session)
-        self.assertEqual(state["active_discovery_set_id"], first_set)
-        self.assertEqual(state["selected_place_id"], old_place["place_id"])
+        assert state["active_discovery_set_id"] == first_set
+        assert state["selected_place_id"] == old_place["place_id"]
 
     async def test_stale_selected_place_label_only_returns_bounded_error(self):
         ctx = _ctx()
@@ -172,11 +171,11 @@ class DestinationReferenceBoundaryTests(unittest.IsolatedAsyncioTestCase):
         with self._expired_clock(record):
             resolved, place_id, error, used_set = await resolve_destination_reference(
                 {}, {"destination": "B Pizza"}, ctx)
-        self.assertIsNone(resolved)
-        self.assertIsNone(place_id)
-        self.assertIsNone(used_set)
-        self.assertIsNotNone(error)
-        self.assertIn("no longer available", error)
+        assert resolved is None
+        assert place_id is None
+        assert used_set is None
+        assert error is not None
+        assert "no longer available" in error
 
     async def test_stale_selected_place_empty_destination_returns_bounded_error(self):
         ctx = _ctx()
@@ -186,11 +185,11 @@ class DestinationReferenceBoundaryTests(unittest.IsolatedAsyncioTestCase):
         with self._expired_clock(record):
             resolved, place_id, error, used_set = await resolve_destination_reference(
                 {}, {"destination": ""}, ctx)
-        self.assertIsNone(resolved)
-        self.assertIsNone(place_id)
-        self.assertIsNone(used_set)
-        self.assertIsNotNone(error)
-        self.assertIn("no longer available", error)
+        assert resolved is None
+        assert place_id is None
+        assert used_set is None
+        assert error is not None
+        assert "no longer available" in error
 
     async def test_explicit_opaque_id_keeps_precedence_over_selected_place(self):
         ctx = _ctx()
@@ -200,11 +199,10 @@ class DestinationReferenceBoundaryTests(unittest.IsolatedAsyncioTestCase):
         resolved, place_id, error, used_set = await resolve_destination_reference(
             {"destination_place_id": place_b["place_id"]},
             {"destination": "B Pizza"}, ctx)
-        self.assertIsNone(error, f"error={error!r}")
-        self.assertEqual(place_id, place_b["place_id"],
-                         "explicit opaque id wins over the selected place")
-        self.assertEqual(used_set, set_id)
-        self.assertEqual(resolved.name, "B Pizza")
+        assert error is None, f"error={error!r}"
+        assert place_id == place_b["place_id"], "explicit opaque id wins over the selected place"
+        assert used_set == set_id
+        assert resolved.name == "B Pizza"
 
     async def test_explicit_invalid_opaque_id_fails_bounded_even_with_selection(self):
         ctx = _ctx()
@@ -212,11 +210,11 @@ class DestinationReferenceBoundaryTests(unittest.IsolatedAsyncioTestCase):
         trip_state.bind_selected_place(ctx.session, record["places"][1]["place_id"])
         resolved, place_id, error, used_set = await resolve_destination_reference(
             {"destination_place_id": "pl_bogus"}, {"destination": "B Pizza"}, ctx)
-        self.assertIsNone(resolved)
-        self.assertIsNone(place_id)
-        self.assertIsNone(used_set)
-        self.assertIsNotNone(error)
-        self.assertIn("invalid", error)
+        assert resolved is None
+        assert place_id is None
+        assert used_set is None
+        assert error is not None
+        assert "invalid" in error
 
     async def test_stale_label_only_prepare_executor_fails_bounded(self):
         """P1 probe: a retyped label must never become routing authority."""
@@ -247,17 +245,13 @@ class DestinationReferenceBoundaryTests(unittest.IsolatedAsyncioTestCase):
             result = await prepare_route_options.execute(
                 {"destination": "B Pizza"}, ctx)
         state = trip_state.get_trip_state(ctx.session)
-        self.assertFalse(result.ok,
-                         "stale label-only prepare must fail bounded")
-        self.assertIn("no longer available", result.error or "",
-                      f"error={result.error!r}")
-        self.assertEqual(prepare_mock.await_count, 0,
-                         "provider seam must not be reached from a stale label")
-        self.assertEqual(stored, [], "no candidate set stored")
-        self.assertEqual(state["destination"], None, "no destination committed")
-        self.assertEqual(state["active_candidate_set_id"], None)
-        self.assertEqual(state["selected_place_id"], pl_id,
-                         "stale selection stays bound after safe failure")
+        assert not result.ok, "stale label-only prepare must fail bounded"
+        assert "no longer available" in (result.error or ""), f"error={result.error!r}"
+        assert prepare_mock.await_count == 0, "provider seam must not be reached from a stale label"
+        assert stored == [], "no candidate set stored"
+        assert state["destination"] is None, "no destination committed"
+        assert state["active_candidate_set_id"] is None
+        assert state["selected_place_id"] == pl_id, "stale selection stays bound after safe failure"
 
     async def test_new_route_after_reset_uses_normal_provider_path(self):
         """A new explicit destination after the reset resolves normally."""
@@ -269,19 +263,18 @@ class DestinationReferenceBoundaryTests(unittest.IsolatedAsyncioTestCase):
         # discovery context exactly as the loop's reset does.
         trip_state.reset_for_new_trip(ctx.session)
         state = trip_state.get_trip_state(ctx.session)
-        self.assertIsNone(state["selected_place_id"])
-        self.assertIsNone(state["active_discovery_set_id"])
+        assert state["selected_place_id"] is None
+        assert state["active_discovery_set_id"] is None
         prepare_mock = AsyncMock(return_value=make_leg(destination="Barclays Center"))
         with patch(
             "app.services.agent.tools.route.prepare_route_options.prepare_single_leg",
             new=prepare_mock):
             result = await prepare_route_options.execute(
                 {"destination": "Barclays Center"}, ctx)
-        self.assertTrue(result.ok, f"normal prepare must succeed; {result.error!r}")
-        self.assertEqual(prepare_mock.await_count, 1,
-                         "provider path reached for the new explicit destination")
+        assert result.ok, f"normal prepare must succeed; {result.error!r}"
+        assert prepare_mock.await_count == 1, "provider path reached for the new explicit destination"
         state = trip_state.get_trip_state(ctx.session)
-        self.assertEqual(state["destination"], "Barclays Center")
+        assert state["destination"] == "Barclays Center"
 
 
 __all__ = ()

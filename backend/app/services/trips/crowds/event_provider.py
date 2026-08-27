@@ -9,18 +9,19 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import httpx
 import json
 import math
 import os
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from typing import Awaitable, Callable
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from app.services.trips import text
+import httpx
+
 from app.services import cache
 from app.services.geography import distance_meters
+from app.services.trips import text
 
 TICKETMASTER_EVENTS_URL = "https://app.ticketmaster.com/discovery/v2/events.json"
 TICKETMASTER_NYC_LATLONG = "40.7128,-74.0060"
@@ -205,8 +206,8 @@ def _et_day_bounds_utc(date_str: str) -> tuple[str, str] | None:
     end_et = start_et + timedelta(days=1) - timedelta(seconds=1)
     fmt = "%Y-%m-%dT%H:%M:%SZ"
     return (
-        start_et.astimezone(timezone.utc).strftime(fmt),
-        end_et.astimezone(timezone.utc).strftime(fmt),
+        start_et.astimezone(UTC).strftime(fmt),
+        end_et.astimezone(UTC).strftime(fmt),
     )
 
 
@@ -293,12 +294,12 @@ def _event_start_iso(event: dict) -> str | None:
     start_iso = start.get("dateTime")
     if isinstance(start_iso, str):
         try:
-            parsed = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
+            parsed = datetime.fromisoformat(start_iso)
         except ValueError:
             return None
         if parsed.tzinfo is None:
             return None
-        return parsed.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return parsed.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     local_date = start.get("localDate")
     local_time = start.get("localTime")
     if not isinstance(local_date, str) or not isinstance(local_time, str):
@@ -312,7 +313,7 @@ def _event_start_iso(event: dict) -> str | None:
         event_timezone = ZoneInfo(timezone_name) if isinstance(timezone_name, str) else _ET
     except (ValueError, KeyError):
         event_timezone = _ET
-    return naive.replace(tzinfo=event_timezone).astimezone(timezone.utc).strftime(
+    return naive.replace(tzinfo=event_timezone).astimezone(UTC).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
 
@@ -398,7 +399,7 @@ def _parse_event(event: dict) -> dict:
     if start_iso and status not in {"canceled", "cancelled", "postponed", "rescheduled"}:
         try:
             start_dt = datetime.strptime(start_iso, "%Y-%m-%dT%H:%M:%SZ").replace(
-                tzinfo=timezone.utc
+                tzinfo=UTC
             )
         except ValueError:
             start_dt = None

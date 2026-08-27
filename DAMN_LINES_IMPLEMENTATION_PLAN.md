@@ -93,7 +93,8 @@ queue_context:
 - Render the source with a PromptKit source component after the queue prose.
 - Show Damn Lines once for each queue response or comparison, not once per venue sentence.
 - Persist and restore the source across page reloads.
-- Allow only configured Damn Lines source URLs. Never render a model-supplied source URL.
+- Accept only configured provider sources or typed Anthropic web-search citations.
+- Normalize and bound every HTTPS source before streaming it. Never parse a source URL from model prose or accept one from the client.
 
 ### Failure behavior
 
@@ -165,7 +166,7 @@ Owned scope:
 Acceptance criteria:
 
 - No ninth capability
-- Auto supports four to five alternatives when requested; Quick remains unchanged
+- Auto supports four to five alternatives when requested. Quick remains unchanged.
 - Branch-flexible search uses exact Google identities
 - Current destination scope only
 - Queue prose follows ordered recommendations
@@ -260,7 +261,7 @@ Acceptance criteria:
 
 - Fresh live data suppresses fallback history in normal mode.
 - Current and historical values are labeled differently.
-- Explicit queue failure is disclosed; ordinary heads-up failure is silent when no fallback exists.
+- Explicit queue failure is disclosed. Ordinary heads-up failure is silent when no fallback exists.
 - Canonical prose includes observation time and omits `and counting`.
 - Queue prose is after ordered recommendations.
 - Source is emitted once with a configured Damn Lines URL.
@@ -316,26 +317,28 @@ Do not add ignore comments, blanket excludes, unsafe casts, type suppressions, d
 - [x] Queue context integrated without a new capability
 - [x] Google continuation and duplicate prevention implemented
 - [x] Canonical prose and structured source implemented
-- [x] PromptKit source rendered and restored
-- [x] Glossary and ADR updated
+- [x] PromptKit `SourceTrigger showFavicon` rendered and restored for provider and web-search sources
+- [x] Domain context and ADR updated
 - [x] Focused tests pass
-- [x] Ruff F/E9 passes on changed files
-- [x] ESLint passes
-- [x] Oxlint passes on changed frontend files
+- [x] Strict Ruff passes on Damn Lines production files and focused tests
+- [x] ESLint passes with zero findings
+- [ ] Whole-frontend Oxlint anti-slop baseline is clean
 - [x] Type checks pass
 - [x] Relevant broader tests pass
 - [x] Provider timeout measured and configured
-- [x] Minimal Anthropic smoke test documented as not run
-- [x] Final diff contains no secrets or unrelated linter adoption
+- [x] Minimal Anthropic queue contract passed with three live requests
+- [x] Final diff contains no secrets
 
 ## Final verification record
 
-- Changed files: place discovery, `damn_lines` provider, SSE sources, PromptKit source disclosure, glossary, ADR
-- Focused tests: backend queue/pagination/prompt/events suite 140 passed. Related discovery tests 82 passed. Pagination/tools 46 passed after restoring Google fail-open. Frontend 92 passed.
-- Ruff: F/E9 clean on changed files. Default ruff 0.16 extra rules already fail on existing backend files, so they were not adopted.
-- ESLint: `eslint .` exits 0 with 6 pre-existing warnings. Changed files are clean.
-- Oxlint: changed frontend files are clean. Whole-frontend `--deny-warnings` fails on existing `any` in build scripts, so oxlint was not added as a repo dependency.
+- Review corrections: valid partial queue snapshots no longer refetch for missing venues. Historical refresh now starts in the application lifespan. Named-area Google searches use a geographic restriction. Generic SSE transport no longer contains provider URL policy. Duplicate glossary and unrelated ADR files were removed.
+- Focused tests: the backend queue, discovery, presentation, pagination, events, prompt, local discovery, and transcript run passed with 125 tests and 4 subtests. The web-search citation and model-loop regression run passed with 95 tests and 25 subtests. The complete backend run passed with 2,004 tests, 21 skips, and 608 subtests. The focused frontend integration run passed with 92 tests. The complete frontend unit run passed with 314 tests. The production frontend build passed.
+- Ruff: the strict project configuration passes on every Damn Lines production module and focused test file. The whole backend has 9,040 existing findings across 364 files under this restored profile. See `docs/lint-cleanup-handoff.md` for the complete rule inventory and cleanup order.
+- ESLint: `eslint .` exits 0 with zero findings.
+- Oxlint: version 1.80.0 and the anti-slop plugin are configured. The full frontend reports 1,110 existing findings across 161 files. No new Damn Lines UI finding remains. See `docs/lint-cleanup-handoff.md` for every rule count, hotspots, and repair guidance.
 - Type checks: `npm run typecheck` passed.
+- Source UI: PromptKit-style source triggers use the cited page URL with Google's favicon endpoint. A live Damn Lines favicon request returned HTTP 200 with a PNG response. Typed Anthropic `web_search_result_location` citations now emit the existing bounded source event for the active turn.
 - Provider timing: three live `/v1/locations` calls through `get_current_observations` were 835 ms, 526 ms, and 513 ms. Each matched one registered venue. p95 plus two seconds is about 2.8 s. `DAMNLINES_TIMEOUT_S` is 4 as a conservative floor. History `/v1/lines` was not called.
-- Anthropic smoke test: not run. Deterministic tests cover schema, prose, sources, and restore.
-- Remaining risks: a full live Google plus Anthropic tool-choice turn is unproven. History warmup is lazy on first queue use, not process startup.
+- Anthropic smoke test: one queue-specific agent turn passed with three live `claude-sonnet-5` requests, no retries, 2,572 input tokens, 665 output tokens, and 11.7 seconds of agent time. The model selected `declare_goals`, `discover_places`, and `present_places`, set `queue_context.mode=decision`, emitted the expected current queue prose and unmonitored-place caveat, and attached the canonical Damn Lines source event. Google and Damn Lines provider responses were deterministic fixtures, so this smoke spent only Anthropic quota.
+- Live environment observation: the configured Redis service rejected the optional provider-cache write and spend-counter update with `ResponseError`. The documented in-memory fallback kept the turn working. This smoke therefore did not certify Redis-backed usage accounting.
+- Remaining risks: a single turn using live Google, Damn Lines, and Anthropic together is unproven. The strict Ruff and Oxlint configurations expose existing repository-wide cleanup outside this integration.

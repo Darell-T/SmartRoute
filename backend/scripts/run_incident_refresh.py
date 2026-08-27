@@ -15,7 +15,8 @@ import asyncio
 import json
 import os
 import sys
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 # ``python scripts/run_incident_refresh.py`` puts ``scripts/`` on sys.path,
 # not the backend root; make ``app`` importable from the backend rootDir.
@@ -24,7 +25,9 @@ if _BACKEND_ROOT not in sys.path:
     sys.path.insert(0, _BACKEND_ROOT)
 
 from app.services.incidents import refresh  # noqa: E402
-from app.services.incidents.scout_provider import close_incident_scout_client  # noqa: E402
+from app.services.incidents.scout_provider import (  # noqa: E402
+    close_incident_scout_client,
+)
 
 # Explicit allowlist of payload-free metrics the CLI prints. The job's own
 # metrics are already bounded (counts, statuses, canonical batch ids), but the
@@ -64,7 +67,7 @@ async def run_once() -> int:
         metrics = await refresh.run_background_incident_refresh()
     except asyncio.CancelledError:
         raise
-    except Exception:
+    except Exception:  # noqa: BLE001 unhandled cycle errors must not print provider payloads
         # Never print the exception: its message can embed provider payloads.
         print("[incident-refresh] cycle failed with an unhandled error", file=sys.stderr)
         return 2
@@ -89,7 +92,7 @@ async def _run_lifecycle() -> int:
             print(_NO_REDIS_MESSAGE, file=sys.stderr)
             return 3
         exit_code = await run_once()
-    except Exception:
+    except Exception:  # noqa: BLE001 unhandled cycle errors must not print provider payloads
         # asyncio.CancelledError is a BaseException, so cancellation still
         # propagates to main() and maps to exit code 2 without this branch.
         print("[incident-refresh] cycle failed with an unhandled error", file=sys.stderr)
@@ -97,9 +100,11 @@ async def _run_lifecycle() -> int:
     finally:
         try:
             await close_incident_scout_client()
-        except Exception:
-            # Transport close must never mask the run outcome or leak details.
-            pass
+        except Exception as exc:  # noqa: BLE001 cleanup must not replace the cycle result
+            print(
+                f"[incident-refresh] scout client close failed: {type(exc).__name__}",
+                file=sys.stderr,
+            )
     return exit_code
 
 
@@ -109,7 +114,7 @@ def main() -> int:
         return asyncio.run(_run_lifecycle())
     except asyncio.CancelledError:
         return 2
-    except Exception:
+    except Exception:  # noqa: BLE001 unhandled cycle errors must not print provider payloads
         print("[incident-refresh] cycle failed with an unhandled error", file=sys.stderr)
         return 2
 

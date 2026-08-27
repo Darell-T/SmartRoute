@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta
-from typing import Any, Iterable, Mapping
+from typing import Any
 from zoneinfo import ZoneInfo
 
 try:
@@ -22,7 +23,6 @@ from app.services.trips.crowds.search_normalization import (
     parse_json,
     response_text,
 )
-
 
 _MODEL = os.getenv("XAI_CROWD_MODEL", "grok-4-1-fast-reasoning")
 _TIMEOUT_S = min(6.0, max(1.0, float(os.getenv("CROWD_SEARCH_TIMEOUT_S", "6"))))

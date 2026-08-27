@@ -6,7 +6,20 @@ import sys
 import types
 import unittest
 from types import SimpleNamespace
+from typing import ClassVar
 from unittest.mock import AsyncMock, patch
+
+import pytest
+
+
+class TicketStoreMustNotAcceptError(AssertionError):
+    def __init__(self) -> None:
+        super().__init__("ticket-store failure must not accept")
+
+
+class AlreadyClosingError(RuntimeError):
+    def __init__(self, code: int) -> None:
+        super().__init__(f"already closing ({code})")
 
 
 def _load_live_feed_module():
@@ -29,7 +42,7 @@ def _load_live_feed_module():
     class _FakeWebSocket:
         pass
 
-    class _FakeWebSocketDisconnect(Exception):
+    class _FakeWebSocketDisconnectError(Exception):
         pass
 
     class _FakeJSONResponse:
@@ -41,7 +54,7 @@ def _load_live_feed_module():
     fake_fastapi.APIRouter = _FakeAPIRouter
     fake_fastapi.Request = _FakeRequest
     fake_fastapi.WebSocket = _FakeWebSocket
-    fake_fastapi.WebSocketDisconnect = _FakeWebSocketDisconnect
+    fake_fastapi.WebSocketDisconnect = _FakeWebSocketDisconnectError
     fake_responses.JSONResponse = _FakeJSONResponse
 
     fake_pydantic = types.ModuleType("pydantic")
@@ -86,7 +99,7 @@ def _load_live_feed_module():
 
 
 def _mint_ticket(
-    live_feed,
+    _live_feed,
     path: str,
     exp: int,
     app_key: str = "test-key",
@@ -131,10 +144,7 @@ class LiveFeedApiTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ, {"APP_KEY": "test-key"}), patch.object(
             self.live_feed.admission.runtime, "allows_mock_modes", return_value=True
         ):
-            self.assertEqual(
-                await self.live_feed._verify_ws_ticket(ticket, "/ws/live-feed"),
-                ("v1.test-principal-opaque-123456", False),
-            )
+            assert await self.live_feed._verify_ws_ticket(ticket, "/ws/live-feed") == ("v1.test-principal-opaque-123456", False)
 
     async def test_ws_ticket_rejects_expired_bad_and_path_mismatched_tickets(self):
         now = int(self.live_feed.time.time())
@@ -146,19 +156,16 @@ class LiveFeedApiTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ, {"APP_KEY": "test-key"}), patch.object(
             self.live_feed.admission.runtime, "allows_mock_modes", return_value=True
         ):
-            self.assertEqual(await self.live_feed._verify_ws_ticket(expired, "/ws/live-feed"), (None, False))
-            self.assertEqual(await self.live_feed._verify_ws_ticket(malformed, "/ws/live-feed"), (None, False))
-            self.assertEqual(await self.live_feed._verify_ws_ticket(far_future, "/ws/live-feed"), (None, False))
-            self.assertEqual(await self.live_feed._verify_ws_ticket(valid_for_alerts, "/ws/live-feed"), (None, False))
+            assert await self.live_feed._verify_ws_ticket(expired, "/ws/live-feed") == (None, False)
+            assert await self.live_feed._verify_ws_ticket(malformed, "/ws/live-feed") == (None, False)
+            assert await self.live_feed._verify_ws_ticket(far_future, "/ws/live-feed") == (None, False)
+            assert await self.live_feed._verify_ws_ticket(valid_for_alerts, "/ws/live-feed") == (None, False)
 
     async def test_ws_ticket_rejects_an_explicitly_oversized_value(self):
         with patch.dict(os.environ, {"APP_KEY": "test-key"}), patch.object(
             self.live_feed.admission.runtime, "allows_mock_modes", return_value=True
         ):
-            self.assertEqual(
-                await self.live_feed._verify_ws_ticket("x" * 513, "/ws/live-feed"),
-                (None, False),
-            )
+            assert await self.live_feed._verify_ws_ticket("x" * 513, "/ws/live-feed") == (None, False)
 
     async def test_ws_ticket_replay_race_consumes_exactly_once(self):
         exp = int(self.live_feed.time.time()) + 90
@@ -170,12 +177,12 @@ class LiveFeedApiTests(unittest.IsolatedAsyncioTestCase):
                 self.live_feed._verify_ws_ticket(ticket, "/ws/live-feed"),
                 self.live_feed._verify_ws_ticket(ticket, "/ws/live-feed"),
             )
-        self.assertEqual(sum(result[0] is not None for result in (first, second)), 1)
-        self.assertEqual({first[1], second[1]}, {False})
+        assert sum(result[0] is not None for result in (first, second)) == 1
+        assert {first[1], second[1]} == {False}
 
     async def test_ticket_store_failure_closes_before_accept_with_1013(self):
         class Socket:
-            query_params = {"ticket": "unused"}
+            query_params: ClassVar[dict] = {"ticket": "unused"}
             url = SimpleNamespace(path="/ws/live-feed")
             app = SimpleNamespace(state=SimpleNamespace(gtfs=object()))
 
@@ -186,12 +193,12 @@ class LiveFeedApiTests(unittest.IsolatedAsyncioTestCase):
                 self.codes.append(code)
 
             async def accept(self):
-                raise AssertionError("ticket-store failure must not accept")
+                raise TicketStoreMustNotAcceptError()
 
         socket = Socket()
         with patch.object(self.live_feed, "_verify_ws_ticket", AsyncMock(return_value=(None, True))):
             await self.live_feed.live_feed_socket(socket)
-        self.assertEqual(socket.codes, [1013])
+        assert socket.codes == [1013]
 
     async def test_lease_guard_refresh_failure_marks_owner_for_single_close(self):
         lease = self.live_feed.admission.AdmissionLease("v1.test-principal-opaque-123456", "ws", "lease")
@@ -206,18 +213,12 @@ class LiveFeedApiTests(unittest.IsolatedAsyncioTestCase):
                 lease_failed,
                 owner,
             )
-        self.assertTrue(owner.cancelled() or owner.cancelling())
-        self.assertTrue(lease_failed.is_set())
+        assert owner.cancelled() or owner.cancelling()
+        assert lease_failed.is_set()
 
     def test_websocket_lease_guard_refreshes_at_one_third_of_socket_ttl(self):
-        self.assertEqual(
-            self.live_feed.LEASE_GUARD_INTERVAL_S,
-            self.live_feed.admission.WEBSOCKET_LEASE_TTL_S // 3,
-        )
-        self.assertGreater(
-            self.live_feed.LEASE_GUARD_INTERVAL_S,
-            self.live_feed.admission.LEASE_TTL_S // 3,
-        )
+        assert self.live_feed.LEASE_GUARD_INTERVAL_S == self.live_feed.admission.WEBSOCKET_LEASE_TTL_S // 3
+        assert self.live_feed.LEASE_GUARD_INTERVAL_S > self.live_feed.admission.LEASE_TTL_S // 3
 
     async def test_lease_guard_does_not_own_socket_close(self):
         owner = asyncio.create_task(asyncio.sleep(60))
@@ -232,12 +233,12 @@ class LiveFeedApiTests(unittest.IsolatedAsyncioTestCase):
                 lease_failed,
                 owner,
             )
-        self.assertTrue(owner.cancelled() or owner.cancelling())
-        self.assertTrue(lease_failed.is_set())
+        assert owner.cancelled() or owner.cancelling()
+        assert lease_failed.is_set()
 
     async def test_service_alerts_releases_once_when_guard_close_fails(self):
         class Socket:
-            query_params = {"ticket": "valid"}
+            query_params: ClassVar[dict] = {"ticket": "valid"}
             url = SimpleNamespace(path="/ws/service-alerts")
             app = SimpleNamespace(state=SimpleNamespace(gtfs=None))
 
@@ -245,7 +246,7 @@ class LiveFeedApiTests(unittest.IsolatedAsyncioTestCase):
                 return None
 
             async def close(self, code):
-                raise RuntimeError("already closing")
+                raise AlreadyClosingError(code)
 
             async def send_json(self, _payload):
                 return None
@@ -274,7 +275,7 @@ class LiveFeedApiTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_service_alerts_releases_immediately_when_client_disconnects(self):
         class Socket:
-            query_params = {"ticket": "valid"}
+            query_params: ClassVar[dict] = {"ticket": "valid"}
             url = SimpleNamespace(path="/ws/service-alerts")
             app = SimpleNamespace(state=SimpleNamespace(gtfs=None))
 
@@ -314,13 +315,13 @@ class LiveFeedApiTests(unittest.IsolatedAsyncioTestCase):
         ):
             await self.live_feed.service_alerts_socket(socket)
 
-        self.assertEqual(socket.accepted, 1)
-        self.assertEqual(socket.sent[0]["type"], "SERVICE_SNAPSHOT")
+        assert socket.accepted == 1
+        assert socket.sent[0]["type"] == "SERVICE_SNAPSHOT"
         release.assert_awaited_once_with(lease)
 
     async def test_both_socket_handlers_accept_valid_ticket_and_release_once(self):
         class Socket:
-            query_params = {"ticket": "valid"}
+            query_params: ClassVar[dict] = {"ticket": "valid"}
 
             def __init__(self, path, gtfs=None):
                 self.url = SimpleNamespace(path=path)
@@ -342,14 +343,14 @@ class LiveFeedApiTests(unittest.IsolatedAsyncioTestCase):
         ):
             await self.live_feed.service_alerts_socket(service_socket)
             await self.live_feed.live_feed_socket(live_socket)
-        self.assertEqual(service_socket.accepted, 1)
-        self.assertEqual(live_socket.accepted, 1)
-        self.assertEqual(live_socket.codes, [1011])
-        self.assertEqual(release.await_count, 2)
+        assert service_socket.accepted == 1
+        assert live_socket.accepted == 1
+        assert live_socket.codes == [1011]
+        assert release.await_count == 2
 
     async def test_socket_admission_denial_closes_before_accept_for_both_handlers(self):
         class Socket:
-            query_params = {"ticket": "valid"}
+            query_params: ClassVar[dict] = {"ticket": "valid"}
             def __init__(self, path):
                 self.url = SimpleNamespace(path=path)
                 self.app = SimpleNamespace(state=SimpleNamespace(gtfs=None))
@@ -364,8 +365,8 @@ class LiveFeedApiTests(unittest.IsolatedAsyncioTestCase):
             for handler, path in ((self.live_feed.service_alerts_socket, "/ws/service-alerts"), (self.live_feed.live_feed_socket, "/ws/live-feed")):
                 socket = Socket(path)
                 await handler(socket)
-                self.assertEqual(socket.accepted, 0)
-                self.assertEqual(socket.codes, [1013])
+                assert socket.accepted == 0
+                assert socket.codes == [1013]
 
     async def test_bounded_ws_parser_accepts_exact_4096_byte_text_and_bytes_frames(self):
         class Socket:
@@ -375,12 +376,12 @@ class LiveFeedApiTests(unittest.IsolatedAsyncioTestCase):
         location = b'{"type":"location","lat":40.7,"lng":-73.9}'
         for frame in ({"text": location.decode()}, {"bytes": location}):
             parsed = await self.live_feed._receive_bounded_ws_json(Socket(frame))
-            self.assertEqual(parsed["type"], "location")
+            assert parsed["type"] == "location"
         padded = location + b" " * (self.live_feed.MAX_WS_MESSAGE_BYTES - len(location))
-        self.assertEqual(len(padded), 4096)
+        assert len(padded) == 4096
         for frame in ({"text": padded.decode()}, {"bytes": padded}):
             parsed = await self.live_feed._receive_bounded_ws_json(Socket(frame))
-            self.assertEqual(parsed["type"], "location")
+            assert parsed["type"] == "location"
 
     async def test_bounded_ws_parser_rejects_4097_byte_text_and_bytes_frames(self):
         class Socket:
@@ -389,9 +390,11 @@ class LiveFeedApiTests(unittest.IsolatedAsyncioTestCase):
 
         location = b'{"type":"location","lat":40.7,"lng":-73.9}'
         oversized = location + b" " * (self.live_feed.MAX_WS_MESSAGE_BYTES + 1 - len(location))
-        self.assertEqual(len(oversized), 4097)
+        assert len(oversized) == 4097
         for frame in ({"text": oversized.decode()}, {"bytes": oversized}):
-            with self.subTest(frame_type=next(iter(frame))), self.assertRaises(ValueError):
+            with self.subTest(frame_type=next(iter(frame))), pytest.raises(
+                ValueError, match="websocket payload too large"
+            ):
                 await self.live_feed._receive_bounded_ws_json(Socket(frame))
 
     async def test_bounded_ws_parser_rejects_unknown_key_out_of_metro_location_and_excess_routes(self):
@@ -405,12 +408,18 @@ class LiveFeedApiTests(unittest.IsolatedAsyncioTestCase):
             {"text": '{"type":"vehicle_scope","selected_route_ids":["A","B","C","D","E","F","G","H","J","L","M","N","Q"]}'},
         )
         for frame in invalid:
-            with self.subTest(frame=frame), self.assertRaises(ValueError):
+            with self.subTest(frame=frame), pytest.raises(
+                ValueError,
+                match=(
+                    r"location outside service area|unexpected location fields|"
+                    r"invalid route selection"
+                ),
+            ):
                 await self.live_feed._receive_bounded_ws_json(Socket(frame))
 
     async def test_invalid_live_feed_frame_does_not_build_a_snapshot(self):
         class Socket:
-            query_params = {"ticket": "valid"}
+            query_params: ClassVar[dict] = {"ticket": "valid"}
             url = SimpleNamespace(path="/ws/live-feed")
             app = SimpleNamespace(state=SimpleNamespace(gtfs=object()))
 
@@ -443,7 +452,7 @@ class LiveFeedApiTests(unittest.IsolatedAsyncioTestCase):
             snapshot,
         ):
             await self.live_feed.live_feed_socket(socket)
-        self.assertEqual(socket.codes, [1008])
+        assert socket.codes == [1008]
         snapshot.assert_not_awaited()
         release.assert_awaited_once_with(lease)
 
@@ -459,9 +468,9 @@ class LiveFeedApiTests(unittest.IsolatedAsyncioTestCase):
             response = await self.live_feed.live_feed(request, payload)
 
         body = json.loads(response.body)
-        self.assertEqual(response.status_code, 503)
-        self.assertEqual(body["error"], "live feed temporarily unavailable")
-        self.assertNotIn("provider secret details", response.body.decode("utf-8"))
+        assert response.status_code == 503
+        assert body["error"] == "live feed temporarily unavailable"
+        assert "provider secret details" not in response.body.decode("utf-8")
 
     async def test_service_alerts_errors_return_503_redacted_json(self):
         request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(gtfs=object())))
@@ -473,10 +482,10 @@ class LiveFeedApiTests(unittest.IsolatedAsyncioTestCase):
             response = await self.live_feed.service_alerts(request)
 
         body = json.loads(response.body)
-        self.assertEqual(response.status_code, 503)
-        self.assertEqual(body["alerts"], [])
-        self.assertEqual(body["error"], "service alerts temporarily unavailable")
-        self.assertNotIn("provider secret details", response.body.decode("utf-8"))
+        assert response.status_code == 503
+        assert body["alerts"] == []
+        assert body["error"] == "service alerts temporarily unavailable"
+        assert "provider secret details" not in response.body.decode("utf-8")
 
     async def test_vehicles_unhandled_errors_return_503_redacted_json(self):
         with patch.object(
@@ -487,9 +496,9 @@ class LiveFeedApiTests(unittest.IsolatedAsyncioTestCase):
             response = await self.live_feed.vehicles()
 
         body = json.loads(response.body)
-        self.assertEqual(response.status_code, 503)
-        self.assertEqual(body["error"], "vehicles temporarily unavailable")
-        self.assertNotIn("provider secret details", response.body.decode("utf-8"))
+        assert response.status_code == 503
+        assert body["error"] == "vehicles temporarily unavailable"
+        assert "provider secret details" not in response.body.decode("utf-8")
 
 
 if __name__ == "__main__":

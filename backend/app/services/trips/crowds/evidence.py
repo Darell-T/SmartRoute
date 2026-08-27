@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import re
-from datetime import datetime, timezone
-from typing import Any, Iterable
+from collections.abc import Iterable
+from datetime import UTC, datetime
+from typing import Any
 
-from app.services.trips.crowds import event as event_crowd, search as crowd_search
+from app.services.trips.crowds import event as event_crowd
+from app.services.trips.crowds import search as crowd_search
 from app.services.trips.crowds.hotspots import HotspotHit
 
 _LIVE_SEARCH_DEADLINE_S = 6.0
@@ -85,7 +87,7 @@ def _deduplicate_impacts(impacts: Iterable[dict]) -> list[dict]:
 
 def _task_outcome(task: asyncio.Task[Any], done: set[asyncio.Task[Any]]) -> Any:
     if task not in done or task.cancelled():
-        return asyncio.TimeoutError()
+        return TimeoutError()
     try:
         return task.result()
     except BaseException as exc:
@@ -113,9 +115,9 @@ async def collect(
     )
     if travel_at is None:
         try:
-            travel_at = datetime.fromisoformat(str(ctx.now_et).replace("Z", "+00:00"))
+            travel_at = datetime.fromisoformat(str(ctx.now_et))
         except ValueError:
-            travel_at = datetime.now(timezone.utc)
+            travel_at = datetime.now(UTC)
 
     ticketmaster_result, grok_result = await _run_provider_searches(
         routes,
@@ -143,7 +145,7 @@ async def collect(
         live_search_required=allow_live_search,
     )
 
-    if allow_live_search and grok_status not in {"complete"}:
+    if allow_live_search and grok_status != "complete":
         failures.append(f"grok_{grok_status}")
     return status, impacts, failures, {
         "grok_status": grok_status,

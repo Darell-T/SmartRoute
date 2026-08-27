@@ -141,9 +141,12 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
         )
     lat, lng, radius_m = bias
     max_results = _clamp_provider_results(tool_input.get("max_results"))
+    location_mode = (
+        "locationRestriction" if tool_input.get("restrict_to_area") else "locationBias"
+    )
     request_body = {
         "textQuery": query,
-        "locationBias": {
+        location_mode: {
             "circle": {
                 "center": {"latitude": lat, "longitude": lng},
                 "radius": radius_m,
@@ -242,8 +245,11 @@ async def _provider_search(tool_input: dict, ctx: ToolContext) -> ToolResult:
 
     try:
         result = await execute(tool_input, ctx)
-    except Exception:
-        _LOGGER.warning("place discovery provider failed")
+    except (RuntimeError, TypeError, ValueError) as exc:
+        _LOGGER.warning(
+            "place discovery provider failed type=%s",
+            type(exc).__name__,
+        )
         return ToolResult(ok=False, error="place search is temporarily unavailable")
     if isinstance(result, ToolResult):
         return result
@@ -288,7 +294,7 @@ def _target_accepts_place(
 ) -> bool:
     """Keep a provider result in the geography that requested it."""
 
-    if scope["kind"] not in {"boroughs", "nyc"}:
+    if scope["kind"] in {"current_location", "named_area"}:
         return True
     address = place.get("address") or place.get("formatted_address")
     borough = conversational_geography.resolve_place_borough(

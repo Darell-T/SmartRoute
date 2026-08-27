@@ -8,20 +8,24 @@ from typing import Any
 
 from app.services.agent import events as agent_events
 from app.services.agent import transcript_store
-from app.services.agent.passenger_output import framed_events, validated_framing
-from app.services.agent.turn.contract import GoalKind, GoalState
 from app.services.agent.model.output_projection import project_presented_route
+from app.services.agent.passenger_output import framed_events, validated_framing
 from app.services.agent.tools._types import ToolContext, ToolResult
 from app.services.agent.tools.route.present_route_commit import (
     record_presentation as _record_presentation,
+)
+from app.services.agent.tools.route.present_route_commit import (
     reserve_and_commit as _reserve_and_commit,
 )
 from app.services.agent.tools.route.present_route_state import (
     ValidatedRoutePresentation,
     canonical_facts,
-    owned_candidate as _owned_candidate,
     rebind_to_entry,
 )
+from app.services.agent.tools.route.present_route_state import (
+    owned_candidate as _owned_candidate,
+)
+from app.services.agent.turn.contract import GoalKind, GoalState
 from app.services.trips.route_incidents.scan import (
     contains_unsafe_incident_clear,
     incident_scan_is_complete,

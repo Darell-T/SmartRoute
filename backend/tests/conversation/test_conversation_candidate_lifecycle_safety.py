@@ -26,6 +26,7 @@ from app.services.agent import trip_state as trip_state_module
 from app.services.agent.tools.route import present_route
 from app.services.agent.turn.contract import GoalState, TurnContract
 from app.services.agent.turn.evidence import TurnEvidence
+
 from tests.conversation.conversation_candidate_reference_fixtures import (
     CANDIDATE_A,
     CANDIDATE_B,
@@ -38,16 +39,20 @@ from tests.conversation.conversation_candidate_reference_fixtures import (
     REPLAN_MESSAGE,
     WHAT_IF_MESSAGE,
 )
-from tests.conversation.conversation_candidate_reference_support import _CandidateReferenceBase
-from tests.conversation.test_conversation_candidate_reference_safety import _ModelLedCandidateMixin
+from tests.conversation.conversation_candidate_reference_support import (
+    _CandidateReferenceBase,
+)
 from tests.conversation.conversation_matrix_harness import (
     _turn_round,
     load_agent_loop,
     make_leg,
     route_cards,
 )
+from tests.conversation.test_conversation_candidate_reference_safety import (
+    _ModelLedCandidateMixin,
+)
 
-MODES = ("auto", "quick")
+MODES = ("auto",)
 INITIAL_TOOL_PROFILE = frozenset(
     {
         "declare_goals",
@@ -148,16 +153,15 @@ class ExpiredCandidateSetTests(_ModelLedCandidateMixin, _CandidateReferenceBase)
                 turn_id="t2",
                 bypass_accepted_replay=True,
             )
-            self.assertIsNone(
-                candidate_store.load_candidate_set(set_id, session_id=session_id)
-            )
+            assert candidate_store.load_candidate_set(set_id, session_id=session_id) is None
             probe = candidate_store.get_candidate(
                 set_id, CANDIDATE_V1, session_id=session_id
             )
-            self.assertTrue(probe[0] is None and probe[2] is not None)
-            self.assertIn("expired", probe[2])
-        self.assertEqual(self._snapshot_session(session), session_before)
-        self.assertEqual(self._snapshot_record(set_id, session_id), record_before)
+            assert probe[0] is None
+            assert probe[2] is not None
+            assert "expired" in probe[2]
+        assert self._snapshot_session(session) == session_before
+        assert self._snapshot_record(set_id, session_id) == record_before
 
         with self._expired_candidate_clock(record):
             ev = await self._scripted_turn(
@@ -179,19 +183,16 @@ class ExpiredCandidateSetTests(_ModelLedCandidateMixin, _CandidateReferenceBase)
                 prepare_leg=make_leg(destination="Coney Island"),
                 fixed_candidate_id=CANDIDATE_V2,
             )
-        self.assertEqual(
-            [name for name, _input in ev.trace.tool_calls],
-            ["declare_goals", "prepare_route_options", "present_route"],
-            f"{scenario} recovery canonical chain",
-        )
-        self.assertEqual(len(route_cards(ev.events)), 1)
+        assert [name for name, _input in ev.trace.tool_calls] == ["declare_goals", "prepare_route_options", "present_route"], f"{scenario} recovery canonical chain"
+        assert len(route_cards(ev.events)) == 1
         new_set_id = ev.state["active_candidate_set_id"]
-        self.assertTrue(bool(new_set_id) and new_set_id.startswith("cs_"))
-        self.assertNotEqual(new_set_id, set_id)
-        self.assertEqual(ev.state["selected_candidate_id"], CANDIDATE_V2)
+        assert bool(new_set_id)
+        assert new_set_id.startswith("cs_")
+        assert new_set_id != set_id
+        assert ev.state["selected_candidate_id"] == CANDIDATE_V2
         new_record = candidate_store.load_candidate_set(new_set_id, session_id=session_id)
-        self.assertTrue(new_record["presented"])
-        self.assertEqual(new_record["selected_candidate_id"], CANDIDATE_V2)
+        assert new_record["presented"]
+        assert new_record["selected_candidate_id"] == CANDIDATE_V2
 
         with self._expired_candidate_clock(record):
             ev = await self._rejected_present_turn(
@@ -205,10 +206,7 @@ class ExpiredCandidateSetTests(_ModelLedCandidateMixin, _CandidateReferenceBase)
                 set_id=new_set_id,
                 turn_id="t4",
             )
-        self.assertEqual(
-            trip_state_module.get_trip_state(session)["selected_candidate_id"],
-            CANDIDATE_V2,
-        )
+        assert trip_state_module.get_trip_state(session)["selected_candidate_id"] == CANDIDATE_V2
 
     async def test_e2_case3_expired_then_recovery(self):
         for mode in MODES:
@@ -281,23 +279,15 @@ class ExpiredCandidateSetTests(_ModelLedCandidateMixin, _CandidateReferenceBase)
             self._snapshot_record = record_snapshot
             self._scripted_turn = scripted_turn
             self._rejected_present_turn = rejected_present
-        self.assertGreaterEqual(len(probe_events), 2, f"{mode} rejected probes recorded")
+        assert len(probe_events) >= 2, f"{mode} rejected probes recorded"
         final_probe = probe_events[-1]
-        self.assertTrue(
-            final_probe["session"],
-            f"{mode} final rejected-present session snapshot precedes its turn",
-        )
-        self.assertTrue(
-            final_probe["record"],
-            f"{mode} final rejected-present record snapshot precedes its turn",
-        )
-        self.assertTrue(snapshot_events, f"{mode} t4 session snapshot recorded")
-        self.assertTrue(record_events, f"{mode} t4 record snapshot recorded")
+        assert final_probe["session"], f"{mode} final rejected-present session snapshot precedes its turn"
+        assert final_probe["record"], f"{mode} final rejected-present record snapshot precedes its turn"
+        assert snapshot_events, f"{mode} t4 session snapshot recorded"
+        assert record_events, f"{mode} t4 record snapshot recorded"
         last_turn_seq = turn_events[-1]
-        self.assertLess(max(final_probe["session"]), last_turn_seq,
-                        f"{mode} t4 session snapshot predates the t4 turn")
-        self.assertLess(max(final_probe["record"]), last_turn_seq,
-                        f"{mode} t4 record snapshot predates the t4 turn")
+        assert max(final_probe["session"]) < last_turn_seq, f"{mode} t4 session snapshot predates the t4 turn"
+        assert max(final_probe["record"]) < last_turn_seq, f"{mode} t4 record snapshot predates the t4 turn"
 
 
 class SupersededCandidateTests(_ModelLedCandidateMixin, _CandidateReferenceBase):
@@ -354,51 +344,22 @@ class SupersededCandidateTests(_ModelLedCandidateMixin, _CandidateReferenceBase)
             message=CHANGE_ROUTE_MESSAGE, rounds=rounds, turn_id="t2",
             prepare_leg=make_leg(destination="Coney Island"),
             fixed_candidate_id=CANDIDATE_V2)
-        self.assertEqual(
-            (ev.offered,
-             [name for name, _input in ev.trace.tool_calls]),
-            (INITIAL_TOOL_PROFILE,
-             ["declare_goals", "prepare_route_options", "present_route", "present_route"]),
-            f"{s} offered={sorted(ev.offered)}; "
-            f"executed={[n for n, _ in ev.trace.tool_calls]}")
+        assert (ev.offered, [name for name, _input in ev.trace.tool_calls]) == (INITIAL_TOOL_PROFILE, ["declare_goals", "prepare_route_options", "present_route", "present_route"]), f"{s} offered={sorted(ev.offered)}; " f"executed={[n for n, _ in ev.trace.tool_calls]}"
         present_attempts = [
             attempt
             for attempt in ev.trace.capability_attempts
             if attempt["capability"] == "present_route"
         ]
-        self.assertEqual(
-            [attempt["ok"] for attempt in present_attempts],
-            [False, True],
-            f"{s} superseded candidate fails and current candidate presents",
-        )
-        self.assertNotIn(
-            CANDIDATE_UNKNOWN_MARKER,
-            ev.trace.final_text,
-            f"{s} hides internal candidate diagnostics",
-        )
+        assert [attempt["ok"] for attempt in present_attempts] == [False, True], f"{s} superseded candidate fails and current candidate presents"
+        assert CANDIDATE_UNKNOWN_MARKER not in ev.trace.final_text, f"{s} hides internal candidate diagnostics"
         new_set_id = ev.state["active_candidate_set_id"]
-        self.assertEqual(
-            (len(route_cards(ev.events)),
-             ev.mocks["prepare_single_leg"].await_count,
-             len(ev.mocks["stored_candidate_set_ids"]),
-             ev.mocks["stored_candidate_set_ids"][0]
-             if ev.mocks["stored_candidate_set_ids"] else None,
-             ev.state["selected_candidate_id"]),
-            (1, 1, 1, new_set_id, CANDIDATE_V2),
-            f"{s} one card, one provider call, one set, one selection")
-        self.assertEqual(self._snapshot_record(set_id, session_id),
-                         old_record_before,
-                         f"{s} superseded record never mutates")
+        assert (len(route_cards(ev.events)), ev.mocks["prepare_single_leg"].await_count, len(ev.mocks["stored_candidate_set_ids"]), ev.mocks["stored_candidate_set_ids"][0] if ev.mocks["stored_candidate_set_ids"] else None, ev.state["selected_candidate_id"]) == (1, 1, 1, new_set_id, CANDIDATE_V2), f"{s} one card, one provider call, one set, one selection"
+        assert self._snapshot_record(set_id, session_id) == old_record_before, f"{s} superseded record never mutates"
         new_record = candidate_store.load_candidate_set(
             new_set_id, session_id=session_id)
-        self.assertEqual((new_record["presented"],
-                          new_record["selected_candidate_id"]),
-                         (True, CANDIDATE_V2),
-                         f"{s} current set presented once")
+        assert (new_record["presented"], new_record["selected_candidate_id"]) == (True, CANDIDATE_V2), f"{s} current set presented once"
         at_prepare = (ev.mocks.get("session_at_store") or [{}])[0]
-        self.assertEqual((at_prepare.get("active_trip") or {}).get("card_id"),
-                         old_card_id,
-                         f"{s} accepted trip survives until commit")
+        assert (at_prepare.get("active_trip") or {}).get("card_id") == old_card_id, f"{s} accepted trip survives until commit"
         self._assert_meta_done(s, ev)
         self._assert_no_text_leak(s, ev)
         self._assert_policy(s, mode, ev)
@@ -465,26 +426,14 @@ class DuplicatePresentationTests(_ModelLedCandidateMixin, _CandidateReferenceBas
             },
             ctx,
         )
-        self.assertTrue(result.ok, f"{s} accepted replay succeeds: {result.error}")
-        self.assertEqual(
-            result.data.get("presentation_outcome"), "accepted_route_replay", s
-        )
-        self.assertEqual(len(route_cards(result.events)), 1, f"{s} one replay card")
-        self.assertEqual(result.session_route_cards, [], f"{s} replay has no card payload")
-        self.assertEqual(
-            session.get("route_cards") or [], cards_before,
-            f"{s} replay does not persist a duplicate card",
-        )
-        self.assertEqual(
-            trip_state_module.get_trip_state(session), state_before,
-            f"{s} replay does not mutate trip state",
-        )
-        self.assertEqual(
-            self._snapshot_record(set_id, session_id), record_before,
-            f"{s} replay does not mutate the accepted candidate record",
-        )
-        self.assertEqual(len(session.get("route_cards") or []), 1,
-                         f"{s} no duplicate card persisted")
+        assert result.ok, f"{s} accepted replay succeeds: {result.error}"
+        assert result.data.get("presentation_outcome") == "accepted_route_replay", s
+        assert len(route_cards(result.events)) == 1, f"{s} one replay card"
+        assert result.session_route_cards == [], f"{s} replay has no card payload"
+        assert (session.get("route_cards") or []) == cards_before, f"{s} replay does not persist a duplicate card"
+        assert trip_state_module.get_trip_state(session) == state_before, f"{s} replay does not mutate trip state"
+        assert self._snapshot_record(set_id, session_id) == record_before, f"{s} replay does not mutate the accepted candidate record"
+        assert len(session.get("route_cards") or []) == 1, f"{s} no duplicate card persisted"
 
     async def _same_round_identical_retry(self, mode: str):
         s = f"E2C5-{mode}-SAME"
@@ -531,21 +480,11 @@ class DuplicatePresentationTests(_ModelLedCandidateMixin, _CandidateReferenceBas
             for attempt in ev.trace.capability_attempts
             if attempt["capability"] == "present_route"
         ]
-        self.assertEqual(
-            (len(present_attempts),
-             all(attempt["ok"] for attempt in present_attempts),
-             len(route_cards(ev.events)),
-             len(session.get("route_cards") or []) - cards_before,
-             ev.trace.provider_tool_execution_count),
-            (2, True, 1, 1, 2),
-            f"{s} one execution, one streamed card, one persisted card")
+        assert (len(present_attempts), all(attempt["ok"] for attempt in present_attempts), len(route_cards(ev.events)), len(session.get("route_cards") or []) - cards_before, ev.trace.provider_tool_execution_count) == (2, True, 1, 1, 2), f"{s} one execution, one streamed card, one persisted card"
         new_set_id = ev.state["active_candidate_set_id"]
         new_record = candidate_store.load_candidate_set(
             new_set_id, session_id=session_id)
-        self.assertEqual((new_record["presented"],
-                          new_record["selected_candidate_id"]),
-                         (True, CANDIDATE_V2),
-                         f"{s} one reservation, one committed selection")
+        assert (new_record["presented"], new_record["selected_candidate_id"]) == (True, CANDIDATE_V2), f"{s} one reservation, one committed selection"
 
     async def test_e2_case5_cross_turn_retry(self):
         for mode in MODES:
@@ -588,30 +527,14 @@ class SessionIsolationCandidateTests(_ModelLedCandidateMixin, _CandidateReferenc
             message=WHAT_IF_MESSAGE, rounds=rounds, turn_id="t2",
             prepare_leg=make_leg(destination="Airport"),
             fixed_candidate_id=CANDIDATE_WHAT_IF_A)
-        self.assertEqual(
-            [name for name, _input in ev_a.trace.tool_calls],
-            ["declare_goals", "prepare_route_options", "present_route"],
-            f"{s} A what-if preview runs the canonical chain")
+        assert [name for name, _input in ev_a.trace.tool_calls] == ["declare_goals", "prepare_route_options", "present_route"], f"{s} A what-if preview runs the canonical chain"
         state_a = trip_state_module.get_trip_state(s_a)
         temp_set_a = state_a["temporary_candidate_set_id"]
-        self.assertEqual(
-            (bool(temp_set_a) and temp_set_a.startswith("cs_"),
-             state_a["temporary_selected_candidate_id"],
-             state_a["active_candidate_set_id"],
-             state_a["selected_candidate_id"]),
-            (True, CANDIDATE_WHAT_IF_A, set_a, CANDIDATE_A),
-            f"{s} A preview binds temp, keeps active")
-        self.assertEqual(
-            (len(route_cards(ev_a.events)),
-             s_a.get("active_trip"), s_a.get("route_cards") or []),
-            (1, a_before["active_trip"], a_before["route_cards"]),
-            f"{s} preview streams one card, persists nothing")
+        assert (bool(temp_set_a) and temp_set_a.startswith("cs_"), state_a["temporary_selected_candidate_id"], state_a["active_candidate_set_id"], state_a["selected_candidate_id"]) == (True, CANDIDATE_WHAT_IF_A, set_a, CANDIDATE_A), f"{s} A preview binds temp, keeps active"
+        assert (len(route_cards(ev_a.events)), s_a.get("active_trip"), s_a.get("route_cards") or []) == (1, a_before["active_trip"], a_before["route_cards"]), f"{s} preview streams one card, persists nothing"
         temp_record_a = candidate_store.load_candidate_set(
             temp_set_a, session_id=sid_a)
-        self.assertEqual((temp_record_a["presented"],
-                          temp_record_a["scenario_mode"]),
-                         (False, "what_if"),
-                         f"{s} preview is an unconsumed what-if")
+        assert (temp_record_a["presented"], temp_record_a["scenario_mode"]) == (False, "what_if"), f"{s} preview is an unconsumed what-if"
         a_after_preview = self._snapshot_session(s_a)
         temp_a_before = self._snapshot_record(temp_set_a, sid_a)
         await self._rejected_present_turn(
@@ -619,24 +542,12 @@ class SessionIsolationCandidateTests(_ModelLedCandidateMixin, _CandidateReferenc
             session_id=sid_b, message=WHAT_IF_MESSAGE,
             candidate_id=CANDIDATE_WHAT_IF_A,
             marker=CANDIDATE_UNKNOWN_MARKER, set_id=set_b, turn_id="t2")
-        self.assertEqual(
-            (self._snapshot_session(s_a),
-             self._snapshot_record(temp_set_a, sid_a)),
-            (a_after_preview, temp_a_before),
-            f"{s} A session and temporary record untouched by B probe")
+        assert (self._snapshot_session(s_a), self._snapshot_record(temp_set_a, sid_a)) == (a_after_preview, temp_a_before), f"{s} A session and temporary record untouched by B probe"
         for probe_set in (set_a, temp_set_a):
-            self.assertIsNone(
-                candidate_store.load_candidate_set(probe_set, session_id=sid_b),
-                f"{s} A set {probe_set} does not load under B")
-        self.assertIsNone(
-            candidate_store.load_candidate_set(set_b, session_id=sid_a),
-            f"{s} B set does not load under A")
-        self.assertEqual(trip_state_module.get_trip_state(s_a)
-                         ["temporary_candidate_set_id"], temp_set_a,
-                         f"{s} A temporary scenario stays bound")
-        self.assertEqual(trip_state_module.get_trip_state(s_b)
-                         ["temporary_candidate_set_id"], None,
-                         f"{s} B binds no temporary scenario from A")
+            assert candidate_store.load_candidate_set(probe_set, session_id=sid_b) is None, f"{s} A set {probe_set} does not load under B"
+        assert candidate_store.load_candidate_set(set_b, session_id=sid_a) is None, f"{s} B set does not load under A"
+        assert trip_state_module.get_trip_state(s_a)["temporary_candidate_set_id"] == temp_set_a, f"{s} A temporary scenario stays bound"
+        assert trip_state_module.get_trip_state(s_b)["temporary_candidate_set_id"] is None, f"{s} B binds no temporary scenario from A"
 
     async def test_e2_case8_session_isolation(self):
         for mode in MODES:

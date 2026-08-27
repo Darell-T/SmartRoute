@@ -5,19 +5,22 @@ from __future__ import annotations
 import copy
 from typing import Any
 
-from app.services.trips.preparation.prepare import PreparedLeg
-from app.services.trips.preparation.prepare import AggregatePreparation, PreparedChain
+from app.services.trips import scoring
+from app.services.trips.crowds import event as event_crowd
 from app.services.trips.preparation.evidence import (
     candidate_evidence_for_route,
     merge_candidate_evidence,
     merge_coverage,
-    merge_evidence_envelopes,
     merge_event_status,
+    merge_evidence_envelopes,
     merge_incident_metadata,
     sum_timings,
 )
-from app.services.trips import scoring
-from app.services.trips.crowds import event as event_crowd
+from app.services.trips.preparation.prepare import (
+    AggregatePreparation,
+    PreparedChain,
+    PreparedLeg,
+)
 from app.services.trips.transfer_semantics import route_accessibility
 
 
