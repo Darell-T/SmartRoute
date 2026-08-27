@@ -12,6 +12,7 @@
    ════════════════════════════════════════════════════════════════════════ */
 
 import { Moon, Sun } from "lucide-react";
+import Image from "next/image";
 import type { ChatTheme } from "@/lib/use-chat-theme";
 import { NearYouRow } from "./near-you-row";
 
@@ -39,7 +40,7 @@ export function ChatTopBar({
   return (
     <header className="sr-chat-top-bar">
       <div className="sr-chat-top-bar__brand">
-        <img src="/smart-route-mark-512.png" width={28} height={28} alt="" />
+        <Image src="/smart-route-mark-512.png" width={28} height={28} alt="" />
         <span className="sr-chat-top-bar__wordmark">SmartRoute</span>
       </div>
 

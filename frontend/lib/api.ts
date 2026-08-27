@@ -85,8 +85,7 @@ export async function planTrip(
       });
 
       if (!res.ok) {
-        const errorText = await res.text();
-        console.error("Backend error:", res.status, errorText);
+        await res.body?.cancel();
         throw new Error(res.status === 503 ? "Service unavailable" : "Failed to plan trip");
       }
       return res.json();
@@ -102,7 +101,6 @@ export async function planTrip(
     const msg = err instanceof Error ? err.message : "";
     const isRetryable = msg === "Service unavailable" || msg.includes("abort") || msg === "Failed to fetch";
     if (isRetryable) {
-      console.log("[api] first attempt failed, retrying in 2s…", msg);
       await new Promise((r) => setTimeout(r, 2000));
       return attempt();
     }

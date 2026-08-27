@@ -20,11 +20,12 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.services import admission
 from app.services.agent import events as agent_events
 from app.services.agent import loop as agent_loop
 from app.services.agent import session as session_module
-from app.services import admission
 from app.services.geography import NYC_BOUNDS
+import contextlib
 
 router = APIRouter()
 
@@ -214,10 +215,8 @@ async def _sse_stream(
             # No __anext__ is running now; close the generator explicitly so
             # its finally also runs when it was suspended at a yield. No-op
             # when the cancellation above already closed it.
-            try:
+            with contextlib.suppress(asyncio.CancelledError, StopAsyncIteration):
                 await agen.aclose()
-            except (asyncio.CancelledError, StopAsyncIteration):
-                pass
         finally:
             # Persist diagnostic mutations even when a turn fails or the
             # client disconnects, but preserve the expiry earned at prompt

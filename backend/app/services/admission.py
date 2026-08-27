@@ -9,6 +9,7 @@ import time
 from dataclasses import dataclass
 
 import redis
+
 from app import runtime
 
 WINDOW_S, LEASE_TTL_S = 60, 120

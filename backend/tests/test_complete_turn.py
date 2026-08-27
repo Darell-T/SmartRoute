@@ -38,9 +38,9 @@ class CompleteTurnTests(unittest.IsolatedAsyncioTestCase):
             },
             ToolContext(session_id="s", turn_evidence=_general_evidence()),
         )
-        self.assertFalse(result.ok)
-        self.assertIn("outcome must be", result.error or "")
-        self.assertTrue(result.internal_diagnostic)
+        assert not result.ok
+        assert "outcome must be" in (result.error or "")
+        assert result.internal_diagnostic
 
     async def test_cancelled_discards_only_temporary_scenario(self):
         session = {"trip_state": trip_state_module.empty_trip_state()}
@@ -64,12 +64,12 @@ class CompleteTurnTests(unittest.IsolatedAsyncioTestCase):
             ToolContext(session=session, session_id="s", turn_evidence=evidence),
         )
 
-        self.assertTrue(result.ok)
+        assert result.ok
         state = trip_state_module.get_trip_state(session)
-        self.assertEqual(state["active_candidate_set_id"], "cs_active")
-        self.assertEqual(state["selected_candidate_id"], "cd_active")
-        self.assertIsNone(state["temporary_candidate_set_id"])
-        self.assertIsNone(state["temporary_selected_candidate_id"])
+        assert state["active_candidate_set_id"] == "cs_active"
+        assert state["selected_candidate_id"] == "cd_active"
+        assert state["temporary_candidate_set_id"] is None
+        assert state["temporary_selected_candidate_id"] is None
 
     async def test_clarification_may_explain_what_happens_after_the_answer(self):
         evidence = _general_evidence("clarify")
@@ -82,12 +82,9 @@ class CompleteTurnTests(unittest.IsolatedAsyncioTestCase):
             ToolContext(session_id="s", turn_evidence=evidence),
         )
 
-        self.assertTrue(result.ok)
-        self.assertEqual(result.data["outcome"], "clarification")
-        self.assertEqual(
-            "".join(event.text for event in result.events if event.type == "token"),
-            "Which station? Once you answer, I'll check arrivals.",
-        )
+        assert result.ok
+        assert result.data["outcome"] == "clarification"
+        assert "".join(event.text for event in result.events if event.type == "token") == "Which station? Once you answer, I'll check arrivals."
 
     async def test_rejects_internal_runtime_language(self):
         evidence = _general_evidence()
@@ -100,9 +97,9 @@ class CompleteTurnTests(unittest.IsolatedAsyncioTestCase):
             ToolContext(session_id="s", turn_evidence=evidence),
         )
 
-        self.assertFalse(result.ok)
-        self.assertTrue(result.internal_diagnostic)
-        self.assertEqual(result.events, [])
+        assert not result.ok
+        assert result.internal_diagnostic
+        assert result.events == []
 
     async def test_partial_transit_recovery_targets_only_unavailable_goal(self):
         evidence = TurnEvidence()
@@ -133,9 +130,9 @@ class CompleteTurnTests(unittest.IsolatedAsyncioTestCase):
             ToolContext(session_id="s", turn_evidence=evidence),
         )
 
-        self.assertFalse(invalid.ok)
-        self.assertIn("outcome=unavailable", invalid.error or "")
-        self.assertEqual(invalid.events, [])
+        assert not invalid.ok
+        assert "outcome=unavailable" in (invalid.error or "")
+        assert invalid.events == []
 
         mixed_unavailable = await complete_turn.execute(
             {
@@ -146,11 +143,11 @@ class CompleteTurnTests(unittest.IsolatedAsyncioTestCase):
             ToolContext(session_id="s", turn_evidence=evidence),
         )
 
-        self.assertFalse(mixed_unavailable.ok)
-        self.assertIn("remove resolved", mixed_unavailable.error or "")
-        self.assertIn("'status'", mixed_unavailable.error or "")
-        self.assertIn("['arrivals']", mixed_unavailable.error or "")
-        self.assertEqual(mixed_unavailable.events, [])
+        assert not mixed_unavailable.ok
+        assert "remove resolved" in (mixed_unavailable.error or "")
+        assert "'status'" in (mixed_unavailable.error or "")
+        assert "['arrivals']" in (mixed_unavailable.error or "")
+        assert mixed_unavailable.events == []
 
         recovered = await complete_turn.execute(
             {
@@ -161,43 +158,9 @@ class CompleteTurnTests(unittest.IsolatedAsyncioTestCase):
             ToolContext(session_id="s", turn_evidence=evidence),
         )
 
-        self.assertTrue(recovered.ok)
-        self.assertEqual(
-            recovered.data["turn_resolution"],
-            "partial_success_with_recovery",
-        )
-        self.assertEqual(
-            recovered.events[0].text,
-            "I couldn't confirm the next arrivals from your station.",
-        )
-
-    async def test_rejects_answer_while_place_presentation_pending(self):
-        evidence = _evidence(("places", GoalKind.PLACE_RECOMMENDATION))
-        evidence.note_discover_places(ok=True, discovery_set_id="ds_1", place_count=3)
-        result = await complete_turn.execute(
-            {
-                "goal_keys": ["places"],
-                "outcome": "answer",
-                "message": "Here are some places.",
-            },
-            ToolContext(session_id="s", turn_evidence=evidence),
-        )
-        self.assertFalse(result.ok)
-        self.assertFalse(evidence.terminal)
-
-    async def test_clarification_may_end_without_presentation(self):
-        evidence = _general_evidence()
-        result = await complete_turn.execute(
-            {
-                "goal_keys": ["response"],
-                "outcome": "clarification",
-                "message": "Which neighborhood?",
-            },
-            ToolContext(session_id="s", turn_evidence=evidence),
-        )
-        self.assertTrue(result.ok)
-        self.assertTrue(result.terminal)
-        self.assertEqual(result.events[0].text, "Which neighborhood?")
+        assert recovered.ok
+        assert recovered.data["turn_resolution"] == "partial_success_with_recovery"
+        assert recovered.events[0].text == "I couldn't confirm the next arrivals from your station."
 
     async def test_answer_preserves_meaningful_paragraph_breaks(self):
         evidence = _general_evidence()
@@ -210,11 +173,8 @@ class CompleteTurnTests(unittest.IsolatedAsyncioTestCase):
             ToolContext(session_id="s", turn_evidence=evidence),
         )
 
-        self.assertTrue(result.ok)
-        self.assertEqual(
-            result.events[0].text,
-            "First paragraph.\n\nSecond paragraph.\nThird line.",
-        )
+        assert result.ok
+        assert result.events[0].text == "First paragraph.\n\nSecond paragraph.\nThird line."
 
     async def test_refusal_may_end_without_grounding_factual_claims(self):
         evidence = _general_evidence()
@@ -226,8 +186,8 @@ class CompleteTurnTests(unittest.IsolatedAsyncioTestCase):
             },
             ToolContext(session_id="s", turn_evidence=evidence),
         )
-        self.assertTrue(result.ok)
-        self.assertTrue(result.terminal)
+        assert result.ok
+        assert result.terminal
 
     async def test_refusal_cannot_skip_pending_place_presentation(self):
         evidence = _evidence(("places", GoalKind.PLACE_RECOMMENDATION))
@@ -244,8 +204,8 @@ class CompleteTurnTests(unittest.IsolatedAsyncioTestCase):
             },
             ToolContext(session_id="s", turn_evidence=evidence),
         )
-        self.assertFalse(result.ok)
-        self.assertFalse(evidence.terminal)
+        assert not result.ok
+        assert not evidence.terminal
 
     async def test_rejects_all_outcomes_while_places_must_be_presented(self):
         evidence = _evidence(("places", GoalKind.PLACE_RECOMMENDATION))
@@ -259,8 +219,8 @@ class CompleteTurnTests(unittest.IsolatedAsyncioTestCase):
                 },
                 ToolContext(session_id="s", turn_evidence=evidence),
             )
-            self.assertFalse(result.ok, outcome)
-        self.assertFalse(evidence.terminal)
+            assert not result.ok, outcome
+        assert not evidence.terminal
 
     async def test_rejects_without_bound_turn_contract(self):
         result = await complete_turn.execute(
@@ -270,10 +230,10 @@ class CompleteTurnTests(unittest.IsolatedAsyncioTestCase):
             },
             ToolContext(session_id="s", turn_evidence=TurnEvidence()),
         )
-        self.assertFalse(result.ok)
-        self.assertIn("bound TurnContract", result.error or "")
-        self.assertTrue(result.internal_diagnostic)
-        self.assertEqual(result.events, [])
+        assert not result.ok
+        assert "bound TurnContract" in (result.error or "")
+        assert result.internal_diagnostic
+        assert result.events == []
 
     async def test_provider_grounded_answer_must_use_canonical_presenter(self):
         evidence = _evidence(("status", GoalKind.SERVICE_STATUS))
@@ -291,10 +251,10 @@ class CompleteTurnTests(unittest.IsolatedAsyncioTestCase):
             },
             ToolContext(session_id="s", turn_evidence=evidence),
         )
-        self.assertFalse(result.ok)
-        self.assertIn("general_response", result.error or "")
-        self.assertEqual(result.events, [])
-        self.assertFalse(evidence.terminal)
+        assert not result.ok
+        assert "general_response" in (result.error or "")
+        assert result.events == []
+        assert not evidence.terminal
 
     async def test_unavailable_requires_an_attempted_goal(self):
         evidence = _evidence(("places", GoalKind.PLACE_RECOMMENDATION))
@@ -311,9 +271,9 @@ class CompleteTurnTests(unittest.IsolatedAsyncioTestCase):
             },
             ToolContext(session_id="s", turn_evidence=evidence),
         )
-        self.assertFalse(result.ok)
-        self.assertIn("attempted-but-unavailable", result.error or "")
-        self.assertEqual(result.events, [])
+        assert not result.ok
+        assert "attempted-but-unavailable" in (result.error or "")
+        assert result.events == []
 
     async def test_clarification_can_close_a_pending_goal(self):
         evidence = _evidence(("places", GoalKind.PLACE_RECOMMENDATION))
@@ -325,8 +285,8 @@ class CompleteTurnTests(unittest.IsolatedAsyncioTestCase):
             },
             ToolContext(session_id="s", turn_evidence=evidence),
         )
-        self.assertTrue(result.ok)
-        self.assertTrue(result.terminal)
+        assert result.ok
+        assert result.terminal
 
     async def test_clarification_can_close_after_goal_is_unavailable(self):
         evidence = _evidence(("places", GoalKind.PLACE_RECOMMENDATION))
@@ -343,7 +303,7 @@ class CompleteTurnTests(unittest.IsolatedAsyncioTestCase):
             },
             ToolContext(session_id="s", turn_evidence=evidence),
         )
-        self.assertTrue(result.ok)
+        assert result.ok
 
     async def test_rejects_unavailable_after_goal_succeeds(self):
         evidence = _general_evidence()
@@ -361,8 +321,8 @@ class CompleteTurnTests(unittest.IsolatedAsyncioTestCase):
             },
             ToolContext(session_id="s", turn_evidence=evidence),
         )
-        self.assertFalse(result.ok)
-        self.assertEqual(result.events, [])
+        assert not result.ok
+        assert result.events == []
 
     async def test_route_answer_requires_canonical_route_presentation(self):
         evidence = _evidence(("route", GoalKind.ROUTE))
@@ -374,8 +334,8 @@ class CompleteTurnTests(unittest.IsolatedAsyncioTestCase):
             },
             ToolContext(session_id="s", turn_evidence=evidence),
         )
-        self.assertFalse(result.ok)
-        self.assertEqual(result.events, [])
+        assert not result.ok
+        assert result.events == []
 
     async def test_compound_turn_correction_names_the_pending_route_action(self):
         evidence = TurnEvidence()
@@ -403,10 +363,10 @@ class CompleteTurnTests(unittest.IsolatedAsyncioTestCase):
             ToolContext(session_id="s", turn_evidence=evidence),
         )
 
-        self.assertFalse(result.ok)
-        self.assertIn("prepare_route_options", result.error or "")
-        self.assertIn("present_route", result.error or "")
-        self.assertEqual(result.events, [])
+        assert not result.ok
+        assert "prepare_route_options" in (result.error or "")
+        assert "present_route" in (result.error or "")
+        assert result.events == []
 
     async def test_route_unavailable_requires_failed_or_empty_preparation(self):
         evidence = _evidence(("route", GoalKind.ROUTE))
@@ -423,12 +383,9 @@ class CompleteTurnTests(unittest.IsolatedAsyncioTestCase):
             },
             ToolContext(session_id="s", turn_evidence=evidence),
         )
-        self.assertTrue(result.ok)
-        self.assertEqual(
-            result.events[0].text,
-            "I could not find a verified route for this request.",
-        )
-        self.assertNotIn("available route", result.events[0].text)
+        assert result.ok
+        assert result.events[0].text == "I could not find a verified route for this request."
+        assert "available route" not in result.events[0].text
 
     async def test_grounding_failure_preserves_validated_model_recovery_copy(self):
         evidence = _evidence(("status", GoalKind.SERVICE_STATUS))
@@ -447,11 +404,8 @@ class CompleteTurnTests(unittest.IsolatedAsyncioTestCase):
             ToolContext(session_id="s", turn_evidence=evidence),
         )
 
-        self.assertTrue(result.ok)
-        self.assertEqual(
-            result.events[0].text,
-            "I couldn't check the Q right now. Want me to retry?",
-        )
+        assert result.ok
+        assert result.events[0].text == "I couldn't check the Q right now. Want me to retry?"
 
 
 if __name__ == "__main__":

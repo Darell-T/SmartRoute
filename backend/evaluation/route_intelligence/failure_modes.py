@@ -9,19 +9,18 @@ every requested active source must have an exact transcript.
 
 from __future__ import annotations
 
-from typing import Any, Iterable, Mapping
+from collections.abc import Iterable, Mapping
+from typing import Any
 
 from evaluation.route_intelligence.comparison import compare_scenario
-from evaluation.route_intelligence.metrics import SourceEffect
+from evaluation.route_intelligence.metrics import SourceContribution, SourceEffect
 from evaluation.route_intelligence.replay import (
     CANONICAL_SOURCE_NAMES,
     ReplayScenario,
-    ScenarioValidationError,
+    _invalid,
     canonical_sources,
     load_scenario,
 )
-from evaluation.route_intelligence.shadow import SourceContribution
-
 
 SOURCE_CONTRIBUTIONS: Mapping[str, SourceContribution] = {
     "mta": SourceContribution.MTA_ALERTS,
@@ -34,23 +33,31 @@ SOURCE_CONTRIBUTIONS: Mapping[str, SourceContribution] = {
 }
 
 
+def _split_vehicle_detection_alias(enabled: set[str], source: str) -> None:
+    if source not in {"subway_vehicle_detection", "bus_vehicle_detection"}:
+        enabled.discard(source)
+        return
+    if "vehicle_detection" not in enabled:
+        enabled.discard(source)
+        return
+    enabled.remove("vehicle_detection")
+    kept = (
+        "bus_vehicle_detection"
+        if source == "subway_vehicle_detection"
+        else "subway_vehicle_detection"
+    )
+    enabled.add(kept)
+
+
 def _without_source(enabled_sources: Iterable[str], source: str) -> frozenset[str]:
     """Disable exactly one canonical source while respecting the legacy alias."""
 
     enabled = set(enabled_sources)
     if source not in CANONICAL_SOURCE_NAMES:
-        raise ScenarioValidationError(f"unknown ablation source: {source}")
+        _invalid(f"unknown ablation source: {source}")
     if source not in canonical_sources(enabled):
-        raise ScenarioValidationError(f"cannot ablate inactive source: {source}")
-    if source in {"subway_vehicle_detection", "bus_vehicle_detection"} and "vehicle_detection" in enabled:
-        enabled.remove("vehicle_detection")
-        enabled.add(
-            "bus_vehicle_detection"
-            if source == "subway_vehicle_detection"
-            else "subway_vehicle_detection"
-        )
-    else:
-        enabled.discard(source)
+        _invalid(f"cannot ablate inactive source: {source}")
+    _split_vehicle_detection_alias(enabled, source)
     return frozenset(enabled)
 
 
@@ -105,7 +112,7 @@ async def run_source_ablations(
     if variants:
         missing = set(active_sources) - variants
         if missing:
-            raise ScenarioValidationError(
+            _invalid(
                 f"advisor_outputs.ablations is missing active source variants: {sorted(missing)}"
             )
 

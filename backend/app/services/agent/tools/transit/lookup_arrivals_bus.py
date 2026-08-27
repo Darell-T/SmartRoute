@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 
-from app.services.agent.tools.location_resolution import parse_coordinates
 from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.location_resolution import parse_coordinates
 from app.services.agent.tools.transit.lookup_arrivals_common import (
     _active_boarding,
     _arrival_payload,
     _dedupe_predictions,
     _direction_from_boarding,
+    _direction_value_matches,
     _empty_payload,
     _location,
     _normalize_direction,
     _normalized_name,
-    _direction_value_matches,
     canonical_station_query,
 )
 

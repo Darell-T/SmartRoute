@@ -558,11 +558,11 @@ export async function ensureMtaBulletImages(
         map.addImage(imageId, imageData, { pixelRatio: 2 });
       } catch (error) {
         if (process.env.NODE_ENV !== "production") {
-          console.warn("[subway-station-badges] failed to register icon", {
-            routeId,
-            imageId,
-            error,
-          });
+          globalThis.reportError?.(
+            new Error(`Failed to register subway icon ${imageId} for ${routeId}`, {
+              cause: error,
+            }),
+          );
         }
       }
     }),

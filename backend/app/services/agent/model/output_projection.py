@@ -14,7 +14,6 @@ from typing import Any
 
 from app.services.agent import discovery_store
 
-
 _PLACE_ID_FIELDS = frozenset(
     {
         "place_id",

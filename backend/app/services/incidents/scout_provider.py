@@ -11,9 +11,10 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 try:  # Optional provider; background coverage stays truthful when absent.
     from xai_sdk import AsyncClient
@@ -28,9 +29,9 @@ except Exception:  # pragma: no cover - exercised by the configured-client path.
     x_search = None
 
 from app.services.incidents.batches import IncidentBatch
+from app.services.incidents.evidence import canonical_citation_url
 from app.services.incidents.scout_normalization import SIX_HOURS
 from app.services.trips.crowds.search_normalization import response_text
-from app.services.incidents.evidence import canonical_citation_url
 
 _MODEL = os.getenv("XAI_INCIDENT_MODEL", "grok-4-1-fast-reasoning")
 

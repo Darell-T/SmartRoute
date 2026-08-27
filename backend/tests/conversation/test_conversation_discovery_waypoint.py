@@ -29,9 +29,15 @@ missing production capability with the compact evidence blob.
 
 from __future__ import annotations
 
-from tests.conversation import conversation_discovery_waypoint_assertions as _waypoint_assertions
-from tests.conversation import conversation_discovery_waypoint_support as _waypoint_support
+import pytest
 from app.services.agent import discovery_store
+
+from tests.conversation import (
+    conversation_discovery_waypoint_assertions as _waypoint_assertions,
+)
+from tests.conversation import (
+    conversation_discovery_waypoint_support as _waypoint_support,
+)
 from tests.conversation.conversation_discovery_fixtures import LEAK_MARKERS
 from tests.conversation.conversation_discovery_waypoint_assertions import (
     _DiscoveryWaypointAssertions,
@@ -48,9 +54,7 @@ from tests.conversation.conversation_discovery_waypoint_fixtures import (
     TURN3_FORBIDDEN,
 )
 from tests.conversation.conversation_discovery_waypoint_support import TurnEvidence
-from tests.conversation.conversation_matrix_harness import load_agent_loop
-from tests.conversation.conversation_matrix_harness import route_cards
-
+from tests.conversation.conversation_matrix_harness import load_agent_loop, route_cards
 
 INITIAL_TOOL_PROFILE = frozenset(
     {
@@ -148,12 +152,12 @@ async def _model_led_run_turn(loop, *args, **kwargs):
     raw_calls = list(trace.tool_calls)
     if raw_calls:
         if raw_calls[0][0] != "declare_goals":
-            raise AssertionError("model-led waypoint turn must declare goals first")
+            pytest.fail("model-led waypoint turn must declare goals first")
         offered = frozenset(
             schema["name"] for schema in loop.client.messages.calls[0]["tools"]
         )
         if offered != INITIAL_TOOL_PROFILE:
-            raise AssertionError(
+            pytest.fail(
                 f"unexpected initial waypoint tool profile: {sorted(offered)}"
             )
         trace.model_led_tool_calls = raw_calls
@@ -214,54 +218,27 @@ class DiscoveryWaypointTranscriptTests(_DiscoveryWaypointAssertions):
             message=M1_GET_BARCLAYS,
             ev=ev,
         )
-        self.assertEqual(ev.offered, TURN1_EXPECTED_PROFILE, blob)
+        assert ev.offered == TURN1_EXPECTED_PROFILE, blob
         names = self._names(ev)
-        self.assertEqual(
-            names,
-            ["prepare_route_options", "present_route"],
-            f"{scenario_id} turn1 sequence; {blob}",
-        )
-        self.assertEqual(names.count("prepare_route_options"), 1, blob)
-        self.assertEqual(names.count("present_route"), 1, blob)
-        self.assertFalse(
-            set(names) & set(TURN1_FORBIDDEN),
-            f"{scenario_id} turn1 forbidden tool; {blob}",
-        )
-        self.assertEqual(
-            ev.mocks["prepare_single_leg"].await_count,
-            1,
-            f"{scenario_id} turn1 provider seam once; {blob}",
-        )
+        assert names == ["prepare_route_options", "present_route"], f"{scenario_id} turn1 sequence; {blob}"
+        assert names.count("prepare_route_options") == 1, blob
+        assert names.count("present_route") == 1, blob
+        assert not set(names) & set(TURN1_FORBIDDEN), f"{scenario_id} turn1 forbidden tool; {blob}"
+        assert ev.mocks["prepare_single_leg"].await_count == 1, f"{scenario_id} turn1 provider seam once; {blob}"
         cards = route_cards(ev.events)
-        self.assertEqual(len(cards), 1, f"{scenario_id} turn1 one card; {blob}")
-        self.assertEqual(
-            len(ev.mocks["stored_candidate_set_ids"]),
-            1,
-            f"{scenario_id} turn1 one stored set; {blob}",
-        )
+        assert len(cards) == 1, f"{scenario_id} turn1 one card; {blob}"
+        assert len(ev.mocks["stored_candidate_set_ids"]) == 1, f"{scenario_id} turn1 one stored set; {blob}"
         state = ev.state
-        self.assertEqual(
-            state["active_candidate_set_id"],
-            ev.mocks["stored_candidate_set_ids"][0],
-            f"{scenario_id} turn1 accepted set; {blob}",
-        )
-        self.assertEqual(
-            state["selected_candidate_id"],
-            FIXED_CANDIDATE_BARCLAYS,
-            f"{scenario_id} turn1 accepted candidate; {blob}",
-        )
-        self.assertEqual(state["destination"], DESTINATION_LABEL, blob)
-        self.assertEqual(state["waypoints"], [], blob)
-        self.assertIsNone(state["active_discovery_set_id"], blob)
-        self.assertIsNone(state["selected_place_id"], blob)
+        assert state["active_candidate_set_id"] == ev.mocks["stored_candidate_set_ids"][0], f"{scenario_id} turn1 accepted set; {blob}"
+        assert state["selected_candidate_id"] == FIXED_CANDIDATE_BARCLAYS, f"{scenario_id} turn1 accepted candidate; {blob}"
+        assert state["destination"] == DESTINATION_LABEL, blob
+        assert state["waypoints"] == [], blob
+        assert state["active_discovery_set_id"] is None, blob
+        assert state["selected_place_id"] is None, blob
         self._no_temp(scenario_id, state)
-        self.assertEqual(cards[0].destination.get("label"), DESTINATION_LABEL, blob)
-        self.assertEqual(ev.events[-1].type, "done", blob)
-        self.assertEqual(
-            (ev.after_session.active_trip or {}).get("card_id"),
-            cards[0].card_id,
-            f"{scenario_id} turn1 active trip card; {blob}",
-        )
+        assert cards[0].destination.get("label") == DESTINATION_LABEL, blob
+        assert ev.events[-1].type == "done", blob
+        assert (ev.after_session.active_trip or {}).get("card_id") == cards[0].card_id, f"{scenario_id} turn1 active trip card; {blob}"
         self._policy_ok(scenario_id, ev, mode, calls=2)
         self._assert_no_leaks(scenario_id, "turn1", ev.trace.final_text)
 
@@ -276,69 +253,37 @@ class DiscoveryWaypointTranscriptTests(_DiscoveryWaypointAssertions):
             message=M2_FIND_PIZZA,
             ev=ev,
         )
-        self.assertEqual(ev.offered, TURN2_EXPECTED_PROFILE, blob)
+        assert ev.offered == TURN2_EXPECTED_PROFILE, blob
         names = self._names(ev)
-        self.assertEqual(
-            names,
-            ["discover_places", "present_places"],
-            f"{scenario_id} t2 seq; {blob}",
-        )
-        self.assertFalse(
-            set(names) & set(TURN2_FORBIDDEN),
-            f"{scenario_id} turn2 forbidden tool; {blob}",
-        )
+        assert names == ["discover_places", "present_places"], f"{scenario_id} t2 seq; {blob}"
+        assert not set(names) & set(TURN2_FORBIDDEN), f"{scenario_id} turn2 forbidden tool; {blob}"
         state = ev.state
         set_id = state["active_discovery_set_id"]
-        self.assertTrue(
-            bool(set_id) and set_id.startswith("ds_"),
-            f"{scenario_id} turn2 real discovery set; {blob}",
-        )
+        assert set_id
+        assert set_id.startswith("ds_"), f"{scenario_id} turn2 real discovery set; {blob}"
         record = discovery_store.load_discovery_set(set_id, session_id=ev.session_id)
-        self.assertIsNotNone(record, f"{scenario_id} turn2 stored record; {blob}")
-        self.assertEqual(
-            [place["ordinal"] for place in record["places"]],
-            [1, 2, 3],
-            f"{scenario_id} turn2 stored ordinals",
-        )
-        self.assertEqual(
-            record["places"][1]["name"],
-            "B Pizza",
-            f"{scenario_id} turn2 ordinal 2",
-        )
-        self.assertEqual(
-            record["places"][1]["provider_place_id"],
-            "ChIJ-bbb",
-            f"{scenario_id} turn2 ordinal-2 provider identity",
-        )
+        assert record is not None, f"{scenario_id} turn2 stored record; {blob}"
+        assert [place["ordinal"] for place in record["places"]] == [1, 2, 3], f"{scenario_id} turn2 stored ordinals"
+        assert record["places"][1]["name"] == "B Pizza", f"{scenario_id} turn2 ordinal 2"
+        assert record["places"][1]["provider_place_id"] == "ChIJ-bbb", f"{scenario_id} turn2 ordinal-2 provider identity"
         for place in record["places"]:
-            self.assertTrue(
-                place["place_id"].startswith("pl_"),
-                f"{scenario_id} turn2 opaque place id",
-            )
-        self.assertIsNotNone(ev.before_state, f"{scenario_id} turn2 before state")
+            assert place["place_id"].startswith("pl_"), f"{scenario_id} turn2 opaque place id"
+        assert ev.before_state is not None, f"{scenario_id} turn2 before state"
         self._unchanged(scenario_id, "turn2", state, ev.before_state, blob)
-        self.assertEqual(
-            state["active_candidate_set_id"],
-            ev.before_state["active_candidate_set_id"],
-            f"{scenario_id} turn2 accepted set unchanged; {blob}",
-        )
-        self.assertEqual(
-            state["selected_candidate_id"],
-            ev.before_state["selected_candidate_id"],
-            f"{scenario_id} turn2 accepted candidate unchanged; {blob}",
-        )
-        self.assertIsNone(state["selected_place_id"], blob)
-        self.assertEqual(route_cards(ev.events), [], blob)
-        self.assertEqual(ev.mocks["stored_candidate_set_ids"], [], blob)
-        self.assertEqual(ev.events[-1].type, "done", blob)
+        assert state["active_candidate_set_id"] == ev.before_state["active_candidate_set_id"], f"{scenario_id} turn2 accepted set unchanged; {blob}"
+        assert state["selected_candidate_id"] == ev.before_state["selected_candidate_id"], f"{scenario_id} turn2 accepted candidate unchanged; {blob}"
+        assert state["selected_place_id"] is None, blob
+        assert route_cards(ev.events) == [], blob
+        assert ev.mocks["stored_candidate_set_ids"] == [], blob
+        assert ev.events[-1].type == "done", blob
         self._assert_session_unchanged(scenario_id, "turn2", ev)
         for marker in CONTEXT_LEAK_MARKERS:
-            self.assertNotIn(marker, ev.context, f"{scenario_id} ctx leak {marker}")
-            self.assertNotIn(marker, ev.result_blob, f"{scenario_id} result leak {marker}")
-        self.assertEqual(ev.trace.final_text.count("A Pizza"), 1, blob)
-        self.assertEqual(ev.trace.final_text.count("B Pizza"), 1, blob)
+            assert marker not in ev.context, f"{scenario_id} ctx leak {marker}"
+            assert marker not in ev.result_blob, f"{scenario_id} result leak {marker}"
+        assert ev.trace.final_text.count("A Pizza") == 1, blob
+        assert ev.trace.final_text.count("B Pizza") == 1, blob
         for marker in ("pl_", "ds_", "latitude", "ChIJ"):
-            self.assertNotIn(marker, ev.trace.final_text, f"{scenario_id} text leak {marker}")
+            assert marker not in ev.trace.final_text, f"{scenario_id} text leak {marker}"
         self._policy_ok(scenario_id, ev, mode, calls=2)
         self._assert_no_leaks(scenario_id, "turn2", ev.trace.final_text)
 
@@ -354,32 +299,19 @@ class DiscoveryWaypointTranscriptTests(_DiscoveryWaypointAssertions):
             ev=ev,
         )
         names = self._names(ev)
-        self.assertEqual(
-            names, ["complete_turn"], f"{scenario_id} turn3 terminal only; {blob}"
-        )
-        self.assertFalse(
-            set(names) & set(TURN3_FORBIDDEN),
-            f"{scenario_id} turn3 forbidden tool; {blob}",
-        )
-        self.assertIsNotNone(ev.before_state, f"{scenario_id} turn3 before state")
+        assert names == ["complete_turn"], f"{scenario_id} turn3 terminal only; {blob}"
+        assert not set(names) & set(TURN3_FORBIDDEN), f"{scenario_id} turn3 forbidden tool; {blob}"
+        assert ev.before_state is not None, f"{scenario_id} turn3 before state"
         self._unchanged(scenario_id, "turn3", ev.state, ev.before_state, blob)
-        self.assertEqual(
-            ev.state["active_discovery_set_id"],
-            ev.before_state["active_discovery_set_id"],
-            f"{scenario_id} turn3 discovery set; {blob}",
-        )
-        self.assertEqual(
-            ev.state["selected_place_id"],
-            ev.before_state["selected_place_id"],
-            f"{scenario_id} turn3 selected place; {blob}",
-        )
-        self.assertEqual(route_cards(ev.events), [], blob)
+        assert ev.state["active_discovery_set_id"] == ev.before_state["active_discovery_set_id"], f"{scenario_id} turn3 discovery set; {blob}"
+        assert ev.state["selected_place_id"] == ev.before_state["selected_place_id"], f"{scenario_id} turn3 selected place; {blob}"
+        assert route_cards(ev.events) == [], blob
         self._no_temp(scenario_id, ev.state)
         self._assert_session_unchanged(scenario_id, "turn3", ev)
-        self.assertIn("active_discovery:", ev.context, blob)
-        self.assertIn(DESTINATION_LABEL, ev.context, blob)
+        assert "active_discovery:" in ev.context, blob
+        assert DESTINATION_LABEL in ev.context, blob
         for marker in CONTEXT_LEAK_MARKERS:
-            self.assertNotIn(marker, ev.context, f"{scenario_id} ctx leak {marker}")
+            assert marker not in ev.context, f"{scenario_id} ctx leak {marker}"
         self._policy_ok(scenario_id, ev, mode, calls=1)
         self._assert_no_leaks(scenario_id, "turn3", ev.trace.final_text)
 
@@ -390,7 +322,7 @@ class DiscoveryWaypointTranscriptTests(_DiscoveryWaypointAssertions):
     def _assert_no_leaks(self, scenario_id: str, tag: str, text: str) -> None:
         lowered = text.casefold()
         for marker in LEAK_MARKERS:
-            self.assertNotIn(marker, lowered, f"{scenario_id} {tag} leak {marker}")
+            assert marker not in lowered, f"{scenario_id} {tag} leak {marker}"
 
     def _assert_session_unchanged(
         self,
@@ -400,22 +332,10 @@ class DiscoveryWaypointTranscriptTests(_DiscoveryWaypointAssertions):
     ) -> None:
         """The accepted trip/card/slots survive the turn unchanged."""
 
-        self.assertIsNotNone(ev.before_session, f"{scenario_id} {tag} before session")
-        self.assertEqual(
-            ev.after_session.active_trip,
-            ev.before_session.active_trip,
-            f"{scenario_id} {tag} active trip unchanged",
-        )
-        self.assertEqual(
-            ev.after_session.route_cards,
-            ev.before_session.route_cards,
-            f"{scenario_id} {tag} route cards unchanged",
-        )
-        self.assertEqual(
-            ev.after_session.slots,
-            ev.before_session.slots,
-            f"{scenario_id} {tag} slots unchanged",
-        )
+        assert ev.before_session is not None, f"{scenario_id} {tag} before session"
+        assert ev.after_session.active_trip == ev.before_session.active_trip, f"{scenario_id} {tag} active trip unchanged"
+        assert ev.after_session.route_cards == ev.before_session.route_cards, f"{scenario_id} {tag} route cards unchanged"
+        assert ev.after_session.slots == ev.before_session.slots, f"{scenario_id} {tag} slots unchanged"
 
     async def _transcript(self, mode: str, scenario_id: str):
         session_id, session = self._new_session(mode)
@@ -431,7 +351,7 @@ class DiscoveryWaypointTranscriptTests(_DiscoveryWaypointAssertions):
         self._assert_turn2(scenario_id=scenario_id, mode=mode, ev=ev2)
         set_id = ev2.state["active_discovery_set_id"]
         record = discovery_store.load_discovery_set(set_id, session_id=session_id)
-        self.assertIsNotNone(record, f"{scenario_id} real stored discovery record")
+        assert record is not None, f"{scenario_id} real stored discovery record"
         place2 = record["places"][1]
         ev3 = await self._turn3(
             mode=mode,
@@ -469,9 +389,6 @@ class DiscoveryWaypointTranscriptTests(_DiscoveryWaypointAssertions):
 
     async def test_d_wp_01_auto(self):
         await self._transcript("auto", "D-WP-01")
-
-    async def test_d_wp_02_quick(self):
-        await self._transcript("quick", "D-WP-02")
 
 
 __all__ = ()

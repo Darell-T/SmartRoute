@@ -15,21 +15,18 @@ from collections.abc import AsyncIterator
 
 import anthropic
 
-from app import runtime
-from app import observability
-from app.services.agent.model import budget
+from app import observability, runtime
 from app.services.agent import events as agent_events
-from app.services.agent.model import mock_turn
-from app.services.agent.model import request as model_request
+from app.services.agent import public_surface, tool_input_policy
+from app.services.agent import session as session_module
+from app.services.agent.model import budget, mock_turn
 from app.services.agent.model import policy as agent_policy
 from app.services.agent.model import prompt as agent_prompt
-from app.services.agent import public_surface
-from app.services.agent import session as session_module
-from app.services.agent import tool_input_policy
+from app.services.agent.model import request as model_request
+from app.services.agent.tools import COMBINED_TOOL_REGISTRY, ToolContext, ToolResult
+from app.services.agent.turn import stream as turn_stream
 from app.services.agent.turn import tool_round
 from app.services.agent.turn.finalization import TurnTrace
-from app.services.agent.turn import stream as turn_stream
-from app.services.agent.tools import COMBINED_TOOL_REGISTRY, ToolContext, ToolResult
 from app.services.agent.turn.ledger import TurnToolLedger as _TurnToolLedger
 
 # Keep the active registry injectable at the turn entry point so deterministic

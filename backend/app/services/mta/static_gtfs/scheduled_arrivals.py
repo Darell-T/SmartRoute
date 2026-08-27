@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, time, timedelta, timezone
+from collections.abc import Iterable
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 from zoneinfo import ZoneInfo
 
 
@@ -60,7 +61,7 @@ class ScheduledArrivalIndex:
         self.valid_until = _parse_datetime(artifact.get("valid_until"))
 
     @classmethod
-    def load(cls, path: str | Path) -> "ScheduledArrivalIndex":
+    def load(cls, path: str | Path) -> ScheduledArrivalIndex:
         return cls(json.loads(Path(path).read_text(encoding="utf-8")))
 
     def lookup(
@@ -72,7 +73,7 @@ class ScheduledArrivalIndex:
         now: datetime,
         limit: int,
     ) -> dict[str, Any]:
-        current = now.astimezone(timezone.utc)
+        current = now.astimezone(UTC)
         if self.valid_until is None or current > self.valid_until:
             return {
                 "status": "stale",
@@ -195,9 +196,9 @@ def _parse_datetime(value: object) -> datetime | None:
     if not isinstance(value, str):
         return None
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value)
     except ValueError:
         return None
     if parsed.tzinfo is None:
         return None
-    return parsed.astimezone(timezone.utc)
+    return parsed.astimezone(UTC)

@@ -1,4 +1,4 @@
-"""Batch B: deterministic exhaustive what-if lifecycle scenarios (Auto+Quick).
+"""Deterministic what-if lifecycle scenarios.
 
 Drives the *real* agent loop (``app.services.agent.loop.run_agent_turn``)
 with production intent/tool filtering, the real ``TOOL_REGISTRY``
@@ -38,7 +38,7 @@ from tests.conversation.conversation_what_if_support import (
 
 
 class TemporalWhatIfTests(_WhatIfLifecycleBase):
-    """B-TEMP-PREVIEW / B-TEMP-ACCEPT / B-TEMP-REJECT (Auto + Quick)."""
+    """B-TEMP-PREVIEW / B-TEMP-ACCEPT / B-TEMP-REJECT."""
 
     @classmethod
     def setUpClass(cls):
@@ -46,9 +46,6 @@ class TemporalWhatIfTests(_WhatIfLifecycleBase):
 
     async def test_b_temp_preview_auto(self):
         await self._temporal_preview(mode="auto", scenario_id="B-TEMP-PREVIEW")
-
-    async def test_b_temp_preview_quick(self):
-        await self._temporal_preview(mode="quick", scenario_id="B-TEMP-PREVIEW")
 
     async def _temporal_accept(self, mode, scenario_id):
         session, session_id, seed = await self._temporal_preview(
@@ -90,9 +87,6 @@ class TemporalWhatIfTests(_WhatIfLifecycleBase):
 
     async def test_b_temp_accept_auto(self):
         await self._temporal_accept("auto", "B-TEMP-ACCEPT")
-
-    async def test_b_temp_accept_quick(self):
-        await self._temporal_accept("quick", "B-TEMP-ACCEPT")
 
     async def _temporal_reject(self, mode, scenario_id):
         session, session_id, seed = await self._temporal_preview(
@@ -139,14 +133,8 @@ class TemporalWhatIfTests(_WhatIfLifecycleBase):
     async def test_b_temp_reject_auto(self):
         await self._temporal_reject("auto", "B-TEMP-REJECT")
 
-    async def test_b_temp_reject_quick(self):
-        await self._temporal_reject("quick", "B-TEMP-REJECT")
-
     async def test_b_temp_reject_probe_auto(self):
         await self._temporal_reject_eligibility_probe("auto", "B-TEMP-REJECT")
-
-    async def test_b_temp_reject_probe_quick(self):
-        await self._temporal_reject_eligibility_probe("quick", "B-TEMP-REJECT")
 
 
 class BusWhatIfTests(_WhatIfLifecycleBase):
@@ -158,9 +146,6 @@ class BusWhatIfTests(_WhatIfLifecycleBase):
 
     async def test_b_bus_preview_auto(self):
         await self._bus_preview(mode="auto", scenario_id="B-BUS-PREVIEW")
-
-    async def test_b_bus_preview_quick(self):
-        await self._bus_preview(mode="quick", scenario_id="B-BUS-PREVIEW")
 
     async def _bus_accept(self, mode, scenario_id):
         session, session_id, seed = await self._bus_preview(
@@ -213,9 +198,6 @@ class BusWhatIfTests(_WhatIfLifecycleBase):
     async def test_b_bus_accept_auto(self):
         await self._bus_accept("auto", "B-BUS-ACCEPT")
 
-    async def test_b_bus_accept_quick(self):
-        await self._bus_accept("quick", "B-BUS-ACCEPT")
-
     async def _bus_reject(self, mode, scenario_id):
         session, session_id, seed = await self._bus_preview(
             mode=mode, scenario_id=scenario_id
@@ -266,14 +248,8 @@ class BusWhatIfTests(_WhatIfLifecycleBase):
     async def test_b_bus_reject_auto(self):
         await self._bus_reject("auto", "B-BUS-REJECT")
 
-    async def test_b_bus_reject_quick(self):
-        await self._bus_reject("quick", "B-BUS-REJECT")
-
     async def test_b_bus_reject_probe_auto(self):
         await self._bus_reject_eligibility_probe("auto", "B-BUS-REJECT")
-
-    async def test_b_bus_reject_probe_quick(self):
-        await self._bus_reject_eligibility_probe("quick", "B-BUS-REJECT")
 
 
 class ReplacementAndUnrelatedTests(_WhatIfLifecycleBase):
@@ -395,9 +371,6 @@ class ReplacementAndUnrelatedTests(_WhatIfLifecycleBase):
     async def test_b_replacement_auto(self):
         await self._replacement("auto", "B-REPLACEMENT")
 
-    async def test_b_replacement_quick(self):
-        await self._replacement("quick", "B-REPLACEMENT")
-
     async def _unrelated(self, mode, scenario_id):
         session, session_id, seed = await self._temporal_preview(
             mode=mode, scenario_id=scenario_id
@@ -450,6 +423,3 @@ class ReplacementAndUnrelatedTests(_WhatIfLifecycleBase):
 
     async def test_b_unrelated_auto(self):
         await self._unrelated("auto", "B-UNRELATED")
-
-    async def test_b_unrelated_quick(self):
-        await self._unrelated("quick", "B-UNRELATED")

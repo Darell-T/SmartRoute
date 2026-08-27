@@ -106,7 +106,7 @@ class StopPatternIndex:
         ]
 
     @classmethod
-    def load(cls, path=None) -> "StopPatternIndex":
+    def load(cls, path=None) -> StopPatternIndex:
         path = Path(path) if path else DEFAULT_ARTIFACT
         return cls(json.loads(Path(path).read_text()))
 

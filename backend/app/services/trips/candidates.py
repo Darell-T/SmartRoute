@@ -2,8 +2,8 @@
 
 import re
 
-from app.services.trips import scoring, text
 from app.services.mta.static_gtfs.stop_patterns import normalize_station_name
+from app.services.trips import scoring, text
 
 _CANDIDATE_ANALYSIS_PATTERN = re.compile(
     r"\[CANDIDATE_ANALYSIS\](.*?)\[/CANDIDATE_ANALYSIS\]",

@@ -1,11 +1,11 @@
 import os
-import httpx
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
+
+import httpx
 
 from app.services.geography import distance_meters
 from app.services.mta.static_gtfs.stop_patterns import normalize_station_name
-
 
 ROUTES_URL = "https://routes.googleapis.com/directions/v2:computeRoutes"
 key = (os.getenv("GOOGLE_ROUTES_API_KEY") or "").strip()
@@ -83,14 +83,14 @@ def _duration_to_seconds(value) -> int | None:
         seconds = float(value[:-1])
     except ValueError:
         return None
-    return max(0, int(round(seconds)))
+    return max(0, round(seconds))
 
 def _serialize_departure_time(value: str | datetime) -> str:
     if isinstance(value, datetime):
         dt = value
     elif isinstance(value, str):
         try:
-            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            dt = datetime.fromisoformat(value)
         except ValueError as exc:
             raise GoogleRoutesError(
                 "invalid_departure_time",
@@ -108,7 +108,7 @@ def _serialize_departure_time(value: str | datetime) -> str:
             "departure_time must be timezone-aware (RFC3339 with offset)",
         )
 
-    return dt.astimezone(timezone.utc).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return dt.astimezone(UTC).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 async def get_transit_route(
@@ -397,10 +397,10 @@ def _parse_leg_steps(leg: dict) -> list:
 
 
 
-                departure_utc = datetime.fromisoformat(depart_time.replace("Z", "+00:00"))
+                departure_utc = datetime.fromisoformat(depart_time)
                 departure_est = departure_utc.astimezone(ZoneInfo("America/New_York"))
 
-                arrival_utc = datetime.fromisoformat(arrival_time.replace("Z", "+00:00"))
+                arrival_utc = datetime.fromisoformat(arrival_time)
                 arrival_est = arrival_utc.astimezone(ZoneInfo("America/New_York"))
                 minutes_until_train_arrives = (departure_est - datetime.now(ZoneInfo("America/New_York"))).total_seconds() / 60
                 arrival = (arrival_est - datetime.now(ZoneInfo("America/New_York"))).total_seconds() / 60

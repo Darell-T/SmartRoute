@@ -6,39 +6,45 @@ import os
 import unittest
 from unittest.mock import patch
 
+import pytest
 from app.services.agent import loop, public_surface
 from app.services.agent.model import policy
 from app.services.agent.tools import (
+    TOOL_REGISTRY,
+    TOOLS,
     assert_strict_tool_schemas_compatible,
     iter_unsupported_strict_keyword_paths,
 )
-from app.services.agent.tools import TOOL_REGISTRY, TOOLS
+from app.services.agent.tools.route.prepare_route_options import (
+    PREPARE_ROUTE_OPTIONS_SCHEMA,
+)
 from app.services.agent.tools.route.present_route import PRESENT_ROUTE_SCHEMA
-from app.services.agent.tools.route.prepare_route_options import PREPARE_ROUTE_OPTIONS_SCHEMA
 
 
 class StrictToolSchemaTests(unittest.TestCase):
     def test_registry_tools_have_no_unsupported_strict_keywords(self):
         assert_strict_tool_schemas_compatible(TOOLS)
         for name, spec in TOOL_REGISTRY.items():
-            self.assertTrue(spec.schema.get("strict"), name)
-            self.assertIn("input_schema", spec.schema)
-            self.assertEqual(spec.schema["name"], name)
+            assert spec.schema.get("strict"), name
+            assert "input_schema" in spec.schema
+            assert spec.schema["name"] == name
 
     def test_destination_branch_schema_covers_route_dependent_choice(self):
         description = " ".join(
             PREPARE_ROUTE_OPTIONS_SCHEMA["input_schema"]["properties"][
                 "destination_place_ids"
-            ]["description"].casefold().split()
+            ]["description"]
+            .casefold()
+            .split()
         )
-        self.assertIn("route-dependent delegated destination choice", description)
-        self.assertIn("least walking", description)
-        self.assertIn("fewer transfers", description)
-        self.assertIn("even when the rider does not explicitly ask to compare", description)
-        self.assertIn("route-independent place-only criteria", description)
-        self.assertNotIn(
-            "use this when the rider asks smartroute to compare verified locations",
-            description,
+        assert "route-dependent delegated destination choice" in description
+        assert "least walking" in description
+        assert "fewer transfers" in description
+        assert "even when the rider does not explicitly ask to compare" in description
+        assert "route-independent place-only criteria" in description
+        assert (
+            "use this when the rider asks smartroute to compare verified locations"
+            not in description
         )
 
     def test_auto_and_quick_intent_profiles_are_strict_compatible(self):
@@ -52,10 +58,10 @@ class StrictToolSchemaTests(unittest.TestCase):
                 strict_names = {
                     tool.get("name") for tool in tools if tool.get("strict")
                 }
-                self.assertEqual(names, expected)
-                self.assertEqual(strict_names, expected_strict)
-                self.assertNotIn("poi_search", names)
-                self.assertNotIn("plan_trip", names)
+                assert names == expected
+                assert strict_names == expected_strict
+                assert "poi_search" not in names
+                assert "plan_trip" not in names
 
     def test_recursive_scanner_flags_max_items(self):
         bad = {
@@ -69,9 +75,9 @@ class StrictToolSchemaTests(unittest.TestCase):
             },
         }
         paths = iter_unsupported_strict_keyword_paths(bad)
-        self.assertIn("$.properties.waypoints.maxItems", paths)
-        self.assertIn("$.properties.waypoints.items.maxLength", paths)
-        with self.assertRaises(AssertionError):
+        assert "$.properties.waypoints.maxItems" in paths
+        assert "$.properties.waypoints.items.maxLength" in paths
+        with pytest.raises(AssertionError):
             assert_strict_tool_schemas_compatible(
                 [{"name": "plan_trip", "strict": True, "input_schema": bad}]
             )
@@ -80,31 +86,28 @@ class StrictToolSchemaTests(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=False):
             for key in ("AGENT_AUTO_MODEL", "AGENT_SONNET_MODEL", "AGENT_MODEL"):
                 os.environ.pop(key, None)
-            self.assertEqual(
-                policy.policy_for_mode("auto").model,
-                "claude-sonnet-5",
-            )
+            assert policy.policy_for_mode("auto").model == "claude-sonnet-5"
 
     def test_present_route_framing_contract_requires_supported_qualitative_reason(self):
         properties = PRESENT_ROUTE_SCHEMA["input_schema"]["properties"]
         lead_in = properties["lead_in"]["description"].casefold()
         reason_code = properties["reason_code"]["description"].casefold()
-        self.assertIn("every successful route needs one", lead_in)
-        self.assertIn("unqualified request", lead_in)
-        self.assertIn("qualitative transfer, walking, disruption, crowd", lead_in)
-        self.assertIn("no digits", lead_in)
-        self.assertIn("name the supported factor directly", lead_in)
-        self.assertIn("no comparative factor or explicit rider constraint", lead_in)
-        self.assertIn("options were close", lead_in)
-        self.assertIn("nothing had a clear edge", lead_in)
-        self.assertIn("covers what the rider asked for", lead_in)
-        self.assertIn("expose backend language", lead_in)
-        self.assertIn("canonical itinerary supports it", lead_in)
-        self.assertIn("hard validity alone does not prove route shape", lead_in)
-        self.assertIn("every successful route presentation requires one", reason_code)
-        self.assertIn(
-            "fits, satisfies constraints, is best, is practical, or satisfies the trip",
-            reason_code,
+        assert "every successful route needs one" in lead_in
+        assert "unqualified request" in lead_in
+        assert "qualitative transfer, walking, disruption, crowd" in lead_in
+        assert "no digits" in lead_in
+        assert "name the supported factor directly" in lead_in
+        assert "no comparative factor or explicit rider constraint" in lead_in
+        assert "options were close" in lead_in
+        assert "nothing had a clear edge" in lead_in
+        assert "covers what the rider asked for" in lead_in
+        assert "expose backend language" in lead_in
+        assert "canonical itinerary supports it" in lead_in
+        assert "hard validity alone does not prove route shape" in lead_in
+        assert "every successful route presentation requires one" in reason_code
+        assert (
+            "fits, satisfies constraints, is best, is practical, or satisfies the trip"
+            in reason_code
         )
 
 

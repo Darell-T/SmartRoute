@@ -7,18 +7,18 @@ the real server-owned executors and stores.
 """
 
 from __future__ import annotations
+
 import unittest
 from unittest.mock import AsyncMock, patch
+
 from app.services.agent import discovery_store
 from app.services.agent import session as session_module
 from app.services.agent import trip_state as trip_state_module
 from app.services.agent.tools import ToolContext, ToolResult
-from app.services.agent.tools.places import discover_places
-from app.services.agent.tools.route import prepare_route_options
-from app.services.agent.tools.route import prepare_route_branches
 from app.services.agent.tools.location_resolution import ResolvedPlace
+from app.services.agent.tools.places import discover_places
+from app.services.agent.tools.route import prepare_route_branches, prepare_route_options
 from app.services.trips import scoring
-from tests.conversation.conversation_matrix_harness import route_cards, run_turn
 
 from tests.agent_route_decision_test_support import (
     AgentRouteDecisionTestMixin,
@@ -27,6 +27,7 @@ from tests.agent_route_decision_test_support import (
     _route,
     _route_goal_round,
 )
+from tests.conversation.conversation_matrix_harness import route_cards, run_turn
 
 
 class AgentRouteStageAReliabilityTests(
@@ -38,8 +39,8 @@ class AgentRouteStageAReliabilityTests(
             ToolContext(session={}, origin={"lat": 40.7, "lng": -74.0}),
         )
 
-        self.assertFalse(result.ok)
-        self.assertEqual(result.error, "session is required for route preparation")
+        assert not result.ok
+        assert result.error == "session is required for route preparation"
 
     async def test_stage_a_excludes_absurd_current_location_route_before_model_choice(
         self,
@@ -86,12 +87,12 @@ class AgentRouteStageAReliabilityTests(
                 },
                 ctx,
             )
-        self.assertTrue(discovery.ok, discovery.error)
+        assert discovery.ok, discovery.error
         nearby_places = discovery.data["places"]
-        self.assertEqual(
-            {place["name"] for place in nearby_places},
-            {"Kyuramen Forest Hills", "Kyuramen Park Slope"},
-        )
+        assert {place["name"] for place in nearby_places} == {
+            "Kyuramen Forest Hills",
+            "Kyuramen Park Slope",
+        }
         forest_id = next(
             place["place_id"]
             for place in nearby_places
@@ -179,33 +180,28 @@ class AgentRouteStageAReliabilityTests(
             )
 
         cards = route_cards(events)
-        self.assertEqual(len(cards), 1, trace.capability_attempts)
+        assert len(cards) == 1, trace.capability_attempts
         card = cards[0]
-        self.assertEqual(card.destination["label"], "Kyuramen Park Slope")
-        self.assertEqual(
-            card.selection_decision["selection_source"],
-            "model",
-        )
-        self.assertEqual(
-            card.selection_decision["reason_code"], "reasonable_local_option"
-        )
-        self.assertNotIn("selected_candidate_id", card.selection_decision)
-        self.assertNotIn("selected_candidate_index", card.selection_decision)
-        self.assertEqual(card.itinerary["selection_decision"], card.selection_decision)
+        assert card.destination["label"] == "Kyuramen Park Slope"
+        assert card.selection_decision["selection_source"] == "model"
+        assert card.selection_decision["reason_code"] == "reasonable_local_option"
+        assert "selected_candidate_id" not in card.selection_decision
+        assert "selected_candidate_index" not in card.selection_decision
+        assert card.itinerary["selection_decision"] == card.selection_decision
         state = trip_state_module.get_trip_state(session)
-        self.assertEqual(state["selected_candidate_id"], "cd_park_stage_a")
+        assert state["selected_candidate_id"] == "cd_park_stage_a"
         rider_text = " ".join(
             event.text for event in events if event.type == "token"
         ).casefold()
-        self.assertIn("overall travel burden", rider_text)
+        assert "overall travel burden" in rider_text
         present_calls = [
             tool_input
             for name, tool_input in trace.tool_calls
             if name == "present_route"
         ]
-        self.assertEqual(present_calls[0]["candidate_id"], "cd_forest_model")
-        self.assertEqual(present_calls[-1]["candidate_id"], "cd_park_stage_a")
-        self.assertEqual(trace.terminal_resolution["selection_source"], "model")
+        assert present_calls[0]["candidate_id"] == "cd_forest_model"
+        assert present_calls[-1]["candidate_id"] == "cd_park_stage_a"
+        assert trace.terminal_resolution["selection_source"] == "model"
 
     async def test_structured_brooklyn_discovery_replaces_prior_scope_for_branches(
         self,
@@ -274,19 +270,19 @@ class AgentRouteStageAReliabilityTests(
                 },
                 ctx,
             )
-        self.assertTrue(discovery.ok, discovery.error)
+        assert discovery.ok, discovery.error
         new_set = discovery.data["discovery_set_id"]
-        self.assertNotEqual(new_set, prior_set)
-        self.assertEqual(
-            trip_state_module.get_trip_state(session)["active_discovery_set_id"],
-            new_set,
+        assert new_set != prior_set
+        assert (
+            trip_state_module.get_trip_state(session)["active_discovery_set_id"]
+            == new_set
         )
         new_record = discovery_store.load_discovery_set(new_set, session_id=session_id)
         prior_record = discovery_store.load_discovery_set(
             prior_set, session_id=session_id
         )
-        self.assertIsNotNone(new_record)
-        self.assertIsNotNone(prior_record)
+        assert new_record is not None
+        assert prior_record is not None
         new_places = list(new_record["places"])
         old_id = prior_record["places"][0]["place_id"]
         new_ids = [place["place_id"] for place in new_places]
@@ -320,6 +316,6 @@ class AgentRouteStageAReliabilityTests(
                 },
                 ctx,
             )
-        self.assertTrue(result.ok, result.error)
-        self.assertEqual(set(result.data["destination_place_ids"]), set(new_ids))
-        self.assertNotIn(old_id, result.data["destination_place_ids"])
+        assert result.ok, result.error
+        assert set(result.data["destination_place_ids"]) == set(new_ids)
+        assert old_id not in result.data["destination_place_ids"]

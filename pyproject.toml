@@ -1,0 +1,54 @@
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "W",
+    "F",
+    "I",
+    "N",
+    "UP",
+    "B",
+    "A",
+    "C4",
+    "SIM",
+    "BLE",
+    "TRY",
+    "ERA",
+    "ARG",
+    "ASYNC",
+    "S",
+    "TID",
+    "RUF",
+    "PERF",
+    "FURB",
+    "LOG",
+    "PT",
+    "C901",
+]
+ignore = ["E501", "S101"]
+
+# Hard ceiling is 6. Preferred cyclomatic complexity is 4; that target is an
+# engineering guideline, not a second lint limit.
+# Ruff C901 counts statement-level control flow only. CRAP uses Radon, which
+# also counts boolean operators and comprehensions. The two numbers can differ.
+[tool.ruff.lint.mccabe]
+max-complexity = 6
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"httpx.Client" = { msg = "Use the project's shared HTTP client wrapper" }
+"httpx.AsyncClient" = { msg = "Use the project's shared async HTTP client" }
+"requests" = { msg = "Prefer the project's HTTP abstraction" }
+"datetime.datetime.utcnow" = { msg = "Use datetime.datetime.now(datetime.UTC)" }
+"pkg_resources" = { msg = "Use importlib.resources or importlib.metadata" }
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "ARG"]
+"__init__.py" = ["F401", "F403"]
+"backend/app/services/agent/tools/provider_http.py" = ["TID251"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 import os
 from datetime import datetime
@@ -9,16 +10,17 @@ from urllib.parse import quote
 
 import httpx
 
+from app.services.cache import cache_get, cache_set
+from app.services.geography import distance_meters
+from app.services.mta import bus_runtime
 from app.services.mta.config import (
     BUS_STOP_MONITORING_URL,
     BUS_STOPS_FOR_LOCATION_URL,
     BUS_URL,
     NYC_TZ,
 )
-from app.services.mta import bus_runtime
-from app.services.cache import cache_get, cache_set
-from app.services.geography import distance_meters
 
+_LOGGER = logging.getLogger(__name__)
 NEARBY_STOPS_CACHE_TTL_S = 120
 STOP_MONITORING_CACHE_TTL_S = 15
 
@@ -53,7 +55,7 @@ def _parse_siri_time(value: str | None) -> int | None:
     if not value:
         return None
     try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(str(value))
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=NYC_TZ)
         return int(parsed.timestamp())
@@ -514,7 +516,12 @@ async def fetch_bus_route_stop_groups(route_id: str) -> dict | None:
                             "version": 2,
                         },
                     )
-            except Exception:
+            except httpx.RequestError as exc:
+                _LOGGER.debug(
+                    "Bus stops-for-route request failed prefix=%s reason=%s",
+                    prefix,
+                    type(exc).__name__,
+                )
                 continue
             if response.status_code != 200:
                 continue

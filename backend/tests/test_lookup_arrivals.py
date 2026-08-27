@@ -3,12 +3,15 @@ from __future__ import annotations
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from app.services.agent.tools.transit import lookup_arrivals
 from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools.transit import lookup_arrivals
 from app.services.mta.feeds import _gtfs_realtime_pb2
 
-
 NOW = 1_800_000_000
+
+
+class DatabaseUnavailableError(RuntimeError):
+    pass
 
 
 class FakeGtfs:
@@ -42,7 +45,7 @@ class FakeGtfs:
 
 
 class FakeScheduledGtfs(FakeGtfs):
-    def get_scheduled_arrivals(self, **kwargs):
+    def get_scheduled_arrivals(self, **_kwargs):
         return {
             "status": "scheduled",
             "valid_until": "2027-01-16T05:00:00+00:00",
@@ -59,10 +62,10 @@ class FakeScheduledGtfs(FakeGtfs):
 
 class BrokenDatabaseGtfs:
     def get_subway_stops_with_routes(self, _route_ids):
-        raise RuntimeError("database unavailable")
+        raise DatabaseUnavailableError
 
     def get_child_stop_ids(self, _stop_id):
-        raise RuntimeError("database unavailable")
+        raise DatabaseUnavailableError
 
 
 def _ctx(*, session=None, origin=None):
@@ -119,17 +122,11 @@ class SubwayArrivalLookupTests(unittest.IsolatedAsyncioTestCase):
             },
             [_feed([("D28N", NOW + 180), ("D28S", NOW + 360)])],
         )
-        self.assertTrue(result.ok)
-        self.assertEqual(result.data["stop"]["name"], "Newkirk Plaza")
-        self.assertEqual(
-            {direction["id"] for direction in result.data["directions"]},
-            {"uptown", "downtown"},
-        )
-        self.assertEqual(
-            set(result.timings),
-            {"stop_resolution_ms", "feed_fetch_ms", "feed_parse_ms"},
-        )
-        self.assertTrue(all(value >= 0 for value in result.timings.values()))
+        assert result.ok
+        assert result.data["stop"]["name"] == "Newkirk Plaza"
+        assert {direction["id"] for direction in result.data["directions"]} == {"uptown", "downtown"}
+        assert set(result.timings) == {"stop_resolution_ms", "feed_fetch_ms", "feed_parse_ms"}
+        assert all(value >= 0 for value in result.timings.values())
 
     async def test_explicit_station_overrides_active_trip_boarding(self):
         session = {
@@ -150,8 +147,8 @@ class SubwayArrivalLookupTests(unittest.IsolatedAsyncioTestCase):
             ctx=_ctx(session=session),
         )
 
-        self.assertEqual(result.data["stop"]["name"], "Prospect Park")
-        self.assertEqual([group["id"] for group in result.data["directions"]], ["downtown"])
+        assert result.data["stop"]["name"] == "Prospect Park"
+        assert [group["id"] for group in result.data["directions"]] == ["downtown"]
 
     async def test_line_only_uses_nearest_station_served_by_that_line(self):
         result = await self._run(
@@ -161,7 +158,7 @@ class SubwayArrivalLookupTests(unittest.IsolatedAsyncioTestCase):
             },
             [_feed([("D26N", NOW + 240)])],
         )
-        self.assertEqual(result.data["stop"]["name"], "Prospect Park")
+        assert result.data["stop"]["name"] == "Prospect Park"
 
     async def test_raw_coordinate_query_uses_nearest_applicable_stop(self):
         session = {
@@ -183,9 +180,9 @@ class SubwayArrivalLookupTests(unittest.IsolatedAsyncioTestCase):
             ctx=_ctx(session=session),
         )
 
-        self.assertTrue(result.ok)
-        self.assertEqual(result.data["stop"]["name"], "Prospect Park")
-        self.assertEqual(result.data["stop"]["id"], "D26")
+        assert result.ok
+        assert result.data["stop"]["name"] == "Prospect Park"
+        assert result.data["stop"]["id"] == "D26"
 
     async def test_current_location_source_ignores_coordinate_like_station_text(self):
         result = await self._run(
@@ -198,8 +195,8 @@ class SubwayArrivalLookupTests(unittest.IsolatedAsyncioTestCase):
             ctx=_ctx(origin={"lat": 40.6615, "lng": -73.9624}),
         )
 
-        self.assertTrue(result.ok)
-        self.assertEqual(result.data["stop"]["name"], "Prospect Park")
+        assert result.ok
+        assert result.data["stop"]["name"] == "Prospect Park"
 
     async def test_named_station_source_never_falls_back_to_current_location(self):
         result = await self._run(
@@ -212,8 +209,8 @@ class SubwayArrivalLookupTests(unittest.IsolatedAsyncioTestCase):
             ctx=_ctx(origin={"lat": 40.6615, "lng": -73.9624}),
         )
 
-        self.assertEqual(result.outcome, "needs_clarification")
-        self.assertEqual(result.data["source_status"], "stop_not_resolved")
+        assert result.outcome == "needs_clarification"
+        assert result.data["source_status"] == "stop_not_resolved"
 
     async def test_active_trip_boarding_takes_priority_over_location(self):
         session = {
@@ -232,9 +229,9 @@ class SubwayArrivalLookupTests(unittest.IsolatedAsyncioTestCase):
             [_feed([("D28N", NOW + 120), ("D28S", NOW + 420)])],
             ctx=_ctx(session=session, origin={"lat": 40.6616, "lng": -73.9623}),
         )
-        self.assertEqual(result.data["stop"]["name"], "Newkirk Plaza")
-        self.assertEqual([group["id"] for group in result.data["directions"]], ["downtown"])
-        self.assertEqual(result.data["catchability"]["catchable_arrival_minutes"], 7)
+        assert result.data["stop"]["name"] == "Newkirk Plaza"
+        assert [group["id"] for group in result.data["directions"]] == ["downtown"]
+        assert result.data["catchability"]["catchable_arrival_minutes"] == 7
 
     async def test_terminal_label_cannot_override_active_trip_direction_for_catchability(self):
         session = {
@@ -269,9 +266,9 @@ class SubwayArrivalLookupTests(unittest.IsolatedAsyncioTestCase):
             ctx=_ctx(session=session),
         )
 
-        self.assertEqual([group["id"] for group in result.data["directions"]], ["downtown"])
-        self.assertEqual(result.data["catchability"]["arrival_minutes"], [12, 15, 17])
-        self.assertEqual(result.data["catchability"]["catchable_arrival_minutes"], 12)
+        assert [group["id"] for group in result.data["directions"]] == ["downtown"]
+        assert result.data["catchability"]["arrival_minutes"] == [12, 15, 17]
+        assert result.data["catchability"]["catchable_arrival_minutes"] == 12
 
     async def test_unresolved_subway_direction_withholds_catchability(self):
         result = await self._run(
@@ -284,11 +281,8 @@ class SubwayArrivalLookupTests(unittest.IsolatedAsyncioTestCase):
             [_feed([("D28N", NOW + 300), ("D28S", NOW + 720)])],
         )
 
-        self.assertEqual(
-            {group["id"] for group in result.data["directions"]},
-            {"uptown", "downtown"},
-        )
-        self.assertNotIn("catchability", result.data)
+        assert {group["id"] for group in result.data["directions"]} == {"uptown", "downtown"}
+        assert "catchability" not in result.data
 
     async def test_active_q_at_church_uses_persisted_stop_when_database_is_unavailable(self):
         session = {
@@ -314,16 +308,10 @@ class SubwayArrivalLookupTests(unittest.IsolatedAsyncioTestCase):
             ctx=context,
         )
 
-        self.assertTrue(result.ok)
-        self.assertEqual(result.data["route_id"], "Q")
-        self.assertEqual(result.data["stop"], {
-            "id": "D28",
-            "name": "Church Av",
-            "distance_meters": 0.0,
-            "latitude": 40.6505,
-            "longitude": -73.9624,
-        })
-        self.assertEqual([group["id"] for group in result.data["directions"]], ["downtown"])
+        assert result.ok
+        assert result.data["route_id"] == "Q"
+        assert result.data["stop"] == {"id": "D28", "name": "Church Av", "distance_meters": 0.0, "latitude": 40.6505, "longitude": -73.9624}
+        assert [group["id"] for group in result.data["directions"]] == ["downtown"]
 
     async def test_predictions_are_deduplicated_and_sorted(self):
         result = await self._run(
@@ -339,7 +327,7 @@ class SubwayArrivalLookupTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
         minutes = result.data["directions"][0]["arrivals"]
-        self.assertEqual([arrival["minutes"] for arrival in minutes], [3, 10])
+        assert [arrival["minutes"] for arrival in minutes] == [3, 10]
 
     async def test_due_prediction_is_skipped_in_favor_of_the_next_arrival(self):
         result = await self._run(
@@ -348,7 +336,7 @@ class SubwayArrivalLookupTests(unittest.IsolatedAsyncioTestCase):
         )
 
         arrivals = result.data["directions"][0]["arrivals"]
-        self.assertEqual([arrival["minutes"] for arrival in arrivals], [8, 14])
+        assert [arrival["minutes"] for arrival in arrivals] == [8, 14]
 
     async def test_stale_and_no_prediction_states_remain_distinct(self):
         stale = await self._run(
@@ -359,16 +347,16 @@ class SubwayArrivalLookupTests(unittest.IsolatedAsyncioTestCase):
             {"route_id": "Q", "stop_query": "Newkirk Plaza"},
             [_feed([], timestamp=NOW)],
         )
-        self.assertEqual(stale.data["source_status"], "stale")
-        self.assertEqual(empty.data["source_status"], "no_predictions")
+        assert stale.data["source_status"] == "stale"
+        assert empty.data["source_status"] == "no_predictions"
 
     async def test_provider_unavailable_is_not_no_predictions(self):
         result = await self._run(
             {"route_id": "Q", "stop_query": "Newkirk Plaza"},
             [],
         )
-        self.assertEqual(result.data["source_status"], "provider_unavailable")
-        self.assertEqual(result.data["directions"], [])
+        assert result.data["source_status"] == "provider_unavailable"
+        assert result.data["directions"] == []
 
     async def test_provider_unavailable_falls_back_to_distinct_scheduled_data(self):
         context = _ctx()
@@ -378,11 +366,11 @@ class SubwayArrivalLookupTests(unittest.IsolatedAsyncioTestCase):
             [],
             ctx=context,
         )
-        self.assertEqual(result.data["source_status"], "scheduled")
+        assert result.data["source_status"] == "scheduled"
         arrival = result.data["directions"][0]["arrivals"][0]
-        self.assertFalse(arrival["realtime"])
-        self.assertEqual(result.data["evidence"]["source"], "mta_static_gtfs")
-        self.assertEqual(result.data["evidence"]["status"], "current")
+        assert not arrival["realtime"]
+        assert result.data["evidence"]["source"] == "mta_static_gtfs"
+        assert result.data["evidence"]["status"] == "current"
 
     async def test_unserved_route_does_not_choose_an_unrelated_station(self):
         result = await self._run(
@@ -392,7 +380,7 @@ class SubwayArrivalLookupTests(unittest.IsolatedAsyncioTestCase):
             },
             [],
         )
-        self.assertEqual(result.data["source_status"], "stop_not_resolved")
+        assert result.data["source_status"] == "stop_not_resolved"
 
 
 class CatchabilityTests(unittest.TestCase):
@@ -402,7 +390,7 @@ class CatchabilityTests(unittest.TestCase):
             walking_minutes=6,
             boarding_buffer_minutes=2,
         )
-        self.assertEqual(result["catchable_arrival_minutes"], 9)
+        assert result["catchable_arrival_minutes"] == 9
 
     def test_due_arrival_is_not_part_of_catchability(self):
         result = lookup_arrivals.assess_catchability(
@@ -410,13 +398,13 @@ class CatchabilityTests(unittest.TestCase):
             walking_minutes=2,
             boarding_buffer_minutes=2,
         )
-        self.assertEqual(result["arrival_minutes"], [8, 14])
-        self.assertEqual(result["catchable_arrival_minutes"], 8)
+        assert result["arrival_minutes"] == [8, 14]
+        assert result["catchable_arrival_minutes"] == 8
 
     def test_no_predictions_has_no_catchable_arrival(self):
         result = lookup_arrivals.assess_catchability([], walking_minutes=3)
-        self.assertIsNone(result["catchable_arrival_minutes"])
-        self.assertEqual(result["confidence"], 0.0)
+        assert result["catchable_arrival_minutes"] is None
+        assert result["confidence"] == 0.0
 
 
 class BusArrivalLookupTests(unittest.IsolatedAsyncioTestCase):
@@ -466,8 +454,8 @@ class BusArrivalLookupTests(unittest.IsolatedAsyncioTestCase):
                 },
                 _ctx(),
             )
-        self.assertEqual(result.data["stop"]["id"], "west")
-        self.assertEqual(result.data["directions"][0]["arrivals"][0]["minutes"], 4)
+        assert result.data["stop"]["id"] == "west"
+        assert result.data["directions"][0]["arrivals"][0]["minutes"] == 4
 
 
 if __name__ == "__main__":

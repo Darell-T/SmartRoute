@@ -12,8 +12,9 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from app.services.agent.tools.location_resolution import ResolvedPlace
+import pytest
 from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools.location_resolution import ResolvedPlace
 from app.services.agent.tools.route.preparation_adapter import prepare_single_leg
 
 
@@ -74,7 +75,9 @@ async def _yield_loop_turn() -> None:
     await finished.wait()
 
 
-def _dependencies(*, block_mta: bool) -> tuple[SimpleNamespace, dict[str, asyncio.Event]]:
+def _dependencies(
+    *, block_mta: bool
+) -> tuple[SimpleNamespace, dict[str, asyncio.Event]]:
     events = {
         "event_started": asyncio.Event(),
         "event_cleaned_up": asyncio.Event(),
@@ -99,24 +102,24 @@ def _dependencies(*, block_mta: bool) -> tuple[SimpleNamespace, dict[str, asynci
         ),
         collect_stalled_trains=AsyncMock(return_value=[]),
         collect_stalled_buses=AsyncMock(return_value=[]),
-        parse_service_alerts=lambda raw: [],
-        filter_alerts_for_routes=lambda alerts, route_ids: [],
-        evidence_envelope=lambda name, payload, **kwargs: {
+        parse_service_alerts=lambda _raw: [],
+        filter_alerts_for_routes=lambda _alerts, _route_ids: [],
+        evidence_envelope=lambda name, payload, **_kwargs: {
             "name": name,
             "payload": payload,
         },
         current_payload=lambda envelope, empty: envelope.get("payload") or empty,
-        scoring=SimpleNamespace(_score_routes=lambda routes, alerts, **kwargs: []),
+        scoring=SimpleNamespace(_score_routes=lambda _routes, _alerts, **_kwargs: []),
         trip_incidents=SimpleNamespace(
-            build_candidate_stop_context=lambda gtfs, routes: [],
+            build_candidate_stop_context=lambda _gtfs, _routes: [],
             scan_route_incidents=_blocking_provider(
                 block=True,
                 started=events["incident_started"],
                 cleaned_up=events["incident_cleaned_up"],
             ),
-            incident_lookup_succeeded=lambda metadata: True,
+            incident_lookup_succeeded=lambda _metadata: True,
         ),
-        crowd_hotspots=SimpleNamespace(find_hotspot_hits=lambda gtfs, routes: []),
+        crowd_hotspots=SimpleNamespace(find_hotspot_hits=lambda _gtfs, _routes: []),
         crowd_evidence=SimpleNamespace(
             collect=_blocking_provider(
                 block=True,
@@ -125,9 +128,9 @@ def _dependencies(*, block_mta: bool) -> tuple[SimpleNamespace, dict[str, asynci
             )
         ),
         candidates=SimpleNamespace(
-            _collect_route_and_bus_ids=lambda routes: (set(), set())
+            _collect_route_and_bus_ids=lambda _routes: (set(), set())
         ),
-        route_service_ids=lambda route: set(),
+        route_service_ids=lambda _route: set(),
         context_timeout_seconds=60.0,
         live_evidence_ttl_seconds=60,
         event_evidence_ttl_seconds=60,
@@ -163,7 +166,7 @@ class PlanTripPrepareCancellationTests(unittest.IsolatedAsyncioTestCase):
         deps, events = _dependencies(block_mta=True)
         with patch(
             "app.services.agent.tools.route.preparation_adapter.normalize_routes",
-            new=lambda routes, gtfs=None: routes,
+            new=lambda routes, _gtfs=None: routes,
         ):
             prepare_task = await self._start_prepare(deps)
             # Both evidence tasks are running and MTA is blocked: preparation
@@ -172,18 +175,18 @@ class PlanTripPrepareCancellationTests(unittest.IsolatedAsyncioTestCase):
             await events["incident_started"].wait()
             await events["mta_started"].wait()
             prepare_task.cancel()
-            with self.assertRaises(asyncio.CancelledError):
+            with pytest.raises(asyncio.CancelledError):
                 await prepare_task
 
-        self.assertTrue(prepare_task.cancelled())
-        self.assertTrue(events["event_cleaned_up"].is_set())
-        self.assertTrue(events["incident_cleaned_up"].is_set())
+        assert prepare_task.cancelled()
+        assert events["event_cleaned_up"].is_set()
+        assert events["incident_cleaned_up"].is_set()
 
     async def test_cancellation_during_event_await_drains_incident_task(self):
         deps, events = _dependencies(block_mta=False)
         with patch(
             "app.services.agent.tools.route.preparation_adapter.normalize_routes",
-            new=lambda routes, gtfs=None: routes,
+            new=lambda routes, _gtfs=None: routes,
         ):
             prepare_task = await self._start_prepare(deps)
             await events["event_started"].wait()
@@ -192,12 +195,12 @@ class PlanTripPrepareCancellationTests(unittest.IsolatedAsyncioTestCase):
             # `await event_task` so the cancellation lands on the event await.
             await _yield_loop_turn()
             prepare_task.cancel()
-            with self.assertRaises(asyncio.CancelledError):
+            with pytest.raises(asyncio.CancelledError):
                 await prepare_task
 
-        self.assertTrue(prepare_task.cancelled())
-        self.assertTrue(events["event_cleaned_up"].is_set())
-        self.assertTrue(events["incident_cleaned_up"].is_set())
+        assert prepare_task.cancelled()
+        assert events["event_cleaned_up"].is_set()
+        assert events["incident_cleaned_up"].is_set()
 
 
 if __name__ == "__main__":

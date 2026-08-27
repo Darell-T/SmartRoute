@@ -5,19 +5,19 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 
-from app.services.trips.preparation.prepare import PreparedLeg
+from app.services.trips import candidates
 from app.services.trips.preparation.combine import combine_prepared_chains
 from app.services.trips.preparation.constraints import route_constraints
-from app.services.trips.preparation.prepare import (
-    AggregatePreparation,
-    PreparedChain,
-)
 from app.services.trips.preparation.context import (
     RoutePreparationContext,
     RoutePreparationFailure,
     is_route_preparation_failure,
 )
-from app.services.trips import candidates
+from app.services.trips.preparation.prepare import (
+    AggregatePreparation,
+    PreparedChain,
+    PreparedLeg,
+)
 
 MULTI_STOP_BEAM_WIDTH = 3
 MULTI_STOP_PROVIDER_WIDTH = 5
@@ -134,7 +134,7 @@ def _dwell(value: object) -> tuple[int, str]:
     if value is None:
         return DEFAULT_DWELL_MINUTES, "default"
     try:
-        return max(0, min(180, int(round(float(value))))), "user"
+        return max(0, min(180, round(float(value)))), "user"
     except (TypeError, ValueError):
         return DEFAULT_DWELL_MINUTES, "default"
 
@@ -145,7 +145,7 @@ def _next_departure_for_route(route: list[dict], dwell_minutes: int) -> str | No
         if isinstance(value, str) and value.strip():
             try:
                 return (
-                    datetime.fromisoformat(value.replace("Z", "+00:00"))
+                    datetime.fromisoformat(value)
                     + timedelta(minutes=dwell_minutes)
                 ).isoformat()
             except ValueError:

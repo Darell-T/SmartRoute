@@ -9,6 +9,7 @@ from app.services.agent.tools._types import ToolContext
 from app.services.trips.location import ResolvedPlace
 from app.services.trips.preparation.input import (
     derive_arrive_by_departure,
+    normalize_route_ids,
     parse_rfc3339,
     point_label,
     prepare_structural_candidates,
@@ -17,8 +18,6 @@ from app.services.trips.preparation.input import (
     summary_eta_minutes,
     validated_waypoints,
 )
-from app.services.trips.preparation.input import normalize_route_ids
-
 
 _RIDER_LOCATION_REFERENCES = {"user", "your location", "current location"}
 

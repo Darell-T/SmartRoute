@@ -15,6 +15,10 @@ from app.services.agent.tools.places import damn_lines, present_places
 LINDUSTRIE_ID = "ChIJ92OsaJVZwokRsC54kf-J-3g"
 UNMONITORED_ID = "google-unmonitored"
 CAPTURED_AT = datetime(2026, 8, 25, 22, 58, tzinfo=UTC)
+GOOGLE_MAPS_SOURCE = {
+    "title": "Google Maps",
+    "url": "https://www.google.com/maps",
+}
 
 
 def _ctx() -> ToolContext:
@@ -72,13 +76,9 @@ class PresentPlacesQueueTests(unittest.IsolatedAsyncioTestCase):
         cache._mem.clear()
         damn_lines._current_refresh_task = None
         damn_lines._history_refresh_task = None
-        damn_lines._warmup_tasks = set()
         damn_lines._history_loaded = False
         damn_lines._history_last_success = None
         damn_lines._history_index = {}
-        warmup = patch.object(damn_lines, "schedule_history_warmup")
-        warmup.start()
-        self.addCleanup(warmup.stop)
 
     async def test_ignore_does_not_fetch_or_mention_queue(self):
         set_id = _store(
@@ -102,7 +102,9 @@ class PresentPlacesQueueTests(unittest.IsolatedAsyncioTestCase):
 
         current.assert_not_awaited()
         assert "wait" not in _token_text(result).casefold()
-        assert _source_event(result) is None
+        source = _source_event(result)
+        assert source is not None
+        assert source.sources == (GOOGLE_MAPS_SOURCE,)
 
     async def test_heads_up_appends_live_note_and_source_after_the_list(self):
         set_id = _store(
@@ -145,6 +147,7 @@ class PresentPlacesQueueTests(unittest.IsolatedAsyncioTestCase):
         assert source is not None
         assert source.turn_id == "t-queue"
         assert source.sources == (
+            GOOGLE_MAPS_SOURCE,
             {
                 "title": "Damn Lines: L'industrie Pizzeria",
                 "url": "https://damnlines.com/camera/lindustrie-pizzeria",
@@ -179,7 +182,9 @@ class PresentPlacesQueueTests(unittest.IsolatedAsyncioTestCase):
 
         assert "queue" not in _token_text(result).casefold()
         assert "wait" not in _token_text(result).casefold()
-        assert _source_event(result) is None
+        source = _source_event(result)
+        assert source is not None
+        assert source.sources == (GOOGLE_MAPS_SOURCE,)
 
     async def test_decision_discloses_missing_live_coverage(self):
         set_id = _store(
@@ -202,7 +207,9 @@ class PresentPlacesQueueTests(unittest.IsolatedAsyncioTestCase):
         assert "There is no queue coverage for Neighborhood Pizza." in _token_text(
             result
         )
-        assert _source_event(result) is None
+        source = _source_event(result)
+        assert source is not None
+        assert source.sources == (GOOGLE_MAPS_SOURCE,)
 
     async def test_historical_one_date_does_not_say_usually(self):
         set_id = _store(
@@ -237,7 +244,9 @@ class PresentPlacesQueueTests(unittest.IsolatedAsyncioTestCase):
         text = _token_text(result)
         assert "On August 18 around 7 PM" in text
         assert "usually" not in text.casefold()
-        assert _source_event(result) is not None
+        source = _source_event(result)
+        assert source is not None
+        assert source.sources[0] == GOOGLE_MAPS_SOURCE
 
     async def test_historical_multi_date_includes_evidence_count(self):
         set_id = _store(
@@ -305,4 +314,6 @@ class PresentPlacesQueueTests(unittest.IsolatedAsyncioTestCase):
 
         historical.assert_not_called()
         assert "historical" not in _token_text(result).casefold()
-        assert _source_event(result) is None
+        source = _source_event(result)
+        assert source is not None
+        assert source.sources == (GOOGLE_MAPS_SOURCE,)

@@ -5,10 +5,8 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from app.services.agent import candidate_store
+from app.services.agent import candidate_store, discovery_store, transcript_store
 from app.services.agent.turn import completion as turn_completion
-from app.services.agent import discovery_store
-from app.services.agent import transcript_store
 from app.services.agent.turn.contract import GoalKind, GoalState
 
 PUBLIC_TOOL_NAMES: tuple[str, ...] = (

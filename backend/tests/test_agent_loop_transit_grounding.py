@@ -3,9 +3,10 @@ from __future__ import annotations
 import dataclasses
 
 from app.services.agent import session as session_module
+from app.services.agent.tools import ToolResult, ToolSpec
 from app.services.agent.tools.transit import evidence as transit_evidence
 from app.services.agent.tools.transit import present_transit
-from app.services.agent.tools import ToolResult, ToolSpec
+
 from tests.agent_loop_reliability_support import (
     AgentLoopReliabilityTestCase,
     goal,
@@ -45,17 +46,11 @@ class AgentLoopTransitGroundingTests(AgentLoopReliabilityTestCase):
             trace=trace,
         )
 
-        self.assertEqual(
-            [name for name, _input in trace.tool_calls],
-            ["check_transit", "complete_turn"],
-        )
-        self.assertEqual(
-            self.loop.client.messages.calls[0]["tool_choice"],
-            {"type": "any"},
-        )
-        self.assertIn(message, self.loop.client.messages.calls[0]["messages"][-1]["content"])
-        self.assertFalse(any(event.type == "arrival_card" for event in events_out))
-        self.assertIn("currently delayed", trace.final_text)
+        assert [name for name, _input in trace.tool_calls] == ["check_transit", "complete_turn"]
+        assert self.loop.client.messages.calls[0]["tool_choice"] == {"type": "any"}
+        assert message in self.loop.client.messages.calls[0]["messages"][-1]["content"]
+        assert not any(event.type == "arrival_card" for event in events_out)
+        assert "currently delayed" in trace.final_text
 
     async def test_arrivals_cannot_substitute_for_required_service_status(self):
         trace = self.loop.TurnTrace()
@@ -83,19 +78,10 @@ class AgentLoopTransitGroundingTests(AgentLoopReliabilityTestCase):
             trace=trace,
         )
 
-        self.assertEqual(
-            [name for name, _input in trace.tool_calls],
-            ["check_transit", "check_transit", "complete_turn"],
-        )
-        self.assertEqual(
-            [
-                call["tool_choice"]
-                for call in self.loop.client.messages.calls
-            ],
-            [{"type": "any"}] * 3,
-        )
-        self.assertIn("current southbound delay", trace.final_text)
-        self.assertTrue(any(event.type == "arrival_card" for event in events_out))
+        assert [name for name, _input in trace.tool_calls] == ["check_transit", "check_transit", "complete_turn"]
+        assert [call["tool_choice"] for call in self.loop.client.messages.calls] == [{"type": "any"}] * 3
+        assert "current southbound delay" in trace.final_text
+        assert any(event.type == "arrival_card" for event in events_out)
 
     async def test_failed_status_grounding_suppresses_a_false_all_clear(self):
         trace = self.loop.TurnTrace()
@@ -151,10 +137,10 @@ class AgentLoopTransitGroundingTests(AgentLoopReliabilityTestCase):
             trace=trace,
         )
 
-        self.assertIn("unavailable", trace.final_text.casefold())
-        self.assertNotIn("no q delays", trace.final_text.casefold())
-        self.assertTrue(any(event.type == "arrival_card" for event in events_out))
-        self.assertEqual(events_out[-1].terminal_state, "completed")
+        assert "unavailable" in trace.final_text.casefold()
+        assert "no q delays" not in trace.final_text.casefold()
+        assert any(event.type == "arrival_card" for event in events_out)
+        assert events_out[-1].terminal_state == "completed"
 
     async def test_known_direction_take_wait_checks_status_and_arrivals_before_advice(self):
         registry = _model_led_registry()
@@ -273,41 +259,26 @@ class AgentLoopTransitGroundingTests(AgentLoopReliabilityTestCase):
         )
 
         names = [name for name, _input in trace.tool_calls]
-        self.assertEqual(
-            names,
-            [
-                "declare_goals",
-                "check_transit",
-                "check_transit",
-                "present_transit",
-                "present_transit",
-            ],
-        )
+        assert names == ["declare_goals", "check_transit", "check_transit", "present_transit", "present_transit"]
         check_indexes = [
             index for index, name in enumerate(names) if name == "check_transit"
         ]
         present_indexes = [
             index for index, name in enumerate(names) if name == "present_transit"
         ]
-        self.assertLess(max(check_indexes), min(present_indexes))
-        self.assertEqual(
-            [call["operation"] for name, call in trace.tool_calls if name == "check_transit"],
-            ["service_status", "arrivals"],
-        )
-        self.assertEqual(
-            [call["stop_source"] for name, call in trace.tool_calls if name == "check_transit"],
-            ["accepted_trip", "accepted_trip"],
-        )
-        self.assertFalse(any(event.type == "clarification" for event in events_out))
+        assert max(check_indexes) < min(present_indexes)
+        assert [call["operation"] for name, call in trace.tool_calls if name == "check_transit"] == ["service_status", "arrivals"]
+        assert [call["stop_source"] for name, call in trace.tool_calls if name == "check_transit"] == ["accepted_trip", "accepted_trip"]
+        assert not any(event.type == "clarification" for event in events_out)
         visible = "".join(event.text for event in events_out if event.type == "token")
-        self.assertIn("out of date", visible.casefold())
-        self.assertIn("fresher", visible.casefold())
-        self.assertNotIn("no active alert", visible.casefold())
-        self.assertNotIn("no affected service", visible.casefold())
+        assert "out of date" in visible.casefold()
+        assert "fresher" in visible.casefold()
+        assert "no active alert" not in visible.casefold()
+        assert "no affected service" not in visible.casefold()
         arrival_card = next(event for event in events_out if event.type == "arrival_card")
-        self.assertEqual(arrival_card.route_id, "Q")
-        self.assertEqual(arrival_card.stop["id"], "D28")
-        self.assertEqual(arrival_card.directions[0]["arrivals"][0]["minutes"], 4)
+        assert arrival_card.route_id == "Q"
+        assert arrival_card.stop["id"] == "D28"
+        assert arrival_card.directions[0]["arrivals"][0]["minutes"] == 4
 
     async def test_resolved_arrival_is_selected_by_the_model_from_active_context(self):
         _session_id, session = session_module.new_session()
@@ -339,23 +310,20 @@ class AgentLoopTransitGroundingTests(AgentLoopReliabilityTestCase):
             tool_registry=_test_registry(),
             trace=trace,
         )
-        self.assertEqual(trace.tool_calls[0][0], "check_transit")
-        self.assertEqual(trace.tool_calls[0][1]["operation"], "arrivals")
-        self.assertFalse(any(name == "plan_trip" for name, _ in trace.tool_calls))
+        assert trace.tool_calls[0][0] == "check_transit"
+        assert trace.tool_calls[0][1]["operation"] == "arrivals"
+        assert not any(name == "plan_trip" for name, _ in trace.tool_calls)
         arrival_event = next(event for event in events_out if event.type == "arrival_card")
-        self.assertEqual(arrival_event.resolution_status, "resolved")
-        self.assertEqual(len(self.loop.client.messages.calls), 2)
-        self.assertEqual(
-            "".join(event.text for event in events_out if event.type == "token"),
-            "The next downtown Q at Newkirk Plaza is in 4 minutes.",
-        )
-        self.assertEqual([event.type for event in events_out].count("done"), 1)
-        self.assertEqual(events_out[-1].stop_reason, "end_turn")
-        self.assertEqual(events_out[-1].terminal_state, "completed")
-        self.assertEqual(trace.model_call_count, 2)
-        self.assertEqual(trace.tool_call_count, 2)
-        self.assertEqual(trace.retry_count, 0)
-        self.assertGreaterEqual(trace.stage_ms["arrival_lookup_ms"], 0)
+        assert arrival_event.resolution_status == "resolved"
+        assert len(self.loop.client.messages.calls) == 2
+        assert "".join(event.text for event in events_out if event.type == "token") == "The next downtown Q at Newkirk Plaza is in 4 minutes."
+        assert [event.type for event in events_out].count("done") == 1
+        assert events_out[-1].stop_reason == "end_turn"
+        assert events_out[-1].terminal_state == "completed"
+        assert trace.model_call_count == 2
+        assert trace.tool_call_count == 2
+        assert trace.retry_count == 0
+        assert trace.stage_ms["arrival_lookup_ms"] >= 0
 
     async def test_implicit_arrival_without_active_trip_is_clarified_by_model(self):
         trace = self.loop.TurnTrace()
@@ -371,14 +339,11 @@ class AgentLoopTransitGroundingTests(AgentLoopReliabilityTestCase):
             trace=trace,
         )
 
-        self.assertEqual(len(self.loop.client.messages.calls), 1)
-        self.assertFalse(any(name == "check_transit" for name, _ in trace.tool_calls))
-        self.assertEqual(
-            "".join(event.text for event in events_out if event.type == "token"),
-            "Which train or bus route do you mean?",
-        )
-        self.assertEqual(events_out[-1].terminal_state, "clarification_required")
-        self.assertFalse(any(event.type == "error" for event in events_out))
+        assert len(self.loop.client.messages.calls) == 1
+        assert not any(name == "check_transit" for name, _ in trace.tool_calls)
+        assert "".join(event.text for event in events_out if event.type == "token") == "Which train or bus route do you mean?"
+        assert events_out[-1].terminal_state == "clarification_required"
+        assert not any(event.type == "error" for event in events_out)
 
     async def test_ambiguous_q_take_wait_clarifies_before_any_transit_call(self):
         trace = self.loop.TurnTrace()
@@ -394,13 +359,7 @@ class AgentLoopTransitGroundingTests(AgentLoopReliabilityTestCase):
             trace=trace,
         )
 
-        self.assertEqual(events_out[-1].terminal_state, "clarification_required")
-        self.assertEqual(
-            [name for name, _input in trace.tool_calls],
-            ["complete_turn"],
-        )
-        self.assertEqual(
-            "".join(event.text for event in events_out if event.type == "token"),
-            "Should I take the Q uptown or downtown?",
-        )
-        self.assertFalse(any(event.type == "arrival_card" for event in events_out))
+        assert events_out[-1].terminal_state == "clarification_required"
+        assert [name for name, _input in trace.tool_calls] == ["complete_turn"]
+        assert "".join(event.text for event in events_out if event.type == "token") == "Should I take the Q uptown or downtown?"
+        assert not any(event.type == "arrival_card" for event in events_out)

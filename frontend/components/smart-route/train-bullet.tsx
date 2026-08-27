@@ -1,5 +1,7 @@
 "use client";
 
+import Image from "next/image";
+
 const BULLET_NAME_BY_ROUTE: Record<string, string> = {
   "6X": "6d",
   "7X": "7d",
@@ -90,11 +92,14 @@ export function TrainBullet({
       }}
     >
       {/* Decorative: accessible name lives on the wrapper to avoid duplicate SR output. */}
-      <img
+      <Image
         src={subwayBulletSrc(line)}
+        width={size}
+        height={size}
         alt=""
         aria-hidden="true"
         draggable={false}
+        unoptimized
         style={{
           width: size,
           height: size,

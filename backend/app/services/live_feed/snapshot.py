@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import re
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from app.services.mta import realtime as mta_realtime
+from app.services.geography import find_nearest_stops
 from app.services.live_feed import vehicle_enrichment
 from app.services.live_feed.network_snapshot import (
     NetworkSnapshot,
     network_snapshot_store,
 )
-from app.services.geography import find_nearest_stops
+from app.services.mta import realtime as mta_realtime
 
 _LAST_EMPTY_VEHICLE_LOG = 0.0
 NEARBY_ARRIVAL_RADIUS_M = 804.672
@@ -157,7 +157,7 @@ def build_nearby_transit_issues(
                     ),
                     "source_types": ["mta_service_alert"],
                     "observed_at": datetime.fromtimestamp(
-                        observed_at, tz=timezone.utc
+                        observed_at, tz=UTC
                     ).isoformat(),
                     "relevance": relevance,
                 }

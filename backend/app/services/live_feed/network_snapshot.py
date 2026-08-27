@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Awaitable, Callable, Mapping
 
 from app.services.mta.alerts import (
     fetch_service_alerts,

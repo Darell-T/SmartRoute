@@ -7,6 +7,7 @@ from unittest.mock import patch
 from app.services.agent import events as agent_events
 from app.services.agent import session as session_module
 from app.services.agent.tools import ToolResult, ToolSpec
+
 from tests.agent_loop_reliability_support import (
     AgentLoopReliabilityTestCase,
     goal,
@@ -36,7 +37,7 @@ class AgentLoopOutputIntegrityTests(AgentLoopReliabilityTestCase):
             tool_registry=_test_registry(),
         )
         tokens = [event.text for event in events_out if event.type == "token"]
-        self.assertEqual(tokens, ["Hello. World."])
+        assert tokens == ["Hello. World."]
 
     def test_persisted_tool_summaries_are_not_replayed_as_assistant_prose(self):
         messages = self.loop._messages_from_history(
@@ -51,13 +52,7 @@ class AgentLoopOutputIntegrityTests(AgentLoopReliabilityTestCase):
             ]
         )
 
-        self.assertEqual(
-            messages,
-            [
-                {"role": "user", "content": "Get me to MSG"},
-                {"role": "assistant", "content": "I found a route."},
-            ],
-        )
+        assert messages == [{"role": "user", "content": "Get me to MSG"}, {"role": "assistant", "content": "I found a route."}]
 
     def test_runtime_syntax_and_fake_waiting_are_removed_from_rider_text(self):
         sanitized = self.loop._sanitize_rider_text(
@@ -66,7 +61,7 @@ class AgentLoopOutputIntegrityTests(AgentLoopReliabilityTestCase):
             "Give me a moment for the results."
         )
 
-        self.assertEqual(sanitized, "")
+        assert sanitized == ""
 
     async def test_truncated_tool_round_is_never_executed_or_marked_complete(self):
         trace = self.loop.TurnTrace()
@@ -97,11 +92,11 @@ class AgentLoopOutputIntegrityTests(AgentLoopReliabilityTestCase):
         )
 
         errors = [event for event in events_out if event.type == "error"]
-        self.assertEqual([event.code for event in errors], ["response_incomplete"])
-        self.assertTrue(errors[0].retryable)
-        self.assertEqual(events_out[-1].stop_reason, "error")
-        self.assertEqual(trace.tool_calls, [])
-        self.assertFalse(trace.terminal_resolution["terminal"])
+        assert [event.code for event in errors] == ["response_incomplete"]
+        assert errors[0].retryable
+        assert events_out[-1].stop_reason == "error"
+        assert trace.tool_calls == []
+        assert not trace.terminal_resolution["terminal"]
 
     async def test_failed_tool_diagnostics_are_model_only(self):
         registry = _test_registry()
@@ -127,10 +122,10 @@ class AgentLoopOutputIntegrityTests(AgentLoopReliabilityTestCase):
         events_out, _ = await self._run(rounds, tool_registry=registry)
 
         tool_end = next(e for e in events_out if e.type == "tool_end")
-        self.assertEqual(tool_end.summary, "That action could not be completed")
-        self.assertNotIn(canary, str(tool_end))
+        assert tool_end.summary == "That action could not be completed"
+        assert canary not in str(tool_end)
         model_context = self.loop.client.messages.calls[1]["messages"][-1]
-        self.assertIn(canary, model_context["content"][0]["content"])
+        assert canary in model_context["content"][0]["content"]
 
     async def test_model_progress_prose_is_discarded_during_route_execution(self):
         rounds = [
@@ -147,24 +142,21 @@ class AgentLoopOutputIntegrityTests(AgentLoopReliabilityTestCase):
 
         event_types = [event.type for event in events_out]
         token_events = [event for event in events_out if event.type == "token"]
-        self.assertLess(event_types.index("meta"), event_types.index("tool_start"))
-        self.assertLess(event_types.index("tool_start"), event_types.index("tool_end"))
-        self.assertLess(event_types.index("tool_end"), event_types.index("route_card"))
+        assert event_types.index("meta") < event_types.index("tool_start")
+        assert event_types.index("tool_start") < event_types.index("tool_end")
+        assert event_types.index("tool_end") < event_types.index("route_card")
         route_card_index = event_types.index("route_card")
-        self.assertLess(event_types.index("token"), route_card_index)
-        self.assertEqual(event_types[-1], "done")
+        assert event_types.index("token") < route_card_index
+        assert event_types[-1] == "done"
         rider_text = "".join(event.text for event in events_out if event.type == "token")
-        self.assertEqual(len(token_events), 1)
-        self.assertEqual(token_events[0].text, _DEFAULT_ROUTE_EXPLANATION)
-        self.assertEqual(
-            rider_text,
-            token_events[0].text,
-        )
-        self.assertNotIn("I'll compare", rider_text)
-        self.assertNotIn("[ROUTE:", rider_text)
-        self.assertNotIn("CANDIDATE_ANALYSIS", rider_text)
-        self.assertEqual(session["history"][-1]["text"], rider_text)
-        self.assertEqual(len(self.loop.client.messages.calls), 2)
+        assert len(token_events) == 1
+        assert token_events[0].text == _DEFAULT_ROUTE_EXPLANATION
+        assert rider_text == token_events[0].text
+        assert "I'll compare" not in rider_text
+        assert "[ROUTE:" not in rider_text
+        assert "CANDIDATE_ANALYSIS" not in rider_text
+        assert session["history"][-1]["text"] == rider_text
+        assert len(self.loop.client.messages.calls) == 2
 
     async def test_route_execution_does_not_inject_progress_acknowledgement(self):
         rounds = [
@@ -187,11 +179,11 @@ class AgentLoopOutputIntegrityTests(AgentLoopReliabilityTestCase):
 
         token_events = [event for event in events_out if event.type == "token"]
         event_types = [event.type for event in events_out]
-        self.assertLess(event_types.index("token"), event_types.index("route_card"))
-        self.assertEqual(len(token_events), 1)
-        self.assertEqual(token_events[0].text, _DEFAULT_ROUTE_EXPLANATION)
-        self.assertNotIn("I'll plan", token_events[0].text)
-        self.assertEqual(len(self.loop.client.messages.calls), 2)
+        assert event_types.index("token") < event_types.index("route_card")
+        assert len(token_events) == 1
+        assert token_events[0].text == _DEFAULT_ROUTE_EXPLANATION
+        assert "I'll plan" not in token_events[0].text
+        assert len(self.loop.client.messages.calls) == 2
 
     async def test_turn_summary_emits_before_done_when_client_closes_at_terminal_event(self):
         async def telemetry_route_preparation(tool_input, ctx):
@@ -250,14 +242,11 @@ class AgentLoopOutputIntegrityTests(AgentLoopReliabilityTestCase):
             for call in printed.call_args_list
             if call.args and str(call.args[0]).startswith("[agent]")
         ]
-        self.assertEqual(len(summary_prints), 1)
-        self.assertLess(timeline.index("turn_summary"), timeline.index("done"))
-        self.assertIn("mode=auto", str(summary_prints[0].args[0]))
-        self.assertEqual(
-            session["history"][-1]["text"],
-            _DEFAULT_ROUTE_EXPLANATION,
-        )
-        self.assertEqual(len(self.loop.client.messages.calls), 2)
+        assert len(summary_prints) == 1
+        assert timeline.index("turn_summary") < timeline.index("done")
+        assert "mode=auto" in str(summary_prints[0].args[0])
+        assert session["history"][-1]["text"] == _DEFAULT_ROUTE_EXPLANATION
+        assert len(self.loop.client.messages.calls) == 2
 
     async def test_compound_arrival_status_and_route_synthesizes_all_evidence(self):
         trace = self.loop.TurnTrace()
@@ -368,21 +357,8 @@ class AgentLoopOutputIntegrityTests(AgentLoopReliabilityTestCase):
             trace=trace,
         )
 
-        self.assertEqual(
-            [name for name, _input in trace.tool_calls],
-            [
-                "declare_goals",
-                "check_transit",
-                "check_transit",
-                "prepare_route_options",
-                "present_route",
-                "present_transit",
-                "present_transit",
-            ],
-        )
-        self.assertEqual(len(self.loop.client.messages.calls), 4)
-        self.assertEqual(
-            [event.type for event in events_out].count("route_card"), 1
-        )
-        self.assertTrue(any(event.type == "arrival_card" for event in events_out))
-        self.assertIn(_DEFAULT_ROUTE_EXPLANATION, trace.final_text)
+        assert [name for name, _input in trace.tool_calls] == ["declare_goals", "check_transit", "check_transit", "prepare_route_options", "present_route", "present_transit", "present_transit"]
+        assert len(self.loop.client.messages.calls) == 4
+        assert [event.type for event in events_out].count("route_card") == 1
+        assert any(event.type == "arrival_card" for event in events_out)
+        assert _DEFAULT_ROUTE_EXPLANATION in trace.final_text

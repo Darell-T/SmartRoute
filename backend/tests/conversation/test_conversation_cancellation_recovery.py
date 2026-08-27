@@ -30,10 +30,10 @@ import asyncio
 import copy
 from unittest.mock import patch
 
-from app.services.agent import candidate_store
-from app.services.agent import discovery_store
+from app.services.agent import candidate_store, discovery_store
 from app.services.agent import events as agent_events
 from app.services.agent import trip_state as trip_state_module
+
 from tests.conversation.conversation_cancellation_fixtures import (
     ACCEPTED_DESTINATION,
     CANDIDATE_V1,
@@ -53,7 +53,6 @@ from tests.conversation.conversation_matrix_harness import (
     run_turn,
     seed_accepted_active_trip,
 )
-
 
 INITIAL_TOOL_PROFILE = frozenset(
     {
@@ -217,39 +216,28 @@ class _ModelLedCancellationMixin:
         destination: str,
         candidate_id: str,
     ) -> None:
-        self.assertEqual(
-            [name for name, _input in trace.tool_calls],
-            ["declare_goals", "prepare_route_options", "present_route"],
-            f"{scenario_id} canonical declaration -> prepare -> present chain",
-        )
-        self.assertEqual(
-            frozenset(schema["name"] for schema in self.loop.client.messages.calls[0]["tools"]),
-            INITIAL_TOOL_PROFILE,
-            f"{scenario_id} initial state-valid profile",
-        )
-        self.assertEqual(
-            frozenset(schema["name"] for schema in self.loop.client.messages.calls[1]["tools"]),
-            frozenset({"present_route", "complete_turn"}),
-            f"{scenario_id} evidence-ready presenter profile",
-        )
+        assert [name for name, _input in trace.tool_calls] == ["declare_goals", "prepare_route_options", "present_route"], f"{scenario_id} canonical declaration -> prepare -> present chain mode={mode}"
+        assert frozenset(schema["name"] for schema in self.loop.client.messages.calls[0]["tools"]) == INITIAL_TOOL_PROFILE, f"{scenario_id} initial state-valid profile"
+        assert frozenset(schema["name"] for schema in self.loop.client.messages.calls[1]["tools"]) == frozenset({"present_route", "complete_turn"}), f"{scenario_id} evidence-ready presenter profile"
         cards = route_cards(events)
-        self.assertEqual((len(cards), cards[0].role if cards else None), (1, "recommended"))
+        assert (len(cards), cards[0].role if cards else None) == (1, "recommended")
         state = trip_state_module.get_trip_state(session)
         set_id = state["active_candidate_set_id"]
-        self.assertTrue(bool(set_id) and set_id.startswith("cs_"))
-        self.assertEqual((state["destination"], state["selected_candidate_id"]), (destination, candidate_id))
-        self.assertEqual(mocks["stored_candidate_set_ids"], [set_id])
+        assert bool(set_id)
+        assert set_id.startswith("cs_")
+        assert (state["destination"], state["selected_candidate_id"]) == (destination, candidate_id)
+        assert mocks["stored_candidate_set_ids"] == [set_id]
         record = candidate_store.load_candidate_set(set_id, session_id=session_id)
-        self.assertIsNotNone(record)
-        self.assertTrue(record["presented"])
-        self.assertEqual(record["selected_candidate_id"], candidate_id)
-        self.assertEqual(mocks["prepare_single_leg"].await_count, 1)
+        assert record is not None
+        assert record["presented"]
+        assert record["selected_candidate_id"] == candidate_id
+        assert mocks["prepare_single_leg"].await_count == 1
         # Prepared candidates are immutable at presentation time; live route
         # enrichment is no longer part of this request-critical path.
-        self.assertEqual(mocks["enrich_route"].await_count, 0)
-        self.assertEqual(events[0].type, "meta")
-        self.assertEqual(events[-1].type, "done")
-        self.assertEqual(events[-1].stop_reason, "end_turn")
+        assert mocks["enrich_route"].await_count == 0
+        assert events[0].type == "meta"
+        assert events[-1].type == "done"
+        assert events[-1].stop_reason == "end_turn"
 
 
 class CancellationDuringPrepareTests(_ModelLedCancellationMixin, CancellationBase):
@@ -289,21 +277,14 @@ class CancellationDuringPrepareTests(_ModelLedCancellationMixin, CancellationBas
             scenario_id=scenario,
         )
         # Transport contract: meta first; nothing terminal or committed leaks.
-        self.assertEqual(
-            chunks[0], agent_events.sse_format(
-                agent_events.MetaEvent(session_id=session_id, turn_id="t1")),
-            f"{scenario} meta frame first",
-        )
+        assert chunks[0] == agent_events.sse_format(agent_events.MetaEvent(session_id=session_id, turn_id="t1")), f"{scenario} meta frame first"
         joined = "\n".join(chunks)
         for forbidden in ("route_card", "tool_end", "done", "error"):
-            self.assertNotIn(
-                forbidden, joined, f"{scenario} no {forbidden} frame after disconnect"
-            )
-        self.assertTrue(request.is_disconnected.await_count >= 1,
-                        f"{scenario} disconnect detected")
+            assert forbidden not in joined, f"{scenario} no {forbidden} frame after disconnect"
+        assert request.is_disconnected.await_count >= 1, f"{scenario} disconnect detected"
         # Production ordering: turn finalization completes before save before
         # lease release (client disconnect mid-stream).
-        self.assertEqual(order, ["finalize", "save", "release"], f"{scenario} order")
+        assert order == ["finalize", "save", "release"], f"{scenario} order"
         self._assert_cancelled_no_commit(
             scenario_id=scenario,
             events=[],
@@ -313,11 +294,7 @@ class CancellationDuringPrepareTests(_ModelLedCancellationMixin, CancellationBas
             seam_cleaned=cleaned,
             destination=ACCEPTED_DESTINATION,
         )
-        self.assertEqual(
-            save_mock.call_args.args[1].get("route_cards") or [],
-            [],
-            f"{scenario} persisted session carries no stale card",
-        )
+        assert (save_mock.call_args.args[1].get("route_cards") or []) == [], f"{scenario} persisted session carries no stale card"
         release_mock.assert_awaited_once()
         await self._assert_no_owned_pending_tasks(baseline)
         # A second turn in the SAME session succeeds prepare -> present once.
@@ -329,17 +306,10 @@ class CancellationDuringPrepareTests(_ModelLedCancellationMixin, CancellationBas
             candidate_id=CANDIDATE_V1,
             mode=mode,
         )
-        self.assertEqual(
-            [card["card_id"] for card in session.get("route_cards") or []],
-            [session["active_trip"]["card_id"]],
-            f"{scenario} exactly one persisted card after recovery",
-        )
+        assert [card["card_id"] for card in session.get("route_cards") or []] == [session["active_trip"]["card_id"]], f"{scenario} exactly one persisted card after recovery"
 
     async def test_j2_cancel1_disconnect_then_same_session_recovers_auto(self):
         await self._cancel1_flow("auto")
-
-    async def test_j2_cancel1_disconnect_then_same_session_recovers_quick(self):
-        await self._cancel1_flow("quick")
 
     async def test_caller_cancellation_at_mta_seam_drains_and_recovers(self):
         """Caller cancellation lands after the evidence tasks exist."""
@@ -368,14 +338,7 @@ class CancellationDuringPrepareTests(_ModelLedCancellationMixin, CancellationBas
             mocks=mocks,
             scenario_id="J2-CANCEL-1-mta",
         )
-        self.assertTrue(
-            any(
-                event.type == "tool_start"
-                and event.tool == "prepare_route_options"
-                for event in events
-            ),
-            "J2-CANCEL-1-mta real prepare started before cancellation",
-        )
+        assert any(event.type == "tool_start" and event.tool == "prepare_route_options" for event in events), "J2-CANCEL-1-mta real prepare started before cancellation"
         self._assert_cancelled_no_commit(
             scenario_id="J2-CANCEL-1-mta",
             events=events,
@@ -385,11 +348,7 @@ class CancellationDuringPrepareTests(_ModelLedCancellationMixin, CancellationBas
             seam_cleaned=cleaned,
             destination=ACCEPTED_DESTINATION,
         )
-        self.assertEqual(
-            self._offered_profile(),
-            INITIAL_TOOL_PROFILE,
-            "J2-CANCEL-1-mta offered the initial state-valid profile",
-        )
+        assert self._offered_profile() == INITIAL_TOOL_PROFILE, "J2-CANCEL-1-mta offered the initial state-valid profile"
         await self._assert_no_owned_pending_tasks(baseline)
         await self._natural_route_turn(
             session=session,
@@ -449,21 +408,10 @@ class WhatIfCancellationTests(_ModelLedCancellationMixin, CancellationBase):
         for key in ("temporary_candidate_set_id",
                     "temporary_selected_candidate_id",
                     "temporary_base_candidate_set_id"):
-            self.assertIsNone(state[key], "J2-CANCEL-2 no temporary commit")
-        self.assertEqual(
-            (state["active_candidate_set_id"], state["selected_candidate_id"]),
-            (seed.candidate_set_id, seed.candidate_id),
-            "J2-CANCEL-2 accepted set/selection unchanged",
-        )
-        self.assertEqual(
-            session.get("active_trip"), session_before["active_trip"],
-            "J2-CANCEL-2 accepted trip unchanged",
-        )
-        self.assertEqual(
-            self._snapshot_record(seed.candidate_set_id, session_id),
-            record_before,
-            "J2-CANCEL-2 accepted store record unchanged",
-        )
+            assert state[key] is None, "J2-CANCEL-2 no temporary commit"
+        assert (state["active_candidate_set_id"], state["selected_candidate_id"]) == (seed.candidate_set_id, seed.candidate_id), "J2-CANCEL-2 accepted set/selection unchanged"
+        assert session.get("active_trip") == session_before["active_trip"], "J2-CANCEL-2 accepted trip unchanged"
+        assert self._snapshot_record(seed.candidate_set_id, session_id) == record_before, "J2-CANCEL-2 accepted store record unchanged"
         await self._assert_no_owned_pending_tasks(baseline)
         # A later ordinary replan of the accepted trip remains usable and
         # commits exactly once; the seed card survives until that commit.
@@ -475,11 +423,7 @@ class WhatIfCancellationTests(_ModelLedCancellationMixin, CancellationBase):
             destination="Work",
             candidate_id=CANDIDATE_V1,
         )
-        self.assertEqual(
-            [card["card_id"] for card in session.get("route_cards") or []],
-            [seed.card_id, session["active_trip"]["card_id"]],
-            "J2-CANCEL-2 seed card survives until the later turn commits",
-        )
+        assert [card["card_id"] for card in session.get("route_cards") or []] == [seed.card_id, session["active_trip"]["card_id"]], "J2-CANCEL-2 seed card survives until the later turn commits"
 
 
 class DiscoveryCancellationTests(_ModelLedCancellationMixin, CancellationBase):
@@ -552,13 +496,9 @@ class DiscoveryCancellationTests(_ModelLedCancellationMixin, CancellationBase):
         )
         state = trip_state_module.get_trip_state(session)
         # Discovery identity may remain; no route identity partially commits.
-        self.assertEqual(state["active_discovery_set_id"], set_id)
-        self.assertEqual(state["selected_place_id"], place_id)
-        self.assertEqual(
-            discovery_store.load_discovery_set(set_id, session_id=session_id),
-            discovery_before,
-            "J2-CANCEL-3 discovery record untouched",
-        )
+        assert state["active_discovery_set_id"] == set_id
+        assert state["selected_place_id"] == place_id
+        assert discovery_store.load_discovery_set(set_id, session_id=session_id) == discovery_before, "J2-CANCEL-3 discovery record untouched"
         await self._assert_no_owned_pending_tasks(baseline)
         # Retry with the same still-valid reference succeeds through the
         # canonical chain and records the reference in the store.
@@ -602,8 +542,8 @@ class DiscoveryCancellationTests(_ModelLedCancellationMixin, CancellationBase):
         new_record = candidate_store.load_candidate_set(
             new_set_id, session_id=session_id
         )
-        self.assertEqual(new_record["discovery_set_id"], set_id)
-        self.assertEqual(new_record["destination_place_id"], place_id)
+        assert new_record["discovery_set_id"] == set_id
+        assert new_record["destination_place_id"] == place_id
 
 
 class DeadlineRecoveryTests(_ModelLedCancellationMixin, CancellationBase):
@@ -662,20 +602,10 @@ class DeadlineRecoveryTests(_ModelLedCancellationMixin, CancellationBase):
                 mocks={},
                 turn_id="t2",
             )
-        self.assertEqual(
-            [event.type for event in deadline_events],
-            ["meta", "reasoning", "done"],
-            "J2-CANCEL-5 deadline turn emits working state then done",
-        )
-        self.assertEqual(deadline_events[-1].stop_reason, "deadline")
-        self.assertEqual(
-            len(self.loop.client.messages.calls),
-            0, "J2-CANCEL-5 deadline turn never calls the model",
-        )
-        self.assertEqual(
-            self._snapshot_session(session),
-            session_before, "J2-CANCEL-5 deadline turn mutates no route state",
-        )
+        assert [event.type for event in deadline_events] == ["meta", "reasoning", "done"], "J2-CANCEL-5 deadline turn emits working state then done"
+        assert deadline_events[-1].stop_reason == "deadline"
+        assert len(self.loop.client.messages.calls) == 0, "J2-CANCEL-5 deadline turn never calls the model"
+        assert self._snapshot_session(session) == session_before, "J2-CANCEL-5 deadline turn mutates no route state"
         # 3) A normal turn still succeeds exactly once; stale events from the
         # cancelled and deadline turns leave no residue.
         events3, _trace3, _mocks3, set3 = await self._natural_route_turn(
@@ -685,20 +615,10 @@ class DeadlineRecoveryTests(_ModelLedCancellationMixin, CancellationBase):
             destination=ACCEPTED_DESTINATION,
             candidate_id=CANDIDATE_V1,
         )
-        self.assertEqual(len(route_cards(events3)), 1)
-        self.assertEqual(
-            [card["card_id"] for card in session.get("route_cards") or []],
-            [session["active_trip"]["card_id"]],
-            "J2-CANCEL-5 only the final turn's card persists",
-        )
-        self.assertEqual(
-            trip_state_module.get_trip_state(session)["active_candidate_set_id"],
-            set3, "J2-CANCEL-5 final turn owns the active set",
-        )
-        self.assertEqual(
-            [event.type for event in stale_events if event.type == "route_card"],
-            [], "J2-CANCEL-5 stale cancelled-turn events carry no card",
-        )
+        assert len(route_cards(events3)) == 1
+        assert [card["card_id"] for card in session.get("route_cards") or []] == [session["active_trip"]["card_id"]], "J2-CANCEL-5 only the final turn's card persists"
+        assert trip_state_module.get_trip_state(session)["active_candidate_set_id"] == set3, "J2-CANCEL-5 final turn owns the active set"
+        assert [event.type for event in stale_events if event.type == "route_card"] == [], "J2-CANCEL-5 stale cancelled-turn events carry no card"
         await self._assert_no_owned_pending_tasks(baseline)
 
 

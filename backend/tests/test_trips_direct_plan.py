@@ -2,8 +2,8 @@
 
 Covers the production wiring of ``POST /api/trip``: the direct endpoint
 delegates to the shared model-free ``prepare_single_leg`` pipeline and its
-import graph never loads the nested advisor, selection parser, shadow
-evaluator, or ``[ROUTE:N]`` control path. Also pins the REST coordinate
+import graph never loads the nested advisor, selection parser, or
+``[ROUTE:N]`` control path. Also pins the REST coordinate
 place resolution, named-destination resolution, and provider-error
 translation contract.
 """
@@ -11,12 +11,13 @@ translation contract.
 from __future__ import annotations
 
 import asyncio
-import subprocess
+import importlib
+import multiprocessing
 import sys
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 from app.services.trips.direct_plan import (
     DirectTripError,
     _resolved_places,
@@ -29,20 +30,20 @@ from tests.test_trips_enrichment import (
     _request_with_gtfs,
 )
 
-
-BACKEND_DIR = Path(__file__).resolve().parent.parent
-
 _BANNED_MODULES = {
     "evaluation.route_intelligence.advisor_context",
     "evaluation.route_intelligence.advisor",
-    "evaluation.route_intelligence.shadow",
-    "evaluation.route_intelligence.trip_shadow",
     "app.services.agent.tools.route.prepare_route_options",
     "app.services.agent.tools.route.present_route",
 }
 
 
-async def _bus_fetch(route_id):
+def _probe_trip_router_import_graph(result_queue) -> None:
+    importlib.import_module("app.routers.trips")
+    result_queue.put(sorted(name for name in sys.modules if name in _BANNED_MODULES))
+
+
+async def _bus_fetch(_route_id):
     return {"canned": []}
 
 
@@ -57,31 +58,19 @@ def _subway_step(route_id, minutes):
 
 
 class DirectPlanWiringTests(unittest.TestCase):
-    def test_api_trip_import_graph_is_advisor_and_shadow_free(self):
+    def test_api_trip_import_graph_is_advisor_free(self):
         """Production wiring: /api/trip never imports the legacy stacks."""
-        probe = (
-            "import sys\n"
-            "import app.routers.trips  # noqa: F401\n"
-            f"banned = {sorted(_BANNED_MODULES)!r}\n"
-            "loaded = sorted(name for name in sys.modules if name in banned)\n"
-            "if loaded:\n"
-            "    print('LOADED:' + ','.join(loaded))\n"
-            "    sys.exit(1)\n"
-            "print('CLEAN')\n"
+        context = multiprocessing.get_context("spawn")
+        result_queue = context.Queue()
+        process = context.Process(
+            target=_probe_trip_router_import_graph,
+            args=(result_queue,),
         )
-        completed = subprocess.run(
-            [sys.executable, "-c", probe],
-            cwd=str(BACKEND_DIR),
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        self.assertEqual(
-            completed.returncode,
-            0,
-            msg=f"advisor/shadow modules loaded: {completed.stdout}{completed.stderr}",
-        )
-        self.assertIn("CLEAN", completed.stdout)
+        process.start()
+        process.join(120)
+        assert process.exitcode == 0
+        assert result_queue.get(timeout=1) == []
+        result_queue.close()
 
 
 class DirectPlanPlaceResolutionTests(unittest.IsolatedAsyncioTestCase):
@@ -89,17 +78,17 @@ class DirectPlanPlaceResolutionTests(unittest.IsolatedAsyncioTestCase):
         origin, destination = _resolved_places(
             40.71, -73.99, "Brooklyn Bridge", 40.7061, -73.9969
         )
-        self.assertEqual(origin.name, "Your location")
-        self.assertEqual((origin.latitude, origin.longitude), (40.71, -73.99))
-        self.assertEqual(origin.source, "user")
-        self.assertEqual(destination.name, "Brooklyn Bridge")
-        self.assertEqual((destination.latitude, destination.longitude), (40.7061, -73.9969))
-        self.assertEqual(destination.source, "gps")
+        assert origin.name == "Your location"
+        assert (origin.latitude, origin.longitude) == (40.71, -73.99)
+        assert origin.source == "user"
+        assert destination.name == "Brooklyn Bridge"
+        assert (destination.latitude, destination.longitude) == (40.7061, -73.9969)
+        assert destination.source == "gps"
 
         _, without_coords = _resolved_places(
             40.71, -73.99, "Brooklyn Bridge", None, None
         )
-        self.assertIsNone(without_coords)
+        assert without_coords is None
 
     async def test_exact_places_reach_canonical_itinerary(self):
         trips = _load_trips_module(
@@ -108,16 +97,18 @@ class DirectPlanPlaceResolutionTests(unittest.IsolatedAsyncioTestCase):
         )
         result = await trips.plan_trip(_request_with_gtfs(), _payload(trips))
         itinerary = result["route_candidates"][0]["itinerary"]
-        self.assertEqual(
-            itinerary["origin"],
-            {"label": "Your location", "lat": 40.7, "lng": -73.99},
-        )
-        self.assertEqual(
-            itinerary["destination"],
-            {"label": "Test Dest", "lat": 40.70, "lng": -73.98},
-        )
-        self.assertEqual(result["selection_decision"]["selection_reason"], "lowest_final_score")
-        self.assertIs(result["selection_decision"], itinerary["selection_decision"])
+        assert itinerary["origin"] == {
+            "label": "Your location",
+            "lat": 40.7,
+            "lng": -73.99,
+        }
+        assert itinerary["destination"] == {
+            "label": "Test Dest",
+            "lat": 40.7,
+            "lng": -73.98,
+        }
+        assert result["selection_decision"]["selection_reason"] == "lowest_final_score"
+        assert result["selection_decision"] is itinerary["selection_decision"]
 
     async def test_named_destination_resolves_when_coordinates_absent(self):
         trips = _load_trips_module(_bus_fetch, routes=[[_subway_step("A", 20)]])
@@ -134,11 +125,12 @@ class DirectPlanPlaceResolutionTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await trips.plan_trip(_request_with_gtfs(), payload)
         itinerary = result["route_candidates"][0]["itinerary"]
-        self.assertEqual(
-            itinerary["destination"],
-            {"label": "Test Dest", "lat": 40.70, "lng": -73.98},
-        )
-        self.assertNotIn("[ROUTE:", result["recommendation"])
+        assert itinerary["destination"] == {
+            "label": "Test Dest",
+            "lat": 40.7,
+            "lng": -73.98,
+        }
+        assert "[ROUTE:" not in result["recommendation"]
 
     async def test_named_destination_failure_is_controlled_not_500(self):
         trips = _load_trips_module(_bus_fetch, routes=[[_subway_step("A", 20)]])
@@ -149,32 +141,38 @@ class DirectPlanPlaceResolutionTests(unittest.IsolatedAsyncioTestCase):
             destination_lat=None,
             destination_lng=None,
         )
-        with patch(
-            "app.services.geography.geocode_address_with_reason",
-            return_value=(None, "Address not found in NYC."),
+        with (
+            patch(
+                "app.services.geography.geocode_address_with_reason",
+                return_value=(None, "Address not found in NYC."),
+            ),
+            pytest.raises(trips.HTTPException) as error,
         ):
-            with self.assertRaises(trips.HTTPException) as error:
-                await trips.plan_trip(_request_with_gtfs(), payload)
-        self.assertEqual(error.exception.status_code, 404)
-        self.assertEqual(error.exception.detail, "No route found")
+            await trips.plan_trip(_request_with_gtfs(), payload)
+        assert error.value.status_code == 404
+        assert error.value.detail == "No route found"
 
 
 class DirectPlanErrorTranslationTests(unittest.TestCase):
     def _assert(self, error, status_code, detail):
         translated = _translate_prepare_error(error)
-        self.assertIsInstance(translated, DirectTripError)
-        self.assertEqual(translated.status_code, status_code)
-        self.assertEqual(translated.detail, detail)
+        assert isinstance(translated, DirectTripError)
+        assert translated.status_code == status_code
+        assert translated.detail == detail
 
     def test_no_route_maps_to_404(self):
-        self._assert("no transit route found between those points", 404, "No route found")
+        self._assert(
+            "no transit route found between those points", 404, "No route found"
+        )
         self._assert("", 404, "No route found")
 
     def test_timeout_maps_to_503(self):
         self._assert("routing failed (timeout)", 503, "Google Routes API timed out")
 
     def test_not_configured_maps_to_500(self):
-        self._assert("routing failed (not_configured)", 500, "Routing provider is not configured")
+        self._assert(
+            "routing failed (not_configured)", 500, "Routing provider is not configured"
+        )
 
     def test_http_status_maps_to_502(self):
         self._assert(
@@ -218,23 +216,22 @@ class DirectPlanDeadlineTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(5)
             return {}
 
-        with patch.object(direct_plan, "DIRECT_TRIP_DEADLINE_S", 0.05), patch.object(
-            direct_plan, "_plan_direct_trip_once", new=_slow_once
+        with (
+            patch.object(direct_plan, "DIRECT_TRIP_DEADLINE_S", 0.05),
+            patch.object(direct_plan, "_plan_direct_trip_once", new=_slow_once),
+            pytest.raises(direct_plan.DirectTripError) as raised,
         ):
-            with self.assertRaises(direct_plan.DirectTripError) as raised:
-                await direct_plan.plan_direct_trip(
-                    gtfs=None,
-                    origin_lat=40.7,
-                    origin_lng=-73.99,
-                    destination="Test Dest",
-                    destination_lat=None,
-                    destination_lng=None,
-                    timings={},
-                )
-        self.assertEqual(raised.exception.status_code, 503)
-        self.assertEqual(
-            raised.exception.detail, "Trip planning is temporarily unavailable."
-        )
+            await direct_plan.plan_direct_trip(
+                gtfs=None,
+                origin_lat=40.7,
+                origin_lng=-73.99,
+                destination="Test Dest",
+                destination_lat=None,
+                destination_lng=None,
+                timings={},
+            )
+        assert raised.value.status_code == 503
+        assert raised.value.detail == "Trip planning is temporarily unavailable."
 
     async def test_fast_planning_is_not_deadline_blocked(self):
         from app.services.trips import direct_plan
@@ -252,7 +249,7 @@ class DirectPlanDeadlineTests(unittest.IsolatedAsyncioTestCase):
                 destination_lng=None,
                 timings={},
             )
-        self.assertEqual(result, {"route": "Test Dest"})
+        assert result == {"route": "Test Dest"}
 
 
 if __name__ == "__main__":

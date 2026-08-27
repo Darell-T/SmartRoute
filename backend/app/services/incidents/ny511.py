@@ -22,7 +22,7 @@ import httpx
 from pydantic import BaseModel, Field
 
 from app import runtime
-
+import contextlib
 
 DEFAULT_API_URL = "https://511ny.org/api/v2/get/event"
 DEFAULT_POLL_INTERVAL_SECONDS = 300.0
@@ -114,7 +114,7 @@ class NY511Settings:
     fixture_path: str | None = None
 
     @classmethod
-    def from_env(cls) -> "NY511Settings":
+    def from_env(cls) -> NY511Settings:
         """Read optional server settings without making missing config fatal."""
         key = (os.getenv("NY511_API_KEY") or "").strip() or None
         raw_enabled = (os.getenv("NY511_ENABLED") or "true").strip().lower()
@@ -239,7 +239,7 @@ def _timestamp(value: Any) -> datetime | None:
         if isinstance(value, (int, float)) or (isinstance(value, str) and value.strip().isdigit()):
             return datetime.fromtimestamp(float(value), tz=UTC)
         if isinstance(value, str):
-            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+            parsed = datetime.fromisoformat(value.strip())
             return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
     except (OverflowError, OSError, ValueError):
         return None
@@ -504,7 +504,7 @@ class NY511Poller:
 
         def _read() -> list[Any]:
             try:
-                with open(fixture_path, "r", encoding="utf-8") as handle:
+                with open(fixture_path, encoding="utf-8") as handle:
                     payload = json.load(handle)
             except (OSError, ValueError, TypeError) as exc:
                 raise NY511FetchError("511NY fixture is malformed or unreadable", retryable=False) from exc
@@ -552,16 +552,12 @@ class NY511Poller:
         if self._task is None:
             return
         self._task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await self._task
-        except asyncio.CancelledError:
-            pass
         self._task = None
 
     async def _run(self) -> None:
         while not self._stop_event.is_set():
             await self.refresh()
-            try:
+            with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self._stop_event.wait(), timeout=self.settings.poll_interval_seconds)
-            except asyncio.TimeoutError:
-                pass

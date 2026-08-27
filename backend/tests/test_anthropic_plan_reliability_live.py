@@ -12,19 +12,21 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from app.services.agent import loop, session as session_module
-from app.services.agent.tools.transit import check_transit
-from app.services.agent.tools.places import discover_places
-from app.services.agent.tools.location_resolution import ResolvedPlace
+from app.services.agent import loop
+from app.services.agent import session as session_module
 from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.location_resolution import ResolvedPlace
+from app.services.agent.tools.places import discover_places
 from app.services.agent.tools.route.route_projection import first_boarding_context
-from app.services.trips.itinerary import build_canonical_itinerary
+from app.services.agent.tools.transit import check_transit
 from app.services.mta.static_gtfs.stop_patterns import StopPatternIndex
+from app.services.trips.itinerary import build_canonical_itinerary
+
 from tests.agent_route_decision_test_support import _prepared_leg, _route
 from tests.anthropic_live_fixtures import _prepared_route
 from tests.anthropic_live_support import (
-    AnthropicLiveAgentContractMixin,
     LIVE_ENABLED,
+    AnthropicLiveAgentContractMixin,
     _passenger_text,
     _safe_trace_diagnostics,
     _tool_names,
@@ -86,10 +88,15 @@ def _kyuramen_branches() -> ToolResult:
     )
 
 
-async def _branch_route(*args, **kwargs):
+class MissingVerifiedDestinationError(AssertionError):
+    def __init__(self) -> None:
+        super().__init__("branch comparison must use a verified destination")
+
+
+async def _branch_route(*_args, **kwargs):
     destination = kwargs.get("resolved_destination")
     if destination is None:
-        raise AssertionError("branch comparison must use a verified destination")
+        raise MissingVerifiedDestinationError()
     name = destination.name.casefold()
     if "forest hills" in name:
         route = _route(
@@ -116,7 +123,7 @@ async def _branch_route(*args, **kwargs):
     )
 
 
-async def _jfk_routes(*args, **kwargs):
+async def _jfk_routes(*_args, **_kwargs):
     destination = ResolvedPlace(
         "John F. Kennedy International Airport",
         40.6413,
@@ -141,7 +148,7 @@ async def _jfk_routes(*args, **kwargs):
     )
 
 
-async def _msg_routes(*args, **kwargs):
+async def _msg_routes(*_args, **_kwargs):
     destination = ResolvedPlace(
         "Madison Square Garden",
         40.7505,
@@ -217,19 +224,7 @@ class AnthropicPlanLiveFixtureContractTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
-        self.assertEqual(
-            _safe_trace_diagnostics(trace),
-            {
-                "trace_id": "1" * 32,
-                "model_request_count": 3,
-                "candidate_ids": ["candidate-1"],
-                "candidate_family_count": 2,
-                "evidence_handles": ["set-1"],
-                "selection_source": "model",
-                "correction_count": 1,
-                "completion_result": "completed",
-            },
-        )
+        assert _safe_trace_diagnostics(trace) == {"trace_id": "1" * 32, "model_request_count": 3, "candidate_ids": ["candidate-1"], "candidate_family_count": 2, "evidence_handles": ["set-1"], "selection_source": "model", "correction_count": 1, "completion_result": "completed"}
 
     async def test_kyuramen_fixture_intercepts_the_active_provider_boundary(self) -> None:
         provider = AsyncMock(return_value=_kyuramen_branches())
@@ -261,8 +256,8 @@ class AnthropicPlanLiveFixtureContractTests(unittest.IsolatedAsyncioTestCase):
                 ctx,
             )
 
-        self.assertTrue(result.ok, result.error)
-        self.assertGreaterEqual(len(result.data.get("places") or []), 2)
+        assert result.ok, result.error
+        assert len(result.data.get("places") or []) >= 2
         provider.assert_awaited_once()
 
 
@@ -295,17 +290,17 @@ class AnthropicPlanReliabilityLiveTests(
         self._report("nearby_multi_branch_model_choice", rider, events, trace)
         self._assert_completed(events)
         names = _tool_names(trace)
-        self.assertIn("discover_places", names)
-        self.assertIn("prepare_route_options", names)
-        self.assertIn("present_route", names)
+        assert "discover_places" in names
+        assert "prepare_route_options" in names
+        assert "present_route" in names
         prepare_input = _present_input(trace, "prepare_route_options")
-        self.assertGreaterEqual(len(prepare_input.get("destination_place_ids") or []), 2)
+        assert len(prepare_input.get("destination_place_ids") or []) >= 2
         card = next(event for event in events if event.type == "route_card")
-        self.assertIn("park slope", str(card.destination.get("label") or "").casefold())
+        assert "park slope" in str(card.destination.get("label") or "").casefold()
         decision = card.selection_decision or {}
-        self.assertEqual(decision.get("selection_source"), "model")
-        self.assertIn(decision.get("reason_code"), {"less_walking", "reasonable_local_option"})
-        self.assertNotIn("forest hills", _passenger_text(events).casefold())
+        assert decision.get("selection_source") == "model"
+        assert decision.get("reason_code") in {"less_walking", "reasonable_local_option"}
+        assert "forest hills" not in _passenger_text(events).casefold()
 
     async def test_jfk_fewer_transfers_controls_the_rationale(self) -> None:
         rider = "Get me to JFK with fewer transfers because I have a large suitcase."
@@ -318,16 +313,13 @@ class AnthropicPlanReliabilityLiveTests(
         self._report("jfk_fewer_transfers", rider, events, trace)
         self._assert_completed(events)
         prepare_input = _present_input(trace, "prepare_route_options")
-        self.assertEqual(prepare_input.get("routing_preference"), "FEWER_TRANSFERS")
+        assert prepare_input.get("routing_preference") == "FEWER_TRANSFERS"
         present_input = _present_input(trace, "present_route")
-        self.assertEqual(present_input.get("reason_code"), "fewer_transfers")
+        assert present_input.get("reason_code") == "fewer_transfers"
         card = next(event for event in events if event.type == "route_card")
         decision = card.selection_decision or {}
-        self.assertEqual(decision.get("reason_code"), "fewer_transfers")
-        self.assertNotIn(
-            (card.summary or {}).get("reason"),
-            {"fastest", "less_walking"},
-        )
+        assert decision.get("reason_code") == "fewer_transfers"
+        assert (card.summary or {}).get("reason") not in {"fastest", "less_walking"}
 
     async def test_msg_crowd_gap_stays_visible_and_grounded(self) -> None:
         rider = "Get me to Madison Square Garden and avoid crowds."
@@ -340,20 +332,14 @@ class AnthropicPlanReliabilityLiveTests(
         self._report("msg_avoid_crowds_limitation", rider, events, trace)
         self._assert_completed(events)
         prepare_input = _present_input(trace, "prepare_route_options")
-        self.assertTrue(prepare_input.get("avoid_crowds"))
+        assert prepare_input.get("avoid_crowds")
         present_input = _present_input(trace, "present_route")
-        self.assertNotEqual(
-            present_input.get("reason_code"),
-            "lower_event_crowd_exposure",
-        )
+        assert present_input.get("reason_code") != "lower_event_crowd_exposure"
         text = _passenger_text(events).casefold()
-        self.assertIn("crowd", text)
-        self.assertTrue("could not" in text or "couldn't" in text or "partial" in text)
+        assert "crowd" in text
+        assert "could not" in text or "couldn't" in text or "partial" in text
         card = next(event for event in events if event.type == "route_card")
-        self.assertNotEqual(
-            (card.selection_decision or {}).get("reason_code"),
-            "lower_event_crowd_exposure",
-        )
+        assert (card.selection_decision or {}).get("reason_code") != "lower_event_crowd_exposure"
 
     async def test_accepted_b_trip_supplies_direction_without_asking(self) -> None:
         index = StopPatternIndex.load()
@@ -404,14 +390,14 @@ class AnthropicPlanReliabilityLiveTests(
         self._report("accepted_b_direction", rider, events, trace)
         self._assert_completed(events)
         names = _tool_names(trace)
-        self.assertIn("check_transit", names)
-        self.assertIn("present_transit", names)
-        self.assertNotIn("clarification", events[-1].terminal_state)
+        assert "check_transit" in names
+        assert "present_transit" in names
+        assert "clarification" not in events[-1].terminal_state
         status_mock.assert_awaited_once()
-        self.assertEqual(status_mock.await_args.args[1]["direction"], "uptown")
+        assert status_mock.await_args.args[1]["direction"] == "uptown"
         text = _passenger_text(events).casefold()
-        self.assertIn("delay", text)
-        self.assertNotIn("which direction", text)
+        assert "delay" in text
+        assert "which direction" not in text
 
     async def test_ordinary_route_completes_without_an_optional_offer(self) -> None:
         rider = "Route me to Union Square."
@@ -431,15 +417,15 @@ class AnthropicPlanReliabilityLiveTests(
             for name, tool_input in trace.tool_calls
             if name == "present_route"
         ]
-        self.assertTrue(present_inputs)
+        assert present_inputs
         present_input = present_inputs[-1]
-        self.assertEqual(present_input.get("follow_up"), "")
+        assert present_input.get("follow_up") == ""
         lead_in = str(present_input.get("lead_in") or "").strip()
-        self.assertTrue(lead_in)
+        assert lead_in
         passenger_text = _passenger_text(events)
         lowered = passenger_text.casefold()
-        self.assertIn(lead_in.casefold(), lowered)
-        self.assertNotIn("?", passenger_text)
+        assert lead_in.casefold() in lowered
+        assert "?" not in passenger_text
         for generic in (
             "this option satisfies the required trip constraints",
             "fits the trip",
@@ -455,11 +441,11 @@ class AnthropicPlanReliabilityLiveTests(
             "evidence",
             "constraints",
         ):
-            self.assertNotIn(generic, lowered)
+            assert generic not in lowered
         card = next(event for event in events if event.type == "route_card")
         decision = card.selection_decision or {}
         reason_code = str(decision.get("reason_code") or "")
-        self.assertEqual(reason_code, present_input.get("reason_code"))
+        assert reason_code == present_input.get("reason_code")
         structured_codes = {
             str(reason.get("code") or "")
             for reason in (card.itinerary or {}).get(
@@ -467,7 +453,7 @@ class AnthropicPlanReliabilityLiveTests(
             )
             if isinstance(reason, dict)
         }
-        self.assertIn(reason_code, structured_codes)
+        assert reason_code in structured_codes
         reason_terms = {
             "fastest": ("fast", "quick"),
             "less_walking": ("walk",),
@@ -487,11 +473,8 @@ class AnthropicPlanReliabilityLiveTests(
             "coverage_gap": ("coverage", "could not", "couldn't"),
             "accessibility": ("accessible", "elevator", "stairs"),
         }
-        self.assertIn(reason_code, reason_terms)
-        self.assertTrue(
-            any(term in lowered for term in reason_terms[reason_code]),
-            (reason_code, lead_in),
-        )
+        assert reason_code in reason_terms
+        assert any(term in lowered for term in reason_terms[reason_code]), (reason_code, lead_in)
         route_shape_claim = re.search(
             r"\bdirect\b|straightforward|transfer[- ]free",
             lowered,
@@ -502,16 +485,16 @@ class AnthropicPlanReliabilityLiveTests(
                 "transfer_count",
                 (card.summary or {}).get("transfers"),
             )
-            self.assertIsNotNone(transfer_count)
-            self.assertEqual(int(transfer_count), 0)
+            assert transfer_count is not None
+            assert int(transfer_count) == 0
             transit_legs = [
                 leg
                 for leg in (itinerary.get("legs") or [])
                 if str(leg.get("mode") or "").upper() != "WALK"
             ]
             if route_shape_claim.group(0) != "straightforward":
-                self.assertLessEqual(len(transit_legs), 1)
-        self.assertEqual(sum(event.type == "route_card" for event in events), 1)
+                assert len(transit_legs) <= 1
+        assert sum(event.type == "route_card" for event in events) == 1
 
 
 if __name__ == "__main__":

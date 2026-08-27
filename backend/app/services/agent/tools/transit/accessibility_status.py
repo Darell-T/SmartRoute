@@ -21,10 +21,10 @@ from __future__ import annotations
 import json
 import os
 
-from app.services.agent.tools.provider_http import fetch_json
-from app.services.agent.tools._types import ToolContext, ToolResult
-from app.services.trips import text
 from app.services import cache
+from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.provider_http import fetch_json
+from app.services.trips import text
 
 # The MTA's current elevator/escalator outage feed -- same api-endpoint.mta.info
 # data-service host as the GTFS-RT feeds in app/services/mta/config.py, no API

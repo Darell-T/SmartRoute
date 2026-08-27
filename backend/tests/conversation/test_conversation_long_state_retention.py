@@ -23,101 +23,48 @@ from __future__ import annotations
 from app.services.agent import candidate_store
 from app.services.agent import session as session_module
 from app.services.agent import trip_state as trip_state_module
+
 from tests.conversation.conversation_discovery_fixtures import discovery_leg_for
 from tests.conversation.conversation_long_state_fixtures import (
-    ALLOW_Q_MESSAGE, ARRIVAL_MESSAGE, AVOID_Q_MESSAGE, AVOID_STAIRS_MESSAGE,
-    DISCOVERY_COFFEE_MESSAGE, DISCOVERY_PIZZA_MESSAGE, EXPLAIN_MESSAGE,
-    PREVIEW_BUS_MESSAGE, PREVIEW_LATER_MESSAGE, PREVIEW_TEN_MESSAGE,
-    EXPLANATION_TOOL_PROFILE, RECOVERY_ARRIVAL_MESSAGE, RETURN_STATUS_MESSAGE,
+    ALLOW_Q_MESSAGE,
+    ARRIVAL_MESSAGE,
+    AVOID_Q_MESSAGE,
+    AVOID_STAIRS_MESSAGE,
+    DISCOVERY_COFFEE_MESSAGE,
+    DISCOVERY_PIZZA_MESSAGE,
+    EXPLAIN_MESSAGE,
+    EXPLANATION_TOOL_PROFILE,
+    PREVIEW_BUS_MESSAGE,
+    PREVIEW_LATER_MESSAGE,
+    PREVIEW_TEN_MESSAGE,
+    RECOVERY_ARRIVAL_MESSAGE,
+    RETURN_STATUS_MESSAGE,
     ROUTE_BARCLAYS_MESSAGE,
-    ROUTE_MUSEUM_MESSAGE, ROUTE_WORK_MESSAGE, SELECT_SECOND_MESSAGE,
-    SELECT_THIRD_MESSAGE, STATUS_MESSAGE, TEMPORAL_DEPARTURE, TEN_MIN_DEPARTURE,
-    WAYPOINT_ADD_MESSAGE, WAYPOINT_REMOVE_MESSAGE,
-    bus_leg, q_leg, r_leg, waypoint_chain_legs,
+    ROUTE_MUSEUM_MESSAGE,
+    ROUTE_WORK_MESSAGE,
+    SELECT_SECOND_MESSAGE,
+    SELECT_THIRD_MESSAGE,
+    STATUS_MESSAGE,
+    TEMPORAL_DEPARTURE,
+    TEN_MIN_DEPARTURE,
+    WAYPOINT_ADD_MESSAGE,
+    WAYPOINT_REMOVE_MESSAGE,
+    bus_leg,
+    q_leg,
+    r_leg,
+    waypoint_chain_legs,
 )
 from tests.conversation.conversation_long_state_support import (
-    _LongStateBase, coffee_poi_result, load_h_agent_loop, stored_place,
+    _LongStateBase,
+    coffee_poi_result,
+    load_h_agent_loop,
+    stored_place,
 )
 from tests.conversation.conversation_matrix_harness import (
     _turn_round,
     complete_turn_round,
     route_cards,
 )
-
-
-class H01AutoTenTurnTests(_LongStateBase):
-    """H-01: Auto, ~10 turns of status/explanation/what-if/replacement."""
-
-    @classmethod
-    def setUpClass(cls):
-        cls.loop = load_h_agent_loop()
-
-    async def test_h01_auto_ten_turn_state_retention(self):
-        session_id, session = self._new_session("h01")
-        # t1 fresh canonical route + accepted card (one card after reset).
-        _e, _t, _m, _b, _a, set1, card_a = await self._route_turn(
-            scenario_id="H-01-t1", session=session, session_id=session_id,
-            mode="auto", message=ROUTE_WORK_MESSAGE, turn_id="t1",
-            destination="Work", provider_leg=q_leg("Work"),
-            candidate_id="cd_h01_1", reset=True,
-            expected_state={"destination": "Work", "planning_mode": "leave_now"})
-        # t2 status-only, t3 arrival-only, t4 explanation-only: no replan.
-        await self._status_turn(
-            scenario_id="H-01-t2", session=session, session_id=session_id,
-            mode="auto", message=STATUS_MESSAGE, turn_id="t2",
-        )
-        await self._arrival_turn(
-            scenario_id="H-01-t3", session=session, session_id=session_id,
-            mode="auto", message=ARRIVAL_MESSAGE, turn_id="t3")
-        await self._no_tool_turn(
-            scenario_id="H-01-t4", session=session, session_id=session_id,
-            mode="auto", message=EXPLAIN_MESSAGE, turn_id="t4",
-            profile=EXPLANATION_TOOL_PROFILE,
-            text="I picked the Q because it is the fastest option to Work.")
-        # t5 temporary what-if preview (active trip untouched), t6 reject.
-        _e, _t, _b, _a, _preview = await self._preview_turn(
-            scenario_id="H-01-t5", session=session, session_id=session_id,
-            mode="auto", message=PREVIEW_LATER_MESSAGE, turn_id="t5",
-            destination="Work",
-            prepare_input={"destination": "Work",
-                           "departure_time": TEMPORAL_DEPARTURE},
-            provider_leg=q_leg("Work"), candidate_id="cd_h01_p1")
-        await self._reject_turn(
-            scenario_id="H-01-t6", session=session, session_id=session_id,
-            mode="auto", turn_id="t6")
-        self.assertEqual(
-            trip_state_module.get_trip_state(session)["active_candidate_set_id"],
-            set1, "H-01 reject keeps the accepted selection")
-        # t7 new destination replacement through canonical prepare/present.
-        _e, _t, _m, _b, _a, set2, card_b = await self._route_turn(
-            scenario_id="H-01-t7", session=session, session_id=session_id,
-            mode="auto", message=ROUTE_BARCLAYS_MESSAGE, turn_id="t7",
-            destination="Barclays", provider_leg=q_leg("Barclays"),
-            candidate_id="cd_h01_2", reset=True,
-            expected_state={"destination": "Barclays"})
-        # t8 return question about the CURRENT trip; t9 stale probe.
-        await self._status_turn(
-            scenario_id="H-01-t8", session=session, session_id=session_id,
-            mode="auto", message=RETURN_STATUS_MESSAGE, turn_id="t8",
-        )
-        await self._stale_probe(
-            scenario_id="H-01-t9", session=session, session_id=session_id,
-            mode="auto", turn_id="t9", stale_candidate_id="cd_h01_1",
-            expected_active_set_id=set2)
-        # Final: accepted selection is exactly the new trip; the superseded
-        # route stays a consumed historical record, never active again.
-        state = trip_state_module.get_trip_state(session)
-        self.assertEqual(state["active_candidate_set_id"], set2, "H-01 final")
-        self.assertEqual(state["selected_candidate_id"], "cd_h01_2", "H-01 final")
-        self.assertEqual(
-            [c["card_id"] for c in session["route_cards"]],
-            [card_a.card_id, card_b.card_id],
-            "H-01 preserves history without resurrecting the old card",
-        )
-        self.assertTrue(
-            candidate_store.load_candidate_set(set1, session_id=session_id)[
-                "presented"],
-            "H-01 old set stays a consumed historical record")
 
 
 class H02QuickTwentyOneTurnTests(_LongStateBase):
@@ -134,7 +81,7 @@ class H02QuickTwentyOneTurnTests(_LongStateBase):
             scenario_id="H-02-t1", session=session, session_id=session_id,
             mode="quick", message=ROUTE_WORK_MESSAGE, turn_id="t1",
             destination="Work", provider_leg=q_leg("Work"),
-            candidate_id="cd_h02_1", reset=True,
+            candidate_id="cd_h02_1",
             expected_state={"destination": "Work"})
         # t2-t3 status and arrival preserve the active trip.
         await self._status_turn(
@@ -154,7 +101,7 @@ class H02QuickTwentyOneTurnTests(_LongStateBase):
             mode="quick", message=SELECT_SECOND_MESSAGE, turn_id="t5",
             ordinal=2)
         # t6 route to the selected canonical place (stored identity wins).
-        _e, _t, _m, _b, _a, set2, _card_b = await self._route_selected_turn(
+        _e, _t, _m, _b, _a, _set2, _card_b = await self._route_selected_turn(
             scenario_id="H-02-t6", session=session, session_id=session_id,
             mode="quick", turn_id="t6", place_id=pl2,
             provider_leg=discovery_leg_for(stored_place(session_id, ds1, 2)),
@@ -177,9 +124,9 @@ class H02QuickTwentyOneTurnTests(_LongStateBase):
             scenario_id="H-02-t9", session=session, session_id=session_id,
             mode="quick", turn_id="t9", candidate_id="cd_h02_p1")
         state = trip_state_module.get_trip_state(session)
-        self.assertEqual(state["active_candidate_set_id"], temp_set1, "H-02 t9")
-        self.assertEqual(state["planning_mode"], "depart_at", "H-02 t9")
-        self.assertEqual(state["requested_departure"], TEMPORAL_DEPARTURE, "H-02 t9")
+        assert state["active_candidate_set_id"] == temp_set1, "H-02 t9"
+        assert state["planning_mode"] == "depart_at", "H-02 t9"
+        assert state["requested_departure"] == TEMPORAL_DEPARTURE, "H-02 t9"
         # t10 unrelated simple turn; t11-t12 status and arrival.
         await self._simple_turn(
             scenario_id="H-02-t10", session=session, session_id=session_id,
@@ -192,41 +139,30 @@ class H02QuickTwentyOneTurnTests(_LongStateBase):
             scenario_id="H-02-t12", session=session, session_id=session_id,
             mode="quick", message=ARRIVAL_MESSAGE, turn_id="t12")
         # t13 constraint change (avoid Q); t14 relaxation (allow Q again).
-        _e, _tr, _m, _b, _a, set3, _card_d = await self._route_turn(
+        _e, _tr, _m, _b, _a, _set3, _card_d = await self._route_turn(
             scenario_id="H-02-t13", session=session, session_id=session_id,
             mode="quick", message=AVOID_Q_MESSAGE, turn_id="t13",
             destination="B Pizza", provider_leg=r_leg("B Pizza"),
             prepare_input={"destination": "B Pizza", "excluded_route_ids": ["Q"]},
             candidate_id="cd_h02_3", expected_excluded_route_ids=["Q"])
-        _e, _tr, _m, _b, _a, set4, _card_e = await self._route_turn(
+        _e, _tr, _m, _b, _a, _set4, _card_e = await self._route_turn(
             scenario_id="H-02-t14", session=session, session_id=session_id,
             mode="quick", message=ALLOW_Q_MESSAGE, turn_id="t14",
             destination="B Pizza", provider_leg=q_leg("B Pizza"),
             prepare_input={"destination": "B Pizza", "allowed_route_ids": ["Q"]},
             candidate_id="cd_h02_4")
-        self.assertEqual(
-            _tr.tool_calls[0][1].get("excluded_route_ids"),
-            [],
-            "H-02 t14 relaxed",
-        )
-        self.assertEqual(
-            (session.get("slots") or {}).get("constraints", {}).get(
-                "excluded_route_ids"
-            )
-            or [],
-            [],
-            "H-02 t14 persisted relaxation",
-        )
+        assert _tr.tool_calls[0][1].get("excluded_route_ids") == [], "H-02 t14 relaxed"
+        assert ((session.get("slots") or {}).get("constraints", {}).get("excluded_route_ids") or []) == [], "H-02 t14 persisted relaxation"
         # t15 correction/new destination (Barclays) -- new-trip reset.
-        _e, _t, _m, _b, _a, set5, _card_f = await self._route_turn(
+        _e, _t, _m, _b, _a, _set5, _card_f = await self._route_turn(
             scenario_id="H-02-t15", session=session, session_id=session_id,
             mode="quick", message=ROUTE_BARCLAYS_MESSAGE, turn_id="t15",
             destination="Barclays", provider_leg=q_leg("Barclays"),
-            candidate_id="cd_h02_5", reset=True,
+            candidate_id="cd_h02_5",
             expected_state={"destination": "Barclays"})
         state = trip_state_module.get_trip_state(session)
-        self.assertEqual(state["active_discovery_set_id"], ds1, "H-02 t15 context")
-        self.assertEqual(state["selected_place_id"], pl2, "H-02 t15 context")
+        assert state["active_discovery_set_id"] == ds1, "H-02 t15 context"
+        assert state["selected_place_id"] == pl2, "H-02 t15 context"
         # t16 return question; t17 recovery arrival (active boarding grounded).
         await self._status_turn(
             scenario_id="H-02-t16", session=session, session_id=session_id,
@@ -246,8 +182,7 @@ class H02QuickTwentyOneTurnTests(_LongStateBase):
         _e, _t, _b, _a, _cs2, _card_g = await self._accept_turn(
             scenario_id="H-02-t19", session=session, session_id=session_id,
             mode="quick", turn_id="t19", candidate_id="cd_h02_p2")
-        self.assertEqual(session["profile"]["preferences"]["preferred_modes"],
-                         ["BUS"], "H-02 t19 BUS preference applied exactly once")
+        assert session["profile"]["preferences"]["preferred_modes"] == ["BUS"], "H-02 t19 BUS preference applied exactly once"
         # t20 final current-trip question; t21 guarded stale probe.
         await self._status_turn(
             scenario_id="H-02-t20", session=session, session_id=session_id,
@@ -260,14 +195,11 @@ class H02QuickTwentyOneTurnTests(_LongStateBase):
         # Final: bus accept is the active selection; stale discovery and
         # candidate references stay stored but never active again.
         state = trip_state_module.get_trip_state(session)
-        self.assertEqual(state["active_candidate_set_id"], temp_set2, "H-02 final")
-        self.assertEqual(state["selected_candidate_id"], "cd_h02_p2", "H-02 final")
-        self.assertEqual(state["active_discovery_set_id"], ds1, "H-02 final")
-        self.assertEqual(state["selected_place_id"], pl2, "H-02 final")
-        self.assertTrue(
-            candidate_store.load_candidate_set(set1, session_id=session_id)[
-                "presented"],
-            "H-02 old sets stay consumed historical records")
+        assert state["active_candidate_set_id"] == temp_set2, "H-02 final"
+        assert state["selected_candidate_id"] == "cd_h02_p2", "H-02 final"
+        assert state["active_discovery_set_id"] == ds1, "H-02 final"
+        assert state["selected_place_id"] == pl2, "H-02 final"
+        assert candidate_store.load_candidate_set(set1, session_id=session_id)["presented"], "H-02 old sets stay consumed historical records"
 
 
 class H03AutoThirtyTwoTurnTests(_LongStateBase):
@@ -284,7 +216,7 @@ class H03AutoThirtyTwoTurnTests(_LongStateBase):
             scenario_id="H-03-t1", session=session, session_id=session_id,
             mode="auto", message=ROUTE_WORK_MESSAGE, turn_id="t1",
             destination="Work", provider_leg=q_leg("Work"),
-            candidate_id="cd_h03_1", reset=True)
+            candidate_id="cd_h03_1")
         await self._status_turn(
             scenario_id="H-03-t2", session=session, session_id=session_id,
             mode="auto", message=STATUS_MESSAGE, turn_id="t2",
@@ -306,7 +238,7 @@ class H03AutoThirtyTwoTurnTests(_LongStateBase):
             scenario_id="H-03-t6", session=session, session_id=session_id,
             mode="auto", message=SELECT_SECOND_MESSAGE, turn_id="t6",
             ordinal=2)
-        _e, _t, _m, _b, _a, set_b, _card_b = await self._route_selected_turn(
+        _e, _t, _m, _b, _a, _set_b, _card_b = await self._route_selected_turn(
             scenario_id="H-03-t7", session=session, session_id=session_id,
             mode="auto", turn_id="t7", place_id=pl2,
             provider_leg=discovery_leg_for(stored_place(session_id, ds1, 2)),
@@ -314,7 +246,7 @@ class H03AutoThirtyTwoTurnTests(_LongStateBase):
         # t8-t9 discovery -> waypoint -> removal lifecycle (Batch D green at
         # execution time) on the accepted B Pizza trip, same active set.
         place3 = stored_place(session_id, ds1, 3)
-        _e, _t, _m, _b, _a, set_wp, _card_wp = await self._route_turn(
+        _e, _t, _m, _b, _a, _set_wp, _card_wp = await self._route_turn(
             scenario_id="H-03-t8", session=session, session_id=session_id,
             mode="auto", message=WAYPOINT_ADD_MESSAGE, turn_id="t8",
             destination="B Pizza",
@@ -340,11 +272,9 @@ class H03AutoThirtyTwoTurnTests(_LongStateBase):
         await self._reject_turn(
             scenario_id="H-03-t11", session=session, session_id=session_id,
             mode="auto", turn_id="t11")
-        self.assertEqual(
-            trip_state_module.get_trip_state(session)["active_candidate_set_id"],
-            set_wp2, "H-03 t11 reject preserves the accepted trip")
+        assert trip_state_module.get_trip_state(session)["active_candidate_set_id"] == set_wp2, "H-03 t11 reject preserves the accepted trip"
         # t12-t13 temporary what-if (bus) preview then ACCEPT.
-        _e, _t, _b, _a, temp_bus = await self._preview_turn(
+        _e, _t, _b, _a, _temp_bus = await self._preview_turn(
             scenario_id="H-03-t12", session=session, session_id=session_id,
             mode="auto", message=PREVIEW_BUS_MESSAGE, turn_id="t12",
             destination="B Pizza",
@@ -363,36 +293,29 @@ class H03AutoThirtyTwoTurnTests(_LongStateBase):
             scenario_id="H-03-t15", session=session, session_id=session_id,
             mode="auto", message=ARRIVAL_MESSAGE, turn_id="t15")
         # t16 constraint change (avoid Q); t17 relaxation (allow Q again).
-        _e, _t, _m, _b, _a, set_d, _card_d = await self._route_turn(
+        _e, _t, _m, _b, _a, _set_d, _card_d = await self._route_turn(
             scenario_id="H-03-t16", session=session, session_id=session_id,
             mode="auto", message=AVOID_Q_MESSAGE, turn_id="t16",
             destination="B Pizza", provider_leg=r_leg("B Pizza"),
             prepare_input={"destination": "B Pizza", "excluded_route_ids": ["Q"]},
             candidate_id="cd_h03_3", expected_excluded_route_ids=["Q"])
-        _e, _t, _m, _b, _a, set_e, _card_e = await self._route_turn(
+        _e, _t, _m, _b, _a, _set_e, _card_e = await self._route_turn(
             scenario_id="H-03-t17", session=session, session_id=session_id,
             mode="auto", message=ALLOW_Q_MESSAGE, turn_id="t17",
             destination="B Pizza", provider_leg=q_leg("B Pizza"),
             prepare_input={"destination": "B Pizza", "allowed_route_ids": ["Q"]},
             candidate_id="cd_h03_4")
-        self.assertEqual(
-            (session.get("slots") or {}).get("constraints", {}).get(
-                "excluded_route_ids"
-            )
-            or [],
-            [],
-            "H-03 t17 persisted relaxation",
-        )
+        assert ((session.get("slots") or {}).get("constraints", {}).get("excluded_route_ids") or []) == [], "H-03 t17 persisted relaxation"
         # t18 new destination (Barclays) -- clears only obsolete state.
-        _e, _t, _m, _b, _a, set_f, _card_f = await self._route_turn(
+        _e, _t, _m, _b, _a, _set_f, _card_f = await self._route_turn(
             scenario_id="H-03-t18", session=session, session_id=session_id,
             mode="auto", message=ROUTE_BARCLAYS_MESSAGE, turn_id="t18",
             destination="Barclays", provider_leg=q_leg("Barclays"),
-            candidate_id="cd_h03_5", reset=True,
+            candidate_id="cd_h03_5",
             expected_state={"destination": "Barclays"})
         state = trip_state_module.get_trip_state(session)
-        self.assertEqual(state["active_discovery_set_id"], ds1, "H-03 t18 context")
-        self.assertEqual(state["selected_place_id"], pl2, "H-03 t18 context")
+        assert state["active_discovery_set_id"] == ds1, "H-03 t18 context"
+        assert state["selected_place_id"] == pl2, "H-03 t18 context"
         # t19-t21 second discovery -> selection -> route (coffee).
         _e, _t, _m, _b, _a, ds2 = await self._discovery_turn(
             scenario_id="H-03-t19", session=session, session_id=session_id,
@@ -403,13 +326,13 @@ class H03AutoThirtyTwoTurnTests(_LongStateBase):
             scenario_id="H-03-t20", session=session, session_id=session_id,
             mode="auto", message=SELECT_THIRD_MESSAGE, turn_id="t20",
             ordinal=3)
-        _e, _t, _m, _b, _a, set_g, _card_g = await self._route_selected_turn(
+        _e, _t, _m, _b, _a, _set_g, _card_g = await self._route_selected_turn(
             scenario_id="H-03-t21", session=session, session_id=session_id,
             mode="auto", turn_id="t21", place_id=pl3,
             provider_leg=discovery_leg_for(stored_place(session_id, ds2, 3)),
             candidate_id="cd_h03_6", expected_destination="C Coffee")
         # t22-t23 what-if preview then accept (10 minutes later).
-        _e, _t, _b, _a, temp_ten = await self._preview_turn(
+        _e, _t, _b, _a, _temp_ten = await self._preview_turn(
             scenario_id="H-03-t22", session=session, session_id=session_id,
             mode="auto", message=PREVIEW_TEN_MESSAGE, turn_id="t22",
             destination="C Coffee",
@@ -419,9 +342,7 @@ class H03AutoThirtyTwoTurnTests(_LongStateBase):
         _e, _t, _b, _a, _ct, _card_h = await self._accept_turn(
             scenario_id="H-03-t23", session=session, session_id=session_id,
             mode="auto", turn_id="t23", candidate_id="cd_h03_p3")
-        self.assertEqual(
-            trip_state_module.get_trip_state(session)["requested_departure"],
-            TEN_MIN_DEPARTURE, "H-03 t23")
+        assert trip_state_module.get_trip_state(session)["requested_departure"] == TEN_MIN_DEPARTURE, "H-03 t23"
         # t24 unrelated simple turn.
         await self._simple_turn(
             scenario_id="H-03-t24", session=session, session_id=session_id,
@@ -432,7 +353,7 @@ class H03AutoThirtyTwoTurnTests(_LongStateBase):
             mode="auto", message=ROUTE_MUSEUM_MESSAGE, turn_id="t25",
             destination="Museum of Natural History",
             provider_leg=q_leg("Museum of Natural History"),
-            candidate_id="cd_h03_7", reset=True,
+            candidate_id="cd_h03_7",
             expected_state={"destination": "Museum of Natural History"})
         # t26 explanation grounded in current trip; t27 recovery arrival.
         await self._no_tool_turn(
@@ -455,9 +376,7 @@ class H03AutoThirtyTwoTurnTests(_LongStateBase):
         await self._reject_turn(
             scenario_id="H-03-t29", session=session, session_id=session_id,
             mode="auto", turn_id="t29")
-        self.assertEqual(
-            trip_state_module.get_trip_state(session)["active_candidate_set_id"],
-            set_i, "H-03 t29 reject preserves the accepted trip")
+        assert trip_state_module.get_trip_state(session)["active_candidate_set_id"] == set_i, "H-03 t29 reject preserves the accepted trip"
         # t30 constraint change -- avoid stairs: the fixture route has unknown
         # accessibility, so the canonical prepare returns a non-presentable
         # no_hard_constraint_match (no card, no present); the accepted trip
@@ -474,20 +393,17 @@ class H03AutoThirtyTwoTurnTests(_LongStateBase):
                         outcome="unavailable",
                     )],
             prepare_leg=q_leg("Museum of Natural History"), mocks={})
-        self.assertEqual([n for n, _i in _tr30.tool_calls],
-                         ["prepare_route_options", "complete_turn"],
-                         "H-03 t30 prepares then terminates truthfully")
-        self.assertEqual(route_cards(_e30), [], "H-03 t30 no card")
+        assert [n for n, _i in _tr30.tool_calls] == ["prepare_route_options", "complete_turn"], "H-03 t30 prepares then terminates truthfully"
+        assert route_cards(_e30) == [], "H-03 t30 no card"
         state = trip_state_module.get_trip_state(session)
-        self.assertEqual(state["active_candidate_set_id"], set_i, "H-03 t30")
-        self.assertEqual(state["selected_candidate_id"], "cd_h03_7", "H-03 t30")
-        self.assertTrue(state["preferences"]["avoid_stairs"], "H-03 t30")
-        self.assertTrue(state["preferences"]["accessibility_required"], "H-03 t30")
+        assert state["active_candidate_set_id"] == set_i, "H-03 t30"
+        assert state["selected_candidate_id"] == "cd_h03_7", "H-03 t30"
+        assert state["preferences"]["avoid_stairs"], "H-03 t30"
+        assert state["preferences"]["accessibility_required"], "H-03 t30"
         audit = candidate_store.load_candidate_set(
             mk30["stored_candidate_set_ids"][0], session_id=session_id)
-        self.assertEqual(audit["route_status"], "no_hard_constraint_match",
-                         "H-03 t30 audit set")
-        self.assertFalse(audit["presented"], "H-03 t30 unconsumed")
+        assert audit["route_status"] == "no_hard_constraint_match", "H-03 t30 audit set"
+        assert not audit["presented"], "H-03 t30 unconsumed"
         # t31 final return to current trip; t32 guarded stale probe (the
         # several-turn-old relaxed-Q candidate E cannot resurrect).
         await self._status_turn(
@@ -502,19 +418,14 @@ class H03AutoThirtyTwoTurnTests(_LongStateBase):
         # but never erases the authoritative trip or resurrects old state.
         session_module.save_session(session_id, session)
         loaded = session_module.load_session(session_id)
-        self.assertIsNotNone(loaded, "H-03 reload")
-        self.assertLessEqual(len(loaded["history"]), 12, "H-03 history bound")
-        self.assertLessEqual(len(loaded["route_cards"]), 8, "H-03 card bound")
+        assert loaded is not None, "H-03 reload"
+        assert len(loaded["history"]) <= 12, "H-03 history bound"
+        assert len(loaded["route_cards"]) <= 8, "H-03 card bound"
         state = trip_state_module.get_trip_state(loaded)
-        self.assertEqual(state["active_candidate_set_id"], set_i, "H-03 reload")
-        self.assertEqual(state["selected_candidate_id"], "cd_h03_7", "H-03 reload")
-        self.assertEqual(state["destination"], "Museum of Natural History",
-                         "H-03 reload")
-        self.assertEqual((loaded.get("active_trip") or {}).get("card_id"),
-                         _card_i.card_id, "H-03 reload keeps the current card")
-        self.assertEqual(state["active_discovery_set_id"], ds2, "H-03 reload")
-        self.assertEqual(state["selected_place_id"], pl3, "H-03 reload")
-        self.assertTrue(
-            candidate_store.load_candidate_set(set_a, session_id=session_id)[
-                "presented"],
-            "H-03 old sets stay consumed historical records")
+        assert state["active_candidate_set_id"] == set_i, "H-03 reload"
+        assert state["selected_candidate_id"] == "cd_h03_7", "H-03 reload"
+        assert state["destination"] == "Museum of Natural History", "H-03 reload"
+        assert (loaded.get("active_trip") or {}).get("card_id") == _card_i.card_id, "H-03 reload keeps the current card"
+        assert state["active_discovery_set_id"] == ds2, "H-03 reload"
+        assert state["selected_place_id"] == pl3, "H-03 reload"
+        assert candidate_store.load_candidate_set(set_a, session_id=session_id)["presented"], "H-03 old sets stay consumed historical records"

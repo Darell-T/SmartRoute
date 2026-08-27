@@ -105,7 +105,7 @@ that Damn Lines supports. `ignore` performs no queue work. `heads_up` checks
 only selected places during presentation. `decision` lets the Agent consider
 normalized queue evidence before it selects a destination. `historical`
 answers an explicit past-pattern question. This remains part of
-`discover_places`; it does not add a ninth model-visible tool.
+`discover_places`. It does not add a ninth model-visible tool.
 
 Current queue observations retain the provider capture time and never change
 route duration. Historical patterns refresh outside the request path and stay

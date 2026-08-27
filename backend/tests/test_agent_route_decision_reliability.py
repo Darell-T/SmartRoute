@@ -6,17 +6,18 @@ non-deterministic decision reproducible; route/place facts still pass through
 the real server-owned executors and stores.
 """
 from __future__ import annotations
+
 import unittest
 from unittest.mock import AsyncMock, patch
+
 from app.services.agent import session as session_module
 from app.services.agent.tools import ToolContext, ToolResult
-from app.services.agent.tools.places import discover_places
 from app.services.agent.tools.location_resolution import ResolvedPlace
+from app.services.agent.tools.places import discover_places
 from app.services.trips.selection_decision import (
     evaluate_candidate_decision,
     evaluate_dominated_selection,
 )
-from tests.conversation.conversation_matrix_harness import route_cards, run_turn
 
 from tests.agent_route_decision_test_support import (
     AgentRouteDecisionTestMixin,
@@ -25,6 +26,7 @@ from tests.agent_route_decision_test_support import (
     _route,
     _route_goal_round,
 )
+from tests.conversation.conversation_matrix_harness import route_cards, run_turn
 
 
 def _dominance_candidate(
@@ -118,28 +120,23 @@ class AgentRouteDecisionReliabilityTests(AgentRouteDecisionTestMixin, unittest.I
             for name, tool_input in trace.tool_calls
             if name == "prepare_route_options"
         ]
-        self.assertEqual(len(prepare_calls), 1)
-        self.assertEqual(
-            prepare_calls[0]["routing_preference"], "FEWER_TRANSFERS"
-        )
-        self.assertEqual(len(present_calls), 2)
-        self.assertEqual(present_calls[-1]["reason_code"], "fewer_transfers")
-        self.assertNotIn("less walking", present_calls[-1]["lead_in"].casefold())
+        assert len(prepare_calls) == 1
+        assert prepare_calls[0]["routing_preference"] == "FEWER_TRANSFERS"
+        assert len(present_calls) == 2
+        assert present_calls[-1]["reason_code"] == "fewer_transfers"
+        assert "less walking" not in present_calls[-1]["lead_in"].casefold()
         cards = route_cards(events)
-        self.assertEqual(len(cards), 1)
+        assert len(cards) == 1
         card = cards[0]
-        self.assertEqual(
-            card.selection_decision["reason_code"],
-            "fewer_transfers",
-        )
+        assert card.selection_decision["reason_code"] == "fewer_transfers"
         structured_codes = {
             reason["code"]
             for reason in card.itinerary["structured_recommendation_reasons"]
         }
-        self.assertEqual(structured_codes, {"fewer_transfers"})
-        self.assertNotIn("fastest", structured_codes)
-        self.assertNotIn("less_walking", structured_codes)
-        self.assertIn("fewer transfers", card.summary["reason"].casefold())
+        assert structured_codes == {"fewer_transfers"}
+        assert "fastest" not in structured_codes
+        assert "less_walking" not in structured_codes
+        assert "fewer transfers" in card.summary["reason"].casefold()
 
     async def test_avoid_crowds_stays_active_without_a_temporally_relevant_event_claim(
         self,
@@ -201,34 +198,31 @@ class AgentRouteDecisionReliabilityTests(AgentRouteDecisionTestMixin, unittest.I
             for name, tool_input in trace.tool_calls
             if name == "prepare_route_options"
         ]
-        self.assertEqual(len(prepare_calls), 1)
-        self.assertTrue(prepare_calls[0]["avoid_crowds"])
+        assert len(prepare_calls) == 1
+        assert prepare_calls[0]["avoid_crowds"]
         present_calls = [
             tool_input
             for name, tool_input in trace.tool_calls
             if name == "present_route"
         ]
-        self.assertEqual(len(present_calls), 2)
-        self.assertNotIn("avoid crowds", present_calls[-1]["lead_in"].casefold())
-        self.assertNotIn("crowd-free", present_calls[-1]["lead_in"].casefold())
+        assert len(present_calls) == 2
+        assert "avoid crowds" not in present_calls[-1]["lead_in"].casefold()
+        assert "crowd-free" not in present_calls[-1]["lead_in"].casefold()
         cards = route_cards(events)
-        self.assertEqual(len(cards), 1)
+        assert len(cards) == 1
         card = cards[0]
         structured_codes = {
             reason["code"]
             for reason in card.itinerary["structured_recommendation_reasons"]
         }
-        self.assertEqual(structured_codes, {"meets_hard_constraints"})
-        self.assertNotIn("lower_event_crowd_exposure", structured_codes)
-        self.assertNotIn("fewer_transfers", structured_codes)
-        self.assertIn(
-            "no relevant event crowd evidence",
-            card.summary["reason"].casefold(),
-        )
+        assert structured_codes == {"meets_hard_constraints"}
+        assert "lower_event_crowd_exposure" not in structured_codes
+        assert "fewer_transfers" not in structured_codes
+        assert "no relevant event crowd evidence" in card.summary["reason"].casefold()
         rider_text = " ".join(
             event.text for event in events if event.type == "token"
         ).casefold()
-        self.assertIn("no relevant event crowd evidence", rider_text)
+        assert "no relevant event crowd evidence" in rider_text
 
     async def test_current_location_keeps_untruncated_provider_candidates(
         self,
@@ -298,16 +292,9 @@ class AgentRouteDecisionReliabilityTests(AgentRouteDecisionTestMixin, unittest.I
                 ctx,
             )
 
-        self.assertTrue(result.ok, result.error)
+        assert result.ok, result.error
         places = result.data["places"]
-        self.assertEqual(
-            [place["name"] for place in places],
-            [
-                "Kyuramen Forest Hills",
-                "Kyuramen Midtown",
-                "Kyuramen Park Slope",
-            ],
-        )
+        assert [place["name"] for place in places] == ["Kyuramen Forest Hills", "Kyuramen Midtown", "Kyuramen Park Slope"]
 
     def test_clear_less_walking_dominance_is_challenged_for_current_or_persisted_preference(self):
         for source in ("current_turn", "persisted_rider"):
@@ -333,8 +320,8 @@ class AgentRouteDecisionReliabilityTests(AgentRouteDecisionTestMixin, unittest.I
                     {"candidates": [selected, alternative]}, selected
                 )
 
-                self.assertTrue(decision["challenged"])
-                self.assertEqual(decision["preference"], "LESS_WALKING")
+                assert decision["challenged"]
+                assert decision["preference"] == "LESS_WALKING"
 
     def test_fewer_transfers_dominance_is_challenged(self):
         selected = _dominance_candidate(
@@ -356,8 +343,8 @@ class AgentRouteDecisionReliabilityTests(AgentRouteDecisionTestMixin, unittest.I
             {"candidates": [selected, alternative]}, selected
         )
 
-        self.assertTrue(decision["challenged"])
-        self.assertEqual(decision["preference"], "FEWER_TRANSFERS")
+        assert decision["challenged"]
+        assert decision["preference"] == "FEWER_TRANSFERS"
 
     def test_less_walking_tradeoff_remains_model_owned(self):
         selected = _dominance_candidate(
@@ -379,7 +366,7 @@ class AgentRouteDecisionReliabilityTests(AgentRouteDecisionTestMixin, unittest.I
             {"candidates": [selected, alternative]}, selected
         )
 
-        self.assertFalse(decision["challenged"])
+        assert not decision["challenged"]
 
     def test_worse_confirmed_or_official_condition_burden_blocks_challenge(self):
         selected = _dominance_candidate(
@@ -403,7 +390,7 @@ class AgentRouteDecisionReliabilityTests(AgentRouteDecisionTestMixin, unittest.I
             {"candidates": [selected, alternative]}, selected
         )
 
-        self.assertFalse(decision["challenged"])
+        assert not decision["challenged"]
 
     def test_equal_condition_counts_with_different_impacts_fail_closed(self):
         cases = (
@@ -443,7 +430,7 @@ class AgentRouteDecisionReliabilityTests(AgentRouteDecisionTestMixin, unittest.I
                     {"candidates": [selected, alternative]}, selected
                 )
 
-                self.assertFalse(decision["challenged"])
+                assert not decision["challenged"]
 
     def test_removing_a_selected_condition_can_still_allow_challenge(self):
         selected = _dominance_candidate(
@@ -469,7 +456,7 @@ class AgentRouteDecisionReliabilityTests(AgentRouteDecisionTestMixin, unittest.I
             {"candidates": [selected, alternative]}, selected
         )
 
-        self.assertTrue(decision["challenged"])
+        assert decision["challenged"]
 
     def test_non_material_planned_service_change_is_ignored_by_dominance(self):
         planned_local = {
@@ -500,7 +487,7 @@ class AgentRouteDecisionReliabilityTests(AgentRouteDecisionTestMixin, unittest.I
         decision = evaluate_dominated_selection(
             {"candidates": [selected, alternative]}, selected
         )
-        self.assertTrue(decision["challenged"])
+        assert decision["challenged"]
 
         unknown_alternative = _dominance_candidate(
             "unknown-alternative",
@@ -513,7 +500,7 @@ class AgentRouteDecisionReliabilityTests(AgentRouteDecisionTestMixin, unittest.I
         decision = evaluate_dominated_selection(
             {"candidates": [selected, unknown_alternative]}, selected
         )
-        self.assertFalse(decision["challenged"])
+        assert not decision["challenged"]
 
     def test_missing_or_nonfinite_comparison_factors_fail_closed(self):
         for key, value in (
@@ -542,7 +529,7 @@ class AgentRouteDecisionReliabilityTests(AgentRouteDecisionTestMixin, unittest.I
                     {"candidates": [selected, alternative]}, selected
                 )
 
-                self.assertFalse(decision["challenged"])
+                assert not decision["challenged"]
 
         for key in ("official_service_impacts", "confirmed_incident_impacts"):
             with self.subTest(key=key):
@@ -566,7 +553,7 @@ class AgentRouteDecisionReliabilityTests(AgentRouteDecisionTestMixin, unittest.I
                     {"candidates": [selected, alternative]}, selected
                 )
 
-                self.assertFalse(decision["challenged"])
+                assert not decision["challenged"]
 
     def test_unconfirmed_vehicle_signal_cannot_ground_disruption_avoidance(self):
         selected = {
@@ -592,9 +579,4 @@ class AgentRouteDecisionReliabilityTests(AgentRouteDecisionTestMixin, unittest.I
             },
         }
 
-        self.assertNotIn(
-            "avoids_active_disruption",
-            evaluate_candidate_decision(
-                {"candidates": [selected, alternative]}, selected
-            )["supported_reason_codes"],
-        )
+        assert "avoids_active_disruption" not in evaluate_candidate_decision({"candidates": [selected, alternative]}, selected)["supported_reason_codes"]

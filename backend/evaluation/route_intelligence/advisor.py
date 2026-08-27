@@ -1,13 +1,12 @@
 """Offline route-advisor adapter used by evaluation scripts and tests."""
 
-import anthropic
 import asyncio
 import json
 import os
 from pathlib import Path
 
-from app import runtime
-from app import observability
+import anthropic
+from app import observability, runtime
 
 client = observability.wrap_anthropic(
     anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
@@ -239,11 +238,48 @@ def build_mock_recommendation(payload: dict) -> str:
     return f"{prose} [ROUTE:{chosen_index}][CANDIDATE_ANALYSIS]{analysis_block}[/CANDIDATE_ANALYSIS]"
 
 
+def _is_overload_error(error: BaseException) -> bool:
+    return isinstance(error, anthropic.APIStatusError) and error.status_code == 529
+
+
+async def _stream_model_with_retries(
+    model: str,
+    system_prompt: str,
+    messages: list[dict[str, str]],
+    succeeded: list[bool],
+    *,
+    overload_attempts: int = 3,
+):
+    """Yield one model's text stream, retrying overload a bounded number of times."""
+    for attempt in range(overload_attempts):
+        try:
+            async with client.messages.stream(
+                model=model,
+                max_tokens=512,
+                system=system_prompt,
+                messages=messages,
+            ) as stream:
+                async for chunk in stream.text_stream:
+                    yield chunk
+        except anthropic.APIStatusError as error:
+            if not _is_overload_error(error):
+                raise
+            wait = 2**attempt
+            print(f"[claude] {model} overloaded (attempt {attempt + 1}), waiting {wait}s")
+            await asyncio.sleep(wait)
+            continue
+        else:
+            succeeded.append(True)
+            return
+    print(f"[claude] {model} still overloaded after retries, trying next model")
+
+
 async def _stream_for_models(
     payload: dict,
     *,
     models: tuple[str, ...],
     system_prompt: str,
+    overload_attempts: int = 3,
 ):
     """Shared provider transport; caller owns the allowed model set."""
     if runtime.enabled("JARVIS_MOCK_ADVISOR"):
@@ -251,31 +287,23 @@ async def _stream_for_models(
         return
 
     messages = [{"role": "user", "content": json.dumps(payload)}]
-
     for model in models:
-        for attempt in range(3):
-            try:
-                async with client.messages.stream(
-                    model=model,
-                    max_tokens=512,
-                    system=system_prompt,
-                    messages=messages,
-                ) as stream:
-                    async for chunk in stream.text_stream:
-                        yield chunk
-                return  # success — stop retrying
-            except anthropic.APIStatusError as e:
-                if e.status_code == 529:  # overloaded
-                    wait = 2 ** attempt
-                    print(f"[claude] {model} overloaded (attempt {attempt+1}), waiting {wait}s")
-                    await asyncio.sleep(wait)
-                else:
-                    raise
-        print(f"[claude] {model} still overloaded after retries, trying next model")
-    raise RuntimeError("All Claude models are currently overloaded. Please try again.")
+        succeeded: list[bool] = []
+        async for chunk in _stream_model_with_retries(
+            model,
+            system_prompt,
+            messages,
+            succeeded,
+            overload_attempts=overload_attempts,
+        ):
+            yield chunk
+        if succeeded:
+            return
+    overloaded = "All Claude models are currently overloaded. Please try again."
+    raise RuntimeError(overloaded)
 
 
-async def stream_recommendation(payload: dict):
+async def stream_recommendation(payload: dict, *, overload_attempts: int = 3):
     """Stream the REST advisor's pinned Haiku recommendation.
 
     REST callers intentionally retain this model and prompt contract.  Agent
@@ -285,6 +313,7 @@ async def stream_recommendation(payload: dict):
         payload,
         models=tuple(_MODEL_PRIORITY),
         system_prompt=SYSTEM_PROMPT,
+        overload_attempts=overload_attempts,
     ):
         yield chunk
 
@@ -297,8 +326,9 @@ async def stream_agent_recommendation(
 ):
     """Stream one agent-policy-selected model with no pinned-advisor fallback."""
     selected_model = str(model or "").strip()
+    missing_model = "agent route model is required"
     if not selected_model:
-        raise ValueError("agent route model is required")
+        raise ValueError(missing_model)
     async for chunk in _stream_for_models(
         payload,
         models=(selected_model,),
@@ -307,10 +337,12 @@ async def stream_agent_recommendation(
         yield chunk
 
 
-async def collect_recommendation(payload: dict) -> str:
+async def collect_recommendation(payload: dict, *, overload_attempts: int = 3) -> str:
     """Drain the REST advisor's pinned Haiku stream into one response."""
     raw = ""
-    async for chunk in stream_recommendation(payload):
+    async for chunk in stream_recommendation(
+        payload, overload_attempts=overload_attempts
+    ):
         raw += chunk
     return raw
 

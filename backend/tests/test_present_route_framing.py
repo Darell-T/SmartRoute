@@ -1,19 +1,24 @@
 """Focused route-presentation framing and canonical-fact guards."""
 from __future__ import annotations
+
+import re
 import unittest
 from unittest.mock import AsyncMock, patch
+
 from app.services.agent import candidate_store, trip_state
 from app.services.agent.tools.location_resolution import ResolvedPlace
 from app.services.agent.tools.route import present_route
-from tests.single_agent_route_test_support import _prepared_leg
+
 from tests.agent_route_decision_test_support import (
     _prepared_leg as _multi_prepared_leg,
+)
+from tests.agent_route_decision_test_support import (
     _route,
 )
-
 from tests.present_route_framing_test_support import (
     PresentRouteFramingTestMixin,
 )
+from tests.single_agent_route_test_support import _prepared_leg
 
 
 class PresentRouteFramingTests(PresentRouteFramingTestMixin, unittest.IsolatedAsyncioTestCase):
@@ -30,9 +35,9 @@ class PresentRouteFramingTests(PresentRouteFramingTestMixin, unittest.IsolatedAs
             ctx,
         )
 
-        self.assertFalse(result.ok)
-        self.assertEqual(result.events, [])
-        self.assertIn("ungrounded success wording", result.error)
+        assert not result.ok
+        assert result.events == []
+        assert "ungrounded success wording" in result.error
 
     async def test_framing_wraps_card_without_replacing_canonical_facts(self):
         ctx, candidate_id, set_id = await self._prepared_context()
@@ -53,36 +58,24 @@ class PresentRouteFramingTests(PresentRouteFramingTestMixin, unittest.IsolatedAs
                 ctx,
             )
 
-        self.assertTrue(result.ok, result.error)
-        self.assertEqual(
-            [event.type for event in result.events],
-            ["token", "route_card"],
-        )
-        self.assertEqual(
-            result.events[0].text,
-            "The route options were close, so I chose this one for your trip.\n\n",
-        )
-        self.assertEqual(
-            result.data["lead_in"],
-            "The route options were close, so I chose this one for your trip.",
-        )
-        self.assertNotRegex(result.data["lead_in"], r"\d+\s+min")
-        self.assertNotIn("transfer", result.data["lead_in"].casefold())
-        self.assertEqual(result.data["follow_up"], "")
-        self.assertEqual(result.data["reason_code"], "meets_hard_constraints")
+        assert result.ok, result.error
+        assert [event.type for event in result.events] == ["token", "route_card"]
+        assert result.events[0].text == "The route options were close, so I chose this one for your trip.\n\n"
+        assert result.data["lead_in"] == "The route options were close, so I chose this one for your trip."
+        assert not re.search(r"\d+\s+min", result.data["lead_in"])
+        assert "transfer" not in result.data["lead_in"].casefold()
+        assert result.data["follow_up"] == ""
+        assert result.data["reason_code"] == "meets_hard_constraints"
         card = next(event for event in result.events if event.type == "route_card")
-        self.assertEqual(card.summary["lines"], ["Q"])
-        self.assertGreater(card.summary["eta_minutes"], 0)
-        self.assertEqual(card.summary["transfers"], 0)
-        self.assertEqual(
-            result.data["candidates"][0]["eta_minutes"],
-            card.summary["eta_minutes"],
-        )
+        assert card.summary["lines"] == ["Q"]
+        assert card.summary["eta_minutes"] > 0
+        assert card.summary["transfers"] == 0
+        assert result.data["candidates"][0]["eta_minutes"] == card.summary["eta_minutes"]
         # The card event keeps the server-owned selection record for the UI,
         # but the model-facing tool result must not expose score/rank data.
-        self.assertNotIn("selection_decision", result.data)
-        self.assertNotIn("selected_route_index", result.data)
-        self.assertNotIn("quick_escalation_reason", result.data)
+        assert "selection_decision" not in result.data
+        assert "selected_route_index" not in result.data
+        assert "quick_escalation_reason" not in result.data
         for private_key in (
             "card_id",
             "event_crowd_penalty",
@@ -93,17 +86,9 @@ class PresentRouteFramingTests(PresentRouteFramingTestMixin, unittest.IsolatedAs
             "structured_recommendation_reasons",
             "reason",
         ):
-            self.assertNotIn(private_key, result.data["candidates"][0])
-        self.assertEqual(
-            card.selection_decision["selection_reason"],
-            "outer_agent_selection",
-        )
-        self.assertEqual(
-            candidate_store.load_candidate_set(
-                set_id, session_id="sess-route-framing"
-            )["presented"],
-            True,
-        )
+            assert private_key not in result.data["candidates"][0]
+        assert card.selection_decision["selection_reason"] == "outer_agent_selection"
+        assert candidate_store.load_candidate_set(set_id, session_id="sess-route-framing")["presented"] is True
 
     async def test_natural_framing_does_not_change_selection_or_canonical_payload(self):
         volatile_fields = {
@@ -177,8 +162,8 @@ class PresentRouteFramingTests(PresentRouteFramingTestMixin, unittest.IsolatedAs
                         },
                         ctx,
                     )
-                    self.assertFalse(rejected.ok)
-                    self.assertEqual(rejected.events, [])
+                    assert not rejected.ok
+                    assert rejected.events == []
                 result = await present_route.execute(
                     {
                         "candidate_id": "cd_winner",
@@ -189,7 +174,7 @@ class PresentRouteFramingTests(PresentRouteFramingTestMixin, unittest.IsolatedAs
                     },
                     ctx,
                 )
-            self.assertTrue(result.ok, result.error)
+            assert result.ok, result.error
             card = next(event for event in result.events if event.type == "route_card")
             record = candidate_store.load_candidate_set(
                 set_id, session_id=ctx.session_id
@@ -205,25 +190,19 @@ class PresentRouteFramingTests(PresentRouteFramingTestMixin, unittest.IsolatedAs
             correction=True,
         )
 
-        first_result, first_card, first_before, first_record, first_state = first
+        first_result, first_card, first_before, _first_record, _first_state = first
         (
             corrected_result,
             corrected_card,
             corrected_before,
-            corrected_record,
-            corrected_state,
+            _corrected_record,
+            _corrected_state,
         ) = corrected
         for result, card, before, record, state in (first, corrected):
-            self.assertEqual(state["selected_candidate_id"], "cd_winner")
-            self.assertEqual(record["selected_candidate_id"], "cd_winner")
-            self.assertEqual(
-                [entry["candidate_id"] for entry in before["candidates"]],
-                ["cd_winner", "cd_alternative"],
-            )
-            self.assertEqual(
-                [entry["candidate_id"] for entry in record["candidates"]],
-                ["cd_winner", "cd_alternative"],
-            )
+            assert state["selected_candidate_id"] == "cd_winner"
+            assert record["selected_candidate_id"] == "cd_winner"
+            assert [entry["candidate_id"] for entry in before["candidates"]] == ["cd_winner", "cd_alternative"]
+            assert [entry["candidate_id"] for entry in record["candidates"]] == ["cd_winner", "cd_alternative"]
             snapshot = card.itinerary["evidence_snapshot"]
             selected_entry = next(
                 entry
@@ -231,44 +210,17 @@ class PresentRouteFramingTests(PresentRouteFramingTestMixin, unittest.IsolatedAs
                 if entry["candidate_id"] == "cd_winner"
             )
             expected_snapshot = selected_entry["digest"]["evidence_snapshot"]
-            self.assertEqual(snapshot, expected_snapshot)
-            self.assertEqual(result.data["reason_code"], "meets_hard_constraints")
+            assert snapshot == expected_snapshot
+            assert result.data["reason_code"] == "meets_hard_constraints"
 
-        self.assertEqual(stable(first_before), stable(corrected_before))
-        self.assertEqual(
-            stable(first_result.data["candidates"]),
-            stable(corrected_result.data["candidates"]),
-        )
-        self.assertEqual(
-            stable(first_result.data["evidence"]),
-            stable(corrected_result.data["evidence"]),
-        )
-        self.assertEqual(stable(first_card.itinerary), stable(corrected_card.itinerary))
-        self.assertEqual(first_card.destination, corrected_card.destination)
-        self.assertEqual(
-            stable(
-                {
-                    key: value
-                    for key, value in first_card.summary.items()
-                    if key != "reason"
-                }
-            ),
-            stable(
-                {
-                    key: value
-                    for key, value in corrected_card.summary.items()
-                    if key != "reason"
-                }
-            ),
-        )
-        self.assertEqual(
-            first_result.data["selection_source"],
-            corrected_result.data["selection_source"],
-        )
-        self.assertEqual(
-            first_card.selection_decision["selection_reason"],
-            corrected_card.selection_decision["selection_reason"],
-        )
+        assert stable(first_before) == stable(corrected_before)
+        assert stable(first_result.data["candidates"]) == stable(corrected_result.data["candidates"])
+        assert stable(first_result.data["evidence"]) == stable(corrected_result.data["evidence"])
+        assert stable(first_card.itinerary) == stable(corrected_card.itinerary)
+        assert first_card.destination == corrected_card.destination
+        assert stable({key: value for key, value in first_card.summary.items() if key != "reason"}) == stable({key: value for key, value in corrected_card.summary.items() if key != "reason"})
+        assert first_result.data["selection_source"] == corrected_result.data["selection_source"]
+        assert first_card.selection_decision["selection_reason"] == corrected_card.selection_decision["selection_reason"]
 
     async def test_live_evidence_stays_on_the_card_without_being_narrated(self):
         prepared = _prepared_leg()
@@ -290,13 +242,10 @@ class PresentRouteFramingTests(PresentRouteFramingTestMixin, unittest.IsolatedAs
                 ctx,
             )
 
-        self.assertTrue(result.ok, result.error)
-        self.assertEqual(
-            result.data["candidates"][0]["alert_headlines"],
-            ["Q trains are delayed"],
-        )
-        self.assertNotIn("Q trains are delayed", result.data["lead_in"])
-        self.assertNotIn("Track obstruction", result.data["lead_in"])
+        assert result.ok, result.error
+        assert result.data["candidates"][0]["alert_headlines"] == ["Q trains are delayed"]
+        assert "Q trains are delayed" not in result.data["lead_in"]
+        assert "Track obstruction" not in result.data["lead_in"]
 
     async def test_partial_crowd_coverage_is_explained_without_claiming_safety(self):
         prepared = _prepared_leg()
@@ -317,13 +266,10 @@ class PresentRouteFramingTests(PresentRouteFramingTestMixin, unittest.IsolatedAs
             ctx,
         )
 
-        self.assertTrue(result.ok, result.error)
-        self.assertIn(
-            "crowd conditions for the relevant window could not be verified",
-            result.data["lead_in"],
-        )
-        self.assertNotIn("avoid_crowds", result.data["lead_in"])
-        self.assertNotIn("lower event crowd exposure", result.data["lead_in"])
+        assert result.ok, result.error
+        assert "crowd conditions for the relevant window could not be verified" in result.data["lead_in"]
+        assert "avoid_crowds" not in result.data["lead_in"]
+        assert "lower event crowd exposure" not in result.data["lead_in"]
 
     async def test_incomplete_incident_all_clear_is_rejected_before_projection(self):
         prepared = _prepared_leg()
@@ -340,12 +286,12 @@ class PresentRouteFramingTests(PresentRouteFramingTestMixin, unittest.IsolatedAs
             ctx,
         )
 
-        self.assertFalse(unsafe.ok)
-        self.assertEqual(unsafe.events, [])
-        self.assertIn("incident coverage is incomplete", unsafe.error.casefold())
+        assert not unsafe.ok
+        assert unsafe.events == []
+        assert "incident coverage is incomplete" in unsafe.error.casefold()
         stored = candidate_store.load_candidate_set(set_id, session_id=ctx.session_id)
-        self.assertFalse(stored["presented"])
-        self.assertIsNone(stored["selected_candidate_id"])
+        assert not stored["presented"]
+        assert stored["selected_candidate_id"] is None
 
         safe = await present_route.execute(
             {
@@ -361,18 +307,13 @@ class PresentRouteFramingTests(PresentRouteFramingTestMixin, unittest.IsolatedAs
             ctx,
         )
 
-        self.assertTrue(safe.ok, safe.error)
-        self.assertEqual([event.type for event in safe.events], ["token", "route_card"])
-        self.assertNotIn("no active incidents", safe.events[0].text.casefold())
-        self.assertIn("incident coverage is incomplete", safe.events[0].text.casefold())
+        assert safe.ok, safe.error
+        assert [event.type for event in safe.events] == ["token", "route_card"]
+        assert "no active incidents" not in safe.events[0].text.casefold()
+        assert "incident coverage is incomplete" in safe.events[0].text.casefold()
         card = safe.events[1]
-        self.assertEqual(card.summary["reason"], safe.data["lead_in"])
-        self.assertEqual(
-            candidate_store.load_candidate_set(
-                set_id, session_id=ctx.session_id
-            )["selected_candidate_id"],
-            candidate_id,
-        )
+        assert card.summary["reason"] == safe.data["lead_in"]
+        assert candidate_store.load_candidate_set(set_id, session_id=ctx.session_id)["selected_candidate_id"] == candidate_id
 
     async def test_unknown_candidate_is_rejected_before_deterministic_fallback(self):
         ctx, _candidate_id, set_id = await self._prepared_context()
@@ -387,16 +328,13 @@ class PresentRouteFramingTests(PresentRouteFramingTestMixin, unittest.IsolatedAs
             ctx,
         )
 
-        self.assertFalse(result.ok)
-        self.assertEqual(result.error, "candidate id is unknown for this set")
-        self.assertEqual(result.events, [])
-        self.assertEqual(
-            trip_state.get_trip_state(ctx.session)["selected_candidate_id"],
-            None,
-        )
+        assert not result.ok
+        assert result.error == "candidate id is unknown for this set"
+        assert result.events == []
+        assert trip_state.get_trip_state(ctx.session)["selected_candidate_id"] is None
         stored = candidate_store.load_candidate_set(set_id, session_id=ctx.session_id)
-        self.assertFalse(stored["presented"])
-        self.assertIsNone(stored["selected_candidate_id"])
+        assert not stored["presented"]
+        assert stored["selected_candidate_id"] is None
 
     async def test_malformed_destination_selection_shape_fails_before_presentation(self):
         for malformed in (
@@ -410,10 +348,15 @@ class PresentRouteFramingTests(PresentRouteFramingTestMixin, unittest.IsolatedAs
                 ctx, candidate_id, set_id = await self._prepared_context()
                 stored_get_candidate = candidate_store.get_candidate
 
-                def malformed_candidate(*args, **kwargs):
-                    record, entry, error = stored_get_candidate(*args, **kwargs)
-                    self.assertIsNotNone(record)
-                    record.update(malformed)
+                def malformed_candidate(
+                    *args,
+                    get_candidate=stored_get_candidate,
+                    payload=malformed,
+                    **kwargs,
+                ):
+                    record, entry, error = get_candidate(*args, **kwargs)
+                    assert record is not None
+                    record.update(payload)
                     return record, entry, error
 
                 with patch(
@@ -431,16 +374,13 @@ class PresentRouteFramingTests(PresentRouteFramingTestMixin, unittest.IsolatedAs
                         ctx,
                     )
 
-                self.assertFalse(result.ok)
-                self.assertTrue(result.internal_diagnostic)
-                self.assertEqual(
-                    result.error,
-                    "candidate set has an invalid destination selection shape",
-                )
-                self.assertEqual(result.events, [])
+                assert not result.ok
+                assert result.internal_diagnostic
+                assert result.error == "candidate set has an invalid destination selection shape"
+                assert result.events == []
                 record = candidate_store.load_candidate_set(
                     set_id,
                     session_id=ctx.session_id,
                 )
-                self.assertFalse(record["presented"])
-                self.assertIsNone(record["selected_candidate_id"])
+                assert not record["presented"]
+                assert record["selected_candidate_id"] is None

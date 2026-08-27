@@ -213,8 +213,7 @@ def record(
             reason=str(selected.get("reason") or "preference_match"),
             canonical_place_id=canonical_id,
             name_aliases=(
-                list(existing.get("name_aliases") or [])
-                + [str(existing.get("name") or "")]
+                [*list(existing.get("name_aliases") or []), str(existing.get("name") or "")]
                 if existing
                 else []
             ),

@@ -192,9 +192,6 @@ class DiscoveryFirstTurnTests(_DiscoveryRouteBase):
     async def test_c_disc_01_discovery_first_turn_auto(self):
         await self._discovery("auto", "C-DISC-01")
 
-    async def test_c_disc_02_discovery_first_turn_quick(self):
-        await self._discovery("quick", "C-DISC-02")
-
 
 class DiscoveryRouteFollowupTests(_DiscoveryRouteBase):
     """C-DISC-03 / C-DISC-04: 'Take me to the second one.' full chain."""
@@ -248,6 +245,3 @@ class DiscoveryRouteFollowupTests(_DiscoveryRouteBase):
 
     async def test_c_disc_03_followup_second_one_auto(self):
         await self._followup("auto", "C-DISC-03")
-
-    async def test_c_disc_04_followup_second_one_quick(self):
-        await self._followup("quick", "C-DISC-04")

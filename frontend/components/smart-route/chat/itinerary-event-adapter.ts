@@ -5,6 +5,12 @@ import type {
   CanonicalTransferKind,
   CanonicalTransferSemantics,
 } from "@/lib/agent-route-card-contract";
+import {
+  canonicalPlaceLabel,
+  canonicalStopLabel,
+} from "@/lib/canonical-itinerary-label";
+
+export { canonicalPlaceLabel } from "@/lib/canonical-itinerary-label";
 
 export type ItineraryEventKind =
   | "subway"
@@ -46,8 +52,10 @@ export function formatDurationMinutes(totalMinutes: number): string {
   return rest > 0 ? `${hours} hr ${rest} min` : `${hours} hr`;
 }
 
-export function durationMinutesFromSeconds(seconds: unknown): number | null {
-  if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0) {
+export function durationMinutesFromSeconds(
+  seconds: number | null | undefined,
+): number | null {
+  if (seconds == null || !Number.isFinite(seconds) || seconds < 0) {
     return null;
   }
   return Math.round(seconds / 60);
@@ -61,35 +69,11 @@ function durationLabelFromSeconds(seconds: number): string {
   return formatDurationMinutes(Math.max(1, Math.round(seconds / 60)));
 }
 
-export function canonicalPlaceLabel(place: unknown, fallback: string): string {
-  if (typeof place === "string" && place.trim()) return place.trim();
-  if (place && typeof place === "object" && !Array.isArray(place)) {
-    const record = place as Record<string, unknown>;
-    for (const key of ["display_name", "label", "name", "address"]) {
-      const value = record[key];
-      if (typeof value === "string" && value.trim()) return value.trim();
-    }
-  }
-  return fallback;
-}
-
-function canonicalStopLabel(stop: unknown): string | null {
-  if (typeof stop === "string" && stop.trim()) return stop.trim();
-  if (stop && typeof stop === "object" && !Array.isArray(stop)) {
-    const record = stop as Record<string, unknown>;
-    for (const key of ["name", "label", "display_name", "station_name"]) {
-      const value = record[key];
-      if (typeof value === "string" && value.trim()) return value.trim();
-    }
-  }
-  return null;
-}
-
 function durationSecondsFromTransfer(
   semantics: CanonicalTransferSemantics | null | undefined,
 ): number | null {
   const seconds = semantics?.total_seconds;
-  return typeof seconds === "number" && Number.isFinite(seconds) && seconds >= 0
+  return seconds !== undefined && Number.isFinite(seconds) && seconds >= 0
     ? seconds
     : null;
 }
@@ -104,7 +88,7 @@ function canonicalLegDurationSeconds(leg: CanonicalItineraryLeg): number | null 
   }
   const value =
     leg.mode.trim().toUpperCase() === "WALK" ? leg.walk_seconds : leg.ride_seconds;
-  return typeof value === "number" && Number.isFinite(value) && value >= 0
+  return value !== undefined && Number.isFinite(value) && value >= 0
     ? value
     : null;
 }
@@ -216,8 +200,7 @@ function appendCanonicalLegs(
     const isRail = ["RAIL", "TRAIN", "LIGHT_RAIL", "TRAM"].includes(mode);
     if (mode !== "SUBWAY" && mode !== "BUS" && !isRail) return;
 
-    const serviceId =
-      typeof leg.service_id === "string" ? leg.service_id.trim().toUpperCase() : "";
+    const serviceId = leg.service_id?.trim().toUpperCase() ?? "";
     let kind: ItineraryEventKind;
     if (mode === "BUS") {
       kind = "bus";
@@ -227,7 +210,7 @@ function appendCanonicalLegs(
       kind = "subway";
     }
     const waitSeconds =
-      typeof leg.wait_seconds === "number" &&
+      leg.wait_seconds !== undefined &&
       Number.isFinite(leg.wait_seconds) &&
       leg.wait_seconds > 0
         ? leg.wait_seconds
@@ -251,7 +234,9 @@ function appendCanonicalLegs(
       kind,
       routeIds: serviceId ? [serviceId] : [],
       stopCount:
-        typeof leg.stop_count === "number" && Number.isFinite(leg.stop_count)
+        leg.stop_count !== null &&
+        leg.stop_count !== undefined &&
+        Number.isFinite(leg.stop_count)
           ? Math.max(0, Math.round(leg.stop_count))
           : undefined,
       stops,
@@ -277,10 +262,10 @@ function labelsMatch(a: string | undefined, b: string | undefined): boolean {
 
 function walkGroupDurationSeconds(events: ItineraryEvent[]): number {
   return events.reduce((total, event) => {
-    if (typeof event.durationSeconds === "number" && Number.isFinite(event.durationSeconds)) {
+    if (event.durationSeconds !== undefined && Number.isFinite(event.durationSeconds)) {
       return total + Math.max(0, event.durationSeconds);
     }
-    if (typeof event.durationMinutes === "number" && Number.isFinite(event.durationMinutes)) {
+    if (event.durationMinutes !== undefined && Number.isFinite(event.durationMinutes)) {
       return total + Math.max(0, event.durationMinutes) * 60;
     }
     return total;

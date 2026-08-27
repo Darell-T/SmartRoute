@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import { parseAgentEvent } from "./agent-chat-event-validator";
 import type { AgentSource, ArrivalCardEvent, RouteCard } from "./agent-chat-stream";
 import {
@@ -21,8 +23,33 @@ interface SessionRecord {
   sessionId: string;
 }
 
+const sessionRecordSchema = z.object({
+  version: z.literal(SESSION_RECORD_VERSION),
+  namespace: z.string(),
+  sessionId: z.string().min(1),
+});
+
+const snapshotHistoryEntrySchema = z.object({
+  role: z.enum(["user", "assistant"]),
+  text: z.string(),
+  turn_id: z.string().optional(),
+});
+
+const snapshotSourceSchema = z.object({
+  turn_id: z.unknown(),
+  sources: z.unknown(),
+});
+
+const snapshotEnvelopeSchema = z.object({
+  session_id: z.string().min(1),
+  history: z.array(snapshotHistoryEntrySchema).default([]),
+  route_cards: z.array(z.record(z.unknown())).default([]),
+  arrival_cards: z.array(z.record(z.unknown())).default([]),
+  sources: z.array(snapshotSourceSchema).default([]),
+});
+
 function currentSessionNamespace(): string {
-  const origin = typeof window === "undefined" ? "server" : window.location.origin;
+  const origin = globalThis.window?.location.origin ?? "server";
   const environment =
     process.env.NEXT_PUBLIC_AGENT_SESSION_ENV ||
     process.env.NEXT_PUBLIC_API_URL ||
@@ -35,24 +62,14 @@ export function sessionStorageKey(namespace: string): string {
 }
 
 export function safeSessionStorage(): StorageLike | undefined {
-  if (typeof window === "undefined") return undefined;
+  if (!globalThis.window) return undefined;
   try {
-    const storage = window.sessionStorage;
+    const storage = globalThis.window.sessionStorage;
     storage.getItem(sessionStorageKey(currentSessionNamespace()));
     return storage;
   } catch {
     return undefined;
   }
-}
-
-function isSessionRecord(record: unknown, namespace: string): record is SessionRecord {
-  if (!record || typeof record !== "object") return false;
-  const version = Object.getOwnPropertyDescriptor(record, "version")?.value;
-  const persistedNamespace = Object.getOwnPropertyDescriptor(record, "namespace")?.value;
-  const sessionId = Object.getOwnPropertyDescriptor(record, "sessionId")?.value;
-  return version === SESSION_RECORD_VERSION &&
-    persistedNamespace === namespace &&
-    typeof sessionId === "string";
 }
 
 export function readPersistedSessionId(
@@ -65,12 +82,12 @@ export function readPersistedSessionId(
     storage.removeItem?.(LEGACY_SESSION_STORAGE_KEY);
     const raw = storage.getItem(key);
     if (!raw) return null;
-    const record: unknown = JSON.parse(raw);
-    if (!isSessionRecord(record, namespace)) {
+    const record = sessionRecordSchema.safeParse(JSON.parse(raw));
+    if (!record.success || record.data.namespace !== namespace) {
       storage.removeItem?.(key);
       return null;
     }
-    return record.sessionId;
+    return record.data.sessionId;
   } catch {
     try {
       storage.removeItem?.(key);
@@ -157,65 +174,38 @@ async function defaultSnapshotTransport(sessionId: string): Promise<Response> {
   });
 }
 
-function parseSnapshot(data: unknown): SessionSnapshot | null {
-  if (!data || typeof data !== "object" || Array.isArray(data)) return null;
-  const record = data as Record<string, unknown>;
-  if (typeof record.session_id !== "string" || record.session_id.length === 0) return null;
-  const history: SessionSnapshotHistoryEntry[] = [];
-  if (Array.isArray(record.history)) {
-    for (const entry of record.history) {
-      if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
-      const item = entry as Record<string, unknown>;
-      if (
-        (item.role !== "user" && item.role !== "assistant") ||
-        typeof item.text !== "string"
-      ) {
-        return null;
-      }
-      history.push({
-        role: item.role,
-        text: item.text,
-        ...(typeof item.turn_id === "string" ? { turn_id: item.turn_id } : {}),
-      });
-    }
-  }
+async function parseSnapshot(response: Response): Promise<SessionSnapshot | null> {
+  const decoded = snapshotEnvelopeSchema.safeParse(await response.json());
+  if (!decoded.success) return null;
+  const record = decoded.data;
   const routeCards: RouteCard[] = [];
-  if (Array.isArray(record.route_cards)) {
-    for (const card of record.route_cards) {
-      // Cards are revalidated at this boundary exactly like live SSE events;
-      // an invalid card is dropped rather than poisoning the whole transcript.
-      const parsed = parseAgentEvent("route_card", card);
-      if (!parsed || parsed.type !== "route_card") continue;
-      const { type: _type, ...rest } = parsed;
-      routeCards.push(rest);
-    }
+  for (const card of record.route_cards) {
+    // Cards are revalidated at this boundary exactly like live SSE events;
+    // an invalid card is dropped rather than poisoning the whole transcript.
+    const parsed = parseAgentEvent("route_card", card);
+    if (!parsed || parsed.type !== "route_card") continue;
+    const { type: _type, ...rest } = parsed;
+    routeCards.push(rest);
   }
   const arrivalCards: ArrivalCardEvent[] = [];
-  if (Array.isArray(record.arrival_cards)) {
-    for (const card of record.arrival_cards) {
-      const parsed = parseAgentEvent("arrival_card", card);
-      if (parsed?.type === "arrival_card") arrivalCards.push(parsed);
-    }
+  for (const card of record.arrival_cards) {
+    const parsed = parseAgentEvent("arrival_card", card);
+    if (parsed?.type === "arrival_card") arrivalCards.push(parsed);
   }
   const snapshotSources: SessionSnapshotSources[] = [];
-  if (Array.isArray(record.sources)) {
-    for (const item of record.sources) {
-      if (item === null || item === undefined) continue;
-      const turnId = Object.getOwnPropertyDescriptor(item, "turn_id")?.value;
-      const sourceItems = Object.getOwnPropertyDescriptor(item, "sources")?.value;
-      const parsedTurn = parseAgentEvent("meta", {
-        session_id: "snapshot",
-        turn_id: turnId,
-      });
-      const parsedSources = parseAgentEvent("sources", { sources: sourceItems });
-      if (parsedTurn?.type === "meta" && parsedSources?.type === "sources") {
-        snapshotSources.push({ turn_id: parsedTurn.turn_id, sources: parsedSources.sources });
-      }
+  for (const item of record.sources) {
+    const parsedTurn = parseAgentEvent("meta", {
+      session_id: "snapshot",
+      turn_id: item.turn_id,
+    });
+    const parsedSources = parseAgentEvent("sources", { sources: item.sources });
+    if (parsedTurn?.type === "meta" && parsedSources?.type === "sources") {
+      snapshotSources.push({ turn_id: parsedTurn.turn_id, sources: parsedSources.sources });
     }
   }
   return {
     session_id: record.session_id,
-    history,
+    history: record.history,
     route_cards: routeCards,
     arrival_cards: arrivalCards,
     sources: snapshotSources,
@@ -295,7 +285,7 @@ export async function fetchSessionSnapshot(
   if (response.status === 404) return { status: "expired" };
   if (!response.ok) return { status: "unavailable" };
   try {
-    const snapshot = parseSnapshot(await response.json());
+    const snapshot = await parseSnapshot(response);
     if (!snapshot) return { status: "unavailable" };
     return { status: "ok", turns: buildTurnsFromSnapshot(snapshot) };
   } catch {

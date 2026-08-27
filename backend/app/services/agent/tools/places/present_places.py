@@ -1,6 +1,7 @@
 """Present a validated shortlist from a server-owned discovery set."""
 from __future__ import annotations
 
+import logging
 import math
 from datetime import datetime
 from typing import Any
@@ -8,19 +9,25 @@ from zoneinfo import ZoneInfo
 
 from app.services.agent import discovery_store
 from app.services.agent import events as agent_events
+from app.services.agent import trip_state as trip_state_module
 from app.services.agent.passenger_output import (
     MAX_PRESENTATION_FRAMING_CHARS,
     MAX_RESEARCH_PRESENTATION_FRAMING_CHARS,
     framed_events,
     validated_framing,
 )
-from app.services.agent import trip_state as trip_state_module
 from app.services.agent.tools._types import ToolContext, ToolResult
 from app.services.agent.tools.places import damn_lines
 from app.services.agent.turn.contract import GoalKind, GoalState
 
+_LOGGER = logging.getLogger(__name__)
+
 
 _PLACE_GOAL_KINDS = frozenset({GoalKind.PLACE_RECOMMENDATION, GoalKind.DESTINATION_SELECTION})
+_GOOGLE_MAPS_SOURCE = {
+    "title": "Google Maps",
+    "url": "https://www.google.com/maps",
+}
 REASON_CODES = ("top_pick", "highest_rating", "most_reviewed", "budget_friendly", "open_now", "preference_match")
 OBJECTIVE_REASONS = frozenset({"top_pick", "highest_rating", "most_reviewed", "budget_friendly", "open_now"})
 _NYC = ZoneInfo("America/New_York")
@@ -343,13 +350,12 @@ def _selected_places(
                 error="recommendations cannot repeat a shown place",
                 internal_diagnostic=True,
             )
-    if research_used:
-        if not owned["lead_in"]:
-            return ToolResult(
-                ok=False,
-                error="research_used requires a concise current detail in lead_in",
-                internal_diagnostic=True,
-            )
+    if research_used and not owned["lead_in"]:
+        return ToolResult(
+            ok=False,
+            error="research_used requires a concise current detail in lead_in",
+            internal_diagnostic=True,
+        )
     owned["selections"] = _normalize_reasons(selections, places)
     owned["research_used"] = research_used
     return owned
@@ -419,14 +425,18 @@ async def _emit_place_presentation(
         canonical_events.append(agent_events.TokenEvent(text=text))
     if queue_text:
         canonical_events.append(agent_events.TokenEvent(text=f"\n\n{queue_text}"))
-    if queue_sources:
+    sources: list[dict[str, str]] = []
+    if not details_only:
+        sources.append(_GOOGLE_MAPS_SOURCE)
+    sources.extend(
+        {"title": source.title, "url": source.url}
+        for source in queue_sources
+    )
+    if sources:
         canonical_events.append(
             agent_events.SourcesEvent(
                 turn_id=ctx.turn_id,
-                sources=tuple(
-                    {"title": source.title, "url": source.url}
-                    for source in queue_sources
-                ),
+                sources=tuple(sources),
             )
         )
     return ToolResult(
@@ -461,7 +471,6 @@ async def _queue_presentation(
         return "", ()
 
     when = _presentation_time(ctx.now_et)
-    damn_lines.schedule_history_warmup(now=when)
     supported_ids = [
         place_id
         for place in selections
@@ -475,7 +484,11 @@ async def _queue_presentation(
                 supported_ids, now=when
             )
             observations = current.observations
-        except Exception:
+        except (RuntimeError, TypeError, ValueError) as exc:
+            _LOGGER.warning(
+                "Damn Lines current queue presentation failed type=%s",
+                type(exc).__name__,
+            )
             observations = {}
 
     notes: list[str] = []
@@ -526,7 +539,7 @@ async def _queue_presentation(
 def _presentation_time(value: object) -> datetime:
     raw = str(value or "").strip()
     try:
-        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(raw)
         if parsed.tzinfo is not None:
             return parsed.astimezone(_NYC)
     except ValueError:

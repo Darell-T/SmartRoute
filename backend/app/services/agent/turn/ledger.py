@@ -15,8 +15,8 @@ import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 
-from app.services.agent import events as agent_events
 from app import observability
+from app.services.agent import events as agent_events
 from app.services.agent.tools import ToolContext, ToolResult
 
 _LOGGER = logging.getLogger(__name__)
@@ -54,7 +54,7 @@ async def run_one_tool(
             )
             observability.finish_tool(tool_span, ok=result.ok)
             return result
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             if deadline_limited or (
                 deadline_monotonic is not None
                 and time.monotonic() >= deadline_monotonic

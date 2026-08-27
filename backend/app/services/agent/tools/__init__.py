@@ -15,17 +15,21 @@ import dataclasses
 import hashlib
 import json
 import os
-from collections.abc import Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 from app.services.agent.public_surface import offered_custom_tools
 from app.services.agent.tools import (
     complete_turn,
     declare_goals,
 )
-from app.services.agent.tools.places import discover_places, place_reference, present_places
 from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.places import (
+    discover_places,
+    place_reference,
+    present_places,
+)
 from app.services.agent.tools.route import prepare_route_options, present_route
 from app.services.agent.tools.transit import (
     accessibility_status,
@@ -35,6 +39,8 @@ from app.services.agent.tools.transit import (
     lookup_facts,
     present_transit,
     transit_snapshot,
+)
+from app.services.agent.tools.transit import (
     venue_crowd_window as venues,
 )
 
@@ -352,9 +358,7 @@ def iter_unsupported_strict_keyword_paths(
     if isinstance(schema, Mapping):
         for key, value in schema.items():
             child = f"{path}.{key}"
-            if key in _UNSUPPORTED_STRICT_KEYWORDS:
-                findings.append(child)
-            elif key == "minItems" and value not in (0, 1):
+            if key in _UNSUPPORTED_STRICT_KEYWORDS or (key == "minItems" and value not in (0, 1)):
                 findings.append(child)
             findings.extend(iter_unsupported_strict_keyword_paths(value, path=child))
     elif isinstance(schema, list):
@@ -390,11 +394,11 @@ assert_strict_tool_schemas_compatible(TOOLS)
 __all__ = [
     "COMBINED_TOOL_REGISTRY",
     "INTERNAL_TOOL_REGISTRY",
-    "TOOL_REGISTRY",
     "TOOLS",
-    "ToolSpec",
+    "TOOL_REGISTRY",
     "ToolContext",
     "ToolResult",
+    "ToolSpec",
     "assert_strict_tool_schemas_compatible",
     "iter_unsupported_strict_keyword_paths",
 ]

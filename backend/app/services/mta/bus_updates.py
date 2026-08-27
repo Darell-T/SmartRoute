@@ -16,7 +16,6 @@ from app.services.mta.bus import (
 )
 from app.services.mta.config import NYC_TZ
 
-
 NEARBY_ARRIVALS_CACHE_TTL_S = 15
 BUS_UPDATE_MAX_STALE_S = 45
 BUS_TOTAL_TIMEOUT_S = 2.5
@@ -71,7 +70,7 @@ async def _fetch_nearby_bus_arrivals(
     results = await asyncio.gather(*tasks, return_exceptions=True)
     arrivals = []
     failures = 0
-    for stop, result in zip(stops, results):
+    for stop, result in zip(stops, results, strict=False):
         if isinstance(result, Exception):
             failures += 1
             continue

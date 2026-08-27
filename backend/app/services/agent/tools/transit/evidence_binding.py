@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from app.services import evidence as evidence_service
@@ -219,7 +219,7 @@ def decision_evidence_for_status(
     evidence_rows = record.get("candidate_evidence")
     if not isinstance(candidates, list) or not isinstance(evidence_rows, list):
         return empty
-    now_utc = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    now_utc = (now or datetime.now(UTC)).astimezone(UTC)
     root_envelope = (record.get("evidence_envelopes") or {}).get("alerts")
     matches: list[dict[str, Any]] = []
     for index, candidate in enumerate(candidates[:8]):
@@ -227,11 +227,11 @@ def decision_evidence_for_status(
             continue
         digest = candidate.get("digest")
         candidate_routes = _route_values(
-            (
+
                 digest.get("transit_lines") or digest.get("route_ids")
                 if isinstance(digest, Mapping)
                 else ()
-            )
+
         )
         if not candidate_routes.intersection(requested):
             continue
@@ -320,8 +320,8 @@ def _official_alert_rows(value: object, routes: object) -> list[dict[str, Any]] 
             not isinstance(projected, dict)
             or projected.get("source") != _OFFICIAL_ALERT_SOURCE
             or not _text(projected.get("source_id"))
-            or wanted
-            and not _route_values(projected.get("route_ids")).intersection(wanted)
+            or (wanted
+            and not _route_values(projected.get("route_ids")).intersection(wanted))
         ):
             continue
         rows.append(projected)

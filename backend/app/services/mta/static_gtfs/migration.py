@@ -1,11 +1,12 @@
 import csv
-import zipfile
-import tempfile
 import io
+import os
+import tempfile
+import zipfile
 from pathlib import Path
+
 import httpx
 import psycopg2
-import os
 from dotenv import load_dotenv
 
 load_dotenv()

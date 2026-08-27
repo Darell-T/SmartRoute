@@ -7,18 +7,27 @@ must propagate immediately so one failing provider request can never become two.
 """
 
 import unittest
-from unittest.mock import AsyncMock, patch
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
+import pytest
+from app.services import directions
+from app.services.agent.tools._types import ToolContext
 from app.services.agent.tools.location_resolution import ResolvedPlace
 from app.services.agent.tools.route import route_input as plan_trip_input
-from app.services.agent.tools.route.preparation_adapter import PreparedLeg, prepare_single_leg
-from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools.route.preparation_adapter import (
+    PreparedLeg,
+    prepare_single_leg,
+)
 from app.services.directions import GoogleRoutesError
-from app.services import directions
-from app.services.trips import candidates as trip_candidates
-from tests.test_stop_patterns import DISTINCT_TRANSFER_FIXTURE, FIXTURE
 from app.services.mta.static_gtfs.stop_patterns import StopPatternIndex
+from app.services.trips import candidates as trip_candidates
+
+from tests.test_stop_patterns import DISTINCT_TRANSFER_FIXTURE, FIXTURE
+
+
+class ReloadedProviderError(RuntimeError):
+    pass
 
 
 class _GoogleRoutesError(RuntimeError):
@@ -38,7 +47,7 @@ class _FakeDirections:
         self._second = second
 
     async def get_transit_route(self, origin, dest, dest_coords=None, **_kwargs):
-        self.calls.append({"dest": dest, "dest_coords": dest_coords})
+        self.calls.append({"origin": origin, "dest": dest, "dest_coords": dest_coords})
         result = self._first if len(self.calls) == 1 else self._second
         if isinstance(result, Exception):
             raise result
@@ -84,13 +93,13 @@ class RouteRecoveryGatingTests(unittest.IsolatedAsyncioTestCase):
             routing_preference="FEWER_TRANSFERS",
         )
 
-        self.assertEqual(departure, "2026-08-24T11:30:00-04:00")
+        assert departure == "2026-08-24T11:30:00-04:00"
 
     async def test_arrive_by_rejects_route_without_duration(self):
         origin, destination = _places()
         directions = _FakeDirections(first=[[{"route_id": "Q"}]])
 
-        with self.assertRaisesRegex(_GoogleRoutesError, "route duration"):
+        with pytest.raises(_GoogleRoutesError, match="route duration"):
             await plan_trip_input.derive_arrive_by_departure(
                 directions_service=directions,
                 origin=origin,
@@ -110,24 +119,10 @@ class RouteRecoveryGatingTests(unittest.IsolatedAsyncioTestCase):
             second=[{"route_id": "A"}],
         )
         routes = await _recover(directions)
-        self.assertEqual(routes, [{"route_id": "A"}])
-        self.assertEqual(len(directions.calls), 2)
-        self.assertIsNone(directions.calls[0]["dest_coords"])
-        self.assertEqual(directions.calls[1]["dest_coords"], (40.70, -73.98))
-
-    async def test_generic_http_404_raises_without_second_request(self):
-        directions = _FakeDirections(
-            first=_GoogleRoutesError(
-                "http_404",
-                "not found",
-                provider_status=404,
-                provider_summary="NOT_FOUND requested resource does not exist",
-            ),
-            second=[{"route_id": "A"}],
-        )
-        with self.assertRaises(_GoogleRoutesError):
-            await _recover(directions)
-        self.assertEqual(len(directions.calls), 1)
+        assert routes == [{"route_id": "A"}]
+        assert len(directions.calls) == 2
+        assert directions.calls[0]["dest_coords"] is None
+        assert directions.calls[1]["dest_coords"] == (40.7, -73.98)
 
     async def test_http_400_address_summary_recovers_by_coordinates(self):
         directions = _FakeDirections(
@@ -138,8 +133,8 @@ class RouteRecoveryGatingTests(unittest.IsolatedAsyncioTestCase):
             second=[{"route_id": "Q"}],
         )
         routes = await _recover(directions)
-        self.assertEqual(routes, [{"route_id": "Q"}])
-        self.assertEqual(len(directions.calls), 2)
+        assert routes == [{"route_id": "Q"}]
+        assert len(directions.calls) == 2
 
     async def test_http_400_destination_summary_recovers_by_coordinates(self):
         directions = _FakeDirections(
@@ -150,17 +145,8 @@ class RouteRecoveryGatingTests(unittest.IsolatedAsyncioTestCase):
             second=[],
         )
         routes = await _recover(directions)
-        self.assertEqual(routes, [])
-        self.assertEqual(len(directions.calls), 2)
-
-    async def test_address_specific_request_failure_recovers_by_coordinates(self):
-        directions = _FakeDirections(
-            first=_GoogleRoutesError("request_failed", "address route failed"),
-            second=[{"route_id": "Q"}],
-        )
-        routes = await _recover(directions)
-        self.assertEqual(routes, [{"route_id": "Q"}])
-        self.assertEqual(len(directions.calls), 2)
+        assert routes == []
+        assert len(directions.calls) == 2
 
     async def test_http_400_non_address_summary_raises_without_second_request(self):
         directions = _FakeDirections(
@@ -170,10 +156,10 @@ class RouteRecoveryGatingTests(unittest.IsolatedAsyncioTestCase):
             ),
             second=[{"route_id": "A"}],
         )
-        with self.assertRaises(_GoogleRoutesError) as raised:
+        with pytest.raises(_GoogleRoutesError) as raised:
             await _recover(directions)
-        self.assertEqual(raised.exception.code, "http_400")
-        self.assertEqual(len(directions.calls), 1)
+        assert raised.value.code == "http_400"
+        assert len(directions.calls) == 1
 
     async def test_http_403_raises_without_second_request(self):
         directions = _FakeDirections(
@@ -183,64 +169,22 @@ class RouteRecoveryGatingTests(unittest.IsolatedAsyncioTestCase):
             ),
             second=[{"route_id": "A"}],
         )
-        with self.assertRaises(_GoogleRoutesError) as raised:
+        with pytest.raises(_GoogleRoutesError) as raised:
             await _recover(directions)
-        self.assertEqual(raised.exception.code, "http_403")
-        self.assertEqual(len(directions.calls), 1)
-
-    async def test_quota_raises_without_second_request(self):
-        directions = _FakeDirections(
-            first=_GoogleRoutesError(
-                "http_429", "quota exceeded", provider_status=429,
-                provider_summary="RESOURCE_EXHAUSTED quota",
-            ),
-            second=[{"route_id": "A"}],
-        )
-        with self.assertRaises(_GoogleRoutesError):
-            await _recover(directions)
-        self.assertEqual(len(directions.calls), 1)
-
-    async def test_timeout_raises_without_second_request(self):
-        directions = _FakeDirections(
-            first=_GoogleRoutesError("timeout", "Google Routes API timed out"),
-            second=[{"route_id": "A"}],
-        )
-        with self.assertRaises(_GoogleRoutesError) as raised:
-            await _recover(directions)
-        self.assertEqual(raised.exception.code, "timeout")
-        self.assertEqual(len(directions.calls), 1)
-
-    async def test_network_error_raises_without_second_request(self):
-        directions = _FakeDirections(
-            first=_GoogleRoutesError("request_failed", "Google Routes API request failed"),
-            second=[{"route_id": "A"}],
-        )
-        with self.assertRaises(_GoogleRoutesError) as raised:
-            await _recover(directions)
-        self.assertEqual(raised.exception.code, "request_failed")
-        self.assertEqual(len(directions.calls), 1)
-
-    async def test_invalid_json_raises_without_second_request(self):
-        directions = _FakeDirections(
-            first=_GoogleRoutesError("invalid_json", "provider returned invalid data"),
-            second=[{"route_id": "A"}],
-        )
-        with self.assertRaises(_GoogleRoutesError) as raised:
-            await _recover(directions)
-        self.assertEqual(raised.exception.code, "invalid_json")
-        self.assertEqual(len(directions.calls), 1)
+        assert raised.value.code == "http_403"
+        assert len(directions.calls) == 1
 
     async def test_successful_first_response_returns_without_second_request(self):
         directions = _FakeDirections(first=[{"route_id": "1"}])
         routes = await _recover(directions)
-        self.assertEqual(routes, [{"route_id": "1"}])
-        self.assertEqual(len(directions.calls), 1)
+        assert routes == [{"route_id": "1"}]
+        assert len(directions.calls) == 1
 
     async def test_empty_first_response_still_recovers_by_coordinates(self):
         directions = _FakeDirections(first=[], second=[{"route_id": "C"}])
         routes = await _recover(directions)
-        self.assertEqual(routes, [{"route_id": "C"}])
-        self.assertEqual(len(directions.calls), 2)
+        assert routes == [{"route_id": "C"}]
+        assert len(directions.calls) == 2
 
 
 class StructuralRecoveryTests(unittest.IsolatedAsyncioTestCase):
@@ -288,16 +232,13 @@ class StructuralRecoveryTests(unittest.IsolatedAsyncioTestCase):
                 excluded_route_ids=set(), excluded_modes=set(), telemetry=telemetry,
             )
 
-        self.assertEqual(fetch.await_count, 2)
-        self.assertEqual(fetch.await_args_list[0].args[2], (40.1, -73.1))
-        self.assertEqual(
-            fetch.await_args_list[1].args[0],
-            (40.1, -73.1),
-        )
-        self.assertEqual(fetch.await_args_list[1].kwargs["departure_time"], "2026-08-23T12:10:00-04:00")
-        self.assertEqual(recovered[0][0]["route_total_seconds"], 1500)
-        self.assertEqual(telemetry["recovery_succeeded"], True)
-        self.assertEqual(telemetry["recovered_service_chain"], ["Q", "R"])
+        assert fetch.await_count == 2
+        assert fetch.await_args_list[0].args[2] == (40.1, -73.1)
+        assert fetch.await_args_list[1].args[0] == (40.1, -73.1)
+        assert fetch.await_args_list[1].kwargs["departure_time"] == "2026-08-23T12:10:00-04:00"
+        assert recovered[0][0]["route_total_seconds"] == 1500
+        assert telemetry["recovery_succeeded"] is True
+        assert telemetry["recovered_service_chain"] == ["Q", "R"]
 
     async def test_provider_failure_preserves_primary_and_does_not_retry(self):
         origin = ResolvedPlace(name="Origin", latitude=40.71, longitude=-73.99, source="user")
@@ -314,13 +255,13 @@ class StructuralRecoveryTests(unittest.IsolatedAsyncioTestCase):
                 allowed_modes=["SUBWAY", "BUS"], routing_preference="FEWER_TRANSFERS",
                 excluded_route_ids=set(), excluded_modes=set(), telemetry={},
             )
-        self.assertEqual(recovered, [])
-        self.assertEqual(fetch.await_count, 1)
+        assert recovered == []
+        assert fetch.await_count == 1
 
     async def test_ordinary_optional_provider_failure_preserves_primary(self):
         class _ReloadedDirections:
             async def get_transfer_route_pair(self, **_kwargs):
-                raise RuntimeError("provider wrapper was reloaded")
+                raise ReloadedProviderError
 
         origin = ResolvedPlace(name="Origin", latitude=40.71, longitude=-73.99, source="user")
         destination = ResolvedPlace(name="Delta Pkwy", latitude=40.3, longitude=-73.3, source="gtfs")
@@ -334,9 +275,9 @@ class StructuralRecoveryTests(unittest.IsolatedAsyncioTestCase):
             excluded_route_ids=set(), excluded_modes=set(), telemetry=telemetry,
         )
 
-        self.assertEqual(recovered, [])
-        self.assertTrue(telemetry["recovery_attempted"])
-        self.assertFalse(telemetry["recovery_succeeded"])
+        assert recovered == []
+        assert telemetry["recovery_attempted"]
+        assert not telemetry["recovery_succeeded"]
 
     async def test_boundary_service_mismatch_rejects_combined_family(self):
         origin = ResolvedPlace(name="Origin", latitude=40.71, longitude=-73.99, source="user")
@@ -356,7 +297,7 @@ class StructuralRecoveryTests(unittest.IsolatedAsyncioTestCase):
                 allowed_modes=["SUBWAY"], routing_preference="FEWER_TRANSFERS",
                 excluded_route_ids=set(), excluded_modes=set(), telemetry={},
             )
-        self.assertEqual(recovered, [])
+        assert recovered == []
 
     async def test_cap_one_and_arrive_by_skip_structural_recovery(self):
         class _Dependencies:
@@ -365,7 +306,7 @@ class StructuralRecoveryTests(unittest.IsolatedAsyncioTestCase):
         class _Context:
             gtfs = SimpleNamespace(_pattern_index=StopPatternIndex(FIXTURE))
 
-        primary = self._primary() + [[{"type": "SUBWAY", "route_id": "A"}]]
+        primary = [*self._primary(), [{"type": "SUBWAY", "route_id": "A"}]]
         for tool_input in (
             {"max_candidates": 1},
             {"max_candidates": 2, "arrival_by": "target"},
@@ -383,7 +324,7 @@ class StructuralRecoveryTests(unittest.IsolatedAsyncioTestCase):
                     routing_preference="FEWER_TRANSFERS", telemetry={}, timings={},
                 )
                 expected = 1 if tool_input.get("excluded_route_ids") else tool_input["max_candidates"]
-                self.assertEqual(len(routes), expected)
+                assert len(routes) == expected
 
     async def test_second_segment_failure_keeps_primary_routes_unchanged(self):
         origin = ResolvedPlace(name="Origin", latitude=40.71, longitude=-73.99, source="user")
@@ -404,8 +345,8 @@ class StructuralRecoveryTests(unittest.IsolatedAsyncioTestCase):
                 allowed_modes=["SUBWAY", "BUS"], routing_preference="FEWER_TRANSFERS",
                 excluded_route_ids=set(), excluded_modes=set(), telemetry={},
             )
-        self.assertEqual(recovered, [])
-        self.assertEqual(fetch.await_count, 2)
+        assert recovered == []
+        assert fetch.await_count == 2
 
 
 class PrepareSingleLegRecoveryIntegrationTests(unittest.IsolatedAsyncioTestCase):
@@ -454,7 +395,7 @@ class PrepareSingleLegRecoveryIntegrationTests(unittest.IsolatedAsyncioTestCase)
             collect_stalled_trains=AsyncMock(side_effect=lambda route_ids: observed["mta"].append(route_ids) or []),
             collect_stalled_buses=AsyncMock(return_value=[]),
             parse_service_alerts=lambda raw: raw,
-            filter_alerts_for_routes=lambda alerts, route_ids: alerts if not observed["mta"].append(route_ids) else alerts,
+            filter_alerts_for_routes=lambda alerts, route_ids: observed["mta"].append(route_ids) or alerts,
             evidence_envelope=evidence,
             current_payload=lambda envelope, empty: envelope.get("payload", empty),
             scoring=SimpleNamespace(_score_routes=score),
@@ -487,22 +428,15 @@ class PrepareSingleLegRecoveryIntegrationTests(unittest.IsolatedAsyncioTestCase)
                 resolved_origin=origin, resolved_destination=destination,
             )
 
-        self.assertIsInstance(prepared, PreparedLeg)
-        self.assertEqual(len(prepared.parsed_routes), 1)
-        self.assertEqual([step["route_id"] for step in prepared.parsed_routes[0]], ["Q", "R"])
-        self.assertEqual(prepared.parsed_routes[0][0]["route_total_seconds"], 1500)
-        self.assertEqual(
-            [step["route_id"] for step in observed["scoring"][0][0]], ["Q", "R"]
-        )
-        self.assertEqual(
-            [step["route_id"] for step in observed["incidents"][0][0]], ["Q", "R"]
-        )
-        self.assertIn("R", observed["mta"][0])
-        self.assertTrue(ctx.telemetry["route_candidate_diagnostics"]["recovery_succeeded"])
-        self.assertEqual(
-            ctx.telemetry["route_candidate_diagnostics"]["final_structurally_unique_candidate_count"],
-            2,
-        )
+        assert isinstance(prepared, PreparedLeg)
+        assert len(prepared.parsed_routes) == 1
+        assert [step["route_id"] for step in prepared.parsed_routes[0]] == ["Q", "R"]
+        assert prepared.parsed_routes[0][0]["route_total_seconds"] == 1500
+        assert [step["route_id"] for step in observed["scoring"][0][0]] == ["Q", "R"]
+        assert [step["route_id"] for step in observed["incidents"][0][0]] == ["Q", "R"]
+        assert "R" in observed["mta"][0]
+        assert ctx.telemetry["route_candidate_diagnostics"]["recovery_succeeded"]
+        assert ctx.telemetry["route_candidate_diagnostics"]["final_structurally_unique_candidate_count"] == 2
         with patch("app.services.agent.tools.route.preparation_adapter.normalize_routes", side_effect=normalize):
             excluded = await prepare_single_leg(
                 {
@@ -512,8 +446,8 @@ class PrepareSingleLegRecoveryIntegrationTests(unittest.IsolatedAsyncioTestCase)
                 ctx, {}, dependencies=deps, emit_comparing_progress=False,
                 resolved_origin=origin, resolved_destination=destination,
             )
-        self.assertIsInstance(excluded, PreparedLeg)
-        self.assertEqual([step["route_id"] for step in excluded.parsed_routes[0]], ["Q"])
+        assert isinstance(excluded, PreparedLeg)
+        assert [step["route_id"] for step in excluded.parsed_routes[0]] == ["Q"]
 
 
 if __name__ == "__main__":

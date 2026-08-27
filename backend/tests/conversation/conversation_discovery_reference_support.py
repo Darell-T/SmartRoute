@@ -23,6 +23,7 @@ from __future__ import annotations
 import dataclasses
 
 from app.services.agent import trip_state as trip_state_module
+
 from tests.conversation.conversation_discovery_fixtures import (
     CONFLICTING_LABEL,
     DISCOVERY_REFERENCE_TOOL_PROFILE,
@@ -130,6 +131,7 @@ class _DiscoveryReferenceBase(_DiscoveryRouteBase):
         models = tuple(
             call["model"] for call in self.loop.client.messages.calls
         )
+        assert scenario_id
         return SelectionEvidence(
             events=events,
             trace=trace,
@@ -220,38 +222,12 @@ class _DiscoveryReferenceBase(_DiscoveryRouteBase):
             for event in ev.events
             if event.type == "tool_end"
         }
-        self.assertEqual(
-            ev.offered,
-            DISCOVERY_REFERENCE_TOOL_PROFILE,
-            f"{scenario_id} selection must offer exactly "
-            f"{sorted(DISCOVERY_REFERENCE_TOOL_PROFILE)}; "
-            f"actual offered={sorted(ev.offered)}; "
-            f"executed={names}; tool_ends={end_map}; "
-            f"state.set={ev.state['active_discovery_set_id']!r}; "
-            f"state.place={ev.state['selected_place_id']!r}; "
-            f"ctx_active_discovery={'active_discovery:' in ev.context}; "
-            f"ctx_has_selected_place={'has_selected_place' in ev.context}",
-        )
-        self.assertEqual(
-            names,
-            ["present_places"],
-            f"{scenario_id} selection presents the stored ordinal-2 place",
-        )
-        self.assertFalse(
-            set(names) & set(REFERENCE_FORBIDDEN_TOOLS),
-            f"{scenario_id} forbidden tool executed on selection",
-        )
+        assert ev.offered == DISCOVERY_REFERENCE_TOOL_PROFILE, f"{scenario_id} selection must offer exactly " f"{sorted(DISCOVERY_REFERENCE_TOOL_PROFILE)}; " f"actual offered={sorted(ev.offered)}; " f"executed={names}; tool_ends={end_map}; " f"state.set={ev.state['active_discovery_set_id']!r}; " f"state.place={ev.state['selected_place_id']!r}; " f"ctx_active_discovery={'active_discovery:' in ev.context}; " f"ctx_has_selected_place={'has_selected_place' in ev.context}"
+        assert names == ["present_places"], f"{scenario_id} selection presents the stored ordinal-2 place"
+        assert not set(names) & set(REFERENCE_FORBIDDEN_TOOLS), f"{scenario_id} forbidden tool executed on selection"
         expected_mode, expected_model = policy_model(self.loop, mode)
-        self.assertEqual(
-            (ev.trace.initial_mode, ev.trace.final_mode),
-            (expected_mode, expected_mode),
-            f"{scenario_id} policy mode",
-        )
-        self.assertEqual(
-            list(ev.models),
-            [expected_model],
-            f"{scenario_id} policy models",
-        )
+        assert (ev.trace.initial_mode, ev.trace.final_mode) == (expected_mode, expected_mode), f"{scenario_id} policy mode"
+        assert list(ev.models) == [expected_model], f"{scenario_id} policy models"
 
     def _assert_reference_chain(
         self,
@@ -264,72 +240,23 @@ class _DiscoveryReferenceBase(_DiscoveryRouteBase):
 
         state = ev.state
         with self.subTest(gap="ordinal2_selected_from_store"):
-            self.assertEqual(
-                state["active_discovery_set_id"],
-                set_id,
-                f"{scenario_id} selection keeps the real discovery set",
-            )
-            self.assertEqual(
-                state["selected_place_id"],
-                ev.place2["place_id"],
-                f"{scenario_id} selected place is the exact real ordinal-2 "
-                f"opaque id; actual={state['selected_place_id']!r}",
-            )
-        self.assertEqual(
-            (state["active_candidate_set_id"], state["selected_candidate_id"]),
-            (None, None),
-            f"{scenario_id} selection stores/selects no candidate",
-        )
-        self.assertEqual(
-            (
-                state["temporary_candidate_set_id"],
-                state["temporary_selected_candidate_id"],
-                state["temporary_base_candidate_set_id"],
-            ),
-            (None, None, None),
-            f"{scenario_id} no temporary scenario after selection",
-        )
-        self.assertEqual(
-            ev.mocks["stored_candidate_set_ids"],
-            [],
-            f"{scenario_id} selection persists no candidate set",
-        )
-        self.assertEqual(
-            route_cards(ev.events),
-            [],
-            f"{scenario_id} selection emits no route card",
-        )
-        self.assertEqual(ev.events[0].type, "meta", f"{scenario_id} meta first")
-        self.assertEqual(ev.events[-1].type, "done", f"{scenario_id} done last")
-        self.assertIn(
-            "active_discovery:",
-            ev.context,
-            f"{scenario_id} context carries the active discovery block",
-        )
-        self.assertIn(
-            ev.place2["place_id"],
-            ev.context,
-            f"{scenario_id} context carries the real ordinal-2 opaque id",
-        )
+            assert state["active_discovery_set_id"] == set_id, f"{scenario_id} selection keeps the real discovery set"
+            assert state["selected_place_id"] == ev.place2["place_id"], f"{scenario_id} selected place is the exact real ordinal-2 " f"opaque id; actual={state['selected_place_id']!r}"
+        assert (state["active_candidate_set_id"], state["selected_candidate_id"]) == (None, None), f"{scenario_id} selection stores/selects no candidate"
+        assert (state["temporary_candidate_set_id"], state["temporary_selected_candidate_id"], state["temporary_base_candidate_set_id"]) == (None, None, None), f"{scenario_id} no temporary scenario after selection"
+        assert ev.mocks["stored_candidate_set_ids"] == [], f"{scenario_id} selection persists no candidate set"
+        assert route_cards(ev.events) == [], f"{scenario_id} selection emits no route card"
+        assert ev.events[0].type == "meta", f"{scenario_id} meta first"
+        assert ev.events[-1].type == "done", f"{scenario_id} done last"
+        assert "active_discovery:" in ev.context, f"{scenario_id} context carries the active discovery block"
+        assert ev.place2["place_id"] in ev.context, f"{scenario_id} context carries the real ordinal-2 opaque id"
         for marker in ("latitude", "longitude", "ChIJ", "provider_place_id"):
-            self.assertNotIn(
-                marker,
-                ev.context,
-                f"{scenario_id} context leaked {marker}",
-            )
+            assert marker not in ev.context, f"{scenario_id} context leaked {marker}"
         for marker in ("latitude", "longitude", "ChIJ"):
-            self.assertNotIn(
-                marker,
-                ev.result_blob,
-                f"{scenario_id} model tool result leaked {marker}",
-            )
+            assert marker not in ev.result_blob, f"{scenario_id} model tool result leaked {marker}"
         lowered = ev.trace.final_text.casefold()
         for marker in LEAK_MARKERS:
-            self.assertNotIn(
-                marker,
-                lowered,
-                f"{scenario_id} rider text leaked {marker}",
-            )
+            assert marker not in lowered, f"{scenario_id} rider text leaked {marker}"
 
     def _assert_route_attempted(
         self,
@@ -347,49 +274,18 @@ class _DiscoveryReferenceBase(_DiscoveryRouteBase):
             for event in ev.events
             if event.type == "tool_end"
         }
-        self.assertEqual(
-            ev.offered,
-            ROUTE_NAVIGATION_TOOL_PROFILE,
-            f"{scenario_id} navigation must offer exactly "
-            f"{sorted(ROUTE_NAVIGATION_TOOL_PROFILE)}; "
-            f"actual offered={sorted(ev.offered)}; "
-            f"executed={names}; tool_ends={end_map}; "
-            f"state.place={ev.state['selected_place_id']!r}; "
-            f"state.set={ev.state['active_discovery_set_id']!r}; "
-            f"state.candidate_set={ev.state['active_candidate_set_id']!r}; "
-            f"ctx_active_discovery={'active_discovery:' in ev.context}; "
-            f"ctx_has_selected_place={'has_selected_place' in ev.context}",
-        )
-        self.assertEqual(
-            names,
-            ["prepare_route_options", "present_route"],
-            f"{scenario_id} navigation tool sequence",
-        )
-        self.assertFalse(
-            set(names) & set(NAVIGATION_FORBIDDEN_TOOLS),
-            f"{scenario_id} forbidden tool executed on navigation",
-        )
+        assert ev.offered == ROUTE_NAVIGATION_TOOL_PROFILE, f"{scenario_id} navigation must offer exactly " f"{sorted(ROUTE_NAVIGATION_TOOL_PROFILE)}; " f"actual offered={sorted(ev.offered)}; " f"executed={names}; tool_ends={end_map}; " f"set_id={set_id!r}; " f"state.place={ev.state['selected_place_id']!r}; " f"state.set={ev.state['active_discovery_set_id']!r}; " f"state.candidate_set={ev.state['active_candidate_set_id']!r}; " f"ctx_active_discovery={'active_discovery:' in ev.context}; " f"ctx_has_selected_place={'has_selected_place' in ev.context}"
+        assert names == ["prepare_route_options", "present_route"], f"{scenario_id} navigation tool sequence"
+        assert not set(names) & set(NAVIGATION_FORBIDDEN_TOOLS), f"{scenario_id} forbidden tool executed on navigation"
         expected_mode, expected_model = policy_model(self.loop, mode)
-        self.assertEqual(
-            (ev.trace.initial_mode, ev.trace.final_mode),
-            (expected_mode, expected_mode),
-            f"{scenario_id} policy mode",
-        )
+        assert (ev.trace.initial_mode, ev.trace.final_mode) == (expected_mode, expected_mode), f"{scenario_id} policy mode"
         # Two scripted tool rounds (prepare then present); present_route is
         # terminal when it emits the recommended card, so the scripted
         # post-present text round is never consumed by a third model call.
-        self.assertEqual(
-            list(ev.models),
-            [expected_model, expected_model],
-            f"{scenario_id} policy models",
-        )
+        assert list(ev.models) == [expected_model, expected_model], f"{scenario_id} policy models"
         lowered = ev.trace.final_text.casefold()
         for marker in LEAK_MARKERS:
-            self.assertNotIn(
-                marker,
-                lowered,
-                f"{scenario_id} rider text leaked {marker}",
-            )
+            assert marker not in lowered, f"{scenario_id} rider text leaked {marker}"
 
     def _assert_route_chain(
         self,
@@ -401,18 +297,9 @@ class _DiscoveryReferenceBase(_DiscoveryRouteBase):
         """Required navigation invariants (checked after the offer gate)."""
 
         state = ev.state
-        self.assertEqual(
-            ev.trace.tool_calls[0][1]["destination_place_id"],
-            ev.place2["place_id"],
-            f"{scenario_id} prepare routes by the exact selected opaque id",
-        )
+        assert ev.trace.tool_calls[0][1]["destination_place_id"] == ev.place2["place_id"], f"{scenario_id} prepare routes by the exact selected opaque id"
         with self.subTest(gap="stored_identity_at_boundary"):
-            self.assertEqual(
-                ev.mocks["prepare_single_leg"].await_count,
-                1,
-                f"{scenario_id} provider seam reached exactly once; "
-                f"actual={ev.mocks['prepare_single_leg'].await_count}",
-            )
+            assert ev.mocks["prepare_single_leg"].await_count == 1, f"{scenario_id} provider seam reached exactly once; " f"actual={ev.mocks['prepare_single_leg'].await_count}"
             resolved = (
                 ev.mocks["prepare_single_leg"].await_args.kwargs.get(
                     "resolved_destination"
@@ -420,85 +307,22 @@ class _DiscoveryReferenceBase(_DiscoveryRouteBase):
                 if ev.mocks["prepare_single_leg"].await_count
                 else None
             )
-            self.assertIsNotNone(
-                resolved,
-                f"{scenario_id} provider boundary must receive the stored "
-                f"canonical destination",
-            )
-            self.assertEqual(
-                resolved.name,
-                "B Pizza",
-                f"{scenario_id} stored name wins over the conflicting label",
-            )
-            self.assertEqual(
-                resolved.latitude,
-                float(ev.place2["latitude"]),
-                f"{scenario_id} stored latitude wins",
-            )
-            self.assertEqual(
-                resolved.longitude,
-                float(ev.place2["longitude"]),
-                f"{scenario_id} stored longitude wins",
-            )
-            self.assertEqual(
-                resolved.place_id,
-                ev.place2["place_id"],
-                f"{scenario_id} stored opaque identity wins",
-            )
-            self.assertEqual(
-                resolved.provider_place_id,
-                ev.place2["provider_place_id"],
-                f"{scenario_id} stored provider identity stays private",
-            )
+            assert resolved is not None, f"{scenario_id} provider boundary must receive the stored " f"canonical destination"
+            assert resolved.name == "B Pizza", f"{scenario_id} stored name wins over the conflicting label"
+            assert resolved.latitude == float(ev.place2["latitude"]), f"{scenario_id} stored latitude wins"
+            assert resolved.longitude == float(ev.place2["longitude"]), f"{scenario_id} stored longitude wins"
+            assert resolved.place_id == ev.place2["place_id"], f"{scenario_id} stored opaque identity wins"
+            assert resolved.provider_place_id == ev.place2["provider_place_id"], f"{scenario_id} stored provider identity stays private"
         cards = route_cards(ev.events)
-        self.assertEqual(
-            len(cards),
-            1,
-            f"{scenario_id} exactly one route card; actual={len(cards)}",
-        )
-        self.assertEqual(
-            len(ev.mocks["stored_candidate_set_ids"]),
-            1,
-            f"{scenario_id} exactly one candidate set stored; "
-            f"actual={ev.mocks['stored_candidate_set_ids']}",
-        )
-        self.assertEqual(
-            state["active_candidate_set_id"],
-            ev.mocks["stored_candidate_set_ids"][0],
-            f"{scenario_id} accepted active candidate set committed",
-        )
-        self.assertEqual(
-            state["selected_candidate_id"],
-            FIXED_CANDIDATE_ID,
-            f"{scenario_id} accepted selected candidate committed",
-        )
-        self.assertEqual(
-            (
-                state["temporary_candidate_set_id"],
-                state["temporary_selected_candidate_id"],
-                state["temporary_base_candidate_set_id"],
-            ),
-            (None, None, None),
-            f"{scenario_id} no temporary scenario after the commit",
-        )
-        self.assertEqual(
-            state["selected_place_id"],
-            ev.place2["place_id"],
-            f"{scenario_id} selected place stays the ordinal-2 opaque id",
-        )
-        self.assertEqual(
-            state["active_discovery_set_id"],
-            set_id,
-            f"{scenario_id} discovery set stays correctly associated",
-        )
-        self.assertEqual(
-            state["destination"],
-            "B Pizza",
-            f"{scenario_id} destination is the stored canonical name",
-        )
-        self.assertEqual(
-            ev.events[-1].type, "done", f"{scenario_id} terminal event"
-        )
+        assert len(cards) == 1, f"{scenario_id} exactly one route card; actual={len(cards)}"
+        assert len(ev.mocks["stored_candidate_set_ids"]) == 1, f"{scenario_id} exactly one candidate set stored; " f"actual={ev.mocks['stored_candidate_set_ids']}"
+        assert state["active_candidate_set_id"] == ev.mocks["stored_candidate_set_ids"][0], f"{scenario_id} accepted active candidate set committed"
+        assert state["selected_candidate_id"] == FIXED_CANDIDATE_ID, f"{scenario_id} accepted selected candidate committed"
+        assert (state["temporary_candidate_set_id"], state["temporary_selected_candidate_id"], state["temporary_base_candidate_set_id"]) == (None, None, None), f"{scenario_id} no temporary scenario after the commit"
+        assert state["selected_place_id"] == ev.place2["place_id"], f"{scenario_id} selected place stays the ordinal-2 opaque id"
+        assert state["active_discovery_set_id"] == set_id, f"{scenario_id} discovery set stays correctly associated"
+        assert state["destination"] == "B Pizza", f"{scenario_id} destination is the stored canonical name"
+        assert ev.events[-1].type == "done", f"{scenario_id} terminal event"
 
 
 __all__ = ("RouteEvidence", "SelectionEvidence", "_DiscoveryReferenceBase")

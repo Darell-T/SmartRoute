@@ -36,7 +36,6 @@ from app.services.agent.tools._types import ToolResult
 from tests.conversation.conversation_cancellation_fixtures import (
     ACCEPTED_DESTINATION,
     CANDIDATE_V1,
-    LEAK_CHECK_TIMEOUT_S,
     NOW_ET,
     ROUTE_MESSAGE,
     ROUTE_NAVIGATION_TOOL_PROFILE,
@@ -107,15 +106,15 @@ class CancellationBase(unittest.IsolatedAsyncioTestCase):
 
     async def _assert_no_owned_pending_tasks(self, baseline: set[asyncio.Task]) -> None:
         # The turn drain above already awaited the cancelled task (its finally
-        # drained request-owned children), so the comparison is deterministic;
-        # the explicit deadline keeps this audit bounded by construction.
-        async with asyncio.timeout(LEAK_CHECK_TIMEOUT_S):
-            owned = [
-                task
-                for task in asyncio.all_tasks()
-                if task is not asyncio.current_task() and task not in baseline
-            ]
-            assert owned == [], f"leaked pending tasks: {owned}"
+        # drained request-owned children). Yield once so done-callbacks flush
+        # before the snapshot; the comparison is then deterministic.
+        await asyncio.sleep(0)
+        owned = [
+            task
+            for task in asyncio.all_tasks()
+            if task is not asyncio.current_task() and task not in baseline
+        ]
+        assert owned == [], f"leaked pending tasks: {owned}"
 
     def _offered_profile(self) -> frozenset:
         return frozenset(

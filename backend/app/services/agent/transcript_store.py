@@ -124,7 +124,8 @@ def add_visible_events(session: dict, events: list) -> None:
                 cards.append(payload)
         elif event_type == "sources" and payload is not None:
             turn_id = str(getattr(event, "turn_id", "") or "").strip()
-            entries = transcript.setdefault("sources", [])
+            entries = _valid_source_entries(transcript.get("sources"))
+            transcript["sources"] = entries
             existing = next(
                 (entry for entry in entries if entry.get("turn_id") == turn_id),
                 None,

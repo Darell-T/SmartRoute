@@ -7,6 +7,7 @@ from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
+import pytest
 from app.services.trips.crowds import search as crowd_search
 from app.services.trips.crowds import search_normalization
 from app.services.trips.crowds import search_provider as crowd_search_provider
@@ -48,9 +49,9 @@ class CrowdSearchNormalizationTests(unittest.TestCase):
             observed_at=self.observed_at,
         )
 
-        self.assertEqual(events[0]["source_class"], "official_web")
-        self.assertTrue(events[0]["scoring_authorized"])
-        self.assertEqual(events[0]["venue_latitude"], self.area.latitude)
+        assert events[0]["source_class"] == "official_web"
+        assert events[0]["scoring_authorized"]
+        assert events[0]["venue_latitude"] == self.area.latitude
 
     def test_independent_x_is_corroborative_and_cannot_score(self):
         source = "https://x.com/randomaccount/status/123"
@@ -72,8 +73,8 @@ class CrowdSearchNormalizationTests(unittest.TestCase):
             observed_at=self.observed_at,
         )
 
-        self.assertEqual(events[0]["source_class"], "independent_x")
-        self.assertFalse(events[0]["scoring_authorized"])
+        assert events[0]["source_class"] == "independent_x"
+        assert not events[0]["scoring_authorized"]
 
     def test_official_evidence_without_a_location_cannot_score(self):
         source = "https://www.lincolncenter.org/venue/calendar"
@@ -94,7 +95,7 @@ class CrowdSearchNormalizationTests(unittest.TestCase):
             observed_at=self.observed_at,
         )
 
-        self.assertFalse(events[0]["scoring_authorized"])
+        assert not events[0]["scoring_authorized"]
 
     def test_uncited_or_unknown_hotspot_output_is_dropped(self):
         events = search_normalization.normalize_search_payload(
@@ -114,15 +115,13 @@ class CrowdSearchNormalizationTests(unittest.TestCase):
             observed_at=self.observed_at,
         )
 
-        self.assertEqual(events, [])
+        assert events == []
 
     def test_prompt_injection_does_not_format_json_contract_braces(self):
-        rendered = crowd_search_provider.PROMPT.replace(
-            "{areas}", "columbus_lincoln"
-        )
+        rendered = crowd_search_provider.PROMPT.replace("{areas}", "columbus_lincoln")
 
-        self.assertIn('{"events":[', rendered)
-        self.assertIn("columbus_lincoln", rendered)
+        assert '{"events":[' in rendered
+        assert "columbus_lincoln" in rendered
 
     def test_cache_key_is_hotspot_and_time_scoped_without_raw_location_data(self):
         first = crowd_search._cache_key(
@@ -143,10 +142,10 @@ class CrowdSearchNormalizationTests(unittest.TestCase):
             datetime.fromisoformat("2026-07-25T20:05:00-04:00"),
         )
 
-        self.assertEqual(first, same_bucket)
-        self.assertNotEqual(first, different)
-        self.assertNotIn(self.area.hotspot_name, first)
-        self.assertNotIn(str(self.area.latitude), first)
+        assert first == same_bucket
+        assert first != different
+        assert self.area.hotspot_name not in first
+        assert str(self.area.latitude) not in first
 
 
 class CrowdSearchCacheTests(unittest.IsolatedAsyncioTestCase):
@@ -165,7 +164,9 @@ class CrowdSearchCacheTests(unittest.IsolatedAsyncioTestCase):
     async def test_empty_or_disabled_search_does_not_call_provider(self):
         with (
             patch.object(crowd_search.cache, "cache_get", return_value=None),
-            patch.object(crowd_search, "_run_search", new_callable=AsyncMock) as provider,
+            patch.object(
+                crowd_search, "_run_search", new_callable=AsyncMock
+            ) as provider,
         ):
             empty = await crowd_search.search_hotspots(
                 [], travel_at=self.area.expected_at, allow_live_search=True
@@ -176,15 +177,17 @@ class CrowdSearchCacheTests(unittest.IsolatedAsyncioTestCase):
                 allow_live_search=False,
             )
 
-        self.assertEqual(empty["status"], "not_required")
-        self.assertEqual(disabled["status"], "not_required")
+        assert empty["status"] == "not_required"
+        assert disabled["status"] == "not_required"
         provider.assert_not_awaited()
 
     async def test_valid_cache_returns_without_calling_provider(self):
         cached = '{"status":"complete","events":[],"completed_sources":["web"]}'
         with (
             patch.object(crowd_search.cache, "cache_get", return_value=cached),
-            patch.object(crowd_search, "_run_search", new_callable=AsyncMock) as provider,
+            patch.object(
+                crowd_search, "_run_search", new_callable=AsyncMock
+            ) as provider,
         ):
             result = await crowd_search.search_hotspots(
                 [self.area],
@@ -192,8 +195,8 @@ class CrowdSearchCacheTests(unittest.IsolatedAsyncioTestCase):
                 allow_live_search=True,
             )
 
-        self.assertTrue(result["cache_hit"])
-        self.assertEqual(result["completed_sources"], ["web"])
+        assert result["cache_hit"]
+        assert result["completed_sources"] == ["web"]
         provider.assert_not_awaited()
 
     async def test_invalid_cache_falls_through_and_caches_partial_result(self):
@@ -218,11 +221,10 @@ class CrowdSearchCacheTests(unittest.IsolatedAsyncioTestCase):
                 allow_live_search=True,
             )
 
-        self.assertFalse(result["cache_hit"])
+        assert not result["cache_hit"]
         provider.assert_awaited_once()
         cache_set.assert_called_once()
-        self.assertEqual(cache_set.call_args.args[2], 300)
-
+        assert cache_set.call_args.args[2] == 300
 
 
 class CrowdSearchProviderTests(unittest.IsolatedAsyncioTestCase):
@@ -241,23 +243,22 @@ class CrowdSearchProviderTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
-        self.assertEqual(
-            crowd_search_provider._citation_urls(response),
-            {
-                "https://example.com/direct",
-                "https://example.com/mapping",
-                "http://example.com/href",
-                "https://example.com/object",
-            },
-        )
+        assert crowd_search_provider._citation_urls(response) == {
+            "https://example.com/direct",
+            "https://example.com/mapping",
+            "http://example.com/href",
+            "https://example.com/object",
+        }
 
     async def test_disabled_provider_returns_bounded_unavailable_result(self):
         with patch.dict("os.environ", {"GROK_CROWD_SEARCH_ENABLED": "0"}):
-            result = await crowd_search_provider.run_search({}, datetime.now().astimezone())
+            result = await crowd_search_provider.run_search(
+                {}, datetime.now().astimezone()
+            )
 
-        self.assertEqual(result["status"], "unavailable")
-        self.assertEqual(result["failure_phase"], "disabled")
-        self.assertEqual(result["events"], [])
+        assert result["status"] == "unavailable"
+        assert result["failure_phase"] == "disabled"
+        assert result["events"] == []
 
     async def test_one_async_request_configures_parallel_web_and_x_tools(self):
         area = HotspotHit(
@@ -280,8 +281,12 @@ class CrowdSearchProviderTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(crowd_search_provider, "_CLIENT", client),
-            patch.object(crowd_search_provider, "system", side_effect=lambda value: value),
-            patch.object(crowd_search_provider, "user", side_effect=lambda value: value),
+            patch.object(
+                crowd_search_provider, "system", side_effect=lambda value: value
+            ),
+            patch.object(
+                crowd_search_provider, "user", side_effect=lambda value: value
+            ),
             patch.object(crowd_search_provider, "web_search", return_value="web-tool"),
             patch.object(crowd_search_provider, "x_search", return_value="x-tool"),
             patch.object(
@@ -295,12 +300,12 @@ class CrowdSearchProviderTests(unittest.IsolatedAsyncioTestCase):
                 area.expected_at,
             )
 
-        self.assertEqual(result["status"], "complete")
+        assert result["status"] == "complete"
         chat.sample.assert_awaited_once_with()
         kwargs = client.chat.create.call_args.kwargs
-        self.assertTrue(kwargs["parallel_tool_calls"])
-        self.assertEqual(kwargs["max_turns"], 2)
-        self.assertEqual(len(kwargs["tools"]), 2)
+        assert kwargs["parallel_tool_calls"]
+        assert kwargs["max_turns"] == 2
+        assert len(kwargs["tools"]) == 2
 
     async def test_cancellation_propagates_to_the_async_provider_call(self):
         area = HotspotHit(
@@ -319,21 +324,29 @@ class CrowdSearchProviderTests(unittest.IsolatedAsyncioTestCase):
             started.set()
             await asyncio.Event().wait()
 
-        chat = SimpleNamespace(append=Mock(), sample=AsyncMock(side_effect=pending_sample))
+        chat = SimpleNamespace(
+            append=Mock(), sample=AsyncMock(side_effect=pending_sample)
+        )
         client = SimpleNamespace(chat=SimpleNamespace(create=Mock(return_value=chat)))
         with (
             patch.object(crowd_search_provider, "_CLIENT", client),
-            patch.object(crowd_search_provider, "system", side_effect=lambda value: value),
-            patch.object(crowd_search_provider, "user", side_effect=lambda value: value),
+            patch.object(
+                crowd_search_provider, "system", side_effect=lambda value: value
+            ),
+            patch.object(
+                crowd_search_provider, "user", side_effect=lambda value: value
+            ),
             patch.object(crowd_search_provider, "web_search", return_value="web-tool"),
             patch.object(crowd_search_provider, "x_search", return_value="x-tool"),
         ):
             task = asyncio.create_task(
-                crowd_search_provider.run_search({area.hotspot_key: area}, area.expected_at)
+                crowd_search_provider.run_search(
+                    {area.hotspot_key: area}, area.expected_at
+                )
             )
             await started.wait()
             task.cancel()
-            with self.assertRaises(asyncio.CancelledError):
+            with pytest.raises(asyncio.CancelledError):
                 await task
 
     async def test_lifecycle_close_releases_the_shared_client(self):

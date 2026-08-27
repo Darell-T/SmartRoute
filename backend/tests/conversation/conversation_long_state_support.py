@@ -24,14 +24,16 @@ import unittest
 from contextlib import nullcontext
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from app.services.agent import candidate_store, discovery_store
+from app.services.agent import trip_state as trip_state_module
+from app.services.agent.tools._types import ToolResult
+from app.services.agent.tools.places import discover_places
+from app.services.agent.tools.transit import evidence as transit_evidence
+from app.services.agent.tools.transit import lookup_arrivals
 from app.services.incidents import index as incident_index
 from app.services.mta import realtime as mta_realtime
-from app.services.agent.tools.transit import evidence as transit_evidence
-from app.services.agent import trip_state as trip_state_module
-from app.services.agent.tools.transit import lookup_arrivals
-from app.services.agent.tools.places import discover_places
-from app.services.agent.tools._types import ToolResult
+
 from tests.conversation.conversation_discovery_fixtures import poi_result
 from tests.conversation.conversation_long_state_fixtures import (
     ACCEPT_MESSAGE,
@@ -313,8 +315,7 @@ def _model_led_rounds(
                     (
                         str(item.get("name") or "")
                         for item in calls
-                        if str(item.get("name") or "")
-                        in {"check_transit"}
+                        if str(item.get("name") or "") == "check_transit"
                     ),
                     None,
                 )
@@ -362,7 +363,7 @@ def stored_place(session_id: str, discovery_set_id: str, ordinal: int) -> dict:
     from app.services.agent import discovery_store
     record = discovery_store.load_discovery_set(discovery_set_id, session_id=session_id)
     if record is None:
-        raise AssertionError(f"discovery set {discovery_set_id} not stored")
+        pytest.fail(f"discovery set {discovery_set_id} not stored")
     return record["places"][ordinal - 1]
 
 @dataclasses.dataclass(frozen=True)
@@ -375,7 +376,7 @@ class SessionProjection:
     preferences: dict
 
     @classmethod
-    def capture(cls, session: dict) -> "SessionProjection":
+    def capture(cls, session: dict) -> SessionProjection:
         state = trip_state_module.get_trip_state(session)
         active = session.get("active_trip")
         return cls(
@@ -389,7 +390,7 @@ class SessionProjection:
                 (session.get("profile") or {}).get("preferences") or {}),
         )
 
-    def diff(self, other: "SessionProjection", *, exclude: tuple = ()) -> list:
+    def diff(self, other: SessionProjection, *, exclude: tuple = ()) -> list:
         changed = ["active_card_id"] if self.active_card_id != other.active_card_id else []
         changed += ["route_card_ids"] if self.route_card_ids != other.route_card_ids else []
         changed += ["preferences"] if self.preferences != other.preferences else []
@@ -428,11 +429,19 @@ class _LongStateBase(unittest.IsolatedAsyncioTestCase):
         trace = self.loop.TurnTrace()
         mocks = {} if mocks is None else dict(mocks)
         adapted_rounds, evidence_id = _model_led_rounds(rounds, turn_id=turn_id)
-        kwargs = dict(session=session, session_id=session_id, message=message,
-                      rounds=adapted_rounds, mode=mode, trace=trace, mocks=mocks,
-                      turn_id=turn_id, prepare_leg=prepare_leg,
-                      prepare_legs=prepare_legs,
-                      fixed_candidate_id=fixed_candidate_id)
+        kwargs = {
+            "session": session,
+            "session_id": session_id,
+            "message": message,
+            "rounds": adapted_rounds,
+            "mode": mode,
+            "trace": trace,
+            "mocks": mocks,
+            "turn_id": turn_id,
+            "prepare_leg": prepare_leg,
+            "prepare_legs": prepare_legs,
+            "fixed_candidate_id": fixed_candidate_id,
+        }
         evidence_patch = (
             patch.object(transit_evidence, "new_evidence_set_id", return_value=evidence_id)
             if evidence_id
@@ -473,32 +482,31 @@ class _LongStateBase(unittest.IsolatedAsyncioTestCase):
                 executor=_check_with_empty_arrivals,
             )
             registry_patch = patch.object(self.loop, "TOOL_REGISTRY", registry)
-        with registry_patch:
-            with (
-                evidence_patch,
-                patch.object(
-                    mta_realtime,
-                    "get_stalled_trains",
-                    new=AsyncMock(return_value=[]),
-                ),
-                patch.object(
-                    mta_realtime,
-                    "get_stalled_buses",
-                    new=AsyncMock(return_value=[]),
-                ),
-                patch.object(
-                    incident_index,
-                    "lookup_incidents",
-                    return_value={"incidents": [], "coverage_status": "current"},
-                ),
-            ):
-                if poi:
-                    provider_result = poi_result_override or poi_result()
-                    with patch.object(discover_places.search_local_places, "execute",
-                                      new=AsyncMock(return_value=provider_result)):
-                        events, trace = await run_turn(self.loop, **kwargs)
-                else:
+        with (
+            registry_patch, evidence_patch,
+            patch.object(
+                mta_realtime,
+                "get_stalled_trains",
+                new=AsyncMock(return_value=[]),
+            ),
+            patch.object(
+                mta_realtime,
+                "get_stalled_buses",
+                new=AsyncMock(return_value=[]),
+            ),
+            patch.object(
+                incident_index,
+                "lookup_incidents",
+                return_value={"incidents": [], "coverage_status": "current"},
+            ),
+        ):
+            if poi:
+                provider_result = poi_result_override or poi_result()
+                with patch.object(discover_places.search_local_places, "execute",
+                                  new=AsyncMock(return_value=provider_result)):
                     events, trace = await run_turn(self.loop, **kwargs)
+            else:
+                events, trace = await run_turn(self.loop, **kwargs)
         raw_calls = list(trace.tool_calls)
         if raw_calls and raw_calls[0][0] == "declare_goals":
             trace.model_led_tool_calls = raw_calls
@@ -515,56 +523,48 @@ class _LongStateBase(unittest.IsolatedAsyncioTestCase):
             "prepare_route_options", "present_places", "present_transit",
             "present_route", "complete_turn",
         } else set(expected)
-        self.assertEqual(offered, expected,
-                         f"{scenario_id} offered {sorted(offered)}")
+        assert offered == expected, f"{scenario_id} offered {sorted(offered)}"
 
     def _assert_forbidden_absent(self, scenario_id: str, names: list) -> None:
         for name in FORBIDDEN_TOOLS:
-            self.assertNotIn(name, names, f"{scenario_id} ran forbidden {name}")
+            assert name not in names, f"{scenario_id} ran forbidden {name}"
 
     def _assert_leak_free(self, scenario_id: str, text: str) -> None:
         lowered = str(text or "").casefold()
         for marker in LEAK_MARKERS:
-            self.assertNotIn(marker, lowered,
-                             f"{scenario_id} passenger text leaked {marker}")
+            assert marker not in lowered, f"{scenario_id} passenger text leaked {marker}"
 
     def _assert_no_candidate_sets(self, scenario_id: str, mocks: dict) -> None:
-        self.assertEqual(mocks["stored_candidate_set_ids"], [],
-                         f"{scenario_id} no candidate set may be stored")
+        assert mocks["stored_candidate_set_ids"] == [], f"{scenario_id} no candidate set may be stored"
     def _assert_unchanged(self, scenario_id: str, before, after) -> None:
         changed = before.diff(after)
-        self.assertEqual(changed, [],
-                         f"{scenario_id} non-mutating turn changed {changed}")
+        assert changed == [], f"{scenario_id} non-mutating turn changed {changed}"
 
     def _assert_one_card(self, scenario_id: str, events: list) -> None:
         cards = route_cards(events)
-        self.assertEqual(len(cards), 1, f"{scenario_id} exactly one card")
-        self.assertEqual(cards[0].role, "recommended", scenario_id)
+        assert len(cards) == 1, f"{scenario_id} exactly one card"
+        assert cards[0].role == "recommended", scenario_id
     def _assert_committed(self, *, scenario_id, session_id, state,
                           set_id, candidate_id) -> None:
-        self.assertEqual(state["active_candidate_set_id"], set_id, scenario_id)
-        self.assertEqual(state["selected_candidate_id"], candidate_id, scenario_id)
+        assert state["active_candidate_set_id"] == set_id, scenario_id
+        assert state["selected_candidate_id"] == candidate_id, scenario_id
         record = candidate_store.load_candidate_set(set_id, session_id=session_id)
-        self.assertIsNotNone(record, f"{scenario_id} committed set stored")
-        self.assertTrue(record["presented"], f"{scenario_id} consumed once")
-        self.assertEqual(record["selected_candidate_id"], candidate_id, scenario_id)
+        assert record is not None, f"{scenario_id} committed set stored"
+        assert record["presented"], f"{scenario_id} consumed once"
+        assert record["selected_candidate_id"] == candidate_id, scenario_id
     def _assert_temp_cleared(self, scenario_id: str, state) -> None:
-        self.assertEqual([state[k] for k in TEMPORARY_KEYS], [None] * 3,
-                         f"{scenario_id} temporary scenario cleared")
+        assert [state[k] for k in TEMPORARY_KEYS] == [None] * 3, f"{scenario_id} temporary scenario cleared"
 
     def _assert_policy(self, scenario_id: str, mode: str, trace, *, model_calls) -> None:
         expected_mode, expected_model = policy_model(self.loop, mode)
         if model_calls:
-            self.assertEqual((trace.initial_mode, trace.final_mode),
-                             (expected_mode, expected_mode), scenario_id)
-        self.assertEqual([call["model"] for call in self.loop.client.messages.calls],
-                         [expected_model] * model_calls,
-                         f"{scenario_id} policy models")
+            assert (trace.initial_mode, trace.final_mode) == (expected_mode, expected_mode), scenario_id
+        assert [call["model"] for call in self.loop.client.messages.calls] == [expected_model] * model_calls, f"{scenario_id} policy models"
     # ---- turn-family helpers (each asserts the full per-turn contract) ----
 
     async def _route_turn(self, *, scenario_id, session, session_id, mode, message,
                           turn_id, destination, candidate_id, provider_leg=None,
-                          prepare_input=None, reset=False,
+                          prepare_input=None,
                           expected_excluded_route_ids=None, expected_state=None,
                           extra_round=None, prepare_legs=None,
                           expected_waypoints=None):
@@ -582,7 +582,7 @@ class _LongStateBase(unittest.IsolatedAsyncioTestCase):
         expected_names = (
             ["get_place_details", "prepare_route_options", "present_route"]
             if extra_round else ["prepare_route_options", "present_route"])
-        self.assertEqual(names, expected_names, f"{scenario_id} canonical chain")
+        assert names == expected_names, f"{scenario_id} canonical chain"
         self._assert_policy(scenario_id, mode, trace,
                             model_calls=3 if extra_round else 2)
         self._assert_forbidden_absent(scenario_id, names)
@@ -593,35 +593,29 @@ class _LongStateBase(unittest.IsolatedAsyncioTestCase):
         self._assert_committed(scenario_id=scenario_id, session_id=session_id,
                                state=state, set_id=set_id, candidate_id=candidate_id)
         card = route_cards(events)[0]
-        self.assertEqual(after.active_card_id, card.card_id, scenario_id)
-        self.assertEqual(
-            after.route_card_ids,
-            (before.route_card_ids + (card.card_id,))[-8:],
-            f"{scenario_id} exactly one persisted card")
+        assert after.active_card_id == card.card_id, scenario_id
+        assert after.route_card_ids == ((*before.route_card_ids, card.card_id))[-8:], f"{scenario_id} exactly one persisted card"
         if expected_excluded_route_ids is not None:
-            self.assertEqual(trace.tool_calls[0][1].get("excluded_route_ids"),
-                             expected_excluded_route_ids,
-                             f"{scenario_id} exclusion reached prepare")
+            assert trace.tool_calls[0][1].get("excluded_route_ids") == expected_excluded_route_ids, f"{scenario_id} exclusion reached prepare"
         if expected_state:
             for key, value in expected_state.items():
-                self.assertEqual(state[key], value, f"{scenario_id} state[{key}]")
+                assert state[key] == value, f"{scenario_id} state[{key}]"
         if expected_waypoints is not None:
-            self.assertEqual(state["waypoints"], expected_waypoints,
-                             f"{scenario_id} waypoints")
+            assert state["waypoints"] == expected_waypoints, f"{scenario_id} waypoints"
         self._assert_leak_free(scenario_id, trace.final_text)
         return events, trace, mocks, before, after, set_id, card
 
     async def _no_tool_turn(self, *, scenario_id, session, session_id, mode,
                             message, turn_id, profile, text):
-        events, trace, mocks, before, after = await self._run(
+        events, trace, _mocks, before, after = await self._run(
             session=session, session_id=session_id, mode=mode, message=message,
             rounds=[complete_turn_round(f"tu-{turn_id}-done", text)],
             turn_id=turn_id, mocks={})
         names = [name for name, _input in trace.tool_calls]
-        self.assertEqual(names, ["complete_turn"], f"{scenario_id} terminal only")
+        assert names == ["complete_turn"], f"{scenario_id} terminal only"
         self._assert_policy(scenario_id, mode, trace, model_calls=1)
         self._assert_profile_from_calls(scenario_id, profile)
-        self.assertEqual(route_cards(events), [], f"{scenario_id} no card")
+        assert route_cards(events) == [], f"{scenario_id} no card"
         self._assert_unchanged(scenario_id, before, after)
         self._assert_leak_free(scenario_id, trace.final_text)
         return events, trace, before, after
@@ -653,14 +647,10 @@ class _LongStateBase(unittest.IsolatedAsyncioTestCase):
             mocks={},
         )
         names = [name for name, _input in trace.tool_calls]
-        self.assertEqual(
-            names,
-            ["check_transit", "present_transit"],
-            f"{scenario_id} grounded status only",
-        )
+        assert names == ["check_transit", "present_transit"], f"{scenario_id} grounded status only"
         self._assert_policy(scenario_id, mode, trace, model_calls=2)
         self._assert_profile_from_calls(scenario_id, TRANSIT_TOOL_PROFILE)
-        self.assertEqual(route_cards(events), [], f"{scenario_id} no card")
+        assert route_cards(events) == [], f"{scenario_id} no card"
         self._assert_unchanged(scenario_id, before, after)
         self._assert_leak_free(scenario_id, trace.final_text)
         return events, trace, before, after
@@ -668,7 +658,7 @@ class _LongStateBase(unittest.IsolatedAsyncioTestCase):
     async def _arrival_turn(self, *, scenario_id, session, session_id, mode,
                             message, turn_id, expected_route_id="Q"):
         from tests.conversation.conversation_matrix_harness import check_transit_input
-        events, trace, mocks, before, after = await self._run(
+        events, trace, _mocks, before, after = await self._run(
             session=session, session_id=session_id, mode=mode, message=message,
             rounds=[
                 _turn_round(
@@ -688,16 +678,14 @@ class _LongStateBase(unittest.IsolatedAsyncioTestCase):
             ],
             turn_id=turn_id, mocks={})
         names = [name for name, _input in trace.tool_calls]
-        self.assertEqual(names, ["check_transit", "complete_turn"],
-                         f"{scenario_id} arrival lookup only")
+        assert names == ["check_transit", "complete_turn"], f"{scenario_id} arrival lookup only"
         self._assert_policy(scenario_id, mode, trace, model_calls=2)
         self._assert_profile_from_calls(scenario_id, ARRIVAL_TOOL_PROFILE)
-        self.assertEqual(trace.tool_calls[0][1]["route_ids"], [expected_route_id])
-        self.assertEqual(route_cards(events), [], f"{scenario_id} no card")
+        assert trace.tool_calls[0][1]["route_ids"] == [expected_route_id]
+        assert route_cards(events) == [], f"{scenario_id} no card"
         self._assert_unchanged(scenario_id, before, after)
         text = "".join(e.text for e in events if e.type == "token")
-        self.assertIn("unavailable", text.casefold(),
-                      f"{scenario_id} truthful recovery, no fabricated arrival")
+        assert "unavailable" in text.casefold(), f"{scenario_id} truthful recovery, no fabricated arrival"
         self._assert_leak_free(scenario_id, text)
         return events, trace, before, after
 
@@ -707,21 +695,13 @@ class _LongStateBase(unittest.IsolatedAsyncioTestCase):
             rounds=[complete_turn_round(f"tu-{turn_id}-done", "You're welcome.")],
             turn_id=turn_id, mocks={})
         names = [name for name, _input in trace.tool_calls]
-        self.assertEqual(
-            names,
-            ["complete_turn"],
-            f"{scenario_id} greeting uses only the terminal conversation tool",
-        )
-        self.assertEqual(
-            trace.model_tool_use_count,
-            2,
-            f"{scenario_id} declares one goal and completes it",
-        )
+        assert names == ["complete_turn"], f"{scenario_id} greeting uses only the terminal conversation tool"
+        assert trace.model_tool_use_count == 2, f"{scenario_id} declares one goal and completes it"
         self._assert_policy(scenario_id, mode, trace, model_calls=1)
-        self.assertEqual(route_cards(events), [], f"{scenario_id} no card")
+        assert route_cards(events) == [], f"{scenario_id} no card"
         self._assert_unchanged(scenario_id, before, after)
         text = "".join(e.text for e in events if e.type == "token")
-        self.assertIn("welcome", text.casefold(), f"{scenario_id} greeting reply")
+        assert "welcome" in text.casefold(), f"{scenario_id} greeting reply"
         return events
 
     async def _discovery_turn(self, *, scenario_id, session, session_id, mode,
@@ -771,31 +751,19 @@ class _LongStateBase(unittest.IsolatedAsyncioTestCase):
                 rounds=rounds, turn_id=turn_id, mocks={}, poi=True,
                 poi_result_override=poi_result_override)
         names = [name for name, _input in trace.tool_calls]
-        self.assertEqual(
-            names, ["discover_places", "present_places"], f"{scenario_id} search only"
-        )
+        assert names == ["discover_places", "present_places"], f"{scenario_id} search only"
         self._assert_policy(scenario_id, mode, trace, model_calls=2)
         self._assert_forbidden_absent(scenario_id, names)
         self._assert_profile_from_calls(scenario_id, DISCOVERY_TOOL_PROFILE)
-        self.assertEqual(route_cards(events), [], f"{scenario_id} no card")
+        assert route_cards(events) == [], f"{scenario_id} no card"
         self._assert_no_candidate_sets(scenario_id, mocks)
         state = trip_state_module.get_trip_state(session)
         set_id = state["active_discovery_set_id"]
-        self.assertTrue(bool(set_id) and set_id.startswith("ds_"),
-                        f"{scenario_id} real discovery set bound")
-        self.assertIsNone(state["selected_place_id"], f"{scenario_id} no selection")
-        self.assertEqual(
-            before.diff(
-                after,
-                exclude=("active_discovery_set_id", "selected_place_id"),
-            ),
-            [],
-            f"{scenario_id} discovery only replaces discovery context",
-        )
-        self.assertIsNone(
-            state["selected_place_id"],
-            f"{scenario_id} new result set clears the prior selection",
-        )
+        assert set_id
+        assert set_id.startswith("ds_"), f"{scenario_id} real discovery set bound"
+        assert state["selected_place_id"] is None, f"{scenario_id} no selection"
+        assert before.diff(after, exclude=("active_discovery_set_id", "selected_place_id")) == [], f"{scenario_id} discovery only replaces discovery context"
+        assert state["selected_place_id"] is None, f"{scenario_id} new result set clears the prior selection"
         self._assert_leak_free(scenario_id, trace.final_text)
         return events, trace, mocks, before, after, set_id
 
@@ -822,18 +790,16 @@ class _LongStateBase(unittest.IsolatedAsyncioTestCase):
             ],
             turn_id=turn_id, mocks={})
         names = [name for name, _input in trace.tool_calls]
-        self.assertEqual(names, ["present_places"],
-                         f"{scenario_id} resolution only")
+        assert names == ["present_places"], f"{scenario_id} resolution only"
         self._assert_policy(scenario_id, mode, trace, model_calls=2)
         self._assert_profile_from_calls(scenario_id, SELECT_TOOL_PROFILE)
-        self.assertEqual(route_cards(events), [], f"{scenario_id} no card")
+        assert route_cards(events) == [], f"{scenario_id} no card"
         self._assert_no_candidate_sets(scenario_id, mocks)
         state = trip_state_module.get_trip_state(session)
         place_id = state["selected_place_id"]
-        self.assertTrue(bool(place_id) and place_id.startswith("pl_"),
-                        f"{scenario_id} real opaque place id bound")
-        self.assertEqual(before.diff(after, exclude=("selected_place_id",)), [],
-                         f"{scenario_id} selection never routes or mutates")
+        assert place_id
+        assert place_id.startswith("pl_"), f"{scenario_id} real opaque place id bound"
+        assert before.diff(after, exclude=("selected_place_id",)) == [], f"{scenario_id} selection never routes or mutates"
         return events, trace, before, after, place_id
 
     async def _route_selected_turn(self, *, scenario_id, session, session_id, mode,
@@ -851,24 +817,20 @@ class _LongStateBase(unittest.IsolatedAsyncioTestCase):
             message="Take me there.", rounds=rounds, turn_id=turn_id,
             prepare_leg=provider_leg, fixed_candidate_id=candidate_id, mocks={})
         names = [name for name, _input in trace.tool_calls]
-        self.assertEqual(names, ["prepare_route_options", "present_route"],
-                         f"{scenario_id} canonical chain, no re-search")
+        assert names == ["prepare_route_options", "present_route"], f"{scenario_id} canonical chain, no re-search"
         self._assert_policy(scenario_id, mode, trace, model_calls=2)
         self._assert_profile_from_calls(scenario_id, ROUTE_TOOL_PROFILE)
-        self.assertEqual(trace.tool_calls[0][1]["destination_place_id"], place_id,
-                         f"{scenario_id} routes by the real opaque id")
+        assert trace.tool_calls[0][1]["destination_place_id"] == place_id, f"{scenario_id} routes by the real opaque id"
         self._assert_one_card(scenario_id, events)
         set_id = mocks["stored_candidate_set_ids"][-1]
         state = trip_state_module.get_trip_state(session)
         self._assert_committed(scenario_id=scenario_id, session_id=session_id,
                                state=state, set_id=set_id, candidate_id=candidate_id)
-        self.assertEqual(state["destination"], expected_destination, scenario_id)
-        self.assertEqual(state["selected_place_id"], place_id, scenario_id)
+        assert state["destination"] == expected_destination, scenario_id
+        assert state["selected_place_id"] == place_id, scenario_id
         card = route_cards(events)[0]
-        self.assertEqual(after.active_card_id, card.card_id, scenario_id)
-        self.assertEqual(after.route_card_ids,
-                         (before.route_card_ids + (card.card_id,))[-8:],
-                         f"{scenario_id} one persisted card")
+        assert after.active_card_id == card.card_id, scenario_id
+        assert after.route_card_ids == ((*before.route_card_ids, card.card_id))[-8:], f"{scenario_id} one persisted card"
         self._assert_leak_free(scenario_id, trace.final_text)
         return events, trace, mocks, before, after, set_id, card
 
@@ -876,6 +838,7 @@ class _LongStateBase(unittest.IsolatedAsyncioTestCase):
                             message, turn_id, destination, prepare_input,
                             provider_leg, candidate_id):
         prepare_input = dict(prepare_input)
+        assert prepare_input.get("destination", destination) == destination, scenario_id
         # Scenario selection is model-owned structured output now; the old
         # phrase classifier no longer injects this field at runtime.
         prepare_input["what_if"] = True
@@ -884,34 +847,27 @@ class _LongStateBase(unittest.IsolatedAsyncioTestCase):
             _turn_round("present_route", f"tu-{turn_id}-v",
                         {"candidate_id": candidate_id}),
         ]
-        events, trace, mocks, before, after = await self._run(
+        events, trace, _mocks, before, after = await self._run(
             session=session, session_id=session_id, mode=mode, message=message,
             rounds=rounds, turn_id=turn_id, prepare_leg=provider_leg,
             fixed_candidate_id=candidate_id, mocks={})
         names = [name for name, _input in trace.tool_calls]
-        self.assertEqual(names, ["prepare_route_options", "present_route"],
-                         f"{scenario_id} preview tools")
+        assert names == ["prepare_route_options", "present_route"], f"{scenario_id} preview tools"
         self._assert_policy(scenario_id, mode, trace, model_calls=2)
         self._assert_profile_from_calls(scenario_id, ROUTE_TOOL_PROFILE)
-        self.assertEqual(trace.tool_calls[0][1].get("what_if"), True,
-                         f"{scenario_id} server-forced what_if")
+        assert trace.tool_calls[0][1].get("what_if") is True, f"{scenario_id} server-forced what_if"
         self._assert_one_card(scenario_id, events)
         state = trip_state_module.get_trip_state(session)
         set_id = state["temporary_candidate_set_id"]
-        self.assertTrue(bool(set_id), f"{scenario_id} temporary set bound")
-        self.assertEqual(state["temporary_selected_candidate_id"], candidate_id,
-                         scenario_id)
-        self.assertEqual(state["temporary_base_candidate_set_id"],
-                         before.trip_state["active_candidate_set_id"],
-                         f"{scenario_id} temp base is the accepted set")
-        self.assertEqual(before.diff(after, exclude=TEMPORARY_KEYS), [],
-                         f"{scenario_id} preview never mutates the active trip")
-        self.assertEqual(after.route_card_ids, before.route_card_ids,
-                         f"{scenario_id} preview card not persisted")
+        assert bool(set_id), f"{scenario_id} temporary set bound"
+        assert state["temporary_selected_candidate_id"] == candidate_id, scenario_id
+        assert state["temporary_base_candidate_set_id"] == before.trip_state["active_candidate_set_id"], f"{scenario_id} temp base is the accepted set"
+        assert before.diff(after, exclude=TEMPORARY_KEYS) == [], f"{scenario_id} preview never mutates the active trip"
+        assert after.route_card_ids == before.route_card_ids, f"{scenario_id} preview card not persisted"
         record = candidate_store.load_candidate_set(set_id, session_id=session_id)
-        self.assertIsNotNone(record, f"{scenario_id} preview record stored")
-        self.assertFalse(record["presented"], f"{scenario_id} unconsumed")
-        self.assertIsNone(record["selected_candidate_id"], scenario_id)
+        assert record is not None, f"{scenario_id} preview record stored"
+        assert not record["presented"], f"{scenario_id} unconsumed"
+        assert record["selected_candidate_id"] is None, scenario_id
         self._assert_leak_free(scenario_id, trace.final_text)
         return events, trace, before, after, set_id
 
@@ -925,13 +881,11 @@ class _LongStateBase(unittest.IsolatedAsyncioTestCase):
                                  "commit_scenario": True})],
             turn_id=turn_id, mocks={})
         names = [name for name, _input in trace.tool_calls]
-        self.assertEqual(names, ["present_route"],
-                         f"{scenario_id} accept never re-prepares")
+        assert names == ["present_route"], f"{scenario_id} accept never re-prepares"
         self._assert_policy(scenario_id, mode, trace, model_calls=2)
         self._assert_profile_from_calls(scenario_id, ACCEPT_TOOL_PROFILE)
         context = str(self.loop.client.messages.calls[0]["messages"][-1]["content"])
-        self.assertIn(candidate_id, context,
-                      f"{scenario_id} temp identity in context")
+        assert candidate_id in context, f"{scenario_id} temp identity in context"
         self._assert_one_card(scenario_id, events)
         state = trip_state_module.get_trip_state(session)
         self._assert_temp_cleared(scenario_id, state)
@@ -939,10 +893,8 @@ class _LongStateBase(unittest.IsolatedAsyncioTestCase):
         self._assert_committed(scenario_id=scenario_id, session_id=session_id,
                                state=state, set_id=set_id, candidate_id=candidate_id)
         card = route_cards(events)[0]
-        self.assertEqual(after.active_card_id, card.card_id, scenario_id)
-        self.assertEqual(after.route_card_ids,
-                         (before.route_card_ids + (card.card_id,))[-8:],
-                         f"{scenario_id} committed branch adds one card")
+        assert after.active_card_id == card.card_id, scenario_id
+        assert after.route_card_ids == ((*before.route_card_ids, card.card_id))[-8:], f"{scenario_id} committed branch adds one card"
         self._assert_leak_free(scenario_id, trace.final_text)
         return events, trace, before, after, set_id, card
 
@@ -962,18 +914,13 @@ class _LongStateBase(unittest.IsolatedAsyncioTestCase):
                 )
             ],
             turn_id=turn_id, mocks={})
-        self.assertEqual(
-            [name for name, _input in trace.tool_calls],
-            ["complete_turn"],
-            f"{scenario_id} terminal only",
-        )
+        assert [name for name, _input in trace.tool_calls] == ["complete_turn"], f"{scenario_id} terminal only"
         self._assert_policy(scenario_id, mode, trace, model_calls=1)
         self._assert_profile_from_calls(scenario_id, REJECT_TOOL_PROFILE)
-        self.assertEqual(route_cards(events), [], f"{scenario_id} no card")
+        assert route_cards(events) == [], f"{scenario_id} no card"
         state = trip_state_module.get_trip_state(session)
         self._assert_temp_cleared(scenario_id, state)
-        self.assertEqual(before.diff(after, exclude=TEMPORARY_KEYS), [],
-                         f"{scenario_id} reject preserves the accepted trip")
+        assert before.diff(after, exclude=TEMPORARY_KEYS) == [], f"{scenario_id} reject preserves the accepted trip"
         self._assert_leak_free(scenario_id, trace.final_text)
         return events, trace, before, after
 
@@ -994,21 +941,23 @@ class _LongStateBase(unittest.IsolatedAsyncioTestCase):
             for attempt in trace.capability_attempts
             if attempt["capability"] == "present_route"
         ]
-        self.assertTrue(attempts and attempts[0]["ok"] is False,
-                        f"{scenario_id} superseded candidate must fail "
-                        f"(ok={attempts[0]['ok'] if attempts else None}); "
-                        "no resurrection")
-        self.assertEqual(route_cards(events), [], f"{scenario_id} no card emitted")
+        assert attempts, (
+            f"{scenario_id} superseded candidate must fail; no resurrection"
+        )
+        assert attempts[0]["ok"] is False, (
+            f"{scenario_id} superseded candidate must fail "
+            f"(ok={attempts[0]['ok']}); no resurrection"
+        )
+        assert route_cards(events) == [], f"{scenario_id} no card emitted"
         state = trip_state_module.get_trip_state(session)
-        self.assertEqual(state["active_candidate_set_id"], expected_active_set_id,
-                         f"{scenario_id} probe must not promote")
+        assert state["active_candidate_set_id"] == expected_active_set_id, f"{scenario_id} probe must not promote"
         return events, trace, before, after
 
 
 __all__ = (
-    "SessionProjection",
     "TEMPORARY_KEYS",
     "TRIP_STATE_KEYS",
+    "SessionProjection",
     "_LongStateBase",
     "load_h_agent_loop",
     "stored_place",

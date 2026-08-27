@@ -6,14 +6,16 @@ handoff. Moved out of test_single_agent_route_tools.py so that phase does
 not grow further.
 """
 from __future__ import annotations
+
 import json
 import unittest
 from unittest.mock import AsyncMock, patch
+
 from app.services.agent import candidate_store, discovery_store, trip_state
 from app.services.agent import session as session_module
+from app.services.agent.tools.location_resolution import ResolvedPlace
 from app.services.agent.tools.places import place_reference
 from app.services.agent.tools.route import prepare_route_options, present_route
-from app.services.agent.tools.location_resolution import ResolvedPlace
 
 from tests.discovery_route_handoff_test_support import (
     DiscoveryRouteHandoffTestMixin,
@@ -31,10 +33,12 @@ class DiscoveryDestinationHandoffTests(DiscoveryRouteHandoffTestMixin, unittest.
         dest_place = record["places"][0]
         captured: dict = {}
 
-        async def fake_prepare(tool_input, tool_ctx, timings, *, resolved_origin=None, resolved_destination=None, **kwargs):
+        async def fake_prepare(tool_input, _tool_ctx, _timings, *, resolved_origin=None, resolved_destination=None, **_kwargs):
             captured["tool_input"] = dict(tool_input)
             captured["resolved_destination"] = resolved_destination
             prepared = _prepared_leg()
+            if resolved_origin is not None:
+                prepared.origin_place = resolved_origin
             if resolved_destination is not None:
                 prepared.destination_place = resolved_destination
             return prepared
@@ -57,20 +61,20 @@ class DiscoveryDestinationHandoffTests(DiscoveryRouteHandoffTestMixin, unittest.
                 },
                 ctx,
             )
-        self.assertTrue(result.ok)
+        assert result.ok
         resolved = captured["resolved_destination"]
-        self.assertEqual(resolved.name, "Di Fara Pizza")
-        self.assertEqual(resolved.latitude, 40.6298)
-        self.assertEqual(resolved.longitude, -73.9616)
-        self.assertEqual(resolved.address, "1424 Av J")
-        self.assertEqual(resolved.place_id, dest_place["place_id"])
-        self.assertEqual(resolved.provider_place_id, "ChIJ-dest")
-        self.assertEqual(captured["tool_input"]["destination"], "Di Fara Pizza")
+        assert resolved.name == "Di Fara Pizza"
+        assert resolved.latitude == 40.6298
+        assert resolved.longitude == -73.9616
+        assert resolved.address == "1424 Av J"
+        assert resolved.place_id == dest_place["place_id"]
+        assert resolved.provider_place_id == "ChIJ-dest"
+        assert captured["tool_input"]["destination"] == "Di Fara Pizza"
         geocode_args = " ".join(str(args) for args in geocode.call_args_list)
-        self.assertNotIn("Completely Different Text", geocode_args)
+        assert "Completely Different Text" not in geocode_args
         state = trip_state.get_trip_state(ctx.session)
-        self.assertEqual(state["destination"], "Di Fara Pizza")
-        self.assertEqual(state["selected_place_id"], dest_place["place_id"])
+        assert state["destination"] == "Di Fara Pizza"
+        assert state["selected_place_id"] == dest_place["place_id"]
 
     async def test_multi_stop_opaque_ids_never_surface_and_duplicates_keep_own_coords(self):
         ctx = _ctx()
@@ -80,7 +84,7 @@ class DiscoveryDestinationHandoffTests(DiscoveryRouteHandoffTestMixin, unittest.
         waypoint_a, waypoint_b, dest_place = record["places"]
         seen: list[dict] = []
 
-        async def fake_prepare(tool_input, tool_ctx, timings, *, resolved_origin=None, resolved_destination=None, **kwargs):
+        async def fake_prepare(tool_input, _tool_ctx, _timings, *, resolved_origin=None, resolved_destination=None, **_kwargs):
             seen.append(
                 {
                     "input": dict(tool_input),
@@ -107,22 +111,22 @@ class DiscoveryDestinationHandoffTests(DiscoveryRouteHandoffTestMixin, unittest.
                 },
                 ctx,
             )
-        self.assertTrue(result.ok)
-        self.assertEqual(len(seen), 3)
+        assert result.ok
+        assert len(seen) == 3
         # Duplicate display names must not swap stored coordinates: A then B
         # then the destination, each with its own lat/lng.
-        self.assertEqual(seen[0]["resolved_destination"].name, "Di Fara Pizza")
-        self.assertEqual(seen[0]["resolved_destination"].latitude, 40.6298)
-        self.assertEqual(seen[1]["resolved_destination"].name, "Di Fara Pizza")
-        self.assertEqual(seen[1]["resolved_destination"].latitude, 40.6360)
-        self.assertEqual(seen[1]["resolved_origin"].latitude, 40.6298)
-        self.assertEqual(seen[2]["resolved_destination"].name, "Lucali")
-        self.assertEqual(seen[2]["resolved_destination"].latitude, 40.6810)
-        self.assertEqual(seen[2]["resolved_origin"].latitude, 40.6360)
+        assert seen[0]["resolved_destination"].name == "Di Fara Pizza"
+        assert seen[0]["resolved_destination"].latitude == 40.6298
+        assert seen[1]["resolved_destination"].name == "Di Fara Pizza"
+        assert seen[1]["resolved_destination"].latitude == 40.636
+        assert seen[1]["resolved_origin"].latitude == 40.6298
+        assert seen[2]["resolved_destination"].name == "Lucali"
+        assert seen[2]["resolved_destination"].latitude == 40.681
+        assert seen[2]["resolved_origin"].latitude == 40.636
 
         state = trip_state.get_trip_state(ctx.session)
-        self.assertEqual(state["waypoints"], ["Di Fara Pizza", "Di Fara Pizza"])
-        self.assertEqual(state["destination"], "Lucali")
+        assert state["waypoints"] == ["Di Fara Pizza", "Di Fara Pizza"]
+        assert state["destination"] == "Lucali"
         persisted_blob = json.dumps(
             {
                 "origin": state["origin"],
@@ -131,32 +135,24 @@ class DiscoveryDestinationHandoffTests(DiscoveryRouteHandoffTestMixin, unittest.
             },
             default=str,
         )
-        self.assertNotIn("pl_", persisted_blob)
+        assert "pl_" not in persisted_blob
 
         record_payload = candidate_store.load_candidate_set(
             result.data["candidate_set_id"],
             session_id="sess-test",
         )
-        self.assertIsNotNone(record_payload)
+        assert record_payload is not None
         for field in ("origin_raw", "destination_raw", "waypoints"):
             value = record_payload.get(field)
-            self.assertNotIn("pl_", json.dumps(value, default=str), field)
-        self.assertEqual(record_payload["destination_raw"], "Lucali")
-        self.assertEqual(record_payload["waypoints"], ["Di Fara Pizza", "Di Fara Pizza"])
-        self.assertEqual(record_payload["destination_place"]["name"], "Lucali")
-        self.assertEqual(record_payload["destination_place"]["lat"], 40.6810)
-        self.assertEqual(
-            record_payload["destination_place"]["place_id"], dest_place["place_id"]
-        )
+            assert "pl_" not in json.dumps(value, default=str), field
+        assert record_payload["destination_raw"] == "Lucali"
+        assert record_payload["waypoints"] == ["Di Fara Pizza", "Di Fara Pizza"]
+        assert record_payload["destination_place"]["name"] == "Lucali"
+        assert record_payload["destination_place"]["lat"] == 40.681
+        assert record_payload["destination_place"]["place_id"] == dest_place["place_id"]
         for segment in record_payload["aggregate_segments"][0]:
-            self.assertNotIn(
-                "pl_",
-                json.dumps(segment["origin_place"], default=str),
-            )
-            self.assertNotIn(
-                "pl_",
-                json.dumps(segment["destination_place"], default=str),
-            )
+            assert "pl_" not in json.dumps(segment["origin_place"], default=str)
+            assert "pl_" not in json.dumps(segment["destination_place"], default=str)
 
     async def test_free_text_destination_with_discovery_waypoint_keeps_provenance_separate(self):
         ctx = _ctx()
@@ -167,13 +163,13 @@ class DiscoveryDestinationHandoffTests(DiscoveryRouteHandoffTestMixin, unittest.
         free_text_destination = "42nd Street and 8th Avenue"
 
         async def fake_prepare(
-            tool_input,
-            tool_ctx,
-            timings,
+            _tool_input,
+            _tool_ctx,
+            _timings,
             *,
             resolved_origin=None,
             resolved_destination=None,
-            **kwargs,
+            **_kwargs,
         ):
             prepared = _prepared_leg()
             if resolved_origin is not None:
@@ -194,20 +190,20 @@ class DiscoveryDestinationHandoffTests(DiscoveryRouteHandoffTestMixin, unittest.
                 ctx,
             )
 
-        self.assertTrue(prepared_result.ok, prepared_result.error)
+        assert prepared_result.ok, prepared_result.error
         candidate_set_id = prepared_result.data["candidate_set_id"]
         candidate = prepared_result.data["candidates"][0]
         candidate_set = candidate_store.load_candidate_set(
             candidate_set_id,
             session_id=ctx.session_id,
         )
-        self.assertIsNotNone(candidate_set)
-        self.assertIsNone(candidate_set["destination_discovery_set_id"])
-        self.assertEqual(candidate_set["waypoint_discovery_set_id"], set_id)
+        assert candidate_set is not None
+        assert candidate_set["destination_discovery_set_id"] is None
+        assert candidate_set["waypoint_discovery_set_id"] == set_id
 
         state_before_presentation = trip_state.get_trip_state(ctx.session)
-        self.assertIsNone(state_before_presentation["selected_place_id"])
-        self.assertEqual(state_before_presentation["destination"], free_text_destination)
+        assert state_before_presentation["selected_place_id"] is None
+        assert state_before_presentation["destination"] == free_text_destination
 
         presented_result = await present_route.execute(
             {
@@ -219,24 +215,18 @@ class DiscoveryDestinationHandoffTests(DiscoveryRouteHandoffTestMixin, unittest.
             ctx,
         )
 
-        self.assertTrue(presented_result.ok, presented_result.error)
+        assert presented_result.ok, presented_result.error
         card_event = next(
             event for event in presented_result.events if event.type == "route_card"
         )
-        self.assertEqual(card_event.destination["label"], free_text_destination)
-        self.assertEqual(
-            presented_result.session_route_cards[0]["destination"]["label"],
-            free_text_destination,
-        )
+        assert card_event.destination["label"] == free_text_destination
+        assert presented_result.session_route_cards[0]["destination"]["label"] == free_text_destination
         session_module.add_route_cards(ctx.session, presented_result.session_route_cards)
-        self.assertEqual(
-            ctx.session["active_trip"]["destination"]["label"],
-            free_text_destination,
-        )
+        assert ctx.session["active_trip"]["destination"]["label"] == free_text_destination
         state_after_presentation = trip_state.get_trip_state(ctx.session)
-        self.assertIsNone(state_after_presentation["selected_place_id"])
-        self.assertNotEqual(state_after_presentation["destination"], waypoint["name"])
-        self.assertEqual(state_after_presentation["destination"], free_text_destination)
+        assert state_after_presentation["selected_place_id"] is None
+        assert state_after_presentation["destination"] != waypoint["name"]
+        assert state_after_presentation["destination"] == free_text_destination
 
     async def test_routes_by_opaque_destination_place_id_without_retyping_label(self):
         ctx = _ctx()
@@ -247,13 +237,15 @@ class DiscoveryDestinationHandoffTests(DiscoveryRouteHandoffTestMixin, unittest.
         details = await place_reference.execute(
             {"place_id": place_id, "discovery_set_id": set_id}, ctx
         )
-        self.assertTrue(details.ok)
+        assert details.ok
         captured: dict = {}
 
-        async def fake_prepare(tool_input, tool_ctx, timings, *, resolved_origin=None, resolved_destination=None, **kwargs):
+        async def fake_prepare(tool_input, _tool_ctx, _timings, *, resolved_origin=None, resolved_destination=None, **_kwargs):
             captured["tool_input"] = dict(tool_input)
             captured["resolved_destination"] = resolved_destination
             prepared = _prepared_leg()
+            if resolved_origin is not None:
+                prepared.origin_place = resolved_origin
             if resolved_destination is not None:
                 prepared.destination_place = resolved_destination
             return prepared
@@ -266,16 +258,14 @@ class DiscoveryDestinationHandoffTests(DiscoveryRouteHandoffTestMixin, unittest.
                 {"destination_place_id": place_id},
                 ctx,
             )
-        self.assertTrue(result.ok)
+        assert result.ok
         # Routing follows the opaque id, never a model-retyped label.
-        self.assertEqual(captured["resolved_destination"].name, "Di Fara Pizza")
-        self.assertEqual(captured["resolved_destination"].place_id, place_id)
-        self.assertEqual(
-            captured["resolved_destination"].provider_place_id, "ChIJ-dest"
-        )
-        self.assertEqual(captured["tool_input"]["destination"], "Di Fara Pizza")
+        assert captured["resolved_destination"].name == "Di Fara Pizza"
+        assert captured["resolved_destination"].place_id == place_id
+        assert captured["resolved_destination"].provider_place_id == "ChIJ-dest"
+        assert captured["tool_input"]["destination"] == "Di Fara Pizza"
         state = trip_state.get_trip_state(ctx.session)
-        self.assertEqual(state["selected_place_id"], place_id)
+        assert state["selected_place_id"] == place_id
 
     async def test_provider_endpoint_id_cannot_replace_candidate_or_presented_opaque_id(self):
         ctx = _ctx()
@@ -286,16 +276,18 @@ class DiscoveryDestinationHandoffTests(DiscoveryRouteHandoffTestMixin, unittest.
         provider_endpoint: dict[str, object] = {}
 
         async def provider_prepare(
-            tool_input,
-            tool_ctx,
-            timings,
+            _tool_input,
+            _tool_ctx,
+            _timings,
             *,
             resolved_origin=None,
             resolved_destination=None,
-            **kwargs,
+            **_kwargs,
         ):
             provider_endpoint["resolved"] = resolved_destination
             prepared = _prepared_leg()
+            if resolved_origin is not None:
+                prepared.origin_place = resolved_origin
             if resolved_destination is not None:
                 # Simulate a provider-shaped endpoint coming back from the
                 # route seam. Persistence must restore the verified opaque
@@ -322,30 +314,23 @@ class DiscoveryDestinationHandoffTests(DiscoveryRouteHandoffTestMixin, unittest.
                 ctx,
             )
 
-        self.assertTrue(prepared_result.ok, prepared_result.error)
-        self.assertEqual(
-            provider_endpoint["resolved"].provider_place_id,
-            destination["provider_place_id"],
-        )
+        assert prepared_result.ok, prepared_result.error
+        assert provider_endpoint["resolved"].provider_place_id == destination["provider_place_id"]
         candidate = prepared_result.data["candidates"][0]
-        self.assertEqual(candidate["destination_place_id"], destination["place_id"])
+        assert candidate["destination_place_id"] == destination["place_id"]
         candidate_set = candidate_store.load_candidate_set(
             prepared_result.data["candidate_set_id"],
             session_id=ctx.session_id,
         )
-        self.assertEqual(
-            candidate_set["destination_place"]["place_id"], destination["place_id"]
-        )
+        assert candidate_set["destination_place"]["place_id"] == destination["place_id"]
         entry = candidate_set["candidates"][0]
-        self.assertEqual(
-            entry["digest"]["destination_place_id"], destination["place_id"]
-        )
+        assert entry["digest"]["destination_place_id"] == destination["place_id"]
 
         presented = await place_reference.execute(
             {"place_id": destination["place_id"], "discovery_set_id": set_id},
             ctx,
         )
-        self.assertTrue(presented.ok, presented.error)
+        assert presented.ok, presented.error
         route_result = await present_route.execute(
             {
                 "candidate_id": candidate["candidate_id"],
@@ -355,15 +340,9 @@ class DiscoveryDestinationHandoffTests(DiscoveryRouteHandoffTestMixin, unittest.
             },
             ctx,
         )
-        self.assertTrue(route_result.ok, route_result.error)
+        assert route_result.ok, route_result.error
         card_event = next(event for event in route_result.events if event.type == "route_card")
-        self.assertEqual(card_event.destination["place_id"], destination["place_id"])
+        assert card_event.destination["place_id"] == destination["place_id"]
         session_module.add_route_cards(ctx.session, route_result.session_route_cards)
-        self.assertEqual(
-            ctx.session["active_trip"]["destination"]["place_id"],
-            destination["place_id"],
-        )
-        self.assertEqual(
-            trip_state.get_trip_state(ctx.session)["selected_place_id"],
-            destination["place_id"],
-        )
+        assert ctx.session["active_trip"]["destination"]["place_id"] == destination["place_id"]
+        assert trip_state.get_trip_state(ctx.session)["selected_place_id"] == destination["place_id"]

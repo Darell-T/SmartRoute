@@ -17,6 +17,7 @@ from app.services.agent.tools.provider_http import fetch_json
 
 _NYC = ZoneInfo("America/New_York")
 _CURRENT_MAX_AGE = timedelta(minutes=5)
+_CURRENT_SNAPSHOT_MAX_AGE = timedelta(minutes=5)
 _HISTORY_REFRESH_AGE = timedelta(days=7)
 _HISTORY_MAX_AGE = timedelta(days=30)
 _CURRENT_CACHE_KEY, _HISTORY_CACHE_KEY = "agent:damn-lines:current:v1", "agent:damn-lines:history:v1"
@@ -76,11 +77,12 @@ _SUPPORTED_VENUES = {
     )
     for place_id, slug, name, source_slug in _VENUE_ROWS
 }
-_PLACE_ID_BY_SLUG = {venue.slug: place_id for place_id, venue in _SUPPORTED_VENUES.items()}
+_PLACE_ID_BY_SLUG = {
+    venue.slug: place_id for place_id, venue in _SUPPORTED_VENUES.items()
+}
 
 _current_refresh_task: asyncio.Task[bool] | None = None
 _history_refresh_task: asyncio.Task[bool] | None = None
-_warmup_tasks: set[asyncio.Task[None]] = set()
 _history_loaded = False
 _history_last_success: datetime | None = None
 _history_index: dict[tuple[str, int, int], HistoricalQueuePattern] = {}
@@ -153,9 +155,15 @@ def _normalize_current_record(record: object, now: datetime) -> QueueObservation
     return _observation(place_id or "", record.get("status"), now)
 
 
-def _encode_current(observations: dict[str, QueueObservation]) -> str:
+def _encode_current(
+    observations: dict[str, QueueObservation], fetched_at: datetime
+) -> str:
     items = [item._asdict() for item in observations.values()]
-    return json.dumps({"observations": items}, separators=(",", ":"), default=str)
+    return json.dumps(
+        {"fetched_at": fetched_at.isoformat(), "observations": items},
+        separators=(",", ":"),
+        default=str,
+    )
 
 
 def _read_current(now: datetime) -> dict[str, QueueObservation] | None:
@@ -166,7 +174,12 @@ def _read_current(now: datetime) -> dict[str, QueueObservation] | None:
         payload = json.loads(raw) if isinstance(raw, str) else None
     except (TypeError, ValueError):
         return None
-    if not isinstance(payload, dict) or not isinstance(payload.get("observations"), list):
+    fetched_at = _timestamp(payload.get("fetched_at")) if isinstance(payload, dict) else None
+    if (
+        fetched_at is None
+        or not timedelta(0) <= now - fetched_at <= _CURRENT_SNAPSHOT_MAX_AGE
+        or not isinstance(payload.get("observations"), list)
+    ):
         return None
     observations: dict[str, QueueObservation] = {}
     for record in payload["observations"]:
@@ -240,7 +253,7 @@ async def _fetch_current(now: datetime) -> bool:
             observations[observation.google_place_id] = observation
     cache.cache_set(
         _CURRENT_CACHE_KEY,
-        _encode_current(observations),
+        _encode_current(observations, now),
         600,
         fail_open=True,
     )
@@ -269,11 +282,12 @@ async def get_current_observations(
         return CurrentQueueResult({}, False)
     checked_at = _now_utc(now)
     cached = _read_current(checked_at)
-    observations = cached or {}
-    available = cached is not None
-    if any(place_id not in observations for place_id in requested):
-        available = await _refresh_current(checked_at) or available
-        observations = _read_current(checked_at) or observations
+    if cached is None:
+        available = await _refresh_current(checked_at)
+        observations = _read_current(checked_at) or {}
+    else:
+        available = True
+        observations = cached
     relevant = {place_id: observations[place_id] for place_id in requested if place_id in observations}
     return CurrentQueueResult(relevant, available)
 
@@ -476,27 +490,6 @@ async def warm_history(*, now: datetime | None = None) -> None:
     _load_history_cache()
     if _history_last_success is None or checked_at - _history_last_success >= _HISTORY_REFRESH_AGE:
         await refresh_history(now=checked_at)
-
-
-def schedule_history_warmup(*, now: datetime | None = None) -> None:
-    """Start a nonblocking refresh when no current-enough snapshot exists."""
-
-    if not (os.getenv("DAMNLINES_API_KEY") or "").strip():
-        return
-    _load_history_cache()
-    checked_at = _now_utc(now)
-    if (
-        _history_last_success is not None
-        and checked_at - _history_last_success < _HISTORY_REFRESH_AGE
-    ):
-        return
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        return
-    task = loop.create_task(warm_history(now=checked_at))
-    _warmup_tasks.add(task)
-    task.add_done_callback(_warmup_tasks.discard)
 
 
 def get_historical_pattern(

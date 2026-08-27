@@ -10,18 +10,13 @@ from typing import TYPE_CHECKING, Literal
 
 from app import observability
 from app.services.agent import events as agent_events
-from app.services.agent.model import stream as model_stream
-from app.services.agent import passenger_output
-from app.services.agent.model import policy as agent_policy
-from app.services.agent import public_surface
-from app.services.agent.model import prompt as agent_prompt
+from app.services.agent import passenger_output, public_surface
 from app.services.agent import session as session_module
-from app.services.agent.turn import completion as turn_completion  # test patch point
-from app.services.agent.turn.tool_round import (
-    TurnDeadlineReached,
-    mixed_terminal_and_capability,
-)
+from app.services.agent.model import policy as agent_policy
+from app.services.agent.model import prompt as agent_prompt
+from app.services.agent.model import stream as model_stream
 from app.services.agent.tools import ToolContext
+from app.services.agent.turn import completion as turn_completion  # test patch point
 from app.services.agent.turn.evidence import TurnEvidence
 from app.services.agent.turn.finalization import (
     extract_safe_usage,
@@ -35,6 +30,10 @@ from app.services.agent.turn.finalization import (
     stage_timings,
 )
 from app.services.agent.turn.ledger import TurnToolLedger
+from app.services.agent.turn.tool_round import (
+    TurnDeadlineReached,
+    mixed_terminal_and_capability,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -68,7 +67,7 @@ class TurnState:
     session_id: str
     turn_id: str
     ctx: ToolContext
-    trace: "TurnTrace | None"
+    trace: TurnTrace | None
     dependencies: TurnDependencies
     mode_policy: agent_policy.AgentModePolicy
     initial_mode: str
@@ -273,6 +272,11 @@ async def _capture_model_events(
     ):
         if isinstance(event, model_stream.ModelCallCompleted):
             capture.outcome = event
+            if event.web_sources:
+                yield agent_events.SourcesEvent(
+                    turn_id=state.turn_id,
+                    sources=event.web_sources,
+                )
         elif isinstance(event, agent_events.TokenEvent):
             if capture.first_token_ms is None and event.text.strip():
                 capture.first_token_ms = (time.monotonic() - model_call_start) * 1000

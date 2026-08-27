@@ -1,13 +1,15 @@
 """Tests for the unflagged prepare_route_options / present_route path."""
 
 from __future__ import annotations
+
 import copy
 import unittest
 from unittest.mock import AsyncMock, patch
+
+from app.services.agent.tools.location_resolution import ResolvedPlace
 from app.services.agent.tools.route import (
     prepare_route_options,
 )
-from app.services.agent.tools.location_resolution import ResolvedPlace
 from app.services.trips.preparation.prepare import AggregatePreparation
 from app.services.trips.route_incidents.scan import incident_scan_is_complete
 
@@ -39,14 +41,14 @@ class SingleAgentRouteMultiStopTests(unittest.IsolatedAsyncioTestCase):
                 {},
                 ["Barclays Center"],
             )
-        self.assertIsInstance(aggregate, AggregatePreparation)
-        self.assertEqual(prepare_mock.await_count, 2)
-        self.assertEqual(len(aggregate.aggregate_segments), 1)
-        self.assertEqual(len(aggregate.aggregate_segments[0]), 2)
-        self.assertEqual(len(aggregate.parsed_routes), 1)
-        self.assertEqual(aggregate.event_impacts[0]["route_index"], 0)
-        self.assertEqual(aggregate.event_impacts[0]["segment_index"], 0)
-        self.assertEqual(aggregate.scored[0]["transfers"], 1)
+        assert isinstance(aggregate, AggregatePreparation)
+        assert prepare_mock.await_count == 2
+        assert len(aggregate.aggregate_segments) == 1
+        assert len(aggregate.aggregate_segments[0]) == 2
+        assert len(aggregate.parsed_routes) == 1
+        assert aggregate.event_impacts[0]["route_index"] == 0
+        assert aggregate.event_impacts[0]["segment_index"] == 0
+        assert aggregate.scored[0]["transfers"] == 1
 
     async def test_multi_stop_downstream_departure_follows_each_upstream_candidate(
         self,
@@ -129,28 +131,19 @@ class SingleAgentRouteMultiStopTests(unittest.IsolatedAsyncioTestCase):
                 {},
                 ["Barclays Center"],
             )
-        self.assertEqual(prepare_mock.await_count, 3)
-        self.assertEqual(
-            [item["departure_time"] for item in downstream_inputs],
-            [
-                "2026-08-06T12:35:00-04:00",
-                "2026-08-06T12:45:00-04:00",
-            ],
-        )
-        self.assertEqual(
-            [
-                chain[1]["steps"][0]["departure_time_iso"]
-                for chain in [
-                    aggregate.aggregate_segments[0],
-                    aggregate.aggregate_segments[1],
-                ]
-            ],
-            [
-                "2026-08-06T12:35:00-04:00",
-                "2026-08-06T12:45:00-04:00",
-            ],
-        )
-        self.assertEqual([row["transfers"] for row in aggregate.scored], [1, 1])
+        assert prepare_mock.await_count == 3
+        assert [item["departure_time"] for item in downstream_inputs] == [
+            "2026-08-06T12:35:00-04:00",
+            "2026-08-06T12:45:00-04:00",
+        ]
+        assert [
+            chain[1]["steps"][0]["departure_time_iso"]
+            for chain in [
+                aggregate.aggregate_segments[0],
+                aggregate.aggregate_segments[1],
+            ]
+        ] == ["2026-08-06T12:35:00-04:00", "2026-08-06T12:45:00-04:00"]
+        assert [row["transfers"] for row in aggregate.scored] == [1, 1]
 
     async def test_candidate_digest_scopes_incidents_and_alerts_to_selected_route(self):
         prepared = _prepared_leg()
@@ -200,20 +193,16 @@ class SingleAgentRouteMultiStopTests(unittest.IsolatedAsyncioTestCase):
         second_alerts = second_conditions["official_alerts"]
         first_headers = [alert["header"] for alert in first_alerts]
         second_headers = [alert["header"] for alert in second_alerts]
-        self.assertIn("Q only", first_headers)
-        self.assertNotIn("A only", first_headers)
-        self.assertNotIn("candidate one only", first_headers)
-        self.assertIn("A only", second_headers)
-        self.assertTrue(all(isinstance(alert, dict) for alert in first_alerts))
-        self.assertTrue(
-            all(alert["material_disruption"] is True for alert in first_alerts)
-        )
-        self.assertTrue(all(isinstance(alert, dict) for alert in second_alerts))
-        self.assertTrue(
-            all(alert["material_disruption"] is True for alert in second_alerts)
-        )
-        self.assertIn("A incident", second_conditions["confirmed_incidents"])
-        self.assertNotIn("Q incident", second_conditions["confirmed_incidents"])
+        assert "Q only" in first_headers
+        assert "A only" not in first_headers
+        assert "candidate one only" not in first_headers
+        assert "A only" in second_headers
+        assert all(isinstance(alert, dict) for alert in first_alerts)
+        assert all(alert["material_disruption"] is True for alert in first_alerts)
+        assert all(isinstance(alert, dict) for alert in second_alerts)
+        assert all(alert["material_disruption"] is True for alert in second_alerts)
+        assert "A incident" in second_conditions["confirmed_incidents"]
+        assert "Q incident" not in second_conditions["confirmed_incidents"]
 
     async def test_second_leg_evidence_is_remapped_into_aggregate_candidate(self):
         first = _prepared_leg()
@@ -245,12 +234,11 @@ class SingleAgentRouteMultiStopTests(unittest.IsolatedAsyncioTestCase):
                 ["Barclays Center"],
             )
         evidence = aggregate.candidate_evidence[0]
-        self.assertEqual(evidence["event_impacts"][0]["segment_index"], 1)
-        self.assertEqual(evidence["event_impacts"][0]["route_index"], 0)
-        self.assertEqual(
-            evidence["incidents"][0]["affected_candidate_route_ids"],
-            ["candidate-0"],
-        )
+        assert evidence["event_impacts"][0]["segment_index"] == 1
+        assert evidence["event_impacts"][0]["route_index"] == 0
+        assert evidence["incidents"][0]["affected_candidate_route_ids"] == [
+            "candidate-0"
+        ]
 
     async def test_multi_stop_incident_metadata_preserves_complete_and_partial_contracts(
         self,
@@ -277,8 +265,8 @@ class SingleAgentRouteMultiStopTests(unittest.IsolatedAsyncioTestCase):
                 {},
                 ["Barclays Center"],
             )
-        self.assertEqual(complete.incident_scan_metadata["status"], "complete")
-        self.assertTrue(incident_scan_is_complete(complete.incident_scan_metadata))
+        assert complete.incident_scan_metadata["status"] == "complete"
+        assert incident_scan_is_complete(complete.incident_scan_metadata)
 
         second.incident_scan_metadata = {
             "status": "partial",
@@ -298,5 +286,5 @@ class SingleAgentRouteMultiStopTests(unittest.IsolatedAsyncioTestCase):
                 {},
                 ["Barclays Center"],
             )
-        self.assertEqual(mixed.incident_scan_metadata["status"], "partial")
-        self.assertFalse(incident_scan_is_complete(mixed.incident_scan_metadata))
+        assert mixed.incident_scan_metadata["status"] == "partial"
+        assert not incident_scan_is_complete(mixed.incident_scan_metadata)

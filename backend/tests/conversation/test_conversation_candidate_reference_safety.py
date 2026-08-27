@@ -17,9 +17,9 @@ from __future__ import annotations
 
 from app.services.agent import candidate_store
 from app.services.agent.tools.route import present_route
-from app.services.agent.turn.contract import GoalState
-from app.services.agent.turn.contract import TurnContract
+from app.services.agent.turn.contract import GoalState, TurnContract
 from app.services.agent.turn.evidence import TurnEvidence
+
 from tests.conversation.conversation_candidate_reference_fixtures import (
     CANDIDATE_A,
     CANDIDATE_B,
@@ -37,7 +37,9 @@ from tests.conversation.conversation_candidate_reference_fixtures import (
     REPLAN_MESSAGE,
     ROUTE_MESSAGE,
 )
-from tests.conversation.conversation_candidate_reference_support import _CandidateReferenceBase
+from tests.conversation.conversation_candidate_reference_support import (
+    _CandidateReferenceBase,
+)
 from tests.conversation.conversation_matrix_harness import (
     _turn_round,
     load_agent_loop,
@@ -45,7 +47,7 @@ from tests.conversation.conversation_matrix_harness import (
     route_cards,
 )
 
-MODES = ("auto", "quick")
+MODES = ("auto",)
 INITIAL_TOOL_PROFILE = frozenset(
     {
         "declare_goals",
@@ -156,19 +158,20 @@ class _ModelLedCandidateMixin:
             fixed_candidate_id=candidate_id,
         )
         names = [name for name, _input in ev.trace.tool_calls]
-        self.assertEqual(ev.offered, INITIAL_TOOL_PROFILE, f"{scenario_id} initial state-valid profile")
-        self.assertEqual(names, ["declare_goals", "prepare_route_options", "present_route"], scenario_id)
-        self.assertEqual(len(route_cards(ev.events)), 1, scenario_id)
+        assert ev.offered == INITIAL_TOOL_PROFILE, f"{scenario_id} initial state-valid profile"
+        assert names == ["declare_goals", "prepare_route_options", "present_route"], scenario_id
+        assert len(route_cards(ev.events)) == 1, scenario_id
         set_id = ev.state["active_candidate_set_id"]
-        self.assertTrue(bool(set_id) and set_id.startswith("cs_"), scenario_id)
-        self.assertEqual(ev.state["selected_candidate_id"], candidate_id, scenario_id)
-        self.assertEqual(ev.mocks["stored_candidate_set_ids"], [set_id], scenario_id)
+        assert set_id, scenario_id
+        assert set_id.startswith("cs_"), scenario_id
+        assert ev.state["selected_candidate_id"] == candidate_id, scenario_id
+        assert ev.mocks["stored_candidate_set_ids"] == [set_id], scenario_id
         record = candidate_store.load_candidate_set(set_id, session_id=session_id)
-        self.assertIsNotNone(record, scenario_id)
-        self.assertTrue(record["presented"], scenario_id)
-        self.assertEqual(record["selected_candidate_id"], candidate_id, scenario_id)
-        self.assertEqual(len(session.get("route_cards") or []), 1, scenario_id)
-        self.assertIsNotNone(session.get("active_trip"), scenario_id)
+        assert record is not None, scenario_id
+        assert record["presented"], scenario_id
+        assert record["selected_candidate_id"] == candidate_id, scenario_id
+        assert len(session.get("route_cards") or []) == 1, scenario_id
+        assert session.get("active_trip") is not None, scenario_id
         self._assert_policy(scenario_id, mode, ev)
         self._assert_meta_done(scenario_id, ev)
         return set_id, record
@@ -231,13 +234,13 @@ class _ModelLedCandidateMixin:
             result = await present_route.load_validated_presentation(payload, ctx)
         else:
             result = await present_route.execute(payload, ctx)
-        self.assertFalse(result.ok, f"{scenario_id} presenter identity probe rejects")
-        self.assertIn(marker, result.error or "", f"{scenario_id} real presenter reports the canonical gate")
-        self.assertNotIn(marker, ev.trace.final_text, f"{scenario_id} hides identity detail from rider text")
-        self.assertEqual(route_cards(ev.events), [], scenario_id)
-        self.assertEqual(ev.mocks["stored_candidate_set_ids"], [], scenario_id)
-        self.assertEqual(self._snapshot_session(session), session_before, scenario_id)
-        self.assertEqual(self._snapshot_record(set_id, session_id), record_before, scenario_id)
+        assert not result.ok, f"{scenario_id} presenter identity probe rejects"
+        assert marker in (result.error or ""), f"{scenario_id} real presenter reports the canonical gate"
+        assert marker not in ev.trace.final_text, f"{scenario_id} hides identity detail from rider text"
+        assert route_cards(ev.events) == [], scenario_id
+        assert ev.mocks["stored_candidate_set_ids"] == [], scenario_id
+        assert self._snapshot_session(session) == session_before, scenario_id
+        assert self._snapshot_record(set_id, session_id) == record_before, scenario_id
         return ev
 
 
@@ -260,8 +263,7 @@ class InventedCandidateAfterNaturalRoutingTests(_ModelLedCandidateMixin, _Candid
             session_id=session_id, message=CHANGE_ROUTE_MESSAGE,
             candidate_id=INVENTED_CANDIDATE_ID,
             marker=CANDIDATE_UNKNOWN_MARKER, set_id=set_id, turn_id="t2")
-        self.assertNotIn(INVENTED_CANDIDATE_ID, ev.result_blob,
-                         f"{s} invented id is not echoed to the model")
+        assert INVENTED_CANDIDATE_ID not in ev.result_blob, f"{s} invented id is not echoed to the model"
 
     async def _control_replan(self, mode: str):
         s = f"E2C1-CTL-{mode}"
@@ -287,14 +289,8 @@ class InventedCandidateAfterNaturalRoutingTests(_ModelLedCandidateMixin, _Candid
             message=REPLAN_MESSAGE, rounds=rounds, turn_id="t3",
             prepare_leg=make_leg(destination="Coney Island"),
             fixed_candidate_id=CANDIDATE_V2)
-        self.assertEqual(
-            [name for name, _input in ev.trace.tool_calls],
-            ["declare_goals", "prepare_route_options", "present_route"],
-            f"{s} fresh replan after rejection works")
-        self.assertEqual(
-            (len(route_cards(ev.events)), ev.state["selected_candidate_id"]),
-            (1, CANDIDATE_V2),
-            f"{s} one card and the new candidate committed")
+        assert [name for name, _input in ev.trace.tool_calls] == ["declare_goals", "prepare_route_options", "present_route"], f"{s} fresh replan after rejection works"
+        assert (len(route_cards(ev.events)), ev.state["selected_candidate_id"]) == (1, CANDIDATE_V2), f"{s} one card and the new candidate committed"
 
     async def test_e2_case1_invented_present(self):
         for mode in MODES:
@@ -318,13 +314,13 @@ class CrossSessionCandidateTests(_ModelLedCandidateMixin, _CandidateReferenceBas
         s = f"E2C2-{mode}"
         sid_a, s_a = self._new_session(mode)
         sid_b, s_b = self._new_session(mode)
-        set_a, record_a = await self._natural_route_turn(
+        set_a, _record_a = await self._natural_route_turn(
             mode=mode, scenario_id=f"{s}-A", session=s_a, session_id=sid_a,
             destination="Work", candidate_id=CANDIDATE_A, turn_id="t1")
-        set_b, record_b = await self._natural_route_turn(
+        set_b, _record_b = await self._natural_route_turn(
             mode=mode, scenario_id=f"{s}-B", session=s_b, session_id=sid_b,
             destination="Home", candidate_id=CANDIDATE_B, turn_id="t1")
-        self.assertNotEqual(set_a, set_b, f"{s} sessions own distinct sets")
+        assert set_a != set_b, f"{s} sessions own distinct sets"
         a_before = self._snapshot_session(s_a)
         record_a_before = self._snapshot_record(set_a, sid_a)
         await self._rejected_present_turn(
@@ -332,10 +328,7 @@ class CrossSessionCandidateTests(_ModelLedCandidateMixin, _CandidateReferenceBas
             session_id=sid_b, message=CHANGE_ROUTE_MESSAGE,
             candidate_id=CANDIDATE_A, marker=CANDIDATE_UNKNOWN_MARKER,
             set_id=set_b, turn_id="t2")
-        self.assertEqual(
-            (self._snapshot_session(s_a), self._snapshot_record(set_a, sid_a)),
-            (a_before, record_a_before),
-            f"{s} A session and record untouched by B's probe")
+        assert (self._snapshot_session(s_a), self._snapshot_record(set_a, sid_a)) == (a_before, record_a_before), f"{s} A session and record untouched by B's probe"
         b_before = self._snapshot_session(s_b)
         record_b_before = self._snapshot_record(set_b, sid_b)
         await self._rejected_present_turn(
@@ -343,14 +336,9 @@ class CrossSessionCandidateTests(_ModelLedCandidateMixin, _CandidateReferenceBas
             session_id=sid_a, message=CHANGE_ROUTE_MESSAGE,
             candidate_id=CANDIDATE_B, marker=CANDIDATE_UNKNOWN_MARKER,
             set_id=set_a, turn_id="t2")
-        self.assertEqual(
-            (self._snapshot_session(s_b), self._snapshot_record(set_b, sid_b)),
-            (b_before, record_b_before),
-            f"{s} B session and record untouched by A's probe")
+        assert (self._snapshot_session(s_b), self._snapshot_record(set_b, sid_b)) == (b_before, record_b_before), f"{s} B session and record untouched by A's probe"
         for src, dst in ((set_a, sid_b), (set_b, sid_a)):
-            self.assertIsNone(
-                candidate_store.load_candidate_set(src, session_id=dst),
-                f"{s} set {src} does not load under {dst}")
+            assert candidate_store.load_candidate_set(src, session_id=dst) is None, f"{s} set {src} does not load under {dst}"
 
     async def test_e2_case2_cross_session_rejected(self):
         for mode in MODES:
@@ -384,9 +372,9 @@ class RawProviderIdentityTests(_ModelLedCandidateMixin, _CandidateReferenceBase)
                 session_id=session_id, message=CHANGE_ROUTE_MESSAGE,
                 candidate_id=probe_id, marker=CANDIDATE_UNKNOWN_MARKER,
                 set_id=set_id, turn_id=f"t2-{index}")
-        self.assertIn("cd_", prepare_blob, f"{s} model sees opaque candidate ids")
-        self.assertNotIn("trip_", prepare_blob, f"{s} model never sees raw trip ids")
-        self.assertNotIn("shape_", prepare_blob, f"{s} model never sees raw shape ids")
+        assert "cd_" in prepare_blob, f"{s} model sees opaque candidate ids"
+        assert "trip_" not in prepare_blob, f"{s} model never sees raw trip ids"
+        assert "shape_" not in prepare_blob, f"{s} model never sees raw shape ids"
         for entry in record.get("candidates") or []:
             digest = entry.get("digest") if isinstance(entry, dict) else None
             destination = entry.get("destination_place") if isinstance(entry, dict) else None
@@ -394,31 +382,17 @@ class RawProviderIdentityTests(_ModelLedCandidateMixin, _CandidateReferenceBase)
             destination_id = destination.get("place_id") if isinstance(destination, dict) else None
             ids = [value for value in (digest_id, destination_id) if value]
             for place_id in ids:
-                self.assertTrue(
-                    str(place_id).startswith("pl_"),
-                    f"{s} stored place identities stay opaque: {place_id!r}",
-                )
+                assert str(place_id).startswith("pl_"), f"{s} stored place identities stay opaque: {place_id!r}"
             if ids:
-                self.assertEqual(
-                    len(ids), 2,
-                    f"{s} stored endpoint and digest identities are paired",
-                )
-                self.assertEqual(
-                    digest_id,
-                    destination_id,
-                    f"{s} stored endpoint and digest identities agree",
-                )
+                assert len(ids) == 2, f"{s} stored endpoint and digest identities are paired"
+                assert digest_id == destination_id, f"{s} stored endpoint and digest identities agree"
             self._assert_no_raw_provider_identity(s, entry)
 
     def _assert_no_raw_provider_identity(self, scenario_id: str, value: object) -> None:
         if isinstance(value, dict):
             for key, nested in value.items():
                 lowered_key = str(key).casefold()
-                self.assertNotIn(
-                    lowered_key,
-                    {"provider_place_id", "provider_place_ids"},
-                    f"{scenario_id} stored entry leaked provider identity field {key!r}",
-                )
+                assert lowered_key not in {"provider_place_id", "provider_place_ids"}, f"{scenario_id} stored entry leaked provider identity field {key!r}"
                 self._assert_no_raw_provider_identity(scenario_id, nested)
             return
         if isinstance(value, (list, tuple)):
@@ -427,11 +401,7 @@ class RawProviderIdentityTests(_ModelLedCandidateMixin, _CandidateReferenceBase)
             return
         lowered = str(value or "").casefold()
         for marker in ("chij", RAW_TRIP_ID.casefold(), RAW_SHAPE_ID.casefold()):
-            self.assertNotIn(
-                marker,
-                lowered,
-                f"{scenario_id} stored entry leaked raw provider identity {marker!r}",
-            )
+            assert marker not in lowered, f"{scenario_id} stored entry leaked raw provider identity {marker!r}"
 
     async def test_e2_case6_raw_provider_identity(self):
         for mode in MODES:
@@ -458,14 +428,8 @@ class CandidateLikeTextDoesNotAuthorTests(_ModelLedCandidateMixin, _CandidateRef
         ev = await self._scripted_turn(
             mode=mode, session=session, session_id=session_id,
             message=message, rounds=rounds, turn_id="t1")
-        self.assertEqual(
-            ev.offered, INITIAL_TOOL_PROFILE,
-            f"{s} offered={sorted(ev.offered)}")
-        self.assertEqual(
-            [name for name, _tool_input in ev.trace.tool_calls],
-            expected_calls,
-            f"{s} bounded calls",
-        )
+        assert ev.offered == INITIAL_TOOL_PROFILE, f"{s} offered={sorted(ev.offered)}"
+        assert [name for name, _tool_input in ev.trace.tool_calls] == expected_calls, f"{s} bounded calls"
         self._assert_no_candidate_authoring(
             scenario_id=s,
             ev=ev,
@@ -496,8 +460,8 @@ class CandidateLikeTextDoesNotAuthorTests(_ModelLedCandidateMixin, _CandidateRef
             (event for event in ev.events
              if event.type == "tool_end" and event.tool == "present_route"),
             None)
-        self.assertIsNone(present_end, f"{s} no presenter is state-valid without prepared evidence")
-        self.assertNotIn(NO_ACTIVE_SET_MARKER, ev.trace.final_text, s)
+        assert present_end is None, f"{s} no presenter is state-valid without prepared evidence"
+        assert NO_ACTIVE_SET_MARKER not in ev.trace.final_text, s
 
     async def _first_option_variant(self, mode: str):
         s = f"E2C7-{mode}-FIRST"
@@ -513,7 +477,7 @@ class CandidateLikeTextDoesNotAuthorTests(_ModelLedCandidateMixin, _CandidateRef
             ],
             ["declare_goals", "complete_turn"],
         )
-        self.assertEqual(ev.events[-1].stop_reason, "clarification_required")
+        assert ev.events[-1].stop_reason == "clarification_required"
 
     async def test_e2_case7_pretend_candidate_text(self):
         for mode in MODES:

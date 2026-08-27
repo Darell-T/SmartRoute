@@ -14,7 +14,6 @@ from types import SimpleNamespace
 from typing import Protocol
 from unittest.mock import patch
 
-
 FIXED_SEEDS = (37, 73, 109)
 DEADLINE_SECONDS = 0.02
 MAX_DEADLINE_WALL_SECONDS = 0.35
@@ -70,7 +69,7 @@ class _FailingStream:
     def __init__(self, status_code: int) -> None:
         self._error = _ProviderError(status_code)
 
-    async def __aenter__(self) -> "_FailingStream":
+    async def __aenter__(self) -> _FailingStream:
         raise self._error
 
     async def __aexit__(self, *_args: object) -> bool:
@@ -82,7 +81,7 @@ class _StalledStream:
         self._started = started
         self._release = asyncio.Event()
 
-    async def __aenter__(self) -> "_StalledStream":
+    async def __aenter__(self) -> _StalledStream:
         return self
 
     async def __aexit__(self, *_args: object) -> bool:
@@ -95,7 +94,8 @@ class _StalledStream:
         yield None
 
     async def get_final_message(self) -> object:
-        raise AssertionError("a stalled provider must not reach a final message")
+        stalled = "a stalled provider must not reach a final message"
+        raise AssertionError(stalled)
 
 
 class _JitteredTextStream:
@@ -103,7 +103,7 @@ class _JitteredTextStream:
         self._chunks = chunks
         self._delays = delays
 
-    async def __aenter__(self) -> "_JitteredTextStream":
+    async def __aenter__(self) -> _JitteredTextStream:
         return self
 
     async def __aexit__(self, *_args: object) -> bool:
@@ -187,13 +187,14 @@ async def _disconnect_fault(model_stream: ModelStreamSeam) -> None:
     except asyncio.CancelledError:
         pass
     else:
-        raise FaultCaseError("consumer cancellation must propagate")
+        cancelled = "consumer cancellation must propagate"
+        raise FaultCaseError(cancelled)
     await stream.aclose()
 
 
 def _jitter_schedule(seed: int) -> tuple[str, list[str], list[float]]:
     text = "Grounded route evidence remains stable."
-    randomizer = random.Random(seed)
+    randomizer = random.Random(seed)  # noqa: S311 deterministic offline jitter, not cryptography
     chunks: list[str] = []
     cursor = 0
     while cursor < len(text):
@@ -223,7 +224,8 @@ async def _stream_jitter(model_stream: ModelStreamSeam, seed: int) -> None:
 
 
 async def _agent_turn_deadline_fault() -> None:
-    from app.services.agent import loop, session as session_module
+    from app.services.agent import loop
+    from app.services.agent import session as session_module
 
     session_id, session = session_module.new_session()
     client = SimpleNamespace(messages=_Messages(_StalledStream()))
@@ -251,6 +253,27 @@ async def _agent_turn_deadline_fault() -> None:
     _require(time.monotonic() - started <= MAX_DEADLINE_WALL_SECONDS, "agent turn exceeded deadline wall-time bound")
 
 
+_FAULT_STATUS = {
+    "invalid_request": (400, "invalid_request", False),
+    "invalid_credentials": (401, "provider_configuration", False),
+    "rate_limited": (429, "rate_limited", True),
+    "model_unavailable": (529, "upstream_error", True),
+}
+
+
+async def _run_fault_case(model_stream: ModelStreamSeam, case: str) -> None:
+    if case == "deadline_stall":
+        await _deadline_fault(model_stream)
+        return
+    if case == "disconnect":
+        await _disconnect_fault(model_stream)
+        return
+    status_code, expected_code, retryable = _FAULT_STATUS[case]
+    await _model_fault(
+        model_stream, status_code=status_code, expected_code=expected_code, retryable=retryable
+    )
+
+
 async def run_model_fault_cases() -> dict[str, object]:
     """Exercise fixed-seed fake-provider faults through production stream seams."""
 
@@ -259,19 +282,8 @@ async def run_model_fault_cases() -> dict[str, object]:
     await _agent_turn_deadline_fault()
     for seed in FIXED_SEEDS:
         await _stream_jitter(model_stream, seed)
-        for case in random.Random(seed).sample(_FAULT_CASES, k=len(_FAULT_CASES)):
-            if case == "invalid_request":
-                await _model_fault(model_stream, status_code=400, expected_code="invalid_request", retryable=False)
-            elif case == "invalid_credentials":
-                await _model_fault(model_stream, status_code=401, expected_code="provider_configuration", retryable=False)
-            elif case == "rate_limited":
-                await _model_fault(model_stream, status_code=429, expected_code="rate_limited", retryable=True)
-            elif case == "model_unavailable":
-                await _model_fault(model_stream, status_code=529, expected_code="upstream_error", retryable=True)
-            elif case == "deadline_stall":
-                await _deadline_fault(model_stream)
-            else:
-                await _disconnect_fault(model_stream)
+        for case in random.Random(seed).sample(_FAULT_CASES, k=len(_FAULT_CASES)):  # noqa: S311 deterministic offline order, not cryptography
+            await _run_fault_case(model_stream, case)
     return {
         "seeds": ",".join(str(seed) for seed in FIXED_SEEDS),
         "seeded_case_runs": len(FIXED_SEEDS) * (len(_FAULT_CASES) + 1),

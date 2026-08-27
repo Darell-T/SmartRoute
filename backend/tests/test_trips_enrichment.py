@@ -8,14 +8,16 @@ enrichment lands on EVERY candidate (alternatives render identically when
 picked).
 """
 
-import importlib
 import asyncio
+import importlib
 import sys
 import time
 import types
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
+
+import pytest
 
 SUBWAY_LOCATED = [
     {"name": "Church Av", "lat": 40.644, "lng": -73.979},
@@ -36,13 +38,13 @@ def _load_trips_module(bus_fetch, *, routes=None):
     fake_fastapi = types.ModuleType("fastapi")
 
     class _FakeAPIRouter:
-        def post(self, *args, **kwargs):
+        def post(self, *_args, **_kwargs):
             def decorator(func):
                 return func
 
             return decorator
 
-    class _FakeHTTPException(Exception):
+    class _FakeHTTPError(Exception):
         def __init__(self, status_code, detail):
             super().__init__(detail)
             self.status_code = status_code
@@ -52,7 +54,7 @@ def _load_trips_module(bus_fetch, *, routes=None):
         pass
 
     fake_fastapi.APIRouter = _FakeAPIRouter
-    fake_fastapi.HTTPException = _FakeHTTPException
+    fake_fastapi.HTTPException = _FakeHTTPError
     fake_fastapi.Request = _FakeRequest
 
     fake_pydantic = types.ModuleType("pydantic")
@@ -89,7 +91,7 @@ def _load_trips_module(bus_fetch, *, routes=None):
         }
         return subway_step, bus_step
 
-    def _fake_parse_response(*args, **kwargs):
+    def _fake_parse_response(*_args, **_kwargs):
         if routes is not None:
             return routes
         s0, b0 = _route_steps()
@@ -97,11 +99,13 @@ def _load_trips_module(bus_fetch, *, routes=None):
         s1["route_total_minutes"] = 9
         return [[s0, b0], [s1]]
 
-    async def _fake_get_transit_route(*args, **kwargs):
+    async def _fake_get_transit_route(*_args, **_kwargs):
         return {"routes": []}
 
     class _FakeGoogleRoutesError(Exception):
-        def __init__(self, code, message, *, provider_status=None, provider_summary=None):
+        def __init__(
+            self, code, message, *, provider_status=None, provider_summary=None
+        ):
             super().__init__(message)
             self.code = code
             self.provider_status = provider_status
@@ -113,25 +117,25 @@ def _load_trips_module(bus_fetch, *, routes=None):
 
     fake_mta_feed = types.ModuleType("app.services.mta.realtime")
 
-    async def _fake_fetch_service_alerts(*args, **kwargs):
+    async def _fake_fetch_service_alerts(*_args, **_kwargs):
         return []
 
-    async def _fake_get_stalled_buses(*args, **kwargs):
+    async def _fake_get_stalled_buses(*_args, **_kwargs):
         return []
 
-    async def _fake_get_stalled_trains(*args, **kwargs):
+    async def _fake_get_stalled_trains(*_args, **_kwargs):
         return []
 
     fake_mta_feed.fetch_service_alerts = _fake_fetch_service_alerts
     fake_mta_feed.get_stalled_buses = _fake_get_stalled_buses
     fake_mta_feed.get_stalled_trains = _fake_get_stalled_trains
-    fake_mta_feed.parse_service_alerts = lambda *a, **k: []
-    fake_mta_feed.filter_alerts_for_routes = lambda *a, **k: []
+    fake_mta_feed.parse_service_alerts = lambda *_args, **_kwargs: []
+    fake_mta_feed.filter_alerts_for_routes = lambda *_args, **_kwargs: []
 
     fake_bus_routes = types.ModuleType("app.services.mta.bus")
     fake_bus_routes.fetch_bus_route_stop_groups = bus_fetch
 
-    def _fake_slice_route_stops(parsed, board_coords, exit_coords, max_snap_m=250):
+    def _fake_slice_route_stops(parsed, _board_coords, _exit_coords, _max_snap_m=250):
         return list(parsed.get("canned", []))
 
     fake_bus_routes.slice_route_stops = _fake_slice_route_stops
@@ -190,15 +194,17 @@ def _request_with_gtfs():
         app=SimpleNamespace(
             state=SimpleNamespace(
                 gtfs=SimpleNamespace(
-                    get_intermediate_stops_with_coords=lambda route_id, dep, arr, *coords: list(SUBWAY_LOCATED),
+                    get_intermediate_stops_with_coords=lambda _route_id, _dep, _arr, *_coords: (
+                        list(SUBWAY_LOCATED)
+                    ),
                 )
             )
-        )
+        ),
     )
 
 
 def _request_with_slow_gtfs():
-    def _slow_lookup(route_id, dep, arr, *coords):
+    def _slow_lookup(_route_id, _dep, _arr, *_coords):
         time.sleep(0.1)
         return list(SUBWAY_LOCATED)
 
@@ -208,7 +214,7 @@ def _request_with_slow_gtfs():
             state=SimpleNamespace(
                 gtfs=SimpleNamespace(get_intermediate_stops_with_coords=_slow_lookup)
             )
-        )
+        ),
     )
 
 
@@ -224,60 +230,59 @@ def _payload(trips):
 
 class TripEnrichmentTests(unittest.IsolatedAsyncioTestCase):
     async def test_chosen_route_enriched_alternates_deferred(self):
-        async def bus_fetch(route_id):
+        async def bus_fetch(_route_id):
             return {"canned": BUS_LOCATED}
 
         trips = _load_trips_module(bus_fetch)
         result = await trips.plan_trip(_request_with_gtfs(), _payload(trips))
 
         subway = result["route"][0]
-        self.assertEqual(subway["intermediate_stop_locations"], SUBWAY_LOCATED)
-        self.assertEqual(subway["intermediate_stops"], ["Church Av", "Fort Hamilton Pkwy"])
+        assert subway["intermediate_stop_locations"] == SUBWAY_LOCATED
+        assert subway["intermediate_stops"] == ["Church Av", "Fort Hamilton Pkwy"]
 
         bus = result["route"][1]
-        self.assertEqual(bus["intermediate_stop_locations"], BUS_LOCATED)
-        self.assertEqual(bus["intermediate_stops"], ["AV A/1 ST", "AV A/3 ST"])
+        assert bus["intermediate_stop_locations"] == BUS_LOCATED
+        assert bus["intermediate_stops"] == ["AV A/1 ST", "AV A/3 ST"]
 
         # Only the chosen route is enriched on the initial response.
         chosen_candidate = result["route_candidates"][0]
-        self.assertTrue(chosen_candidate["enriched"])
-        self.assertFalse(chosen_candidate["can_enrich_on_select"])
-        self.assertIn("itinerary", chosen_candidate)
-        self.assertEqual(
-            chosen_candidate["total_minutes"],
-            round(chosen_candidate["itinerary"]["total_duration_seconds"] / 60),
+        assert chosen_candidate["enriched"]
+        assert not chosen_candidate["can_enrich_on_select"]
+        assert "itinerary" in chosen_candidate
+        assert chosen_candidate["total_minutes"] == round(
+            chosen_candidate["itinerary"]["total_duration_seconds"] / 60
         )
-        self.assertEqual(
-            chosen_candidate["score_breakdown"]["transfers"],
-            chosen_candidate["itinerary"]["transfer_count"],
+        assert (
+            chosen_candidate["score_breakdown"]["transfers"]
+            == chosen_candidate["itinerary"]["transfer_count"]
         )
 
         # Alternates are deferred: empty stop lists, flagged for lazy enrichment.
         alt_candidate = result["route_candidates"][1]
-        self.assertFalse(alt_candidate["enriched"])
-        self.assertTrue(alt_candidate["can_enrich_on_select"])
-        self.assertEqual(alt_candidate["steps"][0]["intermediate_stop_locations"], [])
+        assert not alt_candidate["enriched"]
+        assert alt_candidate["can_enrich_on_select"]
+        assert alt_candidate["steps"][0]["intermediate_stop_locations"] == []
 
     async def test_enrich_route_endpoint_fills_alternate_lazily(self):
-        async def bus_fetch(route_id):
+        async def bus_fetch(_route_id):
             return {"canned": BUS_LOCATED}
 
         trips = _load_trips_module(bus_fetch)
         # Plan a trip, grab the un-enriched alternate, enrich it on demand.
         result = await trips.plan_trip(_request_with_gtfs(), _payload(trips))
         alt_steps = result["route_candidates"][1]["steps"]
-        self.assertEqual(alt_steps[0]["intermediate_stop_locations"], [])
+        assert alt_steps[0]["intermediate_stop_locations"] == []
 
         enriched = await trips.enrich_route(
             _request_with_gtfs(), trips.EnrichRouteRequest(steps=alt_steps)
         )
-        self.assertTrue(enriched["enriched"])
-        self.assertEqual(
-            enriched["steps"][0]["intermediate_stop_locations"], SUBWAY_LOCATED
-        )
+        assert enriched["enriched"]
+        assert enriched["steps"][0]["intermediate_stop_locations"] == SUBWAY_LOCATED
 
-    async def test_enrich_route_accepts_complete_step_and_rejects_invalid_steps_before_enrichment(self):
-        async def bus_fetch(route_id):
+    async def test_enrich_route_accepts_complete_step_and_rejects_invalid_steps_before_enrichment(
+        self,
+    ):
+        async def bus_fetch(_route_id):
             return {"canned": BUS_LOCATED}
 
         trips = _load_trips_module(bus_fetch)
@@ -309,18 +314,20 @@ class TripEnrichmentTests(unittest.IsolatedAsyncioTestCase):
                 {"name": "Canal St", "lat": 40.72, "lng": -74.0}
             ],
         }
-        enrich = AsyncMock(return_value={
-            "subway_legs": 1,
-            "bus_legs": 0,
-            "subway_with_stops": 1,
-            "bus_with_stops": 0,
-        })
+        enrich = AsyncMock(
+            return_value={
+                "subway_legs": 1,
+                "bus_legs": 0,
+                "subway_with_stops": 1,
+                "bus_with_stops": 0,
+            }
+        )
 
         with patch.object(trips.direct_plan.enrichment, "_enrich_route", enrich):
             result = await trips.enrich_route(
                 _request_with_gtfs(), trips.EnrichRouteRequest(steps=[step])
             )
-        self.assertTrue(result["enriched"])
+        assert result["enriched"]
         enrich.assert_awaited_once()
 
         invalid_steps = (
@@ -356,9 +363,14 @@ class TripEnrichmentTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         rejected_enrich = AsyncMock()
-        with patch.object(trips.direct_plan.enrichment, "_enrich_route", rejected_enrich):
+        with patch.object(
+            trips.direct_plan.enrichment, "_enrich_route", rejected_enrich
+        ):
             for invalid_step in invalid_steps:
-                with self.subTest(invalid_step=invalid_step), self.assertRaises(trips.HTTPException):
+                with (
+                    self.subTest(invalid_step=invalid_step),
+                    pytest.raises(trips.HTTPException),
+                ):
                     await trips.enrich_route(
                         _request_with_gtfs(),
                         trips.EnrichRouteRequest(steps=[invalid_step]),
@@ -366,7 +378,7 @@ class TripEnrichmentTests(unittest.IsolatedAsyncioTestCase):
         rejected_enrich.assert_not_awaited()
 
     async def test_enrich_route_accepts_rail_modes_without_rejecting_them(self):
-        async def bus_fetch(route_id):
+        async def bus_fetch(_route_id):
             return {"canned": BUS_LOCATED}
 
         trips = _load_trips_module(bus_fetch)
@@ -380,33 +392,36 @@ class TripEnrichmentTests(unittest.IsolatedAsyncioTestCase):
             "start_point": {"lat": 40.7, "lng": -73.8},
             "end_point": {"lat": 40.65, "lng": -73.78},
         }
-        enrich = AsyncMock(return_value={
-            "subway_legs": 0,
-            "bus_legs": 0,
-            "subway_with_stops": 0,
-            "bus_with_stops": 0,
-        })
+        enrich = AsyncMock(
+            return_value={
+                "subway_legs": 0,
+                "bus_legs": 0,
+                "subway_with_stops": 0,
+                "bus_with_stops": 0,
+            }
+        )
         with patch.object(trips.direct_plan.enrichment, "_enrich_route", enrich):
             result = await trips.enrich_route(
                 _request_with_gtfs(), trips.EnrichRouteRequest(steps=[tram_step])
             )
-        self.assertTrue(result["enriched"])
+        assert result["enriched"]
         enrich.assert_awaited_once()
 
     async def test_oba_failure_degrades_to_empty_without_breaking_trip(self):
-        async def bus_fetch(route_id):
-            raise RuntimeError("OBA down")
+        async def bus_fetch(_route_id):
+            message = "OBA down"
+            raise RuntimeError(message)
 
         trips = _load_trips_module(bus_fetch)
         result = await trips.plan_trip(_request_with_gtfs(), _payload(trips))
 
         bus = result["route"][1]
-        self.assertEqual(bus["intermediate_stop_locations"], [])
-        self.assertEqual(bus["intermediate_stops"], [])
-        self.assertIn("recommendation", result)
+        assert bus["intermediate_stop_locations"] == []
+        assert bus["intermediate_stops"] == []
+        assert "recommendation" in result
 
     async def test_slow_gtfs_enrichment_degrades_without_hanging_trip(self):
-        async def bus_fetch(route_id):
+        async def bus_fetch(_route_id):
             return {"canned": BUS_LOCATED}
 
         trips = _load_trips_module(bus_fetch)
@@ -414,20 +429,20 @@ class TripEnrichmentTests(unittest.IsolatedAsyncioTestCase):
         started = time.monotonic()
         result = await trips.plan_trip(_request_with_slow_gtfs(), _payload(trips))
 
-        self.assertLess(time.monotonic() - started, 0.08)
+        assert time.monotonic() - started < 0.08
         subway = result["route"][0]
-        self.assertEqual(subway["intermediate_stop_locations"], [])
-        self.assertEqual(subway["intermediate_stops"], [])
-        self.assertIn("recommendation", result)
+        assert subway["intermediate_stop_locations"] == []
+        assert subway["intermediate_stops"] == []
+        assert "recommendation" in result
 
     async def test_slow_live_context_degrades_without_hanging_trip(self):
-        async def bus_fetch(route_id):
+        async def bus_fetch(_route_id):
             return {"canned": BUS_LOCATED}
 
         trips = _load_trips_module(bus_fetch)
         trips.TRIP_CONTEXT_TIMEOUT_S = 0.01
 
-        async def _slow_context(*args, **kwargs):
+        async def _slow_context(*_args, **_kwargs):
             await asyncio.sleep(0.1)
             return []
 
@@ -438,10 +453,10 @@ class TripEnrichmentTests(unittest.IsolatedAsyncioTestCase):
         started = time.monotonic()
         result = await trips.plan_trip(_request_with_gtfs(), _payload(trips))
 
-        self.assertLess(time.monotonic() - started, 0.08)
-        self.assertEqual(result["alerts"], [])
-        self.assertNotIn("incidents", result)
-        self.assertIn("recommendation", result)
+        assert time.monotonic() - started < 0.08
+        assert result["alerts"] == []
+        assert "incidents" not in result
+        assert "recommendation" in result
 
 
 if __name__ == "__main__":

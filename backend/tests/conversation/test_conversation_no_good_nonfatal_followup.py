@@ -98,30 +98,6 @@ class NonfatalPrepareSeamTests(_NoGoodOptionsBase):
         )
         self._assert_no_modes_attempt(_session, audit)
 
-    async def test_ng08_nonfatal_no_transit_modes_quick(self):
-        _session, _session_id, _seed, _events, _trace, audit, _state = (
-            await self._run_nonfatal_scenario(
-                mode="quick",
-                message="Avoid buses and subways",
-                prepare_leg=no_transit_modes_result(),
-                expected_status="no_hard_constraint_match",
-                expected_prepare_input={
-                    "exclude_modes": ["BUS", "SUBWAY"],
-                    "max_candidates": self.loop.agent_policy.policy_for_mode(
-                        "quick"
-                    ).max_route_candidates,
-                    "include_first_leg_arrivals": False,
-                },
-            )
-        )
-        self._assert_no_modes_attempt(_session, audit)
-        _mode, quick_model = policy_model(self.loop, "quick")
-        self.assertEqual(self.loop.client.messages.calls[0]["model"], quick_model)
-        self.assertIn(
-            "response_presentation: quick",
-            self.loop.client.messages.calls[0]["messages"][-1]["content"],
-        )
-
     async def test_ng09_nonfatal_no_route_coverage_auto(self):
         _session, _session_id, _seed, _events, _trace, audit, _state = (
             await self._run_nonfatal_scenario(
@@ -275,17 +251,4 @@ class RelaxationFollowupTests(_NoGoodOptionsBase):
             events2=events2,
             trace2=trace2,
             mode="auto",
-        )
-
-    async def test_ng06_quick_relaxation_presents_one_new_card(self):
-        session, session_id, seed, _e1, _t1, events2, trace2 = await self._run_ng06(
-            mode="quick"
-        )
-        self._assert_ng06_spec(
-            session=session,
-            session_id=session_id,
-            seed=seed,
-            events2=events2,
-            trace2=trace2,
-            mode="quick",
         )

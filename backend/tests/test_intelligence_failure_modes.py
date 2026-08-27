@@ -11,16 +11,18 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from app.services import cache
 from app.services.incidents import index as incident_index
 from app.services.trips.route_incidents import (
     index_adapter as incident_index_adapter,
+)
+from app.services.trips.route_incidents import (
     scan as incidents,
 )
 from app.services.trips.route_incidents.context import (
     CandidateStopAssociation,
     CandidateStopContext,
 )
-from app.services import cache
 
 
 def _context() -> list[CandidateStopContext]:
@@ -53,28 +55,25 @@ class IncidentIndexFailureAndCoverageTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await incidents.scan_route_incidents(_context())
 
-        self.assertEqual(result["incidents"], [])
-        self.assertEqual(result["warnings"], [])
+        assert result["incidents"] == []
+        assert result["warnings"] == []
         metadata = result["scan_metadata"]
-        self.assertEqual(metadata["lookup_status"], "failed")
-        self.assertEqual(metadata["coverage_status"], "unavailable")
-        self.assertEqual(metadata["status"], "unavailable")
-        self.assertEqual(metadata["lookup_kind"], "index")
-        self.assertEqual(
-            metadata["sources"],
-            {"attempted": ["incident_index"], "completed": []},
-        )
-        self.assertFalse(incidents.incident_lookup_succeeded(metadata))
-        self.assertFalse(incidents.incident_scan_is_complete(metadata))
+        assert metadata["lookup_status"] == "failed"
+        assert metadata["coverage_status"] == "unavailable"
+        assert metadata["status"] == "unavailable"
+        assert metadata["lookup_kind"] == "index"
+        assert metadata["sources"] == {"attempted": ["incident_index"], "completed": []}
+        assert not incidents.incident_lookup_succeeded(metadata)
+        assert not incidents.incident_scan_is_complete(metadata)
 
     async def test_empty_context_is_unscanned_never_complete(self):
         result = await incidents.scan_route_incidents([])
         metadata = result["scan_metadata"]
-        self.assertEqual(result["incidents"], [])
-        self.assertEqual(metadata["status"], "unscanned")
-        self.assertEqual(metadata["coverage_status"], "unscanned")
-        self.assertEqual(metadata["lookup_kind"], "index")
-        self.assertFalse(incidents.incident_scan_is_complete(metadata))
+        assert result["incidents"] == []
+        assert metadata["status"] == "unscanned"
+        assert metadata["coverage_status"] == "unscanned"
+        assert metadata["lookup_kind"] == "index"
+        assert not incidents.incident_scan_is_complete(metadata)
 
     async def test_current_coverage_with_empty_incidents_is_not_an_all_clear_claim(self):
         incident_index.set_coverage(
@@ -82,11 +81,11 @@ class IncidentIndexFailureAndCoverageTests(unittest.IsolatedAsyncioTestCase):
         )
         result = await incidents.scan_route_incidents(_context())
         metadata = result["scan_metadata"]
-        self.assertEqual(result["incidents"], [])
+        assert result["incidents"] == []
         # Current is permitted only from an explicit current coverage record.
-        self.assertEqual(metadata["coverage_status"], "current")
-        self.assertEqual(metadata["status"], "complete")
-        self.assertTrue(incidents.incident_scan_is_complete(metadata))
+        assert metadata["coverage_status"] == "current"
+        assert metadata["status"] == "complete"
+        assert incidents.incident_scan_is_complete(metadata)
 
     async def test_partial_coverage_stays_incomplete_even_with_advisor_incidents(self):
         incident_index.set_coverage(
@@ -121,12 +120,12 @@ class IncidentIndexFailureAndCoverageTests(unittest.IsolatedAsyncioTestCase):
 
         result = await incidents.scan_route_incidents([overlap])
 
-        self.assertEqual(len(result["incidents"]), 1)
+        assert len(result["incidents"]) == 1
         metadata = result["scan_metadata"]
-        self.assertEqual(metadata["coverage_status"], "partial")
-        self.assertEqual(metadata["status"], "partial")
-        self.assertTrue(incidents.incident_lookup_succeeded(metadata))
-        self.assertFalse(incidents.incident_scan_is_complete(metadata))
+        assert metadata["coverage_status"] == "partial"
+        assert metadata["status"] == "partial"
+        assert incidents.incident_lookup_succeeded(metadata)
+        assert not incidents.incident_scan_is_complete(metadata)
 
     def test_metadata_helpers_distinguish_lookup_success_from_coverage_freshness(self):
         current = {
@@ -139,13 +138,13 @@ class IncidentIndexFailureAndCoverageTests(unittest.IsolatedAsyncioTestCase):
             "lookup_status": "complete",
             "coverage_status": "partial",
         }
-        self.assertTrue(incidents.incident_scan_is_complete(current))
-        self.assertTrue(incidents.incident_lookup_succeeded(current))
-        self.assertFalse(incidents.incident_scan_is_complete(partial))
-        self.assertTrue(incidents.incident_lookup_succeeded(partial))
-        self.assertFalse(incidents.incident_lookup_succeeded({"status": "complete"}))
-        self.assertFalse(incidents.incident_scan_is_complete(None))
-        self.assertFalse(incidents.incident_lookup_succeeded(None))
+        assert incidents.incident_scan_is_complete(current)
+        assert incidents.incident_lookup_succeeded(current)
+        assert not incidents.incident_scan_is_complete(partial)
+        assert incidents.incident_lookup_succeeded(partial)
+        assert not incidents.incident_lookup_succeeded({"status": "complete"})
+        assert not incidents.incident_scan_is_complete(None)
+        assert not incidents.incident_lookup_succeeded(None)
 
     def test_normal_trip_incidents_modules_have_no_cold_scan_path(self):
         for module in (incidents, incident_index_adapter):
@@ -159,7 +158,7 @@ class IncidentIndexFailureAndCoverageTests(unittest.IsolatedAsyncioTestCase):
                 "_inflight_scans",
                 "asyncio",
             ):
-                self.assertNotIn(forbidden, source)
+                assert forbidden not in source
 
     def test_retired_request_time_incident_modules_are_absent(self):
         services_root = Path(__file__).resolve().parents[1] / "app" / "services"
@@ -167,7 +166,7 @@ class IncidentIndexFailureAndCoverageTests(unittest.IsolatedAsyncioTestCase):
             services_root / "incident_monitor.py",
             services_root / "trips" / "incident_scan_cache.py",
         )
-        self.assertEqual([str(path) for path in retired if path.exists()], [])
+        assert [str(path) for path in retired if path.exists()] == []
 
 
 if __name__ == "__main__":

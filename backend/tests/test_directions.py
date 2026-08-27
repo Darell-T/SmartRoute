@@ -4,7 +4,20 @@ import sys
 import types
 import unittest
 from datetime import datetime, timedelta, timezone
+from typing import ClassVar
 from unittest.mock import patch
+
+import pytest
+
+
+class MissingGoogleApiKeyError(AssertionError):
+    def __init__(self) -> None:
+        super().__init__("request should not be sent without a Google API key")
+
+
+class BadProviderJsonError(ValueError):
+    def __init__(self) -> None:
+        super().__init__("bad provider json detail")
 
 
 def _fake_httpx_module():
@@ -17,10 +30,10 @@ def _fake_httpx_module():
         def __init__(self, response):
             self.response = response
 
-    class _TimeoutException(Exception):
+    class _TimeoutError(Exception):
         pass
 
-    class _ReadTimeout(_TimeoutException):
+    class _ReadTimeoutError(_TimeoutError):
         pass
 
     class _AsyncClient:
@@ -32,18 +45,20 @@ def _fake_httpx_module():
 
     fake_httpx.RequestError = _RequestError
     fake_httpx.HTTPStatusError = _HTTPStatusError
-    fake_httpx.TimeoutException = _TimeoutException
-    fake_httpx.ReadTimeout = _ReadTimeout
+    fake_httpx.TimeoutException = _TimeoutError
+    fake_httpx.ReadTimeout = _ReadTimeoutError
     fake_httpx.AsyncClient = _AsyncClient
     return fake_httpx
 
 
 def _load_directions(env: dict[str, str]):
-    with patch.dict(os.environ, env, clear=False):
-        with patch.dict(sys.modules, {"httpx": _fake_httpx_module()}):
-            if "app.services.directions" in sys.modules:
-                return importlib.reload(sys.modules["app.services.directions"])
-            return importlib.import_module("app.services.directions")
+    with (
+        patch.dict(os.environ, env, clear=False),
+        patch.dict(sys.modules, {"httpx": _fake_httpx_module()}),
+    ):
+        if "app.services.directions" in sys.modules:
+            return importlib.reload(sys.modules["app.services.directions"])
+        return importlib.import_module("app.services.directions")
 
 
 def _recording_client_class():
@@ -55,7 +70,7 @@ def _recording_client_class():
             return {"routes": []}
 
     class _Client:
-        requests = []
+        requests: ClassVar[list] = []
 
         async def __aenter__(self):
             return self
@@ -63,13 +78,13 @@ def _recording_client_class():
         async def __aexit__(self, *_args):
             return False
 
-        async def post(self, url, json, headers, timeout):
+        async def post(self, url, *, json, headers, **kwargs):
             self.requests.append(
                 {
                     "url": url,
                     "json": json,
                     "headers": headers,
-                    "timeout": timeout,
+                    "timeout": kwargs["timeout"],
                 }
             )
             return _Response()
@@ -137,11 +152,8 @@ class TransitRouteParamsTests(unittest.IsolatedAsyncioTestCase):
         await directions.get_transit_route((40.7, -73.9), "Atlantic Terminal")
 
         body = client_class.requests[0]["json"]
-        self.assertEqual(
-            body["transitPreferences"],
-            {"allowedTravelModes": ["SUBWAY", "BUS"], "routingPreference": "FEWER_TRANSFERS"},
-        )
-        self.assertNotIn("departureTime", body)
+        assert body["transitPreferences"] == {"allowedTravelModes": ["SUBWAY", "BUS"], "routingPreference": "FEWER_TRANSFERS"}
+        assert "departureTime" not in body
 
     async def test_allowed_travel_modes_override_is_sent(self):
         directions = self.directions
@@ -152,27 +164,27 @@ class TransitRouteParamsTests(unittest.IsolatedAsyncioTestCase):
         )
 
         body = client_class.requests[0]["json"]
-        self.assertEqual(body["transitPreferences"]["allowedTravelModes"], ["SUBWAY"])
+        assert body["transitPreferences"]["allowedTravelModes"] == ["SUBWAY"]
 
     async def test_invalid_allowed_travel_modes_raises(self):
         directions = self.directions
         self._client_for(directions)
 
-        with self.assertRaises(directions.GoogleRoutesError) as raised:
+        with pytest.raises(directions.GoogleRoutesError) as raised:
             await directions.get_transit_route(
                 (40.7, -73.9), "Atlantic Terminal", allowed_travel_modes=["FERRY"]
             )
-        self.assertEqual(raised.exception.code, "invalid_modes")
+        assert raised.value.code == "invalid_modes"
 
     async def test_empty_allowed_travel_modes_raises(self):
         directions = self.directions
         self._client_for(directions)
 
-        with self.assertRaises(directions.GoogleRoutesError) as raised:
+        with pytest.raises(directions.GoogleRoutesError) as raised:
             await directions.get_transit_route(
                 (40.7, -73.9), "Atlantic Terminal", allowed_travel_modes=[]
             )
-        self.assertEqual(raised.exception.code, "invalid_modes")
+        assert raised.value.code == "invalid_modes"
 
     async def test_routing_preference_passthrough(self):
         directions = self.directions
@@ -183,17 +195,17 @@ class TransitRouteParamsTests(unittest.IsolatedAsyncioTestCase):
         )
 
         body = client_class.requests[0]["json"]
-        self.assertEqual(body["transitPreferences"]["routingPreference"], "LESS_WALKING")
+        assert body["transitPreferences"]["routingPreference"] == "LESS_WALKING"
 
     async def test_invalid_routing_preference_raises(self):
         directions = self.directions
         self._client_for(directions)
 
-        with self.assertRaises(directions.GoogleRoutesError) as raised:
+        with pytest.raises(directions.GoogleRoutesError) as raised:
             await directions.get_transit_route(
                 (40.7, -73.9), "Atlantic Terminal", routing_preference="FASTEST"
             )
-        self.assertEqual(raised.exception.code, "invalid_preference")
+        assert raised.value.code == "invalid_preference"
 
     async def test_departure_time_aware_datetime_serializes_to_utc_z(self):
         directions = self.directions
@@ -205,7 +217,7 @@ class TransitRouteParamsTests(unittest.IsolatedAsyncioTestCase):
         )
 
         body = client_class.requests[0]["json"]
-        self.assertEqual(body["departureTime"], "2026-07-16T14:00:00Z")
+        assert body["departureTime"] == "2026-07-16T14:00:00Z"
 
     async def test_departure_time_rfc3339_string_is_accepted(self):
         directions = self.directions
@@ -216,29 +228,29 @@ class TransitRouteParamsTests(unittest.IsolatedAsyncioTestCase):
         )
 
         body = client_class.requests[0]["json"]
-        self.assertEqual(body["departureTime"], "2026-07-16T14:00:00Z")
+        assert body["departureTime"] == "2026-07-16T14:00:00Z"
 
     async def test_departure_time_naive_datetime_is_rejected(self):
         directions = self.directions
         self._client_for(directions)
 
-        with self.assertRaises(directions.GoogleRoutesError) as raised:
+        with pytest.raises(directions.GoogleRoutesError) as raised:
             await directions.get_transit_route(
                 (40.7, -73.9),
                 "Atlantic Terminal",
                 departure_time=datetime(2026, 7, 16, 10, 0, 0),
             )
-        self.assertEqual(raised.exception.code, "invalid_departure_time")
+        assert raised.value.code == "invalid_departure_time"
 
     async def test_departure_time_unparseable_string_is_rejected(self):
         directions = self.directions
         self._client_for(directions)
 
-        with self.assertRaises(directions.GoogleRoutesError) as raised:
+        with pytest.raises(directions.GoogleRoutesError) as raised:
             await directions.get_transit_route(
                 (40.7, -73.9), "Atlantic Terminal", departure_time="not-a-time"
             )
-        self.assertEqual(raised.exception.code, "invalid_departure_time")
+        assert raised.value.code == "invalid_departure_time"
 
     async def test_departure_time_none_omits_key(self):
         directions = self.directions
@@ -249,7 +261,7 @@ class TransitRouteParamsTests(unittest.IsolatedAsyncioTestCase):
         )
 
         body = client_class.requests[0]["json"]
-        self.assertNotIn("departureTime", body)
+        assert "departureTime" not in body
 
 
 class ParseLegStepsTests(unittest.TestCase):
@@ -266,15 +278,15 @@ class ParseLegStepsTests(unittest.TestCase):
         steps = directions._parse_leg_steps(SAMPLE_TRANSIT_LEG)
         transit_step = next(step for step in steps if step["type"] == "SUBWAY")
 
-        self.assertIn("departure_time_iso", transit_step)
-        self.assertIn("arrival_time_iso", transit_step)
-        self.assertTrue(transit_step["departure_time_iso"].startswith("2026-03-22T"))
-        self.assertTrue(transit_step["arrival_time_iso"].startswith("2026-03-22T"))
-        self.assertIn("minutes_until_train_arrives", transit_step)
-        self.assertIn("minutes_until_arrival", transit_step)
-        self.assertEqual(transit_step["route_total_seconds"], 2340)
-        self.assertEqual(transit_step["departure_stop"], "Church Av")
-        self.assertEqual(transit_step["arrival_stop"], "Times Sq-42 St")
+        assert "departure_time_iso" in transit_step
+        assert "arrival_time_iso" in transit_step
+        assert transit_step["departure_time_iso"].startswith("2026-03-22T")
+        assert transit_step["arrival_time_iso"].startswith("2026-03-22T")
+        assert "minutes_until_train_arrives" in transit_step
+        assert "minutes_until_arrival" in transit_step
+        assert transit_step["route_total_seconds"] == 2340
+        assert transit_step["departure_stop"] == "Church Av"
+        assert transit_step["arrival_stop"] == "Times Sq-42 St"
 
     def test_walk_step_is_unchanged(self):
         directions = self.directions
@@ -282,10 +294,7 @@ class ParseLegStepsTests(unittest.TestCase):
         steps = directions._parse_leg_steps(SAMPLE_TRANSIT_LEG)
         walk_step = next(step for step in steps if step["type"] == "WALK")
 
-        self.assertEqual(
-            set(walk_step.keys()),
-            {"type", "start_point", "end_point", "route_total_minutes", "route_total_seconds", "polyline"},
-        )
+        assert set(walk_step.keys()) == {"type", "start_point", "end_point", "route_total_minutes", "route_total_seconds", "polyline"}
 
 
 class DirectionsTests(unittest.IsolatedAsyncioTestCase):
@@ -307,7 +316,7 @@ class DirectionsTests(unittest.IsolatedAsyncioTestCase):
                 return {"routes": []}
 
         class _Client:
-            requests = []
+            requests: ClassVar[list] = []
 
             async def __aenter__(self):
                 return self
@@ -315,13 +324,13 @@ class DirectionsTests(unittest.IsolatedAsyncioTestCase):
             async def __aexit__(self, *_args):
                 return False
 
-            async def post(self, url, json, headers, timeout):
+            async def post(self, url, *, json, headers, **kwargs):
                 self.requests.append(
                     {
                         "url": url,
                         "json": json,
                         "headers": headers,
-                        "timeout": timeout,
+                        "timeout": kwargs["timeout"],
                     }
                 )
                 return _Response()
@@ -329,11 +338,11 @@ class DirectionsTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(directions.httpx, "AsyncClient", _Client):
             result = await directions.get_transit_route((40.7, -73.9), "Atlantic Terminal")
 
-        self.assertEqual(result, {"routes": []})
+        assert result == {"routes": []}
         request = _Client.requests[0]
-        self.assertEqual(request["timeout"], 7.5)
-        self.assertEqual(request["headers"]["X-Goog-Api-Key"], "key")
-        self.assertFalse(request["json"]["computeAlternativeRoutes"])
+        assert request["timeout"] == 7.5
+        assert request["headers"]["X-Goog-Api-Key"] == "key"
+        assert not request["json"]["computeAlternativeRoutes"]
 
     async def test_google_route_timeout_retries_are_capped(self):
         directions = _load_directions(
@@ -358,11 +367,13 @@ class DirectionsTests(unittest.IsolatedAsyncioTestCase):
                 type(self).attempts += 1
                 raise directions.httpx.ReadTimeout("slow")
 
-        with patch.object(directions.httpx, "AsyncClient", _Client):
-            with self.assertRaises(RuntimeError):
-                await directions.get_transit_route((40.7, -73.9), "Atlantic Terminal")
+        with (
+            patch.object(directions.httpx, "AsyncClient", _Client),
+            pytest.raises(RuntimeError),
+        ):
+            await directions.get_transit_route((40.7, -73.9), "Atlantic Terminal")
 
-        self.assertEqual(_Client.attempts, 2)
+        assert _Client.attempts == 2
 
     async def test_google_route_requires_api_key_before_request(self):
         directions = _load_directions(
@@ -381,11 +392,13 @@ class DirectionsTests(unittest.IsolatedAsyncioTestCase):
                 return False
 
             async def post(self, *_args, **_kwargs):
-                raise AssertionError("request should not be sent without a Google API key")
+                raise MissingGoogleApiKeyError()
 
-        with patch.object(directions.httpx, "AsyncClient", _Client):
-            with self.assertRaisesRegex(RuntimeError, "Google Routes API is not configured"):
-                await directions.get_transit_route((40.7, -73.9), "Atlantic Terminal")
+        with (
+            patch.object(directions.httpx, "AsyncClient", _Client),
+            pytest.raises(RuntimeError, match="Google Routes API is not configured"),
+        ):
+            await directions.get_transit_route((40.7, -73.9), "Atlantic Terminal")
 
     async def test_google_route_request_errors_are_redacted_runtime_errors(self):
         directions = _load_directions(
@@ -396,6 +409,10 @@ class DirectionsTests(unittest.IsolatedAsyncioTestCase):
             }
         )
 
+        class ProviderDetailError(directions.httpx.RequestError):
+            def __init__(self) -> None:
+                super().__init__("socket provider detail")
+
         class _Client:
             async def __aenter__(self):
                 return self
@@ -404,13 +421,15 @@ class DirectionsTests(unittest.IsolatedAsyncioTestCase):
                 return False
 
             async def post(self, *_args, **_kwargs):
-                raise directions.httpx.RequestError("socket provider detail")
+                raise ProviderDetailError()
 
-        with patch.object(directions.httpx, "AsyncClient", _Client):
-            with self.assertRaisesRegex(RuntimeError, "Google Routes API request failed") as raised:
-                await directions.get_transit_route((40.7, -73.9), "Atlantic Terminal")
+        with (
+            patch.object(directions.httpx, "AsyncClient", _Client),
+            pytest.raises(RuntimeError, match="Google Routes API request failed") as raised,
+        ):
+            await directions.get_transit_route((40.7, -73.9), "Atlantic Terminal")
 
-        self.assertNotIn("socket provider detail", str(raised.exception))
+        assert "socket provider detail" not in str(raised.value)
 
     async def test_google_route_bad_json_is_redacted_runtime_error(self):
         directions = _load_directions(
@@ -426,7 +445,7 @@ class DirectionsTests(unittest.IsolatedAsyncioTestCase):
                 return None
 
             def json(self):
-                raise ValueError("bad provider json detail")
+                raise BadProviderJsonError()
 
         class _Client:
             async def __aenter__(self):
@@ -438,11 +457,13 @@ class DirectionsTests(unittest.IsolatedAsyncioTestCase):
             async def post(self, *_args, **_kwargs):
                 return _Response()
 
-        with patch.object(directions.httpx, "AsyncClient", _Client):
-            with self.assertRaisesRegex(RuntimeError, "Google Routes API returned invalid JSON") as raised:
-                await directions.get_transit_route((40.7, -73.9), "Atlantic Terminal")
+        with (
+            patch.object(directions.httpx, "AsyncClient", _Client),
+            pytest.raises(RuntimeError, match="Google Routes API returned invalid JSON") as raised,
+        ):
+            await directions.get_transit_route((40.7, -73.9), "Atlantic Terminal")
 
-        self.assertNotIn("bad provider json detail", str(raised.exception))
+        assert "bad provider json detail" not in str(raised.value)
 
     async def test_google_route_http_status_keeps_safe_diagnostic_code(self):
         directions = _load_directions(
@@ -477,13 +498,15 @@ class DirectionsTests(unittest.IsolatedAsyncioTestCase):
             async def post(self, *_args, **_kwargs):
                 return _Response()
 
-        with patch.object(directions.httpx, "AsyncClient", _Client):
-            with self.assertRaises(directions.GoogleRoutesError) as raised:
-                await directions.get_transit_route((40.7, -73.9), "Atlantic Terminal")
+        with (
+            patch.object(directions.httpx, "AsyncClient", _Client),
+            pytest.raises(directions.GoogleRoutesError) as raised,
+        ):
+            await directions.get_transit_route((40.7, -73.9), "Atlantic Terminal")
 
-        self.assertEqual(raised.exception.code, "http_403")
-        self.assertEqual(raised.exception.provider_status, 403)
-        self.assertIn("PERMISSION_DENIED", raised.exception.provider_summary)
+        assert raised.value.code == "http_403"
+        assert raised.value.provider_status == 403
+        assert "PERMISSION_DENIED" in raised.value.provider_summary
 
 
 if __name__ == "__main__":

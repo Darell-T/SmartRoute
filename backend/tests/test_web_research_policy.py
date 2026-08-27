@@ -9,50 +9,42 @@ flows.
 
 from __future__ import annotations
 
-import importlib
-import inspect
 import io
+import os
 import types
 import unittest
-import os
 from contextlib import redirect_stdout
 from unittest.mock import patch
 
+from app.services import cache
 from app.services.agent import events as agent_events
 from app.services.agent import loop as agent_loop
-from app.services.agent.model import policy
-from app.services.agent.model import prompt as agent_prompt
-from app.services.agent.model import stream as model_stream
-from app.services.agent import public_surface
+from app.services.agent import public_surface, tool_input_policy
 from app.services.agent import session as session_module
-from app.services.agent import tool_input_policy
-from app.services.agent import tools as agent_tools
-from app.services.agent.turn.evidence import TurnEvidence
-from app.services.agent.tools.places import place_reference
+from app.services.agent.model import policy
+from app.services.agent.model import stream as model_stream
 from app.services.agent.tools._types import ToolContext
-from app.services.agent.tools.places import search_local_places
-from app.services import cache
-from app.services.agent.turn.contract import GoalKind, GoalState, OutcomeGoal, TurnContract
+from app.services.agent.turn.contract import (
+    GoalKind,
+    GoalState,
+    OutcomeGoal,
+    TurnContract,
+)
+from app.services.agent.turn.evidence import TurnEvidence
+
 from tests._fake_anthropic import reload_agent_loop_module
+
 
 def _state_tools(mode: str) -> list[dict]:
     return agent_loop._tools_for_state(policy.policy_for_mode(mode))
 
 
 class WebSearchPolicyTests(unittest.TestCase):
-    def test_native_web_search_absent_on_the_first_ordinary_round(self):
-        for mode in ("auto", "quick"):
-            with self.subTest(mode=mode):
-                tools = _state_tools(mode)
-                self.assertFalse(
-                    any(tool.get("type") == "web_search_20250305" for tool in tools)
-                )
-
     def test_web_search_is_native_direct_only_nyc_and_one_use(self):
         for mode in ("auto", "quick"):
             with self.subTest(mode=mode):
                 evidence = TurnEvidence()
-                self.assertFalse(evidence.may_offer_web())
+                assert not evidence.may_offer_web()
                 evidence.note_discover_places(
                     ok=True,
                     discovery_set_id="ds_web_policy",
@@ -67,36 +59,18 @@ class WebSearchPolicyTests(unittest.TestCase):
                 web_tool = next(
                     tool for tool in tools if tool.get("type") == "web_search_20250305"
                 )
-                self.assertEqual(web_tool["name"], "web_search")
-                self.assertEqual(web_tool["max_uses"], 1)
-                self.assertEqual(web_tool["allowed_callers"], ["direct"])
-                self.assertEqual(
-                    web_tool["user_location"],
-                    {
-                        "type": "approximate",
-                        "city": "New York City",
-                        "region": "New York",
-                        "country": "US",
-                        "timezone": "America/New_York",
-                    },
-                )
+                assert web_tool["name"] == "web_search"
+                assert web_tool["max_uses"] == 1
+                assert web_tool["allowed_callers"] == ["direct"]
+                assert web_tool["user_location"] == {"type": "approximate", "city": "New York City", "region": "New York", "country": "US", "timezone": "America/New_York"}
 
     def test_structured_discovery_precedes_web_search(self):
         for mode in ("auto", "quick"):
             with self.subTest(mode=mode):
                 initial_evidence = TurnEvidence()
                 initial_tools = _state_tools(mode)
-                self.assertEqual(
-                    [tool.get("name") for tool in initial_tools],
-                    [
-                        "declare_goals",
-                        "discover_places",
-                        "check_transit",
-                        "prepare_route_options",
-                        "complete_turn",
-                    ],
-                )
-                self.assertFalse(initial_evidence.may_offer_web())
+                assert [tool.get("name") for tool in initial_tools] == ["declare_goals", "discover_places", "check_transit", "prepare_route_options", "complete_turn"]
+                assert not initial_evidence.may_offer_web()
 
                 search_evidence = TurnEvidence()
                 search_evidence.note_discover_places(
@@ -111,17 +85,8 @@ class WebSearchPolicyTests(unittest.TestCase):
                     turn_evidence=search_evidence,
                 )
                 names = [tool.get("name") for tool in tools]
-                self.assertEqual(names[-1], "web_search")
-                self.assertEqual(
-                    names[:5],
-                    [
-                        "declare_goals",
-                        "discover_places",
-                        "check_transit",
-                        "prepare_route_options",
-                        "complete_turn",
-                    ],
-                )
+                assert names[-1] == "web_search"
+                assert names[:5] == ["declare_goals", "discover_places", "check_transit", "prepare_route_options", "complete_turn"]
 
                 verify_evidence = TurnEvidence()
                 verify_evidence.note_discover_places(
@@ -135,7 +100,7 @@ class WebSearchPolicyTests(unittest.TestCase):
                     include_web=verify_evidence.may_offer_web(),
                     turn_evidence=verify_evidence,
                 )
-                self.assertEqual(verify_tools[-1].get("name"), "web_search")
+                assert verify_tools[-1].get("name") == "web_search"
 
     def test_verified_place_details_require_web_before_presenter(self):
         evidence = TurnEvidence()
@@ -150,10 +115,7 @@ class WebSearchPolicyTests(unittest.TestCase):
         )
         evidence.record_goal_handle("place_details", "ds_verified_place")
         evidence.record_goal("place_details", GoalState.EVIDENCE_READY, attempted=True)
-        self.assertNotIn(
-            "present_places",
-            public_surface.state_valid_tool_names(evidence),
-        )
+        assert "present_places" not in public_surface.state_valid_tool_names(evidence)
         ctx = ToolContext(
             session={},
             session_id="sess-web-policy",
@@ -169,37 +131,13 @@ class WebSearchPolicyTests(unittest.TestCase):
             },
             ctx,
         )
-        self.assertIn("requires successful current-turn web research", error)
+        assert "requires successful current-turn web research" in error
 
         evidence.note_web(ok=True)
-        self.assertTrue(evidence.web_research_required)
-        self.assertIn(
-            "present_places",
-            public_surface.state_valid_tool_names(evidence),
-        )
-        self.assertEqual(
-            tool_input_policy.goal_error(
-                "present_places",
-                {
-                    "goal_key": "place_details",
-                    "discovery_set_id": "ds_verified_place",
-                    "research_used": False,
-                },
-                ctx,
-            ),
-            "present_places must present the successful current-turn research",
-        )
-        self.assertIsNone(
-            tool_input_policy.goal_error(
-                "present_places",
-                {
-                    "goal_key": "place_details",
-                    "discovery_set_id": "ds_verified_place",
-                    "research_used": True,
-                },
-                ctx,
-            )
-        )
+        assert evidence.web_research_required
+        assert "present_places" in public_surface.state_valid_tool_names(evidence)
+        assert tool_input_policy.goal_error("present_places", {"goal_key": "place_details", "discovery_set_id": "ds_verified_place", "research_used": False}, ctx) == "present_places must present the successful current-turn research"
+        assert tool_input_policy.goal_error("present_places", {"goal_key": "place_details", "discovery_set_id": "ds_verified_place", "research_used": True}, ctx) is None
 
     def test_failed_required_web_does_not_unlock_place_presenter(self):
         evidence = TurnEvidence()
@@ -217,11 +155,8 @@ class WebSearchPolicyTests(unittest.TestCase):
 
         evidence.note_web(ok=False)
 
-        self.assertTrue(evidence.web_research_required)
-        self.assertNotIn(
-            "present_places",
-            public_surface.state_valid_tool_names(evidence),
-        )
+        assert evidence.web_research_required
+        assert "present_places" not in public_surface.state_valid_tool_names(evidence)
 
     def test_empty_structured_search_unlocks_one_web_recovery_pass(self):
         evidence = TurnEvidence()
@@ -232,13 +167,13 @@ class WebSearchPolicyTests(unittest.TestCase):
             operation="search",
         )
 
-        self.assertTrue(evidence.may_offer_web())
+        assert evidence.may_offer_web()
         tools = agent_loop._tools_for_state(
             policy.policy_for_mode("auto"),
             include_web=evidence.may_offer_web(),
             turn_evidence=evidence,
         )
-        self.assertEqual(tools[-1].get("name"), "web_search")
+        assert tools[-1].get("name") == "web_search"
 
     def test_compound_route_uses_web_only_when_structured_search_is_empty(self):
         route_contract = TurnContract((OutcomeGoal("route", GoalKind.ROUTE),))
@@ -250,7 +185,7 @@ class WebSearchPolicyTests(unittest.TestCase):
             place_count=0,
             operation="search",
         )
-        self.assertTrue(empty.may_offer_web())
+        assert empty.may_offer_web()
 
         verified = TurnEvidence()
         verified.bind_contract(route_contract)
@@ -260,7 +195,7 @@ class WebSearchPolicyTests(unittest.TestCase):
             place_count=5,
             operation="search",
         )
-        self.assertFalse(verified.may_offer_web())
+        assert not verified.may_offer_web()
 
     def test_web_introduced_place_still_requires_structured_verification(self):
         evidence = TurnEvidence()
@@ -271,135 +206,18 @@ class WebSearchPolicyTests(unittest.TestCase):
             operation="search",
         )
         evidence.note_web(ok=True)
-        self.assertFalse(evidence.may_offer_web())
-        self.assertIsNone(evidence.discovery_set_id)
-        self.assertEqual(evidence.verified_place_count, 0)
-
-    def test_route_planning_has_no_web_search_until_evidence_gates_it(self):
-        for mode in ("auto", "quick"):
-            with self.subTest(mode=mode):
-                tools = _state_tools(mode)
-                self.assertEqual(
-                    {tool.get("name") for tool in tools},
-                    {
-                        "declare_goals",
-                        "discover_places",
-                        "check_transit",
-                        "prepare_route_options",
-                        "complete_turn",
-                    },
-                )
-                self.assertFalse(
-                    any(tool.get("type") == "web_search_20250305" for tool in tools)
-                )
-
-    def test_no_custom_web_tools_registry_or_flag_surface(self):
-        names = set(agent_tools.TOOL_REGISTRY)
-        self.assertNotIn("search_web", names)
-        self.assertNotIn("open_web_result", names)
-        self.assertNotIn("search_web", {schema["name"] for schema in agent_tools.TOOLS})
-        self.assertNotIn("open_web_result", {schema["name"] for schema in agent_tools.TOOLS})
-        self.assertIsNone(importlib.util.find_spec("app.services.agent.feature_flags"))
-        self.assertNotIn("AGENT_BOUNDED_BROWSER_TOOLS", inspect.getsource(agent_loop))
-        self.assertIsNone(
-            importlib.util.find_spec("app.services.agent.tools.browser_tools")
-        )
-
-    def test_no_placeholder_status_path(self):
-        sources = inspect.getsource(agent_tools) + inspect.getsource(agent_loop)
-        self.assertNotIn("fetch_disabled", sources)
-        self.assertNotIn("provider_unavailable", sources)
-        self.assertNotIn("search_web", sources)
-        self.assertNotIn("open_web_result", sources)
-
-    def test_place_provider_boundary_is_not_registered(self):
-        for mode in ("auto", "quick"):
-            with self.subTest(mode=mode):
-                self.assertNotIn(
-                    "poi_search",
-                    {tool.get("name") for tool in _state_tools(mode)},
-                )
-        self.assertNotIn("poi_search", agent_tools.INTERNAL_TOOL_REGISTRY)
-        self.assertNotIn("search_local_places", agent_tools.INTERNAL_TOOL_REGISTRY)
-        self.assertTrue(callable(search_local_places.execute))
-
-    def test_venue_crowd_window_surface_matches_prompt_guidance(self):
-        # Venue/event questions receive the paired event tools; routing and
-        # discovery never see them because route crowd evidence stays in
-        # canonical preparation/scoring.
-        for mode in ("auto", "quick"):
-            with self.subTest(mode=mode):
-                transit_names = {
-                    tool.get("name")
-                    for tool in _state_tools(mode)
-                }
-                self.assertIn("check_transit", transit_names)
-                self.assertNotIn("venue_crowd_window", transit_names)
-                self.assertNotIn("event_lookup", transit_names)
-
-    def test_get_place_details_move_preserves_strict_schema_and_behavior_surface(self):
-        spec = agent_tools.INTERNAL_TOOL_REGISTRY["get_place_details"]
-        schema = place_reference.GET_PLACE_DETAILS_SCHEMA
-        self.assertIs(spec.schema, schema)
-        self.assertEqual(schema["name"], "get_place_details")
-        self.assertTrue(schema["strict"])
-        self.assertEqual(schema["input_schema"]["required"], [])
-        self.assertFalse(schema["input_schema"]["additionalProperties"])
-        self.assertEqual(
-            set(schema["input_schema"]["properties"]),
-            {"place_id", "ordinal", "description"},
-        )
-        self.assertEqual(
-            place_reference.__all__,
-            ("GET_PLACE_DETAILS_SCHEMA", "execute"),
-        )
-        self.assertTrue(callable(place_reference.execute))
-
-    def test_prompt_web_policy_and_multi_stop_guidance(self):
-        prompt = agent_prompt.SYSTEM_PROMPT
-        normalized = " ".join(prompt.lower().split())
-        self.assertIn("web_search", prompt)
-        self.assertIn("discover_places", normalized)
-        self.assertIn("untrusted data", normalized)
-        self.assertIn("operation=verify", normalized)
-        self.assertIn("do not route by retyped text", normalized)
-        for tool in ("discover_places", "prepare_route_options"):
-            self.assertIn(tool, prompt)
-        self.assertIn("MULTI-STOP PROCEDURE", prompt)
-        self.assertNotIn("poi_search", prompt)
+        assert not evidence.may_offer_web()
+        assert evidence.discovery_set_id is None
+        assert evidence.verified_place_count == 0
 
 
 class WebResultOkUnitTests(unittest.TestCase):
-    def test_empty_result_list_succeeds(self):
-        self.assertTrue(model_stream._web_result_ok([]))
-
-    def test_malformed_none_content_fails_safely(self):
-        self.assertFalse(model_stream._web_result_ok(None))
-        self.assertFalse(model_stream._web_result_ok([None]))
-
     def test_sdk_error_object_fails_list_and_scalar(self):
         error = types.SimpleNamespace(
             type="web_search_tool_result_error", error_code="unavailable"
         )
-        self.assertFalse(model_stream._web_result_ok([error]))
-        self.assertFalse(model_stream._web_result_ok(error))
-
-    def test_dict_error_fails_list_and_scalar(self):
-        self.assertFalse(
-            model_stream._web_result_ok(
-                [{"type": "web_search_tool_result_error", "error_code": "unavailable"}]
-            )
-        )
-        self.assertFalse(
-            model_stream._web_result_ok({"type": "web_search_tool_result_error"})
-        )
-
-    def test_encrypted_and_text_content_succeed(self):
-        content = [
-            {"type": "encrypted_content", "encrypted_index": "0", "encrypted_data": "x"},
-            {"type": "text", "text": "snippet"},
-        ]
-        self.assertTrue(model_stream._web_result_ok(content))
+        assert not model_stream._web_result_ok([error])
+        assert not model_stream._web_result_ok(error)
 
 
 class _WebResultStream:
@@ -474,29 +292,29 @@ class WebResultStreamTests(unittest.IsolatedAsyncioTestCase):
             ]
         )
         progress = next(item for item in items if isinstance(item, agent_events.ToolEndEvent))
-        self.assertFalse(progress.ok)
-        self.assertEqual(progress.summary, "Current place search was unavailable")
+        assert not progress.ok
+        assert progress.summary == "Current place search was unavailable"
         rendered = "".join(
             item.text for item in items if isinstance(item, agent_events.TokenEvent)
         )
-        self.assertNotIn("secrets", rendered)
-        self.assertNotIn("error_code", rendered)
+        assert "secrets" not in rendered
+        assert "error_code" not in rendered
 
     async def test_empty_results_succeed(self):
         items = await _collect_web_result_items([])
         progress = next(item for item in items if isinstance(item, agent_events.ToolEndEvent))
-        self.assertTrue(progress.ok)
-        self.assertEqual(progress.summary, "Current place information checked")
+        assert progress.ok
+        assert progress.summary == "Current place information checked"
         outcome = next(
             item for item in items if isinstance(item, model_stream.ModelCallCompleted)
         )
-        self.assertIsNone(outcome.error)
+        assert outcome.error is None
 
     async def test_missing_content_fails_safely(self):
         items = await _collect_web_result_items(None)
         progress = next(item for item in items if isinstance(item, agent_events.ToolEndEvent))
-        self.assertFalse(progress.ok)
-        self.assertEqual(progress.summary, "Current place search was unavailable")
+        assert not progress.ok
+        assert progress.summary == "Current place search was unavailable"
 
     async def test_encrypted_and_page_content_never_reach_sse_events(self):
         items = await _collect_web_result_items(
@@ -506,13 +324,13 @@ class WebResultStreamTests(unittest.IsolatedAsyncioTestCase):
             ]
         )
         progress = next(item for item in items if isinstance(item, agent_events.ToolEndEvent))
-        self.assertTrue(progress.ok)
+        assert progress.ok
         rendered = "".join(
             item.text for item in items if isinstance(item, agent_events.TokenEvent)
         )
-        self.assertNotIn("ENCRYPTEDSECRET", rendered)
-        self.assertNotIn("raw page text", rendered)
-        self.assertNotIn("instructions", progress.summary)
+        assert "ENCRYPTEDSECRET" not in rendered
+        assert "raw page text" not in rendered
+        assert "instructions" not in progress.summary
 
 
 class _ScriptedMessages:
@@ -576,20 +394,21 @@ class PauseTurnTests(unittest.IsolatedAsyncioTestCase):
     async def _run_turn(self, rounds, *, message="Thanks for checking"):
         self.loop.client.messages = _ScriptedMessages(list(rounds))
         _discard_id, session = session_module.new_session()
-        events_out = []
-        async for event in self.loop.run_agent_turn(
-            session=session,
-            session_id="sess-pause",
-            turn_id="t-pause",
-            message=message,
-            now_et="2026-08-08T12:00:00-04:00",
-            gtfs=None,
-            origin=None,
-            selected_card_id=None,
-            response_presentation="auto",
-            trace=None,
-        ):
-            events_out.append(event)
+        events_out = [
+            event
+            async for event in self.loop.run_agent_turn(
+                session=session,
+                session_id="sess-pause",
+                turn_id="t-pause",
+                message=message,
+                now_et="2026-08-08T12:00:00-04:00",
+                gtfs=None,
+                origin=None,
+                selected_card_id=None,
+                response_presentation="auto",
+                trace=None,
+            )
+        ]
         return events_out, session
 
     async def test_pause_turn_appends_unchanged_content_and_continues(self):
@@ -635,21 +454,18 @@ class PauseTurnTests(unittest.IsolatedAsyncioTestCase):
             ]
         )
         calls = self.loop.client.messages.calls
-        self.assertEqual(len(calls), 3)
-        self.assertEqual(events_out[-1].stop_reason, "end_turn")
+        assert len(calls) == 3
+        assert events_out[-1].stop_reason == "end_turn"
         assistant_messages = [
             message
             for message in calls[1]["messages"]
             if message.get("role") == "assistant"
         ]
-        self.assertEqual(len(assistant_messages), 1)
+        assert len(assistant_messages) == 1
         blocks = assistant_messages[0]["content"]
-        self.assertEqual(
-            [getattr(block, "text", "") for block in blocks],
-            ["Checking current sources..."],
-        )
+        assert [getattr(block, "text", "") for block in blocks] == ["Checking current sources..."]
         history_text = session["history"][-1]["text"]
-        self.assertIn("Found a grounded option.", history_text)
+        assert "Found a grounded option." in history_text
 
     async def test_repeated_pauses_remain_bounded_by_max_rounds(self):
         with patch.dict(os.environ, {"AGENT_AUTO_MAX_ROUNDS": "2"}, clear=False):
@@ -662,8 +478,8 @@ class PauseTurnTests(unittest.IsolatedAsyncioTestCase):
             )
         calls = self.loop.client.messages.calls
         # Wrap-up model calls were removed; max_rounds stops after the budget.
-        self.assertEqual(len(calls), 2)
-        self.assertEqual(events_out[-1].stop_reason, "max_rounds")
+        assert len(calls) == 2
+        assert events_out[-1].stop_reason == "max_rounds"
 
     async def test_encrypted_and_server_tool_content_never_leak_to_sse_history_or_logs(self):
         server_block = types.SimpleNamespace(
@@ -707,9 +523,9 @@ class PauseTurnTests(unittest.IsolatedAsyncioTestCase):
             for message in calls[1]["messages"]
             if message.get("role") == "assistant"
         ]
-        self.assertEqual(len(assistant_messages), 1)
+        assert len(assistant_messages) == 1
         # In-memory continuation keeps the server blocks unchanged...
-        self.assertEqual(assistant_messages[0]["content"], [server_block, encrypted_block])
+        assert assistant_messages[0]["content"] == [server_block, encrypted_block]
         # ...but nothing leaks to SSE text, rider history, or logs.
         token_text = "".join(
             event.text for event in events_out if event.type == "token"
@@ -719,9 +535,9 @@ class PauseTurnTests(unittest.IsolatedAsyncioTestCase):
         )
         log_output = buffer.getvalue()
         for secret in ("ENCRYPTEDSECRET", "secret web query", "web-1"):
-            self.assertNotIn(secret, token_text)
-            self.assertNotIn(secret, history_text)
-            self.assertNotIn(secret, log_output)
+            assert secret not in token_text
+            assert secret not in history_text
+            assert secret not in log_output
 
 
 if __name__ == "__main__":

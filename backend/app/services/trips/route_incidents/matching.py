@@ -6,13 +6,17 @@ geography).  The only searchable geography is the supplied candidate context.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass
 from math import cos, isfinite, radians, sqrt
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any
 
-from app.services.trips.route_incidents.context import CandidateStopContext, valid_coordinate_pair
 from app.services.geography import distance_meters
-
+from app.services.trips.route_incidents.context import (
+    CandidateStopContext,
+    valid_coordinate_pair,
+)
+import itertools
 
 MILES_TO_METERS = 1609.344
 DEFAULT_SEARCH_RADIUS_MILES = 0.5
@@ -171,7 +175,7 @@ def _nearest_distance_meters(stop: CandidateStopContext, incident: object) -> tu
     for component in geometry_components:
         distances.extend(
             (_point_to_segment_meters((stop.latitude, stop.longitude), a, b), "geometry")
-            for a, b in zip(component, component[1:])
+            for a, b in itertools.pairwise(component)
         )
     geometry = item.get("geometry")
     encoded_value = item.get("encoded_polyline") or item.get("polyline")
@@ -181,7 +185,7 @@ def _nearest_distance_meters(stop: CandidateStopContext, incident: object) -> tu
     if len(encoded_points) > 1:
         distances.extend(
             (_point_to_segment_meters((stop.latitude, stop.longitude), a, b), "polyline")
-            for a, b in zip(encoded_points, encoded_points[1:])
+            for a, b in itertools.pairwise(encoded_points)
         )
     return min(distances, key=lambda item: item[0])
 
@@ -322,7 +326,7 @@ def match_cached_incidents(
         roadway = _roadway_incident(item)
         station_access = _station_access_incident(item)
         if station_access:
-            relevance = {mode: "station_access_only" for mode in modes}
+            relevance = dict.fromkeys(modes, "station_access_only")
             affected_modes = ["transfer", "walk"]
             impact_scope = "station_access"
         elif roadway:
@@ -333,7 +337,7 @@ def match_cached_incidents(
             affected_modes = ["bus", "walk"] if "bus" in modes else ["walk"]
             impact_scope = "roadway"
         else:
-            relevance = {mode: "nearby" for mode in modes}
+            relevance = dict.fromkeys(modes, "nearby")
             affected_modes = modes
             impact_scope = "nearby"
         results.append(MatchedIncident(

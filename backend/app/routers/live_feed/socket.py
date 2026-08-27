@@ -6,13 +6,14 @@ import asyncio
 import json
 import math
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Awaitable, Callable, Protocol
+from typing import Protocol
 
 from fastapi import WebSocket, WebSocketDisconnect
 
 from app.services.mta.bus_updates import BusUpdate, BusUpdateData, BusUpdateEvent
-
+import contextlib
 
 SERVICE_ALERT_REFRESH_INTERVAL_S = 60
 
@@ -64,10 +65,8 @@ async def close_socket_safe(
     code: int,
     disconnect_error: type[Exception],
 ) -> None:
-    try:
+    with contextlib.suppress(disconnect_error, RuntimeError):
         await websocket.close(code=code)
-    except (disconnect_error, RuntimeError):
-        pass
 
 
 async def cancel_and_await(*tasks: asyncio.Task | None) -> None:
@@ -138,7 +137,7 @@ async def wait_for_client_disconnect(
     """Notice closed alert sockets while waiting for the next refresh."""
     try:
         await asyncio.wait_for(websocket.receive(), timeout=timeout_seconds)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return False
     except RuntimeError:
         return True
@@ -158,7 +157,7 @@ async def guard_lease(
         try:
             await asyncio.wait_for(stopped.wait(), timeout=interval_seconds)
             return
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
         if not await admission.refresh(lease):
             lease_failed.set()

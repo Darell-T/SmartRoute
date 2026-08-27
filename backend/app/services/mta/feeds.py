@@ -102,7 +102,7 @@ async def fetch_feeds_with_metadata(
         async with httpx.AsyncClient(timeout=10.0) as client:
             tasks = [client.get(feed_request["url"]) for feed_request in urls_to_fetch]
             responses = await asyncio.gather(*tasks, return_exceptions=True)
-        for feed_request, response in zip(urls_to_fetch, responses):
+        for feed_request, response in zip(urls_to_fetch, responses, strict=False):
             url = feed_request["url"]
             if isinstance(response, Exception):
                 _log_fetch_failure(
@@ -176,7 +176,7 @@ def parse_bytes(rawBytes: bytes) -> list:
                     "trip_id": trip_id,
                     "stop_id": stop_id,
                     "stop_sequence": stop.stop_sequence or None,
-                    "arrival_time": stop.arrival.time if stop.arrival.time else None,
+                    "arrival_time": stop.arrival.time or None,
                     "delay": stop.arrival.delay,
                     "direction": direction,
                 })

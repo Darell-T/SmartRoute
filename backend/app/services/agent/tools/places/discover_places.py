@@ -14,9 +14,8 @@ from app.services import geography as geo
 from app.services.agent import discovery_store
 from app.services.agent import trip_state as trip_state_module
 from app.services.agent.tools._types import ToolContext, ToolOutcome, ToolResult
-from app.services.agent.tools.places import damn_lines
+from app.services.agent.tools.places import damn_lines, search_local_places
 from app.services.agent.tools.places import geography as conversational_geography
-from app.services.agent.tools.places import search_local_places
 from app.services.agent.turn.contract import GoalKind
 
 _DISCOVERY_GOAL_KINDS = frozenset(
@@ -387,6 +386,7 @@ async def _search(
             "query": query,
             "near": target["near"],
             "max_results": per_target,
+            "restrict_to_area": scope["kind"] == "named_area",
         }
         token = prior_tokens.get(_target_key(index))
         if token:
@@ -454,7 +454,12 @@ async def _verify(
     for name in names:
         for target in targets:
             pending = search_local_places._provider_search(
-                {"query": name, "near": target["near"], "max_results": 3},
+                {
+                    "query": name,
+                    "near": target["near"],
+                    "max_results": 3,
+                    "restrict_to_area": scope["kind"] == "named_area",
+                },
                 ctx,
             )
             searches.append((name, target, pending))
@@ -673,7 +678,7 @@ async def _persist(
 def _observation_time(value: object) -> datetime:
     raw = str(value or "").strip()
     try:
-        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(raw)
     except ValueError:
         parsed = None
     if parsed is not None and parsed.tzinfo is not None:
@@ -692,7 +697,6 @@ async def _queue_digest(
         return model_places, None
 
     when = _observation_time(getattr(ctx, "now_et", None))
-    damn_lines.schedule_history_warmup(now=when)
     stored_by_id = {
         str(place.get("place_id") or ""): place for place in stored_places
     }
@@ -711,7 +715,11 @@ async def _queue_digest(
             )
             observations = current.observations
             provider_available = current.provider_available
-        except Exception:
+        except (RuntimeError, TypeError, ValueError) as exc:
+            _LOGGER.warning(
+                "Damn Lines current queue lookup failed type=%s",
+                type(exc).__name__,
+            )
             observations = {}
             provider_available = False
 

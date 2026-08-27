@@ -6,9 +6,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.services.agent import events as agent_events
-from app.services.agent.tools.transit import evidence as transit_evidence
 from app.services.agent.passenger_output import framed_events, validated_framing
 from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.transit import evidence as transit_evidence
 from app.services.agent.tools.transit.evidence_projection import (
     accessibility_text,
     arrivals_text,
@@ -241,7 +241,7 @@ class StatusView:
     coverage_note: str
 
     @classmethod
-    def from_evidence(cls, evidence: dict[str, Any]) -> "StatusView":
+    def from_evidence(cls, evidence: dict[str, Any]) -> StatusView:
         checked_routes = _route_names(evidence.get("checked_routes"))
         routes = ", ".join(checked_routes) or "the requested route"
         raw_scope = evidence.get("direction_scope")

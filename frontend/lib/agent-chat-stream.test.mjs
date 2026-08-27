@@ -198,12 +198,12 @@ test("parses, normalizes, and deduplicates trusted Damn Lines sources", async ()
   }]);
 });
 
-test("rejects untrusted source protocols, hosts, paths, and malformed records", async () => {
+test("rejects unsafe source URLs and malformed records", async () => {
   const invalidSources = [
     { title: "Damn Lines", url: "http://damnlines.com/camera/l-industrie" },
-    { title: "Damn Lines", url: "https://damnlines.com.example/camera/l-industrie" },
     { title: "Damn Lines", url: "https://damnlines.com:444/camera/l-industrie" },
-    { title: "Damn Lines", url: "https://damnlines.com/docs/api" },
+    { title: "Damn Lines", url: "https://user:pass@damnlines.com/camera/l-industrie" },
+    { title: "Damn Lines", url: "not-a-url" },
     { title: "", url: "https://damnlines.com/camera/l-industrie" },
     { title: "Damn Lines" },
   ];

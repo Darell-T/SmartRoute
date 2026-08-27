@@ -7,9 +7,9 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from app.services.agent import session as session_module
 from app.services.agent.model import budget
 from app.services.agent.model import policy as agent_policy
-from app.services.agent import session as session_module
 from app.services.agent.turn import completion as turn_completion
 
 
@@ -20,7 +20,7 @@ class FinalizationResult:
     total_model_call_count: int
 
 
-def stage_timings(trace: "TurnTrace | None", started: float) -> dict[str, float]:
+def stage_timings(trace: TurnTrace | None, started: float) -> dict[str, float]:
     """Create the allowlisted timing map and preserve any upstream stages."""
 
     stage_ms = {

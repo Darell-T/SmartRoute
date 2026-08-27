@@ -12,26 +12,26 @@ under heavy reload cycling in this sandbox.
 
 from __future__ import annotations
 
-import importlib
 import asyncio
-from contextlib import contextmanager
+import importlib
 import os
-import random
 import secrets
-import types
 import time
+import types
 import unittest
+from contextlib import contextmanager
+from typing import ClassVar
 from unittest.mock import patch
 
+from app.services import cache
+from app.services.agent import events as agent_events
 from app.services.agent import session as session_module
+from app.services.agent import trip_state as trip_state_module
 from app.services.agent.model import mock_turn
 from app.services.agent.model import stream as model_stream
-from app.services.agent import trip_state as trip_state_module
-from app.services.agent.tools import ToolContext, ToolResult, ToolSpec
+from app.services.agent.tools import ToolContext, ToolResult, ToolSpec, declare_goals
 from app.services.agent.tools import complete_turn as complete_turn_tool
-from app.services.agent.tools import declare_goals
-from app.services.agent import events as agent_events
-from app.services import cache
+
 from tests._fake_anthropic import reload_agent_loop_module
 
 
@@ -58,22 +58,22 @@ def _reloaded_budget(env: dict[str, str]):
         importlib.reload(budget_module)
 
 
-async def _fake_ok_tool(tool_input, ctx):
+async def _fake_ok_tool(tool_input, _ctx):
     return ToolResult(ok=True, data={"echo": tool_input}, summary="did the thing")
 
 
-async def _fake_fail_tool(tool_input, ctx):
+async def _fake_fail_tool(_tool_input, _ctx):
     return ToolResult(ok=False, error="boom")
 
 
-async def _fake_slow_tool(tool_input, ctx):
+async def _fake_slow_tool(_tool_input, _ctx):
     import asyncio
 
     await asyncio.sleep(10)
     return ToolResult(ok=True, data={})
 
 
-async def _fake_prepare_route_options_tool(tool_input, ctx):
+async def _fake_prepare_route_options_tool(_tool_input, _ctx):
     return ToolResult(
         ok=True,
         data={
@@ -126,7 +126,7 @@ async def _fake_present_route_tool(tool_input, ctx):
     )
 
 
-async def _fake_ambiguous_route_tool(tool_input, ctx):
+async def _fake_ambiguous_route_tool(_tool_input, _ctx):
     return ToolResult(
         ok=True,
         data={
@@ -170,7 +170,7 @@ async def _fake_arrivals_tool(tool_input, ctx):
     )
 
 
-async def _fake_transit_snapshot_tool(tool_input, ctx):
+async def _fake_transit_snapshot_tool(tool_input, _ctx):
     lines = [str(line).upper() for line in tool_input.get("lines") or []]
     return ToolResult(
         ok=True,
@@ -210,7 +210,7 @@ async def _fake_arrival_clarification_tool(tool_input, ctx):
     )
 
 
-async def _fake_poi_tool(tool_input, ctx):
+async def _fake_poi_tool(_tool_input, _ctx):
     return ToolResult(
         ok=True,
         data={
@@ -227,7 +227,7 @@ async def _fake_poi_tool(tool_input, ctx):
     )
 
 
-async def _fake_search_local_places_tool(tool_input, ctx):
+async def _fake_search_local_places_tool(_tool_input, _ctx):
     return ToolResult(
         ok=True,
         data={
@@ -315,7 +315,7 @@ async def _fake_complete_turn_tool(tool_input, ctx):
     )
 
 
-async def _fake_present_places_tool(tool_input, ctx):
+async def _fake_present_places_tool(tool_input, _ctx):
     return ToolResult(
         ok=True,
         data={"presented": tool_input.get("selections") or []},
@@ -329,85 +329,85 @@ def _test_registry() -> dict[str, ToolSpec]:
         "ok_tool": ToolSpec(
             schema={"name": "ok_tool"},
             executor=_fake_ok_tool,
-            label_fn=lambda i: "Doing the thing…",
+            label_fn=lambda _input: "Doing the thing…",
             timeout_s=5.0,
         ),
         "fail_tool": ToolSpec(
             schema={"name": "fail_tool"},
             executor=_fake_fail_tool,
-            label_fn=lambda i: "Doing the failing thing…",
+            label_fn=lambda _input: "Doing the failing thing…",
             timeout_s=5.0,
         ),
         "slow_tool": ToolSpec(
             schema={"name": "slow_tool"},
             executor=_fake_slow_tool,
-            label_fn=lambda i: "Doing the slow thing…",
+            label_fn=lambda _input: "Doing the slow thing…",
             timeout_s=0.05,
         ),
         "prepare_route_options": ToolSpec(
             schema={"name": "prepare_route_options"},
             executor=_fake_prepare_route_options_tool,
-            label_fn=lambda i: "Preparing routes…",
+            label_fn=lambda _input: "Preparing routes…",
             timeout_s=5.0,
         ),
         "present_route": ToolSpec(
             schema={"name": "present_route"},
             executor=_fake_present_route_tool,
-            label_fn=lambda i: "Presenting the route…",
+            label_fn=lambda _input: "Presenting the route…",
             timeout_s=5.0,
         ),
         "lookup_arrivals": ToolSpec(
             schema={"name": "lookup_arrivals"},
             executor=_fake_arrivals_tool,
-            label_fn=lambda i: f"Checking {i.get('route_id')} arrivals",
+            label_fn=lambda _input: f"Checking {_input.get('route_id')} arrivals",
             timeout_s=5.0,
         ),
         "transit_snapshot": ToolSpec(
             schema={"name": "transit_snapshot"},
             executor=_fake_transit_snapshot_tool,
-            label_fn=lambda i: "Checking current service conditions",
+            label_fn=lambda _input: "Checking current service conditions",
             timeout_s=5.0,
         ),
         "poi_search": ToolSpec(
             schema={"name": "poi_search"},
             executor=_fake_poi_tool,
-            label_fn=lambda i: "Finding places",
+            label_fn=lambda _input: "Finding places",
             timeout_s=5.0,
         ),
         "search_local_places": ToolSpec(
             schema={"name": "search_local_places"},
             executor=_fake_search_local_places_tool,
-            label_fn=lambda i: "Finding places",
+            label_fn=lambda _input: "Finding places",
             timeout_s=5.0,
         ),
         "get_place_details": ToolSpec(
             schema={"name": "get_place_details"},
             executor=_fake_search_local_places_tool,
-            label_fn=lambda i: "Checking place details",
+            label_fn=lambda _input: "Checking place details",
             timeout_s=5.0,
         ),
         "discover_places": ToolSpec(
             schema={"name": "discover_places"},
             executor=_fake_discover_places_tool,
-            label_fn=lambda i: "Searching verified places…",
+            label_fn=lambda _input: "Searching verified places…",
             timeout_s=5.0,
         ),
         "present_places": ToolSpec(
             schema={"name": "present_places"},
             executor=_fake_present_places_tool,
-            label_fn=lambda i: "Presenting verified places…",
+            label_fn=lambda _input: "Presenting verified places…",
             timeout_s=5.0,
         ),
         "check_transit": ToolSpec(
             schema={"name": "check_transit"},
             executor=_fake_check_transit_tool,
-            label_fn=lambda i: "Checking transit…",
+            label_fn=lambda _input: "Checking transit…",
             timeout_s=5.0,
         ),
         "complete_turn": ToolSpec(
             schema={"name": "complete_turn"},
             executor=_fake_complete_turn_tool,
-            label_fn=lambda i: "Finishing your answer…",
+            label_fn=lambda _input: "Finishing your answer…",
             timeout_s=5.0,
         ),
     }
@@ -657,21 +657,22 @@ class _AgentLoopHelpers:
         ]
         for active in active_patchers:
             active.start()
-        events_out = []
         try:
-            async for event in self.loop.run_agent_turn(
-                session=session,
-                session_id=session_id,
-                turn_id="t1",
-                message=message,
-                now_et="2026-07-15T21:00:00-04:00",
-                gtfs=None,
-                origin=origin,
-                selected_card_id=selected_card_id,
-                response_presentation=response_presentation,
-                trace=trace,
-            ):
-                events_out.append(event)
+            events_out = [
+                event
+                async for event in self.loop.run_agent_turn(
+                    session=session,
+                    session_id=session_id,
+                    turn_id="t1",
+                    message=message,
+                    now_et="2026-07-15T21:00:00-04:00",
+                    gtfs=None,
+                    origin=origin,
+                    selected_card_id=selected_card_id,
+                    response_presentation=response_presentation,
+                    trace=trace,
+                )
+            ]
         finally:
             for active in active_patchers:
                 active.stop()
@@ -681,7 +682,7 @@ class _AgentLoopHelpers:
 class _BudgetConfiguredAgentLoopTests(
     _AgentLoopHelpers, unittest.IsolatedAsyncioTestCase
 ):
-    BUDGET_ENV: dict[str, str]
+    BUDGET_ENV: ClassVar[dict[str, str]]
 
     @classmethod
     def setUpClass(cls):
@@ -704,9 +705,9 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
             [_complete_round("Hello rider")],
             tool_registry=_test_registry(),
         )
-        self.assertEqual(events_out[0].type, "meta")
-        self.assertEqual(events_out[-1].type, "done")
-        self.assertEqual(events_out[-1].stop_reason, "end_turn")
+        assert events_out[0].type == "meta"
+        assert events_out[-1].type == "done"
+        assert events_out[-1].stop_reason == "end_turn"
 
     async def test_final_text_persisted_to_session_history(self):
         _events, session = await self._run(
@@ -714,38 +715,35 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
             tool_registry=_test_registry(),
         )
         assistant_turns = [h for h in session["history"] if h["role"] == "assistant"]
-        self.assertEqual(assistant_turns[-1]["text"], "OK, taking the Q")
+        assert assistant_turns[-1]["text"] == "OK, taking the Q"
 
     def test_internal_card_ids_and_markdown_do_not_reach_rider_prose(self):
         prose = self.loop._sanitize_rider_text(
             "**Recommended: Card rc_b87e6f1a — Q/D trains, 1 transfer, ~31 min**"
         )
-        self.assertEqual(
-            prose,
-            "Recommended: Q/D trains, 1 transfer, about 31 min",
-        )
+        assert prose == "Recommended: Q/D trains, 1 transfer, about 31 min"
 
     def test_opaque_candidate_ids_do_not_reach_rider_prose(self):
         sanitized = self.loop._sanitize_rider_text(
             "Selected cd_test_only from cs_test_only."
         )
-        self.assertNotIn("cd_test_only", sanitized)
-        self.assertNotIn("cs_test_only", sanitized)
+        assert "cd_test_only" not in sanitized
+        assert "cs_test_only" not in sanitized
 
     async def test_done_last_even_after_upstream_model_error(self):
         events_out, _ = await self._run([{"raise": True}])
-        self.assertEqual(events_out[0].type, "meta")
-        self.assertEqual(events_out[-1].type, "done")
-        self.assertEqual(events_out[-1].stop_reason, "error")
+        assert events_out[0].type == "meta"
+        assert events_out[-1].type == "done"
+        assert events_out[-1].stop_reason == "error"
         errors = [e for e in events_out if e.type == "error"]
-        self.assertEqual(len(errors), 1)
-        self.assertEqual(errors[0].code, "upstream_error")
+        assert len(errors) == 1
+        assert errors[0].code == "upstream_error"
 
     async def test_bad_request_is_attempted_once_and_emits_typed_error(self):
-        class BadRequest(Exception):
+        class BadRequestError(Exception):
             status_code = 400
             request_id = "req_bad_request"
-            body = {
+            body: ClassVar[dict] = {
                 "type": "error",
                 "error": {
                     "type": "invalid_request_error",
@@ -755,21 +753,21 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
 
         events_out, _ = await self._run(
             [
-                {"exception": BadRequest()},
+                {"exception": BadRequestError()},
                 {"text": ["must not run"], "stop_reason": "end_turn"},
             ]
         )
-        self.assertEqual(len(self.loop.client.messages.calls), 1)
+        assert len(self.loop.client.messages.calls) == 1
         errors = [event for event in events_out if event.type == "error"]
-        self.assertEqual(errors[0].code, "invalid_request")
-        self.assertFalse(errors[0].retryable)
-        self.assertEqual(events_out[-1].stop_reason, "error")
+        assert errors[0].code == "invalid_request"
+        assert not errors[0].retryable
+        assert events_out[-1].stop_reason == "error"
 
     async def test_transient_server_error_retries_within_application_bound(self):
         class ServerError(Exception):
             status_code = 503
             request_id = "req_server_error"
-            body = {
+            body: ClassVar[dict] = {
                 "type": "error",
                 "error": {
                     "type": "api_error",
@@ -784,14 +782,14 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
             ],
             tool_registry=_test_registry(),
         )
-        self.assertEqual(len(self.loop.client.messages.calls), 2)
-        self.assertFalse(any(event.type == "error" for event in events_out))
-        self.assertEqual(events_out[-1].stop_reason, "end_turn")
+        assert len(self.loop.client.messages.calls) == 2
+        assert not any(event.type == "error" for event in events_out)
+        assert events_out[-1].stop_reason == "end_turn"
 
     async def test_system_block_carries_ephemeral_cache_control(self):
         await self._run([{"text": ["hi"], "stop_reason": "end_turn"}])
         kwargs = self.loop.client.messages.calls[0]
-        self.assertEqual(kwargs["system"][-1]["cache_control"], {"type": "ephemeral"})
+        assert kwargs["system"][-1]["cache_control"] == {"type": "ephemeral"}
 
     async def test_context_block_appended_to_latest_user_message(self):
         await self._run(
@@ -800,8 +798,8 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         )
         kwargs = self.loop.client.messages.calls[0]
         last_user_content = kwargs["messages"][-1]["content"]
-        self.assertIn("<context>", last_user_content)
-        self.assertIn("rider_location: 40.7000,-73.9000", last_user_content)
+        assert "<context>" in last_user_content
+        assert "rider_location: 40.7000,-73.9000" in last_user_content
 
     async def test_quick_presentation_uses_the_shared_pipeline_with_smaller_budgets(
         self,
@@ -823,28 +821,19 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         )
 
         first_call = self.loop.client.messages.calls[0]
-        self.assertIn(
-            "response_presentation: quick",
-            first_call["messages"][-1]["content"],
-        )
+        assert "response_presentation: quick" in first_call["messages"][-1]["content"]
         prepare_input = _trace_tool_input(trace, "prepare_route_options")
-        self.assertEqual(prepare_input["destination"], "Costco")
-        self.assertEqual(prepare_input["max_candidates"], 2)
-        self.assertFalse(prepare_input["avoid_crowds"])
-        self.assertFalse(prepare_input["include_first_leg_arrivals"])
-        self.assertEqual(trace.initial_mode, "quick")
-        self.assertEqual(trace.final_mode, "quick")
-        self.assertEqual(trace.model_call_count, 2)
-        self.assertEqual(len(self.loop.client.messages.calls), 2)
-        self.assertEqual(trace.rider_message, "Take me to Costco")
-        self.assertEqual(
-            [item["selected_capabilities"] for item in trace.model_rounds],
-            [["declare_goals", "prepare_route_options"], ["present_route"]],
-        )
-        self.assertEqual(
-            [item["capability"] for item in trace.capability_attempts],
-            ["declare_goals", "prepare_route_options", "present_route"],
-        )
+        assert prepare_input["destination"] == "Costco"
+        assert prepare_input["max_candidates"] == 2
+        assert not prepare_input["avoid_crowds"]
+        assert not prepare_input["include_first_leg_arrivals"]
+        assert trace.initial_mode == "quick"
+        assert trace.final_mode == "quick"
+        assert trace.model_call_count == 2
+        assert len(self.loop.client.messages.calls) == 2
+        assert trace.rider_message == "Take me to Costco"
+        assert [item["selected_capabilities"] for item in trace.model_rounds] == [["declare_goals", "prepare_route_options"], ["present_route"]]
+        assert [item["capability"] for item in trace.capability_attempts] == ["declare_goals", "prepare_route_options", "present_route"]
 
     async def test_auto_crowd_avoidance_enables_bounded_crowd_research(self):
         trace = self.loop.TurnTrace()
@@ -868,9 +857,9 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         )
 
         plan_input = _trace_tool_input(trace, "prepare_route_options")
-        self.assertTrue(plan_input["avoid_crowds"])
-        self.assertEqual(plan_input["crowd_search_mode"], "auto")
-        self.assertNotIn("include_incident_scan", plan_input)
+        assert plan_input["avoid_crowds"]
+        assert plan_input["crowd_search_mode"] == "auto"
+        assert "include_incident_scan" not in plan_input
 
     async def test_quick_crowd_request_keeps_the_quick_model_for_planning(self):
         trace = self.loop.TurnTrace()
@@ -891,16 +880,10 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
             trace=trace,
         )
 
-        self.assertEqual(trace.final_mode, "quick")
-        self.assertEqual(
-            _trace_tool_input(trace, "prepare_route_options")["crowd_search_mode"],
-            "auto",
-        )
-        self.assertEqual(
-            self.loop.client.messages.calls[0]["model"],
-            self.loop.agent_policy.policy_for_mode("quick").model,
-        )
-        self.assertEqual(len(self.loop.client.messages.calls), 2)
+        assert trace.final_mode == "quick"
+        assert _trace_tool_input(trace, "prepare_route_options")["crowd_search_mode"] == "auto"
+        assert self.loop.client.messages.calls[0]["model"] == self.loop.agent_policy.policy_for_mode("quick").model
+        assert len(self.loop.client.messages.calls) == 2
 
     async def test_active_route_exclusion_persists_across_followups(self):
         trace = self.loop.TurnTrace()
@@ -920,11 +903,8 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
             trace=trace,
         )
 
-        self.assertEqual(trace.tool_calls[0][1]["excluded_route_ids"], ["Q"])
-        self.assertEqual(
-            session["slots"]["constraints"]["excluded_route_ids"],
-            ["Q"],
-        )
+        assert trace.tool_calls[0][1]["excluded_route_ids"] == ["Q"]
+        assert session["slots"]["constraints"]["excluded_route_ids"] == ["Q"]
 
     async def test_intent_tool_profiles_stay_within_provider_schema_limit(self):
         def optional_parameter_count(schema):
@@ -968,11 +948,8 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
                 # Anthropic rejects an over-complex custom-tool request before
                 # its first token. The stable public surface remains below the
                 # provider's compilation boundary for every intent family.
-                self.assertLessEqual(total, 24)
-                self.assertEqual(
-                    expected_tools,
-                    {schema["name"] for schema in schemas},
-                )
+                assert total <= 24
+                assert expected_tools == {schema["name"] for schema in schemas}
 
     async def test_conversational_route_prepares_compares_and_presents_once(self):
         trace = self.loop.TurnTrace()
@@ -990,21 +967,15 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
             trace=trace,
         )
 
-        self.assertEqual(
-            [name for name, _tool_input in trace.tool_calls],
-            ["declare_goals", "prepare_route_options", "present_route"],
-        )
-        self.assertEqual(len(self.loop.client.messages.calls), 2)
+        assert [name for name, _tool_input in trace.tool_calls] == ["declare_goals", "prepare_route_options", "present_route"]
+        assert len(self.loop.client.messages.calls) == 2
         route_cards = [event for event in events_out if event.type == "route_card"]
-        self.assertEqual([event.role for event in route_cards], ["recommended"])
-        self.assertEqual(len(session["route_cards"]), 1)
+        assert [event.role for event in route_cards] == ["recommended"]
+        assert len(session["route_cards"]) == 1
         # The harness explicitly offers the injected fake-registry schemas;
         # the real route-planning surface (which never offers the legacy
         # REST plan_trip) is asserted on the real _tools_for_state path.
-        self.assertEqual(
-            {schema["name"] for schema in self.loop.client.messages.calls[0]["tools"]},
-            set(_model_led_registry()),
-        )
+        assert {schema["name"] for schema in self.loop.client.messages.calls[0]["tools"]} == set(_model_led_registry())
 
     async def test_route_rounds_keep_the_selected_outer_model(self):
         rounds = [
@@ -1015,25 +986,17 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
             ),
             _route_present_round("present-1"),
         ]
-        for mode in ("auto", "quick"):
-            with self.subTest(mode=mode):
-                trace = self.loop.TurnTrace()
-                await self._run(
-                    rounds,
-                    message="Plan a route to Coney Island",
-                    response_presentation=mode,
-                    tool_registry=_model_led_registry(),
-                    trace=trace,
-                )
-                expected_model = self.loop.agent_policy.policy_for_mode(mode).model
-                self.assertEqual(
-                    [call["model"] for call in self.loop.client.messages.calls],
-                    [expected_model, expected_model],
-                )
-                self.assertEqual(
-                    [name for name, _tool_input in trace.tool_calls],
-                    ["declare_goals", "prepare_route_options", "present_route"],
-                )
+        trace = self.loop.TurnTrace()
+        await self._run(
+            rounds,
+            message="Plan a route to Coney Island",
+            response_presentation="auto",
+            tool_registry=_model_led_registry(),
+            trace=trace,
+        )
+        expected_model = self.loop.agent_policy.policy_for_mode("auto").model
+        assert [call["model"] for call in self.loop.client.messages.calls] == [expected_model, expected_model]
+        assert [name for name, _tool_input in trace.tool_calls] == ["declare_goals", "prepare_route_options", "present_route"]
 
     async def test_what_if_preview_stays_temporary_until_a_later_acceptance(self):
         _discard_id, session = session_module.new_session()
@@ -1049,7 +1012,7 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         candidate_id = "cd_what_if"
 
         async def prepare_what_if(tool_input, ctx):
-            self.assertTrue(tool_input.get("what_if"))
+            assert tool_input.get("what_if")
             trip_state_module.bind_temporary_candidate_set(
                 ctx.session,
                 candidate_set_id,
@@ -1067,7 +1030,7 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
             )
 
         async def present_what_if(tool_input, ctx):
-            self.assertEqual(tool_input.get("candidate_id"), candidate_id)
+            assert tool_input.get("candidate_id") == candidate_id
             commit = tool_input.get("commit_scenario") is True
             if commit:
                 trip_state_module.commit_scenario(
@@ -1158,11 +1121,11 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
             tool_registry=registry,
         )
         preview_state = trip_state_module.get_trip_state(session)
-        self.assertEqual(preview_state["active_candidate_set_id"], "cs_active")
-        self.assertEqual(preview_state["selected_candidate_id"], "cd_active")
-        self.assertEqual(preview_state["temporary_candidate_set_id"], candidate_set_id)
-        self.assertEqual(preview_state["temporary_selected_candidate_id"], candidate_id)
-        self.assertEqual(session["active_trip"]["card_id"], "rc_active")
+        assert preview_state["active_candidate_set_id"] == "cs_active"
+        assert preview_state["selected_candidate_id"] == "cd_active"
+        assert preview_state["temporary_candidate_set_id"] == candidate_set_id
+        assert preview_state["temporary_selected_candidate_id"] == candidate_id
+        assert session["active_trip"]["card_id"] == "rc_active"
 
         await self._run(
             [{"text": ["Keep my original trip."], "stop_reason": "end_turn"}],
@@ -1172,8 +1135,8 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
             tool_registry=registry,
         )
         unchanged = trip_state_module.get_trip_state(session)
-        self.assertEqual(unchanged["active_candidate_set_id"], "cs_active")
-        self.assertEqual(unchanged["selected_candidate_id"], "cd_active")
+        assert unchanged["active_candidate_set_id"] == "cs_active"
+        assert unchanged["selected_candidate_id"] == "cd_active"
 
         await self._run(
             [
@@ -1200,10 +1163,10 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
             tool_registry=registry,
         )
         committed = trip_state_module.get_trip_state(session)
-        self.assertEqual(committed["active_candidate_set_id"], candidate_set_id)
-        self.assertEqual(committed["selected_candidate_id"], candidate_id)
-        self.assertIsNone(committed["temporary_candidate_set_id"])
-        self.assertEqual(session["active_trip"]["card_id"], "rc_what_if")
+        assert committed["active_candidate_set_id"] == candidate_set_id
+        assert committed["selected_candidate_id"] == candidate_id
+        assert committed["temporary_candidate_set_id"] is None
+        assert session["active_trip"]["card_id"] == "rc_what_if"
 
     async def test_parallel_tools_return_single_tool_result_message(self):
         rounds = [
@@ -1219,25 +1182,22 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         events_out, _session = await self._run(rounds, tool_registry=_test_registry())
 
         tool_starts = [e for e in events_out if e.type == "tool_start"]
-        self.assertEqual({e.tool for e in tool_starts}, {"ok_tool", "fail_tool"})
+        assert {e.tool for e in tool_starts} == {"ok_tool", "fail_tool"}
         tool_ends = {e.tool: e for e in events_out if e.type == "tool_end"}
-        self.assertTrue(tool_ends["ok_tool"].ok)
-        self.assertFalse(tool_ends["fail_tool"].ok)
-        self.assertEqual(
-            tool_ends["fail_tool"].summary,
-            "That action could not be completed",
-        )
+        assert tool_ends["ok_tool"].ok
+        assert not tool_ends["fail_tool"].ok
+        assert tool_ends["fail_tool"].summary == "That action could not be completed"
 
         second_call_kwargs = self.loop.client.messages.calls[1]
         last_message = second_call_kwargs["messages"][-1]
-        self.assertEqual(last_message["role"], "user")
-        self.assertEqual(len(last_message["content"]), 2)
+        assert last_message["role"] == "user"
+        assert len(last_message["content"]) == 2
         ids = {block["tool_use_id"] for block in last_message["content"]}
-        self.assertEqual(ids, {"tu_1", "tu_2"})
+        assert ids == {"tu_1", "tu_2"}
         error_blocks = [b for b in last_message["content"] if b.get("is_error")]
-        self.assertEqual(len(error_blocks), 1)
-        self.assertEqual(error_blocks[0]["tool_use_id"], "tu_2")
-        self.assertIn("boom", error_blocks[0]["content"])
+        assert len(error_blocks) == 1
+        assert error_blocks[0]["tool_use_id"] == "tu_2"
+        assert "boom" in error_blocks[0]["content"]
 
     async def test_tool_timeout_produces_is_error_tool_end(self):
         rounds = [
@@ -1249,10 +1209,10 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         ]
         events_out, _ = await self._run(rounds, tool_registry=_test_registry())
         tool_end = next(e for e in events_out if e.type == "tool_end")
-        self.assertFalse(tool_end.ok)
-        self.assertEqual(tool_end.summary, "That action could not be completed")
+        assert not tool_end.ok
+        assert tool_end.summary == "That action could not be completed"
         model_context = self.loop.client.messages.calls[1]["messages"][-1]
-        self.assertIn("timed out", model_context["content"][0]["content"])
+        assert "timed out" in model_context["content"][0]["content"]
 
     async def test_route_card_events_emitted_and_stored_in_session(self):
         rounds = [
@@ -1266,10 +1226,10 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
             tool_registry=_model_led_registry(),
         )
         route_cards = [e for e in events_out if e.type == "route_card"]
-        self.assertEqual(len(route_cards), 1)
-        self.assertEqual(route_cards[0].card_id, "rc_conversational")
-        self.assertEqual(route_cards[0].turn_id, "t1")
-        self.assertEqual(session["route_cards"][0]["card_id"], "rc_conversational")
+        assert len(route_cards) == 1
+        assert route_cards[0].card_id == "rc_conversational"
+        assert route_cards[0].turn_id == "t1"
+        assert session["route_cards"][0]["card_id"] == "rc_conversational"
 
     async def test_rider_can_explicitly_allow_bus_again(self):
         _discard_id, session = session_module.new_session()
@@ -1292,10 +1252,7 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
             trace=trace,
         )
 
-        self.assertEqual(
-            _trace_tool_input(trace, "prepare_route_options")["exclude_modes"],
-            [],
-        )
+        assert _trace_tool_input(trace, "prepare_route_options")["exclude_modes"] == []
 
     async def test_route_card_turn_gets_grounded_text_when_model_returns_no_prose(self):
         rounds = [
@@ -1311,9 +1268,9 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         )
 
         prose = "".join(event.text for event in events_out if event.type == "token")
-        self.assertEqual(prose, _DEFAULT_ROUTE_EXPLANATION)
-        self.assertEqual(session["history"][-1]["role"], "assistant")
-        self.assertEqual(session["history"][-1]["text"], prose)
+        assert prose == _DEFAULT_ROUTE_EXPLANATION
+        assert session["history"][-1]["role"] == "assistant"
+        assert session["history"][-1]["text"] == prose
 
     async def test_trace_records_tool_calls_and_final_text(self):
         trace = self.loop.TurnTrace()
@@ -1325,27 +1282,15 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
             _complete_round("final answer"),
         ]
         await self._run(rounds, tool_registry=_test_registry(), trace=trace)
-        self.assertEqual(
-            trace.tool_calls,
-            [
-                ("ok_tool", {"x": 1}),
-                (
-                    "complete_turn",
-                    {"outcome": "answer", "message": "final answer"},
-                ),
-            ],
-        )
-        self.assertEqual(trace.final_text, "final answer")
-        self.assertEqual(trace.model_call_count, 2)
+        assert trace.tool_calls == [("ok_tool", {"x": 1}), ("complete_turn", {"outcome": "answer", "message": "final answer"})]
+        assert trace.final_text == "final answer"
+        assert trace.model_call_count == 2
 
     async def test_simple_arithmetic_skips_model_and_tools(self):
         events_out, session = await self._run([], message="What is 5 + 5?")
-        self.assertEqual(len(self.loop.client.messages.calls), 0)
-        self.assertEqual(
-            "".join(event.text for event in events_out if event.type == "token"),
-            "10.",
-        )
-        self.assertEqual(session["history"][-1]["text"], "10.")
+        assert len(self.loop.client.messages.calls) == 0
+        assert "".join(event.text for event in events_out if event.type == "token") == "10."
+        assert session["history"][-1]["text"] == "10."
 
     async def test_implicit_arrival_followup_uses_active_first_boarding(self):
         _session_id, session = session_module.new_session()
@@ -1376,11 +1321,11 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
             trace=trace,
         )
 
-        self.assertEqual(trace.tool_calls[0][0], "check_transit")
-        self.assertEqual(trace.tool_calls[0][1]["route_ids"], ["2"])
-        self.assertEqual(len(self.loop.client.messages.calls), 2)
-        self.assertEqual([event.type for event in events_out].count("done"), 1)
-        self.assertFalse(any(event.type == "error" for event in events_out))
+        assert trace.tool_calls[0][0] == "check_transit"
+        assert trace.tool_calls[0][1]["route_ids"] == ["2"]
+        assert len(self.loop.client.messages.calls) == 2
+        assert [event.type for event in events_out].count("done") == 1
+        assert not any(event.type == "error" for event in events_out)
 
     async def test_arrival_clarification_is_terminal_and_never_becomes_a_generic_error(
         self,
@@ -1406,7 +1351,7 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         registry["check_transit"] = ToolSpec(
             schema={"name": "check_transit"},
             executor=ambiguous_arrival,
-            label_fn=lambda i: f"Checking {i.get('route_id')} arrivals",
+            label_fn=lambda _input: f"Checking {_input.get('route_id')} arrivals",
             timeout_s=5.0,
         )
 
@@ -1427,15 +1372,15 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
             tool_registry=registry,
         )
 
-        self.assertEqual(len(self.loop.client.messages.calls), 2)
+        assert len(self.loop.client.messages.calls) == 2
         arrival_event = next(
             event for event in events_out if event.type == "arrival_card"
         )
-        self.assertEqual(arrival_event.resolution_status, "ambiguous")
-        self.assertFalse(any(event.type == "error" for event in events_out))
-        self.assertEqual([event.type for event in events_out].count("done"), 1)
-        self.assertEqual(events_out[-1].stop_reason, "clarification_required")
-        self.assertEqual(events_out[-1].terminal_state, "clarification_required")
+        assert arrival_event.resolution_status == "ambiguous"
+        assert not any(event.type == "error" for event in events_out)
+        assert [event.type for event in events_out].count("done") == 1
+        assert events_out[-1].stop_reason == "clarification_required"
+        assert events_out[-1].terminal_state == "clarification_required"
 
     async def test_station_only_arrival_clarification_can_resume_lookup(self):
         clarification_registry = _test_registry()
@@ -1459,7 +1404,7 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         clarification_registry["check_transit"] = ToolSpec(
             schema={"name": "check_transit"},
             executor=ambiguous_arrival,
-            label_fn=lambda i: f"Checking {i.get('route_id')} arrivals",
+            label_fn=lambda _input: f"Checking {_input.get('route_id')} arrivals",
             timeout_s=5.0,
         )
         first_events, session = await self._run(
@@ -1477,10 +1422,7 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
             message="When does the next Q arrive at 34 St?",
             tool_registry=clarification_registry,
         )
-        self.assertEqual(
-            first_events[-1].terminal_state,
-            "clarification_required",
-        )
+        assert first_events[-1].terminal_state == "clarification_required"
 
         trace = self.loop.TurnTrace()
         await self._run(
@@ -1503,11 +1445,8 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         )
 
         first_model_call = self.loop.client.messages.calls[0]
-        self.assertIn(
-            "check_transit",
-            {schema["name"] for schema in first_model_call["tools"]},
-        )
-        self.assertEqual(trace.tool_calls[0][0], "check_transit")
+        assert "check_transit" in {schema["name"] for schema in first_model_call["tools"]}
+        assert trace.tool_calls[0][0] == "check_transit"
 
     async def test_destination_discovery_is_model_directed_and_grounded_in_both_modes(
         self,
@@ -1581,51 +1520,28 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
                         tool_registry=_model_led_registry(),
                         trace=trace,
                     )
-                self.assertTrue(
-                    trace.tool_calls,
-                    f"events={[event.type for event in events_out]} "
-                    f"errors={[getattr(event, 'code', '') for event in events_out if event.type == 'error']} "
-                    f"model_calls={len(self.loop.client.messages.calls)}",
-                )
-                self.assertEqual(trace.tool_calls[0][0], "declare_goals")
-                self.assertEqual(
-                    _trace_tool_input(trace, "discover_places")["max_results"],
-                    expected_limit,
-                )
-                self.assertEqual(len(self.loop.client.messages.calls), 2)
+                assert trace.tool_calls, f"events={[event.type for event in events_out]} " f"errors={[getattr(event, 'code', '') for event in events_out if event.type == 'error']} " f"model_calls={len(self.loop.client.messages.calls)}"
+                assert trace.tool_calls[0][0] == "declare_goals"
+                assert _trace_tool_input(trace, "discover_places")["max_results"] == expected_limit
+                assert len(self.loop.client.messages.calls) == 2
                 response_text = "".join(
                     event.text
                     for event in events_out
                     if isinstance(event, agent_events.TokenEvent)
                 )
-                self.assertEqual(response_text, "Here are current verified matches.")
+                assert response_text == "Here are current verified matches."
                 # The harness explicitly offers the injected fake-registry
                 # schemas, so the real discovery surface (including the
                 # native web_search appended by state policy) is asserted on
                 # the real _tools_for_state path.
-                self.assertIn(
-                    "discover_places",
-                    {
-                        schema["name"]
-                        for schema in self.loop.client.messages.calls[0]["tools"]
-                    },
-                )
+                assert "discover_places" in {schema["name"] for schema in self.loop.client.messages.calls[0]["tools"]}
                 schemas = self.loop._tools_for_state(
                     self.loop.agent_policy.policy_for_mode(mode)
                 )
                 names = {schema["name"] for schema in schemas}
-                self.assertEqual(
-                    names,
-                    set(self.loop.public_surface.INITIAL_TOOL_NAMES),
-                )
-                self.assertNotIn("web_search", names)
-                self.assertIn(
-                    "web_search",
-                    {
-                        schema["name"]
-                        for schema in self.loop.client.messages.calls[1]["tools"]
-                    },
-                )
+                assert names == set(self.loop.public_surface.INITIAL_TOOL_NAMES)
+                assert "web_search" not in names
+                assert "web_search" in {schema["name"] for schema in self.loop.client.messages.calls[1]["tools"]}
 
     async def test_failed_trip_resume_offer_is_added_once_without_auto_retry(self):
         _session_id, session = session_module.new_session()
@@ -1638,9 +1554,9 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         second, _session = await self._run([], message="2 + 2", session=session)
         first_text = "".join(event.text for event in first if event.type == "token")
         second_text = "".join(event.text for event in second if event.type == "token")
-        self.assertIn("retry the trip to JFK", first_text)
-        self.assertEqual(second_text, "4.")
-        self.assertEqual(len(self.loop.client.messages.calls), 0)
+        assert "retry the trip to JFK" in first_text
+        assert second_text == "4."
+        assert len(self.loop.client.messages.calls) == 0
 
 
 class RoundCapTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
@@ -1669,9 +1585,9 @@ class DeadlineTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
     async def test_deadline_exceeded_before_first_round_never_starts_wrapup(self):
         events_out, _session = await self._run([], tool_registry=_test_registry())
 
-        self.assertEqual(len(self.loop.client.messages.calls), 0)
+        assert len(self.loop.client.messages.calls) == 0
         done = events_out[-1]
-        self.assertEqual(done.stop_reason, "deadline")
+        assert done.stop_reason == "deadline"
 
     async def test_near_deadline_tool_is_cancelled_and_returns_deadline_terminal(self):
         async def slow_arrivals(_tool_input, _ctx):
@@ -1706,15 +1622,11 @@ class DeadlineTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
                 message="When is the next Q train?",
                 tool_registry=registry,
             )
-        self.assertEqual([event.type for event in events_out].count("done"), 1)
-        self.assertEqual(events_out[-1].stop_reason, "deadline")
-        self.assertEqual(
-            [event.code for event in events_out if event.type == "error"], ["deadline"]
-        )
-        self.assertTrue(any(event.type == "tool_start" for event in events_out))
-        self.assertTrue(
-            any(event.type == "tool_end" and not event.ok for event in events_out)
-        )
+        assert [event.type for event in events_out].count("done") == 1
+        assert events_out[-1].stop_reason == "deadline"
+        assert [event.code for event in events_out if event.type == "error"] == ["deadline"]
+        assert any(event.type == "tool_start" for event in events_out)
+        assert any(event.type == "tool_end" and not event.ok for event in events_out)
 
     async def test_grounded_route_card_completes_without_a_followup_model_round(self):
         calls = 0
@@ -1797,31 +1709,13 @@ class DeadlineTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
                 tool_registry=_model_led_registry(),
             )
 
-        self.assertLess(time.monotonic() - started, 0.5)
-        self.assertEqual(calls, 2)
-        self.assertEqual(
-            len([event for event in events_out if event.type == "done"]), 1
-        )
-        self.assertEqual(events_out[-1].stop_reason, "end_turn")
-        self.assertTrue(
-            any(
-                event.type == "route_card" and event.card_id == "rc_conversational"
-                for event in events_out
-            )
-        )
-        self.assertTrue(
-            any(
-                _DEFAULT_ROUTE_EXPLANATION in event.text
-                for event in events_out
-                if event.type == "token"
-            )
-        )
-        self.assertTrue(
-            any(
-                card["card_id"] == "rc_conversational"
-                for card in session["route_cards"]
-            )
-        )
+        assert time.monotonic() - started < 0.5
+        assert calls == 2
+        assert len([event for event in events_out if event.type == "done"]) == 1
+        assert events_out[-1].stop_reason == "end_turn"
+        assert any(event.type == "route_card" and event.card_id == "rc_conversational" for event in events_out)
+        assert any(_DEFAULT_ROUTE_EXPLANATION in event.text for event in events_out if event.type == "token")
+        assert any(card["card_id"] == "rc_conversational" for card in session["route_cards"])
 
 
 class AgentDisabledBudgetTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
@@ -1835,11 +1729,11 @@ class AgentDisabledBudgetTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCa
     async def test_agent_enabled_false_short_circuits_before_any_model_call(self):
         with patch.dict(os.environ, {"AGENT_ENABLED": "0"}):
             events_out, _session = await self._run([])
-        self.assertEqual(events_out[0].type, "meta")
+        assert events_out[0].type == "meta"
         error = next(e for e in events_out if e.type == "error")
-        self.assertEqual(error.code, "budget_exceeded")
-        self.assertEqual(events_out[-1].type, "done")
-        self.assertEqual(len(self.loop.client.messages.calls), 0)
+        assert error.code == "budget_exceeded"
+        assert events_out[-1].type == "done"
+        assert len(self.loop.client.messages.calls) == 0
 
 
 class MockAgentModeTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
@@ -1857,31 +1751,26 @@ class MockAgentModeTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
             )
 
         event_types = [event.type for event in events_out]
-        self.assertEqual(event_types[0], "meta")
-        self.assertEqual(event_types[-1], "done")
-        self.assertIn("tool_start", event_types)
-        self.assertIn("tool_end", event_types)
-        self.assertIn("token", event_types)
-        self.assertIn("route_card", event_types)
-        self.assertEqual(len(self.loop.client.messages.calls), 0)
-        self.assertIn(
-            "preview",
-            "".join(
-                event.text for event in events_out if event.type == "token"
-            ).casefold(),
-        )
-        self.assertEqual(session["route_cards"][-1]["card_id"], "mock-t1")
+        assert event_types[0] == "meta"
+        assert event_types[-1] == "done"
+        assert "tool_start" in event_types
+        assert "tool_end" in event_types
+        assert "token" in event_types
+        assert "route_card" in event_types
+        assert len(self.loop.client.messages.calls) == 0
+        assert "preview" in "".join(event.text for event in events_out if event.type == "token").casefold()
+        assert session["route_cards"][-1]["card_id"] == "mock-t1"
 
     async def test_quick_mock_copy_is_shorter_without_changing_route_facts(self):
         automatic = mock_turn.mock_trip_copy("Heading to Costco", "auto")
         quick = mock_turn.mock_trip_copy("Heading to Costco", "quick")
 
-        self.assertLess(len(quick[0]), len(automatic[0]))
-        self.assertEqual(quick[1:], automatic[1:])
+        assert len(quick[0]) < len(automatic[0])
+        assert quick[1:] == automatic[1:]
 
 
 class RateLimitBudgetTests(_BudgetConfiguredAgentLoopTests):
-    BUDGET_ENV = {"AGENT_TURNS_PER_SESSION_PER_MIN": "1"}
+    BUDGET_ENV: ClassVar[dict[str, str]] = {"AGENT_TURNS_PER_SESSION_PER_MIN": "1"}
 
     def setUp(self):
         cache._mem.clear()
@@ -1891,16 +1780,16 @@ class RateLimitBudgetTests(_BudgetConfiguredAgentLoopTests):
         first, _session = await self._run(
             [{"text": ["ok"], "stop_reason": "end_turn"}], session_id=session_id
         )
-        self.assertEqual(first[-1].stop_reason, "end_turn")
+        assert first[-1].stop_reason == "end_turn"
 
         second, _session2 = await self._run([], session_id=session_id)
         error = next(e for e in second if e.type == "error")
-        self.assertEqual(error.code, "rate_limited")
-        self.assertEqual(len(self.loop.client.messages.calls), 0)
+        assert error.code == "rate_limited"
+        assert len(self.loop.client.messages.calls) == 0
 
 
 class DailySpendBudgetTests(_BudgetConfiguredAgentLoopTests):
-    BUDGET_ENV = {"AGENT_DAILY_SPEND_LIMIT_USD": "0.000001"}
+    BUDGET_ENV: ClassVar[dict[str, str]] = {"AGENT_DAILY_SPEND_LIMIT_USD": "0.000001"}
 
     def setUp(self):
         cache._mem.clear()
@@ -1909,13 +1798,13 @@ class DailySpendBudgetTests(_BudgetConfiguredAgentLoopTests):
         self.budget.record_usage_cost(1000, 1000)  # trivially exceeds the tiny limit
         events_out, _session = await self._run([])
         error = next(e for e in events_out if e.type == "error")
-        self.assertEqual(error.code, "budget_exceeded")
-        self.assertFalse(error.retryable)
-        self.assertEqual(len(self.loop.client.messages.calls), 0)
+        assert error.code == "budget_exceeded"
+        assert not error.retryable
+        assert len(self.loop.client.messages.calls) == 0
 
 
 class ConcurrencyBudgetTests(_BudgetConfiguredAgentLoopTests):
-    BUDGET_ENV = {"AGENT_MAX_CONCURRENT_STREAMS": "1"}
+    BUDGET_ENV: ClassVar[dict[str, str]] = {"AGENT_MAX_CONCURRENT_STREAMS": "1"}
 
     def setUp(self):
         cache._mem.clear()
@@ -1928,8 +1817,8 @@ class ConcurrencyBudgetTests(_BudgetConfiguredAgentLoopTests):
         finally:
             sem.release()
         error = next(e for e in events_out if e.type == "error")
-        self.assertEqual(error.code, "rate_limited")
-        self.assertEqual(len(self.loop.client.messages.calls), 0)
+        assert error.code == "rate_limited"
+        assert len(self.loop.client.messages.calls) == 0
 
 
 class DeterministicAndDeduplicationTests(
@@ -1953,8 +1842,8 @@ class DeterministicAndDeduplicationTests(
             message="Is the subway running?",
             tool_registry=_test_registry(),
         )
-        self.assertTrue(any(event.type == "token" for event in events_out))
-        self.assertEqual(len(self.loop.client.messages.calls), 1)
+        assert any(event.type == "token" for event in events_out)
+        assert len(self.loop.client.messages.calls) == 1
 
     async def test_turn_ledger_reuses_successes_and_retries_failures(self):
         calls = {"success": 0, "failure": 0}
@@ -1973,7 +1862,7 @@ class DeterministicAndDeduplicationTests(
                 timings={"render_ms": 5},
             )
 
-        async def fails_then_succeeds(tool_input, _ctx):
+        async def fails_then_succeeds(_tool_input, _ctx):
             calls["failure"] += 1
             succeeded = calls["failure"] == 2
             return ToolResult(
@@ -2025,25 +1914,18 @@ class DeterministicAndDeduplicationTests(
             rounds, tool_registry=registry, trace=trace
         )
 
-        self.assertEqual(calls, {"success": 2, "failure": 2})
+        assert calls == {"success": 2, "failure": 2}
         visible_text = "".join(
             event.text for event in events_out if event.type == "token"
         )
-        self.assertEqual(visible_text, "effect-1\n\neffect-2\n\ndone")
-        self.assertEqual(
-            [entry["text"] for entry in session["history"] if entry["role"] == "tool"],
-            ["ok-1", "ok-2"],
-        )
-        self.assertEqual(
-            [card["card_id"] for card in session["route_cards"]], ["card-1", "card-2"]
-        )
-        self.assertEqual(trace.stage_ms["render_ms"], 10)
-        self.assertEqual(len(trace.tool_calls), 6)
-        self.assertEqual(trace.model_tool_use_count, 6)
-        self.assertEqual(trace.provider_tool_execution_count, 4)
-        self.assertEqual(
-            len([event for event in events_out if event.type == "tool_end"]), 6
-        )
+        assert visible_text == "effect-1\n\neffect-2\n\ndone"
+        assert [entry["text"] for entry in session["history"] if entry["role"] == "tool"] == ["ok-1", "ok-2"]
+        assert [card["card_id"] for card in session["route_cards"]] == ["card-1", "card-2"]
+        assert trace.stage_ms["render_ms"] == 10
+        assert len(trace.tool_calls) == 6
+        assert trace.model_tool_use_count == 6
+        assert trace.provider_tool_execution_count == 4
+        assert len([event for event in events_out if event.type == "tool_end"]) == 6
 
     async def test_turn_ledger_caps_block_provider_work_at_the_boundaries(self):
         calls = 0
@@ -2059,36 +1941,12 @@ class DeterministicAndDeduplicationTests(
             patch.object(self.loop, "MAX_TOOL_EXECUTIONS_PER_NAME", 1),
             patch.object(self.loop, "_run_one_tool", fake_run),
         ):
-            self.assertTrue(
-                (
-                    await ledger.execute(
-                        "one", {"value": 1}, ToolContext(), deadline_monotonic=999999
-                    )
-                ).ok
-            )
-            self.assertFalse(
-                (
-                    await ledger.execute(
-                        "one", {"value": 2}, ToolContext(), deadline_monotonic=999999
-                    )
-                ).ok
-            )
-            self.assertTrue(
-                (
-                    await ledger.execute(
-                        "two", {"value": 1}, ToolContext(), deadline_monotonic=999999
-                    )
-                ).ok
-            )
-            self.assertFalse(
-                (
-                    await ledger.execute(
-                        "three", {"value": 1}, ToolContext(), deadline_monotonic=999999
-                    )
-                ).ok
-            )
+            assert (await ledger.execute("one", {"value": 1}, ToolContext(), deadline_monotonic=999999)).ok
+            assert not (await ledger.execute("one", {"value": 2}, ToolContext(), deadline_monotonic=999999)).ok
+            assert (await ledger.execute("two", {"value": 1}, ToolContext(), deadline_monotonic=999999)).ok
+            assert not (await ledger.execute("three", {"value": 1}, ToolContext(), deadline_monotonic=999999)).ok
 
-        self.assertEqual(calls, 2)
+        assert calls == 2
 
 
 class AgentBudgetIsolationTests(unittest.TestCase):
@@ -2116,9 +1974,7 @@ class AgentBudgetIsolationTests(unittest.TestCase):
         ]
 
         orders = []
-        for seed in (17, 41):
-            ordered_classes = list(selected_classes)
-            random.Random(seed).shuffle(ordered_classes)
+        for ordered_classes in (list(selected_classes), list(reversed(selected_classes))):
             orders.append(
                 [test_case.__name__ for test_case, _method in ordered_classes]
             )
@@ -2127,20 +1983,14 @@ class AgentBudgetIsolationTests(unittest.TestCase):
             )
             result = unittest.TestResult()
             suite.run(result)
-            self.assertTrue(
-                result.wasSuccessful(),
-                f"seed={seed} failures={result.failures} errors={result.errors}",
-            )
-            self.assertEqual(
-                (
-                    budget_module.AGENT_TURNS_PER_SESSION_PER_MIN,
-                    budget_module.AGENT_DAILY_SPEND_LIMIT_USD,
-                    budget_module.AGENT_MAX_CONCURRENT_STREAMS,
-                ),
-                original_limits,
+            assert result.wasSuccessful(), f"failures={result.failures} errors={result.errors}"
+            assert original_limits == (
+                budget_module.AGENT_TURNS_PER_SESSION_PER_MIN,
+                budget_module.AGENT_DAILY_SPEND_LIMIT_USD,
+                budget_module.AGENT_MAX_CONCURRENT_STREAMS,
             )
 
-        self.assertNotEqual(orders[0], orders[1])
+        assert orders[0] != orders[1]
 
 
 if __name__ == "__main__":

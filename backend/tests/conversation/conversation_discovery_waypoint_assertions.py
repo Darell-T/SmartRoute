@@ -16,6 +16,7 @@ recorded blocked/not executed.
 from __future__ import annotations
 
 from app.services.agent import candidate_store
+
 from tests.conversation.conversation_discovery_fixtures import LEAK_MARKERS
 from tests.conversation.conversation_discovery_waypoint_fixtures import (
     BARCLAYS_CANONICAL_NAME,
@@ -66,202 +67,93 @@ class _DiscoveryWaypointAssertions(_DiscoveryWaypointBase):
         )
         # Gate 1 (earliest): the real request must OFFER the canonical route
         # profile before any scripted tool state is credited.
-        self.assertEqual(ev.offered, TURN4_EXPECTED_PROFILE, blob)
-        self.assertFalse(
-            set(self._names(ev)) & set(TURN4_FORBIDDEN),
-            f"{scenario_id} turn4 forbidden tool; {blob}",
-        )
+        assert ev.offered == TURN4_EXPECTED_PROFILE, blob
+        assert not set(self._names(ev)) & set(TURN4_FORBIDDEN), f"{scenario_id} turn4 forbidden tool; {blob}"
         # Gate 2: the new-trip reset must NOT run. The FIRST request context
         # is the real pre-model observation point: it must still show the
         # accepted destination, empty waypoints, and the live discovery and
         # candidate context (nothing wiped before the first model request).
-        self.assertIsNotNone(ev.before_state, f"{scenario_id} turn4 before state")
+        assert ev.before_state is not None, f"{scenario_id} turn4 before state"
         trip = _context_trip_state(ev.context) or {}
         with self.subTest(gap="reset_preserves_destination"):
-            self.assertEqual(
-                trip.get("destination"),
-                DESTINATION_LABEL,
-                f"{scenario_id} turn4 first-request context keeps destination; {blob}",
-            )
+            assert trip.get("destination") == DESTINATION_LABEL, f"{scenario_id} turn4 first-request context keeps destination; {blob}"
         with self.subTest(gap="reset_preserves_discovery_set"):
-            self.assertIs(
-                trip.get("has_active_discovery_set"),
-                True,
-                f"{scenario_id} turn4 first-request context keeps discovery; {blob}",
-            )
-            self.assertIn("active_discovery:", ev.context, blob)
+            assert trip.get("has_active_discovery_set") is True, f"{scenario_id} turn4 first-request context keeps discovery; {blob}"
+            assert "active_discovery:" in ev.context, blob
         with self.subTest(gap="reset_preserves_waypoints"):
-            self.assertEqual(
-                trip.get("waypoints"),
-                [],
-                f"{scenario_id} turn4 pre-model waypoints; {blob}",
-            )
+            assert trip.get("waypoints") == [], f"{scenario_id} turn4 pre-model waypoints; {blob}"
         # Gate 3: ordinal-2 resolved from the REAL stored set, prepare with the
         # exact real id, present once.
-        self.assertEqual(
-            ev.trace.tool_calls[0][1]["waypoints"],
-            [place2["place_id"]],
-            f"{scenario_id} turn4 prepare waypoints; {blob}",
-        )
-        self.assertEqual(
-            self._names(ev),
-            ["prepare_route_options", "present_route"],
-            f"{scenario_id} turn4 sequence; {blob}",
-        )
+        assert ev.trace.tool_calls[0][1]["waypoints"] == [place2["place_id"]], f"{scenario_id} turn4 prepare waypoints; {blob}"
+        assert self._names(ev) == ["prepare_route_options", "present_route"], f"{scenario_id} turn4 sequence; {blob}"
         # Gate 4: TWO real-shaped provider-seam segments in call order, with
         # the stored B Pizza identity supplied through the resolved-place
         # kwargs at the waypoint boundaries (never a phantom B->B segment).
         prepare = ev.mocks["prepare_single_leg"]
-        self.assertEqual(
-            prepare.await_count,
-            2,
-            f"{scenario_id} turn4 two provider-seam segments; {blob}",
-        )
+        assert prepare.await_count == 2, f"{scenario_id} turn4 two provider-seam segments; {blob}"
         calls = prepare.await_args_list
         first_input = calls[0].args[0]
         second_input = calls[1].args[0]
         with self.subTest(gap="segment_order"):
-            self.assertEqual(first_input.get("origin"), "user", blob)
-            self.assertEqual(
-                first_input.get("destination"),
-                place2["place_id"],
-                f"{scenario_id} segment1 destination is the opaque ordinal-2 id; {blob}",
-            )
-            self.assertEqual(
-                second_input.get("origin"),
-                place2["place_id"],
-                f"{scenario_id} segment2 origin is the same opaque ordinal-2 id; {blob}",
-            )
-            self.assertEqual(
-                second_input.get("destination"),
-                DESTINATION_LABEL,
-                f"{scenario_id} segment2 destination inherits Barclays; {blob}",
-            )
+            assert first_input.get("origin") == "user", blob
+            assert first_input.get("destination") == place2["place_id"], f"{scenario_id} segment1 destination is the opaque ordinal-2 id; {blob}"
+            assert second_input.get("origin") == place2["place_id"], f"{scenario_id} segment2 origin is the same opaque ordinal-2 id; {blob}"
+            assert second_input.get("destination") == DESTINATION_LABEL, f"{scenario_id} segment2 destination inherits Barclays; {blob}"
         with self.subTest(gap="stored_identity_at_waypoint_boundary"):
             self._assert_stored_place(
                 calls[0].kwargs.get("resolved_destination"),
                 place2,
                 f"{scenario_id} segment1 destination boundary",
             )
-            self.assertIsNone(
-                calls[0].kwargs.get("resolved_origin"),
-                f"{scenario_id} segment1 origin is the user location",
-            )
+            assert calls[0].kwargs.get("resolved_origin") is None, f"{scenario_id} segment1 origin is the user location"
             self._assert_stored_place(
                 calls[1].kwargs.get("resolved_origin"),
                 place2,
                 f"{scenario_id} segment2 origin boundary",
             )
-            self.assertIsNone(
-                calls[1].kwargs.get("resolved_destination"),
-                f"{scenario_id} segment2 destination is the inherited label",
-            )
+            assert calls[1].kwargs.get("resolved_destination") is None, f"{scenario_id} segment2 destination is the inherited label"
         # Gate 5: canonical candidate record, whole-trip card, itinerary.
         cards = route_cards(ev.events)
-        self.assertEqual(len(cards), 1, f"{scenario_id} turn4 one card; {blob}")
-        self.assertEqual(
-            len(ev.mocks["stored_candidate_set_ids"]),
-            1,
-            f"{scenario_id} turn4 one stored set; {blob}",
-        )
+        assert len(cards) == 1, f"{scenario_id} turn4 one card; {blob}"
+        assert len(ev.mocks["stored_candidate_set_ids"]) == 1, f"{scenario_id} turn4 one stored set; {blob}"
         record = candidate_store.load_candidate_set(
             ev.state["active_candidate_set_id"],
             session_id=ev.session_id,
         )
-        self.assertIsNotNone(record, f"{scenario_id} turn4 candidate record; {blob}")
-        self.assertEqual(
-            record["candidate_kind"],
-            "multi_stop",
-            f"{scenario_id} turn4 multi-stop candidate; {blob}",
-        )
-        self.assertEqual(record["destination_raw"], DESTINATION_LABEL, blob)
-        self.assertEqual(
-            record["waypoints"],
-            [place2["name"]],
-            f"{scenario_id} turn4 stored waypoint label; {blob}",
-        )
+        assert record is not None, f"{scenario_id} turn4 candidate record; {blob}"
+        assert record["candidate_kind"] == "multi_stop", f"{scenario_id} turn4 multi-stop candidate; {blob}"
+        assert record["destination_raw"] == DESTINATION_LABEL, blob
+        assert record["waypoints"] == [place2["name"]], f"{scenario_id} turn4 stored waypoint label; {blob}"
         segments = record["aggregate_segments"][0]
-        self.assertEqual(len(segments), 2, f"{scenario_id} turn4 two segments; {blob}")
-        self.assertEqual(
-            segments[0]["destination_place"]["name"],
-            place2["name"],
-            f"{scenario_id} turn4 segment1 destination place; {blob}",
-        )
-        self.assertEqual(
-            segments[1]["destination_place"]["name"],
-            BARCLAYS_CANONICAL_NAME,
-            f"{scenario_id} turn4 segment2 destination place; {blob}",
-        )
-        self.assertEqual(
-            (segments[0].get("dwell_minutes"), segments[0].get("dwell_source")),
-            (25, "default"),
-            f"{scenario_id} turn4 server-owned dwell provenance; {blob}",
-        )
-        self.assertNotIn(
-            "dwell_minutes",
-            segments[1],
-            f"{scenario_id} turn4 final segment has no dwell; {blob}",
-        )
+        assert len(segments) == 2, f"{scenario_id} turn4 two segments; {blob}"
+        assert segments[0]["destination_place"]["name"] == place2["name"], f"{scenario_id} turn4 segment1 destination place; {blob}"
+        assert segments[1]["destination_place"]["name"] == BARCLAYS_CANONICAL_NAME, f"{scenario_id} turn4 segment2 destination place; {blob}"
+        assert (segments[0].get("dwell_minutes"), segments[0].get("dwell_source")) == (25, "default"), f"{scenario_id} turn4 server-owned dwell provenance; {blob}"
+        assert "dwell_minutes" not in segments[1], f"{scenario_id} turn4 final segment has no dwell; {blob}"
         itinerary = cards[0].itinerary
-        self.assertIsNotNone(itinerary, f"{scenario_id} turn4 itinerary; {blob}")
+        assert itinerary is not None, f"{scenario_id} turn4 itinerary; {blob}"
         waypoints = itinerary.get("waypoints") or []
-        self.assertEqual(len(waypoints), 1, f"{scenario_id} turn4 one waypoint; {blob}")
-        self.assertEqual(
-            waypoints[0].get("display_name"),
-            place2["name"],
-            f"{scenario_id} turn4 itinerary waypoint label; {blob}",
-        )
-        self.assertEqual(
-            (waypoints[0].get("dwell_minutes"), waypoints[0].get("dwell_source")),
-            (25, "default"),
-            f"{scenario_id} turn4 itinerary dwell provenance; {blob}",
-        )
-        self.assertEqual(
-            itinerary.get("total_dwell_seconds"),
-            1500,
-            f"{scenario_id} turn4 itinerary dwell total; {blob}",
-        )
-        self.assertEqual(
-            (itinerary.get("destination") or {}).get("name"),
-            BARCLAYS_CANONICAL_NAME,
-            f"{scenario_id} turn4 itinerary destination; {blob}",
-        )
+        assert len(waypoints) == 1, f"{scenario_id} turn4 one waypoint; {blob}"
+        assert waypoints[0].get("display_name") == place2["name"], f"{scenario_id} turn4 itinerary waypoint label; {blob}"
+        assert (waypoints[0].get("dwell_minutes"), waypoints[0].get("dwell_source")) == (25, "default"), f"{scenario_id} turn4 itinerary dwell provenance; {blob}"
+        assert itinerary.get("total_dwell_seconds") == 1500, f"{scenario_id} turn4 itinerary dwell total; {blob}"
+        assert (itinerary.get("destination") or {}).get("name") == BARCLAYS_CANONICAL_NAME, f"{scenario_id} turn4 itinerary destination; {blob}"
         # Gate 6: the OLD accepted active trip/card survives until the new
         # selection commits. The real observation point is the session at the
         # moment prepare stores the new candidate set (before present_route
         # replaces the card): it must still carry the turn-1 card.
         snapshots = ev.mocks.get("session_at_store") or []
-        self.assertEqual(
-            len(snapshots),
-            1,
-            f"{scenario_id} turn4 exactly one prepare store; {blob}",
-        )
-        self.assertEqual(
-            (snapshots[0]["active_trip"] or {}).get("card_id"),
-            (ev.before_session.active_trip or {}).get("card_id"),
-            f"{scenario_id} turn4 old card survives until replacement; {blob}",
-        )
-        self.assertEqual(
-            snapshots[0]["route_cards"],
-            list(ev.before_session.route_cards),
-            f"{scenario_id} turn4 old cards survive until replacement; {blob}",
-        )
-        self.assertEqual(
-            (ev.after_session.active_trip or {}).get("card_id"),
-            cards[0].card_id,
-            f"{scenario_id} turn4 committed active trip card; {blob}",
-        )
+        assert len(snapshots) == 1, f"{scenario_id} turn4 exactly one prepare store; {blob}"
+        assert (snapshots[0]["active_trip"] or {}).get("card_id") == (ev.before_session.active_trip or {}).get("card_id"), f"{scenario_id} turn4 old card survives until replacement; {blob}"
+        assert snapshots[0]["route_cards"] == list(ev.before_session.route_cards), f"{scenario_id} turn4 old cards survive until replacement; {blob}"
+        assert (ev.after_session.active_trip or {}).get("card_id") == cards[0].card_id, f"{scenario_id} turn4 committed active trip card; {blob}"
         # Gate 7: committed final state.
-        self.assertEqual(ev.state["waypoints"], [place2["name"]], blob)
-        self.assertEqual(ev.state["destination"], DESTINATION_LABEL, blob)
-        self.assertEqual(
-            ev.state["selected_candidate_id"],
-            FIXED_CANDIDATE_WAYPOINT,
-            f"{scenario_id} turn4 committed candidate; {blob}",
-        )
-        self.assertEqual(ev.state["active_discovery_set_id"], set_id, blob)
+        assert ev.state["waypoints"] == [place2["name"]], blob
+        assert ev.state["destination"] == DESTINATION_LABEL, blob
+        assert ev.state["selected_candidate_id"] == FIXED_CANDIDATE_WAYPOINT, f"{scenario_id} turn4 committed candidate; {blob}"
+        assert ev.state["active_discovery_set_id"] == set_id, blob
         self._no_temp(scenario_id, ev.state)
-        self.assertEqual(ev.events[-1].type, "done", blob)
+        assert ev.events[-1].type == "done", blob
         self._assert_no_leaks(scenario_id, "turn4", ev.trace.final_text)
 
     # ------------------------------------------------------------------
@@ -276,49 +168,22 @@ class _DiscoveryWaypointAssertions(_DiscoveryWaypointBase):
             ev=ev,
         )
         # Gate 1 (earliest): the canonical route profile must be OFFERED.
-        self.assertEqual(ev.offered, TURN5_EXPECTED_PROFILE, blob)
+        assert ev.offered == TURN5_EXPECTED_PROFILE, blob
         names = self._names(ev)
-        self.assertEqual(
-            names,
-            ["prepare_route_options", "present_route"],
-            f"{scenario_id} turn5 sequence; {blob}",
-        )
-        self.assertEqual(names.count("prepare_route_options"), 1, blob)
-        self.assertEqual(names.count("present_route"), 1, blob)
-        self.assertFalse(
-            set(names) & set(TURN5_FORBIDDEN),
-            f"{scenario_id} turn5 forbidden tool; {blob}",
-        )
-        self.assertNotIn(
-            "get_place_details",
-            names,
-            f"{scenario_id} turn5 removal never resolves a place; {blob}",
-        )
-        self.assertEqual(
-            ev.trace.tool_calls[0][1]["waypoints"],
-            [],
-            f"{scenario_id} turn5 explicit empty waypoints; {blob}",
-        )
+        assert names == ["prepare_route_options", "present_route"], f"{scenario_id} turn5 sequence; {blob}"
+        assert names.count("prepare_route_options") == 1, blob
+        assert names.count("present_route") == 1, blob
+        assert not set(names) & set(TURN5_FORBIDDEN), f"{scenario_id} turn5 forbidden tool; {blob}"
+        assert "get_place_details" not in names, f"{scenario_id} turn5 removal never resolves a place; {blob}"
+        assert ev.trace.tool_calls[0][1]["waypoints"] == [], f"{scenario_id} turn5 explicit empty waypoints; {blob}"
         state = ev.state
-        self.assertEqual(state["destination"], DESTINATION_LABEL, blob)
-        self.assertEqual(state["waypoints"], [], f"{scenario_id} turn5 empty; {blob}")
-        self.assertEqual(
-            state["selected_candidate_id"],
-            FIXED_CANDIDATE_REMOVAL,
-            f"{scenario_id} turn5 committed candidate; {blob}",
-        )
+        assert state["destination"] == DESTINATION_LABEL, blob
+        assert state["waypoints"] == [], f"{scenario_id} turn5 empty; {blob}"
+        assert state["selected_candidate_id"] == FIXED_CANDIDATE_REMOVAL, f"{scenario_id} turn5 committed candidate; {blob}"
         # The discovery set and selected place association stays safe and
         # session-owned (never cleared by the removal).
-        self.assertEqual(
-            state["active_discovery_set_id"],
-            ev.before_state["active_discovery_set_id"],
-            f"{scenario_id} turn5 discovery set preserved; {blob}",
-        )
-        self.assertEqual(
-            state["selected_place_id"],
-            ev.before_state["selected_place_id"],
-            f"{scenario_id} turn5 selected place preserved; {blob}",
-        )
+        assert state["active_discovery_set_id"] == ev.before_state["active_discovery_set_id"], f"{scenario_id} turn5 discovery set preserved; {blob}"
+        assert state["selected_place_id"] == ev.before_state["selected_place_id"], f"{scenario_id} turn5 selected place preserved; {blob}"
         # Profile/preferences/timing unchanged across the removal.
         for field in (
             "origin",
@@ -328,71 +193,31 @@ class _DiscoveryWaypointAssertions(_DiscoveryWaypointBase):
             "requested_arrival",
             "preferences",
         ):
-            self.assertEqual(
-                state[field],
-                ev.before_state[field],
-                f"{scenario_id} turn5 keeps {field}; {blob}",
-            )
-        self.assertEqual(
-            ev.after_session.slots,
-            ev.before_session.slots,
-            f"{scenario_id} turn5 slots unchanged; {blob}",
-        )
+            assert state[field] == ev.before_state[field], f"{scenario_id} turn5 keeps {field}; {blob}"
+        assert ev.after_session.slots == ev.before_session.slots, f"{scenario_id} turn5 slots unchanged; {blob}"
         # One prepare, one present, one card, one committed selection, and a
         # destination-only canonical record/itinerary with no waypoint or
         # dwell residue.
-        self.assertEqual(
-            ev.mocks["prepare_single_leg"].await_count,
-            1,
-            f"{scenario_id} turn5 one provider seam; {blob}",
-        )
+        assert ev.mocks["prepare_single_leg"].await_count == 1, f"{scenario_id} turn5 one provider seam; {blob}"
         cards = route_cards(ev.events)
-        self.assertEqual(len(cards), 1, f"{scenario_id} turn5 one card; {blob}")
-        self.assertEqual(
-            len(ev.mocks["stored_candidate_set_ids"]),
-            1,
-            f"{scenario_id} turn5 one stored set; {blob}",
-        )
+        assert len(cards) == 1, f"{scenario_id} turn5 one card; {blob}"
+        assert len(ev.mocks["stored_candidate_set_ids"]) == 1, f"{scenario_id} turn5 one stored set; {blob}"
         record = candidate_store.load_candidate_set(
             state["active_candidate_set_id"],
             session_id=ev.session_id,
         )
-        self.assertIsNotNone(record, f"{scenario_id} turn5 candidate record; {blob}")
-        self.assertEqual(
-            record["candidate_kind"],
-            "single_leg",
-            f"{scenario_id} turn5 destination-only candidate; {blob}",
-        )
-        self.assertEqual(record["destination_raw"], DESTINATION_LABEL, blob)
-        self.assertEqual(
-            record["waypoints"],
-            [],
-            f"{scenario_id} turn5 no waypoint residue; {blob}",
-        )
-        self.assertEqual(
-            record["aggregate_segments"],
-            [],
-            f"{scenario_id} turn5 no segment residue; {blob}",
-        )
+        assert record is not None, f"{scenario_id} turn5 candidate record; {blob}"
+        assert record["candidate_kind"] == "single_leg", f"{scenario_id} turn5 destination-only candidate; {blob}"
+        assert record["destination_raw"] == DESTINATION_LABEL, blob
+        assert record["waypoints"] == [], f"{scenario_id} turn5 no waypoint residue; {blob}"
+        assert record["aggregate_segments"] == [], f"{scenario_id} turn5 no segment residue; {blob}"
         itinerary = cards[0].itinerary
-        self.assertIsNotNone(itinerary, f"{scenario_id} turn5 itinerary; {blob}")
-        self.assertEqual(
-            itinerary.get("waypoints"),
-            [],
-            f"{scenario_id} turn5 itinerary no waypoints; {blob}",
-        )
-        self.assertEqual(
-            itinerary.get("total_dwell_seconds"),
-            0,
-            f"{scenario_id} turn5 itinerary no dwell; {blob}",
-        )
-        self.assertEqual(
-            (ev.after_session.active_trip or {}).get("card_id"),
-            cards[0].card_id,
-            f"{scenario_id} turn5 committed active trip card; {blob}",
-        )
+        assert itinerary is not None, f"{scenario_id} turn5 itinerary; {blob}"
+        assert itinerary.get("waypoints") == [], f"{scenario_id} turn5 itinerary no waypoints; {blob}"
+        assert itinerary.get("total_dwell_seconds") == 0, f"{scenario_id} turn5 itinerary no dwell; {blob}"
+        assert (ev.after_session.active_trip or {}).get("card_id") == cards[0].card_id, f"{scenario_id} turn5 committed active trip card; {blob}"
         self._no_temp(scenario_id, state)
-        self.assertEqual(ev.events[-1].type, "done", blob)
+        assert ev.events[-1].type == "done", blob
         self._assert_no_leaks(scenario_id, "turn5", ev.trace.final_text)
 
     # ------------------------------------------------------------------
@@ -402,31 +227,15 @@ class _DiscoveryWaypointAssertions(_DiscoveryWaypointBase):
     def _assert_no_leaks(self, scenario_id: str, tag: str, text: str) -> None:
         lowered = text.casefold()
         for marker in LEAK_MARKERS:
-            self.assertNotIn(marker, lowered, f"{scenario_id} {tag} leak {marker}")
+            assert marker not in lowered, f"{scenario_id} {tag} leak {marker}"
 
     def _assert_stored_place(self, place, stored: dict, label: str) -> None:
-        self.assertIsNotNone(place, f"{label} must be resolved from the store")
-        self.assertEqual(place.name, stored["name"], f"{label} stored name wins")
-        self.assertEqual(
-            place.latitude,
-            float(stored["latitude"]),
-            f"{label} stored latitude wins",
-        )
-        self.assertEqual(
-            place.longitude,
-            float(stored["longitude"]),
-            f"{label} stored longitude wins",
-        )
-        self.assertEqual(
-            place.place_id,
-            stored["place_id"],
-            f"{label} stored opaque identity wins",
-        )
-        self.assertEqual(
-            place.provider_place_id,
-            stored["provider_place_id"],
-            f"{label} provider identity is preserved separately",
-        )
+        assert place is not None, f"{label} must be resolved from the store"
+        assert place.name == stored["name"], f"{label} stored name wins"
+        assert place.latitude == float(stored["latitude"]), f"{label} stored latitude wins"
+        assert place.longitude == float(stored["longitude"]), f"{label} stored longitude wins"
+        assert place.place_id == stored["place_id"], f"{label} stored opaque identity wins"
+        assert place.provider_place_id == stored["provider_place_id"], f"{label} provider identity is preserved separately"
 
 
 __all__ = ("_DiscoveryWaypointAssertions",)

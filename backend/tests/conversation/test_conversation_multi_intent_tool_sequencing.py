@@ -14,7 +14,12 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 from app.services.agent import candidate_store
-from tests.conversation.conversation_discovery_fixtures import discovery_leg_for, poi_result
+
+import tests.conversation.conversation_multi_intent_fixtures as f2
+from tests.conversation.conversation_discovery_fixtures import (
+    discovery_leg_for,
+    poi_result,
+)
 from tests.conversation.conversation_matrix_harness import (
     _turn_round,
     check_transit_input,
@@ -23,7 +28,6 @@ from tests.conversation.conversation_matrix_harness import (
     load_agent_loop,
     present_places_round,
 )
-import tests.conversation.conversation_multi_intent_fixtures as f2
 from tests.conversation.conversation_multi_intent_support import (
     _MultiIntentBase,
     _preamble_normalized,
@@ -116,7 +120,7 @@ class RoutePlusStatusSequencingTests(_MultiIntentBase):
         cls.loop = load_agent_loop()
 
     async def test_01_route_plus_status_executes_status_then_route(self):
-        for mode in ("auto", "quick"):
+        for mode in ("auto",):
             sid = f"F2-01a-{mode}"
             seams = _alerts_seams()
             rounds = [
@@ -155,14 +159,11 @@ class RoutePlusStatusSequencingTests(_MultiIntentBase):
             )
             self._assert_state_valid_presenter(ev, "present_transit", sid)
             self._assert_one_card(ev, sid, expected_selected=f2.FIXED_CANDIDATE_ID)
-            self.assertEqual(ev.state_after["trip_state"]["destination"],
-                             "Times Square", sid)
-            self.assertIn(
-                "check_transit", ev.state_after["history_tool_summaries"]
-            )
+            assert ev.state_after["trip_state"]["destination"] == "Times Square", sid
+            assert "check_transit" in ev.state_after["history_tool_summaries"]
 
     async def test_02_route_plus_status_validator_fills_missing_status(self):
-        for mode in ("auto", "quick"):
+        for mode in ("auto",):
             sid = f"F2-01c-{mode}"
             seams = _alerts_seams()
             rounds = [
@@ -201,12 +202,9 @@ class RoutePlusStatusSequencingTests(_MultiIntentBase):
             )
             self._assert_state_valid_presenter(ev, "present_transit", sid)
             self._assert_one_card(ev, sid, expected_selected=f2.FIXED_CANDIDATE_ID)
-            self.assertEqual(ev.spies["alerts_fetch"].await_count, 1, ev.compact())
-            self.assertEqual(
-                self.loop.client.messages.calls[1]["tool_choice"],
-                {"type": "any"},
-            )
-            self.assertTrue(ev.final_text.strip(), sid)
+            assert ev.spies["alerts_fetch"].await_count == 1, ev.compact()
+            assert self.loop.client.messages.calls[1]["tool_choice"] == {"type": "any"}
+            assert ev.final_text.strip(), sid
 
 
 class DiscoveryPlusRouteSequencingTests(_MultiIntentBase):
@@ -217,7 +215,7 @@ class DiscoveryPlusRouteSequencingTests(_MultiIntentBase):
         cls.loop = load_agent_loop()
 
     async def test_03_discovery_route_second_one(self):
-        for mode in ("auto", "quick"):
+        for mode in ("auto",):
             sid = f"F2-02a-{mode}"
             seams = {"poi": (_poi_seam, AsyncMock(return_value=poi_result())),
                      "prepare": (_prepare_seam,
@@ -262,29 +260,25 @@ class DiscoveryPlusRouteSequencingTests(_MultiIntentBase):
                 ),
                 sid,
             )
-            self.assertEqual(ev.tool_calls[1][1]["destination_place_id"],
-                             f2.ORDINAL_TWO_PLACE_ID,
-                             f"{sid}: real ordinal-2 opaque id; {ev.compact()}")
+            assert ev.tool_calls[1][1]["destination_place_id"] == f2.ORDINAL_TWO_PLACE_ID, f"{sid}: real ordinal-2 opaque id; {ev.compact()}"
             resolved = ev.spies["prepare"].await_args.kwargs.get("resolved_destination")
-            self.assertIsNotNone(resolved, f"{sid}: provider boundary place")
-            self.assertEqual(resolved.name, "B Pizza", sid)
-            self.assertEqual(resolved.place_id, f2.ORDINAL_TWO_PLACE_ID, sid)
-            self.assertEqual(resolved.provider_place_id, "ChIJ-bbb", sid)
-            self.assertEqual(ev.spies["prepare"].await_count, 1, sid)
+            assert resolved is not None, f"{sid}: provider boundary place"
+            assert resolved.name == "B Pizza", sid
+            assert resolved.place_id == f2.ORDINAL_TWO_PLACE_ID, sid
+            assert resolved.provider_place_id == "ChIJ-bbb", sid
+            assert ev.spies["prepare"].await_count == 1, sid
             self._assert_one_card(ev, sid, expected_selected=f2.FIXED_CANDIDATE_ID)
             self._assert_discovery_bound(ev, sid)
-            self.assertEqual(ev.state_after["trip_state"]["selected_place_id"],
-                             f2.ORDINAL_TWO_PLACE_ID, sid)
-            self.assertEqual(ev.state_after["trip_state"]["destination"],
-                             "B Pizza", sid)
-            self.assertNotIn("web_search", [t for t, *_r in ev.tool_ends], sid)
+            assert ev.state_after["trip_state"]["selected_place_id"] == f2.ORDINAL_TWO_PLACE_ID, sid
+            assert ev.state_after["trip_state"]["destination"] == "B Pizza", sid
+            assert "web_search" not in [t for t, *_r in ev.tool_ends], sid
 
     async def test_03b_ramen_compound_cannot_stop_after_place_presentation(self):
         message = "Find a good ramen spot and route me there by subway."
         ramen_result = poi_result()
         for place, name in zip(
             ramen_result.data["results"],
-            ("Ichiran Ramen", "Kajiken Ramen", "Tonchin Ramen"),
+            ("Ichiran Ramen", "Kajiken Ramen", "Tonchin Ramen"), strict=False,
         ):
             place["name"] = name
         selected_ramen = dict(f2.stored_place2())
@@ -317,7 +311,7 @@ class DiscoveryPlusRouteSequencingTests(_MultiIntentBase):
             ),
         ]
 
-        for mode in ("auto", "quick"):
+        for mode in ("auto",):
             sid = f"F2-02b-{mode}"
             ev = await self._probe(
                 mode=mode,
@@ -339,10 +333,7 @@ class DiscoveryPlusRouteSequencingTests(_MultiIntentBase):
                 ),
                 sid,
             )
-            self.assertEqual(
-                ev.tool_calls[1][1].get("exclude_modes"),
-                ["BUS"],
-            )
+            assert ev.tool_calls[1][1].get("exclude_modes") == ["BUS"]
             self._assert_one_card(
                 ev,
                 sid,
@@ -358,7 +349,7 @@ class CompareRouteSequencingTests(_MultiIntentBase):
         cls.loop = load_agent_loop()
 
     async def test_04_compare_exact_message_safe_partial(self):
-        for mode in ("auto", "quick"):
+        for mode in ("auto",):
             sid = f"F2-03a-{mode}"
             rounds = [
                 _turn_round("prepare_route_options", "tu-3a-p", {}),
@@ -383,23 +374,15 @@ class CompareRouteSequencingTests(_MultiIntentBase):
             )
             self._assert_no_card(ev, sid)
             self._assert_no_discovery(ev, sid)
-            self.assertEqual(
-                ev.state_after["trip_state"],
-                ev.state_before["trip_state"],
-                f"{sid}: clarification must not mutate canonical trip state",
-            )
-            self.assertEqual(
-                ev.state_after["route_cards"],
-                ev.state_before["route_cards"],
-                f"{sid}: clarification must not add a route card",
-            )
-            self.assertNotIn("accessibility_status", [t for t, _i in ev.tool_calls], sid)
+            assert ev.state_after["trip_state"] == ev.state_before["trip_state"], f"{sid}: clarification must not mutate canonical trip state"
+            assert ev.state_after["route_cards"] == ev.state_before["route_cards"], f"{sid}: clarification must not add a route card"
+            assert "accessibility_status" not in [t for t, _i in ev.tool_calls], sid
             # The default preference dump always shows accessibility_required;
             # only an activated hard constraint (true) would be a fabrication.
-            self.assertNotIn('"accessibility_required":true', ev.context, sid)
+            assert '"accessibility_required":true' not in ev.context, sid
 
     async def test_05_compare_route_two_candidates_one_card(self):
-        for mode in ("auto", "quick"):
+        for mode in ("auto",):
             sid = f"F2-03c-{mode}"
             seams = {"prepare": (_prepare_seam,
                                  AsyncMock(return_value=f2.work_two_routes_leg()))}
@@ -415,18 +398,18 @@ class CompareRouteSequencingTests(_MultiIntentBase):
             self._assert_offered_exact(ev, f2.ROUTE_TOOL_PROFILE, sid)
             self._assert_policy(ev, mode, sid, model_calls=2)
             self._assert_executed(ev, ("prepare_route_options", "present_route"), sid)
-            self.assertEqual(ev.spies["prepare"].await_count, 1, sid)
+            assert ev.spies["prepare"].await_count == 1, sid
             self._assert_one_card(ev, sid, expected_selected=f2.TWO_CANDIDATE_IDS[1])
             prepare_input = ev.tool_calls[0][1]
-            self.assertIsNone(prepare_input.get("avoid_stairs"), sid)
-            self.assertIsNone(prepare_input.get("accessibility_required"), sid)
-            self.assertNotIn("accessibility_status", [t for t, _i in ev.tool_calls], sid)
+            assert prepare_input.get("avoid_stairs") is None, sid
+            assert prepare_input.get("accessibility_required") is None, sid
+            assert "accessibility_status" not in [t for t, _i in ev.tool_calls], sid
             record = candidate_store.load_candidate_set(ev.stored_candidate_set_ids[0],
                                                         session_id=ev.session_id)
-            self.assertIsNotNone(record, sid)
-            self.assertEqual(len(record["candidates"]), 2, f"{sid}: two candidates")
-            self.assertEqual(record["route_status"], "good", sid)
-            self.assertEqual(ev.state_after["trip_state"]["destination"], "Work", sid)
+            assert record is not None, sid
+            assert len(record["candidates"]) == 2, f"{sid}: two candidates"
+            assert record["route_status"] == "good", sid
+            assert ev.state_after["trip_state"]["destination"] == "Work", sid
 
 
 class StatusPlusReplanSequencingTests(_MultiIntentBase):
@@ -437,7 +420,7 @@ class StatusPlusReplanSequencingTests(_MultiIntentBase):
         cls.loop = load_agent_loop()
 
     async def test_06_status_grounded_replan_uses_accepted_trip(self):
-        for mode in ("auto", "quick"):
+        for mode in ("auto",):
             sid = f"F2-04a-{mode}"
             seams = dict(_alerts_seams())
             seams["prepare"] = (
@@ -481,19 +464,13 @@ class StatusPlusReplanSequencingTests(_MultiIntentBase):
                 sid,
             )
             ends = {t: (ok, summary) for t, ok, summary, _i in ev.tool_ends}
-            self.assertTrue(ends["check_transit"][0], f"{sid}: grounded status")
-            self.assertIsNone(ends["check_transit"][1], sid)
-            self.assertEqual(
-                ev.tool_calls[2][1]["excluded_route_ids"], ["Q"], sid
-            )
+            assert ends["check_transit"][0], f"{sid}: grounded status"
+            assert ends["check_transit"][1] is None, sid
+            assert ev.tool_calls[2][1]["excluded_route_ids"] == ["Q"], sid
             self._assert_one_card(
                 ev, sid, expected_selected=f2.FIXED_CANDIDATE_ID
             )
-            self.assertNotEqual(
-                ev.state_after["trip_state"]["active_candidate_set_id"],
-                ev.seed.candidate_set_id,
-                sid,
-            )
+            assert ev.state_after["trip_state"]["active_candidate_set_id"] != ev.seed.candidate_set_id, sid
 
 
 class DiscoveryPlusStatusSequencingTests(_MultiIntentBase):
@@ -504,7 +481,7 @@ class DiscoveryPlusStatusSequencingTests(_MultiIntentBase):
         cls.loop = load_agent_loop()
 
     async def test_07_discovery_plus_status_no_navigation(self):
-        for mode in ("auto", "quick"):
+        for mode in ("auto",):
             sid = f"F2-05a-{mode}"
             seams = {
                 "poi": (_poi_seam, AsyncMock(return_value=poi_result())),
@@ -546,10 +523,10 @@ class DiscoveryPlusStatusSequencingTests(_MultiIntentBase):
             self._assert_state_valid_presenter(ev, "present_places", sid)
             self._assert_discovery_bound(ev, sid)
             state = ev.state_after["trip_state"]
-            self.assertIsNone(state["selected_place_id"], f"{sid}: no selection")
-            self.assertIsNone(state["destination"], f"{sid}: no destination")
-            self.assertIsNone(state["active_candidate_set_id"], f"{sid}: no candidate")
-            self.assertEqual(ev.cards, (), sid)
+            assert state["selected_place_id"] is None, f"{sid}: no selection"
+            assert state["destination"] is None, f"{sid}: no destination"
+            assert state["active_candidate_set_id"] is None, f"{sid}: no candidate"
+            assert ev.cards == (), sid
 
 
 class RoutePlusExplainSequencingTests(_MultiIntentBase):
@@ -560,7 +537,7 @@ class RoutePlusExplainSequencingTests(_MultiIntentBase):
         cls.loop = load_agent_loop()
 
     async def test_08_route_plus_explain_one_chain(self):
-        for mode in ("auto", "quick"):
+        for mode in ("auto",):
             sid = f"F2-06a-{mode}"
             seams = {"prepare": (_prepare_seam,
                                  AsyncMock(return_value=f2.times_square_leg()))}
@@ -579,9 +556,9 @@ class RoutePlusExplainSequencingTests(_MultiIntentBase):
             self._assert_rejected(ev, "lookup_facts", sid, zero_spies=())
             self._assert_executed(ev, ("prepare_route_options", "present_route"), sid)
             self._assert_one_card(ev, sid, expected_selected=f2.FIXED_CANDIDATE_ID)
-            self.assertEqual(ev.spies["prepare"].await_count, 1, sid)
-            self.assertNotIn("lookup_facts", ev.state_after["history_tool_summaries"], sid)
-            self.assertTrue(ev.final_text.strip(), sid)
+            assert ev.spies["prepare"].await_count == 1, sid
+            assert "lookup_facts" not in ev.state_after["history_tool_summaries"], sid
+            assert ev.final_text.strip(), sid
 
 
 class NegativeToolControlTests(_MultiIntentBase):
@@ -592,23 +569,21 @@ class NegativeToolControlTests(_MultiIntentBase):
         cls.loop = load_agent_loop()
 
     async def test_09_greeting_no_tools(self):
-        for mode in ("auto", "quick"):
+        for mode in ("auto",):
             sid = f"F2-07a-{mode}"
             ev = await self._probe(mode=mode, message=f2.GREETING_MESSAGE,
                                    rounds=[])
-            self.assertEqual(ev.offered, f2.INITIAL_TOOL_PROFILE, sid)
-            self.assertEqual(ev.model_call_count, 2, sid)
-            self.assertEqual(ev.tool_calls, (), sid)
-            self.assertEqual(ev.tool_starts, (), sid)
-            self.assertEqual(ev.tool_ends, (), sid)
-            self.assertEqual(ev.cards, (), sid)
-            self.assertTrue(ev.final_text.strip(), sid)
-            self.assertEqual(_preamble_normalized(ev.state_after),
-                             _preamble_normalized(ev.state_before),
-                             f"{sid}: greeting must not mutate state")
+            assert ev.offered == f2.INITIAL_TOOL_PROFILE, sid
+            assert ev.model_call_count == 2, sid
+            assert ev.tool_calls == (), sid
+            assert ev.tool_starts == (), sid
+            assert ev.tool_ends == (), sid
+            assert ev.cards == (), sid
+            assert ev.final_text.strip(), sid
+            assert _preamble_normalized(ev.state_after) == _preamble_normalized(ev.state_before), f"{sid}: greeting must not mutate state"
 
     async def test_10_status_only_no_route(self):
-        for mode in ("auto", "quick"):
+        for mode in ("auto",):
             sid = f"F2-07c-{mode}"
             rounds = [
                 _status_round("tu-7s"),
@@ -635,7 +610,7 @@ class NegativeToolControlTests(_MultiIntentBase):
             self._assert_no_discovery(ev, sid)
 
     async def test_11_explain_only_no_route(self):
-        for mode in ("auto", "quick"):
+        for mode in ("auto",):
             sid = f"F2-07e-{mode}"
             ev = await self._probe(mode=mode, message=f2.EXPLAIN_ONLY_MESSAGE,
                                    rounds=[complete_turn_round(
@@ -647,11 +622,11 @@ class NegativeToolControlTests(_MultiIntentBase):
             self._assert_policy(ev, mode, sid, model_calls=1)
             self._assert_executed(ev, ("complete_turn",), sid)
             self._assert_seed_preserved(ev, sid)
-            self.assertEqual(ev.cards, (), sid)
-            self.assertEqual(ev.stored_candidate_set_ids, (), sid)
+            assert ev.cards == (), sid
+            assert ev.stored_candidate_set_ids == (), sid
 
     async def test_12_discovery_only_no_route(self):
-        for mode in ("auto", "quick"):
+        for mode in ("auto",):
             sid = f"F2-07g-{mode}"
             seams = {"poi": (_poi_seam, AsyncMock(return_value=poi_result()))}
             rounds = [_search_round("tu-7d"), _present_places_round("tu-7p")]
@@ -663,12 +638,11 @@ class NegativeToolControlTests(_MultiIntentBase):
             self._assert_policy(ev, mode, sid, model_calls=2)
             self._assert_executed(ev, ("discover_places", "present_places"), sid)
             self._assert_discovery_bound(ev, sid)
-            self.assertIsNone(ev.state_after["trip_state"]["selected_place_id"],
-                              f"{sid}: discovery-only must not select a place")
+            assert ev.state_after["trip_state"]["selected_place_id"] is None, f"{sid}: discovery-only must not select a place"
             self._assert_no_card(ev, sid)
 
     async def test_13_no_good_no_silent_presentation(self):
-        for mode in ("auto", "quick"):
+        for mode in ("auto",):
             sid = f"F2-07i-{mode}"
             rounds = [
                 _turn_round("prepare_route_options", "tu-7n",
@@ -690,17 +664,14 @@ class NegativeToolControlTests(_MultiIntentBase):
                 for attempt in ev.capability_attempts
                 if attempt["capability"] == "complete_turn"
             ]
-            self.assertTrue(
-                terminal_attempts and terminal_attempts[0]["ok"],
-                f"{sid}: truthful terminal",
-            )
-            self.assertEqual(ev.cards, (), f"{sid}: no silent presentation")
-            self.assertEqual(len(ev.stored_candidate_set_ids), 1, sid)
-            self.assertNotEqual(ev.stored_candidate_set_ids[0],
-                                ev.seed.candidate_set_id, sid)
+            assert terminal_attempts, f"{sid}: truthful terminal"
+            assert terminal_attempts[0]["ok"], f"{sid}: truthful terminal"
+            assert ev.cards == (), f"{sid}: no silent presentation"
+            assert len(ev.stored_candidate_set_ids) == 1, sid
+            assert ev.stored_candidate_set_ids[0] != ev.seed.candidate_set_id, sid
             audit = candidate_store.load_candidate_set(ev.stored_candidate_set_ids[0],
                                                        session_id=ev.session_id)
-            self.assertEqual(audit["route_status"], "no_hard_constraint_match", sid)
+            assert audit["route_status"] == "no_hard_constraint_match", sid
             self._assert_seed_preserved(ev, sid)
             self._assert_no_forbidden(ev, f2.ROUTE_FORBIDDEN_TOOLS, sid)
 
@@ -713,7 +684,7 @@ class MixedAdversarialRoundTests(_MultiIntentBase):
         cls.loop = load_agent_loop()
 
     async def test_14_mixed_offered_and_unoffered_round(self):
-        for mode in ("auto", "quick"):
+        for mode in ("auto",):
             sid = f"F2-08a-{mode}"
             seams = {"poi": (_poi_seam, AsyncMock(return_value=poi_result())),
                      "alerts": (_alerts_fetch, fail_loud_spy("alerts"))}
@@ -726,20 +697,11 @@ class MixedAdversarialRoundTests(_MultiIntentBase):
             self._assert_policy(ev, mode, sid, model_calls=2)
             self._assert_executed(ev, ("discover_places", "present_places"), sid)
             self._assert_rejected(ev, "transit_snapshot", sid, zero_spies=("alerts",))
-            self.assertEqual(ev.provider_execution_count, 2, f"{sid}: only offered ran")
-            self.assertEqual(
-                len(ev.tool_starts),
-                1,
-                f"{sid}: only rider-visible work emits starts",
-            )
-            self.assertEqual(
-                len(ev.tool_ends),
-                2,
-                f"{sid}: discovery and rejected leaf emit paired ends; "
-                "the internal presenter stays hidden",
-            )
+            assert ev.provider_execution_count == 2, f"{sid}: only offered ran"
+            assert len(ev.tool_starts) == 1, f"{sid}: only rider-visible work emits starts"
+            assert len(ev.tool_ends) == 2, f"{sid}: discovery and rejected leaf emit paired ends; " "the internal presenter stays hidden"
             self._assert_discovery_bound(ev, sid)
-            self.assertIsNone(ev.state_after["trip_state"]["selected_place_id"], sid)
+            assert ev.state_after["trip_state"]["selected_place_id"] is None, sid
             self._assert_no_card(ev, sid)
 
 

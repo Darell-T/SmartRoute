@@ -8,8 +8,12 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from app.services.agent import discovery_store, trip_state
-from app.services.agent.tools.places import discover_places, place_reference, search_local_places
 from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.places import (
+    discover_places,
+    place_reference,
+    search_local_places,
+)
 
 
 def _ctx(session_id: str = "sess-disc") -> ToolContext:
@@ -80,8 +84,8 @@ async def _discover(tool_input: dict, ctx: ToolContext) -> ToolResult:
 class SearchLocalPlacesTests(unittest.IsolatedAsyncioTestCase):
     async def test_requires_session(self):
         result = await _discover({"query": "pizza"}, _ctx(session_id=""))
-        self.assertFalse(result.ok)
-        self.assertIn("session", result.error or "")
+        assert not result.ok
+        assert "session" in (result.error or "")
 
     async def test_open_now_filter_keeps_open_and_unknown(self):
         poi_result = ToolResult(
@@ -99,9 +103,9 @@ class SearchLocalPlacesTests(unittest.IsolatedAsyncioTestCase):
             search_local_places, "execute", new=AsyncMock(return_value=poi_result)
         ):
             result = await _discover({"query": "pizza", "open_now": True}, _ctx())
-        self.assertTrue(result.ok)
+        assert result.ok
         names = [place["name"] for place in result.data["places"]]
-        self.assertEqual(names, ["Open Spot", "Unknown Spot"])
+        assert names == ["Open Spot", "Unknown Spot"]
 
     async def test_empty_results_are_truthful(self):
         poi_result = ToolResult(ok=True, data={"results": []}, summary="none")
@@ -109,10 +113,10 @@ class SearchLocalPlacesTests(unittest.IsolatedAsyncioTestCase):
             search_local_places, "execute", new=AsyncMock(return_value=poi_result)
         ):
             result = await _discover({"query": "pizza"}, _ctx())
-        self.assertTrue(result.ok)
-        self.assertIsNone(result.data["discovery_set_id"])
-        self.assertEqual(result.data["places"], [])
-        self.assertNotIn("no matching", result.summary.casefold())
+        assert result.ok
+        assert result.data["discovery_set_id"] is None
+        assert result.data["places"] == []
+        assert "no matching" not in result.summary.casefold()
 
     async def test_partial_area_search_preserves_available_places(self):
         successful = ToolResult(
@@ -134,12 +138,9 @@ class SearchLocalPlacesTests(unittest.IsolatedAsyncioTestCase):
                 _ctx(),
             )
 
-        self.assertTrue(result.ok)
-        self.assertEqual(
-            [place["name"] for place in result.data["places"]],
-            ["Manhattan Pizza"],
-        )
-        self.assertEqual(result.data["coverage"]["status"], "partial")
+        assert result.ok
+        assert [place["name"] for place in result.data["places"]] == ["Manhattan Pizza"]
+        assert result.data["coverage"]["status"] == "partial"
 
     async def test_poi_failure_propagates(self):
         poi_result = ToolResult(ok=False, error="place search failed")
@@ -147,8 +148,8 @@ class SearchLocalPlacesTests(unittest.IsolatedAsyncioTestCase):
             search_local_places, "execute", new=AsyncMock(return_value=poi_result)
         ):
             result = await _discover({"query": "pizza"}, _ctx())
-        self.assertFalse(result.ok)
-        self.assertIn("unavailable", result.error or "")
+        assert not result.ok
+        assert "unavailable" in (result.error or "")
 
     async def test_provider_exception_becomes_recoverable_search_error(self):
         with patch.object(
@@ -158,9 +159,9 @@ class SearchLocalPlacesTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await _discover({"query": "pizza"}, _ctx())
 
-        self.assertFalse(result.ok)
-        self.assertIn("place search", result.error or "")
-        self.assertNotIn("provider exploded", result.error or "")
+        assert not result.ok
+        assert "place search" in (result.error or "")
+        assert "provider exploded" not in (result.error or "")
 
     async def test_multi_area_search_keeps_one_grounded_result_set(self):
         manhattan_place = _place("Manhattan Pizza", rating=4.7, borough="Manhattan")
@@ -188,26 +189,15 @@ class SearchLocalPlacesTests(unittest.IsolatedAsyncioTestCase):
                 _ctx(),
             )
 
-        self.assertTrue(result.ok)
-        self.assertEqual(
-            result.data["scope"],
-            {"kind": "boroughs", "values": ["Manhattan", "Brooklyn"]},
-        )
-        self.assertTrue(
-            all("search_area" not in place for place in result.data["places"])
-        )
+        assert result.ok
+        assert result.data["scope"] == {"kind": "boroughs", "values": ["Manhattan", "Brooklyn"]}
+        assert all("search_area" not in place for place in result.data["places"])
         record = discovery_store.load_discovery_set(
             result.data["discovery_set_id"],
             session_id="sess-disc",
         )
-        self.assertEqual(
-            [place["search_area"] for place in record["places"]],
-            ["Manhattan", "Brooklyn"],
-        )
-        self.assertEqual(
-            [call.args[0]["near"] for call in search.await_args_list],
-            ["Manhattan", "Brooklyn"],
-        )
+        assert [place["search_area"] for place in record["places"]] == ["Manhattan", "Brooklyn"]
+        assert [call.args[0]["near"] for call in search.await_args_list] == ["Manhattan", "Brooklyn"]
     async def test_stores_set_binds_session_and_exposes_bounded_coordinates(self):
         poi_result = ToolResult(
             ok=True,
@@ -224,31 +214,31 @@ class SearchLocalPlacesTests(unittest.IsolatedAsyncioTestCase):
             search_local_places, "execute", new=AsyncMock(return_value=poi_result)
         ):
             result = await _discover({"query": "pizza"}, ctx)
-        self.assertTrue(result.ok)
+        assert result.ok
         set_id = result.data["discovery_set_id"]
-        self.assertTrue(set_id.startswith("ds_"))
+        assert set_id.startswith("ds_")
         state = trip_state.get_trip_state(ctx.session)
-        self.assertEqual(state["active_discovery_set_id"], set_id)
+        assert state["active_discovery_set_id"] == set_id
         record = discovery_store.load_discovery_set(set_id, session_id="sess-disc")
-        self.assertIsNotNone(record)
+        assert record is not None
         for place in result.data["places"]:
-            self.assertTrue(place["place_id"].startswith("pl_"))
-            self.assertNotIn("latitude", place)
-            self.assertNotIn("longitude", place)
-            self.assertIsInstance(place["rider_distance_meters"], float)
-            self.assertTrue(math.isfinite(place["rider_distance_meters"]))
-            self.assertGreater(place["rider_distance_meters"], 0.0)
-            self.assertNotIn("40.75", json.dumps(place, default=str))
-            self.assertNotIn("-73.99", json.dumps(place, default=str))
-            self.assertNotIn("provider_place_id", place)
-            self.assertNotIn("baseline_score", place)
-            self.assertNotIn("ranking_factors", place)
+            assert place["place_id"].startswith("pl_")
+            assert "latitude" not in place
+            assert "longitude" not in place
+            assert isinstance(place["rider_distance_meters"], float)
+            assert math.isfinite(place["rider_distance_meters"])
+            assert place["rider_distance_meters"] > 0.0
+            assert "40.75" not in json.dumps(place, default=str)
+            assert "-73.99" not in json.dumps(place, default=str)
+            assert "provider_place_id" not in place
+            assert "baseline_score" not in place
+            assert "ranking_factors" not in place
         for place in record["places"]:
-            self.assertIsInstance(place["latitude"], float)
-            self.assertIsInstance(place["longitude"], float)
-            self.assertTrue(math.isfinite(place["latitude"]))
-            self.assertTrue(math.isfinite(place["longitude"]))
-            self.assertIsNotNone(place["baseline_score"])
+            assert isinstance(place["latitude"], float)
+            assert isinstance(place["longitude"], float)
+            assert math.isfinite(place["latitude"])
+            assert math.isfinite(place["longitude"])
+            assert place["baseline_score"] is not None
 
     async def test_stores_provider_place_id_server_side_only(self):
         poi_result = ToolResult(
@@ -265,12 +255,12 @@ class SearchLocalPlacesTests(unittest.IsolatedAsyncioTestCase):
             search_local_places, "execute", new=AsyncMock(return_value=poi_result)
         ):
             result = await _discover({"query": "pizza"}, ctx)
-        self.assertTrue(result.ok)
+        assert result.ok
         record = discovery_store.load_discovery_set(
             result.data["discovery_set_id"], session_id="sess-disc"
         )
-        self.assertEqual(record["places"][0]["provider_place_id"], "ChIJ-abc")
-        self.assertNotIn("ChIJ-abc", json.dumps(result.data, default=str))
+        assert record["places"][0]["provider_place_id"] == "ChIJ-abc"
+        assert "ChIJ-abc" not in json.dumps(result.data, default=str)
 
     async def test_baseline_ranking_is_deterministic_and_does_not_reorder(self):
         from app.services.agent.tools.places.search_local_places import baseline_ranking
@@ -290,17 +280,17 @@ class SearchLocalPlacesTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await _discover({"query": "pizza"}, _ctx())
         names = [place["name"] for place in result.data["places"]]
-        self.assertEqual(names, ["A Pizza", "B Pizza"])
+        assert names == ["A Pizza", "B Pizza"]
         record = discovery_store.load_discovery_set(
             result.data["discovery_set_id"],
             session_id="sess-disc",
         )
         scores = [place["baseline_score"] for place in record["places"]]
-        self.assertGreater(scores[1], scores[0])
+        assert scores[1] > scores[0]
         sample = _place("Stable", rating=4.5, review_count=300)
         first = baseline_ranking(sample)
         second = baseline_ranking(sample)
-        self.assertEqual(first, second)
+        assert first == second
 
 
 class GetPlaceDetailsTests(unittest.IsolatedAsyncioTestCase):
@@ -336,12 +326,12 @@ class GetPlaceDetailsTests(unittest.IsolatedAsyncioTestCase):
         result = await place_reference.execute(
             {"place_id": place_id, "discovery_set_id": set_id}, ctx
         )
-        self.assertTrue(result.ok)
-        self.assertTrue(result.data["canonical"])
-        self.assertEqual(result.data["destination_label"], "Di Fara Pizza, 1424 Av J")
-        self.assertEqual(result.data["baseline_score"], 0.82)
+        assert result.ok
+        assert result.data["canonical"]
+        assert result.data["destination_label"] == "Di Fara Pizza, 1424 Av J"
+        assert result.data["baseline_score"] == 0.82
         state = trip_state.get_trip_state(ctx.session)
-        self.assertEqual(state["selected_place_id"], place_id)
+        assert state["selected_place_id"] == place_id
 
     async def test_explicit_discovery_set_id(self):
         set_id = await self._seed_set()
@@ -350,7 +340,7 @@ class GetPlaceDetailsTests(unittest.IsolatedAsyncioTestCase):
         result = await place_reference.execute(
             {"place_id": place_id, "discovery_set_id": set_id}, _ctx()
         )
-        self.assertTrue(result.ok)
+        assert result.ok
 
     async def test_cross_session_rejected(self):
         set_id = await self._seed_set(session_id="sess-a")
@@ -359,15 +349,15 @@ class GetPlaceDetailsTests(unittest.IsolatedAsyncioTestCase):
         result = await place_reference.execute(
             {"place_id": place_id, "discovery_set_id": set_id}, _ctx(session_id="sess-b")
         )
-        self.assertFalse(result.ok)
-        self.assertIn("unknown, expired", result.error or "")
+        assert not result.ok
+        assert "unknown, expired" in (result.error or "")
 
     async def test_unknown_place_id_rejected(self):
         ctx = _ctx()
         set_id = await self._seed_set()
         trip_state.bind_discovery_set(ctx.session, set_id)
         result = await place_reference.execute({"place_id": "pl_bogus"}, ctx)
-        self.assertFalse(result.ok)
+        assert not result.ok
 
     async def test_description_resolution_binds_selected_place(self):
         set_id = discovery_store.store_discovery_set(
@@ -396,9 +386,9 @@ class GetPlaceDetailsTests(unittest.IsolatedAsyncioTestCase):
             {"description": "the cheaper one"},
             ctx,
         )
-        self.assertTrue(result.ok)
-        self.assertEqual(result.data["name"], "Cheap Pizza")
-        self.assertEqual(trip_state.get_trip_state(ctx.session)["selected_place_id"], cheap_id)
+        assert result.ok
+        assert result.data["name"] == "Cheap Pizza"
+        assert trip_state.get_trip_state(ctx.session)["selected_place_id"] == cheap_id
 
     async def _seed_two_place_set(self, session_id: str = "sess-disc") -> str:
         return discovery_store.store_discovery_set(
@@ -440,17 +430,17 @@ class GetPlaceDetailsTests(unittest.IsolatedAsyncioTestCase):
             {"place_id": second_a, "discovery_set_id": set_a},
             ctx,
         )
-        self.assertTrue(result.ok)
+        assert result.ok
         state = trip_state.get_trip_state(ctx.session)
-        self.assertEqual(state["active_discovery_set_id"], set_a)
-        self.assertEqual(state["selected_place_id"], second_a)
+        assert state["active_discovery_set_id"] == set_a
+        assert state["selected_place_id"] == second_a
 
         # A later implicit ordinal follow-up must resolve against the rebound
         # set A, not the newer set B.
         follow_up = await place_reference.execute({"ordinal": 2}, ctx)
-        self.assertTrue(follow_up.ok)
-        self.assertEqual(follow_up.data["place_id"], second_a)
-        self.assertEqual(follow_up.data["name"], "B Pizza")
+        assert follow_up.ok
+        assert follow_up.data["place_id"] == second_a
+        assert follow_up.data["name"] == "B Pizza"
 
     async def test_failed_explicit_reference_leaves_active_context_unchanged(self):
         ctx = _ctx()
@@ -462,15 +452,15 @@ class GetPlaceDetailsTests(unittest.IsolatedAsyncioTestCase):
 
         def assert_unchanged():
             state = trip_state.get_trip_state(ctx.session)
-            self.assertEqual(state["active_discovery_set_id"], set_b)
-            self.assertEqual(state["selected_place_id"], place_b)
+            assert state["active_discovery_set_id"] == set_b
+            assert state["selected_place_id"] == place_b
 
         # Unknown explicit set id.
         failed = await place_reference.execute(
             {"ordinal": 1, "discovery_set_id": "ds_invented"},
             ctx,
         )
-        self.assertFalse(failed.ok)
+        assert not failed.ok
         assert_unchanged()
 
         # Ambiguous description within an explicit set.
@@ -486,8 +476,8 @@ class GetPlaceDetailsTests(unittest.IsolatedAsyncioTestCase):
             {"description": "cheaper", "discovery_set_id": set_ambiguous},
             ctx,
         )
-        self.assertFalse(failed.ok)
-        self.assertIn("multiple", failed.error or "")
+        assert not failed.ok
+        assert "multiple" in (failed.error or "")
         assert_unchanged()
 
         # Cross-session explicit set.
@@ -500,8 +490,8 @@ class GetPlaceDetailsTests(unittest.IsolatedAsyncioTestCase):
             {"ordinal": 1, "discovery_set_id": set_other},
             ctx,
         )
-        self.assertFalse(failed.ok)
-        self.assertIn("unknown, expired", failed.error or "")
+        assert not failed.ok
+        assert "unknown, expired" in (failed.error or "")
         assert_unchanged()
 
         # Expired explicit set.
@@ -523,8 +513,8 @@ class GetPlaceDetailsTests(unittest.IsolatedAsyncioTestCase):
                 {"ordinal": 1, "discovery_set_id": set_expired},
                 ctx,
             )
-        self.assertFalse(failed.ok)
-        self.assertIn("expired", failed.error or "")
+        assert not failed.ok
+        assert "expired" in (failed.error or "")
         assert_unchanged()
 
 
@@ -555,11 +545,11 @@ class SearchBindsDiscoveryOnlyTests(unittest.IsolatedAsyncioTestCase):
             ),
         ):
             result = await _discover({"query": "pizza"}, ctx)
-        self.assertTrue(result.ok)
+        assert result.ok
         state = trip_state.get_trip_state(ctx.session)
-        self.assertEqual(state["active_discovery_set_id"], result.data["discovery_set_id"])
-        self.assertIsNone(state["selected_place_id"])
-        self.assertIsNone(state["active_candidate_set_id"])
+        assert state["active_discovery_set_id"] == result.data["discovery_set_id"]
+        assert state["selected_place_id"] is None
+        assert state["active_candidate_set_id"] is None
 
 if __name__ == "__main__":
     unittest.main()

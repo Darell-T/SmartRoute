@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
-from typing import Iterable
+from collections.abc import Iterable
+from datetime import UTC, datetime
 
-from app.services.agent.tools.transit.direction import normalize_direction, resolve_direction
-from app.services.agent.tools.location_resolution import parse_coordinates
 from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools.location_resolution import parse_coordinates
+from app.services.agent.tools.transit.direction import (
+    normalize_direction,
+    resolve_direction,
+)
 from app.services.evidence import evidence_envelope
 
 ARRIVAL_LIMIT_DEFAULT = 3
@@ -151,7 +154,7 @@ def _empty_payload(
     stop_name: str = "Transit stop",
     ambiguity: list[dict] | None = None,
 ) -> dict:
-    observed = datetime.fromtimestamp(now, timezone.utc)
+    observed = datetime.fromtimestamp(now, UTC)
     return {
         "route_id": route_id,
         "stop": {"id": "", "name": stop_name},
@@ -190,7 +193,7 @@ def _arrival_payload(
             arrivals.append(
                 {
                     "expected_at": datetime.fromtimestamp(
-                        timestamp, timezone.utc
+                        timestamp, UTC
                     ).isoformat(),
                     "minutes": minutes,
                     "realtime": status in {"live", "stale"},
@@ -221,7 +224,7 @@ def _arrival_payload(
             "longitude": stop.get("stop_lon"),
         },
         "directions": directions,
-        "updated_at": datetime.fromtimestamp(updated_at, timezone.utc).isoformat(),
+        "updated_at": datetime.fromtimestamp(updated_at, UTC).isoformat(),
         "source_status": status,
     }
     if walking_minutes is not None:
@@ -233,9 +236,9 @@ def _arrival_payload(
     payload["evidence"] = evidence_envelope(
         "mta_gtfs_rt" if status != "scheduled" else "mta_static_gtfs",
         {"directions": directions},
-        observed_at=datetime.fromtimestamp(updated_at, timezone.utc),
+        observed_at=datetime.fromtimestamp(updated_at, UTC),
         ttl_seconds=FEED_STALE_AFTER_S if status != "scheduled" else None,
         valid_until=valid_until,
         available=available,
-    ).to_dict(datetime.fromtimestamp(now, timezone.utc))
+    ).to_dict(datetime.fromtimestamp(now, UTC))
     return payload

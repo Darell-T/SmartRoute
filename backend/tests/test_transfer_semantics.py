@@ -98,7 +98,7 @@ class TransferSemanticsTests(unittest.TestCase):
             with self.subTest(expected=expected):
                 route = [previous, _walk(45), following]
                 normalize_route(route, gtfs)
-                self.assertEqual(route_transfer_facts(route)[0]["kind"], expected)
+                assert route_transfer_facts(route)[0]["kind"] == expected
 
     def test_multiple_walk_fragments_are_one_semantic_transfer(self):
         route = [
@@ -109,12 +109,12 @@ class TransferSemanticsTests(unittest.TestCase):
         ]
         normalize_route(route)
         facts = route_transfer_facts(route)
-        self.assertEqual(len(facts), 1)
-        self.assertEqual(facts[0]["kind"], "same_platform")
-        self.assertEqual(facts[0]["fragment_count"], 2)
-        self.assertEqual(facts[0]["total_seconds"], 75)
-        self.assertEqual(route_walking_totals(route), (0, 75))
-        self.assertTrue(route[2]["semantic_transfer_fragment"])
+        assert len(facts) == 1
+        assert facts[0]["kind"] == "same_platform"
+        assert facts[0]["fragment_count"] == 2
+        assert facts[0]["total_seconds"] == 75
+        assert route_walking_totals(route) == (0, 75)
+        assert route[2]["semantic_transfer_fragment"]
 
     def test_nearby_unlinked_stops_remain_a_street_transfer(self):
         route = [
@@ -131,7 +131,7 @@ class TransferSemanticsTests(unittest.TestCase):
             ),
         ]
         normalize_route(route)
-        self.assertEqual(route_transfer_facts(route)[0]["kind"], "street_transfer")
+        assert route_transfer_facts(route)[0]["kind"] == "street_transfer"
 
     def test_transfer_fact_retains_authoritative_station_labels(self):
         route = [
@@ -141,14 +141,14 @@ class TransferSemanticsTests(unittest.TestCase):
         ]
         normalize_route(route)
         fact = route_transfer_facts(route)[0]
-        self.assertEqual(fact["from_station_label"], "14 St")
-        self.assertEqual(fact["to_station_label"], "14 St")
+        assert fact["from_station_label"] == "14 St"
+        assert fact["to_station_label"] == "14 St"
 
     def test_origin_destination_walks_remain_ordinary_street_walking(self):
         route = [_walk(60), _transit("Q"), _walk(120)]
         normalize_route(route)
-        self.assertEqual(route_transfer_facts(route), [])
-        self.assertEqual(route_walking_totals(route), (180, 0))
+        assert route_transfer_facts(route) == []
+        assert route_walking_totals(route) == (180, 0)
 
     def test_accessibility_is_propagated_but_same_station_is_not_proof(self):
         accessible = [
@@ -157,7 +157,7 @@ class TransferSemanticsTests(unittest.TestCase):
             _transit("B", departure_stop_id="A01", departure_accessible=True),
         ]
         normalize_route(accessible)
-        self.assertEqual(route_accessibility(accessible), "accessible")
+        assert route_accessibility(accessible) == "accessible"
 
         inaccessible = [
             _transit("A", arrival_stop_id="A01", arrival_accessible=False),
@@ -165,11 +165,27 @@ class TransferSemanticsTests(unittest.TestCase):
             _transit("B", departure_stop_id="A01", departure_accessible=True),
         ]
         normalize_route(inaccessible)
-        self.assertEqual(route_accessibility(inaccessible), "inaccessible")
+        assert route_accessibility(inaccessible) == "inaccessible"
 
         unknown = [_transit("A", arrival_stop_id="A01"), _walk(20), _transit("B", departure_stop_id="A01")]
         normalize_route(unknown)
-        self.assertEqual(route_accessibility(unknown), "unknown")
+        assert route_accessibility(unknown) == "unknown"
+
+        provider_strings = [
+            _transit("A", arrival_stop_id="A01", arrival_accessible="yes"),
+            _walk(20),
+            _transit("B", departure_stop_id="A01", departure_accessible="available"),
+        ]
+        normalize_route(provider_strings)
+        assert route_accessibility(provider_strings) == "accessible"
+
+        unsupported_strings = [
+            _transit("A", arrival_stop_id="A01", arrival_accessible="sometimes"),
+            _walk(20),
+            _transit("B", departure_stop_id="A01", departure_accessible="unknown"),
+        ]
+        normalize_route(unsupported_strings)
+        assert route_accessibility(unsupported_strings) == "unknown"
 
     def test_canonical_and_scoring_surfaces_semantic_totals(self):
         route = [
@@ -193,15 +209,15 @@ class TransferSemanticsTests(unittest.TestCase):
             origin={"label": "A"},
             destination={"label": "B"},
         )
-        self.assertEqual(canonical["total_walk_seconds"], 0)
-        self.assertEqual(canonical["total_street_walking_seconds"], 0)
-        self.assertEqual(canonical["total_in_station_transfer_seconds"], 90)
-        self.assertEqual(canonical["legs"][1]["transfer_kind"], "same_platform")
-        self.assertEqual(canonical["legs"][1]["transfer_seconds"], 90)
+        assert canonical["total_walk_seconds"] == 0
+        assert canonical["total_street_walking_seconds"] == 0
+        assert canonical["total_in_station_transfer_seconds"] == 90
+        assert canonical["legs"][1]["transfer_kind"] == "same_platform"
+        assert canonical["legs"][1]["transfer_seconds"] == 90
 
         scored = scoring._route_score(route, [], routing_preference="LESS_WALKING")
-        self.assertEqual(scored["in_station_transfer_seconds"], 90)
-        self.assertEqual(scored["walking_penalty"], 0)
+        assert scored["in_station_transfer_seconds"] == 90
+        assert scored["walking_penalty"] == 0
 
         street_route = [_transit("A"), _walk(90), _transit("B")]
         street_route[1]["start_point"] = {"latitude": 40.70, "longitude": -74.0}
@@ -212,8 +228,8 @@ class TransferSemanticsTests(unittest.TestCase):
             [],
             routing_preference="LESS_WALKING",
         )
-        self.assertGreater(street_score["street_walking_seconds"], 0)
-        self.assertGreater(street_score["walking_penalty"], 0)
+        assert street_score["street_walking_seconds"] > 0
+        assert street_score["walking_penalty"] > 0
 
     def test_index_identity_classifies_platform_parent_and_component(self):
         # Pattern index carries canonical parent identity + GTFS transfer
@@ -234,7 +250,7 @@ class TransferSemanticsTests(unittest.TestCase):
             (),
             {
                 "_pattern_index": index,
-                "get_stop_locations": lambda stop_ids: (_ for _ in ()).throw(
+                "get_stop_locations": lambda _stop_ids: (_ for _ in ()).throw(
                     AssertionError("request-time DB lookup must not run")
                 ),
             },
@@ -262,7 +278,7 @@ class TransferSemanticsTests(unittest.TestCase):
                     _transit("B", departure_stop_id=to_id, departure_stop="to"),
                 ]
                 normalize_route(route, gtfs)
-                self.assertEqual(route_transfer_facts(route)[0]["kind"], expected)
+                assert route_transfer_facts(route)[0]["kind"] == expected
 
     def test_pattern_index_present_never_falls_back_to_db_lookup(self):
         artifact = {
@@ -277,7 +293,7 @@ class TransferSemanticsTests(unittest.TestCase):
             (),
             {
                 "_pattern_index": index,
-                "get_stop_locations": lambda stop_ids: (_ for _ in ()).throw(
+                "get_stop_locations": lambda _stop_ids: (_ for _ in ()).throw(
                     AssertionError("request-time DB lookup must not run")
                 ),
             },
@@ -289,9 +305,9 @@ class TransferSemanticsTests(unittest.TestCase):
         ]
         normalize_route(route, gtfs)  # must not raise
         fact = route_transfer_facts(route)[0]
-        self.assertEqual(fact["kind"], "same_platform")
-        self.assertEqual(fact["from_parent_station"], "R14")
-        self.assertEqual(fact["from_station_label"], "14 St")
+        assert fact["kind"] == "same_platform"
+        assert fact["from_parent_station"] == "R14"
+        assert fact["from_station_label"] == "14 St"
 
     def test_complex_identity_does_not_invent_accessibility(self):
         artifact = {
@@ -306,7 +322,7 @@ class TransferSemanticsTests(unittest.TestCase):
             (),
             {
                 "_pattern_index": StopPatternIndex(artifact),
-                "get_stop_locations": lambda stop_ids: (_ for _ in ()).throw(
+                "get_stop_locations": lambda _stop_ids: (_ for _ in ()).throw(
                     AssertionError("request-time DB lookup must not run")
                 ),
             },
@@ -318,10 +334,10 @@ class TransferSemanticsTests(unittest.TestCase):
         ]
         normalize_route(route, gtfs)
         fact = route_transfer_facts(route)[0]
-        self.assertEqual(fact["kind"], "station_complex")
+        assert fact["kind"] == "station_complex"
         # No accessibility evidence in the artifact: remains unknown.
-        self.assertEqual(fact["accessibility"], "unknown")
-        self.assertEqual(route_accessibility(route), "unknown")
+        assert fact["accessibility"] == "unknown"
+        assert route_accessibility(route) == "unknown"
 
     def test_real_artifact_resolver_parents_keep_component_identity(self):
         # Production path: provider steps carry no stop ids, so the
@@ -336,7 +352,7 @@ class TransferSemanticsTests(unittest.TestCase):
             (),
             {
                 "_pattern_index": index,
-                "get_stop_locations": lambda stop_ids: (_ for _ in ()).throw(
+                "get_stop_locations": lambda _stop_ids: (_ for _ in ()).throw(
                     AssertionError("request-time DB lookup must not run")
                 ),
             },
@@ -357,15 +373,15 @@ class TransferSemanticsTests(unittest.TestCase):
             },
         ]
         normalize_route(route, gtfs)  # must not call get_stop_locations
-        self.assertEqual(route[0]["arrival_stop_id"], "R16")
-        self.assertEqual(route[2]["departure_stop_id"], "A27")
-        self.assertIs(route[0]["arrival_stop_is_parent"], True)
-        self.assertIs(route[2]["departure_stop_is_parent"], True)
+        assert route[0]["arrival_stop_id"] == "R16"
+        assert route[2]["departure_stop_id"] == "A27"
+        assert route[0]["arrival_stop_is_parent"] is True
+        assert route[2]["departure_stop_is_parent"] is True
         fact = route_transfer_facts(route)[0]
-        self.assertEqual(fact["kind"], "station_complex")
-        self.assertEqual(fact["street_walking_seconds"], 0)
-        self.assertEqual(fact["in_station_transfer_seconds"], 300)
-        self.assertEqual(route_walking_totals(route), (0, 300))
+        assert fact["kind"] == "station_complex"
+        assert fact["street_walking_seconds"] == 0
+        assert fact["in_station_transfer_seconds"] == 300
+        assert route_walking_totals(route) == (0, 300)
 
 
 if __name__ == "__main__":

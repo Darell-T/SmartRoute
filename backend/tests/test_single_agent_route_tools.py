@@ -1,17 +1,18 @@
 """Tests for the unflagged prepare_route_options / present_route path."""
 from __future__ import annotations
+
 import copy
 import unittest
 from typing import get_args
 from unittest.mock import AsyncMock, patch
-from app.services.agent import candidate_store
+
+from app.services.agent import candidate_store, trip_state
 from app.services.agent.tools.route import (
     prepare_route_branches,
     prepare_route_options,
     prepare_route_persistence,
     present_route,
 )
-from app.services.agent import trip_state
 from app.services.trips.selection_record import SelectionReason
 
 from tests.single_agent_route_test_support import (
@@ -38,17 +39,14 @@ class SingleAgentToolSurfaceTests(unittest.IsolatedAsyncioTestCase):
                 },
                 ctx,
             )
-        self.assertTrue(result.ok)
-        self.assertEqual(result.events, [])
+        assert result.ok
+        assert result.events == []
         data = result.data
-        self.assertIn("candidate_set_id", data)
-        self.assertEqual(len(data["candidates"]), 1)
-        self.assertTrue(str(data["candidates"][0]["candidate_id"]).startswith("cd_"))
-        self.assertIn("evidence_coverage", data)
-        self.assertEqual(
-            ctx.session["trip_state"]["active_candidate_set_id"],
-            data["candidate_set_id"],
-        )
+        assert "candidate_set_id" in data
+        assert len(data["candidates"]) == 1
+        assert str(data["candidates"][0]["candidate_id"]).startswith("cd_")
+        assert "evidence_coverage" in data
+        assert ctx.session["trip_state"]["active_candidate_set_id"] == data["candidate_set_id"]
 
     async def test_legacy_discovery_set_id_does_not_bind_discovery_context(self):
         prepared = _prepared_leg()
@@ -91,12 +89,9 @@ class SingleAgentToolSurfaceTests(unittest.IsolatedAsyncioTestCase):
                 ctx,
             )
 
-        self.assertTrue(result.ok)
+        assert result.ok
         bind_context.assert_not_called()
-        self.assertEqual(
-            trip_state.get_trip_state(ctx.session)["selected_place_id"],
-            "pl_verified",
-        )
+        assert trip_state.get_trip_state(ctx.session)["selected_place_id"] == "pl_verified"
 
     async def test_present_rejects_invented_candidate(self):
         prepared = _prepared_leg()
@@ -117,13 +112,13 @@ class SingleAgentToolSurfaceTests(unittest.IsolatedAsyncioTestCase):
             _present_route_input("cd_invented"),
             ctx,
         )
-        self.assertFalse(result.ok)
-        self.assertEqual(result.error, "candidate id is unknown for this set")
-        self.assertEqual(result.events, [])
+        assert not result.ok
+        assert result.error == "candidate id is unknown for this set"
+        assert result.events == []
         stored = candidate_store.load_candidate_set(set_id, session_id=ctx.session_id)
-        self.assertFalse(stored["presented"])
-        self.assertIsNone(stored["selected_candidate_id"])
-        self.assertNotIn("route_cards", ctx.session)
+        assert not stored["presented"]
+        assert stored["selected_candidate_id"] is None
+        assert "route_cards" not in ctx.session
 
     async def test_present_rejects_wrong_session(self):
         prepared = _prepared_leg()
@@ -149,7 +144,7 @@ class SingleAgentToolSurfaceTests(unittest.IsolatedAsyncioTestCase):
             _present_route_input(candidate_id),
             ctx_b,
         )
-        self.assertFalse(result.ok)
+        assert not result.ok
 
     async def test_present_emits_exactly_one_canonical_route_card_and_is_one_time(self):
         prepared = _prepared_leg()
@@ -174,19 +169,16 @@ class SingleAgentToolSurfaceTests(unittest.IsolatedAsyncioTestCase):
                 _present_route_input(candidate["candidate_id"]),
                 ctx,
             )
-        self.assertTrue(result.ok)
-        self.assertEqual(
-            [event.role for event in result.events if event.type == "route_card"],
-            ["recommended"],
-        )
-        self.assertEqual(len(result.session_route_cards), 1)
-        self.assertNotIn(candidate["candidate_id"], str(result.data))
+        assert result.ok
+        assert [event.role for event in result.events if event.type == "route_card"] == ["recommended"]
+        assert len(result.session_route_cards) == 1
+        assert candidate["candidate_id"] not in str(result.data)
         duplicate = await present_route.execute(
             _present_route_input(candidate["candidate_id"]),
             ctx,
         )
-        self.assertFalse(duplicate.ok)
-        self.assertIn("already presented", duplicate.error or "")
+        assert not duplicate.ok
+        assert "already presented" in (duplicate.error or "")
 
     async def test_present_fails_closed_before_mutation_when_snapshot_is_incomplete(self):
         cases = (
@@ -217,7 +209,7 @@ class SingleAgentToolSurfaceTests(unittest.IsolatedAsyncioTestCase):
                     set_id,
                     session_id=ctx.session_id,
                 )
-                self.assertIsNotNone(stored)
+                assert stored is not None
                 record = copy.deepcopy(stored)
                 entry = next(
                     item
@@ -239,14 +231,14 @@ class SingleAgentToolSurfaceTests(unittest.IsolatedAsyncioTestCase):
                         ctx,
                     )
 
-                self.assertFalse(result.ok)
-                self.assertEqual(result.error, expected_error)
+                assert not result.ok
+                assert result.error == expected_error
                 unchanged = candidate_store.load_candidate_set(
                     set_id,
                     session_id=ctx.session_id,
                 )
-                self.assertFalse(unchanged["presented"])
-                self.assertNotIn("route_cards", ctx.session)
+                assert not unchanged["presented"]
+                assert "route_cards" not in ctx.session
 
     async def test_present_route_card_carries_contract_valid_outer_agent_selection(self):
         prepared = _prepared_leg()
@@ -271,24 +263,21 @@ class SingleAgentToolSurfaceTests(unittest.IsolatedAsyncioTestCase):
                 _present_route_input(candidate["candidate_id"]),
                 ctx,
             )
-        self.assertTrue(result.ok)
+        assert result.ok
         # Selection metadata remains on the canonical card event, not in the
         # tool result returned to Sonnet. Returning private score/selection
         # fields would bias a later completion call.
-        self.assertNotIn("selection_decision", result.data)
+        assert "selection_decision" not in result.data
         recommended = next(
             event
             for event in result.events
             if event.type == "route_card" and event.role == "recommended"
         )
         reason = recommended.selection_decision["selection_reason"]
-        self.assertEqual(reason, "outer_agent_selection")
-        self.assertIn(reason, get_args(SelectionReason))
-        self.assertEqual(recommended.selection_decision["selection_reason"], reason)
-        self.assertEqual(
-            recommended.itinerary["selection_decision"]["selection_reason"],
-            reason,
-        )
+        assert reason == "outer_agent_selection"
+        assert reason in get_args(SelectionReason)
+        assert recommended.selection_decision["selection_reason"] == reason
+        assert recommended.itinerary["selection_decision"]["selection_reason"] == reason
 
     async def test_present_rechecks_hard_constraints_after_outer_selection(self):
         ctx = _ctx()
@@ -345,5 +334,5 @@ class SingleAgentToolSurfaceTests(unittest.IsolatedAsyncioTestCase):
                 _present_route_input("cd_bus"),
                 ctx,
             )
-        self.assertFalse(result.ok)
-        self.assertIn("hard constraints", result.error or "")
+        assert not result.ok
+        assert "hard constraints" in (result.error or "")

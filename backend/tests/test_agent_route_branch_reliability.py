@@ -6,17 +6,17 @@ non-deterministic decision reproducible; route/place facts still pass through
 the real server-owned executors and stores.
 """
 from __future__ import annotations
+
 import unittest
 from unittest.mock import AsyncMock, patch
+
 from app.services.agent import discovery_store
 from app.services.agent import session as session_module
 from app.services.agent import trip_state as trip_state_module
 from app.services.agent.tools import ToolContext, ToolResult
-from app.services.agent.tools.places import discover_places
-from app.services.agent.tools.route import prepare_route_options
-from app.services.agent.tools.route import prepare_route_branches
 from app.services.agent.tools.location_resolution import ResolvedPlace
-from tests.conversation.conversation_matrix_harness import route_cards, run_turn
+from app.services.agent.tools.places import discover_places
+from app.services.agent.tools.route import prepare_route_branches, prepare_route_options
 
 from tests.agent_route_decision_test_support import (
     AgentRouteDecisionTestMixin,
@@ -25,6 +25,7 @@ from tests.agent_route_decision_test_support import (
     _route,
     _route_goal_round,
 )
+from tests.conversation.conversation_matrix_harness import route_cards, run_turn
 
 
 class AgentRouteBranchReliabilityTests(AgentRouteDecisionTestMixin, unittest.IsolatedAsyncioTestCase):
@@ -48,8 +49,8 @@ class AgentRouteBranchReliabilityTests(AgentRouteDecisionTestMixin, unittest.Iso
             },
             ctx,
         )
-        self.assertFalse(result.ok)
-        self.assertIn("comparison-only", result.error or "")
+        assert not result.ok
+        assert "comparison-only" in (result.error or "")
 
     async def test_nearby_branch_pool_leaves_route_choice_to_sonnet(self) -> None:
         session_id, session = session_module.new_session()
@@ -107,14 +108,11 @@ class AgentRouteBranchReliabilityTests(AgentRouteDecisionTestMixin, unittest.Iso
                 },
                 ctx,
             )
-        self.assertTrue(discovery.ok, discovery.error)
+        assert discovery.ok, discovery.error
         nearby_places = discovery.data["places"]
         nearby_names = {place["name"] for place in nearby_places}
-        self.assertEqual(
-            nearby_names,
-            {"Kyuramen Prospect Heights", "Kyuramen Park Slope"},
-        )
-        self.assertNotIn("Kyuramen Forest Hills", nearby_names)
+        assert nearby_names == {"Kyuramen Prospect Heights", "Kyuramen Park Slope"}
+        assert "Kyuramen Forest Hills" not in nearby_names
         park_slope_id = next(
             place["place_id"]
             for place in nearby_places
@@ -180,38 +178,33 @@ class AgentRouteBranchReliabilityTests(AgentRouteDecisionTestMixin, unittest.Iso
                 origin=origin,
             )
 
-        self.assertEqual(len(route_cards(events)), 1, trace.capability_attempts)
+        assert len(route_cards(events)) == 1, trace.capability_attempts
         card = route_cards(events)[0]
-        self.assertNotIn("selected_candidate_id", card.selection_decision)
-        self.assertNotIn("selected_candidate_index", card.selection_decision)
-        self.assertNotIn("base_score", card.selection_decision)
-        self.assertNotIn("final_score", card.selection_decision)
-        self.assertNotIn("penalties", card.selection_decision)
-        self.assertNotIn("evidence_ids", card.selection_decision)
-        self.assertEqual(
-            card.itinerary["selection_decision"], card.selection_decision
-        )
-        self.assertEqual(card.selection_decision["selection_source"], "model")
-        self.assertEqual(card.selection_decision["reason_code"], "less_walking")
-        self.assertEqual(card.destination["label"], "Kyuramen Park Slope")
-        self.assertEqual(card.itinerary["total_duration_seconds"], 2100)
-        self.assertEqual(card.itinerary["total_street_walking_seconds"], 120)
+        assert "selected_candidate_id" not in card.selection_decision
+        assert "selected_candidate_index" not in card.selection_decision
+        assert "base_score" not in card.selection_decision
+        assert "final_score" not in card.selection_decision
+        assert "penalties" not in card.selection_decision
+        assert "evidence_ids" not in card.selection_decision
+        assert card.itinerary["selection_decision"] == card.selection_decision
+        assert card.selection_decision["selection_source"] == "model"
+        assert card.selection_decision["reason_code"] == "less_walking"
+        assert card.destination["label"] == "Kyuramen Park Slope"
+        assert card.itinerary["total_duration_seconds"] == 2100
+        assert card.itinerary["total_street_walking_seconds"] == 120
         prepare_calls = [
             tool_input
             for name, tool_input in trace.tool_calls
             if name == "prepare_route_options"
         ]
-        self.assertEqual(
-            prepare_calls[0]["destination_place_ids"],
-            [prospect_heights_id, park_slope_id],
-        )
+        assert prepare_calls[0]["destination_place_ids"] == [prospect_heights_id, park_slope_id]
         token = next(event for event in events if event.type == "token")
-        self.assertIn("less walking", token.text.casefold())
+        assert "less walking" in token.text.casefold()
         state = trip_state_module.get_trip_state(session)
-        self.assertEqual(state["selected_candidate_id"], "cd_park_model")
-        self.assertEqual(state["destination"], "Kyuramen Park Slope")
-        self.assertEqual(state["selected_place_id"], park_slope_id)
-        self.assertEqual(trace.terminal_resolution["selection_source"], "model")
+        assert state["selected_candidate_id"] == "cd_park_model"
+        assert state["destination"] == "Kyuramen Park Slope"
+        assert state["selected_place_id"] == park_slope_id
+        assert trace.terminal_resolution["selection_source"] == "model"
 
     async def test_branch_route_budget_is_global_and_keeps_each_viable_branch(
         self,
@@ -363,36 +356,22 @@ class AgentRouteBranchReliabilityTests(AgentRouteDecisionTestMixin, unittest.Iso
         ):
             result = await prepare_route_options.execute(route_input, ctx)
 
-        self.assertTrue(result.ok, result.error)
-        self.assertEqual(result.data["candidate_count"], 5)
-        self.assertEqual(len(result.data["candidates"]), 5)
-        self.assertTrue(
-            all(
-                candidate["comparison"]["timing"]["walking_minutes"] <= 5
-                for candidate in result.data["candidates"]
-            )
-        )
+        assert result.ok, result.error
+        assert result.data["candidate_count"] == 5
+        assert len(result.data["candidates"]) == 5
+        assert all(candidate["comparison"]["timing"]["walking_minutes"] <= 5 for candidate in result.data["candidates"])
         branch_ids = [
             candidate["destination_place_id"]
             for candidate in result.data["candidates"]
         ]
-        self.assertGreaterEqual(branch_ids.count(prospect_id), 1)
-        self.assertGreaterEqual(branch_ids.count(park_id), 1)
+        assert branch_ids.count(prospect_id) >= 1
+        assert branch_ids.count(park_id) >= 1
         branch_coverage = result.data["branch_coverage"]
-        self.assertTrue(
-            any(row.get("place_id") == forest_id for row in branch_coverage),
-            branch_coverage,
-        )
-        self.assertEqual(
-            next(row for row in branch_coverage if row["place_id"] == forest_id)[
-                "status"
-            ],
-            "unavailable",
-            branch_coverage,
-        )
-        self.assertNotIn("selected_candidate_id", result.data)
-        self.assertEqual(build_dependencies.call_count, 1)
-        self.assertEqual(result.timings["route_provider_ms"], 30.0)
+        assert any(row.get("place_id") == forest_id for row in branch_coverage), branch_coverage
+        assert next(row for row in branch_coverage if row["place_id"] == forest_id)["status"] == "unavailable", branch_coverage
+        assert "selected_candidate_id" not in result.data
+        assert build_dependencies.call_count == 1
+        assert result.timings["route_provider_ms"] == 30.0
 
     async def test_failed_branch_is_visible_as_coverage_gap(self) -> None:
         session_id, session = session_module.new_session()
@@ -473,16 +452,16 @@ class AgentRouteBranchReliabilityTests(AgentRouteDecisionTestMixin, unittest.Iso
             )
 
         cards = route_cards(events)
-        self.assertEqual(len(cards), 1, trace.capability_attempts)
+        assert len(cards) == 1, trace.capability_attempts
         decision = cards[0].selection_decision
-        self.assertNotIn("selected_candidate_id", decision)
-        self.assertNotIn("selected_candidate_index", decision)
-        self.assertEqual(cards[0].itinerary["selection_decision"], decision)
-        self.assertEqual(decision["selection_source"], "deterministic_fallback")
-        self.assertEqual(decision["reason_code"], "coverage_gap")
-        self.assertEqual(cards[0].destination["label"], "Kyuramen Park Slope")
+        assert "selected_candidate_id" not in decision
+        assert "selected_candidate_index" not in decision
+        assert cards[0].itinerary["selection_decision"] == decision
+        assert decision["selection_source"] == "deterministic_fallback"
+        assert decision["reason_code"] == "coverage_gap"
+        assert cards[0].destination["label"] == "Kyuramen Park Slope"
         rider_text = " ".join(
             event.text for event in events if event.type == "token"
         ).casefold()
-        self.assertIn("could not be checked", rider_text)
-        self.assertEqual(trace.terminal_resolution["selection_source"], "deterministic_fallback")
+        assert "could not be checked" in rider_text
+        assert trace.terminal_resolution["selection_source"] == "deterministic_fallback"
