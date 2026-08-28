@@ -101,19 +101,9 @@ def route_constraints(
         violations.append("walking_tolerance")
     if accessibility_required and accessibility != "accessible":
         violations.append("accessibility_unknown_or_unavailable")
-    requested_arrival = tool_input.get("arrival_by")
-    finalized_arrival = (
-        itinerary.get("arrival_at") if isinstance(itinerary, dict) else None
-    )
-    if requested_arrival and finalized_arrival:
-        try:
-            requested_target = parse_rfc3339(requested_arrival, field="arrival_by")
-            actual_arrival = parse_rfc3339(finalized_arrival, field="arrival_at")
-        except (TypeError, ValueError):
-            pass
-        else:
-            if actual_arrival > requested_target:
-                violations.append("arrival_by_missed")
+    missed_arrival = _arrival_by_violation(tool_input, itinerary)
+    if missed_arrival:
+        violations.append(missed_arrival)
     return {
         "satisfied": not violations,
         "violations": violations,
@@ -124,6 +114,25 @@ def route_constraints(
         "route_modes": sorted(route_modes),
         "route_ids": sorted(route_ids),
     }
+
+
+def _arrival_by_violation(
+    tool_input: dict[str, Any], itinerary: dict[str, Any] | None
+) -> str | None:
+    requested_arrival = tool_input.get("arrival_by")
+    finalized_arrival = (
+        itinerary.get("arrival_at") if isinstance(itinerary, dict) else None
+    )
+    if not requested_arrival or not finalized_arrival:
+        return None
+    try:
+        requested_target = parse_rfc3339(requested_arrival, field="arrival_by")
+        actual_arrival = parse_rfc3339(finalized_arrival, field="arrival_at")
+    except (TypeError, ValueError):
+        return None
+    if actual_arrival > requested_target:
+        return "arrival_by_missed"
+    return None
 
 
 def candidate_digest(

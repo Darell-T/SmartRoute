@@ -29,61 +29,93 @@ def _build_fallback_candidate_reason(
     route_alert = text._safe_text(route_alerts[0], 72) if route_alerts else ""
     chosen_alert = text._safe_text(chosen_alerts[0], 72) if chosen_alerts else ""
     if is_recommended:
-        material_factors: list[str] = []
-        event_penalty = float(route_score.get("event_crowd_penalty") or 0)
-        walking_penalty = float(route_score.get("walking_penalty") or 0)
-        if walking_penalty > 0:
-            walk_minutes = max(0, int(route_score.get("walk_minutes") or 0))
-            material_factors.append(
-                f"preferred for less walking ({walk_minutes} min on foot)"
-            )
-        if event_penalty > 0:
-            material_factors.append("relevant event crowd exposure")
-        if material_factors:
-            duration = int(route_score.get("total_minutes") or 0)
-            return (
-                f"Recommended at {duration} min; "
-                + " and ".join(material_factors[:2])
-                + "."
-            )
-        if route_score.get("alert_count", 0) == 0:
-            return f"Fastest route at {route_score['total_minutes']} min."
-        if route_alert:
-            return (
-                f"Fastest route despite an alert: {route_alert}."
-            )
-        return "Fastest route despite active service alerts."
+        return _recommended_fallback_reason(route_score, route_alert)
+    return _alternate_fallback_reason(
+        route_score, chosen_score, route_alert, chosen_alert
+    )
 
+
+def _recommended_fallback_reason(route_score: dict, route_alert: str) -> str:
+    material_factors: list[str] = []
+    event_penalty = float(route_score.get("event_crowd_penalty") or 0)
+    walking_penalty = float(route_score.get("walking_penalty") or 0)
+    if walking_penalty > 0:
+        walk_minutes = max(0, int(route_score.get("walk_minutes") or 0))
+        material_factors.append(
+            f"preferred for less walking ({walk_minutes} min on foot)"
+        )
+    if event_penalty > 0:
+        material_factors.append("relevant event crowd exposure")
+    if material_factors:
+        duration = int(route_score.get("total_minutes") or 0)
+        return (
+            f"Recommended at {duration} min; "
+            + " and ".join(material_factors[:2])
+            + "."
+        )
+    if route_score.get("alert_count", 0) == 0:
+        return f"Fastest route at {route_score['total_minutes']} min."
+    if route_alert:
+        return f"Fastest route despite an alert: {route_alert}."
+    return "Fastest route despite active service alerts."
+
+
+def _alternate_fallback_reason(
+    route_score: dict,
+    chosen_score: dict,
+    route_alert: str,
+    chosen_alert: str,
+) -> str:
     route_minutes = int(route_score["total_minutes"])
     chosen_minutes = int(chosen_score["total_minutes"])
     delay = route_minutes - chosen_minutes
     transfer_delta = int(route_score["transfers"]) - int(chosen_score["transfers"])
     alert_delta = int(route_score["alert_count"]) - int(chosen_score["alert_count"])
+    delay_alert = _delay_with_alert_reason(delay, alert_delta, route_alert)
+    if delay_alert:
+        return delay_alert
+    if delay <= -2 and transfer_delta > 0:
+        return f"Faster by {abs(delay)} min, but adds an extra transfer."
+    if delay >= 3:
+        return f"Slower by {delay} min."
+    transfer_reason = _transfer_delta_reason(transfer_delta)
+    if transfer_reason:
+        return transfer_reason
+    alert_reason = _alert_only_reason(alert_delta, route_alert)
+    if alert_reason:
+        return alert_reason
+    if chosen_alert and delay <= 2:
+        return f"Similar time, but {chosen_alert} is already accounted for."
+    return "Similar time, but less reliable than the selected route."
+
+
+def _delay_with_alert_reason(delay: int, alert_delta: int, route_alert: str) -> str | None:
     if delay <= -2 and alert_delta > 0:
         if route_alert:
             return f"Faster by {abs(delay)} min, but affected by {route_alert}."
         return f"Faster by {abs(delay)} min, but affected by service alerts."
-    if delay <= -2 and transfer_delta > 0:
-        return f"Faster by {abs(delay)} min, but adds an extra transfer."
     if delay >= 3 and alert_delta > 0:
         if route_alert:
             return f"Slower by {delay} min and affected by {route_alert}."
         return f"Slower by {delay} min and affected by service alerts."
-    if delay >= 3:
-        return f"Slower by {delay} min."
-    if transfer_delta > 0:
-        return (
-            "Adds an extra transfer."
-            if transfer_delta == 1
-            else f"Adds {transfer_delta} extra transfers."
-        )
-    if alert_delta > 0:
-        if route_alert:
-            return f"Affected by {route_alert}."
-        return "Affected by service alerts."
-    if chosen_alert and delay <= 2:
-        return f"Similar time, but {chosen_alert} is already accounted for."
-    return "Similar time, but less reliable than the selected route."
+    return None
+
+
+def _transfer_delta_reason(transfer_delta: int) -> str | None:
+    if transfer_delta <= 0:
+        return None
+    if transfer_delta == 1:
+        return "Adds an extra transfer."
+    return f"Adds {transfer_delta} extra transfers."
+
+
+def _alert_only_reason(alert_delta: int, route_alert: str) -> str | None:
+    if alert_delta <= 0:
+        return None
+    if route_alert:
+        return f"Affected by {route_alert}."
+    return "Affected by service alerts."
+
 
 def _build_route_candidates(
     routes: list[list[dict]],
@@ -91,6 +123,7 @@ def _build_route_candidates(
     candidate_analysis: dict[int, dict[str, str]],
     scored_routes: list[dict] | None = None,
 ) -> list[dict]:
+    del candidate_analysis
     chosen_route = routes[chosen_index] if routes else []
     scores = scoring._score_by_index(scored_routes or scoring._score_routes(routes, []))
     chosen_score = scores.get(chosen_index, scoring._route_score(chosen_route, []))

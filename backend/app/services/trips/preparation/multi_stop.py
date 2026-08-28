@@ -40,6 +40,7 @@ async def prepare_multi_stop(
     waypoint_labels: list[str] | None = None,
     destination_raw: str | None = None,
 ) -> AggregatePreparation | RoutePreparationFailure:
+    del timings
     destinations = [*waypoints, str(tool_input["destination"])]
     dwell_minutes, dwell_source = _dwell(tool_input.get("waypoint_dwell_minutes"))
     max_candidates = _max_candidates(tool_input.get("max_candidates"))
@@ -80,29 +81,19 @@ async def prepare_multi_stop(
         for segment_index, destination in enumerate(destinations[1:], start=1):
             expanded: list[PreparedChain] = []
             for partial in partials:
-                previous_leg, previous_index = partial.legs[-1]
-                departure_time = _next_departure_for_route(
-                    previous_leg.parsed_routes[previous_index],
-                    dwell_minutes,
-                )
-                leg_input = _segment_input(
-                    tool_input,
-                    origin=destinations[segment_index - 1],
-                    destination=destination,
-                    departure_time=departure_time,
-                )
-                leg_input["max_candidates"] = provider_width
-                leg_input.pop("arrival_by", None)
-                prepared = await prepare_segment(leg_input, ctx)
-                if is_route_preparation_failure(prepared):
-                    continue
-                for route_index in _candidate_choices(prepared, provider_width):
-                    expanded.append(
-                        PreparedChain(
-                            legs=[*partial.legs, (prepared, route_index)],
-                            score=partial.score + _route_score(prepared, route_index),
-                        )
+                expanded.extend(
+                    await _chains_through_next_stop(
+                        partial,
+                        ctx,
+                        tool_input,
+                        destinations,
+                        segment_index,
+                        destination,
+                        dwell_minutes,
+                        prepare_segment,
+                        provider_width,
                     )
+                )
             if not expanded:
                 return RoutePreparationFailure(
                     f"could not prepare stop {segment_index + 1}: routing failed"
@@ -128,6 +119,42 @@ async def prepare_multi_stop(
         dwell_minutes=dwell_minutes,
         dwell_source=dwell_source,
     )
+
+
+async def _chains_through_next_stop(
+    partial: PreparedChain,
+    ctx: RoutePreparationContext,
+    tool_input: dict,
+    destinations: list[str],
+    segment_index: int,
+    destination: str,
+    dwell_minutes: int,
+    prepare_segment: PrepareSegment,
+    provider_width: int,
+) -> list[PreparedChain]:
+    previous_leg, previous_index = partial.legs[-1]
+    departure_time = _next_departure_for_route(
+        previous_leg.parsed_routes[previous_index],
+        dwell_minutes,
+    )
+    leg_input = _segment_input(
+        tool_input,
+        origin=destinations[segment_index - 1],
+        destination=destination,
+        departure_time=departure_time,
+    )
+    leg_input["max_candidates"] = provider_width
+    leg_input.pop("arrival_by", None)
+    prepared = await prepare_segment(leg_input, ctx)
+    if is_route_preparation_failure(prepared):
+        return []
+    return [
+        PreparedChain(
+            legs=[*partial.legs, (prepared, route_index)],
+            score=partial.score + _route_score(prepared, route_index),
+        )
+        for route_index in _candidate_choices(prepared, provider_width)
+    ]
 
 
 def _dwell(value: object) -> tuple[int, str]:

@@ -139,7 +139,7 @@ def _step_stops(gtfs: Any, step: Mapping[str, Any]) -> list[dict[str, Any]]:
                 step.get("departure_coords"),
                 step.get("arrival_coords"),
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 pattern-index faults omit intermediates
             rows = []
         for row in rows or []:
             if isinstance(row, Mapping):

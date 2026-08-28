@@ -13,7 +13,7 @@ try:
     from xai_sdk import AsyncClient
     from xai_sdk.chat import system, user
     from xai_sdk.tools import get_tool_call_type, web_search, x_search
-except Exception:  # Optional provider; route planning must remain available.
+except Exception:  # noqa: BLE001 optional SDK import faults leave planning available
     AsyncClient = None
     system = user = get_tool_call_type = web_search = x_search = None
 
@@ -85,7 +85,7 @@ def _completed_sources(response: object) -> set[str]:
     for call in getattr(response, "tool_calls", ()) or ():
         try:
             call_type = get_tool_call_type(call) if get_tool_call_type else ""
-        except Exception:
+        except Exception:  # noqa: BLE001 SDK call-type faults stay unused
             call_type = ""
         if call_type == "web_search_tool":
             completed.add("web_search")
@@ -164,7 +164,7 @@ async def run_search(
         response = await chat.sample()
     except asyncio.CancelledError:
         raise
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 crowd-search SDK faults stay unavailable
         return _failure_result(phase="parallel_request", error=exc)
 
     completed = _completed_sources(response)

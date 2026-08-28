@@ -105,7 +105,7 @@ async def _enrich_bus_legs(steps: list[dict]) -> dict:
                 step["intermediate_stop_locations"] = located
                 step["intermediate_stops"] = [s["name"] for s in located]
                 metrics["with_stops"] += 1
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 bus-stop enrichment faults skip intermediates
         print(f"[trip] bus stop enrichment skipped: {exc}")
     return metrics
 

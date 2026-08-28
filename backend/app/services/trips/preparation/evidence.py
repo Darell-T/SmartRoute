@@ -18,8 +18,8 @@ def _direction_matches(left: object, right: object) -> bool:
     def normalize(value: object) -> str:
         return " ".join(
             str(value or "")
-            .replace("–", "-")
-            .replace("—", "-")
+            .replace("\u2013", "-")
+            .replace("\u2014", "-")
             .replace("_", " ")
             .split()
         ).casefold()
@@ -47,6 +47,7 @@ class _MergedEnvelope:
         self._payload = payload
 
     def status_at(self, now: Any = None) -> str:
+        del now
         return str(self._payload.get("status") or "unavailable")
 
     def current_payload(self, now: Any = None) -> Any:
@@ -55,6 +56,7 @@ class _MergedEnvelope:
         return self._payload.get("payload")
 
     def to_model_dict(self, *, empty: Any, now: Any = None) -> dict[str, Any]:
+        del now
         result = dict(self._payload)
         if result.get("status") != "current":
             result["payload"] = empty

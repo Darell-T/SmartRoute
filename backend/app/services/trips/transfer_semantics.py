@@ -36,34 +36,46 @@ def normalize_route(route: list[dict], gtfs: Any = None) -> list[dict]:
         start = index
         while index + 1 < len(route) and _mode(route[index + 1]) == "WALK":
             index += 1
-        end = index
-        previous = route[start - 1] if start > 0 else None
-        following = route[end + 1] if end + 1 < len(route) else None
-        if _is_transit(previous) and _is_transit(following):
-            fact = _transfer_fact(
-                previous,
-                following,
-                route[start : end + 1],
-                gtfs,
-                group_number,
-            )
-            group_number += 1
-            fragments = route[start : end + 1]
-            first_fragment = fragments[0]
-            last_fragment = fragments[-1]
-            if last_fragment.get("arrival_time_iso"):
-                first_fragment["arrival_time_iso"] = last_fragment["arrival_time_iso"]
-            if last_fragment.get("end_point"):
-                first_fragment["end_point"] = last_fragment["end_point"]
-            first_fragment["transfer_duration_seconds"] = fact["total_seconds"]
-            for fragment_index in range(start, end + 1):
-                route[fragment_index]["semantic_transfer_group_id"] = fact["group_id"]
-                route[fragment_index]["transfer_semantics"] = fact
-                route[fragment_index]["semantic_transfer"] = fact
-                route[fragment_index]["transfer_kind"] = fact["kind"]
-                route[fragment_index]["semantic_transfer_fragment"] = fragment_index != start
+        group_number = _annotate_walk_transfer(
+            route, start, index, gtfs, group_number
+        )
         index += 1
     return route
+
+
+def _annotate_walk_transfer(
+    route: list[dict],
+    start: int,
+    end: int,
+    gtfs: Any,
+    group_number: int,
+) -> int:
+    previous = route[start - 1] if start > 0 else None
+    following = route[end + 1] if end + 1 < len(route) else None
+    if not (_is_transit(previous) and _is_transit(following)):
+        return group_number
+    fact = _transfer_fact(
+        previous,
+        following,
+        route[start : end + 1],
+        gtfs,
+        group_number,
+    )
+    fragments = route[start : end + 1]
+    first_fragment = fragments[0]
+    last_fragment = fragments[-1]
+    if last_fragment.get("arrival_time_iso"):
+        first_fragment["arrival_time_iso"] = last_fragment["arrival_time_iso"]
+    if last_fragment.get("end_point"):
+        first_fragment["end_point"] = last_fragment["end_point"]
+    first_fragment["transfer_duration_seconds"] = fact["total_seconds"]
+    for fragment_index in range(start, end + 1):
+        route[fragment_index]["semantic_transfer_group_id"] = fact["group_id"]
+        route[fragment_index]["transfer_semantics"] = fact
+        route[fragment_index]["semantic_transfer"] = fact
+        route[fragment_index]["transfer_kind"] = fact["kind"]
+        route[fragment_index]["semantic_transfer_fragment"] = fragment_index != start
+    return group_number + 1
 
 
 def route_transfer_facts(route: list[dict]) -> list[dict[str, Any]]:
@@ -108,10 +120,12 @@ def route_accessibility(route: list[dict]) -> str:
     for step in route or []:
         if not _is_transit(step):
             continue
-        for side in ("departure", "arrival"):
-            for key in (f"{side}_accessibility", f"{side}_accessible"):
-                if key in step:
-                    statuses.append(_normalize_accessibility(step[key]))
+        statuses.extend(
+            _normalize_accessibility(step[key])
+            for side in ("departure", "arrival")
+            for key in (f"{side}_accessibility", f"{side}_accessible")
+            if key in step
+        )
     if "inaccessible" in statuses:
         return "inaccessible"
     if statuses and all(status == "accessible" for status in statuses):

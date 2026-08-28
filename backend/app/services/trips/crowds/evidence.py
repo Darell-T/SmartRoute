@@ -90,7 +90,7 @@ def _task_outcome(task: asyncio.Task[Any], done: set[asyncio.Task[Any]]) -> Any:
         return TimeoutError()
     try:
         return task.result()
-    except BaseException as exc:
+    except BaseException as exc:  # noqa: BLE001 provider task faults stay unavailable
         return exc
 
 

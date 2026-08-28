@@ -512,40 +512,17 @@ def build_legs(steps: list[dict], *, data_basis: str) -> list[dict]:
         arr_iso = step.get("arrival_time_iso")
         dep_dt = _parse_iso(dep_iso)
         arr_dt = _parse_iso(arr_iso)
-
-        walk_seconds = 0
-        wait_seconds = 0
-        ride_seconds = 0
-        transfer_seconds = 0
-        semantic: dict[str, Any] | None = None
-
-        if mode == "WALK":
-            raw_semantic = step.get("transfer_semantics")
-            semantic = raw_semantic if isinstance(raw_semantic, dict) else None
-            if isinstance(semantic, dict):
-                walk_seconds = int(semantic.get("street_walking_seconds") or 0)
-                transfer_seconds = int(
-                    semantic.get("in_station_transfer_seconds") or 0
-                )
-            else:
-                walk_seconds = _walk_seconds_for_step(step, dep_dt, arr_dt)
-        elif mode in TRANSIT_MODES:
-            if dep_dt is not None and arr_dt is not None:
-                ride_seconds = _seconds_between(dep_dt, arr_dt)
-            if (
-                prev_mode in TRANSIT_MODES
-                and prev_arrival_dt is not None
-                and dep_dt is not None
-            ):
-                transfer_seconds = _seconds_between(prev_arrival_dt, dep_dt)
-            elif (
-                prev_mode is not None
-                and prev_mode not in TRANSIT_MODES
-                and prev_arrival_dt is not None
-                and dep_dt is not None
-                and not prev_semantic_transfer
-            ):
-                wait_seconds = _seconds_between(prev_arrival_dt, dep_dt)
+        walk_seconds, wait_seconds, ride_seconds, transfer_seconds, semantic = (
+            _leg_timing(
+                mode,
+                step,
+                dep_dt,
+                arr_dt,
+                prev_mode,
+                prev_arrival_dt,
+                prev_semantic_transfer,
+            )
+        )
 
         board = step.get("departure_stop")
         alight = step.get("arrival_stop")
@@ -610,48 +587,105 @@ def build_legs(steps: list[dict], *, data_basis: str) -> list[dict]:
     return legs
 
 
+def _leg_timing(
+    mode: str,
+    step: dict,
+    dep_dt: datetime | None,
+    arr_dt: datetime | None,
+    prev_mode: str | None,
+    prev_arrival_dt: datetime | None,
+    prev_semantic_transfer: bool,
+) -> tuple[int, int, int, int, dict[str, Any] | None]:
+    if mode == "WALK":
+        semantic = step.get("transfer_semantics")
+        if isinstance(semantic, dict):
+            return (
+                int(semantic.get("street_walking_seconds") or 0),
+                0,
+                0,
+                int(semantic.get("in_station_transfer_seconds") or 0),
+                semantic,
+            )
+        return _walk_seconds_for_step(step, dep_dt, arr_dt), 0, 0, 0, None
+    if mode not in TRANSIT_MODES:
+        return 0, 0, 0, 0, None
+    ride_seconds = (
+        _seconds_between(dep_dt, arr_dt)
+        if dep_dt is not None and arr_dt is not None
+        else 0
+    )
+    wait_seconds, transfer_seconds = _transit_gap_seconds(
+        prev_mode, prev_arrival_dt, prev_semantic_transfer, dep_dt
+    )
+    return 0, wait_seconds, ride_seconds, transfer_seconds, None
+
+
+def _transit_gap_seconds(
+    prev_mode: str | None,
+    prev_arrival_dt: datetime | None,
+    prev_semantic_transfer: bool,
+    dep_dt: datetime | None,
+) -> tuple[int, int]:
+    if prev_arrival_dt is None or dep_dt is None:
+        return 0, 0
+    if prev_mode in TRANSIT_MODES:
+        return 0, _seconds_between(prev_arrival_dt, dep_dt)
+    if prev_mode is not None and prev_mode not in TRANSIT_MODES and not prev_semantic_transfer:
+        return _seconds_between(prev_arrival_dt, dep_dt), 0
+    return 0, 0
+
+
 def _canonical_stops_for_step(step: dict) -> list[dict]:
     """Preserve an enriched leg's ordered stops without fabricating stations."""
 
     located = step.get("intermediate_stop_locations")
     if isinstance(located, list) and located:
-        stops: list[dict] = []
-        for value in located:
-            if not isinstance(value, dict):
-                continue
-            name = str(value.get("name") or "").strip()
-            if not name:
-                continue
-            stop: dict[str, Any] = {"name": name}
-            _copy_stop_identity(stop, value)
-            lat, lng = _lat_lon(value)
-            if lat is not None and lng is not None:
-                stop["lat"] = lat
-                stop["lng"] = lng
-            stops.append(stop)
+        stops = _stops_from_located(located)
         if stops:
             return stops
-
     names = step.get("intermediate_stops")
     if not isinstance(names, list):
         return []
     stops: list[dict[str, Any]] = []
     for value in names:
-        if isinstance(value, str) and value.strip():
-            stops.append({"name": value.strip()})
-            continue
+        stop = _stop_from_name_value(value)
+        if stop is not None:
+            stops.append(stop)
+    return stops
+
+
+def _stops_from_located(located: list) -> list[dict]:
+    stops: list[dict] = []
+    for value in located:
         if not isinstance(value, dict):
             continue
-        name = str(value.get("name") or value.get("stop_name") or "").strip()
+        name = str(value.get("name") or "").strip()
         if not name:
             continue
-        stop = {"name": name}
+        stop: dict[str, Any] = {"name": name}
         _copy_stop_identity(stop, value)
         lat, lng = _lat_lon(value)
         if lat is not None and lng is not None:
-            stop.update({"lat": lat, "lng": lng})
+            stop["lat"] = lat
+            stop["lng"] = lng
         stops.append(stop)
     return stops
+
+
+def _stop_from_name_value(value: object) -> dict[str, Any] | None:
+    if isinstance(value, str) and value.strip():
+        return {"name": value.strip()}
+    if not isinstance(value, dict):
+        return None
+    name = str(value.get("name") or value.get("stop_name") or "").strip()
+    if not name:
+        return None
+    stop: dict[str, Any] = {"name": name}
+    _copy_stop_identity(stop, value)
+    lat, lng = _lat_lon(value)
+    if lat is not None and lng is not None:
+        stop.update({"lat": lat, "lng": lng})
+    return stop
 
 
 def _canonical_direction_fields(step: dict) -> dict[str, Any]:
@@ -751,9 +785,9 @@ def _parse_iso(value: Any) -> datetime | None:
         dt = datetime.fromisoformat(text)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=_ET)
-        return dt
     except (TypeError, ValueError):
         return None
+    return dt
 
 
 def _seconds_between(start: datetime, end: datetime) -> int:
