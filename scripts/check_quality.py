@@ -1,18 +1,20 @@
-"""Project-root cyclomatic complexity and CRAP quality gates.
+"""Project-root structural quality gates.
 
-Hard ceilings:
-    cyclomatic complexity <= 6
-    CRAP <= 6
-
-Preferred engineering targets (not separate hard gates):
-    cyclomatic complexity <= 4
-    CRAP <= 4
+New functions must keep cyclomatic and cognitive complexity at or below 10.
+Existing functions above either threshold may remain as legacy debt but may
+not get worse. Ruff separately enforces its default branch and statement
+ceilings on changed paths.
 
 CRAP(m) = CC(m)^2 * (1 - coverage(m))^3 + CC(m)
 
 Python CC for CRAP is Radon McCabe. Ruff C901 remains the fast lint gate.
 Those metrics are not interchangeable: Radon counts boolean operators and
 comprehensions; Ruff C901 counts statement-level control flow only.
+
+CRAP is a coverage-aware regression signal for existing high-complexity
+functions. It has no tiny absolute ceiling that forces unnecessary tests or
+helper extraction. Function and file lengths are review signals, not automatic
+split requirements.
 
 JS/TS coverage states:
     measured    mapping is unique and coverage > 0
@@ -22,9 +24,13 @@ JS/TS coverage states:
 Unresolved functions never receive a fabricated 0% CRAP score.
 
 Adoption uses quality/baseline.json as a ratchet, not a permanent allowlist.
-New functions must meet the hard ceilings. Existing baseline entries may not
-get worse. Compliant functions must be removed from the baseline before they
-can be treated as clean; after removal they cannot regress as legacy debt.
+New functions must meet the cyclomatic ceiling. Existing baseline entries may
+not increase in cyclomatic complexity or CRAP. Compliant functions must be
+removed from the baseline before they can be treated as clean.
+
+Cognitive complexity is compared with a fixed Git point, HEAD by default.
+Pass --quality-ref with the immutable batch checkpoint during independent
+review.
 
 Raw ESLint, Oxlint, and Ruff commands still report the full backlog.
 This command applies the ratchet.
@@ -42,20 +48,22 @@ import argparse
 import importlib.util
 import json
 import os
-from collections import defaultdict
-from pathlib import Path
 import re
 import shutil
 import subprocess
 import sys
-from typing import Mapping
+from collections import defaultdict
+from collections.abc import Mapping
+from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-HARD_COMPLEXITY = 6
-HARD_CRAP = 6
-PREFERRED_COMPLEXITY = 4
-PREFERRED_CRAP = 4
-BASELINE_VERSION = 1
+from complexipy import compute_diff, file_complexity
+
+MAX_COMPLEXITY = 10
+MAX_COGNITIVE_COMPLEXITY = 10
+FUNCTION_LENGTH_REVIEW = 100
+FILE_LENGTH_REVIEW = 500
+BASELINE_VERSION = 2
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
@@ -104,12 +112,7 @@ def assign_identities(rows: list[dict[str, object]]) -> list[dict[str, object]]:
 
 
 def is_violating(row: Mapping[str, object]) -> bool:
-    if int(row["complexity"]) > HARD_COMPLEXITY:
-        return True
-    crap = row.get("crap")
-    if crap is None:
-        return False
-    return float(crap) > HARD_CRAP
+    return int(row["complexity"]) > MAX_COMPLEXITY
 
 
 def worsened_vs(row: Mapping[str, object], previous: Mapping[str, object]) -> bool:
@@ -232,7 +235,9 @@ def evaluate_ratchet(
     }
 
 
-def baseline_entries_from_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+def baseline_entries_from_rows(
+    rows: list[dict[str, object]],
+) -> list[dict[str, object]]:
     entries = []
     for row in rows:
         if not is_violating(row):
@@ -285,7 +290,7 @@ def shrink_baseline(
     return sorted(shrunk, key=lambda item: str(item["id"]))
 
 
-def self_test() -> None:
+def _self_test_crap() -> None:
     checks = (
         (6, 1.0, 6.0),
         (6, 0.5, 10.5),
@@ -300,6 +305,8 @@ def self_test() -> None:
                 f"CRAP({complexity}, {coverage}) = {actual}, expected {expected}"
             )
 
+
+def _self_test_js_coverage() -> None:
     status, coverage, _reason = classify_js_coverage(
         anonymous=False, file_executed=True, match_count=1, coverage=0.0
     )
@@ -309,7 +316,9 @@ def self_test() -> None:
         anonymous=False, file_executed=True, match_count=1, coverage=0.5
     )
     if status != "measured" or coverage != 0.5:
-        raise AssertionError(f"known partial should be measured, got {status} {coverage}")
+        raise AssertionError(
+            f"known partial should be measured, got {status} {coverage}"
+        )
     status, coverage, _reason = classify_js_coverage(
         anonymous=True, file_executed=True, match_count=0, coverage=None
     )
@@ -330,7 +339,9 @@ def self_test() -> None:
         ]
     )
     if nested != (1, 0.8):
-        raise AssertionError(f"same-name V8 copies should keep the best coverage, got {nested}")
+        raise AssertionError(
+            f"same-name V8 copies should keep the best coverage, got {nested}"
+        )
     copies = collapse_v8_entries(
         [
             {"start": 0, "end": 10, "span": 10, "coverage": 1.0},
@@ -338,13 +349,22 @@ def self_test() -> None:
         ]
     )
     if copies != (1, 1.0):
-        raise AssertionError(f"tsx duplicate copies should not look like a collision, got {copies}")
+        raise AssertionError(
+            f"tsx duplicate copies should not look like a collision, got {copies}"
+        )
 
+
+def _assert_ids(actual: object, expected: object, label: str) -> None:
+    if actual != expected:
+        raise AssertionError(f"{label} mismatch: {actual}")
+
+
+def _self_test_ratchet() -> None:
     current = [
         {
             "id": "python:a.py:legacy#0",
-            "complexity": 8,
-            "crap": 10.0,
+            "complexity": 12,
+            "crap": 14.0,
             "language": "Python",
             "file": "a.py",
             "function": "legacy",
@@ -361,8 +381,8 @@ def self_test() -> None:
         },
         {
             "id": "python:a.py:worse#0",
-            "complexity": 9,
-            "crap": 12.0,
+            "complexity": 13,
+            "crap": 17.0,
             "language": "Python",
             "file": "a.py",
             "function": "worse",
@@ -370,8 +390,8 @@ def self_test() -> None:
         },
         {
             "id": "python:a.py:new_bad#0",
-            "complexity": 7,
-            "crap": 8.0,
+            "complexity": 11,
+            "crap": 12.0,
             "language": "Python",
             "file": "a.py",
             "function": "new_bad",
@@ -388,42 +408,80 @@ def self_test() -> None:
         },
     ]
     baseline = [
-        {"id": "python:a.py:legacy#0", "complexity": 8, "crap": 10.0},
-        {"id": "python:a.py:fixed#0", "complexity": 8, "crap": 10.0},
-        {"id": "python:a.py:worse#0", "complexity": 8, "crap": 10.0},
-        {"id": "python:a.py:gone#0", "complexity": 9, "crap": 12.0},
+        {"id": "python:a.py:legacy#0", "complexity": 12, "crap": 14.0},
+        {"id": "python:a.py:fixed#0", "complexity": 12, "crap": 14.0},
+        {"id": "python:a.py:worse#0", "complexity": 12, "crap": 14.0},
+        {"id": "python:a.py:gone#0", "complexity": 11, "crap": 12.0},
     ]
     result = evaluate_ratchet(current, baseline)
-    if [row["id"] for row in result["legacy"]] != ["python:a.py:legacy#0"]:
-        raise AssertionError(f"legacy mismatch: {result['legacy']}")
-    if [row["id"] for row in result["worsened"]] != ["python:a.py:worse#0"]:
-        raise AssertionError(f"worsened mismatch: {result['worsened']}")
-    if [row["id"] for row in result["new_debt"]] != ["python:a.py:new_bad#0"]:
-        raise AssertionError(f"new debt mismatch: {result['new_debt']}")
-    if {row["id"] for row in result["resolved"]} != {"python:a.py:fixed#0"}:
-        raise AssertionError(f"resolved mismatch: {result['resolved']}")
-    if {entry["id"] for entry in result["stale_baseline"]} != {
-        "python:a.py:fixed#0",
-        "python:a.py:gone#0",
-    }:
-        raise AssertionError(f"stale mismatch: {result['stale_baseline']}")
+    _assert_ids(
+        [row["id"] for row in result["legacy"]],
+        ["python:a.py:legacy#0"],
+        "legacy",
+    )
+    _assert_ids(
+        [row["id"] for row in result["worsened"]],
+        ["python:a.py:worse#0"],
+        "worsened",
+    )
+    _assert_ids(
+        [row["id"] for row in result["new_debt"]],
+        ["python:a.py:new_bad#0"],
+        "new debt",
+    )
+    _assert_ids(
+        {row["id"] for row in result["resolved"]},
+        {"python:a.py:fixed#0"},
+        "resolved",
+    )
+    _assert_ids(
+        {entry["id"] for entry in result["stale_baseline"]},
+        {"python:a.py:fixed#0", "python:a.py:gone#0"},
+        "stale",
+    )
     if is_violating({"complexity": 3, "crap": 3.0}):
         raise AssertionError("compliant function must not violate")
-    if not is_violating({"complexity": 7, "crap": None}):
-        raise AssertionError("CC>6 is a violation even when CRAP is unresolved")
+    if not is_violating({"complexity": 11, "crap": None}):
+        raise AssertionError("CC>10 is a violation even when CRAP is unresolved")
+    if is_violating({"complexity": 10, "crap": 110.0}):
+        raise AssertionError("CRAP is a regression signal, not an absolute gate")
     if is_violating({"complexity": 5, "crap": None}):
         raise AssertionError("unresolved CRAP must not fabricate a CRAP violation")
-    _assert_command_output_survives_cp1252()
+    cognitive_cases = (
+        (10, 11, True, "crossing the cognitive ceiling"),
+        (14, 15, True, "legacy cognitive regression"),
+        (8, 9, False, "sub-threshold cognitive delta"),
+        (14, 12, False, "legacy cognitive improvement"),
+    )
+    for old, new, expected, label in cognitive_cases:
+        _assert_ids(cognitive_regression(old, new), expected, label)
 
-    subprocess.run(["node", str(JS_METRICS), "--self-test"], cwd=ROOT, check=True)
+
+def self_test() -> None:
+    _self_test_crap()
+    _self_test_js_coverage()
+    _self_test_ratchet()
+    _assert_command_output_survives_cp1252()
+    result = run_command([node_executable(), str(JS_METRICS), "--self-test"], cwd=ROOT)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr or "JS function metric self-test failed")
 
 
 def npm_executable() -> str:
     return "npm.cmd" if os.name == "nt" else "npm"
 
 
+def node_executable() -> str:
+    executable = shutil.which("node")
+    if executable is None:
+        raise RuntimeError("Node.js is required for the quality gate")
+    return executable
+
+
 def load_phase2():
-    spec = importlib.util.spec_from_file_location("phase2_quality_report", PHASE2_REPORT)
+    spec = importlib.util.spec_from_file_location(
+        "phase2_quality_report", PHASE2_REPORT
+    )
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Cannot load {PHASE2_REPORT}")
     module = importlib.util.module_from_spec(spec)
@@ -441,7 +499,9 @@ def run_command(
     merged = os.environ.copy()
     if env:
         merged.update(env)
-    return subprocess.run(
+    # Every caller supplies an argv list for repository-owned tooling. Shell
+    # execution is disabled, so user text cannot become a command string.
+    return subprocess.run(  # noqa: S603
         command,
         cwd=cwd,
         env=merged,
@@ -515,7 +575,8 @@ def _assert_command_output_survives_cp1252() -> None:
 def backend_test_env() -> dict[str, str]:
     return {
         "APP_KEY": os.environ.get("APP_KEY") or "ci-test-key",
-        "ANTHROPIC_API_KEY": os.environ.get("ANTHROPIC_API_KEY") or "ci-test-anthropic-key",
+        "ANTHROPIC_API_KEY": os.environ.get("ANTHROPIC_API_KEY")
+        or "ci-test-anthropic-key",
         "SMARTROUTE_ENV": "test",
         "AGENT_ALLOW_MEMORY_SESSIONS": "1",
         "SMARTROUTE_RUN_LIVE_TESTS": "0",
@@ -581,10 +642,7 @@ def python_functions() -> list[dict[str, object]]:
     for row in phase2.measured_functions(files, BACKEND, coverage_file):
         coverage = float(row["coverage"])
         statement_count = int(row["statement_count"])
-        if statement_count > 0 and coverage == 0.0:
-            status = "uncovered"
-        else:
-            status = "measured"
+        status = "uncovered" if statement_count > 0 and coverage == 0.0 else "measured"
         rows.append(
             {
                 "file": f"backend/{row['file']}",
@@ -601,6 +659,64 @@ def python_functions() -> list[dict[str, object]]:
             }
         )
     return assign_identities(rows)
+
+
+def cognitive_regression(
+    old_complexity: int | None,
+    new_complexity: int | None,
+) -> bool:
+    if new_complexity is None or new_complexity <= MAX_COGNITIVE_COMPLEXITY:
+        return False
+    return old_complexity is None or new_complexity > old_complexity
+
+
+def cognitive_complexity(git_ref: str) -> dict[str, object]:
+    resolved_ref = run_command(
+        ["git", "rev-parse", "--verify", f"{git_ref}^{{commit}}"],
+        cwd=ROOT,
+        timeout=30,
+    )
+    if resolved_ref.returncode != 0:
+        raise RuntimeError(f"Cannot resolve cognitive-complexity reference {git_ref!r}")
+
+    phase2 = load_phase2()
+    analyses = [
+        file_complexity(str(path), no_ignore=True)
+        for path in phase2.source_files(BACKEND / "app")
+    ]
+    functions = [
+        {
+            "file": analysis.path.replace("\\", "/"),
+            "function": function.name,
+            "line": function.line_start,
+            "lines": function.line_end - function.line_start + 1,
+            "complexity": function.complexity,
+        }
+        for analysis in analyses
+        for function in analysis.functions
+    ]
+    compared = compute_diff(analyses, git_ref, str(ROOT))
+    regressions = [
+        {
+            "file": entry.file_path.replace("\\", "/"),
+            "function": entry.func_name,
+            "old_complexity": entry.old_complexity,
+            "new_complexity": entry.new_complexity,
+            "status": entry.status.value,
+        }
+        for entry in compared
+        if cognitive_regression(entry.old_complexity, entry.new_complexity)
+    ]
+    return {
+        "reference": resolved_ref.stdout.strip(),
+        "functions": functions,
+        "above_threshold": [
+            row
+            for row in functions
+            if int(row["complexity"]) > MAX_COGNITIVE_COMPLEXITY
+        ],
+        "regressions": regressions,
+    }
 
 
 def normalize_v8_path(url: str) -> str | None:
@@ -664,6 +780,57 @@ def load_v8_coverage(coverage_dir: Path) -> dict[str, object]:
     }
 
 
+def lookup_v8_coverage(
+    file_name: str,
+    names: list[str],
+    unique_coverages: Mapping[tuple[str, str], list[float]],
+    collided: set[tuple[str, str]],
+) -> tuple[int, float | None]:
+    coverages: list[float] = []
+    saw_collision = False
+    for name in names:
+        key = (file_name, name)
+        coverages.extend(unique_coverages.get(key, []))
+        if key in collided:
+            saw_collision = True
+    if coverages:
+        return 1, max(coverages)
+    if saw_collision:
+        return 2, None
+    return 0, None
+
+
+def js_coverage_mapping(
+    row: Mapping[str, object],
+    *,
+    executed: set[str],
+    unique_coverages: Mapping[tuple[str, str], list[float]],
+    collided: set[tuple[str, str]],
+    anonymous_counts: Mapping[str, int],
+) -> tuple[str, float | None, str]:
+    file_name = str(row["file"])
+    function_name = str(row["function"])
+    anonymous = bool(row.get("anonymous") or function_name == "anonymous")
+    if anonymous and anonymous_counts[file_name] != 1:
+        match_count, coverage = 2, None
+    else:
+        names = ["", "(anonymous)"] if anonymous else [function_name]
+        if not anonymous and "." in function_name:
+            names.append(function_name.rsplit(".", 1)[-1])
+        match_count, coverage = lookup_v8_coverage(
+            file_name,
+            names,
+            unique_coverages,
+            collided,
+        )
+    return classify_js_coverage(
+        anonymous=anonymous,
+        file_executed=file_name in executed,
+        match_count=match_count,
+        coverage=coverage,
+    )
+
+
 def js_functions(coverage_dir: Path) -> list[dict[str, object]]:
     result = run_command(["node", str(JS_METRICS)], cwd=ROOT, timeout=120)
     if result.returncode != 0:
@@ -679,43 +846,16 @@ def js_functions(coverage_dir: Path) -> list[dict[str, object]]:
         if row.get("anonymous") or row["function"] == "anonymous":
             anonymous_counts[str(row["file"])] += 1
 
-    def lookup_v8_coverage(file_name: str, names: list[str]) -> tuple[int, float | None]:
-        coverages: list[float] = []
-        saw_collision = False
-        for name in names:
-            key = (file_name, name)
-            coverages.extend(unique_coverages.get(key, []))
-            if key in collided:
-                saw_collision = True
-        if coverages:
-            return 1, max(coverages)
-        if saw_collision:
-            return 2, None
-        return 0, None
-
     rows = []
     for row in inventory["functions"]:
         file_name = str(row["file"])
         function_name = str(row["function"])
-        anonymous = bool(row.get("anonymous") or function_name == "anonymous")
-        file_executed = file_name in executed
-        if anonymous:
-            if anonymous_counts[file_name] == 1:
-                match_count, coverage = lookup_v8_coverage(
-                    file_name, ["", "(anonymous)"]
-                )
-            else:
-                match_count, coverage = 2, None
-        else:
-            names = [function_name]
-            if "." in function_name:
-                names.append(function_name.rsplit(".", 1)[-1])
-            match_count, coverage = lookup_v8_coverage(file_name, names)
-        status, mapped_coverage, reason = classify_js_coverage(
-            anonymous=anonymous,
-            file_executed=file_executed,
-            match_count=match_count,
-            coverage=coverage,
+        status, mapped_coverage, reason = js_coverage_mapping(
+            row,
+            executed=executed,
+            unique_coverages=unique_coverages,
+            collided=collided,
+            anonymous_counts=anonymous_counts,
         )
         complexity = int(row["complexity"])
         crap = None
@@ -758,7 +898,7 @@ def parse_json_output(text: str) -> object:
     raise json.JSONDecodeError("no json", text, 0)
 
 
-def parse_ruff_c901(output: str) -> list[dict[str, object]]:
+def parse_ruff_structural(output: str) -> list[dict[str, object]]:
     if not output.strip():
         return []
     try:
@@ -767,10 +907,12 @@ def parse_ruff_c901(output: str) -> list[dict[str, object]]:
         return []
     rows = []
     for item in payload:
-        if item.get("code") != "C901":
+        code = item.get("code")
+        if code not in {"C901", "PLR0912", "PLR0915"}:
             continue
         message = str(item.get("message", ""))
-        matched = RUFF_COMPLEXITY_IN_MESSAGE.search(message)
+        matched = RUFF_COMPLEXITY_IN_MESSAGE.search(message) if code == "C901" else None
+        measured = re.search(r"\((?P<actual>\d+) > (?P<limit>\d+)\)", message)
         filename = str(item.get("filename") or item.get("file") or "")
         try:
             relative = Path(filename).resolve().relative_to(ROOT).as_posix()
@@ -778,9 +920,23 @@ def parse_ruff_c901(output: str) -> list[dict[str, object]]:
             relative = filename.replace("\\", "/")
         rows.append(
             {
+                "code": code,
                 "file": relative,
                 "function": matched.group("name") if matched else message,
-                "complexity": int(matched.group("cc")) if matched else None,
+                "actual": (
+                    int(matched.group("cc"))
+                    if matched
+                    else int(measured.group("actual"))
+                    if measured
+                    else None
+                ),
+                "limit": (
+                    MAX_COMPLEXITY
+                    if code == "C901"
+                    else int(measured.group("limit"))
+                    if measured
+                    else None
+                ),
                 "linter": "ruff",
                 "line": (item.get("location") or {}).get("row"),
             }
@@ -835,7 +991,11 @@ def parse_oxlint_complexity(output: str) -> list[dict[str, object]]:
         code = str(
             item.get("code")
             or item.get("rule")
-            or ((item.get("ruleId") or item.get("rule_id")) if isinstance(item, dict) else "")
+            or (
+                (item.get("ruleId") or item.get("rule_id"))
+                if isinstance(item, dict)
+                else ""
+            )
             or ""
         )
         if "complexity" not in code.lower():
@@ -860,7 +1020,9 @@ def parse_oxlint_complexity(output: str) -> list[dict[str, object]]:
         rows.append(
             {
                 "file": relative,
-                "function": name_match.group(1) if name_match else (message or "anonymous"),
+                "function": name_match.group(1)
+                if name_match
+                else (message or "anonymous"),
                 "complexity": int(cc_match.group(1)) if cc_match else None,
                 "linter": "oxlint",
                 "line": line or item.get("line"),
@@ -870,7 +1032,7 @@ def parse_oxlint_complexity(output: str) -> list[dict[str, object]]:
 
 
 def run_complexity_linters() -> dict[str, object]:
-    ruff_c901 = run_command(
+    ruff_structural = run_command(
         [
             sys.executable,
             "-m",
@@ -879,7 +1041,7 @@ def run_complexity_linters() -> dict[str, object]:
             "--config",
             str(ROOT / "pyproject.toml"),
             "--select",
-            "C901",
+            "C901,PLR0912,PLR0915",
             "--output-format",
             "json",
             "backend",
@@ -887,6 +1049,7 @@ def run_complexity_linters() -> dict[str, object]:
         cwd=ROOT,
         timeout=180,
     )
+    ruff_diagnostics = parse_ruff_structural(ruff_structural.stdout)
     eslint = run_command(
         ["node", "node_modules/eslint/bin/eslint.js", ".", "--format", "json"],
         cwd=FRONTEND,
@@ -907,10 +1070,13 @@ def run_complexity_linters() -> dict[str, object]:
         timeout=180,
     )
     return {
-        "ruff_c901": ruff_c901,
+        "ruff_structural_result": ruff_structural,
         "eslint": eslint,
         "oxlint": oxlint,
-        "ruff_complexity": parse_ruff_c901(ruff_c901.stdout),
+        "ruff_structural": ruff_diagnostics,
+        "ruff_complexity": [
+            row for row in ruff_diagnostics if row.get("code") == "C901"
+        ],
         "eslint_complexity": parse_eslint_complexity(eslint.stdout),
         "oxlint_complexity": parse_oxlint_complexity(oxlint.stdout or oxlint.stderr),
     }
@@ -922,7 +1088,7 @@ def load_baseline(path: Path) -> list[dict[str, object]] | None:
     payload = json.loads(path.read_text(encoding="utf-8"))
     entries = payload.get("entries")
     if not isinstance(entries, list):
-        raise RuntimeError(f"{path} is missing an entries array")
+        raise TypeError(f"{path} is missing an entries array")
     return entries
 
 
@@ -930,13 +1096,13 @@ def write_baseline(path: Path, entries: list[dict[str, object]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "version": BASELINE_VERSION,
-        "hard_complexity": HARD_COMPLEXITY,
-        "hard_crap": HARD_CRAP,
-        "preferred_complexity": PREFERRED_COMPLEXITY,
-        "preferred_crap": PREFERRED_CRAP,
+        "max_cyclomatic_complexity": MAX_COMPLEXITY,
+        "max_cognitive_complexity": MAX_COGNITIVE_COMPLEXITY,
         "formula": "CC^2 * (1 - coverage)^3 + CC",
         "python_cc_source": "radon",
-        "python_lint_source": "ruff C901",
+        "python_lint_source": "ruff C901, PLR0912, PLR0915",
+        "python_cognitive_source": "complexipy",
+        "crap_policy": "regression signal for baseline entries; no absolute ceiling",
         "identity": "language:file:qualified_name#source_order",
         "entries": entries,
     }
@@ -948,11 +1114,6 @@ def format_violation(row: Mapping[str, object]) -> str:
     coverage_text = "unresolved" if coverage is None else f"{float(coverage):.0%}"
     crap = row.get("crap")
     crap_text = "n/a" if crap is None else f"{float(crap):.2f}"
-    parts = []
-    if int(row["complexity"]) > HARD_COMPLEXITY:
-        parts.append("CC")
-    if crap is not None and float(crap) > HARD_CRAP:
-        parts.append("CRAP")
     return "\n".join(
         [
             f"file: {row['file']}",
@@ -964,7 +1125,7 @@ def format_violation(row: Mapping[str, object]) -> str:
             f"coverage status: {row.get('coverage_status')}",
             f"function coverage: {coverage_text}",
             f"CRAP: {crap_text}",
-            f"violation: {' + '.join(parts) or 'none'}",
+            "violation: cyclomatic complexity",
         ]
     )
 
@@ -996,35 +1157,35 @@ def summarize(rows: list[dict[str, object]]) -> dict[str, int]:
     unresolved = [row for row in rows if row.get("coverage_status") == "unresolved"]
     uncovered = [row for row in rows if row.get("coverage_status") == "uncovered"]
     measured = [row for row in rows if row.get("coverage_status") == "measured"]
-    cc_violations = [row for row in rows if int(row["complexity"]) > HARD_COMPLEXITY]
-    crap_violations = [
-        row
-        for row in rows
-        if row.get("crap") is not None and float(row["crap"]) > HARD_CRAP
-    ]
-    cc_only = [
-        row
-        for row in cc_violations
-        if row.get("crap") is None or float(row["crap"]) <= HARD_CRAP
-    ]
-    crap_only = [
-        row
-        for row in crap_violations
-        if int(row["complexity"]) <= HARD_COMPLEXITY
-    ]
+    cc_violations = [row for row in rows if int(row["complexity"]) > MAX_COMPLEXITY]
     return {
         "total_functions": len(rows),
         "measured": len(measured),
         "uncovered": len(uncovered),
         "unresolved": len(unresolved),
         "cc_violations": len(cc_violations),
-        "crap_violations": len(crap_violations),
-        "cc_only_violations": len(cc_only),
-        "crap_only_violations": len(crap_only),
     }
 
 
-def main() -> int:
+def size_signals(rows: list[dict[str, object]]) -> dict[str, list[dict[str, object]]]:
+    long_functions = [
+        row for row in rows if int(row.get("lines") or 0) > FUNCTION_LENGTH_REVIEW
+    ]
+    long_files = []
+    for file_name in sorted({str(row["file"]) for row in rows}):
+        path = ROOT / file_name
+        if not path.is_file():
+            continue
+        line_count = len(path.read_text(encoding="utf-8").splitlines())
+        if line_count > FILE_LENGTH_REVIEW:
+            long_files.append({"file": file_name, "lines": line_count})
+    return {
+        "functions": long_functions,
+        "files": long_files,
+    }
+
+
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument(
@@ -1043,65 +1204,65 @@ def main() -> int:
         action="store_true",
         help="Print every current violating function, including legacy debt",
     )
-    args = parser.parse_args()
-    configure_stdio()
+    parser.add_argument(
+        "--quality-ref",
+        default="HEAD",
+        help="Immutable Git point for cognitive-complexity delta checks",
+    )
+    parser.add_argument(
+        "--cognitive-only",
+        action="store_true",
+        help="Run the complexipy delta without collecting test coverage",
+    )
+    return parser.parse_args()
 
-    if args.self_test:
-        self_test()
-        print("self-test passed")
-        return 0
 
-    self_test()
-    print("self-test passed")
+def update_quality_baseline(
+    rows: list[dict[str, object]],
+    previous: list[dict[str, object]] | None,
+) -> list[dict[str, object]]:
+    if previous is None:
+        entries = baseline_entries_from_rows(rows)
+        action = "bootstrap"
+    else:
+        entries = shrink_baseline(rows, previous)
+        action = f"shrunk from {len(previous)} entries"
+    write_baseline(BASELINE_PATH, entries)
+    print(f"Wrote {action} baseline with {len(entries)} entries to {BASELINE_PATH}")
+    return entries
 
-    rows, test_failures = collect_measurements(args.skip_tests)
-    if test_failures:
-        print("quality failed because required tests did not pass")
-        return 1
 
-    stats = summarize(rows)
-    unresolved_rows = [
-        row for row in rows if row.get("coverage_status") == "unresolved"
-    ]
-    previous = load_baseline(BASELINE_PATH)
-    if args.update_baseline:
-        if previous is None:
-            entries = baseline_entries_from_rows(rows)
-            write_baseline(BASELINE_PATH, entries)
-            print(f"Wrote bootstrap baseline with {len(entries)} entries to {BASELINE_PATH}")
-        else:
-            entries = shrink_baseline(rows, previous)
-            write_baseline(BASELINE_PATH, entries)
-            print(
-                f"Wrote shrunk baseline with {len(entries)} entries "
-                f"(was {len(previous)}) to {BASELINE_PATH}"
-            )
-        previous = entries
-
-    ratchet = evaluate_ratchet(rows, previous)
-    lint_results = run_complexity_linters()
-
+def print_quality_summary(
+    stats: Mapping[str, int],
+    cognitive: Mapping[str, object],
+    sizes: Mapping[str, list[dict[str, object]]],
+    ratchet: Mapping[str, object],
+    lint_results: Mapping[str, object],
+) -> None:
     print("\n== Quality gates ==")
-    print(f"preferred CC: {PREFERRED_COMPLEXITY}")
-    print(f"hard CC: {HARD_COMPLEXITY}")
-    print(f"preferred CRAP: {PREFERRED_CRAP}")
-    print(f"hard CRAP: {HARD_CRAP}")
+    print(f"max cyclomatic complexity for new functions: {MAX_COMPLEXITY}")
+    print(f"max cognitive complexity for new functions: {MAX_COGNITIVE_COMPLEXITY}")
     print("formula: CRAP(m) = CC(m)^2 * (1 - coverage(m))^3 + CC(m)")
+    print("CRAP policy: no absolute ceiling; baseline entries may not worsen")
     print("python CC source: radon (CRAP); ruff C901 (raw lint)")
+    print("python cognitive source: complexipy")
+    print(f"cognitive comparison: {cognitive['reference']}")
     print(f"total functions: {stats['total_functions']}")
     print(f"measured: {stats['measured']}")
     print(f"uncovered: {stats['uncovered']}")
     print(f"unresolved coverage mappings: {stats['unresolved']}")
     print(f"CC violations: {stats['cc_violations']}")
-    print(f"CRAP violations: {stats['crap_violations']}")
-    print(f"CC-only violations: {stats['cc_only_violations']}")
-    print(f"CRAP-only violations: {stats['crap_only_violations']}")
+    print(f"cognitive violations: {len(cognitive['above_threshold'])}")
+    print(f"new or worsened cognitive violations: {len(cognitive['regressions'])}")
+    print(f"functions over {FUNCTION_LENGTH_REVIEW} lines: {len(sizes['functions'])}")
+    print(f"files over {FILE_LENGTH_REVIEW} lines: {len(sizes['files'])}")
     print(f"baseline violations remaining: {len(ratchet['legacy'])}")
     print(f"new violations: {len(ratchet['new_debt'])}")
     print(f"worsened violations: {len(ratchet['worsened'])}")
     print(f"resolved violations: {len(ratchet['resolved'])}")
     print(f"stale baseline entries: {len(ratchet['stale_baseline'])}")
     print(f"Ruff C901 diagnostics: {len(lint_results['ruff_complexity'])}")
+    print(f"Ruff structural diagnostics: {len(lint_results['ruff_structural'])}")
     print(f"ESLint complexity diagnostics: {len(lint_results['eslint_complexity'])}")
     print(f"Oxlint complexity diagnostics: {len(lint_results['oxlint_complexity'])}")
     print(
@@ -1109,17 +1270,44 @@ def main() -> int:
         "This command applies the baseline ratchet and does not use those exit codes."
     )
 
-    if unresolved_rows:
-        print("\n== Unresolved coverage mappings ==")
-        for row in unresolved_rows[:50]:
-            print(
-                f"{row['file']} {row['function']} reason={row.get('unresolved_reason')}"
-            )
-        if len(unresolved_rows) > 50:
-            print(f"... {len(unresolved_rows) - 50} more unresolved mappings")
 
+def print_cognitive_regressions(cognitive: Mapping[str, object]) -> None:
+    regressions = cognitive["regressions"]
+    if not regressions:
+        return
+    print("\n== New or worsened cognitive complexity ==")
+    for row in regressions:
+        print(
+            f"{row['file']} {row['function']} "
+            f"{row['old_complexity']} -> {row['new_complexity']}"
+        )
+
+
+def print_cognitive_summary(cognitive: Mapping[str, object]) -> None:
+    print(f"cognitive comparison: {cognitive['reference']}")
+    print(f"functions analyzed: {len(cognitive['functions'])}")
+    print(
+        f"functions above {MAX_COGNITIVE_COMPLEXITY}: {len(cognitive['above_threshold'])}"
+    )
+    print(f"new or worsened violations: {len(cognitive['regressions'])}")
+    print_cognitive_regressions(cognitive)
+
+
+def print_unresolved_coverage(unresolved_rows: list[dict[str, object]]) -> None:
+    if not unresolved_rows:
+        return
+    print("\n== Unresolved coverage mappings ==")
+    for row in unresolved_rows[:50]:
+        print(f"{row['file']} {row['function']} reason={row.get('unresolved_reason')}")
+    if len(unresolved_rows) > 50:
+        print(f"... {len(unresolved_rows) - 50} more unresolved mappings")
+
+
+def print_ratchet_details(ratchet: Mapping[str, object]) -> None:
     if ratchet["missing_baseline"]:
-        print("\nquality/baseline.json is missing. Snapshot current debt with --update-baseline.")
+        print(
+            "\nquality/baseline.json is missing. Snapshot current debt with --update-baseline."
+        )
     for title, bucket in (
         ("New debt", ratchet["new_debt"]),
         ("Worsened debt", ratchet["worsened"]),
@@ -1130,35 +1318,66 @@ def main() -> int:
         for row in bucket:
             print()
             print(format_violation(row))
-    if ratchet["stale_baseline"]:
+    stale = ratchet["stale_baseline"]
+    if stale:
         print("\n== Baseline entries that must be removed ==")
-        for entry in ratchet["stale_baseline"][:50]:
+        for entry in stale[:50]:
             print(entry["id"])
-        if len(ratchet["stale_baseline"]) > 50:
-            print(f"... {len(ratchet['stale_baseline']) - 50} more stale entries")
-        print("Run python scripts/check_quality.py --update-baseline to shrink the ratchet.")
+        if len(stale) > 50:
+            print(f"... {len(stale) - 50} more stale entries")
+        print(
+            "Run python scripts/check_quality.py --update-baseline to shrink the ratchet."
+        )
 
-    if args.verbose:
-        print("\n== All current violating functions ==")
-        for row in sorted(
-            [item for item in rows if is_violating(item)],
-            key=lambda item: (
-                -float(item["crap"] or 0),
-                str(item["file"]),
-                str(item["function"]),
-            ),
-        ):
-            print()
-            print(format_violation(row))
 
-    report = {
-        "preferred_complexity": PREFERRED_COMPLEXITY,
-        "hard_complexity": HARD_COMPLEXITY,
-        "preferred_crap": PREFERRED_CRAP,
-        "hard_crap": HARD_CRAP,
+def print_verbose_violations(rows: list[dict[str, object]], *, verbose: bool) -> None:
+    if not verbose:
+        return
+    print("\n== All current violating functions ==")
+    violating = sorted(
+        [item for item in rows if is_violating(item)],
+        key=lambda item: (
+            -float(item["crap"] or 0),
+            str(item["file"]),
+            str(item["function"]),
+        ),
+    )
+    for row in violating:
+        print()
+        print(format_violation(row))
+
+
+def print_quality_details(
+    rows: list[dict[str, object]],
+    cognitive: Mapping[str, object],
+    unresolved_rows: list[dict[str, object]],
+    ratchet: Mapping[str, object],
+    *,
+    verbose: bool,
+) -> None:
+    print_cognitive_regressions(cognitive)
+    print_unresolved_coverage(unresolved_rows)
+    print_ratchet_details(ratchet)
+    print_verbose_violations(rows, verbose=verbose)
+
+
+def quality_report(
+    rows: list[dict[str, object]],
+    stats: Mapping[str, int],
+    sizes: Mapping[str, list[dict[str, object]]],
+    cognitive: Mapping[str, object],
+    unresolved_rows: list[dict[str, object]],
+    ratchet: Mapping[str, object],
+    lint_results: Mapping[str, object],
+) -> dict[str, object]:
+    return {
+        "max_cyclomatic_complexity": MAX_COMPLEXITY,
+        "max_cognitive_complexity": MAX_COGNITIVE_COMPLEXITY,
         "formula": "CC^2 * (1 - coverage)^3 + CC",
+        "crap_policy": "regression signal for baseline entries; no absolute ceiling",
         "python_cc_source": "radon",
-        "python_lint_source": "ruff C901",
+        "python_lint_source": "ruff C901, PLR0912, PLR0915",
+        "python_cognitive_source": "complexipy",
         "summary": stats,
         "ratchet": {
             "missing_baseline": ratchet["missing_baseline"],
@@ -1174,24 +1393,96 @@ def main() -> int:
         "legacy": ratchet["legacy"],
         "stale_baseline": ratchet["stale_baseline"],
         "unresolved": unresolved_rows,
+        "cognitive": cognitive,
+        "size_signals": sizes,
         "functions": rows,
         "linter_complexity": (
-            list(lint_results["ruff_complexity"])
+            list(lint_results["ruff_structural"])
             + list(lint_results["eslint_complexity"])
             + list(lint_results["oxlint_complexity"])
         ),
     }
-    if args.output:
-        output_path = Path(args.output)
-        if not output_path.is_absolute():
-            output_path = ROOT / output_path
-        output_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-        print(f"\nWrote {output_path}")
 
-    failed = bool(test_failures) or bool(ratchet["new_debt"]) or bool(ratchet["worsened"])
-    if ratchet["missing_baseline"] or ratchet["stale_baseline"]:
-        failed = True
-    return 1 if failed else 0
+
+def write_report(report: Mapping[str, object], output: str | None) -> None:
+    if not output:
+        return
+    output_path = Path(output)
+    if not output_path.is_absolute():
+        output_path = ROOT / output_path
+    output_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    print(f"\nWrote {output_path}")
+
+
+def quality_failed(
+    ratchet: Mapping[str, object],
+    cognitive: Mapping[str, object],
+) -> bool:
+    return bool(
+        ratchet["missing_baseline"]
+        or ratchet["stale_baseline"]
+        or ratchet["new_debt"]
+        or ratchet["worsened"]
+        or cognitive["regressions"]
+    )
+
+
+def main() -> int:
+    args = parse_args()
+    configure_stdio()
+
+    if args.self_test:
+        self_test()
+        print("self-test passed")
+        return 0
+
+    self_test()
+    print("self-test passed")
+
+    try:
+        cognitive = cognitive_complexity(args.quality_ref)
+    except (OSError, RuntimeError, SyntaxError) as exc:
+        print(f"cognitive-complexity analysis failed: {exc}")
+        return 1
+    if args.cognitive_only:
+        print_cognitive_summary(cognitive)
+        return 1 if cognitive["regressions"] else 0
+
+    rows, test_failures = collect_measurements(args.skip_tests)
+    if test_failures:
+        print("quality failed because required tests did not pass")
+        return 1
+
+    stats = summarize(rows)
+    sizes = size_signals(rows)
+    unresolved_rows = [
+        row for row in rows if row.get("coverage_status") == "unresolved"
+    ]
+    previous = load_baseline(BASELINE_PATH)
+    if args.update_baseline:
+        previous = update_quality_baseline(rows, previous)
+
+    ratchet = evaluate_ratchet(rows, previous)
+    lint_results = run_complexity_linters()
+    print_quality_summary(stats, cognitive, sizes, ratchet, lint_results)
+    print_quality_details(
+        rows,
+        cognitive,
+        unresolved_rows,
+        ratchet,
+        verbose=args.verbose,
+    )
+    report = quality_report(
+        rows,
+        stats,
+        sizes,
+        cognitive,
+        unresolved_rows,
+        ratchet,
+        lint_results,
+    )
+    write_report(report, args.output)
+    return 1 if quality_failed(ratchet, cognitive) else 0
 
 
 if __name__ == "__main__":

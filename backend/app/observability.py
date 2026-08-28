@@ -55,7 +55,7 @@ def initialize(
             options["export_mode"] = "immediate"
         telemetry_dev.init(**options)
         _SDK = telemetry_dev
-    except BaseException:
+    except Exception:  # noqa: BLE001 unexpected SDK faults must not abort startup or a rider turn
         _SDK = None
 
 
@@ -67,11 +67,11 @@ def shutdown() -> None:
         return
     try:
         sdk.flush(timeout_s=1.0)
-    except Exception:
+    except Exception:  # noqa: BLE001 unexpected SDK faults must not abort startup or a rider turn
         _LOGGER.debug("telemetry flush failed during shutdown")
     try:
         sdk.shutdown(timeout_s=1.0)
-    except Exception:
+    except Exception:  # noqa: BLE001 unexpected SDK faults must not abort startup or a rider turn
         _LOGGER.debug("telemetry shutdown failed")
 
 
@@ -95,7 +95,7 @@ def _start(name: str, span_type: str, attributes: Mapping[str, object]) -> Any:
             capture_input=False,
             capture_output=False,
         )
-    except BaseException:
+    except Exception:  # noqa: BLE001 unexpected SDK faults must not abort startup or a rider turn
         return _NoopSpan()
 
 
@@ -115,14 +115,14 @@ def wrap_anthropic(client: Any) -> Any:
         if not isinstance(getattr(client, "messages", None), AsyncMessages):
             return client
         return provider_wrap(client)
-    except BaseException:
+    except Exception:  # noqa: BLE001 unexpected SDK faults must not abort startup or a rider turn
         return client
 
 
 def _trace_id(span: Any) -> str | None:
     try:
         traceparent = span.traceparent()
-    except BaseException:
+    except Exception:  # noqa: BLE001 unexpected SDK faults must not abort startup or a rider turn
         return None
     if not isinstance(traceparent, str):
         return None
@@ -150,7 +150,7 @@ def start_turn(ctx: Any, *, turn_id: str, mode: str) -> Any:
 def _finish(span: Any, attributes: Mapping[str, object]) -> None:
     try:
         span.end(attributes=dict(attributes))
-    except Exception:
+    except Exception:  # noqa: BLE001 unexpected SDK faults must not abort startup or a rider turn
         _LOGGER.debug("telemetry span end failed")
 
 

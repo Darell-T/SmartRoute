@@ -13,10 +13,6 @@ import redis
 from app import runtime
 
 WINDOW_S, LEASE_TTL_S = 60, 120
-# WebSockets release their leases when they close, so expiry is only the
-# orphan-recovery boundary. A longer expiry avoids refreshing two healthy,
-# long-lived rider streams every 40 seconds while still reclaiming abandoned
-# connections within a bounded period.
 WEBSOCKET_LEASE_TTL_S = 600
 REQUESTS_PER_PRINCIPAL, REQUESTS_GLOBAL = 20, 240
 WEBSOCKET_CONNECTIONS_PER_PRINCIPAL, WEBSOCKET_CONNECTIONS_GLOBAL = 30, 600
@@ -28,7 +24,7 @@ _PRINCIPAL_PATTERN = re.compile(r"^v1\.[A-Za-z0-9_-]{16,64}$")
 
 
 @dataclass(frozen=True)
-class AdmissionDenied(Exception):
+class AdmissionDenied(Exception):  # noqa: N818
     status_code: int
     code: str
     retry_after_s: int
@@ -190,7 +186,7 @@ async def acquire(principal: str, kind: str) -> AdmissionLease:
             now + ttl_s,
             token,
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 admission faults fail closed as 503
         raise AdmissionDenied(503, "admission_unavailable", 1) from None
     code, retry = int(result[0]), int(result[1])
     if code:
@@ -215,7 +211,7 @@ async def release(lease: AdmissionLease | None) -> None:
             _key(f"leases:{pool}"),
             lease.token,
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 release faults must not fail the rider response
         return
 
 
@@ -251,7 +247,7 @@ async def refresh(lease: AdmissionLease) -> bool:
                 lease.token,
             )
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 refresh faults end the lease
         return False
 
 
@@ -269,5 +265,5 @@ async def consume_nonce(nonce: str, ttl_s: int) -> str:
         return "consumed"
     try:
         return "consumed" if await asyncio.to_thread(client.set, key, "1", nx=True, ex=max(1, ttl_s)) else "replay"
-    except Exception:
+    except Exception:  # noqa: BLE001 nonce faults stay unavailable
         return "unavailable"

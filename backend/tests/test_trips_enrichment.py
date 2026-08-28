@@ -458,6 +458,19 @@ class TripEnrichmentTests(unittest.IsolatedAsyncioTestCase):
         assert "incidents" not in result
         assert "recommendation" in result
 
+    async def test_enrich_route_oserror_returns_unenriched_steps(self):
+        from app.routers import trips as trips_mod
+
+        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(gtfs=object())))
+        payload = trips_mod.EnrichRouteRequest(steps=[{"type": "WALK"}])
+        with patch.object(
+            trips_mod.enrichment,
+            "_enrich_route",
+            AsyncMock(side_effect=OSError("gtfs down")),
+        ):
+            result = await trips_mod.enrich_route(request, payload)
+        assert result == {"steps": [{"type": "WALK"}], "enriched": False}
+
 
 if __name__ == "__main__":
     unittest.main()

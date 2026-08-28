@@ -20,7 +20,6 @@ ALLOWED_COVERAGE = frozenset({"current", "partial", "stale", "unavailable", "uns
 DEFAULT_STATE = "unconfirmed"
 DEFAULT_COVERAGE = "unscanned"
 
-# (canonical field, alias, bound, uppercase)
 LIST_FIELDS = (
     ("affected_stop_ids", "stop_ids", 24, False),
     ("affected_route_ids", "route_ids", 24, True),
@@ -30,14 +29,13 @@ LIST_FIELDS = (
 SOURCE_COVERAGE_BOUND = 8
 SOURCE_RECORDS_BOUND = 8
 
-# (canonical field, aliases, bound) for the shallow source-record allowlist
 _SOURCE_RECORD_FIELDS = (
     ("source", ("source", "provider", "source_type"), 80),
     ("source_id", ("source_id", "id", "source_identity"), 120),
     ("source_url", ("source_url", "citation_url"), 240),
     ("observed_at", ("observed_at",), 64),
 )
-# Container values are never stringified into shallow provenance fields.
+
 _CONTAINER_TYPES = (dict, list, tuple, set, frozenset)
 
 

@@ -4,6 +4,8 @@ import asyncio
 import os
 import time
 
+import httpx
+
 from app.services.mta.config import BASE_URL, route_to_feed
 
 _FETCH_FAILURE_LOGS: dict[str, float] = {}
@@ -50,6 +52,47 @@ def _log_fetch_summary(context: str, message: str):
     print(message)
 
 
+def _split_cached_feeds(feed_requests, force_refresh, cache_get):
+    results = []
+    pending = []
+    for feed_request in feed_requests:
+        cached = None if force_refresh else cache_get(feed_request["url"], fail_open=True)
+        if cached:
+            results.append({
+                **feed_request,
+                "content": cached,
+                "bytes": len(cached),
+                "from_cache": True,
+            })
+        else:
+            pending.append(feed_request)
+    return results, pending
+
+
+def _append_live_feed(feed_request, response, cache_result, cache_set, results) -> None:
+    url = feed_request["url"]
+    if isinstance(response, Exception):
+        _log_fetch_failure(
+            url,
+            f"[mta_feed] feed fetch failed for {url}: {type(response).__name__}: {response!r}",
+        )
+        return
+    if response.status_code != 200:
+        _log_fetch_failure(
+            url,
+            f"[mta_feed] feed {url} returned {response.status_code}",
+        )
+        return
+    if cache_result:
+        cache_set(url, response.content, 30, fail_open=True)
+    results.append({
+        **feed_request,
+        "content": response.content,
+        "bytes": len(response.content),
+        "from_cache": False,
+    })
+
+
 async def fetch_feeds_with_metadata(
     routes: list,
     log_context: str | None = None,
@@ -69,61 +112,27 @@ async def fetch_feeds_with_metadata(
         print("Error: No valid train routes provided.")
         return []
 
-    feed_requests = []
-    for suffix in unique_suffixes:
-        feed_requests.append({
+    feed_requests = [
+        {
             "suffix": suffix or "numbered",
             "url": _feed_url_for_suffix(suffix),
             "routes": _routes_for_suffix(suffix, requested_routes),
-        })
+        }
+        for suffix in unique_suffixes
+    ]
 
-    results = []
-    urls_to_fetch = []
-
-    for feed_request in feed_requests:
-        cached = (
-            None
-            if force_refresh
-            else cache_get(feed_request["url"], fail_open=True)
-        )
-        if cached:
-            results.append({
-                **feed_request,
-                "content": cached,
-                "bytes": len(cached),
-                "from_cache": True,
-            })
-        else:
-            urls_to_fetch.append(feed_request)
+    results, urls_to_fetch = _split_cached_feeds(
+        feed_requests, force_refresh, cache_get
+    )
 
     if urls_to_fetch:
-        import httpx
-
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:  # noqa: TID251
             tasks = [client.get(feed_request["url"]) for feed_request in urls_to_fetch]
             responses = await asyncio.gather(*tasks, return_exceptions=True)
         for feed_request, response in zip(urls_to_fetch, responses, strict=False):
-            url = feed_request["url"]
-            if isinstance(response, Exception):
-                _log_fetch_failure(
-                    url,
-                    f"[mta_feed] feed fetch failed for {url}: {type(response).__name__}: {response!r}",
-                )
-                continue
-            if response.status_code != 200:
-                _log_fetch_failure(
-                    url,
-                    f"[mta_feed] feed {url} returned {response.status_code}",
-                )
-                continue
-            if cache_result:
-                cache_set(url, response.content, 30, fail_open=True)
-            results.append({
-                **feed_request,
-                "content": response.content,
-                "bytes": len(response.content),
-                "from_cache": False,
-            })
+            _append_live_feed(
+                feed_request, response, cache_result, cache_set, results
+            )
 
     if log_context:
         ok = ", ".join(
@@ -153,8 +162,8 @@ def parse_feed_message(raw_bytes: bytes):
     return feed
 
 
-def parse_bytes(rawBytes: bytes) -> list:
-    user_feed = parse_feed_message(rawBytes)
+def parse_bytes(raw_bytes: bytes) -> list:
+    user_feed = parse_feed_message(raw_bytes)
 
     trip_updates = []
     for entity in user_feed.entity:

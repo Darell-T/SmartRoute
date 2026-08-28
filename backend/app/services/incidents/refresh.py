@@ -31,10 +31,10 @@ from app.services.incidents.official import (
 from app.services.incidents.scout import ScoutBatchResult, scout_incident_batch
 
 JOB_LOCK_KEY = "incident:job:lock"
-JOB_LOCK_TTL_S = 25 * 60  # safely below the 30-minute cron cadence.
+JOB_LOCK_TTL_S = 25 * 60
 JOB_METRICS_KEY = "incident:job:last_metrics"
-SCOUT_CONCURRENCY = 2  # explicit small bound; never station-sized fanout.
-SCOUT_BATCH_TIMEOUT_S = 60.0  # hard per-batch cap for one X + conditional Web scout.
+SCOUT_CONCURRENCY = 2
+SCOUT_BATCH_TIMEOUT_S = 60.0
 
 
 def acquire_job_lock(*, ttl_seconds: int = JOB_LOCK_TTL_S) -> str | None:
@@ -65,10 +65,9 @@ async def _collect_official_once(
     collector: Callable[[], Awaitable[OfficialIncidentSnapshot]],
     attempted_at: str,
 ) -> OfficialIncidentSnapshot:
-    """One official snapshot per job run; failure is unavailable, never an abort."""
     try:
         snapshot = await collector()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 official fetch faults report unavailable
         print(f"[incident-job] official collection failed: {type(exc).__name__}")
         snapshot = None
     if not isinstance(snapshot, OfficialIncidentSnapshot):
@@ -81,7 +80,6 @@ async def _collect_official_once(
 
 
 def _unavailable_result(batch_id: str, attempted_at: str) -> ScoutBatchResult:
-    """Truthful surrogate when a batch scout cannot produce a result."""
     return ScoutBatchResult(
         batch_id=batch_id,
         incidents=(),
@@ -98,22 +96,17 @@ async def _scout_one(
     semaphore: asyncio.Semaphore,
     attempted_at: str,
 ) -> tuple[ScoutBatchResult, bool]:
-    """One bounded batch scout; timeout/failure is unavailable and never retried."""
     async with semaphore:
         try:
             result = await asyncio.wait_for(runner(batch), timeout=SCOUT_BATCH_TIMEOUT_S)
-        except Exception as exc:
-            timed_out = isinstance(exc, asyncio.TimeoutError)
-            if not timed_out:
-                print(f"[incident-job] batch scout failed: {type(exc).__name__}")
-            return _unavailable_result(batch.batch_id, attempted_at), timed_out
+        except TimeoutError:
+            return _unavailable_result(batch.batch_id, attempted_at), True
+        except Exception as exc:  # noqa: BLE001 scout batch faults report unavailable
+            print(f"[incident-job] batch scout failed: {type(exc).__name__}")
+            return _unavailable_result(batch.batch_id, attempted_at), False
     if not isinstance(result, ScoutBatchResult):
         return _unavailable_result(batch.batch_id, attempted_at), False
     if result.batch_id != batch.batch_id:
-        # A returned result must name the canonical batch it was asked to
-        # scout; a wrong, empty, or noncanonical id is an invalid contract
-        # and degrades to the unavailable surrogate so every canonical batch
-        # still gets exactly one coverage record and no stray key is written.
         return _unavailable_result(batch.batch_id, attempted_at), False
     return result, False
 
@@ -122,7 +115,6 @@ async def _scout_all(
     runner: Callable[[IncidentBatch], Awaitable[ScoutBatchResult]],
     attempted_at: str,
 ) -> list[tuple[ScoutBatchResult, bool]]:
-    """Scout the ten canonical INCIDENT_BATCHES under an explicit concurrency bound."""
     semaphore = asyncio.Semaphore(SCOUT_CONCURRENCY)
     tasks = [
         asyncio.create_task(_scout_one(batch, runner, semaphore, attempted_at))
@@ -134,12 +126,6 @@ async def _scout_all(
 def _coverage_status(
     *, official_status: dict[str, str], x_status: str, web_status: str
 ) -> str:
-    """Per-batch coverage truth; never inferred from incident counts.
-
-    current: both official families current, X complete, Web complete or not
-    triggered. unavailable: no usable official source and no usable X result.
-    Everything else is partial.
-    """
     family = tuple(official_status.get(key) for key in (SOURCE_ALERTS, SOURCE_GTFS_RT))
     official_current = len(family) == 2 and all(status == STATUS_CURRENT for status in family)
     official_usable = any(status in (STATUS_CURRENT, STATUS_PARTIAL) for status in family)
@@ -174,7 +160,6 @@ def _coverage_record(
 
 
 def _new_metrics(started_at: str) -> dict[str, Any]:
-    """Bounded payload-free metrics: counts and status summaries only."""
     return {
         "started_at": started_at,
         "status": "skipped",
@@ -221,34 +206,9 @@ async def run_background_incident_refresh(
             status in (STATUS_CURRENT, STATUS_PARTIAL)
             for status in snapshot.source_status.values()
         )
-        unique_ids: set[str] = set()
-        upserted = 0
-        for incident in snapshot.incidents:
-            unique_ids.add(incident_index.upsert_incident(incident))
-            upserted += 1
-        coverage = {"current": 0, "partial": 0, "unavailable": 0}
-        for result, _timed in outcomes:
-            for incident in result.incidents:
-                unique_ids.add(incident_index.upsert_incident(incident))
-                upserted += 1
-            status = _coverage_status(
-                official_status=snapshot.source_status,
-                x_status=result.x_status,
-                web_status=result.web_status,
-            )
-            coverage[status] += 1
-            incident_index.set_coverage(
-                _coverage_record(
-                    batch_id=result.batch_id,
-                    attempted_at=attempted_at,
-                    official_attempted_at=snapshot.attempted_at if official_usable else None,
-                    x_status=result.x_status,
-                    web_status=result.web_status,
-                    x_attempted_at=result.attempted_at,
-                    incidents_found=len(result.incidents),
-                    coverage_status=status,
-                )
-            )
+        upserted, unique_ids, coverage = _index_refresh_cycle(
+            snapshot, outcomes, attempted_at, official_usable
+        )
         metrics["coverage"] = coverage
         metrics["incidents_upserted"] = upserted
         metrics["unique_incident_ids"] = len(unique_ids)
@@ -257,20 +217,58 @@ async def run_background_incident_refresh(
         )
         metrics["duration_ms"] = _duration_ms(started, monotonic)
         _store_metrics(metrics)
-        return metrics
     except asyncio.CancelledError:
         metrics["status"] = "failed"
         _store_metrics(metrics)
         raise
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 job faults report failed without killing the process
         print(f"[incident-job] refresh failed: {type(exc).__name__}")
         metrics["status"] = "failed"
         metrics["error"] = type(exc).__name__
         metrics["duration_ms"] = _duration_ms(started, monotonic)
         _store_metrics(metrics)
         return metrics
+    else:
+        return metrics
     finally:
         release_job_lock(token)
+
+
+def _index_refresh_cycle(
+    snapshot: OfficialIncidentSnapshot,
+    outcomes: list,
+    attempted_at: str,
+    official_usable: bool,
+) -> tuple[int, set[str], dict[str, int]]:
+    unique_ids: set[str] = set()
+    upserted = 0
+    coverage = {"current": 0, "partial": 0, "unavailable": 0}
+    for incident in snapshot.incidents:
+        unique_ids.add(incident_index.upsert_incident(incident))
+        upserted += 1
+    for result, _timed in outcomes:
+        for incident in result.incidents:
+            unique_ids.add(incident_index.upsert_incident(incident))
+            upserted += 1
+        status = _coverage_status(
+            official_status=snapshot.source_status,
+            x_status=result.x_status,
+            web_status=result.web_status,
+        )
+        coverage[status] += 1
+        incident_index.set_coverage(
+            _coverage_record(
+                batch_id=result.batch_id,
+                attempted_at=attempted_at,
+                official_attempted_at=snapshot.attempted_at if official_usable else None,
+                x_status=result.x_status,
+                web_status=result.web_status,
+                x_attempted_at=result.attempted_at,
+                incidents_found=len(result.incidents),
+                coverage_status=status,
+            )
+        )
+    return upserted, unique_ids, coverage
 
 
 def _store_metrics(metrics: dict[str, Any]) -> None:

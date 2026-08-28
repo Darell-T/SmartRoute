@@ -1,11 +1,4 @@
-"""Vehicle position enrichment: place a train along its trip's stop sequence.
-
-Pure functions -- stdlib only, all data passed in. When a GTFS-realtime vehicle
-reports only a stop_id (no lat/lng), or is mid-segment between stops, these
-estimate a plausible map position by interpolating along the trip's stop chain
-using the vehicle status + the arrival-time lookup. No upstream/service imports,
-so this module is trivially unit-testable and has no mock coupling.
-"""
+"""Place a train along its trip stop sequence when GTFS-RT omits coordinates."""
 
 
 def _base_stop_id(stop_id: str | None) -> str | None:
@@ -131,3 +124,67 @@ def _attach_trip_segment(vehicle: dict, trip_stops: list[dict], arrival_lookup: 
         "progress": progress,
     }
     return True
+
+
+def _attach_map_position(
+    vehicle: dict,
+    trip_stops: list[dict] | None,
+    stop_locations: dict,
+    arrival_lookup: dict,
+    now: int,
+) -> str | None:
+    if (
+        vehicle.get("position_source") != "vehicle_position"
+        and trip_stops
+        and _attach_trip_segment(vehicle, trip_stops, arrival_lookup, now)
+    ):
+        source = vehicle.get("position_source")
+        return source if source in {"polyline_estimate", "stop_id"} else "stop_id"
+    stop_id = vehicle.get("stop_id")
+    if not stop_id:
+        return None
+    stop_location = stop_locations.get(stop_id) or stop_locations.get(stop_id.rstrip("NS"))
+    if not stop_location:
+        return "missing"
+    vehicle["stop_name"] = stop_location["stop_name"]
+    if vehicle.get("lat") is None or vehicle.get("lng") is None:
+        vehicle["lat"] = stop_location["lat"]
+        vehicle["lng"] = stop_location["lng"]
+        vehicle["position_source"] = "stop_id"
+        return "stop_id"
+    return None
+
+
+def place_vehicle_markers(
+    vehicles: list[dict],
+    *,
+    trip_stop_context: dict,
+    stop_locations: dict,
+    arrival_lookup: dict,
+    now: int,
+    vehicle_route_ids: set[str],
+) -> tuple[list[dict], dict[str, int]]:
+    """Attach map coordinates and drop vehicles that still have none."""
+    tallies = {"polyline_estimate": 0, "stop_id": 0, "missing": 0}
+    for vehicle in vehicles:
+        trip_stops = trip_stop_context.get(vehicle.get("trip_id") or "")
+        _attach_terminal_stop(vehicle, trip_stops)
+        placed = _attach_map_position(
+            vehicle, trip_stops, stop_locations, arrival_lookup, now
+        )
+        if placed in tallies:
+            tallies[placed] += 1
+        vehicle["route_name"] = f"{vehicle.get('route_id', '')} train"
+    placed_vehicles = [
+        vehicle
+        for vehicle in vehicles
+        if vehicle.get("lat") is not None
+        and vehicle.get("lng") is not None
+        and str(vehicle.get("route_id") or "").upper() in vehicle_route_ids
+    ]
+    return placed_vehicles, {
+        "stop_coordinate_fallbacks": tallies["stop_id"],
+        "segment_estimates": tallies["polyline_estimate"],
+        "missing_stop_coordinates": tallies["missing"],
+        "final_markers_after_stop_fallback": len(placed_vehicles),
+    }

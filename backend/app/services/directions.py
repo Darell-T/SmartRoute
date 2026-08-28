@@ -51,7 +51,7 @@ class GoogleRoutesError(RuntimeError):
 def _provider_error_summary(response) -> str:
     try:
         data = response.json()
-    except Exception:
+    except (ValueError, TypeError):
         text = getattr(response, "text", "") or ""
         return " ".join(text.split())[:300]
 
@@ -76,7 +76,6 @@ def _duration_to_minutes(value) -> int | None:
 
 
 def _duration_to_seconds(value) -> int | None:
-    """Parse the provider duration without losing sub-minute precision."""
     if not isinstance(value, str) or not value.endswith("s"):
         return None
     try:
@@ -109,6 +108,51 @@ def _serialize_departure_time(value: str | datetime) -> str:
         )
 
     return dt.astimezone(UTC).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+async def _compute_google_routes(request_body: dict, headers: dict) -> dict:
+    async with httpx.AsyncClient() as client:  # noqa: TID251
+        last_exc: Exception | None = None
+        for attempt in range(1, GOOGLE_ROUTES_RETRIES + 1):
+            try:
+                response = await client.post(
+                    ROUTES_URL,
+                    json = request_body,
+                    headers = headers,
+                    timeout = GOOGLE_ROUTES_TIMEOUT_S,
+                )
+                response.raise_for_status()
+                try:
+                    return response.json()
+                except (ValueError, TypeError) as exc:
+                    print(f"[directions] Google Routes invalid JSON: {type(exc).__name__}")
+                    raise GoogleRoutesError(
+                        "invalid_json",
+                        "Google Routes API returned invalid JSON",
+                    ) from exc
+            except httpx.TimeoutException as exc:
+                last_exc = exc
+                print(f"[directions] Google Routes timeout (attempt {attempt})")
+            except httpx.HTTPStatusError as exc:
+                status_code = exc.response.status_code
+                summary = _provider_error_summary(exc.response)
+                print(
+                    "[directions] Google Routes HTTP "
+                    f"{status_code} code=http_{status_code} summary={summary or 'none'}"
+                )
+                raise GoogleRoutesError(
+                    f"http_{status_code}",
+                    f"Google Routes API error {status_code}",
+                    provider_status=status_code,
+                    provider_summary=summary,
+                ) from exc
+            except httpx.RequestError as exc:
+                print(f"[directions] Google Routes request failed: {type(exc).__name__}")
+                raise GoogleRoutesError(
+                    "request_failed",
+                    "Google Routes API request failed",
+                ) from exc
+        raise GoogleRoutesError("timeout", "Google Routes API timed out") from last_exc
 
 
 async def get_transit_route(
@@ -180,60 +224,9 @@ async def get_transit_route(
         "X-Goog-Api-Key": key,
         "X-Goog-FieldMask": FIELD_MASK
     }
-
-    # Transit computeRoutes with alternatives can be slow. Keep the budget
-    # configurable so local route planning fails fast instead of exhausting
-    # the whole ATLAS interaction window before downstream fallbacks can run.
-    async with httpx.AsyncClient() as client:
-        last_exc: Exception | None = None
-        for attempt in range(1, GOOGLE_ROUTES_RETRIES + 1):
-            try:
-                response = await client.post(
-                    ROUTES_URL,
-                    json = request_body,
-                    headers = headers,
-                    timeout = GOOGLE_ROUTES_TIMEOUT_S,
-                )
-                response.raise_for_status()
-                try:
-                    return response.json()
-                except (ValueError, TypeError) as exc:
-                    print(f"[directions] Google Routes invalid JSON: {type(exc).__name__}")
-                    raise GoogleRoutesError(
-                        "invalid_json",
-                        "Google Routes API returned invalid JSON",
-                    ) from exc
-            except httpx.TimeoutException as exc:
-                last_exc = exc
-                print(f"[directions] Google Routes timeout (attempt {attempt})")
-            except httpx.HTTPStatusError as exc:
-                # Non-2xx (bad/expired key, quota, provider outage). Do not retry;
-                # surface a clean upstream error and keep provider details out of
-                # the public response.
-                status_code = exc.response.status_code
-                summary = _provider_error_summary(exc.response)
-                print(
-                    "[directions] Google Routes HTTP "
-                    f"{status_code} code=http_{status_code} summary={summary or 'none'}"
-                )
-                raise GoogleRoutesError(
-                    f"http_{status_code}",
-                    f"Google Routes API error {status_code}",
-                    provider_status=status_code,
-                    provider_summary=summary,
-                ) from exc
-            except httpx.RequestError as exc:
-                print(f"[directions] Google Routes request failed: {type(exc).__name__}")
-                raise GoogleRoutesError(
-                    "request_failed",
-                    "Google Routes API request failed",
-                ) from exc
-        raise GoogleRoutesError("timeout", "Google Routes API timed out") from last_exc
+    return await _compute_google_routes(request_body, headers)
 
 def parse_response(response: dict) -> list:
-    # Defensive: a malformed/empty provider route (missing legs, partial transit
-    # details, bad timestamps) skips that one route rather than crashing the whole
-    # trip. An entirely empty/garbage response yields [].
     routes = []
     for route in response.get("routes", []):
         legs = route.get("legs") or []

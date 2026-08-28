@@ -181,7 +181,6 @@ def _normalize_route_ids(route_ids):
 
 
 def _location_verbose_log(connection_id: int, selected_route_ids: set[str]) -> str:
-    """Return location telemetry without rider-provided coordinates."""
 
     return (
         f"[ws_live_feed:{connection_id}] location "
@@ -190,7 +189,6 @@ def _location_verbose_log(connection_id: int, selected_route_ids: set[str]) -> s
 
 
 def _socket_failure_log(channel: str, exc: Exception) -> str:
-    """Preserve failure classification without serializing provider details."""
 
     return f"[{channel}] failed error_type={type(exc).__name__}"
 
@@ -235,7 +233,6 @@ def _realtime_trip_stop_context(
     relevant_trip_ids: set[str],
     stop_locations: dict[str, dict],
 ) -> dict[str, list[dict]]:
-    """Build a bounded fallback when a complete static trip chain is absent."""
 
     context: dict[str, list[dict]] = {}
     seen: set[tuple[str, str, int | None]] = set()
@@ -316,6 +313,59 @@ def _derive_live_network_status(
     ):
         return "caution"
     return "healthy"
+
+
+def _nearby_arrivals(trip_updates, nearby_child_stop_ids, nearby_stop_lookup, now: int) -> list[dict]:
+    arrivals = []
+    for arrival in trip_updates:
+        if not arrival.get("arrival_time") or arrival.get("arrival_time") < now - 60:
+            continue
+        stop_context = _arrival_stop_context(arrival, nearby_stop_lookup)
+        if nearby_child_stop_ids and stop_context is None:
+            continue
+        record = dict(arrival)
+        if stop_context:
+            record["parent_stop_id"] = stop_context.get("stop_id")
+            record["parent_stop_name"] = stop_context.get("stop_name")
+            record["station_name"] = stop_context.get("stop_name")
+            record["distance_m"] = stop_context.get("distance_m")
+            record["stop_lat"] = stop_context.get("stop_lat")
+            record["stop_lon"] = stop_context.get("stop_lon")
+        arrivals.append(record)
+    return arrivals
+
+
+def _cached_bus_overlay(lat: float, lng: float) -> tuple[list, dict, object]:
+    cached_bus = mta_realtime.cached_nearby_bus_update(
+        lat,
+        lng,
+        radius_m=NEARBY_ARRIVAL_RADIUS_M,
+    )
+    if not isinstance(cached_bus, dict):
+        return [], {}, "pending"
+    arrivals = cached_bus.get("arrivals", [])
+    return (
+        [arrival for arrival in arrivals if isinstance(arrival, dict)],
+        cached_bus.get("debug", {}),
+        cached_bus.get("status", "pending"),
+    )
+
+
+def _log_empty_vehicle_scope(
+    route_ids, selected_route_ids, stop_fallback_count, missing_stop_coord_count
+) -> None:
+    global _LAST_EMPTY_VEHICLE_LOG
+    log_now = time.monotonic()
+    if log_now - _LAST_EMPTY_VEHICLE_LOG <= 60:
+        return
+    print(
+        "[live_feed] MTA snapshot had no usable vehicle or stop coordinates "
+        f"for scoped vehicle feeds. nearest_routes={sorted(route_ids)} "
+        f"selected_routes={sorted(selected_route_ids)} "
+        f"stop_fallbacks={stop_fallback_count} "
+        f"missing_stop_coords={missing_stop_coord_count}"
+    )
+    _LAST_EMPTY_VEHICLE_LOG = log_now
 
 
 def _build_live_signals(
@@ -419,45 +469,21 @@ async def _build_live_snapshot(
         enriched_stops,
     )
 
-    trip_updates = network.trip_updates
-
     now = int(time.time())
-    arrivals = []
-    for arrival in trip_updates:
-        if not arrival.get("arrival_time") or arrival.get("arrival_time") < now - 60:
-            continue
-        stop_context = _arrival_stop_context(arrival, nearby_stop_lookup)
-        if nearby_child_stop_ids and stop_context is None:
-            continue
-        record = dict(arrival)
-        if stop_context:
-            record["parent_stop_id"] = stop_context.get("stop_id")
-            record["parent_stop_name"] = stop_context.get("stop_name")
-            record["station_name"] = stop_context.get("stop_name")
-            record["distance_m"] = stop_context.get("distance_m")
-            record["stop_lat"] = stop_context.get("stop_lat")
-            record["stop_lon"] = stop_context.get("stop_lon")
-        arrivals.append(record)
+    arrivals = _nearby_arrivals(
+        network.trip_updates,
+        nearby_child_stop_ids,
+        nearby_stop_lookup,
+        now,
+    )
     arrival_lookup = network.arrival_lookup
 
-    # Time-to-first-arrivals: nearest-stop resolution and filtering of the
-    # process-owned network generation are the only primary work before paint.
-    # Measured here so production telemetry can report it.
     arrivals_ms = round((time.monotonic() - _t0) * 1000)
 
     vehicle_route_ids = _expand_vehicle_route_scope(set(route_ids) | selected_route_ids)
 
-    # BusTime is explicitly secondary. Primary snapshots include a fresh cached
-    # bus result when one exists, but never wait on BusTime discovery or fan-out.
-    cached_bus = mta_realtime.cached_nearby_bus_update(
-        lat,
-        lng,
-        radius_m=NEARBY_ARRIVAL_RADIUS_M,
-    )
-    bus_arrivals = cached_bus.get("arrivals", []) if isinstance(cached_bus, dict) else []
-    bus_debug = cached_bus.get("debug", {}) if isinstance(cached_bus, dict) else {}
-    bus_status = cached_bus.get("status", "pending") if isinstance(cached_bus, dict) else "pending"
-    arrivals.extend(arrival for arrival in bus_arrivals if isinstance(arrival, dict))
+    bus_arrivals, bus_debug, bus_status = _cached_bus_overlay(lat, lng)
+    arrivals.extend(bus_arrivals)
     arrivals.sort(key=lambda a: a.get("arrival_time") or 0)
     vehicles = [
         dict(vehicle)
@@ -492,16 +518,13 @@ async def _build_live_snapshot(
         str(stop_id)
         for stop_id in [
             *(vehicle.get("stop_id") for vehicle in vehicles),
-            *(update.get("stop_id") for update in trip_updates),
+            *(update.get("stop_id") for update in network.trip_updates),
         ]
         if stop_id
     }
     stop_locations = gtfs.get_stop_locations(list(stop_ids))
-    # Rider snapshots must never perform a static trip lookup. The relevant
-    # GTFS-RT records already live in the shared network snapshot and provide
-    # the bounded context available for this refresh generation.
     trip_stop_context = _realtime_trip_stop_context(
-        trip_updates,
+        network.trip_updates,
         relevant_trip_ids,
         stop_locations,
     )
@@ -510,59 +533,31 @@ async def _build_live_snapshot(
             arrival,
             trip_stop_context.get(arrival.get("trip_id") or ""),
         )
-    stop_fallback_count = 0
-    segment_estimate_count = 0
-    missing_stop_coord_count = 0
-    for vehicle in vehicles:
-        stop_id = vehicle.get("stop_id")
-        trip_stops = trip_stop_context.get(vehicle.get("trip_id") or "")
-        vehicle_enrichment._attach_terminal_stop(vehicle, trip_stops)
-        if (
-            vehicle.get("position_source") != "vehicle_position"
-            and trip_stops
-            and vehicle_enrichment._attach_trip_segment(vehicle, trip_stops, arrival_lookup, now)
-        ):
-            if vehicle.get("position_source") == "polyline_estimate":
-                segment_estimate_count += 1
-            else:
-                stop_fallback_count += 1
-        elif stop_id:
-            stop_location = stop_locations.get(stop_id) or stop_locations.get(stop_id.rstrip("NS"))
-            if stop_location:
-                vehicle["stop_name"] = stop_location["stop_name"]
-                if vehicle.get("lat") is None or vehicle.get("lng") is None:
-                    vehicle["lat"] = stop_location["lat"]
-                    vehicle["lng"] = stop_location["lng"]
-                    vehicle["position_source"] = "stop_id"
-                    stop_fallback_count += 1
-            else:
-                missing_stop_coord_count += 1
-        vehicle["route_name"] = f"{vehicle.get('route_id', '')} train"
-
-    vehicles = [
-        vehicle
-        for vehicle in vehicles
-        if vehicle.get("lat") is not None
-        and vehicle.get("lng") is not None
-        and str(vehicle.get("route_id") or "").upper() in vehicle_route_ids
+    vehicles, placement = vehicle_enrichment.place_vehicle_markers(
+        vehicles,
+        trip_stop_context=trip_stop_context,
+        stop_locations=stop_locations,
+        arrival_lookup=arrival_lookup,
+        now=now,
+        vehicle_route_ids=vehicle_route_ids,
+    )
+    vehicle_debug["stop_coordinate_fallbacks"] = placement["stop_coordinate_fallbacks"]
+    vehicle_debug["segment_estimates"] = placement["segment_estimates"]
+    vehicle_debug["missing_stop_coordinates"] = placement["missing_stop_coordinates"]
+    vehicle_debug["final_markers_after_stop_fallback"] = placement[
+        "final_markers_after_stop_fallback"
     ]
-    vehicle_debug["stop_coordinate_fallbacks"] = stop_fallback_count
-    vehicle_debug["segment_estimates"] = segment_estimate_count
-    vehicle_debug["missing_stop_coordinates"] = missing_stop_coord_count
-    vehicle_debug["final_markers_after_stop_fallback"] = len(vehicles)
+    stop_fallback_count = placement["stop_coordinate_fallbacks"]
+    missing_stop_coord_count = placement["missing_stop_coordinates"]
     signals = _build_live_signals(parsed_alerts, vehicles, vehicle_debug, now)
 
     if network.feed_count and not vehicles:
-        log_now = time.monotonic()
-        if log_now - _LAST_EMPTY_VEHICLE_LOG > 60:
-            print(
-                "[live_feed] MTA snapshot had no usable vehicle or stop coordinates "
-                f"for scoped vehicle feeds. nearest_routes={sorted(route_ids)} "
-                f"selected_routes={sorted(selected_route_ids)} "
-                f"stop_fallbacks={stop_fallback_count} "
-                f"missing_stop_coords={missing_stop_coord_count}"
-            )
-            _LAST_EMPTY_VEHICLE_LOG = log_now
+        _log_empty_vehicle_scope(
+            route_ids,
+            selected_route_ids,
+            stop_fallback_count,
+            missing_stop_coord_count,
+        )
 
     return {
         "nearest_stop": nearest_stop,

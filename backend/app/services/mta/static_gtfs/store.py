@@ -37,8 +37,6 @@ _pool_lock = threading.Lock()
 
 
 def init_pool():
-    # Called from the FastAPI lifespan so an unreachable database surfaces
-    # as a startup error instead of hanging at import time.
     global _pool
     with _pool_lock:
         if _pool is None:
@@ -224,10 +222,6 @@ class GTFSStaticData:
             limit=limit,
         )
 
-    # ------------------------------------------------------------------
-    # Simplified my over engineered support for concurrent users
-    # ------------------------------------------------------------------
-
     def _query(self, sql, params=None):
         self.__dict__["_query_count"] = self.__dict__.get("_query_count", 0) + 1
         pool = _get_pool()
@@ -260,24 +254,17 @@ class GTFSStaticData:
 
 
     def _name_index(self) -> dict:
-        """Lazy in-memory {normalized stop_name -> {stripped stop_id}} index.
-        GTFS stops are static and small (~1500 rows), so loading them once and
-        resolving names in memory removes two remote round-trips per enriched
-        leg and tolerates Av/Avenue-style spelling differences between the
-        routing provider and GTFS."""
         idx = self.__dict__.get("_name_index_cache")
         if idx is None:
             idx = {}
             try:
                 rows = self._query("SELECT stop_id, stop_name FROM stops")
-            except Exception:
+            except Exception:  # noqa: BLE001 name-index query faults fall back to per-name lookup
                 rows = []
             for r in rows:
                 key = normalize_station_name(r.get("stop_name"))
                 if key:
                     idx.setdefault(key, set()).add(r["stop_id"].rstrip("NS"))
-            # Only memoize a populated index; a transient load failure should be
-            # retried next call, not cached as permanently empty.
             if idx:
                 self.__dict__["_name_index_cache"] = idx
         return idx
@@ -286,26 +273,16 @@ class GTFSStaticData:
         idx = self._name_index()
         if idx:
             return set(idx.get(normalize_station_name(name), set()))
-        # Index could not load (DB hiccup): fall back to a direct exact match.
         rows = self._query("SELECT stop_id FROM stops WHERE stop_name = %s", (name,))
         return {r["stop_id"].rstrip("NS") for r in rows}
 
     def _route_stop_ids_near(self, route_id: str, coords) -> set:
-        """Stripped id of the single stop on route_id nearest to a {latitude,
-        longitude} point. Fallback for when a provider station name does not
-        resolve to a stop on the route's own trips -- the routing provider
-        sometimes names a leg's endpoint as the transfer station, which is not
-        a stop on this line."""
         if not coords:
             return set()
         lat = coords.get("latitude")
         lng = coords.get("longitude")
         if lat is None or lng is None:
             return set()
-        # Snap against the stops of ONE representative trip on the route -- a
-        # bounded ~30-row query. A DISTINCT join over every trip of the route
-        # is far heavier and, on the synchronous trip path, risks tripping the
-        # database statement timeout and failing the whole request.
         rows = self._query(
             """
             SELECT s.stop_id, s.stop_lat, s.stop_lon
@@ -326,9 +303,6 @@ class GTFSStaticData:
         return {best_id.rstrip("NS")} if best_id else set()
 
     def _trip_stops_between(self, route_id: str, origin_ids: set, dest_ids: set) -> list:
-        """Ordered stop rows between any origin id and any dest id on the first
-        trip of route_id that traverses them in order. Each row:
-        {stop_id, stop_name, stop_lat, stop_lon}. Empty if no trip qualifies."""
         if not origin_ids or not dest_ids:
             return []
 
@@ -375,16 +349,11 @@ class GTFSStaticData:
         )
 
     def _find_trip_stop_rows(self, route_id: str, origin: str, dest: str) -> list:
-        """Ordered stop rows between origin and dest (matched by station name)
-        on the first qualifying trip of route_id. Empty if no trip qualifies."""
         return self._trip_stops_between(
             route_id, self._ids_for_name(origin), self._ids_for_name(dest)
         )
 
     def _db_fallback_enabled(self) -> bool:
-        """The remote-DB enrichment path is OFF by default (Fix B). It only runs
-        as an explicit debug fallback: GTFS_DB_FALLBACK=1 in the environment, or
-        an instance opting in via _allow_db_fallback (used by the DB-path tests)."""
         return (
             os.getenv("GTFS_DB_FALLBACK", "0") == "1"
             or bool(self.__dict__.get("_allow_db_fallback"))
@@ -425,8 +394,6 @@ class GTFSStaticData:
         index = self.__dict__.get("_pattern_index")
         if index is not None:
             return index.all_parent_stops()
-        # location_type column is TEXT (raw GTFS value, "1" for parent stations).
-        # Column is stop_lon (REAL) per the migration — not stop_long.
         return self._query(
             "SELECT stop_id, stop_name, stop_lat, stop_lon FROM stops WHERE location_type = '1'"
         )
@@ -530,7 +497,6 @@ class GTFSStaticData:
         if not trip_ids:
             return {}
 
-        # Realtime updates, not this pattern artifact, own per-trip sequences.
         if self.__dict__.get("_pattern_index") is not None:
             return {}
         rows = self._query(
@@ -563,10 +529,6 @@ class GTFSStaticData:
             })
         return context
 
-    # location_type column is TEXT (the migration writes the raw GTFS string
-    # value, which is "1" for parent stations). Two queries: parents first,
-    # then a single grouped pull of route_ids per parent so we don't fall
-    # into N+1.
     def get_subway_stops_with_routes(self, route_id_whitelist: set[str] | None = None):
         index = self.__dict__.get("_pattern_index")
         if index is not None:

@@ -305,6 +305,28 @@ class ObservabilityTests(unittest.IsolatedAsyncioTestCase):
         assert [span.name for span in spans].count("smartroute.agent.turn") == 1
         assert not any(span.name.startswith("chat ") for span in spans)
 
+    def test_unexpected_sdk_exception_leaves_sdk_uninitialized(self):
+        class TelemetryBoom(Exception):
+            pass
+
+        with patch("telemetry_dev.init", side_effect=TelemetryBoom("init")):
+            observability.initialize(span_exporter=self.exporter)
+        assert observability._SDK is None
+        fake = FakeAsyncAnthropic()
+        assert observability.wrap_anthropic(fake) is fake
+
+    def test_wrap_anthropic_unexpected_exception_returns_unwrapped_client(self):
+        class WrapBoom(Exception):
+            pass
+
+        self._enable()
+        client = anthropic.AsyncAnthropic(api_key="dummy")
+        with patch(
+            "telemetry_dev_anthropic.wrap_anthropic",
+            side_effect=WrapBoom("wrap"),
+        ):
+            assert observability.wrap_anthropic(client) is client
+
 
 if __name__ == "__main__":
     unittest.main()

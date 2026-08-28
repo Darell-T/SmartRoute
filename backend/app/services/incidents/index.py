@@ -139,7 +139,6 @@ def get_coverage(coverage_id: str) -> dict[str, Any] | None:
 
 
 def _coverage_from_record(record: dict[str, Any]) -> dict[str, Any]:
-    """Expired coverage reads as stale, never current."""
     status = str(record.get("coverage_status") or DEFAULT_COVERAGE)
     if record_is_expired(record) and status not in _UNUSABLE_COVERAGE:
         copy = dict(record)
@@ -234,7 +233,6 @@ def _index_keys_for_lookup(
     corridor_ids: Iterable[str] | None,
     coverage_ids: Iterable[str] | None,
 ) -> list[str]:
-    """All reverse-index keys one lookup reads, in deterministic order."""
     keys: list[str] = []
     for value, prefix, upper in (
         *((item, STOP_INDEX_PREFIX, False) for item in _as_list(stop_ids)),
@@ -250,7 +248,6 @@ def _index_keys_for_lookup(
 def _coverage_status(
     requested_ids: list[str], records_by_id: dict[str, dict[str, Any]]
 ) -> str:
-    """Aggregate status derived only from the requested coverage records."""
     if not requested_ids:
         return DEFAULT_COVERAGE
     statuses = {
@@ -262,7 +259,6 @@ def _coverage_status(
     if "partial" in statuses:
         return "partial"
     if statuses & {"current", "partial"} and statuses - {"current", "partial"}:
-        # Usable (current/partial) mixed with missing/unavailable/unscanned/stale.
         return "partial"
     if statuses == {"current"}:
         return "current"
@@ -277,8 +273,7 @@ def _index_keys_for(record: dict[str, Any]) -> list[str]:
     keys: list[str] = []
     for canonical, _alias, _bound, _upper in LIST_FIELDS:
         prefix = _INDEX_PREFIXES[canonical]
-        for value in record.get(canonical) or []:
-            keys.append(f"{prefix}{value}")
+        keys.extend(f"{prefix}{value}" for value in record.get(canonical) or [])
     return keys
 
 
@@ -309,7 +304,6 @@ def _load_json(key: str) -> Any:
 
 
 def _parse_json(raw: Any) -> Any:
-    """Parse one cached blob; malformed or missing blobs read as None."""
     if raw is None:
         return None
     try:

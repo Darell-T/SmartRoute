@@ -144,7 +144,7 @@ async def fetch_nearby_bus_update(
             )
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 bus-update faults fall back to stale cache
             stale = bus_runtime.get_last_cached(
                 bus_runtime.nearby_arrivals_cache,
                 cache_key,

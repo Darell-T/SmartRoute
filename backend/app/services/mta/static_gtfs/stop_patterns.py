@@ -56,6 +56,11 @@ def _coord(coords):
     return None
 
 
+def _coord_record(info: dict | None) -> dict:
+    info = info or {}
+    return {"latitude": info.get("lat"), "longitude": info.get("lon")}
+
+
 class StopPatternIndex:
     def __init__(self, artifact: dict):
         self.stops: dict[str, dict] = artifact.get("stops", {})
@@ -67,7 +72,6 @@ class StopPatternIndex:
             key = normalize_station_name(raw)
             if key:
                 tmp.setdefault(key, set()).add(sid)
-            # Providers shorten compound names; index each dash-separated component.
             for part in raw.split("-"):
                 part_key = normalize_station_name(part)
                 if part_key and part_key != key:
@@ -157,7 +161,6 @@ class StopPatternIndex:
         return self._stop_rows(routes_by_stop)
 
     def _stop_rows(self, routes_by_stop) -> list[dict]:
-        """Project cached route ownership into the existing stop-row contract."""
 
         return [
             {
@@ -287,6 +290,216 @@ class StopPatternIndex:
             "direction_id": best[3],
         }
 
+    def _stop_distance(self, stop_id, destination_coord, fallback=None):
+        info = self.stops.get(_parent_stop_id(str(stop_id)))
+        point = (_coord(info) if info else None) or fallback
+        return distance_meters(*point, *destination_coord) if point else None
+
+    def _members_by_complex(self) -> dict[str, set[str]]:
+        members: dict[str, set[str]] = {}
+        for stop_id, info in self.stops.items():
+            complex_id = info.get("station_complex_id")
+            if complex_id:
+                members.setdefault(str(complex_id), set()).add(str(stop_id))
+        return members
+
+    def _best_destinations_after_stop(
+        self,
+        *,
+        continuation,
+        continuation_stops,
+        continuation_transfer_pos,
+        stop_id,
+        seed,
+        seed_route,
+        boarding_pos,
+        seed_alighting_id,
+        transfer_id,
+        complex_id,
+        seed_distance,
+        destination_coord,
+        min_egress_improvement_meters,
+        continuation_route,
+        best,
+    ):
+        for destination_pos in range(
+            continuation_transfer_pos + 1, len(continuation_stops)
+        ):
+            destination_stop_id = continuation_stops[destination_pos]
+            continuation_distance = self._stop_distance(
+                destination_stop_id, destination_coord
+            )
+            if continuation_distance is None:
+                continue
+            candidate = self._score_continuation_destination(
+                seed_route=seed_route,
+                seed=seed,
+                boarding_pos=boarding_pos,
+                seed_alighting_id=seed_alighting_id,
+                transfer_id=transfer_id,
+                complex_id=str(complex_id),
+                stop_id=stop_id,
+                destination_stop_id=destination_stop_id,
+                seed_distance=seed_distance,
+                continuation_distance=continuation_distance,
+                min_egress_improvement_meters=min_egress_improvement_meters,
+                continuation=continuation,
+                continuation_route=continuation_route,
+            )
+            if candidate is not None and (best is None or candidate[0] < best[0]):
+                best = candidate
+        return best
+
+    def _best_on_continuation(
+        self,
+        *,
+        continuation,
+        seed,
+        seed_route,
+        excluded,
+        boarding_pos,
+        seed_alighting_id,
+        transfer_id,
+        complex_id,
+        members,
+        seed_distance,
+        destination_coord,
+        min_egress_improvement_meters,
+        best,
+    ):
+        continuation_route = str(
+            continuation.get("route_short_name") or continuation.get("route_id") or ""
+        ).strip().upper()
+        if not continuation_route or continuation_route in {seed_route, *excluded}:
+            return best
+        continuation_stops = continuation.get("stop_ids") or []
+        for continuation_transfer_pos, stop_id in enumerate(continuation_stops):
+            if _parent_stop_id(str(stop_id)) not in members:
+                continue
+            best = self._best_destinations_after_stop(
+                continuation=continuation,
+                continuation_stops=continuation_stops,
+                continuation_transfer_pos=continuation_transfer_pos,
+                stop_id=stop_id,
+                seed=seed,
+                seed_route=seed_route,
+                boarding_pos=boarding_pos,
+                seed_alighting_id=seed_alighting_id,
+                transfer_id=transfer_id,
+                complex_id=complex_id,
+                seed_distance=seed_distance,
+                destination_coord=destination_coord,
+                min_egress_improvement_meters=min_egress_improvement_meters,
+                continuation_route=continuation_route,
+                best=best,
+            )
+        return best
+
+    def _best_on_seed(
+        self,
+        *,
+        seed,
+        seed_route,
+        excluded,
+        boarding_ids,
+        alighting_ids,
+        boarding_coord,
+        alighting_coord,
+        destination_coord,
+        min_egress_improvement_meters,
+        complex_members,
+        best,
+    ):
+        positions = seed["pos"]
+        boarding_pos = self._pick_pos(positions, boarding_ids, boarding_coord)
+        alighting_pos = self._pick_pos(positions, alighting_ids, alighting_coord)
+        if boarding_pos is None or alighting_pos is None or boarding_pos >= alighting_pos:
+            return best
+        seed_alighting_id = seed["stop_ids"][alighting_pos]
+        seed_distance = (
+            distance_meters(*alighting_coord, *destination_coord)
+            if alighting_coord
+            else self._stop_distance(seed_alighting_id, destination_coord)
+        )
+        if seed_distance is None:
+            return best
+        for transfer_pos in range(boarding_pos + 1, alighting_pos):
+            transfer_id = seed["stop_ids"][transfer_pos]
+            complex_id = self.identity_for_stop(transfer_id).get("station_complex_id")
+            if not complex_id or complex_id not in complex_members:
+                continue
+            members = complex_members[complex_id]
+            for continuation in self.patterns:
+                best = self._best_on_continuation(
+                    continuation=continuation,
+                    seed=seed,
+                    seed_route=seed_route,
+                    excluded=excluded,
+                    boarding_pos=boarding_pos,
+                    seed_alighting_id=seed_alighting_id,
+                    transfer_id=transfer_id,
+                    complex_id=complex_id,
+                    members=members,
+                    seed_distance=seed_distance,
+                    destination_coord=destination_coord,
+                    min_egress_improvement_meters=min_egress_improvement_meters,
+                    best=best,
+                )
+        return best
+
+    def _score_continuation_destination(
+        self,
+        *,
+        seed_route: str,
+        seed: dict,
+        boarding_pos: int,
+        seed_alighting_id: str,
+        transfer_id: str,
+        complex_id: str,
+        stop_id: str,
+        destination_stop_id: str,
+        seed_distance: float,
+        continuation_distance: float,
+        min_egress_improvement_meters: float,
+        continuation: dict,
+        continuation_route: str,
+    ) -> tuple[tuple, dict] | None:
+        improvement = seed_distance - continuation_distance
+        if improvement < float(min_egress_improvement_meters):
+            return None
+        dest_info = self.stops.get(_parent_stop_id(str(destination_stop_id))) or {}
+        transfer_info = self.stops.get(_parent_stop_id(str(transfer_id))) or {}
+        continuation_info = (
+            self.stops.get(str(stop_id))
+            or self.stops.get(_parent_stop_id(str(stop_id)))
+            or {}
+        )
+        return (
+            (
+                continuation_distance,
+                -improvement,
+                -int(continuation.get("trip_count") or 0),
+            ),
+            {
+                "seed_route_id": seed_route,
+                "seed_boarding_stop_id": str(seed["stop_ids"][boarding_pos]),
+                "seed_alighting_stop_id": str(seed_alighting_id),
+                "transfer_stop_id": str(transfer_id),
+                "transfer_stop_name": transfer_info.get("name"),
+                "transfer_stop_coords": _coord_record(transfer_info),
+                "transfer_station_complex_id": str(complex_id),
+                "continuation_transfer_stop_id": str(stop_id),
+                "continuation_transfer_stop_coords": _coord_record(continuation_info),
+                "continuation_route_id": continuation_route,
+                "destination_stop_id": str(destination_stop_id),
+                "destination_stop_name": dest_info.get("name"),
+                "destination_stop_coords": _coord_record(dest_info),
+                "seed_alighting_distance_meters": round(seed_distance, 1),
+                "destination_distance_meters": round(continuation_distance, 1),
+                "egress_distance_improvement_meters": round(improvement, 1),
+            },
+        )
+
     def suggest_one_transfer(
         self,
         route_id,
@@ -321,99 +534,22 @@ class StopPatternIndex:
             return None
         boarding_coord = _coord(boarding_coords)
         alighting_coord = _coord(alighting_coords)
-        def stop_info(stop_id):
-            return self.stops.get(_parent_stop_id(str(stop_id)))
-
-        def coord_record(info):
-            return {"latitude": info.get("lat"), "longitude": info.get("lon")}
-
-        def distance(stop_id, fallback=None):
-            info = stop_info(stop_id)
-            point = (_coord(info) if info else None) or fallback
-            return distance_meters(*point, *destination_coord) if point else None
-
-        complex_members = {}
-        for stop_id, info in self.stops.items():
-            complex_id = info.get("station_complex_id")
-            if complex_id:
-                complex_members.setdefault(str(complex_id), set()).add(str(stop_id))
+        complex_members = self._members_by_complex()
         best = None
         for seed in self.route_patterns.get(seed_route, []):
-            positions = seed["pos"]
-            boarding_pos = self._pick_pos(positions, boarding_ids, boarding_coord)
-            alighting_pos = self._pick_pos(positions, alighting_ids, alighting_coord)
-            if boarding_pos is None or alighting_pos is None or boarding_pos >= alighting_pos:
-                continue
-            seed_alighting_id = seed["stop_ids"][alighting_pos]
-            seed_distance = distance_meters(*alighting_coord, *destination_coord) if alighting_coord else distance(seed_alighting_id)
-            if seed_distance is None:
-                continue
-            for transfer_pos in range(boarding_pos + 1, alighting_pos):
-                transfer_id = seed["stop_ids"][transfer_pos]
-                transfer_identity = self.identity_for_stop(transfer_id)
-                complex_id = transfer_identity.get("station_complex_id")
-                if not complex_id or complex_id not in complex_members:
-                    continue
-                members = complex_members[complex_id]
-                for continuation in self.patterns:
-                    continuation_route = str(
-                        continuation.get("route_short_name")
-                        or continuation.get("route_id")
-                        or ""
-                    ).strip().upper()
-                    if not continuation_route or continuation_route in {seed_route, *excluded}:
-                        continue
-                    continuation_stops = continuation.get("stop_ids") or []
-                    for continuation_transfer_pos, stop_id in enumerate(continuation_stops):
-                        if _parent_stop_id(str(stop_id)) not in members:
-                            continue
-                        for destination_pos in range(
-                            continuation_transfer_pos + 1,
-                            len(continuation_stops),
-                        ):
-                            destination_stop_id = continuation_stops[destination_pos]
-                            continuation_distance = distance(destination_stop_id)
-                            if continuation_distance is None:
-                                continue
-                            improvement = seed_distance - continuation_distance
-                            if improvement < float(min_egress_improvement_meters):
-                                continue
-                            score = (
-                                continuation_distance,
-                                -improvement,
-                                -int(continuation.get("trip_count") or 0),
-                            )
-                            if best is None or score < best[0]:
-                                info = stop_info(destination_stop_id) or {}
-                                transfer_info = stop_info(transfer_id) or {}
-                                continuation_info = self.stops.get(str(stop_id)) or stop_info(stop_id) or {}
-                                best = (
-                                    score,
-                                    {
-                                        "seed_route_id": seed_route,
-                                        "seed_boarding_stop_id": str(seed["stop_ids"][boarding_pos]),
-                                        "seed_alighting_stop_id": str(seed_alighting_id),
-                                        "transfer_stop_id": str(transfer_id),
-                                        "transfer_stop_name": transfer_info.get("name"),
-                                        "transfer_stop_coords": coord_record(transfer_info),
-                                        "transfer_station_complex_id": str(complex_id),
-                                        "continuation_transfer_stop_id": str(stop_id),
-                                        "continuation_transfer_stop_coords": coord_record(continuation_info),
-                                        "continuation_route_id": continuation_route,
-                                        "destination_stop_id": str(destination_stop_id),
-                                        "destination_stop_name": info.get("name"),
-                                        "destination_stop_coords": coord_record(info),
-                                        "seed_alighting_distance_meters": round(
-                                            seed_distance, 1
-                                        ),
-                                        "destination_distance_meters": round(
-                                            continuation_distance, 1
-                                        ),
-                                        "egress_distance_improvement_meters": round(
-                                            improvement, 1
-                                        ),
-                                    },
-                                )
+            best = self._best_on_seed(
+                seed=seed,
+                seed_route=seed_route,
+                excluded=excluded,
+                boarding_ids=boarding_ids,
+                alighting_ids=alighting_ids,
+                boarding_coord=boarding_coord,
+                alighting_coord=alighting_coord,
+                destination_coord=destination_coord,
+                min_egress_improvement_meters=min_egress_improvement_meters,
+                complex_members=complex_members,
+                best=best,
+            )
         return best[1] if best else None
 
     def get_intermediate_stops_with_coords(
@@ -439,10 +575,9 @@ class StopPatternIndex:
 
         oc = _coord(origin_coords)
         dc = _coord(dest_coords)
-        best = None  # (score, pattern, oi, di)
+        best = None
         for p in candidates:
             pos = p["pos"]
-            # Coordinates disambiguate repeated stop names and express branches.
             oi = self._pick_pos(pos, origin_ids, oc)
             di = self._pick_pos(pos, dest_ids, dc)
             if oi is None or di is None or oi >= di:
@@ -468,7 +603,6 @@ class StopPatternIndex:
         return [r["name"] for r in rows]
 
     def _pick_pos(self, pos: dict, id_set, coord) -> int | None:
-        """Choose the indexed stop nearest ``coord`` or the earliest occurrence."""
         candidates = [(sid, pos[sid]) for sid in id_set if sid in pos]
         if not candidates:
             return None

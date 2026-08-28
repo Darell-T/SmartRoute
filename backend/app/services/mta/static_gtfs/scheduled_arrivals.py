@@ -103,56 +103,14 @@ class ScheduledArrivalIndex:
                     if str(row.get("stop_id") or "") in stop_set
                 ]
                 for row in stop_times:
-                    stop_id = str(row.get("stop_id") or "")
-                    label = str(
-                        trip.get("trip_headsign") or trip.get("direction_id") or "route"
+                    self._append_one_matching_stop(
+                        predictions,
+                        row,
+                        trip,
+                        requested,
+                        midnight,
+                        local_now,
                     )
-                    normalized_direction = _direction_for(
-                        stop_id, label, trip.get("direction_id")
-                    )
-                    if (
-                        requested
-                        and requested not in normalized_direction
-                        and requested not in label.casefold()
-                    ):
-                        continue
-                    arrival_offset = _seconds(row.get("arrival_time"))
-                    if arrival_offset is None:
-                        continue
-                    frequencies = trip.get("frequencies") or []
-                    if frequencies:
-                        first_offset = _seconds(
-                            (trip.get("stop_times") or [{}])[0].get("arrival_time")
-                        )
-                        if first_offset is None:
-                            continue
-                        stop_offset = arrival_offset - first_offset
-                        for frequency in frequencies:
-                            start = _seconds(frequency.get("start_time"))
-                            end = _seconds(frequency.get("end_time"))
-                            headway = int(frequency.get("headway_secs") or 0)
-                            if start is None or end is None or headway <= 0:
-                                continue
-                            for departure in range(start, end, headway):
-                                self._append_prediction(
-                                    predictions,
-                                    midnight,
-                                    departure + stop_offset,
-                                    local_now,
-                                    normalized_direction,
-                                    label,
-                                    trip,
-                                )
-                    else:
-                        self._append_prediction(
-                            predictions,
-                            midnight,
-                            arrival_offset,
-                            local_now,
-                            normalized_direction,
-                            label,
-                            trip,
-                        )
         ordered = sorted(predictions, key=lambda row: row["arrival_time"])
         bounded: list[dict[str, Any]] = []
         per_direction: dict[str, int] = {}
@@ -167,6 +125,79 @@ class ScheduledArrivalIndex:
             "predictions": bounded,
             "valid_until": self.valid_until,
         }
+
+    def _append_one_matching_stop(
+        self,
+        predictions: list[dict[str, Any]],
+        row: dict,
+        trip: dict,
+        requested: str,
+        midnight: datetime,
+        local_now: datetime,
+    ) -> None:
+        stop_id = str(row.get("stop_id") or "")
+        label = str(trip.get("trip_headsign") or trip.get("direction_id") or "route")
+        normalized_direction = _direction_for(stop_id, label, trip.get("direction_id"))
+        if (
+            requested
+            and requested not in normalized_direction
+            and requested not in label.casefold()
+        ):
+            return
+        arrival_offset = _seconds(row.get("arrival_time"))
+        if arrival_offset is None:
+            return
+        if trip.get("frequencies"):
+            self._append_frequency_departures(
+                predictions,
+                trip,
+                arrival_offset,
+                midnight,
+                local_now,
+                normalized_direction,
+                label,
+            )
+            return
+        self._append_prediction(
+            predictions,
+            midnight,
+            arrival_offset,
+            local_now,
+            normalized_direction,
+            label,
+            trip,
+        )
+
+    def _append_frequency_departures(
+        self,
+        predictions: list[dict[str, Any]],
+        trip: dict,
+        arrival_offset: int,
+        midnight: datetime,
+        local_now: datetime,
+        direction: str,
+        label: str,
+    ) -> None:
+        first_offset = _seconds((trip.get("stop_times") or [{}])[0].get("arrival_time"))
+        if first_offset is None:
+            return
+        stop_offset = arrival_offset - first_offset
+        for frequency in trip.get("frequencies") or []:
+            start = _seconds(frequency.get("start_time"))
+            end = _seconds(frequency.get("end_time"))
+            headway = int(frequency.get("headway_secs") or 0)
+            if start is None or end is None or headway <= 0:
+                continue
+            for departure in range(start, end, headway):
+                self._append_prediction(
+                    predictions,
+                    midnight,
+                    departure + stop_offset,
+                    local_now,
+                    direction,
+                    label,
+                    trip,
+                )
 
     @staticmethod
     def _append_prediction(
