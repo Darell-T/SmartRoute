@@ -5,7 +5,6 @@ import httpx
 
 NYC_GEOSEARCH_URL = "https://geosearch.planninglabs.nyc/v2/search"
 
-# NYC bounding box to reject addresses outside the area, NYC ADDRESSES ONLY
 NYC_BOUNDS = {
     "min_lat": 40.4774,
     "max_lat": 40.9176,
@@ -23,7 +22,6 @@ def geocode_address_with_reason(address: str) -> tuple[tuple[float, float] | Non
     if not address or not address.strip():
         return None, "Address is empty."
 
-    # Check if input is already coordinates
     coord_pattern = re.compile(r'^-?\d+\.?\d*,\s*-?\d+\.?\d*$')
     if coord_pattern.match(address.strip()):
         lat, lng = address.strip().split(",")
@@ -34,29 +32,28 @@ def geocode_address_with_reason(address: str) -> tuple[tuple[float, float] | Non
             return None, "Coordinates are outside NYC bounds."
         return (lat, lng), None
 
-    # Use NYC Planning GeoSearch API — free, no key, NYC-specific
     print("[geo] provider=nyc_geosearch outcome=request_started")
     try:
-        with httpx.Client(timeout=5) as client:
+        with httpx.Client(timeout=5) as client:  # noqa: TID251
             resp = client.get(
                 NYC_GEOSEARCH_URL,
                 params={"text": address.strip(), "size": 1},
             )
             resp.raise_for_status()
             features = resp.json().get("features", [])
-        if not features:
-            print("[geo] provider=nyc_geosearch outcome=no_result")
-            return None, "Address not found in NYC."
-
-        lng, lat = features[0]["geometry"]["coordinates"]  # GeoJSON is [lng, lat]
-        in_nyc = _is_in_nyc(lat, lng)
-        print(f"[geo] provider=nyc_geosearch outcome=result in_service_area={int(in_nyc)}")
-        if not in_nyc:
-            return None, "Address is outside NYC bounds."
-        return (lat, lng), None
     except httpx.HTTPError as err:
         print(f"[geo] provider=nyc_geosearch outcome=error error_type={type(err).__name__}")
         return None, "Geocoding service is temporarily unavailable."
+    if not features:
+        print("[geo] provider=nyc_geosearch outcome=no_result")
+        return None, "Address not found in NYC."
+
+    lng, lat = features[0]["geometry"]["coordinates"]  # GeoJSON is [lng, lat]
+    in_nyc = _is_in_nyc(lat, lng)
+    print(f"[geo] provider=nyc_geosearch outcome=result in_service_area={int(in_nyc)}")
+    if not in_nyc:
+        return None, "Address is outside NYC bounds."
+    return (lat, lng), None
 
 
 def _is_in_nyc(lat: float, lon: float) -> bool:

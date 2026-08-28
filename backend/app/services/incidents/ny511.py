@@ -10,6 +10,7 @@ only; they never need the upstream API key or make a live request.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import math
 import os
@@ -22,21 +23,16 @@ import httpx
 from pydantic import BaseModel, Field
 
 from app import runtime
-import contextlib
 
 DEFAULT_API_URL = "https://511ny.org/api/v2/get/event"
 DEFAULT_POLL_INTERVAL_SECONDS = 300.0
 DEFAULT_TIMEOUT_SECONDS = 10.0
 DEFAULT_STALE_AFTER_SECONDS = 900.0
 DEFAULT_MAX_STALE_SECONDS = 3600.0
-# This envelope covers the five boroughs and nearby bridge/tunnel approaches.
-NYC_BOUNDS = (40.45, 40.95, -74.30, -73.65)  # min_lat, max_lat, min_lon, max_lon
+NYC_BOUNDS = (40.45, 40.95, -74.30, -73.65)
 DEFAULT_NYC_BUFFER_DEGREES = 0.05
 MAX_ATTEMPTS = 3
 NYC_COUNTIES = {"bronx", "kings", "new york", "queens", "richmond"}
-# County text is not reliable enough to be the only inclusion criterion, but
-# known adjacent/non-NYC counties must not leak in through the broad bridge and
-# tunnel envelope.  Missing or unrecognized county text falls back to the box.
 KNOWN_NON_NYC_COUNTIES = {
     "albany", "allegany", "bronx", "broome", "cattaraugus", "cayuga",
     "chautauqua", "chemung", "chenango", "clinton", "columbia",
@@ -74,8 +70,6 @@ class Normalized511Incident(BaseModel):
     updated_at: datetime | None = None
     starts_at: datetime | None = None
     expected_end_at: datetime | None = None
-    # A deliberately small, non-sensitive set of source metadata aids server
-    # diagnostics without retaining or sending the full provider record onward.
     source_metadata: dict[str, str] = Field(default_factory=dict)
 
 
@@ -86,8 +80,6 @@ class IncidentSnapshot(BaseModel):
     source_record_count: int = 0
     nyc_record_count: int = 0
     invalid_record_count: int = 0
-    # Fixture snapshots follow the exact live normalization path, but callers
-    # and diagnostics still need to know that they did not come from 511NY.
     source_origin: Literal["live", "fixture"] | None = None
     status: Literal["fresh", "stale", "unavailable"]
     last_error: str | None = None
@@ -120,8 +112,6 @@ class NY511Settings:
         raw_enabled = (os.getenv("NY511_ENABLED") or "true").strip().lower()
         enabled = raw_enabled not in {"0", "false", "no", "off"}
         fixture_path = (os.getenv("NY511_FIXTURE_PATH") or "").strip() or None
-        # Fixture loading requires an explicit non-production runtime profile.
-        # An unset profile must never replace live provider data in deployment.
         runtime_environment = runtime.runtime_profile()
         api_url = (os.getenv("NY511_API_BASE_URL") or DEFAULT_API_URL).strip()
         parsed_url = urlsplit(api_url)
@@ -187,9 +177,6 @@ class NY511Settings:
                     buffer,
                     "511NY fixture mode requires a development or test environment",
                 )
-            # A fixture is intentionally a development/test substitute for the
-            # upstream source.  It needs no key and is loaded by the poller
-            # into the normal process-local SnapshotStore.
             return cls(
                 key,
                 True,
@@ -277,7 +264,6 @@ def _normalize_event(
     *,
     nyc_buffer_degrees: float,
 ) -> tuple[Normalized511Incident | None, bool]:
-    """Return normalized record plus whether provider data was malformed."""
     if not isinstance(record, dict):
         return None, True
     # V2 documents ``ID`` as the unique event identifier.  ``SourceId`` is
@@ -359,12 +345,46 @@ def _normalize_events(
     return list(incidents.values()), invalid_record_count
 
 
+def _parse_event_payload(response: httpx.Response) -> list[Any]:
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise NY511FetchError("511NY returned malformed JSON", retryable=False) from exc
+    if not isinstance(payload, list):
+        raise NY511FetchError("511NY returned an unexpected event schema", retryable=False)
+    return payload
+
+
+def _http_fetch_error(response: httpx.Response) -> NY511FetchError:
+    retryable = response.status_code == 429 or response.status_code >= 500
+    retry_after = None
+    if response.status_code == 429:
+        try:
+            retry_after = float(response.headers.get("Retry-After", ""))
+        except (AttributeError, TypeError, ValueError):
+            retry_after = None
+    return NY511FetchError(
+        f"511NY request failed with HTTP {response.status_code}",
+        retryable=retryable,
+        retry_after_seconds=retry_after,
+    )
+
+
+def _backoff_seconds(last_error: NY511FetchError, attempt: int) -> float:
+    # A 429 receives the provider delay when supplied, never shorter
+    # than the 6 seconds implied by its 10-calls-per-minute budget.
+    # Other transient failures use a small bounded exponential backoff.
+    delay = 0.5 * (2**attempt)
+    if last_error.retry_after_seconds is not None:
+        return max(6.0, min(60.0, last_error.retry_after_seconds))
+    if "HTTP 429" in str(last_error):
+        return 6.0
+    return delay
+
+
 class NY511Client:
     def __init__(self, settings: NY511Settings, *, max_attempts: int = MAX_ATTEMPTS) -> None:
         self._settings = settings
-        # Production retains the bounded retry policy.  Opt-in certification
-        # can request exactly one upstream attempt without duplicating this
-        # client or weakening normal refresh behavior.
         self._max_attempts = max(1, min(MAX_ATTEMPTS, int(max_attempts)))
 
     async def fetch_events(self) -> list[Any]:
@@ -373,31 +393,16 @@ class NY511Client:
         last_error: NY511FetchError | None = None
         for attempt in range(self._max_attempts):
             try:
-                async with httpx.AsyncClient(timeout=self._settings.request_timeout_seconds) as client:
+                async with httpx.AsyncClient(  # noqa: TID251
+                    timeout=self._settings.request_timeout_seconds
+                ) as client:
                     response = await client.get(
                         self._settings.api_url,
                         params={"key": self._settings.api_key, "format": "json"},
                     )
                 if response.status_code == 200:
-                    try:
-                        payload = response.json()
-                    except ValueError as exc:
-                        raise NY511FetchError("511NY returned malformed JSON", retryable=False) from exc
-                    if not isinstance(payload, list):
-                        raise NY511FetchError("511NY returned an unexpected event schema", retryable=False)
-                    return payload
-                retryable = response.status_code == 429 or response.status_code >= 500
-                retry_after = None
-                if response.status_code == 429:
-                    try:
-                        retry_after = float(response.headers.get("Retry-After", ""))
-                    except (AttributeError, TypeError, ValueError):
-                        retry_after = None
-                last_error = NY511FetchError(
-                    f"511NY request failed with HTTP {response.status_code}",
-                    retryable=retryable,
-                    retry_after_seconds=retry_after,
-                )
+                    return _parse_event_payload(response)
+                last_error = _http_fetch_error(response)
             except httpx.TimeoutException:
                 last_error = NY511FetchError("511NY request timed out", retryable=True)
             except httpx.RequestError:
@@ -405,15 +410,7 @@ class NY511Client:
 
             if last_error is None or not last_error.retryable or attempt == self._max_attempts - 1:
                 break
-            # A 429 receives the provider delay when supplied, never shorter
-            # than the 6 seconds implied by its 10-calls-per-minute budget.
-            # Other transient failures use a small bounded exponential backoff.
-            delay = 0.5 * (2**attempt)
-            if last_error.retry_after_seconds is not None:
-                delay = max(6.0, min(60.0, last_error.retry_after_seconds))
-            elif "HTTP 429" in str(last_error):
-                delay = 6.0
-            await asyncio.sleep(delay)
+            await asyncio.sleep(_backoff_seconds(last_error, attempt))
         assert last_error is not None
         raise last_error
 
@@ -496,7 +493,6 @@ class NY511Poller:
         self._task: asyncio.Task[None] | None = None
 
     async def _fixture_records(self) -> list[Any]:
-        """Read one raw provider-shaped development fixture without network I/O."""
 
         fixture_path = self.settings.fixture_path
         if not fixture_path:
@@ -529,13 +525,12 @@ class NY511Poller:
                 else:
                     records = await self.client.fetch_events()
                     await self.store.record_success(records, source_origin="live")
-                return True
             except NY511FetchError as exc:
                 await self.store.record_failure(str(exc))
-            except Exception:
-                # Do not surface unexpected response/client implementation
-                # details (which could include a request URL) in diagnostics.
+            except Exception:  # noqa: BLE001 511 refresh faults stay recorded as failure
                 await self.store.record_failure("511NY refresh failed")
+            else:
+                return True
             return False
 
     def start(self) -> asyncio.Task[None] | None:

@@ -12,8 +12,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import isfinite
 
-# Broad NYC envelope in (south, west, north, east) order. Every batch box
-# must stay inside it; boxes may overlap at edges/corridors.
 NYC_ENVELOPE: tuple[float, float, float, float] = (40.45, -74.30, 40.95, -73.65)
 
 
@@ -24,7 +22,7 @@ class IncidentBatch:
     batch_id: str
     label: str
     boroughs: tuple[str, ...]
-    bounds: tuple[float, float, float, float]  # (south, west, north, east)
+    bounds: tuple[float, float, float, float]
     focus_terms: tuple[str, ...]
 
 

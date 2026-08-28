@@ -41,7 +41,6 @@ def _normalize_network_data(
     raw_alerts: bytes,
     generation: int,
 ) -> NetworkSnapshot:
-    """Parse all feeds sequentially in one worker instead of per-client pools."""
 
     trip_updates: list[dict] = []
     for feed in feed_rows:

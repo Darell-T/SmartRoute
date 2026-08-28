@@ -500,6 +500,23 @@ class LiveFeedApiTests(unittest.IsolatedAsyncioTestCase):
         assert body["error"] == "vehicles temporarily unavailable"
         assert "provider secret details" not in response.body.decode("utf-8")
 
+    async def test_live_feed_decode_error_returns_503_redacted_json(self):
+        from google.protobuf.message import DecodeError
+
+        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(gtfs=object())))
+        payload = self.live_feed.LiveFeedRequest(lat=40.7, lng=-73.9)
+        with patch.object(
+            self.live_feed,
+            "_live_feed_impl",
+            AsyncMock(side_effect=DecodeError("truncated")),
+        ):
+            response = await self.live_feed.live_feed(request, payload)
+
+        body = json.loads(response.body)
+        assert response.status_code == 503
+        assert body["error"] == "live feed temporarily unavailable"
+        assert "truncated" not in response.body.decode("utf-8")
+
 
 if __name__ == "__main__":
     unittest.main()

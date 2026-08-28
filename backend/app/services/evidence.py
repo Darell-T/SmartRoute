@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import dataclasses
 from datetime import UTC, datetime, timedelta
-from typing import Any, Generic, Literal, TypeVar
+from typing import Any, Literal
 
 EvidenceStatus = Literal["current", "stale", "unavailable"]
-T = TypeVar("T")
 
 
 def parse_timestamp(value: object) -> datetime | None:
@@ -26,7 +25,7 @@ def parse_timestamp(value: object) -> datetime | None:
 
 
 @dataclasses.dataclass(frozen=True)
-class EvidenceEnvelope(Generic[T]):
+class EvidenceEnvelope[T]:
     source: str
     observed_at: datetime
     payload: T
@@ -64,7 +63,7 @@ class EvidenceEnvelope(Generic[T]):
         return result
 
 
-def evidence_envelope(
+def evidence_envelope[T](
     source: str,
     payload: T,
     *,
@@ -86,7 +85,7 @@ def evidence_envelope(
     )
 
 
-def current_payload(envelope: EvidenceEnvelope[T], *, now: datetime | None = None, empty: T) -> T:
+def current_payload[T](envelope: EvidenceEnvelope[T], *, now: datetime | None = None, empty: T) -> T:
     """Return only current evidence while retaining its envelope for audit."""
 
     payload = envelope.current_payload(now)

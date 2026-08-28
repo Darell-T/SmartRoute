@@ -28,10 +28,15 @@ def _load_gtfs_module():
         def putconn(self, conn):
             pass
 
+    class _FakeError(Exception):
+        pass
+
     fake_pool_mod.ThreadedConnectionPool = _FakePool
     fake_extras_mod.RealDictCursor = object
     fake_psycopg2.pool = fake_pool_mod
     fake_psycopg2.extras = fake_extras_mod
+    fake_psycopg2.Error = _FakeError
+    fake_psycopg2.InterfaceError = _FakeError
 
     with patch.dict(
         sys.modules,
@@ -54,6 +59,11 @@ STOPS = {
 
 
 def _scripted_query(sql, params=None):
+    if sql.strip() == "SELECT stop_id, stop_name FROM stops":
+        return [
+            {"stop_id": row["stop_id"], "stop_name": row["stop_name"]}
+            for row in STOPS.values()
+        ]
     if "FROM stops WHERE stop_name" in sql:
         name = params[0]
         return [
@@ -138,6 +148,11 @@ class CoordinateFallbackTests(unittest.TestCase):
     }
 
     def _query(self, sql, params=None):
+        if sql.strip() == "SELECT stop_id, stop_name FROM stops":
+            return [
+                {"stop_id": row["stop_id"], "stop_name": row["stop_name"]}
+                for row in self.Q_STOPS.values()
+            ]
         if "st.trip_id = (SELECT trip_id" in sql:  # snap-to-representative-trip
             return [dict(v) for v in self.Q_STOPS.values()]
         if "FROM stops WHERE stop_name" in sql:

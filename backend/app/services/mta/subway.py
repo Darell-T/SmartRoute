@@ -10,23 +10,23 @@ from app.services.mta.feeds import _gtfs_realtime_pb2, fetch_feeds
 def _vehicle_status_name(vehicle) -> str:
     try:
         return _gtfs_realtime_pb2().VehiclePosition.VehicleStopStatus.Name(vehicle.current_status)
-    except Exception:
+    except (ValueError, TypeError, AttributeError):
         return str(vehicle.current_status)
 
 
 def parse_vehicle_positions(
-    rawBytes: bytes,
+    raw_bytes: bytes,
     source: str = "unknown",
     diagnostics: list[dict] | None = None,
     include_stop_only: bool = False,
 ) -> list:
     locations = _gtfs_realtime_pb2().FeedMessage()
-    locations.ParseFromString(rawBytes)
+    locations.ParseFromString(raw_bytes)
 
     vehicle_positions = []
     stats = {
         "source": source,
-        "bytes": len(rawBytes),
+        "bytes": len(raw_bytes),
         "entities": len(locations.entity),
         "trip_updates": 0,
         "vehicle_entities": 0,

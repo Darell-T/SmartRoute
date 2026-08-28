@@ -167,3 +167,25 @@ class AdmissionTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 await admission.consume_nonce("random-ticket-nonce", 30), "replay"
             )
+
+    async def test_unexpected_client_fault_is_admission_unavailable(self):
+        class Boom:
+            def eval(self, *_args, **_kwargs):
+                raise RuntimeError("driver fault")
+
+        with patch.object(admission, "_redis_client", Boom()):
+            with self.assertRaises(admission.AdmissionDenied) as denied:
+                await admission.acquire("v1.principal-one-123456", "trip")
+        self.assertEqual(denied.exception.status_code, 503)
+        self.assertEqual(denied.exception.code, "admission_unavailable")
+
+    async def test_release_swallows_unexpected_client_faults(self):
+        class Boom:
+            def eval(self, *_args, **_kwargs):
+                raise RuntimeError("driver fault")
+
+        lease = admission.AdmissionLease(
+            "v1.principal-one-123456", "trip", "tok", 120
+        )
+        with patch.object(admission, "_redis_client", Boom()):
+            await admission.release(lease)

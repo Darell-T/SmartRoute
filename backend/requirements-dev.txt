@@ -2,5 +2,6 @@
 # for local development and CI: python -m pip install -r requirements.txt -r requirements-dev.txt
 pytest==9.0.3
 coverage==7.15.4
+complexipy==7.0.1
 radon==6.0.1
 ruff==0.15.10

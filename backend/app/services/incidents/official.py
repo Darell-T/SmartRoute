@@ -42,8 +42,6 @@ from app.services.mta.subway import (
 
 SOURCE_ALERTS = "mta_alerts"
 SOURCE_GTFS_RT = "mta_gtfs_rt"
-# Potential stalled signals get a short explicit expiry because stale
-# telemetry alone is not proof of a stalled train.
 STALLED_EXPIRY_S = 600
 _MAX_OFFICIAL_INCIDENTS = 64
 _LOGGER = logging.getLogger(__name__)
@@ -177,8 +175,6 @@ def provenance(
 
 
 def _finite_epoch(value: object) -> float | None:
-    """Float for a finite positive epoch; bool, absent, non-positive, NaN/inf,
-    and overflow values yield None so they can never become timing facts."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     if value <= 0:
@@ -310,12 +306,11 @@ async def _fetch_source(
     default: Callable[[], Awaitable[Any]],
     label: str,
 ) -> Any:
-    """Run one provider fetch, translating failure into None at the boundary."""
     try:
         if fetch is None:
             return await default()
         return await fetch()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 official source faults report unavailable
         print(f"[incident-official] {label} fetch failed: {type(exc).__name__}")
         return None
 
@@ -325,13 +320,12 @@ def _collect_alert_incidents(
     parse_alerts: Callable[[bytes], list[dict[str, Any]]] | None,
     attempted_at: str,
 ) -> tuple[list[dict[str, Any]], str]:
-    """Alerts are current only for a non-empty, successfully parsed payload."""
     if not isinstance(raw_bytes, (bytes, bytearray)) or not raw_bytes:
         return [], STATUS_UNAVAILABLE
     parser = parse_alerts if parse_alerts is not None else _parse_service_alerts
     try:
         raw_alerts = parser(bytes(raw_bytes))
-    except Exception:
+    except Exception:  # noqa: BLE001 malformed alerts stay unavailable
         return [], STATUS_UNAVAILABLE
     if not isinstance(raw_alerts, list):
         return [], STATUS_UNAVAILABLE
@@ -345,6 +339,47 @@ def _collect_alert_incidents(
             seen_ids.add(incident["source_id"])
             incidents.append(incident)
     return incidents, STATUS_CURRENT
+
+
+def _parsed_feed_group(
+    group: object,
+    parser: Callable[[bytes], list[dict[str, Any]]],
+) -> tuple[str, list[dict[str, Any]]] | None:
+    if not isinstance(group, dict):
+        return None
+    suffix = bounded_text(group.get("suffix"), 40) or _NUMBERED_SUFFIX
+    content = group.get("content")
+    if not isinstance(content, (bytes, bytearray)) or not content:
+        return None
+    try:
+        parsed = parser(bytes(content))
+    except Exception as exc:  # noqa: BLE001 malformed GTFS-RT groups are skipped
+        _LOGGER.warning(
+            "Skipping malformed GTFS-RT group suffix=%s reason=%s",
+            suffix,
+            type(exc).__name__,
+        )
+        return None
+    if not isinstance(parsed, list):
+        return None
+    return suffix, parsed
+
+
+def _positions_from_feed_groups(
+    groups: list,
+    parser: Callable[[bytes], list[dict[str, Any]]],
+    expected: set[str],
+) -> tuple[list[dict[str, Any]], set[str]]:
+    positions: list[dict[str, Any]] = []
+    usable: set[str] = set()
+    for group in groups:
+        parsed = _parsed_feed_group(group, parser)
+        if parsed is None:
+            continue
+        suffix, vehicles = parsed
+        positions.extend(vehicles)
+        usable.add(suffix)
+    return positions, usable & expected
 
 
 async def _collect_gtfs_incidents(
@@ -368,43 +403,15 @@ async def _collect_gtfs_incidents(
     parser = (
         parse_positions if parse_positions is not None else _parse_vehicle_positions
     )
-    positions: list[dict[str, Any]] = []
-    usable: set[str] = set()
-    for group in groups:
-        if not isinstance(group, dict):
-            continue
-        suffix = bounded_text(group.get("suffix"), 40) or _NUMBERED_SUFFIX
-        content = group.get("content")
-        if not isinstance(content, (bytes, bytearray)) or not content:
-            # Empty or non-bytes feed groups are not usable evidence.
-            continue
-        try:
-            parsed = parser(bytes(content))
-        except Exception as exc:
-            _LOGGER.warning(
-                "Skipping malformed GTFS-RT group suffix=%s reason=%s",
-                suffix,
-                type(exc).__name__,
-            )
-            continue
-        if not isinstance(parsed, list):
-            # A parser result must be a list; anything else is unusable.
-            continue
-        positions.extend(parsed)
-        usable.add(suffix)
-    usable &= expected
+    positions, usable = _positions_from_feed_groups(groups, parser, expected)
     if not usable:
         return [], STATUS_UNAVAILABLE
     status = STATUS_CURRENT if usable == expected else STATUS_PARTIAL
     detector = detect_stalled if detect_stalled is not None else _detect_stalled_trains
     try:
         stalled_records = detector(positions, set(ALL_SUBWAY_ROUTES), now_timestamp=now)
-    except Exception:
-        # Without stalled detection, GTFS coverage cannot be claimed; alerts
-        # are collected separately and stay intact.
+    except Exception:  # noqa: BLE001 stalled-detector faults report unavailable
         return [], STATUS_UNAVAILABLE
     if not isinstance(stalled_records, list):
-        # A non-list detector result is an invalid detector contract; treat it
-        # like a detector failure and claim no GTFS coverage. Alerts stay intact.
         return [], STATUS_UNAVAILABLE
     return normalize_stalled(stalled_records, positions, attempted_at, now=now), status

@@ -16,11 +16,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-try:  # Optional provider; background coverage stays truthful when absent.
+try:
     from xai_sdk import AsyncClient
     from xai_sdk.chat import system, user
     from xai_sdk.tools import get_tool_call_type, web_search, x_search
-except Exception:  # pragma: no cover - exercised by the configured-client path.
+except Exception:  # noqa: BLE001 optional SDK import faults leave scout unavailable
     AsyncClient = None
     system = None
     user = None
@@ -35,7 +35,6 @@ from app.services.trips.crowds.search_normalization import response_text
 
 _MODEL = os.getenv("XAI_INCIDENT_MODEL", "grok-4-1-fast-reasoning")
 
-# Bounded caps: X 12-claim contract (~150 tokens/claim), Web corroboration (~65 tokens/entry).
 _X_OUTPUT_MAX_TOKENS = 1_800
 _WEB_OUTPUT_MAX_TOKENS = 800
 
@@ -196,7 +195,7 @@ def _completed_sources(response: object) -> set[str]:
     for call in getattr(response, "tool_calls", ()) or ():
         try:
             call_type = get_tool_call_type(call) if get_tool_call_type else ""
-        except Exception:
+        except Exception:  # noqa: BLE001 SDK call-type faults treat the tool as incomplete
             call_type = ""
         if call_type == "x_search_tool":
             completed.add("x_search")
@@ -211,7 +210,6 @@ def _completed_sources(response: object) -> set[str]:
 
 
 async def _run_x_search(batch: IncidentBatch, *, now: datetime) -> ScoutSearchResult:
-    """One X-only server-side-tool request for one coarse batch."""
     active_client = _get_client()
     if active_client is None or not all((system, user, x_search)):
         return ScoutSearchResult("", (), False)
@@ -235,9 +233,10 @@ async def _run_x_search(batch: IncidentBatch, *, now: datetime) -> ScoutSearchRe
 async def _run_web_search(
     claims: tuple[dict[str, Any], ...], *, now: datetime
 ) -> ScoutSearchResult:
-    """One Web-only server-side-tool request covering all accepted claims."""
     active_client = _get_client()
     if active_client is None or not all((system, user, web_search)):
+        return ScoutSearchResult("", (), False)
+    if now.tzinfo is None:
         return ScoutSearchResult("", (), False)
     chat = active_client.chat.create(
         model=_MODEL,

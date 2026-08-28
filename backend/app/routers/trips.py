@@ -108,6 +108,70 @@ def _bounded_stop_location(value: object) -> bool:
     )
 
 
+_ALLOWED_STEP_TYPES = frozenset(
+    {
+        "WALK",
+        "SUBWAY",
+        "BUS",
+        "RAIL",
+        "TRAIN",
+        "LIGHT_RAIL",
+        "TRAM",
+    }
+)
+
+
+def _bounded_text(value: object, limit: int) -> bool:
+    return isinstance(value, str) and len(value) <= limit
+
+
+def _bounded_number(value: object, lo: float, hi: float, *, integer: bool = False) -> bool:
+    if integer:
+        if not isinstance(value, int) or isinstance(value, bool):
+            return False
+    elif (
+        not isinstance(value, (int, float))
+        or isinstance(value, bool)
+        or not math.isfinite(value)
+    ):
+        return False
+    return lo <= value <= hi
+
+
+_STEP_FIELD_OK = {
+    **dict.fromkeys(_STEP_TEXT_FIELDS, lambda value: _bounded_text(value, 300)),
+    **dict.fromkeys(_STEP_ISO_FIELDS, lambda value: _bounded_text(value, 64)),
+    "minutes_until_train_arrives": lambda value: _bounded_number(value, -1440, 1440),
+    "minutes_until_arrival": lambda value: _bounded_number(value, -1440, 1440),
+    "route_total_minutes": lambda value: _bounded_number(value, 0, 1440),
+    "duration_minutes": lambda value: _bounded_number(value, 0, 1440),
+    "route_total_seconds": lambda value: _bounded_number(value, 0, 86_400),
+    "distance_meters": lambda value: _bounded_number(value, 0, 1_000_000),
+    "stop_count": lambda value: _bounded_number(value, 0, 256, integer=True),
+    "segment_index": lambda value: _bounded_number(value, 0, 64, integer=True),
+    "polyline": lambda value: (
+        isinstance(value, dict)
+        and set(value) == {"encodedPolyline"}
+        and isinstance(value.get("encodedPolyline"), str)
+        and len(value["encodedPolyline"]) <= 8192
+    ),
+    "start_point": _bounded_point,
+    "end_point": _bounded_point,
+    "departure_coords": _bounded_point,
+    "arrival_coords": _bounded_point,
+    "intermediate_stops": lambda value: (
+        isinstance(value, list)
+        and len(value) <= 64
+        and all(isinstance(item, str) and len(item) <= 300 for item in value)
+    ),
+    "intermediate_stop_locations": lambda value: (
+        isinstance(value, list)
+        and len(value) <= 64
+        and all(_bounded_stop_location(item) for item in value)
+    ),
+}
+
+
 def _enrichment_steps_are_bounded(steps: object) -> bool:
     if not isinstance(steps, list) or len(steps) > 64:
         return False
@@ -116,86 +180,12 @@ def _enrichment_steps_are_bounded(steps: object) -> bool:
             not isinstance(step, dict)
             or set(step) - _STEP_KEYS
             or not isinstance(step.get("type"), str)
-            or step["type"]
-            not in {
-                "WALK",
-                "SUBWAY",
-                "BUS",
-                "RAIL",
-                "TRAIN",
-                "LIGHT_RAIL",
-                "TRAM",
-            }
+            or step["type"] not in _ALLOWED_STEP_TYPES
         ):
             return False
         for key, value in step.items():
-            if key in _STEP_TEXT_FIELDS and (
-                not isinstance(value, str) or len(value) > 300
-            ):
-                return False
-            if key in _STEP_ISO_FIELDS and (
-                not isinstance(value, str) or len(value) > 64
-            ):
-                return False
-            if key in {"minutes_until_train_arrives", "minutes_until_arrival"} and (
-                not isinstance(value, (int, float))
-                or isinstance(value, bool)
-                or not math.isfinite(value)
-                or not -1440 <= value <= 1440
-            ):
-                return False
-            if key in {"route_total_minutes", "duration_minutes"} and (
-                not isinstance(value, (int, float))
-                or isinstance(value, bool)
-                or not math.isfinite(value)
-                or not 0 <= value <= 1440
-            ):
-                return False
-            if key == "route_total_seconds" and (
-                not isinstance(value, (int, float))
-                or isinstance(value, bool)
-                or not math.isfinite(value)
-                or not 0 <= value <= 86_400
-            ):
-                return False
-            if key == "distance_meters" and (
-                not isinstance(value, (int, float))
-                or isinstance(value, bool)
-                or not 0 <= value <= 1_000_000
-            ):
-                return False
-            if key == "stop_count" and (
-                not isinstance(value, int)
-                or isinstance(value, bool)
-                or not 0 <= value <= 256
-            ):
-                return False
-            if key == "segment_index" and (
-                not isinstance(value, int)
-                or isinstance(value, bool)
-                or not 0 <= value <= 64
-            ):
-                return False
-            if key == "polyline" and (
-                not isinstance(value, dict)
-                or set(value) != {"encodedPolyline"}
-                or not isinstance(value.get("encodedPolyline"), str)
-                or len(value["encodedPolyline"]) > 8192
-            ):
-                return False
-            if key in {"start_point", "end_point", "departure_coords", "arrival_coords"} and not _bounded_point(value):
-                return False
-            if key == "intermediate_stops" and (
-                not isinstance(value, list)
-                or len(value) > 64
-                or any(not isinstance(item, str) or len(item) > 300 for item in value)
-            ):
-                return False
-            if key == "intermediate_stop_locations" and (
-                not isinstance(value, list)
-                or len(value) > 64
-                or any(not _bounded_stop_location(item) for item in value)
-            ):
+            checker = _STEP_FIELD_OK.get(key)
+            if checker is not None and not checker(value):
                 return False
     return True
 
@@ -210,7 +200,7 @@ async def enrich_route(request: Request, payload: EnrichRouteRequest):
     query_count = getattr(gtfs, "_query_count", 0) if gtfs else 0
     try:
         metrics = await enrichment._enrich_route(gtfs, steps)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 enrichment faults return un-enriched steps
         print(f"[enrich-route] failed, returning un-enriched: {exc!r}")
         return {"steps": steps, "enriched": False}
     print(
@@ -253,12 +243,12 @@ def _trip_payload_is_bounded(payload: TripRequest) -> bool:
 
 @router.post("/api/trip")
 async def plan_trip(request: Request, payload: TripRequest):
+    if not _trip_payload_is_bounded(payload):
+        raise HTTPException(status_code=400, detail="Invalid trip request")
     t0 = time.monotonic()
     lease = None
     timings: dict[str, float] = {}
     try:
-        if not _trip_payload_is_bounded(payload):
-            raise HTTPException(status_code=400, detail="Invalid trip request")
         try:
             lease = await admission.acquire(
                 admission.principal_from_request(
@@ -290,7 +280,6 @@ async def plan_trip(request: Request, payload: TripRequest):
             timings=timings,
         )
         elapsed = time.monotonic() - t0
-        # Single per-trip log line: stage durations + total.
         print(
             f"[trip] route={timings.get('route_provider_ms', 0.0) / 1000:.2f}s "
             f"mta={timings.get('mta_ms', 0.0) / 1000:.2f}s "
@@ -298,16 +287,17 @@ async def plan_trip(request: Request, payload: TripRequest):
             f"enrich={timings.get('enrichment_ms', 0.0) / 1000:.2f}s "
             f"total={elapsed:.2f}s"
         )
-        return result
     except direct_plan.DirectTripError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
     except HTTPException:
         raise
-    except Exception:
+    except Exception:  # noqa: BLE001 unhandled plan faults stay a generic 500
         # Full detail goes to the server log only; the public 500 stays generic
         # so internal exception text is never exposed to the browser.
         print(f"[trip] UNHANDLED ERROR:\n{traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail="Trip planning failed")
+        raise HTTPException(status_code=500, detail="Trip planning failed") from None
+    else:
+        return result
     finally:
         await admission.release(lease)
 

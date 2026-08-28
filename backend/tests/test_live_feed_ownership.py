@@ -10,6 +10,7 @@ from types import MappingProxyType, SimpleNamespace
 from typing import ClassVar
 from unittest.mock import AsyncMock, Mock, patch
 
+import httpx
 import pytest
 from app import main as app_main
 from app.services.live_feed import network_snapshot as network_snapshot_module
@@ -282,6 +283,27 @@ class RealtimeWarmLoopTests(unittest.IsolatedAsyncioTestCase):
 
         store.refresh.assert_awaited_once_with()
 
+    async def test_decode_error_does_not_kill_the_warm_loop(self):
+        from google.protobuf.message import DecodeError
+
+        store = SimpleNamespace(
+            has_recent_demand=Mock(return_value=True),
+            refresh=AsyncMock(side_effect=DecodeError("truncated")),
+        )
+
+        with (
+            patch.object(app_main, "network_snapshot_store", store),
+            patch.object(
+                app_main.asyncio,
+                "sleep",
+                new=AsyncMock(side_effect=asyncio.CancelledError),
+            ),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await app_main._realtime_warm_loop()
+
+        store.refresh.assert_awaited_once_with()
+
 
 class RiderSnapshotSharingTests(unittest.IsolatedAsyncioTestCase):
     async def test_rider_filtering_does_not_mutate_shared_network_records(self):
@@ -513,6 +535,25 @@ class BusUpdateOwnershipTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.gather(first, second)
 
         assert calls == 1
+
+    async def test_stops_for_route_uses_eight_second_timeout(self):
+        captured = {}
+
+        async def get(*_args, **kwargs):
+            captured["timeout"] = kwargs.get("timeout")
+            raise httpx.ConnectError("offline")
+
+        client = SimpleNamespace(get=get)
+        with patch.object(bus, "_bus_api_key", return_value="bus-key"), patch.object(
+            bus, "cache_get", return_value=None
+        ), patch.object(
+            bus_runtime, "bus_client", AsyncMock(return_value=client)
+        ):
+            result = await bus.fetch_bus_route_stop_groups("M15")
+
+        assert result is None
+        assert captured["timeout"] == 8.0
+        assert captured["timeout"] >= bus_runtime.BUS_REQUEST_TIMEOUT_S
 
     async def test_rest_returns_primary_snapshot_before_bus_refresh(self):
         snapshot = {
@@ -865,6 +906,37 @@ class SocketOwnershipTests(unittest.IsolatedAsyncioTestCase):
         ]
         assert [message["data"]["generation"] for message in bus_messages] == [2]
         assert bus_messages[0]["data"]["arrivals"] == [{"route_id": "B2"}]
+
+    async def test_snapshot_decode_error_sends_unavailable_and_keeps_the_socket(self):
+        from google.protobuf.message import DecodeError
+
+        frames = iter(
+            [
+                {"type": "location", "lat": 40.7, "lng": -73.9},
+                WebSocketDisconnect(code=1000),
+            ]
+        )
+
+        async def receive(_socket):
+            value = next(frames)
+            if isinstance(value, Exception):
+                raise value
+            return value
+
+        deps = self.dependencies(receive)
+        deps = replace(
+            deps,
+            snapshot=AsyncMock(side_effect=DecodeError("truncated")),
+        )
+        with patch.object(live_feed_socket.asyncio, "sleep", AsyncMock()):
+            await live_feed_socket.stream_live_feed(self.Socket(), 1, deps)
+
+        error_messages = [
+            call.args[1]
+            for call in deps.send.await_args_list
+            if call.args[1].get("type") == "error"
+        ]
+        assert error_messages[0]["message"] == "live feed temporarily unavailable"
 
 
 if __name__ == "__main__":

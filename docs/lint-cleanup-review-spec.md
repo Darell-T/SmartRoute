@@ -39,6 +39,8 @@ Do not begin a review without these inputs:
 8. Exact test and quality commands with exit codes and summary counts.
 9. Any baseline, configuration, generated artifact, or suppression diff.
 10. Assumptions, unresolved risks, and known out-of-scope debt.
+11. Cognitive-complexity output compared with the same fixed point.
+12. Function, file, and production-code growth signals for the isolated diff.
 
 If any item is missing, recover it from the repository when possible. Do not
 ask the worker for information that a read-only command can establish.
@@ -77,6 +79,29 @@ Apply these principles in order:
 8. Lint and metric reduction.
 
 Lint reduction never outranks correctness or readability.
+
+## Structural quality contract
+
+Review complexity as a delta, not as a demand to rewrite every legacy
+function. The checked-in policy is:
+
+- Ruff C901 maximum 10
+- complexipy cognitive maximum 10
+- Ruff PLR0912 maximum 12 branches
+- Ruff PLR0915 maximum 50 statements
+- CRAP has no absolute ceiling and may not worsen for a baseline entry
+- function length above 100 lines is a review signal
+- file length above 500 lines is a review signal, not a split requirement
+
+New functions must stay within the cyclomatic and cognitive ceilings. An
+existing function above a ceiling may remain unchanged or improve. It may not
+worsen. Sub-threshold increases are review context, not automatic defects.
+
+Do not approve a helper solely because it lowers one function's score. Read the
+caller and helper together. The helper must own a named policy, lifecycle,
+side-effect, parsing, or recovery responsibility. Guard clauses, early returns,
+and lookup tables are preferred only when they make the behavior easier to
+follow.
 
 ## Simplicity standard
 
@@ -251,14 +276,20 @@ Reject:
 - new broad suppressions
 - a disabled or weakened rule
 - a broader per-file ignore
-- a raised complexity threshold
+- a complexity threshold changed from the documented 10, 12, and 50 policy
 - a baseline value increased to absorb a regression
+- `# complexipy: ignore` or `# noqa: complexipy`
 - `Any`, `unknown`, unsafe dictionaries, or assertions used to silence types
 - repeated parsing moved to callers to reduce one function's complexity
 - one branch split across meaningless helpers
 - pass-through wrappers or one-use services
 - conditions rewritten into opaque expressions to manipulate a metric
 - test removal used to change coverage or CRAP
+
+Also inspect total churn, net production lines, and production function count.
+The thresholds in `docs/lint-cleanup-plan.md` are review triggers. They require
+an explanation or a smaller checkpoint. They are not automatic reasons to
+reject an otherwise cohesive change.
 
 A `SAFETY:` comment is valid only when a runtime check proves the invariant and
 TypeScript cannot express the narrowed result. The comment must name the check.
@@ -271,7 +302,7 @@ full affected suite. Run the configured linter on the exact owned paths.
 At the end of every batch run fresh quality coverage:
 
 ```powershell
-py scripts/check_quality.py
+py scripts/check_quality.py --quality-ref <fixed-point>
 ```
 
 Do not certify with `--skip-tests`. For a quality-gate repair or a suspected
@@ -282,10 +313,15 @@ For backend completion, require:
 
 ```powershell
 py -m ruff check --config pyproject.toml <owned paths>
+py scripts/check_quality.py --cognitive-only --quality-ref <fixed-point>
 py -m pytest <owned tests> -q --basetemp <unique worktree path>
 py -m pytest backend/tests -q --basetemp <unique worktree path>
-py scripts/check_quality.py
+py scripts/check_quality.py --quality-ref <fixed-point>
 ```
+
+The worker must not run `--update-baseline`. If the accepted patch makes
+entries stale, the reviewer may run a fresh baseline update after all other
+gates pass. Inspect the baseline diff and rerun quality before approval.
 
 For frontend completion, require the applicable subset and then the full
 configured gates:
@@ -318,6 +354,10 @@ Regenerate Ruff, Oxlint, and ESLint inventories. Confirm:
 - global counts did not increase outside the batch
 - file and rule totals reconcile with the handoff
 - resolved quality entries are genuinely stale before removal
+- C901, PLR0912, and PLR0915 use ceilings 10, 12, and 50
+- cognitive complexity has no new or worsened function above 10
+- CRAP has no worsened baseline entry
+- a long function or file was reviewed for cohesion rather than split by reflex
 
 ## Product invariants to check in every relevant batch
 
@@ -413,7 +453,7 @@ out-of-scope P3 debt is recorded but does not expand the batch.
 Use exactly one verdict:
 
 - `APPROVED`: isolated diff is reviewable, every required gate passes, owned
-  lint is zero, and no blocking finding remains.
+  lint is zero, complexity deltas are green, and no blocking finding remains.
 - `PROVISIONAL FINAL-STATE PASS`: final state passes, but no fixed point exists
   to prove the isolated batch diff or absence of scope creep.
 - `REJECTED`: at least one P0, P1, P2, blocking P3, failed gate, or false claim
@@ -479,5 +519,6 @@ those expansions themselves.
 The goal is not code that merely silences tools. The goal is the smallest
 correct code a human engineer can read, test, and safely change later. A batch
 is done only when behavior is preserved, the owned lint is zero, the quality
-ratchet is green, and the diff is simpler than the code it replaced.
+and cognitive ratchets are green, and the diff is simpler than the code it
+replaced.
 
