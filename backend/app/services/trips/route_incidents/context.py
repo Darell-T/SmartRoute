@@ -197,15 +197,9 @@ def extract_candidate_stop_context(
                 lat, lon = coordinates
                 stop_id = _text(record.get("stop_id") or record.get("id"))
                 name = _text(record.get("name") or record.get("stop_name"))
-                keys = _physical_keys(stop_id, name, lat, lon)
-                context = next((aliases[key] for key in keys if key in aliases), None)
-                if context is None:
-                    context = CandidateStopContext(stop_id, name, lat, lon)
-                    contexts.append(context)
-                elif context.stop_id is None and stop_id:
-                    context.stop_id = stop_id
-                for key in keys:
-                    aliases[key] = context
+                context = _resolve_stop_context(
+                    stop_id, name, lat, lon, aliases, contexts
+                )
                 if id(context) in seen_in_step:
                     continue
                 seen_in_step.add(id(context))
@@ -220,3 +214,23 @@ def extract_candidate_stop_context(
                 if association not in context.associations:
                     context.associations.append(association)
     return contexts
+
+
+def _resolve_stop_context(
+    stop_id: str | None,
+    name: str | None,
+    lat: float,
+    lon: float,
+    aliases: dict[tuple[str, ...], CandidateStopContext],
+    contexts: list[CandidateStopContext],
+) -> CandidateStopContext:
+    keys = _physical_keys(stop_id, name, lat, lon)
+    context = next((aliases[key] for key in keys if key in aliases), None)
+    if context is None:
+        context = CandidateStopContext(stop_id, name, lat, lon)
+        contexts.append(context)
+    elif context.stop_id is None and stop_id:
+        context.stop_id = stop_id
+    for key in keys:
+        aliases[key] = context
+    return context

@@ -11,41 +11,48 @@ application behavior. Regenerate the reports below before editing a batch.
 
 ## Current result
 
-Measured on 2026-08-27 after the policy update, then confirmed by a second
-fresh `py scripts/check_quality.py` run on 2026-08-28.
+Ruff rows were regenerated on 2026-08-28 after Batch 3 from
+`py -m ruff check --config pyproject.toml --output-format json backend`.
+Oxlint, ESLint, and complexipy rows remain the 2026-08-27 policy measurement.
+The quality-baseline row includes the Batch 3 reviewer update on 2026-08-28.
 
 | Tool | Findings | Files | Notes |
 |---|---:|---:|---|
-| Ruff | 1,047 | 173 | 266 production, 781 tests, 40 rules |
-| Ruff C901 | 66 | 50 | McCabe ceiling 10 |
-| Ruff PLR0912 | 33 | 29 | Branch ceiling 12 |
-| Ruff PLR0915 | 14 | 14 | Statement ceiling 50 |
+| Ruff | 894 | 129 | 107 production, 787 tests, 35 rules |
+| Ruff C901 | 38 | 29 | McCabe ceiling 10 |
+| Ruff PLR0912 | 18 | 16 | Branch ceiling 12 |
+| Ruff PLR0915 | 8 | 8 | Statement ceiling 50 |
 | complexipy | 276 | 106 | Legacy functions above cognitive 10 |
 | Oxlint | 1,162 | 192 | 719 in generator scripts |
 | ESLint | 193 | 76 | 185 complexity, 8 max-depth |
-| Quality baseline | 353 | | Combined Python and TypeScript CC debt |
+| Quality baseline | 340 | | Combined Python and TypeScript CC debt |
 
-The largest Ruff rule is `PT009` with 614 findings. That is test assertion
+The largest Ruff rule is `PT009` with 616 findings. That is test assertion
 style debt, not production complexity. `TRY003` is ignored. It encouraged
 exception boilerplate without improving passenger behavior or debuggability.
 
-Ruff fell from the Batch 1 snapshot of 1,385 findings because C901 now uses
-the default ceiling of 10 and `TRY003` is no longer enforced. No application
-file changed for that drop.
+Ruff fell from the 2026-08-27 policy snapshot of 1,047 findings because
+Batches 2 and 3 cleared owned production findings. The earlier drop from the
+Batch 1 snapshot of 1,385 was the C901 ceiling of 10 and the `TRY003`
+ignore. No application file changed for that first drop.
 
-Quality certification, two consecutive fresh runs, no `--skip-tests`:
+Quality certification from fresh runs with no `--skip-tests`:
 
 | Run | Exit | New | Worsened | Stale | Remaining | Backend | Frontend |
 |---|---:|---:|---:|---:|---:|---|---:|
 | Policy baseline regeneration | 0 | 0 | 0 | 0 | 353 | 1,813 passed, 21 skipped, 444 subtests | 314 |
 | Second pass 2026-08-28 | 0 | 0 | 0 | 0 | 353 | 1,813 passed, 21 skipped, 444 subtests | 314 |
+| Batch 3 reviewer final 2026-08-28 | 0 | 0 | 0 | 0 | 340 | 1,822 passed, 21 skipped, 444 subtests | 314 |
 
 Cognitive delta against `427fbc8`: 0 new or worsened. CRAP has no absolute
 ceiling. Baseline entries may not worsen.
 
 The route-intelligence batch, Batch 0, and Batch 1 are complete inside
-`427fbc8`. Batch 2 is independently APPROVED in this worktree. Do not start
-Batch 3 automatically.
+`427fbc8`. Batch 2 is independently APPROVED at `368c00d`. Batch 3 production
+and the handoff repair are Codex-approved. The Batch 3 reviewer removed 13
+stale baseline entries and lowered 19 remaining measurements. No entry was
+added or increased. Full quality vs `368c00d` exits 0. Do not start Batch 4
+automatically.
 
 ## Structural policy
 
@@ -113,42 +120,38 @@ message. Do not add broad ignores or lower severity.
 
 ## Ruff rule inventory
 
-Regenerated on 2026-08-27 with the policy update. The Fixable column is Ruff's
-reported fix count. It does not authorize a broad unsafe rewrite.
+Regenerated on 2026-08-28 after Batch 3 from configured JSON. The Fixable
+column is Ruff's reported fix count. It does not authorize a broad unsafe
+rewrite.
 
 | Rule | Total | Production | Tests | Files | Fixable |
 |---|---:|---:|---:|---:|---:|
-| `PT009` | 614 | 0 | 614 | 53 | 614 |
-| `BLE001` | 72 | 72 | 0 | 34 | 0 |
-| `C901` | 66 | 58 | 8 | 50 | 0 |
-| `I001` | 56 | 5 | 51 | 54 | 56 |
-| `PLR0912` | 33 | 30 | 3 | 29 | 0 |
-| `PT027` | 26 | 0 | 26 | 9 | 26 |
-| `ARG001` | 18 | 16 | 2 | 11 | 0 |
-| `PERF401` | 18 | 9 | 9 | 14 | 0 |
-| `PLR0915` | 14 | 9 | 5 | 14 | 0 |
-| `ARG002` | 13 | 6 | 7 | 7 | 0 |
+| `PT009` | 616 | 0 | 616 | 53 | 616 |
+| `I001` | 52 | 1 | 51 | 50 | 52 |
+| `C901` | 38 | 30 | 8 | 29 | 0 |
+| `PT027` | 27 | 0 | 27 | 9 | 27 |
+| `PLR0912` | 18 | 15 | 3 | 16 | 0 |
+| `PERF401` | 14 | 5 | 9 | 10 | 0 |
+| `BLE001` | 13 | 13 | 0 | 9 | 0 |
+| `ARG001` | 13 | 11 | 2 | 7 | 0 |
+| `SIM117` | 12 | 0 | 12 | 5 | 5 |
+| `ARG002` | 11 | 4 | 7 | 6 | 0 |
 | `RUF022` | 11 | 0 | 11 | 11 | 11 |
 | `RUF005` | 11 | 0 | 11 | 5 | 11 |
-| `SIM117` | 11 | 0 | 11 | 4 | 5 |
-| `TRY300` | 10 | 10 | 0 | 9 | 0 |
-| `TID251` | 10 | 10 | 0 | 8 | 0 |
-| `RUF001` | 8 | 8 | 0 | 7 | 0 |
-| `TRY004` | 6 | 6 | 0 | 2 | 0 |
-| `N803` | 5 | 5 | 0 | 3 | 0 |
-| `TRY301` | 4 | 4 | 0 | 3 | 0 |
-| `B904` | 4 | 4 | 0 | 3 | 0 |
+| `PLR0915` | 8 | 3 | 5 | 8 | 0 |
+| `RUF001` | 7 | 7 | 0 | 6 | 0 |
+| `N818` | 4 | 2 | 2 | 3 | 0 |
+| `TRY004` | 4 | 4 | 0 | 1 | 0 |
 | `UP042` | 4 | 4 | 0 | 3 | 4 |
 | `RUF059` | 4 | 0 | 4 | 2 | 4 |
 | `PT018` | 4 | 0 | 4 | 1 | 4 |
-| `N818` | 3 | 3 | 0 | 3 | 0 |
+| `B904` | 3 | 3 | 0 | 2 | 0 |
 | `RUF012` | 3 | 0 | 3 | 2 | 0 |
 | `UP017` | 3 | 0 | 3 | 2 | 3 |
 | `SIM102` | 2 | 2 | 0 | 2 | 0 |
-| `UP047` | 2 | 2 | 0 | 1 | 2 |
 | `ARG005` | 1 | 1 | 0 | 1 | 0 |
 | `PERF403` | 1 | 1 | 0 | 1 | 0 |
-| `UP046` | 1 | 1 | 0 | 1 | 1 |
+| `TRY300` | 1 | 1 | 0 | 1 | 0 |
 | `UP035` | 1 | 0 | 1 | 1 | 1 |
 | `RUF100` | 1 | 0 | 1 | 1 | 1 |
 | `UP041` | 1 | 0 | 1 | 1 | 1 |
@@ -204,18 +207,21 @@ The largest remaining production files by Ruff count are:
 
 | File | Findings |
 |---|---:|
-| `backend/app/routers/live_feed/socket.py` | 16 |
-| `backend/app/services/mta/alerts.py` | 9 |
 | `backend/app/services/agent/tools/__init__.py` | 8 |
-| `backend/app/main.py` | 7 |
-| `backend/app/observability.py` | 7 |
-| `backend/app/routers/trips.py` | 7 |
 | `backend/app/services/agent/tools/transit/evidence.py` | 7 |
-| `backend/app/services/trips/crowds/event_provider.py` | 7 |
+| `backend/app/services/agent/model/stream.py` | 6 |
+| `backend/app/services/agent/tools/transit/lookup_arrivals_subway.py` | 6 |
+| `backend/app/services/agent/tools/location_resolution.py` | 5 |
+| `backend/app/services/agent/session.py` | 4 |
+| `backend/app/services/agent/tools/transit/evidence_binding.py` | 4 |
+| `backend/app/services/agent/candidate_store.py` | 3 |
 
 ### Provider and security rules
 
-`TID251` has 10 remaining findings. Production provider traffic must use
+Configured Ruff reports 0 `TID251` findings. Remaining named `httpx`
+constructors keep line `TID251` noqas until Batch 4 extends
+`provider_http` (protobuf feeds, 511 retry, BusTime lifecycle, alerts).
+Production provider traffic must use
 `backend/app/services/agent/tools/provider_http.py`. Do not add another
 client wrapper. Release validation keeps line `TID251` noqas because it needs
 sync HTTP and SSE. `provider_http` only fetches JSON.
@@ -279,7 +285,7 @@ For every batch:
 
 Cleanup is complete only when the commands in
 `docs/lint-cleanup-plan.md` exit 0. Global Ruff, ESLint, and Oxlint still
-fail on the backlog. Do not start Batch 3 automatically.
+fail on the backlog. Do not start Batch 4 automatically.
 
 ## Batch 2 worker result (2026-08-28)
 
@@ -336,6 +342,109 @@ py scripts/check_quality.py --quality-ref 427fbc8
 Independent review (third pass) APPROVED: scope, behavior, and gaming.
 Do not start Batch 3 automatically. A reviewer may shrink the 9 stale
 baseline ids. Remaining TID251 tokens wait for Batch 4 `provider_http`.
+
+## Batch 3 worker result (2026-08-28)
+
+Owned production path from `docs/lint-cleanup-plan.md` Batch 3:
+`backend/app/services/trips/**`. Fixed point `368c00d`.
+The worker did not update `quality/baseline.json`. The Batch 3 reviewer later
+performed the permitted update. Do not start Batch 4 automatically.
+
+Owned-path Ruff before edits: 44 findings, 17 files (C901 12, BLE001 13,
+PLR0912 5, ARG001 4, I001 1, PLR0915 2, ARG002 2, PERF401 2, TID251 1,
+TRY300 1, RUF001 1). After repair: zero.
+
+Clusters: preparation, incident association, crowd evidence, then itinerary,
+enrichment, scoring, and selection. Scoring and selection modules had no
+owned Ruff findings and were not edited.
+
+`event_provider.fetch_json` is a lazy delegate to
+`app.services.agent.tools.provider_http.fetch_json`. A top-level import
+circular-imports through `agent.tools.__init__` and the venue crowd tables.
+HTTP semantics stay JSON, timeout, never-raises, no retry. Fail-open
+`except Exception` catches keep `# noqa: BLE001` with a one-line
+`{source} faults {outcome}` reason.
+
+Owned-path Ruff is zero. Cognitive delta vs `368c00d`: 0 new or worsened
+(1791 functions analyzed, 267 above 10). Quality certification:
+frontend 314 passed, backend 1822 passed, 21 skipped, 444 subtests,
+0 new, and 0 worsened. The worker run exited 1 only because 13 stale baseline
+entries remained. The reviewer removed those entries and lowered 19 remaining
+measurements without increasing any entry. The final full gate exits 0 with
+340 remaining entries and 0 stale entries.
+
+Isolated owned diff vs `368c00d`: 17 files, 964 insertions, 529 deletions.
+Net production +435 lines. Churn 1493. Extra production functions are 33
+(review trigger). Independent scope, behavior, and gaming review judged
+those as named pipeline, copy, parse, and recovery stages. HEAD
+`prepare_single_leg` was radon CC 72.
+
+Focused command, recorded 2026-08-28, exit 0, 243 passed, 58 subtests.
+PowerShell does not expand pytest globs. The 27 files are listed explicitly.
+`--basetemp` is unique and gitignored.
+
+```powershell
+$env:APP_KEY='ci-test-key'
+$env:ANTHROPIC_API_KEY='ci-test-anthropic-key'
+$env:SMARTROUTE_ENV='test'
+$env:AGENT_ALLOW_MEMORY_SESSIONS='1'
+$env:SMARTROUTE_RUN_LIVE_TESTS='0'
+$env:RUN_LIVE_TESTS='0'
+Set-Location backend
+$files = @(
+  'tests/test_crowd_evidence.py',
+  'tests/test_crowd_hotspots.py',
+  'tests/test_crowd_search.py',
+  'tests/test_event_crowd_scoring.py',
+  'tests/test_itinerary_canonical.py',
+  'tests/test_itinerary_chain.py',
+  'tests/test_plan_trip_input_recovery.py',
+  'tests/test_plan_trip_prepare_cancellation.py',
+  'tests/test_plan_trip_projection.py',
+  'tests/test_route_constraint_relaxation.py',
+  'tests/test_route_decision_evaluation.py',
+  'tests/test_route_endpoint_resolution_policy.py',
+  'tests/test_route_evidence_coverage.py',
+  'tests/test_route_exclusion_constraints.py',
+  'tests/test_route_identity_gate.py',
+  'tests/test_route_itinerary_contract.py',
+  'tests/test_route_option_assembly.py',
+  'tests/test_route_option_assembly_integration.py',
+  'tests/test_route_option_projection_grounding.py',
+  'tests/test_route_tool_import_boundary.py',
+  'tests/test_transfer_semantics.py',
+  'tests/test_trip_admission.py',
+  'tests/test_trip_candidate_reasons.py',
+  'tests/test_trips_direct_plan.py',
+  'tests/test_trips_enrichment.py',
+  'tests/test_trips_incidents.py',
+  'tests/test_trips_plan_deterministic.py'
+)
+py -m pytest @files -q --basetemp "$PWD/../.pytest-batch3-focused"
+```
+
+Quality:
+
+```powershell
+py -m ruff check --config pyproject.toml backend/app/services/trips
+py scripts/check_quality.py --cognitive-only --quality-ref 368c00d
+py scripts/check_quality.py --quality-ref 368c00d
+```
+
+Owned Ruff and cognitive-only exit 0. The worker's full
+`check_quality.py --quality-ref 368c00d` run exited 1 only because 13 stale
+baseline entries remained. The reviewer removed those entries, inspected the
+change, and reran the full command. The final command exits 0 with 340
+remaining entries and 0 new, worsened, or stale entries.
+
+Independent production review APPROVED: scope, behavior, and gaming.
+Codex rejected the first handoff on 2026-08-28 because the focused-test
+command used unresolved globs and the current Ruff inventory was stale.
+Codex rejected the second handoff because its fixed-point Ruff count was one
+too high and it did not record the final baseline result. The final docs
+repair corrects both records. The recorded 27-file command exits 0 with 243
+passed and 58 subtests. The final quality command exits 0. Batch 3 is
+Codex-approved. Do not start Batch 4 automatically.
 
 ## Historical records through 427fbc8
 

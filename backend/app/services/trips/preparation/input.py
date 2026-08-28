@@ -160,36 +160,17 @@ async def recover_structural_route(
     if pattern_index is None or not primary_routes or destination is None:
         return []
 
-    suggestion = None
-    seed_step = None
-    seed_route = None
-    for route in primary_routes:
-        for step in route or []:
-            if str(step.get("type") or "").upper() != "SUBWAY":
-                continue
-            route_id = str(step.get("route_id") or step.get("train_line") or "").strip()
-            if not route_id:
-                continue
-            candidate = pattern_index.suggest_one_transfer(
-                route_id,
-                step.get("departure_stop"),
-                step.get("arrival_stop"),
-                {"lat": destination.latitude, "lon": destination.longitude},
-                boarding_coords=step.get("departure_coords"),
-                alighting_coords=step.get("arrival_coords"),
-                excluded_route_ids=excluded_route_ids,
-                excluded_modes=excluded_modes,
-                allowed_modes=allowed_modes,
-            )
-            if candidate is not None:
-                suggestion = candidate
-                seed_step = step
-                seed_route = route_id.upper()
-                break
-        if suggestion is not None:
-            break
-    if suggestion is None:
+    seed = _subway_transfer_seed(
+        primary_routes,
+        pattern_index,
+        destination,
+        excluded_route_ids,
+        excluded_modes,
+        allowed_modes,
+    )
+    if seed is None:
         return []
+    suggestion, seed_step, seed_route = seed
 
     continuation_route = str(suggestion.get("continuation_route_id") or "").upper()
     if not suggestion.get("continuation_transfer_stop_id"):
@@ -244,7 +225,7 @@ async def recover_structural_route(
         )
         if not combined:
             return []
-    except Exception:
+    except Exception:  # noqa: BLE001 transfer-pair faults skip this recovery
         return []
     finally:
         diagnostics["added_provider_latency_ms"] = (time.monotonic() - started) * 1000
@@ -329,6 +310,58 @@ async def prepare_structural_candidates(
         "added_provider_latency_ms", 0.0
     )
     return routes[:max_candidates]
+
+
+def _subway_transfer_seed(
+    primary_routes: list[list[dict]],
+    pattern_index,
+    destination: ResolvedPlace,
+    excluded_route_ids: set[str],
+    excluded_modes: set[str],
+    allowed_modes: list[str],
+):
+    for route in primary_routes:
+        for step in route or []:
+            found = _subway_step_transfer_seed(
+                step,
+                pattern_index,
+                destination,
+                excluded_route_ids,
+                excluded_modes,
+                allowed_modes,
+            )
+            if found is not None:
+                return found
+    return None
+
+
+def _subway_step_transfer_seed(
+    step: dict,
+    pattern_index,
+    destination: ResolvedPlace,
+    excluded_route_ids: set[str],
+    excluded_modes: set[str],
+    allowed_modes: list[str],
+):
+    if str(step.get("type") or "").upper() != "SUBWAY":
+        return None
+    route_id = str(step.get("route_id") or step.get("train_line") or "").strip()
+    if not route_id:
+        return None
+    candidate = pattern_index.suggest_one_transfer(
+        route_id,
+        step.get("departure_stop"),
+        step.get("arrival_stop"),
+        {"lat": destination.latitude, "lon": destination.longitude},
+        boarding_coords=step.get("departure_coords"),
+        alighting_coords=step.get("arrival_coords"),
+        excluded_route_ids=excluded_route_ids,
+        excluded_modes=excluded_modes,
+        allowed_modes=allowed_modes,
+    )
+    if candidate is None:
+        return None
+    return candidate, step, route_id.upper()
 
 
 async def derive_arrive_by_departure(

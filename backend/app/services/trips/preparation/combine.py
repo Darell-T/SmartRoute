@@ -32,6 +32,7 @@ def combine_prepared_chains(
     dwell_minutes: int,
     dwell_source: str,
 ) -> AggregatePreparation:
+    del waypoints, destination_raw
     if not chains or not all(chain.legs for chain in chains):
         raise ValueError("at least one prepared route chain is required")
     parsed_routes: list[list[dict]] = []

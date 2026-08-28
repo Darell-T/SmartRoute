@@ -143,53 +143,47 @@ async def _drain_owned_evidence_tasks(
     await asyncio.gather(*owned, return_exceptions=True)
 
 
-async def prepare_single_leg(
+def _parse_leg_request(
     tool_input: dict,
-    ctx: RoutePreparationContext,
-    timings: dict[str, float],
-    *,
-    dependencies: PreparationDependencies,
-    emit_comparing_progress: bool = True,
-    resolved_origin: ResolvedPlace | None = None,
-    resolved_destination: ResolvedPlace | None = None,
-) -> PreparedLeg | RoutePreparationFailure:
-    """Resolve places, fetch routes/evidence, score. Never calls a model."""
-
+) -> tuple[str, str, set[str], list[str]] | RoutePreparationFailure:
     origin_raw = str(tool_input.get("origin") or "")
     destination_raw = str(tool_input.get("destination") or "").strip()
     if not destination_raw:
         return RoutePreparationFailure("destination is required")
-
-    for field in ("departure_time", "arrival_by"):
-        value = tool_input.get(field)
-        if value:
-            try:
-                parse_rfc3339(value, field=field)
-            except (TypeError, ValueError) as exc:
-                return RoutePreparationFailure(str(exc))
-
-    excluded = {str(mode).strip().upper() for mode in (tool_input.get("exclude_modes") or [])}
+    time_error = _invalid_schedule_field(tool_input)
+    if time_error:
+        return RoutePreparationFailure(time_error)
+    excluded = {
+        str(mode).strip().upper() for mode in (tool_input.get("exclude_modes") or [])
+    }
     allowed_modes = [mode for mode in ("SUBWAY", "BUS") if mode not in excluded]
     if not allowed_modes:
         return RoutePreparationFailure("no transit modes left after excluding all of them")
+    return origin_raw, destination_raw, excluded, allowed_modes
 
-    plan_origin = time.monotonic()
-    leg_telemetry = ctx.telemetry.get("_plan_trip_active_leg")
-    if not isinstance(leg_telemetry, dict):
-        leg_telemetry = ctx.telemetry["route_candidate_diagnostics"] = {}
-    leg_telemetry["_plan_origin_monotonic"] = plan_origin
 
-    def mark(name: str) -> None:
-        elapsed = (time.monotonic() - plan_origin) * 1000
-        timings[name] = elapsed
-        record_phase = getattr(dependencies, "record_phase_ms", None)
-        if record_phase is not None:
-            record_phase(ctx.telemetry, name, elapsed)
+def _invalid_schedule_field(tool_input: dict) -> str | None:
+    for field in ("departure_time", "arrival_by"):
+        value = tool_input.get(field)
+        if not value:
+            continue
+        try:
+            parse_rfc3339(value, field=field)
+        except (TypeError, ValueError) as exc:
+            return str(exc)
+    return None
 
-    place_started = time.monotonic()
+
+async def _resolve_leg_places(
+    dependencies: PreparationDependencies,
+    ctx: RoutePreparationContext,
+    origin_raw: str,
+    destination_raw: str,
+    resolved_origin: ResolvedPlace | None,
+    resolved_destination: ResolvedPlace | None,
+) -> tuple[ResolvedPlace, ResolvedPlace, str] | RoutePreparationFailure:
     if resolved_origin is not None:
-        origin_place = resolved_origin
-        origin_error = None
+        origin_place, origin_error = resolved_origin, None
     else:
         origin_place, origin_error = await dependencies.resolve_named_place(
             origin_raw,
@@ -202,8 +196,7 @@ async def prepare_single_leg(
     if origin_place is None:
         return RoutePreparationFailure(origin_error or "could not resolve the origin")
     if resolved_destination is not None:
-        destination_place = resolved_destination
-        destination_error = None
+        destination_place, destination_error = resolved_destination, None
     else:
         destination_place, destination_error = await dependencies.resolve_named_place(
             destination_raw,
@@ -217,40 +210,64 @@ async def prepare_single_leg(
         return RoutePreparationFailure(
             destination_error or "could not find that destination in NYC"
         )
-    timings["place_resolution_ms"] = (time.monotonic() - place_started) * 1000
-    mark("place_resolution_complete_ms")
-    # Use canonical discovery/GTFS labels; opaque IDs are never re-geocoded.
-    destination_query = destination_raw
-    if destination_place.source in {"discovery", "gtfs"}:
-        destination_query = (
-            str(destination_place.address or "").strip()
-            or str(destination_place.name or "").strip()
-            or destination_raw
-        )
+    return origin_place, destination_place, _canonical_destination_query(
+        destination_place, destination_raw
+    )
 
-    routing_preference = tool_input.get("routing_preference") or "FEWER_TRANSFERS"
+
+def _canonical_destination_query(place: ResolvedPlace, destination_raw: str) -> str:
+    # Opaque IDs must not be re-geocoded; discovery/GTFS keep canonical labels.
+    if place.source not in {"discovery", "gtfs"}:
+        return destination_raw
+    return (
+        str(place.address or "").strip()
+        or str(place.name or "").strip()
+        or destination_raw
+    )
+
+
+async def _departure_time_for_leg(
+    dependencies: PreparationDependencies,
+    tool_input: dict,
+    origin_place: ResolvedPlace,
+    destination_place: ResolvedPlace,
+    destination_query: str,
+    allowed_modes: list[str],
+    routing_preference: str,
+) -> tuple[str | None, str | None] | RoutePreparationFailure:
     departure_time = tool_input.get("departure_time") or None
     arrival_by = tool_input.get("arrival_by") or None
     if departure_time and arrival_by:
         return RoutePreparationFailure("use either departure_time or arrival_by, not both")
-    if arrival_by:
-        try:
-            departure_time = await dependencies.derive_arrive_by_departure(
-                origin=origin_place,
-                destination=destination_place,
-                destination_query=destination_query,
-                arrival_by=str(arrival_by),
-                allowed_modes=allowed_modes,
-                routing_preference=routing_preference,
-            )
-        except ValueError as exc:
-            return RoutePreparationFailure(str(exc))
-        except dependencies.directions_service.GoogleRoutesError as exc:
-            return RoutePreparationFailure(
-                f"could not estimate an arrive-by departure ({exc.code})"
-            )
+    if not arrival_by:
+        return departure_time, arrival_by
+    try:
+        departure_time = await dependencies.derive_arrive_by_departure(
+            origin=origin_place,
+            destination=destination_place,
+            destination_query=destination_query,
+            arrival_by=str(arrival_by),
+            allowed_modes=allowed_modes,
+            routing_preference=routing_preference,
+        )
+    except ValueError as exc:
+        return RoutePreparationFailure(str(exc))
+    except dependencies.directions_service.GoogleRoutesError as exc:
+        return RoutePreparationFailure(
+            f"could not estimate an arrive-by departure ({exc.code})"
+        )
+    return departure_time, arrival_by
 
-    route_started = time.monotonic()
+
+async def _fetch_provider_routes(
+    dependencies: PreparationDependencies,
+    origin_place: ResolvedPlace,
+    destination_place: ResolvedPlace,
+    destination_query: str,
+    departure_time: str | None,
+    allowed_modes: list[str],
+    routing_preference: str,
+) -> list | RoutePreparationFailure:
     try:
         parsed_routes = await dependencies.route_with_recovery(
             origin=origin_place,
@@ -263,11 +280,23 @@ async def prepare_single_leg(
     except dependencies.directions_service.GoogleRoutesError as exc:
         print(f"[agent-plan_trip] routing failed code={exc.code}")
         return RoutePreparationFailure(f"routing failed ({exc.code})")
-    timings["route_provider_ms"] = (time.monotonic() - route_started) * 1000
-    mark("google_routes_complete_ms")
+    return parsed_routes
 
-    if not parsed_routes:
-        return RoutePreparationFailure("no transit route found between those points")
+
+async def _apply_structural_and_required(
+    dependencies: PreparationDependencies,
+    tool_input: dict,
+    ctx: RoutePreparationContext,
+    parsed_routes: list,
+    origin_place: ResolvedPlace,
+    destination_place: ResolvedPlace,
+    destination_query: str,
+    departure_time: str | None,
+    allowed_modes: list[str],
+    routing_preference: str,
+    leg_telemetry: dict,
+    timings: dict[str, float],
+) -> list | RoutePreparationFailure:
     parsed_routes = await prepare_structural_candidates(
         parsed_routes,
         tool_input=tool_input,
@@ -301,7 +330,219 @@ async def prepare_single_leg(
             return RoutePreparationFailure(
                 f"no route candidate used the requested {requested} service"
             )
-    await ctx.emit_progress("finding_routes", "complete")
+    return parsed_routes
+
+
+async def _collect_mta_live_context(
+    dependencies: PreparationDependencies,
+    route_ids: set[str],
+    bus_route_ids: set[str],
+    timings: dict[str, float],
+    mark: Callable[[str], None],
+) -> tuple[list, list, list, bool, bool, bool]:
+    context_collection_timed_out = False
+    mta_started = time.monotonic()
+    try:
+        raw_alerts, stalled, stalled_buses = await asyncio.wait_for(
+            asyncio.gather(
+                dependencies.collect_alerts(),
+                dependencies.collect_stalled_trains(route_ids),
+                dependencies.collect_stalled_buses(bus_route_ids),
+                return_exceptions=True,
+            ),
+            timeout=dependencies.context_timeout_seconds,
+        )
+    except TimeoutError:
+        context_collection_timed_out = True
+        raw_alerts, stalled, stalled_buses = [], [], []
+    alerts_available = not context_collection_timed_out and not isinstance(
+        raw_alerts, BaseException
+    )
+    subway_vehicles_available = not context_collection_timed_out and not isinstance(
+        stalled, BaseException
+    )
+    bus_vehicles_available = not context_collection_timed_out and not isinstance(
+        stalled_buses, BaseException
+    )
+    raw_alerts = [] if isinstance(raw_alerts, BaseException) else raw_alerts
+    stalled = [] if isinstance(stalled, BaseException) else stalled
+    stalled_buses = [] if isinstance(stalled_buses, BaseException) else stalled_buses
+    timings["mta_ms"] = (time.monotonic() - mta_started) * 1000
+    mark("mta_context_complete_ms")
+    parsed_alerts = dependencies.parse_service_alerts(raw_alerts) if raw_alerts else []
+    relevant_alerts = dependencies.filter_alerts_for_routes(parsed_alerts, route_ids)
+    return (
+        relevant_alerts,
+        stalled,
+        stalled_buses,
+        alerts_available,
+        subway_vehicles_available,
+        bus_vehicles_available,
+    )
+
+
+async def _completed_crowd_evidence(
+    event_task: asyncio.Task[Any] | None,
+) -> tuple[str, list[dict], list[str], dict]:
+    if event_task is None:
+        return "not_required", [], [], {"grok_status": "not_required"}
+    try:
+        return await event_task
+    except Exception as exc:  # noqa: BLE001 crowd-provider faults stay unavailable
+        print(f"[agent-plan_trip] event enrichment failed: {type(exc).__name__}")
+        return "provider_unavailable", [], [type(exc).__name__], {"grok_status": "not_required"}
+
+
+_UNSCANNED_INCIDENT_METADATA = {
+    "status": "unscanned",
+    "lookup_status": "unavailable",
+    "coverage_status": "unscanned",
+    "lookup_kind": "index",
+    "warning_count": 0,
+    "cache_hit": False,
+    "sources": {"attempted": [], "completed": []},
+}
+
+
+def _advisor_incidents_from_scan(incident_scan: Any) -> tuple[list, dict]:
+    if not isinstance(incident_scan, dict):
+        return [], dict(_UNSCANNED_INCIDENT_METADATA)
+    raw_incidents = incident_scan.get("incidents")
+    incidents: list = []
+    if isinstance(raw_incidents, list):
+        incidents = [
+            incident
+            for incident in raw_incidents
+            if isinstance(incident, dict) and incident.get("advisor_eligible") is True
+        ]
+    metadata = incident_scan.get("scan_metadata")
+    if not isinstance(metadata, dict):
+        metadata = dict(_UNSCANNED_INCIDENT_METADATA)
+    return incidents, metadata
+
+
+async def _completed_incident_scan(
+    dependencies: PreparationDependencies,
+    incident_task: asyncio.Task[Any],
+    leg_telemetry: dict | None,
+) -> tuple[list, dict, bool]:
+    incidents: list = []
+    incident_scan_metadata: dict = dict(_UNSCANNED_INCIDENT_METADATA)
+    advisor_evidence_available = False
+    try:
+        incident_scan = await incident_task
+        incidents, incident_scan_metadata = _advisor_incidents_from_scan(incident_scan)
+        if isinstance(leg_telemetry, dict):
+            leg_telemetry["incident_status"] = str(
+                incident_scan_metadata.get("status") or "unscanned"
+            )
+            cache_hit = incident_scan_metadata.get("cache_hit")
+            leg_telemetry["incident_cache_hit"] = (
+                cache_hit if isinstance(cache_hit, bool) else None
+            )
+        # Indexed confirmed incidents are usable when the index lookup itself
+        # succeeded, even when some unrelated coverage batch is stale/partial.
+        advisor_evidence_available = (
+            dependencies.trip_incidents.incident_lookup_succeeded(incident_scan_metadata)
+            and bool(incidents)
+        )
+    except Exception as exc:  # noqa: BLE001 incident-index faults stay unscanned
+        if isinstance(leg_telemetry, dict):
+            leg_telemetry["incident_status"] = "failed"
+            leg_telemetry["incident_cache_hit"] = False
+        print(f"[agent-plan_trip] incident index lookup failed: {type(exc).__name__}")
+    return incidents, incident_scan_metadata, advisor_evidence_available
+
+
+def _bind_leg_envelopes(
+    dependencies: PreparationDependencies,
+    *,
+    relevant_alerts: list,
+    stalled: list,
+    stalled_buses: list,
+    event_impacts: list[dict],
+    event_evidence_status: str,
+    incidents: list,
+    advisor_evidence_available: bool,
+    alerts_available: bool,
+    subway_vehicles_available: bool,
+    bus_vehicles_available: bool,
+) -> dict[str, Any]:
+    observed_at = datetime.now(UTC)
+    return {
+        "alerts": dependencies.evidence_envelope(
+            "mta_service_alerts",
+            relevant_alerts,
+            observed_at=observed_at,
+            ttl_seconds=dependencies.live_evidence_ttl_seconds,
+            available=alerts_available,
+        ),
+        "subway_vehicles": dependencies.evidence_envelope(
+            "mta_subway_vehicle_positions",
+            stalled,
+            observed_at=observed_at,
+            ttl_seconds=dependencies.live_evidence_ttl_seconds,
+            available=subway_vehicles_available,
+        ),
+        "bus_vehicles": dependencies.evidence_envelope(
+            "mta_bus_vehicle_positions",
+            stalled_buses,
+            observed_at=observed_at,
+            ttl_seconds=dependencies.live_evidence_ttl_seconds,
+            available=bus_vehicles_available,
+        ),
+        "events": dependencies.evidence_envelope(
+            "crowd_events",
+            event_impacts,
+            observed_at=observed_at,
+            ttl_seconds=dependencies.event_evidence_ttl_seconds,
+            available=event_evidence_status != "provider_unavailable",
+        ),
+        "advisor": dependencies.evidence_envelope(
+            "route_incident_advisor",
+            incidents,
+            observed_at=observed_at,
+            ttl_seconds=dependencies.live_evidence_ttl_seconds,
+            available=advisor_evidence_available,
+        ),
+    }
+
+
+def _mark_phase(
+    name: str,
+    plan_origin: float,
+    timings: dict[str, float],
+    dependencies: PreparationDependencies,
+    ctx: RoutePreparationContext,
+) -> None:
+    elapsed = (time.monotonic() - plan_origin) * 1000
+    timings[name] = elapsed
+    record_phase = getattr(dependencies, "record_phase_ms", None)
+    if record_phase is not None:
+        record_phase(ctx.telemetry, name, elapsed)
+
+
+async def _enrich_and_score_leg(
+    tool_input: dict,
+    ctx: RoutePreparationContext,
+    timings: dict[str, float],
+    *,
+    dependencies: PreparationDependencies,
+    emit_comparing_progress: bool,
+    origin_raw: str,
+    destination_raw: str,
+    origin_place: ResolvedPlace,
+    destination_place: ResolvedPlace,
+    departure_time: str | None,
+    arrival_by: str | None,
+    excluded: set[str],
+    parsed_routes: list,
+    routing_preference: str,
+    leg_telemetry: dict,
+    plan_origin: float,
+) -> PreparedLeg:
+    def mark(name: str) -> None:
+        _mark_phase(name, plan_origin, timings, dependencies, ctx)
 
     route_ids, bus_route_ids = dependencies.candidates._collect_route_and_bus_ids(
         parsed_routes
@@ -337,7 +578,9 @@ async def prepare_single_leg(
             timings["incident_ms"] = (time.monotonic() - started) * 1000
 
     await ctx.emit_progress("checking_live_conditions", "active")
-    event_task = asyncio.create_task(collect_event_evidence()) if collect_crowd_evidence else None
+    event_task = (
+        asyncio.create_task(collect_event_evidence()) if collect_crowd_evidence else None
+    )
     incident_context = dependencies.trip_incidents.build_candidate_stop_context(
         ctx.gtfs,
         parsed_routes,
@@ -345,154 +588,55 @@ async def prepare_single_leg(
     mark("incident_start_ms")
     incident_task = asyncio.create_task(collect_incident_evidence())
     try:
-        context_collection_timed_out = False
-        mta_started = time.monotonic()
-        try:
-            raw_alerts, stalled, stalled_buses = await asyncio.wait_for(
-                asyncio.gather(
-                    dependencies.collect_alerts(),
-                    dependencies.collect_stalled_trains(route_ids),
-                    dependencies.collect_stalled_buses(bus_route_ids),
-                    return_exceptions=True,
-                ),
-                timeout=dependencies.context_timeout_seconds,
-            )
-        except TimeoutError:
-            context_collection_timed_out = True
-            raw_alerts, stalled, stalled_buses = [], [], []
-        alerts_available = not context_collection_timed_out and not isinstance(
-            raw_alerts,
-            BaseException,
-        )
-        subway_vehicles_available = not context_collection_timed_out and not isinstance(
+        (
+            relevant_alerts,
             stalled,
-            BaseException,
-        )
-        bus_vehicles_available = not context_collection_timed_out and not isinstance(
             stalled_buses,
-            BaseException,
+            alerts_available,
+            subway_vehicles_available,
+            bus_vehicles_available,
+        ) = await _collect_mta_live_context(
+            dependencies, route_ids, bus_route_ids, timings, mark
         )
-        raw_alerts = [] if isinstance(raw_alerts, BaseException) else raw_alerts
-        stalled = [] if isinstance(stalled, BaseException) else stalled
-        stalled_buses = [] if isinstance(stalled_buses, BaseException) else stalled_buses
-        timings["mta_ms"] = (time.monotonic() - mta_started) * 1000
-        mark("mta_context_complete_ms")
-        parsed_alerts = dependencies.parse_service_alerts(raw_alerts) if raw_alerts else []
-        relevant_alerts = dependencies.filter_alerts_for_routes(parsed_alerts, route_ids)
-
-        event_evidence_status = "not_required"
-        event_impacts: list[dict] = []
-        event_failures: list[str] = []
-        crowd_search_metadata: dict = {"grok_status": "not_required"}
-        if event_task is not None:
-            try:
-                (
-                    event_evidence_status,
-                    event_impacts,
-                    event_failures,
-                    crowd_search_metadata,
-                ) = await event_task
-            except Exception as exc:
-                print(f"[agent-plan_trip] event enrichment failed: {type(exc).__name__}")
-                event_evidence_status = "provider_unavailable"
-                event_impacts = []
-                event_failures = [type(exc).__name__]
-
-        incidents: list = []
-        incident_scan_metadata: dict = {
-            "status": "unscanned",
-            "lookup_status": "unavailable",
-            "coverage_status": "unscanned",
-            "lookup_kind": "index",
-            "warning_count": 0,
-            "cache_hit": False,
-            "sources": {"attempted": [], "completed": []},
-        }
-        advisor_evidence_available = False
-        try:
-            incident_scan = await incident_task
-            metadata = incident_scan.get("scan_metadata") if isinstance(incident_scan, dict) else None
-            if isinstance(incident_scan, dict) and isinstance(
-                incident_scan.get("incidents"), list
-            ):
-                incidents = [
-                    incident
-                    for incident in incident_scan["incidents"]
-                    if isinstance(incident, dict)
-                    and incident.get("advisor_eligible") is True
-                ]
-            if isinstance(metadata, dict):
-                incident_scan_metadata = metadata
-            if isinstance(leg_telemetry, dict):
-                leg_telemetry["incident_status"] = str(
-                    incident_scan_metadata.get("status") or "unscanned"
-                )
-                cache_hit = incident_scan_metadata.get("cache_hit")
-                leg_telemetry["incident_cache_hit"] = (
-                    cache_hit if isinstance(cache_hit, bool) else None
-                )
-            # Indexed confirmed incidents are usable when the index lookup itself
-            # succeeded, even when some unrelated coverage batch is stale/partial.
-            advisor_evidence_available = (
-                dependencies.trip_incidents.incident_lookup_succeeded(
-                    incident_scan_metadata
-                )
-                and bool(incidents)
-            )
-        except Exception as exc:
-            if isinstance(leg_telemetry, dict):
-                leg_telemetry["incident_status"] = "failed"
-                leg_telemetry["incident_cache_hit"] = False
-            print(f"[agent-plan_trip] incident index lookup failed: {type(exc).__name__}")
+        (
+            event_evidence_status,
+            event_impacts,
+            event_failures,
+            crowd_search_metadata,
+        ) = await _completed_crowd_evidence(event_task)
+        incidents, incident_scan_metadata, advisor_evidence_available = (
+            await _completed_incident_scan(dependencies, incident_task, leg_telemetry)
+        )
         mark("incident_complete_ms")
         await ctx.emit_progress("checking_live_conditions", "complete")
-        observed_at = datetime.now(UTC)
-        evidence_envelopes = {
-            "alerts": dependencies.evidence_envelope(
-                "mta_service_alerts",
-                relevant_alerts,
-                observed_at=observed_at,
-                ttl_seconds=dependencies.live_evidence_ttl_seconds,
-                available=alerts_available,
-            ),
-            "subway_vehicles": dependencies.evidence_envelope(
-                "mta_subway_vehicle_positions",
-                stalled,
-                observed_at=observed_at,
-                ttl_seconds=dependencies.live_evidence_ttl_seconds,
-                available=subway_vehicles_available,
-            ),
-            "bus_vehicles": dependencies.evidence_envelope(
-                "mta_bus_vehicle_positions",
-                stalled_buses,
-                observed_at=observed_at,
-                ttl_seconds=dependencies.live_evidence_ttl_seconds,
-                available=bus_vehicles_available,
-            ),
-            "events": dependencies.evidence_envelope(
-                "crowd_events",
-                event_impacts,
-                observed_at=observed_at,
-                ttl_seconds=dependencies.event_evidence_ttl_seconds,
-                available=event_evidence_status != "provider_unavailable",
-            ),
-            "advisor": dependencies.evidence_envelope(
-                "route_incident_advisor",
-                incidents,
-                observed_at=observed_at,
-                ttl_seconds=dependencies.live_evidence_ttl_seconds,
-                available=advisor_evidence_available,
-            ),
-        }
-        relevant_alerts = dependencies.current_payload(evidence_envelopes["alerts"], empty=[])
-        stalled = dependencies.current_payload(evidence_envelopes["subway_vehicles"], empty=[])
-        stalled_buses = dependencies.current_payload(
-            evidence_envelopes["bus_vehicles"],
-            empty=[],
+        evidence_envelopes = _bind_leg_envelopes(
+            dependencies,
+            relevant_alerts=relevant_alerts,
+            stalled=stalled,
+            stalled_buses=stalled_buses,
+            event_impacts=event_impacts,
+            event_evidence_status=event_evidence_status,
+            incidents=incidents,
+            advisor_evidence_available=advisor_evidence_available,
+            alerts_available=alerts_available,
+            subway_vehicles_available=subway_vehicles_available,
+            bus_vehicles_available=bus_vehicles_available,
         )
-        event_impacts = dependencies.current_payload(evidence_envelopes["events"], empty=[])
-        incidents = dependencies.current_payload(evidence_envelopes["advisor"], empty=[])
-
+        relevant_alerts = dependencies.current_payload(
+            evidence_envelopes["alerts"], empty=[]
+        )
+        stalled = dependencies.current_payload(
+            evidence_envelopes["subway_vehicles"], empty=[]
+        )
+        stalled_buses = dependencies.current_payload(
+            evidence_envelopes["bus_vehicles"], empty=[]
+        )
+        event_impacts = dependencies.current_payload(
+            evidence_envelopes["events"], empty=[]
+        )
+        incidents = dependencies.current_payload(
+            evidence_envelopes["advisor"], empty=[]
+        )
         scoring_started = time.monotonic()
         scored = dependencies.scoring._score_routes(
             parsed_routes,
@@ -504,7 +648,6 @@ async def prepare_single_leg(
         timings["scoring_ms"] = (time.monotonic() - scoring_started) * 1000
         if emit_comparing_progress:
             await ctx.emit_progress("comparing_options", "active")
-
         return PreparedLeg(
             tool_input=tool_input,
             origin_raw=origin_raw,
@@ -533,6 +676,111 @@ async def prepare_single_leg(
         )
     finally:
         await _drain_owned_evidence_tasks(event_task, incident_task)
+
+
+async def prepare_single_leg(
+    tool_input: dict,
+    ctx: RoutePreparationContext,
+    timings: dict[str, float],
+    *,
+    dependencies: PreparationDependencies,
+    emit_comparing_progress: bool = True,
+    resolved_origin: ResolvedPlace | None = None,
+    resolved_destination: ResolvedPlace | None = None,
+) -> PreparedLeg | RoutePreparationFailure:
+    """Resolve places, fetch routes/evidence, score. Never calls a model."""
+
+    parsed_request = _parse_leg_request(tool_input)
+    if isinstance(parsed_request, RoutePreparationFailure):
+        return parsed_request
+    origin_raw, destination_raw, excluded, allowed_modes = parsed_request
+
+    plan_origin = time.monotonic()
+    leg_telemetry = ctx.telemetry.get("_plan_trip_active_leg")
+    if not isinstance(leg_telemetry, dict):
+        leg_telemetry = ctx.telemetry["route_candidate_diagnostics"] = {}
+    leg_telemetry["_plan_origin_monotonic"] = plan_origin
+
+    place_started = time.monotonic()
+    places = await _resolve_leg_places(
+        dependencies,
+        ctx,
+        origin_raw,
+        destination_raw,
+        resolved_origin,
+        resolved_destination,
+    )
+    if isinstance(places, RoutePreparationFailure):
+        return places
+    origin_place, destination_place, destination_query = places
+    timings["place_resolution_ms"] = (time.monotonic() - place_started) * 1000
+    _mark_phase("place_resolution_complete_ms", plan_origin, timings, dependencies, ctx)
+
+    routing_preference = tool_input.get("routing_preference") or "FEWER_TRANSFERS"
+    departure = await _departure_time_for_leg(
+        dependencies,
+        tool_input,
+        origin_place,
+        destination_place,
+        destination_query,
+        allowed_modes,
+        routing_preference,
+    )
+    if isinstance(departure, RoutePreparationFailure):
+        return departure
+    departure_time, arrival_by = departure
+
+    route_started = time.monotonic()
+    parsed_routes = await _fetch_provider_routes(
+        dependencies,
+        origin_place,
+        destination_place,
+        destination_query,
+        departure_time,
+        allowed_modes,
+        routing_preference,
+    )
+    if isinstance(parsed_routes, RoutePreparationFailure):
+        return parsed_routes
+    timings["route_provider_ms"] = (time.monotonic() - route_started) * 1000
+    _mark_phase("google_routes_complete_ms", plan_origin, timings, dependencies, ctx)
+    if not parsed_routes:
+        return RoutePreparationFailure("no transit route found between those points")
+    parsed_routes = await _apply_structural_and_required(
+        dependencies,
+        tool_input,
+        ctx,
+        parsed_routes,
+        origin_place,
+        destination_place,
+        destination_query,
+        departure_time,
+        allowed_modes,
+        routing_preference,
+        leg_telemetry,
+        timings,
+    )
+    if isinstance(parsed_routes, RoutePreparationFailure):
+        return parsed_routes
+    await ctx.emit_progress("finding_routes", "complete")
+    return await _enrich_and_score_leg(
+        tool_input,
+        ctx,
+        timings,
+        dependencies=dependencies,
+        emit_comparing_progress=emit_comparing_progress,
+        origin_raw=origin_raw,
+        destination_raw=destination_raw,
+        origin_place=origin_place,
+        destination_place=destination_place,
+        departure_time=departure_time,
+        arrival_by=arrival_by,
+        excluded=excluded,
+        parsed_routes=parsed_routes,
+        routing_preference=str(routing_preference),
+        leg_telemetry=leg_telemetry,
+        plan_origin=plan_origin,
+    )
 
 
 __all__ = ("PreparationDependencies", "PreparedLeg", "prepare_single_leg")

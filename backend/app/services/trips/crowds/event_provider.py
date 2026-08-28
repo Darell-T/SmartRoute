@@ -17,8 +17,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-import httpx
-
 from app.services import cache
 from app.services.geography import distance_meters
 from app.services.trips import text
@@ -158,43 +156,19 @@ async def fetch_json(
     json_body: dict | None = None,
     headers: dict | None = None,
 ) -> tuple[dict | list | None, str | None]:
-    """Fetch one provider JSON response with bounded, redacted failures."""
+    # Lazy: agent.tools.__init__ imports venue tables from this module.
+    from app.services.agent.tools.provider_http import fetch_json as shared_fetch_json
 
-    kwargs: dict = {}
-    if params is not None:
-        kwargs["params"] = params
-    if headers is not None:
-        kwargs["headers"] = headers
-    try:
-        async with httpx.AsyncClient(timeout=timeout_s) as client:
-            response = (
-                await client.get(url, **kwargs)
-                if method == "GET"
-                else await client.post(url, json=json_body, **kwargs)
-            )
-            response.raise_for_status()
-            return response.json(), None
-    except httpx.TimeoutException:
-        print(f"[{log_tag}] {what} timed out")
-        return None, f"{what} timed out"
-    except httpx.HTTPStatusError as exc:
-        status = exc.response.status_code
-        print(f"[{log_tag}] {what} HTTP {status}")
-        if status in {401, 403}:
-            return None, f"{what} authentication failed"
-        if status == 429:
-            return None, f"{what} rate limited"
-        if status in {400, 404, 422}:
-            return None, f"{what} request was invalid"
-        if status >= 500:
-            return None, f"{what} is temporarily unavailable"
-        return None, f"{what} failed"
-    except httpx.RequestError as exc:
-        print(f"[{log_tag}] {what} request failed: {type(exc).__name__}")
-        return None, f"{what} failed"
-    except (ValueError, TypeError) as exc:
-        print(f"[{log_tag}] {what} invalid JSON: {exc!r}")
-        return None, f"{what} returned an unexpected response"
+    return await shared_fetch_json(
+        method,
+        url,
+        timeout_s=timeout_s,
+        log_tag=log_tag,
+        what=what,
+        params=params,
+        json_body=json_body,
+        headers=headers,
+    )
 
 
 def _et_day_bounds_utc(date_str: str) -> tuple[str, str] | None:
@@ -238,7 +212,7 @@ def _cache_key(
 def _read_cache(key: str) -> dict | None:
     try:
         raw = cache.cache_get(key)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 cache faults miss this lookup
         print(f"[event-provider] cache read failed: {type(exc).__name__}")
         return None
     if raw is None:
@@ -253,7 +227,7 @@ def _read_cache(key: str) -> dict | None:
 def _write_cache(key: str, value: dict) -> None:
     try:
         cache.cache_set(key, json.dumps(value, default=str), EVENT_LOOKUP_CACHE_TTL_S)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 cache faults skip storing this lookup
         print(f"[event-provider] cache write failed: {type(exc).__name__}")
 
 
@@ -458,18 +432,15 @@ def _events_from_payload(payload: object) -> tuple[list[dict] | None, int]:
 FetchJSON = Callable[..., Awaitable[tuple[dict | list | None, str | None]]]
 
 
-async def _lookup_uncached(
+def _ticketmaster_params(
     query: str,
     date: str | None,
     venue: str | None,
     api_key: str,
     radius_miles: float,
-    latitude: float = 40.7128,
-    longitude: float = -74.0060,
-    *,
-    fetch_json_impl: FetchJSON | None = None,
-    max_pages: int | None = None,
-) -> EventLookupResult:
+    latitude: float,
+    longitude: float,
+) -> dict | EventLookupResult:
     params = {
         "apikey": api_key,
         "latlong": (
@@ -488,12 +459,76 @@ async def _lookup_uncached(
     keyword = f"{query} {venue}".strip() if venue else query
     if keyword:
         params["keyword"] = keyword
-    if date:
-        bounds = _et_day_bounds_utc(date)
-        if bounds is None:
-            return EventLookupResult(ok=False, error="date must be YYYY-MM-DD")
-        params["startDateTime"], params["endDateTime"] = bounds
+    if not date:
+        return params
+    bounds = _et_day_bounds_utc(date)
+    if bounds is None:
+        return EventLookupResult(ok=False, error="date must be YYYY-MM-DD")
+    params["startDateTime"], params["endDateTime"] = bounds
+    return params
 
+
+def _event_in_search(
+    parsed: dict,
+    seen: set[str],
+    latitude: float,
+    longitude: float,
+    radius_miles: float,
+) -> bool:
+    event_latitude = parsed["venue_latitude"]
+    event_longitude = parsed["venue_longitude"]
+    if (
+        event_latitude is not None
+        and event_longitude is not None
+        and not _is_within_search_radius(
+            event_latitude,
+            event_longitude,
+            latitude,
+            longitude,
+            radius_miles,
+        )
+    ):
+        return False
+    if parsed["status"] in {"canceled", "cancelled"}:
+        return False
+    return _event_identity(parsed) not in seen
+
+
+def _append_page_events(
+    raw_events: list[dict],
+    parsed_events: list[dict],
+    seen: set[str],
+    latitude: float,
+    longitude: float,
+    radius_miles: float,
+) -> None:
+    for raw_event in raw_events:
+        parsed = _parse_event(raw_event)
+        if not _event_in_search(parsed, seen, latitude, longitude, radius_miles):
+            continue
+        seen.add(_event_identity(parsed))
+        parsed_events.append(parsed)
+        if len(parsed_events) >= EVENT_LOOKUP_MAX_RESULTS:
+            return
+
+
+async def _lookup_uncached(
+    query: str,
+    date: str | None,
+    venue: str | None,
+    api_key: str,
+    radius_miles: float,
+    latitude: float = 40.7128,
+    longitude: float = -74.0060,
+    *,
+    fetch_json_impl: FetchJSON | None = None,
+    max_pages: int | None = None,
+) -> EventLookupResult:
+    params = _ticketmaster_params(
+        query, date, venue, api_key, radius_miles, latitude, longitude
+    )
+    if isinstance(params, EventLookupResult):
+        return params
     fetch = fetch_json_impl or fetch_json
     timeout_s = _positive_float_env(
         "EVENT_LOOKUP_TIMEOUT_S",
@@ -528,31 +563,9 @@ async def _lookup_uncached(
                 ok=False,
                 error="event lookup returned an unexpected response",
             )
-        for raw_event in raw_events:
-            parsed = _parse_event(raw_event)
-            event_latitude = parsed["venue_latitude"]
-            event_longitude = parsed["venue_longitude"]
-            if (
-                event_latitude is not None
-                and event_longitude is not None
-                and not _is_within_search_radius(
-                    event_latitude,
-                    event_longitude,
-                    latitude,
-                    longitude,
-                    radius_miles,
-                )
-            ):
-                continue
-            if parsed["status"] in {"canceled", "cancelled"}:
-                continue
-            identity = _event_identity(parsed)
-            if identity in seen:
-                continue
-            seen.add(identity)
-            parsed_events.append(parsed)
-            if len(parsed_events) >= EVENT_LOOKUP_MAX_RESULTS:
-                break
+        _append_page_events(
+            raw_events, parsed_events, seen, latitude, longitude, radius_miles
+        )
         pages_to_fetch = min(max(total_pages, 1), page_limit)
         if len(parsed_events) >= EVENT_LOOKUP_MAX_RESULTS or page_number + 1 >= pages_to_fetch:
             break
@@ -571,30 +584,7 @@ async def _lookup_uncached(
     return EventLookupResult(ok=True, data=data, summary=summary)
 
 
-async def lookup_events(
-    tool_input: dict,
-    _context: object | None = None,
-    *,
-    fetch_json_impl: FetchJSON | None = None,
-    lookup_uncached_impl: Callable[..., Awaitable[EventLookupResult]] | None = None,
-) -> EventLookupResult:
-    """Look up bounded NYC-area events without an agent-package dependency."""
-
-    del _context
-    query = str(tool_input.get("query") or "").strip()
-    if os.getenv("TICKETMASTER_ENABLED", "true").strip().lower() in {
-        "0",
-        "false",
-        "no",
-        "off",
-    }:
-        return EventLookupResult(ok=False, error="event lookup is disabled")
-    api_key = os.getenv("TICKETMASTER_API_KEY", "").strip()
-    if not api_key:
-        return EventLookupResult(ok=False, error="event lookup is not configured")
-
-    date = tool_input.get("date")
-    venue = tool_input.get("venue")
+def _search_point(tool_input: dict) -> tuple[float, float, float] | EventLookupResult:
     configured_radius = _positive_float_env(
         "TICKETMASTER_SEARCH_RADIUS_MILES",
         EVENT_LOOKUP_DEFAULT_RADIUS_MILES,
@@ -627,7 +617,37 @@ async def lookup_events(
             ok=False,
             error="event search location is outside the NYC service area",
         )
+    return latitude, longitude, radius_miles
 
+
+async def lookup_events(
+    tool_input: dict,
+    _context: object | None = None,
+    *,
+    fetch_json_impl: FetchJSON | None = None,
+    lookup_uncached_impl: Callable[..., Awaitable[EventLookupResult]] | None = None,
+) -> EventLookupResult:
+    """Look up bounded NYC-area events."""
+
+    del _context
+    query = str(tool_input.get("query") or "").strip()
+    if os.getenv("TICKETMASTER_ENABLED", "true").strip().lower() in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }:
+        return EventLookupResult(ok=False, error="event lookup is disabled")
+    api_key = os.getenv("TICKETMASTER_API_KEY", "").strip()
+    if not api_key:
+        return EventLookupResult(ok=False, error="event lookup is not configured")
+
+    date = tool_input.get("date")
+    venue = tool_input.get("venue")
+    point = _search_point(tool_input)
+    if isinstance(point, EventLookupResult):
+        return point
+    latitude, longitude, radius_miles = point
     cache_key = _cache_key(query, date, venue, radius_miles, latitude, longitude)
 
     def cached_result() -> EventLookupResult | None:

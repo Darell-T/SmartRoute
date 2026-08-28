@@ -100,7 +100,7 @@ async def scan_route_incidents(
             route_ids=route_ids,
             coverage_ids=coverage_ids,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 incident-index faults stay unavailable
         print(f"[trip] incident index lookup failed: {type(exc).__name__}")
         return {
             "incidents": [],
@@ -145,7 +145,7 @@ def build_candidate_stop_context(gtfs: Any, routes: list[list[dict]]) -> list[Ca
                         step.get("departure_coords"),
                         step.get("arrival_coords"),
                     )
-                except Exception:
+                except Exception:  # noqa: BLE001 pattern-index faults omit intermediates
                     rows = []
                 if rows:
                     step["intermediate_stop_locations"] = [

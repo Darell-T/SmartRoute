@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass
+from itertools import pairwise
 from math import cos, isfinite, radians, sqrt
 from typing import Any
 
@@ -16,7 +17,6 @@ from app.services.trips.route_incidents.context import (
     CandidateStopContext,
     valid_coordinate_pair,
 )
-import itertools
 
 MILES_TO_METERS = 1609.344
 DEFAULT_SEARCH_RADIUS_MILES = 0.5
@@ -175,7 +175,7 @@ def _nearest_distance_meters(stop: CandidateStopContext, incident: object) -> tu
     for component in geometry_components:
         distances.extend(
             (_point_to_segment_meters((stop.latitude, stop.longitude), a, b), "geometry")
-            for a, b in itertools.pairwise(component)
+            for a, b in pairwise(component)
         )
     geometry = item.get("geometry")
     encoded_value = item.get("encoded_polyline") or item.get("polyline")
@@ -185,7 +185,7 @@ def _nearest_distance_meters(stop: CandidateStopContext, incident: object) -> tu
     if len(encoded_points) > 1:
         distances.extend(
             (_point_to_segment_meters((stop.latitude, stop.longitude), a, b), "polyline")
-            for a, b in itertools.pairwise(encoded_points)
+            for a, b in pairwise(encoded_points)
         )
     return min(distances, key=lambda item: item[0])
 
