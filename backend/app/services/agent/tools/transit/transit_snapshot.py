@@ -276,7 +276,7 @@ async def _vehicle_evidence(route_ids: list[str]) -> tuple[dict[str, Any], bool]
 def _incident_evidence(route_ids: list[str]) -> tuple[dict[str, Any], bool]:
     try:
         incident_result = incident_index.lookup_incidents(route_ids=route_ids)
-    except Exception:
+    except Exception:  # noqa: BLE001 incident index faults stay unavailable
         return {"incident_coverage": "unavailable"}, False
     if not isinstance(incident_result, dict):
         return (

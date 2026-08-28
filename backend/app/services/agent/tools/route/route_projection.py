@@ -38,7 +38,7 @@ _INCOMPLETE_PATTERNS = (
     r"\bincident\s+(?:information|evidence)\s+(?:is|was)\s+unavailable\b",
     r"\b(?:the\s+)?incident\s+scan\s+(?:has\s+)?timed\s+out\b",
     r"\b(?:the\s+)?incident\s+scan\s+(?:is|was)\s+unavailable\b",
-    r"\b(?:could\s+not|couldn['’]t)\s+complete\s+(?:the\s+)?incident\s+scan\b",
+    r"\b(?:could\s+not|couldn['\u2019]t)\s+complete\s+(?:the\s+)?incident\s+scan\b",
 )
 _PASSENGER_DECISION_FIELDS = (
     "selection_source",

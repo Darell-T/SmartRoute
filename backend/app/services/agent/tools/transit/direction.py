@@ -75,7 +75,7 @@ def normalize_direction_text(value: object) -> str:
 
     raw = "" if value is None else str(value)
     return " ".join(
-        raw.replace("–", "-").replace("—", "-").replace("_", " ").split()
+        raw.replace("\u2013", "-").replace("\u2014", "-").replace("_", " ").split()
     ).casefold()
 
 

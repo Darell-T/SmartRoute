@@ -106,8 +106,6 @@ def prepare_direction(
 def _is_unproven_accepted_headsign(
     ctx: ToolContext, route_ids: list[str], value: str | None
 ) -> bool:
-    """Reject an accepted-trip headsign echoed without current-turn support."""
-
     requested = normalize_direction_text(value)
     if not requested or resolve_direction(value).resolved:
         return False
@@ -121,23 +119,32 @@ def _is_unproven_accepted_headsign(
     wanted = {str(route).strip().upper() for route in route_ids if str(route).strip()}
     if not wanted:
         return False
-    rows = []
+    return any(
+        _row_echoes_headsign(row, wanted, requested)
+        for row in _accepted_trip_rows(active_trip)
+    )
+
+
+def _accepted_trip_rows(active_trip: dict) -> list[dict]:
+    rows: list[dict] = []
     boarding = active_trip.get("first_boarding")
     if isinstance(boarding, dict):
         rows.append(boarding)
     itinerary = active_trip.get("canonical_itinerary")
-    if isinstance(itinerary, dict):
-        legs = itinerary.get("legs")
-        if isinstance(legs, list):
-            rows.extend(leg for leg in legs if isinstance(leg, dict))
-    for row in rows:
-        route = str(row.get("route_id") or row.get("service_id") or "").strip().upper()
-        if wanted and route not in wanted:
-            continue
-        for key in ("headsign", "direction", "direction_label"):
-            if normalize_direction_text(row.get(key)) == requested:
-                return True
-    return False
+    legs = itinerary.get("legs") if isinstance(itinerary, dict) else None
+    if isinstance(legs, list):
+        rows.extend(leg for leg in legs if isinstance(leg, dict))
+    return rows
+
+
+def _row_echoes_headsign(row: dict, wanted: set[str], requested: str) -> bool:
+    route = str(row.get("route_id") or row.get("service_id") or "").strip().upper()
+    if wanted and route not in wanted:
+        return False
+    return any(
+        normalize_direction_text(row.get(key)) == requested
+        for key in ("headsign", "direction", "direction_label")
+    )
 
 
 def _candidate_direction(
@@ -146,8 +153,6 @@ def _candidate_direction(
     *,
     requested: str | None = None,
 ) -> tuple[DirectionResolution | None, bool]:
-    """Resolve direction from matching canonical legs in the active set."""
-
     session = ctx.session
     session_id = str(ctx.session_id or "").strip()
     if not isinstance(session, dict) or not session_id or not route_ids:
@@ -163,36 +168,14 @@ def _candidate_direction(
     resolutions: list[DirectionResolution] = []
     matching = False
     for candidate in record.get("candidates") or []:
-        if not isinstance(candidate, dict):
-            continue
-        digest = candidate.get("digest")
-        if not isinstance(digest, dict):
-            continue
-        candidate_routes = {
-            str(route).strip().upper()
-            for route in (digest.get("transit_lines") or digest.get("route_ids") or [])
-            if str(route).strip()
-        }
-        if not candidate_routes.intersection(wanted):
-            continue
-        matching = True
-        itinerary = digest.get("_canonical_itinerary")
-        legs = itinerary.get("legs") if isinstance(itinerary, dict) else None
-        if not isinstance(legs, list):
+        found, candidate_matching = _candidate_leg_resolutions(
+            candidate, wanted, requested=requested
+        )
+        if found is None:
             return None, True
-        candidate_resolutions = []
-        for leg in legs:
-            if not isinstance(leg, dict) or not _is_matching_transit_leg(leg, wanted):
-                continue
-            resolution = _candidate_leg_direction(leg, requested=requested)
-            if resolution is None:
-                if requested:
-                    continue
-                return None, True
-            candidate_resolutions.append(resolution)
-        if not candidate_resolutions and not requested:
-            return None, True
-        resolutions.extend(candidate_resolutions)
+        if candidate_matching:
+            matching = True
+            resolutions.extend(found)
     if not matching or not resolutions:
         return None, matching
     keys = {_direction_key(item.resolved) for item in resolutions}
@@ -205,6 +188,66 @@ def _candidate_direction(
         authoritative=True,
         matched_value=selected.matched_value,
     ), True
+
+
+def _candidate_leg_resolutions(
+    candidate: object,
+    wanted: set[str],
+    *,
+    requested: str | None,
+) -> tuple[list[DirectionResolution] | None, bool]:
+    legs, matching = _candidate_digest_legs(candidate, wanted)
+    if legs is None:
+        return None, matching
+    if not matching:
+        return [], False
+    found = _resolutions_from_legs(legs, wanted, requested=requested)
+    if found is None:
+        return None, True
+    if not found and not requested:
+        return None, True
+    return found, True
+
+
+def _candidate_digest_legs(
+    candidate: object, wanted: set[str]
+) -> tuple[list[dict[str, Any]] | None, bool]:
+    if not isinstance(candidate, dict):
+        return [], False
+    digest = candidate.get("digest")
+    if not isinstance(digest, dict):
+        return [], False
+    candidate_routes = {
+        str(route).strip().upper()
+        for route in (digest.get("transit_lines") or digest.get("route_ids") or [])
+        if str(route).strip()
+    }
+    if not candidate_routes.intersection(wanted):
+        return [], False
+    itinerary = digest.get("_canonical_itinerary")
+    legs = itinerary.get("legs") if isinstance(itinerary, dict) else None
+    if not isinstance(legs, list):
+        return None, True
+    return legs, True
+
+
+def _resolutions_from_legs(
+    legs: list[dict[str, Any]],
+    wanted: set[str],
+    *,
+    requested: str | None,
+) -> list[DirectionResolution] | None:
+    candidate_resolutions: list[DirectionResolution] = []
+    for leg in legs:
+        if not isinstance(leg, dict) or not _is_matching_transit_leg(leg, wanted):
+            continue
+        resolution = _candidate_leg_direction(leg, requested=requested)
+        if resolution is None:
+            if requested:
+                continue
+            return None
+        candidate_resolutions.append(resolution)
+    return candidate_resolutions
 
 
 def _is_matching_transit_leg(leg: dict[str, Any], wanted: set[str]) -> bool:

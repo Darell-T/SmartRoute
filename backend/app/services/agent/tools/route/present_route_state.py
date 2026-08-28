@@ -446,12 +446,14 @@ class _EnvelopeShim:
         self._payload = payload
 
     def to_model_dict(self, *, empty: Any, now: Any = None) -> dict[str, Any]:
+        del now
         result = dict(self._payload)
         if result.get("status") != "current":
             result["payload"] = empty
         return result
 
     def current_payload(self, now: Any = None) -> Any:
+        del now
         return self._payload.get("payload") if self._payload.get("status") == "current" else None
 
 

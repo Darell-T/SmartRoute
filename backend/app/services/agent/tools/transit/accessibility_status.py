@@ -149,6 +149,7 @@ def _equipment_type(raw: dict) -> str:
 
 
 async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
+    del ctx
     station_raw = str(tool_input.get("station") or "").strip()
     if not station_raw:
         return ToolResult(ok=False, error="station is required")

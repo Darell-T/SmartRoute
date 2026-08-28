@@ -119,7 +119,7 @@ PRESENT_ROUTE_SCHEMA = {
     },
 }
 
-_REPLAY_LEAD_IN = "Here’s the accepted route again."
+_REPLAY_LEAD_IN = "Here\u2019s the accepted route again."
 
 
 async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
@@ -608,15 +608,6 @@ def _structured_reason_claim_error(
             return (
                 "lead_in names a different route factor than the validated "
                 f"structured reason_code {reason_code}"
-            )
-    if reason_code == "meets_hard_constraints":
-        # A comparative claim is not implied by hard validity.  `fastest` is
-        # checked even when it is not a supported alternative reason, because
-        # that explicit claim cannot be grounded by this reason code.
-        if re.search(r"\bfastest\b", normalized):
-            return (
-                "lead_in names a different route factor than the validated "
-                "structured reason_code meets_hard_constraints"
             )
     return None
 

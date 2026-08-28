@@ -137,7 +137,7 @@ def _nearby_stop_context(
             limit=_MAX_NEARBY_STOPS,
             radius_m=_AREA_STOP_RADIUS_M,
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 nearby-stop index faults stay empty
         return []
 
     contexts: list[CandidateStopContext] = []
@@ -347,7 +347,7 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
         }
         try:
             event_result: object = await event_task
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 event lookup faults stay failed
             event_result = error
     else:
         incident_result, event_result = await asyncio.gather(

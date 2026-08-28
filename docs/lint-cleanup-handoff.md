@@ -13,8 +13,10 @@ application behavior. Regenerate the reports below before editing a batch.
 
 Ruff rows were regenerated on 2026-08-28 after Batch 3 from
 `py -m ruff check --config pyproject.toml --output-format json backend`.
+Batch 4 cleared owned Ruff under `backend/app/services/agent/tools`.
 Oxlint, ESLint, and complexipy rows remain the 2026-08-27 policy measurement.
 The quality-baseline row includes the Batch 3 reviewer update on 2026-08-28.
+Workers must not shrink stale baseline entries.
 
 | Tool | Findings | Files | Notes |
 |---|---:|---:|---|
@@ -43,16 +45,18 @@ Quality certification from fresh runs with no `--skip-tests`:
 | Policy baseline regeneration | 0 | 0 | 0 | 0 | 353 | 1,813 passed, 21 skipped, 444 subtests | 314 |
 | Second pass 2026-08-28 | 0 | 0 | 0 | 0 | 353 | 1,813 passed, 21 skipped, 444 subtests | 314 |
 | Batch 3 reviewer final 2026-08-28 | 0 | 0 | 0 | 0 | 340 | 1,822 passed, 21 skipped, 444 subtests | 314 |
+| Batch 4 worker 2026-08-28 | 1 | 0 | 0 | 6 | 334 | 1,822 passed, 21 skipped, 444 subtests | 314 |
 
 Cognitive delta against `427fbc8`: 0 new or worsened. CRAP has no absolute
 ceiling. Baseline entries may not worsen.
 
 The route-intelligence batch, Batch 0, and Batch 1 are complete inside
 `427fbc8`. Batch 2 is independently APPROVED at `368c00d`. Batch 3 production
-and the handoff repair are Codex-approved. The Batch 3 reviewer removed 13
-stale baseline entries and lowered 19 remaining measurements. No entry was
-added or increased. Full quality vs `368c00d` exits 0. Do not start Batch 4
-automatically.
+and the handoff repair are Codex-approved. Batch 4 owned tools Ruff is zero.
+Cognitive vs `ae37295` is 0 new or worsened. Full quality vs `ae37295` has
+0 new and 0 worsened cyclomatic debt. It exits 1 only because 6 stale
+baseline entries remain. The worker did not run `--update-baseline`. Do not
+start Batch 5 automatically.
 
 ## Structural policy
 
@@ -444,7 +448,153 @@ Codex rejected the second handoff because its fixed-point Ruff count was one
 too high and it did not record the final baseline result. The final docs
 repair corrects both records. The recorded 27-file command exits 0 with 243
 passed and 58 subtests. The final quality command exits 0. Batch 3 is
-Codex-approved. Do not start Batch 4 automatically.
+Codex-approved.
+
+## Batch 4
+
+Owned production path:
+
+- `backend/app/services/agent/tools/**`
+
+Supporting edits:
+
+- `docs/lint-cleanup-handoff.md`
+
+Fixed point: `ae37295940b7f1218922ae153c50b0e32368228a`.
+`quality/baseline.json` was not edited.
+
+Owned-path Ruff after repair: zero. Cognitive delta vs `ae37295`: 0 new or
+worsened (1864 functions analyzed, 259 above 10).
+
+Clusters: shared tool boundary, places, transit, then route tools.
+
+`ToolOutcome` is a `StrEnum`. Unused registry kwargs use `del arg`. Fail-open
+`except Exception` catches keep `# noqa: BLE001` with a one-line
+`{source} faults {outcome}` reason. Rider GPS origin uses
+`location_resolution._origin_latlng`, not NYC-bounded `parse_coordinates`.
+
+Isolated owned diff vs `ae37295`: 27 files, 1677 insertions, 837 deletions.
+Net production +840 lines. Extra production functions are 73 including
+async and nested defs. Those are named C901, cognitive, and radon stages.
+File length above 500 lines is a review signal, not a split requirement.
+
+Focused command, recorded 2026-08-28, exit 0, 282 passed, 90 subtests.
+PowerShell does not expand pytest globs. The files are listed explicitly.
+`--basetemp` is unique and gitignored.
+
+```powershell
+$env:APP_KEY='ci-test-app-key'
+$env:ANTHROPIC_API_KEY='ci-test-anthropic'
+$env:SMARTROUTE_ENV='test'
+$env:AGENT_ALLOW_MEMORY_SESSIONS='1'
+$env:PYTHONPATH='backend'
+Set-Location backend
+$files = @(
+  'tests/test_strict_tool_schema.py',
+  'tests/test_strict_tool_schema_new_tools.py',
+  'tests/test_public_tool_surface.py',
+  'tests/test_discover_places.py',
+  'tests/test_place_discovery_pagination.py',
+  'tests/test_discovery_references.py',
+  'tests/test_damn_lines.py',
+  'tests/test_lookup_arrivals.py',
+  'tests/test_scheduled_arrivals.py',
+  'tests/test_transit_evidence.py',
+  'tests/test_check_transit.py',
+  'tests/test_present_transit.py',
+  'tests/test_present_route_correction.py',
+  'tests/test_present_route_framing.py',
+  'tests/test_present_route_reservation.py',
+  'tests/test_plan_trip_projection.py',
+  'tests/test_route_option_projection_grounding.py',
+  'tests/test_route_tool_import_boundary.py',
+  'tests/test_single_agent_route_tools.py',
+  'tests/test_agent_capability_completion_reliability.py',
+  'tests/test_agent_evidence_binding_reliability.py',
+  'tests/test_agent_transit_direction_reliability.py',
+  'tests/test_agent_route_decision_reliability.py',
+  'tests/test_check_area_conditions.py',
+  'tests/test_agent_loop_transit_grounding.py'
+)
+py -m pytest @files -q --basetemp "$PWD/../.pytest-batch4-end"
+```
+
+Full backend: 1822 passed, 21 skipped, 444 subtests. `git diff --check` on
+the owned path is clean.
+
+Quality:
+
+```powershell
+py -m ruff check --config pyproject.toml backend/app/services/agent/tools
+py scripts/check_quality.py --cognitive-only --quality-ref ae37295940b7f1218922ae153c50b0e32368228a
+py scripts/check_quality.py --quality-ref ae37295940b7f1218922ae153c50b0e32368228a
+```
+
+Owned Ruff and cognitive-only exit 0. The worker's full
+`check_quality.py --quality-ref ae37295` run exits 1 only because 6 stale
+baseline entries remain after 6 resolved measurements. New 0. Worsened 0.
+Remaining 334. The worker did not run `--update-baseline`.
+
+Independent production review APPROVED: scope, behavior, and gaming.
+Do not start Batch 5 automatically.
+
+pstack how pass, recorded 2026-08-28, after independent review. Four
+explorers, one explainer, three critics. Named-stage extracts stayed in
+existing files. File length above 500 lines remains a review signal, not
+a split requirement. Production tools were not changed in this pass.
+
+`ok` and `ToolOutcome` are two status axes. Discover and prepare goal
+recording uses `ok` plus payload fields. Transit goal recording uses
+`evidence_ready`. The turn ledger caches a result when `outcome` is not
+`FAILED`. `complete_turn` writes a different `outcome` vocabulary into
+`data`.
+
+Rider GPS uses `location_resolution._origin_latlng`. That name is not in
+`__all__`. Arrivals import it anyway. Model and tool coordinate strings
+use `trips.location.parse_coordinates`, which applies `NYC_BOUNDS`.
+`search_local_places._COORD_RE` parses `near` with no NYC bounds.
+`geo._is_in_nyc` still drops out-of-city provider rows.
+
+`_historical_pattern` is defined in both `discover_places.py` and
+`present_places.py`. Both wrappers call `damn_lines.get_historical_pattern`
+with `now=when` and return None on `TypeError` or `ValueError`. Discover
+stamps model-facing `queue_evidence` dicts after persist. Present builds
+passenger notes from a second lookup. `heads_up` is silent in discover and
+live in present. Those policies cannot share one digest.
+
+### Place gather shrink (after Batch 4)
+
+Batch 5 stays frozen. `damn_lines.py` was not edited. Predicate: net lines
+down, radon CC down, Ruff C901/PLR still 0, focused tests green, function
+count must not rise.
+
+Trail: `.audit/places-simplify.tsv`.
+
+| File | Before | After |
+|---|---:|---:|
+| `discover_places.py` | 1000 | 839 |
+| `search_local_places.py` | 432 | 354 |
+| `damn_lines.py` | 514 | 514 (frozen) |
+| Functions in the two gather files | 52 | 43 |
+
+`_search` radon 16 to 9. `_verify` 19 to 13. `_persist` 17 to 10.
+`_interleaved_sources` 11 to 9. `_matching_continuation_tokens` 12 to 6.
+`search_local_places.execute` stays radon 29. Ruff C901/PLR on both files
+is 0. Focused pytest: 172 passed, 34 subtests.
+
+`DiscoveryRequest` is passed through `_search`, `_verify`, and `_persist`.
+Empty-area coverage is extra labels into `_coverage`. Scores are stamped
+while normalizing. Persist slices. Provider normalize reads execute payload
+keys only. Verify walks `product(names, targets)` into named `pairs`,
+`pending`, and `coverage_targets`. Presented identities come from
+`presented_entity_registry.place_ids`. Matching continuation tokens reuse
+`discovery_store.sanitized_continuation_tokens`.
+
+A `queue_evidence.py` extract was tried and reverted. The digest has one
+caller (`_persist`). Present cannot reuse it without changing `heads_up`,
+clocks, or rider notes. 839 is 39 over 800. The remaining bulk is the
+public schema plus queue evidence that must be read with persist. Do not
+split that fragment. Do not start Batch 5.
 
 ## Historical records through 427fbc8
 

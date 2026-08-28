@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from app.services.agent.tools._types import ToolContext, ToolResult
-from app.services.agent.tools.location_resolution import parse_coordinates
+from app.services.agent.tools.location_resolution import (
+    _origin_latlng,
+    parse_coordinates,
+)
 from app.services.agent.tools.transit.lookup_arrivals_common import (
     _active_boarding,
     _arrival_payload,
@@ -46,8 +49,8 @@ async def execute(
         location, boarding = coordinate_query, None
     elif stop_source == "current_location":
         boarding = None
-        location = parse_coordinates(tool_input.get("user_location")) or parse_coordinates(
-            ctx.origin or {}
+        location = parse_coordinates(tool_input.get("user_location")) or _origin_latlng(
+            ctx
         )
     elif stop_source == "named_station":
         location, boarding = None, None

@@ -108,13 +108,21 @@ def merge_route_preparation_input(tool_input: dict, ctx: ToolContext) -> dict:
     merged["preference_patch"] = trip_state_module.preference_patch_from_tool_input(
         tool_input
     )
-    if isinstance(ctx.session, dict) and merged["scenario"] == "active":
-        if merged["preference_patch"]:
-            trip_state_module.apply_preference_patch(
-                ctx.session,
-                merged["preference_patch"],
-            )
+    _apply_active_preference_patch(ctx, merged)
     return merged
+
+
+def _apply_active_preference_patch(ctx: ToolContext, merged: dict[str, Any]) -> None:
+    if not isinstance(ctx.session, dict):
+        return
+    if merged["scenario"] != "active":
+        return
+    if not merged["preference_patch"]:
+        return
+    trip_state_module.apply_preference_patch(
+        ctx.session,
+        merged["preference_patch"],
+    )
 
 
 def _apply_persisted_trip_constraints(

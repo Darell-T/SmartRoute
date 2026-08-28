@@ -132,40 +132,15 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
 
     if framing_error:
         return ToolResult(ok=False, error=framing_error, internal_diagnostic=True)
-    session_id = str(getattr(ctx, "session_id", None) or "").strip()
-    evidence_set_id = str(tool_input.get("evidence_set_id") or "").strip()
-    goal_key = str(tool_input.get("goal_key") or "").strip()
-    if not session_id:
-        return ToolResult(ok=False, error="session is required for transit presentation")
-    if not evidence_set_id or not goal_key:
-        return ToolResult(ok=False, error="evidence_set_id and goal_key are required")
-    turn_evidence = getattr(ctx, "turn_evidence", None)
-    contract = getattr(turn_evidence, "turn_contract", None)
-    if contract is not None:
-        if contract.get_goal(goal_key) is None:
-            return ToolResult(
-                ok=False,
-                error="goal_key is unknown for this turn contract",
-                internal_diagnostic=True,
-            )
-        if turn_evidence.handle_for(goal_key) != evidence_set_id:
-            return ToolResult(
-                ok=False,
-                error="evidence_set_id does not belong to this goal",
-                internal_diagnostic=True,
-            )
-    evidence = transit_evidence.load_evidence_set(
-        evidence_set_id, session_id=session_id
-    )
-    if evidence is None:
-        return ToolResult(
-            ok=False,
-            error="transit evidence set is unknown, expired, or not owned by this session",
-            internal_diagnostic=True,
-        )
-    operation = str(evidence.get("requested_operation") or "transit")
-    if operation not in _PRESENTABLE_OPERATIONS:
-        return ToolResult(ok=False, error="this transit evidence is not passenger-presentable")
+    owned = _owned_presentable_evidence(tool_input, ctx)
+    if isinstance(owned, ToolResult):
+        return owned
+    evidence = owned["evidence"]
+    evidence_set_id = owned["evidence_set_id"]
+    goal_key = owned["goal_key"]
+    contract = owned["contract"]
+    turn_evidence = owned["turn_evidence"]
+    operation = owned["operation"]
     presented = ctx.telemetry.setdefault("presented_transit_evidence", [])
     if evidence_set_id in presented:
         return ToolResult(
@@ -212,6 +187,78 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
             follow_up,
         ),
     )
+
+
+def _owned_presentable_evidence(
+    tool_input: dict, ctx: ToolContext
+) -> dict[str, Any] | ToolResult:
+    requested = _presentation_request(tool_input, ctx)
+    if isinstance(requested, ToolResult):
+        return requested
+    session_id, evidence_set_id, goal_key = requested
+    turn_evidence = getattr(ctx, "turn_evidence", None)
+    contract = getattr(turn_evidence, "turn_contract", None)
+    contract_error = _contract_evidence_error(
+        turn_evidence, contract, goal_key, evidence_set_id
+    )
+    if contract_error is not None:
+        return contract_error
+    evidence = transit_evidence.load_evidence_set(
+        evidence_set_id, session_id=session_id
+    )
+    if evidence is None:
+        return ToolResult(
+            ok=False,
+            error="transit evidence set is unknown, expired, or not owned by this session",
+            internal_diagnostic=True,
+        )
+    operation = str(evidence.get("requested_operation") or "transit")
+    if operation not in _PRESENTABLE_OPERATIONS:
+        return ToolResult(ok=False, error="this transit evidence is not passenger-presentable")
+    return {
+        "evidence": evidence,
+        "evidence_set_id": evidence_set_id,
+        "goal_key": goal_key,
+        "contract": contract,
+        "turn_evidence": turn_evidence,
+        "operation": operation,
+    }
+
+
+def _presentation_request(
+    tool_input: dict, ctx: ToolContext
+) -> tuple[str, str, str] | ToolResult:
+    session_id = str(getattr(ctx, "session_id", None) or "").strip()
+    evidence_set_id = str(tool_input.get("evidence_set_id") or "").strip()
+    goal_key = str(tool_input.get("goal_key") or "").strip()
+    if not session_id:
+        return ToolResult(ok=False, error="session is required for transit presentation")
+    if not evidence_set_id or not goal_key:
+        return ToolResult(ok=False, error="evidence_set_id and goal_key are required")
+    return session_id, evidence_set_id, goal_key
+
+
+def _contract_evidence_error(
+    turn_evidence: object,
+    contract: object,
+    goal_key: str,
+    evidence_set_id: str,
+) -> ToolResult | None:
+    if contract is None:
+        return None
+    if contract.get_goal(goal_key) is None:
+        return ToolResult(
+            ok=False,
+            error="goal_key is unknown for this turn contract",
+            internal_diagnostic=True,
+        )
+    if turn_evidence.handle_for(goal_key) != evidence_set_id:
+        return ToolResult(
+            ok=False,
+            error="evidence_set_id does not belong to this goal",
+            internal_diagnostic=True,
+        )
+    return None
 
 
 _INCOMPLETE_COVERAGE = frozenset(

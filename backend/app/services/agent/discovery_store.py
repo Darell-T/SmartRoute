@@ -140,7 +140,7 @@ def sanitized_queue_context(value: object) -> dict[str, Any] | None:
     return {"mode": mode, "max_wait_minutes": max_wait}
 
 
-def _sanitized_continuation_tokens(value: object) -> dict[str, str]:
+def sanitized_continuation_tokens(value: object) -> dict[str, str]:
     tokens = value if isinstance(value, dict) else {}
     return {
         key: token[:4096]
@@ -289,7 +289,7 @@ def store_discovery_set(
         "coverage": _sanitized_coverage(coverage),
         "queue_context": sanitized_queue_context(queue_context)
         or dict(_DEFAULT_QUEUE_CONTEXT),
-        "continuation_tokens": _sanitized_continuation_tokens(continuation_tokens),
+        "continuation_tokens": sanitized_continuation_tokens(continuation_tokens),
         "places": normalized,
     }
     cache.cache_set(
