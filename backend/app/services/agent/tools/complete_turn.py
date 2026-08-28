@@ -284,7 +284,6 @@ def _pending_goal_instruction(
 
 def _record_outcome_goals(
     evidence: object,
-    contract: TurnContract,
     goal_keys: tuple[str, ...],
     outcome: str,
 ) -> None:
@@ -305,23 +304,41 @@ def _record_outcome_goals(
         record_goal(key, state)
 
 
-async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
+def _apply_complete_turn_side_effects(
+    ctx: ToolContext,
+    evidence: object,
+    outcome: str,
+) -> None:
+    if outcome == "cancelled" and isinstance(ctx.session, dict):
+        trip_state_module.discard_scenario(ctx.session)
+    if evidence is not None:
+        evidence.mark_terminal("complete_turn")
+
+
+def _parsed_complete_outcome(tool_input: dict) -> tuple[str, ToolResult | None]:
     outcome = str(tool_input.get("outcome") or "").strip()
-    if outcome not in {
+    if outcome in {
         "answer",
         "clarification",
         "refusal",
         "unavailable",
         "cancelled",
     }:
-        return ToolResult(
-            ok=False,
-            error=(
-                "outcome must be answer, clarification, refusal, unavailable, "
-                "or cancelled"
-            ),
-            internal_diagnostic=True,
-        )
+        return outcome, None
+    return "", ToolResult(
+        ok=False,
+        error=(
+            "outcome must be answer, clarification, refusal, unavailable, "
+            "or cancelled"
+        ),
+        internal_diagnostic=True,
+    )
+
+
+async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
+    outcome, outcome_error = _parsed_complete_outcome(tool_input)
+    if outcome_error:
+        return outcome_error
     message = validated_terminal_message(
         tool_input.get("message"),
         outcome=outcome,
@@ -387,11 +404,8 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
             ),
             internal_diagnostic=True,
         )
-    _record_outcome_goals(evidence, contract, goal_keys, outcome)
-    if outcome == "cancelled" and isinstance(ctx.session, dict):
-        trip_state_module.discard_scenario(ctx.session)
-    if evidence is not None:
-        evidence.mark_terminal("complete_turn")
+    _record_outcome_goals(evidence, goal_keys, outcome)
+    _apply_complete_turn_side_effects(ctx, evidence, outcome)
     return ToolResult(
         ok=True,
         data={

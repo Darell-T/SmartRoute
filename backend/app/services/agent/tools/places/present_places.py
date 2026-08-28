@@ -1,4 +1,3 @@
-"""Present a validated shortlist from a server-owned discovery set."""
 from __future__ import annotations
 
 import logging
@@ -21,7 +20,6 @@ from app.services.agent.tools.places import damn_lines
 from app.services.agent.turn.contract import GoalKind, GoalState
 
 _LOGGER = logging.getLogger(__name__)
-
 
 _PLACE_GOAL_KINDS = frozenset({GoalKind.PLACE_RECOMMENDATION, GoalKind.DESTINATION_SELECTION})
 _GOOGLE_MAPS_SOURCE = {
@@ -135,33 +133,19 @@ def _owned_discovery(tool_input: dict, ctx: ToolContext) -> dict[str, Any] | Too
             internal_diagnostic=True,
         )
     evidence = getattr(ctx, "turn_evidence", None)
-    if presentation_mode == "details":
-        can_claim_research = bool(
-            evidence is not None
-            and callable(getattr(evidence, "can_claim_research_used", None))
-            and evidence.can_claim_research_used()
-        )
-        if tool_input.get("research_used") is not True or not can_claim_research:
-            return ToolResult(
-                ok=False,
-                error=(
-                    "details requires successful current-turn research; "
-                    "verify or research the place before presenting details"
-                ),
-                internal_diagnostic=True,
-            )
     goal_key = _place_goal_key(tool_input, ctx)
-    if presentation_mode == "details" and can_claim_research:
-        rebound = _rebind_researched_details(
-            tool_input,
-            evidence=evidence,
-            goal_key=goal_key,
-            set_id=set_id,
-            session_id=session_id,
-            record=record,
-        )
-        if isinstance(rebound, ToolResult):
-            return rebound
+    rebound = _rebind_details_if_researched(
+        tool_input,
+        evidence=evidence,
+        goal_key=goal_key,
+        set_id=set_id,
+        session_id=session_id,
+        record=record,
+        presentation_mode=presentation_mode,
+    )
+    if isinstance(rebound, ToolResult):
+        return rebound
+    if rebound is not None:
         set_id, record = rebound
     bound = _bind_or_reject_discovery(evidence, goal_key, set_id, ctx)
     if isinstance(bound, ToolResult):
@@ -178,6 +162,42 @@ def _owned_discovery(tool_input: dict, ctx: ToolContext) -> dict[str, Any] | Too
         "presentation_mode_explicit": "presentation_mode" in tool_input,
         "already_presented": ctx.telemetry.get("place_presentation_emitted") is True,
     }
+
+
+def _rebind_details_if_researched(
+    tool_input: dict,
+    *,
+    evidence: object,
+    goal_key: str | None,
+    set_id: str,
+    session_id: str,
+    record: dict[str, Any],
+    presentation_mode: str,
+) -> tuple[str, dict[str, Any]] | ToolResult | None:
+    if presentation_mode != "details":
+        return None
+    can_claim_research = bool(
+        evidence is not None
+        and callable(getattr(evidence, "can_claim_research_used", None))
+        and evidence.can_claim_research_used()
+    )
+    if tool_input.get("research_used") is not True or not can_claim_research:
+        return ToolResult(
+            ok=False,
+            error=(
+                "details requires successful current-turn research; "
+                "verify or research the place before presenting details"
+            ),
+            internal_diagnostic=True,
+        )
+    return _rebind_researched_details(
+        tool_input,
+        evidence=evidence,
+        goal_key=goal_key,
+        set_id=set_id,
+        session_id=session_id,
+        record=record,
+    )
 
 
 def _rebind_researched_details(
@@ -328,28 +348,11 @@ def _selected_places(
         for place in selections
         if discovery_store._identity_key(place) in presented_ids
     ]
-    mode = owned["presentation_mode"]
-    if (
-        mode == "recommendations"
-        and not owned["presentation_mode_explicit"]
-        and research_used
-        and repeated
-    ):
-        mode = owned["presentation_mode"] = "details"
-    if mode == "details":
-        if len(selections) != 1 or not repeated:
-            return ToolResult(ok=False, error="details requires exactly one shown place", internal_diagnostic=True)
-        if not owned["lead_in"]:
-            return ToolResult(
-                ok=False, error="details requires concise grounded framing", internal_diagnostic=True
-            )
-    elif repeated and not owned["already_presented"]:
-        if not _destination_selection_replay_allowed(owned, selections, ctx):
-            return ToolResult(
-                ok=False,
-                error="recommendations cannot repeat a shown place",
-                internal_diagnostic=True,
-            )
+    repeat_error = _apply_repeat_presentation_rules(
+        owned, selections, repeated, research_used, ctx
+    )
+    if repeat_error:
+        return repeat_error
     if research_used and not owned["lead_in"]:
         return ToolResult(
             ok=False,
@@ -359,6 +362,62 @@ def _selected_places(
     owned["selections"] = _normalize_reasons(selections, places)
     owned["research_used"] = research_used
     return owned
+
+
+def _apply_repeat_presentation_rules(
+    owned: dict[str, Any],
+    selections: list[dict[str, Any]],
+    repeated: list[dict[str, Any]],
+    research_used: bool,
+    ctx: ToolContext,
+) -> ToolResult | None:
+    mode = owned["presentation_mode"]
+    if (
+        mode == "recommendations"
+        and not owned["presentation_mode_explicit"]
+        and research_used
+        and repeated
+    ):
+        mode = owned["presentation_mode"] = "details"
+    details_error = _details_repeat_error(mode, owned, selections, repeated)
+    if details_error is not None:
+        return details_error
+    if mode == "details":
+        return None
+    if (
+        repeated
+        and not owned["already_presented"]
+        and not _destination_selection_replay_allowed(owned, selections, ctx)
+    ):
+        return ToolResult(
+            ok=False,
+            error="recommendations cannot repeat a shown place",
+            internal_diagnostic=True,
+        )
+    return None
+
+
+def _details_repeat_error(
+    mode: str,
+    owned: dict[str, Any],
+    selections: list[dict[str, Any]],
+    repeated: list[dict[str, Any]],
+) -> ToolResult | None:
+    if mode != "details":
+        return None
+    if len(selections) != 1 or not repeated:
+        return ToolResult(
+            ok=False,
+            error="details requires exactly one shown place",
+            internal_diagnostic=True,
+        )
+    if not owned["lead_in"]:
+        return ToolResult(
+            ok=False,
+            error="details requires concise grounded framing",
+            internal_diagnostic=True,
+        )
+    return None
 
 
 async def _emit_place_presentation(
@@ -494,46 +553,69 @@ async def _queue_presentation(
     notes: list[str] = []
     sourced_ids: list[str] = []
     for place in selections:
-        name = str(place.get("name") or "this place").strip()
-        place_id = str(place.get("provider_place_id") or "").strip()
-        supported = damn_lines.get_supported_venue(place_id) is not None
-        if not supported:
-            if mode in {"decision", "historical"}:
-                notes.append(f"There is no queue coverage for {name}.")
-            continue
-
-        if mode == "historical":
-            pattern = _historical_pattern(place_id, when)
-            notes.append(
-                _historical_note(name, pattern)
-                if pattern is not None
-                else f"There is no historical queue information for {name}."
-            )
-            sourced_ids.append(place_id)
-            continue
-
-        observation = observations.get(place_id)
-        if observation is not None:
-            notes.append(_current_queue_note(name, observation))
-            sourced_ids.append(place_id)
-            continue
-
-        pattern = (
-            _historical_pattern(place_id, when)
-            if place.get("open_status") == "open"
-            else None
+        note, sourced_id = _queue_note_for_place(
+            place, mode=mode, when=when, observations=observations
         )
-        if pattern is not None:
-            notes.append(
-                f"There is no live queue information for {name}. "
-                f"{_historical_note(name, pattern)}"
-            )
-            sourced_ids.append(place_id)
-        elif mode == "decision":
-            notes.append(f"There is no live queue information for {name}.")
-            sourced_ids.append(place_id)
+        if note is not None:
+            notes.append(note)
+        if sourced_id is not None:
+            sourced_ids.append(sourced_id)
 
     return "\n".join(notes), damn_lines.source_for_places(sourced_ids)
+
+
+def _queue_note_for_place(
+    place: dict[str, Any],
+    *,
+    mode: str,
+    when: datetime,
+    observations: dict[str, damn_lines.QueueObservation],
+) -> tuple[str | None, str | None]:
+    name = str(place.get("name") or "this place").strip()
+    place_id = str(place.get("provider_place_id") or "").strip()
+    if damn_lines.get_supported_venue(place_id) is None:
+        return _unsupported_queue_note(name, mode), None
+    if mode == "historical":
+        pattern = _historical_pattern(place_id, when)
+        note = (
+            _historical_note(name, pattern)
+            if pattern is not None
+            else f"There is no historical queue information for {name}."
+        )
+        return note, place_id
+    observation = observations.get(place_id)
+    if observation is not None:
+        return _current_queue_note(name, observation), place_id
+    return _missing_live_queue_note(name, place, place_id, mode, when)
+
+
+def _unsupported_queue_note(name: str, mode: str) -> str | None:
+    if mode in {"decision", "historical"}:
+        return f"There is no queue coverage for {name}."
+    return None
+
+
+def _missing_live_queue_note(
+    name: str,
+    place: dict[str, Any],
+    place_id: str,
+    mode: str,
+    when: datetime,
+) -> tuple[str | None, str | None]:
+    pattern = (
+        _historical_pattern(place_id, when)
+        if place.get("open_status") == "open"
+        else None
+    )
+    if pattern is not None:
+        return (
+            f"There is no live queue information for {name}. "
+            f"{_historical_note(name, pattern)}",
+            place_id,
+        )
+    if mode == "decision":
+        return f"There is no live queue information for {name}.", place_id
+    return None, None
 
 
 def _presentation_time(value: object) -> datetime:

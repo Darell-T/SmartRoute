@@ -7,6 +7,7 @@ existing provider and failure-adaptation seams used by route tools.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import importlib
 from typing import Any
@@ -34,7 +35,6 @@ from app.services.trips.preparation.prepare import (
     prepare_single_leg as _prepare_single_leg,
 )
 from app.services.trips.transfer_semantics import normalize_routes
-import contextlib
 
 directions_service = importlib.import_module("app.services.directions")
 mta_realtime = importlib.import_module("app.services.mta.realtime")

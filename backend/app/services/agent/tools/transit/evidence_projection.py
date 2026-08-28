@@ -40,21 +40,11 @@ def safe_result(
             continue
         if requested_direction:
             matched_direction = True
-        safe_arrivals = []
-        for item in group.get("arrivals") or []:
-            if isinstance(item, dict):
-                safe_arrivals.append(
-                    {
-                        key: item[key]
-                        for key in ("expected_at", "minutes", "realtime")
-                        if key in item
-                    }
-                )
         directions.append(
             {
                 "id": group.get("id"),
                 "label": group.get("label"),
-                "arrivals": safe_arrivals,
+                "arrivals": _safe_group_arrivals(group),
             }
         )
     result["directions"] = directions
@@ -64,6 +54,18 @@ def safe_result(
         if projected is not None:
             result["catchability"] = projected
     return result
+
+
+def _safe_group_arrivals(group: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            key: item[key]
+            for key in ("expected_at", "minutes", "realtime")
+            if key in item
+        }
+        for item in group.get("arrivals") or []
+        if isinstance(item, dict)
+    ]
 
 
 def _safe_catchability(

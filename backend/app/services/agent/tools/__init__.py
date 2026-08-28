@@ -81,6 +81,7 @@ def _lookup_arrivals_label(tool_input: dict) -> str:
 
 
 def _venue_crowd_window_label(tool_input: dict) -> str:
+    del tool_input
     return "Estimating post-event crowds…"
 
 
@@ -103,6 +104,7 @@ def _prepare_route_options_label(tool_input: dict) -> str:
 
 
 def _present_route_label(tool_input: dict) -> str:
+    del tool_input
     return "Presenting the recommended route…"
 
 
@@ -125,6 +127,7 @@ def _discover_places_label(tool_input: dict) -> str:
 
 
 def _present_places_label(tool_input: dict) -> str:
+    del tool_input
     return "Presenting verified places…"
 
 
@@ -161,27 +164,23 @@ def _check_transit_label(tool_input: dict) -> str:
 
 
 def _complete_turn_label(tool_input: dict) -> str:
+    del tool_input
     return "Finishing your answer…"
 
 
 def _declare_goals_label(tool_input: dict) -> str:
+    del tool_input
     return "Thinking through your request…"
 
 
 def _present_transit_label(tool_input: dict) -> str:
+    del tool_input
     return "Presenting verified transit information…"
 
 
-# ---- Fixture replay (eval harness hook -- plan doc section 7 Layer 2) ----
-#
-# AGENT_TOOL_FIXTURES=<dir>: every tool call is intercepted here and replayed
-# from {dir}/{tool_name}/{canonical_hash_of_input}.json instead of running
-# the real executor, so eval runs never touch a network and fail loudly (not
-# silently) on a missing fixture. AGENT_TOOL_FIXTURES_RECORD=1: run the real
-# executor AND write its result to that path before returning, to (re)record
-# fixtures against live API keys. Wrapping happens once here, at registry
-# build time, so route/transit tools get the hook without either
-# module knowing fixtures exist.
+def _get_place_details_label(tool_input: dict) -> str:
+    del tool_input
+    return "Checking place details…"
 
 
 def _canonical_hash(tool_input: dict) -> str:
@@ -271,7 +270,7 @@ INTERNAL_TOOL_REGISTRY: dict[str, ToolSpec] = {
     "get_place_details": _spec(
         place_reference.GET_PLACE_DETAILS_SCHEMA,
         place_reference.execute,
-        lambda tool_input: "Checking place details…",
+        _get_place_details_label,
         8.0,
     ),
 }
@@ -327,7 +326,6 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
     ),
 }
 
-# Executors remain reachable by name for internal dispatch and fixtures.
 COMBINED_TOOL_REGISTRY: dict[str, ToolSpec] = {**INTERNAL_TOOL_REGISTRY, **TOOL_REGISTRY}
 TOOLS: list[dict] = offered_custom_tools(spec.schema for spec in TOOL_REGISTRY.values())
 
@@ -379,8 +377,10 @@ def assert_strict_tool_schemas_compatible(tools: Iterable[Mapping[str, Any]]) ->
         if not isinstance(input_schema, Mapping):
             problems.append(f"{name}: missing object input_schema")
             continue
-        for finding in iter_unsupported_strict_keyword_paths(input_schema):
-            problems.append(f"{name}: {finding}")
+        problems.extend(
+            f"{name}: {finding}"
+            for finding in iter_unsupported_strict_keyword_paths(input_schema)
+        )
     if problems:
         joined = "; ".join(problems)
         raise AssertionError(

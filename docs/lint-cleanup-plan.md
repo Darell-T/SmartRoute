@@ -62,8 +62,9 @@ unnecessary tests.
 
 Function length above 100 lines and file length above 500 lines are review
 signals. They do not automatically fail a batch. A cohesive 500 to 800 line
-module may be clearer than several fragments. A new file above 500 lines needs
-an explicit cohesion justification in the handoff.
+module is healthy when C901 stays at 10. A 1000 line file is a sign of leftover
+complexity, not a split trigger by itself. Do not peel a 100-200 line fragment
+that must always be read with its parent.
 
 ### Required refactoring style
 

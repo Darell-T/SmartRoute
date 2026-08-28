@@ -1,5 +1,3 @@
-"""Google Places provider and normalization boundary for place discovery."""
-
 from __future__ import annotations
 
 import logging
@@ -9,7 +7,6 @@ import re
 import time
 
 from app.services import geography as geo
-from app.services.agent import discovery_store
 from app.services.agent.discovery_store import normalize_price_level
 from app.services.agent.tools._types import ToolContext, ToolResult
 from app.services.agent.tools.location_resolution import resolve_named_point
@@ -58,15 +55,9 @@ def _finite_or_none(value: object) -> float | None:
     return number if math.isfinite(number) else None
 
 
-def _clamped(value: float, maximum: float) -> float:
-    return max(0.0, min(maximum, value))
-
-
 def baseline_ranking(place: dict) -> dict[str, object]:
-    """Deterministic advisory ranking metadata; never reorders provider results."""
-
-    rating = _clamped(_finite(place.get("rating")), 5.0) / 5.0
-    review = _clamped(_finite(place.get("review_count")), 5000.0) / 5000.0
+    rating = max(0.0, min(5.0, _finite(place.get("rating")))) / 5.0
+    review = max(0.0, min(5000.0, _finite(place.get("review_count")))) / 5000.0
     open_status = str(place.get("open_status") or "unknown")
     open_bonus = _OPEN_BONUS.get(open_status, 0.05)
     score = round(0.50 * rating + 0.25 * review + 0.25 * open_bonus, 4)
@@ -118,8 +109,6 @@ def _clamp_provider_results(raw_value: object) -> int:
 
 
 async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
-    """Run one bounded Google Places query and normalize the provider response."""
-
     timings = {"place_resolution_ms": 0.0, "place_normalization_ms": 0.0}
     query = str(tool_input.get("query") or "").strip()
     if not query:
@@ -241,45 +230,28 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
 
 
 async def _provider_search(tool_input: dict, ctx: ToolContext) -> ToolResult:
-    """Contain provider exceptions at the structured-search boundary."""
-
     try:
-        result = await execute(tool_input, ctx)
+        return await execute(tool_input, ctx)
     except (RuntimeError, TypeError, ValueError) as exc:
         _LOGGER.warning(
             "place discovery provider failed type=%s",
             type(exc).__name__,
         )
         return ToolResult(ok=False, error="place search is temporarily unavailable")
-    if isinstance(result, ToolResult):
-        return result
-    return ToolResult(ok=False, error="place search returned no usable result")
-
-
-def _place_identity(place: dict) -> tuple[str, str]:
-    provider_id = str(place.get("provider_place_id") or "").strip().casefold()
-    if provider_id:
-        return "provider", provider_id
-    name = discovery_store._normalized_name(place.get("name"))
-    address = " ".join(str(place.get("address") or "").casefold().split())
-    if name or address:
-        return "name_address", f"{name}|{address}"
-    return "coordinates", f"{place.get('latitude')}|{place.get('longitude')}"
 
 
 def _coverage(
-    areas: list[str] | list[dict[str, str | None]],
+    areas: list[dict[str, str | None]],
     results: list[ToolResult],
+    extra_unavailable: tuple[str, ...] | list[str] = (),
 ) -> dict[str, object]:
     labels = [
-        (str(area.get("label") or "NYC").strip() or "NYC")
-        if isinstance(area, dict)
-        else (str(area or "NYC").strip() or "NYC")
-        for area in areas
+        str(area.get("label") or "NYC").strip() or "NYC" for area in areas
     ]
     unavailable = [
         area for area, result in zip(labels, results, strict=False) if not result.ok
     ]
+    unavailable.extend(extra_unavailable)
     return {
         "status": "partial" if unavailable else "complete",
         "searched_areas": list(dict.fromkeys(labels)),
@@ -292,14 +264,11 @@ def _target_accepts_place(
     target: dict[str, str | None],
     scope: dict,
 ) -> bool:
-    """Keep a provider result in the geography that requested it."""
-
     if scope["kind"] in {"current_location", "named_area"}:
         return True
-    address = place.get("address") or place.get("formatted_address")
+    address = place.get("address")
     borough = conversational_geography.resolve_place_borough(
-        address_components=place.get("address_components")
-        or place.get("addressComponents"),
+        address_components=place.get("address_components"),
         formatted_address=address,
         neighborhood=place.get("neighborhood") or place.get("borough"),
     )
@@ -310,88 +279,42 @@ def _search_targets(scope: dict) -> list[dict[str, str | None]]:
     kind = scope["kind"]
     if kind == "current_location":
         return [{"near": "user", "label": ""}]
-    if kind == "named_area":
-        area = scope["values"][0]
-        return [{"near": area, "label": area}]
-    if kind == "boroughs":
-        return [{"near": borough, "label": borough} for borough in scope["values"]]
-    if kind == "nyc":
-        return [
-            {"near": borough, "label": borough}
-            for borough in conversational_geography.CANONICAL_BOROUGHS
-        ]
-    return [{"near": None, "label": ""}]
+    values = (
+        conversational_geography.CANONICAL_BOROUGHS
+        if kind == "nyc"
+        else scope["values"]
+    )
+    return [{"near": value, "label": value or ""} for value in values]
 
 
 def _normalize_discovery_place(
     place: dict, query: str, search_area: str
-) -> dict | None:
-    if not isinstance(place, dict):
-        return None
-    address = place.get("address") or place.get("formatted_address") or ""
-    components = place.get("address_components") or place.get("addressComponents")
+) -> dict:
+    address = place.get("address") or ""
+    components = place.get("address_components")
     borough = conversational_geography.resolve_place_borough(
         address_components=components,
         formatted_address=address,
         neighborhood=place.get("neighborhood") or place.get("borough"),
     )
     open_now = place.get("open_now")
-    location = place.get("location")
-    latitude = (
-        location.get("latitude")
-        if isinstance(location, dict)
-        else place.get("lat") or place.get("latitude")
-    )
-    longitude = (
-        location.get("longitude")
-        if isinstance(location, dict)
-        else place.get("lng") or place.get("longitude")
-    )
-    latitude = _finite_or_none(latitude)
-    longitude = _finite_or_none(longitude)
     return {
-        "name": place.get("name") or place.get("display_name"),
+        "name": place.get("name"),
         "address": address,
         "neighborhood": place.get("neighborhood") or "",
         "borough": borough,
         "category": place.get("category") or query,
-        "open_status": "open"
-        if open_now is True
-        else ("closed" if open_now is False else "unknown"),
+        "open_status": {True: "open", False: "closed"}.get(open_now, "unknown"),
         "price_level": place.get("price_level"),
         "rating": place.get("rating"),
-        "review_count": place.get("review_count") or place.get("user_rating_count"),
-        "latitude": latitude,
-        "longitude": longitude,
-        "provider_place_id": place.get("place_id") or place.get("id"),
+        "review_count": place.get("review_count"),
+        "latitude": _finite_or_none(place.get("lat") or place.get("latitude")),
+        "longitude": _finite_or_none(place.get("lng") or place.get("longitude")),
+        "provider_place_id": place.get("place_id"),
         "transit_context": place.get("transit_context") or {},
         "search_area": search_area,
         "address_components": components or [],
     }
-
-
-def _authorized_for_scope(place: dict, scope: dict) -> bool:
-    kind = scope["kind"]
-    if kind == "boroughs":
-        return place.get("borough") in scope["values"]
-    if kind != "nyc":
-        return True
-    return (
-        conversational_geography.is_nyc_locality(
-            place.get("address_components"), place.get("address")
-        )
-        or bool(place.get("borough"))
-        or _has_nyc_coordinates(place)
-    )
-
-
-def _has_nyc_coordinates(place: dict) -> bool:
-    try:
-        latitude = float(place.get("latitude"))
-        longitude = float(place.get("longitude"))
-    except (TypeError, ValueError):
-        return False
-    return geo._is_in_nyc(latitude, longitude)
 
 
 def _model_place(place: dict) -> dict:
@@ -408,10 +331,9 @@ def _model_place(place: dict) -> dict:
         "review_count": place.get("review_count"),
         "baseline_order": place.get("ordinal"),
     }
-    for field in ("latitude", "longitude", "rider_distance_meters"):
-        value = _finite_or_none(place.get(field))
-        if value is not None:
-            model[field] = value
+    distance = _finite_or_none(place.get("rider_distance_meters"))
+    if distance is not None:
+        model["rider_distance_meters"] = distance
     return model
 
 
@@ -419,7 +341,7 @@ def _provider_places(result: ToolResult) -> list[dict]:
     data = result.data if isinstance(result.data, dict) else {}
     return [
         place
-        for place in (data.get("places") or data.get("results") or [])
+        for place in (data.get("results") or [])
         if isinstance(place, dict)
     ]
 

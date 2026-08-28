@@ -7,7 +7,10 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 
 from app.services.agent.tools._types import ToolContext
-from app.services.agent.tools.location_resolution import parse_coordinates
+from app.services.agent.tools.location_resolution import (
+    _origin_latlng,
+    parse_coordinates,
+)
 from app.services.agent.tools.transit.direction import (
     normalize_direction,
     resolve_direction,
@@ -32,7 +35,7 @@ _STATION_ALIASES = {
 
 def _normalized_name(value: object) -> str:
     normalized = " ".join(
-        str(value or "").casefold().replace("–", "-").replace("—", "-").split()
+        str(value or "").casefold().replace("\u2013", "-").replace("\u2014", "-").split()
     )
     normalized = re.sub(r"\b(?:station|stop)\b", "", normalized)
     return " ".join(normalized.split())
@@ -67,12 +70,10 @@ def _location(
         coords = parse_coordinates(boarding.get("coordinates"))
         if coords is not None:
             return coords
-    return parse_coordinates(ctx.origin or {})
+    return _origin_latlng(ctx)
 
 
 def _normalize_direction(value: object) -> str | None:
-    """Canonicalize exact semantic values, retaining unknown labels."""
-
     normalized = _normalized_name(value)
     if not normalized:
         return None

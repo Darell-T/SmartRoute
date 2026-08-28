@@ -51,52 +51,8 @@ def bind_accessibility_target(
 
     requested = _route_values(requested_route_ids)
     routes = set(_route_values(active.get("lines")))
-    entities: list[dict[str, str]] = []
-    for raw_leg in itinerary.get("legs") or []:
-        if not isinstance(raw_leg, Mapping):
-            continue
-        mode = _text(raw_leg.get("mode") or raw_leg.get("type")).upper()
-        route_id = _text(raw_leg.get("service_id") or raw_leg.get("route_id")).upper()
-        if route_id:
-            routes.add(route_id)
-        default_type = "BUS_STOP" if mode == "BUS" else _MODE_ENTITY_TYPES.get(mode, "")
-        for side in ("board", "alight"):
-            name = raw_leg.get(side) or raw_leg.get(
-                "departure_stop" if side == "board" else "arrival_stop"
-            )
-            if name in (None, ""):
-                continue
-            entities.append(
-                _entity(
-                    name=name,
-                    entity_id=(
-                        raw_leg.get(f"{side}_stop_id")
-                        or raw_leg.get(f"{side}_parent_station")
-                    ),
-                    entity_type=raw_leg.get(f"{side}_entity_type") or default_type,
-                    mode=mode,
-                    route_id=route_id,
-                )
-            )
-        for raw_stop in raw_leg.get("stops") or []:
-            if not isinstance(raw_stop, Mapping):
-                continue
-            name = raw_stop.get("name") or raw_stop.get("stop_name")
-            if name in (None, ""):
-                continue
-            entities.append(
-                _entity(
-                    name=name,
-                    entity_id=(
-                        raw_stop.get("id")
-                        or raw_stop.get("stop_id")
-                        or raw_stop.get("parent_station")
-                    ),
-                    entity_type=raw_stop.get("entity_type") or default_type,
-                    mode=mode,
-                    route_id=route_id,
-                )
-            )
+    entities, route_ids = _itinerary_accessibility_entities(itinerary)
+    routes.update(route_ids)
 
     matching_routes = requested.intersection(routes) if requested else routes
     if requested and routes and not matching_routes:
@@ -110,15 +66,11 @@ def bind_accessibility_target(
         if not requested or item["route_id"] in matching_routes
     ]
     matches = _matching_entities(query, scoped_entities)
-    if not matches:
-        route_query = query.upper()
-        if route_query in routes and any(
-            item["route_id"] == route_query and item["entity_type"] == "BUS_STOP"
-            for item in scoped_entities
-        ):
-            return None, "accessibility target is a bus stop, not a subway station"
-        return None, "accessibility target is not a station on the accepted itinerary"
-
+    unmatched = _unmatched_accessibility_error(
+        query, matches, routes, scoped_entities
+    )
+    if unmatched is not None:
+        return None, unmatched
     station_matches = [
         item for item in matches if item["entity_type"] in _STATION_ENTITY_TYPES
     ]
@@ -138,6 +90,100 @@ def bind_accessibility_target(
         "station_id": selected["id"] or None,
         "entity_type": selected["entity_type"],
     }, None
+
+
+def _unmatched_accessibility_error(
+    query: str,
+    matches: list[dict[str, str]],
+    routes: set[str],
+    scoped_entities: list[dict[str, str]],
+) -> str | None:
+    if matches:
+        return None
+    route_query = query.upper()
+    if route_query in routes and any(
+        item["route_id"] == route_query and item["entity_type"] == "BUS_STOP"
+        for item in scoped_entities
+    ):
+        return "accessibility target is a bus stop, not a subway station"
+    return "accessibility target is not a station on the accepted itinerary"
+
+
+def _itinerary_accessibility_entities(
+    itinerary: Mapping[str, Any],
+) -> tuple[list[dict[str, str]], set[str]]:
+    entities: list[dict[str, str]] = []
+    routes: set[str] = set()
+    for raw_leg in itinerary.get("legs") or []:
+        if not isinstance(raw_leg, Mapping):
+            continue
+        mode = _text(raw_leg.get("mode") or raw_leg.get("type")).upper()
+        route_id = _text(raw_leg.get("service_id") or raw_leg.get("route_id")).upper()
+        if route_id:
+            routes.add(route_id)
+        default_type = "BUS_STOP" if mode == "BUS" else _MODE_ENTITY_TYPES.get(mode, "")
+        entities.extend(
+            _leg_endpoint_entities(raw_leg, mode, route_id, default_type)
+        )
+        entities.extend(_leg_stop_entities(raw_leg, mode, route_id, default_type))
+    return entities, routes
+
+
+def _leg_endpoint_entities(
+    raw_leg: Mapping[str, Any],
+    mode: str,
+    route_id: str,
+    default_type: str,
+) -> list[dict[str, str]]:
+    entities: list[dict[str, str]] = []
+    for side in ("board", "alight"):
+        name = raw_leg.get(side) or raw_leg.get(
+            "departure_stop" if side == "board" else "arrival_stop"
+        )
+        if name in (None, ""):
+            continue
+        entities.append(
+            _entity(
+                name=name,
+                entity_id=(
+                    raw_leg.get(f"{side}_stop_id")
+                    or raw_leg.get(f"{side}_parent_station")
+                ),
+                entity_type=raw_leg.get(f"{side}_entity_type") or default_type,
+                mode=mode,
+                route_id=route_id,
+            )
+        )
+    return entities
+
+
+def _leg_stop_entities(
+    raw_leg: Mapping[str, Any],
+    mode: str,
+    route_id: str,
+    default_type: str,
+) -> list[dict[str, str]]:
+    entities: list[dict[str, str]] = []
+    for raw_stop in raw_leg.get("stops") or []:
+        if not isinstance(raw_stop, Mapping):
+            continue
+        name = raw_stop.get("name") or raw_stop.get("stop_name")
+        if name in (None, ""):
+            continue
+        entities.append(
+            _entity(
+                name=name,
+                entity_id=(
+                    raw_stop.get("id")
+                    or raw_stop.get("stop_id")
+                    or raw_stop.get("parent_station")
+                ),
+                entity_type=raw_stop.get("entity_type") or default_type,
+                mode=mode,
+                route_id=route_id,
+            )
+        )
+    return entities
 
 
 def accessibility_result_matches(result: object, binding: Mapping[str, Any]) -> bool:
@@ -221,47 +267,13 @@ def decision_evidence_for_status(
         return empty
     now_utc = (now or datetime.now(UTC)).astimezone(UTC)
     root_envelope = (record.get("evidence_envelopes") or {}).get("alerts")
-    matches: list[dict[str, Any]] = []
-    for index, candidate in enumerate(candidates[:8]):
-        if not isinstance(candidate, Mapping) or index >= len(evidence_rows):
-            continue
-        digest = candidate.get("digest")
-        candidate_routes = _route_values(
-
-                digest.get("transit_lines") or digest.get("route_ids")
-                if isinstance(digest, Mapping)
-                else ()
-
-        )
-        if not candidate_routes.intersection(requested):
-            continue
-        evidence = evidence_rows[index]
-        if not isinstance(evidence, Mapping):
-            continue
-        alert_rows = _official_alert_rows(evidence.get("alerts"), requested)
-        if alert_rows is None:
-            continue
-        envelopes = evidence.get("evidence_envelopes")
-        envelope = (
-            envelopes.get("alerts")
-            if isinstance(envelopes, Mapping) and "alerts" in envelopes
-            else root_envelope
-        )
-        envelope_info = _alert_envelope(envelope, requested, now_utc)
-        if envelope_info is None:
-            matches.append({"rows": alert_rows, "envelope": None})
-            continue
-        candidate_ids = _alert_ids(alert_rows)
-        if not candidate_ids or not candidate_ids.issubset(envelope_info["ids"]):
-            matches.append({"rows": alert_rows, "envelope": None})
-            continue
-        matches.append(
-            {
-                "rows": alert_rows,
-                "envelope": envelope_info,
-                "evidence": evidence,
-            }
-        )
+    matches = _status_evidence_matches(
+        candidates[:8],
+        evidence_rows,
+        requested,
+        root_envelope,
+        now_utc,
+    )
     if not matches:
         return empty
     comparable = all(item.get("envelope") is not None for item in matches)
@@ -287,6 +299,86 @@ def decision_evidence_for_status(
         "previous_alert_ids": previous_ids,
         "comparable": True,
     }
+
+
+def _status_evidence_matches(
+    candidates: list[object],
+    evidence_rows: list[object],
+    requested: list[str],
+    root_envelope: object,
+    now_utc: datetime,
+) -> list[dict[str, Any]]:
+    matches: list[dict[str, Any]] = []
+    for index, candidate in enumerate(candidates):
+        match = _status_match_for_candidate(
+            index, candidate, evidence_rows, requested, root_envelope, now_utc
+        )
+        if match is not None:
+            matches.append(match)
+    return matches
+
+
+def _status_match_for_candidate(
+    index: int,
+    candidate: object,
+    evidence_rows: list[object],
+    requested: list[str],
+    root_envelope: object,
+    now_utc: datetime,
+) -> dict[str, Any] | None:
+    if not _candidate_overlaps_requested(candidate, index, evidence_rows, requested):
+        return None
+    evidence = evidence_rows[index]
+    if not isinstance(evidence, Mapping):
+        return None
+    alert_rows = _official_alert_rows(evidence.get("alerts"), requested)
+    if alert_rows is None:
+        return None
+    envelope_info = _candidate_alert_envelope(
+        evidence, root_envelope, requested, now_utc
+    )
+    if envelope_info is None:
+        return {"rows": alert_rows, "envelope": None}
+    candidate_ids = _alert_ids(alert_rows)
+    if not candidate_ids or not candidate_ids.issubset(envelope_info["ids"]):
+        return {"rows": alert_rows, "envelope": None}
+    return {
+        "rows": alert_rows,
+        "envelope": envelope_info,
+        "evidence": evidence,
+    }
+
+
+def _candidate_overlaps_requested(
+    candidate: object,
+    index: int,
+    evidence_rows: list[object],
+    requested: list[str],
+) -> bool:
+    if not isinstance(candidate, Mapping) or index >= len(evidence_rows):
+        return False
+    digest = candidate.get("digest")
+    candidate_routes = _route_values(
+        digest.get("transit_lines") or digest.get("route_ids")
+        if isinstance(digest, Mapping)
+        else ()
+    )
+    return bool(candidate_routes.intersection(requested))
+
+
+def _candidate_alert_envelope(
+    evidence: Mapping[str, Any],
+    root_envelope: object,
+    requested: list[str],
+    now_utc: datetime,
+) -> dict[str, Any] | None:
+    envelopes = evidence.get("evidence_envelopes")
+    envelope = (
+        envelopes.get("alerts")
+        if isinstance(envelopes, Mapping) and "alerts" in envelopes
+        else root_envelope
+    )
+    return _alert_envelope(envelope, requested, now_utc)
 
 
 def decision_alert_continuity(
