@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -163,49 +163,60 @@ def _batch_context(batch: IncidentBatch) -> str:
     )
 
 
+_CITATION_URL_KEYS = ("url", "href", "source_url", "web_citation", "x_citation")
+_TOOL_CALL_SOURCES = {"x_search_tool": "x_search", "web_search_tool": "web_search"}
+_SEARCH_SOURCES = ("x_search", "web_search")
+
+
+def _citation_urls_from_value(
+    value: object, keys: tuple[str, ...]
+) -> Iterator[str]:
+    if isinstance(value, str):
+        canonical = canonical_citation_url(value)
+        if canonical:
+            yield canonical
+        return
+    if value is None or isinstance(value, (bytes, int, float, bool)):
+        return
+    read = value.get if isinstance(value, Mapping) else lambda key: getattr(value, key, None)
+    for key in keys:
+        yield from _citation_urls_from_value(read(key), keys)
+
+
 def response_citations(response: object) -> tuple[str, ...]:
-    """Canonical, sorted, bounded citation URLs returned by the search tool."""
     urls: set[str] = set()
-    keys = ("url", "href", "source_url", "web_citation", "x_citation")
-
-    def collect(value: object) -> None:
-        if value is None:
-            return
-        if isinstance(value, str):
-            canonical = canonical_citation_url(value)
-            if canonical:
-                urls.add(canonical)
-        elif isinstance(value, Mapping):
-            for key in keys:
-                collect(value.get(key))
-        elif not isinstance(value, (bytes, int, float, bool)):
-            for key in keys:
-                collect(getattr(value, key, None))
-
     for citation in (
         *(getattr(response, "citations", ()) or ()),
         *(getattr(response, "inline_citations", ()) or ()),
     ):
-        collect(citation)
+        urls.update(_citation_urls_from_value(citation, _CITATION_URL_KEYS))
     return tuple(sorted(urls))[:40]
+
+
+def _tool_call_source(call: object) -> str | None:
+    try:
+        call_type = get_tool_call_type(call) if get_tool_call_type else ""
+    except Exception:  # noqa: BLE001 SDK call-type faults treat the tool as incomplete
+        call_type = ""
+    return _TOOL_CALL_SOURCES.get(call_type)
+
+
+def _usage_sources(usage: object) -> set[str]:
+    items = usage if isinstance(usage, (list, tuple, set, dict)) else (usage,)
+    found: set[str] = set()
+    for item in items:
+        text = str(item).casefold()
+        found.update(source for source in _SEARCH_SOURCES if source in text)
+    return found
 
 
 def _completed_sources(response: object) -> set[str]:
     completed: set[str] = set()
     for call in getattr(response, "tool_calls", ()) or ():
-        try:
-            call_type = get_tool_call_type(call) if get_tool_call_type else ""
-        except Exception:  # noqa: BLE001 SDK call-type faults treat the tool as incomplete
-            call_type = ""
-        if call_type == "x_search_tool":
-            completed.add("x_search")
-        elif call_type == "web_search_tool":
-            completed.add("web_search")
-    usage = getattr(response, "server_side_tool_usage", ()) or ()
-    items = usage if isinstance(usage, (list, tuple, set, dict)) else (usage,)
-    for item in items:
-        text = str(item).casefold()
-        completed.update(source for source in ("x_search", "web_search") if source in text)
+        source = _tool_call_source(call)
+        if source:
+            completed.add(source)
+    completed.update(_usage_sources(getattr(response, "server_side_tool_usage", ()) or ()))
     return completed
 
 

@@ -1,4 +1,3 @@
-"""In-memory GTFS stop-pattern index with no database lookups."""
 from __future__ import annotations
 
 import json
@@ -61,36 +60,65 @@ def _coord_record(info: dict | None) -> dict:
     return {"latitude": info.get("lat"), "longitude": info.get("lon")}
 
 
+def _name_index_from_stops(stops: dict) -> dict[str, frozenset]:
+    tmp: dict[str, set] = {}
+    for sid, info in stops.items():
+        raw = info.get("name", "")
+        key = normalize_station_name(raw)
+        if key:
+            tmp.setdefault(key, set()).add(sid)
+        for part in raw.split("-"):
+            part_key = normalize_station_name(part)
+            if part_key and part_key != key:
+                tmp.setdefault(part_key, set()).add(sid)
+    return {k: frozenset(v) for k, v in tmp.items()}
+
+
+def _add_public_route_stops(
+    routes_by_stop: dict[str, set[str]], pattern: dict, public_route: str
+) -> None:
+    if not public_route:
+        return
+    for stop_id in pattern.get("stop_ids") or []:
+        routes_by_stop.setdefault(str(stop_id), set()).add(public_route)
+
+
+def _route_pattern_maps(patterns: list) -> tuple[dict[str, list], dict[str, set[str]]]:
+    route_patterns: dict[str, list] = {}
+    routes_by_stop: dict[str, set[str]] = {}
+    for pattern in patterns:
+        aug = {**pattern, "pos": {sid: i for i, sid in enumerate(pattern["stop_ids"])}}
+        public_route = str(
+            pattern.get("route_short_name") or pattern.get("route_id") or ""
+        ).upper()
+        _add_public_route_stops(routes_by_stop, pattern, public_route)
+        for key in {pattern.get("route_id"), pattern.get("route_short_name")}:
+            if key:
+                route_patterns.setdefault(str(key), []).append(aug)
+    return route_patterns, routes_by_stop
+
+
+def _subway_mode_allowed(excluded_modes, allowed_modes) -> bool:
+    if "SUBWAY" in {str(mode).upper() for mode in (excluded_modes or [])}:
+        return False
+    allowed = {str(mode).upper() for mode in (allowed_modes or [])}
+    return allowed_modes is None or "SUBWAY" in allowed
+
+
+def _included_seed_route(route_id, excluded_route_ids) -> tuple[str, set[str]] | None:
+    seed_route = str(route_id or "").strip().upper()
+    excluded = {str(value).strip().upper() for value in (excluded_route_ids or [])}
+    if not seed_route or seed_route in excluded:
+        return None
+    return seed_route, excluded
+
+
 class StopPatternIndex:
     def __init__(self, artifact: dict):
         self.stops: dict[str, dict] = artifact.get("stops", {})
         self.patterns: list[dict] = artifact.get("patterns", [])
-
-        tmp: dict[str, set] = {}
-        for sid, info in self.stops.items():
-            raw = info.get("name", "")
-            key = normalize_station_name(raw)
-            if key:
-                tmp.setdefault(key, set()).add(sid)
-            for part in raw.split("-"):
-                part_key = normalize_station_name(part)
-                if part_key and part_key != key:
-                    tmp.setdefault(part_key, set()).add(sid)
-        self.name_index: dict[str, frozenset] = {k: frozenset(v) for k, v in tmp.items()}
-
-        self.route_patterns: dict[str, list] = {}
-        routes_by_stop: dict[str, set[str]] = {}
-        for p in self.patterns:
-            aug = {**p, "pos": {sid: i for i, sid in enumerate(p["stop_ids"])}}
-            public_route = str(
-                p.get("route_short_name") or p.get("route_id") or ""
-            ).upper()
-            if public_route:
-                for stop_id in p.get("stop_ids") or []:
-                    routes_by_stop.setdefault(str(stop_id), set()).add(public_route)
-            for key in {p.get("route_id"), p.get("route_short_name")}:
-                if key:
-                    self.route_patterns.setdefault(str(key), []).append(aug)
+        self.name_index: dict[str, frozenset] = _name_index_from_stops(self.stops)
+        self.route_patterns, routes_by_stop = _route_pattern_maps(self.patterns)
         self.routes_by_stop = {
             stop_id: frozenset(routes)
             for stop_id, routes in routes_by_stop.items()
@@ -139,7 +167,6 @@ class StopPatternIndex:
         }
 
     def stops_for_routes(self, route_ids=None) -> list[dict]:
-        """Return parent stops served by the requested routes from memory."""
 
         if route_ids is None:
             routes_by_stop = self.routes_by_stop
@@ -244,7 +271,6 @@ class StopPatternIndex:
         origin_coords=None,
         destination_coords=None,
     ) -> dict | None:
-        """Resolve route-specific endpoint IDs and direction without I/O."""
 
         origin_ids = self.ids_for_name(origin)
         destination_ids = self.ids_for_name(destination)
@@ -514,17 +540,12 @@ class StopPatternIndex:
         allowed_modes=None,
         min_egress_improvement_meters=250.0,
     ) -> dict | None:
-        """Return one validated continuation through a shared station complex."""
-
-        if "SUBWAY" in {str(mode).upper() for mode in (excluded_modes or [])}:
+        if not _subway_mode_allowed(excluded_modes, allowed_modes):
             return None
-        allowed = {str(mode).upper() for mode in (allowed_modes or [])}
-        if allowed_modes is not None and "SUBWAY" not in allowed:
+        seed = _included_seed_route(route_id, excluded_route_ids)
+        if seed is None:
             return None
-        seed_route = str(route_id or "").strip().upper()
-        excluded = {str(value).strip().upper() for value in (excluded_route_ids or [])}
-        if not seed_route or seed_route in excluded:
-            return None
+        seed_route, excluded = seed
         destination_coord = _coord(destination_coords)
         if destination_coord is None:
             return None
@@ -536,9 +557,9 @@ class StopPatternIndex:
         alighting_coord = _coord(alighting_coords)
         complex_members = self._members_by_complex()
         best = None
-        for seed in self.route_patterns.get(seed_route, []):
+        for seed_pattern in self.route_patterns.get(seed_route, []):
             best = self._best_on_seed(
-                seed=seed,
+                seed=seed_pattern,
                 seed_route=seed_route,
                 excluded=excluded,
                 boarding_ids=boarding_ids,
@@ -555,7 +576,6 @@ class StopPatternIndex:
     def get_intermediate_stops_with_coords(
         self, route_id, origin, dest, origin_coords=None, dest_coords=None
     ):
-        """Return ordered stops plus bounded lookup metrics; misses never raise."""
         t0 = time.monotonic()
         meta = {
             "hit": False, "signature": None, "stop_count": 0,
@@ -573,30 +593,45 @@ class StopPatternIndex:
         if not origin_ids or not dest_ids or not candidates:
             return _finish([])
 
-        oc = _coord(origin_coords)
-        dc = _coord(dest_coords)
-        best = None
-        for p in candidates:
-            pos = p["pos"]
-            oi = self._pick_pos(pos, origin_ids, oc)
-            di = self._pick_pos(pos, dest_ids, dc)
-            if oi is None or di is None or oi >= di:
-                continue
-            prox = self._proximity(p["stop_ids"][oi], p["stop_ids"][di], oc, dc)
-            score = (prox, di - oi, -p.get("trip_count", 0))
-            if best is None or score < best[0]:
-                best = (score, p, oi, di)
+        best = self._best_forward_slice(
+            candidates, origin_ids, dest_ids, origin_coords, dest_coords
+        )
         if best is None:
             return _finish([])
 
-        _score, p, oi, di = best
+        pattern, origin_pos, dest_pos = best
         rows = []
-        for sid in p["stop_ids"][oi:di + 1]:
-            info = self.stops.get(sid)
+        for stop_id in pattern["stop_ids"][origin_pos:dest_pos + 1]:
+            info = self.stops.get(stop_id)
             if info:
                 rows.append({"name": info["name"], "lat": info["lat"], "lng": info["lon"]})
-        meta.update(hit=True, signature=p.get("signature"), stop_count=len(rows))
+        meta.update(hit=True, signature=pattern.get("signature"), stop_count=len(rows))
         return _finish(rows)
+
+    def _best_forward_slice(
+        self, candidates, origin_ids, dest_ids, origin_coords, dest_coords
+    ):
+        origin_coord = _coord(origin_coords)
+        dest_coord = _coord(dest_coords)
+        best = None
+        for pattern in candidates:
+            positions = pattern["pos"]
+            origin_pos = self._pick_pos(positions, origin_ids, origin_coord)
+            dest_pos = self._pick_pos(positions, dest_ids, dest_coord)
+            if origin_pos is None or dest_pos is None or origin_pos >= dest_pos:
+                continue
+            proximity = self._proximity(
+                pattern["stop_ids"][origin_pos],
+                pattern["stop_ids"][dest_pos],
+                origin_coord,
+                dest_coord,
+            )
+            score = (proximity, dest_pos - origin_pos, -pattern.get("trip_count", 0))
+            if best is None or score < best[0]:
+                best = (score, pattern, origin_pos, dest_pos)
+        if best is None:
+            return None
+        return best[1], best[2], best[3]
 
     def get_intermediate_stops(self, route_id, origin, dest):
         rows, _meta = self.get_intermediate_stops_with_coords(route_id, origin, dest)

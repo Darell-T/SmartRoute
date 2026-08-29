@@ -82,17 +82,12 @@ def _log_boundary_failure(phase: str, exc: BaseException) -> None:
     print(f"[incident-scout] {phase} runner failed: {type(exc).__name__}")
 
 
-async def scout_incident_batch(
+async def _scout_x_phase(
     batch: IncidentBatch,
-    *,
-    run_x_search: Callable[..., Awaitable[ScoutSearchResult]] | None = None,
-    run_web_search: Callable[..., Awaitable[ScoutSearchResult]] | None = None,
-    clock: Callable[[], datetime] | None = None,
-) -> ScoutBatchResult:
-    """Scout one coarse batch: exactly one X call, then one optional Web call."""
-    now = _normalize_clock(clock)
-    x_runner = run_x_search if run_x_search is not None else transport_x_search
-    web_runner = run_web_search if run_web_search is not None else transport_web_search
+    x_runner: Callable[..., Awaitable[ScoutSearchResult]],
+    run_x_search: Callable[..., Awaitable[ScoutSearchResult]] | None,
+    now: datetime,
+) -> tuple[int, str, list[dict[str, Any]]]:
     model_calls = 0
     x_result: ScoutSearchResult | None = None
     if run_x_search is not None or has_client():
@@ -102,23 +97,47 @@ async def scout_incident_batch(
         except Exception as exc:  # noqa: BLE001 scout transport faults stay unavailable
             _log_boundary_failure("x", exc)
     x_status, claims = _consume(x_result, now=now)
-    web_status = "not_triggered"
-    corroborations: list[dict[str, Any]] = []
-    if x_status == "complete" and claims:
-        if run_web_search is not None or has_client():
-            model_calls += 1
-            web_result: ScoutSearchResult | None = None
-            try:
-                web_result = await web_runner(sanitized_claims(claims), now=now)
-            except Exception as exc:  # noqa: BLE001 scout transport faults stay unavailable
-                _log_boundary_failure("web", exc)
-            web_status, corroborations = _consume(
-                web_result,
-                now=now,
-                claims_by_ref={claim["claim_ref"]: claim for claim in claims},
-            )
-        else:
-            web_status = "unavailable"
+    return model_calls, x_status, claims
+
+
+async def _maybe_web_corroboration(
+    claims: list[dict[str, Any]],
+    x_status: str,
+    web_runner: Callable[..., Awaitable[ScoutSearchResult]],
+    run_web_search: Callable[..., Awaitable[ScoutSearchResult]] | None,
+    now: datetime,
+) -> tuple[int, str, list[dict[str, Any]]]:
+    if x_status != "complete" or not claims:
+        return 0, "not_triggered", []
+    if run_web_search is None and not has_client():
+        return 0, "unavailable", []
+    web_result: ScoutSearchResult | None = None
+    try:
+        web_result = await web_runner(sanitized_claims(claims), now=now)
+    except Exception as exc:  # noqa: BLE001 scout transport faults stay unavailable
+        _log_boundary_failure("web", exc)
+    web_status, corroborations = _consume(
+        web_result,
+        now=now,
+        claims_by_ref={claim["claim_ref"]: claim for claim in claims},
+    )
+    return 1, web_status, corroborations
+
+
+async def scout_incident_batch(
+    batch: IncidentBatch,
+    *,
+    run_x_search: Callable[..., Awaitable[ScoutSearchResult]] | None = None,
+    run_web_search: Callable[..., Awaitable[ScoutSearchResult]] | None = None,
+    clock: Callable[[], datetime] | None = None,
+) -> ScoutBatchResult:
+    now = _normalize_clock(clock)
+    x_runner = run_x_search if run_x_search is not None else transport_x_search
+    web_runner = run_web_search if run_web_search is not None else transport_web_search
+    x_calls, x_status, claims = await _scout_x_phase(batch, x_runner, run_x_search, now)
+    web_calls, web_status, corroborations = await _maybe_web_corroboration(
+        claims, x_status, web_runner, run_web_search, now
+    )
     return ScoutBatchResult(
         batch_id=batch.batch_id,
         incidents=build_incident_inputs(
@@ -127,5 +146,5 @@ async def scout_incident_batch(
         attempted_at=now.isoformat().replace("+00:00", "Z"),
         x_status=x_status,
         web_status=web_status,
-        model_calls=model_calls,
+        model_calls=x_calls + web_calls,
     )

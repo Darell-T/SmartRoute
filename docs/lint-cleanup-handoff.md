@@ -54,9 +54,9 @@ ceiling. Baseline entries may not worsen.
 The route-intelligence batch, Batch 0, and Batch 1 are complete inside
 `427fbc8`. Batch 2 is independently APPROVED at `368c00d`. Batch 3 production
 and the handoff repair are Codex-approved. Batch 4 owned tools Ruff is zero.
-Batch 5 is committed at `22f6f0d` and reviewer-approved. Batch 6 lands remaining
-`backend/tests` Ruff cleanup and the reviewer-only baseline shrink. Do not start
-Batch 7. Batches 6A through 6E own remaining backend complexity debt.
+Batch 5 is committed at `22f6f0d` and reviewer-approved. Batch 6 is committed
+at `c058199`. That commit is the fixed point for Batches 6A through 6E. Do not
+start Batch 7.
 
 ## Structural policy
 
@@ -71,8 +71,9 @@ Batch 7. Batches 6A through 6E own remaining backend complexity debt.
 
 ## Remaining batches
 
-The old 20-batch plan is retired. Remaining work is eight subsystem batches
-in `docs/lint-cleanup-plan.md`:
+The old 20-batch plan is retired. Batches 2 through 6 are complete. Remaining
+backend work is 6A through 6E in `docs/lint-cleanup-plan.md`. Do not start
+Batch 7 until those five batches are committed.
 
 | Batch | Subsystem |
 |---:|---|
@@ -80,7 +81,12 @@ in `docs/lint-cleanup-plan.md`:
 | 3 | Canonical trip planning |
 | 4 | Agent capability tools |
 | 5 | Agent orchestration and state |
-| 6 | Backend test style remainder |
+| 6 | Backend test style remainder, committed at `c058199` |
+| 6A | Realtime, MTA, incidents, and routers |
+| 6B | Canonical trips |
+| 6C | Agent place, route, and shared tools |
+| 6D | Agent transit tools |
+| 6E | Agent model, session, and turn |
 | 7 | Frontend contracts and I/O |
 | 8 | Frontend presentation and map |
 | 9 | Transit artifact generator, last |
@@ -99,6 +105,14 @@ Run quality and cognitive delta from the repository root:
 ```powershell
 py scripts/check_quality.py --cognitive-only --quality-ref 427fbc8
 py scripts/check_quality.py --quality-ref 427fbc8
+```
+
+Run the backend debt inventory from the repository root. Reuse
+`backend/.coverage` from a branch-coverage pytest run.
+
+```powershell
+py scripts/report_backend_debt.py --self-test
+py scripts/report_backend_debt.py --max-existing 12 --output .audit/backend-debt.json
 ```
 
 Use these inert backend test values, not production credentials:
@@ -288,8 +302,8 @@ For every batch:
 6. Update this document with fresh JSON counts.
 
 Cleanup is complete only when the commands in
-`docs/lint-cleanup-plan.md` exit 0. Global Ruff, ESLint, and Oxlint still
-fail on the backlog. Do not start Batch 4 automatically.
+`docs/lint-cleanup-plan.md` exit 0. Do not start Batch 7 until Batches 6A
+through 6E are committed.
 
 ## Batch 2 worker result (2026-08-28)
 
@@ -917,7 +931,235 @@ Reviewer final after the authorized 340-to-329 baseline shrink: exit 0.
 `tests_ran: true`. `approval_eligible: true`. Frontend 314 passed. Backend
 coverage pytest 1823 passed, 21 skipped, 444 subtests. New 0. Worsened 0.
 Cognitive 0. Stale 0. Remaining 329. Ruff C901 and structural diagnostics 0.
-Do not start Batch 7.
+Batch 6 is committed at `c058199`. That commit is the fixed point for Batches
+6A through 6E. Do not start Batch 7 until those batches are committed.
+
+## Batches 6A through 6E
+
+Fixed point `c058199`. Measured with
+`py scripts/report_backend_debt.py --max-existing 12` against
+`backend/.coverage` from the Batch 6 full suite. Official `pyproject.toml`
+ceilings stay at 10.
+
+| Metric | Count |
+|---|---:|
+| Production functions | 1879 |
+| Branch-aware coverage | 87.2% |
+| Above 10 in either measurement | 314 |
+| Above 12 in either measurement | 237 |
+| At 11 or 12 | 77 |
+| CRAP above 30 | 21 |
+| Zero coverage | 81 |
+
+| Batch | Functions | Above 12 | At 11 or 12 | CRAP above 30 | Zero coverage |
+|---|---:|---:|---:|---:|---:|
+| 6A | 493 | 47 | 13 | 9 | 42 |
+| 6B | 398 | 62 | 24 | 4 | 14 |
+| 6C | 316 | 40 | 19 | 2 | 12 |
+| 6D | 237 | 35 | 13 | 2 | 3 |
+| 6E | 435 | 53 | 8 | 4 | 10 |
+
+CRAP scores above 30 at the fixed point:
+
+| Batch | Cyclomatic | Cognitive | CRAP | Coverage | Function |
+|---|---:|---:|---:|---:|---|
+| 6A | 34 | 45 | 1190.0 | 0.0 | `mta/subway.py:_build_subway_vehicle_positions` |
+| 6A | 16 | 22 | 272.0 | 0.0 | `live_feed/router.py:_attach_alert_stop_names` |
+| 6A | 9 | 8 | 90.0 | 0.0 | `mta/bus_updates.py:_fetch_nearby_bus_arrivals` |
+| 6A | 9 | 10 | 90.0 | 0.0 | `GTFSStaticData.get_subway_stops_with_routes` |
+| 6A | 8 | 0 | 72.0 | 0.0 | `routers/subway.py:subway_stops` |
+| 6A | 8 | 16 | 72.0 | 0.0 | `GTFSStaticData._query` |
+| 6A | 7 | 3 | 56.0 | 0.0 | `live_feed/router.py:_service_alert_id` |
+| 6A | 6 | 8 | 42.0 | 0.0 | `GTFSStaticData.get_unique_routes_for_stops` |
+| 6A | 11 | 10 | 35.375 | 0.414 | `vehicle_enrichment.py:_attach_trip_segment` |
+| 6D | 39 | 26 | 58.814 | 0.765 | `lookup_arrivals_bus.py:execute` |
+| 6E | 43 | 35 | 43.02 | 0.978 | `model/prompt.py:build_turn_context` |
+| 6E | 36 | 41 | 41.438 | 0.839 | `presented_entity_registry.py:resolve` |
+| 6B | 40 | 45 | 40.627 | 0.927 | `matching.py:match_cached_incidents` |
+| 6E | 38 | 30 | 38.0 | 1.0 | `candidate_store.py:store_candidate_set` |
+| 6B | 32 | 38 | 34.985 | 0.857 | `merge.py:_prefer` |
+| 6D | 25 | 25 | 34.766 | 0.75 | `evidence_binding.py:bind_accessibility_target` |
+| 6B | 33 | 36 | 33.01 | 0.979 | `itinerary.py:build_chained_itinerary` |
+| 6C | 29 | 21 | 31.285 | 0.860 | `search_local_places.py:execute` |
+| 6B | 31 | 26 | 31.049 | 0.963 | `constraints.py:route_constraints` |
+| 6E | 23 | 13 | 30.14 | 0.762 | `discovery_store.py:_sanitized_search_scope` |
+| 6C | 30 | 25 | 30.242 | 0.935 | `route_projection.py:reconcile_first_boarding_timing` |
+
+Delete `GTFSStaticData.get_unique_routes_for_stops` in Batch 6A. Remove the
+hidden `discovery_set_id` input from `place_reference.execute` in Batch 6C.
+Do not change public contracts.
+
+## Batch 6A worker completion (uncommitted)
+
+Fixed point `c058199`. This tree is ready for Codex re-review after the second
+reject. Nothing was committed. `quality/baseline.json` was not changed. Batch
+6B and Batch 7 were not started. Frontend production, `services/trips/**`, and
+`services/agent/**` were not opened for new work.
+
+### Debt after the final coverage run
+
+`py scripts/report_backend_debt.py --max-existing 12 --output .audit/backend-debt.json`
+
+| Metric | At `c058199` | After 6A worker |
+|---|---:|---:|
+| 6A functions | 493 | 579 |
+| 6A above 12 | 47 | 0 |
+| 6A at 11 or 12 | 13 | 13 |
+| 6A CRAP above 30 | 9 | 0 |
+| Branch-aware coverage | 87.2% | 88.4% |
+
+`_bounded_point` dropped from 11/5 to 4/3. It now looks up the two coordinate
+key spellings and reuses `_bounded_number` plus the same NYC box as
+`_in_service_area`. That brings the 11/12 count back to the fixed-point 13.
+
+### Survivors at 11 or 12
+
+Keep each of these at 11 or 12. Another helper would only hide a short guard.
+
+| Function | Cyclo | Cog | Coverage | CRAP | Why it stays |
+|---|---:|---:|---:|---:|---|
+| `reject_oversize_public_json` | 9 | 12 | 0.933 | 9.024 | ASGI public-body size and type admission |
+| `observability.finish_turn` | 9 | 11 | 1.000 | 9.000 | Turn telemetry close |
+| `verify_ticket` | 11 | 8 | 0.870 | 11.269 | HMAC ticket check. Parts, expiry, and signature already have named owners |
+| `_enrichment_steps_are_bounded` | 11 | 12 | 0.900 | 11.121 | Per-field enrichment step admission |
+| `admission._memory_acquire` | 9 | 11 | 0.960 | 9.005 | In-memory admission lock |
+| `normalize_incident_record` | 11 | 9 | 1.000 | 11.000 | Incident record shape |
+| `NY511Client.fetch_events` | 11 | 12 | 0.947 | 11.018 | NY511 fetch and fail-open |
+| `_collect_alert_incidents` | 10 | 11 | 0.895 | 10.117 | Alert-to-incident projection |
+| `_accepted_x_claim` | 12 | 4 | 1.000 | 12.000 | Tweet claim admission |
+| `normalize_web_corroborations` | 10 | 12 | 0.933 | 10.030 | Web corroboration shape |
+| `_derive_live_network_status` | 12 | 6 | 1.000 | 12.000 | Healthy / caution / disrupted table |
+| `_attach_trip_segment` | 11 | 10 | 0.966 | 11.005 | Marker geometry. Public path is `place_vehicle_markers`. Incomplete coordinates fall back to a stop marker. IN_TRANSIT uses previous-to-target progress 0.55 |
+| `StopPatternIndex.stops_for_routes` | 10 | 11 | 0.818 | 10.601 | Pattern-index route query |
+
+### Owned and focused tests
+
+From `backend` with `PYTHONPATH` set to that directory:
+
+`py -m pytest tests/test_live_feed_snapshot.py tests/test_live_feed_stall_issues.py tests/test_mta_subway_vehicles.py tests/test_directions.py tests/test_live_feed_alert_enrichment.py tests/test_agent_chat_stream_cleanup.py tests/test_agent_chat_session_lease.py tests/test_live_feed_ownership.py tests/test_trips_enrichment.py tests/test_mta_feed_bus_stops.py tests/test_bus_routes.py -q`
+
+Result: 143 passed, 17 subtests.
+
+Hop-4 stall invert (`== []` to `!= []`) failed, then the assertion was restored.
+
+`py -m ruff check backend/app backend/tests` result: all checks passed.
+
+`py scripts/check_quality.py --quality-ref c058199 --cognitive-only` result: new or worsened 0.
+
+### Quality
+
+`py scripts/check_quality.py --quality-ref c058199` exit 1.
+`tests_ran: true`. `approval_eligible: false`. New 0. Worsened 0. Cognitive
+new or worsened 0. Frontend 314 passed. Backend 1890 passed, 21 skipped, 444
+subtests. Ruff C901 0. Ruff structural 0. Resolved 32. Stale 34.
+
+Stale baseline entries for the reviewer:
+
+- `python:backend/app/routers/agent_chat.py:agent_chat#0`
+- `python:backend/app/routers/live_feed/router.py:_attach_alert_stop_names#0`
+- `python:backend/app/routers/live_feed/socket.py:receive_bounded_json#0`
+- `python:backend/app/routers/trips.py:_bounded_point#0`
+- `python:backend/app/routers/trips.py:_trip_payload_is_bounded#0`
+- `python:backend/app/services/directions.py:_route_at_transfer#0`
+- `python:backend/app/services/incidents/index.py:_coverage_status#0`
+- `python:backend/app/services/incidents/index.py:lookup_incidents#0`
+- `python:backend/app/services/incidents/normalization.py:sanitize_source_records#0`
+- `python:backend/app/services/incidents/ny511.py:NY511Settings.from_env#0`
+- `python:backend/app/services/incidents/ny511.py:_normalize_event#0`
+- `python:backend/app/services/incidents/refresh.py:run_background_incident_refresh#0`
+- `python:backend/app/services/incidents/scout.py:scout_incident_batch#0`
+- `python:backend/app/services/incidents/scout_provider.py:_completed_sources#0`
+- `python:backend/app/services/live_feed/network_snapshot.py:_normalize_network_data#0`
+- `python:backend/app/services/live_feed/snapshot.py:_build_live_signals#0`
+- `python:backend/app/services/live_feed/snapshot.py:_build_live_snapshot#0`
+- `python:backend/app/services/live_feed/snapshot.py:_realtime_trip_stop_context#0`
+- `python:backend/app/services/live_feed/snapshot.py:_route_stop_match#0`
+- `python:backend/app/services/live_feed/snapshot.py:build_nearby_transit_issues#0`
+- `python:backend/app/services/mta/alerts.py:_alert_semantics#0`
+- `python:backend/app/services/mta/alerts.py:project_service_alert#0`
+- `python:backend/app/services/mta/bus.py:parse_bus_stop_monitoring#0`
+- `python:backend/app/services/mta/bus.py:parse_stalled_bus_positions#0`
+- `python:backend/app/services/mta/bus.py:parse_stops_for_route#0`
+- `python:backend/app/services/mta/bus.py:slice_route_stops#0`
+- `python:backend/app/services/mta/feeds.py:fetch_feeds_with_metadata#0`
+- `python:backend/app/services/mta/static_gtfs/scheduled_arrivals.py:ScheduledArrivalIndex.lookup#0`
+- `python:backend/app/services/mta/static_gtfs/stop_patterns.py:StopPatternIndex.__init__#0`
+- `python:backend/app/services/mta/static_gtfs/stop_patterns.py:StopPatternIndex.get_intermediate_stops_with_coords#0`
+- `python:backend/app/services/mta/static_gtfs/stop_patterns.py:StopPatternIndex.suggest_one_transfer#0`
+- `python:backend/app/services/mta/static_gtfs/store.py:BoundedIntermediateStopsCache._resolve#0`
+- `python:backend/app/services/mta/subway.py:_build_subway_vehicle_positions#0`
+- `python:backend/app/services/mta/subway.py:parse_vehicle_positions#0`
+
+Do not run `--update-baseline` from this worker. `_bounded_point#0` is newly
+stale because that function is now 4/3. `_route_at_transfer#0` and
+`_build_subway_vehicle_positions#0` stay stale under the old names after the
+public renames.
+
+### Final review repairs
+
+1. SSE lifecycle. Deleted `_one_sse_event` and the `SimpleNamespace` out-param.
+   `_sse_stream` keeps `pending` and `succeeded` as locals (6/9). Ping frames
+   still yield when the wait times out. Drain, save, admission release, then
+   session lease order is unchanged.
+2. Public test boundaries. `live_snapshot` stubs
+   `network_snapshot_store.get_or_refresh` and calls `build_live_snapshot`.
+   Parse-and-select is `build_subway_vehicle_positions`. Transfer selection is
+   `route_at_transfer`. Alert identity and WS ticks are `service_alert_id`,
+   `service_alert_signatures`, and `next_service_alert_message`.
+3. Stall tests. `NearbyStallIssueTests` moved to
+   `backend/tests/test_live_feed_stall_issues.py` (109 lines). That class uses
+   `build_nearby_transit_issues` only. It does not use `NetworkSnapshot` or
+   `canal_gtfs`.
+4. `_lacks_map_coordinates` inlined. Coordinate admission stays in
+   `_accepted_subway_vehicle_id` (6/6). Identity, route scope, and in-frame
+   dedupe live in `_unique_requested_vehicle_id` (6/5). Folding coordinates
+   into `_select_subway_vehicle_markers` made that new function cognitive 11.
+5. Restored why-only notes: Google M15-SBS is BusTime/OBA M15+, and a
+   direction group requires board before exit.
+
+### Snapshot test file
+
+`backend/tests/test_live_feed_snapshot.py` is 521 lines. Nearby stop fallback,
+alert projection, live signals, and trip-stop context all go through
+`live_snapshot` with a frozen `NetworkSnapshot`. 500 lines is a review signal,
+not a split trigger. The leftover file is the smallest frozen-generation
+cluster after the stall hop policy left.
+
+### Production function growth
+
+`git diff -U0 c058199 -- backend/app` counts 113 added `def` lines and 27
+removed, net +86. That crosses the +25 review trigger. Remaining helpers own
+named policies (parse, select, admit, identity, expire, fail-open, drain).
+One-call reducers that did not (`_reduce_coverage_statuses`, `_lacks_map_coordinates`,
+the SSE `SimpleNamespace`) were inlined or deleted. Do not rebuild the live
+snapshot or NY511 assemblers to chase a smaller count.
+
+### Unresolved risks
+
+- `_service_alerts_payload` remains an underscored REST payload assembler.
+  Stop-name tests drive that payload. They do not import `_attach_alert_stop_names`.
+- Snapshot tests still construct a frozen `NetworkSnapshot`. The public path
+  is `build_live_snapshot` with a stubbed store, not a live refresh.
+- Public renames leave stale baseline keys under the old underscored names.
+- Quality exit 1 is only the 34 stale baseline entries. Worker must not shrink
+  `quality/baseline.json`.
+
+### Reviewer final
+
+The reviewer accepted the isolated Batch 6A diff and removed exactly the 34
+proven-stale entries listed above. `quality/baseline.json` decreased from 329
+to 295 entries. No entry was added or increased.
+
+`py scripts/check_quality.py --quality-ref c058199 --update-baseline` exits 0.
+`tests_ran: true`. `approval_eligible: true`. Frontend 314 passed. Backend
+1890 passed, 21 skipped, 444 subtests. New 0. Worsened 0. Cognitive new or
+worsened 0. Stale 0. Ruff C901 0. Ruff structural 0.
+
+The reviewer regenerated `.audit/backend-debt.json` from that coverage run.
+Batch 6A has 579 functions, 0 above 12, 13 at 11 or 12, 0 CRAP scores above
+30, and 88.4% branch-aware coverage. Batch 6A is approved for commit. Batch
+6B and Batch 7 were not started.
+
 
 ## Historical records through 427fbc8
 

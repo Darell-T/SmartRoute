@@ -109,6 +109,61 @@ def _bus_update(
     }
 
 
+def _copy_cached_bus_update(cached: dict) -> BusUpdate:
+    return {
+        **cached,
+        "arrivals": [dict(arrival) for arrival in cached.get("arrivals", [])],
+        "status": "cached",
+    }
+
+
+async def _refresh_nearby_bus_update(
+    cache_key: str,
+    lat: float,
+    lng: float,
+    radius_m: float,
+    stop_limit: int,
+    visits_per_stop: int,
+) -> BusUpdate:
+    try:
+        arrivals, debug = await asyncio.wait_for(
+            _fetch_nearby_bus_arrivals(
+                lat,
+                lng,
+                radius_m,
+                stop_limit,
+                visits_per_stop,
+            ),
+            timeout=BUS_TOTAL_TIMEOUT_S,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 bus-update faults fall back to stale cache
+        stale = bus_runtime.get_last_cached(
+            bus_runtime.nearby_arrivals_cache,
+            cache_key,
+        )
+        if isinstance(stale, dict):
+            return _copy_cached_bus_update(stale)
+        return _bus_update(
+            [],
+            {"bus_arrivals_supported": False, "reason": type(exc).__name__},
+            status="unavailable",
+        )
+    status = "ready" if debug.get("bus_arrivals_supported") else "unavailable"
+    update = _bus_update(arrivals, debug, status=status)
+    if status != "ready":
+        return update
+    bus_runtime.set_cached(
+        bus_runtime.nearby_arrivals_cache,
+        cache_key,
+        update,
+        NEARBY_ARRIVALS_CACHE_TTL_S,
+        stale_ttl_s=BUS_UPDATE_MAX_STALE_S,
+    )
+    return update
+
+
 async def fetch_nearby_bus_update(
     lat: float,
     lng: float,
@@ -124,56 +179,13 @@ async def fetch_nearby_bus_update(
         retain_expired=True,
     )
     if isinstance(cached, dict):
-        return {
-            **cached,
-            "arrivals": [dict(arrival) for arrival in cached.get("arrivals", [])],
-            "status": "cached",
-        }
-
-    async def refresh() -> BusUpdate:
-        try:
-            arrivals, debug = await asyncio.wait_for(
-                _fetch_nearby_bus_arrivals(
-                    lat,
-                    lng,
-                    radius_m,
-                    stop_limit,
-                    visits_per_stop,
-                ),
-                timeout=BUS_TOTAL_TIMEOUT_S,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:  # noqa: BLE001 bus-update faults fall back to stale cache
-            stale = bus_runtime.get_last_cached(
-                bus_runtime.nearby_arrivals_cache,
-                cache_key,
-            )
-            if isinstance(stale, dict):
-                return {
-                    **stale,
-                    "arrivals": [dict(arrival) for arrival in stale.get("arrivals", [])],
-                    "status": "cached",
-                }
-            return _bus_update(
-                [],
-                {"bus_arrivals_supported": False, "reason": type(exc).__name__},
-                status="unavailable",
-            )
-        status = "ready" if debug.get("bus_arrivals_supported") else "unavailable"
-        update = _bus_update(arrivals, debug, status=status)
-        if status != "ready":
-            return update
-        bus_runtime.set_cached(
-            bus_runtime.nearby_arrivals_cache,
-            cache_key,
-            update,
-            NEARBY_ARRIVALS_CACHE_TTL_S,
-            stale_ttl_s=BUS_UPDATE_MAX_STALE_S,
-        )
-        return update
-
-    return await bus_runtime.share_inflight(f"nearby-arrivals:{cache_key}", refresh)
+        return _copy_cached_bus_update(cached)
+    return await bus_runtime.share_inflight(
+        f"nearby-arrivals:{cache_key}",
+        lambda: _refresh_nearby_bus_update(
+            cache_key, lat, lng, radius_m, stop_limit, visits_per_stop
+        ),
+    )
 
 
 def cached_nearby_bus_update(
@@ -188,8 +200,4 @@ def cached_nearby_bus_update(
     )
     if not isinstance(cached, dict):
         return None
-    return {
-        **cached,
-        "arrivals": [dict(arrival) for arrival in cached.get("arrivals", [])],
-        "status": "cached",
-    }
+    return _copy_cached_bus_update(cached)

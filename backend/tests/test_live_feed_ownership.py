@@ -68,7 +68,7 @@ class NetworkSnapshotNormalizationTests(unittest.TestCase):
             return_value=[],
         ), patch.object(
             network_snapshot_module,
-            "_build_subway_vehicle_positions",
+            "build_subway_vehicle_positions",
             return_value=([], {}),
         ), patch.object(
             network_snapshot_module,
@@ -386,26 +386,161 @@ class RiderSnapshotSharingTests(unittest.IsolatedAsyncioTestCase):
         assert [stop["stop_name"] for stop in context["trip-1"]] == ["Canal St", "Times Sq"]
         assert "other" not in context
 
-    def test_vehicle_segment_skips_incomplete_static_coordinates(self):
+    def test_incomplete_segment_coords_fall_back_to_stop_marker(self):
         vehicle = {
+            "id": "v1",
             "trip_id": "trip-1",
+            "route_id": "Q",
             "stop_id": "Q02N",
             "status": "IN_TRANSIT_TO",
+            "position_source": "trip_descriptor",
         }
-        stops = [
-            {"stop_id": "Q01N", "stop_name": "Known", "lat": None, "lng": None},
-            {"stop_id": "Q02N", "stop_name": "Target", "lat": 40.7, "lng": -73.9},
-        ]
-
-        attached = rider_snapshot.vehicle_enrichment._attach_trip_segment(
-            vehicle,
-            stops,
-            {},
-            1_000,
+        placed, tallies = rider_snapshot.vehicle_enrichment.place_vehicle_markers(
+            [vehicle],
+            trip_stop_context={
+                "trip-1": [
+                    {"stop_id": "Q01N", "stop_name": "Known", "lat": None, "lng": None},
+                    {"stop_id": "Q02N", "stop_name": "Target", "lat": 40.7, "lng": -73.9},
+                ]
+            },
+            stop_locations={
+                "Q02N": {
+                    "stop_name": "Target",
+                    "lat": 40.71,
+                    "lng": -73.91,
+                    "parent_station": "Q02",
+                }
+            },
+            arrival_lookup={},
+            now=1_000,
+            vehicle_route_ids={"Q"},
         )
 
-        assert not attached
-        assert "lat" not in vehicle
+        assert [row["id"] for row in placed] == ["v1"]
+        assert placed[0]["position_source"] == "stop_id"
+        assert placed[0]["lat"] == 40.71
+        assert placed[0]["lng"] == -73.91
+        assert "segment" not in placed[0]
+        assert tallies["segment_estimates"] == 0
+        assert tallies["stop_coordinate_fallbacks"] == 1
+
+    def test_in_transit_vehicle_is_placed_on_the_previous_to_target_segment(self):
+        vehicle = {
+            "id": "v1",
+            "trip_id": "trip-1",
+            "route_id": "Q",
+            "stop_id": "Q02N",
+            "status": "IN_TRANSIT_TO",
+            "position_source": "trip_descriptor",
+        }
+        placed, tallies = rider_snapshot.vehicle_enrichment.place_vehicle_markers(
+            [vehicle],
+            trip_stop_context={
+                "trip-1": [
+                    {
+                        "stop_id": "Q01N",
+                        "stop_name": "Start",
+                        "lat": 40.70,
+                        "lng": -73.90,
+                    },
+                    {
+                        "stop_id": "Q02N",
+                        "stop_name": "Target",
+                        "lat": 40.80,
+                        "lng": -73.80,
+                    },
+                ]
+            },
+            stop_locations={},
+            arrival_lookup={},
+            now=1_000,
+            vehicle_route_ids={"Q"},
+        )
+
+        assert placed[0]["position_source"] == "polyline_estimate"
+        assert placed[0]["lat"] == pytest.approx(40.755)
+        assert placed[0]["lng"] == pytest.approx(-73.845)
+        assert placed[0]["segment"]["from_stop_id"] == "Q01N"
+        assert placed[0]["segment"]["to_stop_id"] == "Q02N"
+        assert placed[0]["segment"]["progress"] == 0.55
+        assert tallies["segment_estimates"] == 1
+
+    def test_stopped_vehicle_snaps_to_the_current_stop(self):
+        vehicle = {
+            "id": "v1",
+            "trip_id": "trip-1",
+            "route_id": "Q",
+            "stop_id": "Q02N",
+            "status": "STOPPED_AT",
+            "position_source": "trip_descriptor",
+        }
+        placed, _tallies = rider_snapshot.vehicle_enrichment.place_vehicle_markers(
+            [vehicle],
+            trip_stop_context={
+                "trip-1": [
+                    {
+                        "stop_id": "Q01N",
+                        "stop_name": "Start",
+                        "lat": 40.70,
+                        "lng": -73.90,
+                    },
+                    {
+                        "stop_id": "Q02N",
+                        "stop_name": "Target",
+                        "lat": 40.80,
+                        "lng": -73.80,
+                    },
+                ]
+            },
+            stop_locations={},
+            arrival_lookup={},
+            now=1_000,
+            vehicle_route_ids={"Q"},
+        )
+
+        assert placed[0]["position_source"] == "stop_id"
+        assert placed[0]["lat"] == 40.80
+        assert placed[0]["lng"] == -73.80
+        assert placed[0]["segment"]["progress"] == 1.0
+
+    def test_first_stop_uses_the_outbound_segment(self):
+        vehicle = {
+            "id": "v1",
+            "trip_id": "trip-1",
+            "route_id": "Q",
+            "stop_id": "Q01N",
+            "status": "IN_TRANSIT_TO",
+            "position_source": "trip_descriptor",
+        }
+        placed, _tallies = rider_snapshot.vehicle_enrichment.place_vehicle_markers(
+            [vehicle],
+            trip_stop_context={
+                "trip-1": [
+                    {
+                        "stop_id": "Q01N",
+                        "stop_name": "Start",
+                        "lat": 40.70,
+                        "lng": -73.90,
+                    },
+                    {
+                        "stop_id": "Q02N",
+                        "stop_name": "Target",
+                        "lat": 40.80,
+                        "lng": -73.80,
+                    },
+                ]
+            },
+            stop_locations={},
+            arrival_lookup={},
+            now=1_000,
+            vehicle_route_ids={"Q"},
+        )
+
+        assert placed[0]["position_source"] == "polyline_estimate"
+        assert placed[0]["segment"]["from_stop_id"] == "Q01N"
+        assert placed[0]["segment"]["to_stop_id"] == "Q02N"
+        assert placed[0]["segment"]["progress"] == 0.0
+        assert placed[0]["lat"] == 40.70
 
 
 class BusUpdateOwnershipTests(unittest.IsolatedAsyncioTestCase):

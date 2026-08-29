@@ -509,5 +509,51 @@ class DirectionsTests(unittest.IsolatedAsyncioTestCase):
         assert "PERMISSION_DENIED" in raised.value.provider_summary
 
 
+class RouteAtTransferTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.directions = importlib.import_module("app.services.directions")
+
+    def test_first_single_service_route_wins_using_last_arrival_step(self):
+        directions = self.directions
+        times_sq = {"latitude": 40.7580, "longitude": -73.9855}
+        canal = {"latitude": 40.7195, "longitude": -74.0018}
+        far_away = {"latitude": 40.5774, "longitude": -73.9812}
+
+        def subway(route_id, arrival_stop, arrival_coords):
+            return {
+                "type": "SUBWAY",
+                "route_id": route_id,
+                "train_line": route_id,
+                "departure_stop": "Church Av",
+                "departure_coords": {"latitude": 40.6505, "longitude": -73.9793},
+                "arrival_stop": arrival_stop,
+                "arrival_coords": arrival_coords,
+            }
+
+        mixed_service = [
+            {"type": "WALK"},
+            subway("Q", "Canal St", canal),
+            subway("N", "14 St-Union Sq", times_sq),
+            subway("Q", "Times Sq-42 St", times_sq),
+        ]
+        beyond_250m = [subway("Q", "Times Sq-42 St", far_away)]
+        matching = [
+            {"type": "WALK"},
+            subway("Q", "Canal St", canal),
+            subway("Q", "Times Sq-42 St", times_sq),
+        ]
+        later_match = [subway("Q", "Times Sq-42 St", times_sq)]
+
+        chosen = directions.route_at_transfer(
+            [mixed_service, beyond_250m, matching, later_match],
+            "Q",
+            "Times Sq-42 St",
+            times_sq,
+            True,
+        )
+        assert chosen is matching
+
+
 if __name__ == "__main__":
     unittest.main()

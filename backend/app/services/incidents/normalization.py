@@ -73,6 +73,25 @@ def normalize_enum(value: object, allowed: frozenset[str], default: str) -> str:
     return text if text in allowed else default
 
 
+def _allowlisted_source_field(
+    item: dict[str, Any], aliases: tuple[str, ...], limit: int
+) -> str:
+    for alias in aliases:
+        value = item.get(alias)
+        if value is not None and not isinstance(value, _CONTAINER_TYPES):
+            return bounded_text(value, limit)
+    return ""
+
+
+def _source_record_from_item(item: dict[str, Any]) -> dict[str, str]:
+    record: dict[str, str] = {}
+    for canonical, aliases, limit in _SOURCE_RECORD_FIELDS:
+        value = _allowlisted_source_field(item, aliases, limit)
+        if value:
+            record[canonical] = value
+    return record
+
+
 def sanitize_source_records(raw: object) -> list[dict[str, str]]:
     """Shallow provenance records from an allowlist; never keep raw payloads.
 
@@ -89,22 +108,7 @@ def sanitize_source_records(raw: object) -> list[dict[str, str]]:
             break
         if not isinstance(item, dict):
             continue
-        record: dict[str, str] = {}
-        for canonical, aliases, limit in _SOURCE_RECORD_FIELDS:
-            value = next(
-                (
-                    item.get(alias)
-                    for alias in aliases
-                    if item.get(alias) is not None
-                    and not isinstance(item.get(alias), _CONTAINER_TYPES)
-                ),
-                None,
-            )
-            if value is None:
-                continue
-            text = bounded_text(value, limit)
-            if text:
-                record[canonical] = text
+        record = _source_record_from_item(item)
         if record:
             records.append(record)
     return records

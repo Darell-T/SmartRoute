@@ -79,35 +79,6 @@ _STEP_TEXT_FIELDS = frozenset(
 _STEP_ISO_FIELDS = frozenset({"departure_time_iso", "arrival_time_iso"})
 
 
-def _bounded_point(value: object) -> bool:
-    if not isinstance(value, dict):
-        return False
-    if set(value) == {"lat", "lng"}:
-        lat, lng = value["lat"], value["lng"]
-    elif set(value) == {"latitude", "longitude"}:
-        lat, lng = value["latitude"], value["longitude"]
-    else:
-        return False
-    return (
-        isinstance(lat, (int, float))
-        and not isinstance(lat, bool)
-        and isinstance(lng, (int, float))
-        and not isinstance(lng, bool)
-        and math.isfinite(lat)
-        and math.isfinite(lng)
-        and 40.2 <= lat <= 41.2
-        and -74.6 <= lng <= -73.2
-    )
-
-
-def _bounded_stop_location(value: object) -> bool:
-    return (
-        isinstance(value, dict) and set(value) == {"name", "lat", "lng"}
-        and isinstance(value["name"], str) and len(value["name"]) <= 300
-        and _bounded_point({"lat": value["lat"], "lng": value["lng"]})
-    )
-
-
 _ALLOWED_STEP_TYPES = frozenset(
     {
         "WALK",
@@ -136,6 +107,31 @@ def _bounded_number(value: object, lo: float, hi: float, *, integer: bool = Fals
     ):
         return False
     return lo <= value <= hi
+
+
+_POINT_KEYS = {
+    frozenset({"lat", "lng"}): ("lat", "lng"),
+    frozenset({"latitude", "longitude"}): ("latitude", "longitude"),
+}
+
+
+def _bounded_point(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    keys = _POINT_KEYS.get(frozenset(value))
+    if keys is None:
+        return False
+    return _bounded_number(value[keys[0]], 40.2, 41.2) and _bounded_number(
+        value[keys[1]], -74.6, -73.2
+    )
+
+
+def _bounded_stop_location(value: object) -> bool:
+    return (
+        isinstance(value, dict) and set(value) == {"name", "lat", "lng"}
+        and isinstance(value["name"], str) and len(value["name"]) <= 300
+        and _bounded_point({"lat": value["lat"], "lng": value["lng"]})
+    )
 
 
 _STEP_FIELD_OK = {
@@ -212,32 +208,40 @@ async def enrich_route(request: Request, payload: EnrichRouteRequest):
     return {"steps": steps, "enriched": True}
 
 
-def _trip_payload_is_bounded(payload: TripRequest) -> bool:
-    coordinates = (
-        payload.origin_lat,
-        payload.origin_lng,
-        payload.destination_lat,
-        payload.destination_lng,
-    )
-    if any(
+def _finite_or_absent(values: tuple[float | None, ...]) -> bool:
+    return not any(
         value is not None
         and (not isinstance(value, (int, float)) or not math.isfinite(value))
-        for value in coordinates
+        for value in values
+    )
+
+
+def _in_service_area(lat: float, lng: float) -> bool:
+    return 40.2 <= lat <= 41.2 and -74.6 <= lng <= -73.2
+
+
+def _trip_payload_is_bounded(payload: TripRequest) -> bool:
+    if not _finite_or_absent(
+        (
+            payload.origin_lat,
+            payload.origin_lng,
+            payload.destination_lat,
+            payload.destination_lng,
+        )
     ):
         return False
-    if not (40.2 <= payload.origin_lat <= 41.2 and -74.6 <= payload.origin_lng <= -73.2):
+    if not _in_service_area(payload.origin_lat, payload.origin_lng):
         return False
-    if (payload.destination_lat is None) != (payload.destination_lng is None):
+    dest_lat, dest_lng = payload.destination_lat, payload.destination_lng
+    if (dest_lat is None) != (dest_lng is None):
         return False
-    if payload.destination_lat is not None and not (
-        40.2 <= payload.destination_lat <= 41.2
-        and -74.6 <= payload.destination_lng <= -73.2
-    ):
+    if dest_lat is not None and not _in_service_area(dest_lat, dest_lng):
         return False
+    destination = payload.destination
     return (
-        isinstance(payload.destination, str)
-        and bool(payload.destination.strip())
-        and len(payload.destination) <= 300
+        isinstance(destination, str)
+        and bool(destination.strip())
+        and len(destination) <= 300
     )
 
 
