@@ -54,9 +54,9 @@ ceiling. Baseline entries may not worsen.
 The route-intelligence batch, Batch 0, and Batch 1 are complete inside
 `427fbc8`. Batch 2 is independently APPROVED at `368c00d`. Batch 3 production
 and the handoff repair are Codex-approved. Batch 4 owned tools Ruff is zero.
-Batch 5 is committed at `22f6f0d` and reviewer-approved. Batch 6 lands remaining
-`backend/tests` Ruff cleanup and the reviewer-only baseline shrink. Do not start
-Batch 7. Batches 6A through 6E own remaining backend complexity debt.
+Batch 5 is committed at `22f6f0d` and reviewer-approved. Batch 6 is committed
+at `c058199`. That commit is the fixed point for Batches 6A through 6E. Do not
+start Batch 7.
 
 ## Structural policy
 
@@ -71,8 +71,9 @@ Batch 7. Batches 6A through 6E own remaining backend complexity debt.
 
 ## Remaining batches
 
-The old 20-batch plan is retired. Remaining work is eight subsystem batches
-in `docs/lint-cleanup-plan.md`:
+The old 20-batch plan is retired. Batches 2 through 6 are complete. Remaining
+backend work is 6A through 6E in `docs/lint-cleanup-plan.md`. Do not start
+Batch 7 until those five batches are committed.
 
 | Batch | Subsystem |
 |---:|---|
@@ -80,7 +81,12 @@ in `docs/lint-cleanup-plan.md`:
 | 3 | Canonical trip planning |
 | 4 | Agent capability tools |
 | 5 | Agent orchestration and state |
-| 6 | Backend test style remainder |
+| 6 | Backend test style remainder, committed at `c058199` |
+| 6A | Realtime, MTA, incidents, and routers |
+| 6B | Canonical trips |
+| 6C | Agent place, route, and shared tools |
+| 6D | Agent transit tools |
+| 6E | Agent model, session, and turn |
 | 7 | Frontend contracts and I/O |
 | 8 | Frontend presentation and map |
 | 9 | Transit artifact generator, last |
@@ -99,6 +105,14 @@ Run quality and cognitive delta from the repository root:
 ```powershell
 py scripts/check_quality.py --cognitive-only --quality-ref 427fbc8
 py scripts/check_quality.py --quality-ref 427fbc8
+```
+
+Run the backend debt inventory from the repository root. Reuse
+`backend/.coverage` from a branch-coverage pytest run.
+
+```powershell
+py scripts/report_backend_debt.py --self-test
+py scripts/report_backend_debt.py --max-existing 12 --output .audit/backend-debt.json
 ```
 
 Use these inert backend test values, not production credentials:
@@ -288,8 +302,8 @@ For every batch:
 6. Update this document with fresh JSON counts.
 
 Cleanup is complete only when the commands in
-`docs/lint-cleanup-plan.md` exit 0. Global Ruff, ESLint, and Oxlint still
-fail on the backlog. Do not start Batch 4 automatically.
+`docs/lint-cleanup-plan.md` exit 0. Do not start Batch 7 until Batches 6A
+through 6E are committed.
 
 ## Batch 2 worker result (2026-08-28)
 
@@ -917,7 +931,63 @@ Reviewer final after the authorized 340-to-329 baseline shrink: exit 0.
 `tests_ran: true`. `approval_eligible: true`. Frontend 314 passed. Backend
 coverage pytest 1823 passed, 21 skipped, 444 subtests. New 0. Worsened 0.
 Cognitive 0. Stale 0. Remaining 329. Ruff C901 and structural diagnostics 0.
-Do not start Batch 7.
+Batch 6 is committed at `c058199`. That commit is the fixed point for Batches
+6A through 6E. Do not start Batch 7 until those batches are committed.
+
+## Batches 6A through 6E
+
+Fixed point `c058199`. Measured with
+`py scripts/report_backend_debt.py --max-existing 12` against
+`backend/.coverage` from the Batch 6 full suite. Official `pyproject.toml`
+ceilings stay at 10.
+
+| Metric | Count |
+|---|---:|
+| Production functions | 1879 |
+| Branch-aware coverage | 87.2% |
+| Above 10 in either measurement | 314 |
+| Above 12 in either measurement | 237 |
+| At 11 or 12 | 77 |
+| CRAP above 30 | 21 |
+| Zero coverage | 81 |
+
+| Batch | Functions | Above 12 | At 11 or 12 | CRAP above 30 | Zero coverage |
+|---|---:|---:|---:|---:|---:|
+| 6A | 493 | 47 | 13 | 9 | 42 |
+| 6B | 398 | 62 | 24 | 4 | 14 |
+| 6C | 316 | 40 | 19 | 2 | 12 |
+| 6D | 237 | 35 | 13 | 2 | 3 |
+| 6E | 435 | 53 | 8 | 4 | 10 |
+
+CRAP scores above 30 at the fixed point:
+
+| Batch | Cyclomatic | Cognitive | CRAP | Coverage | Function |
+|---|---:|---:|---:|---:|---|
+| 6A | 34 | 45 | 1190.0 | 0.0 | `mta/subway.py:_build_subway_vehicle_positions` |
+| 6A | 16 | 22 | 272.0 | 0.0 | `live_feed/router.py:_attach_alert_stop_names` |
+| 6A | 9 | 8 | 90.0 | 0.0 | `mta/bus_updates.py:_fetch_nearby_bus_arrivals` |
+| 6A | 9 | 10 | 90.0 | 0.0 | `GTFSStaticData.get_subway_stops_with_routes` |
+| 6A | 8 | 0 | 72.0 | 0.0 | `routers/subway.py:subway_stops` |
+| 6A | 8 | 16 | 72.0 | 0.0 | `GTFSStaticData._query` |
+| 6A | 7 | 3 | 56.0 | 0.0 | `live_feed/router.py:_service_alert_id` |
+| 6A | 6 | 8 | 42.0 | 0.0 | `GTFSStaticData.get_unique_routes_for_stops` |
+| 6A | 11 | 10 | 35.375 | 0.414 | `vehicle_enrichment.py:_attach_trip_segment` |
+| 6D | 39 | 26 | 58.814 | 0.765 | `lookup_arrivals_bus.py:execute` |
+| 6E | 43 | 35 | 43.02 | 0.978 | `model/prompt.py:build_turn_context` |
+| 6E | 36 | 41 | 41.438 | 0.839 | `presented_entity_registry.py:resolve` |
+| 6B | 40 | 45 | 40.627 | 0.927 | `matching.py:match_cached_incidents` |
+| 6E | 38 | 30 | 38.0 | 1.0 | `candidate_store.py:store_candidate_set` |
+| 6B | 32 | 38 | 34.985 | 0.857 | `merge.py:_prefer` |
+| 6D | 25 | 25 | 34.766 | 0.75 | `evidence_binding.py:bind_accessibility_target` |
+| 6B | 33 | 36 | 33.01 | 0.979 | `itinerary.py:build_chained_itinerary` |
+| 6C | 29 | 21 | 31.285 | 0.860 | `search_local_places.py:execute` |
+| 6B | 31 | 26 | 31.049 | 0.963 | `constraints.py:route_constraints` |
+| 6E | 23 | 13 | 30.14 | 0.762 | `discovery_store.py:_sanitized_search_scope` |
+| 6C | 30 | 25 | 30.242 | 0.935 | `route_projection.py:reconcile_first_boarding_timing` |
+
+Delete `GTFSStaticData.get_unique_routes_for_stops` in Batch 6A. Remove the
+hidden `discovery_set_id` input from `place_reference.execute` in Batch 6C.
+Do not change public contracts.
 
 ## Historical records through 427fbc8
 

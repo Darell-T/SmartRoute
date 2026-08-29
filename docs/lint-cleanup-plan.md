@@ -17,10 +17,13 @@ whole-backend rewrite is not part of this starting point.
 The quality-policy update after that reset changes tooling and documentation
 only. It does not change application behavior.
 
-## Current measured inventory
+## Starting inventory (2026-08-27)
 
-Regenerate every count before starting a batch. These counts were measured on
-2026-08-27 with the checked-in policy update.
+These counts were measured on 2026-08-27 with the checked-in policy update.
+They are the starting snapshot, not the current backlog. After Batches 2
+through 6, backend Ruff is 0. Regenerated complexity counts live in
+`docs/lint-cleanup-handoff.md` and
+`py scripts/report_backend_debt.py --max-existing 12`.
 
 | Tool | Findings | Files | Notes |
 |---|---:|---:|---|
@@ -206,9 +209,14 @@ the next checkpoint.
 
 ## Remaining batch order
 
-The old 20-batch plan was too granular. The remaining work is organized into
-eight subsystem batches. Each production batch owns its direct tests. Test-only
-style debt is handled after production behavior is stable.
+The old 20-batch plan was too granular. Batches 2 through 6 are complete.
+Remaining backend work is five complexity batches, 6A through 6E, then
+frontend Batches 7 through 9. Do not start Batch 7 until 6A through 6E are
+independently approved and committed.
+
+Measure debt with `scripts/report_backend_debt.py --max-existing 12`. Keep
+the official ceilings in `pyproject.toml` at 10. The value 12 is a one-time
+limit for existing functions. New functions must stay at 10 or lower.
 
 | Batch | Subsystem | Why it is cohesive |
 |---:|---|---|
@@ -217,6 +225,11 @@ style debt is handled after production behavior is stable.
 | 4 | Agent capability tools | One model-visible capability boundary |
 | 5 | Agent orchestration and state | Model, session, loop, and turn lifecycle |
 | 6 | Backend test style remainder | Test-only Ruff debt after production settles |
+| 6A | Realtime, MTA, incidents, and routers | Live data, GTFS, alerts, and HTTP entry points |
+| 6B | Canonical trips | One itinerary and incident-matching domain |
+| 6C | Agent place, route, and shared tools | Place resolution and route preparation |
+| 6D | Agent transit tools | Arrivals, evidence, and area conditions |
+| 6E | Agent model, session, and turn | Prompt, stream, session, and turn lifecycle |
 | 7 | Frontend contracts and I/O | Network, session, validation, and canonical adapters |
 | 8 | Frontend presentation and map | Passenger rendering, interaction, and runtime map |
 | 9 | Transit artifact generator | Large deterministic preprocessing subsystem, last |
@@ -338,6 +351,142 @@ not delete tests unless the rationalization guide proves exact duplicate
 evidence. Run each changed test file, then the owned list in forward and reverse
 order, then the full backend suite. Global Ruff must be zero at batch end.
 
+Batch 6 is committed at `c058199`. That commit is the immutable fixed point
+for Batches 6A through 6E.
+
+## Backend complexity program
+
+Record the fixed point before editing:
+
+```powershell
+$fixedPoint = git rev-parse HEAD
+py scripts/report_backend_debt.py --self-test
+py scripts/report_backend_debt.py --max-existing 12 --output .audit/backend-debt.json
+```
+
+Targets for 6A through 6E:
+
+- Every existing production function has cyclomatic complexity of 12 or lower.
+- Every existing production function has cognitive complexity of 12 or lower.
+- Every new function stays at 10 or lower in both measurements.
+- Functions that remain at 11 or 12 must not exceed the survivor count in
+  `docs/lint-cleanup-handoff.md` at `c058199`. Record each survivor in the
+  handoff.
+- Resolve the CRAP scores above 30 listed in that handoff through useful
+  tests, clearer code, or deletion.
+- Keep branch-aware backend coverage at or above the handoff percentage.
+- Do not change public REST, WebSocket, model-tool, itinerary, or event
+  contracts.
+
+A helper may be introduced only when it owns a named policy, parsing step,
+aggregation, lifecycle, or side effect. Do not create a one-call helper only
+to lower a score. Keep a function at 11 or 12 when that is clearer than
+another layer.
+
+After each of 6A through 6E, run the owned tests, scoped Ruff, the debt
+report, complexipy against `c058199`, the full backend suite with branch
+coverage, and `py scripts/check_quality.py --quality-ref c058199`. Leave
+`quality/baseline.json` for the reviewer.
+
+## Batch 6A: realtime, MTA, incidents, and routers
+
+Own every production function under `backend/app` except `services/trips/**`
+and `services/agent/**`. Regenerated above-12 and CRAP counts are in
+`docs/lint-cleanup-handoff.md`.
+
+Delete `GTFSStaticData.get_unique_routes_for_stops`. It has no production or
+test caller.
+
+Refactor `_build_subway_vehicle_positions` into named parsing, selection, and
+diagnostic phases. Do not change vehicle identity, route filtering,
+staleness, stop-only handling, colors, or debug output.
+
+Simplify alert stop-name enrichment and GTFS query retry. Preserve failure
+behavior, including stale-connection retry, statement timeout without retry,
+and connection return.
+
+Cover these cases through the cheapest public path before the structural
+move:
+
+- Vehicle route filtering, missing and zero coordinates, duplicate IDs,
+  stale timestamps, stop-only vehicles, and diagnostics
+- Alert stop-name lookup, directional child-stop fallback, duplicate names,
+  missing GTFS, and lookup failure
+- BusTime partial stop failures, expired arrivals, ordering, and empty-stop
+  results
+- Subway-stop endpoint readiness, cache reuse, coordinate omission, route
+  colors, and GeoJSON output
+- Database stale-connection retry, second failure, statement timeout without
+  retry, and connection return
+- Stable alert IDs and WebSocket change detection
+
+Preserve startup validation, readiness, backpressure, WebSocket close codes,
+cache fail-open behavior, provider provenance, incident identity, GTFS
+semantics, BusTime behavior, and all timeout and retry counts.
+
+## Batch 6B: canonical trips
+
+Own `backend/app/services/trips/**`. At `c058199` that is 62 functions
+above 12.
+
+Prioritize `match_cached_incidents`, `_prefer`, and
+`build_chained_itinerary`. Separate incident-to-stop matching from impact
+classification. Separate official-source precedence from evidence merging.
+Separate chained-segment construction from total calculation.
+
+Preserve canonical itinerary arithmetic, selection order, dwell provenance,
+transfers, merged walks, incident identity, route matching, crowd evidence,
+constraints, and fallback behavior.
+
+## Batch 6C: agent place, route, and shared tools
+
+Own `backend/app/services/agent/tools/**` except `tools/transit/**`. At
+`c058199` that is 40 functions above 12.
+
+Remove the hidden `discovery_set_id` input from `place_reference.execute`.
+The strict `get_place_details` schema cannot supply it, and no production
+caller uses it. Keep presented-place lookup and active-set fallback as one
+named internal policy.
+
+Preserve strict schemas, session ownership, opaque identities, evidence
+binding, route preparation ownership, candidate identity, and passenger
+redaction.
+
+## Batch 6D: agent transit tools
+
+Own `backend/app/services/agent/tools/transit/**`. At `c058199` that is 35
+functions above 12.
+
+Prioritize `lookup_arrivals_bus.execute`, direction resolution, transit
+evidence projection, accessibility binding, snapshot construction, and area
+condition checks. Separate stop resolution, provider access, filtering,
+grouping, and response construction when those are independent
+responsibilities.
+
+Preserve accepted-itinerary binding, route and direction matching, live
+versus scheduled provenance, outage handling, provider timeouts, and
+graceful unavailable results.
+
+## Batch 6E: agent model, session, state, and turn lifecycle
+
+Own remaining modules under `backend/app/services/agent/` except
+`tools/**`. At `c058199` that is 53 functions above 12.
+
+Prioritize `presented_entity_registry.resolve`, `build_turn_context`,
+candidate persistence, public tool selection, model streaming, session
+restoration, and turn completion. Split selector policies and independent
+context summaries while keeping the public interface small.
+
+Preserve token budgets, cancellation, overload handling, leases, session
+persistence, tool ordering, continuation behavior, one terminal outcome, and
+rider-output sanitization.
+
+After Batch 6E, rerun `scripts/report_backend_debt.py --max-existing 12`
+across all backend production code. No function may remain above 12. Then
+run frontend lint, Oxlint, typecheck, unit tests, release checks, and
+`scripts/check_quality.py` once against the final backend commit. Do not
+start Batch 7 until those checks pass.
+
 ## Batch 7: frontend contracts and I/O
 
 Owned paths:
@@ -407,6 +556,7 @@ Cleanup is complete only when these commands exit 0:
 
 ```powershell
 py -m ruff check --config pyproject.toml backend
+py scripts/report_backend_debt.py --max-existing 12
 py scripts/check_quality.py --cognitive-only --quality-ref HEAD
 py scripts/check_quality.py --quality-ref HEAD
 
