@@ -107,6 +107,10 @@ class TripCandidateReasonTests(unittest.TestCase):
         assert reasons[1]["code"] == "fewer_transfers"
         assert direct_plan.format_recommendation_reason(reasons[0]) == "Uses 8 fewer minutes of walking (4 min on foot)."
 
+    def test_malformed_reason_code_is_not_formatted(self):
+        assert direct_plan.format_recommendation_reason({"code": []}) is None
+        assert direct_plan.format_recommendation_reason({"code": {}}) is None
+
     def test_airtrain_tram_counts_as_a_transfer_and_route_line(self):
         route = _subway_route("F", 71)
         route.append(

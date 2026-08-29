@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
+from app.services.trips import scoring
 from app.services.trips.preparation.prepare import PreparedLeg
 
 _COVERAGE_STATUSES = {"current", "partial", "stale", "unavailable", "unscanned"}
@@ -116,73 +117,120 @@ def candidate_evidence_for_route(
 ) -> dict[str, Any]:
     """Project only facts associated with one local route into one aggregate."""
 
-    route = leg.parsed_routes[route_index] if route_index < len(leg.parsed_routes) else []
-    route_ids = _route_ids(route)
-    local_candidate_id = f"candidate-{route_index}"
-    aggregate_candidate_id = f"candidate-{aggregate_index}"
-    alerts = [
-        alert
-        for alert in leg.relevant_alerts or []
-        if _matches_candidate(alert, local_candidate_id, route_ids)
-    ]
-    incidents = [
-        _remap_incident(incident, local_candidate_id, aggregate_candidate_id, segment_index)
-        for incident in (leg.incidents or [])
-        if _matches_candidate(incident, local_candidate_id, route_ids)
-    ]
-    impacts = [
-        _remap_impact(impact, aggregate_index, segment_index)
-        for impact in (leg.event_impacts or [])
-        if _route_index(impact) == route_index
-    ]
+    scoped = _route_scoped_live_facts(
+        leg,
+        route_index=route_index,
+        aggregate_index=aggregate_index,
+        segment_index=segment_index,
+    )
     return {
-        "alerts": alerts,
-        "incidents": incidents,
-        "event_impacts": impacts,
+        "alerts": scoped["alerts"],
+        "incidents": scoped["incidents"],
+        "event_impacts": scoped["event_impacts"],
         "event_failures": list(leg.event_failures or []),
         "event_evidence_status": str(leg.event_evidence_status or "unscanned"),
         "incident_scan_metadata": dict(leg.incident_scan_metadata or {}),
         "evidence_envelopes": serialize_evidence_envelopes(leg.evidence_envelopes),
         "crowd_search_metadata": dict(leg.crowd_search_metadata or {}),
         "collect_crowd_evidence": bool(leg.collect_crowd_evidence),
+        "unconfirmed_material_claims": scoped["unconfirmed_material_claims"],
+        "evidence_coverage": coverage_for_prepared(leg),
+    }
+
+
+def _route_scoped_live_facts(
+    leg: PreparedLeg,
+    *,
+    route_index: int,
+    aggregate_index: int,
+    segment_index: int,
+) -> dict[str, Any]:
+    route = leg.parsed_routes[route_index] if route_index < len(leg.parsed_routes) else []
+    route_ids = _route_ids(route)
+    local_candidate_id = f"candidate-{route_index}"
+    aggregate_candidate_id = f"candidate-{aggregate_index}"
+    return {
+        "alerts": _scoped_alerts(leg, local_candidate_id, route_ids),
+        "incidents": _scoped_incidents(
+            leg, local_candidate_id, aggregate_candidate_id, route_ids, segment_index
+        ),
+        "event_impacts": _scoped_impacts(leg, route_index, aggregate_index, segment_index),
         "unconfirmed_material_claims": vehicle_claims_for_route(
             route,
             trains=getattr(leg, "stalled", None),
             buses=getattr(leg, "stalled_buses", None),
         ),
-        "evidence_coverage": coverage_for_prepared(leg),
     }
+
+
+def _scoped_alerts(
+    leg: PreparedLeg, local_candidate_id: str, route_ids: set[str]
+) -> list[dict]:
+    return [
+        alert
+        for alert in leg.relevant_alerts or []
+        if _matches_candidate(alert, local_candidate_id, route_ids)
+    ]
+
+
+def _scoped_incidents(
+    leg: PreparedLeg,
+    local_candidate_id: str,
+    aggregate_candidate_id: str,
+    route_ids: set[str],
+    segment_index: int,
+) -> list[dict]:
+    return [
+        _remap_incident(
+            incident, local_candidate_id, aggregate_candidate_id, segment_index
+        )
+        for incident in (leg.incidents or [])
+        if _matches_candidate(incident, local_candidate_id, route_ids)
+    ]
+
+
+def _scoped_impacts(
+    leg: PreparedLeg, route_index: int, aggregate_index: int, segment_index: int
+) -> list[dict]:
+    return [
+        _remap_impact(impact, aggregate_index, segment_index)
+        for impact in (leg.event_impacts or [])
+        if _route_index(impact) == route_index
+    ]
 
 
 def merge_candidate_evidence(groups: Iterable[dict[str, Any]]) -> dict[str, Any]:
     values = list(groups)
-    metadata = [value.get("incident_scan_metadata") or {} for value in values]
-    statuses = [str(value.get("event_evidence_status") or "unscanned") for value in values]
+    crowd = _merge_evidence_rows(values, "crowd_search_metadata")
     return {
-        "alerts": _merge_dicts(value.get("alerts") for value in values),
-        "incidents": _merge_dicts(value.get("incidents") for value in values),
-        "event_impacts": _merge_dicts(value.get("event_impacts") for value in values),
+        "alerts": _merge_evidence_rows(values, "alerts"),
+        "incidents": _merge_evidence_rows(values, "incidents"),
+        "event_impacts": _merge_evidence_rows(values, "event_impacts"),
         "event_failures": _merge_strings(value.get("event_failures") for value in values),
-        "event_evidence_status": merge_event_status(statuses),
-        "incident_scan_metadata": merge_incident_metadata_values(metadata),
+        "event_evidence_status": merge_event_status(
+            str(value.get("event_evidence_status") or "unscanned") for value in values
+        ),
+        "incident_scan_metadata": merge_incident_metadata_values(
+            value.get("incident_scan_metadata") or {} for value in values
+        ),
         "evidence_envelopes": merge_serialized_envelopes(
             value.get("evidence_envelopes") for value in values
         ),
-        "crowd_search_metadata": _merge_dicts(
-            value.get("crowd_search_metadata") for value in values
-        )[0]
-        if _merge_dicts(value.get("crowd_search_metadata") for value in values)
-        else {},
+        "crowd_search_metadata": crowd[0] if crowd else {},
         "collect_crowd_evidence": any(
             bool(value.get("collect_crowd_evidence")) for value in values
         ),
-        "unconfirmed_material_claims": _merge_dicts(
-            value.get("unconfirmed_material_claims") for value in values
+        "unconfirmed_material_claims": _merge_evidence_rows(
+            values, "unconfirmed_material_claims"
         )[:3],
         "evidence_coverage": _merge_coverage_maps(
             value.get("evidence_coverage") for value in values
         ),
     }
+
+
+def _merge_evidence_rows(values: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
+    return _merge_dicts(value.get(key) for value in values)
 
 
 def vehicle_claims_for_route(
@@ -197,38 +245,51 @@ def vehicle_claims_for_route(
     claims: list[dict[str, str]] = []
     for mode, values in (("train", trains), ("bus", buses)):
         for value in values or []:
-            if not isinstance(value, dict):
-                continue
-            signal_route = str(
-                value.get("route_id") or value.get("route") or ""
-            ).strip().upper()
-            if not signal_route or signal_route not in route_lines:
-                continue
-            if not _vehicle_signal_direction_matches(value, route, signal_route):
-                continue
-            status_text = " ".join(
-                str(value.get(key) or "")
-                for key in ("status", "progress_status", "ProgressStatus")
-            ).casefold()
-            if "layover" in status_text:
-                continue
-            location_value = value.get("location") or value.get("stop_name")
-            location = (
-                location_value.strip()
-                if isinstance(location_value, str)
-                else "the route"
+            claim = _route_scoped_vehicle_claim(
+                value, mode=mode, route=route, route_lines=route_lines
             )
-            claims.append(
-                {
-                    "mode": mode,
-                    "route": signal_route,
-                    "location": location[:96],
-                    "status": "possible_delay_unconfirmed",
-                }
-            )
+            if claim is None:
+                continue
+            claims.append(claim)
             if len(claims) >= 3:
                 return claims
     return claims
+
+
+def _route_scoped_vehicle_claim(
+    value: object,
+    *,
+    mode: str,
+    route: list[dict],
+    route_lines: set[str],
+) -> dict[str, str] | None:
+    if not isinstance(value, dict):
+        return None
+    signal_route = str(value.get("route_id") or value.get("route") or "").strip().upper()
+    if not signal_route or signal_route not in route_lines:
+        return None
+    if not _vehicle_signal_direction_matches(value, route, signal_route):
+        return None
+    if _vehicle_claim_is_layover(value):
+        return None
+    location_value = value.get("location") or value.get("stop_name")
+    location = (
+        location_value.strip() if isinstance(location_value, str) else "the route"
+    )
+    return {
+        "mode": mode,
+        "route": signal_route,
+        "location": location[:96],
+        "status": "possible_delay_unconfirmed",
+    }
+
+
+def _vehicle_claim_is_layover(claim: dict) -> bool:
+    status_text = " ".join(
+        str(claim.get(key) or "")
+        for key in ("status", "progress_status", "ProgressStatus")
+    ).casefold()
+    return "layover" in status_text
 
 
 def _vehicle_signal_direction_matches(
@@ -257,37 +318,32 @@ def _vehicle_signal_direction_matches(
     )
 
 
+def _select_coverage(current: str | None, incoming: object) -> str | None:
+    """Worse official-source status wins. not_required never confirms safety."""
+
+    if incoming == "not_required":
+        return incoming if current is None else current
+    if incoming not in _COVERAGE_STATUSES:
+        return current
+    if current in {None, "not_required"} or _STATUS_ORDER.get(
+        incoming, 4
+    ) > _STATUS_ORDER.get(current, 0):
+        return str(incoming)
+    return current
+
+
 def _merge_coverage_maps(groups: Iterable[Any]) -> dict[str, str]:
     merged: dict[str, str] = {}
     for group in groups:
         for key, value in (group or {}).items():
-            if value not in _COVERAGE_STATUSES and value != "not_required":
-                continue
-            name = str(key)
-            if value == "not_required":
-                merged.setdefault(name, value)
-                continue
-            current = merged.get(name)
-            if current in {None, "not_required"} or _STATUS_ORDER.get(
-                value, 4
-            ) > _STATUS_ORDER.get(current, 0):
-                merged[name] = str(value)
+            selected = _select_coverage(merged.get(str(key)), value)
+            if selected is not None:
+                merged[str(key)] = selected
     return merged
 
 
 def merge_coverage(legs: list[PreparedLeg]) -> dict[str, str]:
-    result: dict[str, str] = {}
-    for leg in legs:
-        for key, value in coverage_for_prepared(leg).items():
-            if value == "not_required":
-                # Neutral, non-applicable coverage: fill an empty slot but
-                # never override an applicable status or block a later one.
-                result.setdefault(key, value)
-                continue
-            current = result.get(key)
-            if current in {None, "not_required"} or _STATUS_ORDER.get(value, 4) > _STATUS_ORDER.get(current, 0):
-                result[key] = value
-    return result
+    return _merge_coverage_maps(coverage_for_prepared(leg) for leg in legs)
 
 
 def merge_incident_metadata(legs: list[PreparedLeg]) -> dict[str, Any]:
@@ -299,31 +355,31 @@ def merge_incident_metadata(legs: list[PreparedLeg]) -> dict[str, Any]:
 def merge_incident_metadata_values(metadata_values: Iterable[dict[str, Any]]) -> dict[str, Any]:
     metadata = [value for value in metadata_values if isinstance(value, dict)]
     statuses = [str(value.get("status") or "unavailable") for value in metadata]
-    if statuses and all(value == "complete" for value in statuses):
-        status = "complete"
-    elif statuses and all(value in _PROVIDER_UNAVAILABLE for value in statuses):
-        status = "unavailable"
-    else:
-        status = "partial"
-    attempted = _merge_strings(
-        (value.get("sources") or {}).get("attempted", [])
-        for value in metadata
-        if isinstance(value.get("sources"), dict)
-    )
-    completed = _merge_strings(
-        (value.get("sources") or {}).get("completed", [])
-        for value in metadata
-        if isinstance(value.get("sources"), dict)
-    )
     return {
-        "status": status,
+        "status": _incident_scan_status(statuses),
         "sources": {
             "legs": len(metadata),
-            "attempted": attempted,
-            "completed": completed,
+            "attempted": _source_names(metadata, "attempted"),
+            "completed": _source_names(metadata, "completed"),
             "leg_statuses": statuses,
         },
     }
+
+
+def _incident_scan_status(statuses: list[str]) -> str:
+    if statuses and all(value == "complete" for value in statuses):
+        return "complete"
+    if statuses and all(value in _PROVIDER_UNAVAILABLE for value in statuses):
+        return "unavailable"
+    return "partial"
+
+
+def _source_names(metadata: list[dict[str, Any]], field: str) -> list[str]:
+    return _merge_strings(
+        (value.get("sources") or {}).get(field, [])
+        for value in metadata
+        if isinstance(value.get("sources"), dict)
+    )
 
 
 def merge_event_status(legs_or_statuses: Iterable[PreparedLeg | str]) -> str:
@@ -415,9 +471,9 @@ def _route_index(value: dict[str, Any]) -> int:
 
 def _route_ids(route: list[dict]) -> set[str]:
     return {
-        str(step.get("route_id") or step.get("train_line") or "").strip().upper()
+        line
         for step in route or []
-        if str(step.get("route_id") or step.get("train_line") or "").strip()
+        if (line := scoring._step_route_id(step))
     }
 
 
