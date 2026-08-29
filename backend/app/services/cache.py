@@ -118,6 +118,16 @@ def cache_get(key, *, fail_open: bool = False):
     return _memory_get(key)
 
 
+def _redis_mget(unique_keys: list, fail_open: bool) -> dict:
+    result = dict(zip(unique_keys, redis_client.mget(unique_keys), strict=True))
+    if not fail_open:
+        return result
+    return {
+        key: value if value is not None else _memory_get(key)
+        for key, value in result.items()
+    }
+
+
 def cache_get_many(keys, *, fail_open: bool = False) -> dict:
     """Read many keys in one round trip; missing keys map to None."""
     unique_keys = list(dict.fromkeys(keys))
@@ -125,19 +135,11 @@ def cache_get_many(keys, *, fail_open: bool = False) -> dict:
         return {}
     if redis_client is not None:
         try:
-            values = redis_client.mget(unique_keys)
-            result = dict(zip(unique_keys, values, strict=True))
-            if fail_open:
-                result = {
-                    key: value if value is not None else _memory_get(key)
-                    for key, value in result.items()
-                }
+            return _redis_mget(unique_keys, fail_open)
         except redis.exceptions.RedisError as exc:
             if not fail_open:
                 raise
             _log_fail_open("read", exc)
-        else:
-            return result
     return {key: _memory_get(key) for key in unique_keys}
 
 

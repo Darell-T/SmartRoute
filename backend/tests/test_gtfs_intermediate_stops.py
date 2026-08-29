@@ -1,56 +1,7 @@
-"""GTFSStaticData intermediate-stop queries.
-
-The module opens a psycopg2 pool at import time, so the driver is faked
-before import and ``_query`` is overridden per test -- no database needed.
-Covers the names API (unchanged contract) and the new coords variant that
-feeds route stop markers on the map.
-"""
-
-import importlib
-import sys
-import types
 import unittest
 from typing import ClassVar
-from unittest.mock import patch
 
-
-def _load_gtfs_module():
-    fake_psycopg2 = types.ModuleType("psycopg2")
-    fake_pool_mod = types.ModuleType("psycopg2.pool")
-    fake_extras_mod = types.ModuleType("psycopg2.extras")
-
-    class _FakePool:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def getconn(self):
-            raise AssertionError("tests must stub _query, not hit the pool")
-
-        def putconn(self, conn):
-            pass
-
-    class _FakeError(Exception):
-        pass
-
-    fake_pool_mod.ThreadedConnectionPool = _FakePool
-    fake_extras_mod.RealDictCursor = object
-    fake_psycopg2.pool = fake_pool_mod
-    fake_psycopg2.extras = fake_extras_mod
-    fake_psycopg2.Error = _FakeError
-    fake_psycopg2.InterfaceError = _FakeError
-
-    with patch.dict(
-        sys.modules,
-        {
-            "psycopg2": fake_psycopg2,
-            "psycopg2.pool": fake_pool_mod,
-            "psycopg2.extras": fake_extras_mod,
-        },
-    ):
-        if "app.services.mta.static_gtfs.store" in sys.modules:
-            return importlib.reload(sys.modules["app.services.mta.static_gtfs.store"])
-        return importlib.import_module("app.services.mta.static_gtfs.store")
-
+from app.services.mta.static_gtfs import store as gtfs_store
 
 STOPS = {
     "G35N": {"stop_id": "G35N", "stop_name": "Church Av", "stop_lat": 40.644, "stop_lon": -73.979},
@@ -87,11 +38,11 @@ def _scripted_query(sql, params=None):
 class IntermediateStopTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.module = _load_gtfs_module()
+        cls.module = gtfs_store
 
     def _gtfs(self):
         gtfs = self.module.GTFSStaticData()
-        gtfs._allow_db_fallback = True  # static index not loaded in tests; exercise DB path
+        gtfs._allow_db_fallback = True
         gtfs._query = _scripted_query
         return gtfs
 
@@ -111,7 +62,7 @@ class IntermediateStopTests(unittest.TestCase):
 
     def test_no_ordered_trip_yields_empty_for_both(self):
         gtfs = self.module.GTFSStaticData()
-        gtfs._allow_db_fallback = True  # static index not loaded in tests; exercise DB path
+        gtfs._allow_db_fallback = True
 
         def reversed_query(sql, params=None):
             if "WITH matching_trips" in sql:
@@ -126,15 +77,11 @@ class IntermediateStopTests(unittest.TestCase):
 
 
 class CoordinateFallbackTests(unittest.TestCase):
-    """When the provider's station name is not on the route's trips (e.g. a Q
-    leg whose arrival is labeled as the off-line transfer station), the coords
-    fallback snaps board/alight points to the nearest stops on the route."""
 
     @classmethod
     def setUpClass(cls):
-        cls.module = _load_gtfs_module()
+        cls.module = gtfs_store
 
-    # A short Q line: Church Av -> Prospect Park -> 7 Av -> DeKalb Av.
     Q_STOPS: ClassVar[dict[str, dict]] = {
         "Q05N": {"stop_id": "Q05N", "stop_name": "Church Av", "stop_lat": 40.650, "stop_lon": -73.962},
         "Q04N": {"stop_id": "Q04N", "stop_name": "Prospect Park", "stop_lat": 40.661, "stop_lon": -73.962},
@@ -148,7 +95,7 @@ class CoordinateFallbackTests(unittest.TestCase):
                 {"stop_id": row["stop_id"], "stop_name": row["stop_name"]}
                 for row in self.Q_STOPS.values()
             ]
-        if "st.trip_id = (SELECT trip_id" in sql:  # snap-to-representative-trip
+        if "st.trip_id = (SELECT trip_id" in sql:
             return [dict(v) for v in self.Q_STOPS.values()]
         if "FROM stops WHERE stop_name" in sql:
             name = params[0]
@@ -166,10 +113,8 @@ class CoordinateFallbackTests(unittest.TestCase):
 
     def test_offline_arrival_name_falls_back_to_coord_snap(self):
         gtfs = self.module.GTFSStaticData()
-        gtfs._allow_db_fallback = True  # static index not loaded in tests; exercise DB path
+        gtfs._allow_db_fallback = True
         gtfs._query = self._query
-        # "Jay St - MetroTech" is not a Q stop, so the name lookup yields
-        # nothing; the arrival coords sit next to DeKalb Av and snap to it.
         rows = gtfs.get_intermediate_stops_with_coords(
             "Q",
             "Church Av",
@@ -181,16 +126,15 @@ class CoordinateFallbackTests(unittest.TestCase):
 
     def test_no_coords_still_empty_when_name_off_line(self):
         gtfs = self.module.GTFSStaticData()
-        gtfs._allow_db_fallback = True  # static index not loaded in tests; exercise DB path
+        gtfs._allow_db_fallback = True
         gtfs._query = self._query
-        # Without coords there is no fallback, so an off-line name yields [].
         assert gtfs.get_intermediate_stops_with_coords("Q", "Church Av", "Jay St - MetroTech") == []
 
 
 class IntermediateStopCacheTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.module = _load_gtfs_module()
+        cls.module = gtfs_store
 
     class PatternIndex:
         def __init__(self, marker="cached"):

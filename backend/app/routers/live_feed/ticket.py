@@ -8,6 +8,56 @@ import re
 from collections.abc import Callable
 from typing import Any
 
+_TICKET_TOKEN = re.compile(r"[A-Za-z0-9_-]{16,64}")
+_TICKET_SIGNATURE = re.compile(r"[0-9a-f]{64}")
+
+
+def _ticket_parts(ticket: str) -> tuple[str, str, str, str] | None:
+    parts = ticket.split(".")
+    if len(parts) != 4:
+        return None
+    exp_str, nonce, principal_id, signature = parts
+    if (
+        not exp_str
+        or len(exp_str) > 12
+        or not exp_str.isdigit()
+        or not nonce
+        or not _TICKET_TOKEN.fullmatch(nonce)
+        or not _TICKET_TOKEN.fullmatch(principal_id)
+        or not _TICKET_SIGNATURE.fullmatch(signature)
+    ):
+        return None
+    return exp_str, nonce, principal_id, signature
+
+
+def _ticket_expiry(
+    exp_str: str, now: Callable[[], float]
+) -> tuple[int, int] | None:
+    try:
+        expires_at = int(exp_str)
+    except ValueError:
+        return None
+    current_time = int(now())
+    if expires_at < current_time or expires_at > current_time + 120:
+        return None
+    return expires_at, current_time
+
+
+def _ticket_signature_matches(
+    app_key: str,
+    exp_str: str,
+    path: str,
+    nonce: str,
+    principal: str,
+    signature: str,
+) -> bool:
+    expected = hmac.new(
+        app_key.encode(),
+        f"{exp_str}.{path}.{nonce}.{principal}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(expected, signature)
+
 
 async def verify_ticket(
     ticket: str,
@@ -20,34 +70,18 @@ async def verify_ticket(
     """Validate and atomically consume a short-lived, path-bound ticket."""
     if not app_key or not ticket or not path or len(ticket) > 512:
         return None, False
-    parts = ticket.split(".")
-    if len(parts) != 4:
+    parsed = _ticket_parts(ticket)
+    if parsed is None:
         return None, False
-    exp_str, nonce, principal_id, signature = parts
+    exp_str, nonce, principal_id, signature = parsed
     principal = f"v1.{principal_id}"
-    if (
-        not exp_str
-        or len(exp_str) > 12
-        or not exp_str.isdigit()
-        or not nonce
-        or not re.fullmatch(r"[A-Za-z0-9_-]{16,64}", nonce)
-        or not re.fullmatch(r"[A-Za-z0-9_-]{16,64}", principal_id)
-        or not re.fullmatch(r"[0-9a-f]{64}", signature)
+    expiry = _ticket_expiry(exp_str, now)
+    if expiry is None:
+        return None, False
+    expires_at, current_time = expiry
+    if not _ticket_signature_matches(
+        app_key, exp_str, path, nonce, principal, signature
     ):
-        return None, False
-    try:
-        expires_at = int(exp_str)
-    except ValueError:
-        return None, False
-    current_time = int(now())
-    if expires_at < current_time or expires_at > current_time + 120:
-        return None, False
-    expected = hmac.new(
-        app_key.encode(),
-        f"{exp_str}.{path}.{nonce}.{principal}".encode(),
-        hashlib.sha256,
-    ).hexdigest()
-    if not hmac.compare_digest(expected, signature):
         return None, False
     try:
         admission.principal_from_request(principal)

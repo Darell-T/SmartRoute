@@ -175,6 +175,41 @@ def _new_metrics(started_at: str) -> dict[str, Any]:
     }
 
 
+async def _run_locked_refresh(
+    metrics: dict[str, Any],
+    attempted_at: str,
+    started: float,
+    collect_official: Callable[[], Awaitable[OfficialIncidentSnapshot]] | None,
+    scout_batch: Callable[[IncidentBatch], Awaitable[ScoutBatchResult]] | None,
+    monotonic: Callable[[], float] | None,
+) -> dict[str, Any]:
+    collector = collect_official if collect_official is not None else collect_official_incidents
+    runner = scout_batch if scout_batch is not None else scout_incident_batch
+    snapshot = await _collect_official_once(collector, attempted_at)
+    outcomes = await _scout_all(runner, attempted_at)
+    metrics["official_sources"] = dict(snapshot.source_status)
+    metrics["batches"] = [result.batch_id for result, _timed in outcomes]
+    metrics["model_calls"] = sum(result.model_calls for result, _timed in outcomes)
+    metrics["scout_timeouts"] = sum(1 for _result, timed_out in outcomes if timed_out)
+    metrics["official_incidents"] = len(snapshot.incidents)
+    official_usable = any(
+        status in (STATUS_CURRENT, STATUS_PARTIAL)
+        for status in snapshot.source_status.values()
+    )
+    upserted, unique_ids, coverage = _index_refresh_cycle(
+        snapshot, outcomes, attempted_at, official_usable
+    )
+    metrics["coverage"] = coverage
+    metrics["incidents_upserted"] = upserted
+    metrics["unique_incident_ids"] = len(unique_ids)
+    metrics["status"] = (
+        "complete" if coverage["current"] == len(INCIDENT_BATCHES) else "partial"
+    )
+    metrics["duration_ms"] = _duration_ms(started, monotonic)
+    _store_metrics(metrics)
+    return metrics
+
+
 async def run_background_incident_refresh(
     *,
     collect_official: Callable[[], Awaitable[OfficialIncidentSnapshot]] | None = None,
@@ -182,7 +217,6 @@ async def run_background_incident_refresh(
     clock: Callable[[], float] | None = None,
     monotonic: Callable[[], float] | None = None,
 ) -> dict[str, Any]:
-    """Run one background refresh cycle; defaults resolve to the real boundaries."""
     started = monotonic() if monotonic is not None else time.monotonic()
     attempted_at = _epoch_to_iso(clock() if clock is not None else time.time())
     metrics = _new_metrics(attempted_at)
@@ -192,31 +226,9 @@ async def run_background_incident_refresh(
         _store_metrics(metrics)
         return metrics
     try:
-        collector = collect_official if collect_official is not None else collect_official_incidents
-        runner = scout_batch if scout_batch is not None else scout_incident_batch
-        snapshot = await _collect_official_once(collector, attempted_at)
-        outcomes = await _scout_all(runner, attempted_at)
-        metrics["official_sources"] = dict(snapshot.source_status)
-        metrics["batches"] = [result.batch_id for result, _timed in outcomes]
-        metrics["model_calls"] = sum(result.model_calls for result, _timed in outcomes)
-        metrics["scout_timeouts"] = sum(1 for _result, timed_out in outcomes if timed_out)
-        official_count = len(snapshot.incidents)
-        metrics["official_incidents"] = official_count
-        official_usable = any(
-            status in (STATUS_CURRENT, STATUS_PARTIAL)
-            for status in snapshot.source_status.values()
+        return await _run_locked_refresh(
+            metrics, attempted_at, started, collect_official, scout_batch, monotonic
         )
-        upserted, unique_ids, coverage = _index_refresh_cycle(
-            snapshot, outcomes, attempted_at, official_usable
-        )
-        metrics["coverage"] = coverage
-        metrics["incidents_upserted"] = upserted
-        metrics["unique_incident_ids"] = len(unique_ids)
-        metrics["status"] = (
-            "complete" if coverage["current"] == len(INCIDENT_BATCHES) else "partial"
-        )
-        metrics["duration_ms"] = _duration_ms(started, monotonic)
-        _store_metrics(metrics)
     except asyncio.CancelledError:
         metrics["status"] = "failed"
         _store_metrics(metrics)
@@ -227,8 +239,6 @@ async def run_background_incident_refresh(
         metrics["error"] = type(exc).__name__
         metrics["duration_ms"] = _duration_ms(started, monotonic)
         _store_metrics(metrics)
-        return metrics
-    else:
         return metrics
     finally:
         release_job_lock(token)

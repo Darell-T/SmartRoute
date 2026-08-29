@@ -99,12 +99,7 @@ def _require_in_service_location(message: dict) -> None:
         raise ValueError("location outside service area")
 
 
-async def receive_bounded_json(
-    websocket: WebSocket,
-    max_bytes: int,
-    max_route_ids: int,
-) -> dict:
-    frame = await websocket.receive()
+def _websocket_payload_bytes(frame: dict, max_bytes: int) -> bytes:
     if frame.get("type") == "websocket.disconnect":
         raise WebSocketDisconnect(code=int(frame.get("code") or 1000))
     raw = frame.get("text") if isinstance(frame.get("text"), str) else frame.get("bytes")
@@ -113,12 +108,31 @@ async def receive_bounded_json(
     data = raw.encode("utf-8") if isinstance(raw, str) else raw
     if len(data) > max_bytes:
         raise ValueError("websocket payload too large")
+    return data
+
+
+def _parse_ws_object(data: bytes) -> dict:
     try:
         message = json.loads(data.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError("malformed websocket JSON") from exc
     if not isinstance(message, dict):
         raise TypeError("websocket message must be an object")
+    return message
+
+
+def _invalid_route_selection(selected: object, max_route_ids: int) -> bool:
+    return (
+        not isinstance(selected, list)
+        or len(selected) > max_route_ids
+        or any(
+            not isinstance(route, str) or not route.strip() or len(route) > 12
+            for route in selected
+        )
+    )
+
+
+def _validate_ws_message(message: dict, max_route_ids: int) -> None:
     allowed = _WS_MESSAGE_FIELDS.get(message.get("type"))
     if allowed is None:
         raise ValueError("unsupported websocket message")
@@ -128,15 +142,19 @@ async def receive_bounded_json(
     if message.get("type") == "location":
         _require_in_service_location(message)
     selected = message.get("selected_route_ids")
-    if selected is not None and (
-        not isinstance(selected, list)
-        or len(selected) > max_route_ids
-        or any(
-            not isinstance(route, str) or not route.strip() or len(route) > 12
-            for route in selected
-        )
-    ):
+    if selected is not None and _invalid_route_selection(selected, max_route_ids):
         raise ValueError("invalid route selection")
+
+
+async def receive_bounded_json(
+    websocket: WebSocket,
+    max_bytes: int,
+    max_route_ids: int,
+) -> dict:
+    message = _parse_ws_object(
+        _websocket_payload_bytes(await websocket.receive(), max_bytes)
+    )
+    _validate_ws_message(message, max_route_ids)
     return message
 
 
@@ -176,7 +194,7 @@ async def guard_lease(
             return
 
 
-def _next_service_alert_message(
+def next_service_alert_message(
     payload: dict,
     signatures: dict[str, str],
     previous: dict[str, str],
@@ -205,7 +223,7 @@ async def _service_alert_tick(
 ) -> dict[str, str] | None:
     payload = await deps.service_payload(getattr(websocket.app.state, "gtfs", None))
     signatures = deps.alert_signatures(payload.get("alerts", []))
-    message = _next_service_alert_message(
+    message = next_service_alert_message(
         payload, signatures, previous, sent_snapshot
     )
     if not await deps.send(websocket, message):
@@ -214,6 +232,37 @@ async def _service_alert_tick(
     if await wait_for_client_disconnect(websocket, SERVICE_ALERT_REFRESH_INTERVAL_S):
         return None
     return signatures
+
+
+async def _service_alert_loop(
+    websocket: WebSocket,
+    connection_id: int,
+    deps: LiveFeedSocketDependencies,
+) -> None:
+    previous: dict[str, str] = {}
+    sent_snapshot = False
+    while True:
+        try:
+            signatures = await _service_alert_tick(
+                websocket, deps, connection_id, previous, sent_snapshot
+            )
+            if signatures is None:
+                return
+            previous = signatures
+            sent_snapshot = True
+        except deps.disconnect_error:
+            return
+        except Exception as exc:  # noqa: BLE001 provider faults keep the socket open
+            print(deps.failure_log("ws_service_alerts", exc))
+            if not await deps.send(
+                websocket,
+                {
+                    "type": "error",
+                    "message": "service alerts temporarily unavailable",
+                },
+            ):
+                return
+            await asyncio.sleep(5)
 
 
 async def stream_service_alerts(
@@ -230,32 +279,9 @@ async def stream_service_alerts(
     guard = asyncio.create_task(
         deps.guard(lease, stopped, lease_failed, asyncio.current_task())
     )
-    previous: dict[str, str] = {}
-    sent_snapshot = False
     deps.vlog(f"[ws_service_alerts:{connection_id}] accepted")
     try:
-        while True:
-            try:
-                signatures = await _service_alert_tick(
-                    websocket, deps, connection_id, previous, sent_snapshot
-                )
-                if signatures is None:
-                    return
-                previous = signatures
-                sent_snapshot = True
-            except deps.disconnect_error:
-                return
-            except Exception as exc:  # noqa: BLE001 provider faults keep the socket open
-                print(deps.failure_log("ws_service_alerts", exc))
-                if not await deps.send(
-                    websocket,
-                    {
-                        "type": "error",
-                        "message": "service alerts temporarily unavailable",
-                    },
-                ):
-                    return
-                await asyncio.sleep(5)
+        await _service_alert_loop(websocket, connection_id, deps)
     except deps.disconnect_error:
         deps.vlog(f"[ws_service_alerts:{connection_id}] disconnected")
         return

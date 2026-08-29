@@ -1,8 +1,7 @@
-"""Static GTFS store with its bounded route-segment lookup cache.
+"""Bounded intermediate-stop cache lives with the static-pattern store.
 
-The cache remains here intentionally: it is private to this store and shares
-the same static-pattern lifecycle, so a separate generic utility module would
-only add an import seam without another owner.
+The cache is private to this GTFS lifecycle. Hits resolve from the in-memory
+index and never query Postgres on the trip request path.
 """
 
 import os
@@ -87,6 +86,32 @@ def _freeze_rows(rows) -> tuple[tuple[str, float, float], ...]:
     )
 
 
+def _rows_from_db_fallback(
+    gtfs,
+    route_id,
+    origin,
+    destination,
+    origin_payload,
+    destination_payload,
+) -> tuple[tuple[str, float, float], ...]:
+    rows = gtfs._find_trip_stop_rows(route_id, origin, destination)
+    if not rows and (origin_payload or destination_payload):
+        origin_ids = (
+            gtfs._route_stop_ids_near(route_id, origin_payload)
+            or gtfs._ids_for_name(origin)
+        )
+        destination_ids = (
+            gtfs._route_stop_ids_near(route_id, destination_payload)
+            or gtfs._ids_for_name(destination)
+        )
+        rows = gtfs._trip_stops_between(route_id, origin_ids, destination_ids)
+    return _freeze_rows([
+        {"name": row["stop_name"], "lat": row["stop_lat"], "lng": row["stop_lon"]}
+        for row in rows
+        if row.get("stop_lat") is not None and row.get("stop_lon") is not None
+    ])
+
+
 class BoundedIntermediateStopsCache:
     def __init__(self, gtfs) -> None:
         self._gtfs = gtfs
@@ -153,22 +178,14 @@ class BoundedIntermediateStopsCache:
             )
             return ()
 
-        rows = gtfs._find_trip_stop_rows(route_id, origin, destination)
-        if not rows and (origin_payload or destination_payload):
-            origin_ids = (
-                gtfs._route_stop_ids_near(route_id, origin_payload)
-                or gtfs._ids_for_name(origin)
-            )
-            destination_ids = (
-                gtfs._route_stop_ids_near(route_id, destination_payload)
-                or gtfs._ids_for_name(destination)
-            )
-            rows = gtfs._trip_stops_between(route_id, origin_ids, destination_ids)
-        return _freeze_rows([
-            {"name": row["stop_name"], "lat": row["stop_lat"], "lng": row["stop_lon"]}
-            for row in rows
-            if row.get("stop_lat") is not None and row.get("stop_lon") is not None
-        ])
+        return _rows_from_db_fallback(
+            gtfs,
+            route_id,
+            origin,
+            destination,
+            origin_payload,
+            destination_payload,
+        )
 
 
 class GTFSStaticData:
@@ -190,7 +207,6 @@ class GTFSStaticData:
         return cache
 
     def load_scheduled_arrivals(self, path: str | Path | None = None) -> bool:
-        """Load the optional preprocessed full-GTFS schedule once at startup."""
 
         candidate = Path(
             path
@@ -231,22 +247,13 @@ class GTFSStaticData:
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
                     cur.execute(sql, params)
                     return cur.fetchall()
-            except psycopg2.OperationalError as exc:
+            except (psycopg2.OperationalError, psycopg2.InterfaceError) as exc:
                 pool.putconn(conn, close=True)
                 conn = None
                 # SQLSTATE 57014 = statement_timeout fired. Retrying would just
                 # wait the full timeout again and, on the synchronous trip path,
                 # pile uncancellable query threads onto the pool. Fail fast.
-                if getattr(exc, "pgcode", None) == "57014":
-                    raise
-                # Otherwise a stale pooled connection (server closed it while
-                # idle): retry once on a fresh connection.
-                if attempt == 2:
-                    raise
-            except psycopg2.InterfaceError:
-                pool.putconn(conn, close=True)
-                conn = None
-                if attempt == 2:
+                if getattr(exc, "pgcode", None) == "57014" or attempt == 2:
                     raise
             finally:
                 if conn is not None:
@@ -375,13 +382,6 @@ class GTFSStaticData:
         origin_coords=None,
         dest_coords=None,
     ) -> list:
-        """Ordered stops origin..dest inclusive as [{name, lat, lng}] for the map.
-
-        Fix B: resolved entirely from the in-memory static stop-pattern index
-        (_pattern_index, loaded once at startup) -- NO remote-DB query on the
-        trip hot path. The legacy DB path remains only as an explicit debug
-        fallback (see _db_fallback_enabled). Results are memoized per instance
-        with an explicit bound."""
         return self._intermediate_stops_cache().get(
             route_id,
             origin,
@@ -397,29 +397,6 @@ class GTFSStaticData:
         return self._query(
             "SELECT stop_id, stop_name, stop_lat, stop_lon FROM stops WHERE location_type = '1'"
         )
-
-    def get_unique_routes_for_stops(self, nearest_stops):
-        seen_routes = set()
-        result = {}
-
-        for stop in nearest_stops:
-            rows = self._query(
-                """
-                SELECT DISTINCT t.route_id
-                FROM stops s
-                JOIN stop_times st ON st.stop_id = s.stop_id
-                JOIN trips t ON t.trip_id = st.trip_id
-                WHERE s.parent_station = %s
-                """, (stop["stop_id"],)
-            )
-            routes = [r["route_id"] for r in rows]
-            new_routes = [r for r in routes if r not in seen_routes]
-
-            if new_routes:
-                result[stop["stop_name"]] = new_routes
-                seen_routes.update(new_routes)
-
-        return result
 
     def get_route_ids_for_parent_stop(self, parent_stop_id: str):
         index = self.__dict__.get("_pattern_index")

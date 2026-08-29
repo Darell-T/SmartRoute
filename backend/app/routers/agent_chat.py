@@ -137,6 +137,22 @@ async def _expired_session_stream(session_id: str):
     )
 
 
+async def _wait_event_or_ping(
+    request: Request,
+    pending: asyncio.Future,
+    session_id: str,
+    turn_id: str,
+) -> str:
+    done, _pending = await asyncio.wait({pending}, timeout=HEARTBEAT_INTERVAL_S)
+    if pending in done:
+        return "ready"
+    if await request.is_disconnected():
+        pending.cancel()
+        print(f"[agent-chat] client disconnected sess[{_log_sess(session_id)}] turn={turn_id}")
+        return "disconnect"
+    return "ping"
+
+
 async def _sse_stream(
     request: Request,
     session_id: str,
@@ -164,60 +180,146 @@ async def _sse_stream(
         response_presentation=response_presentation,
         trace=trace,
     )
-    next_event: asyncio.Future | None = None
-    response_succeeded = False
+    pending = None
+    succeeded = False
     try:
         while True:
-            next_event = asyncio.ensure_future(agen.__anext__())
-            while True:
-                done, _pending = await asyncio.wait({next_event}, timeout=HEARTBEAT_INTERVAL_S)
-                if next_event in done:
-                    break
-                if await request.is_disconnected():
-                    next_event.cancel()
-                    print(f"[agent-chat] client disconnected sess[{_log_sess(session_id)}] turn={turn_id}")
-                    return
+            pending = asyncio.ensure_future(agen.__anext__())
+            wait = await _wait_event_or_ping(request, pending, session_id, turn_id)
+            while wait == "ping":
                 yield ": ping\n\n"
-            try:
-                event = next_event.result()
-            except StopAsyncIteration:
+                wait = await _wait_event_or_ping(request, pending, session_id, turn_id)
+            if wait == "disconnect":
                 return
-            next_event = None
+            try:
+                event = pending.result()
+            except StopAsyncIteration:
+                pending = None
+                return
+            pending = None
             if isinstance(event, agent_events.DoneEvent):
-                response_succeeded = event.stop_reason in {
+                succeeded = event.stop_reason in {
                     "end_turn",
                     "clarification_required",
                 }
             yield agent_events.sse_format(event)
     finally:
+        await _finalize_sse_turn(
+            agen,
+            pending,
+            session_id,
+            session,
+            succeeded,
+            lease,
+            session_lease_token,
+        )
+
+
+async def _drain_agent_turn(agen, next_event: asyncio.Future | None) -> None:
+    # Cancel any still-pending __anext__ and await it so CancelledError
+    # reaches run_agent_turn and its finally (turn finalization, which
+    # mutates history/telemetry) completes before we persist the
+    # session. Only the expected child conditions are suppressed: a
+    # caller cancellation stays in flight and keeps propagating after
+    # this finally.
+    if next_event is not None:
+        next_event.cancel()
+        with contextlib.suppress(StopAsyncIteration, asyncio.CancelledError):
+            await next_event
+    # No __anext__ is running now; close the generator explicitly so
+    # its finally also runs when it was suspended at a yield. No-op
+    # when the cancellation above already closed it.
+    with contextlib.suppress(asyncio.CancelledError, StopAsyncIteration):
+        await agen.aclose()
+
+
+async def _finalize_sse_turn(
+    agen,
+    next_event: asyncio.Future | None,
+    session_id: str,
+    session: dict,
+    response_succeeded: bool,
+    lease: admission.AdmissionLease,
+    session_lease_token: str | None,
+) -> None:
+    try:
+        await _drain_agent_turn(agen, next_event)
+    finally:
         try:
-            # Cancel any still-pending __anext__ and await it so CancelledError
-            # reaches run_agent_turn and its finally (turn finalization, which
-            # mutates history/telemetry) completes before we persist the
-            # session. Only the expected child conditions are suppressed: a
-            # caller cancellation stays in flight and keeps propagating after
-            # this finally.
-            if next_event is not None:
-                next_event.cancel()
-                with contextlib.suppress(StopAsyncIteration, asyncio.CancelledError):
-                    await next_event
-            # No __anext__ is running now; close the generator explicitly so
-            # its finally also runs when it was suspended at a yield. No-op
-            # when the cancellation above already closed it.
-            with contextlib.suppress(asyncio.CancelledError, StopAsyncIteration):
-                await agen.aclose()
+            session_module.save_session(
+                session_id,
+                session,
+                refresh_ttl=response_succeeded,
+            )
         finally:
             try:
-                session_module.save_session(
-                    session_id,
-                    session,
-                    refresh_ttl=response_succeeded,
-                )
+                await admission.release(lease)
             finally:
-                try:
-                    await admission.release(lease)
-                finally:
-                    session_module.release_session_lease(session_id, session_lease_token)
+                session_module.release_session_lease(session_id, session_lease_token)
+
+
+_ADMISSION_DETAILS = {
+    403: "Request identity is invalid.",
+    503: "Request admission is temporarily unavailable.",
+}
+
+
+def _admission_http_error(exc: admission.AdmissionDenied) -> HTTPException:
+    return HTTPException(
+        status_code=exc.status_code,
+        detail=_ADMISSION_DETAILS.get(exc.status_code, "Too many requests."),
+        headers={"Retry-After": str(exc.retry_after_s)},
+    )
+
+
+def _streaming_chat_response(
+    request: Request,
+    payload: AgentChatRequest,
+    session_id: str,
+    session: dict,
+    lease: admission.AdmissionLease,
+    session_lease_token: str,
+    session_load_started: float,
+) -> StreamingResponse:
+    incoming_origin = (
+        {"lat": payload.origin.lat, "lng": payload.origin.lng}
+        if payload.origin
+        else None
+    )
+    origin = session_module.update_current_location(session, incoming_origin)
+    session_module.save_session(session_id, session)
+    trace = agent_loop.TurnTrace(
+        stage_ms={"session_load_ms": (time.monotonic() - session_load_started) * 1000}
+    )
+    gtfs = getattr(request.app.state, "gtfs", None)
+    turn_id = session_module.next_turn_id(session)
+    now_et = datetime.now(ZoneInfo("America/New_York")).isoformat()
+    origin_source = "request" if incoming_origin else "session" if origin else "missing"
+    print(
+        f"[agent-chat] sess[{_log_sess(session_id)}] turn={turn_id} "
+        f"msg_len={len(payload.message)} origin_source={origin_source} "
+        f"selected_card={'yes' if payload.selected_card_id else 'no'}"
+        f" presentation={payload.response_presentation}"
+    )
+    return StreamingResponse(
+        _sse_stream(
+            request,
+            session_id,
+            session,
+            turn_id,
+            payload.message,
+            now_et,
+            gtfs,
+            origin,
+            payload.selected_card_id,
+            payload.response_presentation,
+            trace,
+            lease,
+            session_lease_token,
+        ),
+        media_type="text/event-stream",
+        headers=_SSE_HEADERS,
+    )
 
 
 @router.post("/api/agent/chat")
@@ -238,11 +340,7 @@ async def agent_chat(request: Request, payload: AgentChatRequest):
             "chat",
         )
     except admission.AdmissionDenied as exc:
-        raise HTTPException(
-            status_code=exc.status_code,
-            detail=("Request identity is invalid." if exc.status_code == 403 else "Request admission is temporarily unavailable." if exc.status_code == 503 else "Too many requests."),
-            headers={"Retry-After": str(exc.retry_after_s)},
-        ) from None
+        raise _admission_http_error(exc) from None
 
     session_lease_token: str | None = None
     session_load_started = time.monotonic()
@@ -252,8 +350,7 @@ async def agent_chat(request: Request, payload: AgentChatRequest):
             session_id = payload.session_id
             session_lease_token = _claim_turn_lease(session_id)
             session = session_module.load_session(session_id)
-            if session is None:
-                expired_session = True
+            expired_session = session is None
         else:
             session_id, session = session_module.new_session()
             session_lease_token = _claim_turn_lease(session_id)
@@ -271,36 +368,18 @@ async def agent_chat(request: Request, payload: AgentChatRequest):
             headers=_SSE_HEADERS,
         )
     try:
-        incoming_origin = (
-            {"lat": payload.origin.lat, "lng": payload.origin.lng}
-            if payload.origin
-            else None
-        )
-        origin = session_module.update_current_location(session, incoming_origin)
-        session_module.save_session(session_id, session)
-        trace = agent_loop.TurnTrace(
-            stage_ms={"session_load_ms": (time.monotonic() - session_load_started) * 1000}
-        )
-        gtfs = getattr(request.app.state, "gtfs", None)
-        turn_id = session_module.next_turn_id(session)
-        now_et = datetime.now(ZoneInfo("America/New_York")).isoformat()
-        origin_source = "request" if incoming_origin else "session" if origin else "missing"
-        print(
-            f"[agent-chat] sess[{_log_sess(session_id)}] turn={turn_id} "
-            f"msg_len={len(payload.message)} origin_source={origin_source} "
-            f"selected_card={'yes' if payload.selected_card_id else 'no'}"
-            f" presentation={payload.response_presentation}"
-        )
-        response = StreamingResponse(
-            _sse_stream(request, session_id, session, turn_id, payload.message, now_et, gtfs,
-                        origin, payload.selected_card_id, payload.response_presentation, trace, lease,
-                        session_lease_token),
-            media_type="text/event-stream", headers=_SSE_HEADERS,
+        return _streaming_chat_response(
+            request,
+            payload,
+            session_id,
+            session,
+            lease,
+            session_lease_token,
+            session_load_started,
         )
     except BaseException:
         await _release_turn_leases(session_id, session_lease_token, lease)
         raise
-    return response
 
 
 @router.post("/api/agent/chat/session")

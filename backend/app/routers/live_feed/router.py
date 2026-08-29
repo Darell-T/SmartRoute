@@ -150,6 +150,21 @@ async def service_alerts(request: Request):
         )
 
 
+def _unique_alert_stop_names(stop_ids, stop_locations) -> list[str]:
+    names = []
+    seen = set()
+    for stop_id in stop_ids:
+        stop_key = str(stop_id or "").strip()
+        if not stop_key:
+            continue
+        location = stop_locations.get(stop_key) or stop_locations.get(stop_key.rstrip("NS"))
+        name = location.get("stop_name") if isinstance(location, dict) else None
+        if name and name not in seen:
+            names.append(name)
+            seen.add(name)
+    return names
+
+
 def _attach_alert_stop_names(alerts: list[dict], gtfs) -> None:
     stop_ids = {
         str(stop_id).strip()
@@ -159,25 +174,13 @@ def _attach_alert_stop_names(alerts: list[dict], gtfs) -> None:
     }
     if not stop_ids or gtfs is None:
         return
-
     try:
         stop_locations = gtfs.get_stop_locations(list(stop_ids))
     except Exception as exc:  # noqa: BLE001 stop-name enrichment is optional
         print(f"[service_alerts] stop-name enrichment failed: {type(exc).__name__}: {exc!r}")
         return
-
     for alert in alerts:
-        names = []
-        seen = set()
-        for stop_id in alert.get("stop_ids", []):
-            stop_key = str(stop_id or "").strip()
-            if not stop_key:
-                continue
-            location = stop_locations.get(stop_key) or stop_locations.get(stop_key.rstrip("NS"))
-            name = location.get("stop_name") if isinstance(location, dict) else None
-            if name and name not in seen:
-                names.append(name)
-                seen.add(name)
+        names = _unique_alert_stop_names(alert.get("stop_ids", []), stop_locations)
         if names:
             alert["stop_names"] = names
 
@@ -202,7 +205,7 @@ async def _service_alerts_payload(gtfs=None):
     }
 
 
-def _service_alert_id(alert: dict, index: int) -> str:
+def service_alert_id(alert: dict, index: int) -> str:
     alert_id = alert.get("alert_id")
     if alert_id:
         return str(alert_id)
@@ -211,10 +214,10 @@ def _service_alert_id(alert: dict, index: int) -> str:
     return f"{'-'.join(str(route_id) for route_id in route_ids) or 'system'}-{start}"
 
 
-def _service_alert_signatures(alerts: list[dict]) -> dict[str, str]:
+def service_alert_signatures(alerts: list[dict]) -> dict[str, str]:
     signatures: dict[str, str] = {}
     for index, alert in enumerate(alerts):
-        alert_id = _service_alert_id(alert, index)
+        alert_id = service_alert_id(alert, index)
         signatures[alert_id] = hashlib.sha256(
             json.dumps(alert, sort_keys=True, default=str).encode("utf-8")
         ).hexdigest()
@@ -312,10 +315,10 @@ def _socket_dependencies() -> _live_feed_socket.LiveFeedSocketDependencies:
         send=_send_json_safe,
         refresh_event=network_snapshot_store.refresh_event,
         service_payload=_service_alerts_payload,
-        alert_signatures=_service_alert_signatures,
+        alert_signatures=service_alert_signatures,
         snapshot=_live_feed_snapshot.build_live_snapshot,
         bus_update=mta_realtime.fetch_nearby_bus_update,
-        normalize=_live_feed_snapshot._normalize_route_ids,
+        normalize=_live_feed_snapshot._normalized_routes,
         location_log=_live_feed_snapshot._location_verbose_log,
         failure_log=_live_feed_snapshot._socket_failure_log,
         vlog=_vlog,

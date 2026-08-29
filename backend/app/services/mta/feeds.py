@@ -93,6 +93,33 @@ def _append_live_feed(feed_request, response, cache_result, cache_set, results) 
     })
 
 
+async def _fetch_pending_feeds(pending, cache_result, cache_set, results) -> None:
+    if not pending:
+        return
+    async with httpx.AsyncClient(timeout=10.0) as client:  # noqa: TID251
+        responses = await asyncio.gather(
+            *[client.get(item["url"]) for item in pending],
+            return_exceptions=True,
+        )
+    for feed_request, response in zip(pending, responses, strict=False):
+        _append_live_feed(feed_request, response, cache_result, cache_set, results)
+
+
+def _emit_fetch_summary(log_context, feed_requests, results, requested_routes) -> None:
+    ok = ", ".join(
+        f"{item['suffix']}:{item['bytes']}b:{'cache' if item['from_cache'] else 'net'}"
+        for item in sorted(results, key=lambda x: x["suffix"])
+    ) or "none"
+    failed = len(feed_requests) - len(results)
+    _log_fetch_summary(
+        log_context,
+        (
+            f"[mta_feed][{log_context}] fetch requested_feeds={len(feed_requests)} "
+            f"ok={len(results)} failed={failed} routes={sorted(requested_routes)} feeds={ok}"
+        ),
+    )
+
+
 async def fetch_feeds_with_metadata(
     routes: list,
     log_context: str | None = None,
@@ -107,7 +134,6 @@ async def fetch_feeds_with_metadata(
     for route in routes:
         if route in route_to_feed:
             unique_suffixes.add(route_to_feed[route])
-
     if not unique_suffixes:
         print("Error: No valid train routes provided.")
         return []
@@ -120,34 +146,12 @@ async def fetch_feeds_with_metadata(
         }
         for suffix in unique_suffixes
     ]
-
-    results, urls_to_fetch = _split_cached_feeds(
+    results, pending = _split_cached_feeds(
         feed_requests, force_refresh, cache_get
     )
-
-    if urls_to_fetch:
-        async with httpx.AsyncClient(timeout=10.0) as client:  # noqa: TID251
-            tasks = [client.get(feed_request["url"]) for feed_request in urls_to_fetch]
-            responses = await asyncio.gather(*tasks, return_exceptions=True)
-        for feed_request, response in zip(urls_to_fetch, responses, strict=False):
-            _append_live_feed(
-                feed_request, response, cache_result, cache_set, results
-            )
-
+    await _fetch_pending_feeds(pending, cache_result, cache_set, results)
     if log_context:
-        ok = ", ".join(
-            f"{item['suffix']}:{item['bytes']}b:{'cache' if item['from_cache'] else 'net'}"
-            for item in sorted(results, key=lambda x: x["suffix"])
-        ) or "none"
-        failed = len(feed_requests) - len(results)
-        _log_fetch_summary(
-            log_context,
-            (
-                f"[mta_feed][{log_context}] fetch requested_feeds={len(feed_requests)} "
-                f"ok={len(results)} failed={failed} routes={sorted(requested_routes)} feeds={ok}"
-            ),
-        )
-
+        _emit_fetch_summary(log_context, feed_requests, results, requested_routes)
     return results
 
 
@@ -162,32 +166,32 @@ def parse_feed_message(raw_bytes: bytes):
     return feed
 
 
+def _stop_direction(stop_id: str) -> str | None:
+    if stop_id.endswith("N"):
+        return "Uptown"
+    if stop_id.endswith("S"):
+        return "Downtown"
+    return None
+
+
 def parse_bytes(raw_bytes: bytes) -> list:
     user_feed = parse_feed_message(raw_bytes)
-
     trip_updates = []
     for entity in user_feed.entity:
-        if entity.HasField("trip_update"):
-            trip = entity.trip_update
-            trip_id = trip.trip.trip_id
-            route_id = trip.trip.route_id
-
-            for stop in trip.stop_time_update:
-                stop_id = stop.stop_id
-                if stop_id.endswith("N"):
-                    direction = "Uptown"
-                elif stop_id.endswith("S"):
-                    direction = "Downtown"
-                else:
-                    direction = None
-                trip_updates.append({
-                    "route_id": route_id,
-                    "trip_id": trip_id,
-                    "stop_id": stop_id,
-                    "stop_sequence": stop.stop_sequence or None,
-                    "arrival_time": stop.arrival.time or None,
-                    "delay": stop.arrival.delay,
-                    "direction": direction,
-                })
-
+        if not entity.HasField("trip_update"):
+            continue
+        trip = entity.trip_update
+        trip_id = trip.trip.trip_id
+        route_id = trip.trip.route_id
+        for stop in trip.stop_time_update:
+            stop_id = stop.stop_id
+            trip_updates.append({
+                "route_id": route_id,
+                "trip_id": trip_id,
+                "stop_id": stop_id,
+                "stop_sequence": stop.stop_sequence or None,
+                "arrival_time": stop.arrival.time or None,
+                "delay": stop.arrival.delay,
+                "direction": _stop_direction(stop_id),
+            })
     return trip_updates

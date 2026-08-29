@@ -92,6 +92,71 @@ def _finite_env_float(name: str, default: float) -> float:
     return value
 
 
+def _validated_ny511_url(api_url: str) -> str | None:
+    parsed = urlsplit(api_url)
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname not in {"511ny.org", "www.511ny.org"}
+        or parsed.query
+        or parsed.fragment
+        or parsed.username
+        or parsed.password
+    ):
+        return None
+    return api_url
+
+
+def _ny511_timing() -> tuple[float, float, float, float, float] | None:
+    try:
+        poll_interval = max(
+            60.0,
+            _finite_env_float("NY511_POLL_INTERVAL_SECONDS", DEFAULT_POLL_INTERVAL_SECONDS),
+        )
+        timeout = max(
+            1.0,
+            _finite_env_float("NY511_REQUEST_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS),
+        )
+        stale_after = max(
+            1.0,
+            _finite_env_float("NY511_STALE_AFTER_SECONDS", DEFAULT_STALE_AFTER_SECONDS),
+        )
+        max_stale = max(
+            stale_after,
+            _finite_env_float("NY511_MAX_STALE_SECONDS", DEFAULT_MAX_STALE_SECONDS),
+        )
+        buffer = max(
+            0.0,
+            min(
+                0.25,
+                _finite_env_float("NY511_NYC_BUFFER_DEGREES", DEFAULT_NYC_BUFFER_DEGREES),
+            ),
+        )
+    except ValueError:
+        return None
+    return poll_interval, timeout, stale_after, max_stale, buffer
+
+
+def _ny511_mode(
+    enabled: bool,
+    fixture_path: str | None,
+    runtime_environment: str,
+    key: str | None,
+) -> tuple[str | None, str | None, bool]:
+    if not enabled:
+        return "source disabled", None, False
+    if fixture_path:
+        if runtime_environment not in {"development", "dev", "test", "testing"}:
+            return (
+                "511NY fixture mode requires a development or test environment",
+                None,
+                False,
+            )
+        return "using development 511NY fixture", fixture_path, True
+    if not key:
+        return "API key not configured", None, False
+    return None, None, True
+
+
 @dataclass(frozen=True)
 class NY511Settings:
     api_key: str | None
@@ -112,86 +177,18 @@ class NY511Settings:
         raw_enabled = (os.getenv("NY511_ENABLED") or "true").strip().lower()
         enabled = raw_enabled not in {"0", "false", "no", "off"}
         fixture_path = (os.getenv("NY511_FIXTURE_PATH") or "").strip() or None
-        runtime_environment = runtime.runtime_profile()
         api_url = (os.getenv("NY511_API_BASE_URL") or DEFAULT_API_URL).strip()
-        parsed_url = urlsplit(api_url)
-        if (
-            parsed_url.scheme != "https"
-            or parsed_url.hostname not in {"511ny.org", "www.511ny.org"}
-            or parsed_url.query
-            or parsed_url.fragment
-            or parsed_url.username
-            or parsed_url.password
-        ):
+        runtime_environment = runtime.runtime_profile()
+        validated_url = _validated_ny511_url(api_url)
+        if validated_url is None:
             return cls(api_key=key, enabled=False, diagnostic="invalid API base URL")
-
-        try:
-            poll_interval = max(
-                60.0,
-                _finite_env_float(
-                    "NY511_POLL_INTERVAL_SECONDS", DEFAULT_POLL_INTERVAL_SECONDS
-                ),
-            )
-            timeout = max(
-                1.0,
-                _finite_env_float(
-                    "NY511_REQUEST_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS
-                ),
-            )
-            stale_after = max(
-                1.0,
-                _finite_env_float(
-                    "NY511_STALE_AFTER_SECONDS", DEFAULT_STALE_AFTER_SECONDS
-                ),
-            )
-            max_stale = max(
-                stale_after,
-                _finite_env_float(
-                    "NY511_MAX_STALE_SECONDS", DEFAULT_MAX_STALE_SECONDS
-                ),
-            )
-            buffer = max(
-                0.0,
-                min(
-                    0.25,
-                    _finite_env_float(
-                        "NY511_NYC_BUFFER_DEGREES", DEFAULT_NYC_BUFFER_DEGREES
-                    ),
-                ),
-            )
-        except ValueError:
+        timing = _ny511_timing()
+        if timing is None:
             return cls(api_key=key, enabled=False, diagnostic="invalid 511NY numeric configuration")
-
-        if not enabled:
-            return cls(key, False, api_url, poll_interval, timeout, stale_after, max_stale, buffer, "source disabled")
-        if fixture_path:
-            if runtime_environment not in {"development", "dev", "test", "testing"}:
-                return cls(
-                    key,
-                    False,
-                    api_url,
-                    poll_interval,
-                    timeout,
-                    stale_after,
-                    max_stale,
-                    buffer,
-                    "511NY fixture mode requires a development or test environment",
-                )
-            return cls(
-                key,
-                True,
-                api_url,
-                poll_interval,
-                timeout,
-                stale_after,
-                max_stale,
-                buffer,
-                "using development 511NY fixture",
-                fixture_path,
-            )
-        if not key:
-            return cls(key, False, api_url, poll_interval, timeout, stale_after, max_stale, buffer, "API key not configured")
-        return cls(key, True, api_url, poll_interval, timeout, stale_after, max_stale, buffer)
+        diagnostic, fixture_path, enabled = _ny511_mode(
+            enabled, fixture_path, runtime_environment, key
+        )
+        return cls(key, enabled, validated_url, *timing, diagnostic, fixture_path)
 
 
 class NY511FetchError(Exception):
@@ -259,34 +256,29 @@ def _county_key(record: dict[str, Any]) -> str | None:
     return key or None
 
 
-def _normalize_event(
-    record: Any,
-    *,
-    nyc_buffer_degrees: float,
-) -> tuple[Normalized511Incident | None, bool]:
-    if not isinstance(record, dict):
-        return None, True
+def _event_identity(record: dict[str, Any]) -> tuple[str, float, float] | None:
     # V2 documents ``ID`` as the unique event identifier.  ``SourceId`` is
     # retained only as a compatibility fallback for provider variants.
     source_id = _text(record.get("ID")) or _text(record.get("SourceId"))
     latitude = _coordinate(record.get("Latitude"), latitude=True)
     longitude = _coordinate(record.get("Longitude"), latitude=False)
     if not source_id or latitude is None or longitude is None:
-        return None, True
-    if not _in_nyc_envelope(latitude, longitude, nyc_buffer_degrees):
-        return None, False
-    county_key = _county_key(record)
-    if county_key in KNOWN_NON_NYC_COUNTIES:
-        return None, False
+        return None
+    return source_id, latitude, longitude
 
-    secondary_latitude = _coordinate(record.get("LatitudeSecondary"), latitude=True)
-    secondary_longitude = _coordinate(record.get("LongitudeSecondary"), latitude=False)
-    if secondary_latitude is None or secondary_longitude is None:
-        secondary_latitude = secondary_longitude = None
-    severity_raw = _text(record.get("Severity"))
-    encoded_polyline = _text(record.get("EncodedPolyline")) or _text(record.get("MapEncodedPolyline"))
-    geometry = {"encoded_polyline": encoded_polyline} if encoded_polyline else None
-    metadata = {
+
+def _optional_secondary_coords(
+    record: dict[str, Any],
+) -> tuple[float | None, float | None]:
+    latitude = _coordinate(record.get("LatitudeSecondary"), latitude=True)
+    longitude = _coordinate(record.get("LongitudeSecondary"), latitude=False)
+    if latitude is None or longitude is None:
+        return None, None
+    return latitude, longitude
+
+
+def _event_source_metadata(record: dict[str, Any]) -> dict[str, str]:
+    return {
         name: value
         for name, value in {
             "organization": _text(record.get("Organization")),
@@ -295,6 +287,16 @@ def _normalize_event(
         }.items()
         if value is not None
     }
+
+
+def _normalized_511_incident(
+    record: dict[str, Any], source_id: str, latitude: float, longitude: float
+) -> Normalized511Incident:
+    secondary_latitude, secondary_longitude = _optional_secondary_coords(record)
+    severity_raw = _text(record.get("Severity"))
+    encoded_polyline = _text(record.get("EncodedPolyline")) or _text(
+        record.get("MapEncodedPolyline")
+    )
     return Normalized511Incident(
         source_id=source_id,
         event_type=_text(record.get("EventType")),
@@ -310,14 +312,37 @@ def _normalize_event(
         roadway_name=_text(record.get("RoadwayName")),
         direction_of_travel=_text(record.get("DirectionOfTravel")),
         lanes_affected=_text(record.get("LanesAffected")),
-        is_full_closure=record.get("IsFullClosure") if isinstance(record.get("IsFullClosure"), bool) else None,
-        geometry=geometry,
+        is_full_closure=(
+            record.get("IsFullClosure")
+            if isinstance(record.get("IsFullClosure"), bool)
+            else None
+        ),
+        geometry={"encoded_polyline": encoded_polyline} if encoded_polyline else None,
         reported_at=_timestamp(record.get("Reported")),
         updated_at=_timestamp(record.get("LastUpdated")),
         starts_at=_timestamp(record.get("StartDate")),
         expected_end_at=_timestamp(record.get("PlannedEndDate")),
-        source_metadata=metadata,
-    ), False
+        source_metadata=_event_source_metadata(record),
+    )
+
+
+def _normalize_event(
+    record: Any,
+    *,
+    nyc_buffer_degrees: float,
+) -> tuple[Normalized511Incident | None, bool]:
+    if not isinstance(record, dict):
+        return None, True
+    identity = _event_identity(record)
+    if identity is None:
+        return None, True
+    source_id, latitude, longitude = identity
+    if (
+        not _in_nyc_envelope(latitude, longitude, nyc_buffer_degrees)
+        or _county_key(record) in KNOWN_NON_NYC_COUNTIES
+    ):
+        return None, False
+    return _normalized_511_incident(record, source_id, latitude, longitude), False
 
 
 def normalize_event(record: Any, *, nyc_buffer_degrees: float = DEFAULT_NYC_BUFFER_DEGREES) -> Normalized511Incident | None:

@@ -15,6 +15,35 @@ _ALERT_ID_LIMIT = 120
 _TEXT_LIMIT = 480
 _LIST_LIMIT = 24
 _SEGMENT_LIMIT = 24
+_DIRECTION_SCOPES = frozenset({"both_directions", "direction_specific", "unspecified"})
+_PLANNED_STATUSES = frozenset({"planned", "unplanned", "unknown"})
+_CHANGE_TYPES = frozenset({
+    "express_to_local",
+    "suspension",
+    "severe_delay",
+    "delay",
+    "planned_service_change",
+    "unknown",
+})
+_NO_SERVICE_PHRASES = (
+    "suspend",
+    "no service",
+    "not running",
+    "does not run",
+    "will not run",
+)
+_LOCAL_OPERATION_PHRASES = (
+    "runs local",
+    "run local",
+    "running local",
+    "operates local",
+    "operate local",
+    "to local",
+)
+_PLANNED_STATUS_PREFIXES = (
+    ("lmm:planned_work", "planned"),
+    ("lmm:alert", "unplanned"),
+)
 
 
 def _content_digest(content: object) -> str:
@@ -41,6 +70,36 @@ def _cached_observed_at(cache_get, content: object) -> str | None:
         return None
 
 
+def _alerts_payload(
+    content: bytes,
+    freshness: str,
+    observed_at: str | None,
+    with_metadata: bool,
+) -> bytes | dict[str, object]:
+    if with_metadata:
+        return {
+            "content": content,
+            "freshness": freshness,
+            "observed_at": observed_at,
+        }
+    return content
+
+
+def _store_alerts_cache(cache_set, content: bytes, observed_at: str) -> None:
+    cache_set(ALERTS_URL, content, 60, fail_open=True)
+    cache_set(
+        _ALERTS_METADATA_KEY,
+        json.dumps(
+            {
+                "observed_at": observed_at,
+                "content_sha256": _content_digest(content),
+            }
+        ),
+        60,
+        fail_open=True,
+    )
+
+
 async def fetch_service_alerts(
     force_refresh: bool = False,
     *,
@@ -51,12 +110,7 @@ async def fetch_service_alerts(
     cached = cache_get(ALERTS_URL, fail_open=True)
     cached_observed_at = _cached_observed_at(cache_get, cached)
     if cached and not force_refresh:
-        result = {
-            "content": cached,
-            "freshness": "cached",
-            "observed_at": cached_observed_at,
-        }
-        return result if with_metadata else cached
+        return _alerts_payload(cached, "cached", cached_observed_at, with_metadata)
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:  # noqa: TID251
             response = await client.get(ALERTS_URL)
@@ -64,34 +118,12 @@ async def fetch_service_alerts(
     except Exception as exc:  # noqa: BLE001 alert-feed faults fall back to cache or empty
         print(f"[mta_feed] alerts feed failed: {type(exc).__name__}: {exc!r}")
         if cached:
-            result = {
-                "content": cached,
-                "freshness": "stale",
-                "observed_at": cached_observed_at,
-            }
-            return result if with_metadata else cached
-        result = {"content": b"", "freshness": "unavailable", "observed_at": None}
-        return result if with_metadata else b""
+            return _alerts_payload(cached, "stale", cached_observed_at, with_metadata)
+        return _alerts_payload(b"", "unavailable", None, with_metadata)
     observed_at = datetime.now(UTC).isoformat()
     if cache_result:
-        cache_set(ALERTS_URL, response.content, 60, fail_open=True)
-        cache_set(
-            _ALERTS_METADATA_KEY,
-            json.dumps(
-                {
-                    "observed_at": observed_at,
-                    "content_sha256": _content_digest(response.content),
-                }
-            ),
-            60,
-            fail_open=True,
-        )
-    result = {
-        "content": response.content,
-        "freshness": "live",
-        "observed_at": observed_at,
-    }
-    return result if with_metadata else response.content
+        _store_alerts_cache(cache_set, response.content, observed_at)
+    return _alerts_payload(response.content, "live", observed_at, with_metadata)
 
 
 def _require_alerts_http_ok(response) -> None:
@@ -135,14 +167,10 @@ def _english_text(text_field) -> str:
 
 
 def is_material_service_alert(alert: object) -> bool:
-    """Treat only an explicit typed non-material service change as benign."""
-
     return not (isinstance(alert, dict) and alert.get("material_disruption") is False)
 
 
 def project_service_alert(alert: object) -> dict[str, object] | None:
-    """Keep official alert evidence compact while preserving typed semantics."""
-
     if isinstance(alert, str):
         alert = {"header": alert}
     if not isinstance(alert, dict):
@@ -162,22 +190,15 @@ def project_service_alert(alert: object) -> dict[str, object] | None:
     )
     start = alert.get("effective_start", alert.get("start"))
     end = alert.get("effective_end", alert.get("end"))
-    direction_scope = _bounded_text(alert.get("direction_scope"), 32)
-    if direction_scope not in {"both_directions", "direction_specific", "unspecified"}:
-        direction_scope = "unspecified"
-    planned_status = _bounded_text(alert.get("planned_status"), 16)
-    if planned_status not in {"planned", "unplanned", "unknown"}:
-        planned_status = "unknown"
-    change_type = _bounded_text(alert.get("change_type"), 32)
-    if change_type not in {
-        "express_to_local",
-        "suspension",
-        "severe_delay",
-        "delay",
-        "planned_service_change",
-        "unknown",
-    }:
-        change_type = "unknown"
+    direction_scope = _whitelisted_text(
+        alert.get("direction_scope"), 32, _DIRECTION_SCOPES, "unspecified"
+    )
+    planned_status = _whitelisted_text(
+        alert.get("planned_status"), 16, _PLANNED_STATUSES, "unknown"
+    )
+    change_type = _whitelisted_text(
+        alert.get("change_type"), 32, _CHANGE_TYPES, "unknown"
+    )
     service_operating = _service_operating(alert.get("service_operating"))
     material_disruption = alert.get("material_disruption") is not False
     observed_at = _bounded_text(
@@ -219,6 +240,15 @@ def _bounded_text(value: object, limit: int) -> str:
     return " ".join(str(value or "").split()).strip()[:limit]
 
 
+def _whitelisted_text(
+    value: object, limit: int, allowed: frozenset[str], default: str
+) -> str:
+    text = _bounded_text(value, limit)
+    if text in allowed:
+        return text
+    return default
+
+
 def _bounded_ids(value: object, *, upper: bool = False) -> list[str]:
     values = [value] if isinstance(value, str) else value or []
     result: list[str] = []
@@ -233,20 +263,27 @@ def _bounded_ids(value: object, *, upper: bool = False) -> list[str]:
     return result
 
 
+def _bounded_segment(item: object) -> dict[str, str] | None:
+    if not isinstance(item, dict):
+        return None
+    segment: dict[str, str] = {}
+    for key in ("route_id", "stop_id", "direction_id"):
+        text = _bounded_text(item.get(key), _ALERT_ID_LIMIT)
+        if text:
+            segment[key] = text
+    if not segment:
+        return None
+    return segment
+
+
 def _bounded_segments(value: object) -> list[dict[str, str]]:
     if not isinstance(value, list):
         return []
     result: list[dict[str, str]] = []
     seen: set[tuple[str, str, str]] = set()
     for item in value:
-        if not isinstance(item, dict):
-            continue
-        segment = {
-            key: _bounded_text(item.get(key), _ALERT_ID_LIMIT)
-            for key in ("route_id", "stop_id", "direction_id")
-            if _bounded_text(item.get(key), _ALERT_ID_LIMIT)
-        }
-        if not segment:
+        segment = _bounded_segment(item)
+        if segment is None:
             continue
         identity = (
             segment.get("route_id", ""),
@@ -285,51 +322,44 @@ def _direction_id(informed_entity) -> str | None:
     return None
 
 
+def _change_type_from_text(
+    text: str,
+    planned_status: str,
+    no_service: bool,
+    local_operation: bool,
+) -> str:
+    if local_operation and planned_status == "planned":
+        return "express_to_local"
+    if local_operation and "express" in text:
+        return "express_to_local"
+    if no_service:
+        return "suspension"
+    if "severe" in text and "delay" in text:
+        return "severe_delay"
+    if "delay" in text:
+        return "delay"
+    if planned_status == "planned":
+        return "planned_service_change"
+    return "unknown"
+
+
 def _alert_semantics(
     source_id: str,
     header: str,
     description: str,
 ) -> tuple[str, str, bool | str, bool]:
     text = f"{header} {description}".casefold()
-    if source_id.casefold().startswith("lmm:planned_work"):
-        planned_status = "planned"
-    elif source_id.casefold().startswith("lmm:alert"):
-        planned_status = "unplanned"
-    else:
-        planned_status = "unknown"
-    no_service = any(
-        phrase in text
-        for phrase in (
-            "suspend",
-            "no service",
-            "not running",
-            "does not run",
-            "will not run",
-        )
+    folded = source_id.casefold()
+    planned_status = "unknown"
+    for prefix, status in _PLANNED_STATUS_PREFIXES:
+        if folded.startswith(prefix):
+            planned_status = status
+            break
+    no_service = any(phrase in text for phrase in _NO_SERVICE_PHRASES)
+    local_operation = any(phrase in text for phrase in _LOCAL_OPERATION_PHRASES)
+    change_type = _change_type_from_text(
+        text, planned_status, no_service, local_operation
     )
-    local_operation = any(
-        phrase in text
-        for phrase in (
-            "runs local",
-            "run local",
-            "running local",
-            "operates local",
-            "operate local",
-            "to local",
-        )
-    )
-    if local_operation and (planned_status == "planned" or "express" in text):
-        change_type = "express_to_local"
-    elif no_service:
-        change_type = "suspension"
-    elif "severe" in text and "delay" in text:
-        change_type = "severe_delay"
-    elif "delay" in text:
-        change_type = "delay"
-    elif planned_status == "planned":
-        change_type = "planned_service_change"
-    else:
-        change_type = "unknown"
     if no_service:
         service_operating: bool | str = False
     elif local_operation or "service operates" in text:

@@ -262,7 +262,7 @@ async def get_transfer_route_pair(
         routing_preference=routing_preference,
         departure_time=departure_time,
     )
-    first = _route_at_transfer(
+    first = route_at_transfer(
         parse_response(first_response), first_service, transfer_name,
         transfer_coords, True,
     )
@@ -279,7 +279,7 @@ async def get_transfer_route_pair(
         routing_preference=routing_preference,
         departure_time=first_arrival,
     )
-    second = _route_at_transfer(
+    second = route_at_transfer(
         parse_response(second_response), second_service, transfer_name,
         continuation_transfer_coords, False,
     )
@@ -296,31 +296,44 @@ async def get_transfer_route_pair(
     return combined
 
 
-def _route_at_transfer(routes, service, transfer_name, transfer_coords, arrival):
+def _single_service_transit(route, service):
+    transit = [
+        step for step in route
+        if str(step.get("type") or "").upper() in {"SUBWAY", "BUS"}
+    ]
+    if not transit:
+        return None
+    if any(
+        str(step.get("route_id") or step.get("train_line") or "").upper()
+        != str(service).upper()
+        for step in transit
+    ):
+        return None
+    return transit
+
+
+def _transfer_endpoint_matches(step, service, expected, transfer_coords, arrival) -> bool:
+    actual_service = str(
+        step.get("route_id") or step.get("train_line") or ""
+    ).upper()
+    actual_stop = step.get("arrival_stop" if arrival else "departure_stop")
+    point = step.get("arrival_coords" if arrival else "departure_coords")
+    return (
+        actual_service == str(service).upper()
+        and normalize_station_name(str(actual_stop or "")) == expected
+        and _nearby_coords(point, transfer_coords)
+    )
+
+
+def route_at_transfer(routes, service, transfer_name, transfer_coords, arrival):
     expected = normalize_station_name(transfer_name)
     for route in routes or []:
-        transit = [
-            step for step in route
-            if str(step.get("type") or "").upper() in {"SUBWAY", "BUS"}
-        ]
-        if not transit:
-            continue
-        if any(
-            str(step.get("route_id") or step.get("train_line") or "").upper()
-            != str(service).upper()
-            for step in transit
-        ):
+        transit = _single_service_transit(route, service)
+        if transit is None:
             continue
         step = transit[-1] if arrival else transit[0]
-        actual_service = str(
-            step.get("route_id") or step.get("train_line") or ""
-        ).upper()
-        actual_stop = step.get("arrival_stop" if arrival else "departure_stop")
-        point = step.get("arrival_coords" if arrival else "departure_coords")
-        if (
-            actual_service == str(service).upper()
-            and normalize_station_name(str(actual_stop or "")) == expected
-            and _nearby_coords(point, transfer_coords)
+        if _transfer_endpoint_matches(
+            step, service, expected, transfer_coords, arrival
         ):
             return route
     return None
