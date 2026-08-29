@@ -308,42 +308,58 @@ def _aggregate_history(
     buckets: dict[tuple[str, int, int], _HistoryAccumulator] = {}
     for place_id, rows in rows_by_place.items():
         for row in rows:
-            if not isinstance(row, dict):
-                continue
-            bucket_start = _timestamp(row.get("bucket_start"))
-            samples = _people_count(row.get("count_samples"))
-            if bucket_start is None or samples is None or samples <= 0:
-                continue
-            people = _non_negative_number(row.get("people_mean"))
-            wait = _non_negative_number(row.get("wait_minutes_mean"))
-            if people is None and wait is None:
-                continue
-            local = bucket_start.astimezone(_NYC)
-            key = (place_id, local.weekday(), local.hour)
-            bucket = buckets.setdefault(key, _HistoryAccumulator())
-            bucket.sample_count += samples
-            bucket.dates.add(local.date())
-            if people is not None:
-                bucket.people_weight += people * samples
-                bucket.people_samples += samples
-            if wait is not None:
-                bucket.wait_weight += wait * samples
-                bucket.wait_samples += samples
-    result: dict[tuple[str, int, int], HistoricalQueuePattern] = {}
-    for key, bucket in buckets.items():
-        dates = sorted(bucket.dates)
-        result[key] = HistoricalQueuePattern(
-            google_place_id=key[0],
-            weekday=key[1],
-            hour=key[2],
-            people_mean=(bucket.people_weight / bucket.people_samples if bucket.people_samples else None),
-            wait_minutes_mean=(bucket.wait_weight / bucket.wait_samples if bucket.wait_samples else None),
-            sample_count=bucket.sample_count,
-            comparable_dates=len(dates),
-            date_from=dates[0],
-            date_to=dates[-1],
-        )
-    return result
+            _accumulate_history_row(buckets, place_id, row)
+    return {
+        key: _pattern_from_bucket(key, bucket) for key, bucket in buckets.items()
+    }
+
+
+def _accumulate_history_row(
+    buckets: dict[tuple[str, int, int], _HistoryAccumulator],
+    place_id: str,
+    row: object,
+) -> None:
+    if not isinstance(row, dict):
+        return
+    bucket_start = _timestamp(row.get("bucket_start"))
+    samples = _people_count(row.get("count_samples"))
+    if bucket_start is None or samples is None or samples <= 0:
+        return
+    people = _non_negative_number(row.get("people_mean"))
+    wait = _non_negative_number(row.get("wait_minutes_mean"))
+    if people is None and wait is None:
+        return
+    local = bucket_start.astimezone(_NYC)
+    bucket = buckets.setdefault((place_id, local.weekday(), local.hour), _HistoryAccumulator())
+    bucket.sample_count += samples
+    bucket.dates.add(local.date())
+    if people is not None:
+        bucket.people_weight += people * samples
+        bucket.people_samples += samples
+    if wait is not None:
+        bucket.wait_weight += wait * samples
+        bucket.wait_samples += samples
+
+
+def _pattern_from_bucket(
+    key: tuple[str, int, int], bucket: _HistoryAccumulator
+) -> HistoricalQueuePattern:
+    dates = sorted(bucket.dates)
+    return HistoricalQueuePattern(
+        google_place_id=key[0],
+        weekday=key[1],
+        hour=key[2],
+        people_mean=(
+            bucket.people_weight / bucket.people_samples if bucket.people_samples else None
+        ),
+        wait_minutes_mean=(
+            bucket.wait_weight / bucket.wait_samples if bucket.wait_samples else None
+        ),
+        sample_count=bucket.sample_count,
+        comparable_dates=len(dates),
+        date_from=dates[0],
+        date_to=dates[-1],
+    )
 
 
 def _encode_history(index: dict[tuple[str, int, int], HistoricalQueuePattern], last_success: datetime) -> str:
@@ -359,51 +375,76 @@ def _encode_history(index: dict[tuple[str, int, int], HistoricalQueuePattern], l
 
 def _install_history(raw: object) -> bool:
     global _history_index, _history_last_success, _history_loaded
-    if isinstance(raw, bytes):
-        raw = raw.decode("utf-8", errors="replace")
-    try:
-        payload = json.loads(raw) if isinstance(raw, str) else None
-        last_success = _timestamp(payload.get("last_success")) if isinstance(payload, dict) else None
-        records = payload.get("patterns") if isinstance(payload, dict) else None
-    except (TypeError, ValueError):
-        return False
-    if last_success is None or not isinstance(records, list):
+    last_success, records = _decoded_history_payload(raw)
+    if last_success is None or records is None:
         return False
     index: dict[tuple[str, int, int], HistoricalQueuePattern] = {}
     for record in records:
-        if not isinstance(record, list) or len(record) != 9:
-            continue
-        try:
-            pattern = HistoricalQueuePattern(
-                str(record[0]),
-                record[1],
-                record[2],
-                _non_negative_number(record[3]),
-                _non_negative_number(record[4]),
-                record[5],
-                record[6],
-                date.fromisoformat(str(record[7])),
-                date.fromisoformat(str(record[8])),
-            )
-        except (TypeError, ValueError):
-            continue
-        if (
-            pattern.google_place_id in _SUPPORTED_VENUES
-            and isinstance(pattern.weekday, int)
-            and isinstance(pattern.hour, int)
-            and isinstance(pattern.sample_count, int)
-            and isinstance(pattern.comparable_dates, int)
-            and 0 <= pattern.weekday <= 6
-            and 0 <= pattern.hour <= 23
-            and pattern.sample_count > 0
-            and pattern.comparable_dates > 0
-            and (pattern.people_mean is not None or pattern.wait_minutes_mean is not None)
-        ):
+        pattern = _admitted_history_pattern(record)
+        if pattern is not None:
             index[(pattern.google_place_id, pattern.weekday, pattern.hour)] = pattern
     _history_index = index
     _history_last_success = last_success
     _history_loaded = True
     return True
+
+
+def _decoded_history_payload(
+    raw: object,
+) -> tuple[datetime | None, list[object] | None]:
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", errors="replace")
+    try:
+        payload = json.loads(raw) if isinstance(raw, str) else None
+        last_success = (
+            _timestamp(payload.get("last_success")) if isinstance(payload, dict) else None
+        )
+        records = payload.get("patterns") if isinstance(payload, dict) else None
+    except (TypeError, ValueError):
+        return None, None
+    if last_success is None or not isinstance(records, list):
+        return None, None
+    return last_success, records
+
+
+def _admitted_history_pattern(record: object) -> HistoricalQueuePattern | None:
+    if not isinstance(record, list) or len(record) != 9:
+        return None
+    try:
+        pattern = HistoricalQueuePattern(
+            str(record[0]),
+            record[1],
+            record[2],
+            _non_negative_number(record[3]),
+            _non_negative_number(record[4]),
+            record[5],
+            record[6],
+            date.fromisoformat(str(record[7])),
+            date.fromisoformat(str(record[8])),
+        )
+    except (TypeError, ValueError):
+        return None
+    if _history_pattern_admissible(pattern):
+        return pattern
+    return None
+
+
+def _history_pattern_admissible(pattern: HistoricalQueuePattern) -> bool:
+    if pattern.google_place_id not in _SUPPORTED_VENUES:
+        return False
+    if not _bounded_int(pattern.weekday, 0, 6) or not _bounded_int(pattern.hour, 0, 23):
+        return False
+    if not _positive_int(pattern.sample_count) or not _positive_int(pattern.comparable_dates):
+        return False
+    return pattern.people_mean is not None or pattern.wait_minutes_mean is not None
+
+
+def _bounded_int(value: object, low: int, high: int) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and low <= value <= high
+
+
+def _positive_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
 def _load_history_cache() -> None:
@@ -417,40 +458,58 @@ async def _fetch_history_rows(now: datetime, api_key: str) -> dict[str, list[obj
     since = now - _HISTORY_MAX_AGE
     rows_by_place: dict[str, list[object]] = {}
     for place_id, venue in _SUPPORTED_VENUES.items():
-        rows: list[object] = []
-        cursor: str | None = None
-        seen_cursors: set[str] = set()
-        while True:
-            params: dict[str, object] = {
-                "location": venue.slug,
-                "since": since.isoformat(),
-                "until": now.isoformat(),
-                "interval": "1h",
-                "limit": 1000,
-            }
-            if cursor is not None:
-                params["cursor"] = cursor
-            payload = await _request_json(
-                "/lines", api_key=api_key, now=now, params=params
-            )
-            page = payload.get("data_aggregated") if payload is not None else None
-            pagination = payload.get("pagination") if payload is not None else None
-            if not isinstance(page, list) or not isinstance(pagination, dict):
-                return None
-            rows.extend(page)
-            if not pagination.get("has_more"):
-                break
-            next_cursor = pagination.get("next_cursor")
-            if (
-                not isinstance(next_cursor, str)
-                or not next_cursor
-                or next_cursor in seen_cursors
-            ):
-                return None
-            seen_cursors.add(next_cursor)
-            cursor = next_cursor
+        rows = await _fetch_venue_history_rows(venue, since, now, api_key)
+        if rows is None:
+            return None
         rows_by_place[place_id] = rows
     return rows_by_place
+
+
+async def _fetch_venue_history_rows(
+    venue: SupportedVenue,
+    since: datetime,
+    now: datetime,
+    api_key: str,
+) -> list[object] | None:
+    rows: list[object] = []
+    cursor: str | None = None
+    seen_cursors: set[str] = set()
+    while True:
+        params: dict[str, object] = {
+            "location": venue.slug,
+            "since": since.isoformat(),
+            "until": now.isoformat(),
+            "interval": "1h",
+            "limit": 1000,
+        }
+        if cursor is not None:
+            params["cursor"] = cursor
+        page, next_cursor = await _history_page(api_key, now, params)
+        if page is None:
+            return None
+        rows.extend(page)
+        if next_cursor is None:
+            return rows
+        if not next_cursor or next_cursor in seen_cursors:
+            return None
+        seen_cursors.add(next_cursor)
+        cursor = next_cursor
+
+
+async def _history_page(
+    api_key: str, now: datetime, params: dict[str, object]
+) -> tuple[list[object] | None, str | None]:
+    payload = await _request_json("/lines", api_key=api_key, now=now, params=params)
+    page = payload.get("data_aggregated") if payload is not None else None
+    pagination = payload.get("pagination") if payload is not None else None
+    if not isinstance(page, list) or not isinstance(pagination, dict):
+        return None, None
+    if not pagination.get("has_more"):
+        return page, None
+    next_cursor = pagination.get("next_cursor")
+    if not isinstance(next_cursor, str):
+        return None, None
+    return page, next_cursor
 
 
 async def _perform_history_refresh(now: datetime, force: bool) -> bool:

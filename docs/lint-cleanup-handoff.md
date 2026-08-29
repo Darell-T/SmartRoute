@@ -11,7 +11,7 @@ application behavior. Regenerate the reports below before editing a batch.
 
 ## Current result
 
-Ruff rows were regenerated on 2026-08-28 after Batch 6 from
+Ruff rows were regenerated on 2026-08-29 after Batch 6C from
 `py -m ruff check --config pyproject.toml backend` (exit 0, 0 findings).
 Oxlint, ESLint, and complexipy rows remain the 2026-08-27 policy measurement.
 Workers must not shrink stale baseline entries.
@@ -25,7 +25,7 @@ Workers must not shrink stale baseline entries.
 | complexipy | 276 | 106 | Legacy functions above cognitive 10 |
 | Oxlint | 1,162 | 192 | 719 in generator scripts |
 | ESLint | 193 | 76 | 185 complexity, 8 max-depth |
-| Quality baseline | 329 | | Combined Python and TypeScript CC debt after reviewer-only shrink |
+| Quality baseline | 198 | | Combined Python and TypeScript CC debt after the Batch 6C reviewer shrink |
 
 `TRY003` is ignored. It encouraged exception boilerplate without improving
 passenger behavior or debuggability.
@@ -47,6 +47,8 @@ Quality certification from fresh runs with no `--skip-tests`:
 | Batch 6 worker 2026-08-28 | 1 | 0 | 0 | 11 | 329 | 1,823 passed, 21 skipped, 444 subtests | 314 |
 | Batch 5 reviewer final 2026-08-28 | 0 | 0 | 0 | 0 | 329 | 1,823 passed, 21 skipped, 444 subtests | 314 |
 | Batch 6 reviewer final 2026-08-28 | 0 | 0 | 0 | 0 | 329 | 1,823 passed, 21 skipped, 444 subtests | 314 |
+| Batch 6C worker 2026-08-29 | 1 | 0 | 0 | 38 | 198 | 1,894 passed, 21 skipped, 444 subtests | 314 |
+| Batch 6C reviewer final 2026-08-29 | 0 | 0 | 0 | 0 | 198 | 1,894 passed, 21 skipped, 444 subtests | 314 |
 
 Cognitive delta against `427fbc8`: 0 new or worsened. CRAP has no absolute
 ceiling. Baseline entries may not worsen.
@@ -55,8 +57,10 @@ The route-intelligence batch, Batch 0, and Batch 1 are complete inside
 `427fbc8`. Batch 2 is independently APPROVED at `368c00d`. Batch 3 production
 and the handoff repair are Codex-approved. Batch 4 owned tools Ruff is zero.
 Batch 5 is committed at `22f6f0d` and reviewer-approved. Batch 6 is committed
-at `c058199`. That commit is the fixed point for Batches 6A through 6E. Do not
-start Batch 7.
+at `c058199`. That commit is the fixed point for Batches 6A through 6E. Batch
+6A is committed at `140495a`. Batch 6B is committed at `c8a0381`. Batch 6C
+review is complete on the tree based on `c8a0381`. Do not start Batch 6D or
+Batch 7 until the reviewed tree is committed.
 
 ## Structural policy
 
@@ -1509,6 +1513,283 @@ passes. Backend tests have 1,894 passes, 21 skips, and 444 subtest passes.
 New, worsened, and cognitive new or worsened violations are 0. Ruff C901 and
 Ruff structural diagnostics are 0. Batch 6B is approved for commit. Batch 6C
 was not started.
+
+## Batch 6C completion
+
+Scope checkpoint `$batchRef` =
+`c8a0381420be7f341970c497b4ded7b988960be0`. Quality reference `$qualityRef`
+= `c0581994e47ce1a5bbdb2d8e83fc0afd50ff1745`. The worker left HEAD at
+`c8a0381` and the tree uncommitted for Codex review. Codex accepted the
+implementation and removed exactly 38 stale Batch 6C entries from
+`quality/baseline.json`, reducing it from 236 entries to 198. Batch 6D, 6E,
+and Batch 7 were not started. Frontend production, `tools/transit/**`,
+`services/trips/**`, and other `services/agent/**` modules were not edited.
+
+Codex P2: `_admit_route_preparation` now returns a frozen
+`RoutePreparationAdmission`. `execute` consumes named attributes. The
+11-position tuple is gone.
+
+### Changed files
+
+Production:
+
+- `backend/app/services/agent/tools/__init__.py`
+- `backend/app/services/agent/tools/complete_turn.py`
+- `backend/app/services/agent/tools/location_resolution.py`
+- `backend/app/services/agent/tools/places/damn_lines.py`
+- `backend/app/services/agent/tools/places/discover_places.py`
+- `backend/app/services/agent/tools/places/place_reference.py`
+- `backend/app/services/agent/tools/places/present_places.py`
+- `backend/app/services/agent/tools/places/search_local_places.py`
+- `backend/app/services/agent/tools/route/prepare_route_branches.py`
+- `backend/app/services/agent/tools/route/prepare_route_options.py`
+- `backend/app/services/agent/tools/route/prepare_route_persistence.py`
+- `backend/app/services/agent/tools/route/present_route.py`
+- `backend/app/services/agent/tools/route/present_route_commit.py`
+- `backend/app/services/agent/tools/route/present_route_state.py`
+- `backend/app/services/agent/tools/route/route_input.py`
+- `backend/app/services/agent/tools/route/route_projection.py`
+
+Tests and records:
+
+- `backend/tests/test_local_discovery.py`
+- `backend/tests/test_discovery_route_handoff.py`
+- `docs/lint-cleanup-handoff.md`
+- `docs/lint-cleanup-plan.md`
+- `.audit/backend-debt.json`
+
+### Debt after the final coverage run
+
+`py scripts/report_backend_debt.py --max-existing 12 --output .audit/backend-debt.json`
+
+The command exits 1 because Batches 6D and 6E still have functions above
+12. Judge `by_batch: 6C`.
+
+| Metric | At `c8a0381` | After 6C worker |
+|---|---:|---:|
+| 6C functions | 316 | 432 |
+| 6C above 12 | 40 | 0 |
+| 6C at 11 or 12 | 19 | 19 |
+| 6C CRAP above 30 | 2 | 0 |
+| 6C zero-covered | 12 | 20 |
+| Branch-aware coverage | 88.6% | 88.7% |
+
+Production growth versus `$batchRef`: 2,005 insertions and 1,147 deletions
+in `backend/app/services/agent/tools` (net +858 lines). Function count rose
+by 116. Both the 500 net production-line trigger and the 25 net function
+trigger are crossed. The 40 functions above 12 could not land at or below 10
+without extracting named policies for presented-place resolution, history
+admission, candidate-set snapshot identity versus evidence, boarding timing,
+and queue lookup. New helpers stay at cyclomatic and cognitive 10 or below.
+The growth is the cost of finishing the inventory, not metric peelers added
+after the last green cluster.
+
+### Survivors at 11 or 12
+
+Keep each of these at 11 or 12. Another helper would only hide a short guard
+or push a sibling over the 19-function cap.
+
+| Function | Cyclo | Cog | Coverage | CRAP | Why it stays |
+|---|---:|---:|---:|---:|---|
+| `iter_unsupported_strict_keyword_paths` | 8 | 12 | 1.000 | 8.000 | Strict schema additionalProperties walk |
+| `_parse_goal_keys` | 10 | 11 | 0.737 | 11.822 | Complete-turn goal-key admission |
+| `resolve_discovery_place` | 12 | 7 | 0.867 | 12.341 | Opaque discovery place load |
+| `_resolved_discovery_record` | 12 | 3 | 0.889 | 12.198 | Discovery record coordinate admission |
+| `_read_current` | 12 | 12 | 0.812 | 12.949 | Damn Lines current-observation cache read |
+| `_verify` | 10 | 11 | 0.929 | 10.036 | Named-place verification search |
+| `_interleaved_sources` | 9 | 12 | 1.000 | 9.000 | Round-robin discovery sources |
+| `_owned_discovery` | 12 | 8 | 0.926 | 12.059 | Session-owned discovery set load |
+| `try_deterministic_fallback` | 12 | 10 | 0.938 | 12.035 | Place fallback text |
+| `prepare_destination_branches` | 11 | 8 | 0.950 | 11.015 | Per-branch route preparation |
+| `_validated_branch_ids` | 11 | 9 | 0.765 | 12.576 | Comparison destination-id admission |
+| `_resolve_destination_state` | 11 | 7 | 0.933 | 11.036 | Destination options plus accepted label |
+| `canonical_facts_with_fallback` | 11 | 11 | 0.944 | 11.021 | Invalid or dominated selection correction |
+| `_route_reason_error` | 11 | 10 | 0.875 | 11.236 | Structured route-reason claims |
+| `_candidate_discovery_place_id` | 11 | 7 | 0.812 | 11.798 | Selected candidate opaque place bind |
+| `_load_canonical_candidate` | 12 | 11 | 0.929 | 12.052 | Stored itinerary and multi-stop snapshot |
+| `_emit_recommended_card` | 11 | 1 | 1.000 | 11.000 | Passenger card projection |
+| `_boarding_inputs` | 12 | 10 | 1.000 | 12.000 | First-boarding input assembly |
+| `_validated_pattern_context` | 12 | 8 | 0.846 | 12.524 | Unique headsign-matching pattern only |
+
+### Fixed-point CRAP targets
+
+- `search_local_places.execute`: request body, NYC place admission, and page
+  token are named helpers. Now 9/5, coverage 0.769, CRAP 9.995.
+- `reconcile_first_boarding_timing`: catchable offset, first transit index,
+  component totals, and clock stamping are named helpers. Catchable minutes
+  still include access walk and are not double-counted. Now 10/9, coverage
+  0.882, CRAP 10.163.
+
+### Required contract repair
+
+`place_reference.execute` no longer reads `discovery_set_id`. Presented-place
+lookup and active-discovery-set fallback live in `_resolve_owned_place`.
+Tests exercise the public `get_place_details` path.
+
+### Owned tests
+
+From the repository root:
+
+```
+$env:PYTHONPATH = (Resolve-Path 'backend').Path
+$env:APP_KEY = 'dummy'
+$env:ANTHROPIC_API_KEY = 'dummy'
+$env:SMARTROUTE_ENV = 'test'
+$env:AGENT_ALLOW_MEMORY_SESSIONS = '1'
+$files = @(
+    'backend/tests/test_local_discovery.py',
+    'backend/tests/test_presented_entity_registry.py',
+    'backend/tests/test_discovery_route_handoff.py',
+    'backend/tests/test_present_places.py',
+    'backend/tests/test_present_places_queue.py',
+    'backend/tests/test_discover_places.py',
+    'backend/tests/test_discover_places_queue_evidence.py',
+    'backend/tests/test_damn_lines.py',
+    'backend/tests/test_complete_turn.py',
+    'backend/tests/test_route_itinerary_contract.py',
+    'backend/tests/test_route_endpoint_resolution_policy.py',
+    'backend/tests/test_present_route_correction.py',
+    'backend/tests/test_present_route_framing.py',
+    'backend/tests/test_present_route_reservation.py',
+    'backend/tests/test_agent_tools.py',
+    'backend/tests/test_agent_tools_p1.py',
+    'backend/tests/test_agent_tools_p2.py',
+    'backend/tests/test_single_agent_route_tools.py',
+    'backend/tests/test_single_agent_route_what_if.py',
+    'backend/tests/test_single_agent_route_availability.py',
+    'backend/tests/test_single_agent_route_multistop.py',
+    'backend/tests/test_route_option_assembly.py',
+    'backend/tests/test_route_identity_gate.py',
+    'backend/tests/test_discovery_route_branch_commit.py',
+    'backend/tests/test_active_temporary_route_presenter.py',
+    'backend/tests/test_agent_route_decision_reliability.py',
+    'backend/tests/test_route_option_projection_grounding.py',
+    'backend/tests/test_agent_loop_route_execution.py',
+    'backend/tests/conversation/test_conversation_discovery_route.py',
+    'backend/tests/test_discovery_route_provider_handoff.py'
+)
+py -m pytest @files -q --basetemp .pytest-batch6c-forward
+$reverse = @($files)
+[array]::Reverse($reverse)
+py -m pytest @reverse -q --basetemp .pytest-batch6c-reverse
+```
+
+Forward: 312 passed, 52 subtests. Reverse: 312 passed, 52 subtests.
+
+### Red-before-green for new tests
+
+Restoring a shadow `tool_input["discovery_set_id"]` path made
+`test_hidden_discovery_set_id_does_not_select_a_set` fail with
+`discovery set is unknown, expired, or not owned`. Removing that path made
+the test pass by resolving the presented or active-set place instead of the
+invented set id. `test_presented_place_rebinds_its_source_set_for_followups`
+and `test_unknown_or_expired_active_set_leaves_context_unchanged` cover the
+presented-place and safe-failure paths through `place_reference.execute`.
+
+### Full backend and frontend
+
+`py scripts/check_quality.py --update-baseline --quality-ref c0581994e47ce1a5bbdb2d8e83fc0afd50ff1745`
+
+Exit 0. `approval_eligible: true`. `tests_ran: true`. New 0. Worsened 0.
+Cognitive new or worsened 0. Ruff C901 0. Ruff structural 0. Stale 0.
+Backend 1,894 passed, 21 skipped, 444 subtests. Frontend 314 passed.
+
+Cognitive-only against `$qualityRef`: new or worsened 0.
+
+### Reviewer-removed Batch 6C baseline IDs
+
+Codex removed exactly these 38 entries after review. No baseline entry was
+added or widened. The generated update also lowered the surviving ceilings
+for `canonical_facts_with_fallback`, `_candidate_discovery_place_id`, and
+`_validated_pattern_context`.
+
+```
+python:backend/app/services/agent/tools/__init__.py:_check_transit_label#0
+python:backend/app/services/agent/tools/__init__.py:_discover_places_label#0
+python:backend/app/services/agent/tools/complete_turn.py:_projected_facts#0
+python:backend/app/services/agent/tools/complete_turn.py:execute#0
+python:backend/app/services/agent/tools/location_resolution.py:_route_qualified_station#0
+python:backend/app/services/agent/tools/location_resolution.py:resolve_named_place#0
+python:backend/app/services/agent/tools/location_resolution.py:resolve_named_point#0
+python:backend/app/services/agent/tools/places/damn_lines.py:_aggregate_history#0
+python:backend/app/services/agent/tools/places/damn_lines.py:_fetch_history_rows#0
+python:backend/app/services/agent/tools/places/damn_lines.py:_install_history#0
+python:backend/app/services/agent/tools/places/discover_places.py:_queue_digest#0
+python:backend/app/services/agent/tools/places/discover_places.py:_verify#0
+python:backend/app/services/agent/tools/places/place_reference.py:execute#0
+python:backend/app/services/agent/tools/places/present_places.py:_destination_selection_replay_allowed#0
+python:backend/app/services/agent/tools/places/present_places.py:_emit_place_presentation#0
+python:backend/app/services/agent/tools/places/present_places.py:_normalize_reasons#0
+python:backend/app/services/agent/tools/places/present_places.py:_queue_presentation#0
+python:backend/app/services/agent/tools/places/present_places.py:_rebind_researched_details#0
+python:backend/app/services/agent/tools/places/present_places.py:_selected_places#0
+python:backend/app/services/agent/tools/places/present_places.py:_validated_selections#0
+python:backend/app/services/agent/tools/places/search_local_places.py:execute#0
+python:backend/app/services/agent/tools/route/prepare_route_branches.py:resolve_destination_options#0
+python:backend/app/services/agent/tools/route/prepare_route_options.py:_finalize_branch_candidates#0
+python:backend/app/services/agent/tools/route/prepare_route_options.py:execute#0
+python:backend/app/services/agent/tools/route/prepare_route_persistence.py:_candidate_set_payload#0
+python:backend/app/services/agent/tools/route/prepare_route_persistence.py:_place_match_key#0
+python:backend/app/services/agent/tools/route/prepare_route_persistence.py:_public_branch_coverage#0
+python:backend/app/services/agent/tools/route/prepare_route_persistence.py:_update_trip_state#0
+python:backend/app/services/agent/tools/route/present_route.py:_accepted_route_replay#0
+python:backend/app/services/agent/tools/route/present_route.py:_requested_framing#0
+python:backend/app/services/agent/tools/route/present_route_commit.py:activate_stored_discovery_context#0
+python:backend/app/services/agent/tools/route/present_route_state.py:_candidate_binding#0
+python:backend/app/services/agent/tools/route/present_route_state.py:_candidate_evidence#0
+python:backend/app/services/agent/tools/route/present_route_state.py:_destination_identity_groups#0
+python:backend/app/services/agent/tools/route/present_route_state.py:_load_candidate_entry#0
+python:backend/app/services/agent/tools/route/present_route_state.py:canonical_facts#0
+python:backend/app/services/agent/tools/route/route_input.py:merge_route_preparation_input#0
+python:backend/app/services/agent/tools/route/route_projection.py:reconcile_first_boarding_timing#0
+```
+
+### Review suggestions
+
+Primary-agent self-review after the last green cluster. No writer subagent
+touched the tree.
+
+Accepted:
+
+- Drop the `isinstance(place, dict)` swallow in `_nyc_provider_place`. A
+  non-dict Places row must still raise into `execute` and fail the payload
+  as malformed.
+- Keep `_public_text` as the public-digest blank-to-default parse after the
+  FURB110 `or` form.
+- Codex P2: return frozen `RoutePreparationAdmission` from
+  `_admit_route_preparation` and consume named attributes in `execute`.
+  Several adjacent values share compatible types, so a positional tuple
+  could silently swap destination-set, label, or waypoint state.
+
+Rejected:
+
+- Splitting `prepare_route_persistence.py` or `present_places.py` on line
+  count. Each file still owns one lifecycle.
+- Tests for private helpers. Public `place_reference.execute` and existing
+  route/place tests already pin the behavior.
+- Inlining `_record_list` and `_leg_seconds`. They own snapshot-field and
+  itinerary-second parsing at repeated callsites.
+
+### Preserved behavior
+
+Strict tool schemas. Session ownership. Opaque discovery, place, route, and
+candidate identities. Presented-place lookup. Active-discovery-set fallback.
+Evidence binding. Route-preparation ownership. Candidate identity and
+selected-candidate binding. Passenger redaction. Canonical itinerary
+ownership in trips, not agent tools. Model-led capability choice. Tool
+ordering. Timeout and unavailable behavior. Deterministic fallback. No
+hidden `discovery_set_id` input. Numeric GTFS direction is not interpreted
+in pattern validation.
+
+### Unresolved risks
+
+- Zero-covered 6C functions rose from 12 to 20 because extracted helpers
+  inherit sparse call paths. Overall branch-aware coverage rose to 88.7%.
+  No coverage-theater tests were added.
+- `quality/baseline.json` now has 198 entries. The reviewer-owned quality run
+  exits 0 with `approval_eligible: true`.
+- Global debt exit 1 is Batches 6D and 6E. Batch 6C is `above_12=0` and
+  `crap_above_30=0`.
 
 ## Historical records through 427fbc8
 

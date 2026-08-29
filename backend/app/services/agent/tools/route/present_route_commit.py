@@ -45,43 +45,7 @@ def reserve_and_commit(
         )
         if reservation_error:
             return ToolResult(ok=False, error=reservation_error)
-    if presentation.scenario_mode == "what_if":
-        if presentation.commit_scenario:
-            trip_state_module.commit_scenario(
-                presentation.session,
-                candidate_set_id=presentation.candidate_set_id,
-                candidate_id=presentation.candidate_id,
-                tool_input=presentation.tool_input_body,
-            )
-            activate_stored_discovery_context(
-                presentation.record,
-                presentation.session,
-                presentation.session_id,
-                selected_place_id=selected_place_id,
-            )
-            trip_state_module.update_trip_state(
-                presentation.session,
-                destination=_accepted_destination_label(presentation),
-            )
-        else:
-            trip_state_module.bind_temporary_selected_candidate(
-                presentation.session, presentation.candidate_id
-            )
-            projected.session_route_cards = []
-    else:
-        trip_state_module.bind_selected_candidate(
-            presentation.session, presentation.candidate_id
-        )
-        trip_state_module.update_trip_state(
-            presentation.session,
-            destination=_accepted_destination_label(presentation),
-        )
-        activate_stored_discovery_context(
-            presentation.record,
-            presentation.session,
-            presentation.session_id,
-            selected_place_id=selected_place_id,
-        )
+    _bind_presented_route(presentation, projected, selected_place_id)
     presentation.timings["enrichment_ms"] = (
         time.monotonic() - presentation.plan_origin
     ) * 1000
@@ -90,6 +54,58 @@ def reserve_and_commit(
     projected.terminal = False
     projected.terminal_path = None
     return None
+
+
+def _bind_presented_route(
+    presentation: ValidatedRoutePresentation,
+    projected: ToolResult,
+    selected_place_id: str | None,
+) -> None:
+    if presentation.scenario_mode == "what_if":
+        _bind_what_if_route(presentation, projected, selected_place_id)
+        return
+    trip_state_module.bind_selected_candidate(
+        presentation.session, presentation.candidate_id
+    )
+    trip_state_module.update_trip_state(
+        presentation.session,
+        destination=_accepted_destination_label(presentation),
+    )
+    activate_stored_discovery_context(
+        presentation.record,
+        presentation.session,
+        presentation.session_id,
+        selected_place_id=selected_place_id,
+    )
+
+
+def _bind_what_if_route(
+    presentation: ValidatedRoutePresentation,
+    projected: ToolResult,
+    selected_place_id: str | None,
+) -> None:
+    if not presentation.commit_scenario:
+        trip_state_module.bind_temporary_selected_candidate(
+            presentation.session, presentation.candidate_id
+        )
+        projected.session_route_cards = []
+        return
+    trip_state_module.commit_scenario(
+        presentation.session,
+        candidate_set_id=presentation.candidate_set_id,
+        candidate_id=presentation.candidate_id,
+        tool_input=presentation.tool_input_body,
+    )
+    activate_stored_discovery_context(
+        presentation.record,
+        presentation.session,
+        presentation.session_id,
+        selected_place_id=selected_place_id,
+    )
+    trip_state_module.update_trip_state(
+        presentation.session,
+        destination=_accepted_destination_label(presentation),
+    )
 
 
 def record_presentation(presentation: ValidatedRoutePresentation, ctx: ToolContext) -> None:
@@ -143,23 +159,32 @@ def activate_stored_discovery_context(
     )
     if discovery_record is None:
         return
-    valid_place_ids = {
-        str(place.get("place_id") or "").strip()
-        for place in discovery_record.get("places") or []
-        if isinstance(place, dict)
-        and discovery_store.is_opaque_place_id(place.get("place_id"))
-    }
-    destination_place_id = str(record.get("destination_place_id") or "").strip()
-    if destination_place_id not in valid_place_ids:
-        destination_place_id = ""
-    selected_place_id = str(selected_place_id or "").strip()
-    if selected_place_id not in valid_place_ids:
-        selected_place_id = ""
+    valid_place_ids = _opaque_discovery_place_ids(discovery_record)
+    destination_place_id = _owned_place_id(
+        record.get("destination_place_id"), valid_place_ids
+    )
+    selected_place_id = _owned_place_id(selected_place_id, valid_place_ids)
     trip_state_module.bind_discovery_context(
         session,
         discovery_set_id=discovery_set_id,
         selected_place_id=selected_place_id or destination_place_id or None,
     )
+
+
+def _opaque_discovery_place_ids(discovery_record: dict[str, Any]) -> set[str]:
+    from app.services.agent import discovery_store
+
+    return {
+        str(place.get("place_id") or "").strip()
+        for place in discovery_record.get("places") or []
+        if isinstance(place, dict)
+        and discovery_store.is_opaque_place_id(place.get("place_id"))
+    }
+
+
+def _owned_place_id(raw: object, valid_place_ids: set[str]) -> str:
+    place_id = str(raw or "").strip()
+    return place_id if place_id in valid_place_ids else ""
 
 
 def _candidate_discovery_place_id(
@@ -183,12 +208,7 @@ def _candidate_discovery_place_id(
     )
     if discovery_record is None:
         return None
-    valid_place_ids = {
-        str(place.get("place_id") or "").strip()
-        for place in discovery_record.get("places") or []
-        if isinstance(place, dict)
-        and discovery_store.is_opaque_place_id(place.get("place_id"))
-    }
+    valid_place_ids = _opaque_discovery_place_ids(discovery_record)
     digest = entry.get("digest") if isinstance(entry, dict) else None
     candidate_place_id = (
         str(digest.get("destination_place_id") or "").strip()
@@ -197,10 +217,10 @@ def _candidate_discovery_place_id(
     )
     if candidate_place_id in valid_place_ids:
         return candidate_place_id
-    if destination_selection_mode(record) == "single":
-        fallback_place_id = str(record.get("destination_place_id") or "").strip()
-        return fallback_place_id if fallback_place_id in valid_place_ids else None
-    return None
+    if destination_selection_mode(record) != "single":
+        return None
+    fallback_place_id = str(record.get("destination_place_id") or "").strip()
+    return fallback_place_id if fallback_place_id in valid_place_ids else None
 
 
 def _requires_discovery_destination_binding(record: dict[str, Any]) -> bool:

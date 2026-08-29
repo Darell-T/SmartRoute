@@ -108,6 +108,81 @@ def _clamp_provider_results(raw_value: object) -> int:
     return max(_MIN_PROVIDER_RESULTS, min(_MAX_PROVIDER_RESULTS, value))
 
 
+def _search_request_body(
+    query: str,
+    lat: float,
+    lng: float,
+    radius_m: float,
+    max_results: int,
+    page_token: object,
+    *,
+    restrict_to_area: object,
+) -> dict:
+    location_mode = (
+        "locationRestriction" if restrict_to_area else "locationBias"
+    )
+    request_body = {
+        "textQuery": query,
+        location_mode: {
+            "circle": {
+                "center": {"latitude": lat, "longitude": lng},
+                "radius": radius_m,
+            }
+        },
+        "pageSize": max_results,
+    }
+    if isinstance(page_token, str) and page_token.strip():
+        request_body["pageToken"] = page_token.strip()[:4096]
+    return request_body
+
+
+def _nyc_provider_place(place: object) -> dict | None:
+    coords = _nyc_place_coordinates(place)
+    if coords is None:
+        return None
+    place_lat, place_lng = coords
+    opening_hours = place.get("currentOpeningHours") or {}
+    return {
+        "name": text._safe_text((place.get("displayName") or {}).get("text"), 80),
+        "address": text._safe_text(place.get("formattedAddress"), 120),
+        "place_id": str(place.get("id") or "").strip() or None,
+        "lat": place_lat,
+        "lng": place_lng,
+        "open_now": (
+            opening_hours.get("openNow") if "openNow" in opening_hours else None
+        ),
+        "price_level": normalize_price_level(place.get("priceLevel")),
+        "rating": place.get("rating"),
+        "review_count": place.get("userRatingCount"),
+        "address_components": place.get("addressComponents") or [],
+    }
+
+
+def _nyc_place_coordinates(place: dict) -> tuple[object, object] | None:
+    location = place.get("location") or {}
+    place_lat = location.get("latitude")
+    place_lng = location.get("longitude")
+    if place_lat is None or place_lng is None or not geo._is_in_nyc(place_lat, place_lng):
+        return None
+    return place_lat, place_lng
+
+
+def _nyc_provider_places(payload: object) -> list[dict]:
+    results = []
+    for place in (payload or {}).get("places") or []:
+        row = _nyc_provider_place(place)
+        if row is not None:
+            results.append(row)
+    return results
+
+
+def _next_page_token(payload: object) -> str | None:
+    token = (payload or {}).get("nextPageToken")
+    if not isinstance(token, str) or not token.strip():
+        return None
+    return token.strip()[:4096]
+
+
 async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
     timings = {"place_resolution_ms": 0.0, "place_normalization_ms": 0.0}
     query = str(tool_input.get("query") or "").strip()
@@ -130,29 +205,21 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
         )
     lat, lng, radius_m = bias
     max_results = _clamp_provider_results(tool_input.get("max_results"))
-    location_mode = (
-        "locationRestriction" if tool_input.get("restrict_to_area") else "locationBias"
-    )
-    request_body = {
-        "textQuery": query,
-        location_mode: {
-            "circle": {
-                "center": {"latitude": lat, "longitude": lng},
-                "radius": radius_m,
-            }
-        },
-        "pageSize": max_results,
-    }
-    page_token = tool_input.get("page_token")
-    if isinstance(page_token, str) and page_token.strip():
-        request_body["pageToken"] = page_token.strip()[:4096]
     payload, error = await fetch_json(
         "POST",
         PLACES_SEARCH_URL,
         timeout_s=POI_SEARCH_TIMEOUT_S,
         log_tag="agent-place-search",
         what="place search",
-        json_body=request_body,
+        json_body=_search_request_body(
+            query,
+            lat,
+            lng,
+            radius_m,
+            max_results,
+            tool_input.get("page_token"),
+            restrict_to_area=tool_input.get("restrict_to_area"),
+        ),
         headers={
             "Content-Type": "application/json",
             "X-Goog-Api-Key": api_key,
@@ -164,38 +231,7 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
 
     normalization_started = time.monotonic()
     try:
-        results = []
-        for place in (payload or {}).get("places") or []:
-            location = place.get("location") or {}
-            place_lat = location.get("latitude")
-            place_lng = location.get("longitude")
-            if (
-                place_lat is None
-                or place_lng is None
-                or not geo._is_in_nyc(place_lat, place_lng)
-            ):
-                continue
-            opening_hours = place.get("currentOpeningHours") or {}
-            results.append(
-                {
-                    "name": text._safe_text(
-                        (place.get("displayName") or {}).get("text"), 80
-                    ),
-                    "address": text._safe_text(place.get("formattedAddress"), 120),
-                    "place_id": str(place.get("id") or "").strip() or None,
-                    "lat": place_lat,
-                    "lng": place_lng,
-                    "open_now": (
-                        opening_hours.get("openNow")
-                        if "openNow" in opening_hours
-                        else None
-                    ),
-                    "price_level": normalize_price_level(place.get("priceLevel")),
-                    "rating": place.get("rating"),
-                    "review_count": place.get("userRatingCount"),
-                    "address_components": place.get("addressComponents") or [],
-                }
-            )
+        results = _nyc_provider_places(payload)[:max_results]
     except (KeyError, TypeError, AttributeError) as exc:
         _LOGGER.warning(
             "malformed Places response type=%s",
@@ -209,21 +245,14 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
             error="place search returned an unexpected response",
             timings=timings,
         )
-
-    results = results[:max_results]
     timings["place_normalization_ms"] = (
         time.monotonic() - normalization_started
     ) * 1000
-    next_page_token = (payload or {}).get("nextPageToken")
-    if not isinstance(next_page_token, str) or not next_page_token.strip():
-        next_page_token = None
     return ToolResult(
         ok=True,
         data={
             "results": results,
-            "next_page_token": (
-                next_page_token.strip()[:4096] if next_page_token else None
-            ),
+            "next_page_token": _next_page_token(payload),
         },
         timings=timings,
     )

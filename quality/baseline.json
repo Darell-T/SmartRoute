@@ -397,57 +397,12 @@
       "coverage_status": "measured"
     },
     {
-      "id": "python:backend/app/services/agent/tools/__init__.py:_check_transit_label#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/__init__.py",
-      "function": "_check_transit_label",
-      "complexity": 22,
-      "crap": 28.690816,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/__init__.py:_discover_places_label#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/__init__.py",
-      "function": "_discover_places_label",
-      "complexity": 14,
-      "crap": 15.928571,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/complete_turn.py:_projected_facts#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/complete_turn.py",
-      "function": "_projected_facts",
-      "complexity": 20,
-      "crap": 20.0256,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/complete_turn.py:execute#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/complete_turn.py",
-      "function": "execute",
-      "complexity": 13,
-      "crap": 13.207863,
-      "coverage_status": "measured"
-    },
-    {
       "id": "python:backend/app/services/agent/tools/location_resolution.py:_resolved_discovery_record#0",
       "language": "Python",
       "file": "backend/app/services/agent/tools/location_resolution.py",
       "function": "_resolved_discovery_record",
       "complexity": 12,
       "crap": 12.197531,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/location_resolution.py:_route_qualified_station#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/location_resolution.py",
-      "function": "_route_qualified_station",
-      "complexity": 20,
-      "crap": 26.25,
       "coverage_status": "measured"
     },
     {
@@ -460,111 +415,12 @@
       "coverage_status": "measured"
     },
     {
-      "id": "python:backend/app/services/agent/tools/location_resolution.py:resolve_named_place#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/location_resolution.py",
-      "function": "resolve_named_place",
-      "complexity": 15,
-      "crap": 23.333333,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/location_resolution.py:resolve_named_point#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/location_resolution.py",
-      "function": "resolve_named_point",
-      "complexity": 11,
-      "crap": 11.0,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/places/damn_lines.py:_aggregate_history#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/places/damn_lines.py",
-      "function": "_aggregate_history",
-      "complexity": 14,
-      "crap": 14.064291,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/places/damn_lines.py:_fetch_history_rows#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/places/damn_lines.py",
-      "function": "_fetch_history_rows",
-      "complexity": 12,
-      "crap": 12.009216,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/places/damn_lines.py:_install_history#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/places/damn_lines.py",
-      "function": "_install_history",
-      "complexity": 23,
-      "crap": 27.783348,
-      "coverage_status": "measured"
-    },
-    {
       "id": "python:backend/app/services/agent/tools/places/damn_lines.py:_read_current#0",
       "language": "Python",
       "file": "backend/app/services/agent/tools/places/damn_lines.py",
       "function": "_read_current",
       "complexity": 12,
       "crap": 12.949219,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/places/discover_places.py:_queue_digest#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/places/discover_places.py",
-      "function": "_queue_digest",
-      "complexity": 16,
-      "crap": 16.0,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/places/discover_places.py:_verify#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/places/discover_places.py",
-      "function": "_verify",
-      "complexity": 13,
-      "crap": 13.169,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/places/place_reference.py:execute#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/places/place_reference.py",
-      "function": "execute",
-      "complexity": 27,
-      "crap": 27.600677,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/places/present_places.py:_destination_selection_replay_allowed#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/places/present_places.py",
-      "function": "_destination_selection_replay_allowed",
-      "complexity": 14,
-      "crap": 14.382812,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/places/present_places.py:_emit_place_presentation#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/places/present_places.py",
-      "function": "_emit_place_presentation",
-      "complexity": 20,
-      "crap": 20.0,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/places/present_places.py:_normalize_reasons#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/places/present_places.py",
-      "function": "_normalize_reasons",
-      "complexity": 14,
-      "crap": 14.0,
       "coverage_status": "measured"
     },
     {
@@ -577,57 +433,12 @@
       "coverage_status": "measured"
     },
     {
-      "id": "python:backend/app/services/agent/tools/places/present_places.py:_queue_presentation#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/places/present_places.py",
-      "function": "_queue_presentation",
-      "complexity": 14,
-      "crap": 14.0,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/places/present_places.py:_rebind_researched_details#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/places/present_places.py",
-      "function": "_rebind_researched_details",
-      "complexity": 18,
-      "crap": 19.275405,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/places/present_places.py:_selected_places#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/places/present_places.py",
-      "function": "_selected_places",
-      "complexity": 22,
-      "crap": 22.418097,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/places/present_places.py:_validated_selections#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/places/present_places.py",
-      "function": "_validated_selections",
-      "complexity": 12,
-      "crap": 12.865515,
-      "coverage_status": "measured"
-    },
-    {
       "id": "python:backend/app/services/agent/tools/places/present_places.py:try_deterministic_fallback#0",
       "language": "Python",
       "file": "backend/app/services/agent/tools/places/present_places.py",
       "function": "try_deterministic_fallback",
       "complexity": 12,
       "crap": 12.035156,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/places/search_local_places.py:execute#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/places/search_local_places.py",
-      "function": "execute",
-      "complexity": 29,
-      "crap": 31.28478,
       "coverage_status": "measured"
     },
     {
@@ -649,93 +460,12 @@
       "coverage_status": "measured"
     },
     {
-      "id": "python:backend/app/services/agent/tools/route/prepare_route_branches.py:resolve_destination_options#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/route/prepare_route_branches.py",
-      "function": "resolve_destination_options",
-      "complexity": 11,
-      "crap": 11.185878,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/route/prepare_route_options.py:_finalize_branch_candidates#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/route/prepare_route_options.py",
-      "function": "_finalize_branch_candidates",
-      "complexity": 13,
-      "crap": 13.0,
-      "coverage_status": "measured"
-    },
-    {
       "id": "python:backend/app/services/agent/tools/route/prepare_route_options.py:_resolve_destination_state#0",
       "language": "Python",
       "file": "backend/app/services/agent/tools/route/prepare_route_options.py",
       "function": "_resolve_destination_state",
       "complexity": 11,
       "crap": 11.035852,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/route/prepare_route_options.py:execute#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/route/prepare_route_options.py",
-      "function": "execute",
-      "complexity": 14,
-      "crap": 14.052633,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/route/prepare_route_persistence.py:_candidate_set_payload#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/route/prepare_route_persistence.py",
-      "function": "_candidate_set_payload",
-      "complexity": 14,
-      "crap": 14.0,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/route/prepare_route_persistence.py:_place_match_key#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/route/prepare_route_persistence.py",
-      "function": "_place_match_key",
-      "complexity": 16,
-      "crap": 16.0,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/route/prepare_route_persistence.py:_public_branch_coverage#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/route/prepare_route_persistence.py",
-      "function": "_public_branch_coverage",
-      "complexity": 14,
-      "crap": 14.196,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/route/prepare_route_persistence.py:_update_trip_state#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/route/prepare_route_persistence.py",
-      "function": "_update_trip_state",
-      "complexity": 14,
-      "crap": 14.058074,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/route/present_route.py:_accepted_route_replay#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/route/present_route.py",
-      "function": "_accepted_route_replay",
-      "complexity": 14,
-      "crap": 14.058074,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/route/present_route.py:_requested_framing#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/route/present_route.py",
-      "function": "_requested_framing",
-      "complexity": 13,
-      "crap": 13.097801,
       "coverage_status": "measured"
     },
     {
@@ -752,8 +482,8 @@
       "language": "Python",
       "file": "backend/app/services/agent/tools/route/present_route.py",
       "function": "canonical_facts_with_fallback",
-      "complexity": 14,
-      "crap": 14.018407,
+      "complexity": 11,
+      "crap": 11.020748,
       "coverage_status": "measured"
     },
     {
@@ -761,53 +491,8 @@
       "language": "Python",
       "file": "backend/app/services/agent/tools/route/present_route_commit.py",
       "function": "_candidate_discovery_place_id",
-      "complexity": 16,
-      "crap": 17.6875,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/route/present_route_commit.py:activate_stored_discovery_context#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/route/present_route_commit.py",
-      "function": "activate_stored_discovery_context",
-      "complexity": 15,
-      "crap": 15.533333,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/route/present_route_state.py:_candidate_binding#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/route/present_route_state.py",
-      "function": "_candidate_binding",
-      "complexity": 15,
-      "crap": 19.564237,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/route/present_route_state.py:_candidate_evidence#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/route/present_route_state.py",
-      "function": "_candidate_evidence",
-      "complexity": 17,
-      "crap": 21.515625,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/route/present_route_state.py:_destination_identity_groups#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/route/present_route_state.py",
-      "function": "_destination_identity_groups",
-      "complexity": 15,
-      "crap": 15.0,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/route/present_route_state.py:_load_candidate_entry#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/route/present_route_state.py",
-      "function": "_load_candidate_entry",
-      "complexity": 16,
-      "crap": 18.388686,
+      "complexity": 11,
+      "crap": 11.797607,
       "coverage_status": "measured"
     },
     {
@@ -817,24 +502,6 @@
       "function": "_load_canonical_candidate",
       "complexity": 12,
       "crap": 12.052478,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/route/present_route_state.py:canonical_facts#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/route/present_route_state.py",
-      "function": "canonical_facts",
-      "complexity": 23,
-      "crap": 23.397446,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/route/route_input.py:merge_route_preparation_input#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/route/route_input.py",
-      "function": "merge_route_preparation_input",
-      "complexity": 24,
-      "crap": 24.023617,
       "coverage_status": "measured"
     },
     {
@@ -860,17 +527,8 @@
       "language": "Python",
       "file": "backend/app/services/agent/tools/route/route_projection.py",
       "function": "_validated_pattern_context",
-      "complexity": 18,
-      "crap": 18.768,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/route/route_projection.py:reconcile_first_boarding_timing#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/route/route_projection.py",
-      "function": "reconcile_first_boarding_timing",
-      "complexity": 30,
-      "crap": 30.241684,
+      "complexity": 12,
+      "crap": 12.524351,
       "coverage_status": "measured"
     },
     {

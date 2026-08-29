@@ -234,9 +234,7 @@ class DiscoveryDestinationHandoffTests(DiscoveryRouteHandoffTestMixin, unittest.
         trip_state.bind_discovery_set(ctx.session, set_id)
         record = discovery_store.load_discovery_set(set_id, session_id="sess-test")
         place_id = record["places"][0]["place_id"]
-        details = await place_reference.execute(
-            {"place_id": place_id, "discovery_set_id": set_id}, ctx
-        )
+        details = await place_reference.execute({"place_id": place_id}, ctx)
         assert details.ok
         captured: dict = {}
 
@@ -327,7 +325,7 @@ class DiscoveryDestinationHandoffTests(DiscoveryRouteHandoffTestMixin, unittest.
         assert entry["digest"]["destination_place_id"] == destination["place_id"]
 
         presented = await place_reference.execute(
-            {"place_id": destination["place_id"], "discovery_set_id": set_id},
+            {"place_id": destination["place_id"]},
             ctx,
         )
         assert presented.ok, presented.error
