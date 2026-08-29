@@ -65,14 +65,13 @@ class _DiscoveryWaypointAssertions(_DiscoveryWaypointBase):
                 f"ordinal2_name={place2['name']!r}"
             ),
         )
-        # Gate 1 (earliest): the real request must OFFER the canonical route
-        # profile before any scripted tool state is credited.
+        self._assert_turn4_offer_and_reset(scenario_id, blob, ev)
+        self._assert_turn4_segments(scenario_id, blob, ev, place2)
+        self._assert_turn4_record_and_commit(scenario_id, blob, ev, set_id, place2)
+
+    def _assert_turn4_offer_and_reset(self, scenario_id, blob, ev):
         assert ev.offered == TURN4_EXPECTED_PROFILE, blob
         assert not set(self._names(ev)) & set(TURN4_FORBIDDEN), f"{scenario_id} turn4 forbidden tool; {blob}"
-        # Gate 2: the new-trip reset must NOT run. The FIRST request context
-        # is the real pre-model observation point: it must still show the
-        # accepted destination, empty waypoints, and the live discovery and
-        # candidate context (nothing wiped before the first model request).
         assert ev.before_state is not None, f"{scenario_id} turn4 before state"
         trip = _context_trip_state(ev.context) or {}
         with self.subTest(gap="reset_preserves_destination"):
@@ -82,13 +81,10 @@ class _DiscoveryWaypointAssertions(_DiscoveryWaypointBase):
             assert "active_discovery:" in ev.context, blob
         with self.subTest(gap="reset_preserves_waypoints"):
             assert trip.get("waypoints") == [], f"{scenario_id} turn4 pre-model waypoints; {blob}"
-        # Gate 3: ordinal-2 resolved from the REAL stored set, prepare with the
-        # exact real id, present once.
+
+    def _assert_turn4_segments(self, scenario_id, blob, ev, place2):
         assert ev.trace.tool_calls[0][1]["waypoints"] == [place2["place_id"]], f"{scenario_id} turn4 prepare waypoints; {blob}"
         assert self._names(ev) == ["prepare_route_options", "present_route"], f"{scenario_id} turn4 sequence; {blob}"
-        # Gate 4: TWO real-shaped provider-seam segments in call order, with
-        # the stored B Pizza identity supplied through the resolved-place
-        # kwargs at the waypoint boundaries (never a phantom B->B segment).
         prepare = ev.mocks["prepare_single_leg"]
         assert prepare.await_count == 2, f"{scenario_id} turn4 two provider-seam segments; {blob}"
         calls = prepare.await_args_list
@@ -112,7 +108,8 @@ class _DiscoveryWaypointAssertions(_DiscoveryWaypointBase):
                 f"{scenario_id} segment2 origin boundary",
             )
             assert calls[1].kwargs.get("resolved_destination") is None, f"{scenario_id} segment2 destination is the inherited label"
-        # Gate 5: canonical candidate record, whole-trip card, itinerary.
+
+    def _assert_turn4_record_and_commit(self, scenario_id, blob, ev, set_id, place2):
         cards = route_cards(ev.events)
         assert len(cards) == 1, f"{scenario_id} turn4 one card; {blob}"
         assert len(ev.mocks["stored_candidate_set_ids"]) == 1, f"{scenario_id} turn4 one stored set; {blob}"
@@ -138,16 +135,11 @@ class _DiscoveryWaypointAssertions(_DiscoveryWaypointBase):
         assert (waypoints[0].get("dwell_minutes"), waypoints[0].get("dwell_source")) == (25, "default"), f"{scenario_id} turn4 itinerary dwell provenance; {blob}"
         assert itinerary.get("total_dwell_seconds") == 1500, f"{scenario_id} turn4 itinerary dwell total; {blob}"
         assert (itinerary.get("destination") or {}).get("name") == BARCLAYS_CANONICAL_NAME, f"{scenario_id} turn4 itinerary destination; {blob}"
-        # Gate 6: the OLD accepted active trip/card survives until the new
-        # selection commits. The real observation point is the session at the
-        # moment prepare stores the new candidate set (before present_route
-        # replaces the card): it must still carry the turn-1 card.
         snapshots = ev.mocks.get("session_at_store") or []
         assert len(snapshots) == 1, f"{scenario_id} turn4 exactly one prepare store; {blob}"
         assert (snapshots[0]["active_trip"] or {}).get("card_id") == (ev.before_session.active_trip or {}).get("card_id"), f"{scenario_id} turn4 old card survives until replacement; {blob}"
         assert snapshots[0]["route_cards"] == list(ev.before_session.route_cards), f"{scenario_id} turn4 old cards survive until replacement; {blob}"
         assert (ev.after_session.active_trip or {}).get("card_id") == cards[0].card_id, f"{scenario_id} turn4 committed active trip card; {blob}"
-        # Gate 7: committed final state.
         assert ev.state["waypoints"] == [place2["name"]], blob
         assert ev.state["destination"] == DESTINATION_LABEL, blob
         assert ev.state["selected_candidate_id"] == FIXED_CANDIDATE_WAYPOINT, f"{scenario_id} turn4 committed candidate; {blob}"

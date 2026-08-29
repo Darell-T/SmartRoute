@@ -43,6 +43,7 @@ from unittest.mock import AsyncMock, patch
 from app.services.agent import discovery_store
 from app.services.agent import trip_state as trip_state_module
 from app.services.agent.tools.places import discover_places
+
 from tests.conversation.conversation_discovery_support import _DiscoveryRouteBase
 from tests.conversation.conversation_discovery_waypoint_fixtures import (
     BARCLAYS_CANONICAL_NAME,
@@ -96,7 +97,7 @@ class SessionProjection:
     trip_state: dict
 
     @classmethod
-    def capture(cls, session: dict) -> "SessionProjection":
+    def capture(cls, session: dict) -> SessionProjection:
         return cls(
             active_trip=copy.deepcopy(session.get("active_trip")),
             route_cards=tuple(copy.deepcopy(session.get("route_cards") or [])),
@@ -428,31 +429,15 @@ class _DiscoveryWaypointBase(_DiscoveryRouteBase):
 
     def _policy_ok(self, scenario_id: str, ev: TurnEvidence, mode: str, calls: int) -> None:
         expected_mode, expected_model = policy_model(self.loop, mode)
-        self.assertEqual(
-            (ev.trace.initial_mode, ev.trace.final_mode),
-            (expected_mode, expected_mode),
-            f"{scenario_id} policy mode",
-        )
-        self.assertEqual(
-            list(ev.models),
-            [expected_model] * calls,
-            f"{scenario_id} policy models",
-        )
+        assert (ev.trace.initial_mode, ev.trace.final_mode) == (expected_mode, expected_mode), f"{scenario_id} policy mode"
+        assert list(ev.models) == [expected_model] * calls, f"{scenario_id} policy models"
 
     def _no_temp(self, scenario_id: str, state: dict) -> None:
-        self.assertEqual(
-            tuple(state[field] for field in TEMP_FIELDS),
-            (None, None, None),
-            f"{scenario_id} no temporary scenario",
-        )
+        assert tuple(state[field] for field in TEMP_FIELDS) == (None, None, None), f"{scenario_id} no temporary scenario"
 
     def _unchanged(self, scenario_id: str, tag: str, state: dict, before: dict, blob: str) -> None:
         for field in UNCHANGED_FIELDS:
-            self.assertEqual(
-                state[field],
-                before[field],
-                f"{scenario_id} {tag} keeps {field}; {blob}",
-            )
+            assert state[field] == before[field], f"{scenario_id} {tag} keeps {field}; {blob}"
 
 
 def _context_trip_state(context: str) -> dict | None:
@@ -469,10 +454,10 @@ def _context_trip_state(context: str) -> dict | None:
 
 
 __all__ = (
-    "SessionProjection",
     "TEMP_FIELDS",
-    "TurnEvidence",
     "UNCHANGED_FIELDS",
+    "SessionProjection",
+    "TurnEvidence",
     "_DiscoveryWaypointBase",
     "_context_trip_state",
 )

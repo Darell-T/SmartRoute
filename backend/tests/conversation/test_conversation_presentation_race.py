@@ -37,8 +37,9 @@ from unittest.mock import patch
 
 from app.services.agent import candidate_store
 from app.services.agent import trip_state as trip_state_module
-from app.services.agent.tools.route import present_route
 from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools.route import present_route
+
 from tests.conversation.conversation_cancellation_fixtures import (
     ALREADY_PRESENTED_MARKER,
     CANDIDATE_V1,
@@ -199,58 +200,21 @@ class PresentationRaceTests(CancellationBase):
             for attempt in trace.capability_attempts
             if attempt["capability"] == "present_route"
         ]
-        self.assertEqual(
-            (
-                len(present_attempts),
-                all(attempt["ok"] for attempt in present_attempts),
-            ),
-            (2, True),
-            "J2-PRESENT-4a both duplicate calls resolve ok",
-        )
-        self.assertEqual(
-            len(route_cards(events)),
-            1,
-            "J2-PRESENT-4a exactly one streamed accepted card",
-        )
-        self.assertEqual(
-            len(mark_calls),
-            1,
-            "J2-PRESENT-4a exactly one atomic reservation",
-        )
-        self.assertIsNone(
-            mark_calls[0][2], "J2-PRESENT-4a reservation succeeds"
-        )
-        self.assertEqual(
-            mocks["enrich_route"].await_count,
-            0,
-            "J2-PRESENT-4a no request-time enrichment",
-        )
-        self.assertEqual(
-            mocks["prepare_single_leg"].await_count,
-            1,
-            "J2-PRESENT-4a one route-provider prepare call",
-        )
+        assert (len(present_attempts), all(attempt["ok"] for attempt in present_attempts)) == (2, True), "J2-PRESENT-4a both duplicate calls resolve ok"
+        assert len(route_cards(events)) == 1, "J2-PRESENT-4a exactly one streamed accepted card"
+        assert len(mark_calls) == 1, "J2-PRESENT-4a exactly one atomic reservation"
+        assert mark_calls[0][2] is None, "J2-PRESENT-4a reservation succeeds"
+        assert mocks["enrich_route"].await_count == 0, "J2-PRESENT-4a no request-time enrichment"
+        assert mocks["prepare_single_leg"].await_count == 1, "J2-PRESENT-4a one route-provider prepare call"
         new_set_id = trip_state_module.get_trip_state(session)[
             "active_candidate_set_id"
         ]
         new_record = candidate_store.load_candidate_set(
             new_set_id, session_id=session_id
         )
-        self.assertEqual(
-            (new_record["presented"], new_record["selected_candidate_id"]),
-            (True, CANDIDATE_V2),
-            "J2-PRESENT-4a one committed selected identity",
-        )
-        self.assertEqual(
-            len(session.get("route_cards") or []),
-            2,
-            "J2-PRESENT-4a seed card plus one new persisted card",
-        )
-        self.assertEqual(
-            trip_state_module.get_trip_state(session)["selected_candidate_id"],
-            CANDIDATE_V2,
-            "J2-PRESENT-4a committed selection is the one identity",
-        )
+        assert (new_record["presented"], new_record["selected_candidate_id"]) == (True, CANDIDATE_V2), "J2-PRESENT-4a one committed selected identity"
+        assert len(session.get("route_cards") or []) == 2, "J2-PRESENT-4a seed card plus one new persisted card"
+        assert trip_state_module.get_trip_state(session)["selected_candidate_id"] == CANDIDATE_V2, "J2-PRESENT-4a committed selection is the one identity"
         await self._assert_no_owned_pending_tasks(baseline)
 
     async def test_stale_represent_of_presented_candidate_fails_bounded(self):
@@ -303,57 +267,20 @@ class PresentationRaceTests(CancellationBase):
         finally:
             for patcher in patchers:
                 patcher.stop()
-        self.assertFalse(result.ok, "J2-PRESENT-4b stale present fails")
-        self.assertIn(
-            ALREADY_PRESENTED_MARKER,
-            result.error or "",
-            "J2-PRESENT-4b atomic store rejection remains explicit internally",
+        assert not result.ok, "J2-PRESENT-4b stale present fails"
+        assert ALREADY_PRESENTED_MARKER in (result.error or ""), "J2-PRESENT-4b atomic store rejection remains explicit internally"
+        assert result.events == [], "J2-PRESENT-4b no card on stale replay"
+        assert "prepare_single_leg" not in mocks, "J2-PRESENT-4b never enters route preparation"
+        assert len(mark_calls) == 1, "J2-PRESENT-4b one reservation attempt"
+        assert ALREADY_PRESENTED_MARKER in (mark_calls[0][2] or ""), "J2-PRESENT-4b store rejects the duplicate reservation"
+        assert mocks["stored_candidate_set_ids"] == [], "J2-PRESENT-4b no new candidate set stored"
+        assert self._snapshot_session(session) == session_before, "J2-PRESENT-4b session state unchanged"
+        assert self._snapshot_record(set_id, session_id) == record_before, "J2-PRESENT-4b store record unchanged"
+        selected = trip_state_module.get_trip_state(session)["selected_candidate_id"]
+        assert selected == CANDIDATE_V1, (
+            "J2-PRESENT-4b exactly one committed selected identity remains"
         )
-        self.assertEqual(
-            result.events,
-            [],
-            "J2-PRESENT-4b no card on stale replay",
-        )
-        self.assertNotIn(
-            "prepare_single_leg",
-            mocks,
-            "J2-PRESENT-4b never enters route preparation",
-        )
-        self.assertEqual(
-            len(mark_calls),
-            1,
-            "J2-PRESENT-4b one reservation attempt",
-        )
-        self.assertIn(
-            ALREADY_PRESENTED_MARKER,
-            mark_calls[0][2] or "",
-            "J2-PRESENT-4b store rejects the duplicate reservation",
-        )
-        self.assertEqual(
-            mocks["stored_candidate_set_ids"],
-            [],
-            "J2-PRESENT-4b no new candidate set stored",
-        )
-        self.assertEqual(
-            self._snapshot_session(session),
-            session_before,
-            "J2-PRESENT-4b session state unchanged",
-        )
-        self.assertEqual(
-            self._snapshot_record(set_id, session_id),
-            record_before,
-            "J2-PRESENT-4b store record unchanged",
-        )
-        self.assertEqual(
-            trip_state_module.get_trip_state(session)["selected_candidate_id"],
-            CANDIDATE_V1,
-            "J2-PRESENT-4b exactly one committed selected identity remains",
-        )
-        self.assertEqual(
-            len(session.get("route_cards") or []),
-            1,
-            "J2-PRESENT-4b exactly one persisted accepted card",
-        )
+        assert len(session.get("route_cards") or []) == 1, "J2-PRESENT-4b exactly one persisted accepted card"
         await self._assert_no_owned_pending_tasks(baseline)
 
     def test_no_event_replay_state_exists_server_side(self):
@@ -361,14 +288,11 @@ class PresentationRaceTests(CancellationBase):
 
         _session_id, session = new_session()
         for key in ("event_replay", "replay_events", "presented_events", "replay"):
-            self.assertNotIn(key, session)
+            assert key not in session
         from app.routers import agent_chat
 
         paths = [route.path for route in agent_chat.router.routes]
-        self.assertFalse(
-            any("replay" in path for path in paths),
-            "no replay endpoint exists to consume stale SSE frames",
-        )
+        assert not any("replay" in path for path in paths), "no replay endpoint exists to consume stale SSE frames"
         # Candidate records carry no replay/event log; only the one-time
         # presentation reservation guards re-presentation.
         session_id = f"sess-j2-noreplay-{id(session)}"
@@ -378,7 +302,7 @@ class PresentationRaceTests(CancellationBase):
         )
         record = candidate_store.load_candidate_set(set_id, session_id=session_id)
         for key in ("replay", "presented_events", "event_log", "sse_events"):
-            self.assertNotIn(key, record)
+            assert key not in record
 
 
 __all__ = ()

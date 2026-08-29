@@ -3,10 +3,15 @@ from __future__ import annotations
 import unittest
 
 from app.services.agent import public_surface
-from app.services.agent.turn import completion as turn_completion
 from app.services.agent.passenger_output import truthful_failure_text
 from app.services.agent.tools._types import ToolOutcome, ToolResult
-from app.services.agent.turn.contract import GoalKind, GoalState, OutcomeGoal, TurnContract
+from app.services.agent.turn import completion as turn_completion
+from app.services.agent.turn.contract import (
+    GoalKind,
+    GoalState,
+    OutcomeGoal,
+    TurnContract,
+)
 from app.services.agent.turn.evidence import TurnEvidence
 
 
@@ -40,19 +45,13 @@ class TruthfulFailureTextTests(unittest.TestCase):
             ),
         )
 
-        self.assertEqual(evidence.state_for("place"), GoalState.EVIDENCE_READY)
-        self.assertEqual(
-            evidence.state_for("route"),
-            GoalState.ATTEMPTED_BUT_UNAVAILABLE,
-        )
+        assert evidence.state_for("place") == GoalState.EVIDENCE_READY
+        assert evidence.state_for("route") == GoalState.ATTEMPTED_BUT_UNAVAILABLE
         decision = turn_completion.evaluate_completion(contract, evidence)
-        self.assertFalse(decision.may_terminate)
-        self.assertEqual(decision.required_next_actions, ("present:place",))
+        assert not decision.may_terminate
+        assert decision.required_next_actions == ("present:place",)
         offered = public_surface.state_valid_tool_names(evidence)
-        self.assertEqual(
-            public_surface.required_presenter_tool(evidence, offered),
-            "present_places",
-        )
+        assert public_surface.required_presenter_tool(evidence, offered) == "present_places"
 
     def test_unresolved_transit_result_does_not_make_goal_evidence_ready(self) -> None:
         evidence = TurnEvidence()
@@ -74,11 +73,8 @@ class TruthfulFailureTextTests(unittest.TestCase):
             result,
         )
 
-        self.assertEqual(
-            evidence.state_for("arrival"),
-            GoalState.ATTEMPTED_BUT_UNAVAILABLE,
-        )
-        self.assertIsNone(evidence.handle_for("arrival"))
+        assert evidence.state_for("arrival") == GoalState.ATTEMPTED_BUT_UNAVAILABLE
+        assert evidence.handle_for("arrival") is None
 
     def test_compound_route_and_crowd_failure_names_first_unresolved_evidence(self) -> None:
         evidence = TurnEvidence()
@@ -99,10 +95,10 @@ class TruthfulFailureTextTests(unittest.TestCase):
 
         text = truthful_failure_text(evidence)
 
-        self.assertIn("couldn't verify the crowd or area conditions", text)
-        self.assertNotIn("could not find a verified route", text)
-        self.assertNotIn("msg_route", text)
-        self.assertNotIn("avoid_crowds", text)
+        assert "couldn't verify the crowd or area conditions" in text
+        assert "could not find a verified route" not in text
+        assert "msg_route" not in text
+        assert "avoid_crowds" not in text
 
     def test_unresolved_route_keeps_precise_attempted_route_fallback(self) -> None:
         evidence = TurnEvidence()
@@ -121,7 +117,7 @@ class TruthfulFailureTextTests(unittest.TestCase):
 
         text = truthful_failure_text(evidence)
 
-        self.assertEqual(text, "I could not find a verified route for that trip.")
+        assert text == "I could not find a verified route for that trip."
 
     def test_first_unresolved_crowd_goal_wins_over_later_route_failure(self) -> None:
         evidence = TurnEvidence()
@@ -142,8 +138,8 @@ class TruthfulFailureTextTests(unittest.TestCase):
 
         text = truthful_failure_text(evidence)
 
-        self.assertIn("couldn't verify the crowd or area conditions", text)
-        self.assertNotIn("could not find a verified route", text)
+        assert "couldn't verify the crowd or area conditions" in text
+        assert "could not find a verified route" not in text
 
     def test_blocked_goal_requests_clarification(self) -> None:
         evidence = TurnEvidence()
@@ -154,8 +150,8 @@ class TruthfulFailureTextTests(unittest.TestCase):
 
         text = truthful_failure_text(evidence)
 
-        self.assertIn("still need one detail", text)
-        self.assertNotIn("route_goal", text)
+        assert "still need one detail" in text
+        assert "route_goal" not in text
 
     def test_general_response_keeps_generic_unresolved_fallback(self) -> None:
         evidence = TurnEvidence()
@@ -165,11 +161,7 @@ class TruthfulFailureTextTests(unittest.TestCase):
 
         text = truthful_failure_text(evidence)
 
-        self.assertEqual(
-            text,
-            "I couldn't complete that request in this turn, so I don't have a "
-            "verified result to share.",
-        )
+        assert text == "I couldn't complete that request in this turn, so I don't have a " "verified result to share."
 
 
 if __name__ == "__main__":

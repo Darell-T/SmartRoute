@@ -7,12 +7,18 @@ from unittest.mock import AsyncMock, patch
 
 from app.services.agent import candidate_store, public_surface, trip_state
 from app.services.agent.tool_input_policy import goal_error
-from app.services.agent.tools.route import prepare_route_options, present_route
 from app.services.agent.tools._types import ToolContext
-from app.services.agent.turn.contract import GoalKind, GoalState, OutcomeGoal, TurnContract
+from app.services.agent.tools.route import prepare_route_options, present_route
+from app.services.agent.turn.contract import (
+    GoalKind,
+    GoalState,
+    OutcomeGoal,
+    TurnContract,
+)
 from app.services.agent.turn.evidence import TurnEvidence
-from tests.test_single_agent_route_tools import _ctx, _prepared_leg
+
 from tests.conversation.conversation_matrix_harness import clear_caches
+from tests.test_single_agent_route_tools import _ctx, _prepared_leg
 
 
 class ActiveTemporaryRoutePresenterTests(unittest.TestCase):
@@ -67,40 +73,31 @@ class ActiveTemporaryRoutePresenterTests(unittest.TestCase):
             session_id="sess-preview",
         )
 
-        self.assertEqual(
-            offered,
-            {
-                "discover_places",
-                "prepare_route_options",
-                "present_route",
-                "complete_turn",
-            },
-        )
+        assert offered == {
+            "discover_places",
+            "prepare_route_options",
+            "present_route",
+            "complete_turn",
+        }
         ctx = ToolContext(
             session=session,
             session_id="sess-preview",
             turn_evidence=evidence,
         )
-        self.assertIsNone(
-            goal_error(
-                "present_route",
-                {
-                    "goal_key": "route",
-                    "candidate_id": candidate_id,
-                    "lead_in": "The route options were close, so I chose this one for your trip.",
-                    "follow_up": "",
-                    "reason_code": "meets_hard_constraints",
-                },
-                ctx,
-            )
-        )
-        self.assertEqual(
-            public_surface.active_temporary_route_preview(
-                session,
-                session_id="sess-preview",
+        present_input = {
+            "goal_key": "route",
+            "candidate_id": candidate_id,
+            "lead_in": (
+                "The route options were close, so I chose this one for your trip."
             ),
-            (set_id, candidate_id),
+            "follow_up": "",
+            "reason_code": "meets_hard_constraints",
+        }
+        assert goal_error("present_route", present_input, ctx) is None
+        preview = public_surface.active_temporary_route_preview(
+            session, session_id="sess-preview"
         )
+        assert preview == (set_id, candidate_id)
 
     def test_adverse_or_incomplete_evidence_does_not_hide_a_viable_preview(self):
         for route_status in ("insufficient_coverage", "all_materially_degraded"):
@@ -110,21 +107,8 @@ class ActiveTemporaryRoutePresenterTests(unittest.TestCase):
                 )
                 evidence = self._evidence()
 
-                self.assertEqual(
-                    public_surface.active_temporary_route_preview(
-                        session,
-                        session_id="sess-preview",
-                    ),
-                    (set_id, candidate_id),
-                )
-                self.assertIn(
-                    "present_route",
-                    public_surface.state_valid_tool_names(
-                        evidence,
-                        session=session,
-                        session_id="sess-preview",
-                    ),
-                )
+                assert public_surface.active_temporary_route_preview(session, session_id="sess-preview") == (set_id, candidate_id)
+                assert "present_route" in public_surface.state_valid_tool_names(evidence, session=session, session_id="sess-preview")
 
     def test_invalid_preview_never_enters_surface_or_policy(self):
         cases = (
@@ -142,53 +126,39 @@ class ActiveTemporaryRoutePresenterTests(unittest.TestCase):
                     session=session,
                     session_id=lookup_session_id,
                 )
-                self.assertNotIn("present_route", offered)
+                assert "present_route" not in offered
                 ctx = ToolContext(
                     session=session,
                     session_id=lookup_session_id,
                     turn_evidence=evidence,
                 )
                 candidate_input = candidate_id or "cd_preview"
-                self.assertIsNotNone(
-                    goal_error(
-                        "present_route",
-                        {
-                            "goal_key": "route",
-                            "candidate_id": candidate_input,
-                            "lead_in": "The route options were close, so I chose this one for your trip.",
-                            "follow_up": "",
-                            "reason_code": "meets_hard_constraints",
-                        },
-                        ctx,
-                    )
-                )
+                present_input = {
+                    "goal_key": "route",
+                    "candidate_id": candidate_input,
+                    "lead_in": (
+                        "The route options were close, so I chose this one "
+                        "for your trip."
+                    ),
+                    "follow_up": "",
+                    "reason_code": "meets_hard_constraints",
+                }
+                assert goal_error("present_route", present_input, ctx) is not None
 
     def test_expired_preview_is_not_reused(self):
-        session, set_id, candidate_id = self._preview_session()
+        session, set_id, _candidate_id = self._preview_session()
         record = candidate_store.load_candidate_set(
             set_id,
             session_id="sess-preview",
         )
-        self.assertIsNotNone(record)
+        assert record is not None
         with patch(
             "app.services.agent.candidate_store.time.time",
             return_value=float(record["expires_at"]) + 1,
         ):
-            self.assertIsNone(
-                public_surface.active_temporary_route_preview(
-                    session,
-                    session_id="sess-preview",
-                )
-            )
+            assert public_surface.active_temporary_route_preview(session, session_id="sess-preview") is None
             evidence = self._evidence()
-            self.assertNotIn(
-                "present_route",
-                public_surface.state_valid_tool_names(
-                    evidence,
-                    session=session,
-                    session_id="sess-preview",
-                ),
-            )
+            assert "present_route" not in public_surface.state_valid_tool_names(evidence, session=session, session_id="sess-preview")
 
 class ActiveTemporaryRoutePresenterAsyncTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
@@ -209,7 +179,7 @@ class ActiveTemporaryRoutePresenterAsyncTests(unittest.IsolatedAsyncioTestCase):
                 },
                 ctx,
             )
-        self.assertTrue(prepared.ok)
+        assert prepared.ok
         candidate = prepared.data["candidates"][0]
         trip_state.bind_temporary_selected_candidate(
             ctx.session,
@@ -235,13 +205,13 @@ class ActiveTemporaryRoutePresenterAsyncTests(unittest.IsolatedAsyncioTestCase):
                 },
                 ctx,
             )
-        self.assertTrue(presented.ok, presented.error)
+        assert presented.ok, presented.error
         state = trip_state.get_trip_state(ctx.session)
-        self.assertEqual(state["active_candidate_set_id"], prepared.data["candidate_set_id"])
-        self.assertEqual(state["selected_candidate_id"], candidate["candidate_id"])
-        self.assertIsNone(state["temporary_candidate_set_id"])
-        self.assertEqual(evidence.handle_for("route"), prepared.data["candidate_set_id"])
-        self.assertEqual(evidence.state_for("route"), GoalState.SATISFIED)
+        assert state["active_candidate_set_id"] == prepared.data["candidate_set_id"]
+        assert state["selected_candidate_id"] == candidate["candidate_id"]
+        assert state["temporary_candidate_set_id"] is None
+        assert evidence.handle_for("route") == prepared.data["candidate_set_id"]
+        assert evidence.state_for("route") == GoalState.SATISFIED
 
 
 if __name__ == "__main__":

@@ -6,7 +6,12 @@ from app.services.agent.turn.completion import (
     TurnResolution,
     evaluate_completion,
 )
-from app.services.agent.turn.contract import GoalKind, GoalState, OutcomeGoal, TurnContract
+from app.services.agent.turn.contract import (
+    GoalKind,
+    GoalState,
+    OutcomeGoal,
+    TurnContract,
+)
 from app.services.agent.turn.evidence import TurnEvidence
 
 
@@ -19,38 +24,36 @@ class CompletionPolicyTests(unittest.TestCase):
         contract = _contract(("route", GoalKind.ROUTE, ()))
         decision = evaluate_completion(contract, TurnEvidence())
 
-        self.assertFalse(decision.may_terminate)
-        self.assertEqual(decision.remaining_goal_keys, ("route",))
-        self.assertEqual(decision.required_next_actions, ("execute:route",))
+        assert not decision.may_terminate
+        assert decision.remaining_goal_keys == ("route",)
+        assert decision.required_next_actions == ("execute:route",)
 
     def test_evidence_ready_must_be_presented(self) -> None:
         contract = _contract(("status", GoalKind.SERVICE_STATUS, ()))
         evidence = TurnEvidence()
         evidence.record_goal("status", GoalState.EVIDENCE_READY, attempted=True)
         pending = evaluate_completion(contract, evidence)
-        self.assertFalse(pending.may_terminate)
-        self.assertEqual(pending.required_next_actions, ("present:status",))
+        assert not pending.may_terminate
+        assert pending.required_next_actions == ("present:status",)
 
         evidence.record_goal(
             "status", GoalState.SATISFIED, attempted=True, presented=True
         )
         complete = evaluate_completion(contract, evidence)
-        self.assertTrue(complete.may_terminate)
-        self.assertEqual(complete.turn_resolution, TurnResolution.COMPLETED)
+        assert complete.may_terminate
+        assert complete.turn_resolution == TurnResolution.COMPLETED
 
     def test_unavailable_claim_requires_a_real_attempt(self) -> None:
         contract = _contract(("arrivals", GoalKind.ARRIVALS, ()))
         evidence = {"arrivals": {"state": GoalState.ATTEMPTED_BUT_UNAVAILABLE}}
         rejected = evaluate_completion(contract, evidence)
-        self.assertFalse(rejected.may_terminate)
-        self.assertEqual(rejected.required_next_actions, ("attempt:arrivals",))
+        assert not rejected.may_terminate
+        assert rejected.required_next_actions == ("attempt:arrivals",)
 
         evidence["arrivals"]["attempted"] = True
         allowed = evaluate_completion(contract, evidence)
-        self.assertTrue(allowed.may_terminate)
-        self.assertEqual(
-            allowed.turn_resolution, TurnResolution.ATTEMPTED_BUT_UNAVAILABLE
-        )
+        assert allowed.may_terminate
+        assert allowed.turn_resolution == TurnResolution.ATTEMPTED_BUT_UNAVAILABLE
 
     def test_mixed_result_is_partial_only_after_success_is_satisfied(self) -> None:
         contract = _contract(
@@ -66,11 +69,9 @@ class CompletionPolicyTests(unittest.TestCase):
             approved_recovery_options=("try a wider time window",),
         )
         decision = evaluate_completion(contract, evidence)
-        self.assertTrue(decision.may_terminate)
-        self.assertEqual(
-            decision.turn_resolution, TurnResolution.PARTIAL_SUCCESS_WITH_RECOVERY
-        )
-        self.assertEqual(decision.recovery_options, ("try a wider time window",))
+        assert decision.may_terminate
+        assert decision.turn_resolution == TurnResolution.PARTIAL_SUCCESS_WITH_RECOVERY
+        assert decision.recovery_options == ("try a wider time window",)
 
     def test_rider_cancelled_goal_is_a_terminal_cancellation(self) -> None:
         contract = _contract(("scenario", GoalKind.ROUTE, ()))
@@ -79,8 +80,8 @@ class CompletionPolicyTests(unittest.TestCase):
 
         decision = evaluate_completion(contract, evidence)
 
-        self.assertTrue(decision.may_terminate)
-        self.assertEqual(decision.turn_resolution, TurnResolution.CANCELLED)
+        assert decision.may_terminate
+        assert decision.turn_resolution == TurnResolution.CANCELLED
 
 
 if __name__ == "__main__":

@@ -71,15 +71,15 @@ class FakeStreamContext:
         joined_text = "".join(self._round_spec.get("text", []))
         if joined_text:
             blocks.append(FakeContentBlock("text", text=joined_text))
-        for tool_use in self._round_spec.get("tool_use", []):
-            blocks.append(
-                FakeContentBlock(
-                    "tool_use",
-                    id=tool_use["id"],
-                    name=tool_use["name"],
-                    input=tool_use.get("input", {}),
-                )
+        blocks.extend(
+            FakeContentBlock(
+                "tool_use",
+                id=tool_use["id"],
+                name=tool_use["name"],
+                input=tool_use.get("input", {}),
             )
+            for tool_use in self._round_spec.get("tool_use", [])
+        )
         usage = FakeUsage(**self._round_spec.get("usage", {}))
         stop_reason = self._round_spec.get("stop_reason", "end_turn")
         return FakeMessage(blocks, stop_reason, usage)

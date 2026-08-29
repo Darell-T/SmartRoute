@@ -22,10 +22,10 @@ class PublicBodyBoundsTests(unittest.IsolatedAsyncioTestCase):
         request = _Request([body[:97], body[97:]])
 
         async def downstream(received):
-            self.assertEqual(received._body, body)
+            assert received._body == body
             return "ok"
 
-        self.assertEqual(await main.reject_oversize_public_json(request, downstream), "ok")
+        assert await main.reject_oversize_public_json(request, downstream) == "ok"
 
     async def test_chunked_utf8_body_over_limit_is_413_without_downstream(self):
         body = ("\u00e9" * (main.MAX_PUBLIC_BODY_BYTES // 2 + 1)).encode("utf-8")
@@ -35,7 +35,7 @@ class PublicBodyBoundsTests(unittest.IsolatedAsyncioTestCase):
             raise AssertionError("oversize body must not reach downstream")
 
         response = await main.reject_oversize_public_json(request, downstream)
-        self.assertEqual(response.status_code, 413)
+        assert response.status_code == 413
 
     async def test_content_length_fast_rejection(self):
         request = _Request([], main.MAX_PUBLIC_BODY_BYTES + 1)
@@ -44,4 +44,4 @@ class PublicBodyBoundsTests(unittest.IsolatedAsyncioTestCase):
             raise AssertionError("declared oversize body must not reach downstream")
 
         response = await main.reject_oversize_public_json(request, downstream)
-        self.assertEqual(response.status_code, 413)
+        assert response.status_code == 413

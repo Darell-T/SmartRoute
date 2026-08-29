@@ -62,18 +62,18 @@ class FirstLegTimingTests(unittest.TestCase):
             now_iso="2026-08-13T17:00:00-04:00",
         )
 
-        self.assertEqual(reconciled["total_wait_seconds"], 10 * 60)
-        self.assertEqual(reconciled["total_duration_seconds"], 17 * 60)
-        self.assertEqual(
-            reconciled["total_duration_seconds"],
+        assert reconciled["total_wait_seconds"] == 10 * 60
+        assert reconciled["total_duration_seconds"] == 17 * 60
+        duration_parts = (
             reconciled["total_walk_seconds"]
             + reconciled["total_wait_seconds"]
             + reconciled["total_in_vehicle_seconds"]
             + reconciled["total_transfer_seconds"]
-            + reconciled["total_dwell_seconds"],
+            + reconciled["total_dwell_seconds"]
         )
-        self.assertEqual(reconciled["departure_at"], "2026-08-13T17:00:00-04:00")
-        self.assertEqual(reconciled["arrival_at"], "2026-08-13T17:17:00-04:00")
+        assert reconciled["total_duration_seconds"] == duration_parts
+        assert reconciled["departure_at"] == "2026-08-13T17:00:00-04:00"
+        assert reconciled["arrival_at"] == "2026-08-13T17:17:00-04:00"
 
     def test_impossible_live_boarding_does_not_corrupt_canonical_timing(self):
         itinerary = {
@@ -107,8 +107,8 @@ class FirstLegTimingTests(unittest.TestCase):
             now_iso="2026-08-13T17:00:00-04:00",
         )
 
-        self.assertIs(reconciled, itinerary)
-        self.assertEqual(reconciled["total_duration_seconds"], 15 * 60)
+        assert reconciled is itinerary
+        assert reconciled["total_duration_seconds"] == 15 * 60
 
 
 class RouteCardEventItineraryWireTests(unittest.TestCase):
@@ -124,7 +124,7 @@ class RouteCardEventItineraryWireTests(unittest.TestCase):
             alerts=[],
         )
         data = event.to_data()
-        self.assertNotIn("itinerary", data)
+        assert "itinerary" not in data
 
     def test_to_data_includes_itinerary_when_present(self):
         itinerary = {
@@ -144,7 +144,7 @@ class RouteCardEventItineraryWireTests(unittest.TestCase):
             itinerary=itinerary,
         )
         data = event.to_data()
-        self.assertEqual(data["itinerary"], itinerary)
+        assert data["itinerary"] == itinerary
 
 
 if __name__ == "__main__":

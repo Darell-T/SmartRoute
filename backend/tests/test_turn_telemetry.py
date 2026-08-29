@@ -21,12 +21,9 @@ class TurnTelemetryTests(unittest.TestCase):
             },
         )()
         safe = turn_telemetry.extract_safe_usage(usage)
-        self.assertEqual(safe, {"input_tokens": 11, "cache_read_input_tokens": 3})
-        self.assertEqual(turn_telemetry.extract_safe_usage(None), {})
-        self.assertEqual(
-            turn_telemetry.extract_safe_usage({"input_tokens": 4}),
-            {"input_tokens": 4},
-        )
+        assert safe == {"input_tokens": 11, "cache_read_input_tokens": 3}
+        assert turn_telemetry.extract_safe_usage(None) == {}
+        assert turn_telemetry.extract_safe_usage({"input_tokens": 4}) == {"input_tokens": 4}
 
     def test_record_model_call_keeps_only_allowlisted_fields(self):
         telemetry: dict = {}
@@ -41,11 +38,11 @@ class TurnTelemetryTests(unittest.TestCase):
             usage={"input_tokens": 9, "output_tokens": 2, "secret": "nope"},
         )
         call = telemetry["model_calls"][0]
-        self.assertEqual(call["model"], "claude-sonnet-5")
-        self.assertEqual(call["first_token_ms"], 3)
-        self.assertEqual(call["input_tokens"], 9)
-        self.assertEqual(call["output_tokens"], 2)
-        self.assertNotIn("secret", call)
+        assert call["model"] == "claude-sonnet-5"
+        assert call["first_token_ms"] == 3
+        assert call["input_tokens"] == 9
+        assert call["output_tokens"] == 2
+        assert "secret" not in call
 
     def test_model_call_telemetry_uses_ordered_records(self):
         for mode in ("auto", "quick"):
@@ -68,15 +65,9 @@ class TurnTelemetryTests(unittest.TestCase):
                     duration_ms=8,
                     outcome="complete",
                 )
-                self.assertEqual(
-                    [call["call_index"] for call in telemetry["model_calls"]],
-                    [1, 2],
-                )
-                self.assertNotIn("call_count", telemetry["model_calls"][0])
-                self.assertEqual(
-                    [call["model"] for call in telemetry["model_calls"]],
-                    [policy.model, policy.model],
-                )
+                assert [call["call_index"] for call in telemetry["model_calls"]] == [1, 2]
+                assert "call_count" not in telemetry["model_calls"][0]
+                assert [call["model"] for call in telemetry["model_calls"]] == [policy.model, policy.model]
 
 
 if __name__ == "__main__":

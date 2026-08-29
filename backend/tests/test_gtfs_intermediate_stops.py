@@ -10,6 +10,7 @@ import importlib
 import sys
 import types
 import unittest
+from typing import ClassVar
 from unittest.mock import patch
 
 
@@ -96,20 +97,17 @@ class IntermediateStopTests(unittest.TestCase):
 
     def test_names_api_unchanged(self):
         names = self._gtfs().get_intermediate_stops("G", "Church Av", "15 St-Prospect Park")
-        self.assertEqual(names, ["Church Av", "Fort Hamilton Pkwy", "15 St-Prospect Park"])
+        assert names == ["Church Av", "Fort Hamilton Pkwy", "15 St-Prospect Park"]
 
     def test_coords_variant_returns_ordered_locations(self):
         rows = self._gtfs().get_intermediate_stops_with_coords(
             "G", "Church Av", "15 St-Prospect Park"
         )
-        self.assertEqual(
-            rows,
-            [
-                {"name": "Church Av", "lat": 40.644, "lng": -73.979},
-                {"name": "Fort Hamilton Pkwy", "lat": 40.650, "lng": -73.975},
-                {"name": "15 St-Prospect Park", "lat": 40.660, "lng": -73.979},
-            ],
-        )
+        assert rows == [
+            {"name": "Church Av", "lat": 40.644, "lng": -73.979},
+            {"name": "Fort Hamilton Pkwy", "lat": 40.65, "lng": -73.975},
+            {"name": "15 St-Prospect Park", "lat": 40.66, "lng": -73.979},
+        ]
 
     def test_no_ordered_trip_yields_empty_for_both(self):
         gtfs = self.module.GTFSStaticData()
@@ -123,11 +121,8 @@ class IntermediateStopTests(unittest.TestCase):
             return _scripted_query(sql, params)
 
         gtfs._query = reversed_query
-        self.assertEqual(gtfs.get_intermediate_stops("G", "Church Av", "15 St-Prospect Park"), [])
-        self.assertEqual(
-            gtfs.get_intermediate_stops_with_coords("G", "Church Av", "15 St-Prospect Park"),
-            [],
-        )
+        assert gtfs.get_intermediate_stops("G", "Church Av", "15 St-Prospect Park") == []
+        assert gtfs.get_intermediate_stops_with_coords("G", "Church Av", "15 St-Prospect Park") == []
 
 
 class CoordinateFallbackTests(unittest.TestCase):
@@ -140,7 +135,7 @@ class CoordinateFallbackTests(unittest.TestCase):
         cls.module = _load_gtfs_module()
 
     # A short Q line: Church Av -> Prospect Park -> 7 Av -> DeKalb Av.
-    Q_STOPS = {
+    Q_STOPS: ClassVar[dict[str, dict]] = {
         "Q05N": {"stop_id": "Q05N", "stop_name": "Church Av", "stop_lat": 40.650, "stop_lon": -73.962},
         "Q04N": {"stop_id": "Q04N", "stop_name": "Prospect Park", "stop_lat": 40.661, "stop_lon": -73.962},
         "Q03N": {"stop_id": "Q03N", "stop_name": "7 Av", "stop_lat": 40.666, "stop_lon": -73.973},
@@ -182,20 +177,14 @@ class CoordinateFallbackTests(unittest.TestCase):
             {"latitude": 40.650, "longitude": -73.962},
             {"latitude": 40.692, "longitude": -73.986},
         )
-        self.assertEqual(
-            [r["name"] for r in rows],
-            ["Church Av", "Prospect Park", "7 Av", "DeKalb Av"],
-        )
+        assert [r["name"] for r in rows] == ["Church Av", "Prospect Park", "7 Av", "DeKalb Av"]
 
     def test_no_coords_still_empty_when_name_off_line(self):
         gtfs = self.module.GTFSStaticData()
         gtfs._allow_db_fallback = True  # static index not loaded in tests; exercise DB path
         gtfs._query = self._query
         # Without coords there is no fallback, so an off-line name yields [].
-        self.assertEqual(
-            gtfs.get_intermediate_stops_with_coords("Q", "Church Av", "Jay St - MetroTech"),
-            [],
-        )
+        assert gtfs.get_intermediate_stops_with_coords("Q", "Church Av", "Jay St - MetroTech") == []
 
 
 class IntermediateStopCacheTests(unittest.TestCase):
@@ -226,29 +215,23 @@ class IntermediateStopCacheTests(unittest.TestCase):
             )
 
         info = gtfs.intermediate_stops_cache_info()
-        self.assertEqual(info.currsize, self.module.INTERMEDIATE_STOPS_CACHE_MAXSIZE)
+        assert info.currsize == self.module.INTERMEDIATE_STOPS_CACHE_MAXSIZE
         calls_before = index.calls
         gtfs.get_intermediate_stops_with_coords(
             "Q", "Origin 551", "Destination 551"
         )
-        self.assertEqual(index.calls, calls_before)
-        self.assertGreater(gtfs.intermediate_stops_cache_info().hits, 0)
+        assert index.calls == calls_before
+        assert gtfs.intermediate_stops_cache_info().hits > 0
 
     def test_pattern_reload_clears_cached_values(self):
         gtfs = self.module.GTFSStaticData()
         gtfs.set_pattern_index(self.PatternIndex("before"))
-        self.assertEqual(
-            gtfs.get_intermediate_stops_with_coords("Q", "A", "B")[0]["name"],
-            "before",
-        )
-        self.assertEqual(gtfs.intermediate_stops_cache_info().currsize, 1)
+        assert gtfs.get_intermediate_stops_with_coords("Q", "A", "B")[0]["name"] == "before"
+        assert gtfs.intermediate_stops_cache_info().currsize == 1
 
         gtfs.set_pattern_index(self.PatternIndex("after"))
-        self.assertEqual(gtfs.intermediate_stops_cache_info().currsize, 0)
-        self.assertEqual(
-            gtfs.get_intermediate_stops_with_coords("Q", "A", "B")[0]["name"],
-            "after",
-        )
+        assert gtfs.intermediate_stops_cache_info().currsize == 0
+        assert gtfs.get_intermediate_stops_with_coords("Q", "A", "B")[0]["name"] == "after"
 
 
 if __name__ == "__main__":

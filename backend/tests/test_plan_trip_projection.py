@@ -18,7 +18,7 @@ class IncidentCoverageProjectionTests(unittest.TestCase):
             {"status": "complete"},
         )
 
-        self.assertEqual(explanation, "The Q is the faster option with one transfer.")
+        assert explanation == "The Q is the faster option with one transfer."
 
     def test_every_noncomplete_or_absent_incident_status_gets_one_disclosure(self):
         statuses = (
@@ -35,10 +35,7 @@ class IncidentCoverageProjectionTests(unittest.TestCase):
             with self.subTest(status=status):
                 metadata = {} if status is None else {"status": status}
                 explanation = self._project("Take the Q in about 20 minutes.", metadata)
-                self.assertEqual(
-                    explanation.casefold().count("incident coverage is incomplete"),
-                    1,
-                )
+                assert explanation.casefold().count("incident coverage is incomplete") == 1
 
     def test_existing_incomplete_disclosure_is_not_duplicated(self):
         explanation = self._project(
@@ -46,10 +43,7 @@ class IncidentCoverageProjectionTests(unittest.TestCase):
             {"status": "timeout"},
         )
 
-        self.assertEqual(
-            explanation.casefold().count("incident coverage is incomplete"),
-            1,
-        )
+        assert explanation.casefold().count("incident coverage is incomplete") == 1
 
     def test_single_leg_preserves_truthful_model_disclosure_variant(self):
         explanation = self._project(
@@ -57,7 +51,7 @@ class IncidentCoverageProjectionTests(unittest.TestCase):
             {"status": "timeout"},
         )
 
-        self.assertIn("Incident information was unavailable.", explanation)
+        assert "Incident information was unavailable." in explanation
 
     def test_incomplete_scan_replaces_unsafe_all_clear_with_grounded_fallback(self):
         explanation = self._project(
@@ -65,9 +59,8 @@ class IncidentCoverageProjectionTests(unittest.TestCase):
             {"status": "partial"},
         )
 
-        self.assertNotIn("no active incidents", explanation.casefold())
-        self.assertEqual(
-            explanation,
+        assert "no active incidents" not in explanation.casefold()
+        assert explanation == (
             "I found the best available route from the current transit options. "
-            "Current incident coverage is incomplete, so allow extra time.",
+            "Current incident coverage is incomplete, so allow extra time."
         )

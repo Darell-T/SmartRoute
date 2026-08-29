@@ -5,13 +5,12 @@ import unittest
 from unittest.mock import patch
 
 from app.services import cache
-from app.services.agent import loop
+from app.services.agent import events as agent_events
+from app.services.agent import loop, public_surface
 from app.services.agent.model import policy
 from app.services.agent.model import stream as model_stream
-from app.services.agent import public_surface
-from app.services.agent import events as agent_events
-from app.services.agent.tools import ToolResult, ToolSpec
-from app.services.agent.tools import declare_goals
+from app.services.agent.tools import ToolResult, ToolSpec, declare_goals
+
 from tests.test_agent_loop import (
     _AgentLoopHelpers,
     _load_agent_loop,
@@ -33,7 +32,7 @@ def _goal_registry() -> dict[str, ToolSpec]:
         }
         return result
 
-    async def present_transit(tool_input, ctx):
+    async def present_transit(tool_input, _ctx):
         return ToolResult(
             ok=True,
             data={
@@ -142,7 +141,7 @@ def _goal_present_route_round() -> dict:
     }
 
 
-def _goal_present_transit_round(message: str) -> dict:
+def _goal_present_transit_round() -> dict:
     return {
         "tool_use": [
             {
@@ -187,9 +186,9 @@ class TurnLatencyGuardTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase)
             for event in events_out[:first_tool]
             if event.type == "token"
         ]
-        self.assertEqual(tokens_before_tools, [])
+        assert tokens_before_tools == []
         reasoning = [event.text for event in events_out if event.type == "reasoning"]
-        self.assertEqual(reasoning[0], "Thinking through your request…")
+        assert reasoning[0] == "Thinking through your request…"
 
     async def test_ungrounded_arrival_prose_is_not_shown_before_the_tool(self) -> None:
         rounds = [
@@ -197,9 +196,7 @@ class TurnLatencyGuardTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase)
                 **_declared_arrival_round(),
                 "text": ["The next Q is in 3 minutes."],
             },
-            _goal_present_transit_round(
-                "Live data says the next downtown Q is in 4 minutes."
-            ),
+            _goal_present_transit_round(),
         ]
 
         events_out, _session = await self._run(
@@ -211,8 +208,8 @@ class TurnLatencyGuardTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase)
         rider_text = "".join(
             event.text for event in events_out if event.type == "token"
         )
-        self.assertNotIn("3 minutes", rider_text)
-        self.assertIn("4 minutes", rider_text)
+        assert "3 minutes" not in rider_text
+        assert "4 minutes" in rider_text
 
     async def test_first_visible_token_is_recorded_separately_from_model_production(
         self,
@@ -224,7 +221,7 @@ class TurnLatencyGuardTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase)
                     **_declared_arrival_round(),
                     "text": ["The next Q is in 3 minutes."],
                 },
-                _goal_present_transit_round("Live data says 4 minutes."),
+                _goal_present_transit_round(),
             ],
             message="When is the next downtown Q at Church Ave?",
             tool_registry=_goal_registry(),
@@ -233,23 +230,17 @@ class TurnLatencyGuardTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase)
         rider_text = "".join(
             event.text for event in events_out if event.type == "token"
         )
-        self.assertIn("4 minutes", rider_text)
-        self.assertNotIn("3 minutes", rider_text)
-        self.assertIn("conversation_first_visible_token_ms", trace.stage_ms)
-        self.assertGreaterEqual(
-            trace.stage_ms["conversation_first_visible_token_ms"],
-            trace.stage_ms.get("conversation_first_token_ms", 0.0),
-        )
+        assert "4 minutes" in rider_text
+        assert "3 minutes" not in rider_text
+        assert "conversation_first_visible_token_ms" in trace.stage_ms
+        assert trace.stage_ms["conversation_first_visible_token_ms"] >= trace.stage_ms.get("conversation_first_token_ms", 0.0)
 
 
 class ToolSurfaceAndTimeoutDefaultsTests(unittest.TestCase):
     def test_plain_route_surface_is_initial_state_surface(self) -> None:
         tools = loop._tools_for_state()
-        self.assertEqual(
-            {schema["name"] for schema in tools},
-            set(public_surface.INITIAL_TOOL_NAMES),
-        )
-        self.assertTrue(all("strict" not in schema for schema in tools))
+        assert {schema["name"] for schema in tools} == set(public_surface.INITIAL_TOOL_NAMES)
+        assert all("strict" not in schema for schema in tools)
 
     def test_auto_retries_once_and_attempts_time_out_sooner(self) -> None:
         with patch.dict(os.environ, {}, clear=False):
@@ -259,8 +250,8 @@ class ToolSurfaceAndTimeoutDefaultsTests(unittest.TestCase):
             ):
                 os.environ.pop(key, None)
             automatic = policy.policy_for_mode("auto")
-        self.assertEqual(automatic.retry_count, 1)
-        self.assertEqual(model_stream.MODEL_ATTEMPT_TIMEOUT_S, 15.0)
+        assert automatic.retry_count == 1
+        assert model_stream.MODEL_ATTEMPT_TIMEOUT_S == 15.0
 
 
 if __name__ == "__main__":

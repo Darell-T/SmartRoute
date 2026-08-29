@@ -156,7 +156,7 @@ class AnthropicLiveConversationContractTests(
         assert events[-1].type == "done"
         assert events[-1].terminal_state == "clarification_required"
         assert not any(event.type == "error" for event in events)
-        _assert_safe_passenger_output(self, events)
+        _assert_safe_passenger_output(events)
         text = _passenger_text(events).casefold()
         assert "direction" in text or ("uptown" in text and "downtown" in text)
         assert "q" in text

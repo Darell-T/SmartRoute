@@ -3,7 +3,6 @@ import unittest
 from unittest.mock import Mock, patch
 
 import httpx
-
 from app.services import geography as geo
 from app.services.live_feed import snapshot as live_snapshot
 
@@ -15,9 +14,9 @@ class GeocodePrivacyTests(unittest.TestCase):
         with patch("builtins.print") as printed:
             geo.geocode_address_with_reason("40.7128,-74.0060")
         output = " ".join(str(call.args[0]) for call in printed.call_args_list)
-        self.assertNotIn("40.7128", output)
-        self.assertNotIn("-74.0060", output)
-        self.assertIn("outcome=coordinates", output)
+        assert "40.7128" not in output
+        assert "-74.0060" not in output
+        assert "outcome=coordinates" in output
 
     def test_geocoder_logs_and_errors_omit_address_and_provider_text(self):
         response = Mock()
@@ -26,8 +25,8 @@ class GeocodePrivacyTests(unittest.TestCase):
         with patch("httpx.Client.get", return_value=response), patch("builtins.print") as printed:
             geo.geocode_address_with_reason("350 5th Ave, New York")
         output = " ".join(str(call.args[0]) for call in printed.call_args_list)
-        self.assertNotIn("350 5th", output)
-        self.assertIn("outcome=no_result", output)
+        assert "350 5th" not in output
+        assert "outcome=no_result" in output
 
         with patch(
             "httpx.Client.get",
@@ -40,10 +39,10 @@ class GeocodePrivacyTests(unittest.TestCase):
         ) as printed:
             _coords, error = geo.geocode_address_with_reason("350 5th Ave, New York")
         output = " ".join(str(call.args[0]) for call in printed.call_args_list)
-        self.assertEqual(error, "Geocoding service is temporarily unavailable.")
-        self.assertNotIn("350 5th", output)
-        self.assertNotIn("https://", output)
-        self.assertIn("error_type=RequestError", output)
+        assert error == "Geocoding service is temporarily unavailable."
+        assert "350 5th" not in output
+        assert "https://" not in output
+        assert "error_type=RequestError" in output
 
     def test_verbose_socket_location_log_omits_precise_input_and_exception_text(self):
         address = "350 5th Ave, New York"
@@ -55,8 +54,8 @@ class GeocodePrivacyTests(unittest.TestCase):
             print(live_snapshot._socket_failure_log("ws_live_feed", httpx.RequestError(
                 "https://provider/secret", request=httpx.Request("GET", "https://provider/"))))
         output = " ".join(str(call.args[0]) for call in printed.call_args_list)
-        self.assertNotIn(address, output)
-        self.assertNotIn(str(latitude), output)
-        self.assertNotIn(str(longitude), output)
-        self.assertNotIn("https://provider/secret", output)
-        self.assertIn("selected_routes=['B', 'Q']", output)
+        assert address not in output
+        assert str(latitude) not in output
+        assert str(longitude) not in output
+        assert "https://provider/secret" not in output
+        assert "selected_routes=['B', 'Q']" in output

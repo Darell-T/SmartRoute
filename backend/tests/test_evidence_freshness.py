@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from app.services.evidence import current_payload, evidence_envelope
 from evaluation.route_intelligence import advisor_context
 
-
-NOW = datetime.now(timezone.utc)
+NOW = datetime.now(UTC)
 
 
 class EvidenceFreshnessTests(unittest.TestCase):
@@ -24,9 +23,9 @@ class EvidenceFreshnessTests(unittest.TestCase):
             observed_at=NOW,
             available=False,
         )
-        self.assertEqual(current.status_at(NOW), "current")
-        self.assertEqual(current.status_at(NOW + timedelta(seconds=61)), "stale")
-        self.assertEqual(unavailable.status_at(NOW), "unavailable")
+        assert current.status_at(NOW) == "current"
+        assert current.status_at(NOW + timedelta(seconds=61)) == "stale"
+        assert unavailable.status_at(NOW) == "unavailable"
 
     def test_expired_payload_is_suppressed_but_provenance_remains(self):
         stale = evidence_envelope(
@@ -36,11 +35,11 @@ class EvidenceFreshnessTests(unittest.TestCase):
             ttl_seconds=30,
         )
         later = NOW + timedelta(seconds=31)
-        self.assertEqual(current_payload(stale, now=later, empty=[]), [])
+        assert current_payload(stale, now=later, empty=[]) == []
         serialized = stale.to_dict(later)
-        self.assertEqual(serialized["status"], "stale")
-        self.assertEqual(serialized["source"], "mta_alerts")
-        self.assertEqual(serialized["payload"], [{"header": "expired"}])
+        assert serialized["status"] == "stale"
+        assert serialized["source"] == "mta_alerts"
+        assert serialized["payload"] == [{"header": "expired"}]
 
     def test_advisor_boundary_excludes_expired_evidence(self):
         stale = evidence_envelope(
@@ -55,9 +54,9 @@ class EvidenceFreshnessTests(unittest.TestCase):
             ticketmaster_event_impacts=[{"event_id": "fallback"}],
             evidence={"events": stale},
         )
-        self.assertEqual(payload["ticketmaster_event_impacts"], [])
-        self.assertEqual(payload["evidence"]["events"]["status"], "stale")
-        self.assertEqual(payload["evidence"]["events"]["payload"], [])
+        assert payload["ticketmaster_event_impacts"] == []
+        assert payload["evidence"]["events"]["status"] == "stale"
+        assert payload["evidence"]["events"]["payload"] == []
 
 
 if __name__ == "__main__":

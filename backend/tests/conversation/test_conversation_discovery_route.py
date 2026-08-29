@@ -32,7 +32,6 @@ from tests.conversation import conversation_discovery_support as _discovery_supp
 from tests.conversation.conversation_discovery_support import _DiscoveryRouteBase
 from tests.conversation.conversation_matrix_harness import load_agent_loop
 
-
 INITIAL_TOOL_PROFILE = frozenset(
     {
         "declare_goals",
@@ -65,6 +64,21 @@ def _goal_for_call(name: str, tool_input: dict) -> tuple[str, str] | None:
     return None
 
 
+def _declared_call(call: dict) -> dict:
+    name = str(call.get("name") or "")
+    tool_input = dict(call.get("input") or {})
+    goal = _goal_for_call(name, tool_input)
+    if goal is None:
+        return dict(call)
+    key, _kind = goal
+    if name == "complete_turn":
+        tool_input.pop("goal_key", None)
+        tool_input["goal_keys"] = [key]
+    else:
+        tool_input["goal_key"] = key
+    return {**call, "input": tool_input}
+
+
 def _declared_rounds(rounds: list[dict]) -> list[dict]:
     calls = [
         call
@@ -92,21 +106,7 @@ def _declared_rounds(rounds: list[dict]) -> list[dict]:
         if not tool_uses:
             adapted.append(scripted)
             continue
-        transformed: list[dict] = []
-        for call in tool_uses:
-            name = str(call.get("name") or "")
-            tool_input = dict(call.get("input") or {})
-            goal = _goal_for_call(name, tool_input)
-            if goal is None:
-                transformed.append(dict(call))
-                continue
-            key, _kind = goal
-            if name == "complete_turn":
-                tool_input.pop("goal_key", None)
-                tool_input["goal_keys"] = [key]
-            else:
-                tool_input["goal_key"] = key
-            transformed.append({**call, "input": tool_input})
+        transformed = [_declared_call(call) for call in tool_uses]
         if not declared:
             transformed.insert(
                 0,
