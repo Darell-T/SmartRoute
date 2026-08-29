@@ -436,6 +436,11 @@ from 329 to 295 entries. The final quality command exits 0 with
 Own `backend/app/services/trips/**`. At `c058199` that is 62 functions
 above 12.
 
+Worker completion is uncommitted on `damn-lines-integration` against
+checkpoint `140495a`. Quality comparison stays `c058199`. See
+`docs/lint-cleanup-handoff.md`. Do not start Batch 6C until Codex accepts
+Batch 6B.
+
 Prioritize `match_cached_incidents`, `_prefer`, and
 `build_chained_itinerary`. Separate incident-to-stop matching from impact
 classification. Separate official-source precedence from evidence merging.
@@ -444,6 +449,14 @@ Separate chained-segment construction from total calculation.
 Preserve canonical itinerary arithmetic, selection order, dwell provenance,
 transfers, merged walks, incident identity, route matching, crowd evidence,
 constraints, and fallback behavior.
+
+Reviewer final (2026-08-29). Scope checkpoint `140495a`. Batch 6B has
+`above_12=0`, `at_11_or_12=24`, and `crap_above_30=0`. Branch-aware coverage
+is 88.6%. The reviewer removed 59 proven-stale entries and reduced
+`quality/baseline.json` from 295 to 236 entries. The update also lowered the
+existing ceilings for `lookup_events` and `prepare_structural_candidates`.
+The final quality command exits 0 with `approval_eligible: true`. Batch 6C was
+not started.
 
 ## Batch 6C: agent place, route, and shared tools
 

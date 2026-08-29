@@ -161,6 +161,109 @@ def _stop_records(step: Mapping[str, Any]) -> Iterable[tuple[Mapping[str, Any], 
         yield {**arrival, "name": step.get("arrival_stop")}, offset + 1
 
 
+_TRANSIT_STEP_TYPES = frozenset({"SUBWAY", "BUS", "RAIL", "TRAIN", "LIGHT_RAIL"})
+
+
+@dataclass(frozen=True)
+class _ParsedTransitStop:
+    candidate_id: str
+    mode: str
+    route_id: str | None
+    direction: str | None
+    segment_context: str | None
+    stop_id: str | None
+    name: str | None
+    latitude: float
+    longitude: float
+    stop_order: int
+    step_key: tuple[int, int]
+
+
+def _step_segment_context(step: Mapping[str, Any]) -> str | None:
+    departure, arrival = _text(step.get("departure_stop")), _text(step.get("arrival_stop"))
+    return " -> ".join(item for item in (departure, arrival) if item) or None
+
+
+def _record_stop_identity(record: Mapping[str, Any]) -> tuple[str | None, str | None]:
+    stop_id = _text(record.get("stop_id") or record.get("id"))
+    name = _text(record.get("name") or record.get("stop_name"))
+    return stop_id, name
+
+
+def _parse_transit_step(
+    step: object,
+    candidate_id: str,
+    step_index: int,
+    route_index: int,
+) -> Iterable[_ParsedTransitStop]:
+    if not isinstance(step, Mapping):
+        return
+    mode = _text(step.get("type"))
+    if mode not in _TRANSIT_STEP_TYPES:
+        return
+    route_id = _text(step.get("route_id") or step.get("train_line"))
+    direction = _text(step.get("direction"))
+    segment_context = _step_segment_context(step)
+    for record, local_order in _stop_records(step):
+        coordinates = _coords(record)
+        if coordinates is None:
+            continue
+        lat, lon = coordinates
+        stop_id, name = _record_stop_identity(record)
+        yield _ParsedTransitStop(
+            candidate_id=candidate_id,
+            mode=mode.lower(),
+            route_id=route_id,
+            direction=direction,
+            segment_context=segment_context,
+            stop_id=stop_id,
+            name=name,
+            latitude=lat,
+            longitude=lon,
+            stop_order=(step_index * 10000) + local_order,
+            step_key=(route_index, step_index),
+        )
+
+
+def _iter_parsed_stops(
+    routes: Iterable[Iterable[Mapping[str, Any]]],
+    candidate_ids: Iterable[str] | None,
+) -> Iterable[_ParsedTransitStop]:
+    route_list = list(routes or [])
+    supplied_ids = list(candidate_ids or [])
+    for route_index, route in enumerate(route_list):
+        candidate_id = _text(supplied_ids[route_index] if route_index < len(supplied_ids) else None)
+        candidate_id = candidate_id or f"candidate-{route_index}"
+        for step_index, step in enumerate(route or []):
+            yield from _parse_transit_step(step, candidate_id, step_index, route_index)
+
+
+class _StopIdentityIndex:
+    """Join provider aliases onto one physical stop context."""
+
+    def __init__(self) -> None:
+        self._aliases: dict[tuple[str, ...], CandidateStopContext] = {}
+        self.contexts: list[CandidateStopContext] = []
+
+    def resolve(
+        self,
+        stop_id: str | None,
+        name: str | None,
+        lat: float,
+        lon: float,
+    ) -> CandidateStopContext:
+        keys = _physical_keys(stop_id, name, lat, lon)
+        context = next((self._aliases[key] for key in keys if key in self._aliases), None)
+        if context is None:
+            context = CandidateStopContext(stop_id, name, lat, lon)
+            self.contexts.append(context)
+        elif context.stop_id is None and stop_id:
+            context.stop_id = stop_id
+        for key in keys:
+            self._aliases[key] = context
+        return context
+
+
 def extract_candidate_stop_context(
     routes: Iterable[Iterable[Mapping[str, Any]]],
     *,
@@ -172,65 +275,22 @@ def extract_candidate_stop_context(
     including mode, route, direction, ordered position, and the leg endpoints.
     Invalid coordinates are omitted rather than allowed into a local search.
     """
-    route_list = list(routes or [])
-    supplied_ids = list(candidate_ids or [])
-    aliases: dict[tuple[str, ...], CandidateStopContext] = {}
-    contexts: list[CandidateStopContext] = []
-    for route_index, route in enumerate(route_list):
-        candidate_id = _text(supplied_ids[route_index] if route_index < len(supplied_ids) else None)
-        candidate_id = candidate_id or f"candidate-{route_index}"
-        for step_index, step in enumerate(route or []):
-            if not isinstance(step, Mapping):
-                continue
-            mode = _text(step.get("type"))
-            if mode not in {"SUBWAY", "BUS", "RAIL", "TRAIN", "LIGHT_RAIL"}:
-                continue
-            route_id = _text(step.get("route_id") or step.get("train_line"))
-            direction = _text(step.get("direction"))
-            departure, arrival = _text(step.get("departure_stop")), _text(step.get("arrival_stop"))
-            segment_context = " -> ".join(item for item in (departure, arrival) if item) or None
-            seen_in_step: set[int] = set()
-            for record, local_order in _stop_records(step):
-                coordinates = _coords(record)
-                if coordinates is None:
-                    continue
-                lat, lon = coordinates
-                stop_id = _text(record.get("stop_id") or record.get("id"))
-                name = _text(record.get("name") or record.get("stop_name"))
-                context = _resolve_stop_context(
-                    stop_id, name, lat, lon, aliases, contexts
-                )
-                if id(context) in seen_in_step:
-                    continue
-                seen_in_step.add(id(context))
-                association = CandidateStopAssociation(
-                    candidate_route_id=candidate_id,
-                    mode=mode.lower(),
-                    route_id=route_id,
-                    direction=direction,
-                    stop_order=(step_index * 10000) + local_order,
-                    segment_context=segment_context,
-                )
-                if association not in context.associations:
-                    context.associations.append(association)
-    return contexts
-
-
-def _resolve_stop_context(
-    stop_id: str | None,
-    name: str | None,
-    lat: float,
-    lon: float,
-    aliases: dict[tuple[str, ...], CandidateStopContext],
-    contexts: list[CandidateStopContext],
-) -> CandidateStopContext:
-    keys = _physical_keys(stop_id, name, lat, lon)
-    context = next((aliases[key] for key in keys if key in aliases), None)
-    if context is None:
-        context = CandidateStopContext(stop_id, name, lat, lon)
-        contexts.append(context)
-    elif context.stop_id is None and stop_id:
-        context.stop_id = stop_id
-    for key in keys:
-        aliases[key] = context
-    return context
+    index = _StopIdentityIndex()
+    seen_in_step: set[tuple[tuple[int, int], int]] = set()
+    for parsed in _iter_parsed_stops(routes, candidate_ids):
+        context = index.resolve(parsed.stop_id, parsed.name, parsed.latitude, parsed.longitude)
+        marker = (parsed.step_key, id(context))
+        if marker in seen_in_step:
+            continue
+        seen_in_step.add(marker)
+        association = CandidateStopAssociation(
+            candidate_route_id=parsed.candidate_id,
+            mode=parsed.mode,
+            route_id=parsed.route_id,
+            direction=parsed.direction,
+            stop_order=parsed.stop_order,
+            segment_context=parsed.segment_context,
+        )
+        if association not in context.associations:
+            context.associations.append(association)
+    return index.contexts

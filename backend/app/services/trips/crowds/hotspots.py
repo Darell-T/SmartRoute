@@ -114,37 +114,46 @@ def _coords(value: Mapping[str, Any] | None) -> tuple[float, float] | None:
     return latitude, longitude
 
 
+def _parse_named_stop(name: object, coordinates: object) -> dict[str, Any] | None:
+    point = _coords(coordinates if isinstance(coordinates, Mapping) else None)
+    if point is None:
+        return None
+    row = {"name": str(name or "").strip(), "lat": point[0], "lng": point[1]}
+    return row if row["name"] else None
+
+
+def _select_pattern_stops(
+    gtfs: Any, step: Mapping[str, Any]
+) -> list[Mapping[str, Any]]:
+    index = getattr(gtfs, "_pattern_index", None) if gtfs else None
+    if step.get("type") != "SUBWAY" or not index or not step.get("route_id"):
+        return []
+    try:
+        rows, _metadata = index.get_intermediate_stops_with_coords(
+            step["route_id"],
+            step.get("departure_stop"),
+            step.get("arrival_stop"),
+            step.get("departure_coords"),
+            step.get("arrival_coords"),
+        )
+    except Exception:  # noqa: BLE001 pattern-index faults omit intermediates
+        return []
+    return [row for row in rows or [] if isinstance(row, Mapping)]
+
+
 def _step_stops(gtfs: Any, step: Mapping[str, Any]) -> list[dict[str, Any]]:
     stops: list[dict[str, Any]] = []
-
-    def add(name: object, coordinates: object) -> None:
-        point = _coords(coordinates if isinstance(coordinates, Mapping) else None)
-        if point is None:
-            return
-        row = {"name": str(name or "").strip(), "lat": point[0], "lng": point[1]}
-        if row["name"] and (
-            not stops
-            or _station_key(stops[-1]["name"]) != _station_key(row["name"])
+    candidates = [
+        (step.get("departure_stop"), step.get("departure_coords")),
+        *[(row.get("name"), row) for row in _select_pattern_stops(gtfs, step)],
+        (step.get("arrival_stop"), step.get("arrival_coords")),
+    ]
+    for name, coordinates in candidates:
+        row = _parse_named_stop(name, coordinates)
+        if row is not None and (
+            not stops or _station_key(stops[-1]["name"]) != _station_key(row["name"])
         ):
             stops.append(row)
-
-    add(step.get("departure_stop"), step.get("departure_coords"))
-    index = getattr(gtfs, "_pattern_index", None) if gtfs else None
-    if step.get("type") == "SUBWAY" and index and step.get("route_id"):
-        try:
-            rows, _metadata = index.get_intermediate_stops_with_coords(
-                step["route_id"],
-                step.get("departure_stop"),
-                step.get("arrival_stop"),
-                step.get("departure_coords"),
-                step.get("arrival_coords"),
-            )
-        except Exception:  # noqa: BLE001 pattern-index faults omit intermediates
-            rows = []
-        for row in rows or []:
-            if isinstance(row, Mapping):
-                add(row.get("name"), row)
-    add(step.get("arrival_stop"), step.get("arrival_coords"))
     return stops
 
 
@@ -161,38 +170,58 @@ def _interpolated_time(
     return departure + (arrival - departure) * (index / (count - 1))
 
 
+def _project_hotspot_hit(
+    route_index: int,
+    step: Mapping[str, Any],
+    stop: dict[str, Any],
+    stop_index: int,
+    stop_count: int,
+) -> HotspotHit | None:
+    hotspot = _HOTSPOTS_BY_STATION.get(_station_key(stop["name"]))
+    if hotspot is None:
+        return None
+    return HotspotHit(
+        route_index=route_index,
+        hotspot_key=hotspot.key,
+        hotspot_name=hotspot.name,
+        station_name=stop["name"],
+        latitude=stop["lat"],
+        longitude=stop["lng"],
+        expected_at=_interpolated_time(
+            _parse_time(step.get("departure_time_iso")),
+            _parse_time(step.get("arrival_time_iso")),
+            stop_index,
+            stop_count,
+        ),
+        route_id=str(step.get("route_id") or step.get("train_line") or "")
+        .strip()
+        .upper(),
+    )
+
+
+def _select_step_hotspot_hits(
+    route_index: int, step: Mapping[str, Any], gtfs: Any
+) -> list[HotspotHit]:
+    if step.get("type") not in {"SUBWAY", "BUS"}:
+        return []
+    stops = _step_stops(gtfs, step)
+    hits: list[HotspotHit] = []
+    for stop_index, stop in enumerate(stops):
+        hit = _project_hotspot_hit(route_index, step, stop, stop_index, len(stops))
+        if hit is not None:
+            hits.append(hit)
+    return hits
+
+
 def find_hotspot_hits(gtfs: Any, routes: Iterable[Iterable[Mapping[str, Any]]]) -> list[HotspotHit]:
     hits: list[HotspotHit] = []
     seen: set[tuple[int, str]] = set()
     for route_index, route in enumerate(routes or []):
         for step in route or []:
-            if step.get("type") not in {"SUBWAY", "BUS"}:
-                continue
-            stops = _step_stops(gtfs, step)
-            departure = _parse_time(step.get("departure_time_iso"))
-            arrival = _parse_time(step.get("arrival_time_iso"))
-            for stop_index, stop in enumerate(stops):
-                hotspot = _HOTSPOTS_BY_STATION.get(_station_key(stop["name"]))
-                if hotspot is None or (route_index, hotspot.key) in seen:
+            for hit in _select_step_hotspot_hits(route_index, step, gtfs):
+                key = (route_index, hit.hotspot_key)
+                if key in seen:
                     continue
-                seen.add((route_index, hotspot.key))
-                hits.append(
-                    HotspotHit(
-                        route_index=route_index,
-                        hotspot_key=hotspot.key,
-                        hotspot_name=hotspot.name,
-                        station_name=stop["name"],
-                        latitude=stop["lat"],
-                        longitude=stop["lng"],
-                        expected_at=_interpolated_time(
-                            departure,
-                            arrival,
-                            stop_index,
-                            len(stops),
-                        ),
-                        route_id=str(
-                            step.get("route_id") or step.get("train_line") or ""
-                        ).strip().upper(),
-                    )
-                )
+                seen.add(key)
+                hits.append(hit)
     return hits

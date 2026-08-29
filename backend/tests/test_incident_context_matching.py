@@ -12,6 +12,7 @@ from app.services.trips.route_incidents.matching import (
     match_cached_incidents,
 )
 from app.services.trips.route_incidents.merge import merge_incident_evidence
+from app.services.trips.route_incidents.scan import build_candidate_stop_context
 from pydantic import BaseModel
 
 
@@ -320,3 +321,38 @@ class IncidentMergeTests(unittest.TestCase):
         stale_post = {"source": "x", "source_id": "post", "latitude": 40.65, "longitude": -73.96, "description": "collision", "observed_at": (now - timedelta(hours=7)).isoformat()}
         merged = merge_incident_evidence([first, different, resolved, stale_post], now=now)
         assert [item["source_id"] for item in merged] == ["one", "two"]
+
+
+class PatternIndexStopContextTests(unittest.TestCase):
+    def _subway_route(self) -> list[dict]:
+        return [
+            {
+                "type": "SUBWAY",
+                "route_id": "Q",
+                "departure_stop": "Church Av",
+                "arrival_stop": "Prospect Park",
+                "departure_coords": {"latitude": 40.6500, "longitude": -73.9630},
+                "arrival_coords": {"latitude": 40.6610, "longitude": -73.9620},
+            }
+        ]
+
+    def test_pattern_index_fault_omits_intermediates_and_keeps_endpoints(self):
+        class _FaultyIndex:
+            def get_intermediate_stops_with_coords(self, *_args):
+                raise RuntimeError("pattern index unavailable")
+
+        gtfs = type("GTFS", (), {"_pattern_index": _FaultyIndex()})()
+        names = {ctx.stop_name for ctx in build_candidate_stop_context(gtfs, [self._subway_route()])}
+        assert names == {"Church Av", "Prospect Park"}
+
+    def test_pattern_index_rows_attach_as_intermediate_stops(self):
+        class _RowsIndex:
+            def get_intermediate_stops_with_coords(self, *_args):
+                return (
+                    [{"id": "D25", "name": "Parkside Av", "lat": 40.6550, "lng": -73.9625}],
+                    {},
+                )
+
+        gtfs = type("GTFS", (), {"_pattern_index": _RowsIndex()})()
+        names = {ctx.stop_name for ctx in build_candidate_stop_context(gtfs, [self._subway_route()])}
+        assert names == {"Church Av", "Parkside Av", "Prospect Park"}

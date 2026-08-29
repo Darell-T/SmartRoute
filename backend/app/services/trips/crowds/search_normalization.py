@@ -100,6 +100,92 @@ def _parse_time(value: object) -> str | None:
     return parsed.isoformat() if parsed.tzinfo is not None else None
 
 
+def _select_search_event_fields(
+    raw: Mapping[str, Any],
+    areas: Mapping[str, HotspotHit],
+    allowed_citations: set[str],
+) -> tuple[str, HotspotHit, str, str, str] | None:
+    hotspot_key = _bounded_text(raw.get("hotspot_key"), 64)
+    area = areas.get(hotspot_key)
+    source_ref = _bounded_text(raw.get("source_ref"), 500)
+    title = _bounded_text(raw.get("title"), 140)
+    if area is None or source_ref not in allowed_citations or not title:
+        return None
+    category = _bounded_text(raw.get("category"), 24).casefold()
+    if category not in _ALLOWED_CATEGORIES:
+        category = "other"
+    return hotspot_key, area, source_ref, title, category
+
+
+def _project_search_event(
+    hotspot_key: str,
+    area: HotspotHit,
+    source_ref: str,
+    title: str,
+    category: str,
+    raw: Mapping[str, Any],
+    observed_at: datetime,
+) -> tuple[str, dict[str, Any]]:
+    source_class = _source_class(source_ref)
+    venue_name = _bounded_text(raw.get("venue"), 100)
+    start_iso = _parse_time(raw.get("start_iso"))
+    end_iso = _parse_time(raw.get("end_iso"))
+    scoring_authorized = (
+        source_class in {"official_web", "official_x"}
+        and start_iso is not None
+        and bool(venue_name)
+    )
+    identity = hashlib.sha256(
+        f"{hotspot_key}|{title.casefold()}|{start_iso or ''}".encode()
+    ).hexdigest()[:20]
+    return identity, {
+        "event_id": f"grok:{identity}",
+        "source_reference": f"{source_class}:{identity}",
+        "name": title,
+        "category": category,
+        "venue_name": venue_name or area.hotspot_name,
+        "venue_latitude": area.latitude,
+        "venue_longitude": area.longitude,
+        "start_iso": start_iso,
+        "estimated_end_iso": end_iso,
+        "start_time_status": "confirmed" if start_iso else "unknown",
+        "source_class": source_class,
+        "verification_tier": (
+            "official"
+            if source_class in {"official_web", "official_x"}
+            else "corroborative"
+        ),
+        "confidence": {
+            "official_web": 0.85,
+            "official_x": 0.75,
+            "independent_web": 0.55,
+            "independent_x": 0.4,
+        }[source_class],
+        "scoring_authorized": scoring_authorized,
+        "observed_at": observed_at.isoformat(),
+        "hotspot_key": hotspot_key,
+        # Retained inside the provider boundary for audit/replay only.
+        "source_ref": source_ref,
+    }
+
+
+def _parse_normalized_search_event(
+    raw: object,
+    areas: Mapping[str, HotspotHit],
+    allowed_citations: set[str],
+    observed_at: datetime,
+) -> tuple[str, dict[str, Any]] | None:
+    if not isinstance(raw, Mapping):
+        return None
+    fields = _select_search_event_fields(raw, areas, allowed_citations)
+    if fields is None:
+        return None
+    hotspot_key, area, source_ref, title, category = fields
+    return _project_search_event(
+        hotspot_key, area, source_ref, title, category, raw, observed_at
+    )
+
+
 def normalize_search_payload(
     payload: Mapping[str, Any],
     *,
@@ -116,63 +202,16 @@ def normalize_search_payload(
     seen: set[str] = set()
     raw_events = payload.get("events")
     for raw in raw_events if isinstance(raw_events, list) else []:
-        if not isinstance(raw, Mapping):
-            continue
-        hotspot_key = _bounded_text(raw.get("hotspot_key"), 64)
-        area = areas.get(hotspot_key)
-        source_ref = _bounded_text(raw.get("source_ref"), 500)
-        title = _bounded_text(raw.get("title"), 140)
-        if area is None or source_ref not in allowed_citations or not title:
-            continue
-        category = _bounded_text(raw.get("category"), 24).casefold()
-        if category not in _ALLOWED_CATEGORIES:
-            category = "other"
-        source_class = _source_class(source_ref)
-        venue_name = _bounded_text(raw.get("venue"), 100)
-        start_iso = _parse_time(raw.get("start_iso"))
-        end_iso = _parse_time(raw.get("end_iso"))
-        scoring_authorized = (
-            source_class in {"official_web", "official_x"}
-            and start_iso is not None
-            and bool(venue_name)
+        parsed = _parse_normalized_search_event(
+            raw, areas, allowed_citations, observed_at
         )
-        identity = hashlib.sha256(
-            f"{hotspot_key}|{title.casefold()}|{start_iso or ''}".encode()
-        ).hexdigest()[:20]
+        if parsed is None:
+            continue
+        identity, event = parsed
         if identity in seen:
             continue
         seen.add(identity)
-        events.append(
-            {
-                "event_id": f"grok:{identity}",
-                "source_reference": f"{source_class}:{identity}",
-                "name": title,
-                "category": category,
-                "venue_name": venue_name or area.hotspot_name,
-                "venue_latitude": area.latitude,
-                "venue_longitude": area.longitude,
-                "start_iso": start_iso,
-                "estimated_end_iso": end_iso,
-                "start_time_status": "confirmed" if start_iso else "unknown",
-                "source_class": source_class,
-                "verification_tier": (
-                    "official"
-                    if source_class in {"official_web", "official_x"}
-                    else "corroborative"
-                ),
-                "confidence": {
-                    "official_web": 0.85,
-                    "official_x": 0.75,
-                    "independent_web": 0.55,
-                    "independent_x": 0.4,
-                }[source_class],
-                "scoring_authorized": scoring_authorized,
-                "observed_at": observed_at.isoformat(),
-                "hotspot_key": hotspot_key,
-                # Retained inside the provider boundary for audit/replay only.
-                "source_ref": source_ref,
-            }
-        )
+        events.append(event)
         if len(events) >= _MAX_EVENTS:
             break
     return events

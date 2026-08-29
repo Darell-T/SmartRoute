@@ -208,6 +208,35 @@ class TicketmasterEventLookupTests(unittest.IsolatedAsyncioTestCase):
         )
         assert parsed["start_iso"] == "2026-07-17T00:00:00Z"
 
+    async def test_failed_datetime_string_does_not_fall_back_to_local_fields(self):
+        offsetless = _event(
+            "offsetless",
+            start={
+                "dateTime": "2026-07-16T20:00:00",
+                "localDate": "2026-07-16",
+                "localTime": "20:00:00",
+            },
+        )
+        malformed = _event(
+            "malformed",
+            start={
+                "dateTime": "tonight",
+                "localDate": "2026-07-16",
+                "localTime": "20:00:00",
+            },
+        )
+        fetch = AsyncMock(
+            return_value=({"_embedded": {"events": [offsetless, malformed]}}, None)
+        )
+        with patch.object(event_provider, "fetch_json", fetch):
+            result = await check_transit.execute_event_lookup(
+                {"query": "Knicks", "date": "2026-07-16"}, _ctx()
+            )
+        by_id = {event["event_id"]: event for event in result.data["events"]}
+        for event_id in ("offsetless", "malformed"):
+            assert by_id[event_id]["start_iso"] is None
+            assert by_id[event_id]["estimated_end_iso"] is None
+
     async def test_cancelled_events_are_excluded_and_other_unsettled_statuses_have_no_crowd_estimate(self):
         payload = {
             "_embedded": {

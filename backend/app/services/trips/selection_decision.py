@@ -140,8 +140,11 @@ def _add_comparison_reasons(
 ) -> None:
     if _has_stage_a_factor(selected, "reasonable_local_option"):
         supported.add("reasonable_local_option")
-    if alternatives:
-        _add_comparative_reasons(supported, selected, alternatives)
+    if not alternatives:
+        return
+    supported.update(_select_preference_reasons(selected, alternatives))
+    _add_disruption_reason(supported, selected, alternatives)
+    _add_crowd_reason(supported, selected, alternatives)
 
 
 def select_fallback_candidate(
@@ -220,42 +223,33 @@ def _fallback_entry_is_valid(entry: dict[str, Any], digest: object) -> bool:
     )
 
 
-def _add_comparative_reasons(
-    supported: set[str],
-    selected: dict[str, Any],
-    alternatives: list[dict[str, Any]],
-) -> None:
-    _add_preference_reasons(supported, selected, alternatives)
-    _add_disruption_reason(supported, selected, alternatives)
-    _add_crowd_reason(supported, selected, alternatives)
+_PREFERENCE_REASON_KEYS = {
+    "LESS_WALKING": ("less_walking", "walking_minutes"),
+    "FEWER_TRANSFERS": ("fewer_transfers", "transfers"),
+}
 
 
-def _add_preference_reasons(
-    supported: set[str],
+def _select_preference_reasons(
     selected: dict[str, Any],
     alternatives: list[dict[str, Any]],
-) -> None:
+) -> set[str]:
     explicit = _explicit_routing_preference(selected)
-    crowd_active = _crowd_preference_is_active(selected)
-    if explicit is None and not crowd_active:
-        if _strict_minimum(selected, alternatives, "duration_minutes"):
-            supported.add("fastest")
-        if _supports_routing_preference(selected, "LESS_WALKING") and _strict_minimum(
-            selected, alternatives, "walking_minutes"
+    if explicit is not None:
+        code, key = _PREFERENCE_REASON_KEYS[explicit]
+        if _strict_minimum(selected, alternatives, key):
+            return {code}
+        return set()
+    if _crowd_preference_is_active(selected):
+        return set()
+    reasons: set[str] = set()
+    if _strict_minimum(selected, alternatives, "duration_minutes"):
+        reasons.add("fastest")
+    for preference, (code, key) in _PREFERENCE_REASON_KEYS.items():
+        if _supports_routing_preference(selected, preference) and _strict_minimum(
+            selected, alternatives, key
         ):
-            supported.add("less_walking")
-        if _supports_routing_preference(
-            selected, "FEWER_TRANSFERS"
-        ) and _strict_minimum(selected, alternatives, "transfers"):
-            supported.add("fewer_transfers")
-    elif explicit == "LESS_WALKING" and _strict_minimum(
-        selected, alternatives, "walking_minutes"
-    ):
-        supported.add("less_walking")
-    elif explicit == "FEWER_TRANSFERS" and _strict_minimum(
-        selected, alternatives, "transfers"
-    ):
-        supported.add("fewer_transfers")
+            reasons.add(code)
+    return reasons
 
 
 def _add_disruption_reason(

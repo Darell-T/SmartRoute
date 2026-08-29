@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 
 from app.services.trips import candidates
+from app.services.trips.itinerary import DEFAULT_DWELL_MINUTES
 from app.services.trips.preparation.combine import combine_prepared_chains
 from app.services.trips.preparation.constraints import route_constraints
 from app.services.trips.preparation.context import (
@@ -22,7 +23,6 @@ from app.services.trips.preparation.prepare import (
 MULTI_STOP_BEAM_WIDTH = 3
 MULTI_STOP_PROVIDER_WIDTH = 5
 MAX_CANDIDATES = 8
-DEFAULT_DWELL_MINUTES = 25
 
 PrepareSegment = Callable[
     [dict, RoutePreparationContext],
@@ -47,64 +47,21 @@ async def prepare_multi_stop(
     beam_width = max(1, min(MULTI_STOP_BEAM_WIDTH, max_candidates))
     provider_width = max(1, min(MULTI_STOP_PROVIDER_WIDTH, max_candidates))
     previous_sink = ctx.progress_sink
-
-    async def progress_without_intermediate_complete(stage: str, status: str) -> None:
-        if (
-            stage in {"finding_routes", "checking_live_conditions"}
-            and status == "complete"
-        ):
-            return
-        if previous_sink is not None:
-            await previous_sink(stage, status)
-
-    ctx.progress_sink = progress_without_intermediate_complete
+    ctx.progress_sink = _progress_without_intermediate_complete(previous_sink)
     try:
-        first_input = _segment_input(
+        partials = await _grow_multi_stop_beam(
             tool_input,
-            origin=str(tool_input.get("origin") or "user"),
-            destination=destinations[0],
-            departure_time=tool_input.get("departure_time"),
+            ctx,
+            destinations,
+            dwell_minutes,
+            prepare_segment,
+            provider_width,
+            beam_width,
         )
-        first_input["max_candidates"] = provider_width
-        first = await prepare_segment(first_input, ctx)
-        if is_route_preparation_failure(first):
-            return RoutePreparationFailure(
-                f"could not prepare stop 1: {getattr(first, 'error', None) or 'routing failed'}"
-            )
-        partials = [
-            PreparedChain(
-                legs=[(first, route_index)],
-                score=_route_score(first, route_index),
-            )
-            for route_index in _candidate_choices(first, provider_width)
-        ]
-        for segment_index, destination in enumerate(destinations[1:], start=1):
-            expanded: list[PreparedChain] = []
-            for partial in partials:
-                expanded.extend(
-                    await _chains_through_next_stop(
-                        partial,
-                        ctx,
-                        tool_input,
-                        destinations,
-                        segment_index,
-                        destination,
-                        dwell_minutes,
-                        prepare_segment,
-                        provider_width,
-                    )
-                )
-            if not expanded:
-                return RoutePreparationFailure(
-                    f"could not prepare stop {segment_index + 1}: routing failed"
-                )
-            # Keep the provider's order as the model-visible order.  The
-            # private composite score is only a fallback input after the
-            # model has had its chance to choose; it must not decide which
-            # multi-stop chains survive the beam.
-            partials = _bounded_provider_order(expanded, beam_width)
     finally:
         ctx.progress_sink = previous_sink
+    if is_route_preparation_failure(partials):
+        return partials
     if previous_sink is not None:
         for stage in ("finding_routes", "checking_live_conditions"):
             await previous_sink(stage, "complete")
@@ -119,6 +76,77 @@ async def prepare_multi_stop(
         dwell_minutes=dwell_minutes,
         dwell_source=dwell_source,
     )
+
+
+def _progress_without_intermediate_complete(previous_sink):
+    """Hold live-stage complete until the full beam finishes."""
+
+    async def emit(stage: str, status: str) -> None:
+        if (
+            stage in {"finding_routes", "checking_live_conditions"}
+            and status == "complete"
+        ):
+            return
+        if previous_sink is not None:
+            await previous_sink(stage, status)
+
+    return emit
+
+
+async def _grow_multi_stop_beam(
+    tool_input: dict,
+    ctx: RoutePreparationContext,
+    destinations: list[str],
+    dwell_minutes: int,
+    prepare_segment: PrepareSegment,
+    provider_width: int,
+    beam_width: int,
+) -> list[PreparedChain] | RoutePreparationFailure:
+    first_input = _segment_input(
+        tool_input,
+        origin=str(tool_input.get("origin") or "user"),
+        destination=destinations[0],
+        departure_time=tool_input.get("departure_time"),
+    )
+    first_input["max_candidates"] = provider_width
+    first = await prepare_segment(first_input, ctx)
+    if is_route_preparation_failure(first):
+        return RoutePreparationFailure(
+            f"could not prepare stop 1: {getattr(first, 'error', None) or 'routing failed'}"
+        )
+    partials = [
+        PreparedChain(
+            legs=[(first, route_index)],
+            score=_route_score(first, route_index),
+        )
+        for route_index in _candidate_choices(first, provider_width)
+    ]
+    for segment_index, destination in enumerate(destinations[1:], start=1):
+        expanded: list[PreparedChain] = []
+        for partial in partials:
+            expanded.extend(
+                await _chains_through_next_stop(
+                    partial,
+                    ctx,
+                    tool_input,
+                    destinations,
+                    segment_index,
+                    destination,
+                    dwell_minutes,
+                    prepare_segment,
+                    provider_width,
+                )
+            )
+        if not expanded:
+            return RoutePreparationFailure(
+                f"could not prepare stop {segment_index + 1}: routing failed"
+            )
+        # Keep the provider's order as the model-visible order.  The
+        # private composite score is only a fallback input after the
+        # model has had its chance to choose; it must not decide which
+        # multi-stop chains survive the beam.
+        partials = _bounded_provider_order(expanded, beam_width)
+    return partials
 
 
 async def _chains_through_next_stop(

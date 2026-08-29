@@ -258,22 +258,19 @@ def _event_dates(event: dict) -> dict:
     return _mapping(event.get("dates"))
 
 
-def _event_start_iso(event: dict) -> str | None:
-    start = _mapping(_event_dates(event).get("start"))
-    if any(
-        start.get(flag) is True
-        for flag in ("dateTBA", "dateTBD", "timeTBA", "noSpecificTime")
-    ):
+def _parse_aware_iso(value: object) -> str | None:
+    if not isinstance(value, str):
         return None
-    start_iso = start.get("dateTime")
-    if isinstance(start_iso, str):
-        try:
-            parsed = datetime.fromisoformat(start_iso)
-        except ValueError:
-            return None
-        if parsed.tzinfo is None:
-            return None
-        return parsed.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _parse_local_event_start(event: dict, start: dict) -> str | None:
     local_date = start.get("localDate")
     local_time = start.get("localTime")
     if not isinstance(local_date, str) or not isinstance(local_time, str):
@@ -284,12 +281,27 @@ def _event_start_iso(event: dict) -> str | None:
         return None
     timezone_name = _event_dates(event).get("timezone") or event.get("timezone")
     try:
-        event_timezone = ZoneInfo(timezone_name) if isinstance(timezone_name, str) else _ET
+        event_timezone = (
+            ZoneInfo(timezone_name) if isinstance(timezone_name, str) else _ET
+        )
     except (ValueError, KeyError):
         event_timezone = _ET
     return naive.replace(tzinfo=event_timezone).astimezone(UTC).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
+
+
+def _event_start_iso(event: dict) -> str | None:
+    start = _mapping(_event_dates(event).get("start"))
+    if any(
+        start.get(flag) is True
+        for flag in ("dateTBA", "dateTBD", "timeTBA", "noSpecificTime")
+    ):
+        return None
+    date_time = start.get("dateTime")
+    if isinstance(date_time, str):
+        return _parse_aware_iso(date_time)
+    return _parse_local_event_start(event, start)
 
 
 def _start_time_status(event: dict) -> str:
@@ -350,16 +362,38 @@ def _classification_strings(event: dict) -> tuple[str, str, str]:
     )
 
 
-def _parse_event(event: dict) -> dict:
-    name = text._safe_text(event.get("name"), 120)
+def _select_event_venue(event: dict) -> dict | None:
     event_venues = _mapping(event.get("_embedded")).get("venues") or []
     if not isinstance(event_venues, list):
         event_venues = []
-    first_venue = (
-        event_venues[0]
-        if event_venues and isinstance(event_venues[0], dict)
-        else None
-    )
+    if event_venues and isinstance(event_venues[0], dict):
+        return event_venues[0]
+    return None
+
+
+def _calculate_estimated_end(
+    event: dict, start_iso: str | None, status: str
+) -> tuple[str | None, str | None]:
+    if not start_iso or status in {
+        "canceled",
+        "cancelled",
+        "postponed",
+        "rescheduled",
+    }:
+        return None, None
+    try:
+        start_dt = datetime.strptime(start_iso, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=UTC
+        )
+    except ValueError:
+        return None, None
+    duration, basis = estimate_event_duration(*_classification_strings(event))
+    return (start_dt + duration).strftime("%Y-%m-%dT%H:%M:%SZ"), basis
+
+
+def _parse_event(event: dict) -> dict:
+    name = text._safe_text(event.get("name"), 120)
+    first_venue = _select_event_venue(event)
     venue_name_raw = first_venue.get("name") if first_venue else None
     venue_name = text._safe_text(venue_name_raw, 80) if venue_name_raw else None
     venue_key = normalize_venue_name(venue_name_raw)
@@ -368,19 +402,9 @@ def _parse_event(event: dict) -> dict:
     start_iso = _event_start_iso(event)
     dates = _event_dates(event)
     status = text._safe_text(_mapping(dates.get("status")).get("code"), 32).lower() or "unknown"
-    estimated_end_iso = None
-    end_estimate_basis = None
-    if start_iso and status not in {"canceled", "cancelled", "postponed", "rescheduled"}:
-        try:
-            start_dt = datetime.strptime(start_iso, "%Y-%m-%dT%H:%M:%SZ").replace(
-                tzinfo=UTC
-            )
-        except ValueError:
-            start_dt = None
-        if start_dt is not None:
-            duration, basis = estimate_event_duration(*_classification_strings(event))
-            estimated_end_iso = (start_dt + duration).strftime("%Y-%m-%dT%H:%M:%SZ")
-            end_estimate_basis = basis
+    estimated_end_iso, end_estimate_basis = _calculate_estimated_end(
+        event, start_iso, status
+    )
     return {
         "event_id": text._safe_text(event.get("id"), 80) or None,
         "name": name,
@@ -494,22 +518,68 @@ def _event_in_search(
     return _event_identity(parsed) not in seen
 
 
-def _append_page_events(
+def _select_page_events(
     raw_events: list[dict],
-    parsed_events: list[dict],
     seen: set[str],
     latitude: float,
     longitude: float,
     radius_miles: float,
-) -> None:
+    remaining: int,
+) -> tuple[list[dict], set[str]]:
+    selected: list[dict] = []
+    accepted = set(seen)
+    if remaining <= 0:
+        return selected, accepted
     for raw_event in raw_events:
         parsed = _parse_event(raw_event)
-        if not _event_in_search(parsed, seen, latitude, longitude, radius_miles):
+        if not _event_in_search(parsed, accepted, latitude, longitude, radius_miles):
             continue
-        seen.add(_event_identity(parsed))
-        parsed_events.append(parsed)
-        if len(parsed_events) >= EVENT_LOOKUP_MAX_RESULTS:
-            return
+        accepted.add(_event_identity(parsed))
+        selected.append(parsed)
+        if len(selected) >= remaining:
+            break
+    return selected, accepted
+
+
+def _parse_ticketmaster_page(
+    payload: object, error: str | None, *, has_events: bool
+) -> tuple[list[dict] | None, int, EventLookupResult | None, bool]:
+    if error:
+        if has_events:
+            return None, 0, None, True
+        return None, 0, EventLookupResult(ok=False, error=error), False
+    raw_events, total_pages = _events_from_payload(payload)
+    if raw_events is None:
+        return (
+            None,
+            0,
+            EventLookupResult(
+                ok=False,
+                error="event lookup returned an unexpected response",
+            ),
+            False,
+        )
+    return raw_events, total_pages, None, False
+
+
+def _project_event_lookup_result(
+    parsed_events: list[dict], partial: bool, query: str
+) -> EventLookupResult:
+    data: dict = {"events": parsed_events}
+    if any(event.get("estimated_end_iso") for event in parsed_events):
+        data["note"] = (
+            "end times are estimates based on typical event length, "
+            "not an official schedule"
+        )
+    if partial:
+        data["partial"] = True
+    subject = f"'{query}'" if query else "the route area"
+    summary = (
+        f"found {len(parsed_events)} event(s) for {subject}"
+        if parsed_events
+        else f"no events found for {subject}"
+    )
+    return EventLookupResult(ok=True, data=data, summary=summary)
 
 
 async def _lookup_uncached(
@@ -552,36 +622,31 @@ async def _lookup_uncached(
             what="event lookup",
             params=params.copy(),
         )
-        if error:
-            if parsed_events:
-                partial = True
-                break
-            return EventLookupResult(ok=False, error=error)
-        raw_events, total_pages = _events_from_payload(payload)
-        if raw_events is None:
-            return EventLookupResult(
-                ok=False,
-                error="event lookup returned an unexpected response",
-            )
-        _append_page_events(
-            raw_events, parsed_events, seen, latitude, longitude, radius_miles
+        raw_events, total_pages, terminal, stop_partial = _parse_ticketmaster_page(
+            payload, error, has_events=bool(parsed_events)
         )
+        if terminal is not None:
+            return terminal
+        if stop_partial:
+            partial = True
+            break
+        new_events, seen = _select_page_events(
+            raw_events or [],
+            seen,
+            latitude,
+            longitude,
+            radius_miles,
+            EVENT_LOOKUP_MAX_RESULTS - len(parsed_events),
+        )
+        parsed_events.extend(new_events)
         pages_to_fetch = min(max(total_pages, 1), page_limit)
-        if len(parsed_events) >= EVENT_LOOKUP_MAX_RESULTS or page_number + 1 >= pages_to_fetch:
+        if (
+            len(parsed_events) >= EVENT_LOOKUP_MAX_RESULTS
+            or page_number + 1 >= pages_to_fetch
+        ):
             break
 
-    data: dict = {"events": parsed_events}
-    if any(event.get("estimated_end_iso") for event in parsed_events):
-        data["note"] = "end times are estimates based on typical event length, not an official schedule"
-    if partial:
-        data["partial"] = True
-    subject = f"'{query}'" if query else "the route area"
-    summary = (
-        f"found {len(parsed_events)} event(s) for {subject}"
-        if parsed_events
-        else f"no events found for {subject}"
-    )
-    return EventLookupResult(ok=True, data=data, summary=summary)
+    return _project_event_lookup_result(parsed_events, partial, query)
 
 
 def _search_point(tool_input: dict) -> tuple[float, float, float] | EventLookupResult:
@@ -620,6 +685,20 @@ def _search_point(tool_input: dict) -> tuple[float, float, float] | EventLookupR
     return latitude, longitude, radius_miles
 
 
+def _parse_lookup_api_key() -> str | EventLookupResult:
+    if os.getenv("TICKETMASTER_ENABLED", "true").strip().lower() in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }:
+        return EventLookupResult(ok=False, error="event lookup is disabled")
+    api_key = os.getenv("TICKETMASTER_API_KEY", "").strip()
+    if not api_key:
+        return EventLookupResult(ok=False, error="event lookup is not configured")
+    return api_key
+
+
 async def lookup_events(
     tool_input: dict,
     _context: object | None = None,
@@ -631,16 +710,9 @@ async def lookup_events(
 
     del _context
     query = str(tool_input.get("query") or "").strip()
-    if os.getenv("TICKETMASTER_ENABLED", "true").strip().lower() in {
-        "0",
-        "false",
-        "no",
-        "off",
-    }:
-        return EventLookupResult(ok=False, error="event lookup is disabled")
-    api_key = os.getenv("TICKETMASTER_API_KEY", "").strip()
-    if not api_key:
-        return EventLookupResult(ok=False, error="event lookup is not configured")
+    api_key = _parse_lookup_api_key()
+    if isinstance(api_key, EventLookupResult):
+        return api_key
 
     date = tool_input.get("date")
     venue = tool_input.get("venue")

@@ -215,7 +215,7 @@ def _collect_route_and_bus_ids(routes: list[list[dict]]) -> tuple[set[str], set[
 def _route_ids(route: list[dict]) -> list[str]:
     route_ids: list[str] = []
     for step in _transit_steps(route):
-        route_id = str(step.get("route_id") or step.get("train_line") or "").strip().upper()
+        route_id = scoring._step_route_id(step)
         if route_id and route_id not in route_ids:
             route_ids.append(route_id)
     return route_ids
@@ -260,29 +260,31 @@ def _build_route_candidate_labels(routes: list[list[dict]]) -> list[dict]:
     ]
 
 
+def _parse_family_step(step: object) -> tuple[str, str, str, str] | None:
+    if not isinstance(step, dict):
+        return None
+    mode = str(step.get("type") or "").upper()
+    if mode not in {"SUBWAY", "BUS"}:
+        return None
+    route_id = scoring._step_route_id(step)
+    boarding = step.get("departure_stop_id") or step.get("departure_stop")
+    alighting = step.get("arrival_stop_id") or step.get("arrival_stop")
+    return (
+        mode,
+        route_id,
+        normalize_station_name(str(boarding or "")),
+        normalize_station_name(str(alighting or "")),
+    )
+
+
 def route_family_signature(route: list[dict]) -> tuple[tuple[str, str, str, str], ...]:
     """Return the stable transit-family and transfer-topology identity."""
 
-    signature = []
-    for step in route or []:
-        if (
-            not isinstance(step, dict)
-            or str(step.get("type") or "").upper() not in {"SUBWAY", "BUS"}
-        ):
-            continue
-        mode = str(step.get("type") or "").upper()
-        route_id = str(step.get("route_id") or step.get("train_line") or "").strip().upper()
-        boarding = step.get("departure_stop_id") or step.get("departure_stop")
-        alighting = step.get("arrival_stop_id") or step.get("arrival_stop")
-        signature.append(
-            (
-                mode,
-                route_id,
-                normalize_station_name(str(boarding or "")),
-                normalize_station_name(str(alighting or "")),
-            )
-        )
-    return tuple(signature)
+    return tuple(
+        parsed
+        for parsed in (_parse_family_step(step) for step in route or [])
+        if parsed is not None
+    )
 
 
 def dedupe_route_families(routes: list[list[dict]]) -> list[list[dict]]:

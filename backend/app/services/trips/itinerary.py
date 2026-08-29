@@ -9,6 +9,7 @@ Google Routes remains the path engine; this module only normalizes.
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 from uuid import uuid4
@@ -26,6 +27,81 @@ TRANSIT_MODES = frozenset(
 # Server-owned multi-stop pickup buffer when the rider does not specify.
 DEFAULT_DWELL_MINUTES = 25
 BOUNDARY_WALK_MIN_METERS = 25
+
+_STOP_IDENTITY_KEYS = (
+    ("id", ("id", "stop_id")),
+    ("entity_type", ("entity_type", "type")),
+    ("parent_station", ("parent_station", "parent_stop_id")),
+    ("station_complex_id", ("station_complex_id", "complex_id")),
+)
+
+
+@dataclass(frozen=True)
+class TripClocks:
+    departure_at: str | None
+    arrival_at: str | None
+
+
+@dataclass(frozen=True)
+class ItineraryTotals:
+    walk_seconds: int
+    street_walking_seconds: int
+    in_station_transfer_seconds: int
+    wait_seconds: int
+    in_vehicle_seconds: int
+    transfer_seconds: int
+    dwell_seconds: int
+    duration_seconds: int
+    transfer_count: int
+
+
+@dataclass(frozen=True)
+class ChainSegment:
+    index: int
+    itinerary: dict
+    waypoint: dict | None
+
+
+@dataclass(frozen=True)
+class ChainProjection:
+    legs: list[dict]
+    segments: list[dict]
+    dwell_events: list[dict]
+    waypoints: list[dict]
+
+
+@dataclass(frozen=True)
+class LegTiming:
+    walk_seconds: int
+    wait_seconds: int
+    ride_seconds: int
+    transfer_seconds: int
+    semantic: dict[str, Any] | None
+
+
+@dataclass(frozen=True)
+class LegCursor:
+    arrival_dt: datetime | None = None
+    mode: str | None = None
+    semantic_transfer: bool = False
+
+    def advance(
+        self,
+        mode: str,
+        arrival_dt: datetime | None,
+        semantic: dict[str, Any] | None,
+    ) -> LegCursor:
+        if arrival_dt is not None:
+            next_arrival = arrival_dt
+        elif mode == "WALK":
+            next_arrival = None
+        else:
+            next_arrival = self.arrival_dt
+        return LegCursor(
+            arrival_dt=next_arrival,
+            mode=mode,
+            semantic_transfer=isinstance(semantic, dict) and mode == "WALK",
+        )
 
 
 def build_canonical_itinerary(
@@ -57,38 +133,8 @@ def build_canonical_itinerary(
     """
     step_list = _with_boundary_walks(list(steps or []), origin, destination)
     legs = build_legs(step_list, data_basis=data_basis)
-
-    total_walk = sum(int(leg["street_walking_seconds"]) for leg in legs)
-    total_wait = sum(int(leg["wait_seconds"]) for leg in legs)
-    total_in_vehicle = sum(int(leg["ride_seconds"]) for leg in legs)
-    total_transfer = sum(int(leg["transfer_seconds"]) for leg in legs)
-    total_street_walking = sum(int(leg["street_walking_seconds"]) for leg in legs)
-    total_in_station_transfer = sum(
-        int(leg["in_station_transfer_seconds"]) for leg in legs
-    )
-    # Single OD has no waypoint dwell; multi-stop uses build_chained_itinerary.
-    total_dwell = 0
-
-    # Prefer provider door-to-door total when available. Component sums may
-    # not equal this (walks estimated, waits often unknown without walk ISO).
-    route_total_seconds = _first_route_total_seconds(step_list)
-    route_total_minutes = _first_route_total_minutes(step_list)
-    if route_total_seconds is not None:
-        total_duration_seconds = route_total_seconds
-    elif route_total_minutes is not None:
-        # Compatibility for older parsed routes. New directions parsing emits
-        # route_total_seconds so provider precision is retained end to end.
-        total_duration_seconds = max(0, round(route_total_minutes * 60))
-    else:
-        total_duration_seconds = (
-            total_walk + total_wait + total_in_vehicle + total_transfer + total_dwell
-        )
-
-    transit_count = sum(1 for leg in legs if leg["mode"] in TRANSIT_MODES)
-    transfer_count = max(0, transit_count - 1)
-
-    departure_at, arrival_at = _trip_clocks(legs, step_list)
-
+    totals = _calculate_itinerary_totals(legs, step_list)
+    clocks = _trip_clocks(legs, step_list)
     return {
         "itinerary_id": itinerary_id or str(uuid4()),
         "origin": origin,
@@ -104,17 +150,17 @@ def build_canonical_itinerary(
         "data_freshness": snapshot_observed_at or generated_at,
         "evidence_snapshot": _snapshot_record(snapshot_id, snapshot_observed_at),
         "finalized": True,
-        "departure_at": departure_at,
-        "arrival_at": arrival_at,
-        "total_duration_seconds": total_duration_seconds,
-        "total_walk_seconds": total_walk,
-        "total_street_walking_seconds": total_street_walking,
-        "total_in_station_transfer_seconds": total_in_station_transfer,
-        "total_transfer_seconds": total_transfer,
-        "total_wait_seconds": total_wait,
-        "total_in_vehicle_seconds": total_in_vehicle,
-        "total_dwell_seconds": total_dwell,
-        "transfer_count": transfer_count,
+        "departure_at": clocks.departure_at,
+        "arrival_at": clocks.arrival_at,
+        "total_duration_seconds": totals.duration_seconds,
+        "total_walk_seconds": totals.walk_seconds,
+        "total_street_walking_seconds": totals.street_walking_seconds,
+        "total_in_station_transfer_seconds": totals.in_station_transfer_seconds,
+        "total_transfer_seconds": totals.transfer_seconds,
+        "total_wait_seconds": totals.wait_seconds,
+        "total_in_vehicle_seconds": totals.in_vehicle_seconds,
+        "total_dwell_seconds": totals.dwell_seconds,
+        "transfer_count": totals.transfer_count,
         "legs": legs,
         "structured_recommendation_reasons": list(reasons or []),
     }
@@ -161,124 +207,29 @@ def build_chained_itinerary(
     each plan's parsed steps + place + optional rider dwell into this helper
     and emit one chained itinerary / card instead of FE multi-card merge.
     """
-    segment_list = list(segments or [])
-    if not segment_list:
-        raise ValueError("build_chained_itinerary requires at least one segment")
-
-    built: list[dict] = []
-    waypoints: list[dict] = []
-    total_dwell_seconds = 0
-    previous_destination: Any = origin
-
-    for index, raw in enumerate(segment_list):
-        if not isinstance(raw, dict):
-            raise TypeError(
-                f"segment[{index}] must be a dict with steps/destination_place"
-            )
-        steps = raw.get("steps")
-        place = raw.get("destination_place")
-        is_last = index == len(segment_list) - 1
-        segment_origin = raw.get("origin_place", previous_destination)
-        segment_destination = final_destination if is_last else place
-
-        segment_itinerary = build_canonical_itinerary(
-            steps if isinstance(steps, list) else list(steps or []),
-            origin=segment_origin,
-            destination=segment_destination,
-            planning_mode=planning_mode,
-            requested_departure=requested_departure if index == 0 else None,
-            requested_arrival=requested_arrival if index == len(segment_list) - 1 else None,
-            generated_at=generated_at,
-            snapshot_id=snapshot_id,
-            snapshot_observed_at=snapshot_observed_at,
-            data_basis=data_basis,
-            itinerary_id=None,
-        )
-        built.append(segment_itinerary)
-        previous_destination = segment_destination
-
-        if not is_last:
-            dwell_minutes, dwell_source = _resolve_dwell(raw)
-            waypoint = _place_fields(place)
-            waypoint["dwell_minutes"] = dwell_minutes
-            waypoint["dwell_source"] = dwell_source
-            waypoints.append(waypoint)
-            total_dwell_seconds += max(0, int(dwell_minutes)) * 60
-
-    # Keep both the legacy flat leg sequence and the canonical segment
-    # boundaries. Existing direct-route consumers can continue reading
-    # ``legs``; modern map/card/rail consumers must read ``segments`` so an
-    # intermediate destination is never mistaken for an ordinary transfer.
-    all_legs: list[dict] = []
-    canonical_segments: list[dict] = []
-    dwell_events: list[dict] = []
-    for index, itin in enumerate(built):
-        segment_legs = [
-            {**leg, "segment_index": index}
-            for leg in list(itin.get("legs") or [])
-        ]
-        all_legs.extend(segment_legs)
-        segment_origin = (
-            origin
-            if index == 0
-            else _place_fields(segment_list[index - 1].get("destination_place"))
-        )
-        segment_destination = (
-            final_destination
-            if index == len(built) - 1
-            else _place_fields(segment_list[index].get("destination_place"))
-        )
-        canonical_segments.append(
-            {
-                "segment_index": index,
-                "origin": segment_origin,
-                "destination": segment_destination,
-                "legs": segment_legs,
-                "duration_seconds": int(itin["total_duration_seconds"]),
-            }
-        )
-        if index < len(waypoints):
-            waypoint = waypoints[index]
-            dwell_events.append(
-                {
-                    "event_type": "dwell",
-                    "after_segment_index": index,
-                    "waypoint": waypoint,
-                    "duration_seconds": int(waypoint["dwell_minutes"]) * 60,
-                    "source": waypoint["dwell_source"],
-                }
-            )
-
-    total_walk = sum(int(itin["total_walk_seconds"]) for itin in built)
-    total_street_walking = sum(
-        int(itin.get("total_street_walking_seconds") or 0) for itin in built
+    raw_segments = _parse_chain_segments(segments)
+    chain = _construct_chain_segments(
+        raw_segments,
+        origin=origin,
+        final_destination=final_destination,
+        planning_mode=planning_mode,
+        requested_departure=requested_departure,
+        requested_arrival=requested_arrival,
+        generated_at=generated_at,
+        snapshot_id=snapshot_id,
+        snapshot_observed_at=snapshot_observed_at,
+        data_basis=data_basis,
     )
-    total_in_station_transfer = sum(
-        int(itin.get("total_in_station_transfer_seconds") or 0) for itin in built
+    projection = _project_chain(chain, raw_segments, origin, final_destination)
+    totals = _calculate_chain_totals(chain, projection.legs)
+    clocks = TripClocks(
+        chain[0].itinerary.get("departure_at"),
+        chain[-1].itinerary.get("arrival_at"),
     )
-    total_wait = sum(int(itin["total_wait_seconds"]) for itin in built)
-    total_in_vehicle = sum(int(itin["total_in_vehicle_seconds"]) for itin in built)
-    # Dwell is not a transfer. However, changing services between two
-    # separately planned OD segments still is. Count every transit boarding
-    # across the complete canonical journey so B35 -> B37 is one transfer,
-    # not a misleading zero.
-    transit_count = sum(
-        1
-        for leg in all_legs
-        if str(leg.get("mode") or "").upper() in TRANSIT_MODES
-    )
-    transfer_count = max(0, transit_count - 1)
-    total_duration_seconds = (
-        sum(int(itin["total_duration_seconds"]) for itin in built) + total_dwell_seconds
-    )
-
-    departure_at = built[0].get("departure_at")
-    arrival_at = built[-1].get("arrival_at")
-
     return {
         "itinerary_id": itinerary_id or str(uuid4()),
         "origin": origin,
-        "waypoints": waypoints,
+        "waypoints": projection.waypoints,
         "destination": final_destination,
         "timezone": TIMEZONE_NAME,
         "planning_mode": planning_mode,
@@ -289,46 +240,271 @@ def build_chained_itinerary(
         "data_freshness": snapshot_observed_at or generated_at,
         "evidence_snapshot": _snapshot_record(snapshot_id, snapshot_observed_at),
         "finalized": True,
-        "departure_at": departure_at,
-        "arrival_at": arrival_at,
-        "total_duration_seconds": total_duration_seconds,
-        "total_walk_seconds": total_walk,
-        "total_street_walking_seconds": total_street_walking,
-        "total_in_station_transfer_seconds": total_in_station_transfer,
-        "total_transfer_seconds": sum(
-            int(itin.get("total_transfer_seconds") or 0) for itin in built
-        ),
-        "total_wait_seconds": total_wait,
-        "total_in_vehicle_seconds": total_in_vehicle,
-        "total_dwell_seconds": total_dwell_seconds,
-        "transfer_count": transfer_count,
-        "legs": all_legs,
-        "segments": canonical_segments,
-        "dwell_events": dwell_events,
+        "departure_at": clocks.departure_at,
+        "arrival_at": clocks.arrival_at,
+        "total_duration_seconds": totals.duration_seconds,
+        "total_walk_seconds": totals.walk_seconds,
+        "total_street_walking_seconds": totals.street_walking_seconds,
+        "total_in_station_transfer_seconds": totals.in_station_transfer_seconds,
+        "total_transfer_seconds": totals.transfer_seconds,
+        "total_wait_seconds": totals.wait_seconds,
+        "total_in_vehicle_seconds": totals.in_vehicle_seconds,
+        "total_dwell_seconds": totals.dwell_seconds,
+        "transfer_count": totals.transfer_count,
+        "legs": projection.legs,
+        "segments": projection.segments,
+        "dwell_events": projection.dwell_events,
         "structured_recommendation_reasons": list(reasons or []),
     }
 
 
+def _parse_chain_segments(segments: list[dict] | None) -> list[dict]:
+    segment_list = list(segments or [])
+    if not segment_list:
+        raise ValueError("build_chained_itinerary requires at least one segment")
+    for index, raw in enumerate(segment_list):
+        if not isinstance(raw, dict):
+            raise TypeError(
+                f"segment[{index}] must be a dict with steps/destination_place"
+            )
+    return segment_list
+
+
+def _construct_chain_segments(
+    raw_segments: list[dict],
+    *,
+    origin: Any,
+    final_destination: Any,
+    planning_mode: str,
+    requested_departure: str | None,
+    requested_arrival: str | None,
+    generated_at: str | None,
+    snapshot_id: str | None,
+    snapshot_observed_at: str | None,
+    data_basis: str,
+) -> list[ChainSegment]:
+    chain: list[ChainSegment] = []
+    previous_destination: Any = origin
+    last_index = len(raw_segments) - 1
+    for index, raw in enumerate(raw_segments):
+        is_last = index == last_index
+        segment_origin = raw.get("origin_place", previous_destination)
+        segment_destination = final_destination if is_last else raw.get("destination_place")
+        steps = raw.get("steps")
+        itinerary = build_canonical_itinerary(
+            steps if isinstance(steps, list) else list(steps or []),
+            origin=segment_origin,
+            destination=segment_destination,
+            planning_mode=planning_mode,
+            requested_departure=requested_departure if index == 0 else None,
+            requested_arrival=requested_arrival if is_last else None,
+            generated_at=generated_at,
+            snapshot_id=snapshot_id,
+            snapshot_observed_at=snapshot_observed_at,
+            data_basis=data_basis,
+            itinerary_id=None,
+        )
+        waypoint = None if is_last else _project_waypoint(raw)
+        chain.append(ChainSegment(index=index, itinerary=itinerary, waypoint=waypoint))
+        previous_destination = segment_destination
+    return chain
+
+
+def _project_waypoint(raw: dict) -> dict:
+    dwell_minutes, dwell_source = _resolve_dwell(raw)
+    return {
+        **_place_fields(raw.get("destination_place")),
+        "dwell_minutes": dwell_minutes,
+        "dwell_source": dwell_source,
+    }
+
+
+def _select_segment_origin(index: int, raw_segments: list[dict], origin: Any) -> Any:
+    if index == 0:
+        return origin
+    return _place_fields(raw_segments[index - 1].get("destination_place"))
+
+
+def _select_segment_destination(
+    index: int,
+    last_index: int,
+    raw_segments: list[dict],
+    final_destination: Any,
+) -> Any:
+    if index == last_index:
+        return final_destination
+    return _place_fields(raw_segments[index].get("destination_place"))
+
+
+def _project_chain(
+    chain: list[ChainSegment],
+    raw_segments: list[dict],
+    origin: Any,
+    final_destination: Any,
+) -> ChainProjection:
+    # Keep both the legacy flat leg sequence and the canonical segment
+    # boundaries. Existing direct-route consumers can continue reading
+    # ``legs``; modern map/card/rail consumers must read ``segments`` so an
+    # intermediate destination is never mistaken for an ordinary transfer.
+    all_legs: list[dict] = []
+    segments: list[dict] = []
+    dwell_events: list[dict] = []
+    waypoints: list[dict] = []
+    last_index = len(chain) - 1
+    for segment in chain:
+        tagged = [
+            {**leg, "segment_index": segment.index}
+            for leg in list(segment.itinerary.get("legs") or [])
+        ]
+        all_legs.extend(tagged)
+        segments.append(
+            {
+                "segment_index": segment.index,
+                "origin": _select_segment_origin(segment.index, raw_segments, origin),
+                "destination": _select_segment_destination(
+                    segment.index, last_index, raw_segments, final_destination
+                ),
+                "legs": tagged,
+                "duration_seconds": int(segment.itinerary["total_duration_seconds"]),
+            }
+        )
+        if segment.waypoint is None:
+            continue
+        waypoints.append(segment.waypoint)
+        dwell_events.append(
+            {
+                "event_type": "dwell",
+                "after_segment_index": segment.index,
+                "waypoint": segment.waypoint,
+                "duration_seconds": int(segment.waypoint["dwell_minutes"]) * 60,
+                "source": segment.waypoint["dwell_source"],
+            }
+        )
+    return ChainProjection(
+        legs=all_legs,
+        segments=segments,
+        dwell_events=dwell_events,
+        waypoints=waypoints,
+    )
+
+
+def _optional_seconds(itineraries: list[dict], key: str) -> int:
+    total = 0
+    for itin in itineraries:
+        total += int(itin.get(key) or 0)
+    return total
+
+
+def _chain_dwell_seconds(chain: list[ChainSegment]) -> int:
+    total = 0
+    for segment in chain:
+        if segment.waypoint is None:
+            continue
+        total += int(segment.waypoint["dwell_minutes"]) * 60
+    return total
+
+
+def _count_transit_boardings(legs: list[dict]) -> int:
+    count = 0
+    for leg in legs:
+        mode = str(leg.get("mode") or "").upper()
+        if mode in TRANSIT_MODES:
+            count += 1
+    return count
+
+
+def _calculate_chain_totals(
+    chain: list[ChainSegment],
+    legs: list[dict],
+) -> ItineraryTotals:
+    itineraries = [segment.itinerary for segment in chain]
+    dwell = _chain_dwell_seconds(chain)
+    # Dwell is not a transfer. However, changing services between two
+    # separately planned OD segments still is. Count every transit boarding
+    # across the complete canonical journey so B35 -> B37 is one transfer,
+    # not a misleading zero.
+    transit_count = _count_transit_boardings(legs)
+    duration = (
+        sum(int(itin["total_duration_seconds"]) for itin in itineraries) + dwell
+    )
+    return ItineraryTotals(
+        walk_seconds=sum(int(itin["total_walk_seconds"]) for itin in itineraries),
+        street_walking_seconds=_optional_seconds(
+            itineraries, "total_street_walking_seconds"
+        ),
+        in_station_transfer_seconds=_optional_seconds(
+            itineraries, "total_in_station_transfer_seconds"
+        ),
+        wait_seconds=sum(int(itin["total_wait_seconds"]) for itin in itineraries),
+        in_vehicle_seconds=sum(
+            int(itin["total_in_vehicle_seconds"]) for itin in itineraries
+        ),
+        transfer_seconds=_optional_seconds(itineraries, "total_transfer_seconds"),
+        dwell_seconds=dwell,
+        duration_seconds=duration,
+        transfer_count=max(0, transit_count - 1),
+    )
+
+
+def _calculate_itinerary_totals(legs: list[dict], steps: list[dict]) -> ItineraryTotals:
+    walk = sum(int(leg["street_walking_seconds"]) for leg in legs)
+    wait = sum(int(leg["wait_seconds"]) for leg in legs)
+    in_vehicle = sum(int(leg["ride_seconds"]) for leg in legs)
+    transfer = sum(int(leg["transfer_seconds"]) for leg in legs)
+    in_station = sum(int(leg["in_station_transfer_seconds"]) for leg in legs)
+    # Single OD has no waypoint dwell; multi-stop uses build_chained_itinerary.
+    dwell = 0
+    duration = _select_duration_seconds(
+        steps, walk + wait + in_vehicle + transfer + dwell
+    )
+    transit_count = sum(1 for leg in legs if leg["mode"] in TRANSIT_MODES)
+    return ItineraryTotals(
+        walk_seconds=walk,
+        street_walking_seconds=walk,
+        in_station_transfer_seconds=in_station,
+        wait_seconds=wait,
+        in_vehicle_seconds=in_vehicle,
+        transfer_seconds=transfer,
+        dwell_seconds=dwell,
+        duration_seconds=duration,
+        transfer_count=max(0, transit_count - 1),
+    )
+
+
+def _select_duration_seconds(steps: list[dict], component_sum: int) -> int:
+    # Prefer provider door-to-door total when available. Component sums may
+    # not equal this (walks estimated, waits often unknown without walk ISO).
+    route_total_seconds = _first_route_total_seconds(steps)
+    if route_total_seconds is not None:
+        return route_total_seconds
+    route_total_minutes = _first_route_total_minutes(steps)
+    if route_total_minutes is not None:
+        # Compatibility for older parsed routes. New directions parsing emits
+        # route_total_seconds so provider precision is retained end to end.
+        return max(0, round(route_total_minutes * 60))
+    return component_sum
+
+
+def _parse_user_dwell(segment: dict) -> tuple[int, str] | None:
+    if "dwell_minutes" not in segment or segment.get("dwell_minutes") is None:
+        return None
+    try:
+        minutes = round(float(segment["dwell_minutes"]))
+    except (TypeError, ValueError):
+        return None
+    raw_source = segment.get("dwell_source")
+    source = str(raw_source) if raw_source in ("default", "user") else "user"
+    return max(0, minutes), source
+
+
 def _resolve_dwell(segment: dict) -> tuple[int, str]:
     """Return (dwell_minutes, dwell_source) for an intermediate segment."""
+    parsed = _parse_user_dwell(segment)
+    if parsed is not None:
+        return parsed
     raw_source = segment.get("dwell_source")
-    if "dwell_minutes" in segment and segment.get("dwell_minutes") is not None:
-        try:
-            minutes = round(float(segment["dwell_minutes"]))
-        except (TypeError, ValueError):
-            minutes = DEFAULT_DWELL_MINUTES
-            source = "default"
-        else:
-            minutes = max(0, minutes)
-            source = str(raw_source) if raw_source in ("default", "user") else "user"
-            return minutes, source
-    else:
-        minutes = DEFAULT_DWELL_MINUTES
-        source = "default"
-
-    if raw_source in ("default", "user"):
-        source = str(raw_source)
-    return minutes, source
+    source = str(raw_source) if raw_source in ("default", "user") else "default"
+    return DEFAULT_DWELL_MINUTES, source
 
 
 def _snapshot_record(
@@ -474,117 +650,120 @@ def _first_route_total_seconds(steps: list[dict]) -> int | None:
     return None
 
 
+def _select_clocks(
+    records: list[dict],
+    departure_key: str,
+    arrival_key: str,
+) -> TripClocks:
+    departure_at = None
+    arrival_at = None
+    for record in records:
+        if departure_at is None and record.get(departure_key):
+            departure_at = record[departure_key]
+        if record.get(arrival_key):
+            arrival_at = record[arrival_key]
+    return TripClocks(departure_at, arrival_at)
+
+
 def _trip_clocks(
     legs: list[dict],
     steps: list[dict],
-) -> tuple[str | None, str | None]:
+) -> TripClocks:
     """First/last absolute times from legs, falling back to raw step ISOs."""
-    departure_at = None
-    arrival_at = None
-    for leg in legs:
-        if departure_at is None and leg.get("departure_at"):
-            departure_at = leg["departure_at"]
-        if leg.get("arrival_at"):
-            arrival_at = leg["arrival_at"]
-        if leg.get("departure_at") and departure_at is None:
-            departure_at = leg["departure_at"]
-    if departure_at is None or arrival_at is None:
-        for step in steps:
-            if departure_at is None and step.get("departure_time_iso"):
-                departure_at = step["departure_time_iso"]
-            if step.get("arrival_time_iso"):
-                arrival_at = step["arrival_time_iso"]
-    return departure_at, arrival_at
+    clocks = _select_clocks(legs, "departure_at", "arrival_at")
+    if clocks.departure_at is not None and clocks.arrival_at is not None:
+        return clocks
+    fallback = _select_clocks(steps, "departure_time_iso", "arrival_time_iso")
+    return TripClocks(
+        clocks.departure_at or fallback.departure_at,
+        fallback.arrival_at or clocks.arrival_at,
+    )
 
 
 def build_legs(steps: list[dict], *, data_basis: str) -> list[dict]:
     """Build canonical legs from provider-normalized route steps."""
     legs: list[dict] = []
-    prev_arrival_dt: datetime | None = None
-    prev_mode: str | None = None
-    prev_semantic_transfer = False
-
+    cursor = LegCursor()
     for step in steps:
         mode = str(step.get("type") or "").strip().upper() or "UNKNOWN"
         if mode == "WALK" and step.get("semantic_transfer_fragment") is True:
             continue
-        dep_iso = step.get("departure_time_iso")
-        arr_iso = step.get("arrival_time_iso")
-        dep_dt = _parse_iso(dep_iso)
-        arr_dt = _parse_iso(arr_iso)
-        walk_seconds, wait_seconds, ride_seconds, transfer_seconds, semantic = (
-            _leg_timing(
-                mode,
-                step,
-                dep_dt,
-                arr_dt,
-                prev_mode,
-                prev_arrival_dt,
-                prev_semantic_transfer,
-            )
+        dep_dt = _parse_iso(step.get("departure_time_iso"))
+        arr_dt = _parse_iso(step.get("arrival_time_iso"))
+        timing = _leg_timing(
+            mode,
+            step,
+            dep_dt,
+            arr_dt,
+            cursor.mode,
+            cursor.arrival_dt,
+            cursor.semantic_transfer,
         )
-
-        board = step.get("departure_stop")
-        alight = step.get("arrival_stop")
-        service_id = (
-            str(step.get("route_id") or step.get("train_line") or "").strip()
-            or None
-        )
-        if mode == "WALK":
-            service_id = None
-
-        stops = _canonical_stops_for_step(step)
-        raw_stop_count = step.get("stop_count")
-        if isinstance(raw_stop_count, (int, float)) and not isinstance(
-            raw_stop_count, bool
-        ):
-            stop_count = max(0, round(raw_stop_count))
-        else:
-            stop_count = None
-
-        leg = {
-            "mode": mode,
-            "service_id": service_id,
-            "board": board,
-            "alight": alight,
-            **_canonical_direction_fields(step),
-            **_canonical_endpoint_fields(step),
-            "stop_count": stop_count,
-            "stops": stops,
-            "departure_at": _iso_or_none(dep_iso, dep_dt),
-            "arrival_at": _iso_or_none(arr_iso, arr_dt),
-            "walk_seconds": int(walk_seconds),
-            "street_walking_seconds": int(walk_seconds),
-            "in_station_transfer_seconds": (
-                int(semantic.get("in_station_transfer_seconds") or 0)
-                if isinstance(semantic, dict)
-                else 0
-            ),
-            "wait_seconds": int(wait_seconds),
-            "ride_seconds": int(ride_seconds),
-            "transfer_seconds": int(transfer_seconds),
-            "transfer_kind": (
-                semantic.get("kind") if isinstance(semantic, dict) else None
-            ),
-            "transfer_semantics": (
-                dict(semantic) if isinstance(semantic, dict) else None
-            ),
-            "accessibility": (
-                semantic.get("accessibility") if isinstance(semantic, dict) else None
-            ),
-            "geometry": step.get("polyline"),
-            "service_data_basis": data_basis,
-        }
-        legs.append(leg)
-
-        if arr_dt is not None:
-            prev_arrival_dt = arr_dt
-        elif mode == "WALK":
-            prev_arrival_dt = None
-        prev_mode = mode
-        prev_semantic_transfer = isinstance(semantic, dict) and mode == "WALK"
-
+        legs.append(_project_leg_record(step, mode, dep_dt, arr_dt, timing, data_basis))
+        cursor = cursor.advance(mode, arr_dt, timing.semantic)
     return legs
+
+
+def _select_service_id(mode: str, step: dict) -> str | None:
+    if mode == "WALK":
+        return None
+    return str(step.get("route_id") or step.get("train_line") or "").strip() or None
+
+
+def _parse_stop_count(raw: object) -> int | None:
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None
+    return max(0, round(raw))
+
+
+def _project_transfer_fields(semantic: object) -> dict[str, Any]:
+    if not isinstance(semantic, dict):
+        return {
+            "in_station_transfer_seconds": 0,
+            "transfer_kind": None,
+            "transfer_semantics": None,
+            "accessibility": None,
+        }
+    return {
+        "in_station_transfer_seconds": int(semantic.get("in_station_transfer_seconds") or 0),
+        "transfer_kind": semantic.get("kind"),
+        "transfer_semantics": dict(semantic),
+        "accessibility": semantic.get("accessibility"),
+    }
+
+
+def _project_leg_record(
+    step: dict,
+    mode: str,
+    dep_dt: datetime | None,
+    arr_dt: datetime | None,
+    timing: LegTiming,
+    data_basis: str,
+) -> dict:
+    transfer = _project_transfer_fields(timing.semantic)
+    return {
+        "mode": mode,
+        "service_id": _select_service_id(mode, step),
+        "board": step.get("departure_stop"),
+        "alight": step.get("arrival_stop"),
+        **_canonical_direction_fields(step),
+        **_canonical_endpoint_fields(step),
+        "stop_count": _parse_stop_count(step.get("stop_count")),
+        "stops": _canonical_stops_for_step(step),
+        "departure_at": _iso_or_none(step.get("departure_time_iso"), dep_dt),
+        "arrival_at": _iso_or_none(step.get("arrival_time_iso"), arr_dt),
+        "walk_seconds": int(timing.walk_seconds),
+        "street_walking_seconds": int(timing.walk_seconds),
+        "in_station_transfer_seconds": transfer["in_station_transfer_seconds"],
+        "wait_seconds": int(timing.wait_seconds),
+        "ride_seconds": int(timing.ride_seconds),
+        "transfer_seconds": int(timing.transfer_seconds),
+        "transfer_kind": transfer["transfer_kind"],
+        "transfer_semantics": transfer["transfer_semantics"],
+        "accessibility": transfer["accessibility"],
+        "geometry": step.get("polyline"),
+        "service_data_basis": data_basis,
+    }
 
 
 def _leg_timing(
@@ -595,20 +774,20 @@ def _leg_timing(
     prev_mode: str | None,
     prev_arrival_dt: datetime | None,
     prev_semantic_transfer: bool,
-) -> tuple[int, int, int, int, dict[str, Any] | None]:
+) -> LegTiming:
     if mode == "WALK":
         semantic = step.get("transfer_semantics")
         if isinstance(semantic, dict):
-            return (
+            return LegTiming(
                 int(semantic.get("street_walking_seconds") or 0),
                 0,
                 0,
                 int(semantic.get("in_station_transfer_seconds") or 0),
                 semantic,
             )
-        return _walk_seconds_for_step(step, dep_dt, arr_dt), 0, 0, 0, None
+        return LegTiming(_walk_seconds_for_step(step, dep_dt, arr_dt), 0, 0, 0, None)
     if mode not in TRANSIT_MODES:
-        return 0, 0, 0, 0, None
+        return LegTiming(0, 0, 0, 0, None)
     ride_seconds = (
         _seconds_between(dep_dt, arr_dt)
         if dep_dt is not None and arr_dt is not None
@@ -617,7 +796,7 @@ def _leg_timing(
     wait_seconds, transfer_seconds = _transit_gap_seconds(
         prev_mode, prev_arrival_dt, prev_semantic_transfer, dep_dt
     )
-    return 0, wait_seconds, ride_seconds, transfer_seconds, None
+    return LegTiming(0, wait_seconds, ride_seconds, transfer_seconds, None)
 
 
 def _transit_gap_seconds(
@@ -662,8 +841,7 @@ def _stops_from_located(located: list) -> list[dict]:
         name = str(value.get("name") or "").strip()
         if not name:
             continue
-        stop: dict[str, Any] = {"name": name}
-        _copy_stop_identity(stop, value)
+        stop: dict[str, Any] = {"name": name, **_parse_stop_identity(value)}
         lat, lng = _lat_lon(value)
         if lat is not None and lng is not None:
             stop["lat"] = lat
@@ -680,8 +858,7 @@ def _stop_from_name_value(value: object) -> dict[str, Any] | None:
     name = str(value.get("name") or value.get("stop_name") or "").strip()
     if not name:
         return None
-    stop: dict[str, Any] = {"name": name}
-    _copy_stop_identity(stop, value)
+    stop: dict[str, Any] = {"name": name, **_parse_stop_identity(value)}
     lat, lng = _lat_lon(value)
     if lat is not None and lng is not None:
         stop.update({"lat": lat, "lng": lng})
@@ -725,18 +902,15 @@ def _canonical_endpoint_fields(step: dict) -> dict[str, Any]:
     return result
 
 
-def _copy_stop_identity(target: dict[str, Any], source: dict[str, Any]) -> None:
-    for output, keys in (
-        ("id", ("id", "stop_id")),
-        ("entity_type", ("entity_type", "type")),
-        ("parent_station", ("parent_station", "parent_stop_id")),
-        ("station_complex_id", ("station_complex_id", "complex_id")),
-    ):
+def _parse_stop_identity(source: dict[str, Any]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for output, keys in _STOP_IDENTITY_KEYS:
         for key in keys:
             value = source.get(key)
             if value not in (None, "", []):
-                target[output] = value
+                result[output] = value
                 break
+    return result
 
 
 def _walk_seconds_for_step(

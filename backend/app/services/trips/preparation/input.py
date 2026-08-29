@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -132,6 +133,128 @@ async def route_with_recovery(
     return directions_service.parse_response(response)
 
 
+@dataclass(frozen=True)
+class _RecoveryPlan:
+    suggestion: dict
+    seed_route: str
+    continuation_route: str
+
+
+def _empty_recovery_diagnostics() -> dict[str, Any]:
+    return {
+        "recovery_attempted": False,
+        "recovery_succeeded": False,
+        "recovered_structural_signature": None,
+        "recovered_service_chain": None,
+        "added_provider_latency_ms": 0.0,
+    }
+
+
+def _expected_transfer_signature(
+    suggestion: dict, seed_step: dict, seed_route: str, continuation_route: str
+) -> tuple:
+    transfer_name = normalize_station_name(str(suggestion.get("transfer_stop_name") or ""))
+    return (
+        (
+            "SUBWAY",
+            seed_route,
+            normalize_station_name(str(seed_step.get("departure_stop") or "")),
+            transfer_name,
+        ),
+        (
+            "SUBWAY",
+            continuation_route,
+            transfer_name,
+            normalize_station_name(str(suggestion.get("destination_stop_name") or "")),
+        ),
+    )
+
+
+def _structural_recovery_plan(
+    *,
+    pattern_index,
+    primary_routes: list[list[dict]],
+    destination: ResolvedPlace | None,
+    excluded_route_ids: set[str],
+    excluded_modes: set[str],
+    allowed_modes: list[str],
+) -> _RecoveryPlan | None:
+    if pattern_index is None or not primary_routes or destination is None:
+        return None
+    seed = _subway_transfer_seed(
+        primary_routes,
+        pattern_index,
+        destination,
+        excluded_route_ids,
+        excluded_modes,
+        allowed_modes,
+    )
+    if seed is None:
+        return None
+    suggestion, seed_step, seed_route = seed
+    if not suggestion.get("continuation_transfer_stop_id"):
+        return None
+    continuation_route = str(suggestion.get("continuation_route_id") or "").upper()
+    expected = _expected_transfer_signature(
+        suggestion, seed_step, seed_route, continuation_route
+    )
+    if any(
+        candidates.route_family_signature(route) == expected for route in primary_routes
+    ):
+        return None
+    return _RecoveryPlan(suggestion, seed_route, continuation_route)
+
+
+def _transfer_place(suggestion: dict) -> ResolvedPlace | None:
+    coords = suggestion.get("transfer_stop_coords") or {}
+    try:
+        place = ResolvedPlace(
+            name=str(suggestion.get("transfer_stop_name") or ""),
+            latitude=float(coords["latitude"]),
+            longitude=float(coords["longitude"]),
+            source="gtfs",
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+    return place if place.name else None
+
+
+async def _rebuild_transfer_pair(
+    *,
+    directions_service,
+    origin: ResolvedPlace,
+    transfer: ResolvedPlace,
+    suggestion: dict,
+    destination: ResolvedPlace,
+    destination_query: str,
+    allowed_modes: list[str],
+    routing_preference: str,
+    departure_time: str | None,
+    seed_route: str,
+    continuation_route: str,
+) -> list | None:
+    try:
+        combined = await directions_service.get_transfer_route_pair(
+            origin_coords=(origin.latitude, origin.longitude),
+            transfer_name=transfer.name,
+            transfer_coords=(transfer.latitude, transfer.longitude),
+            continuation_transfer_coords=suggestion.get(
+                "continuation_transfer_stop_coords"
+            )
+            or {},
+            destination_query=destination_query,
+            destination_coords=(destination.latitude, destination.longitude),
+            allowed_travel_modes=allowed_modes,
+            routing_preference=routing_preference,
+            departure_time=departure_time,
+            first_service=seed_route,
+            second_service=continuation_route,
+        )
+    except Exception:  # noqa: BLE001 transfer-pair faults skip this recovery
+        return None
+    return combined or None
+
+
 async def recover_structural_route(
     *,
     directions_service,
@@ -150,94 +273,46 @@ async def recover_structural_route(
     """Recover one provider-backed transfer family from static topology."""
 
     diagnostics = telemetry if isinstance(telemetry, dict) else {}
-    diagnostics.update(
-        recovery_attempted=False,
-        recovery_succeeded=False,
-        recovered_structural_signature=None,
-        recovered_service_chain=None,
-        added_provider_latency_ms=0.0,
+    diagnostics.update(_empty_recovery_diagnostics())
+    plan = _structural_recovery_plan(
+        pattern_index=pattern_index,
+        primary_routes=primary_routes,
+        destination=destination,
+        excluded_route_ids=excluded_route_ids,
+        excluded_modes=excluded_modes,
+        allowed_modes=allowed_modes,
     )
-    if pattern_index is None or not primary_routes or destination is None:
+    if plan is None:
         return []
-
-    seed = _subway_transfer_seed(
-        primary_routes,
-        pattern_index,
-        destination,
-        excluded_route_ids,
-        excluded_modes,
-        allowed_modes,
-    )
-    if seed is None:
-        return []
-    suggestion, seed_step, seed_route = seed
-
-    continuation_route = str(suggestion.get("continuation_route_id") or "").upper()
-    if not suggestion.get("continuation_transfer_stop_id"):
-        return []
-    expected_signature = (
-        (
-            "SUBWAY",
-            seed_route,
-            normalize_station_name(str(seed_step.get("departure_stop") or "")),
-            normalize_station_name(str(suggestion.get("transfer_stop_name") or "")),
-        ),
-        (
-            "SUBWAY",
-            continuation_route,
-            normalize_station_name(str(suggestion.get("transfer_stop_name") or "")),
-            normalize_station_name(str(suggestion.get("destination_stop_name") or "")),
-        ),
-    )
-    if any(
-        candidates.route_family_signature(route) == expected_signature
-        for route in primary_routes
-    ):
-        return []
-
     diagnostics["recovery_attempted"] = True
     started = time.monotonic()
-    transfer_coords = suggestion.get("transfer_stop_coords") or {}
-    try:
-        transfer = ResolvedPlace(
-            name=str(suggestion.get("transfer_stop_name") or ""),
-            latitude=float(transfer_coords["latitude"]),
-            longitude=float(transfer_coords["longitude"]),
-            source="gtfs",
-        )
-    except (KeyError, TypeError, ValueError):
-        return []
-    if not transfer.name:
+    transfer = _transfer_place(plan.suggestion)
+    if transfer is None:
         return []
     try:
-        combined = await directions_service.get_transfer_route_pair(
-            origin_coords=(origin.latitude, origin.longitude),
-            transfer_name=transfer.name,
-            transfer_coords=(transfer.latitude, transfer.longitude),
-            continuation_transfer_coords=suggestion.get("continuation_transfer_stop_coords") or {},
+        combined = await _rebuild_transfer_pair(
+            directions_service=directions_service,
+            origin=origin,
+            transfer=transfer,
+            suggestion=plan.suggestion,
+            destination=destination,
             destination_query=destination_query,
-            destination_coords=(destination.latitude, destination.longitude),
-            allowed_travel_modes=allowed_modes,
+            allowed_modes=allowed_modes,
             routing_preference=routing_preference,
             departure_time=departure_time,
-            first_service=seed_route,
-            second_service=continuation_route,
+            seed_route=plan.seed_route,
+            continuation_route=plan.continuation_route,
         )
-        if not combined:
-            return []
-    except Exception:  # noqa: BLE001 transfer-pair faults skip this recovery
-        return []
     finally:
         diagnostics["added_provider_latency_ms"] = (time.monotonic() - started) * 1000
-
+    if not combined:
+        return []
     signature = candidates.route_family_signature(combined)
     diagnostics.update(
         {
             "recovery_succeeded": True,
             "recovered_structural_signature": signature,
-            "recovered_service_chain": [
-                row[1] for row in signature if row[1]
-            ],
+            "recovered_service_chain": [row[1] for row in signature if row[1]],
         }
     )
     return [combined]
@@ -266,9 +341,9 @@ async def prepare_structural_candidates(
     arrival_by = tool_input.get("arrival_by")
     pattern_index = getattr(ctx.gtfs, "_pattern_index", None)
     directions_service = dependencies.directions_service
-    excluded_route_ids = {
-        str(value).strip().upper() for value in tool_input.get("excluded_route_ids") or []
-    }
+    excluded_route_ids = set(
+        normalize_route_ids(tool_input.get("excluded_route_ids") or [])
+    )
     excluded_modes = {str(value).strip().upper() for value in tool_input.get("exclude_modes") or []}
     primary_count = len(primary_routes)
     routes = candidates.dedupe_route_families(primary_routes)

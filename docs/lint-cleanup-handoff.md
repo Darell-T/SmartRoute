@@ -989,12 +989,12 @@ Delete `GTFSStaticData.get_unique_routes_for_stops` in Batch 6A. Remove the
 hidden `discovery_set_id` input from `place_reference.execute` in Batch 6C.
 Do not change public contracts.
 
-## Batch 6A worker completion (uncommitted)
+## Batch 6A (committed at 140495a)
 
-Fixed point `c058199`. This tree is ready for Codex re-review after the second
-reject. Nothing was committed. `quality/baseline.json` was not changed. Batch
-6B and Batch 7 were not started. Frontend production, `services/trips/**`, and
-`services/agent/**` were not opened for new work.
+Fixed point `c058199`. Batch 6A is committed as
+`140495a9292bfc8831888d6f9332556c80cc4b81`. `quality/baseline.json` has 295
+entries after the reviewer shrink. Frontend production, `services/trips/**`,
+and `services/agent/**` were not opened for new work in Batch 6A.
 
 ### Debt after the final coverage run
 
@@ -1157,9 +1157,358 @@ worsened 0. Stale 0. Ruff C901 0. Ruff structural 0.
 
 The reviewer regenerated `.audit/backend-debt.json` from that coverage run.
 Batch 6A has 579 functions, 0 above 12, 13 at 11 or 12, 0 CRAP scores above
-30, and 88.4% branch-aware coverage. Batch 6A is approved for commit. Batch
-6B and Batch 7 were not started.
+30, and 88.4% branch-aware coverage. Batch 6A is approved and committed as
+`140495a`.
 
+## Batch 6B worker completion (uncommitted)
+
+Scope checkpoint `140495a9292bfc8831888d6f9332556c80cc4b81`. Quality
+reference `c0581994e47ce1a5bbdb2d8e83fc0afd50ff1745`. HEAD is still
+`140495a`. This tree is uncommitted for Codex review.
+`quality/baseline.json` was not changed. Batch 6C, 6D, 6E, and Batch 7 were
+not started. Frontend production and `services/agent/**` were not edited.
+
+### Changed files
+
+Production:
+
+- `backend/app/services/trips/candidates.py`
+- `backend/app/services/trips/crowds/event.py`
+- `backend/app/services/trips/crowds/event_provider.py`
+- `backend/app/services/trips/crowds/evidence.py`
+- `backend/app/services/trips/crowds/hotspots.py`
+- `backend/app/services/trips/crowds/search_normalization.py`
+- `backend/app/services/trips/crowds/search_provider.py`
+- `backend/app/services/trips/direct_plan.py`
+- `backend/app/services/trips/enrichment.py`
+- `backend/app/services/trips/itinerary.py`
+- `backend/app/services/trips/preparation/combine.py`
+- `backend/app/services/trips/preparation/constraints.py`
+- `backend/app/services/trips/preparation/evidence.py`
+- `backend/app/services/trips/preparation/finalize.py`
+- `backend/app/services/trips/preparation/input.py`
+- `backend/app/services/trips/preparation/multi_stop.py`
+- `backend/app/services/trips/route_incidents/association.py`
+- `backend/app/services/trips/route_incidents/context.py`
+- `backend/app/services/trips/route_incidents/index_adapter.py`
+- `backend/app/services/trips/route_incidents/matching.py`
+- `backend/app/services/trips/route_incidents/merge.py`
+- `backend/app/services/trips/route_incidents/scan.py`
+- `backend/app/services/trips/scoring.py`
+- `backend/app/services/trips/selection_decision.py`
+- `backend/app/services/trips/transfer_semantics.py`
+
+Tests and records:
+
+- `backend/tests/test_incident_context_matching.py`
+- `backend/tests/test_ticketmaster_event_lookup.py`
+- `backend/tests/test_trip_candidate_reasons.py`
+- `docs/lint-cleanup-handoff.md`
+- `docs/lint-cleanup-plan.md`
+- `.audit/backend-debt.json`
+
+### Debt after the final coverage run
+
+`py scripts/report_backend_debt.py --max-existing 12 --output .audit/backend-debt.json`
+
+The command exits 1 because Batches 6C through 6E still have functions
+above 12. Judge `by_batch: 6B`.
+
+| Metric | At `140495a` | After 6B worker |
+|---|---:|---:|
+| 6B functions | 398 | 573 |
+| 6B above 12 | 62 | 0 |
+| 6B at 11 or 12 | 24 | 24 |
+| 6B CRAP above 30 | 4 | 0 |
+| Branch-aware coverage | 88.4% | 88.6% |
+
+### Survivors at 11 or 12
+
+Keep each of these at 11 or 12. Another helper would only hide a short guard
+or push a sibling over the 24-function cap.
+
+| Function | Cyclo | Cog | Coverage | CRAP | Why it stays |
+|---|---:|---:|---:|---:|---|
+| `_lookup_event_hubs` | 9 | 12 | 1.000 | 9.000 | Event-hub name and coordinate lookup |
+| `_events_from_payload` | 11 | 9 | 0.867 | 11.287 | Ticketmaster payload rows |
+| `_lookup_uncached` | 10 | 12 | 0.875 | 10.195 | Uncached event fetch and fail-open |
+| `lookup_events` | 12 | 10 | 0.967 | 12.005 | Public event lookup |
+| `find_hotspot_hits` | 7 | 12 | 0.909 | 7.037 | Hotspot association |
+| `normalize_search_payload` | 9 | 11 | 0.875 | 9.158 | Crowd-search payload shape |
+| `run_search` | 11 | 9 | 0.783 | 12.243 | Crowd-search provider |
+| `_select_first_valid` | 7 | 11 | 0.818 | 7.295 | First valid candidate |
+| `parse_coordinates` | 10 | 11 | 0.778 | 11.097 | Coordinate parse |
+| `resolve_named_place` | 11 | 8 | 0.600 | 18.744 | Named place resolution |
+| `_vehicle_signal_direction_matches` | 12 | 8 | 1.000 | 12.000 | Vehicle direction match |
+| `_merge_envelope_rows` | 12 | 11 | 0.875 | 12.281 | Evidence envelope merge |
+| `prepare_structural_candidates` | 11 | 8 | 0.900 | 11.121 | Structural candidate recovery |
+| `validated_waypoints` | 8 | 11 | 0.688 | 9.953 | Waypoint admission |
+| `_bounded_strings` | 8 | 11 | 0.917 | 8.037 | Association string admission |
+| `_stop_association` | 12 | 10 | 0.950 | 12.018 | Stop-to-incident association |
+| `_stop_records` | 8 | 11 | 1.000 | 8.000 | Endpoints plus opportunistic intermediates |
+| `_source_records` | 9 | 12 | 0.857 | 9.236 | Index source projection |
+| `_vehicle_signal_hits` | 11 | 10 | 1.000 | 11.000 | Vehicle hits on a scored route |
+| `alert_penalty_from_score` | 11 | 4 | 0.727 | 13.455 | Alert penalty from score |
+| `_fallback_scores` | 8 | 12 | 0.750 | 9.000 | Fallback selection scores |
+| `_add_crowd_reason` | 12 | 4 | 0.833 | 12.667 | Crowd reason text |
+| `_structured_reasons` | 10 | 11 | 0.933 | 10.030 | Structured reason list |
+| `_dominates_for_preference` | 11 | 10 | 1.000 | 11.000 | Preference domination |
+
+### Fixed-point CRAP targets
+
+- `match_cached_incidents`: stop and geometry matching are separate from
+  impact classification. Now 3/3, coverage 1.000, CRAP 3.000.
+- `_prefer`: renamed `_combine_related_records`. Official fields win through
+  `_official_fields_win`. Collection union stays. Now 1/0, coverage 1.000,
+  CRAP 1.000. The stale baseline key is still `_prefer#0`.
+- `build_chained_itinerary`: chained-segment construction is separate from
+  total calculation. Now 4/3, coverage 1.000, CRAP 4.000.
+- `route_constraints`: constraint kinds are named helpers. Now 10/9,
+  coverage 0.938, CRAP 10.024.
+
+A later extracted helper `_subway_pattern_intermediates` had CRAP 30.055 at
+coverage 0.222. The public path `build_candidate_stop_context` now covers
+pattern-index faults: intermediates are omitted and endpoints still match.
+That helper is now 7/6, coverage 0.889, CRAP 7.067.
+
+### Owned tests
+
+From the repository root:
+
+```
+$env:PYTHONPATH = (Resolve-Path 'backend').Path
+$env:APP_KEY = 'dummy'
+$env:ANTHROPIC_API_KEY = 'dummy'
+$env:SMARTROUTE_ENV = 'test'
+$env:AGENT_ALLOW_MEMORY_SESSIONS = '1'
+$files = @(
+    'backend/tests/test_incident_context_matching.py',
+    'backend/tests/test_trips_incidents.py',
+    'backend/tests/test_itinerary_chain.py',
+    'backend/tests/test_itinerary_canonical.py',
+    'backend/tests/test_transfer_semantics.py',
+    'backend/tests/test_event_crowd_scoring.py',
+    'backend/tests/test_trips_plan_deterministic.py',
+    'backend/tests/test_route_decision_evaluation.py',
+    'backend/tests/test_route_evidence_coverage.py',
+    'backend/tests/test_route_option_projection_grounding.py',
+    'backend/tests/test_single_agent_route_availability.py',
+    'backend/tests/test_trips_direct_plan.py',
+    'backend/tests/test_trips_enrichment.py',
+    'backend/tests/test_crowd_evidence.py',
+    'backend/tests/test_crowd_hotspots.py',
+    'backend/tests/test_crowd_search.py',
+    'backend/tests/test_ticketmaster_event_lookup.py',
+    'backend/tests/test_route_constraint_relaxation.py',
+    'backend/tests/test_route_exclusion_constraints.py',
+    'backend/tests/test_plan_trip_input_recovery.py',
+    'backend/tests/test_trip_candidate_reasons.py',
+    'backend/tests/test_intelligence_ablation.py',
+    'backend/tests/test_route_option_assembly.py',
+    'backend/tests/test_single_agent_route_multistop.py',
+    'backend/tests/test_route_itinerary_contract.py',
+    'backend/tests/test_plan_trip_projection.py'
+)
+py -m pytest @files -q --basetemp .pytest-batch6b-forward
+$reverse = @($files)
+[array]::Reverse($reverse)
+py -m pytest @reverse -q --basetemp .pytest-batch6b-reverse
+```
+
+Forward: 280 passed, 1 skipped, 59 subtests.
+Reverse: 280 passed, 1 skipped, 59 subtests.
+
+### Red before green
+
+1. `test_two_segments_default_25_min_dwell` inverted
+   `wp["dwell_minutes"] == 25` to `== 24`. Failure: `assert 25 == 24`.
+   Restored `== 25`.
+2. `_subway_pattern_intermediates` except body changed from `return None`
+   to `raise`. `test_pattern_index_fault_omits_intermediates_and_keeps_endpoints`
+   failed with `RuntimeError: pattern index unavailable`. Restored
+   `return None`.
+3. Offsetless Ticketmaster `dateTime` plus valid local fields. Failure:
+   `assert '2026-07-17T00:00:00Z' is None`. Local fallback removed for
+   string `dateTime`.
+4. `format_recommendation_reason({"code": []})`. Failure:
+   `TypeError: unhashable type: 'list'`. Code must be a string before
+   lookup.
+
+### Codex review repairs
+
+A Codex review of the first 6B tree found two behavior regressions.
+
+P1. `_event_start_iso` used `or` between `_parse_aware_iso` and local
+fields. A supplied `dateTime` string that lacked a timezone or failed
+`fromisoformat` fell through to `localDate`/`localTime` and produced
+`start_iso` plus `estimated_end_iso`. Checkpoint `140495a` returned
+`None` for that string path. Local fields apply only when `dateTime` is
+absent or not a string.
+
+P2. `format_recommendation_reason` looked up `code` in dict tables.
+`{"code": []}` and `{"code": {}}` raised `TypeError`. The checkpoint
+returned `None`. Non-string codes return `None` before lookup.
+
+### Full backend and quality
+
+`py -m pytest backend/tests -q --basetemp .pytest-batch6b-full` is the
+backend half of the quality command below.
+
+`py -m ruff check backend scripts` result: all checks passed.
+
+`py scripts/check_quality.py --quality-ref c058199 --cognitive-only`
+result: new or worsened 0.
+
+`py scripts/check_quality.py --quality-ref c058199` exit 1.
+`tests_ran: true`. `approval_eligible: false`. New 0. Worsened 0. Cognitive
+new or worsened 0. Frontend 314 passed. Backend 1894 passed, 21 skipped, 444
+subtests. Ruff C901 0. Ruff structural 0. Resolved 57. Stale 59.
+
+`git diff --check 140495a` is clean.
+
+Stale baseline entries for the reviewer. All are
+`python:backend/app/services/trips/...`:
+
+- `candidates.py:route_family_signature#0`
+- `crowds/event.py:_lookup_event_hubs#0`
+- `crowds/event.py:search_hubs#0`
+- `crowds/event_provider.py:_event_start_iso#0`
+- `crowds/event_provider.py:_lookup_uncached#0`
+- `crowds/event_provider.py:_parse_event#0`
+- `crowds/evidence.py:_deduplicate_impacts#0`
+- `crowds/evidence.py:collect#0`
+- `crowds/hotspots.py:find_hotspot_hits#0`
+- `crowds/search_normalization.py:normalize_search_payload#0`
+- `crowds/search_provider.py:_citation_urls#0`
+- `crowds/search_provider.py:_completed_sources#0`
+- `direct_plan.py:_translate_prepare_error#0`
+- `direct_plan.py:build_recommendation_reasons#0`
+- `direct_plan.py:format_recommendation_reason#0`
+- `direct_plan.py:project_route_candidates#0`
+- `enrichment.py:_enrich_bus_legs#0`
+- `enrichment.py:_enrich_subway_legs#0`
+- `itinerary.py:_trip_clocks#0`
+- `itinerary.py:build_canonical_itinerary#0`
+- `itinerary.py:build_chained_itinerary#0`
+- `itinerary.py:build_legs#0`
+- `preparation/combine.py:combine_prepared_chains#0`
+- `preparation/constraints.py:_candidate_timing#0`
+- `preparation/constraints.py:_unconfirmed_claims#0`
+- `preparation/constraints.py:candidate_digest#0`
+- `preparation/constraints.py:route_constraints#0`
+- `preparation/constraints.py:route_status#0`
+- `preparation/evidence.py:candidate_evidence_for_route#0`
+- `preparation/evidence.py:merge_candidate_evidence#0`
+- `preparation/evidence.py:merge_incident_metadata_values#0`
+- `preparation/evidence.py:vehicle_claims_for_route#0`
+- `preparation/finalize.py:finalize_aggregate#0`
+- `preparation/input.py:recover_structural_route#0`
+- `preparation/multi_stop.py:prepare_multi_stop#0`
+- `route_incidents/association.py:normalize_matcher_association#0`
+- `route_incidents/context.py:extract_candidate_stop_context#0`
+- `route_incidents/index_adapter.py:_matched_candidate_ids#0`
+- `route_incidents/index_adapter.py:extract_lookup_context#0`
+- `route_incidents/index_adapter.py:project_records#0`
+- `route_incidents/matching.py:Cached511NYSearchTool.execute#0`
+- `route_incidents/matching.py:_decode_polyline#0`
+- `route_incidents/matching.py:_geometry_components#0`
+- `route_incidents/matching.py:_nearest_distance_meters#0`
+- `route_incidents/matching.py:match_cached_incidents#0`
+- `route_incidents/merge.py:_current#0`
+- `route_incidents/merge.py:_prefer#0`
+- `route_incidents/merge.py:_same_incident#0`
+- `route_incidents/scan.py:build_candidate_stop_context#0`
+- `scoring.py:_route_alert_hits#0`
+- `scoring.py:_route_alert_penalty#0`
+- `scoring.py:_route_total_minutes#0`
+- `scoring.py:finalized_route_score#0`
+- `selection_decision.py:_add_preference_reasons#0`
+- `transfer_semantics.py:_accessibility#0`
+- `transfer_semantics.py:_classify_transfer#0`
+- `transfer_semantics.py:endpoint_fields#0`
+- `transfer_semantics.py:endpoint_identity#0`
+- `transfer_semantics.py:route_accessibility#0`
+
+Do not run `--update-baseline` from this worker. `_prefer#0` is stale
+because the combiner is now `_combine_related_records`.
+
+### Production line and function growth
+
+`git diff --numstat 140495a -- backend/app/services/trips` is 3242 insertions
+and 1972 deletions, net +1270 lines. `git diff -U0` counts 195 added `def`
+lines and 22 removed, net +173. The debt inventory moved from 398 to 573
+functions, net +175. That crosses the +25 function and +500 line review
+triggers. Remaining helpers own named policies (match, merge, clock, total,
+constraint, fail-open, admit, select). Peelers that only moved a condition
+were inlined or restored when inlining created a 25th 11/12 survivor.
+
+### Review findings
+
+Read-only reviews: code quality and reader load, reuse and duplication,
+performance and request-path behavior, Comment Sicko, simplify, ponytail.
+
+Accepted:
+
+- Delete restating helper docstrings. Keep provider, canonical, ordering,
+  fallback, and ownership comments.
+- Reuse `_CANDIDATE_ROUTE_ID`, `DEFAULT_DWELL_MINUTES`, scoring
+  `_step_route_id` / `_normalized_mode`, and evidence
+  `_vehicle_claim_is_layover`.
+- Extract `_http_url` as https admission so `_citation_urls` does not sit
+  at 11/12 over the cap.
+- Inline one-call peelers that did not own a policy.
+
+Rejected:
+
+- Full inline of constraint-kind helpers (parked `route_status` above 10).
+- Inline `_parse_route_seconds_minutes` and `_parse_route_minutes_field`
+  (parked `_route_total_minutes` at 11/11 and broke the 24-survivor cap).
+- Inline `_select_bus_steps` (parked `_enrich_bus_legs` at 12/12).
+- Inline `_select_closer_impact` (parked `associate_events` at cognitive 13).
+- Unify drifted walking overlay, digest `SUBWAY`/`BUS`/`RAIL` versus
+  `TRANSIT_MODES`, TRAM matching, itinerary `duration_seconds`, and
+  `to_event_point` for segments.
+- Ticketmaster boolean out-param type.
+- Private-to-public renames for tests.
+- Metric-only helpers or file splits for length.
+
+Performance review reported no request-path findings.
+
+### Unresolved risks
+
+- Pattern-index faults omit subway intermediates. Endpoints still match.
+  Missing intermediates are not invented.
+- A supplied Ticketmaster `dateTime` string that fails validation no longer
+  falls through to local fields. Missing or non-string `dateTime` still
+  uses `localDate`/`localTime`.
+- Missing incident, crowd, vehicle, or route evidence still does not become
+  certainty.
+- Fourteen Batch 6B functions remain zero-covered. They were not in the
+  four CRAP targets and were not given coverage-theater tests.
+- Quality exit 1 is the 59 stale trips baseline entries plus later-batch
+  debt. Worker must not shrink `quality/baseline.json`.
+- Global debt exit 1 is Batches 6C through 6E. Batch 6B is
+  `above_12=0` and `crap_above_30=0`.
+
+### Codex reviewer final
+
+Codex accepted both final repairs. A supplied invalid Ticketmaster `dateTime`
+string no longer falls through to local fields. Non-string recommendation
+reason codes return `None` instead of raising `TypeError`. The two focused
+test files pass with 31 passed and 1 skipped.
+
+The reviewer removed exactly 59 proven-stale entries from
+`quality/baseline.json`, which reduced the file from 295 to 236 entries. No
+entry was added. The generated update also lowered two surviving ceilings:
+`lookup_events` moved from cyclomatic 13 to 12, and
+`prepare_structural_candidates` moved from 12 to 11.
+
+The final quality command against `c058199` exits 0 with
+`approval_eligible: true` and `tests_ran: true`. Frontend tests have 314
+passes. Backend tests have 1,894 passes, 21 skips, and 444 subtest passes.
+New, worsened, and cognitive new or worsened violations are 0. Ruff C901 and
+Ruff structural diagnostics are 0. Batch 6B is approved for commit. Batch 6C
+was not started.
 
 ## Historical records through 427fbc8
 
