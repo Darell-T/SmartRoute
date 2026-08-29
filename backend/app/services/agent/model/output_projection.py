@@ -1,13 +1,3 @@
-"""Canonical projection of provider-shaped values at model-facing boundaries.
-
-Provider place identities are useful to route providers and server-owned
-stores, but they are not conversational identities.  Model-facing payloads
-may carry only the session-owned opaque ``pl_`` identity.  This module keeps
-that rule structural: provider fields are omitted and place-id fields are
-validated against the opaque-id contract instead of being filtered by a
-provider-specific string pattern.
-"""
-
 from __future__ import annotations
 
 from typing import Any
@@ -42,12 +32,7 @@ def opaque_place_id(value: object) -> str | None:
 
 
 def project_model_value(value: object) -> object:
-    """Copy a payload while removing provider place identity fields.
-
-    This intentionally projects by field meaning.  It does not search or
-    replace arbitrary strings, so a provider id cannot be hidden in one field
-    and accidentally retained in another identity-bearing field.
-    """
+    """Copy a payload while removing provider place identity fields."""
 
     if isinstance(value, dict):
         projected: dict[str, object] = {}
@@ -70,9 +55,7 @@ def project_model_value(value: object) -> object:
                 continue
             projected[key] = project_model_value(raw_value)
         return projected
-    if isinstance(value, list):
-        return [project_model_value(item) for item in value]
-    if isinstance(value, tuple):
+    if isinstance(value, (list, tuple)):
         return [project_model_value(item) for item in value]
     return value
 
@@ -81,68 +64,38 @@ def project_route_preparation(
     data: object,
     tool_input: dict[str, Any] | None = None,
 ) -> object:
-    """Project ``prepare_route_options`` data without losing opaque identity.
-
-    Route preparation persists the provider-resolved endpoint for server-side
-    correctness.  The model needs the opaque id it supplied, when one exists,
-    so it can continue the candidate protocol.  Normalized source identities
-    are authoritative; an input identity is only a fallback when the source
-    has no opaque ids.  A single opaque id maps to every candidate in a
-    single-destination preparation.  Multi-destination candidate identities
-    must already be bound by route normalization; this projection never
-    infers a branch from a candidate's list position.
-    """
+    """Project ``prepare_route_options`` data without losing opaque identity."""
 
     if not isinstance(data, dict):
         return project_model_value(data)
 
     projected = project_model_value(data)
-    if not isinstance(projected, dict):
-        return projected
-
     source_ids = _opaque_ids(data.get("destination_place_ids"))
     input_ids = _input_destination_ids(tool_input)
     destination_ids = source_ids or input_ids
-    if "destination_place_ids" in data or destination_ids:
-        projected["destination_place_ids"] = list(destination_ids)
+    if not source_ids and input_ids:
+        projected["destination_place_ids"] = list(input_ids)
 
-    candidates = data.get("candidates")
-    if isinstance(candidates, list):
-        projected_candidates: list[object] = []
-        for candidate in candidates:
-            if not isinstance(candidate, dict):
+    for list_key, id_key in (
+        ("candidates", "destination_place_id"),
+        ("branch_coverage", "place_id"),
+    ):
+        rows = data.get(list_key)
+        if not isinstance(rows, list):
+            continue
+        projected_rows: list[object] = []
+        for row in rows:
+            if not isinstance(row, dict):
                 continue
-            candidate_projection = project_model_value(candidate)
-            if not isinstance(candidate_projection, dict):
-                continue
-            candidate_id = opaque_place_id(candidate.get("destination_place_id"))
-            if candidate_id is None:
-                candidate_id = _single_destination_fallback(destination_ids)
-            if candidate_id is not None:
-                candidate_projection["destination_place_id"] = candidate_id
-            else:
-                candidate_projection.pop("destination_place_id", None)
-            projected_candidates.append(candidate_projection)
-        projected["candidates"] = projected_candidates
-
-    branch_coverage = data.get("branch_coverage")
-    if isinstance(branch_coverage, list):
-        projected_branches: list[object] = []
-        for branch in branch_coverage:
-            if not isinstance(branch, dict):
-                continue
-            branch_projection = project_model_value(branch)
-            if not isinstance(branch_projection, dict):
-                continue
-            branch_id = opaque_place_id(branch.get("place_id"))
-            if branch_id is None:
-                branch_id = _single_destination_fallback(destination_ids)
-            if branch_id is not None:
-                branch_projection["place_id"] = branch_id
-            else:
-                branch_projection.pop("place_id", None)
-            projected_branches.append(branch_projection)
-        projected["branch_coverage"] = projected_branches
+            row_projection = project_model_value(row)
+            row_id = opaque_place_id(row.get(id_key)) or (
+                destination_ids[0] if len(destination_ids) == 1 else None
+            )
+            row_projection.pop(id_key, None)
+            if row_id is not None:
+                row_projection[id_key] = row_id
+            projected_rows.append(row_projection)
+        projected[list_key] = projected_rows
 
     return projected
 
@@ -243,10 +196,6 @@ def _opaque_ids(value: object) -> list[str]:
         for item in value
         if (safe := opaque_place_id(item)) is not None
     ]
-
-
-def _single_destination_fallback(ids: list[str]) -> str | None:
-    return ids[0] if len(ids) == 1 else None
 
 
 __all__ = (

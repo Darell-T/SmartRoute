@@ -458,23 +458,11 @@ def resolve_place_reference(
     *,
     session_id: str,
     discovery_set_id: str | None,
-    session: dict | None = None,
     place_id: str | None = None,
     ordinal: int | None = None,
     description: str | None = None,
 ) -> tuple[dict[str, Any] | None, str | None]:
     """Resolve a conversational place reference against a server-owned set."""
-
-    if session is not None and not discovery_set_id:
-        presented, presented_error, _set_id = resolve_presented_place_reference(
-            session=session,
-            session_id=session_id,
-            place_id=place_id,
-            ordinal=ordinal,
-            description=description,
-        )
-        if presented is not None or presented_error:
-            return presented, presented_error
 
     if not discovery_set_id:
         return None, "no active discovery set"
@@ -490,8 +478,9 @@ def resolve_place_reference(
                 return place, None
         return None, "place id is unknown for this discovery set"
     if ordinal is not None:
+        wanted = int(ordinal)
         for place in places:
-            if int(place.get("ordinal") or 0) == int(ordinal):
+            if int(place.get("ordinal") or 0) == wanted:
                 return place, None
         return None, "ordinal is out of range for this discovery set"
     if description is not None:

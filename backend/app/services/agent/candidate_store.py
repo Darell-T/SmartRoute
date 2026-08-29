@@ -349,7 +349,7 @@ def _mark_presented_redis(
                 type(exc).__name__,
             )
             raise
-        except Exception as exc:
+        except (RuntimeError, TypeError, ValueError, KeyError, AttributeError, OSError) as exc:
             _LOGGER.warning(
                 "atomic candidate presentation failed type=%s",
                 type(exc).__name__,
@@ -379,8 +379,8 @@ def _reserve_record(record: dict[str, Any] | None, candidate_id: str) -> str | N
 def _queue_reserved_record(pipe: Any, key: str, record: dict[str, Any], ttl_seconds: int) -> None:
     try:
         remaining = max(30, int(float(record.get("expires_at") or time.time()) - time.time()))
-    except (TypeError, ValueError):
-        raise ValueError("candidate set expiry is invalid")
+    except (TypeError, ValueError) as exc:
+        raise ValueError("candidate set expiry is invalid") from exc
     pipe.setex(
         key,
         min(max(30, int(ttl_seconds)), remaining),
@@ -391,8 +391,8 @@ def _queue_reserved_record(pipe: Any, key: str, record: dict[str, Any], ttl_seco
 def _cache_reserved_record(key: str, record: dict[str, Any], ttl_seconds: int) -> None:
     try:
         remaining = max(30, int(float(record.get("expires_at") or time.time()) - time.time()))
-    except (TypeError, ValueError):
-        raise ValueError("candidate set expiry is invalid")
+    except (TypeError, ValueError) as exc:
+        raise ValueError("candidate set expiry is invalid") from exc
     cache.cache_set(
         key,
         json.dumps(record, separators=(",", ":"), default=str),

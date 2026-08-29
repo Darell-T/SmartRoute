@@ -10,8 +10,9 @@ from __future__ import annotations
 import unittest
 from unittest.mock import AsyncMock, patch
 
+from app.services.agent import discovery_store
 from app.services.agent import session as session_module
-from app.services.agent.tools import ToolContext, ToolResult
+from app.services.agent.tools import ToolContext
 from app.services.agent.tools.location_resolution import ResolvedPlace
 from app.services.agent.tools.places import discover_places
 from app.services.trips.selection_decision import (
@@ -25,6 +26,7 @@ from tests.agent_route_decision_test_support import (
     _present_round,
     _route,
     _route_goal_round,
+    provider_search_result,
 )
 from tests.conversation.conversation_matrix_harness import route_cards, run_turn
 
@@ -271,14 +273,14 @@ class AgentRouteDecisionReliabilityTests(AgentRouteDecisionTestMixin, unittest.I
             "open_now": True,
         }
 
-        provider_result = ToolResult(
-            ok=True,
-            data={"places": [far_branch, coordinate_missing_branch, nearby_branch]},
-        )
         with patch.object(
             discover_places.search_local_places,
             "_provider_search",
-            new=AsyncMock(return_value=provider_result),
+            new=AsyncMock(
+                return_value=provider_search_result(
+                    far_branch, coordinate_missing_branch, nearby_branch
+                )
+            ),
         ):
             result = await discover_places.execute(
                 {
@@ -580,3 +582,52 @@ class AgentRouteDecisionReliabilityTests(AgentRouteDecisionTestMixin, unittest.I
         }
 
         assert "avoids_active_disruption" not in evaluate_candidate_decision({"candidates": [selected, alternative]}, selected)["supported_reason_codes"]
+
+
+class ProviderSearchResultContractTests(unittest.IsolatedAsyncioTestCase):
+    async def test_shared_fake_coordinates_survive_discovery(self) -> None:
+        session_id, session = session_module.new_session()
+        ctx = ToolContext(
+            session=session,
+            session_id=session_id,
+            turn_id="provider-envelope",
+            now_et="2026-08-20T12:00:00-04:00",
+            origin={"lat": 40.672, "lng": -73.98},
+        )
+        with patch.object(
+            discover_places.search_local_places,
+            "_provider_search",
+            new=AsyncMock(
+                return_value=provider_search_result(
+                    {
+                        "name": "Probe Place",
+                        "place_id": "provider-probe",
+                        "location": {
+                            "latitude": 40.6725,
+                            "longitude": -73.9785,
+                        },
+                    }
+                )
+            ),
+        ):
+            discovery = await discover_places.execute(
+                {
+                    "operation": "search",
+                    "query": "Probe Place",
+                    "scope": {"kind": "current_location", "values": []},
+                    "open_now": None,
+                    "max_results": 1,
+                    "candidate_names": [],
+                },
+                ctx,
+            )
+
+        assert discovery.ok, discovery.error
+        [place] = discovery.data["places"]
+        assert place["name"] == "Probe Place"
+        stored = discovery_store.load_discovery_set(
+            discovery.data["discovery_set_id"],
+            session_id=session_id,
+        )
+        assert stored["places"][0]["latitude"] == 40.6725
+        assert stored["places"][0]["longitude"] == -73.9785

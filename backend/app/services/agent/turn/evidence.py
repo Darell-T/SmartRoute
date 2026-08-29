@@ -198,6 +198,7 @@ class TurnEvidence:
     ) -> None:
         if ok:
             self.transit_evidence = True
+        _ = (operation, data)
 
     def note_web(self, *, ok: bool) -> None:
         self.web_used = True

@@ -49,7 +49,7 @@ class PendingContinuationTests(unittest.TestCase):
         self.assertEqual(tuple(item.unresolved_outcomes[0] for item in retained), ("3", "2", "1"))
 
     def test_rejects_nested_payload_like_metadata(self) -> None:
-        with self.assertRaises(ValueError):
+        with self.assertRaises(TypeError):
             PendingContinuation(("route",), constraints={"provider_payload": {}})
 
     def test_rejects_attempt_count_outside_the_bounded_range(self) -> None:

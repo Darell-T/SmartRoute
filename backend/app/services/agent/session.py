@@ -44,9 +44,9 @@ def _items(value: object, field: str) -> tuple[str, ...]:
     if value is None:
         return ()
     if isinstance(value, (str, bytes, Mapping)):
-        raise ValueError(f"{field} must be a sequence of strings")
+        raise TypeError(f"{field} must be a sequence of strings")
     if not isinstance(value, Sequence):
-        raise ValueError(f"{field} must be a sequence of strings")
+        raise TypeError(f"{field} must be a sequence of strings")
     result: list[str] = []
     seen: set[str] = set()
     for item in value:
@@ -61,7 +61,7 @@ def _items(value: object, field: str) -> tuple[str, ...]:
 
 def _utc(value: datetime) -> datetime:
     if not isinstance(value, datetime):
-        raise ValueError("expiry metadata must be datetime values")
+        raise TypeError("expiry metadata must be datetime values")
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
@@ -92,7 +92,7 @@ class PendingContinuation:
         if isinstance(self.attempt_count, bool) or not isinstance(
             self.attempt_count, int
         ):
-            raise ValueError("attempt_count must be an integer")
+            raise TypeError("attempt_count must be an integer")
         if not 1 <= self.attempt_count <= MAX_CONTINUATION_ATTEMPTS:
             raise ValueError(
                 f"attempt_count must be between 1 and {MAX_CONTINUATION_ATTEMPTS}"

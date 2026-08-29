@@ -102,7 +102,6 @@ def _eval_math_node(node: ast.AST) -> int | float:
     raise ValueError("unsupported expression")
 
 
-_TurnDeadlineReached = tool_round.TurnDeadlineReached
 _rider_excluded_modes = tool_input_policy.rider_excluded_modes
 _rider_excluded_route_ids = tool_input_policy.rider_excluded_route_ids
 _constrained_tool_input = tool_input_policy.constrained_tool_input
@@ -197,7 +196,7 @@ def _build_stream_kwargs(
     )
 
 
-def _web_search_tool(mode_policy: agent_policy.AgentModePolicy) -> dict:
+def _web_search_tool() -> dict:
     return {
         "type": "web_search_20250305",
         "name": "web_search",
@@ -222,7 +221,7 @@ def _optional_parameter_count(tools: list[dict]) -> int:
 
 
 def _tools_for_state(
-    mode_policy: agent_policy.AgentModePolicy | None = None,
+    _mode_policy: agent_policy.AgentModePolicy | None = None,
     session: dict | None = None,
     include_web: bool = False,
     turn_evidence: object | None = None,
@@ -230,7 +229,6 @@ def _tools_for_state(
 ) -> list[dict]:
     """Return tools valid for current turn state, never for rider phrasing."""
 
-    mode_policy = mode_policy or agent_policy.policy_for_mode("auto")
     tools = [
         dict(schema)
         for schema in public_surface.schemas_for_state(
@@ -241,7 +239,7 @@ def _tools_for_state(
         )
     ]
     if include_web:
-        tools.append(_web_search_tool(mode_policy))
+        tools.append(_web_search_tool())
     return tools
 
 

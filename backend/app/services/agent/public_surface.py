@@ -104,7 +104,6 @@ INTERNAL_LEAF_TOOL_NAMES: frozenset[str] = frozenset(
 )
 
 STRICT_TOOL_BUDGET = 0
-STRICT_TOOL_HARD_LIMIT = 20
 STRICT_OPTIONAL_FIELD_BUDGET = 0
 OPTIONAL_FIELD_HARD_LIMIT = 24
 STRICT_UNION_FIELD_BUDGET = 0
@@ -182,32 +181,17 @@ def offered_custom_tools(registry_schemas: Iterable[Mapping[str, Any]]) -> list[
             "public custom tool surface strict-tool count must be "
             f"{STRICT_TOOL_BUDGET}, got {len(strict_tools)}"
         )
-    if len(strict_tools) > STRICT_TOOL_HARD_LIMIT:
-        raise AssertionError(
-            "public custom tool surface exceeds Anthropic strict-tool "
-            f"limit {STRICT_TOOL_HARD_LIMIT}"
-        )
     optional_count = optional_parameter_count(strict_tools)
     if optional_count != STRICT_OPTIONAL_FIELD_BUDGET:
         raise AssertionError(
             "public strict-tool optional-field count must be "
             f"{STRICT_OPTIONAL_FIELD_BUDGET}, got {optional_count}"
         )
-    if optional_count > OPTIONAL_FIELD_HARD_LIMIT:
-        raise AssertionError(
-            "public custom tool surface exceeds Anthropic optional-field "
-            f"limit {OPTIONAL_FIELD_HARD_LIMIT}"
-        )
     union_count = union_parameter_count(strict_tools)
     if union_count != STRICT_UNION_FIELD_BUDGET:
         raise AssertionError(
             "public strict-tool union-field count must be "
             f"{STRICT_UNION_FIELD_BUDGET}, got {union_count}"
-        )
-    if union_count > UNION_FIELD_HARD_LIMIT:
-        raise AssertionError(
-            "public custom tool surface exceeds Anthropic union-field "
-            f"limit {UNION_FIELD_HARD_LIMIT}"
         )
     return offered
 
@@ -328,14 +312,11 @@ def state_valid_tool_names(
     for goal in contract.goals:
         state = evidence.state_for(goal.goal_key)
         if state == GoalState.EVIDENCE_READY:
-            if (
+            skip_presenter = (
                 goal.kind == GoalKind.DESTINATION_SELECTION
                 and _feeds_route_selection(contract, goal.goal_key)
                 and not _dependent_route_failed(contract, evidence, goal.goal_key)
-            ):
-                # The verified selection is input to the dependent route, not
-                # a second user-visible result that must be presented first.
-                continue
+            )
             presenter = _PRESENTER_BY_GOAL.get(goal.kind)
             place_research_pending = (
                 goal.kind
@@ -343,7 +324,7 @@ def state_valid_tool_names(
                 and getattr(evidence, "web_research_required", False)
                 and not getattr(evidence, "web_succeeded", False)
             )
-            if presenter and not place_research_pending:
+            if presenter and not skip_presenter and not place_research_pending:
                 names.add(presenter)
             continue
         if state in {
@@ -369,10 +350,6 @@ def state_valid_tool_names(
                     and _feeds_route_selection(contract, goal.goal_key)
                 )
             ):
-                # Existing server-owned facts can satisfy a details/selection
-                # follow-up without another provider search. Keep the search
-                # capability available too: the model may still choose it when
-                # the rider explicitly asks for new information.
                 names.add("present_places")
             if (
                 goal.kind == GoalKind.ROUTE
@@ -384,8 +361,6 @@ def state_valid_tool_names(
                     )
                 )
             ):
-                # A prior canonical route or what-if preview can be accepted
-                # directly; preparation remains available for a new replan.
                 names.add("present_route")
             capability = _CAPABILITY_BY_GOAL.get(goal.kind)
             if capability:

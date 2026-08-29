@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Mapping, Sequence
-from enum import Enum
+from enum import StrEnum
+from graphlib import CycleError, TopologicalSorter
 from typing import Any
 
 MAX_GOALS = 6
@@ -20,7 +21,7 @@ class ContractValidationError(ValueError):
     """Raised when a model-declared outcome contract is invalid."""
 
 
-class GoalKind(str, Enum):
+class GoalKind(StrEnum):
     PLACE_RECOMMENDATION = "place_recommendation"
     DESTINATION_SELECTION = "destination_selection"
     ROUTE = "route"
@@ -33,7 +34,7 @@ class GoalKind(str, Enum):
     GENERAL_RESPONSE = "general_response"
 
 
-class GoalState(str, Enum):
+class GoalState(StrEnum):
     PENDING = "pending"
     IN_FLIGHT = "in_flight"
     EVIDENCE_READY = "evidence_ready"
@@ -99,40 +100,25 @@ class TurnContract:
             raise ContractValidationError("at least one goal is required")
         if len(self.goals) > MAX_GOALS:
             raise ContractValidationError(f"at most {MAX_GOALS} goals are allowed")
-        try:
-            goals = tuple(
-                goal if isinstance(goal, OutcomeGoal) else OutcomeGoal(**goal)
-                for goal in self.goals
-            )
-        except (TypeError, ValueError) as exc:
-            raise ContractValidationError("each goal needs key, kind, depends_on") from exc
+        goals = tuple(self.goals)
         folded = [goal.goal_key.casefold() for goal in goals]
         if len(set(folded)) != len(folded):
             raise ContractValidationError("goal_key values must be unique")
         keys = {goal.goal_key for goal in goals}
-        for goal in goals:
-            unknown = set(goal.depends_on) - keys
-            if unknown:
-                raise ContractValidationError(
-                    f"goal {goal.goal_key!r} depends on unknown goal"
-                )
-        visiting: set[str] = set()
-        visited: set[str] = set()
-        by_key = {goal.goal_key: goal for goal in goals}
-
-        def visit(key: str) -> None:
-            if key in visiting:
-                raise ContractValidationError("goal dependencies must be acyclic")
-            if key in visited:
-                return
-            visiting.add(key)
-            for dependency in by_key[key].depends_on:
-                visit(dependency)
-            visiting.remove(key)
-            visited.add(key)
-
-        for goal in goals:
-            visit(goal.goal_key)
+        unknown = next(
+            (goal for goal in goals if set(goal.depends_on) - keys),
+            None,
+        )
+        if unknown:
+            raise ContractValidationError(
+                f"goal {unknown.goal_key!r} depends on unknown goal"
+            )
+        try:
+            TopologicalSorter(
+                {goal.goal_key: goal.depends_on for goal in goals}
+            ).prepare()
+        except CycleError as exc:
+            raise ContractValidationError("goal dependencies must be acyclic") from exc
         object.__setattr__(self, "goals", goals)
 
     @classmethod

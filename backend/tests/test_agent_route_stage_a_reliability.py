@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, patch
 from app.services.agent import discovery_store
 from app.services.agent import session as session_module
 from app.services.agent import trip_state as trip_state_module
-from app.services.agent.tools import ToolContext, ToolResult
+from app.services.agent.tools import ToolContext
 from app.services.agent.tools.location_resolution import ResolvedPlace
 from app.services.agent.tools.places import discover_places
 from app.services.agent.tools.route import prepare_route_branches, prepare_route_options
@@ -26,6 +26,7 @@ from tests.agent_route_decision_test_support import (
     _present_round,
     _route,
     _route_goal_round,
+    provider_search_result,
 )
 from tests.conversation.conversation_matrix_harness import route_cards, run_turn
 
@@ -74,7 +75,7 @@ class AgentRouteStageAReliabilityTests(
         with patch.object(
             discover_places.search_local_places,
             "_provider_search",
-            new=AsyncMock(return_value=ToolResult(ok=True, data={"places": branches})),
+            new=AsyncMock(return_value=provider_search_result(*branches)),
         ):
             discovery = await discover_places.execute(
                 {
@@ -256,7 +257,7 @@ class AgentRouteStageAReliabilityTests(
             discover_places.search_local_places,
             "_provider_search",
             new=AsyncMock(
-                return_value=ToolResult(ok=True, data={"places": brooklyn_places})
+                return_value=provider_search_result(*brooklyn_places)
             ),
         ):
             discovery = await discover_places.execute(

@@ -13,6 +13,8 @@ import os
 import time
 from datetime import UTC, datetime
 
+from redis.exceptions import RedisError
+
 from app.services import cache
 
 AGENT_MAX_CONCURRENT_STREAMS = int(os.getenv("AGENT_MAX_CONCURRENT_STREAMS", "4"))
@@ -120,6 +122,6 @@ def record_usage_cost(input_tokens: int, output_tokens: int) -> float:
             pipe.execute()
         else:
             cache.cache_set(key, str(daily_spend_usd() + cost), ttl)
-    except Exception as exc:
+    except (RedisError, OSError, TypeError, ValueError) as exc:
         print(f"[agent-budget] spend counter update failed (continuing): {exc!r}")
     return cost

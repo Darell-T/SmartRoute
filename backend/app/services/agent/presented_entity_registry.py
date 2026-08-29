@@ -156,6 +156,16 @@ def _entry(
     }
 
 
+def _rewrite_source_place_id(
+    source: dict[str, Any], selected_id: str, canonical_id: str
+) -> bool:
+    for stored in source.get("places") or []:
+        if isinstance(stored, dict) and str(stored.get("place_id") or "") == selected_id:
+            stored["place_id"] = canonical_id
+            return True
+    return False
+
+
 def record(
     session: dict | None,
     *,
@@ -194,12 +204,13 @@ def record(
             str(existing.get("place_id") or "") if existing else ""
         ) or str(selected.get("place_id") or "")
         selected_id = str(selected.get("place_id") or "")
-        if canonical_id and selected_id and canonical_id != selected_id:
-            for stored in source.get("places") or []:
-                if isinstance(stored, dict) and str(stored.get("place_id") or "") == selected_id:
-                    stored["place_id"] = canonical_id
-                    source_changed = True
-                    break
+        if (
+            canonical_id
+            and selected_id
+            and canonical_id != selected_id
+            and _rewrite_source_place_id(source, selected_id, canonical_id)
+        ):
+            source_changed = True
         normalized = dict(selected)
         normalized["place_id"] = canonical_id
         canonical_places.append(normalized)
@@ -266,50 +277,55 @@ def resolve(
 ) -> tuple[dict[str, Any] | None, str | None, str | None]:
     """Resolve a presented name/id or newest compatible ordinal."""
 
-    if not isinstance(session, dict) or not session_id:
-        return None, None, None
-    entries = _entries(session)
+    entries = _entries(session) if session_id else []
     requested_set = str(discovery_set_id or "").strip()
-    if requested_set:
-        entries = [
-            item
-            for item in entries
-            if str(item.get("discovery_set_id") or "") == requested_set
-        ]
+    entries = [
+        item
+        for item in entries
+        if not requested_set
+        or str(item.get("discovery_set_id") or "") == requested_set
+    ]
     if not entries:
         return None, None, None
 
     chosen: dict[str, Any] | None = None
     if place_id:
         matches = [
-            item for item in entries if str(item.get("place_id") or "") == str(place_id).strip()
+            item
+            for item in entries
+            if str(item.get("place_id") or "") == str(place_id).strip()
         ]
-        if matches:
-            chosen = max(matches, key=lambda item: int(item.get("presentation_sequence") or 0))
+        chosen = (
+            max(matches, key=lambda item: int(item.get("presentation_sequence") or 0))
+            if matches
+            else None
+        )
     elif ordinal is not None:
         try:
             wanted = int(ordinal)
         except (TypeError, ValueError):
             return None, "ordinal must be a whole number", None
-        sequences = sorted(
-            {int(item.get("presentation_sequence") or 0) for item in entries},
-            reverse=True,
-        )
-        for sequence in sequences:
-            matches = [
+        chosen = next(
+            (
                 item
-                for item in entries
-                if int(item.get("presentation_sequence") or 0) == sequence
-                and int(item.get("ordinal") or 0) == wanted
-            ]
-            if matches:
-                chosen = matches[0]
-                break
+                for item in sorted(
+                    entries,
+                    key=lambda item: int(item.get("presentation_sequence") or 0),
+                    reverse=True,
+                )
+                if int(item.get("ordinal") or 0) == wanted
+            ),
+            None,
+        )
         if chosen is None:
             return None, "ordinal is out of range for presented places", None
     elif description is not None:
         reference = _description_reference(description)
-        if not reference or reference in _PRICE_REFERENCE_WORDS or reference in _BOROUGH_REFERENCE_WORDS:
+        if (
+            not reference
+            or reference in _PRICE_REFERENCE_WORDS
+            or reference in _BOROUGH_REFERENCE_WORDS
+        ):
             return None, None, None
         normalized = _normalized_name(reference)
         matches = [
@@ -322,17 +338,31 @@ def resolve(
             )
         ]
         unique = {str(item.get("canonical_identity")): item for item in matches}
-        if len(unique) > 1:
-            return None, "multiple presented places match that name; please specify which one", None
-        if unique:
-            chosen = max(unique.values(), key=lambda item: int(item.get("presentation_sequence") or 0))
+        if len(unique) != 1:
+            return (
+                None,
+                "multiple presented places match that name; please specify which one"
+                if len(unique) > 1
+                else None,
+                None,
+            )
+        chosen = max(
+            unique.values(),
+            key=lambda item: int(item.get("presentation_sequence") or 0),
+        )
 
     if chosen is None:
         return None, None, None
     place, set_id = _entry_place(chosen, session_id=session_id)
-    if place is None:
-        return None, "the presented place is no longer available; search for it again", None
-    return place, None, set_id
+    return (
+        (place, None, set_id)
+        if place
+        else (
+            None,
+            "the presented place is no longer available; search for it again",
+            None,
+        )
+    )
 
 
 def _finite_price(value: object) -> float | None:
@@ -346,12 +376,7 @@ def _finite_price(value: object) -> float | None:
 def resolve_description(
     places: list[dict[str, Any]], description: str
 ) -> tuple[dict[str, Any] | None, str | None]:
-    words = " ".join(str(description or "").casefold().split()).split()
-    if words and words[0] in {"the", "that"}:
-        words = words[1:]
-    if words and words[-1] in {"one", "place"}:
-        words = words[:-1]
-    reference = " ".join(words)
+    reference = _description_reference(description)
     if not reference:
         return None, "place reference is incomplete"
     if reference in _PRICE_REFERENCE_WORDS:
