@@ -12,6 +12,7 @@ from app.services.agent.tools._types import ToolContext, ToolResult
 from app.services.agent.tools.places import (
     discover_places,
     place_reference,
+    present_places,
     search_local_places,
 )
 
@@ -323,9 +324,7 @@ class GetPlaceDetailsTests(unittest.IsolatedAsyncioTestCase):
         trip_state.bind_discovery_set(ctx.session, set_id)
         record = discovery_store.load_discovery_set(set_id, session_id="sess-disc")
         place_id = record["places"][0]["place_id"]
-        result = await place_reference.execute(
-            {"place_id": place_id, "discovery_set_id": set_id}, ctx
-        )
+        result = await place_reference.execute({"place_id": place_id}, ctx)
         assert result.ok
         assert result.data["canonical"]
         assert result.data["destination_label"] == "Di Fara Pizza, 1424 Av J"
@@ -333,22 +332,27 @@ class GetPlaceDetailsTests(unittest.IsolatedAsyncioTestCase):
         state = trip_state.get_trip_state(ctx.session)
         assert state["selected_place_id"] == place_id
 
-    async def test_explicit_discovery_set_id(self):
+    async def test_hidden_discovery_set_id_does_not_select_a_set(self):
+        ctx = _ctx()
         set_id = await self._seed_set()
+        trip_state.bind_discovery_set(ctx.session, set_id)
         record = discovery_store.load_discovery_set(set_id, session_id="sess-disc")
         place_id = record["places"][0]["place_id"]
         result = await place_reference.execute(
-            {"place_id": place_id, "discovery_set_id": set_id}, _ctx()
+            {"place_id": place_id, "discovery_set_id": "ds_invented"},
+            ctx,
         )
         assert result.ok
+        assert result.data["place_id"] == place_id
+        assert trip_state.get_trip_state(ctx.session)["active_discovery_set_id"] == set_id
 
     async def test_cross_session_rejected(self):
         set_id = await self._seed_set(session_id="sess-a")
         record = discovery_store.load_discovery_set(set_id, session_id="sess-a")
         place_id = record["places"][0]["place_id"]
-        result = await place_reference.execute(
-            {"place_id": place_id, "discovery_set_id": set_id}, _ctx(session_id="sess-b")
-        )
+        ctx = _ctx(session_id="sess-b")
+        trip_state.bind_discovery_set(ctx.session, set_id)
+        result = await place_reference.execute({"place_id": place_id}, ctx)
         assert not result.ok
         assert "unknown, expired" in (result.error or "")
 
@@ -416,33 +420,33 @@ class GetPlaceDetailsTests(unittest.IsolatedAsyncioTestCase):
             query="pizza",
         )
 
-    async def test_explicit_older_set_rebinds_active_context_for_followups(self):
+    async def test_presented_place_rebinds_its_source_set_for_followups(self):
         ctx = _ctx()
-        set_b = await self._seed_two_place_set()
+        ctx.session["presented_entity_registry"] = []
         set_a = await self._seed_two_place_set()
-        trip_state.bind_discovery_set(ctx.session, set_b)
-        record_b = discovery_store.load_discovery_set(set_b, session_id="sess-disc")
-        trip_state.bind_selected_place(ctx.session, record_b["places"][0]["place_id"])
         record_a = discovery_store.load_discovery_set(set_a, session_id="sess-disc")
         second_a = record_a["places"][1]["place_id"]
-
-        result = await place_reference.execute(
-            {"place_id": second_a, "discovery_set_id": set_a},
+        present = await present_places.execute(
+            {
+                "discovery_set_id": set_a,
+                "selections": [
+                    {"place_id": second_a, "reason": "preference_match"},
+                ],
+                "research_used": False,
+            },
             ctx,
         )
-        assert result.ok
+        assert present.ok, present.error
+        set_b = await self._seed_two_place_set()
+        trip_state.bind_discovery_set(ctx.session, set_b)
+
+        result = await place_reference.execute({"place_id": second_a}, ctx)
+        assert result.ok, result.error
         state = trip_state.get_trip_state(ctx.session)
         assert state["active_discovery_set_id"] == set_a
         assert state["selected_place_id"] == second_a
 
-        # A later implicit ordinal follow-up must resolve against the rebound
-        # set A, not the newer set B.
-        follow_up = await place_reference.execute({"ordinal": 2}, ctx)
-        assert follow_up.ok
-        assert follow_up.data["place_id"] == second_a
-        assert follow_up.data["name"] == "B Pizza"
-
-    async def test_failed_explicit_reference_leaves_active_context_unchanged(self):
+    async def test_unknown_or_expired_active_set_leaves_context_unchanged(self):
         ctx = _ctx()
         set_b = await self._seed_two_place_set()
         trip_state.bind_discovery_set(ctx.session, set_b)
@@ -450,51 +454,12 @@ class GetPlaceDetailsTests(unittest.IsolatedAsyncioTestCase):
         place_b = record_b["places"][0]["place_id"]
         trip_state.bind_selected_place(ctx.session, place_b)
 
-        def assert_unchanged():
-            state = trip_state.get_trip_state(ctx.session)
-            assert state["active_discovery_set_id"] == set_b
-            assert state["selected_place_id"] == place_b
-
-        # Unknown explicit set id.
-        failed = await place_reference.execute(
-            {"ordinal": 1, "discovery_set_id": "ds_invented"},
-            ctx,
-        )
+        failed = await place_reference.execute({"place_id": "pl_bogus"}, ctx)
         assert not failed.ok
-        assert_unchanged()
+        state = trip_state.get_trip_state(ctx.session)
+        assert state["active_discovery_set_id"] == set_b
+        assert state["selected_place_id"] == place_b
 
-        # Ambiguous description within an explicit set.
-        set_ambiguous = discovery_store.store_discovery_set(
-            session_id="sess-disc",
-            places=[
-                {"name": "Tied One", "price_level": 2},
-                {"name": "Tied Two", "price_level": 2},
-            ],
-            query="pizza",
-        )
-        failed = await place_reference.execute(
-            {"description": "cheaper", "discovery_set_id": set_ambiguous},
-            ctx,
-        )
-        assert not failed.ok
-        assert "multiple" in (failed.error or "")
-        assert_unchanged()
-
-        # Cross-session explicit set.
-        set_other = discovery_store.store_discovery_set(
-            session_id="sess-other",
-            places=[{"name": "Other Place"}],
-            query="pizza",
-        )
-        failed = await place_reference.execute(
-            {"ordinal": 1, "discovery_set_id": set_other},
-            ctx,
-        )
-        assert not failed.ok
-        assert "unknown, expired" in (failed.error or "")
-        assert_unchanged()
-
-        # Expired explicit set.
         with patch(
             "app.services.agent.discovery_store.time.time",
             return_value=1_700_000_000.0,
@@ -505,17 +470,18 @@ class GetPlaceDetailsTests(unittest.IsolatedAsyncioTestCase):
                 query="pizza",
                 ttl_seconds=30,
             )
+        trip_state.bind_discovery_set(ctx.session, set_expired)
+        trip_state.bind_selected_place(ctx.session, place_b)
         with patch(
             "app.services.agent.discovery_store.time.time",
             return_value=1_700_000_400.0,
         ):
-            failed = await place_reference.execute(
-                {"ordinal": 1, "discovery_set_id": set_expired},
-                ctx,
-            )
+            failed = await place_reference.execute({"ordinal": 1}, ctx)
         assert not failed.ok
         assert "expired" in (failed.error or "")
-        assert_unchanged()
+        state = trip_state.get_trip_state(ctx.session)
+        assert state["active_discovery_set_id"] == set_expired
+        assert state["selected_place_id"] == place_b
 
 
 

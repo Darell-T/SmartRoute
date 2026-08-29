@@ -472,6 +472,21 @@ Preserve strict schemas, session ownership, opaque identities, evidence
 binding, route preparation ownership, candidate identity, and passenger
 redaction.
 
+Worker completion is uncommitted on `damn-lines-integration` against
+checkpoint `c8a0381`. Quality comparison stays `c058199`. See
+`docs/lint-cleanup-handoff.md`. Do not start Batch 6D until Codex accepts
+Batch 6C.
+
+Reviewer complete (2026-08-29). Scope checkpoint `c8a0381`. Codex accepted
+the frozen `RoutePreparationAdmission` returned by
+`_admit_route_preparation`, and `execute` consumes named attributes. Batch
+6C has `above_12=0`, `at_11_or_12=19`, and `crap_above_30=0`. Branch-aware
+coverage is 88.7%. Codex removed exactly 38 stale 6C IDs and reduced
+`quality/baseline.json` from 236 entries to 198. The update also lowered three
+surviving ceilings without widening any entry. The reviewer quality command
+exits 0 with `approval_eligible: true`, `tests_ran: true`, new 0, worsened 0,
+and cognitive new or worsened 0. Batch 6D was not started.
+
 ## Batch 6D: agent transit tools
 
 Own `backend/app/services/agent/tools/transit/**`. At `c058199` that is 35

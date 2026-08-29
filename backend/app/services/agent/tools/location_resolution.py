@@ -327,10 +327,25 @@ def _route_qualified_station(
     station_query = normalize_station_name(match.group("station"))
     if not station_query or ctx.gtfs is None:
         return None, "subway station data is unavailable", True
+    matches, stops_error = _stops_on_named_route(ctx.gtfs, route_id, station_query)
+    if stops_error is not None:
+        return None, stops_error, True
+    if len(matches) != 1:
+        detail = "is ambiguous" if matches else "could not be found"
+        return None, f"that {route_id} station {detail}", True
+    place, coord_error = _gtfs_stop_place(matches[0], match.group("station"))
+    if coord_error is not None:
+        return None, coord_error, True
+    return place, None, True
+
+
+def _stops_on_named_route(
+    gtfs: object, route_id: str, station_query: str
+) -> tuple[list[dict], str | None]:
     try:
-        stops = ctx.gtfs.get_subway_stops_with_routes({route_id})
+        stops = gtfs.get_subway_stops_with_routes({route_id})
     except Exception:  # noqa: BLE001 subway-stop index faults stay unavailable
-        return None, "subway station data is unavailable", True
+        return [], "subway station data is unavailable"
     matches = [
         stop
         for stop in stops or []
@@ -338,27 +353,28 @@ def _route_qualified_station(
         in {str(value).strip().upper() for value in stop.get("route_ids") or []}
         and normalize_station_name(stop.get("stop_name")) == station_query
     ]
-    if len(matches) != 1:
-        detail = "is ambiguous" if matches else "could not be found"
-        return None, f"that {route_id} station {detail}", True
-    stop = matches[0]
+    return matches, None
+
+
+def _gtfs_stop_place(
+    stop: dict, fallback_name: str
+) -> tuple[ResolvedPlace | None, str | None]:
     try:
         latitude = float(stop["stop_lat"])
         longitude = float(stop["stop_lon"])
     except (KeyError, TypeError, ValueError):
-        return None, "subway station coordinates are unavailable", True
+        return None, "subway station coordinates are unavailable"
     if not (math.isfinite(latitude) and math.isfinite(longitude)):
-        return None, "subway station coordinates are unavailable", True
+        return None, "subway station coordinates are unavailable"
     return (
         ResolvedPlace(
-            name=str(stop.get("stop_name") or match.group("station")).strip(),
+            name=str(stop.get("stop_name") or fallback_name).strip(),
             latitude=latitude,
             longitude=longitude,
             source="gtfs",
             place_id=str(stop.get("stop_id") or "").strip() or None,
         ),
         None,
-        True,
     )
 
 
@@ -379,13 +395,9 @@ async def resolve_named_point(
     alias = known_place(value)
     if alias:
         return (alias.latitude, alias.longitude), None
-    saved, saved_error = profile_module.resolve_profile_place(ctx.session, value)
-    if saved_error:
-        return None, saved_error
-    if saved is not None:
-        return (float(saved["latitude"]), float(saved["longitude"])), None
-    if _normalized_label(value) in {"home", "work"}:
-        return None, f"saved {_normalized_label(value).title()} is unavailable"
+    saved_coords, saved_error = _saved_profile_coords(ctx.session, value)
+    if saved_error or saved_coords is not None:
+        return saved_coords, saved_error
     station, station_error, station_matched = _route_qualified_station(value, ctx)
     if station_matched:
         if station is None:
@@ -447,41 +459,21 @@ async def resolve_named_place(
             return None, error or "unknown place reference"
         return place, None
 
-    alias = known_place(value)
-    if alias:
-        return (
-            ResolvedPlace(
-                name=alias.name,
-                latitude=alias.latitude,
-                longitude=alias.longitude,
-                source="fallback",
-                address=alias.address,
-                place_id=alias.place_id,
-            ),
-            None,
-        )
-    saved, saved_error = profile_module.resolve_profile_place(ctx.session, value)
-    if saved_error:
-        return None, saved_error
-    if saved is not None:
-        return (
-            ResolvedPlace(
-                name=str(saved["label"]),
-                latitude=float(saved["latitude"]),
-                longitude=float(saved["longitude"]),
-                source="profile",
-                address=saved.get("address"),
-                place_id=saved.get("place_id"),
-            ),
-            None,
-        )
-    if _normalized_label(value) in {"home", "work"}:
-        return None, f"saved {_normalized_label(value).title()} is unavailable"
+    alias_place = _known_alias_place(value)
+    if alias_place is not None:
+        return alias_place, None
+    saved_place, saved_error = _saved_profile_place(ctx.session, value)
+    if saved_error or saved_place is not None:
+        return saved_place, saved_error
+    return await _station_or_geocoded_place(value, ctx)
 
+
+async def _station_or_geocoded_place(
+    value: str, ctx: ToolContext
+) -> tuple[ResolvedPlace | None, str | None]:
     station, station_error, station_matched = _route_qualified_station(value, ctx)
     if station_matched:
         return station, station_error
-
     coords, error = await asyncio.to_thread(geo.geocode_address_with_reason, value)
     if coords is None:
         return None, error
@@ -498,6 +490,56 @@ async def resolve_named_place(
         ),
         None,
     )
+
+
+def _saved_profile_coords(
+    session: object, value: str
+) -> tuple[tuple[float, float] | None, str | None]:
+    saved, saved_error = profile_module.resolve_profile_place(session, value)
+    if saved_error:
+        return None, saved_error
+    if saved is not None:
+        return (float(saved["latitude"]), float(saved["longitude"])), None
+    if _normalized_label(value) in {"home", "work"}:
+        return None, f"saved {_normalized_label(value).title()} is unavailable"
+    return None, None
+
+
+def _known_alias_place(value: str) -> ResolvedPlace | None:
+    alias = known_place(value)
+    if alias is None:
+        return None
+    return ResolvedPlace(
+        name=alias.name,
+        latitude=alias.latitude,
+        longitude=alias.longitude,
+        source="fallback",
+        address=alias.address,
+        place_id=alias.place_id,
+    )
+
+
+def _saved_profile_place(
+    session: object, value: str
+) -> tuple[ResolvedPlace | None, str | None]:
+    saved, saved_error = profile_module.resolve_profile_place(session, value)
+    if saved_error:
+        return None, saved_error
+    if saved is not None:
+        return (
+            ResolvedPlace(
+                name=str(saved["label"]),
+                latitude=float(saved["latitude"]),
+                longitude=float(saved["longitude"]),
+                source="profile",
+                address=saved.get("address"),
+                place_id=saved.get("place_id"),
+            ),
+            None,
+        )
+    if _normalized_label(value) in {"home", "work"}:
+        return None, f"saved {_normalized_label(value).title()} is unavailable"
+    return None, None
 
 
 __all__ = (

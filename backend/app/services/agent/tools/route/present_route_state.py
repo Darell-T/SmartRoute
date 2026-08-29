@@ -68,67 +68,120 @@ def canonical_facts(owned: dict[str, Any]) -> dict[str, Any] | ToolResult:
         return canonical
     chosen_route, canonical_itinerary, first_route = canonical
     parsed_routes[chosen_index] = chosen_route
-    constraints = route_constraints(
-        chosen_route,
-        dict(record.get("tool_input") or {}),
-        itinerary=canonical_itinerary,
+    constraint_error = _unsatisfied_constraint_error(
+        chosen_route, record, canonical_itinerary
     )
-    if constraints.get("satisfied") is not True:
-        return ToolResult(
-            ok=False,
-            error="selected candidate does not satisfy the server-owned hard constraints",
-        )
-    origin_place = _place_from_dict(record.get("origin_place"))
-    digest = entry.get("digest") if isinstance(entry.get("digest"), dict) else {}
-    destination_place = _place_from_dict(
-        entry.get("destination_place")
-        or digest.get("_destination_place")
-        or record.get("destination_place")
-    )
+    if constraint_error is not None:
+        return constraint_error
+    origin_place, destination_place = _owned_endpoint_places(record, entry)
     if origin_place is None or destination_place is None:
         return ToolResult(ok=False, error="stored place identity is invalid")
-    scenario_mode = str(record.get("scenario_mode") or "active")
-    commit_scenario = scenario_mode == "what_if" and bool(
-        owned["tool_input"].get("commit_scenario")
-    )
     scored = [row for row in (record.get("scored") or []) if isinstance(row, dict)]
-    try:
-        has_selected_score = any(int(row.get("index", -1)) == chosen_index for row in scored)
-    except (TypeError, ValueError):
-        has_selected_score = False
-    if not has_selected_score:
+    if not _has_selected_score(scored, chosen_index):
         return ToolResult(
             ok=False,
             error="prepared candidate is missing finalized comparison factors",
             internal_diagnostic=True,
         )
     candidate_evidence = _candidate_evidence(record, chosen_index)
+    owned.update(
+        _canonical_owned_fields(
+            owned,
+            record,
+            parsed_routes=parsed_routes,
+            canonical_itinerary=canonical_itinerary,
+            first_route=first_route,
+            origin_place=origin_place,
+            destination_place=destination_place,
+            scored=scored,
+            candidate_evidence=candidate_evidence,
+            plan_origin=plan_origin,
+        )
+    )
+    return owned
+
+
+def _canonical_owned_fields(
+    owned: dict[str, Any],
+    record: dict[str, Any],
+    *,
+    parsed_routes: list,
+    canonical_itinerary: dict,
+    first_route: list,
+    origin_place: ResolvedPlace,
+    destination_place: ResolvedPlace,
+    scored: list[dict[str, Any]],
+    candidate_evidence: dict[str, Any],
+    plan_origin: float,
+) -> dict[str, Any]:
     stored_first_leg = record.get("first_leg_arrival_context")
-    first_leg_context = dict(stored_first_leg) if isinstance(stored_first_leg, dict) else None
-    evidence_envelopes = {
+    scenario_mode = str(record.get("scenario_mode") or "active")
+    return {
+        "parsed_routes": parsed_routes,
+        "canonical_itinerary": canonical_itinerary,
+        "first_route": first_route,
+        "origin_place": origin_place,
+        "destination_place": destination_place,
+        "scenario_mode": scenario_mode,
+        "commit_scenario": scenario_mode == "what_if"
+        and bool(owned["tool_input"].get("commit_scenario")),
+        "scored": scored,
+        "candidate_evidence": candidate_evidence,
+        "evidence_envelopes": _evidence_envelopes(candidate_evidence),
+        "first_leg_context": (
+            dict(stored_first_leg) if isinstance(stored_first_leg, dict) else None
+        ),
+        "timings": dict(record.get("timings") or {}),
+        "plan_origin": plan_origin,
+        "tool_input_body": dict(record.get("tool_input") or {}),
+    }
+
+
+def _evidence_envelopes(candidate_evidence: dict[str, Any]) -> dict[str, _EnvelopeShim]:
+    return {
         name: _EnvelopeShim(payload)
         for name, payload in (candidate_evidence.get("evidence_envelopes") or {}).items()
         if isinstance(payload, dict)
     }
-    owned.update(
-        {
-            "parsed_routes": parsed_routes,
-            "canonical_itinerary": canonical_itinerary,
-            "first_route": first_route,
-            "origin_place": origin_place,
-            "destination_place": destination_place,
-            "scenario_mode": scenario_mode,
-            "commit_scenario": commit_scenario,
-            "scored": scored,
-            "candidate_evidence": candidate_evidence,
-            "evidence_envelopes": evidence_envelopes,
-            "first_leg_context": first_leg_context,
-            "timings": dict(record.get("timings") or {}),
-            "plan_origin": plan_origin,
-            "tool_input_body": dict(record.get("tool_input") or {}),
-        }
+
+
+def _unsatisfied_constraint_error(
+    chosen_route: list[dict],
+    record: dict[str, Any],
+    canonical_itinerary: dict,
+) -> ToolResult | None:
+    constraints = route_constraints(
+        chosen_route,
+        dict(record.get("tool_input") or {}),
+        itinerary=canonical_itinerary,
     )
-    return owned
+    if constraints.get("satisfied") is True:
+        return None
+    return ToolResult(
+        ok=False,
+        error="selected candidate does not satisfy the server-owned hard constraints",
+    )
+
+
+def _owned_endpoint_places(
+    record: dict[str, Any], entry: dict[str, Any]
+) -> tuple[ResolvedPlace | None, ResolvedPlace | None]:
+    digest = entry.get("digest") if isinstance(entry.get("digest"), dict) else {}
+    return (
+        _place_from_dict(record.get("origin_place")),
+        _place_from_dict(
+            entry.get("destination_place")
+            or digest.get("_destination_place")
+            or record.get("destination_place")
+        ),
+    )
+
+
+def _has_selected_score(scored: list[dict[str, Any]], chosen_index: int) -> bool:
+    try:
+        return any(int(row.get("index", -1)) == chosen_index for row in scored)
+    except (TypeError, ValueError):
+        return False
 
 
 def rebind_to_entry(facts: dict[str, Any], entry: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -193,29 +246,75 @@ def _destination_identity_groups(record: dict[str, Any]) -> tuple[set[str], ...]
         if isinstance(tool_input, dict)
         else None
     )
-    record_ids = record.get("destination_place_ids")
-    candidate_ids = [
-        candidate["digest"].get("destination_place_id")
-        for candidate in record.get("candidates") or []
-        if isinstance(candidate, dict) and isinstance(candidate.get("digest"), dict)
-    ]
-    branch_ids = [
-        branch.get("place_id")
-        for branch in record.get("branch_coverage") or []
-        if isinstance(branch, dict)
-    ]
     return tuple(
-        {
-            str(value).strip()
-            for value in values or []
-            if str(value or "").strip()
-        }
-        for values in (input_ids, record_ids, candidate_ids, branch_ids)
+        _opaque_id_set(values)
+        for values in (
+            input_ids,
+            record.get("destination_place_ids"),
+            _candidate_destination_ids(record),
+            _branch_place_ids(record),
+        )
         if isinstance(values, list)
     )
 
 
+def _opaque_id_set(values: object) -> set[str]:
+    return {
+        str(value).strip()
+        for value in values or []
+        if str(value or "").strip()
+    }
+
+
+def _candidate_destination_ids(record: dict[str, Any]) -> list[object]:
+    return [
+        candidate["digest"].get("destination_place_id")
+        for candidate in record.get("candidates") or []
+        if isinstance(candidate, dict) and isinstance(candidate.get("digest"), dict)
+    ]
+
+
+def _branch_place_ids(record: dict[str, Any]) -> list[object]:
+    return [
+        branch.get("place_id")
+        for branch in record.get("branch_coverage") or []
+        if isinstance(branch, dict)
+    ]
+
+
 def _candidate_binding(tool_input: dict, ctx: ToolContext) -> dict[str, Any] | ToolResult:
+    ids = _presentation_identity(tool_input, ctx)
+    if isinstance(ids, ToolResult):
+        return ids
+    session_id, candidate_id, session, state, candidate_set_id = ids
+    evidence = getattr(ctx, "turn_evidence", None)
+    goal_key = _route_goal_key(tool_input, ctx)
+    preview = _temporary_preview(
+        state, candidate_set_id, candidate_id, goal_key, evidence, session, session_id
+    )
+    if isinstance(preview, ToolResult):
+        return preview
+    reuses_temporary_preview, _error = preview
+    ownership_error = _candidate_set_ownership_error(
+        evidence, goal_key, candidate_set_id, reuses_temporary_preview, state
+    )
+    if ownership_error is not None:
+        return ownership_error
+    return {
+        "session_id": session_id,
+        "session": session,
+        "candidate_set_id": candidate_set_id,
+        "candidate_id": candidate_id,
+        "goal_key": goal_key,
+        "evidence": evidence,
+        "reuses_temporary_preview": reuses_temporary_preview,
+        "tool_input": tool_input,
+    }
+
+
+def _presentation_identity(
+    tool_input: dict, ctx: ToolContext
+) -> tuple[str, str, dict, dict, str] | ToolResult:
     session_id = str(getattr(ctx, "session_id", None) or "").strip()
     if not session_id:
         return ToolResult(ok=False, error="session is required for route presentation")
@@ -232,14 +331,16 @@ def _candidate_binding(tool_input: dict, ctx: ToolContext) -> dict[str, Any] | T
             ok=False,
             error="no active candidate set; call prepare_route_options first",
         )
-    evidence = getattr(ctx, "turn_evidence", None)
-    goal_key = _route_goal_key(tool_input, ctx)
-    preview = _temporary_preview(
-        state, candidate_set_id, candidate_id, goal_key, evidence, session, session_id
-    )
-    if isinstance(preview, ToolResult):
-        return preview
-    reuses_temporary_preview, _error = preview
+    return session_id, candidate_id, session, state, candidate_set_id
+
+
+def _candidate_set_ownership_error(
+    evidence: Any,
+    goal_key: str | None,
+    candidate_set_id: str,
+    reuses_temporary_preview: bool,
+    state: dict[str, Any],
+) -> ToolResult | None:
     if (
         evidence is not None
         and goal_key is not None
@@ -251,37 +352,21 @@ def _candidate_binding(tool_input: dict, ctx: ToolContext) -> dict[str, Any] | T
             error="candidate set does not belong to this route goal",
             internal_diagnostic=True,
         )
-    if candidate_set_id not in {
+    if candidate_set_id in {
         state.get("active_candidate_set_id"),
         state.get("temporary_candidate_set_id"),
     }:
-        return ToolResult(ok=False, error="candidate set is not active for this trip")
-    return {
-        "session_id": session_id,
-        "session": session,
-        "candidate_set_id": candidate_set_id,
-        "candidate_id": candidate_id,
-        "goal_key": goal_key,
-        "evidence": evidence,
-        "reuses_temporary_preview": reuses_temporary_preview,
-        "tool_input": tool_input,
-    }
+        return None
+    return ToolResult(ok=False, error="candidate set is not active for this trip")
 
 
 def _load_candidate_entry(binding: dict[str, Any]) -> dict[str, Any] | ToolResult:
     record, entry, store_error = candidate_store.get_candidate(
         binding["candidate_set_id"], binding["candidate_id"], session_id=binding["session_id"]
     )
-    if record is None:
-        return ToolResult(ok=False, error=store_error or "candidate not found")
-    if entry is None:
-        # Candidate membership is an authorization boundary.  A model- or
-        # rider-supplied id that is not in this server-owned set must never be
-        # reinterpreted as a request for the deterministic fallback candidate.
-        return ToolResult(
-            ok=False,
-            error=store_error or "candidate id is unknown for this set",
-        )
+    membership_error = _candidate_membership_error(record, entry, store_error)
+    if membership_error is not None:
+        return membership_error
     selection_mode = destination_selection_mode(record)
     if selection_mode is None:
         return ToolResult(
@@ -289,13 +374,47 @@ def _load_candidate_entry(binding: dict[str, Any]) -> dict[str, Any] | ToolResul
             error="candidate set has an invalid destination selection shape",
             internal_diagnostic=True,
         )
-    status = str(record.get("route_status") or "good")
     if binding["reuses_temporary_preview"] and record.get("presented"):
         return ToolResult(
             ok=False,
             error="temporary route preview has already been presented",
             internal_diagnostic=True,
         )
+    parsed_routes, chosen_index = _parsed_chosen_route(record, entry)
+    if chosen_index < 0 or chosen_index >= len(parsed_routes):
+        return ToolResult(ok=False, error="candidate index is out of range")
+    return {
+        **binding,
+        "record": record,
+        "entry": entry,
+        "chosen_index": chosen_index,
+        "parsed_routes": parsed_routes,
+        "status": str(record.get("route_status") or "good"),
+        "destination_selection_mode": selection_mode,
+    }
+
+
+def _candidate_membership_error(
+    record: dict[str, Any] | None,
+    entry: dict[str, Any] | None,
+    store_error: str | None,
+) -> ToolResult | None:
+    if record is None:
+        return ToolResult(ok=False, error=store_error or "candidate not found")
+    if entry is not None:
+        return None
+    # Candidate membership is an authorization boundary. A model- or
+    # rider-supplied id that is not in this server-owned set must never be
+    # reinterpreted as a request for the deterministic fallback candidate.
+    return ToolResult(
+        ok=False,
+        error=store_error or "candidate id is unknown for this set",
+    )
+
+
+def _parsed_chosen_route(
+    record: dict[str, Any], entry: dict[str, Any]
+) -> tuple[list[list[dict]], int]:
     try:
         chosen_index = int(entry.get("index") or 0)
     except (TypeError, ValueError):
@@ -305,17 +424,7 @@ def _load_candidate_entry(binding: dict[str, Any]) -> dict[str, Any] | ToolResul
         for route in (record.get("parsed_routes") or [])
         if isinstance(route, list)
     ]
-    if chosen_index < 0 or chosen_index >= len(parsed_routes):
-        return ToolResult(ok=False, error="candidate index is out of range")
-    return {
-        **binding,
-        "record": record,
-        "entry": entry,
-        "chosen_index": chosen_index,
-        "parsed_routes": parsed_routes,
-        "status": status,
-        "destination_selection_mode": selection_mode,
-    }
+    return parsed_routes, chosen_index
 
 
 def _temporary_preview(
@@ -422,23 +531,42 @@ def _candidate_evidence(record: dict[str, Any], chosen_index: int) -> dict[str, 
         and isinstance(values[chosen_index], dict)
     ):
         return values[chosen_index]
+    return _legacy_candidate_evidence(record, chosen_index)
+
+
+def _legacy_candidate_evidence(
+    record: dict[str, Any], chosen_index: int
+) -> dict[str, Any]:
     return {
-        "alerts": list(record.get("relevant_alerts") or []),
-        "incidents": list(record.get("incidents") or []),
-        "unconfirmed_material_claims": list(record.get("unconfirmed_material_claims") or []),
-        "evidence_coverage": dict(record.get("evidence_coverage") or {}),
-        "event_impacts": [
-            impact
-            for impact in record.get("event_impacts") or []
-            if isinstance(impact, dict)
-            and impact.get("route_index") == chosen_index
-        ],
+        "alerts": _record_list(record, "relevant_alerts"),
+        "incidents": _record_list(record, "incidents"),
+        "unconfirmed_material_claims": _record_list(
+            record, "unconfirmed_material_claims"
+        ),
+        "evidence_coverage": _record_dict(record, "evidence_coverage"),
+        "event_impacts": _event_impacts_for_index(record, chosen_index),
         "event_evidence_status": record.get("event_evidence_status") or "unscanned",
-        "event_failures": list(record.get("event_failures") or []),
-        "crowd_search_metadata": dict(record.get("crowd_search_metadata") or {}),
-        "incident_scan_metadata": dict(record.get("incident_scan_metadata") or {}),
-        "evidence_envelopes": dict(record.get("evidence_envelopes") or {}),
+        "event_failures": _record_list(record, "event_failures"),
+        "crowd_search_metadata": _record_dict(record, "crowd_search_metadata"),
+        "incident_scan_metadata": _record_dict(record, "incident_scan_metadata"),
+        "evidence_envelopes": _record_dict(record, "evidence_envelopes"),
     }
+
+
+def _record_list(record: dict[str, Any], key: str) -> list:
+    return list(record.get(key) or [])
+
+
+def _record_dict(record: dict[str, Any], key: str) -> dict:
+    return dict(record.get(key) or {})
+
+
+def _event_impacts_for_index(record: dict[str, Any], chosen_index: int) -> list[dict[str, Any]]:
+    return [
+        impact
+        for impact in record.get("event_impacts") or []
+        if isinstance(impact, dict) and impact.get("route_index") == chosen_index
+    ]
 
 
 class _EnvelopeShim:

@@ -570,26 +570,13 @@ def _validated_pattern_context(
     headsign_key = normalize_station_name(str(headsign or ""))
     if not origin or not destination or not headsign_key:
         return None
-    matches: list[Mapping[str, object]] = []
-    for pattern in route_patterns.get(route_id, []):
-        if not isinstance(pattern, Mapping):
-            continue
-        stop_ids = pattern.get("stop_ids")
-        if not isinstance(stop_ids, list) or not stop_ids:
-            continue
-        try:
-            origin_index = stop_ids.index(origin)
-            destination_index = stop_ids.index(destination)
-        except ValueError:
-            continue
-        if origin_index >= destination_index:
-            continue
-        terminal = stops.get(str(stop_ids[-1]))
-        terminal_key = normalize_station_name(
-            terminal.get("name") if isinstance(terminal, Mapping) else ""
+    matches = [
+        pattern
+        for pattern in route_patterns.get(route_id, [])
+        if _pattern_matches_headsign(
+            pattern, origin, destination, headsign_key, stops
         )
-        if terminal_key == headsign_key:
-            matches.append(pattern)
+    ]
     if len(matches) != 1:
         return None
     return {
@@ -599,6 +586,106 @@ def _validated_pattern_context(
             "headsign": headsign,
         },
     }
+
+
+def _pattern_matches_headsign(
+    pattern: object,
+    origin: str,
+    destination: str,
+    headsign_key: str,
+    stops: Mapping,
+) -> bool:
+    if not isinstance(pattern, Mapping):
+        return False
+    stop_ids = pattern.get("stop_ids")
+    if not isinstance(stop_ids, list) or not stop_ids:
+        return False
+    try:
+        origin_index = stop_ids.index(origin)
+        destination_index = stop_ids.index(destination)
+    except ValueError:
+        return False
+    if origin_index >= destination_index:
+        return False
+    terminal = stops.get(str(stop_ids[-1]))
+    terminal_key = normalize_station_name(
+        terminal.get("name") if isinstance(terminal, Mapping) else ""
+    )
+    return terminal_key == headsign_key
+
+
+def _catchable_offset_seconds(first_leg_arrival: object) -> int | None:
+    context = first_leg_arrival if isinstance(first_leg_arrival, dict) else {}
+    catchable = context.get("catchable_arrival_minutes")
+    if context.get("source_status") not in {"live", "scheduled"}:
+        return None
+    if (
+        not isinstance(catchable, (int, float))
+        or isinstance(catchable, bool)
+        or not math.isfinite(float(catchable))
+        or float(catchable) < 0
+    ):
+        return None
+    return max(0, round(float(catchable) * 60))
+
+
+def _first_transit_index(legs: list[dict]) -> int | None:
+    return next(
+        (
+            index
+            for index, leg in enumerate(legs)
+            if str(leg.get("mode") or "").upper() in _TRANSIT_MODES
+        ),
+        None,
+    )
+
+
+def _itinerary_component_totals(legs: list[dict], dwell_seconds: int) -> dict[str, int]:
+    total_walk = _leg_seconds(legs, "street_walking_seconds")
+    total_wait = _leg_seconds(legs, "wait_seconds")
+    total_in_vehicle = _leg_seconds(legs, "ride_seconds")
+    total_transfer = _leg_seconds(legs, "transfer_seconds")
+    total_in_station = _leg_seconds(legs, "in_station_transfer_seconds")
+    return {
+        "total_duration_seconds": (
+            total_walk + total_wait + total_in_vehicle + total_transfer + dwell_seconds
+        ),
+        "total_walk_seconds": total_walk,
+        "total_street_walking_seconds": total_walk,
+        "total_in_station_transfer_seconds": total_in_station,
+        "total_wait_seconds": total_wait,
+        "total_in_vehicle_seconds": total_in_vehicle,
+        "total_transfer_seconds": total_transfer,
+    }
+
+
+def _leg_seconds(legs: list[dict], key: str) -> int:
+    return sum(int(leg.get(key) or 0) for leg in legs)
+
+
+def _stamp_reconciled_clocks(
+    reconciled: dict,
+    legs: list[dict],
+    *,
+    now_iso: str | None,
+    first_transit_index: int,
+    boarding_offset_seconds: int,
+    observed_at: object,
+) -> None:
+    start = _parse_clock(now_iso)
+    if start is None:
+        return
+    _retime_legs(
+        legs,
+        start=start,
+        first_transit_index=first_transit_index,
+        boarding_offset_seconds=boarding_offset_seconds,
+    )
+    total_duration = int(reconciled.get("total_duration_seconds") or 0)
+    reconciled["departure_at"] = start.isoformat()
+    reconciled["arrival_at"] = (start + timedelta(seconds=total_duration)).isoformat()
+    reconciled["generated_at"] = reconciled.get("generated_at") or start.isoformat()
+    reconciled["data_freshness"] = observed_at or start.isoformat()
 
 
 def reconcile_first_boarding_timing(
@@ -616,75 +703,39 @@ def reconcile_first_boarding_timing(
     occurs at the observed catchable minute.
     """
 
-    context = first_leg_arrival if isinstance(first_leg_arrival, dict) else {}
-    catchable = context.get("catchable_arrival_minutes")
-    if (
-        context.get("source_status") not in {"live", "scheduled"}
-        or not isinstance(catchable, (int, float))
-        or isinstance(catchable, bool)
-        or not math.isfinite(float(catchable))
-        or float(catchable) < 0
-    ):
+    boarding_offset_seconds = _catchable_offset_seconds(first_leg_arrival)
+    if boarding_offset_seconds is None:
         return itinerary
 
     reconciled = copy.deepcopy(itinerary)
     legs = [leg for leg in (reconciled.get("legs") or []) if isinstance(leg, dict)]
-    first_transit_index = next(
-        (
-            index
-            for index, leg in enumerate(legs)
-            if str(leg.get("mode") or "").upper() in _TRANSIT_MODES
-        ),
-        None,
-    )
+    first_transit_index = _first_transit_index(legs)
     if first_transit_index is None:
         return itinerary
 
-    boarding_offset_seconds = max(0, round(float(catchable) * 60))
     access_seconds = sum(
         _leg_component_seconds(leg) for leg in legs[:first_transit_index]
     )
     if boarding_offset_seconds < access_seconds:
         return itinerary
-    first_transit = legs[first_transit_index]
-    first_transit["wait_seconds"] = max(0, boarding_offset_seconds - access_seconds)
-
-    total_walk = sum(int(leg.get("street_walking_seconds") or 0) for leg in legs)
-    total_wait = sum(int(leg.get("wait_seconds") or 0) for leg in legs)
-    total_in_vehicle = sum(int(leg.get("ride_seconds") or 0) for leg in legs)
-    total_transfer = sum(int(leg.get("transfer_seconds") or 0) for leg in legs)
-    total_in_station = sum(
-        int(leg.get("in_station_transfer_seconds") or 0) for leg in legs
+    legs[first_transit_index]["wait_seconds"] = max(
+        0, boarding_offset_seconds - access_seconds
     )
-    total_dwell = int(reconciled.get("total_dwell_seconds") or 0)
-    total_duration = (
-        total_walk + total_wait + total_in_vehicle + total_transfer + total_dwell
-    )
-
+    reconciled["legs"] = legs
     reconciled.update(
-        {
-            "legs": legs,
-            "total_duration_seconds": total_duration,
-            "total_walk_seconds": total_walk,
-            "total_street_walking_seconds": total_walk,
-            "total_in_station_transfer_seconds": total_in_station,
-            "total_wait_seconds": total_wait,
-            "total_in_vehicle_seconds": total_in_vehicle,
-            "total_transfer_seconds": total_transfer,
-        }
-    )
-    start = _parse_clock(now_iso)
-    if start is not None:
-        _retime_legs(
-            legs,
-            start=start,
-            first_transit_index=first_transit_index,
-            boarding_offset_seconds=boarding_offset_seconds,
+        _itinerary_component_totals(
+            legs, int(reconciled.get("total_dwell_seconds") or 0)
         )
-        reconciled["departure_at"] = start.isoformat()
-        reconciled["arrival_at"] = (start + timedelta(seconds=total_duration)).isoformat()
-        reconciled["generated_at"] = reconciled.get("generated_at") or start.isoformat()
-        reconciled["data_freshness"] = context.get("observed_at") or start.isoformat()
+    )
+    context = first_leg_arrival if isinstance(first_leg_arrival, dict) else {}
+    _stamp_reconciled_clocks(
+        reconciled,
+        legs,
+        now_iso=now_iso,
+        first_transit_index=first_transit_index,
+        boarding_offset_seconds=boarding_offset_seconds,
+        observed_at=context.get("observed_at"),
+    )
     return reconciled
 
 

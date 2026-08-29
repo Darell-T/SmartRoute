@@ -391,30 +391,11 @@ async def resolve_destination_options(
     place_ids, validation_error = _validated_branch_ids(tool_input, raw_ids)
     if validation_error:
         return [], None, None, validation_error, None
-    expanded = False
-    while True:
-        options, used_set, resolution_error = await _resolve_branch_options(
-            place_ids,
-            tool_input,
-            merged,
-            ctx,
-        )
-        if resolution_error:
-            return [], None, None, resolution_error, None
-        if expanded or not used_set:
-            break
-        verified_ids = _verified_discovery_ids(used_set, ctx)
-        next_ids, expansion_error = _expanded_branch_ids(
-            place_ids,
-            verified_ids,
-            candidate_budget(tool_input),
-        )
-        if expansion_error:
-            return [], None, None, expansion_error, None
-        if next_ids is None:
-            break
-        place_ids = next_ids
-        expanded = True
+    options, used_set, resolution_error = await _resolve_comparison_branches(
+        place_ids, tool_input, merged, ctx
+    )
+    if resolution_error:
+        return [], None, None, resolution_error, None
     if len(options) < 2:
         return (
             [],
@@ -424,6 +405,38 @@ async def resolve_destination_options(
             None,
         )
     return options, options[0][0], None, None, used_set
+
+
+async def _resolve_comparison_branches(
+    place_ids: list[str],
+    tool_input: dict,
+    merged: dict,
+    ctx: ToolContext,
+) -> tuple[list[tuple[ResolvedPlace, str | None]], str | None, str | None]:
+    expanded = False
+    while True:
+        options, used_set, resolution_error = await _resolve_branch_options(
+            place_ids,
+            tool_input,
+            merged,
+            ctx,
+        )
+        if resolution_error:
+            return [], None, resolution_error
+        if expanded or not used_set:
+            return options, used_set, None
+        verified_ids = _verified_discovery_ids(used_set, ctx)
+        next_ids, expansion_error = _expanded_branch_ids(
+            place_ids,
+            verified_ids,
+            candidate_budget(tool_input),
+        )
+        if expansion_error:
+            return [], None, expansion_error
+        if next_ids is None:
+            return options, used_set, None
+        place_ids = next_ids
+        expanded = True
 
 
 def _validated_branch_ids(

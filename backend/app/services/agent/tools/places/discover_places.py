@@ -394,18 +394,11 @@ async def _verify(request: DiscoveryRequest, ctx: ToolContext) -> ToolResult:
     unverified: list[str] = []
     by_name: dict[str, tuple[dict, str] | None] = dict.fromkeys(request.names)
     for (name, target), result in zip(pairs, results, strict=True):
-        if not result.ok:
+        if by_name[name] is not None or not result.ok:
             continue
-        if by_name[name] is not None:
-            continue
-        matches = [
-            place
-            for place in search_local_places._provider_places(result)
-            if search_local_places._target_accepts_place(place, target, scope)
-            and _name_matches(name, place)
-        ]
-        if matches:
-            by_name[name] = (matches[0], str(target["label"]))
+        match = _first_verified_place(name, target, result, scope)
+        if match is not None:
+            by_name[name] = match
     for name in request.names:
         match = by_name[name]
         if match is None:
@@ -421,6 +414,23 @@ async def _verify(request: DiscoveryRequest, ctx: ToolContext) -> ToolResult:
         coverage=search_local_places._coverage(coverage_targets, results),
         continuation_tokens={},
     )
+
+
+def _first_verified_place(
+    name: str,
+    target: dict[str, Any],
+    result: ToolResult,
+    scope: dict[str, Any],
+) -> tuple[dict, str] | None:
+    matches = [
+        place
+        for place in search_local_places._provider_places(result)
+        if search_local_places._target_accepts_place(place, target, scope)
+        and _name_matches(name, place)
+    ]
+    if not matches:
+        return None
+    return matches[0], str(target["label"])
 
 
 def _interleaved_sources(
@@ -620,23 +630,30 @@ async def _queue_digest(
         if (place_id := str(place.get("provider_place_id") or "").strip())
         and damn_lines.get_supported_venue(place_id) is not None
     ]
-    observations: dict[str, damn_lines.QueueObservation] = {}
-    provider_available = False
-    if mode != "historical" and supported_ids:
-        try:
-            current = await damn_lines.get_current_observations(
-                supported_ids, now=when
-            )
-            observations = current.observations
-            provider_available = current.provider_available
-        except (RuntimeError, TypeError, ValueError) as exc:
-            _LOGGER.warning(
-                "Damn Lines current queue lookup failed type=%s",
-                type(exc).__name__,
-            )
-            observations = {}
-            provider_available = False
+    observations, provider_available = await _current_queue_lookup(
+        supported_ids, mode=mode, when=when
+    )
+    return _enrich_queue_places(
+        model_places,
+        stored_by_id,
+        observations=observations,
+        mode=mode,
+        when=when,
+        provider_available=provider_available,
+        queue_context=queue_context,
+    )
 
+
+def _enrich_queue_places(
+    model_places: list[dict[str, Any]],
+    stored_by_id: dict[str, dict[str, Any]],
+    *,
+    observations: dict[str, damn_lines.QueueObservation],
+    mode: str,
+    when: datetime,
+    provider_available: bool,
+    queue_context: dict[str, Any],
+) -> tuple[list[dict[str, Any]], float | None]:
     enriched: list[dict[str, Any]] = []
     for model in model_places:
         stored = stored_by_id.get(str(model.get("place_id") or ""), {})
@@ -649,10 +666,28 @@ async def _queue_digest(
             provider_available=provider_available,
         )
         enriched.append(item)
-
     max_wait = queue_context.get("max_wait_minutes")
     queue_max = max_wait if mode == "decision" and max_wait is not None else None
     return enriched, queue_max
+
+
+async def _current_queue_lookup(
+    supported_ids: list[str],
+    *,
+    mode: str,
+    when: datetime,
+) -> tuple[dict[str, damn_lines.QueueObservation], bool]:
+    if mode == "historical" or not supported_ids:
+        return {}, False
+    try:
+        current = await damn_lines.get_current_observations(supported_ids, now=when)
+    except (RuntimeError, TypeError, ValueError) as exc:
+        _LOGGER.warning(
+            "Damn Lines current queue lookup failed type=%s",
+            type(exc).__name__,
+        )
+        return {}, False
+    return current.observations, current.provider_available
 
 
 def _place_queue_evidence(
@@ -675,16 +710,7 @@ def _place_queue_evidence(
         )
     observation = observations.get(place_id)
     if observation is not None:
-        evidence: dict[str, Any] = {
-            "coverage": "supported",
-            "evidence_kind": "current",
-            "captured_at": observation.captured_at.isoformat(),
-        }
-        if observation.people_count is not None:
-            evidence["people_count"] = observation.people_count
-        if observation.wait_minutes is not None:
-            evidence["wait_minutes"] = observation.wait_minutes
-        return evidence
+        return _current_queue_evidence(observation)
     if stored.get("open_status") == "open":
         pattern = _historical_pattern(place_id, when)
         if pattern is not None:
@@ -695,6 +721,19 @@ def _place_queue_evidence(
         "current_available": False,
         "provider_available": provider_available,
     }
+
+
+def _current_queue_evidence(observation: damn_lines.QueueObservation) -> dict[str, Any]:
+    evidence: dict[str, Any] = {
+        "coverage": "supported",
+        "evidence_kind": "current",
+        "captured_at": observation.captured_at.isoformat(),
+    }
+    if observation.people_count is not None:
+        evidence["people_count"] = observation.people_count
+    if observation.wait_minutes is not None:
+        evidence["wait_minutes"] = observation.wait_minutes
+    return evidence
 
 
 def _historical_pattern(

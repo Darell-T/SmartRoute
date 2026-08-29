@@ -214,9 +214,22 @@ def _rebind_researched_details(
     authoritative_id = str(evidence.handle_for(goal_key) or "").strip()
     if not authoritative_id or authoritative_id == set_id:
         return set_id, record
-    raw_selections = tool_input.get("selections")
+    place_id, selection_error = _single_opaque_selection_id(tool_input.get("selections"))
+    if selection_error is not None:
+        return selection_error
+    authoritative_record, load_error = _owned_authoritative_record(
+        authoritative_id, session_id, place_id
+    )
+    if load_error is not None:
+        return load_error
+    return authoritative_id, authoritative_record
+
+
+def _single_opaque_selection_id(
+    raw_selections: object,
+) -> tuple[str, ToolResult | None]:
     if not isinstance(raw_selections, list) or len(raw_selections) != 1:
-        return ToolResult(
+        return "", ToolResult(
             ok=False,
             error="researched details require exactly one verified place selection",
             internal_diagnostic=True,
@@ -227,17 +240,23 @@ def _rebind_researched_details(
         if isinstance(raw_selection, dict)
         else ""
     )
-    if not discovery_store.is_opaque_place_id(place_id):
-        return ToolResult(
-            ok=False,
-            error="researched details require one opaque verified place id",
-            internal_diagnostic=True,
-        )
+    if discovery_store.is_opaque_place_id(place_id):
+        return place_id, None
+    return "", ToolResult(
+        ok=False,
+        error="researched details require one opaque verified place id",
+        internal_diagnostic=True,
+    )
+
+
+def _owned_authoritative_record(
+    authoritative_id: str, session_id: str, place_id: str
+) -> tuple[dict[str, Any] | None, ToolResult | None]:
     authoritative_record = discovery_store.load_discovery_set(
         authoritative_id, session_id=session_id
     )
     if authoritative_record is None:
-        return ToolResult(
+        return None, ToolResult(
             ok=False,
             error="authoritative verified discovery set is unknown, expired, or not owned by this session",
             internal_diagnostic=True,
@@ -247,13 +266,13 @@ def _rebind_researched_details(
         for place in authoritative_record.get("places") or []
         if isinstance(place, dict) and place.get("place_id")
     }
-    if place_id not in authoritative_ids:
-        return ToolResult(
-            ok=False,
-            error="place id is not in the authoritative verified discovery set",
-            internal_diagnostic=True,
-        )
-    return authoritative_id, authoritative_record
+    if place_id in authoritative_ids:
+        return authoritative_record, None
+    return None, ToolResult(
+        ok=False,
+        error="place id is not in the authoritative verified discovery set",
+        internal_diagnostic=True,
+    )
 
 
 def _bind_or_reject_discovery(
@@ -298,15 +317,26 @@ def _destination_selection_replay_allowed(
     place_id = str(selections[0].get("place_id") or "").strip()
     if not discovery_store.is_opaque_place_id(place_id):
         return False
+    evidence, goal_key = _destination_selection_goal(owned)
+    if evidence is None or goal_key is None:
+        return False
+    set_id = str(owned.get("set_id") or "").strip()
+    if not set_id or evidence.handle_for(goal_key) != set_id:
+        return False
+    return _active_set_matches(ctx, set_id)
+
+
+def _destination_selection_goal(owned: dict[str, Any]) -> tuple[Any, str | None]:
     evidence = owned.get("evidence")
     goal_key = owned.get("goal_key")
     contract = getattr(evidence, "turn_contract", None)
     goal = contract.get_goal(goal_key) if contract is not None and goal_key else None
     if goal is None or goal.kind != GoalKind.DESTINATION_SELECTION:
-        return False
-    set_id = str(owned.get("set_id") or "").strip()
-    if not set_id or evidence.handle_for(goal_key) != set_id:
-        return False
+        return None, None
+    return evidence, goal_key
+
+
+def _active_set_matches(ctx: ToolContext, set_id: str) -> bool:
     state = ctx.session.get("trip_state") if isinstance(ctx.session, dict) else None
     return (
         isinstance(state, dict)
@@ -317,39 +347,20 @@ def _destination_selection_replay_allowed(
 def _selected_places(
     tool_input: dict, owned: dict[str, Any], ctx: ToolContext
 ) -> dict[str, Any] | ToolResult:
-    places = [
-        place
-        for place in (owned["record"].get("places") or [])
-        if isinstance(place, dict)
-    ]
-    by_id = {
-        str(place.get("place_id") or ""): place
-        for place in places
-        if place.get("place_id")
-    }
+    places, by_id = _owned_place_index(owned["record"])
     selections, error = _validated_selections(tool_input.get("selections"), by_id)
     if error:
         return ToolResult(ok=False, error=error, internal_diagnostic=True)
-    evidence = owned["evidence"]
     research_used = tool_input.get("research_used") is True
-    if evidence is not None and evidence.web_research_required and not research_used:
-        return ToolResult(
-            ok=False, error="verified place details require current-turn research", internal_diagnostic=True
-        )
-    if research_used and (evidence is None or not evidence.can_claim_research_used()):
-        return ToolResult(ok=False, error="research_used requires current-turn research", internal_diagnostic=True)
-    presented_ids = {
-        str(entry.get("canonical_identity") or "")
-        for entry in discovery_store.presented_entity_registry(ctx.session)
-        if entry.get("canonical_identity")
-    }
-    repeated = [
-        place
-        for place in selections
-        if discovery_store._identity_key(place) in presented_ids
-    ]
+    research_error = _research_claim_error(owned["evidence"], research_used)
+    if research_error is not None:
+        return research_error
     repeat_error = _apply_repeat_presentation_rules(
-        owned, selections, repeated, research_used, ctx
+        owned,
+        selections,
+        _repeated_selections(selections, ctx),
+        research_used,
+        ctx,
     )
     if repeat_error:
         return repeat_error
@@ -362,6 +373,53 @@ def _selected_places(
     owned["selections"] = _normalize_reasons(selections, places)
     owned["research_used"] = research_used
     return owned
+
+
+def _owned_place_index(
+    record: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, dict]]:
+    places = [
+        place
+        for place in (record.get("places") or [])
+        if isinstance(place, dict)
+    ]
+    by_id = {
+        str(place.get("place_id") or ""): place
+        for place in places
+        if place.get("place_id")
+    }
+    return places, by_id
+
+
+def _repeated_selections(
+    selections: list[dict[str, Any]], ctx: ToolContext
+) -> list[dict[str, Any]]:
+    presented_ids = {
+        str(entry.get("canonical_identity") or "")
+        for entry in discovery_store.presented_entity_registry(ctx.session)
+        if entry.get("canonical_identity")
+    }
+    return [
+        place
+        for place in selections
+        if discovery_store._identity_key(place) in presented_ids
+    ]
+
+
+def _research_claim_error(evidence: Any, research_used: bool) -> ToolResult | None:
+    if evidence is not None and evidence.web_research_required and not research_used:
+        return ToolResult(
+            ok=False,
+            error="verified place details require current-turn research",
+            internal_diagnostic=True,
+        )
+    if research_used and (evidence is None or not evidence.can_claim_research_used()):
+        return ToolResult(
+            ok=False,
+            error="research_used requires current-turn research",
+            internal_diagnostic=True,
+        )
+    return None
 
 
 def _apply_repeat_presentation_rules(
@@ -425,23 +483,9 @@ async def _emit_place_presentation(
 ) -> ToolResult:
     selections = owned["selections"]
     set_id = owned["set_id"]
-    presented = [
-        {"place_id": place["place_id"], "reason": place["reason"]}
-        for place in selections
-    ]
+    presented = _presented_refs(selections)
     if owned["already_presented"] and not owned["research_used"]:
-        return ToolResult(
-            ok=True,
-            data={
-                "discovery_set_id": set_id,
-                "presented": presented,
-                "already_presented": True,
-                "passenger_text": "",
-                "lead_in": "",
-                "follow_up": "",
-            },
-            summary="Place options already shown",
-        )
+        return _already_shown_result(set_id, presented)
     limit = 5 if str(getattr(ctx, "agent_mode", "") or "auto") != "quick" else 3
     selections = selections[:limit]
     details_only = owned["presentation_mode"] == "details"
@@ -457,10 +501,7 @@ async def _emit_place_presentation(
             discovery_set_id=set_id,
             places=selections,
         )
-        presented = [
-            {"place_id": place["place_id"], "reason": place["reason"]}
-            for place in selections
-        ]
+        presented = _presented_refs(selections)
     lead_in = owned["lead_in"]
     text = lead_in if details_only else render_place_list(
         selections,
@@ -469,35 +510,9 @@ async def _emit_place_presentation(
     )
     if isinstance(ctx.session, dict) and len(selections) == 1:
         trip_state_module.bind_selected_place(ctx.session, str(selections[0]["place_id"]))
-    evidence = owned["evidence"]
-    goal_key = owned["goal_key"]
-    if evidence is not None and goal_key is not None:
-        record_goal = getattr(evidence, "record_goal", None)
-        if callable(record_goal):
-            record_goal(goal_key, GoalState.SATISFIED, attempted=True, presented=True)
-    # Presenters cannot invent a continuation. The schema field remains stable,
-    # but only server-owned continuation state may offer more work.
+    _mark_place_goal_satisfied(owned["evidence"], owned["goal_key"])
     follow_up = ""
     ctx.telemetry["place_presentation_emitted"] = True
-    canonical_events: list[agent_events.AgentEvent] = []
-    if not details_only:
-        canonical_events.append(agent_events.TokenEvent(text=text))
-    if queue_text:
-        canonical_events.append(agent_events.TokenEvent(text=f"\n\n{queue_text}"))
-    sources: list[dict[str, str]] = []
-    if not details_only:
-        sources.append(_GOOGLE_MAPS_SOURCE)
-    sources.extend(
-        {"title": source.title, "url": source.url}
-        for source in queue_sources
-    )
-    if sources:
-        canonical_events.append(
-            agent_events.SourcesEvent(
-                turn_id=ctx.turn_id,
-                sources=tuple(sources),
-            )
-        )
     return ToolResult(
         ok=True,
         data={
@@ -509,11 +524,68 @@ async def _emit_place_presentation(
         },
         summary="Place options ready",
         events=framed_events(
-            canonical_events,
+            _place_presentation_events(
+                text, queue_text, queue_sources, details_only, ctx.turn_id
+            ),
             lead_in,
             follow_up,
         ),
     )
+
+
+def _presented_refs(selections: list[dict[str, Any]]) -> list[dict[str, str]]:
+    return [
+        {"place_id": place["place_id"], "reason": place["reason"]}
+        for place in selections
+    ]
+
+
+def _already_shown_result(set_id: str, presented: list[dict[str, str]]) -> ToolResult:
+    return ToolResult(
+        ok=True,
+        data={
+            "discovery_set_id": set_id,
+            "presented": presented,
+            "already_presented": True,
+            "passenger_text": "",
+            "lead_in": "",
+            "follow_up": "",
+        },
+        summary="Place options already shown",
+    )
+
+
+def _mark_place_goal_satisfied(evidence: Any, goal_key: str | None) -> None:
+    if evidence is None or goal_key is None:
+        return
+    record_goal = getattr(evidence, "record_goal", None)
+    if callable(record_goal):
+        record_goal(goal_key, GoalState.SATISFIED, attempted=True, presented=True)
+
+
+def _place_presentation_events(
+    text: str,
+    queue_text: str,
+    queue_sources: tuple,
+    details_only: bool,
+    turn_id: str,
+) -> list:
+    canonical_events: list[agent_events.AgentEvent] = []
+    if not details_only:
+        canonical_events.append(agent_events.TokenEvent(text=text))
+    if queue_text:
+        canonical_events.append(agent_events.TokenEvent(text=f"\n\n{queue_text}"))
+    sources: list[dict[str, str]] = []
+    if not details_only:
+        sources.append(_GOOGLE_MAPS_SOURCE)
+    sources.extend(
+        {"title": source.title, "url": source.url} for source in queue_sources
+    )
+    if sources:
+        canonical_events.append(
+            agent_events.SourcesEvent(turn_id=turn_id, sources=tuple(sources))
+        )
+    return canonical_events
 
 
 async def _queue_presentation(
@@ -530,26 +602,9 @@ async def _queue_presentation(
         return "", ()
 
     when = _presentation_time(ctx.now_et)
-    supported_ids = [
-        place_id
-        for place in selections
-        if (place_id := str(place.get("provider_place_id") or "").strip())
-        and damn_lines.get_supported_venue(place_id) is not None
-    ]
-    observations: dict[str, damn_lines.QueueObservation] = {}
-    if supported_ids and mode != "historical":
-        try:
-            current = await damn_lines.get_current_observations(
-                supported_ids, now=when
-            )
-            observations = current.observations
-        except (RuntimeError, TypeError, ValueError) as exc:
-            _LOGGER.warning(
-                "Damn Lines current queue presentation failed type=%s",
-                type(exc).__name__,
-            )
-            observations = {}
-
+    observations = await _live_queue_observations(
+        selections, mode=mode, when=when
+    )
     notes: list[str] = []
     sourced_ids: list[str] = []
     for place in selections:
@@ -562,6 +617,31 @@ async def _queue_presentation(
             sourced_ids.append(sourced_id)
 
     return "\n".join(notes), damn_lines.source_for_places(sourced_ids)
+
+
+async def _live_queue_observations(
+    selections: list[dict[str, Any]],
+    *,
+    mode: str,
+    when: datetime,
+) -> dict[str, damn_lines.QueueObservation]:
+    supported_ids = [
+        place_id
+        for place in selections
+        if (place_id := str(place.get("provider_place_id") or "").strip())
+        and damn_lines.get_supported_venue(place_id) is not None
+    ]
+    if not supported_ids or mode == "historical":
+        return {}
+    try:
+        current = await damn_lines.get_current_observations(supported_ids, now=when)
+    except (RuntimeError, TypeError, ValueError) as exc:
+        _LOGGER.warning(
+            "Damn Lines current queue presentation failed type=%s",
+            type(exc).__name__,
+        )
+        return {}
+    return current.observations
 
 
 def _queue_note_for_place(
@@ -803,60 +883,85 @@ def _validated_selections(
     raw: object,
     by_id: dict[str, dict],
 ) -> tuple[list[dict[str, Any]], str | None]:
-    if not isinstance(raw, list) or not raw:
-        return [], "one through five unique place selections are required"
-    if len(raw) > 5:
+    if not isinstance(raw, list) or not raw or len(raw) > 5:
         return [], "one through five unique place selections are required"
     selected: list[dict[str, Any]] = []
     seen: set[str] = set()
     for item in raw:
-        if not isinstance(item, dict):
-            return [], "each selection must include place_id and reason"
-        place_id = str(item.get("place_id") or "").strip()
-        reason = str(item.get("reason") or "").strip()
-        if reason not in REASON_CODES:
-            return [], "unsupported place reason"
-        if not place_id or place_id not in by_id:
-            return [], "place id is unknown for this discovery set"
-        if place_id in seen:
-            return [], "duplicate place selections are not allowed"
-        seen.add(place_id)
-        place = dict(by_id[place_id])
-        place["reason"] = reason
+        place, error = _admitted_selection(item, by_id, seen)
+        if error is not None:
+            return [], error
         selected.append(place)
     return selected, None
+
+
+def _admitted_selection(
+    item: object,
+    by_id: dict[str, dict],
+    seen: set[str],
+) -> tuple[dict[str, Any], str | None]:
+    if not isinstance(item, dict):
+        return {}, "each selection must include place_id and reason"
+    place_id = str(item.get("place_id") or "").strip()
+    reason = str(item.get("reason") or "").strip()
+    if reason not in REASON_CODES:
+        return {}, "unsupported place reason"
+    if not place_id or place_id not in by_id:
+        return {}, "place id is unknown for this discovery set"
+    if place_id in seen:
+        return {}, "duplicate place selections are not allowed"
+    seen.add(place_id)
+    place = dict(by_id[place_id])
+    place["reason"] = reason
+    return place, None
 
 
 def _normalize_reasons(selections: list[dict], places: list[dict]) -> list[dict]:
     normalized: list[dict] = []
     for index, selected in enumerate(selections):
         place = dict(selected)
-        reason = place["reason"]
-        supported = (
-            reason not in OBJECTIVE_REASONS
-            or (
-                reason == "top_pick"
-                and index == 0
-                and _is_extreme(place, places, "baseline_score", maximum=True)
-            )
-            or (reason == "open_now" and place.get("open_status") == "open")
-            or (
-                reason == "highest_rating"
-                and _is_extreme(place, places, "rating", maximum=True)
-            )
-            or (
-                reason == "most_reviewed"
-                and _is_extreme(place, places, "review_count", maximum=True)
-            )
-            or (
-                reason == "budget_friendly"
-                and _is_extreme(place, places, "price_level", maximum=False)
-            )
-        )
-        if not supported:
+        if not _objective_reason_holds(place["reason"], place, places, index):
             place["reason"] = "preference_match"
         normalized.append(place)
     return normalized
+
+
+def _objective_reason_holds(
+    reason: str, place: dict, places: list[dict], index: int
+) -> bool:
+    if reason not in OBJECTIVE_REASONS:
+        return True
+    checker = _OBJECTIVE_REASON_CHECKS.get(reason)
+    return bool(checker and checker(place, places, index))
+
+
+def _top_pick_holds(place: dict, places: list[dict], index: int) -> bool:
+    return index == 0 and _is_extreme(place, places, "baseline_score", maximum=True)
+
+
+def _open_now_holds(place: dict, *_rest: object) -> bool:
+    return place.get("open_status") == "open"
+
+
+def _highest_rating_holds(place: dict, places: list[dict], *_rest: object) -> bool:
+    return _is_extreme(place, places, "rating", maximum=True)
+
+
+def _most_reviewed_holds(place: dict, places: list[dict], *_rest: object) -> bool:
+    return _is_extreme(place, places, "review_count", maximum=True)
+
+
+def _budget_friendly_holds(place: dict, places: list[dict], *_rest: object) -> bool:
+    return _is_extreme(place, places, "price_level", maximum=False)
+
+
+_OBJECTIVE_REASON_CHECKS = {
+    "top_pick": _top_pick_holds,
+    "open_now": _open_now_holds,
+    "highest_rating": _highest_rating_holds,
+    "most_reviewed": _most_reviewed_holds,
+    "budget_friendly": _budget_friendly_holds,
+}
 
 
 def _is_extreme(place: dict, places: list[dict], field: str, *, maximum: bool) -> bool:

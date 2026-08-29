@@ -126,6 +126,10 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
     replay = _accepted_route_replay(tool_input, ctx)
     if replay is not None:
         return _replay_result(replay, ctx)
+    return await _present_fresh_route(tool_input, ctx)
+
+
+async def _present_fresh_route(tool_input: dict, ctx: ToolContext) -> ToolResult:
     presentation = await load_validated_presentation(tool_input, ctx)
     if isinstance(presentation, ToolResult):
         return presentation
@@ -184,28 +188,34 @@ async def load_validated_presentation(
 def _accepted_route_replay(tool_input: dict, ctx: ToolContext) -> dict | None:
     if not isinstance(ctx.session, dict):
         return None
+    goal_key, candidate_id, goal = _replay_route_goal(tool_input, ctx)
+    if goal is None or not candidate_id:
+        return None
+    selected_id = _selected_candidate_id(ctx.session)
+    if not selected_id or candidate_id != selected_id:
+        return None
+    card = transcript_store.active_accepted_route_card(ctx.session)
+    return {"card": card, "goal_key": goal_key} if isinstance(card, dict) else None
+
+
+def _replay_route_goal(
+    tool_input: dict, ctx: ToolContext
+) -> tuple[str, str, object | None]:
     goal_key = str(tool_input.get("goal_key") or "").strip()
     candidate_id = str(tool_input.get("candidate_id") or "").strip()
     evidence = getattr(ctx, "turn_evidence", None)
     contract = getattr(evidence, "turn_contract", None)
     goal = contract.get_goal(goal_key) if contract is not None else None
-    if (
-        not goal_key
-        or not candidate_id
-        or goal is None
-        or goal.kind != GoalKind.ROUTE
-    ):
-        return None
-    state = ctx.session.get("trip_state")
-    selected_id = (
-        str(state.get("selected_candidate_id") or "").strip()
-        if isinstance(state, dict)
-        else ""
-    )
-    if not selected_id or candidate_id != selected_id:
-        return None
-    card = transcript_store.active_accepted_route_card(ctx.session)
-    return {"card": card, "goal_key": goal_key} if isinstance(card, dict) else None
+    if not goal_key or goal is None or goal.kind != GoalKind.ROUTE:
+        return goal_key, candidate_id, None
+    return goal_key, candidate_id, goal
+
+
+def _selected_candidate_id(session: dict) -> str:
+    state = session.get("trip_state")
+    if not isinstance(state, dict):
+        return ""
+    return str(state.get("selected_candidate_id") or "").strip()
 
 
 def _replay_result(card: dict, ctx: ToolContext) -> ToolResult:
@@ -310,24 +320,7 @@ def canonical_facts_with_fallback(
         return facts
     correction_facts = facts if isinstance(facts, dict) else owned
     if _request_decision_correction(ctx, correction_facts):
-        if dominated and dominated["challenged"]:
-            preference = str(dominated["preference"] or "").casefold().replace("_", "-")
-            error = (
-                f"The selected candidate is clearly dominated for the rider's explicit "
-                f"{preference} preference. Choose again from the existing Candidate Set. "
-                "Do not prepare routes again."
-            )
-        else:
-            error = (
-                "The selected candidate does not satisfy the server-owned hard "
-                "constraints. Retry present_route once with another candidate from "
-                "the existing candidate set. Do not prepare routes again."
-            )
-        return ToolResult(
-            ok=False,
-            error=error,
-            internal_diagnostic=True,
-        )
+        return _selection_correction_error(dominated)
     fallback = select_fallback_candidate(owned["record"])
     fallback_entry = fallback["entry"] if fallback is not None else None
     rebound = rebind_to_entry(owned, fallback_entry)
@@ -338,6 +331,23 @@ def canonical_facts_with_fallback(
         fallback_facts["selection_source"] = "deterministic_fallback"
         fallback_facts["selection_reason"] = "deterministic_fallback"
     return fallback_facts
+
+
+def _selection_correction_error(dominated: dict[str, Any] | None) -> ToolResult:
+    if dominated and dominated["challenged"]:
+        preference = str(dominated["preference"] or "").casefold().replace("_", "-")
+        error = (
+            f"The selected candidate is clearly dominated for the rider's explicit "
+            f"{preference} preference. Choose again from the existing Candidate Set. "
+            "Do not prepare routes again."
+        )
+    else:
+        error = (
+            "The selected candidate does not satisfy the server-owned hard "
+            "constraints. Retry present_route once with another candidate from "
+            "the existing candidate set. Do not prepare routes again."
+        )
+    return ToolResult(ok=False, error=error, internal_diagnostic=True)
 
 
 def with_optional_framing(
@@ -377,25 +387,13 @@ def _requested_framing(
     facts: dict[str, Any], tool_input: dict
 ) -> tuple[str, str, str | None, str | None]:
     lead_in, follow_up, framing_error = validated_framing(tool_input)
-    candidate_evidence = facts.get("candidate_evidence")
-    incident_metadata = (
-        candidate_evidence.get("incident_scan_metadata")
-        if isinstance(candidate_evidence, dict)
-        else None
-    ) or facts["record"].get("incident_scan_metadata") or {}
     explanation_error = framing_error or _route_framing_error(
         lead_in,
         follow_up,
-        incident_metadata,
+        _incident_metadata(facts),
     )
-    raw_reason_code = tool_input.get("reason_code")
-    reason_code = (
-        raw_reason_code.strip()
-        if isinstance(raw_reason_code, str) and raw_reason_code.strip()
-        else None
-    )
-    if raw_reason_code not in (None, "") and reason_code is None:
-        explanation_error = explanation_error or "reason_code is invalid"
+    reason_code, reason_error = _parsed_reason_code(tool_input)
+    explanation_error = explanation_error or reason_error
     if not lead_in:
         explanation_error = explanation_error or (
             "route presentation requires a concise grounded explanation"
@@ -408,6 +406,27 @@ def _requested_framing(
         entry=facts["entry"],
     )
     return lead_in, follow_up, reason_code, explanation_error
+
+
+def _incident_metadata(facts: dict[str, Any]) -> dict:
+    candidate_evidence = facts.get("candidate_evidence")
+    if isinstance(candidate_evidence, dict):
+        metadata = candidate_evidence.get("incident_scan_metadata")
+        if metadata:
+            return metadata
+    return facts["record"].get("incident_scan_metadata") or {}
+
+
+def _parsed_reason_code(tool_input: dict) -> tuple[str | None, str | None]:
+    raw_reason_code = tool_input.get("reason_code")
+    reason_code = (
+        raw_reason_code.strip()
+        if isinstance(raw_reason_code, str) and raw_reason_code.strip()
+        else None
+    )
+    if raw_reason_code not in (None, "") and reason_code is None:
+        return None, "reason_code is invalid"
+    return reason_code, None
 
 
 def _framing_correction(
