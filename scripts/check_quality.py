@@ -455,6 +455,12 @@ def _self_test_ratchet() -> None:
     )
     for old, new, expected, label in cognitive_cases:
         _assert_ids(cognitive_regression(old, new), expected, label)
+    if approval_eligible(tests_ran=False, failed=False):
+        raise AssertionError("skipped tests cannot be approval-eligible")
+    if approval_eligible(tests_ran=True, failed=True):
+        raise AssertionError("failed quality cannot be approval-eligible")
+    if not approval_eligible(tests_ran=True, failed=False):
+        raise AssertionError("full green quality must be approval-eligible")
 
 
 def self_test() -> None:
@@ -1191,7 +1197,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--skip-tests",
         action="store_true",
-        help="Reuse coverage already produced in this working tree (debug only)",
+        help="Reuse coverage already produced in this working tree (debug only; approval_eligible: false; exits 1)",
     )
     parser.add_argument(
         "--update-baseline",
@@ -1212,7 +1218,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--cognitive-only",
         action="store_true",
-        help="Run the complexipy delta without collecting test coverage",
+        help="Run the complexipy delta without collecting test coverage (prints approval_eligible: false)",
     )
     return parser.parse_args()
 
@@ -1427,6 +1433,17 @@ def quality_failed(
     )
 
 
+def approval_eligible(*, tests_ran: bool, failed: bool) -> bool:
+    return tests_ran and not failed
+
+
+def print_approval_status(*, tests_ran: bool, failed: bool) -> bool:
+    eligible = approval_eligible(tests_ran=tests_ran, failed=failed)
+    print(f"approval_eligible: {str(eligible).lower()}")
+    print(f"tests_ran: {str(tests_ran).lower()}")
+    return eligible
+
+
 def main() -> int:
     args = parse_args()
     configure_stdio()
@@ -1446,11 +1463,15 @@ def main() -> int:
         return 1
     if args.cognitive_only:
         print_cognitive_summary(cognitive)
+        print_approval_status(
+            tests_ran=False, failed=bool(cognitive["regressions"])
+        )
         return 1 if cognitive["regressions"] else 0
 
     rows, test_failures = collect_measurements(args.skip_tests)
     if test_failures:
         print("quality failed because required tests did not pass")
+        print_approval_status(tests_ran=True, failed=True)
         return 1
 
     stats = summarize(rows)
@@ -1481,8 +1502,14 @@ def main() -> int:
         ratchet,
         lint_results,
     )
+    failed = quality_failed(ratchet, cognitive)
+    tests_ran = not args.skip_tests
+    eligible = print_approval_status(tests_ran=tests_ran, failed=failed)
+    report["approval_eligible"] = eligible
+    report["tests_ran"] = tests_ran
+    report["quality_ref"] = args.quality_ref
     write_report(report, args.output)
-    return 1 if quality_failed(ratchet, cognitive) else 0
+    return 0 if eligible else 1
 
 
 if __name__ == "__main__":

@@ -305,9 +305,15 @@ At the end of every batch run fresh quality coverage:
 py scripts/check_quality.py --quality-ref <fixed-point>
 ```
 
-Do not certify with `--skip-tests`. For a quality-gate repair or a suspected
-coverage-order issue, require two consecutive fresh runs with identical
-ratchet results.
+Do not certify with `--skip-tests` or `--cognitive-only`. `--skip-tests`
+exits 1 because tests did not run. `--cognitive-only` may exit 0 when the
+cognitive delta is clean, but it prints `approval_eligible: false` and
+cannot support `APPROVED`. A full run already executes backend pytest with
+coverage and frontend unit tests. Record the printed
+`approval_eligible: true` line together with process exit 0. That exit is
+produced only when tests ran and the ratchet is clean. For a quality-gate
+repair or a suspected coverage-order issue, require two consecutive fresh
+runs with identical ratchet results.
 
 For backend completion, require:
 
@@ -453,7 +459,9 @@ out-of-scope P3 debt is recorded but does not expand the batch.
 Use exactly one verdict:
 
 - `APPROVED`: isolated diff is reviewable, every required gate passes, owned
-  lint is zero, complexity deltas are green, and no blocking finding remains.
+  lint is zero, complexity deltas are green, `check_quality.py --quality-ref
+  <fixed-point>` exited 0 with `approval_eligible: true`, and no blocking
+  finding remains.
 - `PROVISIONAL FINAL-STATE PASS`: final state passes, but no fixed point exists
   to prove the isolated batch diff or absence of scope creep.
 - `REJECTED`: at least one P0, P1, P2, blocking P3, failed gate, or false claim

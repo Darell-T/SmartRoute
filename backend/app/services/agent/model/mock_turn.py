@@ -59,8 +59,8 @@ def mock_trip_copy(
         }
         return text, destination, 27, ["N", "Q"]
     return (
-        "I’m showing a simulated transit option so you can preview the chat experience. "
-        "Switch off mock mode when you’re ready to use live route data.",
+        "I'm showing a simulated transit option so you can preview the chat experience. "
+        "Switch off mock mode when you're ready to use live route data.",
         {"label": "Demo destination", "lat": 40.7306, "lng": -73.9866},
         22,
         ["Q"],

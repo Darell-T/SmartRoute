@@ -36,7 +36,7 @@ from app.services.agent.turn.ledger import (
 )
 
 
-class TurnDeadlineReached(Exception):
+class TurnDeadlineReachedError(Exception):
     """Internal control flow that still reaches the turn's single DoneEvent."""
 
 _UNOFFERED_TOOL_ERROR = "tool not offered on this turn"

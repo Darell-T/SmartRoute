@@ -10,6 +10,8 @@ import time
 from collections.abc import AsyncIterator, Callable
 from typing import Any, Literal
 
+import anthropic
+
 from app.services.agent import events as agent_events
 from app.services.agent.model import request as model_request
 
@@ -135,7 +137,7 @@ def _remaining_deadline_s(deadline_monotonic: float | None) -> float | None:
     return max(0.0, deadline_monotonic - time.monotonic())
 
 
-class WebResearchTimeout(TimeoutError):
+class WebResearchTimeoutError(TimeoutError):
     """Native web_search exceeded the bounded research allowance."""
 
 
@@ -175,7 +177,7 @@ async def _paced_provider_iter(
             if web_started and web_timeout_s:
                 oldest = min(web_started.values())
                 if time.monotonic() >= oldest + web_timeout_s:
-                    raise WebResearchTimeout()
+                    raise WebResearchTimeoutError() from None
             raise
         yield item
 
@@ -250,81 +252,72 @@ async def _stream_provider_events(
 ) -> AsyncIterator[agent_events.AgentEvent]:
     """Translate one Anthropic stream into safe rider-visible events."""
 
-    if hasattr(stream, "__aiter__"):
-        async for event in _paced_provider_iter(
-            stream.__aiter__(),
-            first_byte_s=first_byte_s,
-            deadline_monotonic=deadline_monotonic,
-            web_started=state.web_started,
-            web_timeout_s=web_timeout_s,
-        ):
-            state.saw_provider_event = True
-            event_type = getattr(event, "type", "")
-            if event_type == "content_block_start":
-                block = getattr(event, "content_block", None)
-                block_type = getattr(block, "type", "")
-                if block_type == "text":
-                    state.text_indexes.add(int(getattr(event, "index", -1)))
-                elif block_type == "server_tool_use" and getattr(
-                    block, "name", ""
-                ) == "web_search":
-                    state.server_tool_calls += 1
-                    tool_id = str(getattr(block, "id", "web-search"))
-                    state.web_started[tool_id] = time.monotonic()
-                    yield agent_events.ToolStartEvent(
-                        tool_call_id=tool_id,
-                        tool="web_search",
-                        label="Researching current recommendations…",
-                    )
-                elif block_type == "web_search_tool_result":
-                    tool_id = str(getattr(block, "tool_use_id", "web-search"))
-                    started = state.web_started.pop(tool_id, time.monotonic())
-                    duration_ms = (time.monotonic() - started) * 1000
-                    state.web_search_ms += duration_ms
-                    ok = _web_result_ok(getattr(block, "content", None))
-                    state.web_results.append(ok)
-                    yield agent_events.ToolEndEvent(
-                        tool_call_id=tool_id,
-                        tool="web_search",
-                        ok=ok,
-                        duration_ms=round(duration_ms),
-                        summary=(
-                            "Current place information checked"
-                            if ok
-                            else "Current place search was unavailable"
-                        ),
-                    )
-            elif event_type == "content_block_delta":
-                delta = getattr(event, "delta", None)
-                if getattr(delta, "type", "") == "text_delta":
-                    state.saw_text = True
-                    if state.first_token_ms is None:
-                        state.first_token_ms = (
-                            time.monotonic() - state.call_started
-                        ) * 1000
-                    text = state.sanitizer.feed(str(getattr(delta, "text", "")))
-                    if text:
-                        yield agent_events.TokenEvent(text=text)
-            elif event_type == "content_block_stop":
-                index = int(getattr(event, "index", -1))
-                if index in state.text_indexes:
-                    state.text_indexes.discard(index)
-                    text = state.sanitizer.flush()
-                    if text:
-                        yield agent_events.TokenEvent(text=text)
-        return
-
-    async for delta in _paced_provider_iter(
-        stream.text_stream,
+    async for event in _paced_provider_iter(
+        stream.__aiter__(),
         first_byte_s=first_byte_s,
         deadline_monotonic=deadline_monotonic,
+        web_started=state.web_started,
+        web_timeout_s=web_timeout_s,
     ):
-        state.saw_text = True
-        if state.first_token_ms is None:
-            state.first_token_ms = (time.monotonic() - state.call_started) * 1000
-        text = state.sanitizer.feed(str(delta))
-        if text:
-            yield agent_events.TokenEvent(text=text)
+        state.saw_provider_event = True
+        event_type = getattr(event, "type", "")
+        block = getattr(event, "content_block", None)
+        block_type = getattr(block, "type", "")
+        delta = getattr(event, "delta", None)
+        if event_type == "content_block_start" and block_type == "text":
+            state.text_indexes.add(int(getattr(event, "index", -1)))
+        elif (
+            event_type == "content_block_start"
+            and block_type == "server_tool_use"
+            and getattr(block, "name", "") == "web_search"
+        ):
+            state.server_tool_calls += 1
+            tool_id = str(getattr(block, "id", "web-search"))
+            state.web_started[tool_id] = time.monotonic()
+            yield agent_events.ToolStartEvent(
+                tool_call_id=tool_id,
+                tool="web_search",
+                label="Researching current recommendations…",
+            )
+        elif (
+            event_type == "content_block_start"
+            and block_type == "web_search_tool_result"
+        ):
+            tool_id = str(getattr(block, "tool_use_id", "web-search"))
+            started = state.web_started.pop(tool_id, time.monotonic())
+            duration_ms = (time.monotonic() - started) * 1000
+            state.web_search_ms += duration_ms
+            ok = _web_result_ok(getattr(block, "content", None))
+            state.web_results.append(ok)
+            yield agent_events.ToolEndEvent(
+                tool_call_id=tool_id,
+                tool="web_search",
+                ok=ok,
+                duration_ms=round(duration_ms),
+                summary=(
+                    "Current place information checked"
+                    if ok
+                    else "Current place search was unavailable"
+                ),
+            )
+        elif event_type == "content_block_delta" and getattr(delta, "type", "") == (
+            "text_delta"
+        ):
+            state.saw_text = True
+            if state.first_token_ms is None:
+                state.first_token_ms = (
+                    time.monotonic() - state.call_started
+                ) * 1000
+            text = state.sanitizer.feed(str(getattr(delta, "text", "")))
+            if text:
+                yield agent_events.TokenEvent(text=text)
+        elif event_type == "content_block_stop" and int(
+            getattr(event, "index", -1)
+        ) in state.text_indexes:
+            state.text_indexes.discard(int(getattr(event, "index", -1)))
+            text = state.sanitizer.flush()
+            if text:
+                yield agent_events.TokenEvent(text=text)
 
 
 async def stream_model_call(
@@ -373,7 +366,6 @@ async def stream_model_call(
             continue
         yield completed.public_result(attempt)
         return
-    raise AssertionError("model retry loop exited unexpectedly")
 
 
 async def _stream_attempt(
@@ -392,6 +384,8 @@ async def _stream_attempt(
         sanitizer=_RiderTextSanitizer(sanitize_text),
         call_started=time.monotonic(),
     )
+    pending_summary = "Current place search did not complete"
+    record_duration = True
     try:
         async with client.messages.stream(**stream_kwargs) as stream:
             async for event in _stream_provider_events(
@@ -407,22 +401,11 @@ async def _stream_attempt(
                 if trailing:
                     yield agent_events.TokenEvent(text=trailing)
                 final_message = await stream.get_final_message()
-        for event in _pending_web_events(
-            state,
-            summary="Current place search did not complete",
-            record_duration=True,
-        ):
-            yield event
-        yield _AttemptCompleted(state=state, final_message=final_message, error=None)
-    except asyncio.CancelledError:
-        raise
-    except WebResearchTimeout:
-        for event in _pending_web_events(
-            state,
-            summary="Current recommendations were unavailable",
-        ):
-            yield event
-        yield _AttemptCompleted(
+        completed = _AttemptCompleted(state=state, final_message=final_message, error=None)
+    except WebResearchTimeoutError:
+        pending_summary = "Current recommendations were unavailable"
+        record_duration = False
+        completed = _AttemptCompleted(
             state=state,
             final_message=None,
             error=None,
@@ -432,33 +415,24 @@ async def _stream_attempt(
         trailing = state.sanitizer.flush()
         if trailing:
             yield agent_events.TokenEvent(text=trailing)
-        for event in _pending_web_events(
-            state,
-            summary="Current place search was interrupted",
-        ):
-            yield event
+        pending_summary = "Current place search was interrupted"
+        record_duration = False
         retry_mode: RetryMode = (
             "immediate"
             if _silent_retry_allowed(state, deadline_monotonic)
             else "none"
         )
-        yield _AttemptCompleted(
+        completed = _AttemptCompleted(
             state=state,
             final_message=None,
             error=_deadline_error(),
             retry_mode=retry_mode,
         )
-    except Exception as exc:
+    except (anthropic.APIError, OSError, RuntimeError, TypeError, ValueError) as exc:
         trailing = state.sanitizer.flush()
         if trailing:
-            state.saw_text = True
             yield agent_events.TokenEvent(text=trailing)
-        for event in _pending_web_events(
-            state,
-            summary="Current place search was interrupted",
-            record_duration=True,
-        ):
-            yield event
+        pending_summary = "Current place search was interrupted"
         model_request.log_provider_failure(
             exc=exc,
             kwargs=stream_kwargs,
@@ -471,12 +445,19 @@ async def _stream_attempt(
             if not state.saw_text and model_request.should_retry(exc)
             else "none"
         )
-        yield _AttemptCompleted(
+        completed = _AttemptCompleted(
             state=state,
             final_message=None,
             error=model_request.error_event_for(exc),
             retry_mode=retry_mode,
         )
+    for event in _pending_web_events(
+        state,
+        summary=pending_summary,
+        record_duration=record_duration,
+    ):
+        yield event
+    yield completed
 
 
 def _pending_web_events(

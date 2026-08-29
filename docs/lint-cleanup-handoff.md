@@ -55,8 +55,10 @@ The route-intelligence batch, Batch 0, and Batch 1 are complete inside
 and the handoff repair are Codex-approved. Batch 4 owned tools Ruff is zero.
 Cognitive vs `ae37295` is 0 new or worsened. Full quality vs `ae37295` has
 0 new and 0 worsened cyclomatic debt. It exits 1 only because 6 stale
-baseline entries remain. The worker did not run `--update-baseline`. Do not
-start Batch 5 automatically.
+baseline entries remain. The worker did not run `--update-baseline`.
+
+Batch 5 is an uncommitted Codex repair against `93473c3`. See the Batch 5
+section. Do not start Batch 6.
 
 ## Structural policy
 
@@ -536,7 +538,7 @@ baseline entries remain after 6 resolved measurements. New 0. Worsened 0.
 Remaining 334. The worker did not run `--update-baseline`.
 
 Independent production review APPROVED: scope, behavior, and gaming.
-Do not start Batch 5 automatically.
+Do not start Batch 5 automatically. Batch 5 later started from `93473c3`.
 
 pstack how pass, recorded 2026-08-28, after independent review. Four
 explorers, one explainer, three critics. Named-stage extracts stayed in
@@ -594,7 +596,111 @@ A `queue_evidence.py` extract was tried and reverted. The digest has one
 caller (`_persist`). Present cannot reuse it without changing `heads_up`,
 clocks, or rider notes. 839 is 39 over 800. The remaining bulk is the
 public schema plus queue evidence that must be read with persist. Do not
-split that fragment. Do not start Batch 5.
+split that fragment.
+
+### Batch 5: agent orchestration and state
+
+Fixed point `93473c3`. Predicate: net lines down, function count must not
+rise, no helper that exists only to silence C901. Exclude `tools/**`.
+`quality/baseline.json` was not edited.
+
+Trail: `.audit/batch5-simplify.tsv`.
+
+Nine cluster files vs `93473c3`: 4185 to 4084 lines (net -101), 145 to 145
+functions. Owned C901/PLR0912/PLR0915 is 0. Complete owned Ruff is 0.
+Cognitive vs `93473c3`: 0 new or worsened (1856 functions, 256 above 10).
+
+Cluster 1 is model request and stream. `output_projection.py` 259 to 208.
+`prompt.py` 533 to 512. Context sections precompute rider-safe digests and
+use two same-shape JSON tables, then `lines.extend` for present payloads.
+`model/stream.py` dropped the `text_stream` fallback. Test fakes keep
+`__aiter__` only.
+
+Clusters 2-4 are stores, public surface, and turn lifecycle. Dead
+`HARD_LIMIT` asserts after `BUDGET=0` are gone. Goal cycles use
+`graphlib.TopologicalSorter`. `pause_turn` web evidence lives in
+`_apply_server_web_progress`. Registry ordinal lookup walks newest
+presentation first. Evidence capability state lives in
+`_evidence_capability_error`. Presenter research and readiness stay two
+returns. Discovery place-id remap lives in `_rewrite_source_place_id`.
+
+Route-discovery reliability tests keep their assertions. Shared
+`provider_search_result` in `agent_route_decision_test_support.py` is the
+canonical `_provider_search` envelope (`data["results"]`, flattened
+`lat`/`lng`). A discovery execute check fails if that envelope drifts:
+empty `places` on a `places` key, missing stored coordinates without
+`lat`/`lng`. It does not call `_provider_places`. Prove-it: `test_stage_a_excludes_absurd_current_location_route_before_model_choice`
+failed with an empty place set on the stale `places` envelope, then passed
+after the helper.
+
+Provider stream recovery catches `anthropic.APIError` and related runtime
+faults. Loop tests raise `anthropic.BadRequestError` and
+`InternalServerError` through `httpx.Response`, not local `Exception`
+subclasses. Nested continuation constraints raise `TypeError`. Atomic
+candidate presentation fail-open includes `RuntimeError` so a broken
+pipeline stays a bounded store error.
+
+Approval uses `scripts/check_quality.py --quality-ref` as specified in
+`docs/lint-cleanup-review-spec.md`. This batch did not add a second runner.
+
+Recorded 2026-08-28, from `backend/` with
+`SMARTROUTE_ENV=test`, `AGENT_ALLOW_MEMORY_SESSIONS=1`, `PYTHONPATH=.`.
+
+```powershell
+python -m ruff check --config pyproject.toml backend/app/services/agent --exclude tools
+python -m ruff check --config pyproject.toml --select C901,PLR0912,PLR0915 backend/app/services/agent --exclude tools
+```
+
+Both exit 0.
+
+```powershell
+python scripts/check_quality.py --cognitive-only --quality-ref 93473c3
+```
+
+Exit 0. Cognitive 0 new or worsened. Prints `approval_eligible: false`.
+
+34-file manifest, forward then reverse, 329 passed, 58 subtests, both
+exit 0:
+
+```powershell
+py -m pytest @files -q --basetemp "$PWD/../.pytest-batch5-fwd"
+py -m pytest @files -q --basetemp "$PWD/../.pytest-batch5-rev"
+```
+
+Files: `test_agent_model_request.py`, `test_agent_model_stream.py`,
+`test_agent_prompt.py`, `test_model_output_projection.py`,
+`test_agent_session.py`, `test_agent_chat_session_lease.py`,
+`test_agent_chat_session_restore.py`, `test_agent_chat_stream_cleanup.py`,
+`test_agent_loop.py`, `test_agent_loop_output_integrity.py`,
+`test_complete_turn.py`, `test_turn_contract.py`,
+`test_turn_terminal_contract.py`, `test_pending_continuation.py`,
+`test_session_pending_continuations.py`, `test_public_tool_surface.py`,
+`test_presented_entity_registry.py`, `test_discovery_references.py`,
+`test_web_research_policy.py`, `test_active_discovery_presenter.py`,
+`test_active_temporary_route_presenter.py`,
+`test_agent_loop_round_cap_reliability.py`, `test_model_led_goal_loop.py`,
+`test_agent_context_projection.py`, `test_turn_evidence.py`,
+`test_agent_route_branch_reliability.py`,
+`test_agent_route_decision_reliability.py`,
+`test_agent_route_stage_a_reliability.py`, `test_agent_chat_admission.py`,
+`test_agent_events.py`, `test_turn_outcomes.py`, `test_turn_resolution.py`,
+`test_turn_telemetry.py`, `test_turn_latency_guards.py`.
+
+```powershell
+py -m pytest tests -q --basetemp "$PWD/../.pytest-batch5-fullbackend2"
+```
+
+Exit 0. 1823 passed, 21 skipped, 444 subtests.
+
+```powershell
+python scripts/check_quality.py --quality-ref 93473c3
+```
+
+Exit 1. `tests_ran: true`. `approval_eligible: false`. Frontend 314 passed.
+Backend coverage pytest 1823 passed, 21 skipped, 444 subtests. New 0.
+Worsened 0. Cognitive 0. Stale 11, all Batch 4 `agent/tools` entries after
+the place-gather shrink. Remaining 329. The worker did not run
+`--update-baseline`.
 
 ## Historical records through 427fbc8
 

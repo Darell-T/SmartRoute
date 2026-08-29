@@ -23,6 +23,8 @@ from contextlib import contextmanager
 from typing import ClassVar
 from unittest.mock import patch
 
+import anthropic
+import httpx
 from app.services import cache
 from app.services.agent import events as agent_events
 from app.services.agent import session as session_module
@@ -33,6 +35,14 @@ from app.services.agent.tools import ToolContext, ToolResult, ToolSpec, declare_
 from app.services.agent.tools import complete_turn as complete_turn_tool
 
 from tests._fake_anthropic import reload_agent_loop_module
+
+
+def _provider_status_error(cls, status_code: int, request_id: str, body: dict):
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    response = httpx.Response(
+        status_code, request=request, headers={"request-id": request_id}
+    )
+    return cls("provider error", response=response, body=body)
 
 
 def _load_agent_loop(env: dict | None = None):
@@ -638,11 +648,7 @@ class _AgentLoopHelpers:
                     _offered_schemas_for_registry(tool_registry)
                     + (
                         [
-                            self.loop._web_search_tool(
-                                self.loop.agent_policy.policy_for_mode(
-                                    response_presentation
-                                )
-                            )
+                            self.loop._web_search_tool()
                         ]
                         if kwargs.get("include_web")
                         else []
@@ -740,20 +746,22 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         assert errors[0].code == "upstream_error"
 
     async def test_bad_request_is_attempted_once_and_emits_typed_error(self):
-        class BadRequestError(Exception):
-            status_code = 400
-            request_id = "req_bad_request"
-            body: ClassVar[dict] = {
-                "type": "error",
-                "error": {
-                    "type": "invalid_request_error",
-                    "message": "temperature is not supported",
-                },
-            }
-
         events_out, _ = await self._run(
             [
-                {"exception": BadRequestError()},
+                {
+                    "exception": _provider_status_error(
+                        anthropic.BadRequestError,
+                        400,
+                        "req_bad_request",
+                        {
+                            "type": "error",
+                            "error": {
+                                "type": "invalid_request_error",
+                                "message": "temperature is not supported",
+                            },
+                        },
+                    )
+                },
                 {"text": ["must not run"], "stop_reason": "end_turn"},
             ]
         )
@@ -764,20 +772,22 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         assert events_out[-1].stop_reason == "error"
 
     async def test_transient_server_error_retries_within_application_bound(self):
-        class ServerError(Exception):
-            status_code = 503
-            request_id = "req_server_error"
-            body: ClassVar[dict] = {
-                "type": "error",
-                "error": {
-                    "type": "api_error",
-                    "message": "service temporarily unavailable",
-                },
-            }
-
         events_out, _ = await self._run(
             [
-                {"exception": ServerError()},
+                {
+                    "exception": _provider_status_error(
+                        anthropic.InternalServerError,
+                        503,
+                        "req_server_error",
+                        {
+                            "type": "error",
+                            "error": {
+                                "type": "api_error",
+                                "message": "service temporarily unavailable",
+                            },
+                        },
+                    )
+                },
                 _complete_round("Recovered"),
             ],
             tool_registry=_test_registry(),

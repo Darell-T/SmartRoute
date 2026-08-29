@@ -7,11 +7,27 @@ the real server-owned executors and stores.
 """
 from __future__ import annotations
 from datetime import datetime, timedelta
+from app.services.agent.tools._types import ToolResult
 from app.services.agent.tools.location_resolution import ResolvedPlace
 from app.services.agent.tools.route.preparation_adapter import PreparedLeg
 from app.services.trips import scoring
 from app.services import cache
 from tests._fake_anthropic import reload_agent_loop_module
+
+
+def provider_search_result(*places: dict) -> ToolResult:
+    """Envelope `_provider_search` returns after `execute` flattens Google rows."""
+
+    results: list[dict] = []
+    for place in places:
+        item = dict(place)
+        location = item.pop("location", None)
+        if isinstance(location, dict):
+            item.setdefault("lat", location.get("latitude"))
+            item.setdefault("lng", location.get("longitude"))
+        results.append(item)
+    return ToolResult(ok=True, data={"results": results})
+
 
 def _tool(tool_id: str, name: str, tool_input: dict) -> dict:
     return {"id": tool_id, "name": name, "input": tool_input}

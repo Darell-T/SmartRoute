@@ -52,8 +52,6 @@ async def run_one_tool(
             result = await asyncio.wait_for(
                 spec.executor(tool_input, ctx), timeout=timeout_s
             )
-            observability.finish_tool(tool_span, ok=result.ok)
-            return result
         except TimeoutError as exc:
             if deadline_limited or (
                 deadline_monotonic is not None
@@ -64,7 +62,7 @@ async def run_one_tool(
                 result = ToolResult(ok=False, error="timed out")
             observability.finish_tool(tool_span, ok=False, error=exc)
             return result
-        except Exception as exc:
+        except (RuntimeError, TypeError, ValueError, OSError, KeyError, AttributeError) as exc:
             _LOGGER.warning(
                 "agent tool failed tool=%s type=%s",
                 name,
@@ -72,6 +70,9 @@ async def run_one_tool(
             )
             observability.finish_tool(tool_span, ok=False, error=exc)
             return ToolResult(ok=False, error="tool failed")
+        else:
+            observability.finish_tool(tool_span, ok=result.ok)
+            return result
 
 
 @dataclasses.dataclass

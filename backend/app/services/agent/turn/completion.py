@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Iterable, Mapping, Sequence
-from enum import Enum
+from enum import StrEnum
 
 from app.services.agent import session as session_module
 from app.services.agent.turn.contract import GoalState, OutcomeGoal, TurnContract
 from app.services.agent.turn.evidence import TurnEvidence
 
 
-class TurnResolution(str, Enum):
+class TurnResolution(StrEnum):
     COMPLETED = "completed"
     CANCELLED = "cancelled"
     PARTIAL_SUCCESS_WITH_RECOVERY = "partial_success_with_recovery"

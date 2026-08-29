@@ -24,6 +24,7 @@ from tests.agent_route_decision_test_support import (
     _present_round,
     _route,
     _route_goal_round,
+    provider_search_result,
 )
 from tests.conversation.conversation_matrix_harness import route_cards, run_turn
 
@@ -95,7 +96,7 @@ class AgentRouteBranchReliabilityTests(AgentRouteDecisionTestMixin, unittest.Iso
         with patch.object(
             discover_places.search_local_places,
             "_provider_search",
-            new=AsyncMock(return_value=ToolResult(ok=True, data={"places": branches})),
+            new=AsyncMock(return_value=provider_search_result(*branches)),
         ):
             discovery = await discover_places.execute(
                 {

@@ -184,7 +184,7 @@ def _has_unowned_continuation(message: str) -> bool:
     neither permission, so they must stand on their own.
     """
 
-    normalized = " " + message.casefold().replace("’", "'") + " "
+    normalized = " " + message.casefold().replace("\u2019", "'") + " "
     if "?" in normalized:
         return True
     if any(

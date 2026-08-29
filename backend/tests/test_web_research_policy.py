@@ -360,13 +360,12 @@ class _ScriptedStream:
     async def __aexit__(self, *_args):
         return False
 
-    @property
-    def text_stream(self):
-        async def _text():
-            for chunk in self._rounds[0].get("text", []):
-                yield chunk
-
-        return _text()
+    async def __aiter__(self):
+        for chunk in self._rounds[0].get("text", []):
+            yield types.SimpleNamespace(
+                type="content_block_delta",
+                delta=types.SimpleNamespace(type="text_delta", text=chunk),
+            )
 
     async def get_final_message(self):
         spec = self._rounds.pop(0)

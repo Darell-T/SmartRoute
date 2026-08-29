@@ -96,14 +96,17 @@ def resolve_profile_place(
         place = places.get(query)
         return (dict(place), None) if isinstance(place, dict) else (None, None)
 
-    matches: list[dict[str, Any]] = []
-    for place in places.values():
-        if isinstance(place, dict) and query == _place_key(place):
-            matches.append(dict(place))
-    for key in ("saved_places", "frequent_places"):
-        for place in profile.get(key) or []:
-            if isinstance(place, dict) and query == _place_key(place):
-                matches.append(dict(place))
+    matches = [
+        dict(place)
+        for place in places.values()
+        if isinstance(place, dict) and query == _place_key(place)
+    ]
+    matches.extend(
+        dict(place)
+        for key in ("saved_places", "frequent_places")
+        for place in profile.get(key) or []
+        if isinstance(place, dict) and query == _place_key(place)
+    )
     unique: dict[tuple[object, ...], dict[str, Any]] = {}
     for place in matches:
         place_id = str(place.get("place_id") or "").strip()

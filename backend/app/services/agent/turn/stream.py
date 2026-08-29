@@ -31,7 +31,7 @@ from app.services.agent.turn.finalization import (
 )
 from app.services.agent.turn.ledger import TurnToolLedger
 from app.services.agent.turn.tool_round import (
-    TurnDeadlineReached,
+    TurnDeadlineReachedError,
     mixed_terminal_and_capability,
 )
 
@@ -367,6 +367,29 @@ def _record_conversation_timings(
         )
 
 
+def _apply_server_web_progress(
+    state: TurnState,
+    outcome: model_stream.ModelCallCompleted,
+    stop_reason: str,
+    turn_tools: list[dict],
+) -> ModelDirective | None:
+    """Hold web evidence until a pause_turn continuation finishes."""
+
+    if outcome.web_used:
+        state.pending_server_web_used = True
+        state.pending_server_web_succeeded = bool(
+            state.pending_server_web_succeeded and outcome.web_succeeded
+        )
+    if stop_reason == "pause_turn":
+        state.server_tool_continuation_tools = turn_tools
+        return ModelDirective("continue")
+    if state.pending_server_web_used:
+        state.ctx.turn_evidence.note_web(ok=state.pending_server_web_succeeded)
+        state.pending_server_web_used = False
+        state.pending_server_web_succeeded = True
+    return None
+
+
 def resolve_model_iteration(
     state: TurnState,
     iteration: ModelIteration,
@@ -383,8 +406,6 @@ def resolve_model_iteration(
     if outcome.error is not None:
         state.stop_reason = "deadline" if outcome.error.code == "deadline" else "error"
         return ModelDirective("stop", event=outcome.error)
-    if iteration.final_message is None:
-        raise RuntimeError("model stream completed without a final message")
 
     usage = extract_safe_usage(getattr(iteration.final_message, "usage", None))
     state.input_tokens += usage.get("input_tokens", 0)
@@ -404,18 +425,11 @@ def resolve_model_iteration(
     state.messages.append(
         {"role": "assistant", "content": iteration.final_message.content}
     )
-    if outcome.web_used:
-        state.pending_server_web_used = True
-        state.pending_server_web_succeeded = bool(
-            state.pending_server_web_succeeded and outcome.web_succeeded
-        )
-    if stop_reason == "pause_turn":
-        state.server_tool_continuation_tools = iteration.turn_tools
-        return ModelDirective("continue")
-    if state.pending_server_web_used:
-        state.ctx.turn_evidence.note_web(ok=state.pending_server_web_succeeded)
-        state.pending_server_web_used = False
-        state.pending_server_web_succeeded = True
+    web_directive = _apply_server_web_progress(
+        state, outcome, stop_reason, iteration.turn_tools
+    )
+    if web_directive is not None:
+        return web_directive
 
     action_attached = bool(iteration.tool_use_blocks) or bool(
         outcome.server_tool_call_count
@@ -434,9 +448,7 @@ def resolve_model_iteration(
         state.stop_reason = "end_turn"
         return ModelDirective("stop", event=state.fallback_event())
     if stop_reason != "tool_use" or not iteration.tool_use_blocks:
-        state.stop_reason = (
-            "clarification_required" if state.clarification_pending else "end_turn"
-        )
+        state.stop_reason = _terminal_stop_reason(state)
         return ModelDirective("stop")
     if mixed_terminal_and_capability(
         [str(getattr(block, "name", "") or "") for block in iteration.tool_use_blocks]
@@ -705,7 +717,7 @@ async def _stream_turn_body(state: TurnState) -> AsyncIterator[agent_events.Agen
             yield event
         async for event in _stream_post_loop_response(state):
             yield event
-    except TurnDeadlineReached:
+    except TurnDeadlineReachedError:
         state.stop_reason = "deadline"
     except Exception as exc:
         _LOGGER.exception(

@@ -59,13 +59,12 @@ class FakeStreamContext:
     async def __aexit__(self, *_exc_info):
         return False
 
-    async def _iter_text(self):
+    async def __aiter__(self):
         for chunk in self._round_spec.get("text", []):
-            yield chunk
-
-    @property
-    def text_stream(self):
-        return self._iter_text()
+            yield FakeContentBlock(
+                "content_block_delta",
+                delta=FakeContentBlock("text_delta", text=chunk),
+            )
 
     async def get_final_message(self) -> FakeMessage:
         blocks: list = []
