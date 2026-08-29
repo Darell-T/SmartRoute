@@ -6,9 +6,8 @@ index tests with an isolated in-memory cache so test order cannot leak state.
 """
 
 import pytest
-
-from app.services.incidents import index as incident_index
 from app.services import cache
+from app.services.incidents import index as incident_index
 
 
 @pytest.fixture(autouse=True)

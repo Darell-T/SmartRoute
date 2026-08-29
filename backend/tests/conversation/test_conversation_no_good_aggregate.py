@@ -54,11 +54,8 @@ class NoGoodOptionsAutoTests(_NoGoodOptionsBase):
             tool_input_extra={"excluded_route_ids": ["Q"]},
         )
         digest = audit["candidates"][0]["digest"]
-        self.assertIn("excluded_route", digest["hard_constraint_violations"])
-        self.assertEqual(
-            _session["slots"]["constraints"]["excluded_route_ids"],
-            ["Q"],
-        )
+        assert "excluded_route" in digest["hard_constraint_violations"]
+        assert _session["slots"]["constraints"]["excluded_route_ids"] == ["Q"]
 
     async def test_ng03_insufficient_coverage_auto(self):
         (
@@ -73,15 +70,7 @@ class NoGoodOptionsAutoTests(_NoGoodOptionsBase):
             prepare_leg=insufficient_coverage_leg(),
             expected_status="insufficient_coverage",
         )
-        self.assertEqual(
-            record["evidence_coverage"],
-            {
-                "mta": "unscanned",
-                "vehicles": "unscanned",
-                "incidents": "unscanned",
-                "events": "not_required",
-            },
-        )
+        assert record["evidence_coverage"] == {"mta": "unscanned", "vehicles": "unscanned", "incidents": "unscanned", "events": "not_required"}
 
     async def test_ng04_all_materially_degraded_auto(self):
         (
@@ -97,12 +86,12 @@ class NoGoodOptionsAutoTests(_NoGoodOptionsBase):
             expected_status="all_materially_degraded",
         )
         impacts = record["candidates"][0]["digest"]["official_service_impacts"]
-        self.assertEqual(len(impacts), 1)
+        assert len(impacts) == 1
         impact = impacts[0]
-        self.assertEqual(impact["header"], "R service change")
-        self.assertEqual(impact["route_ids"], ["R"])
-        self.assertEqual(impact["source"], "unknown")
-        self.assertTrue(impact["material_disruption"])
+        assert impact["header"] == "R service change"
+        assert impact["route_ids"] == ["R"]
+        assert impact["source"] == "unknown"
+        assert impact["material_disruption"]
 
     async def test_ng05_accessibility_invalidates_every_candidate_auto(self):
         (
@@ -124,9 +113,6 @@ class NoGoodOptionsAutoTests(_NoGoodOptionsBase):
             },
         )
         digest = audit["candidates"][0]["digest"]
-        self.assertIn(
-            "accessibility_unknown_or_unavailable",
-            digest["hard_constraint_violations"],
-        )
-        self.assertTrue(audit["tool_input"]["accessibility_required"])
-        self.assertTrue(audit["tool_input"]["avoid_stairs"])
+        assert "accessibility_unknown_or_unavailable" in digest["hard_constraint_violations"]
+        assert audit["tool_input"]["accessibility_required"]
+        assert audit["tool_input"]["avoid_stairs"]

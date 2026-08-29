@@ -1,8 +1,8 @@
 """Tests for the unflagged prepare_route_options / present_route path."""
 from __future__ import annotations
+
 import unittest
 from unittest.mock import AsyncMock
-
 
 
 class IncidentIndexTests(unittest.TestCase):
@@ -21,9 +21,9 @@ class IncidentIndexTests(unittest.TestCase):
                 "corroboration_state": "confirmed",
             }
         )
-        self.assertTrue(incident_id.startswith("inc_"))
+        assert incident_id.startswith("inc_")
         found = incident_index.lookup_incidents(route_ids=["Q"])
-        self.assertGreaterEqual(len(found["incidents"]), 1)
+        assert len(found["incidents"]) >= 1
         incident_index.set_coverage(
             {
                 "coverage_id": "downtown-northwest-brooklyn",
@@ -32,7 +32,7 @@ class IncidentIndexTests(unittest.TestCase):
             }
         )
         coverage = incident_index.get_coverage("downtown-northwest-brooklyn")
-        self.assertEqual(coverage["coverage_status"], "current")
+        assert coverage["coverage_status"] == "current"
 
 
 class BackgroundJobTests(unittest.IsolatedAsyncioTestCase):
@@ -57,8 +57,8 @@ class BackgroundJobTests(unittest.IsolatedAsyncioTestCase):
         cache._mem.clear()
 
     async def test_job_runs_end_to_end_with_injected_boundaries(self):
+        from app.services import cache
         from app.services.incidents import refresh
-        from app.services.incidents.scout import ScoutBatchResult
         from app.services.incidents.batches import INCIDENT_BATCHES
         from app.services.incidents.official import (
             SOURCE_ALERTS,
@@ -66,7 +66,7 @@ class BackgroundJobTests(unittest.IsolatedAsyncioTestCase):
             STATUS_CURRENT,
             OfficialIncidentSnapshot,
         )
-        from app.services import cache
+        from app.services.incidents.scout import ScoutBatchResult
 
         collector = AsyncMock(
             return_value=OfficialIncidentSnapshot(
@@ -92,26 +92,23 @@ class BackgroundJobTests(unittest.IsolatedAsyncioTestCase):
             clock=lambda: 1_800_000_000.0,
             monotonic=lambda: 0.0,
         )
-        self.assertEqual(metrics["status"], "complete")
-        self.assertEqual(
-            metrics["coverage"],
-            {"current": len(INCIDENT_BATCHES), "partial": 0, "unavailable": 0},
-        )
-        self.assertEqual(metrics["incidents_upserted"], 0)
-        self.assertEqual(metrics["official_incidents"], 0)
-        self.assertEqual(metrics["model_calls"], 0)
-        self.assertNotIn("incidents", metrics)
+        assert metrics["status"] == "complete"
+        assert metrics["coverage"] == {"current": len(INCIDENT_BATCHES), "partial": 0, "unavailable": 0}
+        assert metrics["incidents_upserted"] == 0
+        assert metrics["official_incidents"] == 0
+        assert metrics["model_calls"] == 0
+        assert "incidents" not in metrics
         collector.assert_awaited_once()  # one injected official boundary call only.
-        self.assertIsNone(cache.cache_get(refresh.JOB_LOCK_KEY))
+        assert cache.cache_get(refresh.JOB_LOCK_KEY) is None
 
     async def test_job_lock_prevents_overlap_and_releases_in_finally(self):
-        from app.services.incidents import refresh
         from app.services import cache
+        from app.services.incidents import refresh
 
         token = refresh.acquire_job_lock()
-        self.assertIsNotNone(token)
+        assert token is not None
         try:
-            self.assertFalse(refresh.acquire_job_lock())
+            assert not refresh.acquire_job_lock()
         finally:
-            self.assertTrue(refresh.release_job_lock(token))
-        self.assertIsNone(cache.cache_get(refresh.JOB_LOCK_KEY))
+            assert refresh.release_job_lock(token)
+        assert cache.cache_get(refresh.JOB_LOCK_KEY) is None

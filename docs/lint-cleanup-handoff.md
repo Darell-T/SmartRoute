@@ -11,32 +11,29 @@ application behavior. Regenerate the reports below before editing a batch.
 
 ## Current result
 
-Ruff rows were regenerated on 2026-08-28 after Batch 3 from
-`py -m ruff check --config pyproject.toml --output-format json backend`.
-Batch 4 cleared owned Ruff under `backend/app/services/agent/tools`.
+Ruff rows were regenerated on 2026-08-28 after Batch 6 from
+`py -m ruff check --config pyproject.toml backend` (exit 0, 0 findings).
 Oxlint, ESLint, and complexipy rows remain the 2026-08-27 policy measurement.
-The quality-baseline row includes the Batch 3 reviewer update on 2026-08-28.
 Workers must not shrink stale baseline entries.
 
 | Tool | Findings | Files | Notes |
 |---|---:|---:|---|
-| Ruff | 894 | 129 | 107 production, 787 tests, 35 rules |
-| Ruff C901 | 38 | 29 | McCabe ceiling 10 |
-| Ruff PLR0912 | 18 | 16 | Branch ceiling 12 |
-| Ruff PLR0915 | 8 | 8 | Statement ceiling 50 |
+| Ruff | 0 | 0 | Backend production and tests |
+| Ruff C901 | 0 | 0 | McCabe ceiling 10 |
+| Ruff PLR0912 | 0 | 0 | Branch ceiling 12 |
+| Ruff PLR0915 | 0 | 0 | Statement ceiling 50 |
 | complexipy | 276 | 106 | Legacy functions above cognitive 10 |
 | Oxlint | 1,162 | 192 | 719 in generator scripts |
 | ESLint | 193 | 76 | 185 complexity, 8 max-depth |
-| Quality baseline | 340 | | Combined Python and TypeScript CC debt |
+| Quality baseline | 329 | | Combined Python and TypeScript CC debt after reviewer-only shrink |
 
-The largest Ruff rule is `PT009` with 616 findings. That is test assertion
-style debt, not production complexity. `TRY003` is ignored. It encouraged
-exception boilerplate without improving passenger behavior or debuggability.
+`TRY003` is ignored. It encouraged exception boilerplate without improving
+passenger behavior or debuggability.
 
 Ruff fell from the 2026-08-27 policy snapshot of 1,047 findings because
-Batches 2 and 3 cleared owned production findings. The earlier drop from the
-Batch 1 snapshot of 1,385 was the C901 ceiling of 10 and the `TRY003`
-ignore. No application file changed for that first drop.
+Batches 2 through 6 cleared owned production and then all remaining
+`backend/tests` findings. The earlier drop from the Batch 1 snapshot of
+1,385 was the C901 ceiling of 10 and the `TRY003` ignore.
 
 Quality certification from fresh runs with no `--skip-tests`:
 
@@ -46,6 +43,10 @@ Quality certification from fresh runs with no `--skip-tests`:
 | Second pass 2026-08-28 | 0 | 0 | 0 | 0 | 353 | 1,813 passed, 21 skipped, 444 subtests | 314 |
 | Batch 3 reviewer final 2026-08-28 | 0 | 0 | 0 | 0 | 340 | 1,822 passed, 21 skipped, 444 subtests | 314 |
 | Batch 4 worker 2026-08-28 | 1 | 0 | 0 | 6 | 334 | 1,822 passed, 21 skipped, 444 subtests | 314 |
+| Batch 5 worker 2026-08-28 | 1 | 0 | 0 | 11 | 329 | 1,823 passed, 21 skipped, 444 subtests | 314 |
+| Batch 6 worker 2026-08-28 | 1 | 0 | 0 | 11 | 329 | 1,823 passed, 21 skipped, 444 subtests | 314 |
+| Batch 5 reviewer final 2026-08-28 | 0 | 0 | 0 | 0 | 329 | 1,823 passed, 21 skipped, 444 subtests | 314 |
+| Batch 6 reviewer final 2026-08-28 | 0 | 0 | 0 | 0 | 329 | 1,823 passed, 21 skipped, 444 subtests | 314 |
 
 Cognitive delta against `427fbc8`: 0 new or worsened. CRAP has no absolute
 ceiling. Baseline entries may not worsen.
@@ -53,12 +54,9 @@ ceiling. Baseline entries may not worsen.
 The route-intelligence batch, Batch 0, and Batch 1 are complete inside
 `427fbc8`. Batch 2 is independently APPROVED at `368c00d`. Batch 3 production
 and the handoff repair are Codex-approved. Batch 4 owned tools Ruff is zero.
-Cognitive vs `ae37295` is 0 new or worsened. Full quality vs `ae37295` has
-0 new and 0 worsened cyclomatic debt. It exits 1 only because 6 stale
-baseline entries remain. The worker did not run `--update-baseline`.
-
-Batch 5 is an uncommitted Codex repair against `93473c3`. See the Batch 5
-section. Do not start Batch 6.
+Batch 5 is committed at `22f6f0d` and reviewer-approved. Batch 6 lands remaining
+`backend/tests` Ruff cleanup and the reviewer-only baseline shrink. Do not start
+Batch 7. Batches 6A through 6E own remaining backend complexity debt.
 
 ## Structural policy
 
@@ -175,7 +173,7 @@ helper only to silence C901. Do not add tests only to lower CRAP.
 
 ### Test assertion backlog
 
-Convert `PT009` and `PT027` in Batch 6 after production batches are stable.
+Batch 6 converted remaining `PT009` and `PT027` under `backend/tests`.
 Preserve argument order for membership assertions. Use `pytest.raises` with an
 exact `match` only when the message is part of the contract.
 
@@ -643,10 +641,17 @@ pipeline stays a bounded store error.
 Approval uses `scripts/check_quality.py --quality-ref` as specified in
 `docs/lint-cleanup-review-spec.md`. This batch did not add a second runner.
 
-Recorded 2026-08-28, from `backend/` with
-`SMARTROUTE_ENV=test`, `AGENT_ALLOW_MEMORY_SESSIONS=1`, `PYTHONPATH=.`.
+Recorded from the repository root with inert test credentials,
+`SMARTROUTE_ENV=test`, `AGENT_ALLOW_MEMORY_SESSIONS=1`, and
+`PYTHONPATH=backend`.
 
 ```powershell
+$env:APP_KEY = 'dummy'
+$env:ANTHROPIC_API_KEY = 'dummy'
+$env:SMARTROUTE_ENV = 'test'
+$env:AGENT_ALLOW_MEMORY_SESSIONS = '1'
+$env:PYTHONPATH = 'backend'
+
 python -m ruff check --config pyproject.toml backend/app/services/agent --exclude tools
 python -m ruff check --config pyproject.toml --select C901,PLR0912,PLR0915 backend/app/services/agent --exclude tools
 ```
@@ -654,6 +659,11 @@ python -m ruff check --config pyproject.toml --select C901,PLR0912,PLR0915 backe
 Both exit 0.
 
 ```powershell
+$env:APP_KEY = 'dummy'
+$env:ANTHROPIC_API_KEY = 'dummy'
+$env:SMARTROUTE_ENV = 'test'
+$env:AGENT_ALLOW_MEMORY_SESSIONS = '1'
+$env:PYTHONPATH = 'backend'
 python scripts/check_quality.py --cognitive-only --quality-ref 93473c3
 ```
 
@@ -663,44 +673,251 @@ Exit 0. Cognitive 0 new or worsened. Prints `approval_eligible: false`.
 exit 0:
 
 ```powershell
-py -m pytest @files -q --basetemp "$PWD/../.pytest-batch5-fwd"
-py -m pytest @files -q --basetemp "$PWD/../.pytest-batch5-rev"
+$env:APP_KEY = 'dummy'
+$env:ANTHROPIC_API_KEY = 'dummy'
+$env:SMARTROUTE_ENV = 'test'
+$env:AGENT_ALLOW_MEMORY_SESSIONS = '1'
+$env:PYTHONPATH = 'backend'
+$files = @(
+    'backend/tests/test_agent_model_request.py',
+    'backend/tests/test_agent_model_stream.py',
+    'backend/tests/test_agent_prompt.py',
+    'backend/tests/test_model_output_projection.py',
+    'backend/tests/test_agent_session.py',
+    'backend/tests/test_agent_chat_session_lease.py',
+    'backend/tests/test_agent_chat_session_restore.py',
+    'backend/tests/test_agent_chat_stream_cleanup.py',
+    'backend/tests/test_agent_loop.py',
+    'backend/tests/test_agent_loop_output_integrity.py',
+    'backend/tests/test_complete_turn.py',
+    'backend/tests/test_turn_contract.py',
+    'backend/tests/test_turn_terminal_contract.py',
+    'backend/tests/test_pending_continuation.py',
+    'backend/tests/test_session_pending_continuations.py',
+    'backend/tests/test_public_tool_surface.py',
+    'backend/tests/test_presented_entity_registry.py',
+    'backend/tests/test_discovery_references.py',
+    'backend/tests/test_web_research_policy.py',
+    'backend/tests/test_active_discovery_presenter.py',
+    'backend/tests/test_active_temporary_route_presenter.py',
+    'backend/tests/test_agent_loop_round_cap_reliability.py',
+    'backend/tests/test_model_led_goal_loop.py',
+    'backend/tests/test_agent_context_projection.py',
+    'backend/tests/test_turn_evidence.py',
+    'backend/tests/test_agent_route_branch_reliability.py',
+    'backend/tests/test_agent_route_decision_reliability.py',
+    'backend/tests/test_agent_route_stage_a_reliability.py',
+    'backend/tests/test_agent_chat_admission.py',
+    'backend/tests/test_agent_events.py',
+    'backend/tests/test_turn_outcomes.py',
+    'backend/tests/test_turn_resolution.py',
+    'backend/tests/test_turn_telemetry.py',
+    'backend/tests/test_turn_latency_guards.py'
+)
+py -m pytest @files -q --basetemp "$PWD/.pytest-batch5-fwd"
+$rev = @($files)
+[array]::Reverse($rev)
+py -m pytest @rev -q --basetemp "$PWD/.pytest-batch5-rev"
 ```
 
-Files: `test_agent_model_request.py`, `test_agent_model_stream.py`,
-`test_agent_prompt.py`, `test_model_output_projection.py`,
-`test_agent_session.py`, `test_agent_chat_session_lease.py`,
-`test_agent_chat_session_restore.py`, `test_agent_chat_stream_cleanup.py`,
-`test_agent_loop.py`, `test_agent_loop_output_integrity.py`,
-`test_complete_turn.py`, `test_turn_contract.py`,
-`test_turn_terminal_contract.py`, `test_pending_continuation.py`,
-`test_session_pending_continuations.py`, `test_public_tool_surface.py`,
-`test_presented_entity_registry.py`, `test_discovery_references.py`,
-`test_web_research_policy.py`, `test_active_discovery_presenter.py`,
-`test_active_temporary_route_presenter.py`,
-`test_agent_loop_round_cap_reliability.py`, `test_model_led_goal_loop.py`,
-`test_agent_context_projection.py`, `test_turn_evidence.py`,
-`test_agent_route_branch_reliability.py`,
-`test_agent_route_decision_reliability.py`,
-`test_agent_route_stage_a_reliability.py`, `test_agent_chat_admission.py`,
-`test_agent_events.py`, `test_turn_outcomes.py`, `test_turn_resolution.py`,
-`test_turn_telemetry.py`, `test_turn_latency_guards.py`.
-
 ```powershell
-py -m pytest tests -q --basetemp "$PWD/../.pytest-batch5-fullbackend2"
+$env:APP_KEY = 'dummy'
+$env:ANTHROPIC_API_KEY = 'dummy'
+$env:SMARTROUTE_ENV = 'test'
+$env:AGENT_ALLOW_MEMORY_SESSIONS = '1'
+$env:PYTHONPATH = 'backend'
+py -m pytest backend/tests -q --basetemp "$PWD/.pytest-batch5-fullbackend2"
 ```
 
 Exit 0. 1823 passed, 21 skipped, 444 subtests.
 
 ```powershell
+$env:APP_KEY = 'dummy'
+$env:ANTHROPIC_API_KEY = 'dummy'
+$env:SMARTROUTE_ENV = 'test'
+$env:AGENT_ALLOW_MEMORY_SESSIONS = '1'
+$env:PYTHONPATH = 'backend'
 python scripts/check_quality.py --quality-ref 93473c3
 ```
 
-Exit 1. `tests_ran: true`. `approval_eligible: false`. Frontend 314 passed.
+Worker run before the reviewer baseline shrink: exit 1. `tests_ran: true`.
+`approval_eligible: false`. Frontend 314 passed.
 Backend coverage pytest 1823 passed, 21 skipped, 444 subtests. New 0.
 Worsened 0. Cognitive 0. Stale 11, all Batch 4 `agent/tools` entries after
 the place-gather shrink. Remaining 329. The worker did not run
 `--update-baseline`.
+
+Reviewer final after the authorized 340-to-329 baseline shrink: exit 0.
+`tests_ran: true`. `approval_eligible: true`. Frontend 314 passed. Backend
+coverage pytest 1823 passed, 21 skipped, 444 subtests. New 0. Worsened 0.
+Cognitive 0. Stale 0. Remaining 329.
+
+### Batch 6: backend test style remainder
+
+Fixed point `22f6f0d`. Tests only. Production code was not edited. The worker
+did not edit `quality/baseline.json`. After accepting the rest of the batch,
+the reviewer removed exactly 11 proven-stale Batch 4 entries. No entry was
+added or increased.
+
+Trail: `.audit/batch6-simplify.tsv`.
+
+Pre-edit inventory on `backend/tests`: 787 findings across 82 files,
+616 of them `PT009`. Post-edit `py -m ruff check --config pyproject.toml backend`
+exits 0 with 0 findings.
+
+`ruff --fix --unsafe-fixes` converted `PT009` and `PT027` while keeping
+operand order (`assert a == b`, `a in b`). Remaining C901/PLR/ARG/PERF/N818
+were owned by splitting named test adapters, not by new assertion helpers.
+Protocol kwargs (`deadline_monotonic`, Redis `ex=`) kept their production
+names. Prefixing them broke `consume_nonce` (`unavailable` vs `consumed`) and
+`_Ledger.execute`. Unused protocol values are discarded with `del`, matching
+`test_goal_aware_tool_round.py`.
+
+Prove-it: `test_ticket_nonce_is_single_use` failed after renaming `ex` to
+`_ex`, then passed after restoring the keyword. Cancellation collects events
+with `anext` so a mid-turn cancel still keeps partial events. An `async for`
+append loop would trip `PERF401`. An async listcomp would drop partials.
+
+Simplify kept the `anext` collectors. It replaced `_declare_goals_round`
+with already-imported `_turn_round`, and made `_rewrite_multi_call` always
+return a dict. `_fill_public_schema` stayed in the F2 fixtures. Merging it
+into E1 `_complete_public_inputs` would couple audit batches.
+
+H03 phases are `_h03_through_barclays_destination` and
+`_h03_through_bound_reload`. The first returns only `set_a`. Newly collapsed
+asserts that exceeded 160 characters versus `22f6f0d` were reflowed. Operand
+order and failure messages stayed.
+
+Comment Sicko deleted 44 leftover sermon lines. None were restored.
+`_model_led_rounds` now requires `evidence_id` from `run_multi_probe`. The
+deleted `_load_trips_module` import-first lecture was stale. `app.routers.trips`
+no longer imports `app.services.agent.tools`.
+
+Recorded from the repository root with inert test credentials,
+`SMARTROUTE_ENV=test`, `AGENT_ALLOW_MEMORY_SESSIONS=1`, and
+`PYTHONPATH=backend`.
+
+```powershell
+$env:APP_KEY = 'dummy'
+$env:ANTHROPIC_API_KEY = 'dummy'
+$env:SMARTROUTE_ENV = 'test'
+$env:AGENT_ALLOW_MEMORY_SESSIONS = '1'
+$env:PYTHONPATH = 'backend'
+
+python -m ruff check --config pyproject.toml backend
+python -m ruff check --config pyproject.toml backend/tests
+```
+
+Both exit 0.
+
+60-file impacted manifest, forward then reverse:
+
+```powershell
+$env:APP_KEY = 'dummy'
+$env:ANTHROPIC_API_KEY = 'dummy'
+$env:SMARTROUTE_ENV = 'test'
+$env:AGENT_ALLOW_MEMORY_SESSIONS = '1'
+$env:PYTHONPATH = 'backend'
+$files = @(
+    'backend/tests/conversation/test_conversation_candidate_lifecycle_safety.py',
+    'backend/tests/conversation/test_conversation_discovery_reference.py',
+    'backend/tests/conversation/test_conversation_discovery_route.py',
+    'backend/tests/conversation/test_conversation_discovery_waypoint.py',
+    'backend/tests/conversation/test_conversation_long_state_retention.py',
+    'backend/tests/conversation/test_conversation_multi_intent_tool_sequencing.py',
+    'backend/tests/conversation/test_conversation_no_good_aggregate.py',
+    'backend/tests/conversation/test_conversation_no_good_nonfatal_followup.py',
+    'backend/tests/conversation/test_conversation_presentation_race.py',
+    'backend/tests/conversation/test_conversation_what_if_lifecycle.py',
+    'backend/tests/test_active_temporary_route_presenter.py',
+    'backend/tests/test_activity_copy.py',
+    'backend/tests/test_admission.py',
+    'backend/tests/test_agent_chat_admission.py',
+    'backend/tests/test_agent_evidence_binding_reliability.py',
+    'backend/tests/test_agent_loop_round_cap_reliability.py',
+    'backend/tests/test_agent_progress.py',
+    'backend/tests/test_anthropic_conversation_contract_live.py',
+    'backend/tests/test_completion_policy.py',
+    'backend/tests/test_conversational_geography.py',
+    'backend/tests/test_crowd_evidence.py',
+    'backend/tests/test_crowd_hotspots.py',
+    'backend/tests/test_declare_goals.py',
+    'backend/tests/test_evidence_freshness.py',
+    'backend/tests/test_geo_nearest_stops.py',
+    'backend/tests/test_geo_privacy.py',
+    'backend/tests/test_gtfs_intermediate_stops.py',
+    'backend/tests/test_incident_batches.py',
+    'backend/tests/test_incident_index.py',
+    'backend/tests/test_incident_index_and_background_job.py',
+    'backend/tests/test_incident_index_batch_lookup.py',
+    'backend/tests/test_incident_job_router.py',
+    'backend/tests/test_incident_lifecycle.py',
+    'backend/tests/test_incident_monitor.py',
+    'backend/tests/test_intent_scoped_tool_policy.py',
+    'backend/tests/test_live_feed_snapshot_trip_context.py',
+    'backend/tests/test_model_led_goal_loop.py',
+    'backend/tests/test_model_output_projection.py',
+    'backend/tests/test_mta_feed_bus_stops.py',
+    'backend/tests/test_mta_feed_service_alerts.py',
+    'backend/tests/test_nearby_issues.py',
+    'backend/tests/test_observability.py',
+    'backend/tests/test_pending_continuation.py',
+    'backend/tests/test_plan_trip_projection.py',
+    'backend/tests/test_public_body_bounds.py',
+    'backend/tests/test_route_constraint_relaxation.py',
+    'backend/tests/test_route_decision_evaluation.py',
+    'backend/tests/test_route_exclusion_constraints.py',
+    'backend/tests/test_route_identity_gate.py',
+    'backend/tests/test_route_itinerary_contract.py',
+    'backend/tests/test_route_option_assembly.py',
+    'backend/tests/test_strict_tool_schema_new_tools.py',
+    'backend/tests/test_trip_admission.py',
+    'backend/tests/test_trip_candidate_reasons.py',
+    'backend/tests/test_trips_enrichment.py',
+    'backend/tests/test_turn_contract.py',
+    'backend/tests/test_turn_latency_guards.py',
+    'backend/tests/test_turn_outcomes.py',
+    'backend/tests/test_turn_resolution.py',
+    'backend/tests/test_turn_telemetry.py'
+)
+py -m pytest @files -q --basetemp "$PWD/.pytest-batch6-fwd"
+$rev = @($files)
+[array]::Reverse($rev)
+py -m pytest @rev -q --basetemp "$PWD/.pytest-batch6-rev"
+```
+
+```powershell
+$env:APP_KEY = 'dummy'
+$env:ANTHROPIC_API_KEY = 'dummy'
+$env:SMARTROUTE_ENV = 'test'
+$env:AGENT_ALLOW_MEMORY_SESSIONS = '1'
+$env:PYTHONPATH = 'backend'
+py -m pytest backend/tests -q --basetemp "$PWD/.pytest-batch6-full"
+```
+
+Exit 0. 1823 passed, 21 skipped, 444 subtests.
+
+```powershell
+$env:APP_KEY = 'dummy'
+$env:ANTHROPIC_API_KEY = 'dummy'
+$env:SMARTROUTE_ENV = 'test'
+$env:AGENT_ALLOW_MEMORY_SESSIONS = '1'
+$env:PYTHONPATH = 'backend'
+python scripts/check_quality.py --quality-ref 22f6f0d
+```
+
+Worker run before the reviewer baseline shrink: exit 1. `tests_ran: true`.
+`approval_eligible: false`. Frontend 314 passed.
+Backend coverage pytest 1823 passed, 21 skipped, 444 subtests. New 0.
+Worsened 0. Cognitive 0. Stale 11, all Batch 4 `agent/tools` entries.
+Remaining 329. Ruff C901 and structural diagnostics 0. The worker did not
+run `--update-baseline`.
+
+Reviewer final after the authorized 340-to-329 baseline shrink: exit 0.
+`tests_ran: true`. `approval_eligible: true`. Frontend 314 passed. Backend
+coverage pytest 1823 passed, 21 skipped, 444 subtests. New 0. Worsened 0.
+Cognitive 0. Stale 0. Remaining 329. Ruff C901 and structural diagnostics 0.
+Do not start Batch 7.
 
 ## Historical records through 427fbc8
 

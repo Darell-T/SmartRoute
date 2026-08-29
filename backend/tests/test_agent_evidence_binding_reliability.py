@@ -5,13 +5,13 @@ from __future__ import annotations
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from app.services.agent.tools.transit import evidence as transit_evidence
-from app.services.agent.tools.transit import check_transit
-from app.services.agent.tools.transit import present_transit
+from app.services import cache
 from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.transit import check_transit, present_transit
+from app.services.agent.tools.transit import evidence as transit_evidence
 from app.services.agent.turn.contract import GoalKind, OutcomeGoal, TurnContract
 from app.services.agent.turn.evidence import TurnEvidence
-from app.services import cache
+
 from tests.agent_evidence_binding_test_support import transit_input
 
 
@@ -134,12 +134,9 @@ class AgentEvidenceBindingReliabilityTests(unittest.IsolatedAsyncioTestCase):
                 context,
             )
 
-        self.assertFalse(
-            result.ok,
-            "a station lookup outside the selected itinerary must be rejected",
-        )
-        self.assertNotIn("evidence_set_id", result.data or {})
-        self.assertNotIn("Howard Beach", repr(result.data))
+        assert not result.ok, "a station lookup outside the selected itinerary must be rejected"
+        assert "evidence_set_id" not in (result.data or {})
+        assert "Howard Beach" not in repr(result.data)
 
     async def test_accessibility_evidence_binds_selected_airtrain_station(self):
         provider_result = ToolResult(
@@ -169,12 +166,12 @@ class AgentEvidenceBindingReliabilityTests(unittest.IsolatedAsyncioTestCase):
                 context,
             )
 
-        self.assertTrue(result.ok)
+        assert result.ok
         evidence = (result.data or {}).get("evidence") or {}
         binding = evidence.get("accessibility", {}).get("binding", {})
-        self.assertEqual(binding.get("station"), "Ozone Park-Lefferts Blvd")
-        self.assertEqual(binding.get("entity_type"), "AIRTRAIN_STATION")
-        self.assertEqual(binding.get("route_ids"), ["AIRTRAIN"])
+        assert binding.get("station") == "Ozone Park-Lefferts Blvd"
+        assert binding.get("entity_type") == "AIRTRAIN_STATION"
+        assert binding.get("route_ids") == ["AIRTRAIN"]
 
         turn_evidence = TurnEvidence()
         turn_evidence.bind_contract(
@@ -197,8 +194,8 @@ class AgentEvidenceBindingReliabilityTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
         passenger_text = str((presented.data or {}).get("passenger_text") or "")
-        self.assertIn("Ozone Park-Lefferts Blvd", passenger_text)
-        self.assertNotIn("Howard Beach", passenger_text)
+        assert "Ozone Park-Lefferts Blvd" in passenger_text
+        assert "Howard Beach" not in passenger_text
 
     async def test_current_turn_station_does_not_use_stale_trip_binding(self):
         provider_result = ToolResult(
@@ -228,10 +225,8 @@ class AgentEvidenceBindingReliabilityTests(unittest.IsolatedAsyncioTestCase):
                 context,
             )
 
-        self.assertTrue(result.ok)
-        self.assertNotIn(
-            "binding", ((result.data or {}).get("evidence") or {}).get("accessibility", {})
-        )
+        assert result.ok
+        assert "binding" not in ((result.data or {}).get("evidence") or {}).get("accessibility", {})
 
     async def test_subway_elevator_evidence_cannot_attach_to_bus_stop_routes(self):
         """B35/B15 are bus routes, not station entities with elevator facts."""
@@ -265,12 +260,9 @@ class AgentEvidenceBindingReliabilityTests(unittest.IsolatedAsyncioTestCase):
                         context,
                     )
 
-                self.assertFalse(
-                    result.ok,
-                    f"unsupported bus-stop accessibility must be rejected for {route_id}",
-                )
-                self.assertNotIn("evidence_set_id", result.data or {})
-                self.assertNotIn("elevator_outages", repr(result.data))
+                assert not result.ok, f"unsupported bus-stop accessibility must be rejected for {route_id}"
+                assert "evidence_set_id" not in (result.data or {})
+                assert "elevator_outages" not in repr(result.data)
 
     async def test_accessibility_route_scope_cannot_cross_mixed_route_legs(self):
         session = _mixed_route_session()
@@ -279,8 +271,8 @@ class AgentEvidenceBindingReliabilityTests(unittest.IsolatedAsyncioTestCase):
             session,
             ["Q"],
         )
-        self.assertIsNone(bind_error)
-        self.assertEqual(bound["route_ids"], ["Q"])
+        assert bind_error is None
+        assert bound["route_ids"] == ["Q"]
 
         context = ToolContext(
             session_id="mixed-route-evidence-session",
@@ -295,9 +287,9 @@ class AgentEvidenceBindingReliabilityTests(unittest.IsolatedAsyncioTestCase):
             context,
         )
 
-        self.assertFalse(result.ok)
-        self.assertEqual(result.outcome, "unavailable")
-        self.assertIn("accepted itinerary", str(result.error))
+        assert not result.ok
+        assert result.outcome == "unavailable"
+        assert "accepted itinerary" in str(result.error)
 
     async def test_bus_stop_accessibility_presentation_uses_bus_stop_language(self):
         evidence_set_id, _evidence = transit_evidence.build_evidence_set(
@@ -336,8 +328,8 @@ class AgentEvidenceBindingReliabilityTests(unittest.IsolatedAsyncioTestCase):
         )
 
         passenger_text = str((result.data or {}).get("passenger_text") or "")
-        self.assertNotIn("station", passenger_text.casefold())
-        self.assertNotIn("elevator", passenger_text.casefold())
+        assert "station" not in passenger_text.casefold()
+        assert "elevator" not in passenger_text.casefold()
 
 
 if __name__ == "__main__":

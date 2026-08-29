@@ -178,30 +178,34 @@ def _goal_for_model_tool(
     return None
 
 
-def _model_led_rounds(
-    rounds: list[dict],
-    *,
-    turn_id: str,
-) -> tuple[list[dict], str | None]:
-    """Adapt legacy scripted model rounds to the current public protocol.
-
-    The adapter is test-only: the fake model declares goals before the first
-    provider capability.  State-valid discovery presenters use a separate
-    response after declaration. Provider-grounded transit answers use
-    ``present_transit`` so these long transcripts exercise the canonical
-    presenter rather than the retired free-form terminal.
-    """
-
-    calls = [
+def _scripted_calls(rounds: list[dict]) -> list[dict]:
+    return [
         call
         for scripted in rounds
         for call in scripted.get("tool_use") or []
         if str(call.get("name") or "") != "declare_goals"
     ]
-    names = {str(call.get("name") or "") for call in calls}
-    selection_only = "present_places" in names and "discover_places" not in names
+
+
+def _provider_goal(calls: list[dict], selection_only: bool) -> tuple[str, str] | None:
+    return next(
+        (
+            _goal_for_model_tool(
+                str(item.get("name") or ""),
+                item.get("input") or {},
+                selection_only=selection_only,
+            )
+            for item in calls
+            if str(item.get("name") or "")
+            in {"discover_places", "prepare_route_options", "check_transit"}
+        ),
+        None,
+    )
+
+
+def _collect_declared_goals(calls: list[dict], selection_only: bool) -> list[dict]:
     goals: list[dict] = []
-    by_name: dict[str, tuple[str, str]] = {}
+    seen: set[str] = set()
     for call in calls:
         name = str(call.get("name") or "")
         spec = _goal_for_model_tool(
@@ -210,36 +214,73 @@ def _model_led_rounds(
         if spec is None:
             continue
         key, kind = spec
-        if name == "complete_turn" and any(
-            prior_name in {"discover_places", "prepare_route_options", "check_transit"}
-            for prior_name in (str(item.get("name") or "") for item in calls)
-            if prior_name != name
-        ):
-            # A provider-grounded terminal is only a recovery path.  Its
-            # declared goal is the provider goal, not a second general answer.
-            provider = next(
-                (
-                    _goal_for_model_tool(
-                        str(item.get("name") or ""),
-                        item.get("input") or {},
-                        selection_only=selection_only,
-                    )
-                    for item in calls
-                    if str(item.get("name") or "")
-                    in {"discover_places", "prepare_route_options", "check_transit"}
-                ),
-                None,
-            )
+        if name == "complete_turn":
+            provider = _provider_goal(calls, selection_only)
             if provider is not None:
                 key, kind = provider
-        if key not in by_name:
-            by_name[key] = (key, kind)
+        if key not in seen:
+            seen.add(key)
             goals.append({"goal_key": key, "kind": kind, "depends_on": []})
+    return goals
 
+
+def _rewrite_complete_turn(
+    tool_input: dict, calls: list[dict], selection_only: bool, evidence_id: str
+) -> tuple[str, dict]:
+    outcome = str(tool_input.get("outcome") or "answer")
+    provider = _provider_goal(calls, selection_only)
+    existing_goal_keys = tool_input.get("goal_keys")
+    if provider is not None:
+        tool_input["goal_keys"] = [provider[0]]
+        tool_input.pop("goal_key", None)
+        if outcome == "answer":
+            tool_input["outcome"] = "unavailable"
+    elif not (isinstance(existing_goal_keys, list) and existing_goal_keys):
+        tool_input["goal_keys"] = ["response"]
+    has_transit = any(str(item.get("name") or "") == "check_transit" for item in calls)
+    if has_transit and outcome == "answer":
+        return "present_transit", {
+            "goal_key": "transit",
+            "evidence_set_id": evidence_id,
+        }
+    return "complete_turn", tool_input
+
+
+def _rewrite_scripted_call(
+    call: dict, calls: list[dict], selection_only: bool, evidence_id: str
+) -> dict:
+    name = str(call.get("name") or "")
+    tool_input = dict(call.get("input") or {})
+    if name == "complete_turn":
+        name, tool_input = _rewrite_complete_turn(
+            tool_input, calls, selection_only, evidence_id
+        )
+    spec = _goal_for_model_tool(name, tool_input, selection_only=selection_only)
+    if name == "present_transit":
+        tool_input["goal_key"] = "transit"
+        tool_input.setdefault("evidence_set_id", evidence_id)
+    elif spec is not None and name not in {"declare_goals", "complete_turn"}:
+        tool_input["goal_key"] = spec[0]
+    return {**call, "name": name, "input": tool_input}
+
+
+def _model_led_rounds(
+    rounds: list[dict],
+    *,
+    turn_id: str,
+) -> tuple[list[dict], str | None]:
+    calls = _scripted_calls(rounds)
+    names = {str(call.get("name") or "") for call in calls}
+    selection_only = "present_places" in names and "discover_places" not in names
+    goals = _collect_declared_goals(calls, selection_only)
     if not goals:
         return rounds, None
-
     evidence_id = f"te_test_{turn_id}"
+    declare_call = {
+        "id": f"tu-{turn_id}-goals",
+        "name": "declare_goals",
+        "input": {"goals": goals},
+    }
     adapted: list[dict] = []
     declared = False
     for scripted in rounds:
@@ -247,102 +288,18 @@ def _model_led_rounds(
         if not tool_uses:
             adapted.append(scripted)
             continue
-        # A fresh follow-up may only use the initial five capabilities in the
-        # declaration response. A presenter for already-owned discovery or a
-        # validated temporary route becomes state-valid after declaration, so
-        # model it as the next response.
         if not declared and all(
             str(call.get("name") or "") in {"present_places", "present_route"}
             for call in tool_uses
         ):
-            adapted.append(
-                {
-                    "tool_use": [
-                        {
-                            "id": f"tu-{turn_id}-goals",
-                            "name": "declare_goals",
-                            "input": {"goals": goals},
-                        }
-                    ],
-                    "stop_reason": "tool_use",
-                }
-            )
+            adapted.append(_turn_round("declare_goals", declare_call["id"], declare_call["input"]))
             declared = True
-        transformed: list[dict] = []
-        for call in tool_uses:
-            name = str(call.get("name") or "")
-            tool_input = dict(call.get("input") or {})
-            spec = _goal_for_model_tool(
-                name, tool_input, selection_only=selection_only
-            )
-            if name == "complete_turn":
-                outcome = str(tool_input.get("outcome") or "answer")
-                provider = next(
-                    (
-                        _goal_for_model_tool(
-                            str(item.get("name") or ""),
-                            item.get("input") or {},
-                            selection_only=selection_only,
-                        )
-                        for item in calls
-                        if str(item.get("name") or "")
-                        in {"discover_places", "prepare_route_options", "check_transit"}
-                    ),
-                    None,
-                )
-                existing_goal_keys = tool_input.get("goal_keys")
-                if provider is not None:
-                    provider_key = provider[0]
-                    tool_input["goal_keys"] = [provider_key]
-                    tool_input.pop("goal_key", None)
-                    if outcome == "answer":
-                        tool_input["outcome"] = "unavailable"
-                elif not (
-                    isinstance(existing_goal_keys, list)
-                    and existing_goal_keys
-                ):
-                    tool_input["goal_keys"] = ["response"]
-                spec = _goal_for_model_tool(
-                    name, tool_input, selection_only=selection_only
-                )
-            if name == "check_transit":
-                # All provider-backed transit results use the canonical
-                # presenter.  An unavailable arrival fixture is represented by
-                # an empty evidence set, not a free-form terminal.
-                pass
-            elif name == "complete_turn":
-                provider_name = next(
-                    (
-                        str(item.get("name") or "")
-                        for item in calls
-                        if str(item.get("name") or "") == "check_transit"
-                    ),
-                    None,
-                )
-                if (
-                    provider_name == "check_transit"
-                    and outcome == "answer"
-                ):
-                    name = "present_transit"
-                    tool_input = {
-                        "goal_key": "transit",
-                        "evidence_set_id": evidence_id,
-                    }
-            if name == "present_transit":
-                tool_input["goal_key"] = "transit"
-                tool_input.setdefault("evidence_set_id", evidence_id)
-            elif spec is not None and name not in {"declare_goals", "complete_turn"}:
-                tool_input["goal_key"] = spec[0]
-            transformed.append({**call, "name": name, "input": tool_input})
+        transformed = [
+            _rewrite_scripted_call(call, calls, selection_only, evidence_id)
+            for call in tool_uses
+        ]
         if not declared:
-            transformed.insert(
-                0,
-                {
-                    "id": f"tu-{turn_id}-goals",
-                    "name": "declare_goals",
-                    "input": {"goals": goals},
-                },
-            )
+            transformed.insert(0, declare_call)
             declared = True
         adapted.append({**scripted, "tool_use": transformed})
     return adapted, evidence_id

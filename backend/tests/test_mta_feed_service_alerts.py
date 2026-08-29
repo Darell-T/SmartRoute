@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-import pathlib
-import sys
 import unittest
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -10,12 +8,7 @@ from unittest.mock import patch
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import redis
-
-BACKEND_ROOT = pathlib.Path(__file__).resolve().parents[1]
-if str(BACKEND_ROOT) not in sys.path:
-    sys.path.insert(0, str(BACKEND_ROOT))
-
-from app.services import cache as cache_module  # noqa: E402
+from app.services import cache as cache_module
 
 try:
     from google.transit import gtfs_realtime_pb2

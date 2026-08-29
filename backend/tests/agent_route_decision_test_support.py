@@ -6,12 +6,15 @@ non-deterministic decision reproducible; route/place facts still pass through
 the real server-owned executors and stores.
 """
 from __future__ import annotations
+
 from datetime import datetime, timedelta
+
+from app.services import cache
 from app.services.agent.tools._types import ToolResult
 from app.services.agent.tools.location_resolution import ResolvedPlace
 from app.services.agent.tools.route.preparation_adapter import PreparedLeg
 from app.services.trips import scoring
-from app.services import cache
+
 from tests._fake_anthropic import reload_agent_loop_module
 
 

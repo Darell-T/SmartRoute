@@ -1,6 +1,8 @@
 """Focused route-presentation framing and canonical-fact guards."""
 from __future__ import annotations
+
 import unittest
+
 from app.services.trips.selection_decision import evaluate_candidate_decision
 
 from tests.present_route_framing_test_support import (
@@ -41,7 +43,7 @@ class RouteDecisionEvaluationTests(PresentRouteFramingTestMixin, unittest.Isolat
 
         supported = _supported_reason_codes(record, selected)
 
-        self.assertNotIn("less_walking", supported)
+        assert "less_walking" not in supported
 
     def test_partial_alternative_crowd_evidence_blocks_lower_crowd_claim(self):
         selected = {
@@ -74,11 +76,8 @@ class RouteDecisionEvaluationTests(PresentRouteFramingTestMixin, unittest.Isolat
             selected,
         )
 
-        self.assertNotIn(
-            "lower_event_crowd_exposure",
-            decision["supported_reason_codes"],
-        )
-        self.assertTrue(decision["crowd_limitation_required"])
+        assert "lower_event_crowd_exposure" not in decision["supported_reason_codes"]
+        assert decision["crowd_limitation_required"]
 
     def test_context_only_event_evidence_cannot_support_lower_crowd_claim(self):
         selected = {
@@ -116,11 +115,8 @@ class RouteDecisionEvaluationTests(PresentRouteFramingTestMixin, unittest.Isolat
             selected,
         )
 
-        self.assertNotIn(
-            "lower_event_crowd_exposure",
-            decision["supported_reason_codes"],
-        )
-        self.assertTrue(decision["crowd_limitation_required"])
+        assert "lower_event_crowd_exposure" not in decision["supported_reason_codes"]
+        assert decision["crowd_limitation_required"]
 
     def test_accessibility_reason_requires_an_active_rider_requirement(self):
         selected = {
@@ -137,7 +133,7 @@ class RouteDecisionEvaluationTests(PresentRouteFramingTestMixin, unittest.Isolat
             selected,
         )
 
-        self.assertNotIn("accessibility", supported)
+        assert "accessibility" not in supported
 
     def test_accessibility_reason_is_supported_when_required_and_satisfied(self):
         selected = {
@@ -154,7 +150,7 @@ class RouteDecisionEvaluationTests(PresentRouteFramingTestMixin, unittest.Isolat
             selected,
         )
 
-        self.assertIn("accessibility", supported)
+        assert "accessibility" in supported
 
     def test_unselectable_candidate_cannot_define_supported_reason(self):
         selected = {
@@ -179,8 +175,8 @@ class RouteDecisionEvaluationTests(PresentRouteFramingTestMixin, unittest.Isolat
 
         supported = _supported_reason_codes(record, selected)
 
-        self.assertIn("meets_hard_constraints", supported)
-        self.assertNotIn("fastest", supported)
+        assert "meets_hard_constraints" in supported
+        assert "fastest" not in supported
 
     def test_missing_or_inverse_preference_cannot_define_less_walking(self):
         for preferences in ({}, {"routing_preference": "FEWER_TRANSFERS"}):
@@ -201,12 +197,7 @@ class RouteDecisionEvaluationTests(PresentRouteFramingTestMixin, unittest.Isolat
                         "soft_preferences": preferences,
                     },
                 }
-                self.assertNotIn(
-                    "less_walking",
-                    _supported_reason_codes(
-                        {"candidates": [selected, alternative]}, selected
-                    ),
-                )
+                assert "less_walking" not in _supported_reason_codes({"candidates": [selected, alternative]}, selected)
 
     def test_missing_numeric_factors_fail_closed_for_fastest_and_transfers(self):
         for reason, key, preferences in (
@@ -229,12 +220,7 @@ class RouteDecisionEvaluationTests(PresentRouteFramingTestMixin, unittest.Isolat
                         "soft_preferences": preferences,
                     },
                 }
-                self.assertNotIn(
-                    reason,
-                    _supported_reason_codes(
-                        {"candidates": [selected, alternative]}, selected
-                    ),
-                )
+                assert reason not in _supported_reason_codes({"candidates": [selected, alternative]}, selected)
 
     def test_reason_code_is_grounded_in_the_active_rider_preference(self):
         selected = {
@@ -265,6 +251,6 @@ class RouteDecisionEvaluationTests(PresentRouteFramingTestMixin, unittest.Isolat
 
         supported = _supported_reason_codes(record, selected)
 
-        self.assertIn("fewer_transfers", supported)
-        self.assertNotIn("less_walking", supported)
-        self.assertNotIn("fastest", supported)
+        assert "fewer_transfers" in supported
+        assert "less_walking" not in supported
+        assert "fastest" not in supported

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from app.services.agent.tools._types import ToolContext
-from tests.conversation.conversation_matrix_harness import make_leg
 
+from tests.conversation.conversation_matrix_harness import make_leg
 
 SCORE_CONTRACT_KEYS = {
     "index",

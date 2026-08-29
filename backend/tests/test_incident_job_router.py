@@ -11,31 +11,31 @@ import os
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from fastapi import HTTPException
-
+import pytest
 from app.routers import incident_refresh
+from fastapi import HTTPException
 
 
 class IncidentJobRouterTests(unittest.IsolatedAsyncioTestCase):
     def test_missing_configured_secret_returns_404(self):
-        with patch.dict(os.environ, {"INCIDENT_JOB_CRON_SECRET": ""}, clear=False):
-            with self.assertRaises(HTTPException) as raised:
-                incident_refresh._verify_cron_secret("anything")
-        self.assertEqual(raised.exception.status_code, 404)
+        with patch.dict(os.environ, {"INCIDENT_JOB_CRON_SECRET": ""}, clear=False), pytest.raises(
+            HTTPException
+        ) as raised:
+            incident_refresh._verify_cron_secret("anything")
+        assert raised.value.status_code == 404
 
     def test_wrong_secret_header_returns_403(self):
         with patch.dict(
             os.environ, {"INCIDENT_JOB_CRON_SECRET": "expected-secret"}, clear=False
-        ):
-            with self.assertRaises(HTTPException) as raised:
-                incident_refresh._verify_cron_secret("wrong-secret")
-        self.assertEqual(raised.exception.status_code, 403)
+        ), pytest.raises(HTTPException) as raised:
+            incident_refresh._verify_cron_secret("wrong-secret")
+        assert raised.value.status_code == 403
 
     def test_exact_secret_passes(self):
         with patch.dict(
             os.environ, {"INCIDENT_JOB_CRON_SECRET": "expected-secret"}, clear=False
         ):
-            self.assertIsNone(incident_refresh._verify_cron_secret("expected-secret"))
+            assert incident_refresh._verify_cron_secret("expected-secret") is None
 
     async def test_valid_secret_invokes_the_unconditional_job(self):
         with patch.object(
@@ -45,7 +45,7 @@ class IncidentJobRouterTests(unittest.IsolatedAsyncioTestCase):
         ) as run:
             result = await incident_refresh.incident_refresh()
         run.assert_awaited_once()
-        self.assertEqual(result, {"status": "complete"})
+        assert result == {"status": "complete"}
 
     async def test_failed_result_becomes_503_without_metrics_or_details(self):
         with patch.object(
@@ -58,20 +58,19 @@ class IncidentJobRouterTests(unittest.IsolatedAsyncioTestCase):
                     "coverage": {"current": 0, "partial": 0, "unavailable": 10},
                 }
             ),
-        ) as run:
-            with self.assertRaises(HTTPException) as raised:
-                await incident_refresh.incident_refresh()
+        ) as run, pytest.raises(HTTPException) as raised:
+            await incident_refresh.incident_refresh()
         run.assert_awaited_once()
-        self.assertEqual(raised.exception.status_code, 503)
-        self.assertEqual(raised.exception.detail, "Incident refresh failed")
-        self.assertNotIn("RuntimeError", raised.exception.detail)
-        self.assertNotIn("coverage", raised.exception.detail)
+        assert raised.value.status_code == 503
+        assert raised.value.detail == "Incident refresh failed"
+        assert "RuntimeError" not in raised.value.detail
+        assert "coverage" not in raised.value.detail
 
     def test_router_source_has_no_feature_flag_gating(self):
         source = inspect.getsource(incident_refresh)
-        self.assertNotIn("feature_flags", source)
-        self.assertNotIn("background_grok_worker", source)
-        self.assertNotIn("background_incident_index", source)
+        assert "feature_flags" not in source
+        assert "background_grok_worker" not in source
+        assert "background_incident_index" not in source
 
 
 if __name__ == "__main__":

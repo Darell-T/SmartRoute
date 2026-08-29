@@ -19,6 +19,7 @@ before any scripted tool state is credited.
 from __future__ import annotations
 
 import itertools
+from contextlib import contextmanager
 from unittest.mock import patch
 
 from app.services.agent import candidate_store
@@ -213,17 +214,8 @@ class ExpiredCandidateSetTests(_ModelLedCandidateMixin, _CandidateReferenceBase)
             with self.subTest(mode=mode):
                 await self._case3_with_probe_ordering_sentinel(mode)
 
-    async def _case3_with_probe_ordering_sentinel(self, mode: str) -> None:
-        """Run E2-CASE3 and prove the t4 probe snapshots precede its turn.
-
-        Wraps the snapshot/turn helpers with sequence markers, then checks
-        that the immutable projections handed to the final rejected-present
-        assertion were captured before the final scripted turn. This is a
-        sentinel for the corrected t4 old-candidate probe ordering: if the
-        snapshots were ever taken inline after the turn again, the captured
-        sequence numbers would no longer precede the turn and this fails.
-        """
-
+    @contextmanager
+    def _probe_order_trackers(self):
         seq = itertools.count()
         snapshot_events = []
         record_events = []
@@ -273,12 +265,21 @@ class ExpiredCandidateSetTests(_ModelLedCandidateMixin, _CandidateReferenceBase)
         self._scripted_turn = tracked_turn
         self._rejected_present_turn = tracked_probe
         try:
-            await self.case3_expired_recovery(mode)
+            yield snapshot_events, record_events, turn_events, probe_events
         finally:
             self._snapshot_session = session_snapshot
             self._snapshot_record = record_snapshot
             self._scripted_turn = scripted_turn
             self._rejected_present_turn = rejected_present
+
+    async def _case3_with_probe_ordering_sentinel(self, mode: str) -> None:
+        with self._probe_order_trackers() as (
+            snapshot_events,
+            record_events,
+            turn_events,
+            probe_events,
+        ):
+            await self.case3_expired_recovery(mode)
         assert len(probe_events) >= 2, f"{mode} rejected probes recorded"
         final_probe = probe_events[-1]
         assert final_probe["session"], f"{mode} final rejected-present session snapshot precedes its turn"

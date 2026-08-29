@@ -7,11 +7,12 @@ import time
 import types
 import unittest
 
+import pytest
 from app.services.agent import events as agent_events
 from app.services.agent.model import policy as agent_policy
-from app.services.agent.turn.tool_round import execute_tool_round
 from app.services.agent.tools import ToolSpec
 from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.turn.tool_round import execute_tool_round
 
 
 def _block() -> types.SimpleNamespace:
@@ -51,6 +52,7 @@ class _Ledger:
         return f"{name}:{tool_input.get('destination', '')}"
 
     async def execute(self, name, tool_input, ctx, *, deadline_monotonic):
+        del name, deadline_monotonic
         return await self._executor(tool_input, ctx)
 
 
@@ -67,8 +69,9 @@ def _registry(executor):
 
 async def _collect_round(executor, *, ctx=None):
     ctx = ctx or ToolContext(session={})
-    items = []
-    async for item in execute_tool_round(
+    items = [
+        item
+        async for item in execute_tool_round(
         [_block()],
         ctx,
         {},
@@ -79,8 +82,8 @@ async def _collect_round(executor, *, ctx=None):
         time.monotonic() + 5,
         _Ledger(executor),
         tool_registry=_registry(executor),
-    ):
-        items.append(item)
+        )
+    ]
     return items, ctx
 
 
@@ -94,16 +97,19 @@ class AgentProgressTransportTests(unittest.IsolatedAsyncioTestCase):
 
         items, ctx = await _collect_round(executor)
         event_types = [getattr(item, "type", None) for item in items]
-        self.assertEqual(
-            event_types,
-            ["tool_start", "progress", "progress", "tool_end", None],
-        )
+        assert event_types == [
+            "tool_start",
+            "progress",
+            "progress",
+            "tool_end",
+            None,
+        ]
         progress = [item for item in items if isinstance(item, agent_events.ProgressEvent)]
-        self.assertEqual(
-            [(event.stage, event.status) for event in progress],
-            [("finding_routes", "active"), ("finding_routes", "complete")],
-        )
-        self.assertIsNone(ctx.progress_sink)
+        assert [(event.stage, event.status) for event in progress] == [
+            ("finding_routes", "active"),
+            ("finding_routes", "complete"),
+        ]
+        assert ctx.progress_sink is None
 
     async def test_progress_publisher_preserves_two_leg_cycles_and_drops_only_noise(self):
         async def executor(_tool_input, ctx):
@@ -122,21 +128,21 @@ class AgentProgressTransportTests(unittest.IsolatedAsyncioTestCase):
 
         items, _ = await _collect_round(executor)
         progress = [item for item in items if isinstance(item, agent_events.ProgressEvent)]
-        self.assertEqual(
-            [(event.stage, event.status) for event in progress],
-            [
-                (stage, status)
-                for _leg in range(2)
-                for stage in (
-                    "finding_routes",
-                    "checking_live_conditions",
-                    "comparing_options",
-                )
-                for status in ("active", "complete")
-            ],
+        assert [(event.stage, event.status) for event in progress] == [
+            (stage, status)
+            for _leg in range(2)
+            for stage in (
+                "finding_routes",
+                "checking_live_conditions",
+                "comparing_options",
+            )
+            for status in ("active", "complete")
+        ]
+        assert (progress[6].stage, progress[6].status) == ("finding_routes", "active")
+        assert (progress[-1].stage, progress[-1].status) == (
+            "comparing_options",
+            "complete",
         )
-        self.assertEqual((progress[6].stage, progress[6].status), ("finding_routes", "active"))
-        self.assertEqual((progress[-1].stage, progress[-1].status), ("comparing_options", "complete"))
 
     async def test_cancelled_tool_restores_context_sink(self):
         async def executor(_tool_input, ctx):
@@ -144,9 +150,9 @@ class AgentProgressTransportTests(unittest.IsolatedAsyncioTestCase):
             raise asyncio.CancelledError
 
         ctx = ToolContext(session={})
-        with self.assertRaises(asyncio.CancelledError):
+        with pytest.raises(asyncio.CancelledError):
             await _collect_round(executor, ctx=ctx)
-        self.assertIsNone(ctx.progress_sink)
+        assert ctx.progress_sink is None
 
     async def test_server_owned_refinement_drives_public_discovery(self):
         captured = {}
@@ -180,8 +186,9 @@ class AgentProgressTransportTests(unittest.IsolatedAsyncioTestCase):
                 "candidate_names": [],
             },
         )
-        items = []
-        async for item in execute_tool_round(
+        items = [
+            item
+            async for item in execute_tool_round(
             [_search_block()],
             ctx,
             {},
@@ -193,19 +200,16 @@ class AgentProgressTransportTests(unittest.IsolatedAsyncioTestCase):
             _Ledger(executor),
             tool_registry=registry,
             allowed_tool_names=frozenset({"discover_places"}),
-        ):
-            items.append(item)
+            )
+        ]
 
         start = next(item for item in items if isinstance(item, agent_events.ToolStartEvent))
-        self.assertEqual(
-            start.label,
-            "Searching for pizza across Manhattan and Brooklyn",
-        )
-        self.assertEqual(captured["query"], "pizza")
-        self.assertEqual(
-            captured["scope"],
-            {"kind": "boroughs", "values": ["Manhattan", "Brooklyn"]},
-        )
+        assert start.label == "Searching for pizza across Manhattan and Brooklyn"
+        assert captured["query"] == "pizza"
+        assert captured["scope"] == {
+            "kind": "boroughs",
+            "values": ["Manhattan", "Brooklyn"],
+        }
 
     async def test_presenters_and_completion_do_not_emit_activity_events(self):
         async def executor(_tool_input, _ctx):
@@ -221,8 +225,9 @@ class AgentProgressTransportTests(unittest.IsolatedAsyncioTestCase):
                         timeout_s=5,
                     )
                 }
-                items = []
-                async for item in execute_tool_round(
+                items = [
+                    item
+                    async for item in execute_tool_round(
                     [_terminal_block(name)],
                     ToolContext(session={}),
                     {},
@@ -234,17 +239,15 @@ class AgentProgressTransportTests(unittest.IsolatedAsyncioTestCase):
                     _Ledger(executor),
                     tool_registry=registry,
                     allowed_tool_names=frozenset({name}),
-                ):
-                    items.append(item)
-
-                self.assertFalse(
-                    any(
-                        isinstance(
-                            item,
-                            (agent_events.ToolStartEvent, agent_events.ToolEndEvent),
-                        )
-                        for item in items
                     )
+                ]
+
+                assert not any(
+                    isinstance(
+                        item,
+                        (agent_events.ToolStartEvent, agent_events.ToolEndEvent),
+                    )
+                    for item in items
                 )
 
 
@@ -253,5 +256,6 @@ class ProgressEventTests(unittest.TestCase):
         for stage in ("finding_routes", "checking_live_conditions", "comparing_options"):
             for status in ("active", "complete"):
                 event = agent_events.ProgressEvent(stage=stage, status=status)
-                self.assertEqual(event.to_data(), {"stage": stage, "status": status})
-                self.assertIn(f"event: progress\ndata: {{\"stage\":\"{stage}\"", agent_events.sse_format(event))
+                assert event.to_data() == {"stage": stage, "status": status}
+                needle = f'event: progress\ndata: {{"stage":"{stage}"'
+                assert needle in agent_events.sse_format(event)

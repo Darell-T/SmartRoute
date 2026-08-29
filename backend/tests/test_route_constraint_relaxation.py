@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import unittest
 
-from app.services.agent.model import policy as agent_policy
 from app.services.agent import tool_input_policy
+from app.services.agent.model import policy as agent_policy
 from app.services.trips.preparation.input import normalize_route_ids
 
 
@@ -19,17 +19,11 @@ class PersistedRouteConstraintTests(unittest.TestCase):
             "This prose is not interpreted here", session
         )
 
-        self.assertEqual(exclusions, ("Q", "R"))
-        self.assertEqual(
-            session["slots"]["constraints"]["excluded_route_ids"],
-            ["q", "R", "Q"],
-        )
+        assert exclusions == ("Q", "R")
+        assert session["slots"]["constraints"]["excluded_route_ids"] == ["q", "R", "Q"]
 
     def test_route_id_normalization_remains_bounded_syntax_validation(self) -> None:
-        self.assertEqual(
-            normalize_route_ids(["q", "Q44-SBS", "not a route", "q"]),
-            ("Q", "Q44-SBS"),
-        )
+        assert normalize_route_ids(["q", "Q44-SBS", "not a route", "q"]) == ("Q", "Q44-SBS")
 
 
 class ConstrainedToolInputTests(unittest.TestCase):
@@ -61,8 +55,8 @@ class ConstrainedToolInputTests(unittest.TestCase):
             excluded_route_ids=("Q", "R"),
         )
 
-        self.assertEqual(tool_input["excluded_route_ids"], ["R"])
-        self.assertNotIn("allowed_route_ids", tool_input)
+        assert tool_input["excluded_route_ids"] == ["R"]
+        assert "allowed_route_ids" not in tool_input
 
     def test_explicit_model_allowance_can_clear_persisted_exclusions(self) -> None:
         tool_input = self._constrained(
@@ -70,7 +64,7 @@ class ConstrainedToolInputTests(unittest.TestCase):
             excluded_route_ids=("Q",),
         )
 
-        self.assertEqual(tool_input["excluded_route_ids"], [])
+        assert tool_input["excluded_route_ids"] == []
 
     def test_new_model_exclusion_is_merged_with_persisted_state(self) -> None:
         tool_input = self._constrained(
@@ -78,7 +72,7 @@ class ConstrainedToolInputTests(unittest.TestCase):
             excluded_route_ids=("Q",),
         )
 
-        self.assertEqual(tool_input["excluded_route_ids"], ["Q", "R"])
+        assert tool_input["excluded_route_ids"] == ["Q", "R"]
 
     def test_explicit_mode_allowance_relaxes_persisted_mode(self) -> None:
         tool_input = self._constrained(
@@ -86,23 +80,21 @@ class ConstrainedToolInputTests(unittest.TestCase):
             excluded_modes={"BUS", "RAIL"},
         )
 
-        self.assertEqual(tool_input["exclude_modes"], ["RAIL"])
-        self.assertNotIn("allowed_modes", tool_input)
+        assert tool_input["exclude_modes"] == ["RAIL"]
+        assert "allowed_modes" not in tool_input
 
     def test_required_route_ids_are_preserved_for_backend_validation(self) -> None:
         tool_input = self._constrained(
             {"destination": "Work", "required_route_ids": ["Q"]}
         )
 
-        self.assertEqual(tool_input["required_route_ids"], ["Q"])
+        assert tool_input["required_route_ids"] == ["Q"]
 
     def test_model_arguments_receive_only_server_owned_budget_fields(self) -> None:
         tool_input = self._constrained({"destination": "Work"})
 
-        self.assertEqual(tool_input["max_candidates"], self.policy.max_route_candidates)
-        self.assertEqual(
-            tool_input["include_first_leg_arrivals"], self.policy.optional_enrichment
-        )
+        assert tool_input["max_candidates"] == self.policy.max_route_candidates
+        assert tool_input["include_first_leg_arrivals"] == self.policy.optional_enrichment
 
 
 if __name__ == "__main__":

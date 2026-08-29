@@ -37,14 +37,15 @@ import dataclasses
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
+from app.services import cache
 from app.services.agent import candidate_store
 from app.services.agent import session as session_module
 from app.services.agent import trip_state as trip_state_module
-from app.services.agent.tools.location_resolution import ResolvedPlace
-from app.services.agent.tools._types import ToolResult
-from app.services.agent.tools.route.preparation_adapter import PreparedLeg
 from app.services.agent.public_surface import PUBLIC_TOOL_NAMES
-from app.services import cache
+from app.services.agent.tools._types import ToolResult
+from app.services.agent.tools.location_resolution import ResolvedPlace
+from app.services.agent.tools.route.preparation_adapter import PreparedLeg
+
 from tests._fake_anthropic import reload_agent_loop_module
 
 PUBLIC_TOOL_PROFILE = frozenset(PUBLIC_TOOL_NAMES)
@@ -438,6 +439,63 @@ def text_round(text: str) -> dict:
     return {"text": [text], "stop_reason": "end_turn"}
 
 
+def _turn_prepare_mock(prepare_leg, prepare_legs):
+    if prepare_legs is not None:
+        return AsyncMock(side_effect=prepare_legs)
+    if prepare_leg is not None:
+        return AsyncMock(return_value=prepare_leg)
+    return None
+
+
+def _turn_seam_patchers(
+    *,
+    enrich_mock,
+    arrivals_mock,
+    prepare_mock,
+    fixed_candidate_id,
+    recording_store,
+    mocks,
+):
+    patchers = [
+        patch(
+            "app.services.trips.enrichment._enrich_route",
+            new=enrich_mock,
+        ),
+        patch(
+            "app.services.agent.tools.transit.lookup_arrivals.execute",
+            new=arrivals_mock,
+        ),
+    ]
+    if mocks is not None:
+        patchers.append(
+            patch(
+                "app.services.agent.candidate_store.store_candidate_set",
+                new=recording_store,
+            )
+        )
+    if prepare_mock is not None:
+        patchers.extend(
+            [
+                patch(
+                    "app.services.agent.tools.route.prepare_route_options.prepare_single_leg",
+                    new=prepare_mock,
+                ),
+                patch(
+                    "app.services.agent.tools.route.prepare_route_branches.prepare_single_leg",
+                    new=prepare_mock,
+                ),
+            ]
+        )
+    if fixed_candidate_id is not None:
+        patchers.append(
+            patch(
+                "app.services.agent.candidate_store.new_candidate_id",
+                return_value=fixed_candidate_id,
+            )
+        )
+    return patchers
+
+
 async def run_turn(
     loop,
     *,
@@ -470,12 +528,7 @@ async def run_turn(
 
     loop.client.messages._rounds = list(rounds)
     loop.client.messages.calls = []
-    if prepare_legs is not None:
-        prepare_mock = AsyncMock(side_effect=prepare_legs)
-    elif prepare_leg is not None:
-        prepare_mock = AsyncMock(return_value=prepare_leg)
-    else:
-        prepare_mock = None
+    prepare_mock = _turn_prepare_mock(prepare_leg, prepare_legs)
     enrich_mock = AsyncMock(return_value=None)
     arrivals_mock = AsyncMock(
         return_value=ToolResult(ok=False, error="fixture: no live arrivals")
@@ -484,7 +537,6 @@ async def run_turn(
     stored_set_ids: list[str] = []
 
     def _recording_store(*args, **kwargs):
-        # Run the real store implementation; only observe the returned id.
         set_id = original_store(*args, **kwargs)
         stored_set_ids.append(set_id)
         if mocks is not None:
@@ -496,64 +548,36 @@ async def run_turn(
             )
         return set_id
 
-    patchers = [
-        patch(
-            "app.services.trips.enrichment._enrich_route",
-            new=enrich_mock,
-        ),
-        patch(
-            "app.services.agent.tools.transit.lookup_arrivals.execute",
-            new=arrivals_mock,
-        ),
-    ]
-    if mocks is not None:
-        patchers.append(
-            patch(
-                "app.services.agent.candidate_store.store_candidate_set",
-                new=_recording_store,
-            )
-        )
-    if prepare_mock is not None:
-        patchers.extend(
-            [
-                patch(
-                    "app.services.agent.tools.route.prepare_route_options.prepare_single_leg",
-                    new=prepare_mock,
-                ),
-                patch(
-                    "app.services.agent.tools.route.prepare_route_branches.prepare_single_leg",
-                    new=prepare_mock,
-                ),
-            ]
-        )
-    if fixed_candidate_id is not None:
-        patchers.append(
-            patch(
-                "app.services.agent.candidate_store.new_candidate_id",
-                return_value=fixed_candidate_id,
-            )
-        )
+    patchers = _turn_seam_patchers(
+        enrich_mock=enrich_mock,
+        arrivals_mock=arrivals_mock,
+        prepare_mock=prepare_mock,
+        fixed_candidate_id=fixed_candidate_id,
+        recording_store=_recording_store,
+        mocks=mocks,
+    )
     if mocks is not None:
         mocks["prepare_single_leg"] = prepare_mock
         mocks["enrich_route"] = enrich_mock
         mocks["lookup_arrivals"] = arrivals_mock
         mocks["stored_candidate_set_ids"] = stored_set_ids
-    events: list = []
     for patcher in patchers:
         patcher.start()
     try:
-        async for event in loop.run_agent_turn(
-            session=session,
-            session_id=session_id,
-            turn_id=turn_id,
-            message=message,
-            now_et="2026-08-06T12:00:00-04:00",
-            gtfs=None,
-            origin=origin if origin is not None else {"lat": 40.75, "lng": -73.99},
-            response_presentation=mode,
-            trace=trace,
-        ):
-            events.append(event)
+        events = [
+            event
+            async for event in loop.run_agent_turn(
+                session=session,
+                session_id=session_id,
+                turn_id=turn_id,
+                message=message,
+                now_et="2026-08-06T12:00:00-04:00",
+                gtfs=None,
+                origin=origin if origin is not None else {"lat": 40.75, "lng": -73.99},
+                response_presentation=mode,
+                trace=trace,
+            )
+        ]
     finally:
         for patcher in patchers:
             patcher.stop()
@@ -570,6 +594,7 @@ def new_session() -> tuple[str, dict]:
 
 __all__ = (
     "SeedSnapshot",
+    "_turn_round",
     "all_materially_degraded_leg",
     "clear_caches",
     "insufficient_coverage_leg",
@@ -584,5 +609,4 @@ __all__ = (
     "run_turn",
     "seed_accepted_active_trip",
     "text_round",
-    "_turn_round",
 )

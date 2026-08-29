@@ -12,15 +12,15 @@ ceiling is 24; an explicitly authorized stress pass may raise it with
 ``ANTHROPIC_LIVE_CALL_LIMIT``.
 """
 from __future__ import annotations
+
+import json
 import os
 import sys
 import unittest
-import json
 from pathlib import Path
 from unittest.mock import patch
 
 import anthropic
-
 from app import observability
 from app.services.agent import loop
 from app.services.agent import session as session_module
@@ -166,18 +166,18 @@ def _safe_trace_diagnostics(trace: loop.TurnTrace) -> dict[str, object]:
     }
 
 
-def _assert_safe_passenger_output(test: unittest.TestCase, events: list) -> None:
+def _assert_safe_passenger_output(events: list) -> None:
     text = _passenger_text(events).strip()
-    test.assertTrue(text, "the rider received no conversational prose")
+    assert text, "the rider received no conversational prose"
     lowered = text.casefold()
     for marker in INTERNAL_OUTPUT_MARKERS:
-        test.assertNotIn(marker, lowered)
+        assert marker not in lowered
     paragraphs = [
         " ".join(paragraph.casefold().split())
         for paragraph in text.split("\n\n")
         if len(paragraph.strip()) >= 20
     ]
-    test.assertEqual(len(paragraphs), len(set(paragraphs)))
+    assert len(paragraphs) == len(set(paragraphs))
 
 def _print_transcript(
     *,
@@ -319,7 +319,9 @@ class AnthropicLiveAgentContractMixin:
                 patch.object(loop.budget, "check_session_rate_limit", return_value=True),
                 patch.object(loop.budget, "daily_spend_exceeded", return_value=False),
             ):
-                async for event in loop.run_agent_turn(
+                events = [
+                    event
+                    async for event in loop.run_agent_turn(
                     session=session,
                     session_id=session_id,
                     turn_id=turn_id,
@@ -329,16 +331,16 @@ class AnthropicLiveAgentContractMixin:
                     origin={"lat": 40.6494, "lng": -73.9631},
                     response_presentation="auto",
                     trace=trace,
-                ):
-                    events.append(event)
+                    )
+                ]
         return events, trace
 
     def _assert_completed(self, events: list) -> None:
-        self.assertTrue(events)
-        self.assertEqual(events[-1].type, "done")
-        self.assertEqual(events[-1].terminal_state, "completed")
-        self.assertFalse(any(event.type == "error" for event in events))
-        _assert_safe_passenger_output(self, events)
+        assert events
+        assert events[-1].type == "done"
+        assert events[-1].terminal_state == "completed"
+        assert not any(event.type == "error" for event in events)
+        _assert_safe_passenger_output(events)
 
     def _report(
         self,

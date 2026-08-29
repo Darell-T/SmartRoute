@@ -39,6 +39,7 @@ turns. Reused place fixtures come from ``tests.conversation.conversation_discove
 from __future__ import annotations
 
 from app.services.agent.tools.location_resolution import ResolvedPlace
+
 from tests.conversation.conversation_discovery_fixtures import (
     CONFLICTING_LABEL,
     DISCOVERY_TOOL_PROFILE,
@@ -47,7 +48,10 @@ from tests.conversation.conversation_discovery_fixtures import (
     discovery_leg_for,
     poi_result,
 )
-from tests.conversation.conversation_matrix_harness import discover_search_input, make_leg
+from tests.conversation.conversation_matrix_harness import (
+    discover_search_input,
+    make_leg,
+)
 
 # Exact Batch D1 transcript (mode-identical).
 M1_GET_BARCLAYS = "Get me to Barclays."
@@ -83,7 +87,8 @@ FORBIDDEN_TOOLS = ("plan_trip", "poi_search")
 
 # Turn 1: exactly the canonical route profile is expected.
 TURN1_EXPECTED_PROFILE = ROUTE_TOOL_PROFILE
-TURN1_FORBIDDEN = FORBIDDEN_TOOLS + (
+TURN1_FORBIDDEN = (
+    *FORBIDDEN_TOOLS,
     "search_local_places",
     "web_search",
     "get_place_details",
@@ -98,7 +103,8 @@ TURN1_FORBIDDEN = FORBIDDEN_TOOLS + (
 
 # Turn 2: discovery superset (route profile + search + web).
 TURN2_EXPECTED_PROFILE = DISCOVERY_TOOL_PROFILE
-TURN2_FORBIDDEN = FORBIDDEN_TOOLS + (
+TURN2_FORBIDDEN = (
+    *FORBIDDEN_TOOLS,
     "prepare_route_options",
     "present_route",
     "get_place_details",
@@ -113,7 +119,8 @@ TURN2_FORBIDDEN = FORBIDDEN_TOOLS + (
 )
 
 # Turn 3: comparison question -- no executed tools expected.
-TURN3_FORBIDDEN = FORBIDDEN_TOOLS + (
+TURN3_FORBIDDEN = (
+    *FORBIDDEN_TOOLS,
     "prepare_route_options",
     "present_route",
     "search_local_places",
@@ -128,7 +135,8 @@ TURN3_FORBIDDEN = FORBIDDEN_TOOLS + (
 
 # Turn 4: ordinal-2 waypoint addition through the canonical route profile.
 TURN4_EXPECTED_PROFILE = ROUTE_TOOL_PROFILE
-TURN4_FORBIDDEN = FORBIDDEN_TOOLS + (
+TURN4_FORBIDDEN = (
+    *FORBIDDEN_TOOLS,
     "search_local_places",
     "web_search",
     "transit_snapshot",
@@ -141,7 +149,8 @@ TURN4_FORBIDDEN = FORBIDDEN_TOOLS + (
 
 # Turn 5: waypoint removal -- canonical prepare with explicit empty waypoints.
 TURN5_EXPECTED_PROFILE = ROUTE_TOOL_PROFILE
-TURN5_FORBIDDEN = FORBIDDEN_TOOLS + (
+TURN5_FORBIDDEN = (
+    *FORBIDDEN_TOOLS,
     "search_local_places",
     "get_place_details",
     "web_search",

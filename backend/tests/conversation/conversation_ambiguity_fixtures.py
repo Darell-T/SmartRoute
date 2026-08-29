@@ -25,6 +25,7 @@ clock ``2026-08-06T12:00:00-04:00``.
 from __future__ import annotations
 
 from app.services.agent.tools.route.preparation_adapter import PreparedLeg
+
 from tests.conversation.conversation_matrix_harness import PUBLIC_TOOL_PROFILE, make_leg
 
 # ---------------------------------------------------------------------------
@@ -221,8 +222,8 @@ SCAN_PAYLOAD = {
 }
 
 __all__ = (
-    "ARRIVE_AT_8_LEAVE_AT_9",
     "ARRIVAL_PAST",
+    "ARRIVE_AT_8_LEAVE_AT_9",
     "AVOID_AND_TAKE_Q",
     "AVOID_STAIRS",
     "BOTH_TIMES_MARKER",
@@ -230,8 +231,8 @@ __all__ = (
     "DEPART_LATER_TONIGHT",
     "DEPART_MIDNIGHT_CROSSING",
     "DEPART_PAST",
-    "DEPART_PLUS_30",
     "DEPART_PLUS_5",
+    "DEPART_PLUS_30",
     "DEPART_TOMORROW",
     "DERIVE_FAILED_MARKER",
     "DEST_REQUIRED_MARKER",
@@ -246,10 +247,10 @@ __all__ = (
     "MALFORMED_TIME",
     "NAIVE_TIME",
     "NAV_NO_CONTEXT",
+    "NOW_ET",
     "NO_BUS_ACTUALLY_BUS",
     "NO_TRANSIT_MODES_MARKER",
     "NO_WALKING",
-    "NOW_ET",
     "ORDINAL_NO_CONTEXT",
     "ORIGIN_ONLY_MESSAGES",
     "PLUS_FIVE_PHRASE",

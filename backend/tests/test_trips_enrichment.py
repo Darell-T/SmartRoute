@@ -29,13 +29,8 @@ BUS_LOCATED = [
 ]
 
 
-def _load_trips_module(bus_fetch, *, routes=None):
-    # app.routers.trips now imports route_constraints from the agent tools
-    # package. Import that package under the REAL environment first: re-running
-    # app.services.agent.tools.__init__ under the faked fastapi below would fail
-    # (transit_snapshot -> app.routers.live_feed needs WebSocket/JSONResponse).
-
-    fake_fastapi = types.ModuleType("fastapi")
+def _stub_fastapi():
+    fake = types.ModuleType("fastapi")
 
     class _FakeAPIRouter:
         def post(self, *_args, **_kwargs):
@@ -53,21 +48,27 @@ def _load_trips_module(bus_fetch, *, routes=None):
     class _FakeRequest:
         pass
 
-    fake_fastapi.APIRouter = _FakeAPIRouter
-    fake_fastapi.HTTPException = _FakeHTTPError
-    fake_fastapi.Request = _FakeRequest
+    fake.APIRouter = _FakeAPIRouter
+    fake.HTTPException = _FakeHTTPError
+    fake.Request = _FakeRequest
+    return fake
 
-    fake_pydantic = types.ModuleType("pydantic")
+
+def _stub_pydantic():
+    fake = types.ModuleType("pydantic")
 
     class _FakeBaseModel:
         def __init__(self, **kwargs):
             for key, value in kwargs.items():
                 setattr(self, key, value)
 
-    fake_pydantic.BaseModel = _FakeBaseModel
-    fake_pydantic.ConfigDict = dict
+    fake.BaseModel = _FakeBaseModel
+    fake.ConfigDict = dict
+    return fake
 
-    fake_directions = types.ModuleType("app.services.directions")
+
+def _stub_directions(routes):
+    fake = types.ModuleType("app.services.directions")
 
     def _route_steps():
         subway_step = {
@@ -75,9 +76,6 @@ def _load_trips_module(bus_fetch, *, routes=None):
             "route_id": "G",
             "departure_stop": "Church Av",
             "arrival_stop": "Fort Hamilton Pkwy",
-            # Deterministic selection picks the lowest (minutes, transfers,
-            # index): route 0 at 5 min beats route 1 at 9 min, so the chosen
-            # route stays the subway+bus candidate the enrichment tests assert.
             "route_total_minutes": 5,
         }
         bus_step = {
@@ -111,34 +109,39 @@ def _load_trips_module(bus_fetch, *, routes=None):
             self.provider_status = provider_status
             self.provider_summary = provider_summary
 
-    fake_directions.get_transit_route = _fake_get_transit_route
-    fake_directions.parse_response = _fake_parse_response
-    fake_directions.GoogleRoutesError = _FakeGoogleRoutesError
+    fake.get_transit_route = _fake_get_transit_route
+    fake.parse_response = _fake_parse_response
+    fake.GoogleRoutesError = _FakeGoogleRoutesError
+    return fake
 
-    fake_mta_feed = types.ModuleType("app.services.mta.realtime")
 
-    async def _fake_fetch_service_alerts(*_args, **_kwargs):
+def _stub_mta_feed():
+    fake = types.ModuleType("app.services.mta.realtime")
+
+    async def _empty(*_args, **_kwargs):
         return []
 
-    async def _fake_get_stalled_buses(*_args, **_kwargs):
-        return []
+    fake.fetch_service_alerts = _empty
+    fake.get_stalled_buses = _empty
+    fake.get_stalled_trains = _empty
+    fake.parse_service_alerts = lambda *_args, **_kwargs: []
+    fake.filter_alerts_for_routes = lambda *_args, **_kwargs: []
+    return fake
 
-    async def _fake_get_stalled_trains(*_args, **_kwargs):
-        return []
 
-    fake_mta_feed.fetch_service_alerts = _fake_fetch_service_alerts
-    fake_mta_feed.get_stalled_buses = _fake_get_stalled_buses
-    fake_mta_feed.get_stalled_trains = _fake_get_stalled_trains
-    fake_mta_feed.parse_service_alerts = lambda *_args, **_kwargs: []
-    fake_mta_feed.filter_alerts_for_routes = lambda *_args, **_kwargs: []
+def _stub_bus_routes(bus_fetch):
+    fake = types.ModuleType("app.services.mta.bus")
+    fake.fetch_bus_route_stop_groups = bus_fetch
+    fake.slice_route_stops = lambda parsed, *_rest: list(parsed.get("canned", []))
+    return fake
 
-    fake_bus_routes = types.ModuleType("app.services.mta.bus")
-    fake_bus_routes.fetch_bus_route_stop_groups = bus_fetch
 
-    def _fake_slice_route_stops(parsed, _board_coords, _exit_coords, _max_snap_m=250):
-        return list(parsed.get("canned", []))
-
-    fake_bus_routes.slice_route_stops = _fake_slice_route_stops
+def _load_trips_module(bus_fetch, *, routes=None):
+    fake_fastapi = _stub_fastapi()
+    fake_pydantic = _stub_pydantic()
+    fake_directions = _stub_directions(routes)
+    fake_mta_feed = _stub_mta_feed()
+    fake_bus_routes = _stub_bus_routes(bus_fetch)
 
     with patch.dict(
         sys.modules,
@@ -150,9 +153,6 @@ def _load_trips_module(bus_fetch, *, routes=None):
             "app.services.mta.bus": fake_bus_routes,
         },
     ):
-        # Drop the trips router, its services.trips submodules, and the direct
-        # preparation dependency factory so they re-import fresh inside this
-        # stub context and bind the fake provider modules at module load.
         for _m in [
             k
             for k in list(sys.modules)
@@ -178,8 +178,6 @@ def _load_trips_module(bus_fetch, *, routes=None):
             AdmissionDenied=real_admission.AdmissionDenied,
             principal_from_request=real_admission.principal_from_request,
         )
-        # Expose the injected fakes so focused tests can slow/fail them the
-        # same way the router-level tests used to patch module attributes.
         module._test_fakes = {
             "directions": fake_directions,
             "mta_feed": fake_mta_feed,

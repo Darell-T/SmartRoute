@@ -131,8 +131,8 @@
       "language": "Python",
       "file": "backend/app/services/agent/discovery_store.py",
       "function": "resolve_place_reference",
-      "complexity": 19,
-      "crap": 25.408811,
+      "complexity": 15,
+      "crap": 15.759375,
       "coverage_status": "measured"
     },
     {
@@ -185,8 +185,8 @@
       "language": "Python",
       "file": "backend/app/services/agent/model/output_projection.py",
       "function": "project_model_value",
-      "complexity": 14,
-      "crap": 14.018407,
+      "complexity": 12,
+      "crap": 12.0,
       "coverage_status": "measured"
     },
     {
@@ -194,8 +194,8 @@
       "language": "Python",
       "file": "backend/app/services/agent/model/output_projection.py",
       "function": "project_route_preparation",
-      "complexity": 18,
-      "crap": 19.820444,
+      "complexity": 12,
+      "crap": 12.083333,
       "coverage_status": "measured"
     },
     {
@@ -203,8 +203,8 @@
       "language": "Python",
       "file": "backend/app/services/agent/model/prompt.py",
       "function": "build_turn_context",
-      "complexity": 54,
-      "crap": 54.3645,
+      "complexity": 43,
+      "crap": 43.020291,
       "coverage_status": "measured"
     },
     {
@@ -230,8 +230,8 @@
       "language": "Python",
       "file": "backend/app/services/agent/model/stream.py",
       "function": "_stream_attempt",
-      "complexity": 16,
-      "crap": 19.684362,
+      "complexity": 12,
+      "crap": 12.666667,
       "coverage_status": "measured"
     },
     {
@@ -239,8 +239,8 @@
       "language": "Python",
       "file": "backend/app/services/agent/model/stream.py",
       "function": "_stream_provider_events",
-      "complexity": 19,
-      "crap": 19.003709,
+      "complexity": 17,
+      "crap": 17.008042,
       "coverage_status": "measured"
     },
     {
@@ -258,7 +258,7 @@
       "file": "backend/app/services/agent/model/stream.py",
       "function": "stream_model_call",
       "complexity": 12,
-      "crap": 12.589824,
+      "crap": 12.28125,
       "coverage_status": "measured"
     },
     {
@@ -311,8 +311,8 @@
       "language": "Python",
       "file": "backend/app/services/agent/presented_entity_registry.py",
       "function": "record",
-      "complexity": 30,
-      "crap": 31.41497,
+      "complexity": 26,
+      "crap": 27.424501,
       "coverage_status": "measured"
     },
     {
@@ -320,8 +320,8 @@
       "language": "Python",
       "file": "backend/app/services/agent/presented_entity_registry.py",
       "function": "resolve",
-      "complexity": 42,
-      "crap": 49.610047,
+      "complexity": 36,
+      "crap": 41.437884,
       "coverage_status": "measured"
     },
     {
@@ -329,8 +329,8 @@
       "language": "Python",
       "file": "backend/app/services/agent/presented_entity_registry.py",
       "function": "resolve_description",
-      "complexity": 28,
-      "crap": 28.084656,
+      "complexity": 23,
+      "crap": 23.12915,
       "coverage_status": "measured"
     },
     {
@@ -357,7 +357,7 @@
       "file": "backend/app/services/agent/profile.py",
       "function": "resolve_profile_place",
       "complexity": 19,
-      "crap": 19.208912,
+      "crap": 19.0619,
       "coverage_status": "measured"
     },
     {
@@ -374,8 +374,8 @@
       "language": "Python",
       "file": "backend/app/services/agent/public_surface.py",
       "function": "offered_custom_tools",
-      "complexity": 18,
-      "crap": 21.730388,
+      "complexity": 15,
+      "crap": 15.9216,
       "coverage_status": "measured"
     },
     {
@@ -429,7 +429,7 @@
       "file": "backend/app/services/agent/tool_input_policy.py",
       "function": "goal_error",
       "complexity": 29,
-      "crap": 29.76221,
+      "crap": 29.249185,
       "coverage_status": "measured"
     },
     {
@@ -473,8 +473,8 @@
       "language": "Python",
       "file": "backend/app/services/agent/tools/complete_turn.py",
       "function": "execute",
-      "complexity": 17,
-      "crap": 17.261925,
+      "complexity": 13,
+      "crap": 13.207863,
       "coverage_status": "measured"
     },
     {
@@ -496,15 +496,6 @@
       "coverage_status": "measured"
     },
     {
-      "id": "python:backend/app/services/agent/tools/location_resolution.py:resolve_destination_reference#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/location_resolution.py",
-      "function": "resolve_destination_reference",
-      "complexity": 30,
-      "crap": 31.017253,
-      "coverage_status": "measured"
-    },
-    {
       "id": "python:backend/app/services/agent/tools/location_resolution.py:resolve_discovery_place#0",
       "language": "Python",
       "file": "backend/app/services/agent/tools/location_resolution.py",
@@ -518,8 +509,8 @@
       "language": "Python",
       "file": "backend/app/services/agent/tools/location_resolution.py",
       "function": "resolve_named_place",
-      "complexity": 18,
-      "crap": 25.928435,
+      "complexity": 15,
+      "crap": 23.333333,
       "coverage_status": "measured"
     },
     {
@@ -527,8 +518,8 @@
       "language": "Python",
       "file": "backend/app/services/agent/tools/location_resolution.py",
       "function": "resolve_named_point",
-      "complexity": 13,
-      "crap": 13.0,
+      "complexity": 11,
+      "crap": 11.0,
       "coverage_status": "measured"
     },
     {
@@ -568,24 +559,6 @@
       "coverage_status": "measured"
     },
     {
-      "id": "python:backend/app/services/agent/tools/places/discover_places.py:_matching_continuation_tokens#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/places/discover_places.py",
-      "function": "_matching_continuation_tokens",
-      "complexity": 12,
-      "crap": 12.666667,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/places/discover_places.py:_persist#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/places/discover_places.py",
-      "function": "_persist",
-      "complexity": 28,
-      "crap": 28.150546,
-      "coverage_status": "measured"
-    },
-    {
       "id": "python:backend/app/services/agent/tools/places/discover_places.py:_queue_digest#0",
       "language": "Python",
       "file": "backend/app/services/agent/tools/places/discover_places.py",
@@ -595,39 +568,12 @@
       "coverage_status": "measured"
     },
     {
-      "id": "python:backend/app/services/agent/tools/places/discover_places.py:_search#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/places/discover_places.py",
-      "function": "_search",
-      "complexity": 16,
-      "crap": 16.0,
-      "coverage_status": "measured"
-    },
-    {
       "id": "python:backend/app/services/agent/tools/places/discover_places.py:_verify#0",
       "language": "Python",
       "file": "backend/app/services/agent/tools/places/discover_places.py",
       "function": "_verify",
-      "complexity": 19,
-      "crap": 19.495199,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/places/discover_places.py:validate_request#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/places/discover_places.py",
-      "function": "validate_request",
-      "complexity": 11,
-      "crap": 11.0,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/places/geography.py:normalize_scope#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/places/geography.py",
-      "function": "normalize_scope",
-      "complexity": 21,
-      "crap": 24.528,
+      "complexity": 13,
+      "crap": 13.169,
       "coverage_status": "measured"
     },
     {
@@ -635,8 +581,8 @@
       "language": "Python",
       "file": "backend/app/services/agent/tools/places/place_reference.py",
       "function": "execute",
-      "complexity": 38,
-      "crap": 41.204405,
+      "complexity": 27,
+      "crap": 27.600677,
       "coverage_status": "measured"
     },
     {
@@ -671,8 +617,8 @@
       "language": "Python",
       "file": "backend/app/services/agent/tools/places/present_places.py",
       "function": "_owned_discovery",
-      "complexity": 18,
-      "crap": 18.087006,
+      "complexity": 12,
+      "crap": 12.058528,
       "coverage_status": "measured"
     },
     {
@@ -680,8 +626,8 @@
       "language": "Python",
       "file": "backend/app/services/agent/tools/places/present_places.py",
       "function": "_queue_presentation",
-      "complexity": 22,
-      "crap": 22.418097,
+      "complexity": 14,
+      "crap": 14.0,
       "coverage_status": "measured"
     },
     {
@@ -698,8 +644,8 @@
       "language": "Python",
       "file": "backend/app/services/agent/tools/places/present_places.py",
       "function": "_selected_places",
-      "complexity": 32,
-      "crap": 33.133626,
+      "complexity": 22,
+      "crap": 22.418097,
       "coverage_status": "measured"
     },
     {
@@ -721,30 +667,12 @@
       "coverage_status": "measured"
     },
     {
-      "id": "python:backend/app/services/agent/tools/places/search_local_places.py:_normalize_discovery_place#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/places/search_local_places.py",
-      "function": "_normalize_discovery_place",
-      "complexity": 19,
-      "crap": 19.208912,
-      "coverage_status": "measured"
-    },
-    {
       "id": "python:backend/app/services/agent/tools/places/search_local_places.py:execute#0",
       "language": "Python",
       "file": "backend/app/services/agent/tools/places/search_local_places.py",
       "function": "execute",
       "complexity": 29,
       "crap": 31.28478,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/provider_http.py:fetch_json#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/provider_http.py",
-      "function": "fetch_json",
-      "complexity": 13,
-      "crap": 14.352,
       "coverage_status": "measured"
     },
     {
@@ -950,8 +878,8 @@
       "language": "Python",
       "file": "backend/app/services/agent/tools/route/route_input.py",
       "function": "merge_route_preparation_input",
-      "complexity": 27,
-      "crap": 27.02447,
+      "complexity": 24,
+      "crap": 24.023617,
       "coverage_status": "measured"
     },
     {
@@ -1005,7 +933,7 @@
       "file": "backend/app/services/agent/tools/transit/accessibility_status.py",
       "function": "execute",
       "complexity": 18,
-      "crap": 18.030428,
+      "crap": 18.026629,
       "coverage_status": "measured"
     },
     {
@@ -1040,17 +968,8 @@
       "language": "Python",
       "file": "backend/app/services/agent/tools/transit/check_transit.py",
       "function": "_candidate_direction",
-      "complexity": 33,
-      "crap": 36.377523,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/transit/check_transit.py:_is_unproven_accepted_headsign#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/transit/check_transit.py",
-      "function": "_is_unproven_accepted_headsign",
-      "complexity": 21,
-      "crap": 21.441,
+      "complexity": 19,
+      "crap": 19.13156,
       "coverage_status": "measured"
     },
     {
@@ -1126,21 +1045,12 @@
       "coverage_status": "measured"
     },
     {
-      "id": "python:backend/app/services/agent/tools/transit/evidence.py:_service_row#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/transit/evidence.py",
-      "function": "_service_row",
-      "complexity": 30,
-      "crap": 35.62582,
-      "coverage_status": "measured"
-    },
-    {
       "id": "python:backend/app/services/agent/tools/transit/evidence.py:build_evidence_set#0",
       "language": "Python",
       "file": "backend/app/services/agent/tools/transit/evidence.py",
       "function": "build_evidence_set",
-      "complexity": 77,
-      "crap": 80.898414,
+      "complexity": 17,
+      "crap": 17.0,
       "coverage_status": "measured"
     },
     {
@@ -1166,8 +1076,8 @@
       "language": "Python",
       "file": "backend/app/services/agent/tools/transit/evidence_binding.py",
       "function": "bind_accessibility_target",
-      "complexity": 50,
-      "crap": 78.283283,
+      "complexity": 25,
+      "crap": 34.765625,
       "coverage_status": "measured"
     },
     {
@@ -1175,8 +1085,8 @@
       "language": "Python",
       "file": "backend/app/services/agent/tools/transit/evidence_binding.py",
       "function": "decision_evidence_for_status",
-      "complexity": 32,
-      "crap": 32.46609,
+      "complexity": 19,
+      "crap": 19.016445,
       "coverage_status": "measured"
     },
     {
@@ -1238,8 +1148,8 @@
       "language": "Python",
       "file": "backend/app/services/agent/tools/transit/evidence_projection.py",
       "function": "safe_result",
-      "complexity": 20,
-      "crap": 20.0256,
+      "complexity": 15,
+      "crap": 15.024295,
       "coverage_status": "measured"
     },
     {
@@ -1265,8 +1175,8 @@
       "language": "Python",
       "file": "backend/app/services/agent/tools/transit/lookup_arrivals_bus.py",
       "function": "execute",
-      "complexity": 40,
-      "crap": 60.842662,
+      "complexity": 39,
+      "crap": 58.813556,
       "coverage_status": "measured"
     },
     {
@@ -1292,8 +1202,8 @@
       "language": "Python",
       "file": "backend/app/services/agent/tools/transit/lookup_arrivals_subway.py",
       "function": "execute",
-      "complexity": 52,
-      "crap": 54.531458,
+      "complexity": 16,
+      "crap": 16.125966,
       "coverage_status": "measured"
     },
     {
@@ -1330,15 +1240,6 @@
       "function": "_systemwide_alert_text",
       "complexity": 14,
       "crap": 14.028576,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/transit/present_transit.py:execute#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/transit/present_transit.py",
-      "function": "execute",
-      "complexity": 16,
-      "crap": 18.048,
       "coverage_status": "measured"
     },
     {
@@ -1463,8 +1364,8 @@
       "language": "Python",
       "file": "backend/app/services/agent/turn/contract.py",
       "function": "TurnContract.__post_init__",
-      "complexity": 15,
-      "crap": 15.9216,
+      "complexity": 13,
+      "crap": 13.197113,
       "coverage_status": "measured"
     },
     {
@@ -1508,8 +1409,8 @@
       "language": "Python",
       "file": "backend/app/services/agent/turn/stream.py",
       "function": "resolve_model_iteration",
-      "complexity": 22,
-      "crap": 25.116807,
+      "complexity": 17,
+      "crap": 19.522059,
       "coverage_status": "measured"
     },
     {

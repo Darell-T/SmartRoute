@@ -43,6 +43,7 @@ from __future__ import annotations
 
 from app.services.agent.tools.location_resolution import ResolvedPlace
 from app.services.agent.tools.route.preparation_adapter import PreparedLeg
+
 from tests.conversation.conversation_discovery_fixtures import discovery_leg_for
 from tests.conversation.conversation_matrix_harness import PUBLIC_TOOL_PROFILE, make_leg
 

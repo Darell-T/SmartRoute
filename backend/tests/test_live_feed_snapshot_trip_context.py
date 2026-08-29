@@ -10,7 +10,6 @@ from unittest.mock import patch
 from app.services.live_feed import snapshot as rider_snapshot
 from app.services.live_feed.network_snapshot import NetworkSnapshot
 
-
 TRIP_STOPS = [{
     "stop_id": "Q01N",
     "stop_sequence": 1,
@@ -129,18 +128,18 @@ class SnapshotTripContextMemoryTests(unittest.IsolatedAsyncioTestCase):
 
         # Contract unchanged: terminal/segment enrichment still applies.
         vehicle = result["vehicles"][0]
-        self.assertEqual(vehicle["route_name"], "Q train")
-        self.assertEqual(vehicle["terminal_stop_id"], "Q01N")
-        self.assertEqual(vehicle["terminal_stop_name"], "Canal St")
+        assert vehicle["route_name"] == "Q train"
+        assert vehicle["terminal_stop_id"] == "Q01N"
+        assert vehicle["terminal_stop_name"] == "Canal St"
 
         arrival = next(
             item for item in result["arrivals"] if item["trip_id"] == "trip-2"
         )
-        self.assertEqual(arrival["trip_id"], "trip-2")
-        self.assertEqual(arrival["parent_stop_id"], "Q01")
-        self.assertEqual(arrival["terminal_stop_id"], "Q01N")
-        self.assertEqual(arrival["terminal_stop_name"], "Canal St")
-        self.assertEqual(result["updated_at"], network.updated_at)
+        assert arrival["trip_id"] == "trip-2"
+        assert arrival["parent_stop_id"] == "Q01"
+        assert arrival["terminal_stop_id"] == "Q01N"
+        assert arrival["terminal_stop_name"] == "Canal St"
+        assert result["updated_at"] == network.updated_at
 
     async def test_repeated_builds_from_one_snapshot_are_equivalent(self):
         now = int(time.time())
@@ -172,7 +171,7 @@ class SnapshotTripContextMemoryTests(unittest.IsolatedAsyncioTestCase):
         first = await self._build(StaticLookupGuardGTFS(), network)
         second = await self._build(StaticLookupGuardGTFS(), network)
 
-        self.assertEqual(_without_timing(first), _without_timing(second))
+        assert _without_timing(first) == _without_timing(second)
 
 
 if __name__ == "__main__":

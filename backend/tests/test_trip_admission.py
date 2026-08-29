@@ -3,12 +3,11 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from fastapi import HTTPException
-
+import pytest
 from app.routers import trips
 from app.services import admission
 from app.services.trips.direct_plan import DirectTripError
-
+from fastapi import HTTPException
 
 PRINCIPAL = "v1.test-principal-opaque-123456"
 
@@ -33,18 +32,17 @@ class TripAdmissionTests(unittest.IsolatedAsyncioTestCase):
             "arrival_coords": {"latitude": 40.8, "longitude": -73.95},
             "intermediate_stop_locations": [{"name": "Canal", "lat": 40.72, "lng": -74.0}],
         }
-        self.assertTrue(trips._enrichment_steps_are_bounded([step]))
+        assert trips._enrichment_steps_are_bounded([step])
         for key, value in (("route_total_minutes", -1), ("stop_count", 1.5), ("unknown", True)):
             with self.subTest(key=key):
                 changed = {**step, key: value}
-                self.assertFalse(trips._enrichment_steps_are_bounded([changed]))
+                assert not trips._enrichment_steps_are_bounded([changed])
     async def test_missing_principal_rejects_before_route_provider(self):
         with patch.object(
             trips.direct_plan, "plan_direct_trip", new_callable=AsyncMock
-        ) as plan:
-            with self.assertRaises(HTTPException) as error:
-                await trips.plan_trip(_request(None), _payload())
-        self.assertEqual(error.exception.status_code, 403)
+        ) as plan, pytest.raises(HTTPException) as error:
+            await trips.plan_trip(_request(None), _payload())
+        assert error.value.status_code == 403
         plan.assert_not_awaited()
 
     async def test_admission_denial_rejects_before_route_provider(self):
@@ -55,10 +53,9 @@ class TripAdmissionTests(unittest.IsolatedAsyncioTestCase):
             side_effect=admission.AdmissionDenied(429, "rate_limited", 1),
         ), patch.object(
             trips.direct_plan, "plan_direct_trip", new_callable=AsyncMock
-        ) as plan:
-            with self.assertRaises(HTTPException) as error:
-                await trips.plan_trip(_request(), _payload())
-        self.assertEqual(error.exception.status_code, 429)
+        ) as plan, pytest.raises(HTTPException) as error:
+            await trips.plan_trip(_request(), _payload())
+        assert error.value.status_code == 429
         plan.assert_not_awaited()
 
     async def test_admitted_provider_error_releases_lease_once(self):
@@ -70,9 +67,8 @@ class TripAdmissionTests(unittest.IsolatedAsyncioTestCase):
             "plan_direct_trip",
             new_callable=AsyncMock,
             side_effect=DirectTripError(502, "Upstream routing provider error"),
-        ) as plan:
-            with self.assertRaises(HTTPException):
-                await trips.plan_trip(_request(), _payload())
+        ) as plan, pytest.raises(HTTPException):
+            await trips.plan_trip(_request(), _payload())
         plan.assert_awaited_once()
         release.assert_awaited_once_with(lease)
 
@@ -87,7 +83,6 @@ class TripAdmissionTests(unittest.IsolatedAsyncioTestCase):
             "plan_direct_trip",
             new_callable=AsyncMock,
             side_effect=asyncio.CancelledError,
-        ):
-            with self.assertRaises(asyncio.CancelledError):
-                await trips.plan_trip(_request(), _payload())
+        ), pytest.raises(asyncio.CancelledError):
+            await trips.plan_trip(_request(), _payload())
         release.assert_awaited_once_with(lease)

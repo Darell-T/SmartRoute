@@ -9,6 +9,8 @@ goes through (patch `_http.httpx.AsyncClient`, not the calling tool's own
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from app.services.agent.tools._types import ToolContext
 
 DEFAULT_NOW_ET = "2026-07-15T21:00:00-04:00"
@@ -38,7 +40,7 @@ def recording_get_client(payload, status_code: int = 200):
     request-shape assertions) and returns `payload`/`status_code`."""
 
     class _Client:
-        requests: list[dict] = []
+        requests: ClassVar[list[dict]] = []
 
         def __init__(self, *args, **kwargs):
             pass
@@ -61,7 +63,7 @@ def recording_post_client(payload, status_code: int = 200):
     """Same as `recording_get_client`, for tools that POST (poi_search)."""
 
     class _Client:
-        requests: list[dict] = []
+        requests: ClassVar[list[dict]] = []
 
         def __init__(self, *args, **kwargs):
             pass

@@ -37,8 +37,8 @@ class FindNearestStopsTest(unittest.TestCase):
             radius_m=804.672,
         )
 
-        self.assertEqual([stop["stop_id"] for stop in stops], ["near", "mid"])
-        self.assertTrue(all(stop["distance_m"] <= 804.672 for stop in stops))
+        assert [stop["stop_id"] for stop in stops] == ["near", "mid"]
+        assert all(stop["distance_m"] <= 804.672 for stop in stops)
 
 
 if __name__ == "__main__":

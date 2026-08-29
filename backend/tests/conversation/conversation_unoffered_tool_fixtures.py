@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from app.services.agent.public_surface import INITIAL_TOOL_NAMES
 from app.services.agent.tools import COMBINED_TOOL_REGISTRY
+
 from tests.conversation.conversation_matrix_harness import check_transit_input
 
 # Deterministic messages whose parsed intents own a bounded tool profile.
@@ -114,12 +115,12 @@ def registered_tool_names() -> frozenset[str]:
 
 __all__ = (
     "CHECK_TRANSIT_FACT_INPUT",
-    "DISCOVER_PLACES_INPUT",
     "DISCOVERY_GOALS_INPUT",
     "DISCOVERY_MESSAGE",
     "DISCOVERY_PROFILE",
     "DISCOVERY_READY_PROFILE",
     "DISCOVERY_STATE_VALID_PROFILE",
+    "DISCOVER_PLACES_INPUT",
     "GENERAL_RESPONSE_GOALS_INPUT",
     "GENERAL_RESPONSE_STATE_VALID_PROFILE",
     "INITIAL_TOOL_PROFILE",
@@ -133,14 +134,14 @@ __all__ = (
     "ROUTE_STATE_VALID_PROFILE",
     "SEARCH_LOCAL_PLACES_INPUT",
     "SERVICE_STATUS_GOALS_INPUT",
+    "TRANSIT_FACT_GOALS_INPUT",
+    "TRANSIT_FACT_MESSAGE",
+    "TRANSIT_FACT_TOOL_PROFILE",
     "TRANSIT_QUESTION_MESSAGE",
     "TRANSIT_QUESTION_TOOL_PROFILE",
-    "TRANSIT_FACT_MESSAGE",
-    "TRANSIT_FACT_GOALS_INPUT",
-    "TRANSIT_FACT_TOOL_PROFILE",
     "TRANSIT_READY_PROFILE",
-    "TRANSIT_STATE_VALID_PROFILE",
     "TRANSIT_SNAPSHOT_INPUT",
+    "TRANSIT_STATE_VALID_PROFILE",
     "UNKNOWN_TOOL_INPUT",
     "UNKNOWN_TOOL_NAME",
     "registered_tool_names",

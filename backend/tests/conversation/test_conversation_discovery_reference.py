@@ -22,11 +22,14 @@ OFFERED profile and chain are asserted. Production is not modified here.
 
 from __future__ import annotations
 
-from tests.conversation import conversation_discovery_reference_support as _reference_support
+from tests.conversation import (
+    conversation_discovery_reference_support as _reference_support,
+)
 from tests.conversation import conversation_discovery_support as _discovery_support
-from tests.conversation.conversation_discovery_reference_support import _DiscoveryReferenceBase
+from tests.conversation.conversation_discovery_reference_support import (
+    _DiscoveryReferenceBase,
+)
 from tests.conversation.conversation_matrix_harness import load_agent_loop, policy_model
-
 
 INITIAL_TOOL_PROFILE = frozenset(
     {
@@ -62,6 +65,21 @@ def _goal_for_call(
     if name == "complete_turn":
         return "response", "general_response"
     return None
+
+
+def _declared_call(call: dict, *, selection_only: bool) -> dict:
+    name = str(call.get("name") or "")
+    tool_input = dict(call.get("input") or {})
+    goal = _goal_for_call(name, tool_input, selection_only=selection_only)
+    if goal is None:
+        return {**call, "input": tool_input}
+    key, _kind = goal
+    if name == "complete_turn":
+        tool_input.pop("goal_key", None)
+        tool_input["goal_keys"] = [key]
+    else:
+        tool_input["goal_key"] = key
+    return {**call, "input": tool_input}
 
 
 def _declared_rounds(rounds: list[dict]) -> list[dict]:
@@ -121,21 +139,9 @@ def _declared_rounds(rounds: list[dict]) -> list[dict]:
                 }
             )
             declared = True
-        transformed: list[dict] = []
-        for call in tool_uses:
-            name = str(call.get("name") or "")
-            tool_input = dict(call.get("input") or {})
-            goal = _goal_for_call(
-                name, tool_input, selection_only=selection_only
-            )
-            if goal is not None:
-                key, _kind = goal
-                if name == "complete_turn":
-                    tool_input.pop("goal_key", None)
-                    tool_input["goal_keys"] = [key]
-                else:
-                    tool_input["goal_key"] = key
-            transformed.append({**call, "input": tool_input})
+        transformed: list[dict] = [
+            _declared_call(call, selection_only=selection_only) for call in tool_uses
+        ]
         if not declared:
             transformed.insert(
                 0,
@@ -221,43 +227,20 @@ class DiscoverySelectionRouteTranscriptTests(_DiscoveryReferenceBase):
     def _assert_reference_attempted(self, *, scenario_id: str, mode: str, ev):
         """Prove declaration first, then the state-valid active-set presenter."""
 
-        self.assertEqual(ev.offered, INITIAL_TOOL_PROFILE, scenario_id)
-        self.assertGreaterEqual(
-            len(self.loop.client.messages.calls),
-            2,
-            f"{scenario_id} selection requires a post-declaration model round",
-        )
+        assert ev.offered == INITIAL_TOOL_PROFILE, scenario_id
+        assert len(self.loop.client.messages.calls) >= 2, f"{scenario_id} selection requires a post-declaration model round"
         state_profile = {
             schema["name"] for schema in self.loop.client.messages.calls[1]["tools"]
         }
-        self.assertEqual(
-            state_profile,
-            {"complete_turn", "discover_places", "present_places"},
-            f"{scenario_id} state-valid discovery presenter profile",
-        )
+        assert state_profile == {"complete_turn", "discover_places", "present_places"}, f"{scenario_id} state-valid discovery presenter profile"
         names = [name for name, _input in ev.trace.tool_calls]
-        self.assertEqual(names, ["present_places"], scenario_id)
-        self.assertEqual(
-            ev.trace.tool_calls[0][1]["discovery_set_id"],
-            ev.state["active_discovery_set_id"],
-            f"{scenario_id} presenter uses the owned discovery set",
-        )
-        self.assertEqual(
-            ev.trace.tool_calls[0][1]["selections"][0]["place_id"],
-            ev.place2["place_id"],
-            f"{scenario_id} presenter uses the opaque ordinal-2 place id",
-        )
+        assert names == ["present_places"], scenario_id
+        assert ev.trace.tool_calls[0][1]["discovery_set_id"] == ev.state["active_discovery_set_id"], f"{scenario_id} presenter uses the owned discovery set"
+        assert ev.trace.tool_calls[0][1]["selections"][0]["place_id"] == ev.place2["place_id"], f"{scenario_id} presenter uses the opaque ordinal-2 place id"
         expected_mode, expected_model = policy_model(self.loop, mode)
-        self.assertEqual(
-            (ev.trace.initial_mode, ev.trace.final_mode),
-            (expected_mode, expected_mode),
-            f"{scenario_id} policy mode",
-        )
-        self.assertEqual(
-            list(ev.models), [expected_model, expected_model],
-            f"{scenario_id} policy models",
-        )
-        self.assertIn("B Pizza", ev.trace.final_text, scenario_id)
+        assert (ev.trace.initial_mode, ev.trace.final_mode) == (expected_mode, expected_mode), f"{scenario_id} policy mode"
+        assert list(ev.models) == [expected_model, expected_model], f"{scenario_id} policy models"
+        assert "B Pizza" in ev.trace.final_text, scenario_id
 
     async def _transcript(self, mode: str, scenario_id: str):
         session_id, session = self._new_session(mode)

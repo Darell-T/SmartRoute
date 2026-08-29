@@ -5,6 +5,7 @@ from __future__ import annotations
 import unittest
 
 from app.services import cache
+
 from tests.test_agent_loop import _AgentLoopHelpers, _load_agent_loop, _transit_input
 
 

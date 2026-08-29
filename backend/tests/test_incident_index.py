@@ -7,10 +7,12 @@ import unittest
 from unittest.mock import patch
 
 import pytest
-
-from app.services.incidents import index as incident_index
-from app.services.incidents.normalization import sanitize_source_records, source_identity_pairs
 from app.services import cache
+from app.services.incidents import index as incident_index
+from app.services.incidents.normalization import (
+    sanitize_source_records,
+    source_identity_pairs,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -179,7 +181,7 @@ def test_invalid_input_state_falls_back_to_unconfirmed():
 
 def test_set_incident_state_rejects_unknown_state():
     incident_id = incident_index.upsert_incident({"affected_stop_ids": ["D4"]})
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="unknown incident state"):
         incident_index.set_incident_state(incident_id, "bogus")
 
 
@@ -504,14 +506,11 @@ class IncidentIndexAsyncLookupTests(unittest.IsolatedAsyncioTestCase):
             coverage_ids=["central-south-brooklyn"],
         )
 
-        self.assertEqual(async_result["lookup_kind"], "index")
-        self.assertEqual(async_result["coverage_status"], "current")
-        self.assertEqual(
-            [item["incident_id"] for item in async_result["incidents"]],
-            [incident_id],
-        )
-        self.assertEqual(async_result["incidents"], sync_result["incidents"])
-        self.assertEqual(async_result["coverage"], sync_result["coverage"])
+        assert async_result["lookup_kind"] == "index"
+        assert async_result["coverage_status"] == "current"
+        assert [item["incident_id"] for item in async_result["incidents"]] == [incident_id]
+        assert async_result["incidents"] == sync_result["incidents"]
+        assert async_result["coverage"] == sync_result["coverage"]
 
     async def test_async_lookup_is_bounded_when_cache_reads_stall(self) -> None:
         def _stalled_batch_read(_keys, **_kwargs):
@@ -520,12 +519,11 @@ class IncidentIndexAsyncLookupTests(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(cache, "cache_get_many", side_effect=_stalled_batch_read), patch.object(
             incident_index, "INCIDENT_LOOKUP_TIMEOUT_S", 0.01
-        ):
-            with self.assertRaises(asyncio.TimeoutError):
-                await incident_index.lookup_incidents_async(stop_ids=["D24"])
+        ), pytest.raises(asyncio.TimeoutError):
+            await incident_index.lookup_incidents_async(stop_ids=["D24"])
 
     async def test_async_lookup_without_tokens_returns_empty_lookup(self) -> None:
         result = await incident_index.lookup_incidents_async()
-        self.assertEqual(result["incidents"], [])
-        self.assertEqual(result["coverage"], [])
-        self.assertEqual(result["coverage_status"], "unscanned")
+        assert result["incidents"] == []
+        assert result["coverage"] == []
+        assert result["coverage_status"] == "unscanned"

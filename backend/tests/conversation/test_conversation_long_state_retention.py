@@ -209,8 +209,7 @@ class H03AutoThirtyTwoTurnTests(_LongStateBase):
     def setUpClass(cls):
         cls.loop = load_h_agent_loop()
 
-    async def test_h03_auto_thirty_two_turn_state_retention(self):
-        session_id, session = self._new_session("h03")
+    async def _h03_through_barclays_destination(self, session, session_id):
         # t1 route planning; t2-t4 status, arrival, explanation (no replan).
         _e, _t, _m, _b, _a, set_a, _card_a = await self._route_turn(
             scenario_id="H-03-t1", session=session, session_id=session_id,
@@ -316,6 +315,9 @@ class H03AutoThirtyTwoTurnTests(_LongStateBase):
         state = trip_state_module.get_trip_state(session)
         assert state["active_discovery_set_id"] == ds1, "H-03 t18 context"
         assert state["selected_place_id"] == pl2, "H-03 t18 context"
+        return set_a
+
+    async def _h03_through_bound_reload(self, session, session_id, set_a):
         # t19-t21 second discovery -> selection -> route (coffee).
         _e, _t, _m, _b, _a, ds2 = await self._discovery_turn(
             scenario_id="H-03-t19", session=session, session_id=session_id,
@@ -429,3 +431,8 @@ class H03AutoThirtyTwoTurnTests(_LongStateBase):
         assert state["active_discovery_set_id"] == ds2, "H-03 reload"
         assert state["selected_place_id"] == pl3, "H-03 reload"
         assert candidate_store.load_candidate_set(set_a, session_id=session_id)["presented"], "H-03 old sets stay consumed historical records"
+
+    async def test_h03_auto_thirty_two_turn_state_retention(self):
+        session_id, session = self._new_session("h03")
+        set_a = await self._h03_through_barclays_destination(session, session_id)
+        await self._h03_through_bound_reload(session, session_id, set_a)
