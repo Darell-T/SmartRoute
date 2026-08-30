@@ -67,6 +67,87 @@ def mock_trip_copy(
     )
 
 
+def _mock_itinerary(
+    *,
+    turn_id: str,
+    origin_label: str,
+    destination_label: str,
+    eta_minutes: int,
+    lines: list[str],
+) -> dict:
+    """Build a canonical seconds-based itinerary for the preview route card.
+
+    The frontend renders a route card only when the canonical itinerary carries
+    an id, a finite total duration, and a transfer count, so the preview must
+    supply the same shape as real route preparation rather than a summary alone.
+    """
+    total_seconds = max(60, int(eta_minutes) * 60)
+    transfer_count = max(0, len(lines) - 1)
+    final_walk_seconds = 180
+    per_transfer_seconds = 120
+    ride_budget = total_seconds - final_walk_seconds - transfer_count * per_transfer_seconds
+    ride_each = max(60, ride_budget // max(1, len(lines)))
+
+    legs: list[dict] = []
+    board = "Your nearest station"
+    for index, line in enumerate(lines):
+        is_last = index == len(lines) - 1
+        alight = f"Stop near {destination_label}" if is_last else "Transfer station"
+        legs.append(
+            {
+                "mode": "SUBWAY",
+                "service_id": line,
+                "board": board,
+                "alight": alight,
+                "stop_count": 6,
+                "ride_seconds": ride_each,
+            }
+        )
+        if not is_last:
+            next_line = lines[index + 1]
+            legs.append(
+                {
+                    "mode": "WALK",
+                    "board": alight,
+                    "alight": alight,
+                    "walk_seconds": per_transfer_seconds,
+                    "transfer_kind": "same_station",
+                    "transfer_semantics": {
+                        "kind": "same_station",
+                        "to_route_id": next_line,
+                        "from_station_label": alight,
+                        "to_station_label": alight,
+                        "street_walking_seconds": 0,
+                        "in_station_transfer_seconds": per_transfer_seconds,
+                        "total_seconds": per_transfer_seconds,
+                        "fragment_count": 1,
+                        "accessibility": "unknown",
+                    },
+                }
+            )
+            board = alight
+
+    legs.append(
+        {
+            "mode": "WALK",
+            "board": f"Stop near {destination_label}",
+            "alight": destination_label,
+            "walk_seconds": final_walk_seconds,
+        }
+    )
+
+    return {
+        "itinerary_id": f"mock-itinerary-{turn_id}",
+        "total_duration_seconds": total_seconds,
+        "total_walk_seconds": final_walk_seconds,
+        "transfer_count": transfer_count,
+        "origin": {"display_name": origin_label},
+        "destination": {"display_name": destination_label},
+        "legs": legs,
+        "data_basis": "preview",
+    }
+
+
 def _mock_token_chunks(text: str) -> list[str]:
     words = text.split(" ")
     return [
@@ -143,6 +224,13 @@ async def stream_mock_turn(
         },
         route=[],
         alerts=[],
+        itinerary=_mock_itinerary(
+            turn_id=turn_id,
+            origin_label=mock_origin["label"],
+            destination_label=destination["label"],
+            eta_minutes=eta_minutes,
+            lines=lines,
+        ),
     )
     yield route_card
     session_module.add_visible_events(session, [route_card])
