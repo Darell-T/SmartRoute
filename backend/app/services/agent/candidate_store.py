@@ -46,6 +46,49 @@ def _key(candidate_set_id: str) -> str:
     return f"{CANDIDATE_SET_PREFIX}{candidate_set_id}"
 
 
+def _optional_text(value: object) -> str | None:
+    return str(value or "").strip() or None
+
+
+def _candidate_set_evidence(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "parsed_routes": payload.get("parsed_routes") or [],
+        "scored": payload.get("scored") or [],
+        "relevant_alerts": payload.get("relevant_alerts") or [],
+        "incidents": payload.get("incidents") or [],
+        "event_evidence_status": payload.get("event_evidence_status") or "not_required",
+        "event_impacts": payload.get("event_impacts") or [],
+        "event_failures": payload.get("event_failures") or [],
+    }
+
+
+def _candidate_set_coverage(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "crowd_search_metadata": payload.get("crowd_search_metadata") or {},
+        "incident_scan_metadata": payload.get("incident_scan_metadata") or {},
+        "evidence_envelopes": payload.get("evidence_envelopes") or {},
+        "candidate_evidence": payload.get("candidate_evidence") or [],
+        "branch_coverage": payload.get("branch_coverage") or [],
+        "collect_crowd_evidence": bool(payload.get("collect_crowd_evidence")),
+        "evidence_coverage": payload.get("evidence_coverage") or {},
+        "first_leg_arrival_context": payload.get("first_leg_arrival_context"),
+    }
+
+
+def _candidate_set_constraints(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "excluded": list(payload.get("excluded") or []),
+        "excluded_route_ids": list(payload.get("excluded_route_ids") or []),
+        "timings": payload.get("timings") or {},
+        "route_status": str(payload.get("route_status") or "good"),
+        "hard_constraints": payload.get("hard_constraints") or {},
+        "candidate_kind": str(payload.get("candidate_kind") or "single_leg"),
+        "aggregate_segments": payload.get("aggregate_segments") or [],
+        "scenario_mode": str(payload.get("scenario_mode") or "active"),
+        "waypoints": list(payload.get("waypoints") or [])[:3],
+    }
+
+
 def store_candidate_set(
     *,
     session_id: str,
@@ -62,23 +105,23 @@ def store_candidate_set(
         "candidate_set_id": set_id,
         "session_id": session_id,
         "created_at": now,
-        "expires_at": now + max(30, int(ttl_seconds)),
+        "expires_at": now + ttl,
         "presented": False,
         "selected_candidate_id": None,
         "presentation_reserved_at": None,
         "tool_input": payload.get("tool_input") or {},
-        "discovery_set_id": str(payload.get("discovery_set_id") or "").strip() or None,
-        "destination_discovery_set_id": (
-            str(payload.get("destination_discovery_set_id") or "").strip() or None
+        "discovery_set_id": _optional_text(payload.get("discovery_set_id")),
+        "destination_discovery_set_id": _optional_text(
+            payload.get("destination_discovery_set_id")
         ),
-        "waypoint_discovery_set_id": (
-            str(payload.get("waypoint_discovery_set_id") or "").strip() or None
+        "waypoint_discovery_set_id": _optional_text(
+            payload.get("waypoint_discovery_set_id")
         ),
-        "destination_place_id": str(payload.get("destination_place_id") or "").strip() or None,
+        "destination_place_id": _optional_text(payload.get("destination_place_id")),
         "destination_place_ids": [
-            str(place_id).strip()
-            for place_id in payload.get("destination_place_ids") or []
-            if str(place_id or "").strip()
+            str(item).strip()
+            for item in payload.get("destination_place_ids") or []
+            if str(item or "").strip()
         ],
         "destination_selection_mode": str(
             payload.get("destination_selection_mode") or "single"
@@ -89,31 +132,10 @@ def store_candidate_set(
         "destination_place": payload.get("destination_place"),
         "departure_time": payload.get("departure_time"),
         "arrival_by": payload.get("arrival_by"),
-        "excluded": list(payload.get("excluded") or []),
-        "excluded_route_ids": list(payload.get("excluded_route_ids") or []),
-        "parsed_routes": payload.get("parsed_routes") or [],
-        "scored": payload.get("scored") or [],
-        "relevant_alerts": payload.get("relevant_alerts") or [],
-        "incidents": payload.get("incidents") or [],
-        "event_evidence_status": payload.get("event_evidence_status") or "not_required",
-        "event_impacts": payload.get("event_impacts") or [],
-        "event_failures": payload.get("event_failures") or [],
-        "crowd_search_metadata": payload.get("crowd_search_metadata") or {},
-        "incident_scan_metadata": payload.get("incident_scan_metadata") or {},
-        "evidence_envelopes": payload.get("evidence_envelopes") or {},
-        "candidate_evidence": payload.get("candidate_evidence") or [],
-        "branch_coverage": payload.get("branch_coverage") or [],
-        "collect_crowd_evidence": bool(payload.get("collect_crowd_evidence")),
+        **_candidate_set_evidence(payload),
+        **_candidate_set_coverage(payload),
         "candidates": candidates,
-        "evidence_coverage": payload.get("evidence_coverage") or {},
-        "first_leg_arrival_context": payload.get("first_leg_arrival_context"),
-        "timings": payload.get("timings") or {},
-        "route_status": str(payload.get("route_status") or "good"),
-        "hard_constraints": payload.get("hard_constraints") or {},
-        "candidate_kind": str(payload.get("candidate_kind") or "single_leg"),
-        "aggregate_segments": payload.get("aggregate_segments") or [],
-        "scenario_mode": str(payload.get("scenario_mode") or "active"),
-        "waypoints": list(payload.get("waypoints") or [])[:3],
+        **_candidate_set_constraints(payload),
     }
     cache.cache_set(
         _key(set_id),
@@ -132,17 +154,7 @@ def load_candidate_set(candidate_set_id: str, *, session_id: str) -> dict[str, A
     raw = cache.cache_get(_key(candidate_set_id), fail_open=True)
     if raw is None:
         return None
-    record = _decode_record(raw)
-    if not isinstance(record, dict):
-        return None
-    if str(record.get("session_id") or "") != session_id:
-        return None
-    try:
-        expired = float(record.get("expires_at") or 0) < time.time()
-    except (TypeError, ValueError):
-        expired = True
-    if expired:
-        return None
+    record, _error = _admit_watched_record(raw, session_id)
     return record
 
 
@@ -163,6 +175,56 @@ def get_candidate(
     return record, None, "candidate id is unknown for this set"
 
 
+def _service_conditions(digest: dict[str, Any]) -> dict[str, bool]:
+    alerts = digest.get("official_service_impacts") or []
+    events = digest.get("event_or_crowd_impacts") or []
+    return {
+        "official_service_impact": any(
+            is_material_service_alert(alert) for alert in alerts
+        ),
+        "official_service_change": any(
+            isinstance(alert, dict) and alert.get("material_disruption") is False
+            for alert in alerts
+        ),
+        "confirmed_incident": bool(digest.get("confirmed_incident_impacts")),
+        "possible_service_signal": bool(digest.get("unconfirmed_material_claims")),
+        "potential_event_risk": any(isinstance(impact, dict) for impact in events),
+    }
+
+
+def _timing_metrics(digest: dict[str, Any]) -> dict[str, int | float]:
+    return {
+        key: value
+        for key in ("duration_minutes", "walking_minutes", "transfers")
+        if (value := _finite_metric(digest.get(key))) is not None
+    }
+
+
+def _comparison_option(
+    entry: object, selected_candidate_id: str
+) -> dict[str, Any] | None:
+    if not isinstance(entry, dict):
+        return None
+    digest = entry.get("digest")
+    if not isinstance(digest, dict):
+        return None
+    is_selected = str(entry.get("candidate_id") or "") == selected_candidate_id
+    return {
+        "selected": is_selected,
+        "destination": str(digest.get("destination_name") or "") or None,
+        "lines": [
+            str(line).strip()
+            for line in digest.get("transit_lines") or []
+            if str(line).strip()
+        ],
+        **_timing_metrics(digest),
+        "service_conditions": _service_conditions(digest),
+        "official_alerts": _official_alert_comparison(
+            digest.get("official_service_impacts")
+        ),
+    }
+
+
 def accepted_route_comparison(
     record: dict[str, Any], selected_candidate_id: str
 ) -> dict[str, Any] | None:
@@ -171,52 +233,11 @@ def accepted_route_comparison(
     options: list[dict[str, Any]] = []
     selected_found = False
     for entry in record.get("candidates") or []:
-        if not isinstance(entry, dict):
+        option = _comparison_option(entry, selected_candidate_id)
+        if option is None:
             continue
-        digest = entry.get("digest")
-        if not isinstance(digest, dict):
-            continue
-        is_selected = str(entry.get("candidate_id") or "") == selected_candidate_id
-        selected_found = selected_found or is_selected
-        timing = {
-            key: value
-            for key in ("duration_minutes", "walking_minutes", "transfers")
-            if (value := _finite_metric(digest.get(key))) is not None
-        }
-        official_alerts = _official_alert_comparison(
-            digest.get("official_service_impacts")
-        )
-        conditions = {
-            "official_service_impact": any(
-                is_material_service_alert(alert)
-                for alert in digest.get("official_service_impacts") or []
-            ),
-            "official_service_change": any(
-                isinstance(alert, dict)
-                and alert.get("material_disruption") is False
-                for alert in digest.get("official_service_impacts") or []
-            ),
-            "confirmed_incident": bool(digest.get("confirmed_incident_impacts")),
-            "possible_service_signal": bool(digest.get("unconfirmed_material_claims")),
-            "potential_event_risk": any(
-                isinstance(impact, dict)
-                for impact in digest.get("event_or_crowd_impacts") or []
-            ),
-        }
-        options.append(
-            {
-                "selected": is_selected,
-                "destination": str(digest.get("destination_name") or "") or None,
-                "lines": [
-                    str(line).strip()
-                    for line in digest.get("transit_lines") or []
-                    if str(line).strip()
-                ],
-                **timing,
-                "service_conditions": conditions,
-                "official_alerts": official_alerts,
-            }
-        )
+        selected_found = selected_found or option["selected"]
+        options.append(option)
     if not selected_found:
         return None
     return {"options": options}
@@ -310,6 +331,44 @@ def _mark_presented_memory(
         return None
 
 
+def _admit_watched_record(
+    raw: object, session_id: str
+) -> tuple[dict[str, Any] | None, str | None]:
+    record = _decode_record(raw)
+    if record is None or str(record.get("session_id") or "") != session_id:
+        return None, "candidate set is unknown, expired, or not owned by this session"
+    try:
+        if float(record.get("expires_at") or 0) < time.time():
+            return None, "candidate set is unknown, expired, or not owned by this session"
+    except (TypeError, ValueError):
+        return None, "candidate set expiry is invalid"
+    return record, None
+
+
+def _attempt_watched_presentation(
+    client: Any,
+    key: str,
+    session_id: str,
+    candidate_id: str,
+    ttl_seconds: int,
+) -> str | None | _RedisKeyMissing:
+    with client.pipeline() as pipe:
+        pipe.watch(key)
+        raw = pipe.get(key)
+        if raw is None:
+            return _REDIS_KEY_MISSING
+        record, error = _admit_watched_record(raw, session_id)
+        if error is not None or record is None:
+            return error
+        error = _reserve_record(record, candidate_id)
+        if error:
+            return error
+        pipe.multi()
+        _queue_reserved_record(pipe, key, record, ttl_seconds)
+        pipe.execute()
+        return None
+
+
 def _mark_presented_redis(
     candidate_set_id: str,
     candidate_id: str,
@@ -321,26 +380,9 @@ def _mark_presented_redis(
     key = _key(candidate_set_id)
     for _attempt in range(3):
         try:
-            with client.pipeline() as pipe:
-                pipe.watch(key)
-                raw = pipe.get(key)
-                if raw is None:
-                    return _REDIS_KEY_MISSING
-                record = _decode_record(raw)
-                if record is None or str(record.get("session_id") or "") != session_id:
-                    return "candidate set is unknown, expired, or not owned by this session"
-                try:
-                    if float(record.get("expires_at") or 0) < time.time():
-                        return "candidate set is unknown, expired, or not owned by this session"
-                except (TypeError, ValueError):
-                    return "candidate set expiry is invalid"
-                error = _reserve_record(record, candidate_id)
-                if error:
-                    return error
-                pipe.multi()
-                _queue_reserved_record(pipe, key, record, ttl_seconds)
-                pipe.execute()
-                return None
+            return _attempt_watched_presentation(
+                client, key, session_id, candidate_id, ttl_seconds
+            )
         except WatchError:
             continue
         except RedisError as exc:

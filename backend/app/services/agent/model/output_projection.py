@@ -35,26 +35,7 @@ def project_model_value(value: object) -> object:
     """Copy a payload while removing provider place identity fields."""
 
     if isinstance(value, dict):
-        projected: dict[str, object] = {}
-        for raw_key, raw_value in value.items():
-            key = str(raw_key)
-            if key in _PROVIDER_ID_FIELDS:
-                continue
-            if key in _PLACE_ID_FIELDS:
-                safe = opaque_place_id(raw_value)
-                if safe is not None:
-                    projected[key] = safe
-                continue
-            if key in _PLACE_ID_LIST_FIELDS:
-                if isinstance(raw_value, list):
-                    projected[key] = [
-                        safe
-                        for item in raw_value
-                        if (safe := opaque_place_id(item)) is not None
-                    ]
-                continue
-            projected[key] = project_model_value(raw_value)
-        return projected
+        return _project_mapping(value)
     if isinstance(value, (list, tuple)):
         return [project_model_value(item) for item in value]
     return value
@@ -83,19 +64,11 @@ def project_route_preparation(
         rows = data.get(list_key)
         if not isinstance(rows, list):
             continue
-        projected_rows: list[object] = []
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            row_projection = project_model_value(row)
-            row_id = opaque_place_id(row.get(id_key)) or (
-                destination_ids[0] if len(destination_ids) == 1 else None
-            )
-            row_projection.pop(id_key, None)
-            if row_id is not None:
-                row_projection[id_key] = row_id
-            projected_rows.append(row_projection)
-        projected[list_key] = projected_rows
+        projected[list_key] = [
+            _restore_row_place_id(row, id_key, destination_ids)
+            for row in rows
+            if isinstance(row, dict)
+        ]
 
     return projected
 
@@ -176,6 +149,45 @@ def project_presented_route(data: dict[str, Any]) -> dict[str, Any]:
             if isinstance(candidate, dict)
         ]
     return visible
+
+
+def _project_mapping(value: dict) -> dict:
+    projected: dict[str, object] = {}
+    for raw_key, raw_value in value.items():
+        key = str(raw_key)
+        if key in _PROVIDER_ID_FIELDS:
+            continue
+        if key in _PLACE_ID_FIELDS:
+            safe = opaque_place_id(raw_value)
+            if safe is not None:
+                projected[key] = safe
+            continue
+        if key in _PLACE_ID_LIST_FIELDS:
+            _projected_place_ids(projected, key, raw_value)
+            continue
+        projected[key] = project_model_value(raw_value)
+    return projected
+
+
+def _projected_place_ids(projected: dict, key: str, raw_value: object) -> None:
+    if not isinstance(raw_value, list):
+        return
+    projected[key] = _opaque_ids(raw_value)
+
+
+def _restore_row_place_id(
+    row: dict,
+    id_key: str,
+    destination_ids: list[str],
+) -> dict:
+    row_projection = project_model_value(row)
+    row_id = opaque_place_id(row.get(id_key)) or (
+        destination_ids[0] if len(destination_ids) == 1 else None
+    )
+    row_projection.pop(id_key, None)
+    if row_id is not None:
+        row_projection[id_key] = row_id
+    return row_projection
 
 
 def _input_destination_ids(tool_input: dict[str, Any] | None) -> list[str]:

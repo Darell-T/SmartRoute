@@ -50,13 +50,7 @@ class ReasoningEvent:
         return {"text": self.text}
 
 
-def normalized_source(source: dict[str, str]) -> dict[str, str] | None:
-    """Return one safe HTTPS attribution record from an untrusted boundary."""
-
-    title = str(source.get("title") or "").strip()
-    raw_url = str(source.get("url") or "").strip()
-    if not title or len(title) > 100 or not raw_url or len(raw_url) > 2048:
-        return None
+def _trusted_https_url(raw_url: str) -> str | None:
     try:
         parsed = urlsplit(raw_url)
         port = parsed.port
@@ -71,7 +65,19 @@ def normalized_source(source: dict[str, str]) -> dict[str, str] | None:
         or parsed.password is not None
     ):
         return None
-    url = urlunsplit(("https", host, parsed.path, parsed.query, ""))
+    return urlunsplit(("https", host, parsed.path, parsed.query, ""))
+
+
+def normalized_source(source: dict[str, str]) -> dict[str, str] | None:
+    """Return one safe HTTPS attribution record from an untrusted boundary."""
+
+    title = str(source.get("title") or "").strip()
+    raw_url = str(source.get("url") or "").strip()
+    if not title or len(title) > 100 or not raw_url or len(raw_url) > 2048:
+        return None
+    url = _trusted_https_url(raw_url)
+    if url is None:
+        return None
     return {"title": title, "url": url}
 
 

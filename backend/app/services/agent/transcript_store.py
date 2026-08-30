@@ -101,6 +101,41 @@ def append_entry(session: dict, entry: dict) -> None:
         history.append(dict(entry))
 
 
+def _record_route_card(transcript: dict, payload: dict) -> None:
+    cards = transcript.setdefault("route_cards", [])
+    if not any(card.get("card_id") == payload.get("card_id") for card in cards):
+        cards.append(payload)
+
+
+def _record_arrival_card(transcript: dict, payload: dict) -> None:
+    cards = transcript.setdefault("arrival_cards", [])
+    identity = payload.get("turn_id"), payload.get("route_id")
+    if not any(
+        (card.get("turn_id"), card.get("route_id")) == identity
+        for card in cards
+    ):
+        cards.append(payload)
+
+
+def _record_sources(transcript: dict, event: object, payload: dict) -> None:
+    turn_id = str(getattr(event, "turn_id", "") or "").strip()
+    entries = _valid_source_entries(transcript.get("sources"))
+    transcript["sources"] = entries
+    existing = next(
+        (entry for entry in entries if entry.get("turn_id") == turn_id),
+        None,
+    )
+    if existing is None:
+        entries.append({"turn_id": turn_id, "sources": payload["sources"]})
+        return
+    merged = [*existing.get("sources", []), *payload["sources"]]
+    validated = agent_events.SourcesEvent(
+        turn_id=turn_id,
+        sources=tuple(merged),
+    )
+    existing["sources"] = validated.to_data()["sources"]
+
+
 def add_visible_events(session: dict, events: list) -> None:
     transcript = ensure(session)
     for event in events:
@@ -111,34 +146,11 @@ def add_visible_events(session: dict, events: list) -> None:
             else None
         )
         if event_type == "route_card" and payload is not None:
-            cards = transcript.setdefault("route_cards", [])
-            if not any(card.get("card_id") == payload.get("card_id") for card in cards):
-                cards.append(payload)
+            _record_route_card(transcript, payload)
         elif event_type == "arrival_card" and payload is not None:
-            cards = transcript.setdefault("arrival_cards", [])
-            identity = payload.get("turn_id"), payload.get("route_id")
-            if not any(
-                (card.get("turn_id"), card.get("route_id")) == identity
-                for card in cards
-            ):
-                cards.append(payload)
+            _record_arrival_card(transcript, payload)
         elif event_type == "sources" and payload is not None:
-            turn_id = str(getattr(event, "turn_id", "") or "").strip()
-            entries = _valid_source_entries(transcript.get("sources"))
-            transcript["sources"] = entries
-            existing = next(
-                (entry for entry in entries if entry.get("turn_id") == turn_id),
-                None,
-            )
-            if existing is None:
-                entries.append({"turn_id": turn_id, "sources": payload["sources"]})
-            else:
-                merged = [*existing.get("sources", []), *payload["sources"]]
-                validated = agent_events.SourcesEvent(
-                    turn_id=turn_id,
-                    sources=tuple(merged),
-                )
-                existing["sources"] = validated.to_data()["sources"]
+            _record_sources(transcript, event, payload)
 
 
 def snapshot(session: dict) -> dict:
@@ -169,11 +181,7 @@ def _valid_source_entries(value: object) -> list[dict]:
     return entries
 
 
-def active_accepted_route_card(session: object) -> dict | None:
-    """Return the exact accepted route card only when transcript ownership aligns."""
-
-    if not isinstance(session, dict):
-        return None
+def _accepted_trip_identity(session: dict) -> tuple[str, dict] | None:
     active = session.get("active_trip")
     if not isinstance(active, dict):
         return None
@@ -187,11 +195,11 @@ def active_accepted_route_card(session: object) -> dict | None:
         or not itinerary.get("legs")
     ):
         return None
-    transcript = session.get(SESSION_FIELD)
-    if (
-        not isinstance(transcript, dict)
-        or transcript.get("v") != TRANSCRIPT_SCHEMA_VERSION
-    ):
+    return card_id, itinerary
+
+
+def _owned_route_card(transcript: dict, card_id: str) -> dict | None:
+    if transcript.get("v") != TRANSCRIPT_SCHEMA_VERSION:
         return None
     cards = transcript.get("route_cards")
     if not isinstance(cards, list):
@@ -204,20 +212,43 @@ def active_accepted_route_card(session: object) -> dict | None:
     if len(matches) != 1:
         return None
     card = matches[0]
-    if (
-        card.get("role") != "recommended"
-        or not all(isinstance(card.get(key), dict) for key in ("origin", "destination", "summary"))
-        or not isinstance(card.get("route"), list)
-        or not isinstance(card.get("alerts"), list)
-    ):
+    owned_shape = (
+        card.get("role") == "recommended",
+        isinstance(card.get("origin"), dict),
+        isinstance(card.get("destination"), dict),
+        isinstance(card.get("summary"), dict),
+        isinstance(card.get("route"), list),
+        isinstance(card.get("alerts"), list),
+    )
+    if not all(owned_shape):
         return None
+    return card
+
+
+def _card_matches_itinerary(card: dict, itinerary: dict) -> bool:
     transcript_itinerary = card.get("itinerary")
-    if (
-        not isinstance(transcript_itinerary, dict)
-        or not isinstance(transcript_itinerary.get("legs"), list)
-        or not transcript_itinerary.get("legs")
-        or transcript_itinerary != itinerary
-    ):
+    return (
+        isinstance(transcript_itinerary, dict)
+        and isinstance(transcript_itinerary.get("legs"), list)
+        and bool(transcript_itinerary.get("legs"))
+        and transcript_itinerary == itinerary
+    )
+
+
+def active_accepted_route_card(session: object) -> dict | None:
+    """Return the accepted route card only when transcript ownership aligns."""
+
+    if not isinstance(session, dict):
+        return None
+    identity = _accepted_trip_identity(session)
+    if identity is None:
+        return None
+    transcript = session.get(SESSION_FIELD)
+    if not isinstance(transcript, dict):
+        return None
+    card_id, itinerary = identity
+    card = _owned_route_card(transcript, card_id)
+    if card is None or not _card_matches_itinerary(card, itinerary):
         return None
     return deepcopy(card)
 
@@ -277,6 +308,41 @@ def _turn_bytes(turn: list[dict]) -> int:
     return len(payload)
 
 
+def _priority_turn_indexes(
+    older_turns: list[list[dict]], query_terms: set[str]
+) -> list[int]:
+    scored = []
+    for index, turn in enumerate(older_turns):
+        content = " ".join(str(entry.get("text") or "") for entry in turn)
+        scored.append((len(query_terms & _terms(content)), index))
+    priority = [0]
+    priority.extend(range(max(0, len(older_turns) - 2), len(older_turns)))
+    priority.extend(
+        index for overlap, index in sorted(scored, reverse=True) if overlap
+    )
+    return priority
+
+
+def _bounded_earlier_turns(
+    older_turns: list[list[dict]], priority: list[int]
+) -> list[dict]:
+    selected: set[int] = set()
+    used_bytes = 0
+    for index in priority:
+        if index in selected or len(selected) >= MAX_EARLIER_TURNS:
+            continue
+        turn_bytes = _turn_bytes(older_turns[index])
+        if used_bytes + turn_bytes > MAX_EARLIER_CONTEXT_BYTES:
+            continue
+        selected.add(index)
+        used_bytes += turn_bytes
+    return [
+        entry
+        for index in sorted(selected)
+        for entry in older_turns[index]
+    ]
+
+
 def project_model_history(
     transcript_history: list[dict],
     recent_history: list[dict],
@@ -288,33 +354,8 @@ def project_model_history(
     older_turns = _turns(_older_history(full, recent))
     if not older_turns:
         return recent_history
-
-    query_terms = _terms(current_message)
-    scored = []
-    for index, turn in enumerate(older_turns):
-        content = " ".join(str(entry.get("text") or "") for entry in turn)
-        scored.append((len(query_terms & _terms(content)), index))
-
-    priority = [0]
-    priority.extend(range(max(0, len(older_turns) - 2), len(older_turns)))
-    priority.extend(index for overlap, index in sorted(scored, reverse=True) if overlap)
-
-    selected: set[int] = set()
-    used_bytes = 0
-    for index in priority:
-        if index in selected or len(selected) >= MAX_EARLIER_TURNS:
-            continue
-        turn_bytes = _turn_bytes(older_turns[index])
-        if used_bytes + turn_bytes > MAX_EARLIER_CONTEXT_BYTES:
-            continue
-        selected.add(index)
-        used_bytes += turn_bytes
-
-    earlier = [
-        entry
-        for index in sorted(selected)
-        for entry in older_turns[index]
-    ]
+    priority = _priority_turn_indexes(older_turns, _terms(current_message))
+    earlier = _bounded_earlier_turns(older_turns, priority)
     return earlier + list(recent_history)
 
 

@@ -87,6 +87,37 @@ class OutcomeGoal:
         object.__setattr__(self, "depends_on", dependencies)
 
 
+def _admit_goal_sequence(goals: object) -> tuple[OutcomeGoal, ...]:
+    if isinstance(goals, (str, bytes)) or not isinstance(goals, Sequence):
+        raise ContractValidationError("goals must be an array")
+    if not goals:
+        raise ContractValidationError("at least one goal is required")
+    if len(goals) > MAX_GOALS:
+        raise ContractValidationError(f"at most {MAX_GOALS} goals are allowed")
+    return tuple(goals)
+
+
+def _validate_goal_graph(goals: Sequence[OutcomeGoal]) -> None:
+    folded = [goal.goal_key.casefold() for goal in goals]
+    if len(set(folded)) != len(folded):
+        raise ContractValidationError("goal_key values must be unique")
+    keys = {goal.goal_key for goal in goals}
+    unknown = next(
+        (goal for goal in goals if set(goal.depends_on) - keys),
+        None,
+    )
+    if unknown:
+        raise ContractValidationError(
+            f"goal {unknown.goal_key!r} depends on unknown goal"
+        )
+    try:
+        TopologicalSorter(
+            {goal.goal_key: goal.depends_on for goal in goals}
+        ).prepare()
+    except CycleError as exc:
+        raise ContractValidationError("goal dependencies must be acyclic") from exc
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class TurnContract:
     """Immutable, validated model declaration for a single turn."""
@@ -94,31 +125,8 @@ class TurnContract:
     goals: tuple[OutcomeGoal, ...]
 
     def __post_init__(self) -> None:
-        if isinstance(self.goals, (str, bytes)) or not isinstance(self.goals, Sequence):
-            raise ContractValidationError("goals must be an array")
-        if not self.goals:
-            raise ContractValidationError("at least one goal is required")
-        if len(self.goals) > MAX_GOALS:
-            raise ContractValidationError(f"at most {MAX_GOALS} goals are allowed")
-        goals = tuple(self.goals)
-        folded = [goal.goal_key.casefold() for goal in goals]
-        if len(set(folded)) != len(folded):
-            raise ContractValidationError("goal_key values must be unique")
-        keys = {goal.goal_key for goal in goals}
-        unknown = next(
-            (goal for goal in goals if set(goal.depends_on) - keys),
-            None,
-        )
-        if unknown:
-            raise ContractValidationError(
-                f"goal {unknown.goal_key!r} depends on unknown goal"
-            )
-        try:
-            TopologicalSorter(
-                {goal.goal_key: goal.depends_on for goal in goals}
-            ).prepare()
-        except CycleError as exc:
-            raise ContractValidationError("goal dependencies must be acyclic") from exc
+        goals = _admit_goal_sequence(self.goals)
+        _validate_goal_graph(goals)
         object.__setattr__(self, "goals", goals)
 
     @classmethod

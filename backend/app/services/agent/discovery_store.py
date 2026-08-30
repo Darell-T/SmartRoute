@@ -15,8 +15,6 @@ from app.services.agent import presented_entity_registry as entity_registry
 DISCOVERY_SET_PREFIX = "agent:dset:"
 DEFAULT_TTL_S = 1800
 MAX_PLACES = 8
-MAX_PRESENTED_ENTITIES = entity_registry.MAX_ENTRIES
-PRESENTED_ENTITY_REGISTRY_FIELD = entity_registry.REGISTRY_FIELD
 
 _PLACE_ID_PREFIX = "pl_"
 _ALLOWED_RANKING_FACTORS = ("rating", "review_volume", "open_bonus", "price_level")
@@ -176,6 +174,12 @@ def _sanitized_option(place: dict[str, Any]) -> dict[str, Any]:
     return {key: item for key, item in option.items() if item is not _OMIT}
 
 
+def _waypoint_label(item: str, by_id: dict[str, Any]) -> str:
+    if is_opaque_place_id(item) and item in by_id:
+        return str(by_id[item].get("name") or item)
+    return item
+
+
 def display_waypoint_labels(
     waypoints: list[str], *, session_id: str, discovery_set_id: str | None
 ) -> list[str]:
@@ -193,12 +197,7 @@ def display_waypoint_labels(
         for place in (record or {}).get("places") or []
         if isinstance(place, dict) and place.get("place_id")
     }
-    return [
-        str(by_id[item].get("name") or item)
-        if is_opaque_place_id(item) and item in by_id
-        else item
-        for item in waypoints
-    ]
+    return [_waypoint_label(item, by_id) for item in waypoints]
 
 
 def _identity_key(place: dict[str, Any]) -> str:
@@ -214,14 +213,36 @@ def presented_entity_registry(session: dict | None) -> list[dict[str, Any]]:
     return entity_registry.snapshot(session)
 
 
-def clear_presented_entity_registry(session: dict | None) -> None:
-    """Clear visible-place memory when the conversation is explicitly reset."""
-
-    entity_registry.clear(session)
-
-
 def _key(discovery_set_id: str) -> str:
     return f"{DISCOVERY_SET_PREFIX}{discovery_set_id}"
+
+
+def _normalized_place(
+    place: dict[str, Any], place_id: str, ordinal: int
+) -> dict[str, Any]:
+    return {
+        "place_id": place_id,
+        "ordinal": ordinal,
+        "name": str(place.get("name") or "")[:120],
+        "address": str(place.get("address") or "")[:200],
+        "neighborhood": str(place.get("neighborhood") or "")[:80],
+        "borough": str(place.get("borough") or "")[:40],
+        "category": str(place.get("category") or "")[:60],
+        "open_status": place.get("open_status"),
+        "price_level": normalize_price_level(place.get("price_level")),
+        "rating": place.get("rating"),
+        "review_count": place.get("review_count"),
+        "baseline_score": place.get("baseline_score"),
+        "ranking_factors": place.get("ranking_factors") or {},
+        "latitude": _finite_number_or_none(place.get("latitude")),
+        "longitude": _finite_number_or_none(place.get("longitude")),
+        "rider_distance_meters": _finite_number_or_none(
+            place.get("rider_distance_meters")
+        ),
+        "provider_place_id": place.get("provider_place_id"),
+        "transit_context": place.get("transit_context") or {},
+        "search_area": str(place.get("search_area") or "")[:80],
+    }
 
 
 def store_discovery_set(
@@ -254,29 +275,7 @@ def store_discovery_set(
         identity_key = _identity_key(place)
         place_id = prior_place_ids.get(identity_key) or new_place_id()
         normalized.append(
-            {
-                "place_id": place_id,
-                "ordinal": len(normalized) + 1,
-                "name": str(place.get("name") or "")[:120],
-                "address": str(place.get("address") or "")[:200],
-                "neighborhood": str(place.get("neighborhood") or "")[:80],
-                "borough": str(place.get("borough") or "")[:40],
-                "category": str(place.get("category") or "")[:60],
-                "open_status": place.get("open_status"),
-                "price_level": normalize_price_level(place.get("price_level")),
-                "rating": place.get("rating"),
-                "review_count": place.get("review_count"),
-                "baseline_score": place.get("baseline_score"),
-                "ranking_factors": place.get("ranking_factors") or {},
-                "latitude": _finite_number_or_none(place.get("latitude")),
-                "longitude": _finite_number_or_none(place.get("longitude")),
-                "rider_distance_meters": _finite_number_or_none(
-                    place.get("rider_distance_meters")
-                ),
-                "provider_place_id": place.get("provider_place_id"),
-                "transit_context": place.get("transit_context") or {},
-                "search_area": str(place.get("search_area") or "")[:80],
-            }
+            _normalized_place(place, place_id, len(normalized) + 1)
         )
     record = {
         "discovery_set_id": set_id,
@@ -348,6 +347,35 @@ def _coverage_labels(value: object) -> list[str]:
     return labels
 
 
+def _bounded_scope_values(raw: object, limit: int, width: int) -> list[str]:
+    return [
+        str(area).strip()[:width]
+        for area in (raw or [])
+        if str(area).strip()
+    ][:limit]
+
+
+def _borough_scope(scope: dict[str, Any]) -> dict[str, Any]:
+    values = _bounded_scope_values(
+        scope.get("values") or scope.get("areas") or [], 5, 80
+    )
+    return {"kind": "boroughs", "values": values}
+
+
+def _named_area_scope(scope: dict[str, Any]) -> dict[str, Any]:
+    values = _bounded_scope_values(scope.get("values") or [], 1, 120)
+    if values:
+        return {"kind": "named_area", "values": values}
+    return {"kind": "nyc", "values": []}
+
+
+def _named_near_scope(scope: dict[str, Any]) -> dict[str, Any]:
+    near = str(scope.get("near") or "").strip()[:120]
+    if near:
+        return {"kind": "named", "near": near}
+    return {"kind": "citywide"}
+
+
 def _sanitized_search_scope(value: object) -> dict[str, Any]:
     scope = value if isinstance(value, dict) else {}
     kind = str(scope.get("kind") or "citywide")
@@ -356,35 +384,18 @@ def _sanitized_search_scope(value: object) -> dict[str, Any]:
     if kind == "nyc":
         return {"kind": "nyc", "values": []}
     if kind == "boroughs":
-        values = [
-            str(area).strip()[:80]
-            for area in (scope.get("values") or scope.get("areas") or [])
-            if str(area).strip()
-        ][:5]
-        return {"kind": "boroughs", "values": values}
+        return _borough_scope(scope)
     if kind == "named_area":
-        values = [
-            str(area).strip()[:120]
-            for area in (scope.get("values") or [])
-            if str(area).strip()
-        ][:1]
-        return (
-            {"kind": "named_area", "values": values}
-            if values
-            else {"kind": "nyc", "values": []}
-        )
+        return _named_area_scope(scope)
     if kind == "areas":
-        areas = [
-            str(area).strip()[:80]
-            for area in (scope.get("areas") or [])
-            if str(area).strip()
-        ][:5]
-        return {"kind": "areas", "areas": areas}
+        return {
+            "kind": "areas",
+            "areas": _bounded_scope_values(scope.get("areas") or [], 5, 80),
+        }
     if kind == "nearby":
         return {"kind": "nearby"}
     if kind == "named":
-        near = str(scope.get("near") or "").strip()[:120]
-        return {"kind": "named", "near": near} if near else {"kind": "citywide"}
+        return _named_near_scope(scope)
     return {"kind": "citywide"}
 
 
@@ -454,6 +465,25 @@ def _normalized_name(value: object) -> str:
     return " ".join(re.sub(r"[^a-z0-9]+", " ", text).split())
 
 
+def _place_by_id(
+    places: list[dict[str, Any]], place_id: str
+) -> tuple[dict[str, Any] | None, str | None]:
+    for place in places:
+        if str(place.get("place_id") or "") == place_id:
+            return place, None
+    return None, "place id is unknown for this discovery set"
+
+
+def _place_by_ordinal(
+    places: list[dict[str, Any]], ordinal: int
+) -> tuple[dict[str, Any] | None, str | None]:
+    wanted = int(ordinal)
+    for place in places:
+        if int(place.get("ordinal") or 0) == wanted:
+            return place, None
+    return None, "ordinal is out of range for this discovery set"
+
+
 def resolve_place_reference(
     *,
     session_id: str,
@@ -473,19 +503,50 @@ def resolve_place_reference(
         place for place in (record.get("places") or []) if isinstance(place, dict)
     ]
     if place_id:
-        for place in places:
-            if str(place.get("place_id") or "") == place_id:
-                return place, None
-        return None, "place id is unknown for this discovery set"
+        return _place_by_id(places, place_id)
     if ordinal is not None:
-        wanted = int(ordinal)
-        for place in places:
-            if int(place.get("ordinal") or 0) == wanted:
-                return place, None
-        return None, "ordinal is out of range for this discovery set"
+        return _place_by_ordinal(places, ordinal)
     if description is not None:
         return entity_registry.resolve_description(places, description)
     return None, "place reference is incomplete"
+
+
+def _presented_context_rows(registry: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "place_id": entry.get("place_id"),
+            "discovery_set_id": entry.get("discovery_set_id"),
+            "ordinal": entry.get("ordinal"),
+            "presentation_sequence": entry.get("presentation_sequence"),
+            "name": entry.get("name"),
+            "address": entry.get("address"),
+            "neighborhood": entry.get("neighborhood"),
+            "borough": entry.get("borough"),
+            "category": entry.get("category"),
+            "reason": entry.get("reason"),
+        }
+        for entry in registry
+    ]
+
+
+def _record_context(
+    record: dict[str, Any] | None, discovery_set_id: object
+) -> dict[str, Any]:
+    if record is None:
+        return {
+            "discovery_set_id": None,
+            "query": None,
+            "search_scope": {"kind": "citywide"},
+            "requested_count": None,
+            "coverage": {"status": "complete"},
+        }
+    return {
+        "discovery_set_id": discovery_set_id,
+        "query": record.get("query"),
+        "search_scope": record.get("search_scope"),
+        "requested_count": record.get("requested_count"),
+        "coverage": record.get("coverage"),
+    }
 
 
 def sanitized_discovery_context(
@@ -512,36 +573,11 @@ def sanitized_discovery_context(
         for place in (record or {}).get("places") or []
         if isinstance(place, dict) and place.get("place_id")
     ]
-    registry = presented_entity_registry(session)
-    presented = [
-        {
-            "place_id": entry.get("place_id"),
-            "discovery_set_id": entry.get("discovery_set_id"),
-            "ordinal": entry.get("ordinal"),
-            "presentation_sequence": entry.get("presentation_sequence"),
-            "name": entry.get("name"),
-            "address": entry.get("address"),
-            "neighborhood": entry.get("neighborhood"),
-            "borough": entry.get("borough"),
-            "category": entry.get("category"),
-            "reason": entry.get("reason"),
-        }
-        for entry in registry
-    ]
+    presented = _presented_context_rows(presented_entity_registry(session))
     if record is None and not presented:
         return None
     return {
-        "discovery_set_id": discovery_set_id if record is not None else None,
-        "query": record.get("query") if record is not None else None,
-        "search_scope": (
-            record.get("search_scope") if record is not None else {"kind": "citywide"}
-        ),
-        "requested_count": record.get("requested_count")
-        if record is not None
-        else None,
-        "coverage": (
-            record.get("coverage") if record is not None else {"status": "complete"}
-        ),
+        **_record_context(record, discovery_set_id),
         "selected_place_id": state.get("selected_place_id"),
         "options": options,
         "presented_entities": presented,

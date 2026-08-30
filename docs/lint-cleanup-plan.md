@@ -532,9 +532,22 @@ rider-output sanitization.
 
 After Batch 6E, rerun `scripts/report_backend_debt.py --max-existing 12`
 across all backend production code. No function may remain above 12. Then
-run frontend lint, Oxlint, typecheck, unit tests, release checks, and
-`scripts/check_quality.py` once against the final backend commit. Do not
-start Batch 7 until those checks pass.
+run frontend lint and Oxlint to record the inherited frontend backlog. Run
+typecheck, unit tests, release checks, and `scripts/check_quality.py` once
+against the final backend commit. Do not start Batch 7 until those checks pass
+and the quality ratchet reports no new or worsened frontend findings. Batches
+7 through 9 own the inherited raw frontend findings.
+
+Reviewer complete 2026-08-30. Scope checkpoint `2298e32`. Quality comparison
+`c058199`. Batch 6E has 547 functions, `above_12=0`, `at_11_or_12=18`,
+`crap_above_30=0`, and coverage 88.8%. Global production has `above_12=0`.
+Codex removed eight dead symbols, three trivial helpers, and a temporary audit
+script. Final production growth is 2,037 insertions and 1,308 deletions, net
++729. The reviewer removed 43 stale entries from `quality/baseline.json`,
+which now has 125 entries. Final quality exits 0 with
+`approval_eligible: true`; backend has 1,899 passes, 21 skips, and 444
+subtests; frontend unit has 314 passes; release CI has 14 passes and 4 skips.
+Batch 7 was not started.
 
 ## Batch 7: frontend contracts and I/O
 

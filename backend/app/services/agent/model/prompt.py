@@ -357,6 +357,124 @@ def active_system_prompt() -> str:
     return SINGLE_AGENT_SYSTEM_PROMPT
 
 
+def _place_label(place: object) -> str:
+    if not isinstance(place, dict):
+        return ""
+    return str(place.get("label") or "").strip()
+
+
+def _saved_place_labels(profile: dict) -> dict[str, object]:
+    labels: dict[str, object] = {}
+    places = profile.get("places") or {}
+    for slot in ("home", "work"):
+        label = _place_label(places.get(slot))
+        if label:
+            labels[slot] = label
+    other_labels = [
+        label
+        for key in ("saved_places", "frequent_places")
+        for place in profile.get(key) or []
+        if (label := _place_label(place))
+    ]
+    if other_labels:
+        labels["other"] = list(dict.fromkeys(other_labels))
+    return labels
+
+
+def _trip_digest(state: dict, session_key: str) -> dict[str, object]:
+    return {
+        "origin": state.get("origin"),
+        "destination": state.get("destination"),
+        "waypoints": discovery_store.display_waypoint_labels(
+            list(state.get("waypoints") or []),
+            session_id=session_key,
+            discovery_set_id=state.get("active_discovery_set_id"),
+        ),
+        "planning_mode": state.get("planning_mode"),
+        "preferences": state.get("preferences") or {},
+        "has_active_candidate_set": bool(state.get("active_candidate_set_id")),
+        "has_temporary_scenario": bool(state.get("temporary_candidate_set_id")),
+        "has_active_discovery_set": bool(state.get("active_discovery_set_id")),
+        "has_selected_candidate": bool(state.get("selected_candidate_id")),
+        "has_selected_place": bool(state.get("selected_place_id")),
+    }
+
+
+def _accepted_endpoint_digest(state: dict) -> dict[str, object] | None:
+    if not (
+        state.get("origin")
+        and state.get("destination")
+        and state.get("active_candidate_set_id")
+        and state.get("selected_candidate_id")
+    ):
+        return None
+    return {
+        "origin": state["origin"],
+        "destination": state["destination"],
+        "source": "accepted_trip",
+        "clarification_required": False,
+    }
+
+
+def _accepted_route_comparison(state: dict, session_key: str) -> dict | None:
+    candidate_set_id = str(state.get("active_candidate_set_id") or "").strip()
+    selected_candidate_id = str(state.get("selected_candidate_id") or "").strip()
+    if not candidate_set_id or not selected_candidate_id:
+        return None
+    return candidate_store.load_accepted_route_comparison(
+        candidate_set_id,
+        selected_candidate_id,
+        session_id=session_key,
+    )
+
+
+def _route_card_digest(cards: object) -> list[dict[str, object]] | None:
+    if not cards:
+        return None
+    return [
+        {
+            "card_id": card.get("card_id"),
+            "role": card.get("role"),
+            "lines": card.get("lines"),
+            "eta_minutes": card.get("eta_minutes"),
+        }
+        for card in cards
+    ]
+
+
+def _active_trip_digest(active_trip: object) -> dict[str, object] | None:
+    if not isinstance(active_trip, dict):
+        return None
+    return {
+        "card_id": active_trip.get("card_id"),
+        "lines": active_trip.get("lines"),
+        "destination": active_trip.get("destination"),
+        "first_boarding": active_trip.get("first_boarding"),
+    }
+
+
+def _pending_trip_digest(pending_trip: object) -> dict[str, object] | None:
+    if not isinstance(pending_trip, dict):
+        return None
+    if pending_trip.get("status") in {None, "none"}:
+        return None
+    return {
+        "status": pending_trip.get("status"),
+        "summary": pending_trip.get("summary"),
+    }
+
+
+def _json_context_lines(
+    rows: tuple[tuple[str, object, bool], ...],
+    dump: dict[str, object],
+) -> list[str]:
+    return [
+        f"{label}: {json.dumps(payload, **dump, sort_keys=sort_keys)}"
+        for label, payload, sort_keys in rows
+        if payload
+    ]
+
+
 def build_turn_context(
     session: dict,
     now_et: str,
@@ -375,106 +493,19 @@ def build_turn_context(
             f"rider_location: {float(point['lat']):.4f},{float(point['lng']):.4f}"
         )
     profile = profile_module.get_profile(bound)
-    saved_place_labels: dict[str, object] = {}
-    for slot in ("home", "work"):
-        place = (profile.get("places") or {}).get(slot)
-        if isinstance(place, dict) and str(place.get("label") or "").strip():
-            saved_place_labels[slot] = str(place["label"]).strip()
-    other_labels = [
-        str(place.get("label") or "").strip()
-        for key in ("saved_places", "frequent_places")
-        for place in profile.get(key) or []
-        if isinstance(place, dict) and str(place.get("label") or "").strip()
-    ]
-    if other_labels:
-        saved_place_labels["other"] = list(dict.fromkeys(other_labels))
+    saved_place_labels = _saved_place_labels(profile)
     state = trip_state_module.get_trip_state(bound)
     slots = bound.get("slots") or {}
     continuations = session_module.get_pending_continuations(bound)
     discovery = discovery_store.sanitized_discovery_context(bound, session_key)
-    cards = bound.get("route_cards") or []
-    active_trip = bound.get("active_trip")
-    pending_trip = bound.get("pending_trip")
-    candidate_set_id = str(state.get("active_candidate_set_id") or "").strip()
-    selected_candidate_id = str(state.get("selected_candidate_id") or "").strip()
-    comparison = (
-        candidate_set_id
-        and selected_candidate_id
-        and candidate_store.load_accepted_route_comparison(
-            candidate_set_id,
-            selected_candidate_id,
-            session_id=session_key,
-        )
-    )
+    comparison = _accepted_route_comparison(state, session_key)
     replay = public_surface.active_route_replay(bound)
     temporary_id = state.get("temporary_selected_candidate_id")
     dump = {"separators": (",", ":"), "default": str}
-    trip_digest = {
-        "origin": state.get("origin"),
-        "destination": state.get("destination"),
-        "waypoints": discovery_store.display_waypoint_labels(
-            list(state.get("waypoints") or []),
-            session_id=session_key,
-            discovery_set_id=state.get("active_discovery_set_id"),
-        ),
-        "planning_mode": state.get("planning_mode"),
-        "preferences": state.get("preferences") or {},
-        "has_active_candidate_set": bool(state.get("active_candidate_set_id")),
-        "has_temporary_scenario": bool(state.get("temporary_candidate_set_id")),
-        "has_active_discovery_set": bool(state.get("active_discovery_set_id")),
-        "has_selected_candidate": bool(state.get("selected_candidate_id")),
-        "has_selected_place": bool(state.get("selected_place_id")),
-    }
+    trip_digest = _trip_digest(state, session_key)
     continuation_digest = (
         [continuation.to_dict() for continuation in continuations]
         if continuations
-        else None
-    )
-    endpoint_digest = (
-        {
-            "origin": state["origin"],
-            "destination": state["destination"],
-            "source": "accepted_trip",
-            "clarification_required": False,
-        }
-        if (
-            state.get("origin")
-            and state.get("destination")
-            and state.get("active_candidate_set_id")
-            and state.get("selected_candidate_id")
-        )
-        else None
-    )
-    card_digest = (
-        [
-            {
-                "card_id": card.get("card_id"),
-                "role": card.get("role"),
-                "lines": card.get("lines"),
-                "eta_minutes": card.get("eta_minutes"),
-            }
-            for card in cards
-        ]
-        if cards
-        else None
-    )
-    active_trip_digest = (
-        {
-            "card_id": active_trip.get("card_id"),
-            "lines": active_trip.get("lines"),
-            "destination": active_trip.get("destination"),
-            "first_boarding": active_trip.get("first_boarding"),
-        }
-        if isinstance(active_trip, dict)
-        else None
-    )
-    pending_trip_digest = (
-        {
-            "status": pending_trip.get("status"),
-            "summary": pending_trip.get("summary"),
-        }
-        if isinstance(pending_trip, dict)
-        and pending_trip.get("status") not in {None, "none"}
         else None
     )
     leading_json = (
@@ -482,28 +513,20 @@ def build_turn_context(
         ("known_slots", slots, True),
         ("trip_state", trip_digest, False),
         ("pending_continuations", continuation_digest, False),
-        ("accepted_route_endpoints", endpoint_digest, False),
+        ("accepted_route_endpoints", _accepted_endpoint_digest(state), False),
         ("accepted_route_replay", replay, True),
     )
     trailing_json = (
         ("active_discovery", discovery, False),
-        ("recent_route_cards", card_digest, False),
-        ("active_trip", active_trip_digest, False),
+        ("recent_route_cards", _route_card_digest(bound.get("route_cards")), False),
+        ("active_trip", _active_trip_digest(bound.get("active_trip")), False),
         ("accepted_route_comparison", comparison, False),
-        ("pending_trip", pending_trip_digest, False),
+        ("pending_trip", _pending_trip_digest(bound.get("pending_trip")), False),
     )
-    lines.extend(
-        f"{label}: {json.dumps(payload, **dump, sort_keys=sort_keys)}"
-        for label, payload, sort_keys in leading_json
-        if payload
-    )
+    lines.extend(_json_context_lines(leading_json, dump))
     if temporary_id:
         lines.append(f"temporary_candidate_id: {temporary_id}")
-    lines.extend(
-        f"{label}: {json.dumps(payload, **dump, sort_keys=sort_keys)}"
-        for label, payload, sort_keys in trailing_json
-        if payload
-    )
+    lines.extend(_json_context_lines(trailing_json, dump))
     if selected_card_id:
         lines.append(f"selected_card_id: {selected_card_id}")
     body = "\n".join(lines)

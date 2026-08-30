@@ -72,6 +72,23 @@ def build_stream_kwargs(
         "system": system_blocks,
         **dict(request_options or {}),
     }
+    _strip_unsupported_sampling_and_thinking(kwargs, capabilities)
+    if capabilities.supports_effort:
+        kwargs["output_config"] = {"effort": mode_policy.output_effort}
+    _reject_unsupported_prefill(
+        messages, capabilities, allow_server_tool_continuation
+    )
+    kwargs["max_tokens"] = mode_policy.max_output_tokens
+    kwargs["tools"] = list(tools)
+    if tools and "tool_choice" not in kwargs:
+        kwargs["tool_choice"] = {"type": "any"}
+    return kwargs
+
+
+def _strip_unsupported_sampling_and_thinking(
+    kwargs: dict[str, Any],
+    capabilities: agent_policy.ModelRequestCapabilities,
+) -> None:
     if not capabilities.supports_manual_thinking:
         thinking = kwargs.get("thinking")
         if isinstance(thinking, Mapping) and thinking.get("type") == "enabled":
@@ -79,9 +96,13 @@ def build_stream_kwargs(
     if not capabilities.supports_non_default_sampling:
         for field in _SAMPLING_FIELDS:
             kwargs.pop(field, None)
-    if capabilities.supports_effort:
-        kwargs["output_config"] = {"effort": mode_policy.output_effort}
 
+
+def _reject_unsupported_prefill(
+    messages: list[dict],
+    capabilities: agent_policy.ModelRequestCapabilities,
+    allow_server_tool_continuation: bool,
+) -> None:
     if (
         not capabilities.supports_assistant_prefill
         and not allow_server_tool_continuation
@@ -89,12 +110,6 @@ def build_stream_kwargs(
         and messages[-1].get("role") == "assistant"
     ):
         raise ValueError("configured model does not support assistant prefill")
-
-    kwargs["max_tokens"] = mode_policy.max_output_tokens
-    kwargs["tools"] = list(tools)
-    if tools and "tool_choice" not in kwargs:
-        kwargs["tool_choice"] = {"type": "any"}
-    return kwargs
 
 
 def request_diagnostics(kwargs: Mapping[str, Any]) -> str:

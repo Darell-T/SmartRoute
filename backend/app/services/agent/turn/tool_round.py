@@ -201,6 +201,33 @@ class _ToolRoundExecution:
                 return reason
         return _missing_verified_destination(name, tool_input, self.ctx)
 
+    def _resolve_execution_key(
+        self,
+        name: str,
+        tool_input: dict,
+        presentation_keys: dict[tuple[str, str], str],
+    ) -> str:
+        identity = _presentation_identity(name, tool_input)
+        key = presentation_keys.get(identity) if identity is not None else None
+        if key is None:
+            key = self.ledger.key(name, tool_input)
+            if identity is not None:
+                presentation_keys[identity] = key
+        return key
+
+    def _admit_cached_or_pending(
+        self, block, name: str, tool_input: dict, key: str
+    ) -> None:
+        if block.id in self.declaration_results:
+            self.outcomes_by_key[key] = self.declaration_results[block.id]
+            return
+        cached = self.ledger.reusable_results.get(key)
+        if cached is not None:
+            self.outcomes_by_key[key] = cached
+            return
+        if key not in self.pending_calls:
+            self.pending_calls[key] = (name, tool_input)
+
     def _plan_calls(self) -> None:
         self.start_times = {block.id: time.monotonic() for block in self.blocks}
         presentation_keys: dict[tuple[str, str], str] = {}
@@ -209,22 +236,10 @@ class _ToolRoundExecution:
                 continue
             name = getattr(block, "name", "")
             tool_input = self.tool_inputs[block.id]
-            identity = _presentation_identity(name, tool_input)
-            key = presentation_keys.get(identity) if identity is not None else None
-            if key is None:
-                key = self.ledger.key(name, tool_input)
-                if identity is not None:
-                    presentation_keys[identity] = key
+            key = self._resolve_execution_key(name, tool_input, presentation_keys)
             self.execution_keys[block.id] = key
             self.first_block_by_key.setdefault(key, block.id)
-            if block.id in self.declaration_results:
-                self.outcomes_by_key[key] = self.declaration_results[block.id]
-                continue
-            cached = self.ledger.reusable_results.get(key)
-            if cached is not None:
-                self.outcomes_by_key[key] = cached
-            elif key not in self.pending_calls:
-                self.pending_calls[key] = (name, tool_input)
+            self._admit_cached_or_pending(block, name, tool_input, key)
 
     async def _execute_calls(self) -> AsyncIterator:
         if not self.pending_calls:
