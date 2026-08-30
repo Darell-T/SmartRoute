@@ -59,7 +59,9 @@ class TransitSnapshotToolTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 transit_snapshot.mta_realtime,
                 "fetch_service_alerts",
-                new=AsyncMock(return_value=b"x"),
+                new=AsyncMock(
+                    return_value={"content": b"x", "freshness": "unknown"}
+                ),
             ),
             patch.object(
                 transit_snapshot.mta_realtime,
@@ -139,7 +141,7 @@ class TransitSnapshotToolTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 transit_snapshot.mta_realtime,
                 "fetch_service_alerts",
-                new=AsyncMock(return_value=b"alerts-feed"),
+                new=AsyncMock(return_value={"content": b"alerts-feed"}),
             ),
             patch.object(
                 transit_snapshot.mta_realtime, "parse_service_alerts", return_value=[]
@@ -160,7 +162,7 @@ class TransitSnapshotToolTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 transit_snapshot.mta_realtime,
                 "fetch_service_alerts",
-                new=AsyncMock(return_value=b"x"),
+                new=AsyncMock(return_value={"content": b"x"}),
             ),
             patch.object(
                 transit_snapshot.mta_realtime,

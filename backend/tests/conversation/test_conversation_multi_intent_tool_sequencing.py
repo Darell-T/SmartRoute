@@ -42,7 +42,16 @@ _prepare_seam = f2.PREPARE_SEAM
 
 def _alerts_seams() -> dict:
     return {
-        "alerts_fetch": (_alerts_fetch, AsyncMock(return_value=b"fixture-alerts")),
+        "alerts_fetch": (
+            _alerts_fetch,
+            AsyncMock(
+                return_value={
+                    "content": b"fixture-alerts",
+                    "freshness": "live",
+                    "observed_at": "2026-08-06T12:00:00+00:00",
+                }
+            ),
+        ),
         "alerts_parse": (
             _alerts_parse,
             MagicMock(return_value=f2.q_alerts_fixture()),

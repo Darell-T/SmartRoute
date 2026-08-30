@@ -49,6 +49,8 @@ Quality certification from fresh runs with no `--skip-tests`:
 | Batch 6 reviewer final 2026-08-28 | 0 | 0 | 0 | 0 | 329 | 1,823 passed, 21 skipped, 444 subtests | 314 |
 | Batch 6C worker 2026-08-29 | 1 | 0 | 0 | 38 | 198 | 1,894 passed, 21 skipped, 444 subtests | 314 |
 | Batch 6C reviewer final 2026-08-29 | 0 | 0 | 0 | 0 | 198 | 1,895 passed, 21 skipped, 444 subtests | 314 |
+| Batch 6D worker 2026-08-30 | 1 | 0 | 0 | 31 | 198 | 1,895 passed, 21 skipped, 444 subtests | 314 |
+| Batch 6D reviewer final 2026-08-30 | 0 | 0 | 0 | 0 | 168 | 1,896 passed, 21 skipped, 444 subtests | 314 |
 
 Cognitive delta against `427fbc8`: 0 new or worsened. CRAP has no absolute
 ceiling. Baseline entries may not worsen.
@@ -59,8 +61,9 @@ and the handoff repair are Codex-approved. Batch 4 owned tools Ruff is zero.
 Batch 5 is committed at `22f6f0d` and reviewer-approved. Batch 6 is committed
 at `c058199`. That commit is the fixed point for Batches 6A through 6E. Batch
 6A is committed at `140495a`. Batch 6B is committed at `c8a0381`. Batch 6C
-review is complete on the tree based on `c8a0381`. Do not start Batch 6D or
-Batch 7 until the reviewed tree is committed.
+review is complete on the tree based on `c8a0381`. Batch 6D is Codex-approved
+against checkpoint `676ff13`. Do not start Batch 6E or Batch 7 until the
+reviewed Batch 6D tree is committed.
 
 ## Structural policy
 
@@ -75,9 +78,9 @@ Batch 7 until the reviewed tree is committed.
 
 ## Remaining batches
 
-The old 20-batch plan is retired. Batches 2 through 6 are complete. Remaining
-backend work is 6A through 6E in `docs/lint-cleanup-plan.md`. Do not start
-Batch 7 until those five batches are committed.
+The old 20-batch plan is retired. Batches 2 through 6D are complete. Remaining
+backend work is 6E in `docs/lint-cleanup-plan.md`. Do not start Batch 7 until
+6A through 6E are committed.
 
 | Batch | Subsystem |
 |---:|---|
@@ -1813,6 +1816,262 @@ in pattern validation.
   exits 0 with `approval_eligible: true`.
 - Global debt exit 1 is Batches 6D and 6E. Batch 6C is `above_12=0` and
   `crap_above_30=0`.
+
+## Batch 6D completion
+
+Scope checkpoint `$batchRef` =
+`676ff134863a21a8f247c1b78b82edf1c477c844`. Quality reference `$qualityRef`
+= `c0581994e47ce1a5bbdb2d8e83fc0afd50ff1745`. The worker left HEAD at
+`676ff13` and the tree uncommitted for Codex review. Codex repaired one
+production regression, corrected one stale provider test seam, removed 14
+unearned helper functions, and accepted the resulting tree. The reviewer
+removed exactly 30 stale Batch 6D entries from `quality/baseline.json`, which
+reduced it from 198 to 168 entries. No entry was added or widened. Batch 6E
+and Batch 7 were not started.
+
+### Changed files
+
+Production:
+
+- `backend/app/services/agent/tools/transit/accessibility_status.py`
+- `backend/app/services/agent/tools/transit/check_area_conditions.py`
+- `backend/app/services/agent/tools/transit/check_transit.py`
+- `backend/app/services/agent/tools/transit/direction.py`
+- `backend/app/services/agent/tools/transit/evidence.py`
+- `backend/app/services/agent/tools/transit/evidence_binding.py`
+- `backend/app/services/agent/tools/transit/evidence_projection.py`
+- `backend/app/services/agent/tools/transit/lookup_arrivals_bus.py`
+- `backend/app/services/agent/tools/transit/lookup_arrivals_common.py`
+- `backend/app/services/agent/tools/transit/lookup_arrivals_subway.py`
+- `backend/app/services/agent/tools/transit/present_transit.py`
+- `backend/app/services/agent/tools/transit/transit_snapshot.py`
+- `backend/app/services/agent/tools/transit/venue_crowd_window.py`
+
+Tests:
+
+- `backend/tests/test_agent_tools.py`
+- `backend/tests/test_check_transit.py`
+- `backend/tests/conversation/test_conversation_multi_intent_tool_sequencing.py`
+
+Records:
+
+- `docs/lint-cleanup-handoff.md`
+- `docs/lint-cleanup-plan.md`
+- `.audit/backend-debt.json`
+- `quality/baseline.json`
+
+### Debt after the final coverage run
+
+`py scripts/report_backend_debt.py --max-existing 12 --output .audit/backend-debt.json`
+
+The command exits 1 because Batch 6E still has 53 functions above 12. Judge
+`by_batch: 6D`.
+
+| Metric | At `676ff13` | Worker handoff | After Codex review |
+|---|---:|---:|---:|
+| 6D functions | 237 | 335 | 321 |
+| 6D above 12 | 35 | 0 | 0 |
+| 6D at 11 or 12 | 13 | 16 | 17 |
+| 6D CRAP above 30 | 2 | 1 | 1 |
+| 6D zero-covered | 3 | 6 | 6 |
+| Branch-aware coverage | 88.7% | 88.7% | 88.7% |
+
+The worker tree had 1,687 insertions and 951 deletions in production, net
++736, with 98 additional functions. Codex reduced the final delta to 1,559
+insertions and 993 deletions, net +566, with 84 additional functions. The
+final totals cross the project review triggers but stay inside the accepted
+500 to 800 net-line replacement range. The change replaces 993 old production
+lines. The remaining helpers own provider access, admission, matching,
+projection, aggregation, presentation, or recovery stages.
+
+The remaining CRAP-above-30 row is
+`evidence_projection._area_condition_fields` at cyclomatic 8 with zero
+coverage in `backend/.coverage`. The worker did not add a private-helper
+test. CRAP has no absolute ceiling. The two starting CRAP targets,
+`lookup_arrivals_bus.execute` and
+`evidence_binding.bind_accessibility_target`, are no longer above 30.
+
+### Subtracted peelers
+
+- Inlined `_build_events` after arrivals and status event builders owned the
+  presentation policy.
+- Inlined `_has_unscoped_scope` into `_with_direction_caveat`.
+  `_has_unscoped_items` remains the shared unscoped-finding check.
+- Collapsed two metadata-copy layers into `_copy_lookup_metadata`.
+- Inlined `_arrivals_fields` and `_arrival_lookups` into the readable public
+  arrivals flow.
+- Removed the nine-argument `_append_status_match` wrapper and its one-call
+  coverage wrapper.
+- Replaced two operation function-dispatch tables with direct branches and
+  removed the one-line `_fact_text` projector.
+- Inlined trivial accessibility, direction-label, distance, affected-route,
+  and result-shape adapters when their caller stayed within the ceiling.
+- Removed `_pattern_index_maps`; GTFS map admission now stays with the one
+  pattern-context owner.
+
+Codex removed 14 functions from the worker tree. An attempted fifteenth
+removal made `_admit_venue_window` a new cyclomatic-12 function. The quality
+gate rejected that form, so `_event_timing_unconfirmed` remains as a named
+admission policy.
+
+### Comment Sicko
+
+Codex accepted the comment-only deletions and restored concise reasons for
+the five broad fail-open index recoveries. It also retained the EWR bounds,
+opaque numeric GTFS direction, trips-owned crowd-table, MTA wrapper-key, and
+accessibility capture-timestamp explanations. No restating docstring was
+restored.
+
+Accepted in-scope code fixes:
+
+- Dropped the bytes fallback in `transit_snapshot._alert_provider_payload`.
+  `fetch_service_alerts(..., with_metadata=True)` already returns a dict.
+- Replaced the solo `except Exception` around area event lookup with
+  `asyncio.gather(..., return_exceptions=True)`, matching the two-task path.
+- Fixed `_collect_status_findings` so every matching candidate contributes
+  alerts, incidents, signals, and coverage after the first observation
+  timestamp. The previous short-circuit skipped later candidates.
+- Updated the multi-intent conversation seam to return the documented
+  `with_metadata=True` alert-provider shape. The production bytes fallback
+  remains deleted.
+
+Rejected as 6D behavior changes. Fail-open index recoveries stay, encoded
+the same way as `location_resolution._stops_on_named_route`:
+
+- Removing `_OUTSIDE_NYC_KNOWN_PLACES`. EWR is inside `NYC_BOUNDS` and
+  `test_outside_areas_are_rejected_after_resolution_without_provider_calls`
+  pins the carve-out.
+- Narrowing `except Exception` on nearby stops, incident index, subway stop
+  index, schedule lookup, and child-stop ids. Those recoveries stay empty or
+  unavailable. A typed provider-fault type is out of this batch. Each
+  `# noqa: BLE001` now carries the local fail-open reason.
+
+GTFS and incident index methods that return empty or unavailable instead of
+raising would let those noqas die. That work is out of Batch 6D.
+
+### Survivors at 11 or 12
+
+Keep each of these at 11 or 12. Another helper would hide a short guard or
+restore a peeler removed during review.
+
+| Function | Cyclo | Cog | Coverage | CRAP | Why it stays |
+|---|---:|---:|---:|---:|---|
+| `check_area_conditions._nearby_stop_context` | 10 | 12 | 0.650 | 14.287 | Optional GTFS index and bounded stop admission |
+| `check_transit._candidate_leg_direction` | 8 | 11 | 1.000 | 8.000 | Candidate-leg semantic direction resolution |
+| `check_transit.arrivals` | 11 | 6 | 0.833 | 11.560 | Multi-route lookup orchestration after two wrappers were inlined |
+| `check_transit.execute` | 12 | 9 | 0.917 | 12.083 | Public operation admission and dispatch |
+| `check_transit.grounding_succeeded` | 11 | 8 | 0.929 | 11.044 | Per-operation evidence success policy |
+| `evidence_binding._official_alert_rows` | 10 | 11 | 0.833 | 10.463 | Official alert projection and route filtering |
+| `evidence_binding._official_alert_ids` | 10 | 12 | 0.750 | 11.562 | Exact comparable alert-ID extraction |
+| `evidence_binding._incident_projection` | 12 | 11 | 1.000 | 12.000 | Bounded route-scoped incident projection |
+| `evidence_matching._typed_concern_values` | 6 | 12 | 1.000 | 6.000 | Typed concern normalization |
+| `evidence_projection._event_lines` | 10 | 11 | 0.929 | 10.036 | Bounded passenger event rendering |
+| `evidence_projection.safe_accessibility` | 11 | 7 | 1.000 | 11.000 | Passenger-safe accessibility binding projection |
+| `evidence_projection.safe_unconfirmed_signal` | 11 | 10 | 1.000 | 11.000 | Bounded vehicle-signal projection |
+| `lookup_arrivals.execute` | 12 | 6 | 0.667 | 17.333 | Mode dispatch and request validation |
+| `lookup_arrivals_bus.execute` | 12 | 8 | 0.833 | 12.667 | Bus provider fetch, parse, and result lifecycle |
+| `lookup_facts._find_section` | 12 | 12 | 1.000 | 12.000 | Bounded fact-section match policy |
+| `transit_snapshot._signal_rows` | 11 | 9 | 0.857 | 11.353 | Provider-result and route admission |
+| `transit_snapshot.collect_service_status` | 11 | 10 | 0.800 | 11.968 | Parallel alert, vehicle, and incident assembly |
+
+### Verification
+
+Public pin forward and reverse:
+
+`backend/tests/test_lookup_arrivals.py`
+`backend/tests/test_check_transit.py`
+`backend/tests/test_transit_evidence.py`
+`backend/tests/test_check_area_conditions.py`
+`backend/tests/test_present_transit.py`
+`backend/tests/test_agent_transit_direction_reliability.py`
+`backend/tests/test_agent_evidence_binding_reliability.py`
+`backend/tests/test_area_condition_incidents.py`
+`backend/tests/test_agent_loop_transit_grounding.py`
+`backend/tests/test_agent_tools.py`
+
+Forward: 130 passed, 26 subtests. Reverse: 130 passed, 26 subtests.
+
+The public regression
+`test_service_status_reuses_findings_from_every_matching_candidate` failed
+first with only the first official alert ID. It passes with both candidate
+alert IDs after the short-circuit repair. The 15 multi-intent conversation
+tests pass after the provider seam correction. The venue crowd-window file
+passes with the 32-test `test_agent_tools_p1.py` pin.
+
+Global Ruff: all checks passed.
+
+Cognitive-only against `$batchRef`: new or worsened 0.
+
+Full quality against `$qualityRef`:
+
+```
+py scripts/check_quality.py --update-baseline --quality-ref c0581994e47ce1a5bbdb2d8e83fc0afd50ff1745
+```
+
+Exit 0. `approval_eligible: true`. `tests_ran: true`. New 0. Worsened 0.
+Cognitive new or worsened 0. Ruff C901 0. Ruff structural 0. Stale 0. Backend
+1,896 passed, 21 skipped, 444 subtests. Frontend 314 passed.
+
+The reviewer removed these 30 stale Batch 6D baseline IDs:
+
+```
+python:backend/app/services/agent/tools/transit/accessibility_status.py:_extract_outage_records#0
+python:backend/app/services/agent/tools/transit/accessibility_status.py:execute#0
+python:backend/app/services/agent/tools/transit/check_area_conditions.py:_incident_evidence#0
+python:backend/app/services/agent/tools/transit/check_area_conditions.py:_safe_incidents#0
+python:backend/app/services/agent/tools/transit/check_area_conditions.py:execute#0
+python:backend/app/services/agent/tools/transit/check_transit.py:_candidate_direction#0
+python:backend/app/services/agent/tools/transit/check_transit.py:accessibility#0
+python:backend/app/services/agent/tools/transit/check_transit.py:prepare_direction#0
+python:backend/app/services/agent/tools/transit/direction.py:_route_contexts#0
+python:backend/app/services/agent/tools/transit/direction.py:resolve_direction#0
+python:backend/app/services/agent/tools/transit/evidence.py:_arrival_row#0
+python:backend/app/services/agent/tools/transit/evidence.py:build_evidence_set#0
+python:backend/app/services/agent/tools/transit/evidence_binding.py:_decision_status_data#0
+python:backend/app/services/agent/tools/transit/evidence_binding.py:bind_accessibility_target#0
+python:backend/app/services/agent/tools/transit/evidence_binding.py:decision_evidence_for_status#0
+python:backend/app/services/agent/tools/transit/evidence_projection.py:_safe_catchability#0
+python:backend/app/services/agent/tools/transit/evidence_projection.py:accessibility_text#0
+python:backend/app/services/agent/tools/transit/evidence_projection.py:arrivals_text#0
+python:backend/app/services/agent/tools/transit/evidence_projection.py:operation_facts#0
+python:backend/app/services/agent/tools/transit/evidence_projection.py:operation_facts_text#0
+python:backend/app/services/agent/tools/transit/evidence_projection.py:safe_result#0
+python:backend/app/services/agent/tools/transit/lookup_arrivals_common.py:_arrival_payload#0
+python:backend/app/services/agent/tools/transit/lookup_arrivals_subway.py:_resolve_stop#0
+python:backend/app/services/agent/tools/transit/lookup_arrivals_subway.py:execute#0
+python:backend/app/services/agent/tools/transit/present_transit.py:StatusView.from_evidence#0
+python:backend/app/services/agent/tools/transit/present_transit.py:_build_events#0
+python:backend/app/services/agent/tools/transit/present_transit.py:_systemwide_alert_text#0
+python:backend/app/services/agent/tools/transit/transit_snapshot.py:_incident_evidence#0
+python:backend/app/services/agent/tools/transit/transit_snapshot.py:execute#0
+python:backend/app/services/agent/tools/transit/venue_crowd_window.py:execute#0
+```
+
+The generated update also lowered four surviving ceilings without widening
+any entry: `check_transit.arrivals` moved from 18 to 11,
+`safe_accessibility` and `safe_unconfirmed_signal` moved from 15 to 11, and
+`lookup_arrivals_bus.execute` moved from 39 to 12.
+
+### Preserved behavior
+
+Accepted-itinerary accessibility binding. Route and direction matching.
+Live versus scheduled arrival provenance. Outage handling. Provider
+timeouts. Graceful unavailable results. Missing live data is not confirmed
+safety. Official alert IDs stay comparable for decision-evidence reuse.
+Passenger text still comes from server-owned evidence projection.
+
+### Unresolved risks
+
+- One 6D function still shows CRAP above 30:
+  `evidence_projection._area_condition_fields`. Do not add a helper test to
+  hide that.
+- Net production growth is +566 lines after replacing 993 old lines. Function
+  inventory grew by 84 after Codex removed 14 worker helpers.
+- Global debt exit 1 is Batch 6E. Batch 6D is `above_12=0`.
+- `quality/baseline.json` has 168 entries. The reviewer-owned quality gate
+  exits 0 with `approval_eligible: true`.
+
+Batch 6D is Codex-approved for commit. Batch 6E and Batch 7 were not started.
 
 ## Historical records through 427fbc8
 
