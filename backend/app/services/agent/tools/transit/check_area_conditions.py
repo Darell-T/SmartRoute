@@ -119,8 +119,7 @@ def _is_nyc_area(name: str, latitude: float, longitude: float) -> bool:
         bounds["min_lat"] <= latitude <= bounds["max_lat"]
         and bounds["min_lon"] <= longitude <= bounds["max_lon"]
     )
-    # EWR is a known destination for trip planning, but it is not an NYC area
-    # for this local-conditions tool. The coarse NYC bounding box includes it.
+    # The coarse bounds include EWR, but this tool reports NYC conditions only.
     return in_bounds and _area_key(name) not in _OUTSIDE_NYC_KNOWN_PLACES
 
 
@@ -188,29 +187,35 @@ def _safe_events(value: object) -> list[dict[str, Any]]:
 def _safe_incidents(value: object) -> list[dict[str, Any]]:
     incidents: list[dict[str, Any]] = []
     for row in value if isinstance(value, list) else []:
-        if not isinstance(row, Mapping):
+        display = _incident_display_row(row)
+        if display is None:
             continue
-        severity = str(row.get("severity") or "medium").casefold()
-        display: dict[str, Any] = {
-            "location": text._safe_text(row.get("location") or row.get("location_name"), 100),
-            "nearby_station": text._safe_text(row.get("nearby_station"), 80),
-            "severity": severity if severity in {"low", "medium", "high", "critical"} else "medium",
-            "description": text._safe_text(row.get("description"), 220),
-            "source": text._safe_text(row.get("source"), 60),
-        }
-        state = str(row.get("state") or "").casefold()
-        if state in {"unconfirmed", "confirmed", "rejected", "refreshing", "stale", "resolved"}:
-            display["state"] = state
-        if isinstance(row.get("corroborated"), bool):
-            display["corroborated"] = row["corroborated"]
         incidents.append(display)
         if len(incidents) >= _MAX_INCIDENTS:
             break
     return incidents
 
 
+def _incident_display_row(row: object) -> dict[str, Any] | None:
+    if not isinstance(row, Mapping):
+        return None
+    severity = str(row.get("severity") or "medium").casefold()
+    display: dict[str, Any] = {
+        "location": text._safe_text(row.get("location") or row.get("location_name"), 100),
+        "nearby_station": text._safe_text(row.get("nearby_station"), 80),
+        "severity": severity if severity in {"low", "medium", "high", "critical"} else "medium",
+        "description": text._safe_text(row.get("description"), 220),
+        "source": text._safe_text(row.get("source"), 60),
+    }
+    state = str(row.get("state") or "").casefold()
+    if state in {"unconfirmed", "confirmed", "rejected", "refreshing", "stale", "resolved"}:
+        display["state"] = state
+    if isinstance(row.get("corroborated"), bool):
+        display["corroborated"] = row["corroborated"]
+    return display
+
+
 def _display_incidents(value: object) -> list[dict[str, Any]]:
-    """Deduplicate index incidents and nearby warnings for rider display."""
     merged: dict[str, dict[str, Any]] = {}
     for row in value if isinstance(value, list) else []:
         if not isinstance(row, Mapping):
@@ -238,23 +243,38 @@ def _safe_sources(value: object) -> dict[str, list[str]] | None:
 
 
 def _incident_evidence(value: object) -> dict[str, Any]:
-    """Project a bounded, payload-free summary of an index lookup."""
     metadata = value.get("scan_metadata") if isinstance(value, Mapping) else None
     metadata = metadata if isinstance(metadata, Mapping) else {}
     status = str(metadata.get("status") or "failed")
     evidence: dict[str, Any] = {
         "status": status if status in _TRUTHFUL_INCIDENT_STATUSES else "failed",
     }
-    if isinstance(metadata.get("scanned_at"), str):
-        evidence["scanned_at"] = metadata["scanned_at"]
-    if isinstance(metadata.get("cache_hit"), bool):
-        evidence["cache_hit"] = metadata["cache_hit"]
-    for key in _LOOKUP_METADATA_KEYS:
-        lookup_value = metadata.get(key)
-        if isinstance(lookup_value, str) and lookup_value:
-            evidence[key] = lookup_value
-    if isinstance(metadata.get("warning_count"), int):
-        evidence["warning_count"] = metadata["warning_count"]
+    _copy_lookup_metadata(evidence, metadata)
+    return evidence
+
+
+_SCALAR_LOOKUP_METADATA = (
+    ("scanned_at", str),
+    ("cache_hit", bool),
+    ("warning_count", int),
+)
+
+
+def _copy_lookup_metadata(evidence: dict[str, Any], metadata: Mapping[str, Any]) -> None:
+    evidence.update(
+        {
+            key: metadata[key]
+            for key, expected in _SCALAR_LOOKUP_METADATA
+            if isinstance(metadata.get(key), expected)
+        }
+    )
+    evidence.update(
+        {
+            key: metadata[key]
+            for key in _LOOKUP_METADATA_KEYS
+            if isinstance(metadata.get(key), str) and metadata[key]
+        }
+    )
     requested = metadata.get("requested_coverage_ids")
     if isinstance(requested, list):
         evidence["requested_coverage_ids"] = [
@@ -265,7 +285,6 @@ def _incident_evidence(value: object) -> dict[str, Any]:
     sources = _safe_sources(metadata.get("sources"))
     if sources is not None:
         evidence["sources"] = sources
-    return evidence
 
 
 def _event_evidence(value: object, *, travel_at: datetime) -> dict[str, Any]:
@@ -286,28 +305,27 @@ def _event_evidence(value: object, *, travel_at: datetime) -> dict[str, Any]:
     return evidence
 
 
+_UNSCANNED_INCIDENT_RESULT = {
+    "incidents": [],
+    "warnings": [],
+    "scan_metadata": {
+        "status": "unscanned",
+        "lookup_status": "unscanned",
+        "coverage_status": "unscanned",
+        "lookup_kind": "index",
+        "requested_coverage_ids": [],
+        "warning_count": 0,
+        "cache_hit": False,
+        "sources": {"attempted": ["incident_index"], "completed": []},
+    },
+}
+
+
 async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
-    area_raw = str(tool_input.get("area") or "").strip()
-    if not area_raw:
-        return ToolResult(ok=False, error="area is required")
-    if _area_key(area_raw) in _BROAD_AREA_INPUTS:
-        return ToolResult(ok=False, error=_BROAD_AREA_MESSAGE)
-
-    travel_at, time_error = _parse_at(tool_input.get("at"), ctx)
-    if time_error is not None:
-        return ToolResult(ok=False, error=time_error)
-    assert travel_at is not None
-    place, resolution_error = await resolve_named_place(
-        area_raw,
-        ctx,
-        missing_location_message="Name a specific NYC station, neighborhood, or landmark to check conditions.",
-    )
-    if place is None:
-        return ToolResult(ok=False, error=resolution_error or "could not resolve that NYC area")
-
-    area_name = text._safe_text(place.name, 100) or text._safe_text(area_raw, 100)
-    if not _is_nyc_area(area_name, place.latitude, place.longitude):
-        return ToolResult(ok=False, error=_OUTSIDE_AREA_MESSAGE)
+    admitted = await _admit_area_query(tool_input, ctx)
+    if isinstance(admitted, ToolResult):
+        return admitted
+    area_name, place, travel_at = admitted
     area_key = _coordinate_key(place.latitude, place.longitude)
     stop_context = _nearby_stop_context(
         latitude=place.latitude, longitude=place.longitude, gtfs=ctx.gtfs, area_key=area_key
@@ -322,6 +340,44 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
         expected_at=travel_at,
         route_id="",
     )
+    incident_result, event_result = await _area_provider_results(
+        stop_context, hotspot, travel_at
+    )
+    return _area_conditions_result(
+        area_name, stop_context, incident_result, event_result, travel_at
+    )
+
+
+async def _admit_area_query(
+    tool_input: dict, ctx: ToolContext
+) -> tuple[str, Any, datetime] | ToolResult:
+    area_raw = str(tool_input.get("area") or "").strip()
+    if not area_raw:
+        return ToolResult(ok=False, error="area is required")
+    if _area_key(area_raw) in _BROAD_AREA_INPUTS:
+        return ToolResult(ok=False, error=_BROAD_AREA_MESSAGE)
+    travel_at, time_error = _parse_at(tool_input.get("at"), ctx)
+    if time_error is not None:
+        return ToolResult(ok=False, error=time_error)
+    assert travel_at is not None
+    place, resolution_error = await resolve_named_place(
+        area_raw,
+        ctx,
+        missing_location_message="Name a specific NYC station, neighborhood, or landmark to check conditions.",
+    )
+    if place is None:
+        return ToolResult(ok=False, error=resolution_error or "could not resolve that NYC area")
+    area_name = text._safe_text(place.name, 100) or text._safe_text(area_raw, 100)
+    if not _is_nyc_area(area_name, place.latitude, place.longitude):
+        return ToolResult(ok=False, error=_OUTSIDE_AREA_MESSAGE)
+    return area_name, place, travel_at
+
+
+async def _area_provider_results(
+    stop_context: list[CandidateStopContext],
+    hotspot: HotspotHit,
+    travel_at: datetime,
+) -> tuple[object, object]:
     incident_task = (
         asyncio.create_task(trip_incidents.scan_route_incidents(stop_context, travel_at=travel_at))
         if stop_context
@@ -331,38 +387,29 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
         crowd_search.search_hotspots([hotspot], travel_at=travel_at, allow_live_search=True)
     )
     if incident_task is None:
-        incident_result: object = {
-            "incidents": [],
-            "warnings": [],
-            "scan_metadata": {
-                "status": "unscanned",
-                "lookup_status": "unscanned",
-                "coverage_status": "unscanned",
-                "lookup_kind": "index",
-                "requested_coverage_ids": [],
-                "warning_count": 0,
-                "cache_hit": False,
-                "sources": {"attempted": ["incident_index"], "completed": []},
-            },
-        }
-        try:
-            event_result: object = await event_task
-        except Exception as error:  # noqa: BLE001 event lookup faults stay failed
-            event_result = error
-    else:
-        incident_result, event_result = await asyncio.gather(
-            incident_task,
-            event_task,
-            return_exceptions=True,
-        )
+        event_result = (await asyncio.gather(event_task, return_exceptions=True))[0]
+        return dict(_UNSCANNED_INCIDENT_RESULT), event_result
+    incident_result, event_result = await asyncio.gather(
+        incident_task,
+        event_task,
+        return_exceptions=True,
+    )
+    return incident_result, event_result
+
+
+def _area_conditions_result(
+    area_name: str,
+    stop_context: list[CandidateStopContext],
+    incident_result: object,
+    event_result: object,
+    travel_at: datetime,
+) -> ToolResult:
     if isinstance(incident_result, BaseException):
         incident_result = {"incidents": [], "scan_metadata": {"status": "failed"}}
     if isinstance(event_result, BaseException):
         event_result = {"status": "unavailable", "events": [], "completed_sources": []}
-
     incident_rows = incident_result.get("incidents") if isinstance(incident_result, Mapping) else None
     warning_rows = incident_result.get("warnings") if isinstance(incident_result, Mapping) else None
-
     return ToolResult(
         ok=True,
         data={

@@ -40,50 +40,51 @@ def _served_stops(gtfs: object, route_id: str) -> list[dict]:
     ]
 
 
-def _resolve_stop(
-    gtfs: object,
-    route_id: str,
-    stop_query: str | None,
-    location: tuple[float, float] | None,
-    boarding: dict | None,
+def _query_stop_matches(
+    stops: list[dict], query: str
 ) -> tuple[dict | None, list[dict]]:
-    query = canonical_station_query(stop_query) if stop_query else ""
-    if query:
-        stops = _served_stops(gtfs, route_id)
-        if not stops:
-            return None, []
-        normalized_query = _normalized_name(query)
-        exact = [
-            stop
-            for stop in stops
-            if _normalized_name(stop.get("stop_name")) == normalized_query
-        ]
-        matches = exact or [
-            stop
-            for stop in stops
-            if normalized_query in _normalized_name(stop.get("stop_name"))
-            or _normalized_name(stop.get("stop_name")) in normalized_query
-        ]
-        if len(matches) == 1:
-            return matches[0], []
-        return (None, matches[:4]) if matches else (None, [])
+    normalized_query = _normalized_name(query)
+    exact = [
+        stop
+        for stop in stops
+        if _normalized_name(stop.get("stop_name")) == normalized_query
+    ]
+    matches = exact or [
+        stop
+        for stop in stops
+        if normalized_query in _normalized_name(stop.get("stop_name"))
+        or _normalized_name(stop.get("stop_name")) in normalized_query
+    ]
+    if len(matches) == 1:
+        return matches[0], []
+    return (None, matches[:4]) if matches else (None, [])
 
-    if boarding and boarding.get("stop_id"):
-        coords = boarding.get("coordinates") or {}
-        return {
-            "stop_id": str(boarding["stop_id"]),
-            "stop_name": str(boarding.get("stop_name") or "Transit stop"),
-            "stop_lat": coords.get("latitude", coords.get("lat")),
-            "stop_lon": coords.get("longitude", coords.get("lng")),
-        }, []
 
-    stops = _served_stops(gtfs, route_id)
-    if not stops:
-        return None, []
+def _boarding_stop(boarding: dict | None) -> dict | None:
+    if not boarding or not boarding.get("stop_id"):
+        return None
+    coords = boarding.get("coordinates") or {}
+    return {
+        "stop_id": str(boarding["stop_id"]),
+        "stop_name": str(boarding.get("stop_name") or "Transit stop"),
+        "stop_lat": coords.get("latitude", coords.get("lat")),
+        "stop_lon": coords.get("longitude", coords.get("lng")),
+    }
+
+
+def _named_or_nearest_stop(
+    stops: list[dict],
+    boarding: dict | None,
+    location: tuple[float, float] | None,
+) -> tuple[dict | None, list[dict]]:
     if boarding and boarding.get("stop_name"):
         target = _normalized_name(canonical_station_query(boarding["stop_name"]))
         match = next(
-            (stop for stop in stops if _normalized_name(stop.get("stop_name")) == target),
+            (
+                stop
+                for stop in stops
+                if _normalized_name(stop.get("stop_name")) == target
+            ),
             None,
         )
         if match:
@@ -100,6 +101,28 @@ def _resolve_stop(
             float(stop["stop_lon"]),
         ),
     ), []
+
+
+def _resolve_stop(
+    gtfs: object,
+    route_id: str,
+    stop_query: str | None,
+    location: tuple[float, float] | None,
+    boarding: dict | None,
+) -> tuple[dict | None, list[dict]]:
+    query = canonical_station_query(stop_query) if stop_query else ""
+    if query:
+        stops = _served_stops(gtfs, route_id)
+        if not stops:
+            return None, []
+        return _query_stop_matches(stops, query)
+    bound = _boarding_stop(boarding)
+    if bound is not None:
+        return bound, []
+    stops = _served_stops(gtfs, route_id)
+    if not stops:
+        return None, []
+    return _named_or_nearest_stop(stops, boarding, location)
 
 
 async def _scheduled_fallback(
@@ -214,7 +237,7 @@ def _arrival_source_bindings(
 def _child_stop_ids(ctx: ToolContext, stop: dict) -> set[str]:
     try:
         child_ids = {str(item) for item in ctx.gtfs.get_child_stop_ids(stop["stop_id"])}
-    except Exception:  # noqa: BLE001 child-stop index faults to N/S suffix
+    except Exception:  # noqa: BLE001 child-stop index faults use N/S suffixes
         child_ids = {f"{stop['stop_id']}N", f"{stop['stop_id']}S"}
     child_ids.add(str(stop["stop_id"]))
     return child_ids
@@ -356,6 +379,26 @@ def _feed_prediction_status(
     return "no_predictions"
 
 
+def _subway_request_scope(
+    tool_input: dict, boarding: dict | None
+) -> tuple[str | None, int | None]:
+    explicit_direction = _normalize_direction(tool_input.get("direction"))
+    boarding_direction = _direction_from_boarding(boarding)
+    requested_direction = (
+        explicit_direction
+        if explicit_direction in {"uptown", "downtown"}
+        else boarding_direction or explicit_direction
+    )
+    walking_minutes = tool_input.get("walking_minutes")
+    if walking_minutes is None:
+        walking_minutes = (boarding or {}).get("walking_minutes")
+    normalized_walking = int(walking_minutes) if walking_minutes is not None else None
+    catchability_walking = (
+        normalized_walking if requested_direction in {"uptown", "downtown"} else None
+    )
+    return requested_direction, catchability_walking
+
+
 async def execute(
     tool_input: dict,
     ctx: ToolContext,
@@ -382,24 +425,16 @@ async def execute(
         return completed(resolved)
     stop, boarding, location = resolved
     child_ids = _child_stop_ids(ctx, stop)
-    explicit_direction = _normalize_direction(tool_input.get("direction"))
-    boarding_direction = _direction_from_boarding(boarding)
-    requested_direction = (
-        explicit_direction
-        if explicit_direction in {"uptown", "downtown"}
-        else boarding_direction or explicit_direction
-    )
-    walking_minutes = tool_input.get("walking_minutes")
-    if walking_minutes is None:
-        walking_minutes = (boarding or {}).get("walking_minutes")
-    normalized_walking = int(walking_minutes) if walking_minutes is not None else None
-    catchability_walking = (
-        normalized_walking if requested_direction in {"uptown", "downtown"} else None
+    requested_direction, catchability_walking = _subway_request_scope(
+        tool_input, boarding
     )
     if location:
         stop["distance_m"] = round(
             distance_meters(
-                location[0], location[1], float(stop["stop_lat"]), float(stop["stop_lon"])
+                location[0],
+                location[1],
+                float(stop["stop_lat"]),
+                float(stop["stop_lon"]),
             ),
             1,
         )

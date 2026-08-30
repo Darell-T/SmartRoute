@@ -172,6 +172,53 @@ def _empty_payload(
     }
 
 
+_DIRECTION_GROUP_LABELS = {
+    "uptown": "Uptown / Manhattan-bound",
+    "downtown": "Downtown / Brooklyn-bound",
+}
+
+
+def _direction_groups(
+    grouped: dict[str, list[dict]], now: int, status: str
+) -> list[dict]:
+    directions = []
+    for direction, values in sorted(grouped.items()):
+        arrivals = _group_arrival_predictions(values, now, status)
+        if not arrivals:
+            continue
+        directions.append(
+            {
+                "id": direction,
+                "label": _DIRECTION_GROUP_LABELS.get(
+                    direction,
+                    str(values[0].get("direction_label") or direction).title(),
+                ),
+                "arrivals": arrivals,
+            }
+        )
+    return directions
+
+
+def _group_arrival_predictions(
+    values: list[dict], now: int, status: str
+) -> list[dict]:
+    arrivals = []
+    for value in values:
+        timestamp = int(value["arrival_time"])
+        minutes = (timestamp - now + 59) // 60
+        if minutes <= 0:
+            continue
+        arrivals.append(
+            {
+                "expected_at": datetime.fromtimestamp(timestamp, UTC).isoformat(),
+                "minutes": minutes,
+                "realtime": status in {"live", "stale"},
+                "trip_id": value.get("trip_id"),
+                "vehicle_id": value.get("vehicle_id"),
+            }
+        )
+    return arrivals
+
 def _arrival_payload(
     *,
     route_id: str,
@@ -183,37 +230,9 @@ def _arrival_payload(
     walking_minutes: int | None = None,
     valid_until: object = None,
 ) -> dict:
-    directions = []
-    for direction, values in sorted(grouped.items()):
-        arrivals = []
-        for value in values:
-            timestamp = int(value["arrival_time"])
-            minutes = (timestamp - now + 59) // 60
-            if minutes <= 0:
-                continue
-            arrivals.append(
-                {
-                    "expected_at": datetime.fromtimestamp(
-                        timestamp, UTC
-                    ).isoformat(),
-                    "minutes": minutes,
-                    "realtime": status in {"live", "stale"},
-                    "trip_id": value.get("trip_id"),
-                    "vehicle_id": value.get("vehicle_id"),
-                }
-            )
-        if not arrivals:
-            continue
-        label = str(values[0].get("direction_label") or direction).title()
-        if direction == "uptown":
-            label = "Uptown / Manhattan-bound"
-        elif direction == "downtown":
-            label = "Downtown / Brooklyn-bound"
-        directions.append({"id": direction, "label": label, "arrivals": arrivals})
+    directions = _direction_groups(grouped, now, status)
     all_minutes = [
-        arrival["minutes"]
-        for group in directions
-        for arrival in group["arrivals"]
+        arrival["minutes"] for group in directions for arrival in group["arrivals"]
     ]
     payload = {
         "route_id": route_id,

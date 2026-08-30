@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
@@ -76,6 +77,22 @@ bind_accessibility_target = _binding.bind_accessibility_target
 accessibility_result_matches = _binding.accessibility_result_matches
 
 
+@dataclass
+class _EvidenceAccumulator:
+    service: dict[str, Any] = field(default_factory=dict)
+    arrivals: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    alerts: list[dict[str, Any]] = field(default_factory=list)
+    incidents: list[dict[str, Any]] = field(default_factory=list)
+    signals: list[dict[str, Any]] = field(default_factory=list)
+    coverage: dict[str, str] = field(default_factory=dict)
+    freshness: dict[str, Any] = field(default_factory=dict)
+    observed_at: dict[str, str] = field(default_factory=dict)
+    freshness_by_source: dict[str, Any] = field(default_factory=dict)
+    unknowns: list[str] = field(default_factory=list)
+    accessibility: dict[str, Any] | None = None
+    safe_results: list[dict[str, Any]] = field(default_factory=list)
+
+
 def build_evidence_set(
     *,
     session_id: str,
@@ -90,73 +107,23 @@ def build_evidence_set(
 ) -> tuple[str, dict[str, Any]]:
     """Persist a bounded view of one existing leaf-tool result."""
     requested_set_id = str(evidence_set_id or "").strip()
-    if requested_set_id:
-        existing = load_evidence_set(requested_set_id, session_id=str(session_id or ""))
-        if existing is not None:
-            public_existing = dict(existing)
-            for key in ("session_id", "created_at", "expires_at"):
-                public_existing.pop(key, None)
-            return requested_set_id, public_existing
-
-    row = result if isinstance(result, dict) else {}
-    if isinstance(row.get("results"), list):
-        rows = [item for item in row["results"] if isinstance(item, dict)]
-    else:
-        rows = [row]
+    reused = _reused_evidence_set(session_id, requested_set_id)
+    if reused is not None:
+        return reused
+    row, rows = _result_rows(result)
     operation_name = _text(operation) or "transit"
     routes = _routes(route_ids)
-    resolution = direction_resolution
-    if resolution is None and direction not in (None, ""):
-        resolution = resolve_direction(direction, _direction_contexts(rows))
-    requested_direction = (
-        resolution.resolved
-        if resolution and resolution.resolved
-        else normalize_direction(direction)
+    resolution, requested_direction = _request_direction(
+        direction, direction_resolution, rows
     )
     concern_values = _concerns(concerns)
-    service: dict[str, Any] = {}
-    arrivals: dict[str, list[dict[str, Any]]] = {}
-    alerts: list[dict[str, Any]] = []
-    incidents: list[dict[str, Any]] = []
-    signals: list[dict[str, Any]] = []
-    coverage: dict[str, str] = {}
-    freshness: dict[str, Any] = {}
-    observed_at: dict[str, str] = {}
-    freshness_by_source: dict[str, Any] = {}
-    unknowns: list[str] = []
-    accessibility: dict[str, Any] | None = None
-    safe_results: list[dict[str, Any]] = []
-    for current in rows:
-        safe_results.append(_safe_result(current, requested_direction))
-        _ingest_row_observations(
-            current,
-            operation_name=operation_name,
-            freshness=freshness,
-            observed_at=observed_at,
-        )
-        _ingest_operation_row(
-            current,
-            operation_name=operation_name,
-            routes=routes,
-            concern_values=concern_values,
-            coverage=coverage,
-            service=service,
-            alerts=alerts,
-            incidents=incidents,
-            signals=signals,
-            arrivals=arrivals,
-            requested_direction=requested_direction,
-        )
-        if operation_name == "accessibility":
-            coverage["accessibility"] = _coverage(current)
-            accessibility = _safe_accessibility(current)
-        _ingest_row_signals(
-            current,
-            concern_values=concern_values,
-            routes=routes,
-            requested_direction=requested_direction,
-            signals=signals,
-        )
+    ingested = _ingest_result_rows(
+        rows,
+        operation_name=operation_name,
+        routes=routes,
+        concern_values=concern_values,
+        requested_direction=requested_direction,
+    )
     return _store_public_evidence(
         session_id=session_id,
         requested_set_id=requested_set_id,
@@ -166,21 +133,100 @@ def build_evidence_set(
         concern_values=concern_values,
         resolution=resolution,
         requested_direction=requested_direction,
-        service=service,
-        arrivals=arrivals,
-        alerts=alerts,
-        incidents=incidents,
-        signals=signals,
-        coverage=coverage,
-        freshness=freshness,
-        observed_at=observed_at,
-        freshness_by_source=freshness_by_source,
-        unknowns=unknowns,
-        accessibility=accessibility,
-        safe_results=safe_results,
+        service=ingested.service,
+        arrivals=ingested.arrivals,
+        alerts=ingested.alerts,
+        incidents=ingested.incidents,
+        signals=ingested.signals,
+        coverage=ingested.coverage,
+        freshness=ingested.freshness,
+        observed_at=ingested.observed_at,
+        freshness_by_source=ingested.freshness_by_source,
+        unknowns=ingested.unknowns,
+        accessibility=ingested.accessibility,
+        safe_results=ingested.safe_results,
         turn_id=turn_id,
     )
 
+
+def _reused_evidence_set(
+    session_id: str, requested_set_id: str
+) -> tuple[str, dict[str, Any]] | None:
+    if not requested_set_id:
+        return None
+    existing = load_evidence_set(requested_set_id, session_id=str(session_id or ""))
+    if existing is None:
+        return None
+    public_existing = dict(existing)
+    for key in ("session_id", "created_at", "expires_at"):
+        public_existing.pop(key, None)
+    return requested_set_id, public_existing
+
+
+def _result_rows(result: object) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    row = result if isinstance(result, dict) else {}
+    if isinstance(row.get("results"), list):
+        return row, [item for item in row["results"] if isinstance(item, dict)]
+    return row, [row]
+
+
+def _request_direction(
+    direction: object,
+    direction_resolution: DirectionResolution | None,
+    rows: list[dict[str, Any]],
+) -> tuple[DirectionResolution | None, str | None]:
+    resolution = direction_resolution
+    if resolution is None and direction not in (None, ""):
+        resolution = resolve_direction(direction, _direction_contexts(rows))
+    requested_direction = (
+        resolution.resolved
+        if resolution and resolution.resolved
+        else normalize_direction(direction)
+    )
+    return resolution, requested_direction
+
+
+def _ingest_result_rows(
+    rows: list[dict[str, Any]],
+    *,
+    operation_name: str,
+    routes: list[str],
+    concern_values: list[str],
+    requested_direction: str | None,
+) -> _EvidenceAccumulator:
+    ingested = _EvidenceAccumulator()
+    for current in rows:
+        ingested.safe_results.append(_safe_result(current, requested_direction))
+        _ingest_row_observations(
+            current,
+            operation_name=operation_name,
+            freshness=ingested.freshness,
+            observed_at=ingested.observed_at,
+        )
+        _ingest_operation_row(
+            current,
+            operation_name=operation_name,
+            routes=routes,
+            concern_values=concern_values,
+            coverage=ingested.coverage,
+            service=ingested.service,
+            alerts=ingested.alerts,
+            incidents=ingested.incidents,
+            signals=ingested.signals,
+            arrivals=ingested.arrivals,
+            requested_direction=requested_direction,
+        )
+        if operation_name == "accessibility":
+            ingested.coverage["accessibility"] = _coverage(current)
+            ingested.accessibility = _safe_accessibility(current)
+        _ingest_row_signals(
+            current,
+            concern_values=concern_values,
+            routes=routes,
+            requested_direction=requested_direction,
+            signals=ingested.signals,
+        )
+    return ingested
 
 def _store_public_evidence(
     *,
@@ -711,8 +757,6 @@ def _incident_row_eligible(
 
 
 def _source_key(operation: str, row: dict[str, Any]) -> str:
-    """Return a stable passenger-domain source key for freshness metadata."""
-
     if operation == "service_status":
         return "alerts"
     if operation == "arrivals":
@@ -722,34 +766,51 @@ def _source_key(operation: str, row: dict[str, Any]) -> str:
     return operation
 
 
+_NAMED_SOURCE_OBSERVED = (
+    ("gtfs_rt", "gtfs_rt_observed_at"),
+    ("bustime", "bustime_observed_at"),
+    ("incidents", "incident_observed_at"),
+)
+
+
 def _source_observations(row: dict[str, Any]) -> dict[str, str]:
     values: dict[str, str] = {}
     for raw in (row.get("observed_at_by_source"), row.get("observed_at")):
-        if not isinstance(raw, dict):
-            continue
-        for source, observed in raw.items():
-            source_name = _text(source)
-            observed_text = _text(observed)
-            if source_name and observed_text:
-                values[source_name] = observed_text
-    for source, key in (
-        ("gtfs_rt", "gtfs_rt_observed_at"),
-        ("bustime", "bustime_observed_at"),
-        ("incidents", "incident_observed_at"),
-    ):
+        values.update(_mapped_observations(raw))
+    values.update(_named_source_observations(row))
+    if values:
+        return values
+    return _accessibility_capture_observation(row)
+
+
+def _mapped_observations(raw: object) -> dict[str, str]:
+    if not isinstance(raw, dict):
+        return {}
+    values: dict[str, str] = {}
+    for source, observed in raw.items():
+        source_name = _text(source)
+        observed_text = _text(observed)
+        if source_name and observed_text:
+            values[source_name] = observed_text
+    return values
+
+
+def _named_source_observations(row: dict[str, Any]) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for source, key in _NAMED_SOURCE_OBSERVED:
         observed_text = _text(row.get(key))
         if observed_text:
             values[source] = observed_text
-    if values:
-        return values
+    return values
+
+
+def _accessibility_capture_observation(row: dict[str, Any]) -> dict[str, str]:
     # Accessibility feeds do not publish a provider timestamp.  A capture
     # timestamp is still useful to make the evidence boundary explicit; the
     # operation's coverage remains authoritative for whether it is usable.
-    return (
-        {"accessibility": datetime.now(UTC).isoformat()}
-        if "station_matched" in row
-        else {}
-    )
+    if "station_matched" not in row:
+        return {}
+    return {"accessibility": datetime.now(UTC).isoformat()}
 
 
 def _observed_value(row: dict[str, Any]) -> object:
@@ -786,8 +847,6 @@ def _has_unscoped_signals(signals: list[dict[str, Any]]) -> bool:
 
 
 def _remove_false_all_clear(service: dict[str, Any]) -> None:
-    """Do not retain a no-alert status when the alert source is incomplete."""
-
     for bucket in service.values():
         if isinstance(bucket, dict) and bucket.get("status") == "no_matching_alerts":
             bucket["status"] = "unknown"
@@ -805,9 +864,8 @@ def _arrival_row(
     arrivals: dict[str, list[dict[str, Any]]],
     requested_direction: str | None,
 ) -> None:
-    for group in (
-        row.get("directions") if isinstance(row.get("directions"), list) else []
-    ):
+    groups = row.get("directions") if isinstance(row.get("directions"), list) else []
+    for group in groups:
         if not isinstance(group, dict):
             continue
         direction = (
@@ -817,19 +875,29 @@ def _arrival_row(
         )
         if requested_direction and direction != requested_direction:
             continue
-        group_arrivals = []
-        for item in group.get("arrivals") or []:
-            if not isinstance(item, dict):
-                continue
-            group_arrivals.append(
-                {
-                    "route_id": _text(row.get("route_id")).upper(),
-                    "stop": _safe_stop(row.get("stop")),
-                    "direction": direction,
-                    "direction_label": _text(group.get("label")),
-                    "expected_at": _text(item.get("expected_at")),
-                    "minutes": item.get("minutes"),
-                    "realtime": item.get("realtime"),
-                }
-            )
-        arrivals.setdefault(direction, []).extend(group_arrivals)
+        arrivals.setdefault(direction, []).extend(
+            _arrival_group_items(row, group, direction)
+        )
+
+def _arrival_group_items(
+    row: dict[str, Any], group: dict[str, Any], direction: str
+) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    route_id = _text(row.get("route_id")).upper()
+    stop = _safe_stop(row.get("stop"))
+    label = _text(group.get("label"))
+    for item in group.get("arrivals") or []:
+        if not isinstance(item, dict):
+            continue
+        items.append(
+            {
+                "route_id": route_id,
+                "stop": stop,
+                "direction": direction,
+                "direction_label": label,
+                "expected_at": _text(item.get("expected_at")),
+                "minutes": item.get("minutes"),
+                "realtime": item.get("realtime"),
+            }
+        )
+    return items

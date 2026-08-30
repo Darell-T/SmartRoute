@@ -79,47 +79,39 @@ def _passenger_text(evidence: dict[str, Any], operation: str) -> str:
     return operation_facts_text(operation, evidence.get("operation_facts") or {})
 
 
-def _build_events(
-    ctx: ToolContext,
-    evidence: dict[str, Any],
-    operation: str,
-    text: str,
+def _arrival_card_events(
+    ctx: ToolContext, evidence: dict[str, Any], text: str
 ) -> list:
-    if operation != "arrivals":
-        result: list[agent_events.AgentEvent] = [agent_events.TokenEvent(text=text)]
-        findings = [
-            *(
-                item
-                for item in evidence.get("confirmed_matching_alerts") or []
-                if isinstance(item, dict)
-            ),
-            *(
-                item
-                for item in evidence.get("incidents") or []
-                if isinstance(item, dict) and item.get("confirmed") is True
-            ),
-        ]
-        if (
-            operation == "service_status"
-            and not evidence.get("checked_routes")
-            and (
-                any(isinstance(item, dict) for item in findings)
-                or any(
-                    isinstance(item, dict)
-                    for item in evidence.get("unconfirmed_signals") or []
-                )
-            )
-        ):
-            result.append(agent_events.TransitStatusActionEvent(turn_id=ctx.turn_id))
-        return result
-    result = [
+    cards = [
         agent_events.ArrivalCardEvent.from_lookup(ctx.turn_id, row)
         for row in evidence.get("results") or []
         if isinstance(row, dict)
         and row.get("route_id")
         and renderable_arrival_card(row)
     ]
-    return result or [agent_events.TokenEvent(text=text)]
+    return cards or [agent_events.TokenEvent(text=text)]
+
+
+def _status_token_events(
+    ctx: ToolContext,
+    evidence: dict[str, Any],
+    operation: str,
+    text: str,
+) -> list:
+    events: list[agent_events.AgentEvent] = [agent_events.TokenEvent(text=text)]
+    if _should_emit_status_action(operation, evidence):
+        events.append(agent_events.TransitStatusActionEvent(turn_id=ctx.turn_id))
+    return events
+
+
+def _should_emit_status_action(operation: str, evidence: dict[str, Any]) -> bool:
+    if operation != "service_status" or evidence.get("checked_routes"):
+        return False
+    if _dict_rows(evidence.get("confirmed_matching_alerts")):
+        return True
+    if any(item.get("confirmed") is True for item in _dict_rows(evidence.get("incidents"))):
+        return True
+    return bool(_dict_rows(evidence.get("unconfirmed_signals")))
 
 
 async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
@@ -182,7 +174,11 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
         data=data,
         summary=f"Presented checked {operation.replace('_', ' ')}",
         events=framed_events(
-            _build_events(ctx, evidence, operation, text),
+            (
+                _arrival_card_events(ctx, evidence, text)
+                if operation == "arrivals"
+                else _status_token_events(ctx, evidence, operation, text)
+            ),
             lead_in,
             follow_up,
         ),
@@ -293,40 +289,52 @@ class StatusView:
         routes = ", ".join(checked_routes) or "the requested route"
         raw_scope = evidence.get("direction_scope")
         scope = raw_scope if isinstance(raw_scope, dict) else {}
-        target = (
-            f"{scope['resolved']} {routes}"
-            if scope.get("authoritative") and scope.get("resolved")
-            else routes
-        )
-        findings = _dict_rows(evidence.get("confirmed_matching_alerts")) + tuple(
-            item
-            for item in _dict_rows(evidence.get("incidents"))
-            if item.get("confirmed") is True
-        )
-        if scope.get("requested"):
-            findings = tuple(
-                item
-                for item in findings
-                if _finding_matches_direction(item, scope.get("requested"))
-                or not item.get("direction")
-            )
+        findings = _status_findings(evidence, scope)
         signals = _dict_rows(evidence.get("unconfirmed_signals"))
-        if scope.get("requested") and any(
-            not str(item.get("direction") or "").strip()
-            and item.get("direction_scope") != "both_directions"
-            for item in (*findings, *signals)
-        ):
-            target = routes
         return cls(
             checked_routes=checked_routes,
             routes=routes,
             scope=scope,
-            target=target,
+            target=_status_target(routes, scope, findings, signals),
             unknowns=tuple(str(item) for item in evidence.get("unknowns") or []),
             findings=findings,
             signals=signals,
             coverage_note=_coverage_note(evidence),
         )
+
+
+def _status_findings(
+    evidence: dict[str, Any], scope: dict[str, Any]
+) -> tuple[dict[str, Any], ...]:
+    findings = _dict_rows(evidence.get("confirmed_matching_alerts")) + tuple(
+        item
+        for item in _dict_rows(evidence.get("incidents"))
+        if item.get("confirmed") is True
+    )
+    if not scope.get("requested"):
+        return findings
+    return tuple(
+        item
+        for item in findings
+        if _finding_matches_direction(item, scope.get("requested"))
+        or not item.get("direction")
+    )
+
+
+def _status_target(
+    routes: str,
+    scope: dict[str, Any],
+    findings: tuple[dict[str, Any], ...],
+    signals: tuple[dict[str, Any], ...],
+) -> str:
+    target = (
+        f"{scope['resolved']} {routes}"
+        if scope.get("authoritative") and scope.get("resolved")
+        else routes
+    )
+    if scope.get("requested") and _has_unscoped_items(findings, signals):
+        return routes
+    return target
 
 
 def service_status_text(evidence: dict[str, Any]) -> str:
@@ -429,7 +437,10 @@ def _route_specific_status_text(evidence: dict[str, Any], view: StatusView) -> s
 
 
 def _with_direction_caveat(text: str, view: StatusView) -> str:
-    if not _has_unscoped_scope(view):
+    if not (
+        view.scope.get("requested")
+        and _has_unscoped_items(view.findings, view.signals)
+    ):
         return text
     return _sentence(
         f"{text} This is route-level evidence and does not confirm the "
@@ -445,26 +456,34 @@ def _systemwide_alert_text(
     lines: list[str] = []
     seen: set[tuple[str, str]] = set()
     for item in alerts[:8]:
-        routes = ", ".join(
-            str(route).strip().upper()
-            for route in item.get("route_ids") or []
-            if str(route).strip()
-        ) or "Affected service"
-        header = _alert_detail(item)
-        if _is_planned_service_change(item):
-            header = f"Official planned service change: {header}"
-        key = (routes, header)
+        key = _systemwide_alert_line(item)
         if key in seen:
             continue
         seen.add(key)
+        routes, header = key
         lines.append(f"- {routes}: {header}")
-    for signal in (signals or [])[:4]:
-        mode = "bus" if signal.get("mode") == "bus" else "train"
-        route = str(signal.get("route_id") or "").strip().upper()
-        suffix = f" on {route}" if route else ""
-        lines.append(f"- Possible stalled {mode}{suffix} (not confirmed)")
+    lines.extend(_systemwide_signal_line(signal) for signal in (signals or [])[:4])
     text = "Affected services right now:\n" + "\n".join(lines)
     return f"{text} {coverage_note}" if coverage_note else text
+
+
+def _systemwide_alert_line(item: dict[str, Any]) -> tuple[str, str]:
+    routes = ", ".join(
+        str(route).strip().upper()
+        for route in item.get("route_ids") or []
+        if str(route).strip()
+    ) or "Affected service"
+    header = _alert_detail(item)
+    if _is_planned_service_change(item):
+        header = f"Official planned service change: {header}"
+    return routes, header
+
+
+def _systemwide_signal_line(signal: dict[str, Any]) -> str:
+    mode = "bus" if signal.get("mode") == "bus" else "train"
+    route = str(signal.get("route_id") or "").strip().upper()
+    suffix = f" on {route}" if route else ""
+    return f"- Possible stalled {mode}{suffix} (not confirmed)"
 
 
 def _confirmed_finding_text(item: dict[str, Any]) -> str:
@@ -558,13 +577,13 @@ def _finding_matches_direction(item: dict[str, Any], requested: object) -> bool:
     return bool(direction and requested_text and direction.casefold() == requested_text.casefold())
 
 
-def _has_unscoped_scope(view: StatusView) -> bool:
-    if not view.scope.get("requested"):
-        return False
+def _has_unscoped_items(
+    findings: tuple[dict[str, Any], ...], signals: tuple[dict[str, Any], ...]
+) -> bool:
     return any(
         not str(item.get("direction") or "").strip()
         and item.get("direction_scope") != "both_directions"
-        for item in (*view.findings, *view.signals)
+        for item in (*findings, *signals)
     )
 
 

@@ -1,12 +1,3 @@
-"""transit_snapshot tool: current NYC transit conditions, no route planning.
-
-Two modes: near a point (nearest stops + live arrivals + alerts, via the
-same snapshot builder the live-feed map uses) or by line (service alerts
-filtered to specific route ids, no location needed). Everything returned to
-the model goes through text._safe_text caps -- alert/POI/social text is
-untrusted per the system prompt's injection-defense clause.
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -108,84 +99,124 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
             if str(line).strip()
         )
     )
-
     if near_raw:
-        coords, error = await resolve_named_point(
-            near_raw,
-            ctx,
-            missing_location_message="I need your location to check nearby conditions -- share GPS or give me a station name.",
-        )
-        if coords is None:
-            return ToolResult(ok=False, error=error or "could not resolve that location")
-        if ctx.gtfs is None:
-            return ToolResult(ok=False, error="live transit data is not ready yet")
-        snapshot = await _build_live_snapshot(ctx.gtfs, coords[0], coords[1])
-        arrivals = snapshot.get("arrivals") or []
-        alerts = snapshot.get("alerts") or []
-        data = {
-            "source": "smartroute_live_feed",
-            "freshness": "live",
-            "observed_at": datetime.now(UTC).isoformat(),
-            "nearest_stop": _safe_stop(snapshot.get("nearest_stop")),
-            "arrivals": [_safe_arrival(a) for a in arrivals[:ARRIVAL_LIMIT]],
-            "alerts": [_safe_alert(a) for a in alerts[:ALERT_LIMIT]],
-            "network_status": (snapshot.get("signals") or {}).get("network_status"),
-        }
-        summary = f"{len(arrivals)} arrival(s), {len(alerts)} alert(s) near {text._safe_text(near_raw, 60)}"
-        return ToolResult(ok=True, data=data, summary=summary)
+        return await _nearby_snapshot(near_raw, ctx)
+    return await _route_alert_snapshot(lines)
 
-    alert_result = await mta_realtime.fetch_service_alerts(
-        force_refresh=True,
-        with_metadata=True,
+
+async def _nearby_snapshot(near_raw: str, ctx: ToolContext) -> ToolResult:
+    coords, error = await resolve_named_point(
+        near_raw,
+        ctx,
+        missing_location_message="I need your location to check nearby conditions -- share GPS or give me a station name.",
     )
-    if isinstance(alert_result, dict):
-        raw_alerts = alert_result.get("content") or b""
-        freshness = str(alert_result.get("freshness") or "unavailable")
-        observed_at = alert_result.get("observed_at")
-    else:
-        raw_alerts = alert_result
-        # A legacy bytes-only provider result has no trustworthy observation
-        # metadata. Keep the payload usable, but never imply request-time data.
-        freshness = "unknown" if raw_alerts else "unavailable"
-        observed_at = None
-    if not raw_alerts:
-        return ToolResult(
-            ok=False,
-            data={
-                "source": "mta_service_alerts",
-                "freshness": freshness,
-                "status": "unavailable",
-                "requested_routes": lines,
-                "affected_routes": [],
-                "alerts": [],
-                **({"observed_at": observed_at} if observed_at else {}),
-            },
-            error="current MTA service-alert data is unavailable",
-        )
-    parsed = mta_realtime.parse_service_alerts(raw_alerts)
-    filtered = mta_realtime.filter_alerts_for_routes(parsed, set(lines)) if lines else parsed
-    affected_routes = sorted(
-        {
-            str(route_id).strip().upper()
-            for alert in filtered
-            for route_id in (alert.get("route_ids") or [])
-            if str(route_id).strip()
-        }
-    )
+    if coords is None:
+        return ToolResult(ok=False, error=error or "could not resolve that location")
+    if ctx.gtfs is None:
+        return ToolResult(ok=False, error="live transit data is not ready yet")
+    snapshot = await _build_live_snapshot(ctx.gtfs, coords[0], coords[1])
+    arrivals = snapshot.get("arrivals") or []
+    alerts = snapshot.get("alerts") or []
     data = {
-        "source": "mta_service_alerts",
-        "freshness": freshness,
-        "status": "active_alerts" if filtered else "no_active_alerts",
-        "requested_routes": lines,
-        "affected_routes": affected_routes,
-        "alerts": [_safe_alert(a) for a in filtered[:ALERT_LIMIT]],
-        **({"observed_at": observed_at} if observed_at else {}),
+        "source": "smartroute_live_feed",
+        "freshness": "live",
+        "observed_at": datetime.now(UTC).isoformat(),
+        "nearest_stop": _safe_stop(snapshot.get("nearest_stop")),
+        "arrivals": [_safe_arrival(a) for a in arrivals[:ARRIVAL_LIMIT]],
+        "alerts": [_safe_alert(a) for a in alerts[:ALERT_LIMIT]],
+        "network_status": (snapshot.get("signals") or {}).get("network_status"),
     }
+    summary = f"{len(arrivals)} arrival(s), {len(alerts)} alert(s) near {text._safe_text(near_raw, 60)}"
+    return ToolResult(ok=True, data=data, summary=summary)
+
+
+async def _route_alert_snapshot(lines: list[str]) -> ToolResult:
+    raw_alerts, freshness, observed_at = await _alert_provider_payload()
+    if not raw_alerts:
+        return _unavailable_alert_result(lines, freshness, observed_at)
+    parsed = mta_realtime.parse_service_alerts(raw_alerts)
+    filtered = (
+        mta_realtime.filter_alerts_for_routes(parsed, set(lines)) if lines else parsed
+    )
+    return _active_alert_result(lines, filtered, freshness, observed_at)
+
+
+def _unavailable_alert_result(
+    lines: list[str], freshness: str, observed_at: object
+) -> ToolResult:
+    return ToolResult(
+        ok=False,
+        data=_service_alert_payload(
+            lines,
+            freshness,
+            observed_at,
+            status="unavailable",
+            affected_routes=[],
+            alerts=[],
+        ),
+        error="current MTA service-alert data is unavailable",
+    )
+
+
+def _active_alert_result(
+    lines: list[str],
+    filtered: list,
+    freshness: str,
+    observed_at: object,
+) -> ToolResult:
+    data = _service_alert_payload(
+        lines,
+        freshness,
+        observed_at,
+        status="active_alerts" if filtered else "no_active_alerts",
+        affected_routes=sorted(
+            {
+                str(route_id).strip().upper()
+                for alert in filtered
+                for route_id in (alert.get("route_ids") or [])
+                if str(route_id).strip()
+            }
+        ),
+        alerts=[_safe_alert(alert) for alert in filtered[:ALERT_LIMIT]],
+    )
     summary = (
         f"{len(filtered)} active service alert(s)"
         + (f" for {'/'.join(lines)}" if lines else "")
     )
     return ToolResult(ok=True, data=data, summary=summary)
+
+def _service_alert_payload(
+    lines: list[str],
+    freshness: str,
+    observed_at: object,
+    *,
+    status: str,
+    affected_routes: list[str],
+    alerts: list,
+) -> dict[str, Any]:
+    data: dict[str, Any] = {
+        "source": "mta_service_alerts",
+        "freshness": freshness,
+        "status": status,
+        "requested_routes": lines,
+        "affected_routes": affected_routes,
+        "alerts": alerts,
+    }
+    if observed_at:
+        data["observed_at"] = observed_at
+    return data
+
+
+async def _alert_provider_payload() -> tuple[object, str, object]:
+    alert_result = await mta_realtime.fetch_service_alerts(
+        force_refresh=True,
+        with_metadata=True,
+    )
+    return (
+        alert_result.get("content") or b"",
+        str(alert_result.get("freshness") or "unavailable"),
+        alert_result.get("observed_at"),
+    )
 
 
 _SUBWAY_ROUTES = frozenset(
@@ -224,23 +255,8 @@ def _signal_rows(
 
 
 def _latest_observed(rows: list[dict[str, Any]], mode: str) -> str:
-    return max(
-        (
-            str(
-                item.get("time_recorded")
-                or item.get("observed_at")
-                or item.get("updated_at")
-            ).strip()
-            for item in rows
-            if item.get("mode") == mode
-            and (
-                item.get("time_recorded")
-                or item.get("observed_at")
-                or item.get("updated_at")
-            )
-        ),
-        default="",
-    )
+    matching = [item for item in rows if item.get("mode") == mode]
+    return _latest_timestamp(matching, ("time_recorded", "observed_at", "updated_at"))
 
 
 async def _vehicle_evidence(route_ids: list[str]) -> tuple[dict[str, Any], bool]:
@@ -296,23 +312,23 @@ def _incident_evidence(route_ids: list[str]) -> tuple[dict[str, Any], bool]:
         ),
         "incidents": incidents,
     }
-    observed_at = max(
-        (
-            str(
-                item.get("observed_at")
-                or item.get("updated_at")
-                or item.get("reported_at")
-            ).strip()
-            for item in incidents
-            if item.get("observed_at")
-            or item.get("updated_at")
-            or item.get("reported_at")
-        ),
-        default="",
+    observed_at = _latest_timestamp(
+        incidents, ("observed_at", "updated_at", "reported_at")
     )
     if observed_at:
         data["incident_observed_at"] = observed_at
     return data, True
+
+
+def _latest_timestamp(rows: list[dict[str, Any]], keys: tuple[str, ...]) -> str:
+    return max(
+        (
+            str(next((item.get(key) for key in keys if item.get(key)), "")).strip()
+            for item in rows
+            if any(item.get(key) for key in keys)
+        ),
+        default="",
+    )
 
 
 def _status_payload(route_ids: list[str], result: ToolResult) -> dict[str, Any]:

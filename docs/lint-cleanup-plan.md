@@ -505,6 +505,17 @@ Preserve accepted-itinerary binding, route and direction matching, live
 versus scheduled provenance, outage handling, provider timeouts, and
 graceful unavailable results.
 
+Reviewer complete (2026-08-30). Scope checkpoint `676ff13`. Quality
+comparison stays `c058199`. Batch 6D has 321 functions, `above_12=0`,
+`at_11_or_12=17`, and one uncovered CRAP signal. Codex repaired
+multi-candidate status evidence aggregation and corrected the alert-provider
+conversation seam. Final production growth is 1,559 insertions and 993
+deletions, net +566. Codex removed 14 worker helper functions. The reviewer
+removed 30 stale baseline entries and lowered four surviving ceilings.
+`quality/baseline.json` now has 168 entries. The full gate exits 0 with 1,896
+backend passes, 21 skips, 444 subtests, 314 frontend passes, and no new or
+worsened violations. Batch 6E and Batch 7 were not started.
+
 ## Batch 6E: agent model, session, state, and turn lifecycle
 
 Own remaining modules under `backend/app/services/agent/` except

@@ -532,75 +532,12 @@
       "coverage_status": "measured"
     },
     {
-      "id": "python:backend/app/services/agent/tools/transit/accessibility_status.py:_extract_outage_records#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/transit/accessibility_status.py",
-      "function": "_extract_outage_records",
-      "complexity": 13,
-      "crap": 14.015778,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/transit/accessibility_status.py:execute#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/transit/accessibility_status.py",
-      "function": "execute",
-      "complexity": 18,
-      "crap": 18.026629,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/transit/check_area_conditions.py:_incident_evidence#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/transit/check_area_conditions.py",
-      "function": "_incident_evidence",
-      "complexity": 15,
-      "crap": 15.0,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/transit/check_area_conditions.py:_safe_incidents#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/transit/check_area_conditions.py",
-      "function": "_safe_incidents",
-      "complexity": 11,
-      "crap": 11.035852,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/transit/check_area_conditions.py:execute#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/transit/check_area_conditions.py",
-      "function": "execute",
-      "complexity": 23,
-      "crap": 23.861388,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/transit/check_transit.py:_candidate_direction#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/transit/check_transit.py",
-      "function": "_candidate_direction",
-      "complexity": 19,
-      "crap": 19.13156,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/transit/check_transit.py:accessibility#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/transit/check_transit.py",
-      "function": "accessibility",
-      "complexity": 13,
-      "crap": 13.92876,
-      "coverage_status": "measured"
-    },
-    {
       "id": "python:backend/app/services/agent/tools/transit/check_transit.py:arrivals#0",
       "language": "Python",
       "file": "backend/app/services/agent/tools/transit/check_transit.py",
       "function": "arrivals",
-      "complexity": 18,
-      "crap": 18.377898,
+      "complexity": 11,
+      "crap": 11.560185,
       "coverage_status": "measured"
     },
     {
@@ -622,60 +559,6 @@
       "coverage_status": "measured"
     },
     {
-      "id": "python:backend/app/services/agent/tools/transit/check_transit.py:prepare_direction#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/transit/check_transit.py",
-      "function": "prepare_direction",
-      "complexity": 15,
-      "crap": 15.0,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/transit/direction.py:_route_contexts#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/transit/direction.py",
-      "function": "_route_contexts",
-      "complexity": 27,
-      "crap": 27.265671,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/transit/direction.py:resolve_direction#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/transit/direction.py",
-      "function": "resolve_direction",
-      "complexity": 11,
-      "crap": 11.0,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/transit/evidence.py:_arrival_row#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/transit/evidence.py",
-      "function": "_arrival_row",
-      "complexity": 11,
-      "crap": 11.560185,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/transit/evidence.py:build_evidence_set#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/transit/evidence.py",
-      "function": "build_evidence_set",
-      "complexity": 17,
-      "crap": 17.0,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/transit/evidence_binding.py:_decision_status_data#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/transit/evidence_binding.py",
-      "function": "_decision_status_data",
-      "complexity": 25,
-      "crap": 25.0,
-      "coverage_status": "measured"
-    },
-    {
       "id": "python:backend/app/services/agent/tools/transit/evidence_binding.py:_incident_projection#0",
       "language": "Python",
       "file": "backend/app/services/agent/tools/transit/evidence_binding.py",
@@ -685,84 +568,12 @@
       "coverage_status": "measured"
     },
     {
-      "id": "python:backend/app/services/agent/tools/transit/evidence_binding.py:bind_accessibility_target#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/transit/evidence_binding.py",
-      "function": "bind_accessibility_target",
-      "complexity": 25,
-      "crap": 34.765625,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/transit/evidence_binding.py:decision_evidence_for_status#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/transit/evidence_binding.py",
-      "function": "decision_evidence_for_status",
-      "complexity": 19,
-      "crap": 19.016445,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/transit/evidence_projection.py:_safe_catchability#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/transit/evidence_projection.py",
-      "function": "_safe_catchability",
-      "complexity": 14,
-      "crap": 14.196,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/transit/evidence_projection.py:accessibility_text#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/transit/evidence_projection.py",
-      "function": "accessibility_text",
-      "complexity": 17,
-      "crap": 23.740525,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/transit/evidence_projection.py:arrivals_text#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/transit/evidence_projection.py",
-      "function": "arrivals_text",
-      "complexity": 14,
-      "crap": 17.0625,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/transit/evidence_projection.py:operation_facts#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/transit/evidence_projection.py",
-      "function": "operation_facts",
-      "complexity": 20,
-      "crap": 20.4,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/transit/evidence_projection.py:operation_facts_text#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/transit/evidence_projection.py",
-      "function": "operation_facts_text",
-      "complexity": 17,
-      "crap": 17.0,
-      "coverage_status": "measured"
-    },
-    {
       "id": "python:backend/app/services/agent/tools/transit/evidence_projection.py:safe_accessibility#0",
       "language": "Python",
       "file": "backend/app/services/agent/tools/transit/evidence_projection.py",
       "function": "safe_accessibility",
-      "complexity": 15,
-      "crap": 15.0,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/transit/evidence_projection.py:safe_result#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/transit/evidence_projection.py",
-      "function": "safe_result",
-      "complexity": 15,
-      "crap": 15.024295,
+      "complexity": 11,
+      "crap": 11.0,
       "coverage_status": "measured"
     },
     {
@@ -770,8 +581,8 @@
       "language": "Python",
       "file": "backend/app/services/agent/tools/transit/evidence_projection.py",
       "function": "safe_unconfirmed_signal",
-      "complexity": 15,
-      "crap": 15.0,
+      "complexity": 11,
+      "crap": 11.0,
       "coverage_status": "measured"
     },
     {
@@ -788,35 +599,8 @@
       "language": "Python",
       "file": "backend/app/services/agent/tools/transit/lookup_arrivals_bus.py",
       "function": "execute",
-      "complexity": 39,
-      "crap": 58.813556,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/transit/lookup_arrivals_common.py:_arrival_payload#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/transit/lookup_arrivals_common.py",
-      "function": "_arrival_payload",
-      "complexity": 15,
-      "crap": 15.130208,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/transit/lookup_arrivals_subway.py:_resolve_stop#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/transit/lookup_arrivals_subway.py",
-      "function": "_resolve_stop",
-      "complexity": 23,
-      "crap": 23.240783,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/transit/lookup_arrivals_subway.py:execute#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/transit/lookup_arrivals_subway.py",
-      "function": "execute",
-      "complexity": 16,
-      "crap": 16.125966,
+      "complexity": 12,
+      "crap": 12.666667,
       "coverage_status": "measured"
     },
     {
@@ -826,42 +610,6 @@
       "function": "_find_section",
       "complexity": 12,
       "crap": 12.0,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/transit/present_transit.py:StatusView.from_evidence#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/transit/present_transit.py",
-      "function": "StatusView.from_evidence",
-      "complexity": 18,
-      "crap": 18.0,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/transit/present_transit.py:_build_events#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/transit/present_transit.py",
-      "function": "_build_events",
-      "complexity": 22,
-      "crap": 22.0,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/transit/present_transit.py:_systemwide_alert_text#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/transit/present_transit.py",
-      "function": "_systemwide_alert_text",
-      "complexity": 14,
-      "crap": 14.028576,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/transit/transit_snapshot.py:_incident_evidence#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/transit/transit_snapshot.py",
-      "function": "_incident_evidence",
-      "complexity": 15,
-      "crap": 23.333333,
       "coverage_status": "measured"
     },
     {
@@ -880,24 +628,6 @@
       "function": "collect_service_status",
       "complexity": 11,
       "crap": 11.968,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/transit/transit_snapshot.py:execute#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/transit/transit_snapshot.py",
-      "function": "execute",
-      "complexity": 29,
-      "crap": 29.031148,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "python:backend/app/services/agent/tools/transit/venue_crowd_window.py:execute#0",
-      "language": "Python",
-      "file": "backend/app/services/agent/tools/transit/venue_crowd_window.py",
-      "function": "execute",
-      "complexity": 15,
-      "crap": 15.011431,
       "coverage_status": "measured"
     },
     {

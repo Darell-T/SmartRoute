@@ -584,6 +584,65 @@ class CheckTransitTests(unittest.IsolatedAsyncioTestCase):
         assert evidence_payload["confirmed_matching_alerts"][0]["source_id"] == "lmm:planned_work:33095"
         assert evidence_payload["freshness"]["origin"] == "accepted_candidate_evidence"
 
+    async def test_service_status_reuses_findings_from_every_matching_candidate(self):
+        session_id = "reuse-all-matches"
+        alerts = [
+            _q_alert("lmm:planned_work:first"),
+            _q_alert("lmm:planned_work:second"),
+        ]
+        evidence_rows = []
+        for alert in alerts:
+            envelope = _serialized_alert_envelope(
+                alert,
+                status="current",
+                valid_until=datetime.now(UTC) + timedelta(minutes=5),
+            )
+            evidence_rows.append(
+                {
+                    "alerts": [alert],
+                    "incidents": [],
+                    "unconfirmed_material_claims": [],
+                    "evidence_envelopes": {"alerts": envelope},
+                    "evidence_coverage": {
+                        "vehicles": "current",
+                        "incidents": "current",
+                    },
+                }
+            )
+        candidate_set_id = candidate_store.store_candidate_set(
+            session_id=session_id,
+            payload={
+                "candidate_evidence": evidence_rows,
+                "candidates": [
+                    {
+                        "candidate_id": f"candidate-q-{index}",
+                        "digest": {"transit_lines": ["Q"]},
+                    }
+                    for index in range(2)
+                ],
+            },
+        )
+        session: dict = {}
+        trip_state.bind_candidate_set(session, candidate_set_id)
+
+        with patch.object(
+            transit_snapshot, "execute", new=AsyncMock()
+        ) as snapshot:
+            result = await check_transit.execute(
+                _base_input(direction="uptown"),
+                ToolContext(session_id=session_id, session=session),
+            )
+
+        assert result.ok, result.error
+        snapshot.assert_not_awaited()
+        assert {
+            row["source_id"]
+            for row in result.data["evidence"]["confirmed_matching_alerts"]
+        } == {
+            "lmm:planned_work:first",
+            "lmm:planned_work:second",
+        }
+
     async def test_reused_candidate_evidence_projects_only_requested_route_facts(self):
         session = _candidate_session(
             "reuse-facts",

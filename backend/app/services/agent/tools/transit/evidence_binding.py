@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -42,11 +43,8 @@ def bind_accessibility_target(
 ) -> tuple[dict[str, Any] | None, str | None]:
     """Bind an accessibility request to one accepted itinerary entity."""
 
-    active = session.get("active_trip") if isinstance(session, Mapping) else None
-    if not isinstance(active, Mapping):
-        return None, None
-    itinerary = active.get("canonical_itinerary") or active.get("itinerary")
-    if not isinstance(itinerary, Mapping) or not isinstance(itinerary.get("legs"), list):
+    active, itinerary = _accepted_itinerary(session)
+    if active is None or itinerary is None:
         return None, None
 
     requested = _route_values(requested_route_ids)
@@ -60,6 +58,33 @@ def bind_accessibility_target(
     query = _text(station)
     if not query:
         return None, "accessibility requires a station"
+    selected, error = _select_accessibility_station(
+        query, entities, requested, matching_routes, routes
+    )
+    if error is not None:
+        return None, error
+    return _accessibility_binding(active, selected, matching_routes), None
+
+
+def _accepted_itinerary(
+    session: object,
+) -> tuple[Mapping[str, Any] | None, Mapping[str, Any] | None]:
+    active = session.get("active_trip") if isinstance(session, Mapping) else None
+    if not isinstance(active, Mapping):
+        return None, None
+    itinerary = active.get("canonical_itinerary") or active.get("itinerary")
+    if not isinstance(itinerary, Mapping) or not isinstance(itinerary.get("legs"), list):
+        return None, None
+    return active, itinerary
+
+
+def _select_accessibility_station(
+    query: str,
+    entities: list[dict[str, str]],
+    requested: set[str],
+    matching_routes: set[str],
+    routes: set[str],
+) -> tuple[dict[str, str] | None, str | None]:
     scoped_entities = [
         item
         for item in entities
@@ -74,11 +99,18 @@ def bind_accessibility_target(
     station_matches = [
         item for item in matches if item["entity_type"] in _STATION_ENTITY_TYPES
     ]
-    if not station_matches:
-        if any(item["entity_type"] == "BUS_STOP" for item in matches):
-            return None, "accessibility target is a bus stop, not a subway station"
-        return None, "accessibility target is not a supported station entity"
-    selected = station_matches[0]
+    if station_matches:
+        return station_matches[0], None
+    if any(item["entity_type"] == "BUS_STOP" for item in matches):
+        return None, "accessibility target is a bus stop, not a subway station"
+    return None, "accessibility target is not a supported station entity"
+
+
+def _accessibility_binding(
+    active: Mapping[str, Any],
+    selected: dict[str, str],
+    matching_routes: set[str],
+) -> dict[str, Any]:
     return {
         "bound": True,
         "card_id": _text(active.get("card_id")) or None,
@@ -89,7 +121,7 @@ def bind_accessibility_target(
         "station": selected["name"],
         "station_id": selected["id"] or None,
         "entity_type": selected["entity_type"],
-    }, None
+    }
 
 
 def _unmatched_accessibility_error(
@@ -230,6 +262,15 @@ def _route_values(value: object) -> set[str]:
     return {_text(item).upper() for item in values if _text(item)}
 
 
+@dataclass(frozen=True)
+class _StatusEvidenceAdmission:
+    requested: list[str]
+    candidates: list[object]
+    evidence_rows: list[object]
+    root_envelope: object
+    now_utc: datetime
+
+
 def decision_evidence_for_status(
     route_ids: object,
     session: object,
@@ -251,29 +292,51 @@ def decision_evidence_for_status(
         "comparable": False,
         "route_ids": requested,
     }
+    admitted = _admit_status_evidence(requested, session, session_id, now)
+    if admitted is None:
+        return empty
+    matches = _status_evidence_matches(
+        admitted.candidates[:8],
+        admitted.evidence_rows,
+        admitted.requested,
+        admitted.root_envelope,
+        admitted.now_utc,
+    )
+    return _status_evidence_outcome(matches, empty, admitted.requested)
+
+
+def _admit_status_evidence(
+    requested: list[str],
+    session: object,
+    session_id: object,
+    now: datetime | None,
+) -> _StatusEvidenceAdmission | None:
     owner = _text(session_id)
     if not requested or not owner or not isinstance(session, Mapping):
-        return empty
+        return None
     state = trip_state.get_trip_state(dict(session))
     set_id = _text(state.get("active_candidate_set_id"))
     if not set_id:
-        return empty
+        return None
     record = candidate_store.load_candidate_set(set_id, session_id=owner)
     if not isinstance(record, dict):
-        return empty
+        return None
     candidates = record.get("candidates")
     evidence_rows = record.get("candidate_evidence")
     if not isinstance(candidates, list) or not isinstance(evidence_rows, list):
-        return empty
-    now_utc = (now or datetime.now(UTC)).astimezone(UTC)
-    root_envelope = (record.get("evidence_envelopes") or {}).get("alerts")
-    matches = _status_evidence_matches(
-        candidates[:8],
-        evidence_rows,
-        requested,
-        root_envelope,
-        now_utc,
+        return None
+    return _StatusEvidenceAdmission(
+        requested=requested,
+        candidates=candidates,
+        evidence_rows=evidence_rows,
+        root_envelope=(record.get("evidence_envelopes") or {}).get("alerts"),
+        now_utc=(now or datetime.now(UTC)).astimezone(UTC),
     )
+
+
+def _status_evidence_outcome(
+    matches: list[dict[str, Any]], empty: dict[str, Any], requested: list[str]
+) -> dict[str, Any]:
     if not matches:
         return empty
     comparable = all(item.get("envelope") is not None for item in matches)
@@ -475,43 +538,9 @@ def _alert_envelope(
 def _decision_status_data(
     matches: list[dict[str, Any]], routes: list[str]
 ) -> dict[str, Any]:
-    alerts: list[dict[str, Any]] = []
-    incidents: list[dict[str, Any]] = []
-    signals: list[dict[str, Any]] = []
-    seen_alerts: set[str] = set()
-    seen_incidents: set[str] = set()
-    seen_signals: set[tuple[str, str]] = set()
-    coverage: dict[str, str] = {}
-    observed_at = ""
-    for match in matches:
-        for alert in match.get("rows") or []:
-            alert_id = _text(alert.get("source_id"))
-            if alert_id and alert_id not in seen_alerts:
-                seen_alerts.add(alert_id)
-                alerts.append(alert)
-        envelope = match.get("envelope") or {}
-        observed_at = observed_at or _text(envelope.get("observed_at"))
-        evidence = match.get("evidence") or {}
-        evidence_coverage = evidence.get("evidence_coverage")
-        if isinstance(evidence_coverage, Mapping):
-            _merge_coverage(
-                coverage,
-                "vehicles",
-                evidence_coverage.get("vehicles") or evidence_coverage.get("gtfs_rt"),
-            )
-            _merge_coverage(coverage, "incidents", evidence_coverage.get("incidents"))
-        for raw in evidence.get("incidents") or []:
-            incident = _incident_projection(raw, routes)
-            incident_id = _text(incident.get("incident_id"))
-            if incident and incident_id and incident_id not in seen_incidents:
-                seen_incidents.add(incident_id)
-                incidents.append(incident)
-        for raw in evidence.get("unconfirmed_material_claims") or []:
-            signal = _signal_projection(raw, routes)
-            key = (_text(signal.get("route_id")), _text(signal.get("location")))
-            if signal and key not in seen_signals:
-                seen_signals.add(key)
-                signals.append(signal)
+    alerts, incidents, signals, coverage, observed_at = _collect_status_findings(
+        matches, routes
+    )
     return {
         "source": _OFFICIAL_ALERT_SOURCE,
         "freshness": "current",
@@ -532,6 +561,84 @@ def _decision_status_data(
         "evidence_origin": "accepted_candidate_evidence",
         **({"observed_at": observed_at} if observed_at else {}),
     }
+
+
+def _collect_status_findings(
+    matches: list[dict[str, Any]], routes: list[str]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], dict[str, str], str]:
+    alerts: list[dict[str, Any]] = []
+    incidents: list[dict[str, Any]] = []
+    signals: list[dict[str, Any]] = []
+    seen_alerts: set[str] = set()
+    seen_incidents: set[str] = set()
+    seen_signals: set[tuple[str, str]] = set()
+    coverage: dict[str, str] = {}
+    observed_at = ""
+    for match in matches:
+        _append_unique_alerts(match.get("rows") or [], alerts, seen_alerts)
+        evidence = match.get("evidence") or {}
+        evidence_coverage = evidence.get("evidence_coverage")
+        if isinstance(evidence_coverage, Mapping):
+            _merge_coverage(
+                coverage,
+                "vehicles",
+                evidence_coverage.get("vehicles")
+                or evidence_coverage.get("gtfs_rt"),
+            )
+            _merge_coverage(
+                coverage, "incidents", evidence_coverage.get("incidents")
+            )
+        _append_unique_incidents(
+            evidence.get("incidents") or [], routes, incidents, seen_incidents
+        )
+        _append_unique_signals(
+            evidence.get("unconfirmed_material_claims") or [],
+            routes,
+            signals,
+            seen_signals,
+        )
+        match_observed_at = _text(
+            (match.get("envelope") or {}).get("observed_at")
+        )
+        observed_at = observed_at or match_observed_at
+    return alerts, incidents, signals, coverage, observed_at
+
+
+def _append_unique_alerts(
+    rows: object, alerts: list[dict[str, Any]], seen: set[str]
+) -> None:
+    for alert in rows or []:
+        alert_id = _text(alert.get("source_id"))
+        if alert_id and alert_id not in seen:
+            seen.add(alert_id)
+            alerts.append(alert)
+
+def _append_unique_incidents(
+    rows: object,
+    routes: list[str],
+    incidents: list[dict[str, Any]],
+    seen: set[str],
+) -> None:
+    for raw in rows:
+        incident = _incident_projection(raw, routes)
+        incident_id = _text(incident.get("incident_id"))
+        if incident and incident_id and incident_id not in seen:
+            seen.add(incident_id)
+            incidents.append(incident)
+
+
+def _append_unique_signals(
+    rows: object,
+    routes: list[str],
+    signals: list[dict[str, Any]],
+    seen: set[tuple[str, str]],
+) -> None:
+    for raw in rows:
+        signal = _signal_projection(raw, routes)
+        key = (_text(signal.get("route_id")), _text(signal.get("location")))
+        if signal and key not in seen:
+            seen.add(key)
+            signals.append(signal)
 
 
 def _merge_coverage(target: dict[str, str], key: str, value: object) -> None:
