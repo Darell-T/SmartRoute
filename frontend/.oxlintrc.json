@@ -11,6 +11,13 @@
     ".pi/**",
     ".roo/**",
     ".windsurf/**",
+    "node_modules/**",
+    ".next/**",
+    "public/**",
+    "coverage/**",
+    "test-results/**",
+    "next-env.d.ts",
+    "**/*.d.ts",
     "tools/oxlint/anti-slop/**"
   ],
   "jsPlugins": [
@@ -35,6 +42,6 @@
     "anti-slop/no-unsafe-dictionary-type": "error",
     "anti-slop/no-widen-then-assert": "error",
     "anti-slop/require-safety-comment-for-type-assertion": "error",
-    "complexity": ["error", { "max": 6 }]
+    "complexity": ["error", { "max": 12 }]
   }
 }

@@ -1,0 +1,58 @@
+{
+  "unitTestRoots": ["app", "lib", "components", "scripts"],
+  "unitTestPattern": "\\.test\\.(js|mjs|cjs|ts|tsx)$",
+  "unitTestExclude": {
+    "scripts/build-artifact-manifest.test.ts": "Generated public GeoJSON hash lock. Artifact verification, not a behavior unit test."
+  },
+  "productionRoots": ["app", "lib", "components", "scripts"],
+  "authoredRoots": ["app", "lib", "components", "scripts", "tests", "tools"],
+  "batchRules": [
+    {"batch": "7", "prefix": "app/"},
+    {"batch": "7", "prefix": "lib/"},
+    {"batch": "8", "prefix": "components/"},
+    {"batch": "8", "prefix": "tests/release/"},
+    {"batch": "9", "prefix": "scripts/"}
+  ],
+  "skipDirNames": [
+    "node_modules",
+    ".next",
+    "coverage",
+    "public",
+    "test-results",
+    "types"
+  ],
+  "skipPathPrefixes": ["tools/oxlint"],
+  "coverageExcludeGlobs": [
+    "node_modules/**",
+    ".next/**",
+    "public/**",
+    "coverage/**",
+    "test-results/**",
+    "tools/**",
+    "types/**",
+    "tests/**",
+    "**/*.test.*",
+    "**/*.spec.*",
+    "**/*.check.*",
+    "**/*.d.ts",
+    "next-env.d.ts"
+  ],
+  "lifecycleExclusions": {
+    "node_modules/**": "installed dependencies",
+    ".next/**": "Next.js generated output",
+    "public/**": "static and generated transit artifacts",
+    "coverage/**": "coverage output",
+    "test-results/**": "release evidence output",
+    "tools/oxlint/**": "vendored Oxlint plugin",
+    "types/**": "declaration-only modules",
+    "tests/**": "Playwright release tests, not production source",
+    "**/*.test.*": "unit tests",
+    "**/*.spec.*": "Playwright specs",
+    "**/*.check.*": "development check scripts",
+    "**/*.d.ts": "TypeScript declarations",
+    "next-env.d.ts": "Next.js generated declarations"
+  },
+  "nativeCoverageLimitation": "Node 23 NODE_V8_COVERAGE and --experimental-test-coverage record tsx compiled scripts, omit unexecuted production files, and do not emit stable source-mapped TypeScript line, branch, and function totals. c8 --all --exclude-after-remap remaps to .ts/.tsx and includes missing files as zero.",
+  "browserCoverageLimitation": "Playwright release tests do not contribute source-mapped .ts/.tsx coverage in this stack. Browser-only React and MapLibre files stay unexecuted until Batch 8 can map bundled source.",
+  "unexecutedBranchInventory": "c8 placeholder branch maps on unexecuted files are discarded. Branch denominators for those files are the McCabe decision-point lower bound: sum(complexity - 1) over inventoried production functions."
+}

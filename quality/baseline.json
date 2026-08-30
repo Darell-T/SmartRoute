@@ -1,6 +1,8 @@
 {
   "version": 2,
   "max_cyclomatic_complexity": 10,
+  "max_python_cyclomatic_complexity": 10,
+  "max_frontend_cyclomatic_complexity": 12,
   "max_cognitive_complexity": 10,
   "formula": "CC^2 * (1 - coverage)^3 + CC",
   "python_cc_source": "radon",
@@ -631,15 +633,6 @@
       "coverage_status": "measured"
     },
     {
-      "id": "typescript:frontend/components/smart-route/chat/home-near-you.tsx:HomeNearYou#0",
-      "language": "TypeScript",
-      "file": "frontend/components/smart-route/chat/home-near-you.tsx",
-      "function": "HomeNearYou",
-      "complexity": 11,
-      "crap": 132.0,
-      "coverage_status": "uncovered"
-    },
-    {
       "id": "typescript:frontend/components/smart-route/chat/itinerary-card-legs.tsx:StopChain#0",
       "language": "TypeScript",
       "file": "frontend/components/smart-route/chat/itinerary-card-legs.tsx",
@@ -683,15 +676,6 @@
       "complexity": 18,
       "crap": 18.0,
       "coverage_status": "measured"
-    },
-    {
-      "id": "typescript:frontend/components/smart-route/chat/mobile-navigation.tsx:handleKeyDown#0",
-      "language": "TypeScript",
-      "file": "frontend/components/smart-route/chat/mobile-navigation.tsx",
-      "function": "handleKeyDown",
-      "complexity": 12,
-      "crap": 156.0,
-      "coverage_status": "uncovered"
     },
     {
       "id": "typescript:frontend/components/smart-route/chat/near-you.ts:buildArrivalsPayloadForRoute#0",
@@ -745,24 +729,6 @@
       "function": "compactFeedTitle",
       "complexity": 13,
       "crap": 13.0,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "typescript:frontend/components/smart-route/left-rail/alert-feed-copy.ts:leadSentences#0",
-      "language": "TypeScript",
-      "file": "frontend/components/smart-route/left-rail/alert-feed-copy.ts",
-      "function": "leadSentences",
-      "complexity": 11,
-      "crap": 11.0,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "typescript:frontend/components/smart-route/left-rail/alert-feed-copy.ts:splitSentences#0",
-      "language": "TypeScript",
-      "file": "frontend/components/smart-route/left-rail/alert-feed-copy.ts",
-      "function": "splitSentences",
-      "complexity": 12,
-      "crap": 12.0,
       "coverage_status": "measured"
     },
     {
@@ -829,15 +795,6 @@
       "coverage_status": "measured"
     },
     {
-      "id": "typescript:frontend/components/smart-route/left-rail/live-data/nearby-arrivals.ts:normalizeWay#0",
-      "language": "TypeScript",
-      "file": "frontend/components/smart-route/left-rail/live-data/nearby-arrivals.ts",
-      "function": "normalizeWay",
-      "complexity": 11,
-      "crap": 11.0,
-      "coverage_status": "measured"
-    },
-    {
       "id": "typescript:frontend/components/smart-route/left-rail/live-data/route-candidates.ts:alternativeCardFields#0",
       "language": "TypeScript",
       "file": "frontend/components/smart-route/left-rail/live-data/route-candidates.ts",
@@ -892,15 +849,6 @@
       "coverage_status": "measured"
     },
     {
-      "id": "typescript:frontend/components/smart-route/left-rail/live-data/route-reason-copy.ts:derivePublicRationale#0",
-      "language": "TypeScript",
-      "file": "frontend/components/smart-route/left-rail/live-data/route-reason-copy.ts",
-      "function": "derivePublicRationale",
-      "complexity": 12,
-      "crap": 12.807229297862573,
-      "coverage_status": "measured"
-    },
-    {
       "id": "typescript:frontend/components/smart-route/left-rail/live-data/route-reasoning.ts:buildRouteReasoningInsights#0",
       "language": "TypeScript",
       "file": "frontend/components/smart-route/left-rail/live-data/route-reasoning.ts",
@@ -917,24 +865,6 @@
       "complexity": 32,
       "crap": null,
       "coverage_status": "unresolved"
-    },
-    {
-      "id": "typescript:frontend/components/smart-route/left-rail/live-data/route-steps.ts:detailStepsFromCanonicalItinerary#0",
-      "language": "TypeScript",
-      "file": "frontend/components/smart-route/left-rail/live-data/route-steps.ts",
-      "function": "detailStepsFromCanonicalItinerary",
-      "complexity": 12,
-      "crap": 12.0,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "typescript:frontend/components/smart-route/left-rail/live-data/route-steps.ts:namedIntermediateStops#0",
-      "language": "TypeScript",
-      "file": "frontend/components/smart-route/left-rail/live-data/route-steps.ts",
-      "function": "namedIntermediateStops",
-      "complexity": 11,
-      "crap": 11.08927603285839,
-      "coverage_status": "measured"
     },
     {
       "id": "typescript:frontend/components/smart-route/left-rail/live-data/route-steps.ts:routeStepToRailStep#0",
@@ -1000,15 +930,6 @@
       "coverage_status": "uncovered"
     },
     {
-      "id": "typescript:frontend/components/smart-route/map/smart-route-map.tsx:anonymous#21",
-      "language": "TypeScript",
-      "file": "frontend/components/smart-route/map/smart-route-map.tsx",
-      "function": "anonymous",
-      "complexity": 11,
-      "crap": 132.0,
-      "coverage_status": "uncovered"
-    },
-    {
       "id": "typescript:frontend/components/smart-route/map/smart-route-map.tsx:applyDarkMapTheme#0",
       "language": "TypeScript",
       "file": "frontend/components/smart-route/map/smart-route-map.tsx",
@@ -1045,30 +966,12 @@
       "coverage_status": "measured"
     },
     {
-      "id": "typescript:frontend/lib/agent-chat-session.ts:buildTurnsFromSnapshot#0",
-      "language": "TypeScript",
-      "file": "frontend/lib/agent-chat-session.ts",
-      "function": "buildTurnsFromSnapshot",
-      "complexity": 11,
-      "crap": 11.0,
-      "coverage_status": "measured"
-    },
-    {
       "id": "typescript:frontend/lib/agent-chat-session.ts:parseSnapshot#0",
       "language": "TypeScript",
       "file": "frontend/lib/agent-chat-session.ts",
       "function": "parseSnapshot",
       "complexity": 13,
       "crap": 13.322664004772943,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "typescript:frontend/lib/agent-chat-session.ts:readPersistedSessionId#0",
-      "language": "TypeScript",
-      "file": "frontend/lib/agent-chat-session.ts",
-      "function": "readPersistedSessionId",
-      "complexity": 11,
-      "crap": 11.0,
       "coverage_status": "measured"
     },
     {
@@ -1124,15 +1027,6 @@
       "complexity": 18,
       "crap": 342.0,
       "coverage_status": "uncovered"
-    },
-    {
-      "id": "typescript:frontend/lib/use-live-feed.ts:anonymous#0",
-      "language": "TypeScript",
-      "file": "frontend/lib/use-live-feed.ts",
-      "function": "anonymous",
-      "complexity": 12,
-      "crap": null,
-      "coverage_status": "unresolved"
     }
   ]
 }

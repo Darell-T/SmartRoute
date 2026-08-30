@@ -1,10 +1,3 @@
-/**
- * Inventory production JS/TS functions with McCabe-style complexity.
- *
- * Complexity counting follows ESLint's classic `complexity` rule so CRAP uses
- * the same branching model as the lint ceiling. Nested functions are measured
- * separately and do not add to their parent.
- */
 import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
@@ -15,17 +8,23 @@ const repoRoot = path.resolve(scriptDir, "..");
 const frontendRoot = path.join(repoRoot, "frontend");
 const require = createRequire(path.join(frontendRoot, "package.json"));
 const ts = require("typescript");
+const scope = JSON.parse(
+  fs.readFileSync(path.join(scriptDir, "frontend_quality_scope.json"), "utf8"),
+);
+const SKIP_DIRS = new Set(scope.skipDirNames);
+const SKIP_PATH_PREFIXES = (scope.skipPathPrefixes || []).map((prefix) =>
+  prefix.replace(/\/$/, ""),
+);
 
-const SOURCE_ROOTS = ["app", "components", "lib", "types"];
-const SKIP_DIRS = new Set([
-  "node_modules",
-  ".next",
-  "coverage",
-  "public",
-  "scripts",
-  "tools",
-  "tests",
-]);
+function skippedRelative(relativePath) {
+  const parts = relativePath.split("/");
+  if (parts.some((part) => SKIP_DIRS.has(part))) {
+    return true;
+  }
+  return SKIP_PATH_PREFIXES.some(
+    (prefix) => relativePath === prefix || relativePath.startsWith(`${prefix}/`),
+  );
+}
 
 const LOGICAL_OPERATORS = new Set([
   ts.SyntaxKind.AmpersandAmpersandToken,
@@ -179,29 +178,44 @@ function collectFunctions(sourceFile) {
   return functions;
 }
 
-function shouldSkip(relativePath) {
-  const parts = relativePath.split(/[\\/]/);
-  if (parts.some((part) => SKIP_DIRS.has(part))) {
-    return true;
-  }
-  const base = path.basename(relativePath);
-  return (
-    base.endsWith(".d.ts") ||
-    base.includes(".test.") ||
-    base.includes(".check.") ||
-    base.endsWith(".test.ts") ||
-    base.endsWith(".test.tsx") ||
-    base.endsWith(".test.mjs")
-  );
+function batchFor(relativePath) {
+  const match = scope.batchRules
+    .filter((rule) => relativePath.startsWith(rule.prefix))
+    .sort((left, right) => right.prefix.length - left.prefix.length)[0];
+  return match ? match.batch : "unassigned";
 }
 
-function walkSourceFiles() {
+function classify(relativePath) {
+  const parts = relativePath.split("/");
+  const base = path.basename(relativePath);
+  if (skippedRelative(relativePath) || base.endsWith(".d.ts")) {
+    return { role: "excluded", batch: "unassigned" };
+  }
+  const testFile =
+    base.includes(".test.") ||
+    base.includes(".spec.") ||
+    parts.includes("tests");
+  const toolFile = base.includes(".check.") || relativePath.startsWith("tools/");
+  let role = "excluded";
+  if (testFile) role = "test";
+  else if (toolFile) role = "tool";
+  else if (
+    scope.productionRoots.some((root) => relativePath.startsWith(`${root}/`))
+  ) {
+    role = "production";
+  }
+  return { role, batch: batchFor(relativePath) };
+}
+
+function walkSourceFiles(kind) {
+  const roots = kind === "authored" ? scope.authoredRoots : scope.productionRoots;
   const files = [];
   const visitDir = (dir) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        if (!SKIP_DIRS.has(entry.name)) {
+        const relativeDir = path.relative(frontendRoot, full).replaceAll("\\", "/");
+        if (!SKIP_DIRS.has(entry.name) && !skippedRelative(relativeDir)) {
           visitDir(full);
         }
         continue;
@@ -210,12 +224,15 @@ function walkSourceFiles() {
         continue;
       }
       const relative = path.relative(frontendRoot, full).replaceAll("\\", "/");
-      if (!shouldSkip(relative)) {
-        files.push(full);
+      const { role } = classify(relative);
+      if (kind === "authored") {
+        if (role !== "excluded") files.push(full);
+        continue;
       }
+      if (role === "production") files.push(full);
     }
   };
-  for (const root of SOURCE_ROOTS) {
+  for (const root of roots) {
     const dir = path.join(frontendRoot, root);
     if (fs.existsSync(dir)) {
       visitDir(dir);
@@ -237,10 +254,34 @@ function scriptKindFor(filePath) {
   return ts.ScriptKind.Unknown;
 }
 
-function inventory() {
+function inventoryFromSource(relative, text) {
+  const { role, batch } = classify(relative);
+  const sourceFile = ts.createSourceFile(
+    relative,
+    text,
+    ts.ScriptTarget.Latest,
+    true,
+    scriptKindFor(relative),
+  );
+  return {
+    files: [{ file: relative, role, batch }],
+    functions: collectFunctions(sourceFile).map((row) => ({
+      file: relative,
+      language: "TypeScript",
+      role,
+      batch,
+      ...row,
+    })),
+  };
+}
+
+function inventory(kind) {
   const functions = [];
-  for (const filePath of walkSourceFiles()) {
+  const files = [];
+  for (const filePath of walkSourceFiles(kind)) {
     const relative = path.relative(frontendRoot, filePath).replaceAll("\\", "/");
+    const { role, batch } = classify(relative);
+    files.push({ file: relative, role, batch });
     const text = fs.readFileSync(filePath, "utf8");
     const sourceFile = ts.createSourceFile(
       relative,
@@ -250,10 +291,16 @@ function inventory() {
       scriptKindFor(filePath),
     );
     for (const row of collectFunctions(sourceFile)) {
-      functions.push({ file: relative, language: "TypeScript", ...row });
+      functions.push({
+        file: relative,
+        language: "TypeScript",
+        role,
+        batch,
+        ...row,
+      });
     }
   }
-  return functions;
+  return { files, functions };
 }
 
 function selfTest() {
@@ -278,11 +325,40 @@ export function formatNycRouteClock(value) {
       `self-test failed: expected formatNycRouteClock complexity 5, got ${JSON.stringify(fn)}`,
     );
   }
+  const cases = [
+    ["app/page.tsx", "production", "7"],
+    ["lib/nyc-route-clock.ts", "production", "7"],
+    ["lib/nyc-route-clock.test.mjs", "test", "7"],
+    ["components/map/smart-route-map.tsx", "production", "8"],
+    ["tests/release/smartroute-chat.spec.ts", "test", "8"],
+    ["scripts/build/bundle-stage.ts", "production", "9"],
+    ["scripts/build/spine.test.ts", "test", "9"],
+    ["components/map/subway-renderer.check.mjs", "tool", "8"],
+    ["types/api.ts", "excluded", "unassigned"],
+    ["next-env.d.ts", "excluded", "unassigned"],
+    ["public/generated.json", "excluded", "unassigned"],
+    ["tools/run-unit-tests.mjs", "tool", "unassigned"],
+    ["tools/oxlint/anti-slop/index.ts", "excluded", "unassigned"],
+  ];
+  for (const [relative, role, batch] of cases) {
+    const actual = classify(relative);
+    if (actual.role !== role || actual.batch !== batch) {
+      throw new Error(
+        `classify(${relative}) => ${JSON.stringify(actual)}, expected ${role}/${batch}`,
+      );
+    }
+  }
 }
 
+const sourceIdx = process.argv.indexOf("--source");
 if (process.argv.includes("--self-test")) {
   selfTest();
   process.stderr.write("js_function_metrics self-test passed\n");
+} else if (sourceIdx !== -1) {
+  const relative = process.argv[sourceIdx + 1];
+  const text = fs.readFileSync(0, "utf8");
+  process.stdout.write(`${JSON.stringify(inventoryFromSource(relative, text))}\n`);
 } else {
-  process.stdout.write(`${JSON.stringify({ functions: inventory() }, null, 2)}\n`);
+  const kind = process.argv.includes("--authored") ? "authored" : "production";
+  process.stdout.write(`${JSON.stringify(inventory(kind), null, 2)}\n`);
 }
