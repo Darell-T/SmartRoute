@@ -134,6 +134,22 @@ def _contains_opaque_identifier(text: str) -> bool:
     )
 
 
+def _activity_copy_rejected(normalized: str) -> bool:
+    if normalized in _FLUFF_ONLY:
+        return True
+    if _contains_internal_language(normalized):
+        return True
+    if _contains_opaque_identifier(normalized):
+        return True
+    if any(promise in normalized for promise in _TIMING_PROMISES):
+        return True
+    if _contains_numeric_timing(normalized):
+        return True
+    if normalized.startswith(_RESULT_CLAIM_PREFIXES):
+        return True
+    return any(claim in normalized for claim in _RESULT_CLAIM_FRAGMENTS)
+
+
 def validated_activity_label(value: object) -> str | None:
     """Return concise safe activity copy, or ``None`` for server fallback."""
     if not isinstance(value, str) or any(mark in value for mark in "\r\n\t"):
@@ -142,19 +158,7 @@ def validated_activity_label(value: object) -> str | None:
     if not label or len(label) > MAX_ACTIVITY_LABEL_CHARS:
         return None
     normalized = label.casefold().strip(" .!?…")
-    if normalized in _FLUFF_ONLY:
-        return None
-    if _contains_internal_language(normalized):
-        return None
-    if _contains_opaque_identifier(normalized):
-        return None
-    if any(promise in normalized for promise in _TIMING_PROMISES):
-        return None
-    if _contains_numeric_timing(normalized):
-        return None
-    if normalized.startswith(_RESULT_CLAIM_PREFIXES):
-        return None
-    if any(claim in normalized for claim in _RESULT_CLAIM_FRAGMENTS):
+    if _activity_copy_rejected(normalized):
         return None
     return label
 
@@ -203,12 +207,7 @@ def _has_unowned_continuation(message: str) -> bool:
     return has_first_person_modal and has_future_condition
 
 
-def validated_terminal_message(
-    value: object,
-    *,
-    outcome: str | None = None,
-) -> str | None:
-    """Return formatted conversational prose only when it is safe to expose."""
+def _normalized_terminal_message(value: object) -> str | None:
     if not isinstance(value, str):
         return None
     raw = value.replace("\r\n", "\n").replace("\r", "\n")
@@ -219,6 +218,19 @@ def validated_terminal_message(
         lines.pop()
     message = "\n".join(lines)
     if not message or len(message) > MAX_TERMINAL_MESSAGE_CHARS:
+        return None
+    return message
+
+
+def validated_terminal_message(
+    value: object,
+    *,
+    outcome: str | None = None,
+) -> str | None:
+    """Return formatted conversational prose only when it is safe to expose."""
+
+    message = _normalized_terminal_message(value)
+    if message is None:
         return None
     if _contains_internal_language(message) or _contains_opaque_identifier(message):
         return None

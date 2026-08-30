@@ -56,3 +56,29 @@ def test_sources_event_rejects_untrusted_urls() -> None:
                 turn_id="turn-1",
                 sources=({"title": "Damn Lines", "url": url},),
             )
+
+
+def test_sources_event_casefolds_host_and_rejects_overlong_title() -> None:
+    event = SourcesEvent(
+        turn_id="turn-1",
+        sources=(
+            {
+                "title": "Damn Lines",
+                "url": "https://DamnLines.com/camera/lindustrie-pizzeria?live=1#clip",
+            },
+        ),
+    )
+
+    assert event.to_data() == {
+        "sources": [
+            {
+                "title": "Damn Lines",
+                "url": "https://damnlines.com/camera/lindustrie-pizzeria?live=1",
+            }
+        ]
+    }
+    with pytest.raises(ValueError, match="source is not trusted"):
+        SourcesEvent(
+            turn_id="turn-1",
+            sources=({"title": "x" * 101, "url": "https://damnlines.com/ok"},),
+        )

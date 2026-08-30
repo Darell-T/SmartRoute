@@ -83,6 +83,20 @@ def evaluate_simple_arithmetic(message: object) -> str | None:
     return f"{value:.10g}." if isinstance(value, float) else f"{value}."
 
 
+def _eval_bounded_binop(node: ast.BinOp) -> int | float:
+    op = _SUPPORTED_BINOPS.get(type(node.op))
+    if op is None:
+        raise ValueError("unsupported expression")
+    left = _eval_math_node(node.left)
+    right = _eval_math_node(node.right)
+    if isinstance(node.op, ast.Pow) and abs(right) > 8:
+        raise ValueError("exponent too large")
+    result = op(left, right)
+    if abs(result) > 1_000_000_000_000:
+        raise ValueError("result too large")
+    return result
+
+
 def _eval_math_node(node: ast.AST) -> int | float:
     if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
         if abs(node.value) > 1_000_000_000:
@@ -90,21 +104,13 @@ def _eval_math_node(node: ast.AST) -> int | float:
         return node.value
     if isinstance(node, ast.UnaryOp) and type(node.op) in _SUPPORTED_UNARY:
         return _SUPPORTED_UNARY[type(node.op)](_eval_math_node(node.operand))
-    if isinstance(node, ast.BinOp) and type(node.op) in _SUPPORTED_BINOPS:
-        left = _eval_math_node(node.left)
-        right = _eval_math_node(node.right)
-        if isinstance(node.op, ast.Pow) and abs(right) > 8:
-            raise ValueError("exponent too large")
-        result = _SUPPORTED_BINOPS[type(node.op)](left, right)
-        if abs(result) > 1_000_000_000_000:
-            raise ValueError("result too large")
-        return result
+    if isinstance(node, ast.BinOp):
+        return _eval_bounded_binop(node)
     raise ValueError("unsupported expression")
 
 
 _rider_excluded_modes = tool_input_policy.rider_excluded_modes
 _rider_excluded_route_ids = tool_input_policy.rider_excluded_route_ids
-_constrained_tool_input = tool_input_policy.constrained_tool_input
 
 
 async def _run_one_tool(
@@ -212,14 +218,6 @@ def _web_search_tool() -> dict:
     }
 
 
-def _schema_optional_parameter_count(schema: object) -> int:
-    return public_surface.schema_optional_parameter_count(schema)
-
-
-def _optional_parameter_count(tools: list[dict]) -> int:
-    return public_surface.optional_parameter_count(tools)
-
-
 def _tools_for_state(
     _mode_policy: agent_policy.AgentModePolicy | None = None,
     session: dict | None = None,
@@ -306,13 +304,6 @@ def _turn_dependencies(session_id: str = "") -> turn_stream.TurnDependencies:
     )
 
 
-async def _stream_turn(**kwargs) -> AsyncIterator[agent_events.AgentEvent]:
-    async for event in turn_stream.stream_turn(
-        dependencies=_turn_dependencies(kwargs.get("session_id", "")), **kwargs
-    ):
-        yield event
-
-
 def _rejection_events(
     session_id: str, turn_id: str, code: str, text: str, retryable: bool
 ) -> tuple[agent_events.ErrorEvent, agent_events.DoneEvent]:
@@ -350,6 +341,79 @@ def _admission_rejection(session_id: str) -> tuple[str, str, bool] | None:
     return None
 
 
+def _arithmetic_shortcut_events(
+    session: dict,
+    session_id: str,
+    turn_id: str,
+    message: str,
+    answer: str,
+    trace: TurnTrace | None,
+) -> tuple[agent_events.TokenEvent, agent_events.DoneEvent]:
+    session_module.append_history(session, "user", message, turn_id=turn_id)
+    resume_offer = session_module.consume_resume_offer(session)
+    final_text = answer + (f"\n\n{resume_offer}" if resume_offer else "")
+    session_module.append_history(session, "assistant", final_text, turn_id=turn_id)
+    if trace is not None:
+        trace.final_text = final_text
+    return (
+        agent_events.TokenEvent(text=final_text),
+        agent_events.DoneEvent(
+            session_id=session_id,
+            turn_id=turn_id,
+            stop_reason="end_turn",
+            usage={"input_tokens": 0, "output_tokens": 0},
+        ),
+    )
+
+
+async def _live_turn_events(
+    *,
+    session: dict,
+    session_id: str,
+    turn_id: str,
+    message: str,
+    now_et: str,
+    gtfs,
+    origin: dict | None,
+    selected_card_id: str | None,
+    response_presentation: str,
+    trace: TurnTrace | None,
+) -> AsyncIterator[agent_events.AgentEvent]:
+    sem = budget.concurrency_semaphore()
+    if sem.locked():
+        for event in _rejection_events(
+            session_id,
+            turn_id,
+            "rate_limited",
+            "SmartRoute is busy helping other riders -- try again shortly.",
+            True,
+        ):
+            yield event
+        return
+    ctx = ToolContext(
+        gtfs=gtfs,
+        session=session,
+        session_id=session_id,
+        turn_id=turn_id,
+        now_et=now_et,
+        origin=origin,
+        telemetry=trace.telemetry if trace is not None else {},
+    )
+    async with sem:
+        async for event in turn_stream.stream_turn(
+            session=session,
+            session_id=session_id,
+            turn_id=turn_id,
+            message=message,
+            ctx=ctx,
+            selected_card_id=selected_card_id,
+            response_presentation=response_presentation,
+            trace=trace,
+            dependencies=_turn_dependencies(session_id),
+        ):
+            yield event
+
+
 async def run_agent_turn(
     *,
     session: dict,
@@ -384,51 +448,26 @@ async def run_agent_turn(
         return
     deterministic_answer = evaluate_simple_arithmetic(message)
     if deterministic_answer is not None:
-        session_module.append_history(session, "user", message, turn_id=turn_id)
-        resume_offer = session_module.consume_resume_offer(session)
-        final_text = deterministic_answer + (
-            f"\n\n{resume_offer}" if resume_offer else ""
-        )
-        session_module.append_history(session, "assistant", final_text, turn_id=turn_id)
-        if trace is not None:
-            trace.final_text = final_text
-        yield agent_events.TokenEvent(text=final_text)
-        yield agent_events.DoneEvent(
-            session_id=session_id,
-            turn_id=turn_id,
-            stop_reason="end_turn",
-            usage={"input_tokens": 0, "output_tokens": 0},
-        )
-        return
-    sem = budget.concurrency_semaphore()
-    if sem.locked():
-        for event in _rejection_events(
+        for event in _arithmetic_shortcut_events(
+            session,
             session_id,
             turn_id,
-            "rate_limited",
-            "SmartRoute is busy helping other riders -- try again shortly.",
-            True,
+            message,
+            deterministic_answer,
+            trace,
         ):
             yield event
         return
-    ctx = ToolContext(
-        gtfs=gtfs,
+    async for event in _live_turn_events(
         session=session,
         session_id=session_id,
         turn_id=turn_id,
+        message=message,
         now_et=now_et,
+        gtfs=gtfs,
         origin=origin,
-        telemetry=trace.telemetry if trace is not None else {},
-    )
-    async with sem:
-        async for event in _stream_turn(
-            session=session,
-            session_id=session_id,
-            turn_id=turn_id,
-            message=message,
-            ctx=ctx,
-            selected_card_id=selected_card_id,
-            response_presentation=response_presentation,
-            trace=trace,
-        ):
-            yield event
+        selected_card_id=selected_card_id,
+        response_presentation=response_presentation,
+        trace=trace,
+    ):
+        yield event

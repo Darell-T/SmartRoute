@@ -83,6 +83,35 @@ class CompletionPolicyTests(unittest.TestCase):
         assert decision.may_terminate
         assert decision.turn_resolution == TurnResolution.CANCELLED
 
+    def test_open_states_keep_the_matching_next_action(self) -> None:
+        contract = _contract(
+            ("route", GoalKind.ROUTE, ("place",)),
+            ("place", GoalKind.DESTINATION_SELECTION, ()),
+        )
+        evidence = {
+            "place": {
+                "state": GoalState.IN_FLIGHT,
+                "attempted": True,
+                "approved_recovery_options": ("try a wider window",),
+                "recovery_options": ("ignored alias",),
+            },
+            "route": {"state": GoalState.PENDING},
+        }
+        blocked = evaluate_completion(contract, evidence)
+        assert not blocked.may_terminate
+        assert blocked.required_next_actions == (
+            "wait_for:route=place",
+            "await:place",
+        )
+        assert blocked.recovery_options == ("try a wider window",)
+
+        evidence["place"]["state"] = GoalState.EVIDENCE_READY
+        presented = evaluate_completion(
+            contract, evidence, presented_goal_keys=("place",)
+        )
+        assert presented.required_next_actions == ("execute:route",)
+        assert presented.remaining_goal_keys == ("route",)
+
 
 if __name__ == "__main__":
     unittest.main()

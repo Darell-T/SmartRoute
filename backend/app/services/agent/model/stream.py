@@ -137,6 +137,29 @@ def _remaining_deadline_s(deadline_monotonic: float | None) -> float | None:
     return max(0.0, deadline_monotonic - time.monotonic())
 
 
+def _next_item_timeout_s(
+    deadline_monotonic: float | None,
+    web_started: dict[str, float] | None,
+    web_timeout_s: float | None,
+) -> float | None:
+    timeout_s = _remaining_deadline_s(deadline_monotonic)
+    if web_started and web_timeout_s:
+        oldest = min(web_started.values())
+        web_remaining = max(0.0, oldest + web_timeout_s - time.monotonic())
+        timeout_s = web_remaining if timeout_s is None else min(timeout_s, web_remaining)
+    return timeout_s
+
+
+def _web_research_expired(
+    web_started: dict[str, float] | None,
+    web_timeout_s: float | None,
+) -> bool:
+    if not web_started or not web_timeout_s:
+        return False
+    oldest = min(web_started.values())
+    return time.monotonic() >= oldest + web_timeout_s
+
+
 class WebResearchTimeoutError(TimeoutError):
     """Native web_search exceeded the bounded research allowance."""
 
@@ -163,21 +186,17 @@ async def _paced_provider_iter(
         return
     yield first
     while True:
-        timeout_s = _remaining_deadline_s(deadline_monotonic)
-        if web_started and web_timeout_s:
-            oldest = min(web_started.values())
-            web_remaining = max(0.0, oldest + web_timeout_s - time.monotonic())
-            timeout_s = web_remaining if timeout_s is None else min(timeout_s, web_remaining)
+        timeout_s = _next_item_timeout_s(
+            deadline_monotonic, web_started, web_timeout_s
+        )
         try:
             async with asyncio.timeout(timeout_s):
                 item = await iterator.__anext__()
         except StopAsyncIteration:
             return
         except TimeoutError:
-            if web_started and web_timeout_s:
-                oldest = min(web_started.values())
-                if time.monotonic() >= oldest + web_timeout_s:
-                    raise WebResearchTimeoutError() from None
+            if _web_research_expired(web_started, web_timeout_s):
+                raise WebResearchTimeoutError() from None
             raise
         yield item
 
@@ -209,6 +228,38 @@ def _field(value: object, name: str) -> object | None:
     return getattr(value, name, None)
 
 
+def _citation_source(citation: object) -> dict[str, str] | None:
+    if _field(citation, "type") != "web_search_result_location":
+        return None
+    candidate = agent_events.normalized_source(
+        {
+            "title": str(_field(citation, "title") or "Web source"),
+            "url": str(_field(citation, "url") or ""),
+        }
+    )
+    if candidate is None or not candidate["url"]:
+        return None
+    return candidate
+
+
+def _extend_cited_sources(
+    citations: object,
+    sources: list[dict[str, str]],
+    seen: set[str],
+) -> bool:
+    if not isinstance(citations, (list, tuple)):
+        return False
+    for citation in citations:
+        candidate = _citation_source(citation)
+        if candidate is None or candidate["url"] in seen:
+            continue
+        seen.add(candidate["url"])
+        sources.append(candidate)
+        if len(sources) == 8:
+            return True
+    return False
+
+
 def _web_sources(final_message: object | None) -> tuple[dict[str, str], ...]:
     """Extract the original pages cited by Anthropic native web search."""
 
@@ -221,25 +272,77 @@ def _web_sources(final_message: object | None) -> tuple[dict[str, str], ...]:
     for block in content:
         if _field(block, "type") != "text":
             continue
-        citations = _field(block, "citations")
-        if not isinstance(citations, (list, tuple)):
-            continue
-        for citation in citations:
-            if _field(citation, "type") != "web_search_result_location":
-                continue
-            candidate = agent_events.normalized_source(
-                {
-                    "title": str(_field(citation, "title") or "Web source"),
-                    "url": str(_field(citation, "url") or ""),
-                }
-            )
-            if candidate is None or candidate["url"] in seen:
-                continue
-            seen.add(candidate["url"])
-            sources.append(candidate)
-            if len(sources) == 8:
-                return tuple(sources)
+        if _extend_cited_sources(_field(block, "citations"), sources, seen):
+            return tuple(sources)
     return tuple(sources)
+
+
+def _on_web_search_start(
+    block: object,
+    state: _AttemptState,
+) -> agent_events.ToolStartEvent:
+    state.server_tool_calls += 1
+    tool_id = str(getattr(block, "id", "web-search"))
+    state.web_started[tool_id] = time.monotonic()
+    return agent_events.ToolStartEvent(
+        tool_call_id=tool_id,
+        tool="web_search",
+        label="Researching current recommendations…",
+    )
+
+
+def _on_web_search_result(
+    _event: object,
+    block: object,
+    state: _AttemptState,
+) -> agent_events.ToolEndEvent:
+    tool_id = str(getattr(block, "tool_use_id", "web-search"))
+    started = state.web_started.pop(tool_id, time.monotonic())
+    duration_ms = (time.monotonic() - started) * 1000
+    state.web_search_ms += duration_ms
+    ok = _web_result_ok(getattr(block, "content", None))
+    state.web_results.append(ok)
+    return agent_events.ToolEndEvent(
+        tool_call_id=tool_id,
+        tool="web_search",
+        ok=ok,
+        duration_ms=round(duration_ms),
+        summary=(
+            "Current place information checked"
+            if ok
+            else "Current place search was unavailable"
+        ),
+    )
+
+
+def _on_text_delta(
+    _event: object,
+    delta: object,
+    state: _AttemptState,
+) -> tuple[agent_events.TokenEvent, ...]:
+    if getattr(delta, "type", "") != "text_delta":
+        return ()
+    state.saw_text = True
+    if state.first_token_ms is None:
+        state.first_token_ms = (time.monotonic() - state.call_started) * 1000
+    text = state.sanitizer.feed(str(getattr(delta, "text", "")))
+    if not text:
+        return ()
+    return (agent_events.TokenEvent(text=text),)
+
+
+def _on_text_stop(
+    event: object,
+    state: _AttemptState,
+) -> tuple[agent_events.TokenEvent, ...]:
+    index = int(getattr(event, "index", -1))
+    if index not in state.text_indexes:
+        return ()
+    state.text_indexes.discard(index)
+    text = state.sanitizer.flush()
+    if not text:
+        return ()
+    return (agent_events.TokenEvent(text=text),)
 
 
 async def _stream_provider_events(
@@ -264,6 +367,7 @@ async def _stream_provider_events(
         block = getattr(event, "content_block", None)
         block_type = getattr(block, "type", "")
         delta = getattr(event, "delta", None)
+        emitted: tuple[agent_events.AgentEvent, ...] = ()
         if event_type == "content_block_start" and block_type == "text":
             state.text_indexes.add(int(getattr(event, "index", -1)))
         elif (
@@ -271,53 +375,43 @@ async def _stream_provider_events(
             and block_type == "server_tool_use"
             and getattr(block, "name", "") == "web_search"
         ):
-            state.server_tool_calls += 1
-            tool_id = str(getattr(block, "id", "web-search"))
-            state.web_started[tool_id] = time.monotonic()
-            yield agent_events.ToolStartEvent(
-                tool_call_id=tool_id,
-                tool="web_search",
-                label="Researching current recommendations…",
-            )
+            emitted = (_on_web_search_start(block, state),)
         elif (
             event_type == "content_block_start"
             and block_type == "web_search_tool_result"
         ):
-            tool_id = str(getattr(block, "tool_use_id", "web-search"))
-            started = state.web_started.pop(tool_id, time.monotonic())
-            duration_ms = (time.monotonic() - started) * 1000
-            state.web_search_ms += duration_ms
-            ok = _web_result_ok(getattr(block, "content", None))
-            state.web_results.append(ok)
-            yield agent_events.ToolEndEvent(
-                tool_call_id=tool_id,
-                tool="web_search",
-                ok=ok,
-                duration_ms=round(duration_ms),
-                summary=(
-                    "Current place information checked"
-                    if ok
-                    else "Current place search was unavailable"
-                ),
-            )
-        elif event_type == "content_block_delta" and getattr(delta, "type", "") == (
-            "text_delta"
-        ):
-            state.saw_text = True
-            if state.first_token_ms is None:
-                state.first_token_ms = (
-                    time.monotonic() - state.call_started
-                ) * 1000
-            text = state.sanitizer.feed(str(getattr(delta, "text", "")))
-            if text:
-                yield agent_events.TokenEvent(text=text)
-        elif event_type == "content_block_stop" and int(
-            getattr(event, "index", -1)
-        ) in state.text_indexes:
-            state.text_indexes.discard(int(getattr(event, "index", -1)))
-            text = state.sanitizer.flush()
-            if text:
-                yield agent_events.TokenEvent(text=text)
+            emitted = (_on_web_search_result(event, block, state),)
+        elif event_type == "content_block_delta":
+            emitted = _on_text_delta(event, delta, state)
+        elif event_type == "content_block_stop":
+            emitted = _on_text_stop(event, state)
+        for item in emitted:
+            yield item
+
+
+async def _apply_follow_up(
+    completed: _AttemptCompleted,
+    attempt: int,
+    attempts: int,
+    deadline_monotonic: float | None,
+) -> ModelCallCompleted | None:
+    if completed.retry_mode == "immediate" and attempt < attempts:
+        return None
+    if completed.retry_mode == "backoff" and attempt < attempts:
+        retry_delay = _retry_delay_s(attempt, deadline_monotonic)
+        if retry_delay <= 0:
+            return _deadline_from_attempt(completed, attempt)
+        await asyncio.sleep(retry_delay)
+        return None
+    return completed.public_result(attempt)
+
+
+def _required_attempt_completion(
+    completed: _AttemptCompleted | None,
+) -> _AttemptCompleted:
+    if completed is None:
+        raise RuntimeError("model attempt ended without a completion record")
+    return completed
 
 
 async def stream_model_call(
@@ -353,19 +447,62 @@ async def stream_model_call(
                 completed = event
             else:
                 yield event
-        if completed is None:
-            raise RuntimeError("model attempt ended without a completion record")
-        if completed.retry_mode == "immediate" and attempt < attempts:
+        terminal = await _apply_follow_up(
+            _required_attempt_completion(completed),
+            attempt,
+            attempts,
+            deadline_monotonic,
+        )
+        if terminal is None:
             continue
-        if completed.retry_mode == "backoff" and attempt < attempts:
-            retry_delay = _retry_delay_s(attempt, deadline_monotonic)
-            if retry_delay <= 0:
-                yield _deadline_from_attempt(completed, attempt)
-                return
-            await asyncio.sleep(retry_delay)
-            continue
-        yield completed.public_result(attempt)
+        yield terminal
         return
+
+
+def _timeout_attempt_result(
+    state: _AttemptState,
+    deadline_monotonic: float | None,
+) -> _AttemptCompleted:
+    retry_mode: RetryMode = (
+        "immediate"
+        if _silent_retry_allowed(state, deadline_monotonic)
+        else "none"
+    )
+    return _AttemptCompleted(
+        state=state,
+        final_message=None,
+        error=_deadline_error(),
+        retry_mode=retry_mode,
+    )
+
+
+def _provider_error_result(
+    state: _AttemptState,
+    exc: Exception,
+    *,
+    stream_kwargs: dict,
+    log_tag: str,
+    attempt: int,
+    attempts: int,
+) -> _AttemptCompleted:
+    model_request.log_provider_failure(
+        exc=exc,
+        kwargs=stream_kwargs,
+        log_tag=log_tag,
+        attempt=attempt,
+        attempts=attempts,
+    )
+    retry_mode: RetryMode = (
+        "backoff"
+        if not state.saw_text and model_request.should_retry(exc)
+        else "none"
+    )
+    return _AttemptCompleted(
+        state=state,
+        final_message=None,
+        error=model_request.error_event_for(exc),
+        retry_mode=retry_mode,
+    )
 
 
 async def _stream_attempt(
@@ -417,39 +554,19 @@ async def _stream_attempt(
             yield agent_events.TokenEvent(text=trailing)
         pending_summary = "Current place search was interrupted"
         record_duration = False
-        retry_mode: RetryMode = (
-            "immediate"
-            if _silent_retry_allowed(state, deadline_monotonic)
-            else "none"
-        )
-        completed = _AttemptCompleted(
-            state=state,
-            final_message=None,
-            error=_deadline_error(),
-            retry_mode=retry_mode,
-        )
+        completed = _timeout_attempt_result(state, deadline_monotonic)
     except (anthropic.APIError, OSError, RuntimeError, TypeError, ValueError) as exc:
         trailing = state.sanitizer.flush()
         if trailing:
             yield agent_events.TokenEvent(text=trailing)
         pending_summary = "Current place search was interrupted"
-        model_request.log_provider_failure(
-            exc=exc,
-            kwargs=stream_kwargs,
+        completed = _provider_error_result(
+            state,
+            exc,
+            stream_kwargs=stream_kwargs,
             log_tag=log_tag,
             attempt=attempt,
             attempts=attempts,
-        )
-        retry_mode = (
-            "backoff"
-            if not state.saw_text and model_request.should_retry(exc)
-            else "none"
-        )
-        completed = _AttemptCompleted(
-            state=state,
-            final_message=None,
-            error=model_request.error_event_for(exc),
-            retry_mode=retry_mode,
         )
     for event in _pending_web_events(
         state,

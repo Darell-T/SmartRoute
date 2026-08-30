@@ -48,6 +48,27 @@ class TurnEvidenceWebTests(unittest.TestCase):
 
         assert [item["new_state"] for item in evidence.goal_transitions] == ["in_flight", "satisfied"]
 
+    def test_record_goal_keeps_unique_recovery_options_in_declaration_order(self):
+        evidence = TurnEvidence()
+        evidence.bind_contract(_contract(("places", GoalKind.PLACE_RECOMMENDATION, ())))
+        evidence.record_goal(
+            "places",
+            GoalState.ATTEMPTED_BUT_UNAVAILABLE,
+            attempted=True,
+            approved_recovery_options=(" retry ", "retry", "", "other", "retry"),
+        )
+
+        assert evidence.recovery_options_for("places") == ("retry", "other")
+        evidence.record_goal(
+            "places",
+            GoalState.ATTEMPTED_BUT_UNAVAILABLE,
+            attempted=True,
+        )
+        assert evidence.recovery_options_for("places") == ()
+        assert [item["new_state"] for item in evidence.goal_transitions] == [
+            "attempted_but_unavailable"
+        ]
+
     def test_successful_web_is_one_use_and_claimable(self):
         evidence = TurnEvidence()
         evidence.note_discover_places(ok=True, discovery_set_id="ds_1", place_count=3)

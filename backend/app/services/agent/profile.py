@@ -91,11 +91,16 @@ def resolve_profile_place(
     if not query:
         return None, None
     profile = get_profile(session)
-    places = profile.get("places") or {}
     if query in {"home", "work"}:
-        place = places.get(query)
+        place = (profile.get("places") or {}).get(query)
         return (dict(place), None) if isinstance(place, dict) else (None, None)
+    return _unique_place(_matching_saved_places(profile, query))
 
+
+def _matching_saved_places(
+    profile: dict[str, Any], query: str
+) -> list[dict[str, Any]]:
+    places = profile.get("places") or {}
     matches = [
         dict(place)
         for place in places.values()
@@ -107,6 +112,12 @@ def resolve_profile_place(
         for place in profile.get(key) or []
         if isinstance(place, dict) and query == _place_key(place)
     )
+    return matches
+
+
+def _unique_place(
+    matches: list[dict[str, Any]],
+) -> tuple[dict[str, Any] | None, str | None]:
     unique: dict[tuple[object, ...], dict[str, Any]] = {}
     for place in matches:
         place_id = str(place.get("place_id") or "").strip()
@@ -168,13 +179,10 @@ def normalize_place(raw: object) -> dict[str, Any] | None:
     label = str(raw.get("label") or raw.get("name") or raw.get("address") or "").strip()
     if not label or len(label) > 160:
         return None
-    try:
-        latitude = float(raw["latitude"] if "latitude" in raw else raw["lat"])
-        longitude = float(raw["longitude"] if "longitude" in raw else raw["lng"])
-    except (KeyError, TypeError, ValueError):
+    coordinates = _admitted_coordinates(raw)
+    if coordinates is None:
         return None
-    if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
-        return None
+    latitude, longitude = coordinates
     return {
         "label": label[:160],
         "address": str(raw.get("address") or "").strip()[:200] or None,
@@ -182,6 +190,17 @@ def normalize_place(raw: object) -> dict[str, Any] | None:
         "longitude": longitude,
         "place_id": str(raw.get("place_id") or "").strip()[:160] or None,
     }
+
+
+def _admitted_coordinates(raw: dict[str, Any]) -> tuple[float, float] | None:
+    try:
+        latitude = float(raw["latitude"] if "latitude" in raw else raw["lat"])
+        longitude = float(raw["longitude"] if "longitude" in raw else raw["lng"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+        return None
+    return (latitude, longitude)
 
 
 def _validated_preferences(raw: dict[str, Any]) -> dict[str, Any]:

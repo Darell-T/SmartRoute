@@ -51,6 +51,8 @@ Quality certification from fresh runs with no `--skip-tests`:
 | Batch 6C reviewer final 2026-08-29 | 0 | 0 | 0 | 0 | 198 | 1,895 passed, 21 skipped, 444 subtests | 314 |
 | Batch 6D worker 2026-08-30 | 1 | 0 | 0 | 31 | 198 | 1,895 passed, 21 skipped, 444 subtests | 314 |
 | Batch 6D reviewer final 2026-08-30 | 0 | 0 | 0 | 0 | 168 | 1,896 passed, 21 skipped, 444 subtests | 314 |
+| Batch 6E worker 2026-08-30 | 1 | 0 | 0 | 43 | 168 | 1,899 passed, 21 skipped, 444 subtests | 314 |
+| Batch 6E reviewer final 2026-08-30 | 0 | 0 | 0 | 0 | 125 | 1,899 passed, 21 skipped, 444 subtests | 314 |
 
 Cognitive delta against `427fbc8`: 0 new or worsened. CRAP has no absolute
 ceiling. Baseline entries may not worsen.
@@ -61,9 +63,9 @@ and the handoff repair are Codex-approved. Batch 4 owned tools Ruff is zero.
 Batch 5 is committed at `22f6f0d` and reviewer-approved. Batch 6 is committed
 at `c058199`. That commit is the fixed point for Batches 6A through 6E. Batch
 6A is committed at `140495a`. Batch 6B is committed at `c8a0381`. Batch 6C
-review is complete on the tree based on `c8a0381`. Batch 6D is Codex-approved
-against checkpoint `676ff13`. Do not start Batch 6E or Batch 7 until the
-reviewed Batch 6D tree is committed.
+review is complete on the tree based on `c8a0381`. Batch 6D is committed at
+`2298e32`. Batch 6E is Codex-approved on the tree based on that checkpoint.
+Batch 7 was not started.
 
 ## Structural policy
 
@@ -78,9 +80,8 @@ reviewed Batch 6D tree is committed.
 
 ## Remaining batches
 
-The old 20-batch plan is retired. Batches 2 through 6D are complete. Remaining
-backend work is 6E in `docs/lint-cleanup-plan.md`. Do not start Batch 7 until
-6A through 6E are committed.
+The old 20-batch plan is retired. Batches 2 through 6E are complete. Remaining
+work is frontend Batches 7 through 9.
 
 | Batch | Subsystem |
 |---:|---|
@@ -2071,7 +2072,230 @@ Passenger text still comes from server-owned evidence projection.
 - `quality/baseline.json` has 168 entries. The reviewer-owned quality gate
   exits 0 with `approval_eligible: true`.
 
-Batch 6D is Codex-approved for commit. Batch 6E and Batch 7 were not started.
+Batch 6D is committed at `2298e32`. Batch 7 was not started.
+
+## Batch 6E completion (2026-08-30)
+
+The worker left the implementation uncommitted for Codex review. Codex removed
+dead and unearned helpers, restored useful boundary explanations, corrected a
+private cross-module dependency, and accepted the resulting tree.
+
+Starting refs: `$batchRef` / HEAD `2298e32`. `$qualityRef` `c058199`.
+The worker left `quality/baseline.json` at 168 entries. The reviewer removed
+exactly 43 proven-stale entries. The final file has 125 entries. No entry was
+added or widened.
+
+Scope: remaining production under `backend/app/services/agent/` excluding
+`tools/**`. Six Batch 6C metadata-only files may still appear in
+`git status --short`. They were not edited in this batch:
+`backend/app/services/agent/tools/__init__.py`, `complete_turn.py`,
+`location_resolution.py`, `places/place_reference.py`,
+`places/present_places.py`, `route/present_route_state.py`.
+
+### Starting inventory
+
+From `scripts/report_backend_debt.py --max-existing 12 --scope backend/app/services/agent/`
+`by_batch.6E` at HEAD: functions 435, `above_12` 53, `at_11_or_12` 8,
+`crap_above_30` 4, `zero_covered` 10, overall backend branch coverage 88.7%.
+
+Starting CRAP above 30: `store_candidate_set`, `_sanitized_search_scope`,
+`presented_entity_registry.resolve`, `build_turn_context`.
+
+### Ending inventory
+
+From a fresh `coverage run --branch --source=app -m pytest` then
+`scripts/report_backend_debt.py --max-existing 12`:
+
+| Metric | Start | End |
+|---|---:|---:|
+| 6E functions | 435 | 547 |
+| 6E `above_12` | 53 | 0 |
+| 6E `at_11_or_12` | 8 | 18 |
+| 6E `crap_above_30` | 4 | 0 |
+| 6E `zero_covered` | 10 | 6 |
+| Global production `above_12` | | 0 |
+| Overall backend branch coverage | 88.7% | 88.8% |
+
+Debt `--max-existing 12` exits 0. Cognitive vs `$batchRef` `2298e32` has
+0 new and 0 worsened violations. Final quality vs `$qualityRef` `c058199`
+has new 0, worsened 0, stale 0, remaining 125, and
+`approval_eligible: true`. Ruff for the owned backend scope exits 0.
+
+Net production `git diff --numstat HEAD -- backend/app/services/agent`:
+2,037 insertions, 1,308 deletions, net +729. The change replaces 1,308 old
+lines and stays under the accepted +800 boundary. Function count grew by 112.
+Remaining helpers own named selector, parsing, persistence, retry, lifecycle,
+telemetry, or aggregation policies. New functions stay cyclo and cognitive at
+or below 10.
+
+Backend pytest: 1,899 passed, 21 skipped, 444 subtests. Three new public-path
+tests: `test_sources_event_casefolds_host_and_rejects_overlong_title`,
+`test_open_states_keep_the_matching_next_action`,
+`test_record_goal_keeps_unique_recovery_options_in_declaration_order`.
+
+### Production files changed
+
+21 files. None under `tools/**`.
+
+- `backend/app/services/agent/candidate_store.py`
+- `backend/app/services/agent/discovery_store.py`
+- `backend/app/services/agent/events.py`
+- `backend/app/services/agent/loop.py`
+- `backend/app/services/agent/model/output_projection.py`
+- `backend/app/services/agent/model/prompt.py`
+- `backend/app/services/agent/model/request.py`
+- `backend/app/services/agent/model/stream.py`
+- `backend/app/services/agent/passenger_output.py`
+- `backend/app/services/agent/presented_entity_registry.py`
+- `backend/app/services/agent/profile.py`
+- `backend/app/services/agent/public_surface.py`
+- `backend/app/services/agent/session.py`
+- `backend/app/services/agent/tool_input_policy.py`
+- `backend/app/services/agent/transcript_store.py`
+- `backend/app/services/agent/trip_state.py`
+- `backend/app/services/agent/turn/completion.py`
+- `backend/app/services/agent/turn/contract.py`
+- `backend/app/services/agent/turn/evidence.py`
+- `backend/app/services/agent/turn/stream.py`
+- `backend/app/services/agent/turn/tool_round.py`
+
+Tests: `backend/tests/test_agent_events.py`,
+`backend/tests/test_completion_policy.py`,
+`backend/tests/test_turn_evidence.py`. Audit: `.audit/backend-debt.json`.
+
+### Cluster notes
+
+Cluster 1 registries and stores: field-group extracts. `load_candidate_set`
+reuses `_admit_watched_record`. `_timing_metrics` restored so new
+`_comparison_option` stays at or below 10. `_borough_scope` kept because
+inlining pushed `_sanitized_search_scope` to cyclo 13.
+
+Cluster 2 model prompt, request, output, stream: Codex inlined the trivial
+deadline check. Inlining the completion invariant pushed `stream_model_call`
+to cognitive 14, so `_required_attempt_completion` owns that invariant.
+`_projected_place_ids` stays because inlining pushed `_project_mapping` to
+cognitive 13. `_accepted_route_comparison` uses an explicit empty-id guard.
+
+Cluster 3 public policy, profiles, sessions, passenger output: sanitization
+and slot extracts. Codex kept `_finite_price` local rather than reaching into
+another module's private helper. `_registry_identity_fields` keeps new
+`_admit_registry_entry` at or below 10. Codex inlined `_slot_place`.
+
+Cluster 4 loop, events, turn: `_eval_bounded_binop`,
+`_arithmetic_shortcut_events`, `_live_turn_events`. `_stream_turn`
+passthrough inlined into `_live_turn_events`. Contract unique, known, and
+acyclic checks merged into `_validate_goal_graph`. Stream token and error
+peelers inlined. `_ModelPhase` and `_CapabilityPhase` store
+`ModelDirective`.
+
+### 11-or-12 survivors
+
+18 remaining. Do not peel further. Inlining evidence is in the cluster notes.
+
+| cyclo | cog | cov | CRAP | File:function |
+|---:|---:|---:|---:|---|
+| 12 | 12 | 1.000 | 12.000 | `model/stream.py:_stream_provider_events` |
+| 7 | 12 | 0.875 | 7.096 | `model/stream.py:stream_model_call` |
+| 12 | 11 | 0.833 | 12.667 | `presented_entity_registry.py:record` |
+| 12 | 6 | 0.800 | 13.152 | `profile.py:normalize_place` |
+| 12 | 11 | 0.920 | 12.074 | `tool_input_policy.py:goal_error` |
+| 12 | 10 | 1.000 | 12.000 | `turn/completion.py:apply_completion` |
+| 9 | 12 | 0.957 | 9.007 | `turn/completion.py:evaluate_completion` |
+| 11 | 12 | 0.812 | 11.798 | `turn/contract.py:TurnContract._status_for` |
+| 7 | 12 | 0.833 | 7.227 | `turn/stream.py:_capture_model_events` |
+| 11 | 12 | 1.000 | 11.000 | `turn/tool_round.py:_ToolRoundExecution._validate_calls` |
+| 11 | 10 | 0.824 | 11.665 | `discovery_store.py:_sanitized_search_scope` |
+| 11 | 10 | 0.765 | 12.576 | `discovery_store.py:load_discovery_set` |
+| 11 | 11 | 0.950 | 11.015 | `presented_entity_registry.py:resolve` |
+| 11 | 9 | 1.000 | 11.000 | `profile.py:_validated_preferences` |
+| 11 | 8 | 0.933 | 11.036 | `session.py:add_pending_continuation` |
+| 11 | 5 | 0.944 | 11.021 | `turn/stream.py:_finish_model_iteration` |
+| 7 | 11 | 1.000 | 7.000 | `turn/stream.py:_stream_react_loop` |
+| 11 | 11 | 0.857 | 11.353 | `turn/stream.py:resolve_model_iteration` |
+
+### Reviewer baseline shrink
+
+The worker left these 43 stale IDs for Codex. The reviewer removed exactly
+these entries with the fresh full-suite coverage evidence below. The generated
+update also lowered eight surviving complexity or CRAP ceilings. No surviving
+entry increased.
+
+`candidate_store`: `_mark_presented_redis`, `accepted_route_comparison`,
+`store_candidate_set`. `discovery_store`: `display_waypoint_labels`,
+`resolve_place_reference`, `sanitized_discovery_context`,
+`store_discovery_set`. `events`: `normalized_source`. `loop`:
+`_eval_math_node`, `run_agent_turn`. `output_projection`:
+`project_model_value`, `project_route_preparation`. `prompt`:
+`build_turn_context`. `request`: `build_stream_kwargs`. `model/stream`:
+`_paced_provider_iter`, `_stream_attempt`, `_web_sources`,
+`stream_model_call`. `passenger_output`: `validated_activity_label`,
+`validated_terminal_message`. `registry`: `_entries`, `_entry`,
+`_entry_place`, `resolve_description`. `profile`: `resolve_profile_place`.
+`public_surface`: `active_temporary_route_preview`, `offered_custom_tools`,
+`state_valid_tool_names`. `session`: `extract_slots`, `save_session`.
+`tool_input_policy`: `constrained_tool_input`,
+`missing_verified_destination`. `transcript_store`:
+`active_accepted_route_card`, `add_visible_events`,
+`project_model_history`. `trip_state`: `_normalize`, `commit_scenario`.
+`completion`: `_facts`, `_goal_progress`. `contract`:
+`TurnContract.__post_init__`. `evidence`: `_record_discovery_result`,
+`record_goal`. `turn/stream`: `stream_capability_iteration`.
+
+### Frontend gate
+
+Batch 6E did not change frontend production. From `frontend/`:
+
+- `npm run typecheck` passed
+- `npm run typecheck:scripts` passed
+- `npm run test:unit` 314 passed
+- transit artifact verify passed (15 station-anchor tests plus overlay,
+  palette, and renderer checks)
+- raw `npm run lint` still reports the 2026-08-27 ESLint backlog (193)
+- `npm run lint:oxlint` still exits 1 with the 2026-08-27 Oxlint backlog
+- `npm run test:release:ci` passed: 14 passed, 4 skipped, exit 0.
+  First Chromium-backed run timed out 3 specs under 4 workers. A later
+  `npm run test:release:ci` run of the same 18 specs passed. Browser-use
+  CDP is not a substitute for this Playwright suite.
+
+### Reviews
+
+Quality, reuse, performance, Comment Sicko, Ponytail, Testing on the Toilet,
+simplify, and blast-radius ran after the four clusters. Named policies stayed
+in-file. Fail-open recoveries stayed at real boundaries. Comment Sicko
+deleted restating docstrings. Anthropic grammar and tool-ordering comments
+were kept. Blast-radius proof: owned live candidate sets load, foreign empty
+missing expired and bad-expiry miss, registry price samples match including
+nan and inf.
+
+Codex then removed unused schema-count wrappers, constants, compatibility
+entry points, session-key wrappers, and the temporary audit script. Codex
+also inlined three trivial helpers, restored six boundary explanations that
+state security or ownership constraints, and kept the remaining one-call
+helpers only where they own a named policy or lifecycle responsibility.
+
+The reviewer restored registry price parsing locally. The worker version
+called `discovery_store._finite_price`, which coupled the registry to another
+module's private implementation through an existing lazy import cycle.
+
+### Final verification
+
+- Focused agent regression set: 201 passed and 37 subtests passed.
+- Full backend: 1,899 passed, 21 skipped, and 444 subtests passed.
+- Frontend unit: 314 passed.
+- Frontend typechecks and transit artifact verification passed.
+- Release CI: 14 passed and 4 intentionally skipped.
+- Raw ESLint still reports 193 inherited frontend findings. Raw Oxlint also
+  reports the inherited frontend backlog. The quality ratchet reports no new
+  or worsened frontend violations.
+- Final quality exits 0 with `approval_eligible: true`, new 0, worsened 0,
+  cognitive new or worsened 0, stale 0, Ruff C901 0, and Ruff structural 0.
+
+### Remaining risk
+
+The 11-or-12 band is 18, above the starting 8, but no function is above 12.
+Batch 6E CRAP above 30 is 0. The only global CRAP item is the documented
+Batch 6D `_area_condition_fields` signal. Raw frontend lint debt remains for
+Batches 7 through 9. Batch 6E is Codex-approved for commit.
 
 ## Historical records through 427fbc8
 

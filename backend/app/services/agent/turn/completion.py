@@ -39,6 +39,13 @@ _PERSISTED_RESOLUTIONS = {
     TurnResolution.ATTEMPTED_BUT_UNAVAILABLE,
     TurnResolution.PARTIAL_SUCCESS_WITH_RECOVERY,
 }
+_FAILURE_STATES = {
+    GoalState.BLOCKED_WAITING_FOR_RIDER,
+    GoalState.ATTEMPTED_BUT_UNAVAILABLE,
+    GoalState.UNSUPPORTED,
+    GoalState.CANCELLED_BY_RIDER,
+    GoalState.SUPERSEDED,
+}
 
 
 def _state(value: object) -> GoalState:
@@ -46,35 +53,48 @@ def _state(value: object) -> GoalState:
     return value if isinstance(value, GoalState) else GoalState(str(value))
 
 
-def _facts(evidence: object, key: str) -> tuple[GoalState, bool, bool, tuple[str, ...]]:
-    """Read the narrow execution interface without mutating the ledger."""
+def _mapping_facts(
+    evidence: Mapping, key: str
+) -> tuple[object, bool, bool, object]:
+    raw = evidence.get(key)
+    if not isinstance(raw, Mapping):
+        return raw, False, False, ()
+    return (
+        raw.get("state", GoalState.PENDING),
+        bool(raw.get("attempted", False)),
+        bool(raw.get("presented", False)),
+        raw.get("approved_recovery_options") or raw.get("recovery_options") or (),
+    )
+
+
+def _object_facts(evidence: object, key: str) -> tuple[object, bool, bool, object]:
     raw: object = None
     attempted = presented = False
-    options: Iterable[str] = ()
+    options: object = ()
+    method = getattr(evidence, "state_for", None)
+    if callable(method):
+        raw = method(key)
+    method = getattr(evidence, "attempted_for", None)
+    if callable(method):
+        attempted = bool(method(key))
+    method = getattr(evidence, "presented_for", None)
+    if callable(method):
+        presented = bool(method(key))
+    method = getattr(evidence, "recovery_options_for", None)
+    if callable(method):
+        options = method(key)
+    return raw, attempted, presented, options
+
+
+def _facts(evidence: object, key: str) -> tuple[GoalState, bool, bool, tuple[str, ...]]:
+    """Read the narrow execution interface without mutating the ledger."""
+
     if isinstance(evidence, Mapping):
-        raw = evidence.get(key)
-        if isinstance(raw, Mapping):
-            attempted = bool(raw.get("attempted", False))
-            presented = bool(raw.get("presented", False))
-            options = (
-                raw.get("approved_recovery_options")
-                or raw.get("recovery_options")
-                or ()
-            )
-            raw = raw.get("state", GoalState.PENDING)
+        raw, attempted, presented, options = _mapping_facts(evidence, key)
     elif evidence is not None:
-        method = getattr(evidence, "state_for", None)
-        if callable(method):
-            raw = method(key)
-        method = getattr(evidence, "attempted_for", None)
-        if callable(method):
-            attempted = bool(method(key))
-        method = getattr(evidence, "presented_for", None)
-        if callable(method):
-            presented = bool(method(key))
-        method = getattr(evidence, "recovery_options_for", None)
-        if callable(method):
-            options = method(key)
+        raw, attempted, presented, options = _object_facts(evidence, key)
+    else:
+        raw, attempted, presented, options = None, False, False, ()
     if raw is None:
         raw = GoalState.PENDING
     return _state(raw), attempted, presented, _normalise(options)
@@ -171,6 +191,28 @@ def completion_telemetry(
     }
 
 
+def _remaining_action(
+    contract: TurnContract,
+    evidence: object,
+    goal_key: str,
+    state: GoalState,
+    attempted: bool,
+    is_presented: bool,
+) -> str | None:
+    if state == GoalState.EVIDENCE_READY and not is_presented:
+        return f"present:{goal_key}"
+    if state == GoalState.PENDING:
+        blockers = contract.dependency_blockers(goal_key, evidence)
+        if blockers:
+            return f"wait_for:{goal_key}=" + ",".join(blockers)
+        return f"execute:{goal_key}"
+    if state == GoalState.IN_FLIGHT:
+        return f"await:{goal_key}"
+    if state == GoalState.ATTEMPTED_BUT_UNAVAILABLE and not attempted:
+        return f"attempt:{goal_key}"
+    return None
+
+
 def _goal_progress(
     contract: TurnContract,
     evidence: object,
@@ -180,31 +222,16 @@ def _goal_progress(
     goal_key = str(goal.goal_key)
     state, attempted, was_presented, recovery = _facts(evidence, goal_key)
     is_presented = was_presented or goal_key in presented
-    if state == GoalState.EVIDENCE_READY and not is_presented:
-        return goal_key, f"present:{goal_key}", None, False, recovery
-    if state == GoalState.PENDING:
-        blockers = contract.dependency_blockers(goal_key, evidence)
-        action = (
-            f"wait_for:{goal_key}=" + ",".join(blockers)
-            if blockers
-            else f"execute:{goal_key}"
-        )
+    action = _remaining_action(
+        contract, evidence, goal_key, state, attempted, is_presented
+    )
+    if action is not None:
         return goal_key, action, None, False, recovery
-    if state == GoalState.IN_FLIGHT:
-        return goal_key, f"await:{goal_key}", None, False, recovery
-    if state == GoalState.ATTEMPTED_BUT_UNAVAILABLE and not attempted:
-        return goal_key, f"attempt:{goal_key}", None, False, recovery
     if state == GoalState.SATISFIED or (
         state == GoalState.EVIDENCE_READY and is_presented
     ):
         return None, None, None, True, recovery
-    if state in {
-        GoalState.BLOCKED_WAITING_FOR_RIDER,
-        GoalState.ATTEMPTED_BUT_UNAVAILABLE,
-        GoalState.UNSUPPORTED,
-        GoalState.CANCELLED_BY_RIDER,
-        GoalState.SUPERSEDED,
-    }:
+    if state in _FAILURE_STATES:
         return None, None, state, False, recovery
     return goal_key, f"resolve:{goal_key}", None, False, recovery
 

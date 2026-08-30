@@ -108,7 +108,6 @@ STRICT_OPTIONAL_FIELD_BUDGET = 0
 OPTIONAL_FIELD_HARD_LIMIT = 24
 STRICT_UNION_FIELD_BUDGET = 0
 UNION_FIELD_HARD_LIMIT = 16
-CAPABILITY_SURFACE_VERSION = "model_led_goals_v2"
 
 
 def schema_optional_parameter_count(schema: object) -> int:
@@ -150,31 +149,14 @@ def union_parameter_count(tools: Iterable[Mapping[str, Any]]) -> int:
     )
 
 
-def offered_custom_tools(registry_schemas: Iterable[Mapping[str, Any]]) -> list[dict]:
-    """Return every public schema in stable vocabulary order."""
-
-    wanted = frozenset(PUBLIC_TOOL_NAMES)
-    offered = []
-    for schema in registry_schemas:
-        if schema.get("name") not in wanted:
-            continue
-        provider_schema = dict(schema)
-        # Anthropic rejects the combined public request during grammar
-        # compilation even when only a subset is strict. The backend already
-        # validates every capability at its executor/evidence boundary, so do
-        # not opt the public request into provider-side grammar compilation.
-        provider_schema.pop("strict", None)
-        offered.append(provider_schema)
-    names = [schema.get("name") for schema in offered]
-    if names != list(PUBLIC_TOOL_NAMES):
-        by_name = {schema.get("name"): schema for schema in offered}
-        missing = [name for name in PUBLIC_TOOL_NAMES if name not in by_name]
-        if missing:
-            raise AssertionError(
-                "public tool surface is missing required tools: "
-                + ", ".join(missing)
-            )
-        offered = [by_name[name] for name in PUBLIC_TOOL_NAMES]
+def _assert_public_tool_budget(offered: list[dict]) -> None:
+    by_name = {schema.get("name"): schema for schema in offered}
+    missing = [name for name in PUBLIC_TOOL_NAMES if name not in by_name]
+    if missing:
+        raise AssertionError(
+            "public tool surface is missing required tools: "
+            + ", ".join(missing)
+        )
     strict_tools = [tool for tool in offered if tool.get("strict")]
     if len(strict_tools) != STRICT_TOOL_BUDGET:
         raise AssertionError(
@@ -193,6 +175,28 @@ def offered_custom_tools(registry_schemas: Iterable[Mapping[str, Any]]) -> list[
             "public strict-tool union-field count must be "
             f"{STRICT_UNION_FIELD_BUDGET}, got {union_count}"
         )
+
+
+def offered_custom_tools(registry_schemas: Iterable[Mapping[str, Any]]) -> list[dict]:
+    """Return every public schema in stable vocabulary order."""
+
+    wanted = frozenset(PUBLIC_TOOL_NAMES)
+    offered = []
+    for schema in registry_schemas:
+        if schema.get("name") not in wanted:
+            continue
+        provider_schema = dict(schema)
+        # Anthropic rejects the combined public request during grammar
+        # compilation even when only a subset is strict. The backend already
+        # validates every capability at its executor/evidence boundary, so do
+        # not opt the public request into provider-side grammar compilation.
+        provider_schema.pop("strict", None)
+        offered.append(provider_schema)
+    names = [schema.get("name") for schema in offered]
+    if names != list(PUBLIC_TOOL_NAMES):
+        by_name = {schema.get("name"): schema for schema in offered}
+        offered = [by_name[name] for name in PUBLIC_TOOL_NAMES if name in by_name]
+    _assert_public_tool_budget(offered)
     return offered
 
 
@@ -225,19 +229,10 @@ def active_discovery_set_id(
     return set_id if isinstance(places, list) and places else None
 
 
-def active_temporary_route_preview(
+def _live_what_if_selection(
     session: object | None,
-    *,
-    session_id: str | None = None,
-) -> tuple[str, str] | None:
-    """Return a validated, still-presentable temporary route selection.
-
-    Trip state contains only pointers. The candidate store is the authority
-    for ownership, expiry, route status, and candidate identity; this helper
-    keeps an inherited what-if preview out of the model-visible surface when
-    any of those checks fail.
-    """
-
+    session_id: str | None,
+) -> tuple[object, object, str, str] | None:
     if not isinstance(session, dict):
         return None
     owner = str(session_id or "").strip()
@@ -257,17 +252,40 @@ def active_temporary_route_preview(
         candidate_id,
         session_id=owner,
     )
-    if error or not isinstance(record, dict) or not isinstance(entry, dict):
+    if error:
         return None
+    return record, entry, set_id, candidate_id
+
+
+def _presentable_what_if(record: object, entry: object) -> bool:
+    if not isinstance(record, dict) or not isinstance(entry, dict):
+        return False
     if str(record.get("scenario_mode") or "") != "what_if":
-        return None
+        return False
     if record.get("presented"):
-        return None
+        return False
     digest = entry.get("digest")
-    if (
-        not isinstance(digest, dict)
-        or digest.get("hard_constraints_satisfied") is not True
-    ):
+    if not isinstance(digest, dict):
+        return False
+    return digest.get("hard_constraints_satisfied") is True
+
+
+def active_temporary_route_preview(
+    session: object | None,
+    *,
+    session_id: str | None = None,
+) -> tuple[str, str] | None:
+    """Return a still-presentable temporary route selection.
+
+    Trip state contains pointers. The candidate store owns session identity,
+    expiry, scenario mode, presentation state, and candidate admission.
+    """
+
+    selection = _live_what_if_selection(session, session_id)
+    if selection is None:
+        return None
+    record, entry, set_id, candidate_id = selection
+    if not _presentable_what_if(record, entry):
         return None
     return set_id, candidate_id
 
@@ -288,6 +306,106 @@ def active_route_replay(session: object | None) -> dict[str, str] | None:
     if not candidate_id or not card_id:
         return None
     return {"candidate_id": candidate_id, "card_id": card_id}
+
+
+def _ready_presenter_name(goal: object, contract: object, evidence: object) -> str | None:
+    skip_presenter = (
+        goal.kind == GoalKind.DESTINATION_SELECTION
+        and _feeds_route_selection(contract, goal.goal_key)
+        and not _dependent_route_failed(contract, evidence, goal.goal_key)
+    )
+    presenter = _PRESENTER_BY_GOAL.get(goal.kind)
+    place_research_pending = (
+        goal.kind
+        in {GoalKind.PLACE_RECOMMENDATION, GoalKind.DESTINATION_SELECTION}
+        and getattr(evidence, "web_research_required", False)
+        and not getattr(evidence, "web_succeeded", False)
+    )
+    if presenter and not skip_presenter and not place_research_pending:
+        return presenter
+    return None
+
+
+def _pending_place_presenter(
+    goal: object,
+    state: object,
+    contract: object,
+    evidence: object,
+    active_discovery: str | None,
+) -> str | None:
+    if state != GoalState.PENDING:
+        return None
+    if goal.kind not in {
+        GoalKind.PLACE_RECOMMENDATION,
+        GoalKind.DESTINATION_SELECTION,
+    }:
+        return None
+    if not active_discovery:
+        return None
+    if getattr(evidence, "web_research_required", False) and not getattr(
+        evidence, "web_succeeded", False
+    ):
+        return None
+    if goal.kind == GoalKind.DESTINATION_SELECTION and _feeds_route_selection(
+        contract, goal.goal_key
+    ):
+        return None
+    return "present_places"
+
+
+def _pending_route_presenter(
+    goal: object,
+    state: object,
+    active_temporary_route: tuple[str, str] | None,
+    active_route: dict[str, str] | None,
+) -> str | None:
+    if goal.kind != GoalKind.ROUTE:
+        return None
+    if (
+        state == GoalState.PENDING and (active_temporary_route or active_route)
+    ) or (
+        state == GoalState.ATTEMPTED_BUT_UNAVAILABLE and active_route
+    ):
+        return "present_route"
+    return None
+
+
+def _pending_tool_names(
+    goal: object,
+    state: object,
+    contract: object,
+    evidence: object,
+    active_discovery: str | None,
+    active_temporary_route: tuple[str, str] | None,
+    active_route: dict[str, str] | None,
+) -> set[str]:
+    if state not in {
+        GoalState.PENDING,
+        GoalState.ATTEMPTED_BUT_UNAVAILABLE,
+    }:
+        return set()
+    if not contract.dependencies_ready(goal.goal_key, evidence):
+        return set()
+    names: set[str] = set()
+    if (
+        goal.kind == GoalKind.ROUTE
+        and contract.route_allows_internal_discovery(goal.goal_key)
+    ):
+        names.add("discover_places")
+    place_presenter = _pending_place_presenter(
+        goal, state, contract, evidence, active_discovery
+    )
+    if place_presenter:
+        names.add(place_presenter)
+    route_presenter = _pending_route_presenter(
+        goal, state, active_temporary_route, active_route
+    )
+    if route_presenter:
+        names.add(route_presenter)
+    capability = _CAPABILITY_BY_GOAL.get(goal.kind)
+    if capability:
+        names.add(capability)
+    return names
 
 
 def state_valid_tool_names(
@@ -312,59 +430,21 @@ def state_valid_tool_names(
     for goal in contract.goals:
         state = evidence.state_for(goal.goal_key)
         if state == GoalState.EVIDENCE_READY:
-            skip_presenter = (
-                goal.kind == GoalKind.DESTINATION_SELECTION
-                and _feeds_route_selection(contract, goal.goal_key)
-                and not _dependent_route_failed(contract, evidence, goal.goal_key)
-            )
-            presenter = _PRESENTER_BY_GOAL.get(goal.kind)
-            place_research_pending = (
-                goal.kind
-                in {GoalKind.PLACE_RECOMMENDATION, GoalKind.DESTINATION_SELECTION}
-                and getattr(evidence, "web_research_required", False)
-                and not getattr(evidence, "web_succeeded", False)
-            )
-            if presenter and not skip_presenter and not place_research_pending:
+            presenter = _ready_presenter_name(goal, contract, evidence)
+            if presenter:
                 names.add(presenter)
             continue
-        if state in {
-            GoalState.PENDING,
-            GoalState.ATTEMPTED_BUT_UNAVAILABLE,
-        } and contract.dependencies_ready(goal.goal_key, evidence):
-            if (
-                goal.kind == GoalKind.ROUTE
-                and contract.route_allows_internal_discovery(goal.goal_key)
-            ):
-                names.add("discover_places")
-            if (
-                state == GoalState.PENDING
-                and goal.kind
-                in {GoalKind.PLACE_RECOMMENDATION, GoalKind.DESTINATION_SELECTION}
-                and active_discovery
-                and not (
-                    getattr(evidence, "web_research_required", False)
-                    and not getattr(evidence, "web_succeeded", False)
-                )
-                and not (
-                    goal.kind == GoalKind.DESTINATION_SELECTION
-                    and _feeds_route_selection(contract, goal.goal_key)
-                )
-            ):
-                names.add("present_places")
-            if (
-                goal.kind == GoalKind.ROUTE
-                and (
-                    (state == GoalState.PENDING and (active_temporary_route or active_route))
-                    or (
-                        state == GoalState.ATTEMPTED_BUT_UNAVAILABLE
-                        and active_route
-                    )
-                )
-            ):
-                names.add("present_route")
-            capability = _CAPABILITY_BY_GOAL.get(goal.kind)
-            if capability:
-                names.add(capability)
+        names.update(
+            _pending_tool_names(
+                goal,
+                state,
+                contract,
+                evidence,
+                active_discovery,
+                active_temporary_route,
+                active_route,
+            )
+        )
     return frozenset(names)
 
 
@@ -442,7 +522,3 @@ def is_presenter(tool_name: str) -> bool:
 
 def is_public_tool(name: object) -> bool:
     return str(name or "") in PUBLIC_TOOL_NAMES
-
-
-def is_internal_leaf_tool(name: object) -> bool:
-    return str(name or "") in INTERNAL_LEAF_TOOL_NAMES
