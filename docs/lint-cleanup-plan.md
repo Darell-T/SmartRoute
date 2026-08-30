@@ -52,11 +52,17 @@ The fresh policy certification passed:
 
 Use four complementary signals. Do not substitute one for another.
 
-1. Ruff C901 limits McCabe complexity to 10.
-2. complexipy limits cognitive complexity to 10 for new functions and blocks
-   regressions above 10 in existing functions.
-3. Ruff PLR0912 limits branches to 12.
-4. Ruff PLR0915 limits statements to 50.
+1. Ruff C901 limits Python McCabe complexity to 10.
+2. complexipy limits Python cognitive complexity to 10 for new functions and
+   blocks regressions above 10 in existing functions.
+3. Ruff PLR0912 limits Python branches to 12.
+4. Ruff PLR0915 limits Python statements to 50.
+5. Oxlint limits every authored frontend JavaScript and TypeScript function
+   to cyclomatic complexity 12, including tests and development tools.
+   `scripts/js_function_metrics.mjs --authored` is the matching inventory.
+   ESLint applies the same ceiling only to application paths. It ignores
+   `scripts/**`, `tools/**`, and `*.test.mjs`. 12 is a guardrail, not a
+   target.
 
 CRAP remains in `scripts/check_quality.py` as a coverage-aware regression
 signal for baseline functions. CRAP has no absolute ceiling. A hard CRAP value
@@ -209,14 +215,16 @@ the next checkpoint.
 
 ## Remaining batch order
 
-The old 20-batch plan was too granular. Batches 2 through 6 are complete.
-Remaining backend work is five complexity batches, 6A through 6E, then
-frontend Batches 7 through 9. Do not start Batch 7 until 6A through 6E are
-independently approved and committed.
+The old 20-batch plan was too granular. Batches 2 through 6E are complete.
+Pre-batch F0 establishes the frontend measurement contract. Do not start
+Batch 7 production refactoring until F0 is accepted. Do not start Batch 7
+during F0.
 
-Measure debt with `scripts/report_backend_debt.py --max-existing 12`. Keep
-the official ceilings in `pyproject.toml` at 10. The value 12 is a one-time
-limit for existing functions. New functions must stay at 10 or lower.
+Measure backend debt with `scripts/report_backend_debt.py --max-existing 12`.
+Keep the official Python ceilings in `pyproject.toml` at 10. Measure frontend
+debt with `scripts/report_frontend_debt.py`. The frontend cyclomatic ceiling is
+12. New Python functions must stay at 10 or lower. A coherent frontend
+function at 8 or 11 may stay as it is.
 
 | Batch | Subsystem | Why it is cohesive |
 |---:|---|---|
@@ -230,9 +238,10 @@ limit for existing functions. New functions must stay at 10 or lower.
 | 6C | Agent place, route, and shared tools | Place resolution and route preparation |
 | 6D | Agent transit tools | Arrivals, evidence, and area conditions |
 | 6E | Agent model, session, and turn | Prompt, stream, session, and turn lifecycle |
-| 7 | Frontend contracts and I/O | Network, session, validation, and canonical adapters |
-| 8 | Frontend presentation and map | Passenger rendering, interaction, and runtime map |
-| 9 | Transit artifact generator | Large deterministic preprocessing subsystem, last |
+| F0 | Frontend quality foundation | Complexity ceiling, coverage denominator, and debt report |
+| 7 | Application and library boundaries | `frontend/app/**` and `frontend/lib/**` |
+| 8 | Components, interaction, and maps | `frontend/components/**` and `frontend/tests/release/**` |
+| 9 | Transit artifact generation | `frontend/scripts/**` |
 
 ## Batch 0: route intelligence and quality stabilization
 
@@ -549,68 +558,211 @@ which now has 125 entries. Final quality exits 0 with
 subtests; frontend unit has 314 passes; release CI has 14 passes and 4 skips.
 Batch 7 was not started.
 
-## Batch 7: frontend contracts and I/O
+## Batch F0: frontend quality foundation
+
+F0 is pre-batch measurement work. It does not refactor application, component,
+map, or artifact-generation behavior. Codex reviews the uncommitted tree and
+decides whether to shrink `quality/baseline.json`. The worker must not update
+the baseline and must not begin Batch 7.
+
+The immutable checkpoint is `ae27211fa9ba`. Compare quality to that commit.
+
+### Complexity contract
+
+- Python cyclomatic maximum remains 10 in `pyproject.toml` and
+  `scripts/check_quality.py`.
+- Frontend JavaScript and TypeScript cyclomatic maximum is 12. Oxlint and
+  `scripts/js_function_metrics.mjs --authored` are the exhaustive owners for
+  every authored frontend JS/TS function, including tests and development
+  tools. ESLint remains the application-focused linter and ignores
+  `scripts/**`, `tools/**`, and `*.test.mjs`. Generated, vendored
+  (`tools/oxlint/**`), declaration-only, dependency, and build-output paths
+  are lifecycle exclusions.
+- `scripts/check_quality.py` uses the same frontend ceiling of 12. Unchanged
+  over-12 TypeScript functions that were newly inventoried against
+  `--quality-ref` are pre-existing scope debt, not new debt, and are not
+  added to `quality/baseline.json`.
+- Do not replace the Python maximum with 12.
+- Functions from 7 through 12 become compliant. Do not extract helpers only
+  to turn 13 into 12.
+
+### Coverage scope
+
+Include production TypeScript and JavaScript under `frontend/app/**`,
+`frontend/lib/**`, `frontend/components/**`, and `frontend/scripts/**`.
+
+Exclude tests, specs, check scripts, declarations, configuration, vendored
+code, `node_modules/**`, `.next/**`, `public/**`, coverage output, and
+release evidence. Every exclusion is in `scripts/frontend_quality_scope.json`
+with a lifecycle reason.
+
+An included production file that was never executed counts as zero. Do not
+omit it. Do not collapse unresolved function mappings into covered or
+uncovered.
+
+### Coverage execution
+
+`frontend/tools/run-unit-tests.mjs` is the single unit-test contract.
+`npm run test:unit` and `npm run test:coverage` use it. Node 23 native V8
+coverage records tsx compiled scripts, omits unexecuted files, and does not
+emit stable source-mapped TypeScript totals. `c8` is the coverage-specific
+dependency that remaps to `.ts` and `.tsx` and includes missing files as
+zero.
+
+Playwright release tests do not contribute source-mapped `.ts` and `.tsx`
+coverage. Browser-only React and MapLibre files stay unexecuted until Batch 8
+can map bundled source. Do not add a second component-test architecture in
+F0.
+
+### Targets for Batches 7 through 9
+
+The complete authored production scope after Batch 9 must reach at least 95%
+line, branch, and confirmed function coverage. Confirmed function coverage is
+measured functions divided by every inventoried production function, including
+unresolved mappings. Mapped-only coverage is diagnostic only. Each owning
+batch must:
+
+1. Reach at least 95% line, branch, and confirmed function coverage for its
+   owned production files and production functions before approval. Do not mix
+   test or tool functions into that coverage.
+2. Avoid decreasing any whole-frontend coverage metric.
+3. Leave no owned production file completely unexecuted.
+4. Leave no owned function above complexity 12.
+5. Leave no owned function above 12 with unresolved coverage.
+6. Test important failure, fallback, cancellation, stale-data, and
+   malformed-input branches.
+7. Demonstrate that representative new tests fail when the protected decision
+   is temporarily inverted or removed.
+8. Test through public interfaces whenever practical.
+9. Avoid direct private-helper tests unless the helper itself is an earned
+   module interface.
+10. Avoid source-text, snapshot, and mock-call-count tests as substitutes for
+    behavior.
+11. Prefer real values and small fakes over mocks.
+12. Keep tests DAMP and readable.
+
+Aim for 100% branch coverage in pure critical modules where the remaining
+branches represent real behavior: state reducers, event validators, proxy and
+stream protocol handling, canonical itinerary adapters, route selection and
+planning policies, and deterministic transit artifact transformations. Do not
+force 100% by testing impossible TypeScript states, framework internals,
+decorative rendering, or implementation details. Do not introduce
+coverage-ignore comments in worker code.
+
+### Commands
+
+```powershell
+py scripts/check_quality.py --self-test
+py scripts/report_frontend_debt.py --self-test
+Set-Location frontend
+npm run typecheck
+npm run typecheck:scripts
+npm run test:unit
+npm run test:coverage
+npm run verify:transit-artifacts
+npm run lint
+npm run lint:oxlint
+Set-Location ..
+py scripts/report_frontend_debt.py --quality-ref ae27211fa9ba --output .audit/frontend-debt.json
+py scripts/check_quality.py --quality-ref ae27211fa9ba
+```
+
+Frontend ESLint and Oxlint may remain red solely for the accepted inventory
+above complexity 12. F0 must not refactor those production functions.
+
+## Batch 7: application and library boundaries
 
 Owned paths:
 
-- `frontend/lib/**`
 - `frontend/app/**`
-- frontend release tests
-- PromptKit source and input primitives used by those boundaries
+- `frontend/lib/**`
 
-Before editing React or TypeScript, read the applicable repository skills.
+Current complexity-above-12 inventory: 10 functions.
 
-Preserve stream framing, reconnect and abort behavior, session restoration,
-route identity, proxy redaction, source validation, and canonical backend
-contracts. Validate unknown data once at the I/O boundary. Do not calculate
-trip facts in frontend adapters.
+Start with `agent-chat-state.ts` (47), `agent-chat-controller.ts` (35),
+`mapbox-search.ts` (18), backend proxy and stream proxy functions (17),
+`app/page.tsx` (16), and agent event validator, session, stream, and
+proxy-core functions from 13 through 14.
 
-Run scoped ESLint and Oxlint, typecheck, unit tests, and release evidence tests.
-Finish with all frontend gates and fresh quality.
+Suggested cohesive clusters:
 
-## Batch 8: frontend presentation and map
+1. Proxy, stream, WebSocket, and provider boundaries.
+2. Agent state, controller, session, and event validation.
+3. Application composition and remaining library debt.
+4. Owned-scope coverage completion.
 
-Owned paths:
+Preserve protocol behavior, cancellation, reconnect handling, canonical route
+facts, and provider failure semantics. Validate unknown data once at the I/O
+boundary. Do not calculate trip facts in frontend adapters.
 
-- `frontend/components/smart-route/**`
-- `frontend/components/map/**`
-
-Exclude generator code under `frontend/scripts/build/**`.
-
-Preserve one recommended route in chat, canonical labels, collapsed transit
-legs, explicit stop expansion, focus and keyboard behavior, reduced motion,
-mobile navigation, route selection, camera behavior, official colors, shared
-corridors, and station-to-line relationships.
-
-Keep Damn Lines prose and `SourceTrigger` favicon sources after recommendation
-ordering. Do not put queue data on the map or route card.
-
-Run scoped linters, typecheck, all 314 unit tests, map checks, and transit
-artifact verification. Generated artifacts must remain unchanged.
-
-## Batch 9: transit artifact generator
+## Batch 8: components, interaction, and maps
 
 Owned paths:
 
-- `frontend/scripts/build/**`
-- generator entry points and their direct tests
-- station-anchor and artifact release evidence builders
+- `frontend/components/**`
+- `frontend/tests/release/**`
 
-Start this batch only after Batches 2 through 8 are approved. This is the
-largest subsystem and remains last.
+Current complexity-above-12 inventory: 46 functions.
 
-Work in four internal checkpoints: canonical inputs, topology and snapping,
-bundle and authored geometry, then visual-network and station materialization.
-Use the change-size guardrails after each checkpoint.
+Prioritize `route-plan.buildPlan` (65), `DestinationInput` (46), subway-network
+feature construction (43), itinerary event adaptation (39), `AssistantMessage`
+(34), route steps and reasoning (26 through 32), route-view itinerary, alert
+normalization, route-stop feature construction, and SmartRoute map lifecycle.
 
-Preserve exact GTFS meanings, route and stop identity, lane ordering, shared
-corridor separation, snap gates, authored repair preconditions, deterministic
-ordering, official colors, artifact fingerprints, and validation failures.
-Never loosen a geographic threshold to hide a bad transformation.
+Suggested cohesive clusters:
 
-Run the matching generator tests after each checkpoint. Finish with scripts
-typecheck, global Oxlint and ESLint, full regeneration, artifact verification,
-map checks, and generated-diff inspection.
+1. Canonical itinerary and display adapters.
+2. Chat and route-view interactions.
+3. Map projection, feature generation, and MapLibre lifecycle.
+4. Browser behavior and owned-scope coverage completion.
+
+Do not recalculate backend-owned itinerary facts. Do not split files by size
+alone. Split `subway-network.ts` or `smart-route-map.tsx` only if pure
+projection, source and layer lifecycle, or interaction ownership becomes
+independently understandable and testable. Source-mapped browser coverage is
+a Batch 8 prerequisite if the existing stack still cannot map Playwright
+execution back to `.ts` and `.tsx`.
+
+## Batch 9: transit artifact generation and frontend tools
+
+Owned paths:
+
+- `frontend/scripts/**`
+
+Current complexity-above-12 inventory: 70 functions.
+
+Prioritize `bundle-stage.ts` (107), `shared-corridor-separation-stage.ts`
+(87), same-color merge and Mott Haven stages (49), lane continuity, route-gap,
+snapping, physical-bundle, collapse, and finalization stages, and
+`regenerate-canonical-from-gtfs.ts`.
+
+Suggested cohesive clusters:
+
+1. Generator invariants and existing test-manifest completion.
+2. Bundle and shared-corridor pipeline.
+3. Geometry repair and lane-continuity stages.
+4. Remaining tools and owned-scope coverage completion.
+
+Preserve deterministic artifact output. Never hand-edit generated artifacts.
+Regenerate through documented commands and inspect exact output diffs.
+
+## Navigability and growth rules
+
+For every later cluster:
+
+- Record production lines added and removed.
+- Record production functions added and removed.
+- Prefer neutral or negative net production growth.
+- Stop when net new production exceeds 500 lines unless the added behavior or
+  independent module boundary is explicitly justified.
+- A 500 to 800 line cohesive module is acceptable.
+- Do not replace one difficult function with dozens of tiny one-call helpers.
+- A helper must own a named policy, phase, lifecycle, side effect, parser, or
+  recovery responsibility.
+- Do not create pass-through modules.
+- Do not merge independent domains merely to reduce file count.
+- Delete dead compatibility paths after all callers migrate.
+- Preserve API contracts and canonical itinerary ownership.
 
 ## Final completion gate
 
@@ -628,7 +780,10 @@ npm run lint:oxlint
 npm run typecheck
 npm run typecheck:scripts
 npm run test:unit
+npm run test:coverage
 npm run verify:transit-artifacts
+Set-Location ..
+py scripts/report_frontend_debt.py --output .audit/frontend-debt.json
 ```
 
 Also require:
@@ -642,4 +797,25 @@ Also require:
   evidence
 - no unexpected generated artifact change
 - no frontend ownership of canonical itinerary arithmetic
+- at least 95% line, branch, and function coverage on authored production
+  frontend scope
 - a final handoff with exact counts, commands, and authorized exceptions
+
+## Worker status 2026-08-30
+
+F0 Codex guardrail repairs are implemented and uncommitted against
+`ae27211fa9ba`. Frontend ceiling 12. Python ceiling 10. Unit 557 passed.
+Release 14 passed, 4 skipped. Confirmed authored production function coverage
+is 34.40% (847 / 2462). Mapped-only function coverage is diagnostic 47.75%.
+c8 implementation function coverage is 82.27% and is not authored-function
+coverage. Line 52.27% (23449 / 44859). Exact branch coverage is unresolved
+while 114 production files are unexecuted. Branch proxy upper bound 56.06%
+(4742 / 8459). Unresolved functions 688. Oxlint complexity above 12 remains
+126 (Batch 7: 10, Batch 8: 46, Batch 9: 70). The worker quality run against
+the fixed point exited 1 only because 12 TypeScript baseline entries were
+stale. Codex accepted F0 and removed exactly those 12 entries. The baseline
+decreased from 125 to 113 with no additions or changes. The reviewer quality
+run exits 0 with `approval_eligible: true`. New, worsened, cognitive, Ruff
+C901, Ruff structural, and stale violations are all 0. Pre-existing TypeScript
+scope debt 72 requires `--quality-ref` and was not added to the baseline.
+Batch 7 production refactoring was not started.

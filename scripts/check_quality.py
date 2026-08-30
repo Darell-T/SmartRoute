@@ -1,47 +1,3 @@
-"""Project-root structural quality gates.
-
-New functions must keep cyclomatic and cognitive complexity at or below 10.
-Existing functions above either threshold may remain as legacy debt but may
-not get worse. Ruff separately enforces its default branch and statement
-ceilings on changed paths.
-
-CRAP(m) = CC(m)^2 * (1 - coverage(m))^3 + CC(m)
-
-Python CC for CRAP is Radon McCabe. Ruff C901 remains the fast lint gate.
-Those metrics are not interchangeable: Radon counts boolean operators and
-comprehensions; Ruff C901 counts statement-level control flow only.
-
-CRAP is a coverage-aware regression signal for existing high-complexity
-functions. It has no tiny absolute ceiling that forces unnecessary tests or
-helper extraction. Function and file lengths are review signals, not automatic
-split requirements.
-
-JS/TS coverage states:
-    measured    mapping is unique and coverage > 0
-    uncovered   mapping is reliable and coverage is 0
-    unresolved  V8/tsx output cannot be confidently bound to the function
-
-Unresolved functions never receive a fabricated 0% CRAP score.
-
-Adoption uses quality/baseline.json as a ratchet, not a permanent allowlist.
-New functions must meet the cyclomatic ceiling. Existing baseline entries may
-not increase in cyclomatic complexity or CRAP. Compliant functions must be
-removed from the baseline before they can be treated as clean.
-
-Cognitive complexity is compared with a fixed Git point, HEAD by default.
-Pass --quality-ref with the immutable batch checkpoint during independent
-review.
-
-Raw ESLint, Oxlint, and Ruff commands still report the full backlog.
-This command applies the ratchet.
-
-Run from the repository root:
-
-    python scripts/check_quality.py
-    python scripts/check_quality.py --self-test
-    python scripts/check_quality.py --update-baseline
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -53,13 +9,15 @@ import shutil
 import subprocess
 import sys
 from collections import defaultdict
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 from complexipy import compute_diff, file_complexity
 
-MAX_COMPLEXITY = 10
+MAX_PYTHON_COMPLEXITY = 10
+MAX_FRONTEND_COMPLEXITY = 12
+MAX_COMPLEXITY = MAX_PYTHON_COMPLEXITY
 MAX_COGNITIVE_COMPLEXITY = 10
 FUNCTION_LENGTH_REVIEW = 100
 FILE_LENGTH_REVIEW = 500
@@ -111,8 +69,15 @@ def assign_identities(rows: list[dict[str, object]]) -> list[dict[str, object]]:
     return rows
 
 
+def complexity_ceiling(row: Mapping[str, object]) -> int:
+    language = str(row.get("language") or "Python")
+    if language_key(language) == "python":
+        return MAX_PYTHON_COMPLEXITY
+    return MAX_FRONTEND_COMPLEXITY
+
+
 def is_violating(row: Mapping[str, object]) -> bool:
-    return int(row["complexity"]) > MAX_COMPLEXITY
+    return int(row["complexity"]) > complexity_ceiling(row)
 
 
 def worsened_vs(row: Mapping[str, object], previous: Mapping[str, object]) -> bool:
@@ -132,8 +97,6 @@ def classify_js_coverage(
     match_count: int,
     coverage: float | None,
 ) -> tuple[str, float | None, str]:
-    """Return coverage_status, coverage, reason."""
-
     if not file_executed:
         return "uncovered", 0.0, "file was not executed during the coverage run"
     if match_count == 1 and coverage is not None:
@@ -179,47 +142,72 @@ def v8_block_coverage(ranges: list[dict[str, object]]) -> float:
 def collapse_v8_entries(
     entries: list[dict[str, object]],
 ) -> tuple[int, float | None]:
-    # tsx can emit the same named function more than once in one compiled
-    # script. Same-name copies are treated as one function. Coverage is the
-    # best measured copy so an unexecuted wrapper cannot hide execution.
     if not entries:
         return 0, None
     return 1, max(float(item["coverage"]) for item in entries)
 
 
+def unbaselined_bucket(
+    row: Mapping[str, object],
+    historical_complexity: Mapping[str, int] | None,
+) -> str:
+    if historical_complexity is None:
+        return "new_debt"
+    if language_key(str(row.get("language") or "Python")) != "typescript":
+        return "new_debt"
+    ident = str(row["id"])
+    if ident not in historical_complexity:
+        return "new_debt"
+    if int(row["complexity"]) > int(historical_complexity[ident]):
+        return "worsened"
+    return "scope_debt"
+
+
+def classify_ratchet_row(
+    row: Mapping[str, object],
+    previous: Mapping[str, object] | None,
+    historical_complexity: Mapping[str, int] | None,
+) -> str | None:
+    if not is_violating(row):
+        return "resolved" if previous is not None else None
+    if previous is None:
+        return unbaselined_bucket(row, historical_complexity)
+    if worsened_vs(row, previous):
+        return "worsened"
+    return "legacy"
+
+
 def evaluate_ratchet(
     current_rows: list[dict[str, object]],
     baseline_entries: list[dict[str, object]] | None,
+    *,
+    historical_complexity: Mapping[str, int] | None = None,
 ) -> dict[str, object]:
+    empty: dict[str, object] = {
+        "missing_baseline": True,
+        "new_debt": [row for row in current_rows if is_violating(row)],
+        "worsened": [],
+        "resolved": [],
+        "legacy": [],
+        "stale_baseline": [],
+        "scope_debt": [],
+    }
     if baseline_entries is None:
-        return {
-            "missing_baseline": True,
-            "new_debt": [row for row in current_rows if is_violating(row)],
-            "worsened": [],
-            "resolved": [],
-            "legacy": [],
-            "stale_baseline": [],
-        }
+        return empty
     current_by_id = {str(row["id"]): row for row in current_rows}
     baseline_by_id = {str(entry["id"]): entry for entry in baseline_entries}
-    new_debt = []
-    worsened = []
-    resolved = []
-    legacy = []
+    buckets: dict[str, list] = {
+        "new_debt": [],
+        "worsened": [],
+        "resolved": [],
+        "legacy": [],
+        "scope_debt": [],
+    }
     for row in current_rows:
         previous = baseline_by_id.get(str(row["id"]))
-        violating = is_violating(row)
-        if not violating:
-            if previous is not None:
-                resolved.append(row)
-            continue
-        if previous is None:
-            new_debt.append(row)
-            continue
-        if worsened_vs(row, previous):
-            worsened.append(row)
-        else:
-            legacy.append(row)
+        bucket = classify_ratchet_row(row, previous, historical_complexity)
+        if bucket is not None:
+            buckets[bucket].append(row)
     stale = []
     for entry in baseline_entries:
         row = current_by_id.get(str(entry["id"]))
@@ -227,10 +215,7 @@ def evaluate_ratchet(
             stale.append(entry)
     return {
         "missing_baseline": False,
-        "new_debt": new_debt,
-        "worsened": worsened,
-        "resolved": resolved,
-        "legacy": legacy,
+        **buckets,
         "stale_baseline": stale,
     }
 
@@ -463,14 +448,168 @@ def _self_test_ratchet() -> None:
         raise AssertionError("full green quality must be approval-eligible")
 
 
+def _self_test_frontend_scope_debt() -> None:
+    keep = {
+        "id": "typescript:frontend/scripts/old.ts:keep#0",
+        "complexity": 17,
+        "crap": None,
+        "language": "TypeScript",
+        "file": "frontend/scripts/old.ts",
+        "function": "keep",
+        "line": 1,
+    }
+    added = {
+        "id": "typescript:frontend/scripts/fresh.ts:added#0",
+        "complexity": 13,
+        "crap": None,
+        "language": "TypeScript",
+        "file": "frontend/scripts/fresh.ts",
+        "function": "added",
+        "line": 1,
+    }
+    grew = {
+        "id": "typescript:frontend/scripts/bump.ts:grew#0",
+        "complexity": 15,
+        "crap": None,
+        "language": "TypeScript",
+        "file": "frontend/scripts/bump.ts",
+        "function": "grew",
+        "line": 1,
+    }
+    python_new = {
+        "id": "python:a.py:new_bad#0",
+        "complexity": 11,
+        "crap": 12.0,
+        "language": "Python",
+        "file": "a.py",
+        "function": "new_bad",
+        "line": 1,
+    }
+    historical = {
+        str(keep["id"]): 17,
+        str(grew["id"]): 13,
+    }
+    result = evaluate_ratchet(
+        [keep, added, grew, python_new],
+        [],
+        historical_complexity=historical,
+    )
+    _assert_ids(
+        [row["id"] for row in result["new_debt"]],
+        [added["id"], python_new["id"]],
+        "scope-aware new debt",
+    )
+    _assert_ids(
+        [row["id"] for row in result["worsened"]],
+        [grew["id"]],
+        "quality-ref worsened TypeScript",
+    )
+    _assert_ids(
+        [row["id"] for row in result["scope_debt"]],
+        [keep["id"]],
+        "pre-existing TypeScript scope debt",
+    )
+    only_scope = evaluate_ratchet([keep], [], historical_complexity=historical)
+    if only_scope["new_debt"] or only_scope["worsened"] or only_scope["stale_baseline"]:
+        raise AssertionError("unchanged over-12 TypeScript must not be new, worsened, or stale")
+    if quality_failed(only_scope, {"regressions": []}):
+        raise AssertionError("unchanged generator functions must not fail quality")
+
+
+def _synthetic_unbaselined_over12() -> dict[str, object]:
+    return {
+        "id": "typescript:frontend/scripts/old.ts:keep#0",
+        "complexity": 17,
+        "crap": None,
+        "language": "TypeScript",
+        "file": "frontend/scripts/old.ts",
+        "function": "keep",
+        "line": 1,
+    }
+
+
+def _self_test_default_command_new_debt() -> None:
+    args = parse_args([])
+    if args.quality_ref is not None:
+        raise AssertionError(
+            "plain py scripts/check_quality.py must not default --quality-ref"
+        )
+    keep = _synthetic_unbaselined_over12()
+    historical = historical_complexity_for_command(args.quality_ref, [keep], set())
+    if historical is not None:
+        raise AssertionError("plain command must not collect a historical complexity map")
+    result = evaluate_ratchet([keep], [], historical_complexity=historical)
+    _assert_ids(
+        [row["id"] for row in result["new_debt"]],
+        [keep["id"]],
+        "default-command new debt",
+    )
+    if result["scope_debt"]:
+        raise AssertionError("default command must not adopt HEAD as scope debt")
+    explicit = parse_args(["--quality-ref", "HEAD"])
+    if explicit.quality_ref != "HEAD":
+        raise AssertionError("explicit --quality-ref HEAD must remain available")
+
+
+def _self_test_shrink_command_requires_quality_ref() -> None:
+    missing = shrink_command(None)
+    if "--quality-ref <fixed-point>" not in missing or "--update-baseline" not in missing:
+        raise AssertionError("printed shrink command must name --quality-ref <fixed-point>")
+    named = shrink_command("ae27211")
+    if "--quality-ref ae27211" not in named:
+        raise AssertionError("printed shrink command must include the supplied fixed point")
+    try:
+        require_quality_ref_for_baseline_update(None)
+    except ValueError as exc:
+        if "--quality-ref" not in str(exc):
+            raise AssertionError("update-baseline without quality-ref must name the flag") from exc
+    else:
+        raise AssertionError("--update-baseline must refuse to run without --quality-ref")
+    if require_quality_ref_for_baseline_update("HEAD") != "HEAD":
+        raise AssertionError("explicit --quality-ref must remain usable with --update-baseline")
+
+
+def _self_test_language_ceilings() -> None:
+    if is_violating({"language": "Python", "complexity": 10}):
+        raise AssertionError("Python complexity 10 must pass")
+    if not is_violating({"language": "Python", "complexity": 11}):
+        raise AssertionError("Python complexity 11 must still fail")
+    if is_violating({"language": "TypeScript", "complexity": 12}):
+        raise AssertionError("frontend complexity 12 must pass")
+    if not is_violating({"language": "TypeScript", "complexity": 13}):
+        raise AssertionError("frontend complexity 13 must fail")
+    if MAX_COMPLEXITY != MAX_PYTHON_COMPLEXITY or MAX_PYTHON_COMPLEXITY != 10:
+        raise AssertionError("backend cyclomatic ceiling must remain 10")
+    if MAX_FRONTEND_COMPLEXITY != 12:
+        raise AssertionError("frontend cyclomatic ceiling must be 12")
+
+
 def self_test() -> None:
     _self_test_crap()
     _self_test_js_coverage()
     _self_test_ratchet()
+    _self_test_frontend_scope_debt()
+    _self_test_default_command_new_debt()
+    _self_test_shrink_command_requires_quality_ref()
+    _self_test_language_ceilings()
     _assert_command_output_survives_cp1252()
     result = run_command([node_executable(), str(JS_METRICS), "--self-test"], cwd=ROOT)
     if result.returncode != 0:
         raise RuntimeError(result.stderr or "JS function metric self-test failed")
+    frontend_debt = run_command(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "report_frontend_debt.py"),
+            "--self-test",
+        ],
+        cwd=ROOT,
+    )
+    if frontend_debt.returncode != 0:
+        raise RuntimeError(
+            frontend_debt.stderr
+            or frontend_debt.stdout
+            or "frontend debt self-test failed"
+        )
 
 
 def npm_executable() -> str:
@@ -501,12 +640,11 @@ def run_command(
     cwd: Path,
     env: Mapping[str, str] | None = None,
     timeout: int | None = None,
+    input_text: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     merged = os.environ.copy()
     if env:
         merged.update(env)
-    # Every caller supplies an argv list for repository-owned tooling. Shell
-    # execution is disabled, so user text cannot become a command string.
     return subprocess.run(  # noqa: S603
         command,
         cwd=cwd,
@@ -515,6 +653,7 @@ def run_command(
         encoding="utf-8",
         capture_output=True,
         timeout=timeout,
+        input=input_text,
     )
 
 
@@ -568,7 +707,7 @@ def _assert_command_output_survives_cp1252() -> None:
             return None
 
     previous = sys.stdout
-    sys.stdout = _Cp1252()  # type: ignore[assignment]
+    sys.stdout = _Cp1252()
     try:
         print_command_result(
             "frontend tests with V8 coverage",
@@ -625,16 +764,11 @@ def collect_python_coverage() -> subprocess.CompletedProcess[str]:
 def collect_js_coverage(coverage_dir: Path) -> subprocess.CompletedProcess[str]:
     if coverage_dir.exists():
         shutil.rmtree(coverage_dir)
-    coverage_dir.mkdir(parents=True, exist_ok=True)
-    env = {
-        "NODE_V8_COVERAGE": str(coverage_dir),
-        "NODE_NO_WARNINGS": "1",
-    }
     return run_command(
-        [npm_executable(), "run", "test:unit"],
+        [npm_executable(), "run", "test:coverage"],
         cwd=FRONTEND,
-        env=env,
-        timeout=600,
+        env={"NODE_NO_WARNINGS": "1"},
+        timeout=900,
     )
 
 
@@ -837,8 +971,101 @@ def js_coverage_mapping(
     )
 
 
+def git_changed_paths(git_ref: str, paths: Sequence[str]) -> set[str]:
+    if not paths:
+        return set()
+    result = run_command(["git", "diff", "--name-only", git_ref, "--", *paths], cwd=ROOT)
+    return {
+        line.replace("\\", "/")
+        for line in result.stdout.splitlines()
+        if line.strip()
+    }
+
+
+def git_path_exists(git_ref: str, repo_path: str) -> bool:
+    result = run_command(["git", "cat-file", "-e", f"{git_ref}:{repo_path}"], cwd=ROOT)
+    return result.returncode == 0
+
+
+def js_functions_from_source(
+    frontend_relative: str, source: str
+) -> list[dict[str, object]]:
+    result = run_command(
+        [node_executable(), str(JS_METRICS), "--source", frontend_relative],
+        cwd=ROOT,
+        input_text=source,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr or "JS historical inventory failed")
+    payload = json.loads(result.stdout)
+    rows = []
+    for row in payload.get("functions") or []:
+        if not isinstance(row, dict):
+            continue
+        item = dict(row)
+        item["file"] = f"frontend/{row['file']}"
+        item["language"] = "TypeScript"
+        rows.append(item)
+    return assign_identities(rows)
+
+
+def collect_typescript_historical(
+    rows: Sequence[Mapping[str, object]],
+    baseline_ids: set[str],
+    git_ref: str,
+) -> dict[str, int]:
+    historical: dict[str, int] = {}
+    candidates = [
+        row
+        for row in rows
+        if is_violating(row)
+        and language_key(str(row.get("language") or "")) == "typescript"
+        and str(row["id"]) not in baseline_ids
+    ]
+    files = sorted({str(row["file"]) for row in candidates})
+    changed = git_changed_paths(git_ref, files)
+    for file_field in files:
+        file_rows = [row for row in candidates if str(row["file"]) == file_field]
+        existed = git_path_exists(git_ref, file_field)
+        if existed and file_field not in changed:
+            for row in file_rows:
+                historical[str(row["id"])] = int(row["complexity"])
+            continue
+        if not existed:
+            continue
+        shown = run_command(["git", "show", f"{git_ref}:{file_field}"], cwd=ROOT)
+        if shown.returncode != 0:
+            continue
+        old_by_id = {
+            str(row["id"]): row
+            for row in js_functions_from_source(
+                file_field.removeprefix("frontend/"),
+                shown.stdout,
+            )
+        }
+        for row in file_rows:
+            previous = old_by_id.get(str(row["id"]))
+            if previous is not None:
+                historical[str(row["id"])] = int(previous["complexity"])
+    return historical
+
+
+def historical_complexity_for_command(
+    quality_ref: str | None,
+    rows: Sequence[Mapping[str, object]],
+    baseline_ids: set[str],
+) -> dict[str, int] | None:
+    if quality_ref is None:
+        return None
+    return collect_typescript_historical(rows, baseline_ids, quality_ref)
+
+
 def js_functions(coverage_dir: Path) -> list[dict[str, object]]:
-    result = run_command(["node", str(JS_METRICS)], cwd=ROOT, timeout=120)
+    result = run_command(
+        [node_executable(), str(JS_METRICS), "--authored"],
+        cwd=ROOT,
+        timeout=120,
+    )
     if result.returncode != 0:
         print_command_result("JS function inventory", result)
         raise RuntimeError("JS function inventory failed")
@@ -1102,7 +1329,9 @@ def write_baseline(path: Path, entries: list[dict[str, object]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "version": BASELINE_VERSION,
-        "max_cyclomatic_complexity": MAX_COMPLEXITY,
+        "max_cyclomatic_complexity": MAX_PYTHON_COMPLEXITY,
+        "max_python_cyclomatic_complexity": MAX_PYTHON_COMPLEXITY,
+        "max_frontend_cyclomatic_complexity": MAX_FRONTEND_COMPLEXITY,
         "max_cognitive_complexity": MAX_COGNITIVE_COMPLEXITY,
         "formula": "CC^2 * (1 - coverage)^3 + CC",
         "python_cc_source": "radon",
@@ -1142,7 +1371,7 @@ def collect_measurements(skip_tests: bool) -> tuple[list[dict[str, object]], lis
     test_failures: list[str] = []
     coverage_dir = FRONTEND / "coverage" / "v8"
     if not skip_tests:
-        print("Collecting frontend coverage via npm run test:unit")
+        print("Collecting frontend coverage via npm run test:coverage")
         js_tests = collect_js_coverage(coverage_dir)
         print_command_result("frontend tests with V8 coverage", js_tests)
         if js_tests.returncode != 0:
@@ -1163,7 +1392,7 @@ def summarize(rows: list[dict[str, object]]) -> dict[str, int]:
     unresolved = [row for row in rows if row.get("coverage_status") == "unresolved"]
     uncovered = [row for row in rows if row.get("coverage_status") == "uncovered"]
     measured = [row for row in rows if row.get("coverage_status") == "measured"]
-    cc_violations = [row for row in rows if int(row["complexity"]) > MAX_COMPLEXITY]
+    cc_violations = [row for row in rows if is_violating(row)]
     return {
         "total_functions": len(rows),
         "measured": len(measured),
@@ -1191,7 +1420,7 @@ def size_signals(rows: list[dict[str, object]]) -> dict[str, list[dict[str, obje
     }
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument(
@@ -1202,7 +1431,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--update-baseline",
         action="store_true",
-        help="Shrink quality/baseline.json to remaining violating functions",
+        help="Shrink quality/baseline.json to remaining violating functions. Requires --quality-ref.",
     )
     parser.add_argument("--output", help="Optional JSON report path")
     parser.add_argument(
@@ -1212,15 +1441,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--quality-ref",
-        default="HEAD",
-        help="Immutable Git point for cognitive-complexity delta checks",
+        default=None,
+        help="Immutable Git point for cognitive delta and TypeScript scope-debt adoption. Omit to treat unbaselined violations as new debt.",
     )
     parser.add_argument(
         "--cognitive-only",
         action="store_true",
         help="Run the complexipy delta without collecting test coverage (prints approval_eligible: false)",
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def update_quality_baseline(
@@ -1246,8 +1475,9 @@ def print_quality_summary(
     lint_results: Mapping[str, object],
 ) -> None:
     print("\n== Quality gates ==")
-    print(f"max cyclomatic complexity for new functions: {MAX_COMPLEXITY}")
-    print(f"max cognitive complexity for new functions: {MAX_COGNITIVE_COMPLEXITY}")
+    print(f"max python cyclomatic complexity: {MAX_PYTHON_COMPLEXITY}")
+    print(f"max frontend cyclomatic complexity: {MAX_FRONTEND_COMPLEXITY}")
+    print(f"max cognitive complexity for new Python functions: {MAX_COGNITIVE_COMPLEXITY}")
     print("formula: CRAP(m) = CC(m)^2 * (1 - coverage(m))^3 + CC(m)")
     print("CRAP policy: no absolute ceiling; baseline entries may not worsen")
     print("python CC source: radon (CRAP); ruff C901 (raw lint)")
@@ -1265,6 +1495,10 @@ def print_quality_summary(
     print(f"baseline violations remaining: {len(ratchet['legacy'])}")
     print(f"new violations: {len(ratchet['new_debt'])}")
     print(f"worsened violations: {len(ratchet['worsened'])}")
+    print(
+        "pre-existing TypeScript scope debt: "
+        f"{len(ratchet.get('scope_debt') or [])}"
+    )
     print(f"resolved violations: {len(ratchet['resolved'])}")
     print(f"stale baseline entries: {len(ratchet['stale_baseline'])}")
     print(f"Ruff C901 diagnostics: {len(lint_results['ruff_complexity'])}")
@@ -1299,6 +1533,20 @@ def print_cognitive_summary(cognitive: Mapping[str, object]) -> None:
     print_cognitive_regressions(cognitive)
 
 
+def shrink_command(quality_ref: str | None) -> str:
+    ref = quality_ref or "<fixed-point>"
+    return (
+        "Run python scripts/check_quality.py "
+        f"--quality-ref {ref} --update-baseline to shrink the ratchet."
+    )
+
+
+def require_quality_ref_for_baseline_update(quality_ref: str | None) -> str:
+    if quality_ref is None:
+        raise ValueError("--update-baseline requires --quality-ref <fixed-point>")
+    return quality_ref
+
+
 def print_unresolved_coverage(unresolved_rows: list[dict[str, object]]) -> None:
     if not unresolved_rows:
         return
@@ -1309,10 +1557,15 @@ def print_unresolved_coverage(unresolved_rows: list[dict[str, object]]) -> None:
         print(f"... {len(unresolved_rows) - 50} more unresolved mappings")
 
 
-def print_ratchet_details(ratchet: Mapping[str, object]) -> None:
+def print_ratchet_details(
+    ratchet: Mapping[str, object],
+    *,
+    quality_ref: str | None = None,
+) -> None:
     if ratchet["missing_baseline"]:
         print(
-            "\nquality/baseline.json is missing. Snapshot current debt with --update-baseline."
+            "\nquality/baseline.json is missing. Snapshot current debt with "
+            "--quality-ref <fixed-point> --update-baseline."
         )
     for title, bucket in (
         ("New debt", ratchet["new_debt"]),
@@ -1331,8 +1584,13 @@ def print_ratchet_details(ratchet: Mapping[str, object]) -> None:
             print(entry["id"])
         if len(stale) > 50:
             print(f"... {len(stale) - 50} more stale entries")
+        print(shrink_command(quality_ref))
+    scope_debt = ratchet.get("scope_debt") or []
+    if scope_debt:
         print(
-            "Run python scripts/check_quality.py --update-baseline to shrink the ratchet."
+            f"\nPre-existing TypeScript scope debt: {len(scope_debt)} "
+            "over-12 functions already present at --quality-ref. "
+            "Not new debt. Not added to quality/baseline.json."
         )
 
 
@@ -1360,10 +1618,11 @@ def print_quality_details(
     ratchet: Mapping[str, object],
     *,
     verbose: bool,
+    quality_ref: str | None = None,
 ) -> None:
     print_cognitive_regressions(cognitive)
     print_unresolved_coverage(unresolved_rows)
-    print_ratchet_details(ratchet)
+    print_ratchet_details(ratchet, quality_ref=quality_ref)
     print_verbose_violations(rows, verbose=verbose)
 
 
@@ -1377,7 +1636,9 @@ def quality_report(
     lint_results: Mapping[str, object],
 ) -> dict[str, object]:
     return {
-        "max_cyclomatic_complexity": MAX_COMPLEXITY,
+        "max_cyclomatic_complexity": MAX_PYTHON_COMPLEXITY,
+        "max_python_cyclomatic_complexity": MAX_PYTHON_COMPLEXITY,
+        "max_frontend_cyclomatic_complexity": MAX_FRONTEND_COMPLEXITY,
         "max_cognitive_complexity": MAX_COGNITIVE_COMPLEXITY,
         "formula": "CC^2 * (1 - coverage)^3 + CC",
         "crap_policy": "regression signal for baseline entries; no absolute ceiling",
@@ -1392,11 +1653,13 @@ def quality_report(
             "worsened": len(ratchet["worsened"]),
             "resolved": len(ratchet["resolved"]),
             "stale_baseline": len(ratchet["stale_baseline"]),
+            "scope_debt": len(ratchet.get("scope_debt") or []),
         },
         "new_debt": ratchet["new_debt"],
         "worsened": ratchet["worsened"],
         "resolved": ratchet["resolved"],
         "legacy": ratchet["legacy"],
+        "scope_debt": ratchet.get("scope_debt") or [],
         "stale_baseline": ratchet["stale_baseline"],
         "unresolved": unresolved_rows,
         "cognitive": cognitive,
@@ -1457,7 +1720,7 @@ def main() -> int:
     print("self-test passed")
 
     try:
-        cognitive = cognitive_complexity(args.quality_ref)
+        cognitive = cognitive_complexity(args.quality_ref or "HEAD")
     except (OSError, RuntimeError, SyntaxError) as exc:
         print(f"cognitive-complexity analysis failed: {exc}")
         return 1
@@ -1481,9 +1744,20 @@ def main() -> int:
     ]
     previous = load_baseline(BASELINE_PATH)
     if args.update_baseline:
+        try:
+            require_quality_ref_for_baseline_update(args.quality_ref)
+        except ValueError as exc:
+            print(exc)
+            return 1
         previous = update_quality_baseline(rows, previous)
 
-    ratchet = evaluate_ratchet(rows, previous)
+    baseline_ids = {str(entry["id"]) for entry in (previous or [])}
+    historical = historical_complexity_for_command(
+        args.quality_ref, rows, baseline_ids
+    )
+    ratchet = evaluate_ratchet(
+        rows, previous, historical_complexity=historical
+    )
     lint_results = run_complexity_linters()
     print_quality_summary(stats, cognitive, sizes, ratchet, lint_results)
     print_quality_details(
@@ -1492,6 +1766,7 @@ def main() -> int:
         unresolved_rows,
         ratchet,
         verbose=args.verbose,
+        quality_ref=args.quality_ref,
     )
     report = quality_report(
         rows,

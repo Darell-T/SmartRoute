@@ -53,6 +53,8 @@ Quality certification from fresh runs with no `--skip-tests`:
 | Batch 6D reviewer final 2026-08-30 | 0 | 0 | 0 | 0 | 168 | 1,896 passed, 21 skipped, 444 subtests | 314 |
 | Batch 6E worker 2026-08-30 | 1 | 0 | 0 | 43 | 168 | 1,899 passed, 21 skipped, 444 subtests | 314 |
 | Batch 6E reviewer final 2026-08-30 | 0 | 0 | 0 | 0 | 125 | 1,899 passed, 21 skipped, 444 subtests | 314 |
+| F0 worker 2026-08-30 | 1 | 68 | 0 | 12 | 125 | 1,899 passed, 21 skipped, 444 subtests | 557 |
+| F0 Codex repair 2026-08-30 | 1 | 0 | 0 | 12 | 125 | 1,899 passed, 21 skipped, 444 subtests | 557 |
 
 Cognitive delta against `427fbc8`: 0 new or worsened. CRAP has no absolute
 ceiling. Baseline entries may not worsen.
@@ -65,23 +67,26 @@ at `c058199`. That commit is the fixed point for Batches 6A through 6E. Batch
 6A is committed at `140495a`. Batch 6B is committed at `c8a0381`. Batch 6C
 review is complete on the tree based on `c8a0381`. Batch 6D is committed at
 `2298e32`. Batch 6E is Codex-approved on the tree based on that checkpoint.
-Batch 7 was not started.
+F0 is uncommitted against `ae27211fa9ba`. Batch 7 was not started.
 
 ## Structural policy
 
 - Ruff C901 maximum 10
-- complexipy cognitive maximum 10 for new functions, no worsening above 10
+- Frontend JavaScript and TypeScript cyclomatic maximum 12
+- complexipy cognitive maximum 10 for new Python functions, no worsening above 10
 - Ruff PLR0912 maximum 12 branches
 - Ruff PLR0915 maximum 50 statements
 - CRAP is a coverage-aware delta for existing baseline debt
 - Function length above 100 lines and file length above 500 lines are review
   signals, not split requirements
 - Workers must not run `--update-baseline`
+- Codex alone may shrink `quality/baseline.json` after review
 
 ## Remaining batches
 
-The old 20-batch plan is retired. Batches 2 through 6E are complete. Remaining
-work is frontend Batches 7 through 9.
+The old 20-batch plan is retired. Batches 2 through 6E are complete. F0 is
+the frontend measurement contract. Remaining work is Batches 7 through 9.
+Do not start Batch 7 until F0 is accepted.
 
 | Batch | Subsystem |
 |---:|---|
@@ -95,9 +100,99 @@ work is frontend Batches 7 through 9.
 | 6C | Agent place, route, and shared tools |
 | 6D | Agent transit tools |
 | 6E | Agent model, session, and turn |
-| 7 | Frontend contracts and I/O |
-| 8 | Frontend presentation and map |
-| 9 | Transit artifact generator, last |
+| F0 | Frontend quality foundation |
+| 7 | `frontend/app/**` and `frontend/lib/**` |
+| 8 | `frontend/components/**` and `frontend/tests/release/**` |
+| 9 | `frontend/scripts/**` |
+
+## F0 worker result
+
+Fixed point `ae27211fa9ba`. Tree left uncommitted. `quality/baseline.json`
+unchanged. Batch 7 production files unchanged except the artifact-manifest
+generator now hashes LF-normalized GeoJSON bytes so Windows CRLF checkouts
+do not rewrite hashes.
+
+F0 sets the frontend measurement contract used by Batches 7 through 9.
+
+- Frontend cyclomatic ceiling 12. Oxlint and
+  `scripts/js_function_metrics.mjs --authored` are exhaustive for every
+  authored JS/TS function, including tests and `frontend/tools/run-unit-tests.mjs`.
+  ESLint remains application-focused and ignores `scripts/**`, `tools/**`,
+  and `*.test.mjs`. Lifecycle exclusions: generated, vendored
+  `tools/oxlint/**`, declarations, dependencies, and build output.
+- Python cyclomatic ceiling remains 10. `MAX_COMPLEXITY` was not replaced
+  with 12.
+- Production coverage denominator is authored production under
+  `frontend/app/**`, `frontend/lib/**`, `frontend/components/**`, and
+  `frontend/scripts/**`. Authored complexity includes tests and tools.
+- Exclusions live in `scripts/frontend_quality_scope.json` by lifecycle.
+- `frontend/tools/run-unit-tests.mjs` owns unit selection. Coverage wraps
+  that same process.
+- Native Node 23 V8 coverage cannot remap TypeScript or include missing
+  files. `c8@12.0.0` is the coverage-specific dependency that does both.
+- Playwright does not contribute source-mapped `.ts` and `.tsx` coverage.
+  That remains a Batch 8 prerequisite.
+- `npm run verify:transit-artifacts` owns `scripts/build-artifact-manifest.test.ts`.
+
+Honest production baseline from
+`py scripts/report_frontend_debt.py --quality-ref ae27211fa9ba`:
+
+- production files 226
+- line coverage 52.27% (23449 / 44859)
+- exact branch coverage unresolved while 114 production files are unexecuted
+- branch proxy upper bound 56.06% (4742 / 8459), mixed c8 and McCabe units
+- confirmed authored production function coverage 34.40% (847 / 2462)
+- mapped-only function coverage 47.75% (diagnostic only)
+- c8 implementation function coverage 82.27% (1601 / 1946), not authored
+- unexecuted files 114
+- measured functions 847
+- uncovered functions 927
+- unresolved functions 688
+- authored functions above 12: 126 (Batch 7: 10, Batch 8: 46, Batch 9: 70)
+- production functions above 12: 122
+- unassigned production files 0
+- production line growth +15 / -8, net +7, including untracked production files
+
+Per-batch production coverage, none at the 95% gate yet. Branch percentages
+below are proxy upper bounds. The exact branch gate stays unresolved.
+
+| Batch | Lines | Branch proxy | Confirmed functions | Above 12 |
+|---:|---|---|---|---:|
+| 7 | 55.85% (3387 / 6064) | 68.81% (728 / 1058) | 25.13% (99 / 394) | 10 |
+| 8 | 39.72% (6864 / 17283) | 48.52% (1493 / 3077) | 25.82% (235 / 910) | 46 |
+| 9 | 61.35% (13198 / 21512) | 58.30% (2521 / 4324) | 44.30% (513 / 1158) | 70 |
+
+Unit tests: 557 passed. Release: 14 passed, 4 skipped.
+`scripts/build-artifact-manifest.test.ts` is on `verify:transit-artifacts`
+and passes. GeoJSON was not hand-edited. The generator hashes LF-normalized
+bytes so the committed manifest hashes stay `ea2e0dc306ac`, `7dcef6a621f9`,
+and `0775d322d828`.
+
+Frontend target after Batch 9 is at least 95% line, branch, and confirmed
+function coverage. Mapped-only coverage is diagnostic. Codex alone may
+shrink `quality/baseline.json`.
+
+The worker quality run against `ae27211fa9ba` exited 1 with
+`approval_eligible: false`.
+Tests ran. Backend 1,899 passed, 21 skipped, 444 subtests. Cognitive new or
+worsened is 0. New cyclomatic 0. Worsened cyclomatic 0. Stale 12 TypeScript
+baseline entries now at or below 12. Pre-existing TypeScript scope debt is
+72 functions already over 12 at `ae27211` (68 generators plus 4 authored
+tests). Scope-debt adoption requires an explicit `--quality-ref`. The plain
+`py scripts/check_quality.py` command treats unbaselined violations as new
+debt. Shrinking the baseline requires
+`py scripts/check_quality.py --quality-ref ae27211fa9ba --update-baseline`.
+They are not new product code and were not written into
+`quality/baseline.json`. The worker did not run `--update-baseline`.
+
+Reviewer final, 2026-08-30. Codex accepted the isolated F0 diff and removed
+exactly those 12 proven-stale TypeScript entries. `quality/baseline.json`
+decreased from 125 to 113 entries. No entry was added or changed. The full
+quality command against `ae27211fa9ba` exits 0 with `approval_eligible: true`,
+557 frontend tests, 1,899 backend tests, 21 skipped backend tests, and 444
+backend subtests. New, worsened, cognitive, Ruff C901, Ruff structural, and
+stale violations are all 0. The 72 TypeScript functions already above 12 at
+the fixed point remain explicit scope debt and were not added to the baseline.
 
 ## Reproduce the inventories
 
@@ -121,6 +216,8 @@ Run the backend debt inventory from the repository root. Reuse
 ```powershell
 py scripts/report_backend_debt.py --self-test
 py scripts/report_backend_debt.py --max-existing 12 --output .audit/backend-debt.json
+py scripts/report_frontend_debt.py --self-test
+py scripts/report_frontend_debt.py --quality-ref ae27211fa9ba --output .audit/frontend-debt.json
 ```
 
 Use these inert backend test values, not production credentials:
@@ -139,6 +236,9 @@ npm run lint
 npm run lint:oxlint
 node --import tsx node_modules/oxlint/bin/oxlint --format json .
 npm run typecheck
+npm run typecheck:scripts
+npm run test:unit
+npm run test:coverage
 ```
 
 The JSON reports are the source of truth for each file, line, rule, and
