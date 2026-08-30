@@ -323,7 +323,8 @@ def _destination_selection_replay_allowed(
     set_id = str(owned.get("set_id") or "").strip()
     if not set_id or evidence.handle_for(goal_key) != set_id:
         return False
-    return _active_set_matches(ctx, set_id)
+    state = trip_state_module.get_trip_state(ctx.session)
+    return str(state.get("active_discovery_set_id") or "").strip() == set_id
 
 
 def _destination_selection_goal(owned: dict[str, Any]) -> tuple[Any, str | None]:
@@ -334,14 +335,6 @@ def _destination_selection_goal(owned: dict[str, Any]) -> tuple[Any, str | None]
     if goal is None or goal.kind != GoalKind.DESTINATION_SELECTION:
         return None, None
     return evidence, goal_key
-
-
-def _active_set_matches(ctx: ToolContext, set_id: str) -> bool:
-    state = ctx.session.get("trip_state") if isinstance(ctx.session, dict) else None
-    return (
-        isinstance(state, dict)
-        and str(state.get("active_discovery_set_id") or "").strip() == set_id
-    )
 
 
 def _selected_places(
@@ -931,37 +924,17 @@ def _objective_reason_holds(
 ) -> bool:
     if reason not in OBJECTIVE_REASONS:
         return True
-    checker = _OBJECTIVE_REASON_CHECKS.get(reason)
-    return bool(checker and checker(place, places, index))
-
-
-def _top_pick_holds(place: dict, places: list[dict], index: int) -> bool:
-    return index == 0 and _is_extreme(place, places, "baseline_score", maximum=True)
-
-
-def _open_now_holds(place: dict, *_rest: object) -> bool:
-    return place.get("open_status") == "open"
-
-
-def _highest_rating_holds(place: dict, places: list[dict], *_rest: object) -> bool:
-    return _is_extreme(place, places, "rating", maximum=True)
-
-
-def _most_reviewed_holds(place: dict, places: list[dict], *_rest: object) -> bool:
-    return _is_extreme(place, places, "review_count", maximum=True)
-
-
-def _budget_friendly_holds(place: dict, places: list[dict], *_rest: object) -> bool:
+    if reason == "top_pick":
+        return index == 0 and _is_extreme(
+            place, places, "baseline_score", maximum=True
+        )
+    if reason == "open_now":
+        return place.get("open_status") == "open"
+    if reason == "highest_rating":
+        return _is_extreme(place, places, "rating", maximum=True)
+    if reason == "most_reviewed":
+        return _is_extreme(place, places, "review_count", maximum=True)
     return _is_extreme(place, places, "price_level", maximum=False)
-
-
-_OBJECTIVE_REASON_CHECKS = {
-    "top_pick": _top_pick_holds,
-    "open_now": _open_now_holds,
-    "highest_rating": _highest_rating_holds,
-    "most_reviewed": _most_reviewed_holds,
-    "budget_friendly": _budget_friendly_holds,
-}
 
 
 def _is_extreme(place: dict, places: list[dict], field: str, *, maximum: bool) -> bool:

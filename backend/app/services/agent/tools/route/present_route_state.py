@@ -116,6 +116,11 @@ def _canonical_owned_fields(
 ) -> dict[str, Any]:
     stored_first_leg = record.get("first_leg_arrival_context")
     scenario_mode = str(record.get("scenario_mode") or "active")
+    evidence_envelopes = {
+        name: _EnvelopeShim(payload)
+        for name, payload in (candidate_evidence.get("evidence_envelopes") or {}).items()
+        if isinstance(payload, dict)
+    }
     return {
         "parsed_routes": parsed_routes,
         "canonical_itinerary": canonical_itinerary,
@@ -127,7 +132,7 @@ def _canonical_owned_fields(
         and bool(owned["tool_input"].get("commit_scenario")),
         "scored": scored,
         "candidate_evidence": candidate_evidence,
-        "evidence_envelopes": _evidence_envelopes(candidate_evidence),
+        "evidence_envelopes": evidence_envelopes,
         "first_leg_context": (
             dict(stored_first_leg) if isinstance(stored_first_leg, dict) else None
         ),
@@ -135,16 +140,6 @@ def _canonical_owned_fields(
         "plan_origin": plan_origin,
         "tool_input_body": dict(record.get("tool_input") or {}),
     }
-
-
-def _evidence_envelopes(candidate_evidence: dict[str, Any]) -> dict[str, _EnvelopeShim]:
-    return {
-        name: _EnvelopeShim(payload)
-        for name, payload in (candidate_evidence.get("evidence_envelopes") or {}).items()
-        if isinstance(payload, dict)
-    }
-
-
 def _unsatisfied_constraint_error(
     chosen_route: list[dict],
     record: dict[str, Any],
@@ -538,27 +533,19 @@ def _legacy_candidate_evidence(
     record: dict[str, Any], chosen_index: int
 ) -> dict[str, Any]:
     return {
-        "alerts": _record_list(record, "relevant_alerts"),
-        "incidents": _record_list(record, "incidents"),
-        "unconfirmed_material_claims": _record_list(
-            record, "unconfirmed_material_claims"
+        "alerts": list(record.get("relevant_alerts") or []),
+        "incidents": list(record.get("incidents") or []),
+        "unconfirmed_material_claims": list(
+            record.get("unconfirmed_material_claims") or []
         ),
-        "evidence_coverage": _record_dict(record, "evidence_coverage"),
+        "evidence_coverage": dict(record.get("evidence_coverage") or {}),
         "event_impacts": _event_impacts_for_index(record, chosen_index),
         "event_evidence_status": record.get("event_evidence_status") or "unscanned",
-        "event_failures": _record_list(record, "event_failures"),
-        "crowd_search_metadata": _record_dict(record, "crowd_search_metadata"),
-        "incident_scan_metadata": _record_dict(record, "incident_scan_metadata"),
-        "evidence_envelopes": _record_dict(record, "evidence_envelopes"),
+        "event_failures": list(record.get("event_failures") or []),
+        "crowd_search_metadata": dict(record.get("crowd_search_metadata") or {}),
+        "incident_scan_metadata": dict(record.get("incident_scan_metadata") or {}),
+        "evidence_envelopes": dict(record.get("evidence_envelopes") or {}),
     }
-
-
-def _record_list(record: dict[str, Any], key: str) -> list:
-    return list(record.get(key) or [])
-
-
-def _record_dict(record: dict[str, Any], key: str) -> dict:
-    return dict(record.get(key) or {})
 
 
 def _event_impacts_for_index(record: dict[str, Any], chosen_index: int) -> list[dict[str, Any]]:

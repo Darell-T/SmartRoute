@@ -183,9 +183,8 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
         ordinal=ordinal_int,
         description=description or None,
     )
-    missing = _missing_place_result(resolve_error, place)
-    if missing is not None:
-        return missing
+    if place is None:
+        return ToolResult(ok=False, error=resolve_error or "place not found")
     bound_place_id = str(place.get("place_id") or "").strip()
     _bind_resolved_place(
         ctx,
@@ -193,12 +192,4 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
         place_id=bound_place_id,
     )
     return _place_details_result(place)
-
-
-def _missing_place_result(resolve_error: str | None, place: dict | None) -> ToolResult | None:
-    if resolve_error or place is None:
-        return ToolResult(ok=False, error=resolve_error or "place not found")
-    return None
-
-
 __all__ = ("GET_PLACE_DETAILS_SCHEMA", "execute")

@@ -109,7 +109,17 @@ def _present_route_label(tool_input: dict) -> str:
 
 
 def _discover_places_where(tool_input: dict) -> str:
-    kind, values = _discovery_scope(tool_input)
+    scope = (
+        tool_input.get("scope")
+        if isinstance(tool_input.get("scope"), dict)
+        else {}
+    )
+    kind = str(scope.get("kind") or "")
+    values = [
+        str(item).strip()
+        for item in (scope.get("values") or [])
+        if str(item).strip()
+    ]
     if kind == "current_location":
         return "near you"
     if not values:
@@ -119,16 +129,6 @@ def _discover_places_where(tool_input: dict) -> str:
     if kind == "boroughs":
         return f"in {' and '.join(values)}"
     return "in NYC"
-
-
-def _discovery_scope(tool_input: dict) -> tuple[str, list[str]]:
-    scope = tool_input.get("scope") if isinstance(tool_input.get("scope"), dict) else {}
-    values = [
-        str(item).strip()
-        for item in (scope.get("values") or [])
-        if str(item).strip()
-    ]
-    return str(scope.get("kind") or ""), values
 
 
 def _discover_places_label(tool_input: dict) -> str:
@@ -164,41 +164,24 @@ def _label_route_ids(tool_input: dict) -> list[str]:
 
 def _check_transit_label(tool_input: dict) -> str:
     operation = str(tool_input.get("operation") or "").strip()
-    projector = _TRANSIT_OPERATION_LABELS.get(operation)
-    if projector is not None:
-        return projector(tool_input)
+    if operation == "arrivals":
+        return _arrivals_status_label(tool_input)
+    operation_label = _TRANSIT_OPERATION_LABELS.get(operation)
+    if operation_label is not None:
+        template, field, default = operation_label
+        value = str(tool_input.get(field) or default).strip()
+        return template.format(value)
     routes = _label_route_ids(tool_input)
     if routes:
         return f"Checking {routes[0]} service…"
     return "Checking live transit conditions…"
 
 
-def _accessibility_operation_label(tool_input: dict) -> str:
-    station = str(tool_input.get("station") or "that station").strip()
-    return f"Checking accessibility at {station}…"
-
-
-def _area_conditions_operation_label(tool_input: dict) -> str:
-    area = str(tool_input.get("area") or "that area").strip()
-    return f"Checking conditions near {area}…"
-
-
-def _event_schedule_operation_label(tool_input: dict) -> str:
-    query = str(tool_input.get("event_query") or "that event").strip()
-    return f"Checking {query} schedule…"
-
-
-def _fact_operation_label(tool_input: dict) -> str:
-    topic = str(tool_input.get("topic") or "that").strip()
-    return f"Looking up {topic}…"
-
-
 _TRANSIT_OPERATION_LABELS = {
-    "arrivals": _arrivals_status_label,
-    "accessibility": _accessibility_operation_label,
-    "area_conditions": _area_conditions_operation_label,
-    "event_schedule": _event_schedule_operation_label,
-    "fact": _fact_operation_label,
+    "accessibility": ("Checking accessibility at {}…", "station", "that station"),
+    "area_conditions": ("Checking conditions near {}…", "area", "that area"),
+    "event_schedule": ("Checking {} schedule…", "event_query", "that event"),
+    "fact": ("Looking up {}…", "topic", "that"),
 }
 
 

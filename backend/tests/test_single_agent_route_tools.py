@@ -336,3 +336,68 @@ class SingleAgentToolSurfaceTests(unittest.IsolatedAsyncioTestCase):
             )
         assert not result.ok
         assert "hard constraints" in (result.error or "")
+
+    async def test_present_reads_evidence_from_an_active_legacy_candidate_set(self):
+        prepared = _prepared_leg()
+        origin = {
+            "name": prepared.origin_place.name,
+            "latitude": prepared.origin_place.latitude,
+            "longitude": prepared.origin_place.longitude,
+        }
+        destination = {
+            "name": prepared.destination_place.name,
+            "latitude": prepared.destination_place.latitude,
+            "longitude": prepared.destination_place.longitude,
+        }
+        candidate_id = "cd_legacy_evidence"
+        ctx = _ctx()
+        set_id = candidate_store.store_candidate_set(
+            session_id=ctx.session_id,
+            payload={
+                "tool_input": prepared.tool_input,
+                "origin_place": origin,
+                "destination_place": destination,
+                "parsed_routes": prepared.parsed_routes,
+                "scored": prepared.scored,
+                "candidates": [
+                    {
+                        "candidate_id": candidate_id,
+                        "index": 0,
+                        "digest": {
+                            "hard_constraints_satisfied": True,
+                            "_canonical_itinerary": _stored_itinerary(
+                                prepared.parsed_routes[0], origin, destination
+                            )
+                        },
+                    }
+                ],
+                "relevant_alerts": [{"header": "Q trains are delayed"}],
+                "incidents": [],
+                "event_evidence_status": "not_required",
+                "event_impacts": [],
+                "event_failures": [],
+                "crowd_search_metadata": {"grok_status": "not_required"},
+                "incident_scan_metadata": {
+                    "status": "complete",
+                    "sources": {"attempted": [], "completed": []},
+                },
+                "evidence_envelopes": {},
+                "evidence_coverage": {"alerts": "current"},
+                "route_status": "good",
+            },
+        )
+        trip_state.bind_candidate_set(ctx.session, set_id)
+
+        with patch(
+            "app.services.trips.enrichment._enrich_route",
+            new=AsyncMock(return_value=None),
+        ):
+            result = await present_route.execute(
+                _present_route_input(candidate_id),
+                ctx,
+            )
+
+        assert result.ok, result.error
+        assert result.data["candidates"][0]["alert_headlines"] == [
+            "Q trains are delayed"
+        ]
