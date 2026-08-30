@@ -1,0 +1,15 @@
+{
+  "name": "SmartRoute",
+  "install": "bash .cursor/install.sh",
+  "terminals": [
+    {
+      "name": "backend",
+      "command": "cd backend && SMARTROUTE_ENV=development APP_KEY=local-dev-app-key ANTHROPIC_API_KEY=local-dev-mock-anthropic-key AGENT_MOCK_MODE=1 AGENT_ALLOW_MEMORY_SESSIONS=1 .venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    },
+    {
+      "name": "frontend",
+      "command": "cd frontend && API_URL=http://localhost:8000 NEXT_PUBLIC_API_URL=http://localhost:8000 APP_KEY=local-dev-app-key npm run dev"
+    }
+  ],
+  "ports": [3000, 8000]
+}
