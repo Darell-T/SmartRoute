@@ -492,19 +492,6 @@ async def _station_or_geocoded_place(
     )
 
 
-def _saved_profile_coords(
-    session: object, value: str
-) -> tuple[tuple[float, float] | None, str | None]:
-    saved, saved_error = profile_module.resolve_profile_place(session, value)
-    if saved_error:
-        return None, saved_error
-    if saved is not None:
-        return (float(saved["latitude"]), float(saved["longitude"])), None
-    if _normalized_label(value) in {"home", "work"}:
-        return None, f"saved {_normalized_label(value).title()} is unavailable"
-    return None, None
-
-
 def _known_alias_place(value: str) -> ResolvedPlace | None:
     alias = known_place(value)
     if alias is None:
@@ -517,6 +504,15 @@ def _known_alias_place(value: str) -> ResolvedPlace | None:
         address=alias.address,
         place_id=alias.place_id,
     )
+
+
+def _saved_profile_coords(
+    session: object, value: str
+) -> tuple[tuple[float, float] | None, str | None]:
+    saved, error = _saved_profile_place(session, value)
+    if saved is None:
+        return None, error
+    return (saved.latitude, saved.longitude), None
 
 
 def _saved_profile_place(

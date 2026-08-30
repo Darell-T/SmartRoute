@@ -48,7 +48,7 @@ Quality certification from fresh runs with no `--skip-tests`:
 | Batch 5 reviewer final 2026-08-28 | 0 | 0 | 0 | 0 | 329 | 1,823 passed, 21 skipped, 444 subtests | 314 |
 | Batch 6 reviewer final 2026-08-28 | 0 | 0 | 0 | 0 | 329 | 1,823 passed, 21 skipped, 444 subtests | 314 |
 | Batch 6C worker 2026-08-29 | 1 | 0 | 0 | 38 | 198 | 1,894 passed, 21 skipped, 444 subtests | 314 |
-| Batch 6C reviewer final 2026-08-29 | 0 | 0 | 0 | 0 | 198 | 1,894 passed, 21 skipped, 444 subtests | 314 |
+| Batch 6C reviewer final 2026-08-29 | 0 | 0 | 0 | 0 | 198 | 1,895 passed, 21 skipped, 444 subtests | 314 |
 
 Cognitive delta against `427fbc8`: 0 new or worsened. CRAP has no absolute
 ceiling. Baseline entries may not worsen.
@@ -1525,6 +1525,10 @@ implementation and removed exactly 38 stale Batch 6C entries from
 and Batch 7 were not started. Frontend production, `tools/transit/**`,
 `services/trips/**`, and other `services/agent/**` modules were not edited.
 
+After the first local commit, Codex reopened the review because net production
+growth exceeded the agreed range. The correction removed unearned dispatch
+and wrapper layers and reran the full quality gate before Batch 6D began.
+
 Codex P2: `_admit_route_preparation` now returns a frozen
 `RoutePreparationAdmission`. `execute` consumes named attributes. The
 11-position tuple is gone.
@@ -1554,6 +1558,7 @@ Tests and records:
 
 - `backend/tests/test_local_discovery.py`
 - `backend/tests/test_discovery_route_handoff.py`
+- `backend/tests/test_single_agent_route_tools.py`
 - `docs/lint-cleanup-handoff.md`
 - `docs/lint-cleanup-plan.md`
 - `.audit/backend-debt.json`
@@ -1565,24 +1570,27 @@ Tests and records:
 The command exits 1 because Batches 6D and 6E still have functions above
 12. Judge `by_batch: 6C`.
 
-| Metric | At `c8a0381` | After 6C worker |
+| Metric | At `c8a0381` | After 6C review |
 |---|---:|---:|
-| 6C functions | 316 | 432 |
+| 6C functions | 316 | 417 |
 | 6C above 12 | 40 | 0 |
 | 6C at 11 or 12 | 19 | 19 |
 | 6C CRAP above 30 | 2 | 0 |
-| 6C zero-covered | 12 | 20 |
+| 6C zero-covered | 12 | 12 |
 | Branch-aware coverage | 88.6% | 88.7% |
 
-Production growth versus `$batchRef`: 2,005 insertions and 1,147 deletions
-in `backend/app/services/agent/tools` (net +858 lines). Function count rose
-by 116. Both the 500 net production-line trigger and the 25 net function
-trigger are crossed. The 40 functions above 12 could not land at or below 10
-without extracting named policies for presented-place resolution, history
-admission, candidate-set snapshot identity versus evidence, boarding timing,
-and queue lookup. New helpers stay at cyclomatic and cognitive 10 or below.
-The growth is the cost of finishing the inventory, not metric peelers added
-after the last green cluster.
+Production growth versus `$batchRef`: 1,919 insertions and 1,141 deletions in
+`backend/app/services/agent/tools` (net +778 lines). The Batch 6C function
+inventory rose from 316 to 417, a net increase of 101. These totals cross the
+project review triggers but stay inside the user-approved 500 to 800 net-line
+range for replacement work. The refactor replaced 1,141 old production lines.
+
+The reopened review reduced the first committed tree from 432 to 417 Batch 6C
+functions. It removed operation-label projector functions, a projected-facts
+function dispatcher with dummy parameters, five objective-reason check
+functions, one missing-result wrapper, and two record-coercion wrappers. The
+remaining additions own named provider, validation, persistence, evidence, or
+lifecycle stages rather than one-call metric peelers.
 
 ### Survivors at 11 or 12
 
@@ -1674,7 +1682,7 @@ $reverse = @($files)
 py -m pytest @reverse -q --basetemp .pytest-batch6c-reverse
 ```
 
-Forward: 312 passed, 52 subtests. Reverse: 312 passed, 52 subtests.
+Forward: 313 passed, 52 subtests. Reverse: 313 passed, 52 subtests.
 
 ### Red-before-green for new tests
 
@@ -1686,15 +1694,22 @@ invented set id. `test_presented_place_rebinds_its_source_set_for_followups`
 and `test_unknown_or_expired_active_set_leaves_context_unchanged` cover the
 presented-place and safe-failure paths through `place_reference.execute`.
 
+`test_present_reads_evidence_from_an_active_legacy_candidate_set` exercises
+the public route presenter with a candidate record that predates the current
+evidence envelope. Candidate records can remain active for the 900-second
+store lifetime across a deployment. The test protects that compatibility path
+without pinning private record-coercion helpers.
+
 ### Full backend and frontend
 
-`py scripts/check_quality.py --update-baseline --quality-ref c0581994e47ce1a5bbdb2d8e83fc0afd50ff1745`
+`py scripts/check_quality.py --quality-ref c8a0381420be7f341970c497b4ded7b988960be0`
 
 Exit 0. `approval_eligible: true`. `tests_ran: true`. New 0. Worsened 0.
 Cognitive new or worsened 0. Ruff C901 0. Ruff structural 0. Stale 0.
-Backend 1,894 passed, 21 skipped, 444 subtests. Frontend 314 passed.
+Backend 1,895 passed, 21 skipped, 444 subtests. Frontend 314 passed.
 
-Cognitive-only against `$qualityRef`: new or worsened 0.
+Cognitive-only against `$batchRef`: new or worsened 0. The earlier
+reviewer-owned baseline shrink against `$qualityRef` also exited 0.
 
 ### Reviewer-removed Batch 6C baseline IDs
 
@@ -1760,6 +1775,14 @@ Accepted:
   `_admit_route_preparation` and consume named attributes in `execute`.
   Several adjacent values share compatible types, so a positional tuple
   could silently swap destination-set, label, or waypoint state.
+- Replace four operation-label functions and their function dispatcher with
+  one data table in `_check_transit_label`.
+- Replace the projected-facts function dispatcher and dummy `outcome`
+  parameters with direct branches to the three named projection policies.
+- Inline `_record_list` and `_record_dict`. Protect the cross-deployment
+  legacy candidate shape through the public route presenter.
+- Remove five one-line objective-reason functions, `_missing_place_result`,
+  and other one-call wrappers that did not own policy.
 
 Rejected:
 
@@ -1767,8 +1790,8 @@ Rejected:
   count. Each file still owns one lifecycle.
 - Tests for private helpers. Public `place_reference.execute` and existing
   route/place tests already pin the behavior.
-- Inlining `_record_list` and `_leg_seconds`. They own snapshot-field and
-  itinerary-second parsing at repeated callsites.
+- Inlining `_leg_seconds`. It owns itinerary-second parsing at five repeated
+  callsites.
 
 ### Preserved behavior
 
@@ -1783,9 +1806,9 @@ in pattern validation.
 
 ### Unresolved risks
 
-- Zero-covered 6C functions rose from 12 to 20 because extracted helpers
-  inherit sparse call paths. Overall branch-aware coverage rose to 88.7%.
-  No coverage-theater tests were added.
+- Zero-covered 6C functions stayed at 12. The public route-presenter test
+  covers the former zero-covered legacy candidate path. Overall branch-aware
+  coverage rose to 88.7%.
 - `quality/baseline.json` now has 198 entries. The reviewer-owned quality run
   exits 0 with `approval_eligible: true`.
 - Global debt exit 1 is Batches 6D and 6E. Batch 6C is `above_12=0` and

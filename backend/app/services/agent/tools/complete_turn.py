@@ -150,17 +150,18 @@ def _projected_facts(
         }
         for goal in contract.goals
     }
-    projector = _OUTCOME_FACT_PROJECTORS.get(outcome, _unavailable_goal_facts)
-    return projector(facts, contract, goal_keys, outcome)
+    if outcome == "answer":
+        return _answer_goal_facts(facts, contract, goal_keys)
+    if outcome in {"clarification", "refusal", "cancelled"}:
+        return _interrupt_goal_facts(facts, contract, goal_keys, outcome)
+    return _unavailable_goal_facts(facts, contract, goal_keys)
 
 
 def _answer_goal_facts(
     facts: dict[str, dict[str, object]],
     contract: TurnContract,
     goal_keys: tuple[str, ...],
-    outcome: str,
 ) -> tuple[dict[str, dict[str, object]], ToolResult | None]:
-    del outcome
     if any(contract.goal(key).kind != GoalKind.GENERAL_RESPONSE for key in goal_keys):
         return {}, ToolResult(
             ok=False,
@@ -242,9 +243,7 @@ def _unavailable_goal_facts(
     facts: dict[str, dict[str, object]],
     contract: TurnContract,
     goal_keys: tuple[str, ...],
-    outcome: str,
 ) -> tuple[dict[str, dict[str, object]], ToolResult | None]:
-    del outcome
     invalid_keys = [
         key
         for key in goal_keys
@@ -269,15 +268,6 @@ def _unavailable_goal_facts(
         ),
         internal_diagnostic=True,
     )
-
-
-_OUTCOME_FACT_PROJECTORS = {
-    "answer": _answer_goal_facts,
-    "clarification": _interrupt_goal_facts,
-    "refusal": _interrupt_goal_facts,
-    "cancelled": _interrupt_goal_facts,
-    "unavailable": _unavailable_goal_facts,
-}
 
 
 def _pending_goal_instruction(
