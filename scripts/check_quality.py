@@ -28,6 +28,7 @@ BACKEND = ROOT / "backend"
 FRONTEND = ROOT / "frontend"
 PHASE2_REPORT = BACKEND / "scripts" / "phase2_quality_report.py"
 JS_METRICS = ROOT / "scripts" / "js_function_metrics.mjs"
+FRONTEND_DEBT = ROOT / "scripts" / "report_frontend_debt.py"
 BASELINE_PATH = ROOT / "quality" / "baseline.json"
 
 COMPLEXITY_IN_MESSAGE = re.compile(r"complexity of (\d+)", re.IGNORECASE)
@@ -584,6 +585,33 @@ def _self_test_language_ceilings() -> None:
         raise AssertionError("frontend cyclomatic ceiling must be 12")
 
 
+def _self_test_frontend_c8_gate() -> None:
+    debt = load_frontend_debt()
+    missing = debt.coverage_metrics(["app/page.tsx"], {})
+    missing_gate = debt.resolve_function_gate(
+        missing, debt.c8_implementation_function_coverage(["app/page.tsx"], {})
+    )
+    if missing["branch_status"] != "unresolved":
+        raise AssertionError("quality runner must treat unexecuted files as unresolved branches")
+    if missing_gate["function_status"] != "unresolved":
+        raise AssertionError("quality runner must treat unexecuted files as unresolved functions")
+    executed = {
+        "s": {"0": 1},
+        "statementMap": {"0": {"start": {"line": 1}}},
+        "b": {"0": [1, 1]},
+        "f": {"0": 1, "1": 0},
+    }
+    kept = debt.coverage_metrics(["app/page.tsx"], {"app/page.tsx": executed})
+    kept_c8 = debt.c8_implementation_function_coverage(
+        ["app/page.tsx"], {"app/page.tsx": executed}
+    )
+    kept_gate = debt.resolve_function_gate(kept, kept_c8)
+    if kept["branch_status"] != "exact" or kept["branch_total"] != 2:
+        raise AssertionError("quality runner must use c8 branch totals once every file executes")
+    if kept_gate["function_status"] != "exact" or kept_c8["total"] != 2:
+        raise AssertionError("quality runner must use c8 function totals once every file executes")
+
+
 def self_test() -> None:
     _self_test_crap()
     _self_test_js_coverage()
@@ -592,6 +620,7 @@ def self_test() -> None:
     _self_test_default_command_new_debt()
     _self_test_shrink_command_requires_quality_ref()
     _self_test_language_ceilings()
+    _self_test_frontend_c8_gate()
     _assert_command_output_survives_cp1252()
     result = run_command([node_executable(), str(JS_METRICS), "--self-test"], cwd=ROOT)
     if result.returncode != 0:
@@ -629,6 +658,17 @@ def load_phase2():
     )
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Cannot load {PHASE2_REPORT}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_frontend_debt():
+    spec = importlib.util.spec_from_file_location(
+        "report_frontend_debt", FRONTEND_DEBT
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Cannot load {FRONTEND_DEBT}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -1105,6 +1145,7 @@ def js_functions(coverage_dir: Path) -> list[dict[str, object]]:
                 "coverage": mapped_coverage,
                 "crap": crap,
                 "coverage_status": status,
+                "anonymous": bool(row.get("anonymous") or function_name == "anonymous"),
                 "unresolved_reason": None if status != "unresolved" else reason,
                 "cc_source": "eslint-classic",
             }

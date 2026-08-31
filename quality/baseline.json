@@ -678,15 +678,6 @@
       "coverage_status": "measured"
     },
     {
-      "id": "typescript:frontend/components/smart-route/chat/near-you.ts:buildArrivalsPayloadForRoute#0",
-      "language": "TypeScript",
-      "file": "frontend/components/smart-route/chat/near-you.ts",
-      "function": "buildArrivalsPayloadForRoute",
-      "complexity": 15,
-      "crap": 15.0,
-      "coverage_status": "measured"
-    },
-    {
       "id": "typescript:frontend/components/smart-route/chat/near-you.ts:buildHomeNearbyModel#0",
       "language": "TypeScript",
       "file": "frontend/components/smart-route/chat/near-you.ts",
@@ -765,15 +756,6 @@
       "function": "TransitText",
       "complexity": 14,
       "crap": 14.0,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "typescript:frontend/components/smart-route/left-rail/demo-data.ts:demoArrival#0",
-      "language": "TypeScript",
-      "file": "frontend/components/smart-route/left-rail/demo-data.ts",
-      "function": "demoArrival",
-      "complexity": 16,
-      "crap": 16.000073725290004,
       "coverage_status": "measured"
     },
     {

@@ -8,8 +8,8 @@
      rings.
 
      Hoisted to :root (was scoped to `.sr-rail`) so non-rail surfaces — the
-     chat tab's tab-shell chrome, tab toggle — can read the same tokens
-     without needing a `.sr-rail` ancestor. The rail's own chrome rules
+     chat tab's tab-shell chrome — can read the same tokens without needing
+     a `.sr-rail` ancestor. The rail's own chrome rules
      (background/border/shadow/etc.) stay below, still scoped to `.sr-rail`.
      ════════════════════════════════════════════════════════════════════ */
 
