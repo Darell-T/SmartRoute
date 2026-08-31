@@ -168,18 +168,6 @@ def resolve_place_borough(
     return borough_from_formatted_address(formatted_address)
 
 
-def is_nyc_locality(address_components: object, formatted_address: object) -> bool:
-    if borough_from_address_components(address_components):
-        return True
-    if borough_from_formatted_address(formatted_address):
-        return True
-    if not isinstance(address_components, list):
-        return False
-    locality = _normalized(_component_text(address_components, "locality"))
-    admin1 = _normalized(_component_text(address_components, "administrative_area_level_1"))
-    return locality in _NYC_LOCALITY_WORDS and admin1 in {"ny", "new york"}
-
-
 def _component_text(components: list, wanted_type: str) -> str:
     for component in components:
         if not isinstance(component, dict):

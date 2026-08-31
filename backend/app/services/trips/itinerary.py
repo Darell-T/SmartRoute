@@ -202,10 +202,6 @@ def build_chained_itinerary(
     - ``departure_at`` / ``arrival_at`` from first / last segment clocks
 
     Does not invent FE-side dwell. Pure function: no network, no LLM.
-
-    Later wiring: after N ``plan_trip`` OD plans (or a multi-stop tool), pass
-    each plan's parsed steps + place + optional rider dwell into this helper
-    and emit one chained itinerary / card instead of FE multi-card merge.
     """
     raw_segments = _parse_chain_segments(segments)
     chain = _construct_chain_segments(

@@ -11,9 +11,9 @@ application behavior. Regenerate the reports below before editing a batch.
 
 ## Current result
 
-The accepted integration checkpoint is `9b4327d`. It contains Batches 2
-through 6E and F0. The whole-repository audit on 2026-08-30 used an isolated
-checkout of that commit. Workers must not shrink stale baseline entries.
+The accepted pre-6F checkpoint is `ac96d12`. It contains Batches 2 through 6E,
+F0, and the backend test-assurance work. Batch 6F is Codex-approved on the tree
+based on that checkpoint. Workers must not shrink stale baseline entries.
 
 | Tool | Findings | Files | Notes |
 |---|---:|---:|---|
@@ -22,7 +22,7 @@ checkout of that commit. Workers must not shrink stale baseline entries.
 | Ruff PLR0912 | 0 | 0 | Branch ceiling 12 |
 | Ruff PLR0915 | 0 | 0 | Statement ceiling 50 |
 | Backend combined complexity | 91 | | Radon or cognitive 11 through 12, none above 12 |
-| Backend branch coverage | 89.14% | | Full `backend/app` statement and branch denominator |
+| Backend combined coverage | 89.34% | | Full `backend/app` statement and branch denominator |
 | Backend CRAP above 30 | 0 | 0 | Public behavior tests closed the prior evidence gap |
 | Oxlint complexity above 12 | 126 | | Batch 7: 10, Batch 8: 46, Batch 9: 70 |
 | Quality baseline | 113 | | After the accepted F0 reviewer shrink |
@@ -57,6 +57,7 @@ Quality certification from fresh runs with no `--skip-tests`:
 | F0 Codex repair 2026-08-30 | 1 | 0 | 0 | 12 | 125 | 1,899 passed, 21 skipped, 444 subtests | 557 |
 | F0 reviewer final 2026-08-30 | 0 | 0 | 0 | 0 | 113 | 1,899 passed, 21 skipped, 444 subtests | 557 |
 | Backend test assurance 2026-08-31 | 0 | 0 | 0 | 0 | 113 | 1,917 passed, 21 skipped, 446 subtests | 557 |
+| Batch 6F reviewer final 2026-08-31 | 0 | 0 | 0 | 0 | 113 | 1,915 passed, 21 skipped, 446 subtests | 557 |
 
 Cognitive delta against `427fbc8`: 0 new or worsened. CRAP has no absolute
 ceiling. Baseline entries may not worsen.
@@ -69,8 +70,10 @@ at `c058199`. That commit is the fixed point for Batches 6A through 6E. Batch
 6A is committed at `140495a`. Batch 6B is committed at `c8a0381`. Batch 6C
 review is complete on the tree based on `c8a0381`. Batch 6D is committed at
 `2298e32`. Batch 6E is Codex-approved on the tree based on that checkpoint.
-Batch 6E is committed at `ae27211`. F0 is committed at `9b4327d`. Batch 7
-was not started. The next order is Batch 6F, F1, 7, 8, and 9.
+Batch 6E is committed at `ae27211`. F0 is committed at `9b4327d`. The backend
+test-assurance checkpoint is `ac96d12`. Batch 6F is Codex-approved on the tree
+based on that checkpoint. Batch 7 was not started. The next order is F1, 7, 8,
+and 9.
 
 ## Structural policy
 
@@ -87,10 +90,9 @@ was not started. The next order is Batch 6F, F1, 7, 8, and 9.
 
 ## Remaining batches
 
-The old 20-batch plan is retired. Batches 2 through 6E and F0 are complete.
+The old 20-batch plan is retired. Batches 2 through 6F and F0 are complete.
 The audit added one bounded backend closure and one frontend measurement and
-subtraction closure. Do not start Batch 7 until Batch 6F and F1 are reviewed
-and committed.
+subtraction closure. Do not start Batch 7 until F1 is reviewed and committed.
 
 | Batch | Subsystem |
 |---:|---|
@@ -104,7 +106,7 @@ and committed.
 | 6C | Agent place, route, and shared tools |
 | 6D | Agent transit tools |
 | 6E | Agent model, session, and turn |
-| 6F | Delete only backend symbols whose production call-site search stays empty |
+| 6F | Proven backend dead-code deletion, Codex-approved from `ac96d12` |
 | F0 | Frontend quality foundation, committed at `9b4327d` |
 | F1 | Correct aggregate coverage semantics and delete proven dead frontend code |
 | 7 | `frontend/app/**` and `frontend/lib/**` |
@@ -220,6 +222,29 @@ fallback, and evidence statuses. Batch 6F must not duplicate them. The audit
 also found and fixed a dropped route id in the explicit crowd-request fallback.
 See `docs/backend-test-quality.md` for the coverage report, the risk buckets,
 the Cosmic Ray canary, and the 85% CI floor.
+
+## Batch 6F reviewer final (2026-08-31)
+
+Batch 6F started from `ac96d12`. The repository-wide call-site audit confirmed
+that every owned candidate was dead. The accepted tree deletes all 13
+zero-covered compatibility surfaces, the unreachable first-boarding timing
+subtree, the two tests that only exercised that subtree, and imports, exports,
+private data, and stale comments made obsolete by those deletions.
+
+The change removes 329 net backend production lines and 22 production
+functions. It adds no production code, module, dependency, or replacement
+abstraction. Canonical itinerary projection still owns live route clocks.
+Frontend production, `quality/baseline.json`, Cosmic Ray configuration, and the
+85% CI floor are unchanged.
+
+Fresh verification reports 1,915 backend tests passed, 21 skipped, and 446
+subtests. Combined statement and branch coverage is 89.34%. Statement coverage
+is 91.96% (20,336 / 22,113). Branch coverage is 81.86% (6,346 / 7,752). The
+regenerated debt report has 2,415 authored functions, 37 with zero coverage,
+none above 12, and none with CRAP above 30. Full quality against `ac96d12` exits
+0 with `approval_eligible: true`. The only raw backend Ruff finding is the
+fixed-point import-order issue in `backend/scripts/phase2_quality_report.py`;
+Batch 6F did not edit that out-of-scope script.
 
 ## Whole-repository audit and revised next work (2026-08-30)
 

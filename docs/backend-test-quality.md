@@ -11,45 +11,31 @@ coverage.
 
 | Measure | Result |
 |---|---:|
-| Combined statement and branch coverage | 89.14% |
-| Statement coverage | 91.77% (20,419 of 22,251) |
-| Branch coverage | 81.64% (6,360 of 7,790) |
-| Missing statements | 1,832 |
-| Missing branches | 1,430 |
-| Zero-covered authored functions | 50 of 2,437 |
+| Combined statement and branch coverage | 89.34% |
+| Statement coverage | 91.96% (20,336 of 22,113) |
+| Branch coverage | 81.86% (6,346 of 7,752) |
+| Missing statements | 1,777 |
+| Missing branches | 1,406 |
+| Zero-covered authored functions | 37 of 2,415 |
 | Functions with CRAP above 30 | 0 |
 
 The original audit found 66 zero-covered functions and one function with CRAP above
 30. Public behavior tests reduced that list to 50 and removed the CRAP finding.
-The repaired behavior includes evidence freshness, passenger-safe area evidence,
-directions parsing, area-condition dispatch, unconfirmed alerts, crowd fallback,
-BusTime vehicle requests, stalled-bus failure isolation, API-key rejection, and an
-already-expired model deadline.
+Batch 6F then deleted all 13 zero-covered functions whose repository-wide call-site
+search stayed empty. It also deleted an unreachable first-boarding timing subtree
+that had tests but no production caller. The repaired behavior includes evidence
+freshness, passenger-safe area evidence, directions parsing, area-condition
+dispatch, unconfirmed alerts, crowd fallback, BusTime vehicle requests,
+stalled-bus failure isolation, API-key rejection, and an already-expired model
+deadline.
 
-The remaining 50 functions are not all boilerplate.
+The remaining 37 functions are not all boilerplate.
 
 | Risk bucket | Count | Review result |
 |---|---:|---|
-| Probable dead code or unused compatibility surface | 13 | Delete only after the 6F call-site audit proves that no external contract uses it. Do not add tests only to preserve dead code. |
 | Low-risk request normalization, labels, empty-result projections, and defaults | 18 | These functions do not own route selection, itinerary arithmetic, or passenger-safety decisions. Cover them when their public behavior changes. |
 | Provider, startup, shutdown, logging, and persistence lifecycle paths | 17 | These paths are operational risk, not harmless boilerplate. Prefer boundary fakes and deployment smoke checks over mocks of internal helpers. |
 | Live orchestration adapters | 2 | `build_preparation_dependencies.derive_with_bound_provider` and `_progress_without_intermediate_complete.emit` still need public-path evidence when those flows change. |
-
-The 13 probable deletion candidates are:
-
-- `presented_entity_registry.clear`
-- `PendingContinuation.recovery_options`
-- `places.geography.is_nyc_locality`
-- `trip_state.set_origin`
-- `trip_state.clear_route_selection`
-- `services.geography.geocode_address`
-- `services.geography.walking_time_minutes`
-- `GTFSStaticData.get_stop_names`
-- `route_incidents.context.stop_reference`
-- `CandidateStopContext.directions`
-- `CandidateStopContext.stop_reference`
-- `CandidateStopContext.as_dict`
-- `trips.text._expand_abbreviations`
 
 The 17 operational paths include the three startup and refresh loops in
 `app/main.py`, `NetworkSnapshotStore.close`, the BusTime client lifecycle and
@@ -64,10 +50,11 @@ The 18 low-risk functions consist of two `AgentChatRequest` normalizers,
 wrapper is one line, and its same-day inclusion policy is already covered at the
 parser owner.
 
-The zero-covered list no longer contains the identified route-evidence projection,
-API authorization, model-deadline, BusTime request, directions-response, or
-unconfirmed-alert gaps. It also does not replace line and branch review. A function
-can have coverage while an important branch remains untested.
+The zero-covered list no longer contains the 13 proven dead surfaces or the
+identified route-evidence projection, API authorization, model-deadline, BusTime
+request, directions-response, or unconfirmed-alert gaps. It also does not replace
+line and branch review. A function can have coverage while an important branch
+remains untested.
 
 ## Generate the coverage report
 

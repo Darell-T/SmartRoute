@@ -210,7 +210,7 @@ class BuildCanonicalItineraryTests(unittest.TestCase):
 
         walk1 = result["legs"][0]
         walk2 = result["legs"][2]
-        # Expected: meters / 1.4 m/s (same default as geo.walking_time_minutes)
+        # Canonical itinerary walking uses a 1.4 m/s pace.
         m1 = geo.distance_meters(40.6602, -73.9690, 40.6616, -73.9622)
         m2 = geo.distance_meters(40.7180, -74.0000, 40.7190, -74.0010)
         expected1 = max(0, round(m1 / 1.4))

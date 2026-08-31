@@ -664,6 +664,17 @@ Keep the CI floor at 85%. Do not rerun the Cosmic Ray canary unless
 this batch. The worker leaves the tree uncommitted for Codex review. Codex
 alone decides whether any stale baseline entry should be removed.
 
+Reviewer final (2026-08-31). Fixed point `ac96d12`. Batch 6F deleted 22
+production functions and 329 net backend production lines. All 13 zero-covered
+candidate surfaces had no independent caller and were deleted. The unreachable
+first-boarding timing subtree and its two private-only tests were also deleted.
+The regenerated debt report contains 2,415 functions, 37 with zero coverage,
+none above 12, and none with CRAP above 30. Combined coverage is 89.34%.
+The full backend suite passed with 1,915 tests, 21 skips, and 446 subtests.
+Full quality against the fixed point exits 0 with `approval_eligible: true`.
+`quality/baseline.json`, the 85% CI floor, Cosmic Ray configuration, frontend,
+and passenger behavior are unchanged.
+
 ## Batch F0: frontend quality foundation
 
 F0 is committed at `9b4327d`. It established the frontend complexity ceiling,
