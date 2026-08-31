@@ -13,11 +13,6 @@ NYC_BOUNDS = {
 }
 
 
-def geocode_address(address: str) -> tuple | None:
-    coords, _reason = geocode_address_with_reason(address)
-    return coords
-
-
 def geocode_address_with_reason(address: str) -> tuple[tuple[float, float] | None, str | None]:
     if not address or not address.strip():
         return None, "Address is empty."
@@ -94,23 +89,3 @@ def find_nearest_stops(
 
     distances.sort(key=lambda x: x["distance_m"])
     return distances[:limit]
-
-
-def walking_time_minutes(meters: float, speed_mps: float = 1.4) -> float:
-    return round(meters / speed_mps / 60, 1)
-
-
-if __name__ == "__main__":
-    from app.services.mta.static_gtfs.store import GTFSStaticData
-
-    result = geocode_address("350 5th Ave, New York")
-    print(f"Geocoded: {result}")
-
-    if result:
-        gtfs = GTFSStaticData()
-        lat, lon = result
-        nearest = find_nearest_stops(lat, lon, gtfs)
-        print("\nNearest stations:")
-        for stop in nearest:
-            walk = walking_time_minutes(stop["distance_m"])
-            print(f"  {stop['stop_name']} ({stop['stop_id']}) - {stop['distance_m']}m, ~{walk} min walk")

@@ -428,15 +428,6 @@ class GTFSStaticData:
         )
         return [r["stop_id"] for r in rows]
 
-    def get_stop_names(self, stop_ids: list[str]):
-        if not stop_ids:
-            return {}
-        rows = self._query(
-            "SELECT stop_id, stop_name FROM stops WHERE stop_id = ANY(%s)",
-            (stop_ids,),
-        )
-        return {r["stop_id"]: r["stop_name"] for r in rows}
-
     def get_stop_locations(self, stop_ids: list[str]):
         if not stop_ids:
             return {}

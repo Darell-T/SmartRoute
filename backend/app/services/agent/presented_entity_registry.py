@@ -112,13 +112,6 @@ def snapshot(session: dict | None) -> list[dict[str, Any]]:
     return [dict(entry) for entry in _entries(session)]
 
 
-def clear(session: dict | None) -> None:
-    if not isinstance(session, dict):
-        return
-    session[REGISTRY_FIELD] = []
-    session.pop("presented_entity_sequence", None)
-
-
 def place_ids(session: dict | None) -> dict[str, str]:
     return {
         str(entry.get("canonical_identity")): str(entry.get("place_id"))

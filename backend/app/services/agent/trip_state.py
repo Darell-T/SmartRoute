@@ -121,10 +121,6 @@ def set_destination(session: dict, destination: str) -> dict[str, Any]:
     )
 
 
-def set_origin(session: dict, origin: str) -> dict[str, Any]:
-    return update_trip_state(session, origin=str(origin or "").strip() or None)
-
-
 def replace_waypoints(session: dict, waypoints: list[str]) -> dict[str, Any]:
     cleaned = [
         point.strip()
@@ -227,14 +223,6 @@ def bind_discovery_context(
 
 def bind_selected_place(session: dict, place_id: str) -> dict[str, Any]:
     return update_trip_state(session, selected_place_id=place_id)
-
-
-def clear_route_selection(session: dict) -> dict[str, Any]:
-    return update_trip_state(
-        session,
-        active_candidate_set_id=None,
-        selected_candidate_id=None,
-    )
 
 
 def discard_scenario(session: dict) -> dict[str, Any]:
@@ -427,7 +415,6 @@ __all__ = (
     "bind_selected_place",
     "bind_temporary_candidate_set",
     "bind_temporary_selected_candidate",
-    "clear_route_selection",
     "commit_scenario",
     "discard_scenario",
     "empty_trip_state",
@@ -436,5 +423,4 @@ __all__ = (
     "reset_for_new_trip",
     "save_trip_state",
     "set_destination",
-    "set_origin",
 )

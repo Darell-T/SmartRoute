@@ -135,10 +135,6 @@ class PendingContinuation:
             expires_at=created + ttl,
         )
 
-    @property
-    def recovery_options(self) -> tuple[str, ...]:
-        return self.approved_recovery_options
-
     def is_expired(self, now: datetime | None = None) -> bool:
         expires = self.expires_at
         if expires is None:
