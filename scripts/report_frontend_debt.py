@@ -252,6 +252,7 @@ def decorate_functions(
                 "coverage": mapped,
                 "crap": None if crap is None else round(float(crap), 3),
                 "coverage_status": status,
+                "anonymous": bool(row.get("anonymous") or row["function"] == "anonymous"),
                 "unresolved_reason": None if status != "unresolved" else reason,
             }
         )
@@ -310,12 +311,21 @@ def coverage_metrics(
 def function_metrics(rows: Sequence[Mapping[str, object]]) -> dict[str, int]:
     measured = sum(1 for row in rows if row["coverage_status"] == "measured")
     uncovered = sum(1 for row in rows if row["coverage_status"] == "uncovered")
-    unresolved = sum(1 for row in rows if row["coverage_status"] == "unresolved")
+    unresolved_rows = [
+        row for row in rows if row["coverage_status"] == "unresolved"
+    ]
+    anonymous_unresolved = sum(
+        1
+        for row in unresolved_rows
+        if row.get("anonymous") or row.get("function") == "anonymous"
+    )
     return {
         "functions": len(rows),
         "measured": measured,
         "uncovered": uncovered,
-        "unresolved": unresolved,
+        "unresolved": len(unresolved_rows),
+        "anonymous_unresolved": anonymous_unresolved,
+        "named_unresolved": len(unresolved_rows) - anonymous_unresolved,
         "above_12": sum(1 for row in rows if int(row["complexity"]) > 12),
         "at_11_or_12": sum(
             1 for row in rows if int(row["complexity"]) in SURVIVOR_BAND
@@ -327,13 +337,6 @@ def function_metrics(rows: Sequence[Mapping[str, object]]) -> dict[str, int]:
         ),
         "function_coverage_mapped": measured + uncovered,
     }
-
-
-def confirmed_function_coverage(metrics: Mapping[str, int]) -> float:
-    total = int(metrics["functions"])
-    if total == 0:
-        return 0.0
-    return int(metrics["measured"]) / total
 
 
 def mapped_only_function_coverage(metrics: Mapping[str, int]) -> float:
@@ -383,20 +386,45 @@ def resolve_branch_gate(file_coverage: Mapping[str, object]) -> dict[str, object
     }
 
 
+def resolve_function_gate(
+    file_coverage: Mapping[str, object],
+    c8_functions: Mapping[str, object],
+) -> dict[str, object]:
+    unexecuted = unexecuted_count(file_coverage["unexecuted_files"])
+    total = int(c8_functions["total"])
+    hit = int(c8_functions["hit"])
+    ratio = float(c8_functions["ratio"])
+    unresolved = unexecuted > 0
+    return {
+        "function_c8": ratio,
+        "function_c8_hit": hit,
+        "function_c8_total": total,
+        "function": None if unresolved else ratio,
+        "function_status": "unresolved" if unresolved else "exact",
+        "meets_function_target": (not unresolved)
+        and (total == 0 or ratio >= TARGET_COVERAGE),
+    }
+
+
 def batch_coverage_report(
     *,
     production_rows: Sequence[Mapping[str, object]],
     authored_rows: Sequence[Mapping[str, object]],
     file_coverage: Mapping[str, object],
+    records: Mapping[str, Mapping[str, object]] | None = None,
+    production_files: Sequence[str] = (),
 ) -> dict[str, object]:
     production_metrics = function_metrics(production_rows)
     authored_metrics = function_metrics(authored_rows)
-    confirmed = confirmed_function_coverage(production_metrics)
     line = float(file_coverage["line_coverage"])
     line_total = int(file_coverage["line_total"])
     branch_total = int(file_coverage["branch_total"])
     production_functions = production_metrics["functions"]
     branch = resolve_branch_gate(file_coverage)
+    c8_functions = c8_implementation_function_coverage(
+        production_files, records or {}
+    )
+    functions = resolve_function_gate(file_coverage, c8_functions)
     return {
         "production_files": int(file_coverage["production_files"]),
         "production_functions": production_functions,
@@ -408,19 +436,23 @@ def batch_coverage_report(
         "branch_status": branch["branch_status"],
         "branch_hit": int(file_coverage["branch_hit"]),
         "branch_total": branch_total,
-        "confirmed_function_coverage": confirmed,
+        "function_coverage": functions["function"],
+        "function_c8": functions["function_c8"],
+        "function_status": functions["function_status"],
+        "function_c8_hit": functions["function_c8_hit"],
+        "function_c8_total": functions["function_c8_total"],
         "mapped_only_function_coverage": mapped_only_function_coverage(
             production_metrics
         ),
         "measured_functions": production_metrics["measured"],
         "uncovered_functions": production_metrics["uncovered"],
         "unresolved_functions": production_metrics["unresolved"],
+        "anonymous_unresolved": production_metrics["anonymous_unresolved"],
+        "named_unresolved": production_metrics["named_unresolved"],
         "unexecuted_files": unexecuted_count(file_coverage["unexecuted_files"]),
         "meets_line_target": line_total == 0 or line >= TARGET_COVERAGE,
         "meets_branch_target": branch["meets_branch_target"],
-        "meets_function_target": (
-            production_functions == 0 or confirmed >= TARGET_COVERAGE
-        ),
+        "meets_function_target": functions["meets_function_target"],
         "authored_functions": len(authored_rows),
         "above_12": authored_metrics["above_12"],
         "at_11_or_12": authored_metrics["at_11_or_12"],
@@ -504,7 +536,7 @@ def build_report(
     production_metrics = function_metrics(production)
     authored_metrics = function_metrics(authored)
     c8_functions = c8_implementation_function_coverage(production_files, records)
-    confirmed = confirmed_function_coverage(production_metrics)
+    functions = resolve_function_gate(coverage, c8_functions)
     mapped_only = mapped_only_function_coverage(production_metrics)
     by_batch: dict[str, dict[str, object]] = {}
     for batch in ("7", "8", "9", "unassigned"):
@@ -520,6 +552,8 @@ def build_report(
             file_coverage=coverage_metrics(
                 files, records, production_rows=prod_rows
             ),
+            records=records,
+            production_files=files,
         )
     return {
         "fixed_point": identity["fixed_point"],
@@ -534,19 +568,21 @@ def build_report(
             "scope": "frontend authored production TypeScript/JavaScript",
             "line": coverage["line_coverage"],
             "branch": coverage["branch_coverage"],
-            "function": confirmed,
-            "confirmed_function": confirmed,
+            "function": functions["function"],
+            "function_c8": functions["function_c8"],
             "mapped_only_function": mapped_only,
-            "c8_implementation_function": c8_functions["ratio"],
-            "function_gate": "confirmed_function",
+            "function_gate": "source_mapped_c8",
+            "function_status": functions["function_status"],
             "function_denominator": (
-                "all inventoried production functions including unresolved"
+                "source-mapped c8 function map; exact only after every owned "
+                "production file executes"
             ),
             "mapped_only_function_note": (
                 "diagnostic only: measured / (measured + uncovered)"
             ),
-            "c8_implementation_function_note": (
-                "c8 helper counts from coverage-final.json; not authored-function coverage"
+            "function_c8_note": (
+                "source-mapped c8 function totals; exact gate while unexecuted "
+                "files remain is unresolved"
             ),
             "branch_unexecuted_inventory": "mccabe_decision_points",
             "branch_status": coverage["branch_status"],
@@ -565,12 +601,14 @@ def build_report(
             "measured_functions": production_metrics["measured"],
             "uncovered_functions": production_metrics["uncovered"],
             "unresolved_functions": production_metrics["unresolved"],
+            "anonymous_unresolved": production_metrics["anonymous_unresolved"],
+            "named_unresolved": production_metrics["named_unresolved"],
             "inventoried_functions": production_metrics["functions"],
-            "c8_implementation_function_hit": c8_functions["hit"],
-            "c8_implementation_function_total": c8_functions["total"],
+            "function_c8_hit": functions["function_c8_hit"],
+            "function_c8_total": functions["function_c8_total"],
             "meets_line_target": float(coverage["line_coverage"]) >= TARGET_COVERAGE,
             "meets_branch_target": bool(coverage["meets_branch_target"]),
-            "meets_function_target": confirmed >= TARGET_COVERAGE,
+            "meets_function_target": functions["meets_function_target"],
         },
         "complexity": {
             "above_12": authored_metrics["above_12"],
@@ -617,21 +655,30 @@ def print_summary(report: Mapping[str, object]) -> None:
     print(
         "  unexecuted branch inventory: McCabe decision points (complexity-1)"
     )
+    if coverage["function_status"] == "unresolved":
+        print(
+            "  function coverage: unresolved "
+            f"(source-mapped c8 {_pct(float(coverage['function_c8']))} "
+            f"over executed files; {coverage['function_c8_hit']} / "
+            f"{coverage['function_c8_total']})"
+        )
+    else:
+        print(
+            "  function coverage: "
+            f"{_pct(float(coverage['function']))} "
+            f"({coverage['function_c8_hit']} / {coverage['function_c8_total']})"
+        )
     print(
-        "  confirmed authored production function coverage "
-        "(measured / all inventoried production functions): "
-        f"{_pct(float(coverage['confirmed_function']))} "
-        f"({coverage['measured_functions']} / {coverage['inventoried_functions']})"
+        "  authored mapping diagnostics: "
+        f"measured={coverage['measured_functions']} "
+        f"uncovered={coverage['uncovered_functions']} "
+        f"anonymous_unresolved={coverage['anonymous_unresolved']} "
+        f"named_unresolved={coverage['named_unresolved']}"
     )
     print(
         "  mapped-only function coverage (diagnostic only, "
         "measured / measured+uncovered): "
         f"{_pct(float(coverage['mapped_only_function']))}"
-    )
-    print(
-        "  c8 implementation function coverage "
-        "(not authored-function coverage): "
-        f"{_pct(float(coverage['c8_implementation_function']))}"
     )
     print(f"  unexecuted files: {coverage['unexecuted_files']}")
     print(f"  unresolved functions: {coverage['unresolved_functions']}")
@@ -664,11 +711,25 @@ def print_summary(report: Mapping[str, object]) -> None:
                 f"({bucket['branch_hit']} / {bucket['branch_total']}) "
                 f"meets_95={bucket['meets_branch_target']}"
             )
+        if bucket["function_status"] == "unresolved":
+            print(
+                "  function coverage: unresolved "
+                f"(source-mapped c8 {_pct(float(bucket['function_c8']))}; "
+                f"{bucket['function_c8_hit']} / {bucket['function_c8_total']}) "
+                f"meets_95={bucket['meets_function_target']}"
+            )
+        else:
+            print(
+                f"  function coverage: {_pct(float(bucket['function_coverage']))} "
+                f"({bucket['function_c8_hit']} / {bucket['function_c8_total']}) "
+                f"meets_95={bucket['meets_function_target']}"
+            )
         print(
-            "  confirmed function coverage: "
-            f"{_pct(float(bucket['confirmed_function_coverage']))} "
-            f"({bucket['measured_functions']} / {bucket['production_functions']}) "
-            f"meets_95={bucket['meets_function_target']}"
+            "  authored mapping diagnostics: "
+            f"measured={bucket['measured_functions']} "
+            f"uncovered={bucket['uncovered_functions']} "
+            f"anonymous_unresolved={bucket['anonymous_unresolved']} "
+            f"named_unresolved={bucket['named_unresolved']}"
         )
         print(
             "  mapped-only function coverage (diagnostic): "
@@ -756,23 +817,55 @@ def _self_test_function_coverage_definitions() -> None:
         "measured": 847,
         "uncovered": 926,
         "unresolved": 688,
+        "anonymous_unresolved": 618,
+        "named_unresolved": 70,
         "function_coverage_mapped": 1773,
         "above_12": 0,
         "at_11_or_12": 0,
         "high_crap": 0,
     }
-    confirmed = confirmed_function_coverage(measured)
     mapped_only = mapped_only_function_coverage(measured)
-    if abs(confirmed - (847 / 2461)) > 1e-12:
-        raise AssertionError(
-            f"confirmed function coverage must be measured/all, got {confirmed}"
-        )
     if abs(mapped_only - (847 / 1773)) > 1e-12:
         raise AssertionError(
             f"mapped-only diagnostic must ignore unresolved, got {mapped_only}"
         )
-    if confirmed >= mapped_only:
-        raise AssertionError("unresolved functions must keep confirmed below mapped-only")
+    split = function_metrics(
+        [
+            {
+                "coverage_status": "measured",
+                "function": "load",
+                "complexity": 1,
+                "crap": 1.0,
+            },
+            {
+                "coverage_status": "uncovered",
+                "function": "save",
+                "complexity": 1,
+                "crap": 1.0,
+            },
+            {
+                "coverage_status": "unresolved",
+                "function": "anonymous",
+                "anonymous": True,
+                "complexity": 1,
+                "crap": None,
+            },
+            {
+                "coverage_status": "unresolved",
+                "function": "renderPage",
+                "anonymous": False,
+                "complexity": 1,
+                "crap": None,
+            },
+        ]
+    )
+    if split["anonymous_unresolved"] != 1 or split["named_unresolved"] != 1:
+        raise AssertionError(
+            "anonymous and named unresolved mapping counts must stay separate, "
+            f"got {split}"
+        )
+    if split["unresolved"] != 2:
+        raise AssertionError("unresolved total must remain the diagnostic sum")
 
 
 def _self_test_batch_production_coverage() -> None:
@@ -821,12 +914,12 @@ def _self_test_batch_production_coverage() -> None:
     )
     if batch["production_functions"] != 3:
         raise AssertionError("batch function coverage must ignore tests and tools")
-    if abs(batch["confirmed_function_coverage"] - (1 / 3)) > 1e-12:
-        raise AssertionError("batch confirmed coverage must include unresolved")
+    if batch["function_status"] != "unresolved" or batch["function_coverage"] is not None:
+        raise AssertionError("unexecuted batch files keep the exact function gate unresolved")
     if batch["above_12"] != 1:
         raise AssertionError("authored complexity must still count over-12 tools and tests")
     if batch["meets_function_target"] is not False:
-        raise AssertionError("batch must expose whether 95% confirmed functions was met")
+        raise AssertionError("unresolved function status cannot meet the 95% gate")
     if batch["meets_branch_target"] is not False:
         raise AssertionError("unexecuted batch files keep the exact branch gate unresolved")
     if batch["branch_status"] != "unresolved" or batch["branch_coverage"] is not None:
@@ -922,6 +1015,93 @@ def _self_test_branch_gate_stays_unresolved() -> None:
         raise AssertionError("all-executed c8 coverage may satisfy the 95% branch gate")
 
 
+def _self_test_c8_function_gate() -> None:
+    executed = {
+        "s": {"0": 1},
+        "statementMap": {"0": {"start": {"line": 1}}},
+        "b": {"0": [1, 0, 1]},
+        "f": {"0": 1, "1": 1, "2": 0},
+    }
+    missing = coverage_metrics(["app/page.tsx"], {})
+    missing_c8 = c8_implementation_function_coverage(["app/page.tsx"], {})
+    missing_gate = resolve_function_gate(missing, missing_c8)
+    if missing["branch_status"] != "unresolved" or missing["branch_coverage"] is not None:
+        raise AssertionError("one unexecuted production file must keep exact branch unresolved")
+    if missing_gate["function_status"] != "unresolved" or missing_gate["function"] is not None:
+        raise AssertionError("one unexecuted production file must keep exact function unresolved")
+    if missing_gate["meets_function_target"]:
+        raise AssertionError("unresolved function status cannot meet the 95% gate")
+    kept = coverage_metrics(["app/page.tsx"], {"app/page.tsx": executed})
+    kept_c8 = c8_implementation_function_coverage(
+        ["app/page.tsx"], {"app/page.tsx": executed}
+    )
+    kept_gate = resolve_function_gate(kept, kept_c8)
+    if kept["branch_status"] != "exact" or kept["branch_total"] != 3 or kept["branch_hit"] != 2:
+        raise AssertionError("all-executed files must report exact c8 branch totals")
+    if kept_gate["function_status"] != "exact" or kept_gate["function"] is None:
+        raise AssertionError("all-executed files must report exact c8 function totals")
+    if kept_c8["hit"] != 2 or kept_c8["total"] != 3:
+        raise AssertionError(
+            f"c8 function totals drifted, got hit={kept_c8['hit']} total={kept_c8['total']}"
+        )
+    renamed = {
+        "s": {"0": 1},
+        "statementMap": {"0": {"start": {"line": 1}}},
+        "b": {"0": [1]},
+        "f": {"0": 1, "1": 0},
+    }
+    files = ["app/page.tsx"]
+    records = {"app/page.tsx": renamed}
+    file_coverage = coverage_metrics(files, records)
+    anonymous_rows = [
+        {
+            "file": "frontend/app/page.tsx",
+            "function": "anonymous",
+            "anonymous": True,
+            "coverage_status": "unresolved",
+            "complexity": 1,
+            "crap": None,
+            "batch": "7",
+        }
+    ]
+    named_rows = [
+        {
+            "file": "frontend/app/page.tsx",
+            "function": "handleClick",
+            "anonymous": False,
+            "coverage_status": "measured",
+            "complexity": 1,
+            "crap": 1.0,
+            "batch": "7",
+        }
+    ]
+    anonymous_batch = batch_coverage_report(
+        production_rows=anonymous_rows,
+        authored_rows=anonymous_rows,
+        file_coverage=file_coverage,
+        records=records,
+        production_files=files,
+    )
+    named_batch = batch_coverage_report(
+        production_rows=named_rows,
+        authored_rows=named_rows,
+        file_coverage=file_coverage,
+        records=records,
+        production_files=files,
+    )
+    if anonymous_batch["function_c8"] != named_batch["function_c8"]:
+        raise AssertionError(
+            "renaming an anonymous authored callback must not change c8 function coverage"
+        )
+    if anonymous_batch["measured_functions"] == named_batch["measured_functions"]:
+        raise AssertionError(
+            "authored mapping diagnostics may change when a callback is named; "
+            "the c8 aggregate must stay independent of that rename"
+        )
+    if abs(float(anonymous_batch["function_c8"]) - 0.5) > 1e-12:
+        raise AssertionError("c8 function ratio must follow the f map, not authored names")
+
+
 def _self_test_untracked_production_growth() -> None:
     scope = load_scope()
     added = count_untracked_production_lines(
@@ -985,6 +1165,7 @@ def self_test() -> None:
     _self_test_batch_production_coverage()
     _self_test_unexecuted_branches_use_decisions()
     _self_test_branch_gate_stays_unresolved()
+    _self_test_c8_function_gate()
     _self_test_untracked_production_growth()
     _self_test_fixed_point()
     _self_test_discovery()

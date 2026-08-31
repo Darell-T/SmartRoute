@@ -9,10 +9,11 @@ The worker implements. A separate reviewer follows
 
 ## Trusted starting point
 
-Commit `427fbc8` remains the historical reset point. The current accepted
-integration checkpoint is `9b4327d`, which contains Batches 2 through 6E and
-the committed F0 frontend quality contract. The discarded whole-backend
-rewrite is not part of this history.
+Commit `427fbc8` remains the historical reset point. Checkpoint `16390f3`
+contains Batches 2 through 6F and the committed F0 frontend quality contract.
+Batch F1 is Codex-approved on the tree from that checkpoint. Start Batch 7
+only from the accepted F1 commit. The discarded whole-backend rewrite is not
+part of this history.
 
 The repository audit recorded on 2026-08-30 found a bounded backend closure,
 a frontend measurement correction, and proven dead frontend code. It did not
@@ -808,6 +809,8 @@ above complexity 12. F0 must not refactor those production functions.
 
 ## Batch F1: frontend measurement correction and subtraction
 
+F1 is Codex-approved on the tree from `16390f3`. Batch 7 was not started.
+
 F1 makes the denominator truthful before any worker writes coverage tests or
 refactors a high-complexity frontend function. Start from the accepted Batch
 6F commit. Record the actual fixed point. The worker must not change
@@ -880,6 +883,20 @@ theme. Run typecheck, script typecheck, unit, coverage, release CI, both
 linters, transit artifact verification, the corrected reporter self-tests,
 and full quality against the fixed point. Generated GeoJSON and manifest
 hashes must not change. Leave the tree uncommitted for Codex review.
+
+### F1 reviewer result
+
+Codex repeated the dead-code searches, removed two stale comment banners that
+still described the deleted top bar and Near You row, and verified desktop and
+mobile theme switching against the running application. The final production
+diff is +5 / -1222 lines, net -1217, with no new production file or dependency.
+The reviewer removed exactly the two proven-stale TypeScript entries from
+`quality/baseline.json`, reducing it from 113 to 111 without changing another
+entry. Full quality against `16390f3` exits 0 with `approval_eligible: true`:
+551 frontend tests and 1,915 backend tests passed, with 21 backend skips and
+446 subtests. New, worsened, stale, cognitive-delta, Ruff C901, and Ruff
+structural counts are all 0. Batch 7 must use the accepted F1 commit as its
+immutable quality reference.
 
 ## Batch 7: application and library boundaries
 

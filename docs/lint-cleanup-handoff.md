@@ -11,9 +11,10 @@ application behavior. Regenerate the reports below before editing a batch.
 
 ## Current result
 
-The accepted pre-6F checkpoint is `ac96d12`. It contains Batches 2 through 6E,
-F0, and the backend test-assurance work. Batch 6F is Codex-approved on the tree
-based on that checkpoint. Workers must not shrink stale baseline entries.
+The accepted 6F checkpoint is `16390f3`. It contains Batches 2 through 6F, F0,
+and the backend test-assurance work. Batch F1 is Codex-approved on the tree
+from that checkpoint. Batch 7 was not started. Workers must not shrink stale
+baseline entries.
 
 | Tool | Findings | Files | Notes |
 |---|---:|---:|---|
@@ -24,8 +25,8 @@ based on that checkpoint. Workers must not shrink stale baseline entries.
 | Backend combined complexity | 91 | | Radon or cognitive 11 through 12, none above 12 |
 | Backend combined coverage | 89.34% | | Full `backend/app` statement and branch denominator |
 | Backend CRAP above 30 | 0 | 0 | Public behavior tests closed the prior evidence gap |
-| Oxlint complexity above 12 | 126 | | Batch 7: 10, Batch 8: 46, Batch 9: 70 |
-| Quality baseline | 113 | | After the accepted F0 reviewer shrink |
+| Oxlint complexity above 12 | 123 | | Batch 7: 10, Batch 8: 44, Batch 9: 69 |
+| Quality baseline | 111 | | F1 reviewer removed exactly 2 proven-stale TypeScript IDs |
 
 `TRY003` is ignored. It encouraged exception boilerplate without improving
 passenger behavior or debuggability.
@@ -58,6 +59,8 @@ Quality certification from fresh runs with no `--skip-tests`:
 | F0 reviewer final 2026-08-30 | 0 | 0 | 0 | 0 | 113 | 1,899 passed, 21 skipped, 444 subtests | 557 |
 | Backend test assurance 2026-08-31 | 0 | 0 | 0 | 0 | 113 | 1,917 passed, 21 skipped, 446 subtests | 557 |
 | Batch 6F reviewer final 2026-08-31 | 0 | 0 | 0 | 0 | 113 | 1,915 passed, 21 skipped, 446 subtests | 557 |
+| F1 worker 2026-08-31 | 1 | 0 | 0 | 2 | 111 | 1,915 passed, 21 skipped, 446 subtests | 551 |
+| F1 reviewer final 2026-08-31 | 0 | 0 | 0 | 0 | 111 | 1,915 passed, 21 skipped, 446 subtests | 551 |
 
 Cognitive delta against `427fbc8`: 0 new or worsened. CRAP has no absolute
 ceiling. Baseline entries may not worsen.
@@ -72,8 +75,9 @@ review is complete on the tree based on `c8a0381`. Batch 6D is committed at
 `2298e32`. Batch 6E is Codex-approved on the tree based on that checkpoint.
 Batch 6E is committed at `ae27211`. F0 is committed at `9b4327d`. The backend
 test-assurance checkpoint is `ac96d12`. Batch 6F is Codex-approved on the tree
-based on that checkpoint. Batch 7 was not started. The next order is F1, 7, 8,
-and 9.
+based on that checkpoint. Batch 6F is committed at `16390f3`. F1 is
+Codex-approved on the tree from that checkpoint. Batch 7 was not started. The
+next order is 7, 8, and 9.
 
 ## Structural policy
 
@@ -90,9 +94,8 @@ and 9.
 
 ## Remaining batches
 
-The old 20-batch plan is retired. Batches 2 through 6F and F0 are complete.
-The audit added one bounded backend closure and one frontend measurement and
-subtraction closure. Do not start Batch 7 until F1 is reviewed and committed.
+The old 20-batch plan is retired. Batches 2 through 6F, F0, and F1 are
+complete. Start Batch 7 only from the accepted F1 commit.
 
 | Batch | Subsystem |
 |---:|---|
@@ -108,7 +111,7 @@ subtraction closure. Do not start Batch 7 until F1 is reviewed and committed.
 | 6E | Agent model, session, and turn |
 | 6F | Proven backend dead-code deletion, Codex-approved from `ac96d12` |
 | F0 | Frontend quality foundation, committed at `9b4327d` |
-| F1 | Correct aggregate coverage semantics and delete proven dead frontend code |
+| F1 | Correct aggregate coverage semantics and delete proven dead frontend code. Codex-approved from `16390f3` |
 | 7 | `frontend/app/**` and `frontend/lib/**` |
 | 8 | `frontend/components/**` and `frontend/tests/release/**` |
 | 9 | `frontend/scripts/**` |
@@ -245,6 +248,75 @@ none above 12, and none with CRAP above 30. Full quality against `ac96d12` exits
 0 with `approval_eligible: true`. The only raw backend Ruff finding is the
 fixed-point import-order issue in `backend/scripts/phase2_quality_report.py`;
 Batch 6F did not edit that out-of-scope script.
+
+## F1 worker result (2026-08-31)
+
+Fixed point `16390f3`. F1 is uncommitted. Batch 7 was not started. The worker
+did not update `quality/baseline.json`.
+
+F1A reports source-mapped c8 branch and function totals as the aggregate
+metrics. Exact branch and function status stays `unresolved` while any owned
+production file is unexecuted. Authored measured, uncovered, anonymous
+unresolved, and named unresolved counts remain diagnostic. Line coverage still
+counts an included but unexecuted production file as zero. Reports no longer
+use `confirmed_function` approval language.
+
+F1B deleted the six proven-dead production files, the abandoned geometry helper
+test, three test-only Near You exports, and CSS owned by the deleted chat top
+bar, Near You row, and floating tab toggle. `buildHomeNearbyModel` remains.
+`near-you.test.ts` uses one small local `LeftRailLiveData` fixture.
+
+Current frontend measurement from
+`py scripts/report_frontend_debt.py --quality-ref 16390f3ccaca108d3acbe9eac6cb35d4950d2f65`:
+
+- production files 220
+- line coverage 51.86% (22746 / 43860)
+- exact branch coverage unresolved while 110 production files are unexecuted
+- branch proxy upper bound 55.76% (4649 / 8337)
+- source-mapped c8 function coverage 83.03% (1580 / 1903), unresolved while
+  production files remain unexecuted
+- unexecuted files 110
+- measured functions 839
+- uncovered functions 914
+- anonymous unresolved 602
+- named unresolved 69
+- authored functions above 12: 123 (Batch 7: 10, Batch 8: 44, Batch 9: 69)
+- production functions 2424
+- production line growth +5 / -1201, net -1196
+
+Unit tests: 551 passed. Release CI: 14 passed, 4 skipped. Transit artifacts
+unchanged. Quality against `16390f3` exits 1 with `approval_eligible: false`
+because two baseline entries are now stale. New 0. Worsened 0. Cognitive new
+or worsened 0. The worker did not run `--update-baseline`.
+
+## F1 reviewer result (2026-08-31)
+
+Codex repeated the import, symbol, and stale-comment searches. The worker's
+deletions are valid. The only missed cleanup was two comment banners in
+`chat-panel.tsx` and `line-badge.tsx` that still described the deleted top bar
+and Near You row. Codex removed those banners instead of adding replacement
+documentation. The final production diff is +5 / -1222 lines, net -1217.
+
+Desktop and mobile theme controls were exercised against the running Next.js
+application. Both changed the shell theme and their accessible action labels.
+Unit tests passed 551. The release suite passed 14 with 4 skipped. Typecheck,
+script typecheck, transit artifact verification, reporter self-tests, and the
+quality-runner self-test passed. Raw ESLint has 53 inherited complexity
+findings plus 8 inherited max-depth findings. Oxlint has 123 inherited
+complexity findings. F1 added none.
+
+Full quality against `16390f3` passed 1,915 backend tests, with 21 skipped and
+446 subtests, and 551 frontend tests. It exits 0 with
+`approval_eligible: true`. New, worsened, stale, cognitive-delta, Ruff C901,
+and Ruff structural counts are all 0. Codex removed exactly these two
+proven-stale baseline entries and changed no surviving entry:
+
+- `typescript:frontend/components/smart-route/chat/near-you.ts:buildArrivalsPayloadForRoute#0`
+- `typescript:frontend/components/smart-route/left-rail/demo-data.ts:demoArrival#0`
+
+`quality/baseline.json` decreased from 113 to 111 entries. Batch 7 was not
+started. Its worker must use the accepted F1 commit as the immutable fixed
+point.
 
 ## Whole-repository audit and revised next work (2026-08-30)
 
