@@ -89,6 +89,8 @@ function. The checked-in policy is:
 - complexipy cognitive maximum 10
 - Ruff PLR0912 maximum 12 branches
 - Ruff PLR0915 maximum 50 statements
+- Oxlint maximum 12 for every authored frontend JavaScript and TypeScript
+  function. ESLint applies the same maximum to application paths.
 - CRAP has no absolute ceiling and may not worsen for a baseline entry
 - function length above 100 lines is a review signal
 - file length above 500 lines is a review signal, not a split requirement
@@ -254,6 +256,8 @@ Reject:
 - `pytest.raises` around code that was not intended to fail
 - a mock that no longer verifies call arguments or call count
 - a test that only mirrors implementation details
+- a source-text or CSS-text assertion used as a substitute for rendered,
+  browser, adapter, or generated-output behavior
 - coverage created by an unrelated focused run and reused as final evidence
 - a deterministic test replaced by a live call
 
@@ -339,8 +343,22 @@ npm run lint:oxlint
 npm run typecheck
 npm run typecheck:scripts
 npm run test:unit
+npm run test:coverage
+npm run test:release:ci
 npm run verify:transit-artifacts
+Set-Location ..
+py scripts/report_frontend_debt.py --quality-ref <fixed-point> --output .audit/frontend-debt.json
+py scripts/check_quality.py --quality-ref <fixed-point>
 ```
+
+After F1, reject an aggregate authored-mapper ratio as the function gate. The
+authored measured, uncovered, and unresolved counts remain diagnostic. Exact
+c8 branch and function coverage become eligible only when the completed owned
+scope has zero unexecuted production files. Require the 95 percent target or
+an explicit reviewer exception that names the remaining non-behavioral branch
+and explains why testing it would add implementation coupling, exercise an
+impossible validated state, or test framework internals. The worker cannot
+grant that exception.
 
 Do not accept a worker's claim that a command passed when the reviewer cannot
 reproduce it. Report invocation or environment failures separately from code
@@ -370,7 +388,11 @@ Regenerate Ruff, Oxlint, and ESLint inventories. Confirm:
 ### Canonical routes
 
 - One backend-owned canonical itinerary feeds chat, cards, route steps, and map.
+- REST and SSE validate the shared canonical contract at their input boundary.
+- Downstream frontend code consumes a narrowed post-validation candidate type.
 - Frontend code renders facts and does not recalculate them.
+- Missing timing, duration, transfer, ranking, or recommendation facts remain
+  unavailable. The frontend does not recover them from steps or prose.
 - Candidate identity and selected-route identity remain stable.
 - Walking, transfers, waypoints, dwell, and timing provenance remain intact.
 

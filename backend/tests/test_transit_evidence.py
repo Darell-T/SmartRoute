@@ -35,6 +35,64 @@ class TransitEvidenceTests(unittest.TestCase):
         assert "unavailable for MSG" in render("venue_crowd_window", {"venue": "MSG"})
         assert "unavailable" in render("unknown", {})
 
+    def test_area_condition_projection_keeps_only_passenger_safe_facts(self) -> None:
+        facts = transit_evidence_projection.operation_facts(
+            "area_conditions",
+            {
+                "resolved_area": "  Union   Square  ",
+                "incidents": [
+                    {
+                        "title": "Signal problem",
+                        "severity": "major",
+                        "provider_payload": {"private": True},
+                    },
+                    "untrusted",
+                ],
+                "events": [
+                    {
+                        "name": "Street fair",
+                        "venue_name": "Broadway",
+                        "estimated_end_iso": "2026-08-31T19:00:00-04:00",
+                        "provider_id": "internal-event-id",
+                    }
+                ],
+                "incident_evidence": {"status": "partial"},
+                "event_evidence": {"status": "current"},
+            },
+        )
+
+        assert facts == {
+            "area": "Union Square",
+            "incidents": [{"name": "Signal problem", "severity": "major"}],
+            "events": [
+                {
+                    "name": "Street fair",
+                    "venue_name": "Broadway",
+                    "estimated_end_iso": "2026-08-31T19:00:00-04:00",
+                }
+            ],
+            "incident_status": "partial",
+            "event_status": "current",
+        }
+
+    def test_area_condition_projection_bounds_each_result_collection(self) -> None:
+        facts = transit_evidence_projection.operation_facts(
+            "area_conditions",
+            {
+                "incidents": [
+                    {"title": f"Incident {index}"} for index in range(10)
+                ],
+                "events": [{"name": f"Event {index}"} for index in range(10)],
+            },
+        )
+
+        assert [item["name"] for item in facts["incidents"]] == [
+            f"Incident {index}" for index in range(8)
+        ]
+        assert [item["name"] for item in facts["events"]] == [
+            f"Event {index}" for index in range(8)
+        ]
+
     def test_route_alert_does_not_gain_requested_downtown_scope(self) -> None:
         set_id, payload = transit_evidence.build_evidence_set(
             session_id="s1",
@@ -64,6 +122,33 @@ class TransitEvidenceTests(unittest.TestCase):
         assert payload["confirmed_matching_alerts"][0]["route_ids"] == ["Q"]
         assert payload["unconfirmed_signals"] == []
         assert "downtown direction was not resolved" in " ".join(payload["unknowns"])
+
+    def test_unconfirmed_provider_alert_stays_explicitly_unconfirmed(self) -> None:
+        _set_id, payload = transit_evidence.build_evidence_set(
+            session_id="unconfirmed-alert",
+            operation="service_status",
+            route_ids=["Q"],
+            concerns=["delay"],
+            result={
+                "source": "third_party_signal",
+                "freshness": "live",
+                "status": "active_alerts",
+                "alerts": [
+                    {
+                        "alert_id": "possible-delay",
+                        "header": "Possible Q delay",
+                        "kind": "service_delay",
+                        "route_ids": ["Q"],
+                        "state": "possible",
+                    }
+                ],
+            },
+        )
+
+        signal = payload["unconfirmed_signals"][0]
+        assert signal["alert_id"] == "possible-delay"
+        assert signal["kind"] == "unconfirmed_alert"
+        assert signal["confirmed"] is False
 
     def test_planned_q_alert_survives_snapshot_and_applies_to_both_directions(self) -> None:
         raw_alert = {

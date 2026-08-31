@@ -4,6 +4,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 os.environ.setdefault("APP_KEY", "test-app-key")
 os.environ.setdefault("ANTHROPIC_API_KEY", "test-anthropic-key")
 from app import main
@@ -24,6 +26,15 @@ class ReadinessTests(unittest.IsolatedAsyncioTestCase):
         )
         self.routes_config.start()
         self.addCleanup(self.routes_config.stop)
+
+    async def test_protected_api_dependency_rejects_the_wrong_app_key(self):
+        with patch.dict(os.environ, {"APP_KEY": "expected-key"}, clear=False):
+            with pytest.raises(main.HTTPException) as raised:
+                await main._verify_api_key("wrong-key")
+            await main._verify_api_key("expected-key")
+
+        assert raised.value.status_code == 403
+        assert raised.value.detail == "Forbidden"
 
     async def test_session_store_probe_calls_successful_ping_off_event_loop(self):
         eval_calls = []

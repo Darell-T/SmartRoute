@@ -273,7 +273,8 @@ class CrowdSearchProviderTests(unittest.IsolatedAsyncioTestCase):
         )
         response = SimpleNamespace(
             content='{"events":[]}',
-            tool_calls=["web_search", "x_search"],
+            tool_calls=["web_search"],
+            server_side_tool_usage={"x_search": 1},
             citations=[],
         )
         chat = SimpleNamespace(append=Mock(), sample=AsyncMock(return_value=response))

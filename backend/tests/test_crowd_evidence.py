@@ -102,6 +102,54 @@ class CrowdEvidenceTests(unittest.IsolatedAsyncioTestCase):
         assert "grok_partial" in failures
         assert metadata["completed_sources"] == ["web_search"]
 
+    async def test_explicit_request_uses_route_hubs_when_no_hotspots_were_preselected(self):
+        route_point = crowd_evidence.event_crowd.RoutePoint(
+            route_index=0,
+            name="57 St-7 Av",
+            latitude=40.765,
+            longitude=-73.98,
+            expected_at=datetime.fromisoformat("2026-07-25T20:40:00-04:00"),
+            route_id="Q",
+        )
+        search = AsyncMock(
+            return_value={
+                "status": "complete",
+                "events": [],
+                "completed_sources": ["web_search", "x_search"],
+            }
+        )
+        with (
+            patch.object(
+                crowd_evidence.event_crowd,
+                "search_hubs",
+                return_value=[route_point],
+            ),
+            patch.object(
+                crowd_evidence.event_crowd,
+                "collect_route_event_evidence",
+                new=AsyncMock(return_value=("no_relevant_events", [], [])),
+            ),
+            patch.object(
+                crowd_evidence.crowd_search,
+                "search_hotspots",
+                new=search,
+            ),
+        ):
+            status, impacts, failures, _metadata = await crowd_evidence.collect(
+                [_route()],
+                _Ctx(),
+                hotspot_hits=[],
+                explicit_crowd_request=True,
+                allow_live_search=True,
+            )
+
+        assert status == "no_relevant_events"
+        assert impacts == []
+        assert failures == []
+        generated_hits = search.await_args.args[0]
+        assert generated_hits[0].hotspot_key == "route-0-57-st-7-av"
+        assert generated_hits[0].route_id == "Q"
+
     async def test_grok_timeout_keeps_ticketmaster_result_and_marks_partial(self):
         async def slow_search(*_args, **_kwargs):
             await asyncio.sleep(0.1)

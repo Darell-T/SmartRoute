@@ -11,10 +11,9 @@ application behavior. Regenerate the reports below before editing a batch.
 
 ## Current result
 
-Ruff rows were regenerated on 2026-08-29 after Batch 6C from
-`py -m ruff check --config pyproject.toml backend` (exit 0, 0 findings).
-Oxlint, ESLint, and complexipy rows remain the 2026-08-27 policy measurement.
-Workers must not shrink stale baseline entries.
+The accepted integration checkpoint is `9b4327d`. It contains Batches 2
+through 6E and F0. The whole-repository audit on 2026-08-30 used an isolated
+checkout of that commit. Workers must not shrink stale baseline entries.
 
 | Tool | Findings | Files | Notes |
 |---|---:|---:|---|
@@ -22,10 +21,11 @@ Workers must not shrink stale baseline entries.
 | Ruff C901 | 0 | 0 | McCabe ceiling 10 |
 | Ruff PLR0912 | 0 | 0 | Branch ceiling 12 |
 | Ruff PLR0915 | 0 | 0 | Statement ceiling 50 |
-| complexipy | 276 | 106 | Legacy functions above cognitive 10 |
-| Oxlint | 1,162 | 192 | 719 in generator scripts |
-| ESLint | 193 | 76 | 185 complexity, 8 max-depth |
-| Quality baseline | 198 | | Combined Python and TypeScript CC debt after the Batch 6C reviewer shrink |
+| Backend combined complexity | 91 | | Radon or cognitive 11 through 12, none above 12 |
+| Backend branch coverage | 89.14% | | Full `backend/app` statement and branch denominator |
+| Backend CRAP above 30 | 0 | 0 | Public behavior tests closed the prior evidence gap |
+| Oxlint complexity above 12 | 126 | | Batch 7: 10, Batch 8: 46, Batch 9: 70 |
+| Quality baseline | 113 | | After the accepted F0 reviewer shrink |
 
 `TRY003` is ignored. It encouraged exception boilerplate without improving
 passenger behavior or debuggability.
@@ -55,6 +55,8 @@ Quality certification from fresh runs with no `--skip-tests`:
 | Batch 6E reviewer final 2026-08-30 | 0 | 0 | 0 | 0 | 125 | 1,899 passed, 21 skipped, 444 subtests | 314 |
 | F0 worker 2026-08-30 | 1 | 68 | 0 | 12 | 125 | 1,899 passed, 21 skipped, 444 subtests | 557 |
 | F0 Codex repair 2026-08-30 | 1 | 0 | 0 | 12 | 125 | 1,899 passed, 21 skipped, 444 subtests | 557 |
+| F0 reviewer final 2026-08-30 | 0 | 0 | 0 | 0 | 113 | 1,899 passed, 21 skipped, 444 subtests | 557 |
+| Backend test assurance 2026-08-31 | 0 | 0 | 0 | 0 | 113 | 1,917 passed, 21 skipped, 446 subtests | 557 |
 
 Cognitive delta against `427fbc8`: 0 new or worsened. CRAP has no absolute
 ceiling. Baseline entries may not worsen.
@@ -67,7 +69,8 @@ at `c058199`. That commit is the fixed point for Batches 6A through 6E. Batch
 6A is committed at `140495a`. Batch 6B is committed at `c8a0381`. Batch 6C
 review is complete on the tree based on `c8a0381`. Batch 6D is committed at
 `2298e32`. Batch 6E is Codex-approved on the tree based on that checkpoint.
-F0 is uncommitted against `ae27211fa9ba`. Batch 7 was not started.
+Batch 6E is committed at `ae27211`. F0 is committed at `9b4327d`. Batch 7
+was not started. The next order is Batch 6F, F1, 7, 8, and 9.
 
 ## Structural policy
 
@@ -84,9 +87,10 @@ F0 is uncommitted against `ae27211fa9ba`. Batch 7 was not started.
 
 ## Remaining batches
 
-The old 20-batch plan is retired. Batches 2 through 6E are complete. F0 is
-the frontend measurement contract. Remaining work is Batches 7 through 9.
-Do not start Batch 7 until F0 is accepted.
+The old 20-batch plan is retired. Batches 2 through 6E and F0 are complete.
+The audit added one bounded backend closure and one frontend measurement and
+subtraction closure. Do not start Batch 7 until Batch 6F and F1 are reviewed
+and committed.
 
 | Batch | Subsystem |
 |---:|---|
@@ -100,17 +104,19 @@ Do not start Batch 7 until F0 is accepted.
 | 6C | Agent place, route, and shared tools |
 | 6D | Agent transit tools |
 | 6E | Agent model, session, and turn |
-| F0 | Frontend quality foundation |
+| 6F | Delete only backend symbols whose production call-site search stays empty |
+| F0 | Frontend quality foundation, committed at `9b4327d` |
+| F1 | Correct aggregate coverage semantics and delete proven dead frontend code |
 | 7 | `frontend/app/**` and `frontend/lib/**` |
 | 8 | `frontend/components/**` and `frontend/tests/release/**` |
 | 9 | `frontend/scripts/**` |
 
 ## F0 worker result
 
-Fixed point `ae27211fa9ba`. Tree left uncommitted. `quality/baseline.json`
-unchanged. Batch 7 production files unchanged except the artifact-manifest
-generator now hashes LF-normalized GeoJSON bytes so Windows CRLF checkouts
-do not rewrite hashes.
+Fixed point `ae27211fa9ba`. F0 was reviewed and committed at `9b4327d`.
+Batch 7 production files stayed unchanged. The artifact-manifest generator
+now hashes LF-normalized GeoJSON bytes so Windows CRLF checkouts do not
+rewrite hashes.
 
 F0 sets the frontend measurement contract used by Batches 7 through 9.
 
@@ -141,9 +147,11 @@ Honest production baseline from
 - line coverage 52.27% (23449 / 44859)
 - exact branch coverage unresolved while 114 production files are unexecuted
 - branch proxy upper bound 56.06% (4742 / 8459), mixed c8 and McCabe units
-- confirmed authored production function coverage 34.40% (847 / 2462)
-- mapped-only function coverage 47.75% (diagnostic only)
-- c8 implementation function coverage 82.27% (1601 / 1946), not authored
+- historical authored-mapper ratio 34.40% (847 / 2462), superseded as an
+  aggregate gate by the audit below
+- mapped-only authored ratio 47.75% (diagnostic only)
+- c8 source-mapped function coverage 82.27% (1601 / 1946), not yet
+  gate-eligible while production files remain unexecuted
 - unexecuted files 114
 - measured functions 847
 - uncovered functions 927
@@ -168,9 +176,12 @@ and passes. GeoJSON was not hand-edited. The generator hashes LF-normalized
 bytes so the committed manifest hashes stay `ea2e0dc306ac`, `7dcef6a621f9`,
 and `0775d322d828`.
 
-Frontend target after Batch 9 is at least 95% line, branch, and confirmed
-function coverage. Mapped-only coverage is diagnostic. Codex alone may
-shrink `quality/baseline.json`.
+The 2026-08-30 audit supersedes F0's aggregate `confirmed function` gate.
+Standard source-mapped c8 function coverage becomes exact only after all
+owned production files execute. The authored mapping remains diagnostic.
+Frontend target after Batch 9 is at least 95% line, exact c8 branch, and exact
+c8 function coverage, subject only to a reviewer-recorded non-behavioral
+exception. Codex alone may shrink `quality/baseline.json`.
 
 The worker quality run against `ae27211fa9ba` exited 1 with
 `approval_eligible: false`.
@@ -194,6 +205,155 @@ backend subtests. New, worsened, cognitive, Ruff C901, Ruff structural, and
 stale violations are all 0. The 72 TypeScript functions already above 12 at
 the fixed point remain explicit scope debt and were not added to the baseline.
 
+## Backend test assurance (2026-08-31)
+
+The test-assurance checkpoint supersedes the backend coverage and CRAP counts
+from the earlier audit below. The full branch-coverage run passed with 1,917
+tests, 21 skips, and 446 subtests. Combined statement and branch coverage is
+89.14%. Statement coverage is 91.77% (20,419 / 22,251). Branch coverage is
+81.64% (6,360 / 7,790). The debt report has 2,437 authored functions, 50 with
+zero coverage, and none with CRAP above 30.
+
+The public area-condition projection tests now protect passenger-safe fields,
+malformed-row filtering, both eight-item collection bounds, resolved-area
+fallback, and evidence statuses. Batch 6F must not duplicate them. The audit
+also found and fixed a dropped route id in the explicit crowd-request fallback.
+See `docs/backend-test-quality.md` for the coverage report, the risk buckets,
+the Cosmic Ray canary, and the 85% CI floor.
+
+## Whole-repository audit and revised next work (2026-08-30)
+
+This section records the evidence available before the backend test-assurance
+checkpoint. Use the current result and test-assurance section above for active
+counts and next steps.
+
+Codex audited an isolated checkout of `9b4327d`. No subagent or worker changed
+the result. The audit inspected completed backend diffs, current production
+and tests, frontend F0 measurement, and the future Batch 7 through 9 scopes.
+It changed only this plan and handoff.
+
+### Backend evidence
+
+The fresh branch-coverage suite passed with 1,899 tests, 21 skips, and 444
+subtests. Backend coverage is 88.8%. The debt report contains 2,437 production
+functions, 91 with a Radon or cognitive score of 11 or 12, none above 12, and
+one CRAP value above 30. Ruff remains clean at its McCabe maximum of 10.
+
+The one high CRAP signal is
+`agent/tools/transit/evidence_projection.py:_area_condition_fields`: Radon 8,
+cognitive 5, zero direct coverage, and CRAP 72. It is real rider-facing
+behavior reached by `operation_facts` and transit evidence construction. A
+single public dispatch test is justified. A helper-level coverage campaign is
+not.
+
+Batches 6A through 6E added 3,893 net backend production lines and no
+production files. Static call counting found many one-call helpers, but manual
+inspection of the largest clusters found named predicates, lifecycle stages,
+and policy transforms. Do not launch a broad helper-inline pass. Future work
+must be deletion first and neutral or negative growth unless new behavior
+earns the addition.
+
+Repository-wide reference searches found this bounded dead code:
+
+- the 175-line `reconcile_first_boarding_timing` subtree in
+  `agent/tools/route/route_projection.py`, reached only by its two tests
+- `_expand_abbreviations` and `_TTS_ABBREVIATIONS` in `trips/text.py`
+- `is_nyc_locality` in `tools/places/geography.py`
+- `GTFSStaticData.get_stop_names`
+- a stale `Later wiring` paragraph in the already-wired chained-itinerary
+  implementation
+
+Vulture at 80 percent confidence found no additional production result. The
+audit did not find a high-confidence unused backend file. Test-only public
+helpers in cache, incident batches, trip state, and turn contracts were not
+added to the deletion list because their small size did not justify guessing
+about intended interfaces.
+
+Large backend files remain review signals. `turn/stream.py` and the largest
+trip and tool modules are cohesive around one lifecycle or policy. The audit
+found no independent boundary that justified a file-count refactor. Do not
+split them by line count.
+
+### Frontend measurement evidence
+
+F0 measured 226 production files, 52.27 percent line coverage, 114 unexecuted
+files, and 82.27 percent source-mapped c8 function coverage over the functions
+c8 could discover. Exact branch coverage is unresolved while files remain
+unexecuted.
+
+The raw authored mapper reports 847 measured, 927 uncovered, and 688
+unresolved functions. Of the unresolved records, 618 are anonymous callbacks
+and 70 are named functions not present in raw V8 output. The mapper primarily
+joins by file and function name. Treating all unresolved records as uncovered
+would reward renaming callbacks or reshaping production code for the tool.
+F1 keeps those records diagnostic and uses standard source-mapped c8 function
+coverage as the exact aggregate metric only after every owned file executes.
+
+### Proven dead frontend code
+
+A conservative TypeScript import graph produced 13 root candidates. Manual
+review retained Next's `app/manifest.ts`, transit `*.check.mjs` entry points,
+`scripts/release/build-browser-evidence.ts`, and
+`scripts/build/artifact-fingerprint.ts`. Framework, package, release, README,
+or standalone CLI procedures identify those files as roots even when another
+TypeScript module does not import them.
+
+The remaining exact fixed-point references prove these production files dead:
+
+- `chat-top-bar.tsx`, `tab-toggle.tsx`, and `near-you-row.tsx`
+- `left-rail/demo-data.ts`, a 538-line production fixture imported only by
+  `near-you.test.ts`
+- `left-rail/incident-format.ts`
+- `scripts/build/line-geometry-cleanup.ts`, imported only by its own test and
+  never by the generator
+
+Those complete files total 892 production lines. Dead selectors and three
+test-only Near You exports add further removable production code. F1 must
+replace the demo dependency with a small local typed test fixture. It must not
+create another production fixture module.
+
+### Frontend architecture evidence
+
+Batch 7 must establish the canonical route boundary before Batch 8. The REST
+client currently types `res.json()` as `TripResponse` without runtime
+validation. The SSE path has a canonical itinerary Zod schema, but the REST
+types leave required candidate facts optional. One shared schema and one
+narrowed post-validation type prevent every component from repeating optional
+checks.
+
+Batch 8 has a real domain violation, not a style complaint.
+`left-rail/live-data/route-plan.ts` invents arrival clocks, recounts transfers,
+and derives leave-by time. `route-candidates.ts` falls back to step timing,
+creates clocks from `Date.now()`, and parses passenger prose for minutes and
+transfer counts. These calculations must be deleted after Batch 7 makes the
+canonical type available. Missing backend facts remain unavailable.
+
+Nine component test files rely substantially on source or CSS text. They do
+not execute the interaction they claim to protect. Batch 8 must first prove
+that existing Playwright execution can map to original TypeScript and TSX.
+When a touched behavior has only a source assertion, replace it with rendered
+or browser behavior. Keep true generated-output and rendered-markup contracts.
+
+Batch 9's largest function mixes six real generator stages. Splitting those
+stages is justified, but dozens of branch peelers are not. The fixed-point
+pipeline also carries an `unbundledFeatures` array that is always empty. Remove
+that state first. Type only touched stage boundaries with narrow property
+interfaces. Do not replace more than 100 `any` uses with one giant optional
+schema or unsafe casts.
+
+### Work explicitly rejected
+
+- Do not force all 91 accepted backend survivors from 11 or 12 down to 10.
+- Do not split files or merge domains to improve a file count.
+- Do not add a React test framework beside Playwright and the current unit
+  runner.
+- Do not write source-text tests to reach coverage.
+- Do not rename production callbacks to satisfy the raw V8 mapper.
+- Do not reopen completed backend architecture without a behavior or ownership
+  defect.
+- Do not pursue 100 percent by testing impossible typed states, framework
+  internals, or decorative branches.
+
 ## Reproduce the inventories
 
 Run Ruff from the repository root:
@@ -206,9 +366,13 @@ py -m ruff check --config pyproject.toml --output-format json backend
 Run quality and cognitive delta from the repository root:
 
 ```powershell
-py scripts/check_quality.py --cognitive-only --quality-ref 427fbc8
-py scripts/check_quality.py --quality-ref 427fbc8
+$fixedPoint = git rev-parse HEAD
+py scripts/check_quality.py --cognitive-only --quality-ref $fixedPoint
+py scripts/check_quality.py --quality-ref $fixedPoint
 ```
+
+Record `$fixedPoint` before editing. Do not recompute it after the worker
+changes the tree.
 
 Run the backend debt inventory from the repository root. Reuse
 `backend/.coverage` from a branch-coverage pytest run.
