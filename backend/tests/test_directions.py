@@ -275,7 +275,10 @@ class ParseLegStepsTests(unittest.TestCase):
     def test_transit_step_includes_additive_iso_fields_without_removing_existing_ones(self):
         directions = self.directions
 
-        steps = directions._parse_leg_steps(SAMPLE_TRANSIT_LEG)
+        routes = directions.parse_response(
+            {"routes": [{"legs": [SAMPLE_TRANSIT_LEG]}]}
+        )
+        steps = routes[0]
         transit_step = next(step for step in steps if step["type"] == "SUBWAY")
 
         assert "departure_time_iso" in transit_step
@@ -291,10 +294,32 @@ class ParseLegStepsTests(unittest.TestCase):
     def test_walk_step_is_unchanged(self):
         directions = self.directions
 
-        steps = directions._parse_leg_steps(SAMPLE_TRANSIT_LEG)
+        routes = directions.parse_response(
+            {"routes": [{"legs": [SAMPLE_TRANSIT_LEG]}]}
+        )
+        steps = routes[0]
         walk_step = next(step for step in steps if step["type"] == "WALK")
 
         assert set(walk_step.keys()) == {"type", "start_point", "end_point", "route_total_minutes", "route_total_seconds", "polyline"}
+
+    def test_parse_response_skips_malformed_routes_without_losing_valid_siblings(self):
+        malformed = {
+            "duration": "300s",
+            "steps": [{"travelMode": "TRANSIT", "transitDetails": {}}],
+        }
+
+        routes = self.directions.parse_response(
+            {
+                "routes": [
+                    {"legs": []},
+                    {"legs": [malformed]},
+                    {"legs": [SAMPLE_TRANSIT_LEG]},
+                ]
+            }
+        )
+
+        assert len(routes) == 1
+        assert any(step["type"] == "SUBWAY" for step in routes[0])
 
 
 class DirectionsTests(unittest.IsolatedAsyncioTestCase):

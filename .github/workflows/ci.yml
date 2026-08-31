@@ -27,7 +27,7 @@ jobs:
       - run: npm run build
 
   backend:
-    name: Backend (pytest)
+    name: Backend (pytest and coverage)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -45,7 +45,10 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt -r requirements-dev.txt
-      - run: python -m pytest -q
+      - name: Run backend tests with branch coverage
+        run: python -m coverage run --branch --source=app -m pytest -q
+      - name: Enforce the backend coverage floor
+        run: python -m coverage report --fail-under=85 --precision=2 --show-missing --skip-covered
 
   dependency-advisories:
     name: Dependency advisories (candidate-bound)

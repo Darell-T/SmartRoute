@@ -28,7 +28,7 @@ def _dynamic_hits(routes: list[list[dict]]) -> list[HotspotHit]:
                 latitude=point.latitude,
                 longitude=point.longitude,
                 expected_at=point.expected_at,
-                route_id="",
+                route_id=point.route_id,
             )
         )
     return hits

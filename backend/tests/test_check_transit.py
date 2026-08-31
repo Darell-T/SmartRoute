@@ -167,6 +167,42 @@ class CheckTransitTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         cache._mem.clear()
 
+    async def test_area_conditions_dispatches_through_the_public_transit_tool(self):
+        downstream = ToolResult(
+            ok=True,
+            data={
+                "resolved_area": "Union Square",
+                "incidents": [],
+                "events": [],
+                "incident_evidence": {"status": "current"},
+                "event_evidence": {"status": "current"},
+            },
+            summary="No matching conditions",
+        )
+        with patch.object(
+            check_transit.check_area_conditions,
+            "execute",
+            new=AsyncMock(return_value=downstream),
+        ) as area_tool:
+            result = await check_transit.execute(
+                _base_input(
+                    operation="area_conditions",
+                    route_ids=[],
+                    area="Union Square",
+                    at="2026-08-30T12:00:00-04:00",
+                ),
+                ToolContext(session_id="area-dispatch"),
+            )
+
+        assert result.ok
+        assert result.data["operation"] == "area_conditions"
+        assert result.data["result"]["resolved_area"] == "Union Square"
+        payload, _ctx = area_tool.await_args.args
+        assert payload == {
+            "area": "Union Square",
+            "at": "2026-08-30T12:00:00-04:00",
+        }
+
     async def test_service_status_does_not_call_arrivals(self):
         evidence = TurnEvidence()
         ctx = ToolContext(session_id="s", turn_evidence=evidence)

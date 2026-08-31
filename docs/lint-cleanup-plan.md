@@ -9,13 +9,16 @@ The worker implements. A separate reviewer follows
 
 ## Trusted starting point
 
-The current worktree was reset to commit `427fbc8` on 2026-08-27. That commit
-contains the approved Damn Lines integration, route-intelligence cleanup,
-deterministic tooling cleanup, and test rationalization. The discarded
-whole-backend rewrite is not part of this starting point.
+Commit `427fbc8` remains the historical reset point. The current accepted
+integration checkpoint is `9b4327d`, which contains Batches 2 through 6E and
+the committed F0 frontend quality contract. The discarded whole-backend
+rewrite is not part of this history.
 
-The quality-policy update after that reset changes tooling and documentation
-only. It does not change application behavior.
+The repository audit recorded on 2026-08-30 found a bounded backend closure,
+a frontend measurement correction, and proven dead frontend code. It did not
+justify another architecture rewrite. Start each remaining batch from the
+latest accepted commit, record that exact SHA, and do not work from a dirty
+checkout.
 
 ## Starting inventory (2026-08-27)
 
@@ -215,16 +218,35 @@ the next checkpoint.
 
 ## Remaining batch order
 
-The old 20-batch plan was too granular. Batches 2 through 6E are complete.
-Pre-batch F0 establishes the frontend measurement contract. Do not start
-Batch 7 production refactoring until F0 is accepted. Do not start Batch 7
-during F0.
+The old 20-batch plan was too granular. Batches 2 through 6E and F0 are
+complete. The backend test-assurance pass completes the missing public
+evidence test and sets the branch-aware coverage, mutation, and CI contracts.
+Batch 6F now removes only proven backend leftovers. Batch F1 corrects the
+frontend coverage gate and subtracts proven dead frontend code. Do not start
+Batch 7 until both closures are reviewed and committed.
 
 Measure backend debt with `scripts/report_backend_debt.py --max-existing 12`.
 Keep the official Python ceilings in `pyproject.toml` at 10. Measure frontend
 debt with `scripts/report_frontend_debt.py`. The frontend cyclomatic ceiling is
 12. New Python functions must stay at 10 or lower. A coherent frontend
 function at 8 or 11 may stay as it is.
+
+The 91 backend functions reported at 11 or 12 are the maximum of the Radon
+cyclomatic and complexipy cognitive measurements. They are not 91 unresolved
+Ruff C901 violations. Ruff is clean at its maximum of 10, and the accepted
+legacy cognitive ratchet has no new or worsened functions. Do not launch a
+metric-only pass to turn all 91 into 10. Revisit one only when a behavior,
+coverage, or navigation problem gives the refactor an independent reason.
+
+After the backend test-assurance patch is reviewed and committed, protect its
+measured floor: 89.14% combined line and branch coverage, 91.77% statement
+coverage, 81.64% branch coverage, 50 zero-covered authored functions, and no
+function with CRAP above 30. Keep the CI floor at 85%. Follow
+`docs/backend-test-quality.md` when regenerating or interpreting these counts.
+Do not turn the 17 remaining provider, startup, shutdown, logging, persistence,
+and live orchestration paths into mocked unit tests merely to raise coverage.
+Protect those paths with boundary or deployment evidence when their behavior
+changes.
 
 | Batch | Subsystem | Why it is cohesive |
 |---:|---|---|
@@ -238,7 +260,9 @@ function at 8 or 11 may stay as it is.
 | 6C | Agent place, route, and shared tools | Place resolution and route preparation |
 | 6D | Agent transit tools | Arrivals, evidence, and area conditions |
 | 6E | Agent model, session, and turn | Prompt, stream, session, and turn lifecycle |
-| F0 | Frontend quality foundation | Complexity ceiling, coverage denominator, and debt report |
+| 6F | Backend closure | Delete only symbols whose production call-site search stays empty |
+| F0 | Frontend quality foundation | Complexity ceiling, coverage denominator, and debt report, committed at `9b4327d` |
+| F1 | Frontend measurement and subtraction | Correct coverage semantics and remove proven dead production code |
 | 7 | Application and library boundaries | `frontend/app/**` and `frontend/lib/**` |
 | 8 | Components, interaction, and maps | `frontend/components/**` and `frontend/tests/release/**` |
 | 9 | Transit artifact generation | `frontend/scripts/**` |
@@ -558,12 +582,95 @@ which now has 125 entries. Final quality exits 0 with
 subtests; frontend unit has 314 passes; release CI has 14 passes and 4 skips.
 Batch 7 was not started.
 
+## Batch 6F: backend closure
+
+This is a deletion-only batch, not another backend complexity or coverage
+program. Start only from a clean accepted commit that includes the backend
+test-assurance patch. Record that commit as the immutable fixed point before
+editing. Stop if the worktree is dirty or the patch is absent. Do not touch
+`quality/baseline.json`, frontend production, provider behavior, canonical
+itinerary arithmetic, or any accepted 11-or-12 survivor merely to lower a
+metric.
+
+Own only these files and their directly named tests:
+
+- `backend/app/services/agent/tools/route/route_projection.py`
+- `backend/app/services/agent/presented_entity_registry.py`
+- `backend/app/services/agent/session.py`
+- `backend/app/services/agent/trip_state.py`
+- `backend/app/services/geography.py`
+- `backend/tests/test_route_itinerary_contract.py`
+- `backend/app/services/trips/text.py`
+- `backend/app/services/agent/tools/places/geography.py`
+- `backend/app/services/mta/static_gtfs/store.py`
+- `backend/app/services/trips/itinerary.py`
+- `backend/app/services/trips/route_incidents/context.py`
+- `backend/app/services/agent/tools/transit/evidence_projection.py`
+- `backend/tests/test_transit_evidence.py`
+- tests that directly own one of the listed symbols
+
+Complete the batch in this order:
+
+1. Record `git status --short` and `git rev-parse HEAD`. Confirm that the fixed
+   point includes `backend/cosmic-ray.toml`, `docs/backend-test-quality.md`, and
+   the branch-aware backend CI gate. Stop without editing if it does not.
+2. Repeat repository-wide searches for every candidate symbol. Search
+   production, tests, imports, exports, scripts, and current documentation.
+   Record the results before deleting anything. If an intervening production
+   or test caller exists, skip that symbol and report the caller. Do not refactor
+   the caller to make the deletion possible. A reference contained only inside
+   the same dead candidate subtree is not an independent caller. Treat a
+   `__main__` demo as a contract only when a current command or document invokes
+   it.
+3. Delete `reconcile_first_boarding_timing` and its private subtree
+   `_catchable_offset_seconds`, `_first_transit_index`,
+   `_itinerary_component_totals`, `_leg_seconds`,
+   `_stamp_reconciled_clocks`, `_leg_component_seconds`, and `_retime_legs`.
+   No production caller reaches this subtree. Delete only the two tests that
+   exist solely for that unreachable API. Do not replace it with another
+   timing adapter.
+4. Delete the following candidates only when the repeated search stays empty:
+   `_expand_abbreviations`, `_TTS_ABBREVIATIONS`, `is_nyc_locality`,
+   `GTFSStaticData.get_stop_names`, `presented_entity_registry.clear`,
+   `PendingContinuation.recovery_options`, `trip_state.set_origin`,
+   `trip_state.clear_route_selection`, `services.geography.geocode_address`,
+   `services.geography.walking_time_minutes`,
+   `route_incidents.context.stop_reference`,
+   `CandidateStopContext.directions`, `CandidateStopContext.stop_reference`,
+   and `CandidateStopContext.as_dict`. Remove imports, exports, and private data
+   made unused by an accepted deletion. Do not delete a class, field, or helper
+   that a surviving path still needs.
+5. Remove the stale `Later wiring` paragraph from
+   `chain_canonical_itineraries`. The chained itinerary is already wired.
+   Keep the input shape, totals, clocks, and no-frontend-dwell explanation.
+6. Preserve the existing public test through
+   `evidence_projection.operation_facts("area_conditions", row)`. It already
+   protects the incident and event bounds, ignored non-dict rows, passenger
+   fields, resolved-area fallback, and evidence statuses. Do not add a second
+   test for the same behavior. Do not add tests for dead code or equivalent
+   mutants.
+7. Run the focused tests after each deletion cluster. Run the full backend
+   suite with branch coverage, Ruff, the backend debt report, the cognitive
+   delta, and full quality against the fixed point at the boundary.
+
+Acceptance requires no product behavior change, no new production module, no
+replacement helper layer, negative net backend production growth, no new or
+worsened complexity, `above_12=0`, and `crap_above_30=0`. Combined backend
+coverage may not fall below 89.14%. The count of zero-covered authored
+functions must fall by exactly the number of zero-covered functions deleted.
+Keep the CI floor at 85%. Do not rerun the Cosmic Ray canary unless
+`backend/app/services/evidence.py` or
+`backend/tests/test_evidence_freshness.py` changes. Those files are outside
+this batch. The worker leaves the tree uncommitted for Codex review. Codex
+alone decides whether any stale baseline entry should be removed.
+
 ## Batch F0: frontend quality foundation
 
-F0 is pre-batch measurement work. It does not refactor application, component,
-map, or artifact-generation behavior. Codex reviews the uncommitted tree and
-decides whether to shrink `quality/baseline.json`. The worker must not update
-the baseline and must not begin Batch 7.
+F0 is committed at `9b4327d`. It established the frontend complexity ceiling,
+scope inventory, one unit runner, and c8 source mapping. It did not refactor
+application, component, map, or artifact-generation behavior. The F1 audit
+correction below supersedes only F0's function-coverage gate. It does not
+change the F0 complexity or source-scope contracts.
 
 The immutable checkpoint is `ae27211fa9ba`. Compare quality to that commit.
 
@@ -616,30 +723,48 @@ F0.
 
 ### Targets for Batches 7 through 9
 
-The complete authored production scope after Batch 9 must reach at least 95%
-line, branch, and confirmed function coverage. Confirmed function coverage is
-measured functions divided by every inventoried production function, including
-unresolved mappings. Mapped-only coverage is diagnostic only. Each owning
-batch must:
+The complete production scope after Batch 9 targets at least 95% line, branch,
+and standard c8 source-mapped function coverage. The target is not permission
+to rename anonymous callbacks, export private helpers, add source-text tests,
+or exercise impossible typed states.
 
-1. Reach at least 95% line, branch, and confirmed function coverage for its
-   owned production files and production functions before approval. Do not mix
-   test or tool functions into that coverage.
-2. Avoid decreasing any whole-frontend coverage metric.
-3. Leave no owned production file completely unexecuted.
+F0's authored-function mapper matches raw V8 records primarily by file and
+function name. At the F0 checkpoint, 688 functions are unresolved: 618 are
+anonymous and 70 are named functions missing from raw V8. Counting all 688 as
+uncovered makes source spelling affect the gate and can reward production
+refactors that do not improve test evidence. Keep the authored inventory for
+complexity and mapping diagnostics. Do not use `measured / all inventoried`
+as the approval percentage.
+
+Use the source-mapped c8 function total as the function gate only after every
+owned production file has executed. Before that point, function and branch
+gate status is `unresolved`, because c8 cannot discover a complete branch or
+function denominator for a file that never loaded. Line coverage continues to
+include missing production files as zero.
+
+Each owning batch must:
+
+1. Target at least 95% line, exact c8 branch, and exact c8 function coverage
+   for its owned production files. The exact branch and function checks become
+   eligible only when owned unexecuted production files equal zero.
+2. Leave no owned production file completely unexecuted. This is a hard gate.
+3. Avoid decreasing any whole-frontend coverage metric.
 4. Leave no owned function above complexity 12.
-5. Leave no owned function above 12 with unresolved coverage.
-6. Test important failure, fallback, cancellation, stale-data, and
-   malformed-input branches.
-7. Demonstrate that representative new tests fail when the protected decision
+5. Test important failure, fallback, cancellation, stale-data, and
+   malformed-input decisions through public behavior.
+6. Demonstrate that representative new tests fail when the protected decision
    is temporarily inverted or removed.
-8. Test through public interfaces whenever practical.
-9. Avoid direct private-helper tests unless the helper itself is an earned
-   module interface.
-10. Avoid source-text, snapshot, and mock-call-count tests as substitutes for
-    behavior.
-11. Prefer real values and small fakes over mocks.
-12. Keep tests DAMP and readable.
+7. Avoid direct private-helper tests unless the helper is an earned module
+   interface.
+8. Do not add source-text, style-text, broad snapshot, or mock-call-count tests
+   as substitutes for behavior.
+9. Prefer real values and small fakes over mocks. Keep tests DAMP and readable.
+10. If an owned scope remains below 95%, the worker must stop for reviewer
+    disposition with the exact uncovered files and decisions. Only the
+    reviewer may accept a documented exception for framework glue,
+    unreachable generated branches, or impossible validated states. A worker
+    may not declare the batch complete by lowering the target or adding
+    coverage-ignore comments.
 
 Aim for 100% branch coverage in pure critical modules where the remaining
 branches represent real behavior: state reducers, event validators, proxy and
@@ -670,30 +795,184 @@ py scripts/check_quality.py --quality-ref ae27211fa9ba
 Frontend ESLint and Oxlint may remain red solely for the accepted inventory
 above complexity 12. F0 must not refactor those production functions.
 
+## Batch F1: frontend measurement correction and subtraction
+
+F1 makes the denominator truthful before any worker writes coverage tests or
+refactors a high-complexity frontend function. Start from the accepted Batch
+6F commit. Record the actual fixed point. The worker must not change
+`quality/baseline.json`, add a dependency, add a test framework, begin Batch
+7, or redesign a visible surface.
+
+### F1A: correct the coverage gate
+
+Own only the F0 quality scope, reporter, quality runner, their self-tests, and
+the two lint-cleanup documents. Preserve the raw authored mapping as a
+diagnostic for per-function CRAP and unresolved records. Change the aggregate
+approval semantics as follows:
+
+1. Report standard source-mapped c8 function coverage as the aggregate
+   function metric.
+2. Report function gate status as `unresolved` while any owned production file
+   is unexecuted. Do the same for exact branch coverage.
+3. Keep authored measured, uncovered, anonymous-unresolved, and
+   named-unresolved counts visible. Do not convert unresolved mappings to
+   covered or uncovered.
+4. Keep line coverage's missing-file zero behavior.
+5. Add self-tests proving that an unexecuted file blocks exact branch and
+   function status, all-executed c8 records provide the exact totals, and
+   anonymous authored callbacks cannot lower or raise the c8 percentage by
+   being renamed.
+6. Remove the old `confirmed_function` approval wording from reports and
+   documents. Do not delete the authored inventory itself.
+
+### F1B: delete proven dead frontend production
+
+Repeat exact import and symbol searches first. At `9b4327d`, the following
+files have no application or build-pipeline caller:
+
+- `frontend/components/smart-route/chat/chat-top-bar.tsx`
+- `frontend/components/smart-route/chat/tab-toggle.tsx`
+- `frontend/components/smart-route/chat/near-you-row.tsx`
+- `frontend/components/smart-route/left-rail/demo-data.ts`
+- `frontend/components/smart-route/left-rail/incident-format.ts`
+- `frontend/scripts/build/line-geometry-cleanup.ts`
+
+Delete them only if the repeated fixed-point search agrees. These complete
+files contain 892 production lines before CSS and in-file dead exports are
+counted. Then make these exact follow-up removals:
+
+1. Delete `line-geometry-cleanup.test.ts`. It protects only the abandoned
+   helper, and no active generator stage imports that helper.
+2. In `near-you.ts`, keep `buildHomeNearbyModel`. Delete the test-only
+   `deriveNearbyRouteIds`, `stationNameForRoute`, and
+   `buildArrivalsPayloadForRoute` exports and their dead tests. Replace the
+   538-line `DEMO_RAIL_DATA` dependency in `near-you.test.ts` with one small,
+   local, typed `LeftRailLiveData` fixture containing only values the public
+   model reads. Do not create another production fixture file.
+3. Delete only the CSS selectors owned by the removed top bar, Near You row,
+   and floating tab toggle. Keep `.sr-tab-shell*`, `.sr-chat-theme-toggle*`,
+   and every selector still used by the current sidebar or mobile navigation.
+   Remove comments that describe the deleted floating toggle or top bar.
+4. Keep `artifact-fingerprint.ts`. It has no import caller because it is a
+   standalone CLI, and the build README classifies it as a utility. Batch 9
+   may document its exact command and output lifecycle. It may delete it only
+   after the reviewer confirms the manual workflow is no longer used.
+5. Do not delete `frontend/app/manifest.ts`, any `*.check.mjs` transit
+   validation entry point, or `scripts/release/build-browser-evidence.ts`.
+   Static import graphs report these as roots, but Next, package commands, or
+   the release guide invokes them.
+
+F1 must be net-negative production code and must not add a replacement
+component, compatibility export, wrapper, or fixture module. Verify the
+current sidebar and mobile navigation still switch views and toggle the
+theme. Run typecheck, script typecheck, unit, coverage, release CI, both
+linters, transit artifact verification, the corrected reporter self-tests,
+and full quality against the fixed point. Generated GeoJSON and manifest
+hashes must not change. Leave the tree uncommitted for Codex review.
+
 ## Batch 7: application and library boundaries
 
 Owned paths:
 
 - `frontend/app/**`
 - `frontend/lib/**`
+- `frontend/types/**` only for the canonical response types used by those
+  boundaries
 
-Current complexity-above-12 inventory: 10 functions.
+F0 complexity-above-12 inventory: 10 functions. Regenerate the count after
+F1. Start from the accepted F1 commit and use it as the immutable quality
+reference.
 
 Start with `agent-chat-state.ts` (47), `agent-chat-controller.ts` (35),
 `mapbox-search.ts` (18), backend proxy and stream proxy functions (17),
 `app/page.tsx` (16), and agent event validator, session, stream, and
 proxy-core functions from 13 through 14.
 
-Suggested cohesive clusters:
+Complete these clusters in order. Do not combine them into one rewrite.
 
-1. Proxy, stream, WebSocket, and provider boundaries.
-2. Agent state, controller, session, and event validation.
-3. Application composition and remaining library debt.
-4. Owned-scope coverage completion.
+### Batch 7A: one canonical route boundary
 
-Preserve protocol behavior, cancellation, reconnect handling, canonical route
-facts, and provider failure semantics. Validate unknown data once at the I/O
-boundary. Do not calculate trip facts in frontend adapters.
+The REST trip client currently returns `res.json()` as `TripResponse` without
+runtime validation. The agent SSE validator already contains the canonical
+itinerary Zod schema, while `types/api.ts` imports that type indirectly from
+the stream module and leaves canonical candidate fields optional. Repair this
+boundary before component work:
+
+1. Verify the backend route-candidate and canonical-itinerary response fields
+   against backend response models and contract tests. Require only fields the
+   backend actually guarantees. A legitimately nullable clock remains
+   nullable and displays as unavailable later.
+2. Move the canonical itinerary Zod policy out of the event-only validator
+   into one earned shared `frontend/lib` schema module. Reuse it from both the
+   SSE route-card validator and the REST trip-response validator. Do not copy a
+   second itinerary schema and do not make REST import the entire event
+   validator.
+3. Import canonical itinerary types directly from their contract owner, not
+   through `agent-chat-stream.ts`.
+4. Define a narrowed canonical route-candidate type for data that passed the
+   boundary. It must make the guaranteed itinerary id, duration, transfer
+   count, legs, and other verified fields required. Keep a separate raw type
+   only where untrusted JSON first enters.
+5. Parse `planTrip` response JSON as `unknown`. Reject malformed or
+   noncanonical candidates through the existing API error path. Do not cast,
+   use `any`, or silently filter every invalid candidate into an apparently
+   successful empty plan.
+6. Make `normalizeTripCandidates` and agent route-card selection return the
+   narrowed type after their checks. Downstream map and rail state should not
+   repeatedly ask whether required canonical facts exist.
+7. Add boundary tests for one valid REST response, a missing canonical
+   itinerary, malformed totals or transfer count, and an SSE card using the
+   same itinerary schema. Invert one required check to prove the malformed
+   response test goes red.
+
+Stop this cluster if a UI-required value is not in the backend canonical
+contract. Record the exact missing field for a small backend contract change.
+Do not invent it from route steps or passenger-facing prose.
+
+### Batch 7B: agent state transitions
+
+Refactor `applyAgentEvent` by protocol responsibility, not by extracting each
+case into a one-call peeler. Use a small number of typed reducers for:
+
+- session and turn start
+- streamed text, reasoning, sources, and progress
+- tool lifecycle
+- route and arrival cards
+- terminal success, clarification, cancellation, and failure
+
+Keep `ChatReducerAction` discriminated. Preserve exhaustive checking with a
+`never` assertion or the existing equivalent. Do not use a string-keyed
+handler registry, mutable context bag, class hierarchy, or catch-all partial
+state merge. Protect turn identity, unique tool and card updates, exactly one
+terminal outcome, and ignored stale-turn events through public reducer tests.
+
+### Batch 7C: controller and transport lifecycle
+
+Separate one network attempt from the retry policy in `runTurn`. The attempt
+returns a small discriminated outcome based on the existing failure taxonomy.
+The outer function owns expired-session recovery and the existing retry
+limit. The `finally` path continues to clear abort and active-request state.
+Preserve cancellation, dropped-stream classification, meta-event timing,
+session replacement, and one terminal callback. Do not add a stateful runner
+class or duplicate the stream parser.
+
+Then repair `mapbox-search.ts`, proxy, stream proxy, WebSocket, session, and
+provider boundaries with guard clauses and named parse or recovery policies.
+Keep timeouts, abort signals, status codes, redaction, and streaming headers
+unchanged. Validate untrusted values once at the outer boundary.
+
+### Batch 7D: page composition and gate
+
+Reduce `app/page.tsx` only by extracting independently testable state or
+interaction ownership. Do not create pass-through hooks or move a large prop
+bag into another file. Finish the remaining owned complexity findings, then
+close line, exact branch, and exact function coverage under the F1 rules.
+
+Batch 7 acceptance also requires no frontend calculation of itinerary timing,
+duration, transfers, ranking, or recommendation facts. It requires zero owned
+functions above 12, zero owned unexecuted production files, no new source-text
+tests, and neutral or negative net production growth unless the one shared
+boundary schema is the measured, reviewer-accepted reason for growth.
 
 ## Batch 8: components, interaction, and maps
 
@@ -702,26 +981,98 @@ Owned paths:
 - `frontend/components/**`
 - `frontend/tests/release/**`
 
-Current complexity-above-12 inventory: 46 functions.
+F0 complexity-above-12 inventory: 46 functions. Regenerate it after F1 and
+Batch 7. Start from the accepted Batch 7 commit.
 
 Prioritize `route-plan.buildPlan` (65), `DestinationInput` (46), subway-network
 feature construction (43), itinerary event adaptation (39), `AssistantMessage`
 (34), route steps and reasoning (26 through 32), route-view itinerary, alert
 normalization, route-stop feature construction, and SmartRoute map lifecycle.
 
-Suggested cohesive clusters:
+Complete these clusters in order.
 
-1. Canonical itinerary and display adapters.
-2. Chat and route-view interactions.
-3. Map projection, feature generation, and MapLibre lifecycle.
-4. Browser behavior and owned-scope coverage completion.
+### Batch 8A: prove browser source coverage
 
-Do not recalculate backend-owned itinerary facts. Do not split files by size
-alone. Split `subway-network.ts` or `smart-route-map.tsx` only if pure
-projection, source and layer lifecycle, or interaction ownership becomes
-independently understandable and testable. Source-mapped browser coverage is
-a Batch 8 prerequisite if the existing stack still cannot map Playwright
-execution back to `.ts` and `.tsx`.
+Before refactoring a React or MapLibre component, extend the existing
+Playwright and c8 path just enough to prove Chromium execution maps to exact
+original `.ts` and `.tsx` files and line ranges. Use the existing Next dev
+Webpack server, Playwright, browser coverage API or CDP coverage, source maps,
+and c8's existing remapper. Do not install a second component framework.
+
+The proof must exercise one known interaction in an existing release test and
+show hits in the expected original component lines, not only a hashed bundle
+URL. Add a small mapper fixture self-test if mapping code is introduced. If
+the proof cannot map exact original sources, stop the batch and report the
+blocker. Do not compensate with source-regex assertions or production callback
+renames.
+
+### Batch 8B: remove frontend-owned itinerary arithmetic
+
+Use the narrowed Batch 7 canonical candidate type throughout the rail, map,
+and route-view adapters. In particular:
+
+1. In `left-rail/live-data/route-plan.ts`, remove the `now + total minutes`
+   arrival fallback, transfer recount from transit steps, and leave-by clock
+   derived by subtracting the first walk from a live countdown.
+2. In `left-rail/live-data/route-candidates.ts`, remove fallback totals from
+   `route_total_minutes` or the maximum `minutes_until_arrival`, client-made
+   arrival and departure clocks, and regex parsing of recommendation prose to
+   recover minutes or transfer counts.
+3. Format backend-owned `departure_at`, `arrival_at`,
+   `total_duration_seconds`, `transfer_count`, structured recommendation
+   reasons, and explicit live-arrival context without changing their meaning.
+   If a canonical fact is absent, render the existing unavailable state. Do
+   not guess.
+4. Do not rank candidates, select a recommendation, or infer a rejection
+   reason in React. Candidate identity, ranking, and facts remain backend
+   owned. Preserve geometry and route identity for the map.
+5. Add adapter tests with deliberately conflicting legacy step fields to prove
+   the canonical value wins, plus missing-clock and malformed-boundary cases.
+   The tests call the public adapter, not its private formatting helpers.
+
+Stop and request a backend contract field if the product truly needs a fact
+the canonical response does not provide.
+
+### Batch 8C: component behavior and reader load
+
+Repair chat, route-view, destination input, itinerary event adaptation, and
+alert presentation by cohesive interaction responsibility. Prefer rendered or
+browser behavior for keyboard navigation, focus, disclosure, route selection,
+mobile navigation, reduced motion, and unavailable states.
+
+The following fixed-point tests contain substantial source or CSS text
+assertions and are not proof that the component works:
+
+- `chat-arrivals-card.test.mjs`
+- `chat-composer.test.mjs`
+- `chat-route-card.test.mjs`
+- `chat-sidebar.test.mjs`
+- `chat-working-panel.test.mjs`
+- `home-screen-layout.test.mjs`
+- `mobile-navigation.test.mjs`
+- `left-rail/hydration.test.mjs`
+- `left-rail/route-view.characterization.test.mjs`
+
+When a touched behavior is covered only by one of those assertions, replace
+that assertion with rendered or browser behavior and then remove the weaker
+assertion. Do not rewrite unrelated stable tests only to increase a deletion
+count. Keep artifact-byte, generated-output, and actual rendered-markup tests
+when those outputs are the contract.
+
+### Batch 8D: map projection and lifecycle
+
+Separate pure feature projection from MapLibre source and layer lifecycle only
+where each side becomes independently understandable and testable. Preserve
+official colors, shared-corridor separation, station relationships, stable
+feature ids, event cleanup, map resize behavior, and reduced motion. Do not
+split `subway-network.ts` or `smart-route-map.tsx` by size alone. Do not move
+canonical route decisions into map helpers.
+
+Finish all remaining component findings and the owned coverage gate only after
+the behavior clusters are green. Acceptance requires zero owned functions
+above 12, zero owned unexecuted production files, source-mapped browser proof,
+no source-text tests added, no frontend itinerary arithmetic, and no visible
+behavior drift outside an explicitly approved correction.
 
 ## Batch 9: transit artifact generation and frontend tools
 
@@ -729,22 +1080,80 @@ Owned paths:
 
 - `frontend/scripts/**`
 
-Current complexity-above-12 inventory: 70 functions.
+F0 complexity-above-12 inventory: 70 functions. Regenerate it after F1 and
+Batch 8. Start from the accepted Batch 8 commit.
 
 Prioritize `bundle-stage.ts` (107), `shared-corridor-separation-stage.ts`
 (87), same-color merge and Mott Haven stages (49), lane continuity, route-gap,
 snapping, physical-bundle, collapse, and finalization stages, and
 `regenerate-canonical-from-gtfs.ts`.
 
-Suggested cohesive clusters:
+Complete these clusters in order.
 
-1. Generator invariants and existing test-manifest completion.
-2. Bundle and shared-corridor pipeline.
-3. Geometry repair and lane-continuity stages.
-4. Remaining tools and owned-scope coverage completion.
+### Batch 9A: subtract stale pipeline state
 
-Preserve deterministic artifact output. Never hand-edit generated artifacts.
-Regenerate through documented commands and inspect exact output diffs.
+`bundle-stage.ts` initializes `unbundledFeatures` to an empty array and never
+adds an item. Remove that internal array and its propagation through bundle
+artifact parameter types, writer, metadata, and validation stages. If the
+public artifact schema requires `remaining_unbundled_corridors`, keep that
+output as the explicit invariant value `0`. Do not retain a dead collection to
+produce it. Remove stale `Fix 2` migration comments after tests prove the
+current policy. Generated runtime artifacts must remain byte-for-byte or
+semantically identical according to their documented lifecycle.
+
+### Batch 9B: type the touched stage boundaries
+
+The F0 tree has more than 100 explicit `any` uses in Batch 9, concentrated in
+diagnostics, validation, phase 3c, bundle output, and metadata. Do not launch a
+blind repository-wide `any` replacement and do not create one giant property
+interface with every field optional.
+
+Use the existing generic feature model as the base. For each touched pipeline
+boundary, define the smallest stage-owned property type that represents the
+fields that stage requires and produces. Use `unknown` at untrusted JSON
+boundaries and narrow it. Preserve generic geometry and feature types. Never
+use a cast, non-null assertion, or index signature merely to silence the
+checker. Record explicit `any` counts before and after each touched cluster.
+The count must not rise.
+
+### Batch 9C: bundle and shared corridors
+
+Refactor `buildBundleArtifacts` by real pipeline stages:
+
+- build the anchor and corridor index
+- classify and project solo lanes
+- project bundles and their lanes
+- project gap markers
+- bake final lane geometry
+- sort deterministically and assemble output
+
+Each extracted function owns one phase with a typed input and output. Do not
+extract per-branch wrappers or pass one mutable context bag through every
+phase. Preserve anchor identity, corridor membership, lane order, gap
+semantics, route colors, feature ids, and deterministic ordering. Apply the
+same rule to shared-corridor separation: split only classification,
+intersection policy, projection, and finalization responsibilities that can be
+tested independently.
+
+### Batch 9D: geometry repair and remaining tools
+
+Repair Mott Haven, same-color merge, lane continuity, route gaps, snapping,
+physical bundles, collapse, finalization, and GTFS regeneration in cohesive
+location or phase clusters. Keep local NYC geometry policy local when it is
+not the same concept as a shared transform. Do not generalize one-off
+cartographic exceptions into a framework.
+
+For every cluster, run focused transformation tests, typecheck scripts,
+Oxlint, and the exact artifact checks. At the boundary, regenerate through the
+documented commands, inspect every generated diff, run the complete generator
+test manifest in both relevant orders, and run release CI. Never hand-edit a
+generated GeoJSON file or accept a hash change without explaining the exact
+source transformation that caused it.
+
+Batch 9 acceptance requires zero owned functions above 12, zero owned
+unexecuted production files, the F1 coverage target or a reviewer-recorded
+exception, no unexplained `any` growth, no dead pipeline state, deterministic
+artifacts, and no helper or module added solely to satisfy a metric.
 
 ## Navigability and growth rules
 
@@ -797,25 +1206,40 @@ Also require:
   evidence
 - no unexpected generated artifact change
 - no frontend ownership of canonical itinerary arithmetic
-- at least 95% line, branch, and function coverage on authored production
-  frontend scope
+- zero unexecuted production files in each completed frontend batch
+- at least 95% line, exact c8 branch, and exact c8 function coverage on
+  production frontend scope, or a reviewer-recorded exception that names the
+  remaining non-behavioral branches and why testing them would be harmful
 - a final handoff with exact counts, commands, and authorized exceptions
 
-## Worker status 2026-08-30
+## Current status 2026-08-31
 
-F0 Codex guardrail repairs are implemented and uncommitted against
-`ae27211fa9ba`. Frontend ceiling 12. Python ceiling 10. Unit 557 passed.
-Release 14 passed, 4 skipped. Confirmed authored production function coverage
-is 34.40% (847 / 2462). Mapped-only function coverage is diagnostic 47.75%.
-c8 implementation function coverage is 82.27% and is not authored-function
-coverage. Line 52.27% (23449 / 44859). Exact branch coverage is unresolved
-while 114 production files are unexecuted. Branch proxy upper bound 56.06%
-(4742 / 8459). Unresolved functions 688. Oxlint complexity above 12 remains
-126 (Batch 7: 10, Batch 8: 46, Batch 9: 70). The worker quality run against
-the fixed point exited 1 only because 12 TypeScript baseline entries were
-stale. Codex accepted F0 and removed exactly those 12 entries. The baseline
-decreased from 125 to 113 with no additions or changes. The reviewer quality
-run exits 0 with `approval_eligible: true`. New, worsened, cognitive, Ruff
-C901, Ruff structural, and stale violations are all 0. Pre-existing TypeScript
-scope debt 72 requires `--quality-ref` and was not added to the baseline.
-Batch 7 production refactoring was not started.
+The accepted backend test-assurance checkpoint has 1,917 passes, 21 skips,
+and 446 subtests. Combined line and branch
+coverage is 89.14%. Statement coverage is 91.77% (20,419 / 22,251). Branch
+coverage is 81.64% (6,360 / 7,790). The authored-function report has 50
+zero-covered functions out of 2,437 and no function with CRAP above 30. The
+Cosmic Ray canary killed 48 of 54 executed candidates. Batch 6F must start
+from a clean commit that contains this checkpoint.
+
+F0 is committed at `9b4327d`. Frontend ceiling 12. Python Ruff ceiling 10.
+Unit 557 passed. Release 14 passed, 4 skipped. Line coverage is 52.27%
+(23449 / 44859). Exact branch and function gates remain unresolved while 114
+production files are unexecuted. Standard c8 source-mapped function coverage
+is 82.27% (1601 / 1946), but it is not yet gate-eligible because missing files
+do not contribute a complete function denominator. The authored mapper has
+847 measured, 927 uncovered, and 688 unresolved functions. Keep those counts
+as diagnostics after F1.
+
+Oxlint complexity above 12 remains 126 at F0 (Batch 7: 10, Batch 8: 46,
+Batch 9: 70). `quality/baseline.json` has 113 entries after Codex removed the
+12 proven-stale TypeScript entries. F0 quality against `ae27211fa9ba` exits 0
+with `approval_eligible: true` and no new, worsened, cognitive, Ruff C901,
+Ruff structural, or stale violations.
+
+The whole-repository audit did not start Batch 7. The next implementation
+order is Batch 6F, F1, 7, 8, and 9. The audit documents the only justified
+backend closure, a corrected frontend coverage gate, 892 whole-file frontend
+production lines proven dead before follow-up CSS and exports, the canonical
+route boundary needed before component cleanup, and deletion-first generator
+work.

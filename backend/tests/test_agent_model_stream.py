@@ -278,6 +278,29 @@ class ModelStreamTests(unittest.IsolatedAsyncioTestCase):
         outcome = next(item for item in items if isinstance(item, model_stream.ModelCallCompleted))
         assert outcome.error.code == "deadline"
 
+    async def test_already_expired_deadline_never_starts_a_provider_attempt(self):
+        class Messages:
+            def stream(self, **_kwargs):
+                raise AssertionError("expired work must not reach the provider")
+
+        items = [
+            item
+            async for item in model_stream.stream_model_call(
+                client=types.SimpleNamespace(messages=Messages()),
+                stream_kwargs={},
+                log_tag="test",
+                retry_count=2,
+                sanitize_text=lambda value: value,
+                deadline_monotonic=time.monotonic() - 1,
+            )
+        ]
+
+        assert len(items) == 1
+        outcome = items[0]
+        assert isinstance(outcome, model_stream.ModelCallCompleted)
+        assert outcome.error.code == "deadline"
+        assert outcome.attempts == 0
+
     async def test_web_search_progress_is_balanced_when_deadline_cancels_stream(self):
         client = types.SimpleNamespace(messages=_Messages(_WebStallStream()))
         items = [item async for item in model_stream.stream_model_call(client=client, stream_kwargs={}, log_tag="test", retry_count=0, sanitize_text=lambda value: value, deadline_monotonic=time.monotonic() + 0.01)]
