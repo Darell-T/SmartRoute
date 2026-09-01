@@ -543,15 +543,6 @@
       "coverage_status": "measured"
     },
     {
-      "id": "typescript:frontend/app/page.tsx:SmartRoutePageContent#0",
-      "language": "TypeScript",
-      "file": "frontend/app/page.tsx",
-      "function": "SmartRoutePageContent",
-      "complexity": 16,
-      "crap": 272.0,
-      "coverage_status": "uncovered"
-    },
-    {
       "id": "typescript:frontend/components/map/route-stops-features.ts:buildRouteStopFeatures#0",
       "language": "TypeScript",
       "file": "frontend/components/map/route-stops-features.ts",
@@ -925,87 +916,6 @@
       "language": "TypeScript",
       "file": "frontend/components/smart-route/page/use-route-planning-controller.ts",
       "function": "handleSubmit",
-      "complexity": 18,
-      "crap": 342.0,
-      "coverage_status": "uncovered"
-    },
-    {
-      "id": "typescript:frontend/lib/agent-chat-controller.ts:runTurn#0",
-      "language": "TypeScript",
-      "file": "frontend/lib/agent-chat-controller.ts",
-      "function": "runTurn",
-      "complexity": 35,
-      "crap": 35.0,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "typescript:frontend/lib/agent-chat-event-validator.ts:parseAgentEvent#0",
-      "language": "TypeScript",
-      "file": "frontend/lib/agent-chat-event-validator.ts",
-      "function": "parseAgentEvent",
-      "complexity": 14,
-      "crap": 14.0,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "typescript:frontend/lib/agent-chat-session.ts:parseSnapshot#0",
-      "language": "TypeScript",
-      "file": "frontend/lib/agent-chat-session.ts",
-      "function": "parseSnapshot",
-      "complexity": 13,
-      "crap": 13.322664004772943,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "typescript:frontend/lib/agent-chat-state.ts:applyAgentEvent#0",
-      "language": "TypeScript",
-      "file": "frontend/lib/agent-chat-state.ts",
-      "function": "applyAgentEvent",
-      "complexity": 47,
-      "crap": 47.0,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "typescript:frontend/lib/agent-chat-stream.ts:parseSseFrame#0",
-      "language": "TypeScript",
-      "file": "frontend/lib/agent-chat-stream.ts",
-      "function": "parseSseFrame",
-      "complexity": 13,
-      "crap": 14.26031375885265,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "typescript:frontend/lib/backend-proxy-core.ts:readJsonBody#0",
-      "language": "TypeScript",
-      "file": "frontend/lib/backend-proxy-core.ts",
-      "function": "readJsonBody",
-      "complexity": 13,
-      "crap": 13.0,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "typescript:frontend/lib/backend-proxy.ts:proxyToBackend#0",
-      "language": "TypeScript",
-      "file": "frontend/lib/backend-proxy.ts",
-      "function": "proxyToBackend",
-      "complexity": 17,
-      "crap": 306.0,
-      "coverage_status": "uncovered"
-    },
-    {
-      "id": "typescript:frontend/lib/backend-stream-proxy.ts:streamProxyToBackend#0",
-      "language": "TypeScript",
-      "file": "frontend/lib/backend-stream-proxy.ts",
-      "function": "streamProxyToBackend",
-      "complexity": 17,
-      "crap": 17.0,
-      "coverage_status": "measured"
-    },
-    {
-      "id": "typescript:frontend/lib/mapbox-search.ts:retrieveMapboxSuggestion#0",
-      "language": "TypeScript",
-      "file": "frontend/lib/mapbox-search.ts",
-      "function": "retrieveMapboxSuggestion",
       "complexity": 18,
       "crap": 342.0,
       "coverage_status": "uncovered"

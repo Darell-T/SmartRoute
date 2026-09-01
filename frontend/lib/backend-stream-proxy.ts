@@ -123,6 +123,65 @@ function instrumentStream(
   });
 }
 
+function credentialFailureResponse(
+  correlationId: string,
+  path: string,
+  startedAt: number,
+  status: number,
+): Response {
+  logFailure(
+    failureDetails(correlationId, path, "connect", startedAt, {
+      upstreamStatus: status,
+      abortSource: "unknown",
+    }),
+  );
+  return proxyError(status, correlationId);
+}
+
+async function rejectFailedUpstream(
+  upstream: Response,
+  signal: AbortSignal | undefined,
+  onAbort: () => void,
+  correlationId: string,
+  path: string,
+  startedAt: number,
+): Promise<Response> {
+  await upstream.body?.cancel().catch(() => undefined);
+  if (signal) signal.removeEventListener("abort", onAbort);
+  const status = upstream.status >= 400 ? upstream.status : 502;
+  logFailure(
+    failureDetails(correlationId, path, "upstream_status", startedAt, {
+      upstreamStatus: status,
+    }),
+  );
+  return proxyError(status, correlationId);
+}
+
+function sseProxyResponse(
+  upstream: Response,
+  body: ReadableStream<Uint8Array> | null,
+  correlationId: string,
+): Response {
+  return new Response(body, {
+    status: upstream.status,
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      "X-Accel-Buffering": "no",
+      [REQUEST_ID_HEADER]: correlationId,
+    },
+  });
+}
+function bindAbortSignals(
+  controller: AbortController,
+  signal: AbortSignal | undefined,
+  onAbort: () => void,
+): void {
+  if (!signal) return;
+  if (signal.aborted) controller.abort();
+  else signal.addEventListener("abort", onAbort, { once: true });
+}
+
 /**
  * Streams FastAPI SSE without buffering while keeping credentials and raw
  * upstream failures at the server boundary.
@@ -136,26 +195,12 @@ export async function streamProxyToBackend(
   const correlationId = randomUUID();
   const startedAt = performance.now();
   const appKey = process.env.APP_KEY;
-  if (!appKey) {
-    logFailure(
-      failureDetails(correlationId, path, "connect", startedAt, {
-        upstreamStatus: 500,
-        abortSource: "unknown",
-      }),
-    );
-    return proxyError(500, correlationId);
-  }
+  if (!appKey) return credentialFailureResponse(correlationId, path, startedAt, 500);
 
   const controller = new AbortController();
   const principal = request ? requestPrincipal(request) : null;
   if (request && !principal) {
-    logFailure(
-      failureDetails(correlationId, path, "connect", startedAt, {
-        upstreamStatus: 503,
-        abortSource: "unknown",
-      }),
-    );
-    return proxyError(503, correlationId);
+    return credentialFailureResponse(correlationId, path, startedAt, 503);
   }
 
   let clientAborted = signal?.aborted ?? false;
@@ -164,10 +209,7 @@ export async function streamProxyToBackend(
     clientAborted = true;
     controller.abort();
   };
-  if (signal) {
-    if (signal.aborted) controller.abort();
-    else signal.addEventListener("abort", onAbort, { once: true });
-  }
+  bindAbortSignals(controller, signal, onAbort);
 
   const connectTimer = setTimeout(() => {
     connectTimedOut = true;
@@ -192,24 +234,17 @@ export async function streamProxyToBackend(
   } catch {
     clearTimeout(connectTimer);
     if (signal) signal.removeEventListener("abort", onAbort);
-    const abortSource = classifyProxyAbort(connectTimedOut, clientAborted);
     logFailure(
-      failureDetails(correlationId, path, "connect", startedAt, { abortSource }),
+      failureDetails(correlationId, path, "connect", startedAt, {
+        abortSource: classifyProxyAbort(connectTimedOut, clientAborted),
+      }),
     );
     return proxyError(502, correlationId);
   }
   clearTimeout(connectTimer);
 
   if (!upstream.ok) {
-    await upstream.body?.cancel().catch(() => undefined);
-    if (signal) signal.removeEventListener("abort", onAbort);
-    const status = upstream.status >= 400 ? upstream.status : 502;
-    logFailure(
-      failureDetails(correlationId, path, "upstream_status", startedAt, {
-        upstreamStatus: status,
-      }),
-    );
-    return proxyError(status, correlationId);
+    return rejectFailedUpstream(upstream, signal, onAbort, correlationId, path, startedAt);
   }
 
   const responseBody = upstream.body
@@ -225,13 +260,5 @@ export async function streamProxyToBackend(
       )
     : null;
 
-  return new Response(responseBody, {
-    status: upstream.status,
-    headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache, no-transform",
-      "X-Accel-Buffering": "no",
-      [REQUEST_ID_HEADER]: correlationId,
-    },
-  });
+  return sseProxyResponse(upstream, responseBody, correlationId);
 }

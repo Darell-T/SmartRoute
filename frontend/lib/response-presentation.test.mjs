@@ -8,6 +8,7 @@ import {
   normalizeResponsePresentationMode,
   persistResponsePresentationMode,
   readResponsePresentationMode,
+  browserSessionStorage,
 } from "./response-presentation.ts";
 
 function memoryStorage(initial = {}) {
@@ -64,6 +65,37 @@ test("same-tab mode selection updates subscribers and persists the mode", () => 
   assert.equal(updates, 1);
   assert.equal(store.getClientSnapshot(), "quick");
   assert.equal(storage.getItem(RESPONSE_PRESENTATION_STORAGE_KEY), "quick");
+});
+
+test("browser session storage is absent during SSR and when the store throws", () => {
+  const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+  delete globalThis.window;
+  try {
+    assert.equal(browserSessionStorage(), undefined);
+  } finally {
+    if (windowDescriptor) Object.defineProperty(globalThis, "window", windowDescriptor);
+  }
+
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: {},
+  });
+  Object.defineProperty(globalThis.window, "sessionStorage", {
+    configurable: true,
+    get() {
+      throw new Error("blocked");
+    },
+  });
+  try {
+    assert.equal(browserSessionStorage(), undefined);
+  } finally {
+    if (windowDescriptor) Object.defineProperty(globalThis, "window", windowDescriptor);
+    else delete globalThis.window;
+  }
+});
+
+test("persist is a no-op when session storage is unavailable", () => {
+  assert.doesNotThrow(() => persistResponsePresentationMode(undefined, "quick"));
 });
 
 test("blocked session storage falls back safely to Auto", () => {

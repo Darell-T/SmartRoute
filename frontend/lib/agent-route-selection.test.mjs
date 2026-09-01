@@ -9,7 +9,13 @@ const card = {
   destination: { label: "Destination", lat: 40.6, lng: -74 },
   summary: { eta_minutes: 34, transfers: 0, lines: ["A"], reason: "Server reason" }, alerts: [],
   route: [{ type: "WALK", end_point: { latitude: 40.6, longitude: -74 } }],
-  itinerary: { itinerary_id: "it_1", total_duration_seconds: 2040, transfer_count: 0, arrival_at: "2026-07-16T15:45:00-04:00" },
+  itinerary: {
+    itinerary_id: "it_1",
+    total_duration_seconds: 2040,
+    transfer_count: 0,
+    arrival_at: "2026-07-16T15:45:00-04:00",
+    legs: [{ mode: "WALK", walk_seconds: 2040 }],
+  },
 };
 
 test("uses route geometry while preserving server canonical facts", () => {
@@ -97,4 +103,25 @@ test("chat entry context and passenger-safe selection decision remain intact", (
   const plan = agentRoutePlanFromCards([{ ...card, itinerary: { ...card.itinerary, selection_decision: decision } }], "rc_1");
   assert.equal(plan?.entryContext, "chat");
   assert.deepEqual(plan?.candidates[0].itinerary?.selection_decision, decision);
+});
+
+test("a missing selected card id cannot invent a route plan", () => {
+  assert.equal(agentRoutePlanFromCards([card], "rc_missing"), null);
+});
+
+test("a selected card without geometry cannot become the active plan", () => {
+  assert.equal(agentRoutePlanFromCards([{ ...card, route: [] }], "rc_1"), null);
+});
+
+test("sibling cards without itineraries are dropped from the plan", () => {
+  const sibling = { ...card, card_id: "rc_bad", itinerary: undefined };
+  const plan = agentRoutePlanFromCards([card, sibling], "rc_1");
+  assert.equal(plan?.candidates.length, 1);
+  assert.equal(plan?.candidates[0].id, "rc_1");
+});
+
+test("an itinerary without arrival_at omits that field from the candidate", () => {
+  const { arrival_at: _ignored, ...itinerary } = card.itinerary;
+  const plan = agentRoutePlanFromCards([{ ...card, itinerary }], "rc_1");
+  assert.equal("arrival_at" in plan.candidates[0], false);
 });

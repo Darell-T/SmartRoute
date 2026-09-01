@@ -5,6 +5,7 @@ import {
   locationStateForCoordinates,
   nextLocationState,
   requestInitialLocation,
+  visibleMapLocation,
 } from "./initial-geolocation.ts";
 
 test("initial geolocation falls back when unavailable and ignores late callbacks after cleanup", async () => {
@@ -135,4 +136,14 @@ test("only a precise device location is authoritative for chat routing", () => {
   assert.equal(authoritativeChatOrigin(fallback), null);
   assert.equal(authoritativeChatOrigin({ status: "pending" }), null);
   assert.equal(authoritativeChatOrigin({ status: "outside_service_area" }), null);
+});
+
+test("the map may use a NYC fallback pin that chat origin must not", () => {
+  const fallback = locationStateForCoordinates(
+    { lat: 40.7484, lng: -73.9857 },
+    "fallback",
+  );
+  assert.deepEqual(visibleMapLocation(fallback), { lat: 40.7484, lng: -73.9857 });
+  assert.equal(visibleMapLocation({ status: "pending" }), null);
+  assert.equal(visibleMapLocation({ status: "outside_service_area" }), null);
 });

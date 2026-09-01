@@ -11,6 +11,8 @@ import {
   runTurn,
   sessionStorageKey,
 } from "./use-agent-chat.ts";
+import { clearPersistedSession } from "./agent-chat-session.ts";
+import { AgentChatTransportError, fetchAgentChatEvents } from "./agent-chat-controller.ts";
 import {
   isRoutePreparationTool,
   isRouteResultTool,
@@ -39,6 +41,11 @@ test("turn_started clears a previous turn's error", () => {
     text: "hi",
   });
   assert.equal(state.error, null);
+});
+
+test("applyAgentEvent returns an unknown action unchanged", () => {
+  const action = { type: "not_a_chat_action" };
+  assert.equal(applyAgentEvent(initialState(), action), action);
 });
 
 test("chat_reset clears the active conversation and session", () => {
@@ -157,6 +164,77 @@ test("transit-status action is carried by its typed event and ignores stale turn
   assert.equal(state.messages[1].transitStatusAction, undefined);
 });
 
+function sampleRouteCard(turnId, cardId = "rc_1") {
+  return {
+    type: "route_card",
+    card_id: cardId,
+    turn_id: turnId,
+    role: "recommended",
+    origin: { label: "Home", lat: 40.7, lng: -73.9 },
+    destination: { label: "Costco", lat: 40.8, lng: -73.8 },
+    summary: { eta_minutes: 22, transfers: 1, lines: ["A"], reason: "Fastest" },
+    route: [],
+    alerts: [],
+  };
+}
+
+function sampleArrivalCard(turnId, minutes) {
+  return {
+    type: "arrival_card",
+    turn_id: turnId,
+    route_id: "Q",
+    stop: { id: "D28", name: "Newkirk Plaza", latitude: 40.635, longitude: -73.962 },
+    directions: [
+      {
+        id: "downtown",
+        label: "Downtown",
+        arrivals: [{ expected_at: "2026-07-25T14:04:00Z", minutes, realtime: true }],
+      },
+    ],
+    updated_at: "2026-07-25T14:00:00Z",
+    source_status: "live",
+  };
+}
+
+test("a stale route_card leaves the current turn unchanged", () => {
+  let state = applyAgentEvent(initialState(), { type: "turn_started", text: "Plan a trip" });
+  state = applyAgentEvent(state, { type: "meta", session_id: "sess-1", turn_id: "new-turn" });
+  const before = structuredClone(state.messages[1]);
+  state = applyAgentEvent(state, sampleRouteCard("old-turn"));
+  assert.deepEqual(state.messages[1], before);
+  assert.equal(state.messages[1].routeCards.length, 0);
+});
+
+test("a matching-turn route_card attaches to the current assistant turn", () => {
+  let state = applyAgentEvent(initialState(), { type: "turn_started", text: "Plan a trip" });
+  state = applyAgentEvent(state, { type: "meta", session_id: "sess-1", turn_id: "new-turn" });
+  state = applyAgentEvent(state, sampleRouteCard("new-turn"));
+  assert.equal(state.messages[1].routeCards.length, 1);
+  assert.equal(state.messages[1].routeCards[0].card_id, "rc_1");
+});
+
+test("a route_card still attaches before the turn receives a turnId", () => {
+  let state = applyAgentEvent(initialState(), { type: "turn_started", text: "Plan a trip" });
+  state = applyAgentEvent(state, sampleRouteCard("pending-turn"));
+  assert.equal(state.messages[1].routeCards[0].card_id, "rc_1");
+});
+
+test("a stale arrival_card leaves the current turn unchanged", () => {
+  let state = applyAgentEvent(initialState(), { type: "turn_started", text: "Next Q?" });
+  state = applyAgentEvent(state, { type: "meta", session_id: "sess-1", turn_id: "new-turn" });
+  const before = structuredClone(state.messages[1]);
+  state = applyAgentEvent(state, sampleArrivalCard("old-turn", 9));
+  assert.deepEqual(state.messages[1], before);
+  assert.equal(state.messages[1].arrivals, undefined);
+});
+
+test("a matching-turn arrival_card replaces arrivals on the current turn", () => {
+  let state = applyAgentEvent(initialState(), { type: "turn_started", text: "Next Q?" });
+  state = applyAgentEvent(state, { type: "meta", session_id: "sess-1", turn_id: "new-turn" });
+  state = applyAgentEvent(state, sampleArrivalCard("new-turn", 4));
+  assert.deepEqual(state.messages[1].arrivals.groups[0].minutes, [4]);
+});
+
 test("sources attach only to the active assistant turn and deduplicate by URL", () => {
   let state = applyAgentEvent(initialState(), { type: "turn_started", text: "Pizza nearby" });
   state = applyAgentEvent(state, { type: "meta", session_id: "sess-1", turn_id: "turn-1" });
@@ -234,6 +312,42 @@ test("replayed tool and route-card events are deduplicated by stable id", () => 
 
   assert.equal(state.messages[1].toolChips.length, 1);
   assert.equal(state.messages[1].routeCards.length, 1);
+});
+
+test("a later route card with a new id appends instead of replacing the first", () => {
+  let state = applyAgentEvent(initialState(), { type: "turn_started", text: "Plan a trip" });
+  const recommended = {
+    type: "route_card",
+    card_id: "route-1",
+    turn_id: "turn-1",
+    role: "recommended",
+    origin: { label: "Your location", lat: 40.7, lng: -73.9 },
+    destination: { label: "Coney Island", lat: 40.57, lng: -73.98 },
+    summary: { eta_minutes: 30, transfers: 0, lines: ["Q"], reason: "Direct" },
+    route: [],
+    alerts: [],
+  };
+  state = applyAgentEvent(state, recommended);
+  state = applyAgentEvent(state, { ...recommended, card_id: "route-2", role: "alternative" });
+  assert.deepEqual(
+    state.messages[1].routeCards.map((card) => card.card_id),
+    ["route-1", "route-2"],
+  );
+});
+
+test("a done event for another turn id does not terminate the active turn", () => {
+  let state = applyAgentEvent(initialState(), { type: "turn_started", text: "hi" });
+  state = applyAgentEvent(state, { type: "meta", session_id: "s1", turn_id: "t-live" });
+  const afterStale = applyAgentEvent(state, {
+    type: "done",
+    session_id: "s1",
+    turn_id: "t-old",
+    stop_reason: "end_turn",
+    usage: {},
+  });
+  assert.equal(afterStale.messages[1].isStreaming, true);
+  assert.equal(afterStale.messages[1].stopReason, undefined);
+  assert.equal(afterStale.isStreaming, true);
 });
 
 test("a recovered route attempt replaces the prior failed chip", () => {
@@ -749,6 +863,36 @@ test("session id persistence writes a record, clears null, and tolerates throwin
   assert.doesNotThrow(() => persistSessionId(throwing, null, namespace));
 });
 
+test("persisted session reads survive storage that throws while clearing a corrupt record", () => {
+  const namespace = "http://localhost:3000|development";
+  const storage = {
+    getItem() { return "{"; },
+    setItem() {},
+    removeItem() { throw new Error("blocked"); },
+  };
+  assert.equal(readPersistedSessionId(storage, namespace), null);
+  persistSessionId(undefined, "sess-1", namespace);
+});
+
+test("clearPersistedSession ignores storage that throws on remove", () => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "window");
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: {
+      sessionStorage: {
+        getItem() { return null; },
+        removeItem() { throw new Error("blocked"); },
+      },
+    },
+  });
+  try {
+    assert.doesNotThrow(() => clearPersistedSession());
+  } finally {
+    if (previous) Object.defineProperty(globalThis, "window", previous);
+    else delete globalThis.window;
+  }
+});
+
 test("a typed provider request failure stops cleanly without creating a route card", () => {
   let state = applyAgentEvent(initialState(), {
     type: "turn_started",
@@ -821,6 +965,113 @@ test("arrival_card attaches production arrival evidence to the streaming assista
   assert.equal(turn.arrivals.sourceStatus, "live");
   assert.deepEqual(turn.arrivals.stationCoordinates, { lat: 40.635, lng: -73.962 });
   assert.match(turn.arrivals.stationGuidance, /0\.2 mi away/);
+});
+
+test("whitespace-only reasoning does not change the turn", () => {
+  let state = applyAgentEvent(initialState(), { type: "turn_started", text: "Next train?" });
+  state = applyAgentEvent(state, { type: "reasoning", text: "   " });
+  assert.equal(state.messages[1].reasoning, "");
+  state = applyAgentEvent(state, { type: "reasoning", text: "Checking live arrivals." });
+  state = applyAgentEvent(state, { type: "reasoning", text: "\nChecking live arrivals.\n" });
+  assert.equal(state.messages[1].reasoning, "Checking live arrivals.");
+});
+
+test("an unnamed stop without coordinates uses the Transit stop fallback", () => {
+  let state = applyAgentEvent(initialState(), { type: "turn_started", text: "Next train?" });
+  state = applyAgentEvent(state, {
+    type: "arrival_card",
+    turn_id: "pending",
+    route_id: "Q",
+    stop: { id: "D28", name: "" },
+    directions: [
+      {
+        id: "downtown",
+        label: "Downtown",
+        arrivals: [{ expected_at: "2026-07-25T14:04:00Z", minutes: 0, realtime: true }],
+      },
+      {
+        id: "uptown",
+        label: "Uptown",
+        arrivals: [{ expected_at: "2026-07-25T14:08:00Z", minutes: 8, realtime: true }],
+      },
+    ],
+    updated_at: "2026-07-25T14:00:00Z",
+    source_status: "live",
+  });
+  assert.equal(state.messages[1].arrivals.stationName, "Transit stop");
+  assert.equal(state.messages[1].arrivals.stationCoordinates, undefined);
+  assert.deepEqual(state.messages[1].arrivals.groups, [
+    { direction: "uptown", label: "Uptown", minutes: [8] },
+  ]);
+});
+
+test("a new turn after an empty failure drops the failed assistant placeholder", () => {
+  let state = applyAgentEvent(initialState(), { type: "turn_started", text: "hi" });
+  state = applyAgentEvent(state, {
+    type: "stream_error",
+    message: "SmartRoute couldn’t complete this request.",
+  });
+  state = applyAgentEvent(state, { type: "turn_started", text: "again" });
+  assert.deepEqual(
+    state.messages.map((turn) => turn.role),
+    ["user", "user", "assistant"],
+  );
+  assert.equal(state.messages[0].text, "hi");
+  assert.equal(state.messages[1].text, "again");
+});
+
+test("an error event after arrivals leaves the arrival turn unchanged", () => {
+  let state = applyAgentEvent(initialState(), { type: "turn_started", text: "Next Q?" });
+  state = applyAgentEvent(state, sampleArrivalCard("pending", 4));
+  const before = structuredClone(state);
+  state = applyAgentEvent(state, {
+    type: "error",
+    code: "upstream_error",
+    message: "ignored",
+    retryable: true,
+  });
+  assert.deepEqual(state, before);
+});
+
+test("done with no assistant turn does not invent a message", () => {
+  const state = applyAgentEvent(initialState(), {
+    type: "done",
+    session_id: "s1",
+    turn_id: "t1",
+    stop_reason: "end_turn",
+    usage: {},
+  });
+  assert.deepEqual(state.messages, []);
+  assert.equal(state.sessionId, "s1");
+  assert.equal(state.isStreaming, false);
+});
+
+test("a later arrival card replaces the previous arrival payload on the same turn", () => {
+  const liveArrival = {
+    type: "arrival_card",
+    turn_id: "t1",
+    route_id: "Q",
+    stop: { id: "D28", name: "Newkirk Plaza", latitude: 40.635, longitude: -73.962 },
+    directions: [
+      {
+        id: "downtown",
+        label: "Downtown",
+        arrivals: [{ expected_at: "2026-07-25T14:04:00Z", minutes: 4, realtime: true }],
+      },
+    ],
+    updated_at: "2026-07-25T14:00:00Z",
+    source_status: "live",
+  };
+  let state = applyAgentEvent(initialState(), { type: "turn_started", text: "Next Q?" });
+  state = applyAgentEvent(state, liveArrival);
+  state = applyAgentEvent(state, {
+    ...liveArrival,
+    route_id: "B",
+    stop: { id: "D28", name: "Newkirk Plaza", latitude: 40.635, longitude: -73.962 },
+    updated_at: "2026-07-25T14:01:00Z",
+  });
+  assert.equal(state.messages[1].arrivals.routeId, "B");
+  assert.equal(state.messages[1].arrivals.updatedAt, "2026-07-25T14:01:00Z");
 });
 
 test("arrival clarification stays prose-only and accepts only one terminal event", () => {
@@ -1172,6 +1423,199 @@ test("runTurn retries a dropped connection once when no tokens arrived", async (
   assert.equal(actions.at(-1)?.type, "done");
 });
 
+test("runTurn treats a second dropped stream as exhausted and still clears in-flight state", async () => {
+  let attempts = 0;
+  const actions = [];
+  const transport = async function* () {
+    attempts += 1;
+    yield { type: "meta", session_id: "sess-1", turn_id: `t${attempts}` };
+  };
+  const controller = new AbortController();
+  const inFlightRef = { current: true };
+  const abortControllerRef = { current: controller };
+
+  await runTurn(
+    transport,
+    { message: "When is the next Q?", response_presentation: "auto" },
+    controller,
+    (action) => actions.push(action),
+    inFlightRef,
+    abortControllerRef,
+  );
+
+  assert.equal(attempts, 2);
+  assert.equal(actions.filter((action) => action.type === "turn_retry_started").length, 1);
+  assert.equal(actions.at(-1)?.type, "stream_error");
+  assert.equal(actions.at(-1)?.message, "The connection to SmartRoute dropped before it finished responding.");
+  assert.equal(inFlightRef.current, false);
+  assert.equal(abortControllerRef.current, null);
+});
+
+test("runTurn cancellation stays cancellation and still cleans up", async () => {
+  const actions = [];
+  const controller = new AbortController();
+  const inFlightRef = { current: true };
+  const abortControllerRef = { current: controller };
+  const transport = async function* (_request, signal) {
+    controller.abort();
+    signal.throwIfAborted();
+  };
+
+  await runTurn(
+    transport,
+    { message: "hi", response_presentation: "auto" },
+    controller,
+    (action) => actions.push(action),
+    inFlightRef,
+    abortControllerRef,
+  );
+
+  assert.deepEqual(actions.map((action) => action.type), ["stream_cancelled"]);
+  assert.equal(inFlightRef.current, false);
+  assert.equal(abortControllerRef.current, null);
+});
+
+test("fetchAgentChatEvents maps a non-OK status through the existing transport error", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ error: "secret upstream dump" }), {
+      status: 503,
+      headers: { "x-smartroute-request-id": "corr-1" },
+    });
+  try {
+    await assert.rejects(
+      async () => {
+        for await (const _event of fetchAgentChatEvents(
+          { message: "hi", response_presentation: "auto" },
+          new AbortController().signal,
+        )) {
+          throw new Error("must not yield events");
+        }
+      },
+      (err) => {
+        assert.equal(err.name, "AgentChatTransportError");
+        assert.equal(err.status, 503);
+        assert.equal(err.correlationId, "corr-1");
+        assert.doesNotMatch(err.message, /secret upstream dump/);
+        return true;
+      },
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("fetchAgentChatEvents maps a 200 response without a body to a 502 transport error", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(null, { status: 200 });
+  try {
+    await assert.rejects(
+      async () => {
+        for await (const _event of fetchAgentChatEvents(
+          { message: "hi", response_presentation: "auto" },
+          new AbortController().signal,
+        )) {
+          throw new Error("must not yield events");
+        }
+      },
+      (err) => {
+        assert.equal(err.name, "AgentChatTransportError");
+        assert.equal(err.status, 502);
+        return true;
+      },
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("fetchAgentChatEvents yields parsed SSE events from an OK stream", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response("event: token\ndata: {\"text\":\"Q in 4\"}\n\nevent: done\ndata: {\"session_id\":\"s1\",\"turn_id\":\"t1\",\"stop_reason\":\"end_turn\",\"usage\":{}}\n\n", {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    });
+  try {
+    const events = [];
+    for await (const event of fetchAgentChatEvents(
+      { message: "hi", response_presentation: "auto" },
+      new AbortController().signal,
+    )) {
+      events.push(event);
+    }
+    assert.equal(events[0].type, "token");
+    assert.equal(events[0].text, "Q in 4");
+    assert.equal(events[1].type, "done");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("runTurn retries a 503 from fetchAgentChatEvents then completes the stream", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    if (calls === 1) {
+      return new Response("busy", {
+        status: 503,
+        headers: { "x-smartroute-request-id": "corr-503" },
+      });
+    }
+    return new Response(
+      "event: token\ndata: {\"text\":\"Q in 4\"}\n\nevent: done\ndata: {\"session_id\":\"s1\",\"turn_id\":\"t1\",\"stop_reason\":\"end_turn\",\"usage\":{}}\n\n",
+      { status: 200, headers: { "content-type": "text/event-stream" } },
+    );
+  };
+  const actions = [];
+  try {
+    await runTurn(
+      fetchAgentChatEvents,
+      { message: "Next Q?", response_presentation: "auto" },
+      new AbortController(),
+      (action) => actions.push(action),
+      { current: true },
+      { current: null },
+    );
+    assert.equal(calls, 2);
+    assert.ok(actions.some((action) => action.type === "turn_retry_started"));
+    assert.equal(actions.at(-1)?.type, "done");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("runTurn retries a retryable thrown transport error once when no rider output arrived", async () => {
+  let attempts = 0;
+  const actions = [];
+  const transport = async function* () {
+    attempts += 1;
+    if (attempts === 1) {
+      throw new AgentChatTransportError("temporary", 503, true, "corr-retry");
+    }
+    yield { type: "token", text: "The Q is next." };
+    yield {
+      type: "done",
+      session_id: "s1",
+      turn_id: "t1",
+      stop_reason: "end_turn",
+      usage: {},
+    };
+  };
+  const controller = new AbortController();
+  await runTurn(
+    transport,
+    { message: "Next Q?", response_presentation: "auto" },
+    controller,
+    (action) => actions.push(action),
+    { current: true },
+    { current: controller },
+  );
+  assert.equal(attempts, 2);
+  assert.ok(actions.some((action) => action.type === "turn_retry_started"));
+  assert.equal(actions.at(-1)?.type, "done");
+});
 
 function validCard(cardId, turnId, role = "recommended") {
   return {
@@ -1308,6 +1752,62 @@ test("buildTurnsFromSnapshot restores an arrivals card on its producing turn", (
   assert.equal(turns[1].arrivals.routeId, "Q");
   assert.equal(turns[1].arrivals.stationName, "Church Av");
   assert.deepEqual(turns[1].arrivals.groups[0].minutes, [5]);
+});
+
+test("fetchSessionSnapshot restores a validated arrival card onto its turn", async () => {
+  const snapshot = validSnapshot({
+    route_cards: [],
+    arrival_cards: [{
+      type: "arrival_card",
+      turn_id: "t1",
+      route_id: "Q",
+      stop: { name: "Church Av", latitude: 40.64, longitude: -73.96 },
+      directions: [{
+        id: "downtown",
+        label: "Downtown / Brooklyn-bound",
+        arrivals: [{ expected_at: "2026-08-13T12:05:00-04:00", minutes: 5, realtime: true }],
+      }],
+      updated_at: "2026-08-13T12:00:00-04:00",
+      source_status: "live",
+      resolution_status: "resolved",
+    }],
+  });
+  const result = await fetchSessionSnapshot(
+    "sess-1",
+    async () => new Response(JSON.stringify(snapshot), { status: 200 }),
+  );
+  assert.equal(result.status, "ok");
+  assert.equal(result.turns[1].arrivals.routeId, "Q");
+  assert.equal(result.turns[1].arrivals.stationName, "Church Av");
+});
+
+test("runTurn maps a thrown non-transport error onto the generic failure", async () => {
+  const actions = [];
+  const transport = async function* () {
+    throw new TypeError("socket hung up");
+  };
+  await runTurn(
+    transport,
+    { message: "Next Q?", response_presentation: "auto" },
+    new AbortController(),
+    (action) => actions.push(action),
+    { current: true },
+    { current: null },
+  );
+  assert.equal(actions.at(-1)?.type, "stream_error");
+  assert.equal(actions.at(-1)?.message, "SmartRoute couldn’t complete this request.");
+});
+
+test("fetchSessionSnapshot drops invalid arrival cards but keeps the transcript", async () => {
+  const snapshot = validSnapshot({
+    arrival_cards: [{ turn_id: "t1", route_id: "Q" }],
+  });
+  const result = await fetchSessionSnapshot(
+    "sess-1",
+    async () => new Response(JSON.stringify(snapshot), { status: 200 }),
+  );
+  assert.equal(result.status, "ok");
+  assert.equal(result.turns[1].arrivals, undefined);
 });
 
 test("buildTurnsFromSnapshot restores validated sources on their producing turn", async () => {

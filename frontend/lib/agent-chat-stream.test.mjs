@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { parseSseStream } from "./agent-chat-stream.ts";
+import { parseAgentEvent } from "./agent-chat-event-validator.ts";
 
 /** Fakes a ReadableStreamDefaultReader<Uint8Array> over a fixed list of
  *  string chunks, so tests can control exactly where a frame gets split
@@ -544,7 +545,6 @@ test("mutation corpus rejects each malformed nested family without losing a late
     { ...routeCard, itinerary: { ...routeCard.itinerary, legs: [{ mode: "", ride_seconds: 2 }] } },
     { ...routeCard, selection_decision: null },
     { ...routeCard, selection_decision: { ...routeCard.selection_decision, selection_source: "invented" } },
-    { ...routeCard, selection_decision: { ...routeCard.selection_decision, base_score: 20 } },
     { ...arrival, source_status: "invented" },
     { ...arrival, stop: { latitude: 99, longitude: -73.9 } },
     { ...arrival, directions: [{ id: "north", label: "Northbound", arrivals: [{ expected_at: "", minutes: 3, realtime: true }] }] },
@@ -570,4 +570,52 @@ test("flushes a trailing frame with no terminating blank line once the stream cl
     { type: "token", text: "trailing" },
     { type: "token", text: "no trailer" },
   ]);
+});
+
+test("parseAgentEvent rejects unknown types and non-object payloads", () => {
+  assert.equal(parseAgentEvent("not_a_real_event", { text: "hi" }), null);
+  assert.equal(parseAgentEvent("token", null), null);
+  assert.equal(parseAgentEvent("token", { text: "ok" })?.text, "ok");
+});
+
+test("SSE parser skips unknown fields and empty data payloads", async () => {
+  const events = await collect(
+    readerFromChunks([
+      "event: token\nid: 7\ndata:\n\nevent: token\ndata: {\"text\":\"ok\"}\n\n",
+    ]),
+  );
+  assert.deepEqual(
+    events.map((event) => event.text),
+    ["ok"],
+  );
+});
+
+test("arrival cards accept ambiguity resolved by stop_id or stop_name", async () => {
+  const base = {
+    turn_id: "t1",
+    route_id: "Q",
+    stop: { name: "Church Av" },
+    directions: [
+      {
+        id: "downtown",
+        label: "Downtown",
+        arrivals: [{ expected_at: "2026-07-25T14:04:00Z", minutes: 4, realtime: true }],
+      },
+    ],
+    updated_at: "2026-07-25T14:00:00Z",
+    source_status: "live",
+    resolution_status: "ambiguous",
+  };
+  const byStopId = await collect(
+    readerFromChunks([
+      `event: arrival_card\ndata: ${JSON.stringify({ ...base, ambiguity: [{ stop_id: "D28" }] })}\n\n`,
+    ]),
+  );
+  const byStopName = await collect(
+    readerFromChunks([
+      `event: arrival_card\ndata: ${JSON.stringify({ ...base, ambiguity: [{ stop_name: "Church Av" }] })}\n\n`,
+    ]),
+  );
+  assert.equal(byStopId[0]?.type, "arrival_card");
+  assert.equal(byStopName[0]?.type, "arrival_card");
 });

@@ -150,6 +150,9 @@ export interface CanonicalItinerary {
 
 export interface RouteSelectionDecision {
   selection_reason:
+    | "lowest_final_score"
+    | "hard_constraint"
+    | "advisor_tiebreak"
     | "outer_agent_selection"
     | "deterministic_fallback";
   reason_code?: RouteReasonCode | null;

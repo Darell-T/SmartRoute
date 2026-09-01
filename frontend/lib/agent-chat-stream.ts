@@ -255,27 +255,15 @@ function buildEvent(eventType: string, data: Record<string, unknown>): AgentEven
  *  (`: ping`), blank frames, and malformed frames (which also log a
  *  `console.warn` so a bad frame is visible in dev tools without breaking
  *  the stream). */
-function parseSseFrame(frame: string): AgentEvent | null {
-  let eventType: string | null = null;
-  const dataLines: string[] = [];
+function readSseLine(rawLine: string): { field: "event" | "data"; value: string } | null {
+  const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+  if (line === "" || line.startsWith(":")) return null;
+  if (line.startsWith("event:")) return { field: "event", value: line.slice("event:".length).trim() };
+  if (line.startsWith("data:")) return { field: "data", value: line.slice("data:".length).trim() };
+  return null;
+}
 
-  for (const rawLine of frame.split("\n")) {
-    const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
-    if (line === "" || line.startsWith(":")) continue; // blank / comment-heartbeat
-    if (line.startsWith("event:")) {
-      eventType = line.slice("event:".length).trim();
-    } else if (line.startsWith("data:")) {
-      dataLines.push(line.slice("data:".length).trim());
-    }
-  }
-
-  if (eventType === null && dataLines.length === 0) return null; // pure heartbeat/blank frame
-  if (eventType === null) {
-    warnSkip("data field with no event field", frame);
-    return null;
-  }
-
-  const raw = dataLines.join("\n");
+function decodeSsePayload(eventType: string, raw: string): Record<string, unknown> | null {
   let data: unknown;
   try {
     data = raw ? JSON.parse(raw) : {};
@@ -287,7 +275,27 @@ function parseSseFrame(frame: string): AgentEvent | null {
     warnSkip(`"${eventType}" data is not an object`, data);
     return null;
   }
-  return buildEvent(eventType, data);
+  return data;
+}
+
+function parseSseFrame(frame: string): AgentEvent | null {
+  let eventType: string | null = null;
+  const dataLines: string[] = [];
+
+  for (const rawLine of frame.split("\n")) {
+    const field = readSseLine(rawLine);
+    if (!field) continue;
+    if (field.field === "event") eventType = field.value;
+    else dataLines.push(field.value);
+  }
+
+  if (eventType === null && dataLines.length === 0) return null;
+  if (eventType === null) {
+    warnSkip("data field with no event field", frame);
+    return null;
+  }
+  const data = decodeSsePayload(eventType, dataLines.join("\n"));
+  return data ? buildEvent(eventType, data) : null;
 }
 
 /**

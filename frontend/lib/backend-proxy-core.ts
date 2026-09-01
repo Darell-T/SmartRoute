@@ -54,14 +54,10 @@ export function appendRequestSearch(path: string, request: Request): string {
   return search ? `${path}${search}` : path;
 }
 
-/** Parse a request JSON body, distinguishing empty input from malformed JSON. */
-export async function readJsonBody(request: Request, maxBytes = 32 * 1024): Promise<JsonBodyReadResult> {
-  const declaredLength = request.headers.get("content-length");
-  if (declaredLength && /^\d+$/.test(declaredLength) && Number(declaredLength) > maxBytes) {
-    return { ok: false, tooLarge: true, empty: false, value: undefined };
-  }
-  const reader = request.body?.getReader();
-  if (!reader) return { ok: true, empty: true, value: undefined };
+async function readLimitedBytes(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  maxBytes: number,
+): Promise<{ tooLarge: true } | { bytes: Uint8Array }> {
   const chunks: Uint8Array[] = [];
   let total = 0;
   try {
@@ -71,16 +67,20 @@ export async function readJsonBody(request: Request, maxBytes = 32 * 1024): Prom
       total += value.byteLength;
       if (total > maxBytes) {
         await reader.cancel();
-        return { ok: false, tooLarge: true, empty: false, value: undefined };
+        return { tooLarge: true };
       }
       chunks.push(value);
     }
   } finally {
     reader.releaseLock();
   }
+  return { bytes: concatBytes(chunks, total) };
+}
+
+function parseJsonBytes(bytes: Uint8Array): JsonBodyReadResult {
   let raw: string;
   try {
-    raw = new TextDecoder("utf-8", { fatal: true }).decode(concatBytes(chunks, total));
+    raw = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch {
     return { ok: false, tooLarge: false, empty: false, value: undefined };
   }
@@ -92,6 +92,21 @@ export async function readJsonBody(request: Request, maxBytes = 32 * 1024): Prom
   } catch {
     return { ok: false, tooLarge: false, empty: false, value: undefined };
   }
+}
+
+/** Parse a request JSON body, distinguishing empty input from malformed JSON. */
+export async function readJsonBody(request: Request, maxBytes = 32 * 1024): Promise<JsonBodyReadResult> {
+  const declaredLength = request.headers.get("content-length");
+  if (declaredLength && /^\d+$/.test(declaredLength) && Number(declaredLength) > maxBytes) {
+    return { ok: false, tooLarge: true, empty: false, value: undefined };
+  }
+  const reader = request.body?.getReader();
+  if (!reader) return { ok: true, empty: true, value: undefined };
+  const limited = await readLimitedBytes(reader, maxBytes);
+  if ("tooLarge" in limited) {
+    return { ok: false, tooLarge: true, empty: false, value: undefined };
+  }
+  return parseJsonBytes(limited.bytes);
 }
 
 function concatBytes(chunks: Uint8Array[], length: number): Uint8Array {
