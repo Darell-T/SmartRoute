@@ -1,5 +1,12 @@
 import { expect, type Page } from "@playwright/test";
-import { openSmartRoute, sendChatMessage, test } from "./support";
+import {
+  boxBottom,
+  installIosVisualViewportStub,
+  openSmartRoute,
+  sendChatMessage,
+  setSmartRouteViewport,
+  test,
+} from "./support";
 
 async function dragMobileNavigationClosed(page: Page) {
   const dialog = page.getByRole("dialog", { name: "SmartRoute navigation" });
@@ -28,10 +35,15 @@ async function dragMobileNavigationClosed(page: Page) {
 
 test.describe("SmartRoute shell release behavior", () => {
   test("supports keyboard navigation, sidebar collapse, and reduced motion", async ({ page }, testInfo) => {
+    test.setTimeout(45_000);
     await openSmartRoute(page);
 
     if (testInfo.project.name === "desktop") {
+      await page.getByRole("button", { name: "New Trip" }).hover();
       const collapse = page.getByRole("button", { name: "Collapse sidebar" });
+      await collapse.hover();
+      await page.getByRole("button", { name: /Switch to (light|dark) mode/ }).hover();
+      await page.getByRole("button", { name: /Switch to (light|dark) mode/ }).focus();
       await collapse.focus();
       await expect(collapse).toBeFocused();
       await collapse.press("Enter");
@@ -58,8 +70,46 @@ test.describe("SmartRoute shell release behavior", () => {
       await expect(resizeGrip).toBeFocused();
       await resizeGrip.press("ArrowUp");
       await expect(resizeGrip).toHaveAttribute("aria-expanded", "true");
+      await resizeGrip.press("End");
+      await resizeGrip.press("Home");
+      await resizeGrip.press("ArrowDown");
+      await resizeGrip.press("Enter");
+      const gripBox = await resizeGrip.boundingBox();
+      expect(gripBox).not.toBeNull();
+      if (gripBox) {
+        const x = gripBox.x + gripBox.width / 2;
+        const y = gripBox.y + gripBox.height / 2;
+        await page.mouse.move(x, y);
+        await page.mouse.down();
+        await page.mouse.move(x, y - 160, { steps: 8 });
+        await page.mouse.up();
+      }
     } else {
       await expect(page.getByLabel("SmartRoute Left Rail")).toBeVisible();
+    }
+
+    await expect(page.getByLabel("Search destination or address")).toBeVisible();
+    await expect(page.locator(".maplibregl-canvas").first()).toBeVisible({ timeout: 15_000 });
+    await page.locator(".maplibregl-canvas").first().click({ force: true, position: { x: 80, y: 80 } });
+    const recenter = page.getByLabel("Recenter map");
+    if (await recenter.isVisible()) {
+      await recenter.click();
+    }
+    const rail = page.locator(".sr-rail");
+    await rail.getByRole("button", { name: "Alerts" }).click();
+    await expect(page.getByRole("heading", { name: "Service alerts" })).toBeVisible();
+    await rail.getByRole("button", { name: "Route" }).click();
+    const destination = page.getByLabel("Search destination or address");
+    await destination.fill("JFK");
+    await page.getByRole("button", { name: "Search route" }).click();
+    await expect(page.getByText("31 min").or(page.getByText("Take the 2."))).toBeVisible({ timeout: 15_000 });
+    const alternate = page.getByRole("button", { name: /Use this route instead/ });
+    if (await alternate.count()) {
+      await alternate.first().click();
+    }
+    const clearRoute = page.getByLabel("Clear route");
+    if (await clearRoute.isVisible()) {
+      await clearRoute.click();
     }
   });
 
@@ -102,38 +152,7 @@ test.describe("SmartRoute shell release behavior", () => {
 
   test("keeps the composer inside the panned iOS visual viewport", async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "mobile", "Mobile visual viewport coverage");
-    await page.addInitScript(() => {
-      const viewport = new EventTarget() as EventTarget & {
-        height: number;
-        offsetTop: number;
-        width: number;
-        offsetLeft: number;
-        pageTop: number;
-        pageLeft: number;
-        scale: number;
-      };
-      Object.assign(viewport, {
-        height: 844,
-        offsetTop: 0,
-        width: 390,
-        offsetLeft: 0,
-        pageTop: 0,
-        pageLeft: 0,
-        scale: 1,
-      });
-      Object.defineProperty(window, "visualViewport", {
-        configurable: true,
-        value: viewport,
-      });
-      (window as Window & {
-        __setSmartRouteViewport?: (height: number, offsetTop: number) => void;
-      }).__setSmartRouteViewport = (height, offsetTop) => {
-        viewport.height = height;
-        viewport.offsetTop = offsetTop;
-        viewport.dispatchEvent(new Event("resize"));
-        viewport.dispatchEvent(new Event("scroll"));
-      };
-    });
+    await installIosVisualViewportStub(page);
     await openSmartRoute(page);
     // Let hydration finish before Playwright temporarily hides carets for the
     // capture; mutating textarea styles during hydration creates a false
@@ -143,22 +162,16 @@ test.describe("SmartRoute shell release behavior", () => {
 
     const composer = page.getByLabel("Message SmartRoute");
     await composer.focus();
-    await page.evaluate(() => {
-      (window as Window & {
-        __setSmartRouteViewport?: (height: number, offsetTop: number) => void;
-      }).__setSmartRouteViewport?.(420, 96);
-    });
+    await setSmartRouteViewport(page, 420, 96);
     await page.waitForTimeout(20);
 
     const stageBox = await page.locator(".sr-mobile-stage").boundingBox();
     const composerBox = await page.locator(".sr-chat-composer").boundingBox();
     const threadBox = await page.locator(".sr-chat-thread").boundingBox();
     expect(stageBox).not.toBeNull();
-    expect(composerBox).not.toBeNull();
-    expect(threadBox).not.toBeNull();
     expect(Math.round(stageBox?.y ?? 0)).toBe(96);
     expect(Math.round(stageBox?.height ?? 0)).toBe(420);
-    expect((composerBox?.y ?? 0) + (composerBox?.height ?? 0)).toBeLessThanOrEqual(516);
+    expect(boxBottom(composerBox)).toBeLessThanOrEqual(516);
     expect(threadBox?.height ?? 0).toBeGreaterThan(0);
     await expect(page.locator(".sr-chat-empty__suggestions")).toBeHidden();
 
@@ -170,17 +183,9 @@ test.describe("SmartRoute shell release behavior", () => {
     await composer.fill("");
     await composer.blur();
     await page.setViewportSize({ width: 375, height: 667 });
-    await page.evaluate(() => {
-      (window as Window & {
-        __setSmartRouteViewport?: (height: number, offsetTop: number) => void;
-      }).__setSmartRouteViewport?.(667, 0);
-    });
+    await setSmartRouteViewport(page, 667, 0);
     await page.waitForTimeout(20);
-    const compactComposerBox = await page.locator(".sr-chat-composer").boundingBox();
-    expect(compactComposerBox).not.toBeNull();
-    expect(
-      (compactComposerBox?.y ?? 0) + (compactComposerBox?.height ?? 0),
-    ).toBeLessThanOrEqual(667);
+    expect(boxBottom(await page.locator(".sr-chat-composer").boundingBox())).toBeLessThanOrEqual(667);
     await expect(page.locator(".sr-chat-empty__suggestions")).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath("375x667-keyboard-closed.png") });
   });

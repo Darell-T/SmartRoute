@@ -1,10 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 
-import type { TransitRouteData } from "@/types";
+import type { RouteStep, TransitRouteData } from "@/types";
 import { DEFAULT_LOCATION } from "@/lib/api";
 import {
   createCurrentLocationDot,
@@ -12,7 +12,7 @@ import {
   createWaypointMarker,
   updateCurrentLocationDot,
 } from "./route-preview-markers";
-import { flyToRoute, stopRotation } from "@/components/map/camera";
+import { flyToRoute } from "@/components/map/camera";
 import { addStationBadge, clearBadges } from "@/components/map/station-badges";
 import { buildTrips, getLineColor } from "@/components/map/route-layers";
 import { isTransitStep } from "@/lib/route-planning";
@@ -45,6 +45,9 @@ import {
   DEBUG_LIVE_MAP,
   loadVisualSubwayNetworkOrNull,
   loadSubwayStationAnchorsOrNull,
+  applyDarkMapTheme,
+  journeyFitCoordinates,
+  canonicalWaypointCoordinates,
 } from "./smart-route-map-helpers";
 
 declare global {
@@ -55,43 +58,6 @@ declare global {
 
 const DARK_MAP_STYLE_URL =
   "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
-
-function applyDarkMapTheme(mapInstance: maplibregl.Map): void {
-  // The map remains a stable dark cartographic canvas in both interface
-  // themes. Only the navigation and Route/Alerts rail switch appearance.
-  for (const layer of mapInstance.getStyle().layers ?? []) {
-    const id = layer.id;
-    const type = layer.type;
-    try {
-      if (
-        type === "line" &&
-        /road|street|tunnel|bridge|motorway|trunk|primary|secondary|tertiary/i.test(id)
-      ) {
-        mapInstance.setPaintProperty(id, "line-color", "#2B3A4D");
-        mapInstance.setPaintProperty(id, "line-opacity", 0.55);
-      } else if (type === "fill" && /water|ocean|river|bay/i.test(id)) {
-        mapInstance.setPaintProperty(id, "fill-color", "#1B3A52");
-      } else if (type === "fill" && /park|wood|grass|forest|cemetery/i.test(id)) {
-        mapInstance.setPaintProperty(id, "fill-color", "#1C4327");
-        mapInstance.setPaintProperty(id, "fill-opacity", 0.72);
-      } else if (type === "fill" && /land|landuse|sand/i.test(id)) {
-        mapInstance.setPaintProperty(id, "fill-color", "#161E2E");
-        mapInstance.setPaintProperty(id, "fill-opacity", 0.66);
-      } else if (type === "background") {
-        mapInstance.setPaintProperty(id, "background-color", "#0D1220");
-      } else if (type === "symbol") {
-        if (/poi/i.test(id)) {
-          mapInstance.setLayoutProperty(id, "visibility", "none");
-        } else {
-          mapInstance.setPaintProperty(id, "text-opacity", 0.55);
-          mapInstance.setPaintProperty(id, "text-halo-color", "#05070A");
-        }
-      }
-    } catch {
-      // This CARTO style revision lacks the targeted property; skip it.
-    }
-  }
-}
 
 interface SmartRouteMapProps {
   onLocationUpdate?: (coords: { lng: number; lat: number; fallback?: true }) => void;
@@ -121,9 +87,6 @@ export function SmartRouteMap({
   const waypointMarkersRef = useRef<maplibregl.Marker[]>([]);
   const onLocationUpdateRef = useRef(onLocationUpdate);
   const mapReadyRef = useRef(false);
-  const rotationIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const rotationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const animFrameRef = useRef<number | null>(null);
   const originRef = useRef<[number, number] | null>(null);
   const originAccuracyRef = useRef<number | null>(null);
   const stationMarkersRef = useRef<maplibregl.Marker[]>([]);
@@ -480,27 +443,10 @@ export function SmartRouteMap({
     syncBuildingsOrder();
   }, [subwayLayerDataVersion, mapStyleVersion]);
 
-
-  // Route animation + camera rotation
   useEffect(() => {
     if (!map.current || !mapReadyRef.current) return;
 
     const m = map.current;
-
-    function stopAnimation() {
-      if (animFrameRef.current) {
-        cancelAnimationFrame(animFrameRef.current);
-        animFrameRef.current = null;
-      }
-    }
-
-    function stopAll() {
-      stopRotation({
-        rotationTimeout: rotationTimeoutRef,
-        rotationInterval: rotationIntervalRef,
-      });
-      stopAnimation();
-    }
 
     function clearRouteFromMap() {
       clearBadges(stationMarkersRef.current);
@@ -508,80 +454,34 @@ export function SmartRouteMap({
     }
 
     if (!routeData) {
-      stopAll();
       clearRouteFromMap();
-      return stopAll;
+      return;
     }
 
     // Route active: render the FULL route statically and zoom out to frame it.
     // No animated path draw and no camera follow/rotation: the map stays
     // simple with the path, stop dots, and board/arrive endpoints framed in a
     // single zoom-out.
-    stopAll();
-    clearBadges(stationMarkersRef.current);
+    clearRouteFromMap();
     const steps = routeData.steps;
     if (steps && steps.length > 0) {
       const { stepCoords } = buildTrips(steps);
 
       setRouteStopData(m, steps);
-      // Only the first boarding stop gets a pill. The destination is already
-      // carried by the arrival pin, so a final station pill adds clutter.
-      // Rail modes (LIRR, Metro-North, PATH, light rail, tram) get the same
-      // boarding pill as subway/bus; only the first transit boarding stop is
-      // marked, and non-subway modes render as a colored letter badge.
-      const transitSteps = steps.filter(isTransitStep);
-      const boardingStop =
-        transitSteps.length > 0
-          ? {
-              step: transitSteps[0],
-              point: transitSteps[0].departure_coords,
-              name: transitSteps[0].departure_stop,
-            }
-          : null;
-      let badgeCount = 0;
-      const badgeKeys = new Set<string>();
-      for (const { step, point, name } of boardingStop ? [boardingStop] : []) {
-        if (!point || !name) continue;
-        const coords = toLngLat(point);
-        const key = `${coords[0].toFixed(4)},${coords[1].toFixed(4)}`;
-        if (badgeKeys.has(key)) continue;
-        badgeKeys.add(key);
-        const color =
-          step.type === "BUS"
-            ? "#0057B8"
-            : step.line_color || getLineColor(step.train_line || "");
-        const letter =
-          step.train_line ||
-          (step.type === "BUS" ? "BUS" : step.route_id || "?");
-        const mk = addStationBadge(
-          m,
-          coords,
-          name,
-          letter,
-          color,
-          badgeCount++,
-          step.type === "SUBWAY",
-        );
-        stationMarkersRef.current.push(mk);
-      }
+      addFirstBoardingBadge(m, steps, stationMarkersRef.current);
       bringRouteStopsToTop(m);
-
-      // One zoom-out to frame the whole journey -- the route geometry plus the
-      // user's actual location and the destination -- so both endpoints are
-      // guaranteed in view, not just the transit polyline.
-      const fitCoords = stepCoords.flat();
-      if (originRef.current) fitCoords.push(originRef.current);
-      for (const waypoint of routeData.itinerary?.waypoints ?? []) {
-        const point = canonicalWaypointCoordinates(waypoint);
-        if (point) fitCoords.push(point);
-      }
-      if (destCoords) fitCoords.push([destCoords.lng, destCoords.lat]);
+      const fitCoords = journeyFitCoordinates(
+        stepCoords,
+        originRef.current,
+        routeData.itinerary?.waypoints,
+        destCoords,
+      );
       if (fitCoords.length > 0) {
         flyToRoute(m, fitCoords, { duration: 900, maxZoom: 16 });
       }
     }
 
-    return stopAll;
+    return undefined;
   }, [routeData, destCoords, mobileSheetState, mapStyleVersion]);
 
   // Focus mode: hide the ambient subway network while a route is displayed
@@ -692,18 +592,40 @@ export function SmartRouteMap({
   );
 }
 
-function canonicalWaypointCoordinates(waypoint: {
-  lat?: number | null;
-  lng?: number | null;
-  latitude?: number | null;
-  longitude?: number | null;
-}): [number, number] | null {
-  const lat = waypoint.lat ?? waypoint.latitude;
-  const lng = waypoint.lng ?? waypoint.longitude;
-  return typeof lat === "number" && Number.isFinite(lat) &&
-    typeof lng === "number" && Number.isFinite(lng)
-    ? [lng, lat]
-    : null;
+function boardingBadgeStyle(step: RouteStep): {
+  color: string;
+  letter: string;
+  isSubway: boolean;
+} {
+  if (step.type === "BUS") {
+    return { color: "#0057B8", letter: step.train_line || "BUS", isSubway: false };
+  }
+  return {
+    color: step.line_color || getLineColor(step.train_line || ""),
+    letter: step.train_line || step.route_id || "?",
+    isSubway: step.type === "SUBWAY",
+  };
+}
+
+function addFirstBoardingBadge(
+  m: maplibregl.Map,
+  steps: RouteStep[],
+  markers: maplibregl.Marker[],
+): void {
+  const step = steps.find(isTransitStep);
+  if (!step?.departure_coords || !step.departure_stop) return;
+  const style = boardingBadgeStyle(step);
+  markers.push(
+    addStationBadge(
+      m,
+      toLngLat(step.departure_coords),
+      step.departure_stop,
+      style.letter,
+      style.color,
+      0,
+      style.isSubway,
+    ),
+  );
 }
 
 function canonicalWaypointLabel(waypoint: {

@@ -46,7 +46,6 @@ export function buildLeftRailData({
       switchHeadline,
       routeEta,
       routeTotalTime,
-      nowMs,
       routeEntryContext,
     ),
     feed: buildFeed(alerts, incidents, nowMs),

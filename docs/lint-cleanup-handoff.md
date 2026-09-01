@@ -14,8 +14,9 @@ application behavior. Regenerate the reports below before editing a batch.
 The accepted 6F checkpoint is `16390f3`. It contains Batches 2 through 6F, F0,
 and the backend test-assurance work. Batch F1 is Codex-approved on the tree
 from that checkpoint at `d2ecdfe3bf43397aee2051c84ac0bf4544d8cfc0`. Codex
-approved Batch 7 on the tree from that fixed point. Start Batch 8 only from
-the resulting Batch 7 commit. Workers must not shrink stale baseline entries.
+approved Batch 7 on the tree from that fixed point. Batch 8 is implemented
+and uncommitted for Codex. Start Batch 9 only from the accepted Batch 8
+commit. Workers must not shrink stale baseline entries.
 
 | Tool | Findings | Files | Notes |
 |---|---:|---:|---|
@@ -26,7 +27,7 @@ the resulting Batch 7 commit. Workers must not shrink stale baseline entries.
 | Backend combined complexity | 91 | | Radon or cognitive 11 through 12, none above 12 |
 | Backend combined coverage | 89.34% | | Full `backend/app` statement and branch denominator |
 | Backend CRAP above 30 | 0 | 0 | Public behavior tests closed the prior evidence gap |
-| Oxlint complexity above 12 | 113 | | Batch 7: 0, Batch 8: 44, Batch 9: 69 |
+| Oxlint complexity above 12 | 69 | | Batch 7: 0, Batch 8: 0, Batch 9: 69 |
 | Quality baseline | 101 | | Batch 7 reviewer removed exactly 10 proven-stale TypeScript IDs |
 
 `TRY003` is ignored. It encouraged exception boilerplate without improving
@@ -64,6 +65,7 @@ Quality certification from fresh runs with no `--skip-tests`:
 | F1 reviewer final 2026-08-31 | 0 | 0 | 0 | 0 | 111 | 1,915 passed, 21 skipped, 446 subtests | 551 |
 | Batch 7 worker 2026-08-31 | 1 | 0 | 0 | 10 | 111 | 1,915 passed, 21 skipped, 446 subtests | 770 |
 | Batch 7 reviewer final 2026-08-31 | 0 | 0 | 0 | 0 | 101 | 1,915 passed, 21 skipped, 446 subtests | 770 |
+| Batch 8 worker 2026-09-01 | 1 | 0 | 0 | 42 | 101 | 1,915 passed, 21 skipped, 446 subtests | 1,084 unit plus 14 Playwright |
 
 Cognitive delta against `427fbc8`: 0 new or worsened. CRAP has no absolute
 ceiling. Baseline entries may not worsen.
@@ -100,7 +102,7 @@ commit.
 ## Remaining batches
 
 The old 20-batch plan is retired. Batches 2 through 6F, F0, and F1 are
-complete. Batch 7 is Codex-approved. Batch 8 is next.
+complete. Batch 7 is Codex-approved. Batch 8 is implemented and uncommitted for Codex. Batch 9 is next.
 
 | Batch | Subsystem |
 |---:|---|
@@ -674,6 +676,357 @@ Ruff C901, and Ruff structural counts are 0.
 
 Batch 7 is Codex-approved. This reviewer result is part of the Batch 7 commit.
 Start Batch 8 only from that commit.
+
+## Batch 8 worker result (2026-09-01)
+
+Worker implementation. Codex is the reviewer. The worker did not update
+`quality/baseline.json`, did not approve this batch, did not commit, and did
+not start Batch 9.
+
+### 1. Fixed point
+
+Immutable quality reference:
+`6cd3238bc114e4a4176a77866b3b927aa57ed221`.
+
+`git rev-parse HEAD` equals that SHA before and after the work.
+
+### 2. Preserved user-owned dirty files
+
+Expected initial status, left untouched:
+
+```text
+ M frontend/next-env.d.ts
+?? frontend/CLAUDE.md
+```
+
+The finishing pass started from the in-progress Batch 8 tree. Those two files
+were already dirty. The worker did not edit, stage, delete, restore, stash, or
+commit either file.
+
+Out of Batch 8 and left dirty:
+
+```text
+ M backend/app/services/trips/crowds/evidence.py
+ M backend/tests/test_agent_model_stream.py
+ M backend/tests/test_check_transit.py
+ M backend/tests/test_crowd_evidence.py
+ M backend/tests/test_directions.py
+ M backend/tests/test_itinerary_canonical.py
+ M backend/tests/test_transit_evidence.py
+ M docs/README.md
+```
+
+### 3. Changed files
+
+Production in Batch 8 owned paths:
+
+- `frontend/components/map/buildings-layer.ts`
+- `frontend/components/map/camera.ts`
+- `frontend/components/map/route-stops-features.ts`
+- `frontend/components/map/station-badges.ts`
+- `frontend/components/map/subway-network.ts`
+- `frontend/components/smart-route/chat/chat-arrivals-card.tsx`
+- `frontend/components/smart-route/chat/chat-composer.tsx`
+- `frontend/components/smart-route/chat/chat-message.tsx`
+- `frontend/components/smart-route/chat/chat-sidebar.tsx`
+- `frontend/components/smart-route/chat/chat-working-panel.tsx`
+- `frontend/components/smart-route/chat/itinerary-card-legs.tsx`
+- `frontend/components/smart-route/chat/itinerary-event-adapter.ts`
+- `frontend/components/smart-route/chat/itinerary-view-model.ts`
+- `frontend/components/smart-route/chat/near-you.ts`
+- `frontend/components/smart-route/chat/recommended-itinerary-card.tsx`
+- `frontend/components/smart-route/left-rail/alert-detail.tsx`
+- `frontend/components/smart-route/left-rail/alert-feed-copy.ts`
+- `frontend/components/smart-route/left-rail/alert-feed-normalizer.ts`
+- `frontend/components/smart-route/left-rail/atoms.tsx`
+- `frontend/components/smart-route/left-rail/live-data.ts`
+- `frontend/components/smart-route/left-rail/live-data/alerts-feed.ts`
+- `frontend/components/smart-route/left-rail/live-data/nearby-arrivals.ts`
+- `frontend/components/smart-route/left-rail/live-data/route-candidates.ts`
+- `frontend/components/smart-route/left-rail/live-data/route-plan.ts`
+- `frontend/components/smart-route/left-rail/live-data/route-reason-copy.ts`
+- `frontend/components/smart-route/left-rail/live-data/route-reasoning.ts`
+- `frontend/components/smart-route/left-rail/live-data/route-steps.ts`
+- `frontend/components/smart-route/left-rail/route-view-actions.tsx`
+- `frontend/components/smart-route/left-rail/route-view-alternatives.tsx`
+- `frontend/components/smart-route/left-rail/route-view-itinerary.tsx`
+- `frontend/components/smart-route/left-rail/route-view.tsx`
+- `frontend/components/smart-route/map/smart-route-map-helpers.ts` (new)
+- `frontend/components/smart-route/map/smart-route-map.tsx`
+- `frontend/components/smart-route/page/use-route-planning-controller.ts`
+
+Supporting production and harness outside `components/**` and
+`tests/release/**`:
+
+- `frontend/lib/use-voice-input.ts` (DestinationInput reuses composer dictation)
+- `frontend/playwright.config.ts` (NYC geolocation grant)
+- `frontend/tools/run-unit-tests.mjs` (Playwright merge and 8A proof)
+- `frontend/tools/browser-source-coverage.mjs` (new)
+- `scripts/frontend_quality_scope.json`
+- `scripts/report_frontend_debt.py` (`browser_tsx_source_mapped`)
+
+Tests. New Node files plus edits to existing component and release tests,
+including `frontend/tools/browser-source-coverage.test.mjs`.
+
+Docs and inventory:
+
+- `docs/lint-cleanup-plan.md`
+- `docs/lint-cleanup-handoff.md`
+- `.audit/frontend-debt.json`
+
+### 4. Batch 8A proof
+
+Exact, not hashed-chunk.
+
+- Interaction. Playwright release tests with `SMARTROUTE_BROWSER_COVERAGE=1`.
+  `openSmartRoute` loads `/?qa-map=1`. The page fixture calls
+  `page.coverage.startJSCoverage`.
+- Generated script URL. Owned webpack-internal modules such as
+  `webpack-internal:///(app-pages-browser)/./components/...`. Hashed chunks
+  are not the proof identity.
+- Source-map owner. Next webpack. `withInlineSourceMap` fetches
+  `http://127.0.0.1:3100/__nextjs_source-map?filename=...` and inlines
+  `data:application/json;base64`. Existing inline `data:` maps are kept.
+- Original path. `components/smart-route/chat/chat-sidebar.tsx`.
+- Original line range. 1 through 271. 271 hit, including original line 143.
+- Command. `npm --prefix frontend run test:coverage`.
+- Proof. `istanbulFromBrowserRawDirectory` builds a browser-only Istanbul map.
+  `assertOriginalLineHit` checks original line 143 on that map before merge.
+  `coverage/browser-source-mapped.json` is deleted at the start of every
+  coverage run and rewritten only after the browser-only assertion succeeds.
+- Proof log. `browser source coverage: components/smart-route/chat/chat-sidebar.tsx original lines 1-271 (271 hit)`.
+- Reporter flag. `detect_browser_source_mapped()` reads the marker written
+  after the browser-only proof.
+
+### 5. Tests
+
+Frontend unit during the latest official coverage run. 1084 passed, 0 failed.
+Playwright release. 14 passed, 4 skipped (`@visual`).
+Shared-stub pair `live-data.test.mjs` then `hydration.test.mjs`, and the reverse
+import order, each passed 33 tests in one process.
+
+Deleted source-text assertions on touched surfaces. Replaced with SSR markup
+or public API return values in chat sidebar, composer, working panel, and
+related chrome tests.
+
+### 6. Commands
+
+- `npm --prefix frontend run typecheck`. Exit 0 after Batch 8 type fixes.
+- `npm --prefix frontend run lint`. Exit 0. Quality parser ESLint complexity 0.
+- `npm --prefix frontend run lint:oxlint`. Still red. Inherited component
+  anti-slop plus Batch 9 `frontend/scripts/**` complexity. Quality parser
+  Oxlint complexity 69, all Batch 9.
+- Transit artifacts. Not regenerated. No builder or generated GeoJSON inputs
+  changed.
+- Two consecutive `npm --prefix frontend run test:coverage` runs, with
+  `PLAYWRIGHT_BROWSERS_PATH=C:\Users\19293\AppData\Local\ms-playwright`.
+  Both wrote the 8A proof line. Batch 8 `components/**` via
+  `scripts/report_frontend_debt.py`:
+
+  Both runs printed the browser-only 8A proof before merge.
+  Reporter after run 2. line 96.86% (16374 / 16904), branch 95.18% (4422 / 4646),
+  function 95.52% (832 / 871). Unexecuted files 0.
+  `browser_tsx_source_mapped: True`. `above_12: 0`.
+
+  Lines and functions stay at or above 95%. Branch counters still jitter
+  across Istanbul merges. Both ratios are at or above 95%.
+
+- `py scripts/check_quality.py --quality-ref 6cd3238bc114e4a4176a77866b3b927aa57ed221`.
+  Exit 1. `tests_ran: true`. `approval_eligible: false`.
+  new 0, worsened 0, new or worsened cognitive 0, Ruff C901 0, Ruff
+  structural 0, ESLint complexity 0, Oxlint complexity 69.
+  stale baseline entries 42. Backend tests 1915 passed, 21 skipped, 446
+  subtests.
+
+### 7. Starting versus final Batch 8 inventory
+
+Start at `6cd3238`:
+
+- production files 88
+- production functions 880
+- above 12: 44
+- at 11 or 12: 10
+- unexecuted files 21
+- line 55.18% (9050 / 16402)
+- branch unresolved
+- function unresolved
+
+Final:
+
+- production files 88
+- production functions 1000
+- authored functions 1910
+- above 12: 0
+- at 11 or 12: 24
+- unexecuted files 0
+- high-CRAP diagnostic 24
+- line 96.86% (16374 / 16904)
+- branch 95.18% (4422 / 4646)
+- function 95.52% (832 / 871)
+
+### 8. ESLint and Oxlint
+
+Start. ESLint complexity 43, all Batch 8. Oxlint complexity 113 (Batch 8: 44,
+Batch 9: 69).
+
+Final. Application ESLint complexity 0 (`npm run lint` exit 0). Quality Oxlint
+complexity 69, Batch 9 only. Raw `lint:oxlint` still reports inherited
+component anti-slop. That is not a complexity finding.
+
+### 9. Production growth
+
+Official `production_line_growth` versus `6cd3238`. Added 3130, removed 2631,
+net 499. Production functions 880 to 1000, net +120, above the +25 trigger.
+
+Continue justification. Named policy extracts (alert copy, destination
+combobox keys, itinerary adapter, route-view, subway-network), the map helper
+module for Node-testable paint and fit math, then deletion of dead camera
+rotation and unused ETA aliases. No new architecture.
+
+### 10. Stale baseline IDs for Codex
+
+The worker did not run `--update-baseline`. Codex may shrink these 42
+TypeScript entries after review:
+
+- `typescript:frontend/components/map/route-stops-features.ts:buildRouteStopFeatures#0`
+- `typescript:frontend/components/map/station-badges.ts:addIntermediateStopLabels#0`
+- `typescript:frontend/components/map/subway-network.ts:anonymous#6`
+- `typescript:frontend/components/map/subway-network.ts:buildSubwayLaneFeaturesFromVisual#0`
+- `typescript:frontend/components/smart-route/chat/chat-arrivals-card.tsx:ChatArrivalsCard#0`
+- `typescript:frontend/components/smart-route/chat/chat-composer.tsx:ChatComposer#0`
+- `typescript:frontend/components/smart-route/chat/chat-message.tsx:AssistantMessage#0`
+- `typescript:frontend/components/smart-route/chat/chat-sidebar.tsx:AnimatedSidebarIcon#0`
+- `typescript:frontend/components/smart-route/chat/chat-working-panel.tsx:ChatWorkingPanel#0`
+- `typescript:frontend/components/smart-route/chat/itinerary-card-legs.tsx:StopChain#0`
+- `typescript:frontend/components/smart-route/chat/itinerary-event-adapter.ts:anonymous#2`
+- `typescript:frontend/components/smart-route/chat/itinerary-event-adapter.ts:condensePreviewEvents#0`
+- `typescript:frontend/components/smart-route/chat/itinerary-view-model.ts:buildItineraryViewModel#0`
+- `typescript:frontend/components/smart-route/chat/itinerary-view-model.ts:formatStructuredRecommendationReason#0`
+- `typescript:frontend/components/smart-route/chat/near-you.ts:buildHomeNearbyModel#0`
+- `typescript:frontend/components/smart-route/chat/recommended-itinerary-card.tsx:ItineraryCardShell#0`
+- `typescript:frontend/components/smart-route/left-rail/alert-detail.tsx:buildAlertDetailView#0`
+- `typescript:frontend/components/smart-route/left-rail/alert-feed-copy.ts:compactAlertTitle#0`
+- `typescript:frontend/components/smart-route/left-rail/alert-feed-copy.ts:compactFeedTitle#0`
+- `typescript:frontend/components/smart-route/left-rail/alert-feed-normalizer.ts:anonymous#1`
+- `typescript:frontend/components/smart-route/left-rail/alert-feed-normalizer.ts:normalizeServiceAlert#0`
+- `typescript:frontend/components/smart-route/left-rail/atoms.tsx:StepIcon#0`
+- `typescript:frontend/components/smart-route/left-rail/atoms.tsx:TransitText#0`
+- `typescript:frontend/components/smart-route/left-rail/live-data/alerts-feed.ts:buildHealth#0`
+- `typescript:frontend/components/smart-route/left-rail/live-data/nearby-arrivals.ts:buildArrivalRows#0`
+- `typescript:frontend/components/smart-route/left-rail/live-data/route-candidates.ts:alternativeCardFields#0`
+- `typescript:frontend/components/smart-route/left-rail/live-data/route-candidates.ts:buildAlternatives#0`
+- `typescript:frontend/components/smart-route/left-rail/live-data/route-candidates.ts:normalizeAlternateReason#0`
+- `typescript:frontend/components/smart-route/left-rail/live-data/route-plan.ts:buildPlan#0`
+- `typescript:frontend/components/smart-route/left-rail/live-data/route-reason-copy.ts:buildWhyNotSentence#0`
+- `typescript:frontend/components/smart-route/left-rail/live-data/route-reason-copy.ts:candidateDisplayLabel#0`
+- `typescript:frontend/components/smart-route/left-rail/live-data/route-reasoning.ts:buildRouteReasoningInsights#0`
+- `typescript:frontend/components/smart-route/left-rail/live-data/route-steps.ts:anonymous#5`
+- `typescript:frontend/components/smart-route/left-rail/live-data/route-steps.ts:routeStepToRailStep#0`
+- `typescript:frontend/components/smart-route/left-rail/route-view-actions.tsx:DestinationInput#0`
+- `typescript:frontend/components/smart-route/left-rail/route-view-alternatives.tsx:AlternateRouteCard#0`
+- `typescript:frontend/components/smart-route/left-rail/route-view-itinerary.tsx:RecommendedRouteCard#0`
+- `typescript:frontend/components/smart-route/left-rail/route-view-itinerary.tsx:anonymous#14`
+- `typescript:frontend/components/smart-route/left-rail/route-view.tsx:RouteView#0`
+- `typescript:frontend/components/smart-route/map/smart-route-map.tsx:anonymous#15`
+- `typescript:frontend/components/smart-route/map/smart-route-map.tsx:applyDarkMapTheme#0`
+- `typescript:frontend/components/smart-route/page/use-route-planning-controller.ts:handleSubmit#0`
+
+### 11. Review findings
+
+1. Scope and behavior versus `6cd3238`. Applied. Canonical itinerary facts stay
+   backend-owned. Chat, cards, steps, and map read the same contract.
+2. Type-system and boundary. Applied. `STRUCTURED_REASON_COPY` is a string
+   table. `isValidCard` is a type predicate. `LAYOUT_EASE` is a 4-tuple, not a
+   const assertion against Motion.
+3. Simplify and ponytail. Applied by deletion. Removed unused camera rotation,
+   unused `selectedRouteIndex`, the `candidateEtaMinutes` alias, `buildPlan`'s
+   unused clock argument, and restating comments on touched files.
+4. Testing on the Toilet. Applied. New tests assert public API returns, SSR
+   markup, or Playwright outcomes. The 8A proof asserts original line 143 on
+   the browser-only Istanbul map before merge. Unit-only coverage cannot
+   satisfy that proof. ChatMessage View alerts and source order are rendered
+   markup tests. Redundant source-identifier regexes in `chat-route-card` and
+   `hydration` tests were deleted.
+5. Performance. No extra request-time work. Browser coverage collection is
+   test-only behind `SMARTROUTE_BROWSER_COVERAGE=1`.
+6. Comments. Deleted restating JSDoc on `flyToRoute`. Kept nearby-arrivals
+   compass and walk-fold notes because they name passenger policy.
+7. Gaming. No new `any`, suppression, or lint-config ceiling change. Coverage
+   tests hit missed branches through public formatters and render, not wrappers
+   added only to satisfy a meter.
+
+### 12. Requested reviewer exceptions
+
+- Official 95% gate is Batch 8 `components/**` via `report_frontend_debt.py`,
+  not whole-frontend c8.
+- Two consecutive official merges need not match Istanbul branch counters
+  exactly when both ratios stay at or above 95%. Lines and functions matched.
+- `frontend/lib/use-voice-input.ts` is outside owned paths. Reuse for
+  DestinationInput dictation.
+- Raw Oxlint may remain red for inherited component anti-slop. Complexity
+  above 12 in owned Batch 8 files is 0. Batch 9 `scripts/**` stays red.
+- Net production +499 and +120 functions. Documented continue justification
+  above.
+
+### 13. Skipped changes
+
+- Did not rewrite untouched anti-slop across `subway-network.ts` and prompt-kit.
+- Did not inline `transitLineId` or `locatedStopFeatures`.
+- Did not swap left-rail `clockFromIso` onto `formatNycRouteClock`.
+- Did not narrow `SubmitPrep` or delete `PREVIEW_EVENT_MAX`.
+- Did not add Playwright for Stop route planning (control never visible) or
+  Open in Live Feed (hides composer).
+- Did not lower the 24 functions at complexity 11 or 12.
+- Did not update `quality/baseline.json`.
+
+### 14. Remaining risks
+
+- Istanbul branch denominators jitter by a few counters across merges.
+- Node unit tests stub MapLibre CSS. They do not replace Playwright for map
+  layout.
+- Files still below 95% lines individually. Totals still meet the gate.
+- Full quality exits 1 until Codex removes the 42 stale entries.
+- Cursor sandbox remaps Playwright unless `PLAYWRIGHT_BROWSERS_PATH` points at
+  `C:\Users\19293\AppData\Local\ms-playwright`.
+
+### 15. Batch 9
+
+Batch 9 was not started.
+
+### 16. Commit state
+
+The Batch 8 tree is uncommitted. `quality/baseline.json` is unchanged.
+HEAD remains `6cd3238bc114e4a4176a77866b3b927aa57ed221`.
+
+### 17. Do not treat as Batch 8
+
+- `frontend/next-env.d.ts`
+- `frontend/CLAUDE.md`
+- backend files and `docs/README.md`
+- local levers under `.audit/` except `.audit/frontend-debt.json`
+
+### 18. Reviewer final
+
+Codex accepted the isolated Batch 8 diff after the worker repaired the two
+review findings. The coverage command removes any prior browser marker, maps
+Chromium records alone, and asserts original `chat-sidebar.tsx` line 143 before
+merging unit coverage. Its unit test proves unit-only coverage cannot satisfy
+the guard. Rendered `ChatMessage` tests protect the View alerts condition and
+source order. The route-view SSR clock test has no wall-clock comparison.
+
+The reviewer removed exactly 42 proven-stale TypeScript entries from
+`quality/baseline.json`, which reduced the file from 101 to 59 entries. No
+entry was added or widened. The generated update lowered the surviving
+`check_transit.execute` CRAP ceiling from 12.083333 to 12.010417.
+
+The final `py scripts/check_quality.py --quality-ref 6cd3238` command exits 0
+with `approval_eligible: true`, `tests_ran: true`, new 0, worsened 0, stale 0,
+cognitive new or worsened 0, Ruff C901 0, Ruff structural 0, and ESLint
+complexity 0. It passed 1,084 frontend tests and 1,915 backend tests, with 21
+backend skips and 446 backend subtests. The browser-only proof mapped original
+sidebar lines 1 through 271. Batch 8 component coverage remains 96.86% lines
+(16,374 / 16,904), 95.18% branches (4,422 / 4,646), and 95.52% functions
+(832 / 871). Batch 9 was not started.
 
 ## Whole-repository audit and revised next work (2026-08-30)
 

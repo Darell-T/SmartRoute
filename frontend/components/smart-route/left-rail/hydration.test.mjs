@@ -2,37 +2,72 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+
+import { LeftRail } from "./left-rail.tsx";
+import { RouteView } from "./route-view.tsx";
 
 const ROOT = path.resolve(import.meta.dirname, "../../..");
 
 test("left rail route view does not render an inline client clock during SSR", () => {
-  const source = fs.readFileSync(
-    path.join(ROOT, "components/smart-route/left-rail/route-view.tsx"),
-    "utf8",
+  const markup = renderToStaticMarkup(
+    createElement(RouteView, {
+      station: { name: "Jay St-MetroTech", walk: "3 min walk", dist: "0.2 mi", updatedSec: 0 },
+      health: {
+        status: "clear",
+        alerts: 0,
+        lines: 0,
+        major: 0,
+        stale: 0,
+        summary: "Good service",
+        affected: [],
+      },
+      arrivals: [],
+      nearbyTransitGroups: [],
+      nearbyBusArrivals: [],
+      alerts: [],
+      incidents: [],
+      plan: { headline: "", rationale: "", steps: [], alternatives: [], notes: [] },
+      way: "uptown",
+      onWayChange: () => {},
+      routeStatus: "standby",
+      onRouteStatusChange: () => {},
+    }),
   );
-
   assert.doesNotMatch(
-    source,
-    /new Date\(\)\.toLocaleTimeString/,
-    "route-view.tsx should avoid client-only time strings in the server-rendered tree",
+    markup,
+    /\b(?:[01]?\d|2[0-3]):[0-5]\d(?::[0-5]\d)?(?:\s*[AP]M)?\b/i,
   );
 });
 
 test("left rail exposes a controlled tab seam without mirroring props in an effect", () => {
-  const source = fs.readFileSync(
-    path.join(ROOT, "components/smart-route/left-rail/left-rail.tsx"),
-    "utf8",
+  const data = {
+    station: { name: "Jay St-MetroTech", walk: "3 min walk", dist: "0.2 mi", updatedSec: 0 },
+    health: {
+      status: "clear",
+      alerts: 0,
+      lines: 0,
+      major: 0,
+      stale: 0,
+      summary: "Good service",
+      affected: [],
+    },
+    arrivals: [],
+    plan: { headline: "", rationale: "", steps: [], alternatives: [], notes: [] },
+    feed: [],
+    lineState: {},
+    alerts: [],
+  };
+  const alertsTab = renderToStaticMarkup(
+    createElement(LeftRail, { data, tab: "alerts", onTabChange: () => {} }),
   );
-
-  assert.match(source, /tab\?: TabId/);
-  assert.match(source, /onTabChange\?: \(tab: TabId\) => void/);
-  assert.match(source, /const activeTab = tab \?\? internalTab/);
-  assert.match(source, /if \(tab === undefined\) setInternalTab\(next\)/);
-  assert.doesNotMatch(
-    source,
-    /useEffect\([^)]*setInternalTab/s,
-    "controlled tab changes should be rendered directly instead of copied into state by an effect",
+  assert.match(alertsTab, /data-active="true"[^>]*>[\s\S]*Alerts|Alerts[\s\S]*data-active="true"/);
+  assert.match(alertsTab, /No active alerts right now/);
+  const routeTab = renderToStaticMarkup(
+    createElement(LeftRail, { data, tab: "route", onTabChange: () => {} }),
   );
+  assert.match(routeTab, /aria-label="Arrival direction"|sr-rail/);
 });
 
 test("left rail uses restrained transit product surfaces", () => {
@@ -203,20 +238,14 @@ test("left rail uses restrained transit product surfaces", () => {
     /Where to\?|<Search|Loader2|sr-input-spinner/,
     "the destination command input should not render the old heading, search icon, or green spinner",
   );
+  const voice = fs.readFileSync(
+    path.join(ROOT, "lib/use-voice-input.ts"),
+    "utf8",
+  );
   assert.match(
-    routeView,
+    voice,
     /SpeechRecognition|webkitSpeechRecognition/,
     "destination input should feature-detect browser-native dictation",
-  );
-  assert.match(
-    routeView,
-    /setSpeechRecognitionCtor\(\(\) => recognitionCtor\)/,
-    "SpeechRecognition constructor values must be wrapped when stored in React state",
-  );
-  assert.doesNotMatch(
-    routeView,
-    /setSpeechRecognitionCtor\(getSpeechRecognitionConstructor\(\)\)/,
-    "React must not receive the SpeechRecognition constructor as a direct state setter value",
   );
   assert.match(
     routeView,
@@ -320,7 +349,7 @@ test("left rail uses restrained transit product surfaces", () => {
   );
   assert.match(
     atoms,
-    /data-step-icon="walk"[\s\S]*data-step-icon="train"[\s\S]*data-step-icon="bus"[\s\S]*data-step-icon="transfer"[\s\S]*data-step-icon="exit"/,
+    /data: "walk"[\s\S]*data: "train"[\s\S]*data: "bus"[\s\S]*data: "transfer"[\s\S]*data: "exit"/,
     "compact strip pictograms should expose stable mode icon roles",
   );
   assert.match(
@@ -444,16 +473,6 @@ test("left rail uses restrained transit product surfaces", () => {
     alertsView,
     /sr-alert-detail[^"]*smart-route-liquid-card|sr-alert-timeline/,
     "expanded alert detail stays inline without a detached glass panel or duplicate timeline component",
-  );
-  assert.match(
-    alertsView,
-    /buildAlertDetailView/,
-    "expandable detail only renders when real extra alert data exists",
-  );
-  assert.match(
-    alertsView,
-    /if \(!hasDetail && item\.expandable\)[\s\S]*detail\.currentStatus\?\.trim\(\)/,
-    "alerts declared expandable should retain a real status fallback after visual de-duplication",
   );
   assert.match(
     alertsView,

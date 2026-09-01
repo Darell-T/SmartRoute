@@ -1,13 +1,10 @@
 "use client";
 
 /**
- * Voice dictation for the chat composer, via the browser's Web Speech API.
- * This is a straight port of the recognition setup in
- * `components/smart-route/left-rail/route-view.tsx`'s `DestinationInput`
- * (the app's one other voice-input surface) into a reusable hook, so the
- * chat composer's mic behaves identically: single-shot (`continuous:
- * false`), final-results-only, English locale, and a graceful no-op when
- * the browser has no `SpeechRecognition`/`webkitSpeechRecognition`.
+ * Voice dictation for the chat composer and left-rail destination field.
+ * Both surfaces share this hook: single-shot (`continuous: false`),
+ * final-results-only, English locale, and a no-op when the browser has no
+ * `SpeechRecognition` or `webkitSpeechRecognition`.
  *
  * Kept intentionally free of any UI — `isListening`/`isSupported` are the
  * whole public surface a mic button needs.

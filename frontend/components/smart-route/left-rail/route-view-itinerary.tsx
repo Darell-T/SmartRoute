@@ -11,55 +11,43 @@ import { PredictionStatus } from "./route-view-nearby";
 import { LINE_COLORS } from "./types";
 import type { RouteDetailStep, RoutePlan, RouteStripSegment } from "./types";
 
-export function RecommendedRouteCard({
-  candidate,
-  plan,
-  destination,
-  cardRef,
-}: {
-  candidate: RecommendedRouteDisplay;
-  plan: RoutePlan;
-  destination?: string;
-  cardRef?: RefObject<HTMLElement | null>;
-}) {
-  const [detailsOpen, setDetailsOpen] = useState(false);
+function leaveByCopy(label: string | undefined): string | null {
+  if (!label) return null;
+  if (label === "now") return "Leave now";
+  return `Leave by ${label}`;
+}
+
+function recommendedFootMeta(
+  plan: RoutePlan,
+  candidate: RecommendedRouteDisplay,
+): string {
   const transfers = plan.transferCount ?? candidate.transfers ?? 0;
-  const hasDetails = (plan.detailSteps?.length ?? 0) > 0;
-  // Hero line: duration is the LargeTitle, arrival time rides the same
-  // baseline row. Leave-by only appears when the backend supplies it.
-  const etaLabel =
-    plan.eta && plan.eta !== "Live" ? `${plan.eta} arrival` : null;
-  const leaveByLabel = plan.leaveByLabel
-    ? plan.leaveByLabel === "now"
-      ? "Leave now"
-      : `Leave by ${plan.leaveByLabel}`
-    : null;
-  const hasNextDeparture =
-    typeof plan.nextDepartureMinutes === "number" &&
-    Number.isFinite(plan.nextDepartureMinutes);
-  const meta = [
+  return [
     `${transfers} transfer${transfers === 1 ? "" : "s"}`,
-    typeof candidate.walkMinutes === "number"
-      ? `${candidate.walkMinutes} min walk`
-      : null,
+    typeof candidate.walkMinutes === "number" ? `${candidate.walkMinutes} min walk` : null,
   ]
     .filter(Boolean)
     .join(" · ");
+}
 
+function RecommendedRouteHero({
+  plan,
+  etaLabel,
+  leaveByLabel,
+  hasNextDeparture,
+}: {
+  plan: RoutePlan;
+  etaLabel: string | null;
+  leaveByLabel: string | null;
+  hasNextDeparture: boolean;
+}) {
   return (
-    <article ref={cardRef} className="sr-recommended-route smart-route-liquid-card">
-      <div className="sr-recommended-route__top">
-        <CandidateStatusBadge
-          status={plan.isAlternativeRoute ? "selected" : "winner"}
-        />
-      </div>
+    <>
       <div className="sr-recommended-route__hero">
         <strong className="sr-recommended-route__duration">
           {formatDurationLabel(plan.totalTime)}
         </strong>
-        {etaLabel && (
-          <span className="sr-recommended-route__eta">{etaLabel}</span>
-        )}
+        {etaLabel && <span className="sr-recommended-route__eta">{etaLabel}</span>}
       </div>
       {leaveByLabel && (
         <span className="sr-recommended-route__leaveby">{leaveByLabel}</span>
@@ -79,6 +67,42 @@ export function RecommendedRouteCard({
         </p>
       )}
       {plan.rationale ? <TypedRouteReasoning text={plan.rationale} /> : null}
+    </>
+  );
+}
+
+export function RecommendedRouteCard({
+  candidate,
+  plan,
+  destination,
+  cardRef,
+}: {
+  candidate: RecommendedRouteDisplay;
+  plan: RoutePlan;
+  destination?: string;
+  cardRef?: RefObject<HTMLElement | null>;
+}) {
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const hasDetails = (plan.detailSteps?.length ?? 0) > 0;
+  const etaLabel = plan.eta && plan.eta !== "Live" ? `${plan.eta} arrival` : null;
+  const leaveByLabel = leaveByCopy(plan.leaveByLabel);
+  const hasNextDeparture =
+    typeof plan.nextDepartureMinutes === "number" && Number.isFinite(plan.nextDepartureMinutes);
+  const meta = recommendedFootMeta(plan, candidate);
+
+  return (
+    <article ref={cardRef} className="sr-recommended-route smart-route-liquid-card">
+      <div className="sr-recommended-route__top">
+        <CandidateStatusBadge
+          status={plan.isAlternativeRoute ? "selected" : "winner"}
+        />
+      </div>
+      <RecommendedRouteHero
+        plan={plan}
+        etaLabel={etaLabel}
+        leaveByLabel={leaveByLabel}
+        hasNextDeparture={hasNextDeparture}
+      />
       <div className="sr-recommended-route__footer">
         <span>{meta}</span>
         {hasDetails && (
@@ -289,6 +313,233 @@ export function RouteStepStrip({ segments }: { segments: RouteStripSegment[] }) 
   );
 }
 
+const RIDE_MOTION = { duration: 0.3, ease: [0.22, 1, 0.36, 1] as const };
+
+function rideLineColor(step: RouteDetailStep): string {
+  if (step.mode === "bus") return "#38445c";
+  return (step.routeId && LINE_COLORS[step.routeId]) || "var(--sr-rule-bright)";
+}
+
+function RideMetaToggle({
+  rideMeta,
+  canExpand,
+  expanded,
+  stopListId,
+  onToggle,
+  reduceMotion,
+}: {
+  rideMeta?: string;
+  canExpand: boolean;
+  expanded: boolean;
+  stopListId: string;
+  onToggle: () => void;
+  reduceMotion: boolean;
+}) {
+  if (!rideMeta) return null;
+  if (!canExpand) return <span className="sr-detail-ride__meta">{rideMeta}</span>;
+  return (
+    <button
+      type="button"
+      className="sr-detail-ride__disclosure"
+      aria-expanded={expanded}
+      aria-controls={stopListId}
+      onClick={onToggle}
+    >
+      <span>{rideMeta}</span>
+      <motion.span
+        className="sr-detail-ride__chevron"
+        animate={{ rotate: expanded ? 180 : 0 }}
+        transition={reduceMotion ? { duration: 0 } : RIDE_MOTION}
+      >
+        <ChevronDown size={14} strokeWidth={1.8} aria-hidden="true" />
+      </motion.span>
+    </button>
+  );
+}
+
+function RideStopList({
+  expanded,
+  rideStops,
+  stopListId,
+  reduceMotion,
+}: {
+  expanded: boolean;
+  rideStops: string[];
+  stopListId: string;
+  reduceMotion: boolean;
+}) {
+  return (
+    <AnimatePresence initial={false}>
+      {expanded && rideStops.length > 0 ? (
+        <motion.ol
+          id={stopListId}
+          className="sr-detail-ride__stops"
+          initial={reduceMotion ? false : { opacity: 0, height: 0 }}
+          animate={{ opacity: 1, height: "auto" }}
+          exit={reduceMotion ? undefined : { opacity: 0, height: 0 }}
+          transition={reduceMotion ? { duration: 0 } : RIDE_MOTION}
+        >
+          {rideStops.map((stop, stopIndex) => (
+            <li key={`${stopListId}-${stop}-${stopIndex}`}>{stop}</li>
+          ))}
+        </motion.ol>
+      ) : null}
+    </AnimatePresence>
+  );
+}
+
+function RideTransferNote({ step }: { step: RouteDetailStep }) {
+  if (!step.transferTo) return null;
+  return (
+    <small className="sr-detail-ride__transfer">
+      <StepIcon type="transfer" />
+      Transfer to the
+      <span className="sr-line-token">
+        {step.transferMode === "bus" ? (
+          <BusChip route={step.transferTo} />
+        ) : (
+          <RouteBullet line={step.transferTo} size={14} />
+        )}
+      </span>
+      {step.transferMode === "bus" ? "bus" : "train"}
+    </small>
+  );
+}
+
+function DetailRideStep({
+  step,
+  index,
+  expanded,
+  onToggle,
+  reduceMotion,
+}: {
+  step: RouteDetailStep;
+  index: number;
+  expanded: boolean;
+  onToggle: (index: number) => void;
+  reduceMotion: boolean;
+}) {
+  const rideStops = step.stops ?? [];
+  const stopListId = `sr-ride-stops-${index}`;
+  return (
+    <li className="sr-detail-ride">
+      <span
+        className="sr-detail-ride__line"
+        style={{ background: rideLineColor(step) }}
+        aria-hidden="true"
+      />
+      <span className="sr-detail-ride__copy">
+        {step.fromStop && <strong>{step.fromStop}</strong>}
+        <RideMetaToggle
+          rideMeta={step.rideMeta}
+          canExpand={rideStops.length > 0}
+          expanded={expanded}
+          stopListId={stopListId}
+          onToggle={() => onToggle(index)}
+          reduceMotion={reduceMotion}
+        />
+        <RideStopList
+          expanded={expanded}
+          rideStops={rideStops}
+          stopListId={stopListId}
+          reduceMotion={reduceMotion}
+        />
+        {step.toStop && <strong>{step.toStop}</strong>}
+        <RideTransferNote step={step} />
+      </span>
+    </li>
+  );
+}
+
+function DetailVehicleIcon({ step }: { step: RouteDetailStep }) {
+  if (step.kind !== "board" || !step.routeId) return <StepIcon type="walk" />;
+  if (step.mode === "bus") {
+    return (
+      <span className="sr-detail-step__vehicle">
+        <BusChip route={step.routeId} />
+        <StepIcon type="bus" />
+      </span>
+    );
+  }
+  return (
+    <span className="sr-detail-step__vehicle">
+      <RouteBullet line={step.routeId} size={22} />
+      <StepIcon type="ride" />
+    </span>
+  );
+}
+
+function DetailGenericStep({ step }: { step: RouteDetailStep }) {
+  return (
+    <li className="sr-detail-step">
+      <span className="sr-detail-step__icon">
+        <DetailVehicleIcon step={step} />
+      </span>
+      <span className="sr-detail-step__copy">
+        <strong>{step.title}</strong>
+        {step.subtitle && <small>{step.subtitle}</small>}
+        {step.note && (
+          <small className="sr-detail-step__note">
+            {step.note}
+            {step.live && (
+              <PredictionStatus predictionType="live" predictionFreshness="fresh" />
+            )}
+          </small>
+        )}
+      </span>
+    </li>
+  );
+}
+
+function DetailChainStep({
+  step,
+  index,
+  expanded,
+  onToggle,
+  reduceMotion,
+}: {
+  step: RouteDetailStep;
+  index: number;
+  expanded: boolean;
+  onToggle: (index: number) => void;
+  reduceMotion: boolean;
+}) {
+  if (step.kind === "segment") {
+    return (
+      <li className="sr-detail-step sr-detail-step--segment">
+        <span className="sr-detail-step__copy">
+          <strong>{step.title}</strong>
+        </span>
+      </li>
+    );
+  }
+  if (step.kind === "dwell") {
+    return (
+      <li className="sr-detail-step sr-detail-step--dwell">
+        <span className="sr-detail-step__icon">
+          <LocationPin tone="start" size={18} />
+        </span>
+        <span className="sr-detail-step__copy">
+          <strong>{step.title}</strong>
+          {step.subtitle && <small>{step.subtitle}</small>}
+        </span>
+      </li>
+    );
+  }
+  if (step.kind === "ride") {
+    return (
+      <DetailRideStep
+        step={step}
+        index={index}
+        expanded={expanded}
+        onToggle={onToggle}
+        reduceMotion={reduceMotion}
+      />
+    );
+  }
+  return <DetailGenericStep step={step} />;
+}
+
 function RouteDetailsChain({
   steps,
   destination,
@@ -322,160 +573,16 @@ function RouteDetailsChain({
           <small>Your location</small>
         </span>
       </li>
-      {steps.map((step, index) => {
-        if (step.kind === "segment") {
-          return (
-            <li key={index} className="sr-detail-step sr-detail-step--segment">
-              <span className="sr-detail-step__copy">
-                <strong>{step.title}</strong>
-              </span>
-            </li>
-          );
-        }
-        if (step.kind === "dwell") {
-          return (
-            <li key={index} className="sr-detail-step sr-detail-step--dwell">
-              <span className="sr-detail-step__icon">
-                <LocationPin tone="start" size={18} />
-              </span>
-              <span className="sr-detail-step__copy">
-                <strong>{step.title}</strong>
-                {step.subtitle && <small>{step.subtitle}</small>}
-              </span>
-            </li>
-          );
-        }
-        if (step.kind === "ride") {
-          const lineColor =
-            step.mode === "bus"
-              ? "#38445c"
-              : (step.routeId && LINE_COLORS[step.routeId]) ||
-                "var(--sr-rule-bright)";
-          const rideStops = step.stops ?? [];
-          const canExpand = rideStops.length > 0;
-          const expanded = expandedRideIds.has(index);
-          const stopListId = `sr-ride-stops-${index}`;
-          return (
-            <li key={index} className="sr-detail-ride">
-              <span
-                className="sr-detail-ride__line"
-                style={{ background: lineColor }}
-                aria-hidden="true"
-              />
-              <span className="sr-detail-ride__copy">
-                {step.fromStop && <strong>{step.fromStop}</strong>}
-                {step.rideMeta ? (
-                  canExpand ? (
-                    <button
-                      type="button"
-                      className="sr-detail-ride__disclosure"
-                      aria-expanded={expanded}
-                      aria-controls={stopListId}
-                      onClick={() => toggleRide(index)}
-                    >
-                      <span>{step.rideMeta}</span>
-                      <motion.span
-                        className="sr-detail-ride__chevron"
-                        animate={{ rotate: expanded ? 180 : 0 }}
-                        transition={
-                          reduceMotion
-                            ? { duration: 0 }
-                            : { duration: 0.3, ease: [0.22, 1, 0.36, 1] }
-                        }
-                      >
-                        <ChevronDown
-                          size={14}
-                          strokeWidth={1.8}
-                          aria-hidden="true"
-                        />
-                      </motion.span>
-                    </button>
-                  ) : (
-                    <span className="sr-detail-ride__meta">{step.rideMeta}</span>
-                  )
-                ) : null}
-                <AnimatePresence initial={false}>
-                  {expanded && rideStops.length > 0 ? (
-                    <motion.ol
-                      id={stopListId}
-                      className="sr-detail-ride__stops"
-                      initial={reduceMotion ? false : { opacity: 0, height: 0 }}
-                      animate={{ opacity: 1, height: "auto" }}
-                      exit={
-                        reduceMotion ? undefined : { opacity: 0, height: 0 }
-                      }
-                      transition={
-                        reduceMotion
-                          ? { duration: 0 }
-                          : { duration: 0.3, ease: [0.22, 1, 0.36, 1] }
-                      }
-                    >
-                      {rideStops.map((stop, stopIndex) => (
-                        <li key={`${stopListId}-${stop}-${stopIndex}`}>
-                          {stop}
-                        </li>
-                      ))}
-                    </motion.ol>
-                  ) : null}
-                </AnimatePresence>
-                {step.toStop && <strong>{step.toStop}</strong>}
-                {step.transferTo && (
-                  <small className="sr-detail-ride__transfer">
-                    <StepIcon type="transfer" />
-                    Transfer to the
-                    <span className="sr-line-token">
-                      {step.transferMode === "bus" ? (
-                        <BusChip route={step.transferTo} />
-                      ) : (
-                        <RouteBullet line={step.transferTo} size={14} />
-                      )}
-                    </span>
-                    {step.transferMode === "bus" ? "bus" : "train"}
-                  </small>
-                )}
-              </span>
-            </li>
-          );
-        }
-        return (
-          <li key={index} className="sr-detail-step">
-            <span className="sr-detail-step__icon">
-              {step.kind === "board" && step.routeId ? (
-                <span className="sr-detail-step__vehicle">
-                  {step.mode === "bus" ? (
-                    <>
-                      <BusChip route={step.routeId} />
-                      <StepIcon type="bus" />
-                    </>
-                  ) : (
-                    <>
-                      <RouteBullet line={step.routeId} size={22} />
-                      <StepIcon type="ride" />
-                    </>
-                  )}
-                </span>
-              ) : (
-                <StepIcon type="walk" />
-              )}
-            </span>
-            <span className="sr-detail-step__copy">
-              <strong>{step.title}</strong>
-              {step.subtitle && <small>{step.subtitle}</small>}
-              {step.note && (
-                <small className="sr-detail-step__note">
-                  {step.note}
-                  {step.live && (
-                    <PredictionStatus
-                      predictionType="live"
-                      predictionFreshness="fresh"
-                    />
-                  )}
-                </small>
-              )}
-            </span>
-          </li>
-        );
-      })}
+      {steps.map((step, index) => (
+        <DetailChainStep
+          key={index}
+          step={step}
+          index={index}
+          expanded={expandedRideIds.has(index)}
+          onToggle={toggleRide}
+          reduceMotion={reduceMotion}
+        />
+      ))}
       <li className="sr-detail-step">
         <span className="sr-detail-step__icon">
           <LocationPin tone="arrive" size={20} />

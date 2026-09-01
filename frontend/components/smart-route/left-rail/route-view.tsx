@@ -61,7 +61,6 @@ export function RouteView({
 }) {
   const isPlanning = routeStatus === "thinking";
   const isReady = routeStatus === "result";
-  const isError = routeStatus === "error";
   const isChatHandoff = isReady && plan.entryContext === "chat";
   const recommended = useMemo(
     () => (isReady ? recommendedCandidateFromPlan(plan) : null),
@@ -76,9 +75,6 @@ export function RouteView({
     shouldReduceMotion,
     enabled: !isChatHandoff,
   });
-  // Public evaluation insights for the planning state, derived from the
-  // live facts the rail already holds (station access, live arrivals,
-  // official alerts, reported incidents). No fact → no line.
   const planningInsights = useMemo(
     () =>
       isPlanning
@@ -103,92 +99,25 @@ export function RouteView({
       ) : null}
 
       <AnimatePresence mode="wait" initial={false}>
-        {routeStatus === "standby" && (
-          <motion.div key="idle" {...CONTENT_PHASE}>
-            <NearbyTransitPanel
-              station={station}
-              arrivals={arrivals}
-              nearbyTransitGroups={nearbyTransitGroups}
-              nearbyBusArrivals={nearbyBusArrivals}
-              way={way}
-              onWayChange={onWayChange}
-              onRequestRailExpand={onRequestRailExpand}
-            />
-          </motion.div>
-        )}
-
-        {isPlanning && (
-          <motion.div key="plan-flow" {...CONTENT_PHASE}>
-            <section className="sr-rail-section">
-              <RoutePlanningReasoning
-                destination={search?.inputValue ?? ""}
-                insights={planningInsights}
-              />
-            </section>
-          </motion.div>
-        )}
-
-        {isReady && recommended && isChatHandoff && (
-          <motion.div key="chat-directions" {...CONTENT_PHASE}>
-            <section className="sr-rail-section">
-              <RouteDirections
-                plan={plan}
-                destination={plan.journeyPlaces?.at(-1) ?? search?.inputValue}
-              />
-            </section>
-          </motion.div>
-        )}
-
-        {isReady && recommended && !isChatHandoff && (
-          <motion.div key="results" {...CONTENT_PHASE}>
-            <LayoutGroup id="sr-route-results">
-              <section className="sr-rail-section">
-                <motion.div
-                  key={routeResultKey(plan)}
-                  layout
-                  initial={
-                    shouldReduceMotion ? { opacity: 0 } : { opacity: 0, y: 6 }
-                  }
-                  animate={
-                    shouldReduceMotion ? { opacity: 1 } : { opacity: 1, y: 0 }
-                  }
-                  transition={{ duration: 0.22, ease: "easeOut" }}
-                >
-                  <RecommendedRouteCard
-                    candidate={recommended}
-                    plan={plan}
-                    destination={plan.journeyPlaces?.at(-1) ?? search?.inputValue}
-                    cardRef={recommendedCardRef}
-                  />
-                </motion.div>
-                {plan.alternatives.length > 0 && (
-                  <AlternateRoutesCollapsible
-                    alternatives={plan.alternatives}
-                    onSelectAlternative={onSelectAlternative}
-                  />
-                )}
-              </section>
-            </LayoutGroup>
-          </motion.div>
-        )}
-
-        {isError && (
-          <motion.div key="error" {...CONTENT_PHASE}>
-            <RouteErrorPanel
-              onRetry={() => {
-                if (search?.inputValue.trim()) {
-                  search.onSubmit(search.inputValue.trim(), null);
-                } else {
-                  onRouteStatusChange("standby");
-                }
-              }}
-              onClear={() => {
-                search?.onClear();
-                onRouteStatusChange("standby");
-              }}
-            />
-          </motion.div>
-        )}
+        <RouteStatusContent
+          routeStatus={routeStatus}
+          isChatHandoff={isChatHandoff}
+          recommended={recommended}
+          station={station}
+          arrivals={arrivals}
+          nearbyTransitGroups={nearbyTransitGroups}
+          nearbyBusArrivals={nearbyBusArrivals}
+          way={way}
+          onWayChange={onWayChange}
+          onRequestRailExpand={onRequestRailExpand}
+          search={search}
+          planningInsights={planningInsights}
+          plan={plan}
+          recommendedCardRef={recommendedCardRef}
+          shouldReduceMotion={shouldReduceMotion}
+          onSelectAlternative={onSelectAlternative}
+          onRouteStatusChange={onRouteStatusChange}
+        />
       </AnimatePresence>
     </div>
   );
@@ -203,6 +132,165 @@ const CONTENT_PHASE = {
   exit: { opacity: 0, y: -4 },
   transition: { duration: 0.2, ease: "easeOut" as const },
 };
+
+function journeyDestination(plan: RoutePlan, search?: RailSearchProps) {
+  return plan.journeyPlaces?.at(-1) ?? search?.inputValue;
+}
+
+function RouteResultsPanel({
+  plan,
+  recommended,
+  search,
+  recommendedCardRef,
+  shouldReduceMotion,
+  onSelectAlternative,
+}: {
+  plan: RoutePlan;
+  recommended: ReturnType<typeof recommendedCandidateFromPlan>;
+  search?: RailSearchProps;
+  recommendedCardRef: RefObject<HTMLElement | null>;
+  shouldReduceMotion: boolean | null;
+  onSelectAlternative?: (candidateId: string) => void;
+}) {
+  const hidden = shouldReduceMotion ? { opacity: 0 } : { opacity: 0, y: 6 };
+  const visible = shouldReduceMotion ? { opacity: 1 } : { opacity: 1, y: 0 };
+  return (
+    <motion.div key="results" {...CONTENT_PHASE}>
+      <LayoutGroup id="sr-route-results">
+        <section className="sr-rail-section">
+          <motion.div
+            key={routeResultKey(plan)}
+            layout
+            initial={hidden}
+            animate={visible}
+            transition={{ duration: 0.22, ease: "easeOut" }}
+          >
+            <RecommendedRouteCard
+              candidate={recommended}
+              plan={plan}
+              destination={journeyDestination(plan, search)}
+              cardRef={recommendedCardRef}
+            />
+          </motion.div>
+          {plan.alternatives.length > 0 && (
+            <AlternateRoutesCollapsible
+              alternatives={plan.alternatives}
+              onSelectAlternative={onSelectAlternative}
+            />
+          )}
+        </section>
+      </LayoutGroup>
+    </motion.div>
+  );
+}
+
+function RouteStatusContent({
+  routeStatus,
+  isChatHandoff,
+  recommended,
+  station,
+  arrivals,
+  nearbyTransitGroups,
+  nearbyBusArrivals,
+  way,
+  onWayChange,
+  onRequestRailExpand,
+  search,
+  planningInsights,
+  plan,
+  recommendedCardRef,
+  shouldReduceMotion,
+  onSelectAlternative,
+  onRouteStatusChange,
+}: {
+  routeStatus: RouteRailStatus;
+  isChatHandoff: boolean;
+  recommended: ReturnType<typeof recommendedCandidateFromPlan> | null;
+  station: Station;
+  arrivals: Arrival[];
+  nearbyTransitGroups: NearbyTransitGroup[];
+  nearbyBusArrivals: Arrival[];
+  way: ArrivalFilter;
+  onWayChange: (d: ArrivalFilter) => void;
+  onRequestRailExpand?: () => void;
+  search?: RailSearchProps;
+  planningInsights: ReturnType<typeof buildRouteReasoningInsights>;
+  plan: RoutePlan;
+  recommendedCardRef: RefObject<HTMLElement | null>;
+  shouldReduceMotion: boolean | null;
+  onSelectAlternative?: (candidateId: string) => void;
+  onRouteStatusChange: (s: RouteRailStatus) => void;
+}) {
+  if (routeStatus === "standby") {
+    return (
+      <motion.div key="idle" {...CONTENT_PHASE}>
+        <NearbyTransitPanel
+          station={station}
+          arrivals={arrivals}
+          nearbyTransitGroups={nearbyTransitGroups}
+          nearbyBusArrivals={nearbyBusArrivals}
+          way={way}
+          onWayChange={onWayChange}
+          onRequestRailExpand={onRequestRailExpand}
+        />
+      </motion.div>
+    );
+  }
+  if (routeStatus === "thinking") {
+    return (
+      <motion.div key="plan-flow" {...CONTENT_PHASE}>
+        <section className="sr-rail-section">
+          <RoutePlanningReasoning
+            destination={search?.inputValue ?? ""}
+            insights={planningInsights}
+          />
+        </section>
+      </motion.div>
+    );
+  }
+  if (routeStatus === "error") {
+    return (
+      <motion.div key="error" {...CONTENT_PHASE}>
+        <RouteErrorPanel
+          onRetry={() => {
+            if (search?.inputValue.trim()) {
+              search.onSubmit(search.inputValue.trim(), null);
+            } else {
+              onRouteStatusChange("standby");
+            }
+          }}
+          onClear={() => {
+            search?.onClear();
+            onRouteStatusChange("standby");
+          }}
+        />
+      </motion.div>
+    );
+  }
+  if (routeStatus !== "result" || !recommended) return null;
+  if (isChatHandoff) {
+    return (
+      <motion.div key="chat-directions" {...CONTENT_PHASE}>
+        <section className="sr-rail-section">
+          <RouteDirections
+            plan={plan}
+            destination={journeyDestination(plan, search)}
+          />
+        </section>
+      </motion.div>
+    );
+  }
+  return (
+    <RouteResultsPanel
+      plan={plan}
+      recommended={recommended}
+      search={search}
+      recommendedCardRef={recommendedCardRef}
+      shouldReduceMotion={shouldReduceMotion}
+      onSelectAlternative={onSelectAlternative}
+    />
+  );
+}
 
 /* ── Scroll choreography ──────────────────────────────────────────────
    The rail scrolls so the recommended card sits at the top, just under

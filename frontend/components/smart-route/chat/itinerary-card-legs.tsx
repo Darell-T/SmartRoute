@@ -16,7 +16,7 @@ import { intermediateStopNames } from "./itinerary-event-adapter";
 import { warnUnsupportedRouteId, type ItineraryEvent } from "./itinerary-view-model";
 import { WalkingIcon } from "./walking-icon";
 
-export const LAYOUT_EASE = [0.22, 1, 0.36, 1] as const;
+export const LAYOUT_EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 
 export function JourneyTitle({ names, id }: { names: string[]; id: string }) {
   return (
@@ -67,8 +67,49 @@ function RouteGlyph({
   return <TrainBullet line={normalized} size={24} />;
 }
 
-function intermediateStops(event: ItineraryEvent): string[] {
-  return intermediateStopNames(event);
+function RideDisclosure({
+  eventId,
+  rideLabel,
+  canExpand,
+  expanded,
+  onToggle,
+  motionTransition,
+}: {
+  eventId: string;
+  rideLabel: string;
+  canExpand: boolean;
+  expanded: boolean;
+  onToggle: () => void;
+  motionTransition: { duration: number; ease?: [number, number, number, number] };
+}) {
+  if (!rideLabel) return null;
+  if (!canExpand) {
+    return (
+      <p className="sr-itinerary-card__ride-summary">
+        <span className="sr-itinerary-card__chain-summary-marker" aria-hidden="true" />
+        <span>Ride {rideLabel}</span>
+      </p>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className="sr-itinerary-card__disclosure"
+      aria-expanded={expanded}
+      aria-controls={`${eventId}-stops`}
+      onClick={onToggle}
+    >
+      <span className="sr-itinerary-card__chain-summary-marker" aria-hidden="true" />
+      <span>Ride {rideLabel}</span>
+      <motion.span
+        className="sr-itinerary-card__disclosure-icon"
+        animate={{ rotate: expanded ? 180 : 0 }}
+        transition={motionTransition}
+      >
+        <NavArrowDown width={14} height={14} strokeWidth={1.8} />
+      </motion.span>
+    </button>
+  );
 }
 
 function StopChain({
@@ -86,53 +127,31 @@ function StopChain({
   onToggle: () => void;
   reduceMotion: boolean;
 }) {
-  const stops = intermediateStops(event);
-  const disclosure = rideLabel ? (
-    canExpand ? (
-      <button
-        type="button"
-        className="sr-itinerary-card__disclosure"
-        aria-expanded={expanded}
-        aria-controls={`${event.id}-stops`}
-        onClick={onToggle}
-      >
-        <span className="sr-itinerary-card__chain-summary-marker" aria-hidden="true" />
-        <span>Ride {rideLabel}</span>
-        <motion.span
-          className="sr-itinerary-card__disclosure-icon"
-          animate={{ rotate: expanded ? 180 : 0 }}
-          transition={
-            reduceMotion ? { duration: 0 } : { duration: 0.3, ease: LAYOUT_EASE }
-          }
-        >
-          <NavArrowDown width={14} height={14} strokeWidth={1.8} />
-        </motion.span>
-      </button>
-    ) : (
-      <p className="sr-itinerary-card__ride-summary">
-        <span className="sr-itinerary-card__chain-summary-marker" aria-hidden="true" />
-        <span>Ride {rideLabel}</span>
-      </p>
-    )
-  ) : null;
+  const stops = intermediateStopNames(event);
+  const motionTransition = reduceMotion
+    ? { duration: 0 }
+    : { duration: 0.3, ease: LAYOUT_EASE };
+  const routeColor = event.kind === "bus" ? "#5f8fd9" : getRouteColor(event.routeIds[0] ?? "");
 
   return (
     <div
       className="sr-itinerary-card__stop-chain"
       data-expanded={expanded ? "true" : "false"}
-      style={
-        {
-          "--sr-route-color":
-            event.kind === "bus" ? "#5f8fd9" : getRouteColor(event.routeIds[0] ?? ""),
-        } as CSSProperties
-      }
+      style={{ "--sr-route-color": routeColor } as CSSProperties}
     >
       <div className="sr-itinerary-card__chain-track">
         <div className="sr-itinerary-card__chain-row">
           <span className="sr-itinerary-card__chain-marker sr-itinerary-card__chain-marker--start" />
           <span className="sr-itinerary-card__station">{event.fromLabel ?? "Board"}</span>
         </div>
-        {disclosure}
+        <RideDisclosure
+          eventId={event.id}
+          rideLabel={rideLabel}
+          canExpand={canExpand}
+          expanded={expanded}
+          onToggle={onToggle}
+          motionTransition={motionTransition}
+        />
         <AnimatePresence initial={false}>
           {expanded && stops.length > 0 ? (
             <motion.ol
@@ -141,9 +160,7 @@ function StopChain({
               initial={reduceMotion ? false : { opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: "auto" }}
               exit={reduceMotion ? undefined : { opacity: 0, height: 0 }}
-              transition={
-                reduceMotion ? { duration: 0 } : { duration: 0.3, ease: LAYOUT_EASE }
-              }
+              transition={motionTransition}
             >
               {stops.map((stop, index) => (
                 <motion.li
@@ -183,7 +200,7 @@ function TransitLeg({
   onToggle: () => void;
   reduceMotion: boolean;
 }) {
-  const stopNames = intermediateStops(event);
+  const stopNames = intermediateStopNames(event);
   const stopsLabel =
     typeof event.stopCount === "number"
       ? `${event.stopCount} ${event.stopCount === 1 ? "stop" : "stops"}`

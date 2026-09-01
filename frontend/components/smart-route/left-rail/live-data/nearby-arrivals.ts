@@ -58,10 +58,8 @@ function busWay(
   const compass = String(stopCompass ?? "").toUpperCase();
   if (compass.includes("N")) return "uptown";
   if (compass.includes("S")) return "downtown";
-  return normalizeWay(direction) === "unknown" ? "unknown" : normalizeWay(direction);
+  return normalizeWay(direction);
 }
-
-/* GTFS abbreviations that keep their transit spelling when title-cased. */
 
 function isDirectionOnlyDestination(value: string, direction: NearbyTransitDirection): boolean {
   const clean = value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
@@ -476,75 +474,83 @@ export function buildNearbyBusArrivals(serviceRows: Arrival[]): Arrival[] {
     .slice(0, 12);
 }
 
+function liveArrivalMode(arrival: LiveArrival): "subway" | "bus" {
+  return String(arrival.mode ?? "subway") === "bus" ? "bus" : "subway";
+}
+
+function liveHeadsignFields(
+  arrival: LiveArrival,
+  line: string,
+  direction: NearbyTransitDirection,
+  mode: "subway" | "bus",
+): { destination: string; servicePattern: string | undefined } {
+  const headsign = destinationForArrival(arrival, line, direction, mode);
+  if (mode !== "bus") {
+    return { destination: headsign, servicePattern: servicePatternForArrival(arrival, line, mode) };
+  }
+  const parts = splitBusHeadsign(headsign);
+  return {
+    destination: parts.destination || headsign,
+    servicePattern: parts.qualifiers.length
+      ? parts.qualifiers.join(" · ")
+      : servicePatternForArrival(arrival, line, mode),
+  };
+}
+
+function arrivalFromLive(arrival: LiveArrival, nowMs: number): Arrival | null {
+  const arrivalTime = Number(arrival.arrival_time);
+  if (!Number.isFinite(arrivalTime)) return null;
+  const line = normalizeRouteId(String(arrival.route_id ?? "").trim());
+  if (!line) return null;
+  const distanceM = stationDistanceForArrival(arrival);
+  if (!isInsideHalfMile(distanceM)) return null;
+  const mins = minutesUntilArrival(arrivalTime, nowMs);
+  const stopId = String(arrival.stop_id ?? "");
+  const mode = liveArrivalMode(arrival);
+  const direction =
+    mode === "bus"
+      ? busWay(arrival.stop_compass, arrival.direction)
+      : normalizeWay(arrival.direction, stopId);
+  const { destination, servicePattern } = liveHeadsignFields(arrival, line, direction, mode);
+  const stopName = stationNameForArrival(arrival);
+  const stale = arrivalTime < nowMs / 1000 - 60;
+  const alertSeverity = alertSeverityForDelay(Number(arrival.delay));
+  const predictionType = predictionTypeForArrival(arrival);
+  return {
+    id: [mode, line, direction, destination, stopName ?? ""].join("|"),
+    mode,
+    routeIds: [line],
+    destination,
+    servicePattern,
+    stopName,
+    walkMinutes: walkMinutesForDistance(distanceM),
+    distanceMiles: distanceMilesForMeters(distanceM),
+    arrivalMinutes: [mins],
+    direction,
+    predictionType,
+    predictionFreshness: predictionFreshnessForArrival(predictionType, stale),
+    alertSeverity,
+    line,
+    way: direction,
+    dest: destination,
+    label: labelForMinutes(mins),
+    mins,
+    status: alertSeverity === "none" ? "On Time" : "Delayed",
+    stale,
+    stationName: stopName,
+    stationDistanceM: distanceM,
+  };
+}
+
 export function buildArrivalRows(
   liveFeed: Partial<LiveFeedResponse> | null | undefined,
   nowMs = Date.now(),
 ): ArrivalRows {
   const arrivals: Arrival[] = [];
   for (const arrival of liveFeed?.arrivals ?? []) {
-    const arrivalTime = Number(arrival.arrival_time);
-    if (!Number.isFinite(arrivalTime)) continue;
-    const line = normalizeRouteId(String(arrival.route_id ?? "").trim());
-    if (!line) continue;
-    const mins = minutesUntilArrival(arrivalTime, nowMs);
-    const distanceM = stationDistanceForArrival(arrival);
-    if (!isInsideHalfMile(distanceM)) continue;
-    const delay = Number(arrival.delay);
-    const stopId = String(arrival.stop_id ?? "");
-    const mode: "subway" | "bus" =
-      String(arrival.mode ?? "subway") === "bus" ? "bus" : "subway";
-    const direction =
-      mode === "bus"
-        ? busWay(arrival.stop_compass, arrival.direction)
-        : normalizeWay(arrival.direction, stopId);
-    let destination = destinationForArrival(arrival, line, direction, mode);
-    let servicePattern = servicePatternForArrival(arrival, line, mode);
-    if (mode === "bus") {
-      const parts = splitBusHeadsign(destination);
-      if (parts.destination) destination = parts.destination;
-      if (parts.qualifiers.length > 0) {
-        servicePattern = parts.qualifiers.join(" · ");
-      }
-    }
-    const stopName = stationNameForArrival(arrival);
-    const walkMinutes = walkMinutesForDistance(distanceM);
-    const distanceMiles = distanceMilesForMeters(distanceM);
-    const stale = arrivalTime < nowMs / 1000 - 60;
-    const alertSeverity = alertSeverityForDelay(delay);
-    const predictionType = predictionTypeForArrival(arrival);
-    const predictionFreshness = predictionFreshnessForArrival(predictionType, stale);
-    arrivals.push({
-      id: [
-        mode,
-        line,
-        direction,
-        destination,
-        stopName ?? "",
-      ].join("|"),
-      mode,
-      routeIds: [line],
-      destination,
-      servicePattern,
-      stopName,
-      walkMinutes,
-      distanceMiles,
-      arrivalMinutes: [mins],
-      direction,
-      predictionType,
-      predictionFreshness,
-      alertSeverity,
-      line,
-      way: direction,
-      dest: destination,
-      label: labelForMinutes(mins),
-      mins,
-      status: alertSeverity === "none" ? "On Time" : "Delayed",
-      stale,
-      stationName: stopName,
-      stationDistanceM: distanceM,
-    });
+    const row = arrivalFromLive(arrival, nowMs);
+    if (row) arrivals.push(row);
   }
-
   arrivals.sort((left, right) => left.mins - right.mins);
   return {
     serviceRows: collapseToServiceRows(arrivals).slice(0, 48),

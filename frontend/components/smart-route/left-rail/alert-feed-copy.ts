@@ -107,15 +107,52 @@ export function leadSentences(
   return output || undefined;
 }
 
+function rewriteMedicalTitle(text: string): string | null {
+  if (!/person needed medical attention|medical assistance/i.test(text)) return null;
+  return titleWithAt(text.replace(/person needed medical attention/i, "Medical assistance"));
+}
+
+function rewritePartialSuspensionTitle(text: string): string | null {
+  if (!/partial suspension/i.test(text)) return null;
+  return text.replace(/\s*-\s*/g, " between ").replace(/\s+and\s+and\s+/i, " and ");
+}
+
+function rewriteDelayTitle(text: string): string | null {
+  const runningDelays = text.match(/\btrains?\s+(?:are\s+)?running with delays\b(.*)$/i);
+  if (runningDelays) return sentenceCase(`Delays${runningDelays[1]}`.trim());
+  const noService = text.match(
+    /\bthere is no (?:[A-Za-z0-9/ ]{1,12}\s)?service (?:in either direction )?(between [A-Za-z0-9 .'\-\/]+?)(?:[.,]|$)/i,
+  );
+  if (noService) return sentenceCase(`No service ${noService[1].trim()}`);
+  const everyMinutes = text.match(/\bruns?\s+(?:about\s+)?every\s+(\d+)\s+minutes?\b([^.,]*)/i);
+  if (!everyMinutes) return null;
+  return `Runs every ${everyMinutes[1]} minutes${everyMinutes[2].replace(/\s+/g, " ").trimEnd()}`;
+}
+
+function rewritePatternTitle(text: string, routePattern: RegExp | null): string | null {
+  if (/\b(?:trains?\s+(?:are\s+)?running|runs?)\s+express\b/i.test(text)) return "Running express";
+  if (/\b(?:trains?\s+(?:are\s+)?running|runs?)\s+local\b/i.test(text)) return "Running local";
+  if (/\bskip(?:s|ping)?\b/i.test(text) && !/suspension/i.test(text)) return "Skipping stations";
+  if (/\badditional\b[^.]*\bservice\b/i.test(text)) return "Additional service";
+  if (routePattern?.test(text)) return "Trains running with delays";
+  return null;
+}
+
+function rewriteLeadTitle(withoutSource: string): string | null {
+  const leadStripped = withoutSource.replace(/^(?:\[[A-Za-z0-9+-]{1,4}\]\s*)+/, "").trim();
+  if (leadStripped === withoutSource) return null;
+  if (!/^(?:runs?|trains?|service|is|are|will|has|have|no)\b/i.test(leadStripped)) return null;
+  if (leadStripped.split(/\s+/).length < 3) return null;
+  return sentenceCase(leadStripped);
+}
+
 export function compactAlertTitle(
   title: string,
   routeIds: string[] = [],
   fallback = "Service alert",
 ): string {
   const cleaned = cleanPassengerAlertText(title);
-  if (!cleaned) {
-    return fallback;
-  }
+  if (!cleaned) return fallback;
 
   const withoutSource = cleaned.replace(/^MTA\s+/i, "").trim();
   const withoutTokens = withoutSource.replace(ROUTE_TOKEN_PATTERN, "$1").trim();
@@ -126,67 +163,14 @@ export function compactAlertTitle(
       )
     : null;
 
-  if (/person needed medical attention|medical assistance/i.test(withoutTokens)) {
-    return titleWithAt(
-      withoutTokens.replace(/person needed medical attention/i, "Medical assistance"),
-    );
-  }
-  if (/partial suspension/i.test(withoutTokens)) {
-    return withoutTokens
-      .replace(/\s*-\s*/g, " between ")
-      .replace(/\s+and\s+and\s+/i, " and ");
-  }
-
-  const runningDelays = withoutTokens.match(
-    /\btrains?\s+(?:are\s+)?running with delays\b(.*)$/i,
+  return (
+    rewriteMedicalTitle(withoutTokens)
+    ?? rewritePartialSuspensionTitle(withoutTokens)
+    ?? rewriteDelayTitle(withoutTokens)
+    ?? rewritePatternTitle(withoutTokens, routePattern)
+    ?? rewriteLeadTitle(withoutSource)
+    ?? sentenceCase(withoutSource)
   );
-  if (runningDelays) {
-    return sentenceCase(`Delays${runningDelays[1]}`.trim());
-  }
-
-  const noService = withoutTokens.match(
-    /\bthere is no (?:[A-Za-z0-9/ ]{1,12}\s)?service (?:in either direction )?(between [A-Za-z0-9 .'\-\/]+?)(?:[.,]|$)/i,
-  );
-  if (noService) {
-    return sentenceCase(`No service ${noService[1].trim()}`);
-  }
-
-  const everyMinutes = withoutTokens.match(
-    /\bruns?\s+(?:about\s+)?every\s+(\d+)\s+minutes?\b([^.,]*)/i,
-  );
-  if (everyMinutes) {
-    return `Runs every ${everyMinutes[1]} minutes${everyMinutes[2]
-      .replace(/\s+/g, " ")
-      .trimEnd()}`;
-  }
-  if (/\b(?:trains?\s+(?:are\s+)?running|runs?)\s+express\b/i.test(withoutTokens)) {
-    return "Running express";
-  }
-  if (/\b(?:trains?\s+(?:are\s+)?running|runs?)\s+local\b/i.test(withoutTokens)) {
-    return "Running local";
-  }
-  if (/\bskip(?:s|ping)?\b/i.test(withoutTokens) && !/suspension/i.test(withoutTokens)) {
-    return "Skipping stations";
-  }
-  if (/\badditional\b[^.]*\bservice\b/i.test(withoutTokens)) {
-    return "Additional service";
-  }
-  if (routePattern?.test(withoutTokens)) {
-    return "Trains running with delays";
-  }
-
-  const leadStripped = withoutSource
-    .replace(/^(?:\[[A-Za-z0-9+-]{1,4}\]\s*)+/, "")
-    .trim();
-  if (
-    leadStripped !== withoutSource &&
-    /^(?:runs?|trains?|service|is|are|will|has|have|no)\b/i.test(leadStripped) &&
-    leadStripped.split(/\s+/).length >= 3
-  ) {
-    return sentenceCase(leadStripped);
-  }
-
-  return sentenceCase(withoutSource);
 }
 
 export function compactAlertSummary(
@@ -218,28 +202,25 @@ export function compactAlertTimestamp(value: string | undefined): string {
   return text === "live" ? "live" : text.replace(/\s+ago$/, "");
 }
 
-export function compactFeedTitle(title: string, routeIds: string[]): string {
-  const cleaned = cleanPassengerAlertText(title);
-  const [kindRaw, placeRaw] = cleaned.split(/\s+-\s+/);
-  const kind = sentenceCase(kindRaw || cleaned);
-  const place = cleanPassengerAlertText(placeRaw);
-  if (/medical/i.test(kind) && place) {
-    return `Medical assistance at ${place}`;
-  }
-  if (/fire response/i.test(kind) && place) {
-    return `Fire response at ${place}`;
-  }
-  if (/police activity/i.test(kind) && place) {
-    return `Police activity near ${place}`;
-  }
+function feedTitleFromKind(kind: string, place: string, routeIds: string[]): string | null {
+  if (/medical/i.test(kind) && place) return `Medical assistance at ${place}`;
+  if (/fire response/i.test(kind) && place) return `Fire response at ${place}`;
+  if (/police activity/i.test(kind) && place) return `Police activity near ${place}`;
   if (/stalled/i.test(kind)) {
     return routeIds[0] ? `Stalled ${routeIds[0]} train` : "Stalled train";
   }
   if (/partial suspension/i.test(kind) && place) {
     return `Partial suspension between ${place}`;
   }
+  return null;
+}
 
-  return place ? `${kind} at ${place}` : kind;
+export function compactFeedTitle(title: string, routeIds: string[]): string {
+  const cleaned = cleanPassengerAlertText(title);
+  const [kindRaw, placeRaw] = cleaned.split(/\s+-\s+/);
+  const kind = sentenceCase(kindRaw || cleaned);
+  const place = cleanPassengerAlertText(placeRaw);
+  return feedTitleFromKind(kind, place, routeIds) ?? (place ? `${kind} at ${place}` : kind);
 }
 
 export function parseAlertAlternatives(

@@ -93,3 +93,114 @@ export function mapFeatureArrayProperty(value: unknown): string[] {
 export function firstSymbolLayerId(m: maplibregl.Map) {
   return m.getStyle().layers?.find((layer) => layer.type === "symbol")?.id;
 }
+
+const ROAD_LAYER = /road|street|tunnel|bridge|motorway|trunk|primary|secondary|tertiary/i;
+const WATER_LAYER = /water|ocean|river|bay/i;
+const PARK_LAYER = /park|wood|grass|forest|cemetery/i;
+const LAND_LAYER = /land|landuse|sand/i;
+const POI_LAYER = /poi/i;
+
+function fillThemeActions(id: string): {
+  paint: Array<{ property: string; value: string | number }>;
+} | null {
+  if (WATER_LAYER.test(id)) {
+    return { paint: [{ property: "fill-color", value: "#1B3A52" }] };
+  }
+  if (PARK_LAYER.test(id)) {
+    return {
+      paint: [
+        { property: "fill-color", value: "#1C4327" },
+        { property: "fill-opacity", value: 0.72 },
+      ],
+    };
+  }
+  if (LAND_LAYER.test(id)) {
+    return {
+      paint: [
+        { property: "fill-color", value: "#161E2E" },
+        { property: "fill-opacity", value: 0.66 },
+      ],
+    };
+  }
+  return null;
+}
+
+function darkThemeActions(layer: { id: string; type: string }): {
+  hide?: boolean;
+  paint: Array<{ property: string; value: string | number }>;
+} | null {
+  const { id, type } = layer;
+  if (type === "line" && ROAD_LAYER.test(id)) {
+    return {
+      paint: [
+        { property: "line-color", value: "#2B3A4D" },
+        { property: "line-opacity", value: 0.55 },
+      ],
+    };
+  }
+  if (type === "fill") return fillThemeActions(id);
+  if (type === "background") {
+    return { paint: [{ property: "background-color", value: "#0D1220" }] };
+  }
+  if (type !== "symbol") return null;
+  if (POI_LAYER.test(id)) return { hide: true, paint: [] };
+  return {
+    paint: [
+      { property: "text-opacity", value: 0.55 },
+      { property: "text-halo-color", value: "#05070A" },
+    ],
+  };
+}
+
+export function applyDarkMapTheme(mapInstance: maplibregl.Map): void {
+  for (const layer of mapInstance.getStyle().layers ?? []) {
+    const actions = darkThemeActions(layer);
+    if (!actions) continue;
+    try {
+      if (actions.hide) {
+        mapInstance.setLayoutProperty(layer.id, "visibility", "none");
+        continue;
+      }
+      for (const paint of actions.paint) {
+        mapInstance.setPaintProperty(layer.id, paint.property, paint.value);
+      }
+    } catch {
+      // This CARTO style revision lacks the targeted property; skip it.
+    }
+  }
+}
+
+export function canonicalWaypointCoordinates(waypoint: {
+  lat?: number | null;
+  lng?: number | null;
+  latitude?: number | null;
+  longitude?: number | null;
+}): [number, number] | null {
+  const lat = waypoint.lat ?? waypoint.latitude;
+  const lng = waypoint.lng ?? waypoint.longitude;
+  return typeof lat === "number" && Number.isFinite(lat) &&
+    typeof lng === "number" && Number.isFinite(lng)
+    ? [lng, lat]
+    : null;
+}
+
+export function journeyFitCoordinates(
+  stepCoords: [number, number][][],
+  origin: [number, number] | null,
+  waypoints: Array<{
+    lat?: number | null;
+    lng?: number | null;
+    latitude?: number | null;
+    longitude?: number | null;
+  }> | undefined,
+  destCoords: { lat: number; lng: number } | null | undefined,
+): [number, number][] {
+  const fitCoords = stepCoords.flat();
+  if (origin) fitCoords.push(origin);
+  for (const waypoint of waypoints ?? []) {
+    const point = canonicalWaypointCoordinates(waypoint);
+    if (point) fitCoords.push(point);
+  }
+  if (destCoords) fitCoords.push([destCoords.lng, destCoords.lat]);
+  return fitCoords;
+}

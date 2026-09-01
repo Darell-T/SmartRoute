@@ -87,37 +87,42 @@ export function AlertDetailPanel({ item, detail }: AlertDetailPanelProps) {
   );
 }
 
+function updateHasCopy(update: AlertUpdateEntry): boolean {
+  return Boolean(update.title?.trim() || update.summary?.trim());
+}
+
+function expandableStatus(
+  detail: NonNullable<AlertFeedItem["details"]>,
+  item: AlertFeedItem,
+): string | undefined {
+  return detail.currentStatus?.trim() || detail.whatHappened?.trim() || item.summary?.trim() || undefined;
+}
+
+function hasAlertDetailFields(view: AlertDetailView): boolean {
+  return Boolean(
+    view.impact || view.alternatives || view.statusText || view.stops.length || view.updates.length,
+  );
+}
+
 export function buildAlertDetailView(
   item: AlertFeedItem,
 ): AlertDetailView | null {
   const detail = item.details;
-  if (!detail) {
-    return null;
-  }
+  if (!detail) return null;
 
   const summary = detailSummary(item);
   const { impact, alternatives } = disruptionAndGuidance(item, summary);
-  let statusText = distinctStatus(item, summary);
-  const stops = detail.affectedStops ?? [];
-  const updates = (detail.updates ?? []).filter(
-    (update) => Boolean(update.title?.trim() || update.summary?.trim()),
-  );
-  let hasDetail = Boolean(
-    impact || alternatives || statusText || stops.length > 0 || updates.length > 0,
-  );
-
-  if (!hasDetail && item.expandable) {
-    statusText =
-      detail.currentStatus?.trim() ??
-      detail.whatHappened?.trim() ??
-      item.summary?.trim() ??
-      undefined;
-    hasDetail = Boolean(statusText);
-  }
-
-  return hasDetail
-    ? { impact, alternatives, statusText, stops, updates }
-    : null;
+  const view: AlertDetailView = {
+    impact,
+    alternatives,
+    statusText: distinctStatus(item, summary),
+    stops: detail.affectedStops ?? [],
+    updates: (detail.updates ?? []).filter(updateHasCopy),
+  };
+  if (hasAlertDetailFields(view)) return view;
+  if (!item.expandable) return null;
+  view.statusText = expandableStatus(detail, item);
+  return view.statusText ? view : null;
 }
 
 export function featuredAlertBody(item: AlertFeedItem): string | undefined {

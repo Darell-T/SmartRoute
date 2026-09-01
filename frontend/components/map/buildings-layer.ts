@@ -93,11 +93,3 @@ export function ensureBuildingsLayer(map: maplibregl.Map, beforeId?: string) {
     map.moveLayer(BUILDINGS_LAYER_ID, beforeId);
   }
 }
-
-function setBuildingsHidden(map: maplibregl.Map, hidden: boolean) {
-  if (!map.getLayer(BUILDINGS_LAYER_ID)) return;
-  const visibility = hidden ? "none" : "visible";
-  if (map.getLayoutProperty(BUILDINGS_LAYER_ID, "visibility") !== visibility) {
-    map.setLayoutProperty(BUILDINGS_LAYER_ID, "visibility", visibility);
-  }
-}

@@ -521,6 +521,17 @@ def production_growth(git_ref: str, scope: Mapping[str, object]) -> dict[str, in
     return {"added": added, "removed": removed, "net": added - removed}
 
 
+def detect_browser_source_mapped() -> bool:
+    marker = FRONTEND / "coverage" / "browser-source-mapped.json"
+    if not marker.is_file():
+        return False
+    try:
+        payload = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return bool(payload.get("file") and payload.get("hit"))
+
+
 def build_report(
     *,
     authored: Sequence[Mapping[str, object]],
@@ -1227,7 +1238,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         scope=scope,
         identity=identity,
         growth=growth,
-        browser_source_mapped=False,
+        browser_source_mapped=detect_browser_source_mapped(),
     )
     print_summary(report)
     output = Path(args.output)

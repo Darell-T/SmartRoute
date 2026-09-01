@@ -143,105 +143,150 @@ function transferSubtitle(
   return [location, duration, accessibility].filter(Boolean).join(" · ");
 }
 
+function transitEventKind(mode: string): ItineraryEventKind | null {
+  if (mode === "BUS") return "bus";
+  if (mode === "SUBWAY") return "subway";
+  if (["RAIL", "TRAIN", "LIGHT_RAIL", "TRAM"].includes(mode)) return "rail";
+  return null;
+}
+
+function isSemanticWalkTransfer(
+  mode: string,
+  semantics: CanonicalTransferSemantics | null | undefined,
+): semantics is CanonicalTransferSemantics {
+  return (
+    mode === "WALK"
+    && semantics != null
+    && semantics.kind !== "street_transfer"
+    && semantics.kind !== "ordinary_walk"
+  );
+}
+
+function stopCountFromLeg(leg: CanonicalItineraryLeg): number | undefined {
+  if (leg.stop_count === null || leg.stop_count === undefined) return undefined;
+  if (!Number.isFinite(leg.stop_count)) return undefined;
+  return Math.max(0, Math.round(leg.stop_count));
+}
+
+function waitSecondsFromLeg(leg: CanonicalItineraryLeg): number {
+  if (leg.wait_seconds === undefined || !Number.isFinite(leg.wait_seconds)) return 0;
+  return Math.max(0, leg.wait_seconds);
+}
+
+function firstPresentLabel(
+  ...values: Array<string | null | undefined>
+): string | undefined {
+  for (const value of values) {
+    if (value) return value;
+  }
+  return undefined;
+}
+
+function legEndpoints(
+  transfer: boolean,
+  semantics: CanonicalTransferSemantics | undefined,
+  leg: CanonicalItineraryLeg,
+  stops: string[],
+): { fromLabel?: string; toLabel?: string } {
+  return {
+    fromLabel: firstPresentLabel(
+      transfer ? canonicalStopLabel(semantics?.from_station_label) : null,
+      canonicalStopLabel(leg.board),
+      stops[0],
+    ),
+    toLabel: firstPresentLabel(
+      transfer ? canonicalStopLabel(semantics?.to_station_label) : null,
+      canonicalStopLabel(leg.alight),
+      stops.at(-1),
+    ),
+  };
+}
+
+function pushWaitEvent(
+  events: ItineraryEvent[],
+  idPrefix: string,
+  index: number,
+  serviceId: string,
+  waitSeconds: number,
+  fromLabel: string | undefined,
+): void {
+  if (waitSeconds <= 0) return;
+  const waitMinutes = durationMinutesFromSeconds(waitSeconds);
+  events.push({
+    id: `${idPrefix}-${index}-wait`,
+    kind: "wait",
+    routeIds: serviceId ? [serviceId] : [],
+    title: serviceId ? `Wait for ${serviceId}` : "Wait to board",
+    subtitle: fromLabel,
+    durationSeconds: waitSeconds,
+    durationMinutes: waitMinutes ?? undefined,
+    durationLabel: durationLabelFromMinutes(waitMinutes),
+    fromLabel,
+  });
+}
+
+function pushCanonicalLeg(
+  events: ItineraryEvent[],
+  leg: CanonicalItineraryLeg,
+  index: number,
+  segmentDestination: string,
+  idPrefix: string,
+): void {
+  const mode = leg.mode.trim().toUpperCase();
+  const semantics = leg.transfer_semantics;
+  const transfer = isSemanticWalkTransfer(mode, semantics);
+  const stops = canonicalLegStops(leg);
+  const { fromLabel, toLabel } = legEndpoints(transfer, semantics ?? undefined, leg, stops);
+  const durationSeconds = canonicalLegDurationSeconds(leg);
+  const durationMinutes = durationMinutesFromSeconds(durationSeconds);
+  const base = {
+    id: `${idPrefix}-${index}`,
+    title: toLabel || fromLabel || segmentDestination,
+    durationSeconds: durationSeconds ?? undefined,
+    durationMinutes: durationMinutes ?? undefined,
+    durationLabel: durationLabelFromMinutes(durationMinutes),
+    fromLabel,
+    toLabel,
+  };
+
+  if (transfer) {
+    events.push({
+      ...base,
+      kind: "transfer",
+      title: transferTitle(semantics),
+      subtitle: transferSubtitle(semantics, durationSeconds),
+      routeIds: transferRouteIds(semantics),
+      transferKind: semantics.kind,
+      accessibility: semantics.accessibility,
+    });
+    return;
+  }
+  if (mode === "WALK") {
+    events.push({ ...base, kind: "walk", routeIds: [] });
+    return;
+  }
+  const kind = transitEventKind(mode);
+  if (!kind) return;
+  const serviceId = leg.service_id?.trim().toUpperCase() ?? "";
+  pushWaitEvent(events, idPrefix, index, serviceId, waitSecondsFromLeg(leg), fromLabel);
+  events.push({
+    ...base,
+    kind,
+    routeIds: serviceId ? [serviceId] : [],
+    stopCount: stopCountFromLeg(leg),
+    stops,
+  });
+}
+
 function appendCanonicalLegs(
   events: ItineraryEvent[],
   legs: CanonicalItineraryLeg[],
   segmentDestination: string,
   idPrefix: string,
 ): void {
-  legs.forEach((leg, index) => {
-    const mode = leg.mode.trim().toUpperCase();
-    const semantics = leg.transfer_semantics;
-    const isSemanticTransfer =
-      mode === "WALK" &&
-      semantics != null &&
-      semantics.kind !== "street_transfer" &&
-      semantics.kind !== "ordinary_walk";
-    const stops = canonicalLegStops(leg);
-    const fromLabel =
-      (isSemanticTransfer ? canonicalStopLabel(semantics?.from_station_label) : null) ??
-      canonicalStopLabel(leg.board) ??
-      stops[0] ??
-      undefined;
-    const toLabel =
-      (isSemanticTransfer ? canonicalStopLabel(semantics?.to_station_label) : null) ??
-      canonicalStopLabel(leg.alight) ??
-      stops.at(-1) ??
-      undefined;
-    const durationSeconds = canonicalLegDurationSeconds(leg);
-    const durationMinutes = durationMinutesFromSeconds(durationSeconds);
-    const base = {
-      id: `${idPrefix}-${index}`,
-      title: toLabel || fromLabel || segmentDestination,
-      durationSeconds: durationSeconds ?? undefined,
-      durationMinutes: durationMinutes ?? undefined,
-      durationLabel: durationLabelFromMinutes(durationMinutes),
-      fromLabel,
-      toLabel,
-    };
-
-    if (isSemanticTransfer && semantics) {
-      events.push({
-        ...base,
-        kind: "transfer",
-        title: transferTitle(semantics),
-        subtitle: transferSubtitle(semantics, durationSeconds),
-        routeIds: transferRouteIds(semantics),
-        transferKind: semantics.kind,
-        accessibility: semantics.accessibility,
-      });
-      return;
-    }
-
-    if (mode === "WALK") {
-      events.push({ ...base, kind: "walk", routeIds: [] });
-      return;
-    }
-    const isRail = ["RAIL", "TRAIN", "LIGHT_RAIL", "TRAM"].includes(mode);
-    if (mode !== "SUBWAY" && mode !== "BUS" && !isRail) return;
-
-    const serviceId = leg.service_id?.trim().toUpperCase() ?? "";
-    let kind: ItineraryEventKind;
-    if (mode === "BUS") {
-      kind = "bus";
-    } else if (isRail) {
-      kind = "rail";
-    } else {
-      kind = "subway";
-    }
-    const waitSeconds =
-      leg.wait_seconds !== undefined &&
-      Number.isFinite(leg.wait_seconds) &&
-      leg.wait_seconds > 0
-        ? leg.wait_seconds
-        : 0;
-    if (waitSeconds > 0) {
-      const waitMinutes = durationMinutesFromSeconds(waitSeconds);
-      events.push({
-        id: `${idPrefix}-${index}-wait`,
-        kind: "wait",
-        routeIds: serviceId ? [serviceId] : [],
-        title: serviceId ? `Wait for ${serviceId}` : "Wait to board",
-        subtitle: fromLabel,
-        durationSeconds: waitSeconds,
-        durationMinutes: waitMinutes ?? undefined,
-        durationLabel: durationLabelFromMinutes(waitMinutes),
-        fromLabel,
-      });
-    }
-    events.push({
-      ...base,
-      kind,
-      routeIds: serviceId ? [serviceId] : [],
-      stopCount:
-        leg.stop_count !== null &&
-        leg.stop_count !== undefined &&
-        Number.isFinite(leg.stop_count)
-          ? Math.max(0, Math.round(leg.stop_count))
-          : undefined,
-      stops,
-    });
-  });
+  for (const [index, leg] of legs.entries()) {
+    pushCanonicalLeg(events, leg, index, segmentDestination, idPrefix);
+  }
 }
 
 function eventBoundaryLabel(
@@ -272,6 +317,69 @@ function walkGroupDurationSeconds(events: ItineraryEvent[]): number {
   }, 0);
 }
 
+function walkSectionEndpoints(
+  group: ItineraryEvent[],
+  previous: ItineraryEvent | undefined,
+  next: ItineraryEvent | undefined,
+  atStart: boolean,
+  atEnd: boolean,
+  originLabel: string,
+  destinationLabel: string,
+): { fromLabel?: string; toLabel?: string; hasExplicitIdentity: boolean } {
+  const explicitFrom = group.find((item) => item.fromLabel)?.fromLabel;
+  const explicitTo = [...group].reverse().find((item) => item.toLabel)?.toLabel;
+  return {
+    fromLabel: firstPresentLabel(
+      explicitFrom,
+      eventBoundaryLabel(previous, "end"),
+      atStart ? originLabel : undefined,
+    ),
+    toLabel: firstPresentLabel(
+      explicitTo,
+      eventBoundaryLabel(next, "start"),
+      atEnd ? destinationLabel : undefined,
+    ),
+    hasExplicitIdentity: Boolean(explicitFrom || explicitTo),
+  };
+}
+
+function walkSectionFromGroup(
+  group: ItineraryEvent[],
+  previous: ItineraryEvent | undefined,
+  next: ItineraryEvent | undefined,
+  atStart: boolean,
+  atEnd: boolean,
+  originLabel: string,
+  destinationLabel: string,
+): ItineraryEvent | null {
+  const durationSeconds = walkGroupDurationSeconds(group);
+  const { fromLabel, toLabel, hasExplicitIdentity } = walkSectionEndpoints(
+    group,
+    previous,
+    next,
+    atStart,
+    atEnd,
+    originLabel,
+    destinationLabel,
+  );
+  if (durationSeconds <= 0) return null;
+  if (labelsMatch(fromLabel, toLabel)) return null;
+  if (!hasExplicitIdentity && durationSeconds < MIN_INFERRED_WALK_SECONDS) return null;
+  if (!fromLabel && !toLabel) return null;
+  const durationMinutes = Math.max(1, Math.round(durationSeconds / 60));
+  return {
+    id: `${group[0].id}-walk-section`,
+    kind: "walk",
+    routeIds: [],
+    title: toLabel ?? fromLabel ?? "Walk",
+    fromLabel,
+    toLabel,
+    durationSeconds,
+    durationMinutes,
+    durationLabel: durationLabelFromSeconds(durationSeconds),
+  };
+}
+
 export function condensePreviewEvents(
   events: ItineraryEvent[],
   destinationLabel: string,
@@ -290,42 +398,16 @@ export function condensePreviewEvents(
 
     let end = index + 1;
     while (end < events.length && events[end].kind === "walk") end += 1;
-    const group = events.slice(index, end);
-    const durationSeconds = walkGroupDurationSeconds(group);
-    const explicitFrom = group.find((item) => item.fromLabel)?.fromLabel;
-    const explicitTo = [...group].reverse().find((item) => item.toLabel)?.toLabel;
-    const fromLabel =
-      explicitFrom ??
-      eventBoundaryLabel(sections.at(-1), "end") ??
-      (index === 0 ? originLabel : undefined);
-    const toLabel =
-      explicitTo ??
-      eventBoundaryLabel(events[end], "start") ??
-      (end === events.length ? destinationLabel : undefined);
-    const hasExplicitIdentity = Boolean(explicitFrom || explicitTo);
-    const isInternalSamePlaceTransfer = labelsMatch(fromLabel, toLabel);
-    const isUnlabeledMicroFragment =
-      !hasExplicitIdentity && durationSeconds < MIN_INFERRED_WALK_SECONDS;
-
-    if (
-      durationSeconds > 0 &&
-      !isInternalSamePlaceTransfer &&
-      !isUnlabeledMicroFragment &&
-      (fromLabel || toLabel)
-    ) {
-      const durationMinutes = Math.max(1, Math.round(durationSeconds / 60));
-      sections.push({
-        id: `${group[0].id}-walk-section`,
-        kind: "walk",
-        routeIds: [],
-        title: toLabel ?? fromLabel ?? "Walk",
-        fromLabel,
-        toLabel,
-        durationSeconds,
-        durationMinutes,
-        durationLabel: durationLabelFromSeconds(durationSeconds),
-      });
-    }
+    const section = walkSectionFromGroup(
+      events.slice(index, end),
+      sections.at(-1),
+      events[end],
+      index === 0,
+      end === events.length,
+      originLabel,
+      destinationLabel,
+    );
+    if (section) sections.push(section);
     index = end;
   }
   return sections;

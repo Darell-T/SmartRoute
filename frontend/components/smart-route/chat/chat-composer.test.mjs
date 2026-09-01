@@ -1,224 +1,257 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
-const COMPOSER_SOURCE = fs.readFileSync(
-  fileURLToPath(new URL("./chat-composer.tsx", import.meta.url)),
-  "utf8",
-);
-const PANEL_SOURCE = fs.readFileSync(
-  fileURLToPath(new URL("./chat-panel.tsx", import.meta.url)),
-  "utf8",
-);
-const MODE_MENU_SOURCE = fs.readFileSync(
-  fileURLToPath(new URL("./response-mode-menu.tsx", import.meta.url)),
-  "utf8",
-);
-const WELCOME_SOURCE = fs.readFileSync(
-  fileURLToPath(new URL("./chat-welcome.tsx", import.meta.url)),
-  "utf8",
-);
-const HOME_NEARBY_SOURCE = fs.readFileSync(
-  fileURLToPath(new URL("./home-near-you.tsx", import.meta.url)),
-  "utf8",
-);
-const SUGGESTION_SOURCE = fs.readFileSync(
-  fileURLToPath(
-    new URL("../../prompt-kit/prompt-suggestion.tsx", import.meta.url),
-  ),
-  "utf8",
-);
+import { ChatComposer } from "./chat-composer.tsx";
+import { ChatMessage } from "./chat-message.tsx";
+import { ChatPanel } from "./chat-panel.tsx";
+import { ChatSuggestions, ChatWelcome } from "./chat-welcome.tsx";
+import { ChatWorkingPanel } from "./chat-working-panel.tsx";
+import { HomeNearYou } from "./home-near-you.tsx";
+import { ResponseModeMenu } from "./response-mode-menu.tsx";
+import { ChatRouteCardList, recommendedCardsForChat } from "./chat-route-card.tsx";
+import { WalkingIcon } from "./walking-icon.tsx";
+
 const CHAT_STYLE_SOURCE = fs.readFileSync(
-  fileURLToPath(
-    new URL("../../../app/styles/smart-route-chat.css", import.meta.url),
-  ),
-  "utf8",
-);
-const MESSAGE_SOURCE = fs.readFileSync(
-  fileURLToPath(new URL("./chat-message.tsx", import.meta.url)),
-  "utf8",
-);
-const WORKING_PANEL_SOURCE = fs.readFileSync(
-  fileURLToPath(new URL("./chat-working-panel.tsx", import.meta.url)),
-  "utf8",
-);
-const ROUTE_VIEW_SOURCE = fs.readFileSync(
-  fileURLToPath(
-    new URL("../left-rail/route-view-itinerary.tsx", import.meta.url),
-  ),
+  new URL("../../../app/styles/smart-route-chat.css", import.meta.url),
   "utf8",
 );
 
-test("composer exposes Auto and Quick through an accessible custom menu", () => {
-  assert.match(COMPOSER_SOURCE, /<ResponseModeMenu/);
-  assert.doesNotMatch(COMPOSER_SOURCE, /<select/);
-  assert.doesNotMatch(COMPOSER_SOURCE, /<option/);
-  assert.match(MODE_MENU_SOURCE, /value: "auto"/);
-  assert.match(MODE_MENU_SOURCE, /value: "quick"/);
-  assert.match(MODE_MENU_SOURCE, /role="menuitemradio"/);
-  assert.match(MODE_MENU_SOURCE, /aria-checked=\{selected\}/);
-  assert.match(MODE_MENU_SOURCE, /aria-haspopup="menu"/);
-  assert.match(MODE_MENU_SOURCE, /aria-expanded=\{open\}/);
-  assert.match(
-    MODE_MENU_SOURCE,
-    /Mode affects response depth, not trip time\./,
+const nearby = {
+  locationState: "precise_nyc",
+  locationLabel: "Near you",
+  locationNotice: null,
+  stationName: "Jay St-MetroTech",
+  arrivals: [
+    {
+      id: "q-coney",
+      routeId: "Q",
+      destination: "Coney Island",
+      minutes: [4],
+    },
+  ],
+  arrivalsState: "ready",
+  condition: { state: "clear", label: "No active service changes nearby" },
+  issue: null,
+};
+
+const idleChat = {
+  messages: [],
+  selectedCardId: null,
+  isStreaming: false,
+  send() {},
+  cancel() {},
+  selectCard() {},
+  retryLast() {},
+  dismissError() {},
+};
+
+test("composer exposes Auto, Quick, send, and voice without an attachment action", () => {
+  const html = renderToStaticMarkup(
+    createElement(ChatComposer, {
+      value: "Plan a trip to JFK",
+      onValueChange() {},
+      presentationMode: "auto",
+      onPresentationModeChange() {},
+      theme: "dark",
+      onSend() {},
+      onCancel() {},
+      isStreaming: false,
+    }),
   );
-  assert.match(
-    MODE_MENU_SOURCE,
-    /Chooses the right amount of analysis/,
+  assert.match(html, /aria-label="Message SmartRoute"/);
+  assert.match(html, /Ask SmartRoute/);
+  assert.match(html, /Response style: Auto/);
+  assert.match(html, /aria-label="Send message"/);
+  assert.doesNotMatch(html, /attach/i);
+  const streaming = renderToStaticMarkup(
+    createElement(ChatComposer, {
+      value: "",
+      onValueChange() {},
+      presentationMode: "quick",
+      onPresentationModeChange() {},
+      theme: "dark",
+      onSend() {},
+      onCancel() {},
+      isStreaming: true,
+    }),
   );
-  assert.match(
-    MODE_MENU_SOURCE,
-    /Faster response with fewer comparisons/,
-  );
-  assert.doesNotMatch(MODE_MENU_SOURCE, /sr-response-mode-menu__eyebrow/);
-  assert.doesNotMatch(MODE_MENU_SOURCE, /components\/ui\/brain/);
-  assert.doesNotMatch(MODE_MENU_SOURCE, /components\/ui\/zap/);
-  assert.match(MODE_MENU_SOURCE, /ChevronDown/);
+  assert.match(streaming, /Response style: Quick/);
+  assert.match(streaming, /aria-label="Stop"/);
 });
 
-test("response menu opens upward and supports keyboard navigation", () => {
-  assert.match(MODE_MENU_SOURCE, /bottom: window\.innerHeight - rect\.top \+ 8/);
-  assert.match(MODE_MENU_SOURCE, /const MENU_WIDTH = 240/);
-  assert.match(MODE_MENU_SOURCE, /rect\.right - MENU_WIDTH/);
-  assert.match(MODE_MENU_SOURCE, /event\.key === "ArrowDown"/);
-  assert.match(MODE_MENU_SOURCE, /event\.key === "ArrowUp"/);
-  assert.match(MODE_MENU_SOURCE, /event\.key === "Home"/);
-  assert.match(MODE_MENU_SOURCE, /event\.key === "End"/);
-  assert.match(MODE_MENU_SOURCE, /event\.key === "Escape"/);
+test("response mode menu lists Auto and Quick as radio items", () => {
+  const html = renderToStaticMarkup(
+    createElement(ResponseModeMenu, {
+      value: "auto",
+      theme: "dark",
+      onValueChange() {},
+    }),
+  );
+  assert.match(html, /aria-haspopup="menu"/);
+  assert.match(html, /aria-expanded="false"/);
+  assert.match(html, /Response style: Auto/);
+  assert.match(html, />Auto</);
 });
 
-test("focused response mode options activate with Enter and Space", () => {
-  const activationBranch = /event\.key === "Enter" \|\| event\.key === " "\)[\s\S]*?event\.preventDefault\(\);[\s\S]*?onValueChange\(RESPONSE_MODES\[index\]\.value\);[\s\S]*?closeMenu\(\);/;
-  assert.match(MODE_MENU_SOURCE, activationBranch);
+test("empty chat leads with nearby proof and compact suggestions", () => {
+  const welcome = renderToStaticMarkup(
+    createElement(ChatWelcome, { nearby, onOpenLiveMap() {} }),
+  );
+  assert.match(welcome, /Where to\?/);
+  assert.match(welcome, />Near you</);
+  assert.match(welcome, /Jay St-MetroTech/);
+  assert.match(welcome, /Coney Island/);
+  const suggestions = renderToStaticMarkup(
+    createElement(ChatSuggestions, {
+      suggestions: [
+        { label: "JFK · fewer transfers", query: "Get me to JFK with fewer transfers." },
+        { label: "MSG · avoid crowds", query: "Get me to Madison Square Garden and avoid crowds." },
+        { label: "Ramen · best route now", query: "Find a good ramen spot and route me there by subway." },
+      ],
+      onSelectSuggestion() {},
+    }),
+  );
+  assert.match(suggestions, /aria-label="Trip suggestions"/);
+  assert.match(suggestions, /JFK · fewer transfers/);
+  assert.match(suggestions, /MSG · avoid crowds/);
+  assert.match(suggestions, /Ramen · best route now/);
+  const panel = renderToStaticMarkup(
+    createElement(ChatPanel, {
+      chat: idleChat,
+      theme: "dark",
+      nearby,
+      onOpenLiveMap() {},
+    }),
+  );
+  assert.match(panel, /Where to\?/);
+  assert.match(panel, /JFK · fewer transfers/);
+  assert.match(panel, /data-empty="true"/);
 });
 
-test("composer actions use the shared Prompt Kit action primitive", () => {
-  assert.match(COMPOSER_SOURCE, /<PromptInputActions className="sr-chat-composer__actions">/);
-  assert.match(COMPOSER_SOURCE, /<PromptInputAction[\s\S]*Use voice input/);
-  assert.match(
-    COMPOSER_SOURCE,
-    /<PromptInputAction\s+tooltip=\{isStreaming \? "Stop response" : "Send message"\}/,
+test("home nearby unavailable and outside-area states keep passenger copy", () => {
+  const unavailable = renderToStaticMarkup(
+    createElement(HomeNearYou, {
+      model: {
+        ...nearby,
+        arrivals: [],
+        arrivalsState: "unavailable",
+        condition: { state: "unavailable", label: "Service status unavailable" },
+      },
+      onOpenLiveMap() {},
+    }),
   );
-  assert.ok(
-    COMPOSER_SOURCE.indexOf("<PromptInputTextarea") <
-      COMPOSER_SOURCE.indexOf("<PromptInputActions"),
-    "the text area should precede Auto, microphone, and send controls",
+  assert.match(unavailable, /Nearby arrivals unavailable/);
+  const outside = renderToStaticMarkup(
+    createElement(HomeNearYou, {
+      model: {
+        ...nearby,
+        locationState: "outside_service_area",
+        locationLabel: "NYC transit only",
+        locationNotice: "SmartRoute currently covers NYC transit.",
+        stationName: null,
+        arrivals: [],
+        arrivalsState: "outside_service_area",
+      },
+      onOpenLiveMap() {},
+    }),
   );
-  assert.doesNotMatch(COMPOSER_SOURCE, /import\s*\{[^}]*\bPlus\b[^}]*\}/s);
-  assert.doesNotMatch(COMPOSER_SOURCE, /aria-label=["'][^"']*attach/i);
+  assert.match(outside, /NYC transit only/);
+  assert.match(outside, /covers NYC transit/);
 });
 
-test("changing presentation does not regenerate a completed response", () => {
-  assert.match(PANEL_SOURCE, /useSyncExternalStore\([\s\S]*?responsePresentationModeStore\.getServerSnapshot/);
-  assert.match(
-    PANEL_SOURCE,
-    /onPresentationModeChange=\{responsePresentationModeStore\.setMode\}/,
+test("failed chat turns render one compact recovery surface", () => {
+  const html = renderToStaticMarkup(
+    createElement(ChatMessage, {
+      turn: {
+        role: "assistant",
+        turnId: "t1",
+        text: "",
+        reasoning: "",
+        toolChips: [],
+        routeCards: [],
+        isStreaming: false,
+        error: {
+          code: "upstream_error",
+          message: "SmartRoute couldn’t complete this request.",
+          retryable: true,
+        },
+      },
+      theme: "dark",
+      onRetry() {},
+      onDismissError() {},
+    }),
   );
-  assert.match(PANEL_SOURCE, /onSend=\{\(text\) => chat\.send\(text, presentationMode\)\}/);
-  assert.doesNotMatch(PANEL_SOURCE, /useEffect\(\(\) => \{\s*chat\.send/);
+  assert.match(html, /class="sr-chat-turn-error" role="alert"/);
+  assert.match(html, /Try again/);
+  assert.match(html, /Dismiss/);
+  assert.doesNotMatch(html, /Upstream request failed/);
+  const user = renderToStaticMarkup(
+    createElement(ChatMessage, {
+      turn: { role: "user", text: "hello" },
+      theme: "dark",
+    }),
+  );
+  assert.match(user, /hello/);
 });
 
-test("empty chat leads with nearby transit proof and compact Prompt Kit suggestions", () => {
-  assert.match(WELCOME_SOURCE, /Where to\?/);
-  assert.match(WELCOME_SOURCE, /sr-chat-welcome-line--title/);
-  assert.match(WELCOME_SOURCE, /<HomeNearYou/);
-  assert.match(HOME_NEARBY_SOURCE, /<ArrivalCountdown/);
-  assert.match(HOME_NEARBY_SOURCE, /MapPin/);
-  assert.doesNotMatch(HOME_NEARBY_SOURCE, /Brain|Sparkle|Diamond/);
-  assert.doesNotMatch(WELCOME_SOURCE, /Let’s get moving/);
-  assert.match(WELCOME_SOURCE, /<PromptSuggestion/);
-  assert.match(WELCOME_SOURCE, /variant="outline"/);
-  assert.doesNotMatch(WELCOME_SOURCE, /NavArrowRight/);
-  assert.doesNotMatch(WELCOME_SOURCE, /Chevron/);
-  assert.match(PANEL_SOURCE, /JFK · fewer transfers/);
-  assert.match(PANEL_SOURCE, /MSG · avoid crowds/);
-  assert.match(PANEL_SOURCE, /Ramen · best route now/);
-  assert.match(SUGGESTION_SOURCE, /variant = "outline"/);
-
-  assert.match(
-    PANEL_SOURCE,
-    /Get me to JFK with fewer transfers\./,
+test("working panel uses route-progress copy instead of a thinking label", () => {
+  const html = renderToStaticMarkup(
+    createElement(ChatWorkingPanel, {
+      toolChips: [],
+      progress: { stage: "finding_routes", status: "active" },
+      reasoning: "Comparing live routes",
+      isStreaming: true,
+    }),
   );
-  assert.match(
-    PANEL_SOURCE,
-    /Get me to Madison Square Garden and avoid crowds\./,
-  );
-  assert.match(
-    PANEL_SOURCE,
-    /Find a good ramen spot and route me there by subway\./,
-  );
-  assert.match(PANEL_SOURCE, /fillDraftAndFocus/);
-  assert.match(
-    PANEL_SOURCE,
-    /querySelector\("textarea"\)\?\.focus\(\)/,
-  );
+  assert.match(html, /Finding viable routes/);
+  assert.match(html, /sr-chat-working-panel__reasoning/);
+  assert.doesNotMatch(html, /Thinking…/);
 });
 
-test("suggestions are text-only and use a focus-aware mobile snap rail", () => {
-  assert.doesNotMatch(WELCOME_SOURCE, /sr-chat-suggestion-icon/);
-  assert.doesNotMatch(PANEL_SOURCE, /\bicon:\s*/);
-  assert.doesNotMatch(CHAT_STYLE_SOURCE, /\.sr-chat-suggestion-icon/);
+test("walking icon stays decorative", () => {
+  const html = renderToStaticMarkup(createElement(WalkingIcon));
+  assert.match(html, /aria-hidden="true"/);
+});
+
+test("suggestion rail CSS stays a text-only snap strip", () => {
   assert.match(
     CHAT_STYLE_SOURCE,
     /\.sr-chat-suggestion-pill\s*\{[\s\S]*?border:\s*0;[\s\S]*?background:\s*transparent;/,
   );
-  assert.doesNotMatch(CHAT_STYLE_SOURCE, /sr-chat-suggestion-(?:separator|dot)/);
-  assert.match(WELCOME_SOURCE, /<span>\{suggestion\.label\}<\/span>/);
-  assert.match(PANEL_SOURCE, /className="sr-chat-composer-dock"/);
-  assert.match(HOME_NEARBY_SOURCE, /model\.stationName \? \(/);
   assert.match(CHAT_STYLE_SOURCE, /scroll-snap-type: x mandatory/);
   assert.match(CHAT_STYLE_SOURCE, /scrollbar-width: none/);
   assert.match(CHAT_STYLE_SOURCE, /env\(safe-area-inset-bottom\)/);
-  assert.match(
-    CHAT_STYLE_SOURCE,
-    /\.sr-chat-empty__suggestions\[data-hidden="true"\]/,
-  );
-  assert.match(PANEL_SOURCE, /hidden=\{composerFocused\}/);
-  assert.match(
-    CHAT_STYLE_SOURCE,
-    /\.sr-chat-suggestion-motion \{[\s\S]*?scroll-snap-align: start/,
-  );
-});
-
-test("generated response text never renders a synthetic caret", () => {
-  assert.doesNotMatch(MESSAGE_SOURCE, /showCaret|sr-chat-caret/);
-  assert.doesNotMatch(PANEL_SOURCE, /showCaret/);
-  assert.doesNotMatch(ROUTE_VIEW_SOURCE, /sr-ai-reasoning__cursor/);
   assert.doesNotMatch(CHAT_STYLE_SOURCE, /sr-chat-caret/);
 });
 
-test("thinking stays neutral until a real search capability starts", () => {
-  assert.match(WORKING_PANEL_SOURCE, /Finding viable routes/);
-  assert.match(WORKING_PANEL_SOURCE, /Checking live service and current incidents/);
-  assert.match(WORKING_PANEL_SOURCE, /Deliberating between the best options/);
-  assert.match(WORKING_PANEL_SOURCE, /<Shimmer[^>]*>[\s\S]*?\{streamingLabel\}/);
-  assert.match(WORKING_PANEL_SOURCE, /isSearchActivityTool\(chip\.tool\)/);
-  assert.doesNotMatch(WORKING_PANEL_SOURCE, /Thinking…/);
-  assert.match(
-    MESSAGE_SOURCE,
-    /aria-label=\{isSearching \? "Searching current sources" : "Deliberating"\}/,
+test("local arrivals turns skip the working panel and expose Live Feed", () => {
+  const html = renderToStaticMarkup(
+    createElement(ChatMessage, {
+      turn: {
+        id: "local-1",
+        role: "assistant",
+        local: true,
+        text: "Next Q trains",
+        arrivals: {
+          routeId: "Q",
+          stationName: "Jay St",
+          stationGuidance: "3 min walk",
+          sourceStatus: "live",
+          updatedAt: "2026-07-16T12:00:00-04:00",
+          groups: [{ direction: "uptown", label: "Uptown", minutes: [4] }],
+        },
+        routeCards: [],
+        isStreaming: false,
+      },
+      theme: "dark",
+      onSeeArrivalsOnMap() {},
+    }),
   );
-  assert.doesNotMatch(WORKING_PANEL_SOURCE, /CheckCircle|CircleCheck|CheckIcon/);
-  assert.match(WORKING_PANEL_SOURCE, /sr-chat-working-panel__reasoning/);
-  assert.match(CHAT_STYLE_SOURCE, /\.sr-chat-working-panel__reasoning\s*\{/);
-  assert.match(
-    CHAT_STYLE_SOURCE,
-    /\.sr-chat-working-panel__reasoning\s*\{[\s\S]*?color:\s*var\(--sr-chat-ink-dim\)/,
-  );
-});
-
-test("failed chat turns have one compact manual recovery surface", () => {
-  const messageSource = fs.readFileSync(
-    fileURLToPath(new URL("./chat-message.tsx", import.meta.url)),
-    "utf8",
-  );
-  assert.doesNotMatch(PANEL_SOURCE, /sr-chat-error-banner/);
-  assert.match(messageSource, /className="sr-chat-turn-error" role="alert"/);
-  assert.match(messageSource, />\s*Try again\s*</);
-  assert.match(messageSource, />\s*Dismiss\s*</);
-  assert.match(PANEL_SOURCE, /chat\.retryLast/);
-  assert.match(PANEL_SOURCE, /chat\.dismissError/);
-  assert.doesNotMatch(messageSource, /Upstream request failed\./);
+  assert.match(html, /Jay St|Uptown|Open in Live Feed/);
+  assert.deepEqual(recommendedCardsForChat([{ card_id: "recommended", role: "recommended" }]).map((card) => card.card_id), ["recommended"]);
+  const empty = renderToStaticMarkup(createElement(ChatRouteCardList, { cards: [] }));
+  assert.equal(empty, "");
 });

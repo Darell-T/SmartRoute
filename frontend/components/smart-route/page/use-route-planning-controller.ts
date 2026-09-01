@@ -32,6 +32,29 @@ export type ExternalRoutePlan = {
 
 export type RoutePlanningPhase = "idle" | "cancellable" | "finalizing";
 
+type SubmitPrep =
+  | { ok: false; error?: string }
+  | { ok: true; destination: string };
+
+export function prepareRouteSubmit(
+  destinationOverride: string | undefined,
+  inputValue: string,
+  userLocation: UserLocation,
+): SubmitPrep {
+  const destination = (destinationOverride ?? inputValue).trim();
+  if (!destination) return { ok: false };
+  if (!userLocation) return { ok: false, error: "Waiting for GPS location..." };
+  return { ok: true, destination };
+}
+
+export function planningErrorText(error: unknown): string {
+  const message = error instanceof Error ? error.message : "Unknown error";
+  if (message.includes("Failed to plan trip")) {
+    return "No route found. Try a more specific address.";
+  }
+  return "Connection error. Check your network and try again.";
+}
+
 export function useRoutePlanningController({
   userLocation,
 }: RoutePlanningControllerInput) {
@@ -50,7 +73,6 @@ export function useRoutePlanningController({
   const [routeCandidates, setRouteCandidates] = useState<RouteCandidate[]>([]);
   const [activeRouteCandidateId, setActiveRouteCandidateId] =
     useState<string | null>(null);
-  const [, setSelectedRouteIndex] = useState<number | null>(null);
   const [planningPhase, setPlanningPhase] =
     useState<RoutePlanningPhase>("idle");
 
@@ -73,7 +95,6 @@ export function useRoutePlanningController({
       setPlanningPhase("idle");
       setRouteCandidates([]);
       setActiveRouteCandidateId(null);
-      setSelectedRouteIndex(null);
       setPlannedRouteSteps([]);
       setRecommendationText("");
       setSwitchHeadline(null);
@@ -81,16 +102,48 @@ export function useRoutePlanningController({
     }
   }
 
-  async function handleSubmit(
+    async function executePlan(
+      requestId: number,
+      abortController: AbortController,
+      destination: string,
+      destinationSelection: DestinationSelection | null,
+      origin: NonNullable<UserLocation>,
+    ) {
+      await waitForCancellationCheckpoint();
+      if (routePlanningRequestIdRef.current !== requestId || abortController.signal.aborted) {
+        return;
+      }
+      setPlanningPhase("finalizing");
+      const tripData = await planTrip(
+        origin.lat,
+        origin.lng,
+        destination,
+        destinationSelection,
+        { signal: abortController.signal },
+      );
+      if (routePlanningRequestIdRef.current !== requestId) return;
+      const normalizedTrip = normalizeTripCandidates(tripData);
+      if (!normalizedTrip) {
+        throw new Error("The route response is missing its canonical itinerary.");
+      }
+      setRouteCandidates(normalizedTrip.candidates);
+      setActiveRouteCandidateId(normalizedTrip.selected.id);
+      setPlannedRouteSteps(normalizedTrip.selected.steps);
+      setSwitchHeadline(null);
+      setRecommendationText(tripData.recommendation);
+      if (destinationSelection) setSelectedDestination(destinationSelection);
+    }
+
+    async function handleSubmit(
     destinationOverride?: string,
     selectionOverride?: DestinationSelection | null,
   ) {
-    const destination = (destinationOverride ?? inputValue).trim();
-    if (!destination) return;
-    if (!userLocation) {
-      setErrorText("Waiting for GPS location...");
+    const prepared = prepareRouteSubmit(destinationOverride, inputValue, userLocation);
+    if (!prepared.ok) {
+      if (prepared.error) setErrorText(prepared.error);
       return;
     }
+    if (!userLocation) return;
 
     const destinationSelection =
       selectionOverride === undefined ? selectedDestination : selectionOverride;
@@ -103,60 +156,25 @@ export function useRoutePlanningController({
     setErrorText(null);
     setIsLoading(true);
     setPlanningPhase("cancellable");
-    const initialThinkingText =
-      "Checking live arrivals, service alerts, walking time, and transfers.";
-    setRecommendationText(initialThinkingText);
+    setRecommendationText(
+      "Checking live arrivals, service alerts, walking time, and transfers.",
+    );
     setRouteCandidates([]);
     setActiveRouteCandidateId(null);
-    setSelectedRouteIndex(null);
     setPlannedRouteSteps([]);
 
     try {
-      await waitForCancellationCheckpoint();
-      if (
-        routePlanningRequestIdRef.current !== requestId ||
-        abortController.signal.aborted
-      ) {
-        return;
-      }
-      setPlanningPhase("finalizing");
-      const tripData = await planTrip(
-        userLocation.lat,
-        userLocation.lng,
-        destination,
+      await executePlan(
+        requestId,
+        abortController,
+        prepared.destination,
         destinationSelection,
-        { signal: abortController.signal },
+        userLocation,
       );
-      if (routePlanningRequestIdRef.current !== requestId) return;
-
-      const normalizedTrip = normalizeTripCandidates(tripData);
-      if (!normalizedTrip) {
-        throw new Error("The route response is missing its canonical itinerary.");
-      }
-      const {
-        candidates: nextCandidates,
-        selected: selectedCandidate,
-        selectedIndex: nextSelectedIndex,
-      } = normalizedTrip;
-      const selectedSteps = selectedCandidate.steps;
-      setRouteCandidates(nextCandidates);
-      setActiveRouteCandidateId(
-        selectedCandidate.id,
-      );
-      setSelectedRouteIndex(nextSelectedIndex);
-      setPlannedRouteSteps(selectedSteps);
-      setSwitchHeadline(null);
-      setRecommendationText(tripData.recommendation);
-      if (destinationSelection) setSelectedDestination(destinationSelection);
     } catch (error) {
       if (routePlanningRequestIdRef.current !== requestId) return;
       if (abortController.signal.aborted) return;
-      const message = error instanceof Error ? error.message : "Unknown error";
-      setErrorText(
-        message.includes("Failed to plan trip")
-          ? "No route found. Try a more specific address."
-          : "Connection error. Check your network and try again.",
-      );
+      setErrorText(planningErrorText(error));
     } finally {
       if (routePlanningRequestIdRef.current === requestId) {
         setIsLoading(false);
@@ -185,7 +203,6 @@ export function useRoutePlanningController({
       activeRouteCandidateId !== null &&
       candidate.id !== activeRouteCandidateId;
     setActiveRouteCandidateId(candidate.id);
-    setSelectedRouteIndex(candidate.index);
     setPlannedRouteSteps(candidate.steps);
 
     // Lazily enrich an alternate's intermediate stops the first time it's
@@ -235,7 +252,6 @@ export function useRoutePlanningController({
     setErrorText(null);
     setRouteCandidates(plan.candidates);
     setActiveRouteCandidateId(activeCandidate.id);
-    setSelectedRouteIndex(activeCandidate.index);
     setPlannedRouteSteps(activeCandidate.steps);
     setRecommendationText(plan.recommendationText);
     // Older restored/deep-linked plans predate the explicit field. Keep that
@@ -252,7 +268,6 @@ export function useRoutePlanningController({
     setPlanningPhase("idle");
     setRouteCandidates([]);
     setActiveRouteCandidateId(null);
-    setSelectedRouteIndex(null);
     setPlannedRouteSteps([]);
     setRecommendationText("");
     setSwitchHeadline(null);
@@ -269,7 +284,6 @@ export function useRoutePlanningController({
     setPlanningPhase("idle");
     setRouteCandidates([]);
     setActiveRouteCandidateId(null);
-    setSelectedRouteIndex(null);
     setPlannedRouteSteps([]);
     setRecommendationText("");
     setRouteEntryContext("map_search");

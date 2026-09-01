@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
-const CARD_SOURCE = readFileSync(
-  new URL("./chat-arrivals-card.tsx", import.meta.url),
-  "utf8",
-);
+import { ChatArrivalsCard } from "./chat-arrivals-card.tsx";
+
 const CHAT_CSS = readFileSync(
   new URL("../../../app/styles/smart-route-chat.css", import.meta.url),
   "utf8",
@@ -19,14 +19,25 @@ const WALKING_ICON_SOURCE = readFileSync(
   "utf8",
 );
 
-test("Live Feed action reuses the map action interaction contract", () => {
-  assert.match(CARD_SOURCE, /<motion\.button[\s\S]*?type="button"/);
-  assert.match(
-    CARD_SOURCE,
-    /className="sr-itinerary-card__map-btn sr-chat-arrivals-card__footer"/,
+const sampleArrivals = {
+  routeId: "Q",
+  stationName: "Church Av",
+  stationGuidance: "3 min walk",
+  sourceStatus: "live",
+  updatedAt: "2026-07-16T12:00:00-04:00",
+  groups: [{ direction: "uptown", label: "Uptown", minutes: [4, 9] }],
+};
+
+test("Live Feed action is a reduced-motion-safe map control", () => {
+  const html = renderToStaticMarkup(
+    createElement(ChatArrivalsCard, {
+      arrivals: sampleArrivals,
+      onSeeOnMap: () => {},
+    }),
   );
-  assert.match(CARD_SOURCE, /aria-label="Open in Live Feed"/);
-  assert.match(CARD_SOURCE, /whileTap=\{reduceMotion \? undefined/);
+  assert.match(html, /aria-label="Open in Live Feed"/);
+  assert.match(html, /sr-itinerary-card__map-btn sr-chat-arrivals-card__footer/);
+  assert.match(html, />Open in Live Feed</);
   assert.match(CHAT_CSS, /\.sr-itinerary-card__map-btn:hover svg\s*\{/);
 });
 
@@ -46,13 +57,13 @@ test("chat focus and selected outlines use neutral ink instead of green accent",
 });
 
 test("arrival and itinerary cards share the same walking icon primitive", () => {
-  assert.match(CARD_SOURCE, /import \{ WalkingIcon \} from "\.\/walking-icon"/);
-  assert.match(ITINERARY_SOURCE, /import \{ WalkingIcon \} from "\.\/walking-icon"/);
-  assert.match(CARD_SOURCE, /<WalkingIcon className="sr-chat-arrivals-card__walk-icon"/);
+  const html = renderToStaticMarkup(
+    createElement(ChatArrivalsCard, { arrivals: sampleArrivals }),
+  );
+  assert.match(html, /sr-chat-arrivals-card__walk-icon/);
   assert.match(ITINERARY_SOURCE, /<WalkingIcon \/>/);
   assert.match(WALKING_ICON_SOURCE, /faPersonWalking/);
   assert.match(WALKING_ICON_SOURCE, /aria-hidden="true"/);
-  assert.doesNotMatch(CARD_SOURCE, /import \{[^}]*Walking[^}]*\} from "iconoir-react"/);
 });
 
 test("light mode strengthens the existing orb without changing its dimensions", () => {

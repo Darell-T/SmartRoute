@@ -70,6 +70,55 @@ export function AlternateRoutesCollapsible({
   );
 }
 
+function alternatePath(alternative: Alternative): string | undefined {
+  if (alternative.fromStop && alternative.toStop) {
+    return `${alternative.fromStop} → ${alternative.toStop}`;
+  }
+  return alternative.dest;
+}
+
+function alternateLeaves(alternative: Alternative): string | null {
+  if (alternative.leavesLabel) return `Leaves ${alternative.leavesLabel}`;
+  if (alternative.arriveLabel) return `Arrives ${alternative.arriveLabel}`;
+  return null;
+}
+
+function altMotion(reduce: boolean | null) {
+  return {
+    enter: reduce ? { opacity: 0 } : { opacity: 0, y: 4 },
+    shown: reduce ? { opacity: 1 } : { opacity: 1, y: 0 },
+    leave: reduce ? { opacity: 0 } : { opacity: 0, y: -4 },
+  };
+}
+
+function AlternateRouteCopy({
+  alternative,
+  path,
+  leaves,
+  duration,
+}: {
+  alternative: Alternative;
+  path?: string;
+  leaves: string | null;
+  duration: string;
+}) {
+  const reason = alternative.reason?.trim();
+  return (
+    <div className="sr-alt-row__body">
+      <div className="sr-alt-row__head">
+        <strong className="sr-alt-row__duration">{duration}</strong>
+        {leaves && <span className="sr-alt-row__leaves">{leaves}</span>}
+      </div>
+      {alternative.strip && alternative.strip.length > 0 ? (
+        <RouteStepStrip segments={alternative.strip} />
+      ) : (
+        path && <span className="sr-alt-row__path">{path}</span>
+      )}
+      {reason && <span className="sr-alt-row__reason">{reason}</span>}
+    </div>
+  );
+}
+
 function AlternateRouteCard({
   alternative,
   onSelectAlternative,
@@ -77,45 +126,31 @@ function AlternateRouteCard({
   alternative: Alternative;
   onSelectAlternative?: (candidateId: string) => void;
 }) {
-  // Selecting an alternative reuses its precomputed candidate; it never replans.
   const shouldReduceMotion = useReducedMotion();
   const canUse = Boolean(alternative.id && onSelectAlternative);
-  const reason = alternative.reason?.trim();
-  const path =
-    alternative.fromStop && alternative.toStop
-      ? `${alternative.fromStop} → ${alternative.toStop}`
-      : alternative.dest;
-  const leaves = alternative.leavesLabel
-    ? `Leaves ${alternative.leavesLabel}`
-    : alternative.arriveLabel
-      ? `Arrives ${alternative.arriveLabel}`
-      : null;
+  const path = alternatePath(alternative);
+  const leaves = alternateLeaves(alternative);
+  const duration =
+    typeof alternative.totalMinutes === "number"
+      ? formatDurationLabel(`${alternative.totalMinutes} min`)
+      : "Live";
+  const motionState = altMotion(shouldReduceMotion);
 
   return (
     <motion.li
       className="sr-alt-row"
       layout
-      initial={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, y: 4 }}
-      animate={shouldReduceMotion ? { opacity: 1 } : { opacity: 1, y: 0 }}
-      exit={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, y: -4 }}
+      initial={motionState.enter}
+      animate={motionState.shown}
+      exit={motionState.leave}
       transition={{ duration: 0.2, ease: "easeOut" }}
     >
-      <div className="sr-alt-row__body">
-        <div className="sr-alt-row__head">
-          <strong className="sr-alt-row__duration">
-            {typeof alternative.totalMinutes === "number"
-              ? formatDurationLabel(`${alternative.totalMinutes} min`)
-              : "Live"}
-          </strong>
-          {leaves && <span className="sr-alt-row__leaves">{leaves}</span>}
-        </div>
-        {alternative.strip && alternative.strip.length > 0 ? (
-          <RouteStepStrip segments={alternative.strip} />
-        ) : (
-          path && <span className="sr-alt-row__path">{path}</span>
-        )}
-        {reason && <span className="sr-alt-row__reason">{reason}</span>}
-      </div>
+      <AlternateRouteCopy
+        alternative={alternative}
+        path={path}
+        leaves={leaves}
+        duration={duration}
+      />
       {canUse && (
         <button
           type="button"
