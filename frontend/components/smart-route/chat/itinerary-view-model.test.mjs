@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildItineraryViewModel, condensePreviewEvents, formatClockTime, formatDurationMinutes, formatStructuredRecommendationReason, isSupportedSubwayRoute, parseRationale, PREVIEW_EVENT_MAX, shouldCollapseEvents, transferLabel } from "./itinerary-view-model.ts";
+import { buildItineraryViewModel, buildMergedItineraryViewModel, condensePreviewEvents, formatClockTime, formatDurationMinutes, formatStructuredRecommendationReason, isSupportedSubwayRoute, parseRationale, PREVIEW_EVENT_MAX, shouldCollapseEvents, transferLabel, warnUnsupportedRouteId } from "./itinerary-view-model.ts";
+import { durationMinutesFromSeconds, intermediateStopNames } from "./itinerary-event-adapter.ts";
 
 const card = {
   card_id: "rc_1", turn_id: "t1", role: "recommended",
@@ -188,4 +189,156 @@ test("event crowd exposure reason stays concise and rider-facing", () => {
     }),
     "Lower exposure to nearby event crowds",
   );
+});
+
+test("canonical station-complex walk becomes a transfer row", () => {
+  const model = buildItineraryViewModel({
+    ...card,
+    itinerary: {
+      ...card.itinerary,
+      legs: [
+        { mode: "SUBWAY", ride_seconds: 300, service_id: "A", board: { label: "Jay" }, alight: { label: "MetroTech" } },
+        {
+          mode: "WALK",
+          transfer_kind: "station_complex",
+          transfer_semantics: {
+            kind: "station_complex",
+            to_route_id: "R",
+            from_station_label: "Jay",
+            to_station_label: "Lawrence",
+            total_seconds: 180,
+            accessibility: "unknown",
+          },
+        },
+        { mode: "SUBWAY", ride_seconds: 240, service_id: "R" },
+      ],
+    },
+  });
+  assert.ok(model.events.some((event) => event.kind === "transfer"));
+});
+
+test("duration formatters cover hour-only and invalid seconds", () => {
+  assert.equal(formatDurationMinutes(60), "1 hr");
+  assert.equal(formatDurationMinutes(90), "1 hr 30 min");
+  assert.equal(formatDurationMinutes(-1), "—");
+  assert.equal(durationMinutesFromSeconds(null), null);
+  assert.equal(durationMinutesFromSeconds(-4), null);
+  assert.equal(durationMinutesFromSeconds(90), 2);
+  assert.deepEqual(
+    intermediateStopNames({
+      stops: ["Jay", "DeKalb", "Canal"],
+      fromLabel: "Jay",
+      toLabel: "Canal",
+    }),
+    ["DeKalb"],
+  );
+});
+
+test("canonical rail, wait, and inaccessible same-platform transfers stay typed", () => {
+  const model = buildItineraryViewModel({
+    ...card,
+    itinerary: {
+      ...card.itinerary,
+      legs: [
+        { mode: "LIGHT_RAIL", ride_seconds: 400, service_id: "SIR", wait_seconds: 90, stop_count: Number.NaN },
+        {
+          mode: "WALK",
+          transfer_kind: "same_platform",
+          transfer_semantics: {
+            kind: "same_platform",
+            to_route_id: "R",
+            from_station_label: "Jay",
+            to_station_label: "Jay",
+            total_seconds: 45,
+            accessibility: "inaccessible",
+          },
+        },
+        { mode: "SUBWAY", ride_seconds: 200, wait_seconds: 0 },
+        { mode: "FERRY", ride_seconds: 120 },
+      ],
+    },
+  });
+  assert.ok(model.events.some((event) => event.kind === "rail"));
+  assert.ok(model.events.some((event) => event.kind === "wait"));
+  const transfer = model.events.find((event) => event.kind === "transfer");
+  assert.ok(transfer?.subtitle?.includes("Same station") || transfer?.subtitle?.includes("Accessibility"));
+});
+
+test("walk groups without seconds still condense from duration minutes", () => {
+  const condensed = condensePreviewEvents(
+    [
+      { id: "w1", kind: "walk", routeIds: [], durationMinutes: 3, fromLabel: "A", toLabel: "B" },
+      { id: "w2", kind: "walk", routeIds: [], durationMinutes: 2, fromLabel: "B", toLabel: "C" },
+    ],
+    "C",
+    "A",
+  );
+  assert.equal(condensed.length, 1);
+  assert.equal(condensed[0].kind, "walk");
+});
+
+test("structured reasons, merged cards, and unsupported route warnings stay rider-facing", () => {
+  assert.match(
+    formatStructuredRecommendationReason({ code: "fastest", difference_seconds: 180 }) ?? "",
+    /faster/,
+  );
+  assert.equal(
+    formatStructuredRecommendationReason({ code: "fastest" }),
+    "Fastest available route",
+  );
+  assert.equal(
+    formatStructuredRecommendationReason({ code: "less_walking" }),
+    "Less walking than the other options",
+  );
+  assert.match(
+    formatStructuredRecommendationReason({ code: "avoids_active_disruption" }) ?? "",
+    /alerts/,
+  );
+  assert.match(
+    formatStructuredRecommendationReason({ code: "accessibility" }) ?? "",
+    /accessibility/i,
+  );
+  assert.match(
+    formatStructuredRecommendationReason({ code: "reasonable_local_option" }) ?? "",
+    /Nearby option/,
+  );
+  assert.equal(formatStructuredRecommendationReason(""), null);
+  assert.equal(formatStructuredRecommendationReason({}), null);
+  assert.equal(buildMergedItineraryViewModel([]), null);
+  const merged = buildMergedItineraryViewModel([card]);
+  assert.equal(merged?.invalid, false);
+  warnUnsupportedRouteId("Q");
+  warnUnsupportedRouteId("XX");
+});
+
+test("planned dwell and empty legs stay explicit", () => {
+  const dwell = buildItineraryViewModel({
+    ...card,
+    itinerary: {
+      ...card.itinerary,
+      legs: [],
+      segments: [
+        {
+          segment_index: 0,
+          destination: { label: "Waypoint" },
+          legs: [{ mode: "SUBWAY", ride_seconds: 120, service_id: "A" }],
+        },
+      ],
+      dwell_events: [
+        {
+          event_type: "dwell",
+          after_segment_index: 0,
+          waypoint: { label: "Waypoint" },
+          duration_seconds: Number.NaN,
+          source: "default",
+        },
+      ],
+    },
+  });
+  assert.ok(dwell.events.some((event) => event.kind === "waypoint" || event.kind === "subway"));
+  const empty = buildItineraryViewModel({
+    ...card,
+    itinerary: { ...card.itinerary, legs: null },
+  });
+  assert.equal(empty.invalid, false);
 });

@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useId, useState } from "react";
 import { ArrowUp, Mic, X } from "lucide-react";
 import { motion } from "motion/react";
 import type { MapboxSearchSuggestion } from "@/lib/mapbox-search";
 import { useDestinationSearch } from "@/lib/use-destination-search";
+import { useVoiceInput } from "@/lib/use-voice-input";
 import {
   DestinationSuggestions,
   destinationSuggestionOptionId,
@@ -30,56 +31,271 @@ type DestinationInputActionState =
   | "finalizing"
   | "clear";
 
-type SpeechRecognitionAlternativeLike = {
-  transcript: string;
+const ACTION_LABELS: Record<DestinationInputActionState, string> = {
+  empty: "Search route",
+  submit: "Search route",
+  stop: "Stop route planning",
+  finalizing: "Finalizing route",
+  clear: "Clear route",
 };
 
-type SpeechRecognitionResultLike = {
-  readonly length: number;
-  readonly isFinal: boolean;
-  item(index: number): SpeechRecognitionAlternativeLike;
-  [index: number]: SpeechRecognitionAlternativeLike;
-};
+export type DestinationComboboxCommand =
+  | { type: "none" }
+  | { type: "highlight"; index: number }
+  | { type: "choose"; index: number }
+  | { type: "escape" };
 
-type SpeechRecognitionResultListLike = {
-  readonly length: number;
-  item(index: number): SpeechRecognitionResultLike;
-  [index: number]: SpeechRecognitionResultLike;
-};
+export function destinationComboboxCommand(
+  key: string,
+  suggestionCount: number,
+  highlightedIndex: number,
+): DestinationComboboxCommand {
+  if (suggestionCount === 0) return { type: "none" };
+  if (key === "ArrowDown") {
+    return { type: "highlight", index: (highlightedIndex + 1) % suggestionCount };
+  }
+  if (key === "ArrowUp") {
+    return {
+      type: "highlight",
+      index: highlightedIndex === 0 ? suggestionCount - 1 : highlightedIndex - 1,
+    };
+  }
+  if (key === "Enter") return { type: "choose", index: highlightedIndex };
+  if (key === "Escape") return { type: "escape" };
+  return { type: "none" };
+}
 
-type SpeechRecognitionEventLike = Event & {
-  results: SpeechRecognitionResultListLike;
-};
+function destinationActionState(input: {
+  showClearAction: boolean;
+  planningPhase: string;
+  isResolving: boolean;
+  isLoading: boolean | undefined;
+  hasSearchContent: boolean;
+}): DestinationInputActionState {
+  if (input.showClearAction) return "clear";
+  if (input.planningPhase === "cancellable") return "stop";
+  if (input.planningPhase === "finalizing" || input.isResolving || input.isLoading) {
+    return "finalizing";
+  }
+  if (input.hasSearchContent) return "submit";
+  return "empty";
+}
 
-type SpeechRecognitionLike = {
-  lang: string;
-  continuous: boolean;
-  interimResults: boolean;
-  maxAlternatives: number;
-  start: () => void;
-  stop: () => void;
-  abort: () => void;
-  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
-  onerror: (() => void) | null;
-  onend: (() => void) | null;
-};
+function DestinationActionGlyph({
+  actionState,
+}: {
+  actionState: DestinationInputActionState;
+}) {
+  if (actionState === "clear") {
+    return <X size={20} strokeWidth={2.1} aria-hidden="true" />;
+  }
+  if (actionState === "stop" || actionState === "finalizing") {
+    return <span className="sr-input-stop-icon" aria-hidden="true" />;
+  }
+  return <ArrowUp size={21} strokeWidth={2.25} aria-hidden="true" />;
+}
 
-type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
-
-type SpeechRecognitionWindow = Window &
-  typeof globalThis & {
-    SpeechRecognition?: SpeechRecognitionConstructor;
-    webkitSpeechRecognition?: SpeechRecognitionConstructor;
+function destinationSubmitColors(filled: boolean) {
+  if (filled) {
+    return {
+      backgroundColor: "rgba(255,255,255,0.96)",
+      color: "rgba(8,12,18,0.96)",
+    };
+  }
+  return {
+    backgroundColor: "rgba(255,255,255,0.12)",
+    color: "rgba(255,255,255,0.72)",
   };
+}
 
-function getSpeechRecognitionConstructor(): SpeechRecognitionConstructor | null {
-  if (typeof window === "undefined") return null;
-  const speechWindow = window as SpeechRecognitionWindow;
+function DestinationVoiceButton({
+  enabled,
+  listening,
+  onStart,
+}: {
+  enabled: boolean;
+  listening: boolean;
+  onStart: () => void;
+}) {
+  if (!enabled) return null;
   return (
-    speechWindow.SpeechRecognition ??
-    speechWindow.webkitSpeechRecognition ??
-    null
+    <button
+      type="button"
+      className="sr-input-voice"
+      aria-label={listening ? "Listening for destination" : "Use voice input"}
+      data-listening={listening ? "true" : "false"}
+      onClick={onStart}
+    >
+      <Mic size={20} strokeWidth={1.9} aria-hidden="true" />
+    </button>
   );
+}
+
+function DestinationSubmitControl({
+  actionState,
+  actionLabel,
+  actionFilled,
+  actionDisabled,
+  onClear,
+  onStop,
+}: {
+  actionState: DestinationInputActionState;
+  actionLabel: string;
+  actionFilled: boolean;
+  actionDisabled: boolean;
+  onClear: () => void;
+  onStop: () => void;
+}) {
+  return (
+    <motion.button
+      type={actionState === "submit" ? "submit" : "button"}
+      className="sr-input-submit"
+      aria-label={actionLabel}
+      disabled={actionDisabled}
+      data-filled={actionFilled ? "true" : "false"}
+      data-action-state={actionState}
+      onClick={() => {
+        if (actionState === "clear") onClear();
+        else if (actionState === "stop") onStop();
+      }}
+      animate={destinationSubmitColors(actionFilled)}
+      transition={{ duration: 0.2, ease: "easeOut" }}
+      whileTap={actionDisabled ? undefined : { scale: 0.96 }}
+    >
+      <DestinationActionGlyph actionState={actionState} />
+    </motion.button>
+  );
+}
+
+function DestinationComboboxField({
+  suggestionsId,
+  suggestionsOpen,
+  highlightedIndex,
+  displayValue,
+  busy,
+  wired,
+  suggestions,
+  onChange,
+  onFocus,
+  onBlur,
+  onHighlight,
+  onChoose,
+  onEscape,
+}: {
+  suggestionsId: string;
+  suggestionsOpen: boolean;
+  highlightedIndex: number;
+  displayValue: string;
+  busy: boolean;
+  wired: boolean;
+  suggestions: MapboxSearchSuggestion[];
+  onChange: (value: string) => void;
+  onFocus: () => void;
+  onBlur: () => void;
+  onHighlight: (index: number) => void;
+  onChoose: (suggestion: MapboxSearchSuggestion) => void;
+  onEscape: () => void;
+}) {
+  return (
+    <input
+      aria-label="Search destination or address"
+      role="combobox"
+      aria-autocomplete="list"
+      aria-expanded={suggestionsOpen}
+      aria-controls={suggestionsOpen ? suggestionsId : undefined}
+      aria-activedescendant={
+        suggestionsOpen
+          ? destinationSuggestionOptionId(suggestionsId, highlightedIndex)
+          : undefined
+      }
+      value={displayValue}
+      onChange={(event) => onChange(event.target.value)}
+      onFocus={onFocus}
+      onBlur={onBlur}
+      onKeyDown={(event) => {
+        if (!wired) return;
+        const command = destinationComboboxCommand(
+          event.key,
+          suggestions.length,
+          highlightedIndex,
+        );
+        if (command.type === "highlight") {
+          event.preventDefault();
+          onHighlight(command.index);
+          return;
+        }
+        if (command.type === "choose") {
+          const suggestion = suggestions[command.index];
+          if (!suggestion) return;
+          event.preventDefault();
+          onChoose(suggestion);
+          return;
+        }
+        if (command.type === "escape") {
+          event.preventDefault();
+          onEscape();
+        }
+      }}
+      placeholder="Where are we headed?"
+      autoComplete="off"
+      disabled={busy}
+      title={displayValue || undefined}
+    />
+  );
+}
+
+function destinationPresentation(input: {
+  actionState: DestinationInputActionState;
+  busy: boolean;
+  voiceSupported: boolean;
+  showClearAction: boolean;
+  wired: boolean;
+  focused: boolean;
+  suggestionCount: number;
+}) {
+  const idle = input.actionState === "empty" || input.actionState === "finalizing";
+  return {
+    canUseVoice: input.voiceSupported && !input.busy && !input.showClearAction,
+    actionDisabled: idle,
+    actionFilled: !idle,
+    suggestionsOpen: input.wired && input.focused && input.suggestionCount > 0,
+  };
+}
+
+function destinationFieldModel(input: {
+  search?: RailSearchProps;
+  controlledSearch: RailSearchProps | null;
+  isResolving: boolean;
+  focused: boolean;
+  suggestionCount: number;
+  value: string;
+  voiceSupported: boolean;
+}) {
+  const planningPhase = input.search?.planningPhase ?? "idle";
+  const loading = Boolean(input.search?.isLoading);
+  const busy = planningPhase !== "idle" || loading || input.isResolving;
+  const showClearAction = Boolean(input.controlledSearch?.hasActiveRoute) && !busy;
+  const actionState = destinationActionState({
+    showClearAction,
+    planningPhase,
+    isResolving: input.isResolving,
+    isLoading: loading,
+    hasSearchContent: cleanDestinationSubmit(input.value).length > 0,
+  });
+  return {
+    busy,
+    actionState,
+    actionLabel: ACTION_LABELS[actionState],
+    ...destinationPresentation({
+      actionState,
+      busy,
+      voiceSupported: input.voiceSupported,
+      showClearAction,
+      wired: Boolean(input.controlledSearch),
+      focused: input.focused,
+      suggestionCount: input.suggestionCount,
+    }),
+  };
 }
 
 export function DestinationInput({
@@ -93,10 +309,6 @@ export function DestinationInput({
 }) {
   const [localValue, setLocalValue] = useState("");
   const [focused, setFocused] = useState(false);
-  const [speechRecognitionCtor, setSpeechRecognitionCtor] =
-    useState<SpeechRecognitionConstructor | null>(null);
-  const [isListening, setIsListening] = useState(false);
-  const speechRecognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const suggestionsId = useId();
   const controlledSearch = search ?? null;
   const wired = controlledSearch !== null;
@@ -119,18 +331,6 @@ export function DestinationInput({
     markSelectedLabel,
     resetSession,
   } = destinationSearch;
-
-  useEffect(() => {
-    const supportCheck = window.setTimeout(() => {
-      const recognitionCtor = getSpeechRecognitionConstructor();
-      setSpeechRecognitionCtor(() => recognitionCtor);
-    }, 0);
-    return () => {
-      window.clearTimeout(supportCheck);
-      speechRecognitionRef.current?.abort();
-      speechRecognitionRef.current = null;
-    };
-  }, []);
 
   function setValue(next: string) {
     const cleaned = cleanDestinationDraft(next);
@@ -186,85 +386,23 @@ export function DestinationInput({
     controlledSearch?.onCancelPlanning();
   }
 
-  function startVoiceInput() {
-    if (!speechRecognitionCtor || isListening) {
-      speechRecognitionRef.current?.stop();
-      return;
-    }
+  const voice = useVoiceInput((transcript) => {
+    const cleaned = cleanDestinationDraft(transcript);
+    if (!cleaned) return;
+    setValue(cleaned);
+    setFocused(true);
+    onFocusChange?.(true);
+  });
 
-    const recognition = new speechRecognitionCtor();
-    recognition.lang = "en-US";
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.maxAlternatives = 1;
-    recognition.onresult = (event) => {
-      const transcriptParts: string[] = [];
-      for (let index = 0; index < event.results.length; index += 1) {
-        const result = event.results[index] ?? event.results.item(index);
-        const alternative = result[0] ?? result.item(0);
-        if (alternative?.transcript) {
-          transcriptParts.push(alternative.transcript);
-        }
-      }
-      const transcript = cleanDestinationDraft(transcriptParts.join(" "));
-      if (!transcript) return;
-      setValue(transcript);
-      setFocused(true);
-      onFocusChange?.(true);
-    };
-    recognition.onerror = () => {
-      setIsListening(false);
-      speechRecognitionRef.current = null;
-    };
-    recognition.onend = () => {
-      setIsListening(false);
-      speechRecognitionRef.current = null;
-    };
-
-    speechRecognitionRef.current = recognition;
-    setIsListening(true);
-    try {
-      recognition.start();
-    } catch {
-      setIsListening(false);
-      speechRecognitionRef.current = null;
-    }
-  }
-
-  const planningPhase = search?.planningPhase ?? "idle";
-  const isPlanning = planningPhase !== "idle" || Boolean(search?.isLoading);
-  const busy = Boolean(isPlanning || isResolving);
-  const hasSearchContent = cleanDestinationSubmit(value).length > 0;
-  const showClearAction = Boolean(controlledSearch?.hasActiveRoute && !busy);
-  const actionState: DestinationInputActionState = showClearAction
-    ? "clear"
-    : planningPhase === "cancellable"
-      ? "stop"
-      : planningPhase === "finalizing" || isResolving || search?.isLoading
-        ? "finalizing"
-        : hasSearchContent
-          ? "submit"
-          : "empty";
-  const canUseVoice =
-    speechRecognitionCtor !== null &&
-    !busy &&
-    !showClearAction &&
-    actionState !== "clear";
-  const actionDisabled =
-    actionState === "empty" || actionState === "finalizing";
-  const actionLabel =
-    actionState === "clear"
-      ? "Clear route"
-      : actionState === "stop"
-        ? "Stop route planning"
-        : actionState === "finalizing"
-          ? "Finalizing route"
-          : "Search route";
-  const actionFilled =
-    actionState === "submit" ||
-    actionState === "stop" ||
-    actionState === "clear";
-  const suggestionsOpen = wired && focused && suggestions.length > 0;
+  const field = destinationFieldModel({
+    search,
+    controlledSearch,
+    isResolving,
+    focused,
+    suggestionCount: suggestions.length,
+    value,
+    voiceSupported: voice.isSupported,
+  });
 
   return (
     <section className="sr-rail-section sr-route-search">
@@ -272,22 +410,18 @@ export function DestinationInput({
         className="sr-input-group"
         onSubmit={(event) => {
           event.preventDefault();
-          if (actionState === "submit") submitSearch();
+          if (field.actionState === "submit") submitSearch();
         }}
       >
-        <input
-          aria-label="Search destination or address"
-          role="combobox"
-          aria-autocomplete="list"
-          aria-expanded={suggestionsOpen}
-          aria-controls={suggestionsOpen ? suggestionsId : undefined}
-          aria-activedescendant={
-            suggestionsOpen
-              ? destinationSuggestionOptionId(suggestionsId, highlightedIndex)
-              : undefined
-          }
-          value={displayValue}
-          onChange={(event) => setValue(event.target.value)}
+        <DestinationComboboxField
+          suggestionsId={suggestionsId}
+          suggestionsOpen={field.suggestionsOpen}
+          highlightedIndex={highlightedIndex}
+          displayValue={displayValue}
+          busy={field.busy}
+          wired={wired}
+          suggestions={suggestions}
+          onChange={setValue}
           onFocus={() => {
             setFocused(true);
             onFocusChange?.(true);
@@ -298,81 +432,27 @@ export function DestinationInput({
               onFocusChange?.(false);
             }, 140)
           }
-          onKeyDown={(event) => {
-            if (!wired || suggestions.length === 0) return;
-            if (event.key === "ArrowDown") {
-              event.preventDefault();
-              setHighlightedIndex((highlightedIndex + 1) % suggestions.length);
-            } else if (event.key === "ArrowUp") {
-              event.preventDefault();
-              setHighlightedIndex(
-                highlightedIndex === 0
-                  ? suggestions.length - 1
-                  : highlightedIndex - 1,
-              );
-            } else if (event.key === "Enter" && suggestions[highlightedIndex]) {
-              event.preventDefault();
-              void chooseSuggestion(suggestions[highlightedIndex]);
-            } else if (event.key === "Escape") {
-              clearSuggestions();
-            }
-          }}
-          placeholder="Where are we headed?"
-          autoComplete="off"
-          disabled={busy}
-          title={displayValue || undefined}
+          onHighlight={setHighlightedIndex}
+          onChoose={(suggestion) => void chooseSuggestion(suggestion)}
+          onEscape={clearSuggestions}
         />
-        {canUseVoice && (
-          <button
-            type="button"
-            className="sr-input-voice"
-            aria-label={
-              isListening ? "Listening for destination" : "Use voice input"
-            }
-            data-listening={isListening ? "true" : "false"}
-            onClick={startVoiceInput}
-          >
-            <Mic size={20} strokeWidth={1.9} aria-hidden="true" />
-          </button>
-        )}
-        <motion.button
-          type={actionState === "submit" ? "submit" : "button"}
-          className="sr-input-submit"
-          aria-label={actionLabel}
-          disabled={actionDisabled}
-          data-filled={actionFilled ? "true" : "false"}
-          data-action-state={actionState}
-          onClick={() => {
-            if (actionState === "clear") {
-              clearSearch();
-            } else if (actionState === "stop") {
-              stopRoutePlanning();
-            }
-          }}
-          animate={{
-            backgroundColor: actionFilled
-              ? "rgba(255,255,255,0.96)"
-              : "rgba(255,255,255,0.12)",
-            color: actionFilled
-              ? "rgba(8,12,18,0.96)"
-              : "rgba(255,255,255,0.72)",
-          }}
-          transition={{ duration: 0.2, ease: "easeOut" }}
-          whileTap={!actionDisabled ? { scale: 0.96 } : undefined}
-        >
-          {actionState === "clear" ? (
-            <X size={20} strokeWidth={2.1} aria-hidden="true" />
-          ) : actionState === "stop" || actionState === "finalizing" ? (
-            <span className="sr-input-stop-icon" aria-hidden="true" />
-          ) : (
-            <ArrowUp size={21} strokeWidth={2.25} aria-hidden="true" />
-          )}
-        </motion.button>
+        <DestinationVoiceButton
+          enabled={field.canUseVoice}
+          listening={voice.isListening}
+          onStart={voice.start}
+        />
+        <DestinationSubmitControl
+          actionState={field.actionState}
+          actionLabel={field.actionLabel}
+          actionFilled={field.actionFilled}
+          actionDisabled={field.actionDisabled}
+          onClear={clearSearch}
+          onStop={stopRoutePlanning}
+        />
       </form>
-
       <DestinationSuggestions
         id={suggestionsId}
-        open={suggestionsOpen}
+        open={field.suggestionsOpen}
         suggestions={suggestions}
         highlightedIndex={highlightedIndex}
         onHighlight={setHighlightedIndex}

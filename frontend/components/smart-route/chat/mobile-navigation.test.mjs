@@ -1,78 +1,102 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
-const NAVIGATION_SOURCE = fs.readFileSync(
-  fileURLToPath(new URL("./mobile-navigation.tsx", import.meta.url)),
-  "utf8",
-);
-const TOP_BAR_SOURCE = fs.readFileSync(
-  fileURLToPath(new URL("./mobile-top-bar.tsx", import.meta.url)),
-  "utf8",
-);
-const PAGE_SOURCE = fs.readFileSync(
-  fileURLToPath(new URL("../../../app/page.tsx", import.meta.url)),
-  "utf8",
-);
-const STAGE_SOURCE = fs.readFileSync(
-  fileURLToPath(new URL("./mobile-stage.tsx", import.meta.url)),
-  "utf8",
-);
+import { MobileNavigation } from "./mobile-navigation.tsx";
+import { MobileStage } from "./mobile-stage.tsx";
+import { MobileTopBar } from "./mobile-top-bar.tsx";
+
 const CSS_SOURCE = fs.readFileSync(
-  fileURLToPath(
-    new URL("../../../app/styles/smart-route-mobile-shell.css", import.meta.url),
-  ),
+  new URL("../../../app/styles/smart-route-mobile-shell.css", import.meta.url),
   "utf8",
 );
 
-test("mobile navigation is a draggable full-canvas page with an interruptible spring", () => {
-  assert.match(PAGE_SOURCE, /<MobileStage/);
-  assert.match(STAGE_SOURCE, /DRAG_ACTIVATION_DISTANCE = 10/);
-  assert.match(STAGE_SOURCE, /setPointerCapture/);
-  assert.match(STAGE_SOURCE, /onPointerMove=\{handleDismissPointerMove\}/);
-  assert.match(STAGE_SOURCE, /stageAnimationRef\.current\?\.stop\(\)/);
-  assert.match(STAGE_SOURCE, /CLOSE_DISTANCE_RATIO = 0\.28/);
-  assert.match(STAGE_SOURCE, /CLOSE_VELOCITY = -460/);
-  assert.match(STAGE_SOURCE, /type: "spring"/);
-  assert.match(
-    STAGE_SOURCE,
-    /aria-hidden=\{navigationOpen \? true : undefined\}/,
+test("open mobile navigation is a dialog with only available destinations", () => {
+  const html = renderToStaticMarkup(
+    createElement(MobileNavigation, {
+      open: true,
+      activeTab: "chat",
+      theme: "dark",
+      onClose() {},
+      onOpenChat() {},
+      onOpenLiveMap() {},
+      onNewTrip() {},
+      onToggleTheme() {},
+    }),
   );
-  assert.match(NAVIGATION_SOURCE, /<AnimatePresence initial=\{false\}>/);
-  assert.match(NAVIGATION_SOURCE, /role="dialog"/);
-  assert.match(NAVIGATION_SOURCE, /aria-modal="true"/);
-  assert.match(NAVIGATION_SOURCE, /FOCUSABLE_SELECTOR/);
-  assert.match(NAVIGATION_SOURCE, /event\.key === "Escape"/);
-  assert.match(NAVIGATION_SOURCE, /event\.shiftKey/);
-  assert.match(
-    STAGE_SOURCE,
-    /inert=\{navigationOpen \? true : undefined\}/,
+  assert.match(html, /role="dialog"/);
+  assert.match(html, /aria-modal="true"/);
+  assert.match(html, /aria-label="SmartRoute navigation"/);
+  assert.match(html, /New Trip/);
+  assert.match(html, />Chat</);
+  assert.match(html, /Transit Map/);
+  assert.match(html, /aria-label="Close navigation"/);
+  assert.match(html, /Switch to light mode/);
+  assert.doesNotMatch(html, /Coming soon|Bookmark|Settings/);
+  const closed = renderToStaticMarkup(
+    createElement(MobileNavigation, {
+      open: false,
+      activeTab: "livemap",
+      theme: "light",
+      onClose() {},
+      onOpenChat() {},
+      onOpenLiveMap() {},
+      onNewTrip() {},
+      onToggleTheme() {},
+    }),
   );
+  assert.doesNotMatch(closed, /role="dialog"/);
 });
 
-test("mobile navigation keeps only available destinations", () => {
-  assert.match(NAVIGATION_SOURCE, /icon=\{MessageCircle\}/);
-  assert.match(NAVIGATION_SOURCE, /icon=\{MapIcon\}/);
-  assert.doesNotMatch(
-    NAVIGATION_SOURCE,
-    /Coming soon|Bookmark|MessageSquareText|CircleHelp|Settings|showLock/,
+test("mobile chrome exposes a reachable menu trigger and optional brand", () => {
+  const withBrand = renderToStaticMarkup(
+    createElement(MobileTopBar, {
+      navigationOpen: false,
+      showBrand: true,
+      onOpenNavigation() {},
+      onNewTrip() {},
+    }),
   );
-  assert.doesNotMatch(NAVIGATION_SOURCE, /BrainIcon|ZapIcon/);
+  assert.match(withBrand, /aria-label="Open navigation menu"/);
+  assert.match(withBrand, /aria-expanded="false"/);
+  assert.match(withBrand, /Start a new SmartRoute trip/);
+  const liveMap = renderToStaticMarkup(
+    createElement(MobileTopBar, {
+      navigationOpen: true,
+      showBrand: false,
+      onOpenNavigation() {},
+      onNewTrip() {},
+    }),
+  );
+  assert.match(liveMap, /aria-expanded="true"/);
+  assert.doesNotMatch(liveMap, /sr-mobile-top-bar__brand/);
 });
 
-test("mobile chrome stays neutral and exposes reachable primary controls", () => {
-  assert.match(TOP_BAR_SOURCE, /aria-label="Open navigation menu"/);
-  assert.doesNotMatch(TOP_BAR_SOURCE, /Open transit map|Open chat/);
-  assert.doesNotMatch(TOP_BAR_SOURCE, /MapIcon|MessageCircle/);
-  assert.match(
-    STAGE_SOURCE,
-    /<motion\.div\s+className="sr-mobile-stage-dismiss"\s+aria-hidden="true"/,
+test("mobile stage marks the page inert while navigation is open", () => {
+  const html = renderToStaticMarkup(
+    createElement(
+      MobileStage,
+      { navigationOpen: true, onDismissNavigation() {} },
+      createElement("p", null, "Chat"),
+    ),
   );
-  assert.doesNotMatch(STAGE_SOURCE, /aria-label="Close navigation"/);
-  assert.doesNotMatch(STAGE_SOURCE, /motion\.button/);
-  assert.match(NAVIGATION_SOURCE, /aria-label="Close navigation"/);
-  assert.doesNotMatch(NAVIGATION_SOURCE, /\bX\b|Close navigation menu/);
+  assert.match(html, /data-navigation-open="true"/);
+  assert.match(html, /aria-hidden="true"/);
+  assert.match(html, /sr-mobile-stage-dismiss/);
+  const closed = renderToStaticMarkup(
+    createElement(
+      MobileStage,
+      { navigationOpen: false, onDismissNavigation() {} },
+      createElement("p", null, "Chat"),
+    ),
+  );
+  assert.match(closed, /data-navigation-open="false"/);
+  assert.doesNotMatch(closed, /sr-mobile-stage-dismiss/);
+});
+
+test("mobile shell CSS keeps a 52px drag sliver without toy-green fills", () => {
   assert.match(CSS_SOURCE, /touch-action:\s*none/);
   assert.match(CSS_SOURCE, /min-height:\s*52px/);
   assert.match(
@@ -83,22 +107,4 @@ test("mobile chrome stays neutral and exposes reachable primary controls", () =>
     CSS_SOURCE,
     /#22c55e|#2ee85f|#3ed134|rgba\(46,\s*232,\s*95/i,
   );
-});
-
-test("mobile branding is removed while the live transit map is active", () => {
-  assert.match(PAGE_SOURCE, /showBrand=\{!isLivemapTab\}/);
-  assert.match(TOP_BAR_SOURCE, /\{showBrand \? \(/);
-});
-
-test("live map workspace mounts on demand and stays mounted across tabs", () => {
-  assert.match(PAGE_SOURCE, /import dynamic from "next\/dynamic"/);
-  assert.match(PAGE_SOURCE, /const LiveWorkspace = dynamic\(/);
-  assert.match(PAGE_SOURCE, /ssr: false/);
-  assert.doesNotMatch(PAGE_SOURCE, /import \{ LiveWorkspace \} from/);
-  assert.match(PAGE_SOURCE, /const \[mapRequested, setMapRequested\] = useState\(false\);/);
-  assert.match(
-    PAGE_SOURCE,
-    /const openLiveMap = useCallback\(\(\) => \{\s*setMapRequested\(true\);/,
-  );
-  assert.match(PAGE_SOURCE, /\{mapRequested \? \(/);
 });

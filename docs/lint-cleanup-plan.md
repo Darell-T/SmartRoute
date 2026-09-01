@@ -13,8 +13,8 @@ Commit `427fbc8` remains the historical reset point. Checkpoint `16390f3`
 contains Batches 2 through 6F and the committed F0 frontend quality contract.
 Batch F1 is Codex-approved at
 `d2ecdfe3bf43397aee2051c84ac0bf4544d8cfc0`. Codex approved Batch 7 on the
-tree from that fixed point. Start Batch 8 only from the resulting Batch 7
-commit. The discarded whole-backend rewrite is not part of this history.
+tree from that fixed point. Batch 8 is implemented and uncommitted for Codex.
+Start Batch 9 only from the accepted Batch 8 commit. The discarded whole-backend rewrite is not part of this history.
 
 The repository audit recorded on 2026-08-30 found a bounded backend closure,
 a frontend measurement correction, and proven dead frontend code. It did not
@@ -1127,6 +1127,39 @@ the behavior clusters are green. Acceptance requires zero owned functions
 above 12, zero owned unexecuted production files, source-mapped browser proof,
 no source-text tests added, no frontend itinerary arithmetic, and no visible
 behavior drift outside an explicitly approved correction.
+
+### Batch 8 worker result
+
+Worker implementation on 2026-09-01. Fixed point
+`6cd3238bc114e4a4176a77866b3b927aa57ed221`. The tree is uncommitted for Codex.
+The worker did not update `quality/baseline.json`, did not start Batch 9, and
+did not call the batch approved.
+
+Clusters 8A through 8D are implemented. Owned functions above 12 are 0. Owned
+unexecuted production files are 0. Two consecutive coverage runs met the Batch 8
+`components/**` 95% gate after a browser-only 8A proof: line 96.86%
+(16374 / 16904), branch 95.18% (4422 / 4646), function 95.52% (832 / 871).
+`browser_tsx_source_mapped` is true. Net owned production lines are +499.
+Production functions grew from 880 to 1000. Full quality versus the fixed point
+exits 1 with 42 proven-stale TypeScript baseline entries, new 0, worsened 0,
+cognitive 0, Ruff C901 0. Full detail is in `docs/lint-cleanup-handoff.md`.
+
+### Batch 8 reviewer result
+
+Codex approved Batch 8 after repairing and independently verifying the browser
+coverage proof and behavior-level tests. The 8A guard deletes the prior marker,
+maps Chromium records by themselves, and proves original
+`chat-sidebar.tsx` line 143 before merging unit coverage. Rendered
+`ChatMessage` tests now protect the View alerts condition and source order.
+
+The reviewer removed exactly 42 proven-stale TypeScript entries from
+`quality/baseline.json`, reducing it from 101 to 59 entries. No entry was added
+or widened. One surviving backend CRAP ceiling decreased from 12.083333 to
+12.010417. The final full quality command against `6cd3238` exits 0 with
+`approval_eligible: true`, 1,084 frontend tests, 1,915 backend tests, 21 backend
+skips, and 446 backend subtests. New, worsened, stale, cognitive-delta, Ruff
+C901, Ruff structural, and ESLint complexity counts are all 0. Batch 9 must
+start from the accepted Batch 8 commit.
 
 ## Batch 9: transit artifact generation and frontend tools
 

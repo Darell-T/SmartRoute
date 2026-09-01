@@ -1,19 +1,152 @@
 import type { RouteCandidate, RouteStep as ApiRouteStep } from "@/types/api";
 import { canonicalPlaceLabel } from "@/lib/canonical-itinerary-label";
 import type { RoutePlan } from "../types";
-import { cleanDestinationLabel, formatClockAt } from "./formatters";
-import { buildAlternatives, candidateEtaMinutes } from "./route-candidates";
+import { cleanDestinationLabel } from "./formatters";
+import {
+  buildAlternatives,
+  canonicalDurationMinutes,
+  canonicalTransferCount,
+  clockFromIso,
+  firstTransitStep,
+} from "./route-candidates";
 import {
   buildVisibleRouteReason,
   publicRecommendationText,
 } from "./route-reason-copy";
 import {
   detailStepsFromCanonicalItinerary,
-  isTransitStep,
   mergeConsecutiveWalks,
   routeStepToRailStep,
   stripFromSteps,
 } from "./route-steps";
+
+function withArriveStep(
+  steps: RoutePlan["steps"],
+  merged: ApiRouteStep[],
+): RoutePlan["steps"] {
+  if (steps.length === 0) return steps;
+  const lastRaw = merged[merged.length - 1];
+  const dest =
+    lastRaw.arrival_stop
+    || lastRaw.departure_stop
+    || steps[steps.length - 1].title
+    || "Destination";
+  const next = steps.slice();
+  next[next.length - 1] = {
+    ...next[next.length - 1],
+    type: "arrive",
+    action: "Arrive",
+    title: cleanDestinationLabel(dest) || "Destination",
+    detail: "Arrive at destination",
+  };
+  return next;
+}
+
+function planHeadline(
+  activeRouteCandidate: RouteCandidate | null | undefined,
+  switchHeadline?: string | null,
+): string {
+  const override = publicRecommendationText(switchHeadline);
+  if (override) return override;
+  if (!activeRouteCandidate) return "Choose a destination for route guidance.";
+  if (activeRouteCandidate.is_recommended === false) return "Alternative route engaged.";
+  return "Route plan is live.";
+}
+
+function planRationale(
+  candidate: RouteCandidate | null | undefined,
+  routeSteps: ApiRouteStep[] | undefined,
+  routeCandidates: RouteCandidate[] | undefined,
+  routeEntryContext: RoutePlan["entryContext"],
+): string {
+  if (!candidate) return "Nearby arrivals are live within a half-mile radius.";
+  if (routeEntryContext === "chat") return "";
+  return buildVisibleRouteReason(candidate, routeSteps, routeCandidates);
+}
+
+function journeyPlacesFrom(
+  candidate: RouteCandidate | null | undefined,
+): string[] | undefined {
+  const itinerary = candidate?.itinerary;
+  if (!itinerary) return undefined;
+  const waypoints = itinerary.waypoints ?? [];
+  return [
+    canonicalPlaceLabel(itinerary.origin, "Your location"),
+    ...waypoints.map((waypoint) => canonicalPlaceLabel(waypoint, "Waypoint")),
+    canonicalPlaceLabel(itinerary.destination, "Destination"),
+  ].filter((place, index, values) => index === 0 || values[index - 1] !== place);
+}
+
+function liveCountdown(value: number | undefined): number | undefined {
+  if (value === undefined || !Number.isFinite(value)) return undefined;
+  return Math.max(0, Math.round(value));
+}
+
+function emptyPlanFacts(hasSteps: boolean): Pick<RoutePlan, "eta" | "totalTime" | "leaveByLabel" | "transferCount"> {
+  return {
+    eta: "Live",
+    totalTime: hasSteps ? "Calculated" : "Pending",
+    leaveByLabel: undefined,
+    transferCount: undefined,
+  };
+}
+
+function candidateArrivalClock(candidate: RouteCandidate): string | null {
+  const fromItinerary = clockFromIso(candidate.itinerary?.arrival_at);
+  if (fromItinerary) return fromItinerary;
+  return clockFromIso(candidate.arrival_at);
+}
+
+function selectedEta(routeEta: string | null | undefined, arrivalClock: string | null): string {
+  if (routeEta) return routeEta;
+  if (arrivalClock) return arrivalClock;
+  return "Live";
+}
+
+function selectedTotalTime(
+  routeTotalTime: string | null | undefined,
+  durationMinutes: number | null,
+  hasSteps: boolean,
+): string {
+  if (routeTotalTime) return routeTotalTime;
+  if (durationMinutes !== null) return `${durationMinutes} min`;
+  if (hasSteps) return "Calculated";
+  return "Pending";
+}
+
+function selectedPlanFacts(
+  candidate: RouteCandidate | null | undefined,
+  routeEta: string | null | undefined,
+  routeTotalTime: string | null | undefined,
+  hasSteps: boolean,
+): Pick<RoutePlan, "eta" | "totalTime" | "leaveByLabel" | "transferCount"> {
+  if (!candidate) return emptyPlanFacts(hasSteps);
+  return {
+    eta: selectedEta(routeEta, candidateArrivalClock(candidate)),
+    totalTime: selectedTotalTime(
+      routeTotalTime,
+      canonicalDurationMinutes(candidate),
+      hasSteps,
+    ),
+    leaveByLabel: clockFromIso(candidate.itinerary?.departure_at) ?? undefined,
+    transferCount: canonicalTransferCount(candidate),
+  };
+}
+
+function planHeadsign(
+  transitStep: ApiRouteStep | undefined,
+  steps: RoutePlan["steps"],
+): string {
+  return (
+    cleanDestinationLabel(transitStep?.direction || transitStep?.arrival_stop)
+    || (steps.length > 0 ? steps[steps.length - 1].title : "")
+    || "Walking route"
+  );
+}
+
+function pickedLineFrom(transitStep: ApiRouteStep | undefined): string {
+  return transitStep?.train_line || transitStep?.route_id || "";
+}
 
 export function buildPlan(
   routeSteps: ApiRouteStep[] | undefined,
@@ -22,129 +155,43 @@ export function buildPlan(
   switchHeadline?: string | null,
   routeEta?: string | null,
   routeTotalTime?: string | null,
-  nowMs = Date.now(),
   routeEntryContext: "chat" | "map_search" | "deep_link" | "restored" = "map_search",
 ): RoutePlan {
-  const transitStep = routeSteps?.find(isTransitStep);
-  const line = transitStep?.train_line || transitStep?.route_id || "";
+  const transitStep = firstTransitStep(routeSteps);
   const merged = mergeConsecutiveWalks(routeSteps ?? []);
-  const steps: RoutePlan["steps"] = merged.map(routeStepToRailStep);
-  // The final step of any plan is the destination: relabel it "Arrive" with
-  // the celebratory checkered-flag icon, naming where you end up.
-  if (steps.length > 0) {
-    const lastRaw = merged[merged.length - 1];
-    const dest =
-      lastRaw.arrival_stop
-      || lastRaw.departure_stop
-      || steps[steps.length - 1].title
-      || "Destination";
-    steps[steps.length - 1] = {
-      ...steps[steps.length - 1],
-      type: "arrive",
-      action: "Arrive",
-      title: cleanDestinationLabel(dest) || "Destination",
-      detail: "Arrive at destination",
-    };
-  }
-
-  let defaultHeadline = "Choose a destination for route guidance.";
-  if (activeRouteCandidate) {
-    defaultHeadline =
-      activeRouteCandidate.is_recommended === false
-        ? "Alternative route engaged."
-        : "Route plan is live.";
-  }
-
-  const headsign =
-    cleanDestinationLabel(transitStep?.direction || transitStep?.arrival_stop)
-    || (steps.length > 0 ? steps[steps.length - 1].title : "")
-    || "Walking route";
-
-  const selectedEtaMinutes = candidateEtaMinutes(activeRouteCandidate);
-  // Preference: canonical itinerary.arrival_at → now+eta (legacy).
-  let selectedEta: string | null = null;
-  const arrivalAtIso = activeRouteCandidate?.arrival_at;
-  if (arrivalAtIso?.trim() && nowMs > 0) {
-    const parsed = Date.parse(arrivalAtIso);
-    if (Number.isFinite(parsed)) {
-      selectedEta = formatClockAt(parsed);
-    }
-  }
-  if (selectedEta === null && selectedEtaMinutes !== null && nowMs > 0) {
-    selectedEta = formatClockAt(nowMs + selectedEtaMinutes * 60_000);
-  }
-  const selectedTotalTime =
-    selectedEtaMinutes !== null ? `${selectedEtaMinutes} min` : null;
-  const journeyPlaces = activeRouteCandidate?.itinerary
-    ? [
-        canonicalPlaceLabel(activeRouteCandidate.itinerary.origin, "Your location"),
-        ...(activeRouteCandidate.itinerary.waypoints ?? []).map((waypoint) =>
-          canonicalPlaceLabel(waypoint, "Waypoint"),
-        ),
-        canonicalPlaceLabel(activeRouteCandidate.itinerary.destination, "Destination"),
-      ].filter((place, index, values) => index === 0 || values[index - 1] !== place)
-    : undefined;
-
-  // Transfers: prefer candidate score_breakdown (from itinerary.transfer_count
-  // via agentRoutePlanFromCards). Recompute only when absent.
-  // Recompute rule: transit-vehicle boardings minus one; walks never count.
-  const transitLegs = merged.filter(isTransitStep);
-  const fromCandidate = activeRouteCandidate?.score_breakdown?.transfers;
-  const transferCount =
-    fromCandidate !== undefined && Number.isFinite(fromCandidate)
-      ? Math.max(0, Math.round(fromCandidate))
-      : Math.max(0, transitLegs.length - 1);
-
-  // "Leave by" backs the transit departure off by the approach walk; if the
-  // walk consumes the whole wait, it's simply "now".
-  const firstWalkMinutes =
-    merged[0]?.type === "WALK" &&
-    merged[0].duration_minutes !== undefined
-      ? Math.max(0, Math.round(merged[0].duration_minutes))
-      : 0;
-  const departsIn = transitStep?.minutes_until_train_arrives;
-  const nextDepartureMinutes =
-    departsIn !== undefined && Number.isFinite(departsIn)
-      ? Math.max(0, Math.round(departsIn))
-      : undefined;
-  let leaveByLabel: string | undefined;
-  if (departsIn !== undefined && Number.isFinite(departsIn) && nowMs > 0) {
-    const minutesUntilLeave = departsIn - firstWalkMinutes;
-    leaveByLabel =
-      minutesUntilLeave <= 0
-        ? "now"
-        : formatClockAt(nowMs + minutesUntilLeave * 60_000);
-  }
-
-  return {
+  const steps = withArriveStep(merged.map(routeStepToRailStep), merged);
+  const facts = selectedPlanFacts(
+    activeRouteCandidate,
+    routeEta,
+    routeTotalTime,
+    steps.length > 0,
+  );
+  const shared = {
     entryContext: routeEntryContext,
-    headline: publicRecommendationText(switchHeadline) || defaultHeadline,
-    rationale: !activeRouteCandidate
-      ? "Nearby arrivals are live within a half-mile radius."
-      : routeEntryContext === "chat"
-        ? ""
-        : buildVisibleRouteReason(
-            activeRouteCandidate,
-            routeSteps,
-            routeCandidates,
-          ),
-    headsign: activeRouteCandidate ? headsign : undefined,
-    isAlternativeRoute: activeRouteCandidate?.is_recommended === false,
-    eta: (activeRouteCandidate && (routeEta || selectedEta)) || "Live",
-    totalTime:
-      (activeRouteCandidate && (routeTotalTime || selectedTotalTime))
-      || (steps.length ? "Calculated" : "Pending"),
-    leaveByLabel: activeRouteCandidate ? leaveByLabel : undefined,
-    nextDepartureMinutes: activeRouteCandidate ? nextDepartureMinutes : undefined,
-    transferCount: activeRouteCandidate ? transferCount : undefined,
-    journeyPlaces,
-    strip: activeRouteCandidate ? stripFromSteps(routeSteps) : undefined,
-    detailSteps: activeRouteCandidate
-      ? detailStepsFromCanonicalItinerary(routeSteps, activeRouteCandidate.itinerary)
-      : undefined,
-    pickedLine: line,
+    headline: planHeadline(activeRouteCandidate, switchHeadline),
+    rationale: planRationale(
+      activeRouteCandidate,
+      routeSteps,
+      routeCandidates,
+      routeEntryContext,
+    ),
+    ...facts,
+    pickedLine: pickedLineFrom(transitStep),
     steps,
-    alternatives: buildAlternatives(routeCandidates, activeRouteCandidate, nowMs),
+    alternatives: buildAlternatives(routeCandidates, activeRouteCandidate),
     notes: [],
+  };
+  if (!activeRouteCandidate) return shared;
+  return {
+    ...shared,
+    headsign: planHeadsign(transitStep, steps),
+    isAlternativeRoute: activeRouteCandidate.is_recommended === false,
+    nextDepartureMinutes: liveCountdown(transitStep?.minutes_until_train_arrives),
+    journeyPlaces: journeyPlacesFrom(activeRouteCandidate),
+    strip: stripFromSteps(routeSteps),
+    detailSteps: detailStepsFromCanonicalItinerary(
+      routeSteps,
+      activeRouteCandidate.itinerary,
+    ),
   };
 }

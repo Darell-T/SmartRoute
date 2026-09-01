@@ -19,6 +19,14 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 
 type SidebarIcon = ComponentType<SVGProps<SVGSVGElement>>;
 type IconMotion = "lift" | "rotate" | "open";
+type SidebarTransform = { x: number; y: number; rotate: number; scale: number };
+
+const SIDEBAR_ICON_REST: SidebarTransform = { x: 0, y: 0, rotate: 0, scale: 1 };
+const SIDEBAR_ICON_MOTION: Record<IconMotion, SidebarTransform> = {
+  lift: { x: 0, y: -1, rotate: 0, scale: 1.025 },
+  rotate: { x: 0, y: 0, rotate: 9, scale: 1.025 },
+  open: { x: 0.8, y: 0, rotate: 0, scale: 1.025 },
+};
 
 function subscribeToHydration() {
   return () => undefined;
@@ -39,8 +47,8 @@ type SidebarItemProps = {
 
 function AnimatedSidebarIcon({
   icon: Icon,
-  active = false,
-  engaged = false,
+  active,
+  engaged,
   effect = "lift",
 }: {
   icon: SidebarIcon;
@@ -53,25 +61,10 @@ function AnimatedSidebarIcon({
   // Motion's media-query value is client-only. Keep the server's initial
   // attribute stable until hydration completes, then honor the preference.
   const reduceMotion = hydrated && prefersReducedMotion;
-  let transform: { x: number; y: number; rotate: number; scale: number };
-  if (reduceMotion) {
-    transform = { x: 0, y: 0, rotate: 0, scale: 1 };
-  } else if (effect === "rotate") {
-    transform = { x: 0, y: 0, rotate: engaged ? 9 : 0, scale: engaged ? 1.025 : 1 };
-  } else if (effect === "open") {
-    transform = { x: engaged ? 0.8 : 0, y: 0, rotate: 0, scale: engaged ? 1.025 : 1 };
-  } else {
-    transform = { x: 0, y: engaged ? -1 : 0, rotate: 0, scale: engaged ? 1.025 : 1 };
-  }
-
-  let iconState: "active" | "engaged" | "rest";
-  if (active) {
-    iconState = "active";
-  } else if (engaged) {
-    iconState = "engaged";
-  } else {
-    iconState = "rest";
-  }
+  const transform = reduceMotion || !engaged
+    ? SIDEBAR_ICON_REST
+    : (SIDEBAR_ICON_MOTION[effect] ?? SIDEBAR_ICON_MOTION.lift);
+  const iconState = active ? "active" : engaged ? "engaged" : "rest";
 
   return (
     <motion.span

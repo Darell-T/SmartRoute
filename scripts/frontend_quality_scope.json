@@ -1,5 +1,5 @@
 {
-  "unitTestRoots": ["app", "lib", "components", "scripts"],
+  "unitTestRoots": ["app", "lib", "components", "scripts", "tools"],
   "unitTestPattern": "\\.test\\.(js|mjs|cjs|ts|tsx)$",
   "unitTestExclude": {
     "scripts/build-artifact-manifest.test.ts": "Generated public GeoJSON hash lock. Artifact verification, not a behavior unit test."
@@ -53,6 +53,6 @@
     "next-env.d.ts": "Next.js generated declarations"
   },
   "nativeCoverageLimitation": "Node 23 NODE_V8_COVERAGE and --experimental-test-coverage record tsx compiled scripts, omit unexecuted production files, and do not emit stable source-mapped TypeScript line, branch, and function totals. c8 --all --exclude-after-remap remaps to .ts/.tsx and includes missing files as zero.",
-  "browserCoverageLimitation": "Playwright release tests do not contribute source-mapped .ts/.tsx coverage in this stack. Browser-only React and MapLibre files stay unexecuted until Batch 8 can map bundled source.",
+  "browserCoverageLimitation": "Playwright release tests record Chromium JS coverage for webpack-internal application modules. tools/browser-source-coverage.mjs remaps those records through emitted source maps onto original .ts/.tsx paths, then Istanbul-merges them into coverage/coverage-final.json. Hashed /_next/static/chunks URLs are not the coverage identity.",
   "unexecutedBranchInventory": "c8 placeholder branch maps on unexecuted files are discarded. Branch denominators for those files are the McCabe decision-point lower bound: sum(complexity - 1) over inventoried production functions."
 }

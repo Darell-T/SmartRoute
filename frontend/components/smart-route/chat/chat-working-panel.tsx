@@ -125,6 +125,50 @@ function useElapsedSeconds(isStreaming: boolean): number | undefined {
   return elapsed;
 }
 
+function WorkingPanelTrigger({
+  isStreaming,
+  progress,
+  toolChips,
+  streamingLabel,
+  reduceMotion,
+  elapsedSeconds,
+}: {
+  isStreaming: boolean;
+  progress?: { stage: keyof typeof PROGRESS_COPY; status: "active" | "complete" };
+  toolChips: ToolChipData[];
+  streamingLabel: string;
+  reduceMotion: boolean;
+  elapsedSeconds: number | undefined;
+}) {
+  if (!isStreaming) {
+    return elapsedSeconds ? `Thought for ${elapsedSeconds}s` : "Done";
+  }
+  const searching =
+    progress?.status === "active"
+    || toolChips.some((chip) => isSearchActivityTool(chip.tool) && chip.status === "running");
+  if (!searching) {
+    return (
+      <Shimmer className="sr-chat-working-panel__shimmer" duration={1.35}>
+        {streamingLabel}
+      </Shimmer>
+    );
+  }
+  return (
+    <AnimatePresence initial={false} mode="wait">
+      <motion.span
+        key={streamingLabel}
+        className="sr-chat-working-panel__semantic-stage"
+        initial={reduceMotion ? false : { opacity: 0, y: 3 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={reduceMotion ? undefined : { opacity: 0, y: -3 }}
+        transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+      >
+        {streamingLabel}
+      </motion.span>
+    </AnimatePresence>
+  );
+}
+
 export function ChatWorkingPanel({
   toolChips,
   progress,
@@ -163,32 +207,14 @@ export function ChatWorkingPanel({
       aria-busy={isStreaming}
     >
       <ReasoningTrigger className="sr-chat-working-panel__trigger">
-        {isStreaming ? (
-          progress?.status === "active" || toolChips.some(
-            (chip) => isSearchActivityTool(chip.tool) && chip.status === "running",
-          ) ? (
-            <AnimatePresence initial={false} mode="wait">
-              <motion.span
-                key={streamingLabel}
-                className="sr-chat-working-panel__semantic-stage"
-                initial={reduceMotion ? false : { opacity: 0, y: 3 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={reduceMotion ? undefined : { opacity: 0, y: -3 }}
-                transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-              >
-                {streamingLabel}
-              </motion.span>
-            </AnimatePresence>
-          ) : (
-            <Shimmer className="sr-chat-working-panel__shimmer" duration={1.35}>
-              {streamingLabel}
-            </Shimmer>
-          )
-        ) : (
-          elapsedSeconds
-            ? `Thought for ${elapsedSeconds}s`
-            : "Done"
-        )}
+        <WorkingPanelTrigger
+          isStreaming={isStreaming}
+          progress={progress}
+          toolChips={toolChips}
+          streamingLabel={streamingLabel}
+          reduceMotion={reduceMotion}
+          elapsedSeconds={elapsedSeconds}
+        />
       </ReasoningTrigger>
       <ReasoningContent className="sr-chat-working-panel__content">
         {detailText ? (

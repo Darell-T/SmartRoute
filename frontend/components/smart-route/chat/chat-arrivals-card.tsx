@@ -36,6 +36,41 @@ function arrivalStatusLabel(arrivals: ArrivalsTurnPayload): string | null {
   return `${status} · updated ${clock}`;
 }
 
+const EMPTY_ARRIVAL_COPY = {
+  provider_unavailable: "Live predictions are temporarily unavailable.",
+  stale: "The latest predictions are stale.",
+  stop_not_resolved: "Choose a more specific station.",
+} as const;
+
+function arrivalsEmptyCopy(sourceStatus: ArrivalsTurnPayload["sourceStatus"]): string {
+  if (sourceStatus === "provider_unavailable") return EMPTY_ARRIVAL_COPY.provider_unavailable;
+  if (sourceStatus === "stale") return EMPTY_ARRIVAL_COPY.stale;
+  if (sourceStatus === "stop_not_resolved") return EMPTY_ARRIVAL_COPY.stop_not_resolved;
+  return "No current predictions for this stop.";
+}
+
+function ArrivalsLiveFeedButton({
+  onSeeOnMap,
+  reduceMotion,
+}: {
+  onSeeOnMap: () => void;
+  reduceMotion: boolean;
+}) {
+  return (
+    <motion.button
+      type="button"
+      className="sr-itinerary-card__map-btn sr-chat-arrivals-card__footer"
+      aria-label="Open in Live Feed"
+      onClick={onSeeOnMap}
+      whileTap={reduceMotion ? undefined : { scale: 0.985 }}
+      transition={{ duration: reduceMotion ? 0 : 0.12 }}
+    >
+      <MapPin width={20} height={20} strokeWidth={1.6} aria-hidden="true" />
+      Open in Live Feed
+    </motion.button>
+  );
+}
+
 export function ChatArrivalsCard({
   arrivals,
   onSeeOnMap,
@@ -45,14 +80,7 @@ export function ChatArrivalsCard({
 }) {
   const reduceMotion = useReducedMotion() ?? false;
   const hasArrivals = arrivals.groups.length > 0;
-  const emptyCopy =
-    arrivals.sourceStatus === "provider_unavailable"
-      ? "Live predictions are temporarily unavailable."
-      : arrivals.sourceStatus === "stale"
-        ? "The latest predictions are stale."
-        : arrivals.sourceStatus === "stop_not_resolved"
-          ? "Choose a more specific station."
-          : "No current predictions for this stop.";
+  const emptyCopy = arrivalsEmptyCopy(arrivals.sourceStatus);
   const catchable = arrivals.catchability?.catchable_arrival_minutes;
   const statusLabel = arrivalStatusLabel(arrivals);
 
@@ -97,17 +125,7 @@ export function ChatArrivalsCard({
       </div>
 
       {onSeeOnMap ? (
-        <motion.button
-          type="button"
-          className="sr-itinerary-card__map-btn sr-chat-arrivals-card__footer"
-          aria-label="Open in Live Feed"
-          onClick={onSeeOnMap}
-          whileTap={reduceMotion ? undefined : { scale: 0.985 }}
-          transition={{ duration: reduceMotion ? 0 : 0.12 }}
-        >
-          <MapPin width={20} height={20} strokeWidth={1.6} aria-hidden="true" />
-          Open in Live Feed
-        </motion.button>
+        <ArrivalsLiveFeedButton onSeeOnMap={onSeeOnMap} reduceMotion={reduceMotion} />
       ) : null}
     </div>
   );

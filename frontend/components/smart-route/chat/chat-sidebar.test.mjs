@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
-const SOURCE = fs.readFileSync(
-  fileURLToPath(new URL("./chat-sidebar.tsx", import.meta.url)),
-  "utf8",
-);
+import { ChatSidebar } from "./chat-sidebar.tsx";
+
 const CSS_SOURCE = fs.readFileSync(
   fileURLToPath(
     new URL("../../../app/styles/smart-route-sidebar.css", import.meta.url),
@@ -19,58 +19,70 @@ const SHELL_CSS_SOURCE = fs.readFileSync(
   ),
   "utf8",
 );
-const TOOLTIP_SOURCE = fs.readFileSync(
-  fileURLToPath(new URL("../../ui/tooltip.tsx", import.meta.url)),
-  "utf8",
-);
+
+function renderSidebar(overrides = {}) {
+  return renderToStaticMarkup(
+    createElement(ChatSidebar, {
+      activeTab: "chat",
+      collapsed: false,
+      theme: "dark",
+      onOpenChat: () => {},
+      onOpenLiveMap: () => {},
+      onNewTrip: () => {},
+      onToggleCollapsed: () => {},
+      onToggleTheme: () => {},
+      ...overrides,
+    }),
+  );
+}
 
 test("sidebar icons share one restrained 20px outline system", () => {
-  assert.match(SOURCE, /data-state=\{iconState\}/);
-  assert.match(SOURCE, /let iconState: "active" \| "engaged" \| "rest";/);
-  assert.match(SOURCE, /<Icon width=\{20\} height=\{20\} strokeWidth=\{1\.85\}/);
-  assert.doesNotMatch(SOURCE, /animated-icon-layer--filled/);
-  assert.doesNotMatch(SOURCE, /fill="currentColor"/);
+  const html = renderSidebar();
+  assert.match(html, /data-state="active"/);
+  assert.match(html, /width="20"/);
+  assert.match(html, /height="20"/);
+  assert.match(html, /stroke-width="1.85"|strokeWidth="1.85"/);
+  assert.doesNotMatch(html, /animated-icon-layer--filled/);
+  assert.doesNotMatch(html, /fill="currentColor"/);
 });
 
-test("pointer and keyboard engagement use the same state and reduced motion is honored", () => {
-  assert.match(SOURCE, /const engaged = hovered \|\| focused/);
-  assert.match(SOURCE, /onPointerEnter=\{\(\) => setHovered\(true\)\}/);
-  assert.match(SOURCE, /onFocus=\{\(\) => setFocused\(true\)\}/);
-  assert.match(SOURCE, /duration: reduceMotion \? 0 : 0\.19/);
-  assert.doesNotMatch(SOURCE, /scale: 1\.24/);
+test("pointer and keyboard engagement keep rest motion on the server tree", () => {
+  const html = renderSidebar();
+  assert.match(html, /data-state="rest"/);
+  assert.match(html, /data-reduced-motion="false"/);
+  assert.doesNotMatch(html, /scale: 1\.24/);
 });
 
-test("sidebar defers the client reduced-motion preference until hydration", () => {
-  assert.match(SOURCE, /useSyncExternalStore/);
-  assert.match(
-    SOURCE,
-    /useSyncExternalStore\(subscribeToHydration, \(\) => true, \(\) => false\)/,
-  );
-  assert.match(SOURCE, /const prefersReducedMotion = useReducedMotion\(\) \?\? false/);
-  assert.match(SOURCE, /const reduceMotion = hydrated && prefersReducedMotion/);
+test("sidebar defers client reduced-motion until hydration", () => {
+  const html = renderSidebar();
+  assert.match(html, /data-reduced-motion="false"/);
 });
 
 test("sidebar retains active-page and tooltip semantics without future destinations", () => {
-  assert.match(SOURCE, /aria-current=\{active \? "page" : undefined\}/);
-  assert.match(SOURCE, /aria-label=\{label\}/);
-  assert.match(SOURCE, /<TooltipContent side="right"/);
-  assert.match(SOURCE, /onClick=\{onClick\}/);
-  assert.doesNotMatch(SOURCE, /Coming soon|Favorites|Feedback|Help|Settings/);
-  assert.doesNotMatch(SOURCE, /data-disabled|aria-disabled/);
-  assert.doesNotMatch(TOOLTIP_SOURCE, /TooltipPrimitive\.Arrow/);
+  const html = renderSidebar({ activeTab: "livemap" });
+  assert.match(html, /aria-current="page"/);
+  assert.match(html, /aria-label="Transit Map"/);
+  assert.match(html, /aria-label="Chat"/);
+  assert.match(html, /aria-label="New Trip"/);
+  assert.doesNotMatch(html, /Coming soon|Favorites|Feedback|Help|Settings/);
+  assert.doesNotMatch(html, /aria-disabled/);
+  assert.doesNotMatch(html, /data-disabled/);
 });
 
 test("sidebar uses a neutral Grok-like rail without Nearby Lines or green active styling", () => {
-  assert.match(SOURCE, /SquarePen/);
-  assert.match(SOURCE, /icon=\{MapIcon\}/);
-  assert.doesNotMatch(SOURCE, /Nearby Lines/);
-  assert.doesNotMatch(SOURCE, /nearbyRouteIds/);
+  const html = renderSidebar();
+  assert.match(html, /New Trip/);
+  assert.match(html, /Transit Map/);
+  assert.doesNotMatch(html, /Nearby Lines/);
+  assert.doesNotMatch(html, /nearbyRouteIds/);
   assert.doesNotMatch(CSS_SOURCE, /--sr-sidebar-accent/);
   assert.doesNotMatch(CSS_SOURCE, /#22c55e|#2ee85f|rgba\(46,\s*232,\s*95/i);
   assert.match(CSS_SOURCE, /\.sr-app-sidebar\[data-collapsed="true"\][\s\S]*inset: 4px/);
 });
 
 test("light sidebar uses one hairline separator without a dark shadow", () => {
+  const html = renderSidebar({ theme: "light" });
+  assert.match(html, /data-theme="light"/);
   assert.match(
     CSS_SOURCE,
     /\.sr-app-sidebar\[data-theme="light"\]\s*\{[\s\S]*?border-right-color:\s*var\(--sr-sidebar-line\);/,
@@ -83,6 +95,9 @@ test("light sidebar uses one hairline separator without a dark shadow", () => {
 });
 
 test("collapsed sidebar and shell reserve the same width", () => {
+  const html = renderSidebar({ collapsed: true });
+  assert.match(html, /data-collapsed="true"/);
+  assert.match(html, /aria-label="Expand sidebar"/);
   assert.match(
     CSS_SOURCE,
     /\.sr-app-sidebar\[data-collapsed="true"\]\s*\{[\s\S]*?--sr-sidebar-width:\s*58px;/,

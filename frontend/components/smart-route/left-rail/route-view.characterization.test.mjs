@@ -1,14 +1,11 @@
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import path from "node:path";
 import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { RouteView } from "./route-view.tsx";
+import { RouteErrorPanel, RoutePlanningReasoning } from "./route-view-state.tsx";
 import { recommendedCandidateFromPlan } from "./route-display-compat.ts";
-
-const ROOT = path.resolve(import.meta.dirname, "../../..");
 
 const canonicalPlan = {
   headline: "Take the A to Fulton St",
@@ -170,37 +167,74 @@ test("standby route view preserves nearby direction controls without arrival sig
 });
 
 test("route view keeps explicit controls and motion-safe state on the intended elements", () => {
-  const source = routeViewSource();
-
-  assert.match(source, /className="sr-details-toggle"[\s\S]*aria-expanded={detailsOpen}/);
-  assert.match(source, /className="sr-alternates__trigger"[\s\S]*aria-expanded={open}/);
-  assert.match(source, /onSelectAlternative\?\.\(alternative\.id!\)/);
-  assert.match(source, /onRequestRailExpand\?\.\(\);[\s\S]*onWayChange/);
-  assert.match(source, /shouldReduceMotion \? "auto" : "smooth"/);
+  const markup = renderRouteView({ plan: canonicalPlan });
+  assert.match(markup, /class="sr-details-toggle"/);
+  assert.match(markup, /aria-expanded="false"/);
+  assert.match(markup, /class="sr-alternates__trigger"/);
+  assert.match(markup, /aria-label="Alternate routes"/);
+  assert.match(markup, /Use this route instead: Borough Hall \u2192 Wall St/);
 });
 
-function routeViewSource() {
-  return [
-    "route-view.tsx",
-    "route-view-actions.tsx",
-    "route-view-alternatives.tsx",
-    "route-view-itinerary.tsx",
-    "route-view-nearby.tsx",
-    "route-view-state.tsx",
-  ]
-    .map((file) =>
-      fs.readFileSync(
-        path.join(ROOT, "components/smart-route/left-rail", file),
-        "utf8",
-      ),
-    )
-    .join("\n");
-}
+test("route view thinking and error branches stay inside the rail", () => {
+  const thinking = renderRouteView({ routeStatus: "thinking", plan: canonicalPlan });
+  assert.match(thinking, /Finding routes/);
+  const error = renderRouteView({
+    routeStatus: "error",
+    plan: canonicalPlan,
+    search: {
+      inputValue: "JFK",
+      isLoading: false,
+      planningPhase: "idle",
+      hasActiveRoute: false,
+      onInputChange() {},
+      onSubmit() {},
+      onCancelPlanning() {},
+      onClear() {},
+    },
+  });
+  assert.match(error, /No route found|Try again|Cancel/);
+  const idleError = renderRouteView({
+    routeStatus: "error",
+    plan: canonicalPlan,
+    search: {
+      inputValue: "   ",
+      isLoading: false,
+      planningPhase: "idle",
+      hasActiveRoute: false,
+      onInputChange() {},
+      onSubmit() {},
+      onCancelPlanning() {},
+      onClear() {},
+    },
+  });
+  assert.match(idleError, /Try again|Cancel/);
+});
+
+test("route planning and error panels keep passenger copy", () => {
+  const thinking = renderToStaticMarkup(
+    createElement(RoutePlanningReasoning, {
+      destination: "  JFK  ",
+      insights: [{ id: "live", text: "Q arriving in 4 min", source: "live-arrival" }],
+    }),
+  );
+  assert.match(thinking, /Finding routes/);
+  assert.match(thinking, /JFK/);
+  const error = renderToStaticMarkup(
+    createElement(RouteErrorPanel, {
+      onRetry() {},
+      onClear() {},
+    }),
+  );
+  assert.match(error, /No route found/);
+  assert.match(error, /Try again/);
+  assert.match(error, /Cancel/);
+});
 
 function renderRouteView({
   routeStatus = "result",
   plan,
   nearbyTransitGroups = [],
+  search,
 } = {}) {
   return renderToStaticMarkup(
     createElement(RouteView, {
@@ -225,6 +259,7 @@ function renderRouteView({
       routeStatus,
       onRouteStatusChange: () => {},
       onSelectAlternative: () => {},
+      search,
     }),
   );
 }

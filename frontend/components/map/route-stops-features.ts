@@ -14,8 +14,6 @@ function decode(encoded: string): [number, number][] {
   return polyline.decode(encoded).map(([lat, lng]: [number, number]) => [lng, lat]);
 }
 
-/** Interpolate a position along a coordinate array given progress 0..1.
- *  (Moved from station-badges.ts so the pure builders can share it.) */
 export function interpolateAlongLine(
   coords: [number, number][],
   progress: number,
@@ -128,95 +126,109 @@ export function buildTransitPathFeatures(
   return { type: "FeatureCollection", features };
 }
 
-/**
- * One Point feature per intermediate stop of every transit step. Real
- * coordinates (intermediate_stop_locations) win; when only names exist the
- * positions are interpolated evenly along the step's decoded polyline --
- * approximate, but it keeps dots on the line for un-enriched payloads.
- */
+function stopPoint(
+  coordinates: [number, number],
+  name: string,
+  color: string,
+  line: string,
+  interpolated: boolean,
+): GeoJSON.Feature<GeoJSON.Point, RouteStopProps> {
+  return {
+    type: "Feature",
+    geometry: { type: "Point", coordinates },
+    properties: { name, color, line, interpolated },
+  };
+}
+
+function locatedStopFeatures(
+  step: RouteStep,
+  color: string,
+  line: string,
+): GeoJSON.Feature<GeoJSON.Point, RouteStopProps>[] | null {
+  const located = step.intermediate_stop_locations ?? [];
+  if (located.length === 0) return null;
+  const encoded = step.polyline?.encodedPolyline;
+  const lineCoords = encoded ? decode(encoded) : null;
+  const snap = Boolean(lineCoords && lineCoords.length >= 2);
+  const features: GeoJSON.Feature<GeoJSON.Point, RouteStopProps>[] = [];
+  for (const stop of located) {
+    if (typeof stop.lat !== "number" || typeof stop.lng !== "number") continue;
+    const raw: [number, number] = [stop.lng, stop.lat];
+    const coordinates = snap && lineCoords ? nearestPointOnPolyline(lineCoords, raw) : raw;
+    features.push(stopPoint(coordinates, stop.name, color, line, false));
+  }
+  return features;
+}
+
+function interpolatedStopFeatures(
+  names: string[],
+  coords: [number, number][],
+  color: string,
+  line: string,
+): GeoJSON.Feature<GeoJSON.Point, RouteStopProps>[] {
+  const lastIndex = names.length - 1;
+  return names.map((name, index) =>
+    stopPoint(interpolateAlongLine(coords, index / lastIndex), name, color, line, true),
+  );
+}
+
+function countedStopFeatures(
+  count: number,
+  coords: [number, number][],
+  color: string,
+  line: string,
+): GeoJSON.Feature<GeoJSON.Point, RouteStopProps>[] {
+  const lastIndex = count - 1;
+  return Array.from({ length: count }, (_, index) =>
+    stopPoint(interpolateAlongLine(coords, index / lastIndex), "", color, line, true),
+  );
+}
+
+function transitLineId(step: RouteStep): string {
+  return (step.train_line || step.route_id || "").toUpperCase();
+}
+
+function decodedPolyline(step: RouteStep): [number, number][] | null {
+  const encoded = step.polyline?.encodedPolyline;
+  if (!encoded) return null;
+  const coords = decode(encoded);
+  return coords.length >= 2 ? coords : null;
+}
+
+/** Real coordinates win; names-only legs interpolate along the polyline so
+ *  dots stay on the drawn line for un-enriched payloads. */
+function stepStopFeatures(
+  step: RouteStep,
+  color: string,
+  line: string,
+): GeoJSON.Feature<GeoJSON.Point, RouteStopProps>[] {
+  const located = locatedStopFeatures(step, color, line);
+  if (located) return located;
+  const coords = decodedPolyline(step);
+  if (!coords) return [];
+  const names = step.intermediate_stops ?? [];
+  if (names.length >= 2) return interpolatedStopFeatures(names, coords, color, line);
+  const stopCount = typeof step.stop_count === "number" ? step.stop_count : 0;
+  const count = stopCount + 1;
+  return count >= 2 ? countedStopFeatures(count, coords, color, line) : [];
+}
+
 export function buildRouteStopFeatures(
   steps: RouteStep[] | undefined,
   colorFor: ColorResolver = defaultColorFor,
 ): GeoJSON.FeatureCollection<GeoJSON.Point, RouteStopProps> {
   const features: GeoJSON.Feature<GeoJSON.Point, RouteStopProps>[] = [];
-
   for (const step of steps ?? []) {
     if (!isTransitStep(step)) continue;
-    const color = colorFor(step);
-    const line = (step.train_line || step.route_id || "").toUpperCase();
-
-    const located = step.intermediate_stop_locations ?? [];
-    if (located.length > 0) {
-      // Stop coords are curbside positions, offset from the road/track
-      // centerline Google returns as the step geometry. Snap each onto the
-      // decoded polyline so the dot sits exactly on the drawn line.
-      const encoded = step.polyline?.encodedPolyline;
-      const lineCoords = encoded ? decode(encoded) : null;
-      const snap = lineCoords && lineCoords.length >= 2;
-      for (const stop of located) {
-        if (typeof stop.lat !== "number" || typeof stop.lng !== "number") continue;
-        const raw: [number, number] = [stop.lng, stop.lat];
-        const coordinates = snap ? nearestPointOnPolyline(lineCoords, raw) : raw;
-        features.push({
-          type: "Feature",
-          geometry: { type: "Point", coordinates },
-          properties: { name: stop.name, color, line, interpolated: false },
-        });
-      }
-      continue;
-    }
-
-    const encoded = step.polyline?.encodedPolyline;
-    if (!encoded) continue;
-    const coords = decode(encoded);
-    if (coords.length < 2) continue;
-
-    const names = step.intermediate_stops ?? [];
-    if (names.length >= 2) {
-      const lastIndex = names.length - 1;
-      for (let i = 0; i < names.length; i++) {
-        const point = interpolateAlongLine(coords, i / lastIndex);
-        features.push({
-          type: "Feature",
-          geometry: { type: "Point", coordinates: point },
-          properties: { name: names[i], color, line, interpolated: true },
-        });
-      }
-      continue;
-    }
-
-    // Last-resort fallback: GTFS enrichment gave neither coords nor names (e.g.
-    // a leg whose station lookup came back empty), but Google's step still
-    // carries the stop count + the polyline. Place that many evenly-spaced
-    // (unlabeled) dots so EVERY transit leg shows its stops regardless of the
-    // enrichment -- the dots no longer depend on the GTFS pipeline succeeding.
-    const stopCount = typeof step.stop_count === "number" ? step.stop_count : 0;
-    const count = stopCount + 1; // board stop + each subsequent stop (incl. alight)
-    if (count >= 2) {
-      const lastIndex = count - 1;
-      for (let i = 0; i < count; i++) {
-        const point = interpolateAlongLine(coords, i / lastIndex);
-        features.push({
-          type: "Feature",
-          geometry: { type: "Point", coordinates: point },
-          properties: { name: "", color, line, interpolated: true },
-        });
-      }
-    }
+    features.push(...stepStopFeatures(step, colorFor(step), transitLineId(step)));
   }
-
-  // The trip's first and last stops are drawn as roundel badges (board /
-  // arrive), so blank their labels here -- the dot still anchors the spot but
-  // the station name is not printed twice next to the badge.
   if (features.length > 0) {
     features[0].properties.name = "";
     features[features.length - 1].properties.name = "";
   }
-
   return { type: "FeatureCollection", features };
 }
 
-/** LineString per WALK step (rendered as a dashed MapLibre line). */
 export function buildWalkFeatures(
   steps: RouteStep[] | undefined,
 ): GeoJSON.FeatureCollection<GeoJSON.LineString> {

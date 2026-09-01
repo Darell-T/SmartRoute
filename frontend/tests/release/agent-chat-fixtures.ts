@@ -64,6 +64,9 @@ const plannedRoute = {
         ride_seconds: 1680,
       },
     ],
+    waypoints: [
+      { label: "Times Sq-42 St", lat: 40.7553, lng: -73.987, dwell_minutes: 2 },
+    ],
   },
 };
 
