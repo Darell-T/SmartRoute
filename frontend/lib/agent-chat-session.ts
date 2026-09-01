@@ -178,8 +178,18 @@ async function parseSnapshot(response: Response): Promise<SessionSnapshot | null
   const decoded = snapshotEnvelopeSchema.safeParse(await response.json());
   if (!decoded.success) return null;
   const record = decoded.data;
+  return {
+    session_id: record.session_id,
+    history: record.history,
+    route_cards: parseSnapshotRouteCards(record.route_cards),
+    arrival_cards: parseSnapshotArrivalCards(record.arrival_cards),
+    sources: parseSnapshotSources(record.sources),
+  };
+}
+
+function parseSnapshotRouteCards(cards: Record<string, unknown>[]): RouteCard[] {
   const routeCards: RouteCard[] = [];
-  for (const card of record.route_cards) {
+  for (const card of cards) {
     // Cards are revalidated at this boundary exactly like live SSE events;
     // an invalid card is dropped rather than poisoning the whole transcript.
     const parsed = parseAgentEvent("route_card", card);
@@ -187,13 +197,21 @@ async function parseSnapshot(response: Response): Promise<SessionSnapshot | null
     const { type: _type, ...rest } = parsed;
     routeCards.push(rest);
   }
+  return routeCards;
+}
+
+function parseSnapshotArrivalCards(cards: Record<string, unknown>[]): ArrivalCardEvent[] {
   const arrivalCards: ArrivalCardEvent[] = [];
-  for (const card of record.arrival_cards) {
+  for (const card of cards) {
     const parsed = parseAgentEvent("arrival_card", card);
     if (parsed?.type === "arrival_card") arrivalCards.push(parsed);
   }
+  return arrivalCards;
+}
+
+function parseSnapshotSources(items: Array<{ turn_id?: unknown; sources?: unknown }>): SessionSnapshotSources[] {
   const snapshotSources: SessionSnapshotSources[] = [];
-  for (const item of record.sources) {
+  for (const item of items) {
     const parsedTurn = parseAgentEvent("meta", {
       session_id: "snapshot",
       turn_id: item.turn_id,
@@ -203,13 +221,7 @@ async function parseSnapshot(response: Response): Promise<SessionSnapshot | null
       snapshotSources.push({ turn_id: parsedTurn.turn_id, sources: parsedSources.sources });
     }
   }
-  return {
-    session_id: record.session_id,
-    history: record.history,
-    route_cards: routeCards,
-    arrival_cards: arrivalCards,
-    sources: snapshotSources,
-  };
+  return snapshotSources;
 }
 
 /**

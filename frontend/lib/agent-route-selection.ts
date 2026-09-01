@@ -10,8 +10,10 @@
  * map identically.
  */
 
-import type { RouteCard } from "@/lib/agent-chat-stream";
-import type { DestinationSelection, RouteCandidate, RouteStep } from "@/types/api";
+import type { RouteCard } from "@/lib/agent-route-card-contract";
+import type { DestinationSelection, RouteStep } from "@/types/api";
+import { parseCanonicalItinerary } from "./canonical-itinerary-schema";
+import type { ValidatedRouteCandidate } from "./trip-response";
 
 export interface AgentRouteSelection {
   cardId: string;
@@ -43,18 +45,15 @@ export function normalizeRouteCoordinate(
 
 export interface AgentRoutePlan {
   destination: DestinationSelection;
-  candidates: RouteCandidate[];
+  candidates: ValidatedRouteCandidate[];
   activeCandidateId: string;
   recommendationText: string;
   /** The rail suppresses duplicated chat reasoning for this route source. */
   entryContext: "chat";
 }
 
-function canonicalDurationMinutes(card: RouteCard): number | null {
-  const seconds = card.itinerary?.total_duration_seconds;
-  return typeof seconds === "number" && Number.isFinite(seconds) && seconds >= 0
-    ? Math.round(seconds / 60)
-    : null;
+function canonicalDurationMinutes(seconds: number): number {
+  return Math.round(seconds / 60);
 }
 
 /**
@@ -95,35 +94,33 @@ export function agentRoutePlanFromCards(
   selectedCardId: string,
 ): AgentRoutePlan | null {
   const selectedCard = cards.find((card) => card.card_id === selectedCardId);
-  if (
-    !selectedCard ||
-    !selectedCard.itinerary ||
-    canonicalDurationMinutes(selectedCard) === null ||
-    !Number.isFinite(selectedCard.itinerary.transfer_count)
-  ) return null;
+  const selectedItinerary = selectedCard
+    ? parseCanonicalItinerary(selectedCard.itinerary)
+    : null;
+  if (!selectedCard || !selectedItinerary) return null;
   const selectedRoute = agentRouteFromCard(selectedCard);
   if (!selectedRoute) return null;
 
-  const candidates = cards.flatMap((card, index): RouteCandidate[] => {
+  const candidates = cards.flatMap((card, index): ValidatedRouteCandidate[] => {
     const route = agentRouteFromCard(card);
-    if (!route) return [];
-    const totalMinutes = canonicalDurationMinutes(card);
-    if (!card.itinerary || totalMinutes === null || !Number.isFinite(card.itinerary.transfer_count)) return [];
+    const itinerary = parseCanonicalItinerary(card.itinerary);
+    if (!route || !itinerary) return [];
+    const totalMinutes = canonicalDurationMinutes(itinerary.total_duration_seconds);
     return [
       {
         id: card.card_id,
         index,
         steps: route.steps,
-        itinerary: card.itinerary,
-        itinerary_id: card.itinerary.itinerary_id,
+        itinerary,
+        itinerary_id: itinerary.itinerary_id,
         origin: card.origin,
         destination: card.destination,
         is_recommended: card.role === "recommended",
         total_minutes: totalMinutes,
-        ...(card.itinerary.arrival_at ? { arrival_at: card.itinerary.arrival_at } : {}),
+        ...(itinerary.arrival_at ? { arrival_at: itinerary.arrival_at } : {}),
         score_breakdown: {
           duration_minutes: totalMinutes,
-          transfers: card.itinerary.transfer_count,
+          transfers: itinerary.transfer_count,
           active_alerts: card.alerts.length,
           transit_lines: card.summary.lines,
         },

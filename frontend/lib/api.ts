@@ -1,8 +1,8 @@
 import type {
   DestinationSelection,
   RouteStep,
-  TripResponse,
 } from "@/types";
+import { parseTripResponse, TRIP_PLAN_FAILED, type ValidatedTripResponse } from "./trip-response";
 
 /** Empire State Building — demo fallback when GPS is unavailable */
 export const DEFAULT_LOCATION = { lng: -73.9857, lat: 40.7484 } as const;
@@ -67,8 +67,8 @@ export async function planTrip(
   destination: string,
   selection?: DestinationSelection | null,
   options: PlanTripOptions = {},
-): Promise<TripResponse> {
-  async function attempt(): Promise<TripResponse> {
+): Promise<ValidatedTripResponse> {
+  async function attempt(): Promise<ValidatedTripResponse> {
     const abort = signalWithTimeout(60_000, options.signal);
     try {
       const res = await fetch("/api/trip", {
@@ -86,9 +86,16 @@ export async function planTrip(
 
       if (!res.ok) {
         await res.body?.cancel();
-        throw new Error(res.status === 503 ? "Service unavailable" : "Failed to plan trip");
+        throw new Error(res.status === 503 ? "Service unavailable" : TRIP_PLAN_FAILED);
       }
-      return res.json();
+      let payload: unknown;
+      try {
+        payload = await res.json();
+      } catch (err) {
+        if (err instanceof SyntaxError) throw new Error(TRIP_PLAN_FAILED);
+        throw err;
+      }
+      return parseTripResponse(payload);
     } finally {
       abort.cleanup();
     }

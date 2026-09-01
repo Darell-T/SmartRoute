@@ -74,30 +74,33 @@ export class LiveFeedConnection {
     try {
       const ticket = await this.options.fetchTicket();
       if (this.disposed || this.socket) return;
-      const socket = this.options.createSocket(ticket);
-      this.socket = socket;
-      socket.onopen = () => {
-        if (this.disposed || socket !== this.socket) return;
-        this.backoff = 1_000;
-        this.options.onStatus("open");
-        this.sendLocation(true);
-      };
-      socket.onmessage = (event) => {
-        if (!this.disposed && socket === this.socket) this.options.onMessage(event.data);
-      };
-      socket.onerror = () => {
-        if (!this.disposed && socket === this.socket) this.options.onStatus("error");
-      };
-      socket.onclose = () => {
-        if (this.disposed || socket !== this.socket) return;
-        this.socket = null;
-        if (!this.disposed) this.scheduleReconnect();
-      };
+      this.attachSocket(this.options.createSocket(ticket));
     } catch {
       if (!this.disposed) this.scheduleReconnect();
     } finally {
       this.connecting = false;
     }
+  }
+
+  private attachSocket(socket: LiveFeedSocket): void {
+    this.socket = socket;
+    socket.onopen = () => {
+      if (this.disposed || socket !== this.socket) return;
+      this.backoff = 1_000;
+      this.options.onStatus("open");
+      this.sendLocation(true);
+    };
+    socket.onmessage = (event) => {
+      if (!this.disposed && socket === this.socket) this.options.onMessage(event.data);
+    };
+    socket.onerror = () => {
+      if (!this.disposed && socket === this.socket) this.options.onStatus("error");
+    };
+    socket.onclose = () => {
+      if (this.disposed || socket !== this.socket) return;
+      this.socket = null;
+      if (!this.disposed) this.scheduleReconnect();
+    };
   }
 
   private scheduleReconnect(): void {

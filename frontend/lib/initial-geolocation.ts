@@ -58,6 +58,13 @@ export function authoritativeChatOrigin(
   return location.status === "precise_nyc" ? location.coordinates : null;
 }
 
+export function visibleMapLocation(location: InitialLocationState): Coordinates | null {
+  if (location.status === "precise_nyc" || location.status === "fallback_nyc") {
+    return location.coordinates;
+  }
+  return null;
+}
+
 export function requestInitialLocation(
   geolocation: GeolocationLike | undefined,
   fallback: Coordinates,

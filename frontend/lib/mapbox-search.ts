@@ -14,32 +14,81 @@ export type MapboxSearchSuggestion = {
   };
 };
 
-type SearchBoxSuggestionResponse = {
-  suggestions?: Array<{
-    mapbox_id?: string;
-    name?: string;
-    full_address?: string;
-    place_formatted?: string;
-    feature_type?: string;
-    coordinates?: {
-      latitude?: number;
-      longitude?: number;
-    };
-  }>;
-};
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
-type SearchBoxRetrieveResponse = {
-  features?: Array<{
-    properties?: {
-      name?: string;
-      full_address?: string;
-      place_formatted?: string;
-    };
-    geometry?: {
-      coordinates?: [number, number];
-    };
-  }>;
-};
+function finiteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function optionalText(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function coordinatesFromUnknown(value: unknown): { lat: number; lng: number } | undefined {
+  if (!isRecord(value)) return undefined;
+  const latitude = finiteNumber(value.latitude);
+  const longitude = finiteNumber(value.longitude);
+  if (latitude === null || longitude === null) return undefined;
+  return { lat: latitude, lng: longitude };
+}
+
+function suggestionFromUnknown(entry: unknown): MapboxSearchSuggestion[] {
+  if (!isRecord(entry)) return [];
+  const mapboxId = optionalText(entry.mapbox_id);
+  const label = destinationLabel(
+    optionalText(entry.name),
+    optionalText(entry.full_address) || optionalText(entry.place_formatted),
+  );
+  const coordinates = coordinatesFromUnknown(entry.coordinates);
+  if (!mapboxId && !coordinates) return [];
+  return [
+    {
+      id: mapboxId || label,
+      label,
+      address: optionalText(entry.full_address) || optionalText(entry.place_formatted),
+      mapboxId,
+      coordinates,
+    },
+  ];
+}
+
+function parseSuggestResponse(value: unknown): MapboxSearchSuggestion[] {
+  if (!isRecord(value) || !Array.isArray(value.suggestions)) return [];
+  return value.suggestions.flatMap(suggestionFromUnknown);
+}
+
+function selectionFromSuggestion(suggestion: MapboxSearchSuggestion): DestinationSelection | null {
+  if (!suggestion.coordinates) return null;
+  return {
+    label: suggestion.label,
+    address: suggestion.address,
+    coordinates: suggestion.coordinates,
+  };
+}
+
+function parseRetrieveFeature(
+  value: unknown,
+  fallbackLabel: string,
+): DestinationSelection | null {
+  if (!isRecord(value) || !Array.isArray(value.features)) return null;
+  const feature = value.features[0];
+  if (!isRecord(feature) || !isRecord(feature.geometry) || !Array.isArray(feature.geometry.coordinates)) {
+    return null;
+  }
+  const lng = finiteNumber(feature.geometry.coordinates[0]);
+  const lat = finiteNumber(feature.geometry.coordinates[1]);
+  if (lat === null || lng === null) return null;
+  const properties = isRecord(feature.properties) ? feature.properties : {};
+  const address =
+    optionalText(properties.full_address) || optionalText(properties.place_formatted);
+  return {
+    label: destinationLabel(optionalText(properties.name), address, fallbackLabel),
+    address,
+    coordinates: { lat, lng },
+  };
+}
 
 export function createMapboxSearchSessionToken() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -84,28 +133,7 @@ export async function suggestMapboxPlaces({
     { signal },
   );
   if (!response.ok) return [];
-
-  const data = (await response.json()) as SearchBoxSuggestionResponse;
-  return (data.suggestions ?? [])
-    .map((suggestion) => {
-      const longitude = suggestion.coordinates?.longitude;
-      const latitude = suggestion.coordinates?.latitude;
-      const label = destinationLabel(
-        suggestion.name,
-        suggestion.full_address || suggestion.place_formatted,
-      );
-      return {
-        id: suggestion.mapbox_id || label,
-        label,
-        address: suggestion.full_address || suggestion.place_formatted,
-        mapboxId: suggestion.mapbox_id,
-        coordinates:
-          typeof latitude === "number" && typeof longitude === "number"
-            ? { lat: latitude, lng: longitude }
-            : undefined,
-      };
-    })
-    .filter((suggestion) => suggestion.mapboxId || suggestion.coordinates);
+  return parseSuggestResponse(await response.json());
 }
 
 export async function retrieveMapboxSuggestion({
@@ -117,14 +145,8 @@ export async function retrieveMapboxSuggestion({
   accessToken: string;
   sessionToken: string;
 }): Promise<DestinationSelection | null> {
-  if (suggestion.coordinates) {
-    return {
-      label: suggestion.label,
-      address: suggestion.address,
-      coordinates: suggestion.coordinates,
-    };
-  }
-
+  const known = selectionFromSuggestion(suggestion);
+  if (known) return known;
   if (!suggestion.mapboxId) return null;
 
   const params = new URLSearchParams({
@@ -138,23 +160,11 @@ export async function retrieveMapboxSuggestion({
   );
   if (!response.ok) return null;
 
-  const data = (await response.json()) as SearchBoxRetrieveResponse;
-  const feature = data.features?.[0];
-  const coordinates = feature?.geometry?.coordinates;
-  if (!coordinates) return null;
-
-  const [lng, lat] = coordinates;
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-
-  const properties = feature.properties;
+  const retrieved = parseRetrieveFeature(await response.json(), suggestion.label);
+  if (!retrieved) return null;
   return {
-    label: destinationLabel(
-      properties?.name,
-      properties?.full_address || properties?.place_formatted,
-      suggestion.label,
-    ),
-    address:
-      properties?.full_address || properties?.place_formatted || suggestion.address,
-    coordinates: { lat, lng },
+    label: retrieved.label,
+    address: retrieved.address || suggestion.address,
+    coordinates: retrieved.coordinates,
   };
 }

@@ -46,6 +46,7 @@ test("Vercel falls back from stale local or non-HTTP backend overrides", () => {
     { API_URL: "http://127.0.0.1:8000" },
     { API_URL: "http://[::1]:8000" },
     { API_URL: "ftp://backend.example" },
+    { API_URL: "not a url" },
   ];
 
   for (const environment of environments) {

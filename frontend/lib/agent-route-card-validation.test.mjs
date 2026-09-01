@@ -194,7 +194,7 @@ test("accepts a complete route_card with deterministic fallback provenance", asy
   });
 });
 
-test("rejects private route selection fields at both passenger boundaries", async () => {
+test("strips private route selection fields at both passenger boundaries", async () => {
   const safeDecision = {
     selection_reason: "outer_agent_selection",
     reason_code: "fewer_transfers",
@@ -248,13 +248,22 @@ test("rejects private route selection fields at both passenger boundaries", asyn
 
   await silenceConsoleWarn(async (calls) => {
     const events = await collect(readerFromChunks([frames]));
-    assert.deepEqual(events, [{
+    assert.equal(events.length, payloads.length + 1);
+    for (const event of events.slice(0, payloads.length)) {
+      assert.equal(event.type, "route_card");
+      assert.deepEqual(event.selection_decision, safeDecision);
+      assert.deepEqual(event.itinerary.selection_decision, safeDecision);
+      assert.equal("evidence_ids" in event.selection_decision, false);
+      assert.equal("selected_candidate_index" in event.selection_decision, false);
+      assert.equal("base_score" in event.itinerary.selection_decision, false);
+    }
+    assert.deepEqual(events.at(-1), {
       type: "done",
       session_id: "s1",
       turn_id: "t1",
       stop_reason: "end_turn",
       usage: {},
-    }]);
-    assert.equal(calls.length, payloads.length);
+    });
+    assert.equal(calls.length, 0, "backend-shaped selection records must parse, not drop");
   });
 });

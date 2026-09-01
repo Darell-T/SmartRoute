@@ -1,7 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import type { ZodType } from "zod";
 import {
-  appendRequestSearch,
   fetchBackendText,
   readJsonBody,
   resolveBackendBaseUrl,
@@ -27,6 +26,43 @@ interface ProxyOptions {
   next?: { revalidate?: number };
 }
 
+function failedUpstreamResponse(aborted: boolean) {
+  return NextResponse.json(
+    { error: aborted ? "Upstream request timed out." : "Upstream request failed." },
+    { status: aborted ? 504 : 502 },
+  );
+}
+
+function jsonOrRedactedUpstream(raw: string, status: number) {
+  try {
+    return NextResponse.json(JSON.parse(raw), { status });
+  } catch {
+    // Backend returned non-JSON (e.g. a plain "Internal Server Error"). Do not
+    // forward the raw body; return a clean, redacted error with a useful status.
+    return NextResponse.json(
+      { error: "Upstream returned an unexpected response." },
+      { status: status >= 400 ? status : 502 },
+    );
+  }
+}
+
+function buildProxyHeaders(
+  appKey: string,
+  request: NextRequest | undefined,
+  hasBody: boolean,
+): Record<string, string> | NextResponse {
+  const headers: Record<string, string> = { "X-App-Key": appKey };
+  if (request) {
+    const principal = requestPrincipal(request);
+    if (!principal) {
+      return NextResponse.json({ error: "Request identity is unavailable." }, { status: 503 });
+    }
+    headers["X-SmartRoute-Principal"] = principal;
+  }
+  if (hasBody) headers["Content-Type"] = "application/json";
+  return headers;
+}
+
 /**
  * The single, safe way for a public Next route to reach the FastAPI backend.
  * Centralizes APP_KEY injection, request timeouts, non-JSON handling, upstream
@@ -36,7 +72,6 @@ interface ProxyOptions {
 export async function proxyToBackend(path: string, options: ProxyOptions = {}, request?: NextRequest) {
   const appKey = process.env.APP_KEY;
   if (!appKey) {
-    // Operator misconfiguration, not a data leak: APP_KEY must match FastAPI's.
     return NextResponse.json(
       { error: "Server is not configured (missing APP_KEY)." },
       { status: 500 },
@@ -44,15 +79,8 @@ export async function proxyToBackend(path: string, options: ProxyOptions = {}, r
   }
 
   const { method = "GET", body, timeoutMs = DEFAULT_TIMEOUT_MS, cache, next } = options;
-  const headers: Record<string, string> = { "X-App-Key": appKey };
-  if (request) {
-    const principal = requestPrincipal(request);
-    if (!principal) {
-      return NextResponse.json({ error: "Request identity is unavailable." }, { status: 503 });
-    }
-    headers["X-SmartRoute-Principal"] = principal;
-  }
-  if (body !== undefined) headers["Content-Type"] = "application/json";
+  const headers = buildProxyHeaders(appKey, request, body !== undefined);
+  if (headers instanceof NextResponse) return headers;
 
   const result = await fetchBackendText(
     `${backendBase}${path}`,
@@ -66,26 +94,9 @@ export async function proxyToBackend(path: string, options: ProxyOptions = {}, r
     timeoutMs,
   );
 
-  if (!result.ok) {
-    return NextResponse.json(
-      { error: result.aborted ? "Upstream request timed out." : "Upstream request failed." },
-      { status: result.aborted ? 504 : 502 },
-    );
-  }
-
-  if (!result.raw) {
-    return new NextResponse(null, { status: result.status });
-  }
-  try {
-    return NextResponse.json(JSON.parse(result.raw), { status: result.status });
-  } catch {
-    // Backend returned non-JSON (e.g. a plain "Internal Server Error"). Do not
-    // forward the raw body; return a clean, redacted error with a useful status.
-    return NextResponse.json(
-      { error: "Upstream returned an unexpected response." },
-      { status: result.status >= 400 ? result.status : 502 },
-    );
-  }
+  if (!result.ok) return failedUpstreamResponse(result.aborted);
+  if (!result.raw) return new NextResponse(null, { status: result.status });
+  return jsonOrRedactedUpstream(result.raw, result.status);
 }
 
 interface PostProxyOptions<T> {

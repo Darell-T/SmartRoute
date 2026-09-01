@@ -11,9 +11,10 @@ The worker implements. A separate reviewer follows
 
 Commit `427fbc8` remains the historical reset point. Checkpoint `16390f3`
 contains Batches 2 through 6F and the committed F0 frontend quality contract.
-Batch F1 is Codex-approved on the tree from that checkpoint. Start Batch 7
-only from the accepted F1 commit. The discarded whole-backend rewrite is not
-part of this history.
+Batch F1 is Codex-approved at
+`d2ecdfe3bf43397aee2051c84ac0bf4544d8cfc0`. Codex approved Batch 7 on the
+tree from that fixed point. Start Batch 8 only from the resulting Batch 7
+commit. The discarded whole-backend rewrite is not part of this history.
 
 The repository audit recorded on 2026-08-30 found a bounded backend closure,
 a frontend measurement correction, and proven dead frontend code. It did not
@@ -1001,6 +1002,31 @@ duration, transfers, ranking, or recommendation facts. It requires zero owned
 functions above 12, zero owned unexecuted production files, no new source-text
 tests, and neutral or negative net production growth unless the one shared
 boundary schema is the measured, reviewer-accepted reason for growth.
+
+### Batch 7 worker result
+
+Worker implementation on 2026-08-31. Fixed point
+`d2ecdfe3bf43397aee2051c84ac0bf4544d8cfc0`. The tree is uncommitted for Codex.
+The worker did not update `quality/baseline.json`, did not start Batch 8, and
+did not call the batch approved.
+
+Clusters 7A through 7D are implemented. Owned Oxlint complexity above 12 is 0.
+Owned ESLint complexity and max-depth findings are 0. Owned unexecuted
+production files are 0. Two consecutive coverage runs produced identical
+exact Batch 7 totals at or above the 95% gate: line 98.85% (6472 / 6547),
+branch 95.04% (1609 / 1693), function 98.31% (407 / 414). Net owned
+production lines are +483. Production functions grew from 394 to 465. Full
+detail is in `docs/lint-cleanup-handoff.md`.
+
+### Batch 7 reviewer result
+
+Codex approved Batch 7 after an independent source review and corrected the
+superseded worker text in `docs/lint-cleanup-handoff.md`. The reviewer removed
+exactly 10 stale TypeScript entries. `quality/baseline.json` fell from 111
+entries to 101. Full quality against
+`d2ecdfe3bf43397aee2051c84ac0bf4544d8cfc0` exits 0 with
+`approval_eligible: true`, 770 frontend tests, and 1,915 backend tests. Batch 8
+must start from the resulting Batch 7 commit.
 
 ## Batch 8: components, interaction, and maps
 

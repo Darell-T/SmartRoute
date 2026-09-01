@@ -60,6 +60,34 @@ test("websocket URL uses server-provided backend base instead of stale public lo
   }
 });
 
+test("fetchWsTicket accepts a ticket without a websocket base override", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ ticket: "ticket-only" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  try {
+    assert.equal(await fetchWsTicket("/ws/live-feed"), "ticket-only");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("fetchWsTicket rejects a 200 payload that omits the ticket", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ ws_base_url: "wss://api.example" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  try {
+    await assert.rejects(fetchWsTicket("/ws/live-feed"), /missing ticket/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("server-side websocket ticket route exposes ws_base_url from API_URL", () => {
   const source = fs.readFileSync(path.join(ROOT, "app/api/ws-ticket/route.ts"), "utf8");
 

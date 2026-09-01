@@ -15,12 +15,17 @@ export async function fetchWsTicket(
 ): Promise<string> {
   const res = await fetch(`/api/ws-ticket?path=${encodeURIComponent(path)}`, { cache: "no-store", signal });
   if (!res.ok) throw new Error(`ws-ticket request failed (${res.status})`);
-  const data = (await res.json()) as { ticket?: string; ws_base_url?: string };
-  if (!data.ticket) throw new Error("ws-ticket response missing ticket");
-  if (data.ws_base_url) {
-    serverWsBaseUrl = data.ws_base_url.replace(/\/+$/, "");
+  const data: unknown = await res.json();
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    throw new Error("ws-ticket response missing ticket");
   }
-  return data.ticket;
+  const ticket = "ticket" in data ? data.ticket : undefined;
+  const wsBase = "ws_base_url" in data ? data.ws_base_url : undefined;
+  if (typeof ticket !== "string" || !ticket) throw new Error("ws-ticket response missing ticket");
+  if (typeof wsBase === "string" && wsBase) {
+    serverWsBaseUrl = wsBase.replace(/\/+$/, "");
+  }
+  return ticket;
 }
 
 /**

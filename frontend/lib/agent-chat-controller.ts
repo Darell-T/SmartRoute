@@ -5,6 +5,9 @@ import type { AgentChatRequestBody } from "./agent-chat-request";
 import type { ChatReducerAction } from "./agent-chat-state";
 
 const CHAT_ENDPOINT = "/api/agent/chat";
+const DROPPED_STREAM_MESSAGE =
+  "The connection to SmartRoute dropped before it finished responding.";
+const GENERIC_TRANSPORT_MESSAGE = "SmartRoute couldn’t complete this request.";
 
 export type AgentChatTransport = (
   request: AgentChatRequestBody,
@@ -30,6 +33,22 @@ export class AgentChatTransportError extends Error {
     this.name = "AgentChatTransportError";
   }
 }
+
+type TurnAttemptOutcome =
+  | {
+      kind: "ended";
+      receivedDone: boolean;
+      sessionExpired: boolean;
+      retryableFailure: boolean;
+      sawRiderOutput: boolean;
+      buffered: AgentEvent[];
+    }
+  | { kind: "cancelled" }
+  | {
+      kind: "transport_error";
+      error: AgentChatTransportError;
+      sawRiderOutput: boolean;
+    };
 
 export async function* fetchAgentChatEvents(
   request: AgentChatRequestBody,
@@ -62,6 +81,128 @@ function isRiderVisibleOutput(event: AgentEvent): boolean {
   return event.type === "route_card" || event.type === "arrival_card";
 }
 
+function isRetryableProviderFailure(event: AgentEvent): boolean {
+  return event.type === "error" && event.retryable && event.code !== "session_expired";
+}
+
+function shouldBufferStreamEvent(
+  event: AgentEvent,
+  waitingForFirstPair: boolean,
+  sessionExpired: boolean,
+): boolean {
+  if (waitingForFirstPair && event.type === "meta") return true;
+  if (event.type === "error" && event.code === "session_expired") return true;
+  return sessionExpired;
+}
+
+function transportErrorFromUnknown(err: unknown): AgentChatTransportError {
+  return err instanceof AgentChatTransportError
+    ? err
+    : new AgentChatTransportError(GENERIC_TRANSPORT_MESSAGE, 500, true, null);
+}
+
+async function runOneTurnAttempt(
+  transport: AgentChatTransport,
+  request: AgentChatRequestBody,
+  controller: AbortController,
+  dispatch: Dispatch<ChatReducerAction>,
+): Promise<TurnAttemptOutcome> {
+  let sawRiderOutput = false;
+  const buffered: AgentEvent[] = [];
+  let sessionExpired = false;
+  let retryableFailure = false;
+  let receivedDone = false;
+  try {
+    for await (const event of transport(request, controller.signal)) {
+      if (isRiderVisibleOutput(event)) sawRiderOutput = true;
+      if (isRetryableProviderFailure(event)) retryableFailure = true;
+      if (shouldBufferStreamEvent(event, buffered.length === 0, sessionExpired)) {
+        if (event.type === "error" && event.code === "session_expired") {
+          sessionExpired = true;
+        }
+        buffered.push(event);
+        if (event.type === "done") receivedDone = true;
+        continue;
+      }
+      for (const pending of buffered.splice(0)) dispatch(pending);
+      if (event.type === "done") receivedDone = true;
+      dispatch(event);
+    }
+    return {
+      kind: "ended",
+      receivedDone,
+      sessionExpired,
+      retryableFailure,
+      sawRiderOutput,
+      buffered,
+    };
+  } catch (err) {
+    if (controller.signal.aborted) return { kind: "cancelled" };
+    return {
+      kind: "transport_error",
+      error: transportErrorFromUnknown(err),
+      sawRiderOutput,
+    };
+  }
+}
+
+function shouldRetryTransportFailure(
+  outcome: Extract<TurnAttemptOutcome, { kind: "transport_error" }>,
+  failureRetryAttempted: boolean,
+): boolean {
+  return !failureRetryAttempted && !outcome.sawRiderOutput && outcome.error.retryable;
+}
+
+function shouldRetryEndedAttempt(
+  outcome: Extract<TurnAttemptOutcome, { kind: "ended" }>,
+  failureRetryAttempted: boolean,
+  aborted: boolean,
+): boolean {
+  if (aborted || outcome.sawRiderOutput || failureRetryAttempted) return false;
+  return outcome.retryableFailure || !outcome.receivedDone;
+}
+
+function dispatchTransportFailure(
+  dispatch: Dispatch<ChatReducerAction>,
+  error: AgentChatTransportError,
+): void {
+  dispatch({
+    type: "stream_error",
+    message: error.message,
+    code: `transport_${error.status}`,
+    retryable: error.retryable,
+    correlationId: error.correlationId ?? undefined,
+  });
+}
+
+function shouldRecoverExpiredSession(
+  outcome: Extract<TurnAttemptOutcome, { kind: "ended" }>,
+  recoveryAttempted: boolean,
+  aborted: boolean,
+): boolean {
+  return outcome.sessionExpired && !recoveryAttempted && !aborted;
+}
+
+function withoutExpiredSession(request: AgentChatRequestBody): AgentChatRequestBody {
+  return {
+    ...request,
+    session_id: undefined,
+    selected_card_id: undefined,
+  };
+}
+
+function dispatchDroppedStream(
+  dispatch: Dispatch<ChatReducerAction>,
+  outcome: Extract<TurnAttemptOutcome, { kind: "ended" }>,
+  aborted: boolean,
+): void {
+  if (outcome.receivedDone || aborted) return;
+  dispatch({
+    type: "stream_error",
+    message: DROPPED_STREAM_MESSAGE,
+  });
+}
+
 export async function runTurn(
   transport: AgentChatTransport,
   request: AgentChatRequestBody,
@@ -73,112 +214,48 @@ export async function runTurn(
     discardSession: () => undefined,
   },
 ): Promise<void> {
-  let receivedDone = false;
   let recoveryAttempted = false;
   let failureRetryAttempted = false;
   let activeRequest = request;
   try {
     while (true) {
-      let sawRiderOutput = false;
-      try {
-        const buffered: AgentEvent[] = [];
-        let sessionExpired = false;
-        let retryableFailure = false;
-        receivedDone = false;
-
-        for await (const event of transport(activeRequest, controller.signal)) {
-          if (isRiderVisibleOutput(event)) sawRiderOutput = true;
-          if (
-            event.type === "error" &&
-            event.retryable &&
-            event.code !== "session_expired"
-          ) {
-            retryableFailure = true;
-          }
-          if (buffered.length === 0 && event.type === "meta") {
-            buffered.push(event);
-            continue;
-          }
-          if (event.type === "error" && event.code === "session_expired") {
-            sessionExpired = true;
-            buffered.push(event);
-            continue;
-          }
-          if (sessionExpired) {
-            buffered.push(event);
-            if (event.type === "done") receivedDone = true;
-            continue;
-          }
-          for (const pending of buffered.splice(0)) dispatch(pending);
-          if (event.type === "done") receivedDone = true;
-          dispatch(event);
-        }
-
-        if (
-          sessionExpired && !recoveryAttempted && !controller.signal.aborted
-        ) {
-          recoveryAttempted = true;
-          failureRetryAttempted = true;
-          recovery.discardSession();
-          // The new backend session cannot resolve a card owned by the
-          // expired session. Preserve the rider's message and location, but
-          // let the fresh turn resolve its own authoritative context.
-          activeRequest = {
-            ...request,
-            session_id: undefined,
-            selected_card_id: undefined,
-          };
-          continue;
-        }
-
-        for (const pending of buffered) dispatch(pending);
-
-        const dropped = !receivedDone && !controller.signal.aborted;
-        const canRetryFailure =
-          !controller.signal.aborted &&
-          !sawRiderOutput &&
-          !failureRetryAttempted &&
-          (retryableFailure || dropped);
-        if (canRetryFailure) {
-          failureRetryAttempted = true;
-          dispatch({ type: "turn_retry_started" });
-          continue;
-        }
-        if (dropped) {
-          dispatch({
-            type: "stream_error",
-            message: "The connection to SmartRoute dropped before it finished responding.",
-          });
-        }
-        break;
-      } catch (err) {
-        if (controller.signal.aborted) {
-          dispatch({ type: "stream_cancelled" });
-          break;
-        }
-        const transportFailure =
-          err instanceof AgentChatTransportError
-            ? err
-            : new AgentChatTransportError(
-                "SmartRoute couldn’t complete this request.",
-                500,
-                true,
-                null,
-              );
-        if (!failureRetryAttempted && !sawRiderOutput && transportFailure.retryable) {
-          failureRetryAttempted = true;
-          dispatch({ type: "turn_retry_started" });
-          continue;
-        }
-        dispatch({
-          type: "stream_error",
-          message: transportFailure.message,
-          code: `transport_${transportFailure.status}`,
-          retryable: transportFailure.retryable,
-          correlationId: transportFailure.correlationId ?? undefined,
-        });
+      const outcome = await runOneTurnAttempt(
+        transport,
+        activeRequest,
+        controller,
+        dispatch,
+      );
+      if (outcome.kind === "cancelled") {
+        dispatch({ type: "stream_cancelled" });
         break;
       }
+      if (outcome.kind === "transport_error") {
+        if (shouldRetryTransportFailure(outcome, failureRetryAttempted)) {
+          failureRetryAttempted = true;
+          dispatch({ type: "turn_retry_started" });
+          continue;
+        }
+        dispatchTransportFailure(dispatch, outcome.error);
+        break;
+      }
+      if (shouldRecoverExpiredSession(outcome, recoveryAttempted, controller.signal.aborted)) {
+        recoveryAttempted = true;
+        failureRetryAttempted = true;
+        recovery.discardSession();
+        // The new backend session cannot resolve a card owned by the
+        // expired session. Preserve the rider's message and location, but
+        // let the fresh turn resolve its own authoritative context.
+        activeRequest = withoutExpiredSession(request);
+        continue;
+      }
+      for (const pending of outcome.buffered) dispatch(pending);
+      if (shouldRetryEndedAttempt(outcome, failureRetryAttempted, controller.signal.aborted)) {
+        failureRetryAttempted = true;
+        dispatch({ type: "turn_retry_started" });
+        continue;
+      }
+      dispatchDroppedStream(dispatch, outcome, controller.signal.aborted);
+      break;
     }
   } finally {
     inFlightRef.current = false;

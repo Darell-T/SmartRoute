@@ -13,8 +13,9 @@ application behavior. Regenerate the reports below before editing a batch.
 
 The accepted 6F checkpoint is `16390f3`. It contains Batches 2 through 6F, F0,
 and the backend test-assurance work. Batch F1 is Codex-approved on the tree
-from that checkpoint. Batch 7 was not started. Workers must not shrink stale
-baseline entries.
+from that checkpoint at `d2ecdfe3bf43397aee2051c84ac0bf4544d8cfc0`. Codex
+approved Batch 7 on the tree from that fixed point. Start Batch 8 only from
+the resulting Batch 7 commit. Workers must not shrink stale baseline entries.
 
 | Tool | Findings | Files | Notes |
 |---|---:|---:|---|
@@ -25,8 +26,8 @@ baseline entries.
 | Backend combined complexity | 91 | | Radon or cognitive 11 through 12, none above 12 |
 | Backend combined coverage | 89.34% | | Full `backend/app` statement and branch denominator |
 | Backend CRAP above 30 | 0 | 0 | Public behavior tests closed the prior evidence gap |
-| Oxlint complexity above 12 | 123 | | Batch 7: 10, Batch 8: 44, Batch 9: 69 |
-| Quality baseline | 111 | | F1 reviewer removed exactly 2 proven-stale TypeScript IDs |
+| Oxlint complexity above 12 | 113 | | Batch 7: 0, Batch 8: 44, Batch 9: 69 |
+| Quality baseline | 101 | | Batch 7 reviewer removed exactly 10 proven-stale TypeScript IDs |
 
 `TRY003` is ignored. It encouraged exception boilerplate without improving
 passenger behavior or debuggability.
@@ -61,6 +62,8 @@ Quality certification from fresh runs with no `--skip-tests`:
 | Batch 6F reviewer final 2026-08-31 | 0 | 0 | 0 | 0 | 113 | 1,915 passed, 21 skipped, 446 subtests | 557 |
 | F1 worker 2026-08-31 | 1 | 0 | 0 | 2 | 111 | 1,915 passed, 21 skipped, 446 subtests | 551 |
 | F1 reviewer final 2026-08-31 | 0 | 0 | 0 | 0 | 111 | 1,915 passed, 21 skipped, 446 subtests | 551 |
+| Batch 7 worker 2026-08-31 | 1 | 0 | 0 | 10 | 111 | 1,915 passed, 21 skipped, 446 subtests | 770 |
+| Batch 7 reviewer final 2026-08-31 | 0 | 0 | 0 | 0 | 101 | 1,915 passed, 21 skipped, 446 subtests | 770 |
 
 Cognitive delta against `427fbc8`: 0 new or worsened. CRAP has no absolute
 ceiling. Baseline entries may not worsen.
@@ -76,8 +79,10 @@ review is complete on the tree based on `c8a0381`. Batch 6D is committed at
 Batch 6E is committed at `ae27211`. F0 is committed at `9b4327d`. The backend
 test-assurance checkpoint is `ac96d12`. Batch 6F is Codex-approved on the tree
 based on that checkpoint. Batch 6F is committed at `16390f3`. F1 is
-Codex-approved on the tree from that checkpoint. Batch 7 was not started. The
-next order is 7, 8, and 9.
+Codex-approved on the tree from that checkpoint at
+`d2ecdfe3bf43397aee2051c84ac0bf4544d8cfc0`. Codex approved Batch 7 on the
+tree from that fixed point. Start Batch 8 only from the resulting Batch 7
+commit.
 
 ## Structural policy
 
@@ -95,7 +100,7 @@ next order is 7, 8, and 9.
 ## Remaining batches
 
 The old 20-batch plan is retired. Batches 2 through 6F, F0, and F1 are
-complete. Start Batch 7 only from the accepted F1 commit.
+complete. Batch 7 is Codex-approved. Batch 8 is next.
 
 | Batch | Subsystem |
 |---:|---|
@@ -317,6 +322,358 @@ proven-stale baseline entries and changed no surviving entry:
 `quality/baseline.json` decreased from 113 to 111 entries. Batch 7 was not
 started. Its worker must use the accepted F1 commit as the immutable fixed
 point.
+
+## Batch 7 worker result (2026-08-31)
+
+Worker implementation. Codex is the reviewer. The worker did not update
+`quality/baseline.json`, did not approve this batch, did not commit, and did
+not start Batch 8.
+
+### 1. Fixed point
+
+Immutable quality reference:
+`d2ecdfe3bf43397aee2051c84ac0bf4544d8cfc0`.
+
+`git rev-parse HEAD` equals that SHA before and after the work.
+
+### 2. Preserved user-owned dirty files
+
+Initial status, left untouched:
+
+```text
+ M frontend/next-env.d.ts
+?? frontend/CLAUDE.md
+```
+
+Final status is identical. The worker did not edit, stage, delete, restore,
+stash, or commit either file.
+
+### 3. Changed files
+
+Production:
+
+- `frontend/lib/canonical-itinerary-schema.ts` (new)
+- `frontend/lib/trip-response.ts` (new)
+- `frontend/app/page-parts.tsx`
+- `frontend/app/page.tsx`
+- `frontend/lib/agent-chat-controller.ts`
+- `frontend/lib/agent-chat-event-validator.ts`
+- `frontend/lib/agent-chat-session.ts`
+- `frontend/lib/agent-chat-state.ts`
+- `frontend/lib/agent-chat-stream.ts`
+- `frontend/lib/agent-route-selection.ts`
+- `frontend/lib/api.ts`
+- `frontend/lib/backend-proxy-core.ts`
+- `frontend/lib/backend-proxy.ts`
+- `frontend/lib/backend-stream-proxy.ts`
+- `frontend/lib/initial-geolocation.ts`
+- `frontend/lib/live-feed-connection.ts`
+- `frontend/lib/mapbox-search.ts`
+- `frontend/lib/route-planning.ts`
+- `frontend/lib/use-live-feed.ts`
+- `frontend/lib/ws-ticket.ts`
+- `frontend/types/api.ts` (canonical itinerary import path only)
+
+Tests:
+
+- `frontend/lib/trip-response.test.mjs` (new)
+- `frontend/lib/mapbox-search.test.mjs` (new)
+- `frontend/lib/owned-lib-boundaries.test.mjs` (new)
+- `frontend/lib/owned-hooks.test.mjs` (new)
+- `frontend/app/page-parts.test.mjs` (new)
+- `frontend/app/api/owned-routes.test.mjs` (new)
+- `frontend/app/manifest.test.mjs` (new)
+- `frontend/app/owned-react-surfaces.test.mjs` (new)
+- `frontend/lib/agent-route-selection.test.mjs`
+- `frontend/lib/initial-geolocation.test.mjs`
+- `frontend/lib/use-agent-chat.test.mjs`
+- `frontend/lib/ws-ticket.test.mjs`
+
+Docs and inventory:
+
+- `docs/lint-cleanup-plan.md`
+- `docs/lint-cleanup-handoff.md`
+- `.audit/frontend-debt.json`
+
+### 4. Backend fields verified for the canonical itinerary
+
+Inspected backend `build_canonical_itinerary` and the existing SSE Zod policy
+before defining frontend requirements. Guaranteed on a successful canonical
+itinerary:
+
+- `itinerary_id`
+- `total_duration_seconds`
+- `transfer_count`
+- `legs`
+
+A successful REST trip also guarantees at least one route candidate with
+`id`, `index`, `steps`, `is_recommended`, `total_minutes`, `itinerary`, and
+`score_breakdown.transfers`, plus `selected_route_index` matching a candidate.
+
+Legitimately nullable or optional, kept nullable or optional:
+
+- `departure_at`, `arrival_at`
+- `total_walk_seconds`, `total_wait_seconds`, `total_in_vehicle_seconds`,
+  `total_dwell_seconds`
+- origin, destination, waypoints, segments, dwell events
+- structured recommendation reasons and `selection_decision`
+- candidate `recommendation_reason`, `rejection_reason`, enrichment flags
+
+No UI-required canonical fact was missing from the backend contract. The
+worker did not invent duration, timing, transfers, ranking, or recommendation
+choice in the frontend.
+
+### 5. Raw and validated frontend types
+
+Raw untrusted shapes stay at the existing public contract:
+
+- `TripResponse` and `RouteCandidate` in `frontend/types/api.ts`
+- `CanonicalItinerary` in `frontend/lib/agent-route-card-contract.ts`
+
+Validated post-parse types:
+
+- `ValidatedCanonicalItinerary` requires `itinerary_id`,
+  `total_duration_seconds`, `transfer_count`, and `legs`
+- `ValidatedRouteCandidate` requires `total_minutes`, `itinerary`, and
+  `score_breakdown.transfers`
+- `ValidatedTripResponse` requires `selected_route_index` and
+  `route_candidates: ValidatedRouteCandidate[]`
+
+JSON null on candidate clocks is stripped to absent so the validated type
+remains a subtype of the public raw type. Itinerary clocks may still be JSON
+null. `planTrip` parses `res.json()` as `unknown` and rejects through
+`TRIP_PLAN_FAILED` (`Failed to plan trip`). It does not use `as TripResponse`,
+`any`, a non-null assertion, or an empty successful plan.
+
+### 6. Shared Zod schema owner
+
+`frontend/lib/canonical-itinerary-schema.ts` owns `canonicalItinerarySchema`
+and `parseCanonicalItinerary`. The SSE route-card validator and
+`frontend/lib/trip-response.ts` reuse that module. The REST client does not
+import the complete SSE event validator. `frontend/types/api.ts` imports
+`CanonicalItinerary` from `agent-route-card-contract.ts`, not from
+`agent-chat-stream.ts`.
+
+### 7. Cluster invariants
+
+7A. One canonical route boundary. Malformed REST JSON, a missing itinerary,
+malformed duration totals, a malformed transfer count, and a selected index
+with no matching candidate all throw `Failed to plan trip`. A valid response
+returns `ValidatedTripResponse`. SSE `route_card` events parse itineraries
+with the same schema. `normalizeTripCandidates` and agent route-card
+selection return the validated candidate type.
+
+7B. `applyAgentEvent` uses typed reducers for session and turn start,
+streamed content, tool lifecycle, route and arrival cards, and terminal
+outcomes. `ChatReducerAction` stays a discriminated union with a `never`
+exhaustive check. Stale-turn events are ignored. Tool and card updates stay
+unique by id. A turn receives at most one terminal result. Cancellation stays
+cancellation. Clarification and failure remain distinct. Route cards and
+arrival cards replace by identity.
+
+7C. `runTurn` keeps retry, expired-session recovery, abort cleanup,
+active-request cleanup, session replacement, dropped-stream classification,
+meta-event timing, and one terminal callback. One network attempt returns
+`TurnAttemptOutcome` (`ended`, `cancelled`, `transport_error`). Mapbox,
+backend proxy, stream proxy, WebSocket ticket, session, and live-feed
+boundaries use guard clauses and named parse or recovery policies. Timeouts,
+abort signals, status codes, streaming headers, redaction, and retry counts
+are unchanged. GET `/api/service-alerts` still does not pass `req` into
+`proxyToBackend`. That pre-existing identity skip was not changed.
+
+7D. `page-parts.tsx` gained independently testable ownership for rail status,
+fullscreen toggle, destination coordinates from a route, route-card lookup,
+and nearby-station selection. The page layout and interaction design did not
+change. Remaining owned functions above complexity 12 are 0.
+
+### 8. Focused tests and results
+
+```powershell
+npx tsx --test lib/trip-response.test.mjs
+npx tsx --test lib/use-agent-chat.test.mjs
+npx tsx --test lib/mapbox-search.test.mjs
+npx tsx --test app/page-parts.test.mjs
+npx tsx --test app/api/owned-routes.test.mjs lib/owned-lib-boundaries.test.mjs app/owned-react-surfaces.test.mjs lib/owned-hooks.test.mjs
+```
+
+All focused files passed. Invert proof for 7A: `total_duration_seconds` was
+temporarily optional in the shared itinerary schema. The malformed-duration
+test failed because it expected `Failed to plan trip` and did not throw. The
+check was restored and the test passed again. The mutation is not in the tree.
+
+### 9. Forward and reverse order
+
+The stub-heavy files share `fetch`, `document`, and `Module._load`. Both
+orders passed 117 tests:
+
+- forward: hooks, react surfaces, lib boundaries, owned routes
+- reverse: owned routes, lib boundaries, react surfaces, hooks
+
+### 10. Unit, coverage, release, artifact, lint, and quality
+
+From the repository root unless noted:
+
+- `npm --prefix frontend run typecheck`: pass
+- `npm --prefix frontend run typecheck:scripts`: pass
+- `npm --prefix frontend run test:unit`: 770 passed
+- `npm --prefix frontend run test:coverage`: used by the quality runner
+- `npm --prefix frontend run test:release:ci`: 14 passed, 4 skipped
+- `npm --prefix frontend run verify:transit-artifacts`: pass
+- `py scripts/check_quality.py --self-test`: pass
+- `py scripts/report_frontend_debt.py --self-test`: pass
+- `node scripts/js_function_metrics.mjs --self-test`: pass
+- `py scripts/report_frontend_debt.py --quality-ref d2ecdfe3bf43397aee2051c84ac0bf4544d8cfc0 --output .audit/frontend-debt.json`: wrote the Batch 7 inventory below
+- `py scripts/check_quality.py --quality-ref d2ecdfe3bf43397aee2051c84ac0bf4544d8cfc0`: `tests_ran: true`, `approval_eligible: false` only because of the 10 stale baseline IDs listed in item 14. New 0. Worsened 0. Cognitive new or worsened 0. Ruff C901 0. Ruff structural 0.
+- `git diff --check`: no whitespace errors
+- `npm --prefix frontend run lint`: 43 complexity findings, 0 max-depth. Zero in `frontend/app/**` or `frontend/lib/**`. Remaining findings are Batch 8 and Batch 9.
+- `npm --prefix frontend run lint:oxlint`: 113 complexity findings. Zero in `frontend/app/**` or `frontend/lib/**`.
+
+Transit artifacts and manifest hashes did not change.
+
+Starting inventory at the F1 commit matched the accepted F1 Batch 7 report:
+50 production files, 394 production functions, 733 authored functions, 10
+above complexity 12, 3 at 11 or 12, 21 unexecuted files, line coverage
+55.85% (3387 / 6064). Regenerated ESLint was 53 complexity and 8 max-depth.
+Regenerated Oxlint complexity was 123, with Batch 7 owning 10. After Batch 7,
+those 10 Oxlint findings and the Batch 7 ESLint complexity and max-depth
+findings are gone. Repository ESLint complexity is 43. Repository Oxlint
+complexity is 113. The 8 inherited max-depth findings were in owned Batch 7
+files.
+
+### 11. Final Batch 7 coverage
+
+Exact, because unexecuted owned production files are 0. Two consecutive
+`npm --prefix frontend run test:coverage` runs produced identical totals:
+
+- line 98.85% (6472 / 6547)
+- branch 95.04% (1609 / 1693)
+- function 98.31% (407 / 414)
+
+The remaining 84 unhit branch arms are mostly c8 line-1 export-name
+instrumentation, exhaustive `never` defaults, and a few unreachable guards
+after validated state. They are not required to close the 95% gate.
+
+### 12. Final Batch 7 complexity
+
+- production files 52
+- production functions 465
+- authored functions 1674
+- above 12: 0
+- at 11 or 12: 7
+- unexecuted files: 0
+- high-CRAP diagnostic signals: 0
+
+The original 3 functions at 11 or 12 were not refactored only to lower a
+number. The new 11-or-12 count is from splitting former functions that were
+above 12.
+
+`frontend/lib/agent-chat-state.ts` is 528 lines. It remains one ChatState
+reducer module: turn types, `ChatReducerAction`, and the five protocol
+reducers must be read together. Splitting it would create pass-through files.
+
+### 13. Production growth
+
+Tracked plus untracked owned production vs `d2ecdfe`: +1369 / -886, net +483,
+under the 500-line stop. Production functions 394 to 465, net +71, above the
+25-function stop. The shared schema and REST parser remain the measured
+reason. `canonical-itinerary-schema.ts` is 362 lines and `trip-response.ts`
+is 107 lines.
+
+The shared schema and REST parser remain the largest new files. Typed
+reducers, `TurnAttemptOutcome`, and named parse or recovery policies account
+for the function growth. The worker finished 7A through 7D because stopping
+mid-cluster would leave the shared schema and reducers incomplete, then
+stopped adding further production.
+
+### 14. Stale baseline IDs for Codex
+
+The worker did not run `--update-baseline`. Codex may shrink these 10
+TypeScript entries after review:
+
+- `typescript:frontend/app/page.tsx:SmartRoutePageContent#0`
+- `typescript:frontend/lib/agent-chat-controller.ts:runTurn#0`
+- `typescript:frontend/lib/agent-chat-event-validator.ts:parseAgentEvent#0`
+- `typescript:frontend/lib/agent-chat-session.ts:parseSnapshot#0`
+- `typescript:frontend/lib/agent-chat-state.ts:applyAgentEvent#0`
+- `typescript:frontend/lib/agent-chat-stream.ts:parseSseFrame#0`
+- `typescript:frontend/lib/backend-proxy-core.ts:readJsonBody#0`
+- `typescript:frontend/lib/backend-proxy.ts:proxyToBackend#0`
+- `typescript:frontend/lib/backend-stream-proxy.ts:streamProxyToBackend#0`
+- `typescript:frontend/lib/mapbox-search.ts:retrieveMapboxSuggestion#0`
+
+### 15. Review findings
+
+1. Scope and behavior vs `d2ecdfe`. Applied. Diff stays in `frontend/app/**`,
+   `frontend/lib/**`, the one `types/api.ts` import path, focused tests, the
+   audit file, and these two docs. Passenger-visible layout did not change.
+   Release chat, shell, map handoff, and accessibility tests passed.
+2. Type-system and boundary. Applied. One shared itinerary schema. Raw types
+   stay at the untrusted contract. Validated types are required after parse.
+   REST does not import the SSE event validator.
+3. Simplify and ponytail. Applied by deletion first. Reverted a
+   `interpretServiceAlertMessage` extract from `use-service-alerts.ts` because
+   it added production lines without an independently testable policy.
+   `page-parts.tsx` keeps named policies, not a prop-bag move.
+4. Testing on the Toilet. Applied. Tests call public parse, reducer, `runTurn`,
+   proxy, and hook APIs. No source-text assertions. Node CSS and Next stubs
+   exist so `layout.tsx`, `page.tsx`, and `manifest.ts` can execute. Those
+   tests still assert metadata, shell render, and client mount.
+5. Performance. No extra request-time work beyond one boundary parse that
+   replaced the `as TripResponse` cast. Reducers are pure. Page composition
+   did not add rerender subscriptions.
+6. Comments. Kept the proxy note that browser-facing chat copy must not come
+   from an upstream body. Deleted restating migration notes where touched.
+7. Gaming. No new `any`, unsafe cast, suppression, or lint-config change.
+   `applySocketMessage` remains private. Hook tests exercise it through
+   `useLiveFeed`. Test `loadWithoutCss` was split because Oxlint counts tests
+   in the Batch 7 authored inventory.
+
+### 16. Skipped changes
+
+- Did not pass `req` into GET `/api/service-alerts`. That would change
+  deployed identity behavior and is not proven wrong by an existing test.
+- Did not extract more page.tsx handlers. Remaining handlers are layout
+  wiring, not independently testable domain ownership.
+- Did not add coverage-only branches or wrappers to reach 95%.
+- Did not lower the 7 functions at complexity 11 or 12.
+- Did not copy the itinerary schema or add a second contract.
+- Did not add a handler registry, runner class, or context bag.
+- Did not modify `frontend/components/**`, backend, scripts, package files,
+  generated artifacts, or `quality/baseline.json`.
+
+### 17. Remaining risks
+
+- Production function growth (+71) exceeds the 25-function review trigger.
+  The shared schema and REST parser justify that growth.
+- Node unit tests stub CSS, `next/font`, and `next/dynamic`. They do not
+  replace Playwright for layout.
+- Browser source-mapped coverage for React and MapLibre remains Batch 8A.
+
+### 18. Batch 8
+
+Batch 8 was not started.
+
+### 19. Commit state
+
+The Batch 7 tree is uncommitted. `quality/baseline.json` is unchanged.
+
+## Batch 7 reviewer final (2026-08-31)
+
+Codex reviewed the production diff and repaired the superseded worker text in
+this handoff. Independent forward and reverse runs each passed 117 tests. Two
+fresh coverage runs produced the same Batch 7 totals: 98.85% lines, 95.04%
+branches, and 98.31% functions. Batch 7 has no production function above 12
+and no unexecuted production file.
+
+The reviewer removed exactly the 10 stale TypeScript entries listed above.
+`quality/baseline.json` fell from 111 entries to 101. The full quality command
+against `d2ecdfe3bf43397aee2051c84ac0bf4544d8cfc0` exits 0 with
+`approval_eligible: true`. It runs 770 frontend tests and 1,915 backend tests,
+with 21 backend skips and 446 subtests. New, worsened, stale, cognitive-delta,
+Ruff C901, and Ruff structural counts are 0.
+
+Batch 7 is Codex-approved. This reviewer result is part of the Batch 7 commit.
+Start Batch 8 only from that commit.
 
 ## Whole-repository audit and revised next work (2026-08-30)
 
