@@ -21,7 +21,10 @@ from unittest.mock import patch
 from app.services.agent import discovery_store
 from app.services.agent import trip_state as trip_state_module
 
-from tests.conversation.conversation_discovery_fixtures import SEARCH_INPUT, discovery_leg_for
+from tests.conversation.conversation_discovery_fixtures import (
+    SEARCH_INPUT,
+    discovery_leg_for,
+)
 from tests.conversation.conversation_external_content_fixtures import (
     DISCOVERY_PROFILE,
     FILE_SCHEME_URL,
@@ -56,6 +59,7 @@ from tests.conversation.conversation_matrix_harness import (
     load_agent_loop,
     route_cards,
 )
+
 
 def _discovery_rounds(session_id: str):
     set_id, place_ids = discovery_id_tokens(session_id, "t1")
@@ -108,18 +112,14 @@ class _ExternalContentScenarios(_ExternalContentBase):
         self._assert_offered_profile(sid, DISCOVERY_PROFILE)
         self._assert_web_offer(sid, 1, expected=True)
         self._assert_injection_defense_in_prompt(sid)
-        self.assertEqual(
-            [name for name, _input in trace.tool_calls],
-            ["declare_goals", "discover_places", "present_places"],
-            sid,
-        )
+        assert [name for name, _input in trace.tool_calls] == ["declare_goals", "discover_places", "present_places"], sid
         state = trip_state_module.get_trip_state(session)
         record = discovery_store.load_discovery_set(state["active_discovery_set_id"], session_id=session_id)
-        self.assertIsNotNone(record, sid)
-        self.assertEqual([p["ordinal"] for p in record["places"]], [1, 2, 3], sid)
+        assert record is not None, sid
+        assert [p["ordinal"] for p in record["places"]] == [1, 2, 3], sid
         request_blob = self._server_authored_request_blob()
-        self.assertIn("pl_", request_blob, sid)
-        self.assertIn("ds_", request_blob, sid)
+        assert "pl_" in request_blob, sid
+        assert "ds_" in request_blob, sid
         self._assert_pass_tail(
             sid, events=events, trace=trace, mocks=mocks, session=session,
             session_id=session_id, seed=seed, expected_model_calls=2,
@@ -165,31 +165,16 @@ class _ExternalContentScenarios(_ExternalContentBase):
         self._assert_web_offer(sid, 1, expected=False)
         self._assert_web_offer(sid, 2, expected=False)
         names = [name for name, _input in trace.tool_calls]
-        self.assertEqual(
-            names,
-            [
-                "declare_goals",
-                "discover_places",
-                "prepare_route_options",
-                "complete_turn",
-            ],
-            sid,
-        )
-        self.assertNotIn("present_route", names, sid)
-        self.assertEqual(
-            trace.tool_calls[2][1]["destination_place_id"], INVENTED_PLACE_ID, sid
-        )
+        assert names == ["declare_goals", "discover_places", "prepare_route_options", "complete_turn"], sid
+        assert "present_route" not in names, sid
+        assert trace.tool_calls[2][1]["destination_place_id"] == INVENTED_PLACE_ID, sid
         prepare_end = next(
             event for event in events
             if event.type == "tool_end" and event.tool == "prepare_route_options"
         )
-        self.assertFalse(prepare_end.ok, sid)
-        self.assertEqual(
-            prepare_end.summary,
-            "Route options could not be prepared",
-            sid,
-        )
-        self.assertNotIn(INVENTED_PLACE_ID, prepare_end.summary, sid)
+        assert not prepare_end.ok, sid
+        assert prepare_end.summary == "Route options could not be prepared", sid
+        assert INVENTED_PLACE_ID not in prepare_end.summary, sid
         self._assert_pass_tail(
             sid, events=events, trace=trace, mocks=mocks, session=session,
             session_id=session_id, seed=seed,
@@ -208,16 +193,12 @@ class _ExternalContentScenarios(_ExternalContentBase):
             rounds=discovery_rounds,
         )
         self._assert_offered_profile(f"{sid}-t1", DISCOVERY_PROFILE)
-        self.assertEqual(
-            [name for name, _input in trace1.tool_calls],
-            ["declare_goals", "discover_places", "present_places"],
-            sid,
-        )
+        assert [name for name, _input in trace1.tool_calls] == ["declare_goals", "discover_places", "present_places"], sid
         state = trip_state_module.get_trip_state(session)
         record = discovery_store.load_discovery_set(state["active_discovery_set_id"], session_id=session_id)
-        self.assertIsNotNone(record, sid)
+        assert record is not None, sid
         place2 = record["places"][1]
-        self.assertEqual(place2["name"], "B Pizza", sid)
+        assert place2["name"] == "B Pizza", sid
         events2, trace2, mocks2 = await self._run_discovery_turn(
             session=session, session_id=session_id, message=G01_DISCOVERY_MESSAGE,
             scenario_id=f"{sid}-t2",
@@ -246,52 +227,39 @@ class _ExternalContentScenarios(_ExternalContentBase):
             prepare_leg=discovery_leg_for(place2), fixed_candidate_id=G01_FIXED_CANDIDATE_ID,
         )
         self._assert_offered_profile(f"{sid}-t2", DISCOVERY_PROFILE)
-        self.assertEqual(
-            [name for name, _input in trace2.tool_calls],
-            ["declare_goals", "prepare_route_options", "present_route"], sid,
-        )
-        self.assertEqual(
-            trace2.tool_calls[1][1]["destination_place_id"], place2["place_id"], sid
-        )
-        self.assertEqual(mocks2["prepare_single_leg"].await_count, 1, sid)
+        assert [name for name, _input in trace2.tool_calls] == ["declare_goals", "prepare_route_options", "present_route"], sid
+        assert trace2.tool_calls[1][1]["destination_place_id"] == place2["place_id"], sid
+        assert mocks2["prepare_single_leg"].await_count == 1, sid
         provider_destination = mocks2["prepare_single_leg"].await_args.kwargs.get(
             "resolved_destination"
         )
-        self.assertIsNotNone(provider_destination, sid)
-        self.assertEqual(provider_destination.name, place2["name"], sid)
-        self.assertNotEqual(provider_destination.name, INJECTED_DESTINATION, sid)
+        assert provider_destination is not None, sid
+        assert provider_destination.name == place2["name"], sid
+        assert provider_destination.name != INJECTED_DESTINATION, sid
         # The route/provider seam may still receive the provider identity; it
         # is not a conversational identity and must stop at that boundary.
-        self.assertEqual(provider_destination.place_id, place2["place_id"], sid)
-        self.assertEqual(
-            provider_destination.provider_place_id,
-            place2["provider_place_id"],
-            sid,
-        )
+        assert provider_destination.place_id == place2["place_id"], sid
+        assert provider_destination.provider_place_id == place2["provider_place_id"], sid
         cards = route_cards(events2)
-        self.assertEqual(len(cards), 1, sid)
-        self.assertEqual(cards[0].destination.get("label"), place2["name"], sid)
-        self.assertEqual(len(mocks2["stored_candidate_set_ids"]), 1, sid)
+        assert len(cards) == 1, sid
+        assert cards[0].destination.get("label") == place2["name"], sid
+        assert len(mocks2["stored_candidate_set_ids"]) == 1, sid
         state2 = trip_state_module.get_trip_state(session)
-        self.assertEqual(state2["active_candidate_set_id"], mocks2["stored_candidate_set_ids"][0], sid)
-        self.assertEqual(state2["selected_candidate_id"], G01_FIXED_CANDIDATE_ID, sid)
-        self.assertEqual(state2["destination"], place2["name"], sid)
+        assert state2["active_candidate_set_id"] == mocks2["stored_candidate_set_ids"][0], sid
+        assert state2["selected_candidate_id"] == G01_FIXED_CANDIDATE_ID, sid
+        assert state2["destination"] == place2["name"], sid
         self._assert_terminal(f"{sid}-t2", events2)
         self._assert_policy(f"{sid}-t2", trace2, expected_model_calls=2)
         request_blob = self._server_authored_request_blob()
-        self.assertIn(place2["place_id"], request_blob, sid)
-        self.assertNotIn(place2["provider_place_id"].casefold(), request_blob.casefold(), sid)
-        self.assertNotIn(
-            place2["provider_place_id"].casefold(),
-            self._events_blob(events2).casefold(),
-            sid,
-        )
+        assert place2["place_id"] in request_blob, sid
+        assert place2["provider_place_id"].casefold() not in request_blob.casefold(), sid
+        assert place2["provider_place_id"].casefold() not in self._events_blob(events2).casefold(), sid
         self._assert_no_secret_leak(
             f"{sid}-t2", session=session, events=events2, trace=trace2,
             request_blob=request_blob,
             state_blob=self._trip_state_blob(session), opaque_ids_expected_in_request=True,
         )
-        self.assertNotEqual(seed.destination, INJECTED_DESTINATION, sid)
+        assert seed.destination != INJECTED_DESTINATION, sid
 
     async def test_g01_d_plain_label_after_discovery_is_not_route_identity(self):
         """A plain discovery label must never become route identity (P1 check).
@@ -353,11 +321,7 @@ class _ExternalContentScenarios(_ExternalContentBase):
         self._assert_web_offer(sid, 1, expected=False)
         self._assert_web_offer(sid, 2, expected=False)
         self._assert_injection_defense_in_prompt(sid)
-        self.assertEqual(
-            [name for name, _input in trace.tool_calls],
-            ["declare_goals", "discover_places", "complete_turn"],
-            sid,
-        )
+        assert [name for name, _input in trace.tool_calls] == ["declare_goals", "discover_places", "complete_turn"], sid
         prepare_end = next(
             event for event in events
             if event.type == "tool_end" and event.tool == "prepare_route_options"
@@ -369,14 +333,11 @@ class _ExternalContentScenarios(_ExternalContentBase):
             for event in events
             if event.type == "tool_start" and event.tool == "prepare_route_options"
         ]
-        self.assertEqual(prepare_starts, [], sid)
-        self.assertIn("not available", prepare_end.summary.casefold(), sid)
+        assert prepare_starts == [], sid
+        assert "not available" in prepare_end.summary.casefold(), sid
         # A route presenter is not state-valid without candidate evidence and
         # therefore must never be reached after the rejected prepare.
-        self.assertFalse(
-            any(event.tool == "present_route" for event in events if event.type == "tool_start"),
-            sid,
-        )
+        assert not any(event.tool == "present_route" for event in events if event.type == "tool_start"), sid
         state = trip_state_module.get_trip_state(session)
         evidence = g01d_evidence(
             offered=(schema["name"] for schema in self.loop.client.messages.calls[0]["tools"]),
@@ -384,21 +345,16 @@ class _ExternalContentScenarios(_ExternalContentBase):
             state=state, prepare_end=prepare_end,
         )
         # The attacker-controlled label must not become route identity.
-        self.assertFalse(
-            prepare_end.ok,
-            f"{sid}: server accepted plain post-web label as canonical route identity\n{evidence}",
-        )
-        self.assertEqual(mocks["prepare_single_leg"].await_count, 0, f"{sid}: provider route seam reached\n{evidence}")
-        self.assertEqual(mocks["stored_candidate_set_ids"], [], f"{sid}: candidate set stored/bound\n{evidence}")
-        self.assertEqual(route_cards(events), [], f"{sid}: route presented\n{evidence}")
+        assert not prepare_end.ok, f"{sid}: server accepted plain post-web label as canonical route identity\n{evidence}"
+        assert mocks["prepare_single_leg"].await_count == 0, f"{sid}: provider route seam reached\n{evidence}"
+        assert mocks["stored_candidate_set_ids"] == [], f"{sid}: candidate set stored/bound\n{evidence}"
+        assert route_cards(events) == [], f"{sid}: route presented\n{evidence}"
         for key, expected in (
             ("destination", seed.destination),
             ("active_candidate_set_id", seed.candidate_set_id),
             ("selected_candidate_id", seed.candidate_id),
         ):
-            self.assertEqual(
-                state[key], expected, f"{sid}: accepted trip {key} mutated\n{evidence}"
-            )
+            assert state[key] == expected, f"{sid}: accepted trip {key} mutated\n{evidence}"
         self._assert_pass_tail(
             sid, events=events, trace=trace, mocks=mocks, session=session,
             session_id=session_id, seed=seed,
@@ -442,30 +398,21 @@ class _ExternalContentScenarios(_ExternalContentBase):
             fixed_candidate_id=G01_FIXED_CANDIDATE_ID,
         )
         self._assert_offered_profile(sid, ROUTE_PROFILE)
-        self.assertFalse(
-            any(schema["name"] == "web_search" for schema in self.loop.client.messages.calls[0]["tools"]),
-            sid,
-        )
-        self.assertEqual(
-            [name for name, _input in trace.tool_calls],
-            ["declare_goals", "prepare_route_options", "present_route"], sid,
-        )
-        self.assertEqual(trace.tool_calls[1][1]["destination"], "Work", sid)
+        assert not any(schema["name"] == "web_search" for schema in self.loop.client.messages.calls[0]["tools"]), sid
+        assert [name for name, _input in trace.tool_calls] == ["declare_goals", "prepare_route_options", "present_route"], sid
+        assert trace.tool_calls[1][1]["destination"] == "Work", sid
         # The plain label reaches the normal provider seam (in production the
         # seam geocodes it); that is the canonical path, not a security break.
-        self.assertEqual(mocks["prepare_single_leg"].await_count, 1, sid)
-        self.assertIsNone(
-            mocks["prepare_single_leg"].await_args.kwargs.get("resolved_destination"),
-            sid,
-        )
+        assert mocks["prepare_single_leg"].await_count == 1, sid
+        assert mocks["prepare_single_leg"].await_args.kwargs.get("resolved_destination") is None, sid
         cards = route_cards(events)
-        self.assertEqual(len(cards), 1, sid)
-        self.assertEqual(cards[0].destination.get("label"), "Work", sid)
-        self.assertEqual(len(mocks["stored_candidate_set_ids"]), 1, sid)
+        assert len(cards) == 1, sid
+        assert cards[0].destination.get("label") == "Work", sid
+        assert len(mocks["stored_candidate_set_ids"]) == 1, sid
         state = trip_state_module.get_trip_state(session)
-        self.assertEqual(state["destination"], "Work", sid)
-        self.assertEqual(state["active_candidate_set_id"], mocks["stored_candidate_set_ids"][0], sid)
-        self.assertEqual(state["selected_candidate_id"], G01_FIXED_CANDIDATE_ID, sid)
+        assert state["destination"] == "Work", sid
+        assert state["active_candidate_set_id"] == mocks["stored_candidate_set_ids"][0], sid
+        assert state["selected_candidate_id"] == G01_FIXED_CANDIDATE_ID, sid
         self._assert_terminal(sid, events)
         self._assert_policy(sid, trace, expected_model_calls=2)
         self._assert_no_secret_leak(
@@ -493,16 +440,12 @@ class _ExternalContentScenarios(_ExternalContentBase):
         )
         self._assert_offered_profile(sid, ROUTE_PROFILE)
         self._assert_injection_defense_in_prompt(sid)
-        self.assertEqual(
-            [name for name, _input in trace.tool_calls],
-            ["declare_goals", "complete_turn"],
-            sid,
-        )
+        assert [name for name, _input in trace.tool_calls] == ["declare_goals", "complete_turn"], sid
         request_blob = self._server_authored_request_blob()
-        self.assertIn("pl_", request_blob, sid)
-        self.assertIn("ds_", request_blob, sid)
+        assert "pl_" in request_blob, sid
+        assert "ds_" in request_blob, sid
         for marker in ("chij", "40.7,-73.97", "cd_", "cs_"):
-            self.assertNotIn(marker, request_blob.casefold(), f"{sid}: request leaked {marker}")
+            assert marker not in request_blob.casefold(), f"{sid}: request leaked {marker}"
         self._assert_pass_tail(
             sid, events=events, trace=trace, mocks=mocks, session=session,
             session_id=session_id, seed=seed, expected_model_calls=1,
@@ -526,11 +469,7 @@ class _ExternalContentScenarios(_ExternalContentBase):
         )
         self._assert_offered_profile(sid, ROUTE_PROFILE)
         self._assert_no_fetch_surface(sid)
-        self.assertEqual(
-            [name for name, _input in trace.tool_calls],
-            ["declare_goals", "complete_turn"],
-            sid,
-        )
+        assert [name for name, _input in trace.tool_calls] == ["declare_goals", "complete_turn"], sid
         self._assert_pass_tail(
             sid, events=events, trace=trace, mocks=mocks, session=session,
             session_id=session_id, seed=seed, expected_model_calls=1,
@@ -545,8 +484,8 @@ class _ExternalContentScenarios(_ExternalContentBase):
                 seed = self._seed_accepted_trip(session, session_id)
                 geocode_calls: list[str] = []
 
-                def fake_geocode(address: str):
-                    geocode_calls.append(str(address))
+                def fake_geocode(address: str, captured_calls=geocode_calls):
+                    captured_calls.append(str(address))
                     return None, "Address not found in NYC."
 
                 with patch("app.services.geography.geocode_address_with_reason", side_effect=fake_geocode):
@@ -585,28 +524,20 @@ class _ExternalContentScenarios(_ExternalContentBase):
                 self._assert_offered_profile(sid, DISCOVERY_PROFILE)
                 self._assert_web_offer(sid, 1, expected=False)
                 self._assert_web_offer(sid, 2, expected=False)
-                self.assertEqual(
-                    [name for name, _input in trace.tool_calls],
-                    [
-                        "declare_goals",
-                        "discover_places",
-                        "complete_turn",
-                    ],
-                    sid,
-                )
+                assert [name for name, _input in trace.tool_calls] == ["declare_goals", "discover_places", "complete_turn"], sid
                 prepare_end = next(
                     event for event in events
                     if event.type == "tool_end" and event.tool == "prepare_route_options"
                 )
-                self.assertFalse(prepare_end.ok, sid)
+                assert not prepare_end.ok, sid
                 # The server-side discovery gate rejects the URL before the
                 # bounded NYC geocoder (and every other executor/provider/
                 # store) sees it: a plain label is not routing authority on a
                 # destination_discovery turn.
-                self.assertIn("not available", prepare_end.summary.casefold(), sid)
-                self.assertEqual(geocode_calls, [], f"{sid}: URL reached the geocoder")
-                self.assertEqual(route_cards(events), [], sid)
-                self.assertEqual(mocks["stored_candidate_set_ids"], [], sid)
+                assert "not available" in prepare_end.summary.casefold(), sid
+                assert geocode_calls == [], f"{sid}: URL reached the geocoder"
+                assert route_cards(events) == [], sid
+                assert mocks["stored_candidate_set_ids"] == [], sid
                 self._assert_terminal(sid, events)
                 self._assert_policy(
                     sid,
@@ -621,7 +552,7 @@ class _ExternalContentScenarios(_ExternalContentBase):
                     for event in events
                     if event.type == "tool_start" and event.tool == "prepare_route_options"
                 ]
-                self.assertEqual(starts, [], sid)
+                assert starts == [], sid
                 self._assert_absent(sid, "SSE events", self._events_blob(events), (url,))
                 self._assert_absent(
                     sid, "passenger text/history",
@@ -654,18 +585,6 @@ class ExternalContentAutoTests(_ExternalContentScenarios):
     __test__ = True
     __unittest_skip__ = False
     mode = "auto"
-
-    @classmethod
-    def setUpClass(cls):
-        cls.loop = load_agent_loop()
-
-
-class ExternalContentQuickTests(_ExternalContentScenarios):
-    """Batch G scenarios in Quick mode with the same canonical facts."""
-
-    __test__ = True
-    __unittest_skip__ = False
-    mode = "quick"
 
     @classmethod
     def setUpClass(cls):

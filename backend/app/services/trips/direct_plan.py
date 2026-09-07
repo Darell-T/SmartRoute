@@ -15,24 +15,25 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from datetime import datetime, timezone
-from typing import Any, Iterable
+from collections.abc import Iterable
+from datetime import UTC, datetime
+from typing import Any
 
 from app.services.trips import candidates, enrichment, scoring, text
-from app.services.trips.route_incidents.scan import (
-    INCOMPLETE_INCIDENT_DISCLOSURE,
-    incident_scan_is_complete,
-)
 from app.services.trips.itinerary import build_canonical_itinerary
 from app.services.trips.location import ResolvedPlace
-from app.services.trips.preparation.dependencies import (
-    build_preparation_dependencies,
-)
-from app.services.trips.preparation.prepare import prepare_single_leg
 from app.services.trips.preparation.constraints import route_constraints
 from app.services.trips.preparation.context import (
     RoutePreparationContext,
     is_route_preparation_failure,
+)
+from app.services.trips.preparation.dependencies import (
+    build_preparation_dependencies,
+)
+from app.services.trips.preparation.prepare import prepare_single_leg
+from app.services.trips.route_incidents.scan import (
+    INCOMPLETE_INCIDENT_DISCLOSURE,
+    incident_scan_is_complete,
 )
 from app.services.trips.selection_record import build_route_selection_decision
 
@@ -411,7 +412,7 @@ async def _plan_direct_trip_once(
         session={},
         session_id="",
         turn_id="",
-        now_et=datetime.now(timezone.utc).isoformat(),
+        now_et=datetime.now(UTC).isoformat(),
         origin={"lat": origin_lat, "lng": origin_lng},
         telemetry={},
     )
@@ -502,16 +503,16 @@ async def plan_direct_trip(
             ),
             timeout=DIRECT_TRIP_DEADLINE_S,
         )
-    except asyncio.TimeoutError as exc:
+    except TimeoutError as exc:
         raise DirectTripError(503, "Trip planning is temporarily unavailable.") from exc
 
 
 __all__ = (
-    "build_recommendation_reasons",
-    "DirectTripError",
-    "format_recommendation_reason",
     "INCOMPLETE_INCIDENT_DISCLOSURE",
     "NEUTRAL_RECOMMENDATION_FALLBACK",
+    "DirectTripError",
+    "build_recommendation_reasons",
+    "format_recommendation_reason",
     "plan_direct_trip",
     "project_route_candidates",
 )

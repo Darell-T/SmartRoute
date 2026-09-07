@@ -8,10 +8,10 @@ from typing import Any
 
 from app.services.agent import candidate_store, public_surface
 from app.services.agent import trip_state as trip_state_module
-from app.services.agent.tools.location_resolution import ResolvedPlace
 from app.services.agent.tools._types import ToolContext, ToolResult
-from app.services.trips.preparation.constraints import route_constraints
+from app.services.agent.tools.location_resolution import ResolvedPlace
 from app.services.agent.turn.contract import GoalKind, GoalState
+from app.services.trips.preparation.constraints import route_constraints
 
 
 @dataclass(frozen=True)
@@ -446,12 +446,14 @@ class _EnvelopeShim:
         self._payload = payload
 
     def to_model_dict(self, *, empty: Any, now: Any = None) -> dict[str, Any]:
+        del now
         result = dict(self._payload)
         if result.get("status") != "current":
             result["payload"] = empty
         return result
 
     def current_payload(self, now: Any = None) -> Any:
+        del now
         return self._payload.get("payload") if self._payload.get("status") == "current" else None
 
 

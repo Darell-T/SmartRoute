@@ -97,7 +97,7 @@ class BuildCanonicalItineraryTests(unittest.TestCase):
             step["route_total_minutes"] = 26  # legacy alias must not win
 
         result = build_canonical_itinerary(steps, origin="A", destination="B")
-        self.assertEqual(result["total_duration_seconds"], 1_531)
+        assert result["total_duration_seconds"] == 1531
 
     def test_walk_subway_walk_totals_and_transfer_count(self):
         from app.services.trips.itinerary import build_canonical_itinerary
@@ -112,24 +112,24 @@ class BuildCanonicalItineraryTests(unittest.TestCase):
             itinerary_id="it-test-1",
         )
 
-        self.assertEqual(result["itinerary_id"], "it-test-1")
-        self.assertEqual(result["origin"], "Prospect Park")
-        self.assertEqual(result["destination"], "Canal St")
-        self.assertEqual(result["waypoints"], [])
-        self.assertEqual(result["timezone"], "America/New_York")
-        self.assertEqual(result["planning_mode"], "leave_now")
-        self.assertEqual(result["data_basis"], "mixed")
-        self.assertEqual(result["generated_at"], "2026-07-23T09:00:00-04:00")
+        assert result["itinerary_id"] == "it-test-1"
+        assert result["origin"] == "Prospect Park"
+        assert result["destination"] == "Canal St"
+        assert result["waypoints"] == []
+        assert result["timezone"] == "America/New_York"
+        assert result["planning_mode"] == "leave_now"
+        assert result["data_basis"] == "mixed"
+        assert result["generated_at"] == "2026-07-23T09:00:00-04:00"
 
         # Whole-trip total prefers Google route_total_minutes * 60
-        self.assertEqual(result["total_duration_seconds"], 25 * 60)
-        self.assertEqual(result["transfer_count"], 0)
-        self.assertEqual(result["total_dwell_seconds"], 0)
+        assert result["total_duration_seconds"] == 25 * 60
+        assert result["transfer_count"] == 0
+        assert result["total_dwell_seconds"] == 0
 
         # Three legs: walk, subway, walk
-        self.assertEqual(len(result["legs"]), 3)
+        assert len(result["legs"]) == 3
         modes = [leg["mode"] for leg in result["legs"]]
-        self.assertEqual(modes, ["WALK", "SUBWAY", "WALK"])
+        assert modes == ["WALK", "SUBWAY", "WALK"]
 
     def test_ride_seconds_from_iso_not_minutes_until_arrival(self):
         from app.services.trips.itinerary import build_canonical_itinerary
@@ -142,13 +142,13 @@ class BuildCanonicalItineraryTests(unittest.TestCase):
         )
         subway_leg = result["legs"][1]
         # ISO delta is 12 minutes → 720 seconds; minutes_until_arrival is 999
-        self.assertEqual(subway_leg["ride_seconds"], 720)
-        self.assertNotEqual(subway_leg["ride_seconds"], 999 * 60)
-        self.assertEqual(subway_leg["service_id"], "Q")
-        self.assertEqual(subway_leg["board"], "Prospect Park")
-        self.assertEqual(subway_leg["alight"], "Canal St")
-        self.assertEqual(subway_leg["departure_at"], "2026-07-23T09:10:00-04:00")
-        self.assertEqual(subway_leg["arrival_at"], "2026-07-23T09:22:00-04:00")
+        assert subway_leg["ride_seconds"] == 720
+        assert subway_leg["ride_seconds"] != 999 * 60
+        assert subway_leg["service_id"] == "Q"
+        assert subway_leg["board"] == "Prospect Park"
+        assert subway_leg["alight"] == "Canal St"
+        assert subway_leg["departure_at"] == "2026-07-23T09:10:00-04:00"
+        assert subway_leg["arrival_at"] == "2026-07-23T09:22:00-04:00"
 
     def test_transit_leg_retains_direction_and_entity_identity(self):
         from app.services.trips.itinerary import build_canonical_itinerary
@@ -183,15 +183,15 @@ class BuildCanonicalItineraryTests(unittest.TestCase):
 
         leg = build_canonical_itinerary([step], origin="A", destination="B")["legs"][0]
 
-        self.assertEqual(leg["direction"], "uptown")
-        self.assertEqual(leg["headsign"], "Bedford Park Blvd")
-        self.assertEqual(leg["destination_stop_name"], "Bedford Park Blvd")
-        self.assertEqual(leg["board_stop_id"], "D25")
-        self.assertEqual(leg["alight_stop_id"], "D24")
-        self.assertEqual(leg["board_entity_type"], "SUBWAY_STATION")
-        self.assertEqual(leg["alight_entity_type"], "SUBWAY_STATION")
-        self.assertEqual(leg["stops"][0]["id"], "D26")
-        self.assertEqual(leg["stops"][0]["entity_type"], "SUBWAY_STATION")
+        assert leg["direction"] == "uptown"
+        assert leg["headsign"] == "Bedford Park Blvd"
+        assert leg["destination_stop_name"] == "Bedford Park Blvd"
+        assert leg["board_stop_id"] == "D25"
+        assert leg["alight_stop_id"] == "D24"
+        assert leg["board_entity_type"] == "SUBWAY_STATION"
+        assert leg["alight_entity_type"] == "SUBWAY_STATION"
+        assert leg["stops"][0]["id"] == "D26"
+        assert leg["stops"][0]["entity_type"] == "SUBWAY_STATION"
 
     def test_departure_arrival_at_from_absolute_iso(self):
         from app.services.trips.itinerary import build_canonical_itinerary
@@ -199,8 +199,8 @@ class BuildCanonicalItineraryTests(unittest.TestCase):
         steps = _walk_subway_walk_fixture()
         result = build_canonical_itinerary(steps, origin="A", destination="B")
         # First/last absolute times on the route (walk steps have no ISO)
-        self.assertEqual(result["departure_at"], "2026-07-23T09:10:00-04:00")
-        self.assertEqual(result["arrival_at"], "2026-07-23T09:22:00-04:00")
+        assert result["departure_at"] == "2026-07-23T09:10:00-04:00"
+        assert result["arrival_at"] == "2026-07-23T09:22:00-04:00"
 
     def test_walk_seconds_from_haversine_not_magic_four_minutes(self):
         from app.services.trips.itinerary import build_canonical_itinerary
@@ -213,18 +213,18 @@ class BuildCanonicalItineraryTests(unittest.TestCase):
         # Expected: meters / 1.4 m/s (same default as geo.walking_time_minutes)
         m1 = geo.distance_meters(40.6602, -73.9690, 40.6616, -73.9622)
         m2 = geo.distance_meters(40.7180, -74.0000, 40.7190, -74.0010)
-        expected1 = max(0, int(round(m1 / 1.4)))
-        expected2 = max(0, int(round(m2 / 1.4)))
+        expected1 = max(0, round(m1 / 1.4))
+        expected2 = max(0, round(m2 / 1.4))
 
-        self.assertEqual(walk1["walk_seconds"], expected1)
-        self.assertEqual(walk2["walk_seconds"], expected2)
-        self.assertEqual(walk1["ride_seconds"], 0)
-        self.assertEqual(walk2["ride_seconds"], 0)
+        assert walk1["walk_seconds"] == expected1
+        assert walk2["walk_seconds"] == expected2
+        assert walk1["ride_seconds"] == 0
+        assert walk2["ride_seconds"] == 0
         # Must not invent 4-minute walks (240 s) as scoring does
-        self.assertNotEqual(walk1["walk_seconds"], 240)
+        assert walk1["walk_seconds"] != 240
 
-        self.assertEqual(result["total_walk_seconds"], expected1 + expected2)
-        self.assertEqual(result["total_in_vehicle_seconds"], 720)
+        assert result["total_walk_seconds"] == expected1 + expected2
+        assert result["total_in_vehicle_seconds"] == 720
 
     def test_no_invented_one_minute_transfer_filler(self):
         from app.services.trips.itinerary import build_canonical_itinerary
@@ -232,9 +232,9 @@ class BuildCanonicalItineraryTests(unittest.TestCase):
         steps = _walk_subway_walk_fixture()
         result = build_canonical_itinerary(steps, origin="A", destination="B")
         for leg in result["legs"]:
-            self.assertEqual(leg["transfer_seconds"], 0)
+            assert leg["transfer_seconds"] == 0
         # Single transit → transfer_count 0; wait not fabricated as 60s filler
-        self.assertEqual(result["transfer_count"], 0)
+        assert result["transfer_count"] == 0
 
     def test_two_transit_legs_transfer_count(self):
         from app.services.trips.itinerary import build_canonical_itinerary
@@ -259,15 +259,15 @@ class BuildCanonicalItineraryTests(unittest.TestCase):
             ),
         ]
         result = build_canonical_itinerary(steps, origin="A", destination="B")
-        self.assertEqual(result["transfer_count"], 1)
-        self.assertEqual(result["total_duration_seconds"], 40 * 60)
+        assert result["transfer_count"] == 1
+        assert result["total_duration_seconds"] == 40 * 60
         # Ride seconds from ISO only
-        self.assertEqual(result["legs"][1]["ride_seconds"], 600)
-        self.assertEqual(result["legs"][2]["ride_seconds"], 900)
-        self.assertEqual(result["total_in_vehicle_seconds"], 1500)
+        assert result["legs"][1]["ride_seconds"] == 600
+        assert result["legs"][2]["ride_seconds"] == 900
+        assert result["total_in_vehicle_seconds"] == 1500
         # ISO gap between alight and next board is measurable transfer time
-        self.assertEqual(result["legs"][2]["transfer_seconds"], 300)
-        self.assertEqual(result["total_wait_seconds"] + result["legs"][2]["transfer_seconds"] >= 0, True)
+        assert result["legs"][2]["transfer_seconds"] == 300
+        assert result["total_wait_seconds"] + result["legs"][2]["transfer_seconds"] >= 0
 
     def test_subway_to_airtrain_tram_is_one_transfer(self):
         from app.services.trips.itinerary import build_canonical_itinerary
@@ -294,10 +294,10 @@ class BuildCanonicalItineraryTests(unittest.TestCase):
 
         result = build_canonical_itinerary(steps, origin="A", destination="JFK")
 
-        self.assertEqual(result["transfer_count"], 1)
-        self.assertEqual(result["legs"][1]["mode"], "TRAM")
-        self.assertEqual(result["legs"][1]["ride_seconds"], 8 * 60)
-        self.assertEqual(result["legs"][1]["transfer_seconds"], 21 * 60)
+        assert result["transfer_count"] == 1
+        assert result["legs"][1]["mode"] == "TRAM"
+        assert result["legs"][1]["ride_seconds"] == 8 * 60
+        assert result["legs"][1]["transfer_seconds"] == 21 * 60
 
     def test_total_duration_falls_back_to_component_sum_without_route_total(self):
         from app.services.trips.itinerary import build_canonical_itinerary
@@ -315,9 +315,9 @@ class BuildCanonicalItineraryTests(unittest.TestCase):
             }
         ]
         result = build_canonical_itinerary(steps, origin="A", destination="B")
-        self.assertEqual(result["total_in_vehicle_seconds"], 900)
-        self.assertEqual(result["total_duration_seconds"], 900)
-        self.assertEqual(result["transfer_count"], 0)
+        assert result["total_in_vehicle_seconds"] == 900
+        assert result["total_duration_seconds"] == 900
+        assert result["transfer_count"] == 0
 
     def test_walk_without_coords_is_zero_not_magic(self):
         from app.services.trips.itinerary import build_canonical_itinerary
@@ -331,8 +331,8 @@ class BuildCanonicalItineraryTests(unittest.TestCase):
             ),
         ]
         result = build_canonical_itinerary(steps, origin="A", destination="B")
-        self.assertEqual(result["legs"][0]["walk_seconds"], 0)
-        self.assertEqual(result["total_walk_seconds"], 0)
+        assert result["legs"][0]["walk_seconds"] == 0
+        assert result["total_walk_seconds"] == 0
 
     def test_reasons_and_defaults(self):
         from app.services.trips.itinerary import build_canonical_itinerary
@@ -343,14 +343,14 @@ class BuildCanonicalItineraryTests(unittest.TestCase):
             destination="Y",
             reasons=["Fastest option"],
         )
-        self.assertEqual(result["origin"], "X")
-        self.assertEqual(result["destination"], "Y")
-        self.assertEqual(result["legs"], [])
-        self.assertEqual(result["total_duration_seconds"], 0)
-        self.assertEqual(result["transfer_count"], 0)
-        self.assertEqual(result["structured_recommendation_reasons"], ["Fastest option"])
-        self.assertIsNotNone(result["itinerary_id"])
-        self.assertIn("data_freshness", result)
+        assert result["origin"] == "X"
+        assert result["destination"] == "Y"
+        assert result["legs"] == []
+        assert result["total_duration_seconds"] == 0
+        assert result["transfer_count"] == 0
+        assert result["structured_recommendation_reasons"] == ["Fastest option"]
+        assert result["itinerary_id"] is not None
+        assert "data_freshness" in result
         # Required leg fields present on every leg when steps exist is covered above;
         # empty route still exposes totals keys.
         for key in (
@@ -359,7 +359,7 @@ class BuildCanonicalItineraryTests(unittest.TestCase):
             "total_in_vehicle_seconds",
             "total_dwell_seconds",
         ):
-            self.assertIn(key, result)
+            assert key in result
 
     def test_leg_geometry_and_service_data_basis(self):
         from app.services.trips.itinerary import build_canonical_itinerary
@@ -371,9 +371,9 @@ class BuildCanonicalItineraryTests(unittest.TestCase):
             destination="B",
             data_basis="realtime",
         )
-        self.assertEqual(result["legs"][0]["geometry"], {"encodedPolyline": "walk_poly"})
-        self.assertEqual(result["legs"][1]["geometry"], {"encodedPolyline": "subway_poly"})
-        self.assertEqual(result["legs"][1]["service_data_basis"], "realtime")
+        assert result["legs"][0]["geometry"] == {"encodedPolyline": "walk_poly"}
+        assert result["legs"][1]["geometry"] == {"encodedPolyline": "subway_poly"}
+        assert result["legs"][1]["service_data_basis"] == "realtime"
 
     def test_preserves_provider_stop_count_and_ordered_stop_locations(self):
         from app.services.trips.itinerary import build_canonical_itinerary
@@ -398,20 +398,10 @@ class BuildCanonicalItineraryTests(unittest.TestCase):
         result = build_canonical_itinerary([step], origin="A", destination="B")
         leg = result["legs"][0]
 
-        self.assertEqual(leg["stop_count"], 6)
-        self.assertEqual(
-            [stop["name"] for stop in leg["stops"]],
-            [
-                "Church Av",
-                "Beverley Rd",
-                "Cortelyou Rd",
-                "Newkirk Plaza",
-                "Avenue H",
-                "Atlantic Av-Barclays Ctr",
-            ],
-        )
-        self.assertEqual(leg["stops"][1]["lat"], 40.6443)
-        self.assertEqual(leg["stops"][1]["lng"], -73.9644)
+        assert leg["stop_count"] == 6
+        assert [stop["name"] for stop in leg["stops"]] == ["Church Av", "Beverley Rd", "Cortelyou Rd", "Newkirk Plaza", "Avenue H", "Atlantic Av-Barclays Ctr"]
+        assert leg["stops"][1]["lat"] == 40.6443
+        assert leg["stops"][1]["lng"] == -73.9644
 
     def test_does_not_fabricate_stops_when_provider_omits_them(self):
         from app.services.trips.itinerary import build_canonical_itinerary
@@ -423,63 +413,15 @@ class BuildCanonicalItineraryTests(unittest.TestCase):
         step["intermediate_stops"] = ["Prospect Park", "7 Av", "Canal St"]
         result = build_canonical_itinerary([step], origin="A", destination="B")
 
-        self.assertEqual(
-            result["legs"][0]["stops"],
-            [{"name": "Prospect Park"}, {"name": "7 Av"}, {"name": "Canal St"}],
-        )
-        self.assertIsNone(result["legs"][0]["stop_count"])
+        assert result["legs"][0]["stops"] == [{"name": "Prospect Park"}, {"name": "7 Av"}, {"name": "Canal St"}]
+        assert result["legs"][0]["stop_count"] is None
 
     def test_canonical_stops_normalize_located_and_name_only_variants(self):
         from app.services.trips.itinerary import _canonical_stops_for_step
 
-        self.assertEqual(
-            _canonical_stops_for_step(
-                {
-                    "intermediate_stop_locations": [
-                        None,
-                        {"name": ""},
-                        {
-                            "name": "  Parkside Av  ",
-                            "stop_id": "D25",
-                            "type": "station",
-                            "parent_stop_id": "D25-parent",
-                            "complex_id": "complex-25",
-                            "lat": 40.655,
-                            "lng": -73.9625,
-                        },
-                    ]
-                }
-            ),
-            [
-                {
-                    "name": "Parkside Av",
-                    "id": "D25",
-                    "entity_type": "station",
-                    "parent_station": "D25-parent",
-                    "station_complex_id": "complex-25",
-                    "lat": 40.655,
-                    "lng": -73.9625,
-                }
-            ],
-        )
-        self.assertEqual(
-            _canonical_stops_for_step(
-                {
-                    "intermediate_stop_locations": [{"name": ""}],
-                    "intermediate_stops": [
-                        "  Prospect Park ",
-                        3,
-                        {"stop_name": "7 Av", "id": "D26"},
-                        {"name": ""},
-                    ],
-                }
-            ),
-            [
-                {"name": "Prospect Park"},
-                {"name": "7 Av", "id": "D26"},
-            ],
-        )
-        self.assertEqual(_canonical_stops_for_step({"intermediate_stops": None}), [])
+        assert _canonical_stops_for_step({"intermediate_stop_locations": [None, {"name": ""}, {"name": "  Parkside Av  ", "stop_id": "D25", "type": "station", "parent_stop_id": "D25-parent", "complex_id": "complex-25", "lat": 40.655, "lng": -73.9625}]}) == [{"name": "Parkside Av", "id": "D25", "entity_type": "station", "parent_station": "D25-parent", "station_complex_id": "complex-25", "lat": 40.655, "lng": -73.9625}]
+        assert _canonical_stops_for_step({"intermediate_stop_locations": [{"name": ""}], "intermediate_stops": ["  Prospect Park ", 3, {"stop_name": "7 Av", "id": "D26"}, {"name": ""}]}) == [{"name": "Prospect Park"}, {"name": "7 Av", "id": "D26"}]
+        assert _canonical_stops_for_step({"intermediate_stops": None}) == []
 
 
 if __name__ == "__main__":

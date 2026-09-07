@@ -8,33 +8,47 @@ results as live performance evidence.
 from __future__ import annotations
 
 import math
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from evaluation.route_intelligence.metrics import aggregate_metrics
 from evaluation.route_intelligence.replay import ReplayScenario
 
 
-def _association_matches(report: Mapping[str, Any], scenario: ReplayScenario) -> bool | None:
-    expected = scenario.expected.get("expected_association")
-    if not isinstance(expected, Mapping):
-        return None
+def _association_row(report: Mapping[str, Any]) -> Mapping[str, Any] | None:
     evidence = report.get("evidence") if isinstance(report.get("evidence"), Mapping) else {}
     rows = evidence.get("association_diagnostics")
     if not isinstance(rows, list) or not rows or not isinstance(rows[0], Mapping):
-        return False
-    actual = rows[0]
+        return None
+    return rows[0]
+
+
+def _subway_relevance_matches(actual: Mapping[str, Any], expected: Mapping[str, Any]) -> bool:
+    relevance = expected.get("subway_relevance")
+    if relevance is None:
+        return True
+    actual_relevance = actual.get("relevance_by_mode")
+    return isinstance(actual_relevance, Mapping) and actual_relevance.get("subway") == relevance
+
+
+def _association_fields_match(actual: Mapping[str, Any], expected: Mapping[str, Any]) -> bool:
     if list(actual.get("candidate_route_ids") or ()) != list(expected.get("candidate_route_ids") or ()):
         return False
     if list(actual.get("modes") or ()) != list(expected.get("modes") or ()):
         return False
     if actual.get("impact_scope") != expected.get("impact_scope"):
         return False
-    relevance = expected.get("subway_relevance")
-    if relevance is not None:
-        actual_relevance = actual.get("relevance_by_mode")
-        if not isinstance(actual_relevance, Mapping) or actual_relevance.get("subway") != relevance:
-            return False
-    return True
+    return _subway_relevance_matches(actual, expected)
+
+
+def _association_matches(report: Mapping[str, Any], scenario: ReplayScenario) -> bool | None:
+    expected = scenario.expected.get("expected_association")
+    if not isinstance(expected, Mapping):
+        return None
+    actual = _association_row(report)
+    if actual is None:
+        return False
+    return _association_fields_match(actual, expected)
 
 
 def _deduplication_matches(report: Mapping[str, Any], scenario: ReplayScenario) -> bool | None:
@@ -138,7 +152,7 @@ def build_fixture_validation_results(
         for report in reports
     ]
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "evidence_scope": "deterministic_fixture",
         "claim_boundary": (
             "Recorded advisor transcripts validate deterministic payload and "

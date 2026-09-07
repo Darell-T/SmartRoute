@@ -12,7 +12,12 @@ from __future__ import annotations
 
 import dataclasses
 import json
-from typing import Any, Literal, Union
+from typing import Any, Literal
+from urllib.parse import urlsplit, urlunsplit
+
+_TURN_ID_REQUIRED = "turn_id is required"
+_UNTRUSTED_SOURCE = "source is not trusted"
+_SOURCE_COUNT_REQUIRED = "one through eight unique sources are required"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -43,6 +48,60 @@ class ReasoningEvent:
 
     def to_data(self) -> dict[str, Any]:
         return {"text": self.text}
+
+
+def normalized_source(source: dict[str, str]) -> dict[str, str] | None:
+    """Return one safe HTTPS attribution record from an untrusted boundary."""
+
+    title = str(source.get("title") or "").strip()
+    raw_url = str(source.get("url") or "").strip()
+    if not title or len(title) > 100 or not raw_url or len(raw_url) > 2048:
+        return None
+    try:
+        parsed = urlsplit(raw_url)
+        port = parsed.port
+    except ValueError:
+        return None
+    host = (parsed.hostname or "").casefold()
+    if (
+        parsed.scheme != "https"
+        or not host
+        or port is not None
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        return None
+    url = urlunsplit(("https", host, parsed.path, parsed.query, ""))
+    return {"title": title, "url": url}
+
+
+@dataclasses.dataclass(frozen=True)
+class SourcesEvent:
+    """Trusted attribution for canonical facts emitted in one assistant turn."""
+
+    turn_id: str
+    sources: tuple[dict[str, str], ...]
+    type: str = "sources"
+
+    def __post_init__(self) -> None:
+        if not str(self.turn_id or "").strip():
+            raise ValueError(_TURN_ID_REQUIRED)
+        normalized: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for source in self.sources:
+            trusted = normalized_source(source)
+            if trusted is None:
+                raise ValueError(_UNTRUSTED_SOURCE)
+            if trusted["url"] in seen:
+                continue
+            seen.add(trusted["url"])
+            normalized.append(trusted)
+        if not normalized or len(normalized) > 8:
+            raise ValueError(_SOURCE_COUNT_REQUIRED)
+        object.__setattr__(self, "sources", tuple(normalized))
+
+    def to_data(self) -> dict[str, Any]:
+        return {"sources": [dict(source) for source in self.sources]}
 
 
 ProgressStage = Literal[
@@ -152,7 +211,7 @@ class ArrivalCardEvent:
     type: str = "arrival_card"
 
     @classmethod
-    def from_lookup(cls, turn_id: str, payload: dict) -> "ArrivalCardEvent":
+    def from_lookup(cls, turn_id: str, payload: dict) -> ArrivalCardEvent:
         source_status = str(payload.get("source_status") or "provider_unavailable")
         ambiguity = payload.get("ambiguity")
         if source_status == "stop_not_resolved":
@@ -253,19 +312,20 @@ class DoneEvent:
         }
 
 
-AgentEvent = Union[
-    MetaEvent,
-    TokenEvent,
-    ReasoningEvent,
-    ProgressEvent,
-    ToolStartEvent,
-    ToolEndEvent,
-    RouteCardEvent,
-    ArrivalCardEvent,
-    TransitStatusActionEvent,
-    ErrorEvent,
-    DoneEvent,
-]
+AgentEvent = (
+    MetaEvent
+    | TokenEvent
+    | ReasoningEvent
+    | SourcesEvent
+    | ProgressEvent
+    | ToolStartEvent
+    | ToolEndEvent
+    | RouteCardEvent
+    | ArrivalCardEvent
+    | TransitStatusActionEvent
+    | ErrorEvent
+    | DoneEvent
+)
 
 
 def sse_format(event: AgentEvent) -> str:

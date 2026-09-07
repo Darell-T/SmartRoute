@@ -1,25 +1,34 @@
-"""Present a validated shortlist from a server-owned discovery set."""
 from __future__ import annotations
 
+import logging
 import math
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from app.services.agent import discovery_store
 from app.services.agent import events as agent_events
+from app.services.agent import trip_state as trip_state_module
 from app.services.agent.passenger_output import (
     MAX_PRESENTATION_FRAMING_CHARS,
     MAX_RESEARCH_PRESENTATION_FRAMING_CHARS,
     framed_events,
     validated_framing,
 )
-from app.services.agent import trip_state as trip_state_module
 from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.places import damn_lines
 from app.services.agent.turn.contract import GoalKind, GoalState
 
+_LOGGER = logging.getLogger(__name__)
 
 _PLACE_GOAL_KINDS = frozenset({GoalKind.PLACE_RECOMMENDATION, GoalKind.DESTINATION_SELECTION})
+_GOOGLE_MAPS_SOURCE = {
+    "title": "Google Maps",
+    "url": "https://www.google.com/maps",
+}
 REASON_CODES = ("top_pick", "highest_rating", "most_reviewed", "budget_friendly", "open_now", "preference_match")
 OBJECTIVE_REASONS = frozenset({"top_pick", "highest_rating", "most_reviewed", "budget_friendly", "open_now"})
+_NYC = ZoneInfo("America/New_York")
 PRESENT_PLACES_SCHEMA = {
     "name": "present_places",
     "description": "Present verified recommendations or one previously shown place's details.",
@@ -79,7 +88,7 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
     selected = _selected_places(tool_input, owned, ctx)
     if isinstance(selected, ToolResult):
         return selected
-    return _emit_place_presentation(selected, ctx)
+    return await _emit_place_presentation(selected, ctx)
 
 
 def _place_goal_key(tool_input: dict, ctx: ToolContext) -> str | None:
@@ -124,33 +133,19 @@ def _owned_discovery(tool_input: dict, ctx: ToolContext) -> dict[str, Any] | Too
             internal_diagnostic=True,
         )
     evidence = getattr(ctx, "turn_evidence", None)
-    if presentation_mode == "details":
-        can_claim_research = bool(
-            evidence is not None
-            and callable(getattr(evidence, "can_claim_research_used", None))
-            and evidence.can_claim_research_used()
-        )
-        if tool_input.get("research_used") is not True or not can_claim_research:
-            return ToolResult(
-                ok=False,
-                error=(
-                    "details requires successful current-turn research; "
-                    "verify or research the place before presenting details"
-                ),
-                internal_diagnostic=True,
-            )
     goal_key = _place_goal_key(tool_input, ctx)
-    if presentation_mode == "details" and can_claim_research:
-        rebound = _rebind_researched_details(
-            tool_input,
-            evidence=evidence,
-            goal_key=goal_key,
-            set_id=set_id,
-            session_id=session_id,
-            record=record,
-        )
-        if isinstance(rebound, ToolResult):
-            return rebound
+    rebound = _rebind_details_if_researched(
+        tool_input,
+        evidence=evidence,
+        goal_key=goal_key,
+        set_id=set_id,
+        session_id=session_id,
+        record=record,
+        presentation_mode=presentation_mode,
+    )
+    if isinstance(rebound, ToolResult):
+        return rebound
+    if rebound is not None:
         set_id, record = rebound
     bound = _bind_or_reject_discovery(evidence, goal_key, set_id, ctx)
     if isinstance(bound, ToolResult):
@@ -167,6 +162,42 @@ def _owned_discovery(tool_input: dict, ctx: ToolContext) -> dict[str, Any] | Too
         "presentation_mode_explicit": "presentation_mode" in tool_input,
         "already_presented": ctx.telemetry.get("place_presentation_emitted") is True,
     }
+
+
+def _rebind_details_if_researched(
+    tool_input: dict,
+    *,
+    evidence: object,
+    goal_key: str | None,
+    set_id: str,
+    session_id: str,
+    record: dict[str, Any],
+    presentation_mode: str,
+) -> tuple[str, dict[str, Any]] | ToolResult | None:
+    if presentation_mode != "details":
+        return None
+    can_claim_research = bool(
+        evidence is not None
+        and callable(getattr(evidence, "can_claim_research_used", None))
+        and evidence.can_claim_research_used()
+    )
+    if tool_input.get("research_used") is not True or not can_claim_research:
+        return ToolResult(
+            ok=False,
+            error=(
+                "details requires successful current-turn research; "
+                "verify or research the place before presenting details"
+            ),
+            internal_diagnostic=True,
+        )
+    return _rebind_researched_details(
+        tool_input,
+        evidence=evidence,
+        goal_key=goal_key,
+        set_id=set_id,
+        session_id=session_id,
+        record=record,
+    )
 
 
 def _rebind_researched_details(
@@ -317,6 +348,29 @@ def _selected_places(
         for place in selections
         if discovery_store._identity_key(place) in presented_ids
     ]
+    repeat_error = _apply_repeat_presentation_rules(
+        owned, selections, repeated, research_used, ctx
+    )
+    if repeat_error:
+        return repeat_error
+    if research_used and not owned["lead_in"]:
+        return ToolResult(
+            ok=False,
+            error="research_used requires a concise current detail in lead_in",
+            internal_diagnostic=True,
+        )
+    owned["selections"] = _normalize_reasons(selections, places)
+    owned["research_used"] = research_used
+    return owned
+
+
+def _apply_repeat_presentation_rules(
+    owned: dict[str, Any],
+    selections: list[dict[str, Any]],
+    repeated: list[dict[str, Any]],
+    research_used: bool,
+    ctx: ToolContext,
+) -> ToolResult | None:
     mode = owned["presentation_mode"]
     if (
         mode == "recommendations"
@@ -325,33 +379,50 @@ def _selected_places(
         and repeated
     ):
         mode = owned["presentation_mode"] = "details"
+    details_error = _details_repeat_error(mode, owned, selections, repeated)
+    if details_error is not None:
+        return details_error
     if mode == "details":
-        if len(selections) != 1 or not repeated:
-            return ToolResult(ok=False, error="details requires exactly one shown place", internal_diagnostic=True)
-        if not owned["lead_in"]:
-            return ToolResult(
-                ok=False, error="details requires concise grounded framing", internal_diagnostic=True
-            )
-    elif repeated and not owned["already_presented"]:
-        if not _destination_selection_replay_allowed(owned, selections, ctx):
-            return ToolResult(
-                ok=False,
-                error="recommendations cannot repeat a shown place",
-                internal_diagnostic=True,
-            )
-    if research_used:
-        if not owned["lead_in"]:
-            return ToolResult(
-                ok=False,
-                error="research_used requires a concise current detail in lead_in",
-                internal_diagnostic=True,
-            )
-    owned["selections"] = _normalize_reasons(selections, places)
-    owned["research_used"] = research_used
-    return owned
+        return None
+    if (
+        repeated
+        and not owned["already_presented"]
+        and not _destination_selection_replay_allowed(owned, selections, ctx)
+    ):
+        return ToolResult(
+            ok=False,
+            error="recommendations cannot repeat a shown place",
+            internal_diagnostic=True,
+        )
+    return None
 
 
-def _emit_place_presentation(owned: dict[str, Any], ctx: ToolContext) -> ToolResult:
+def _details_repeat_error(
+    mode: str,
+    owned: dict[str, Any],
+    selections: list[dict[str, Any]],
+    repeated: list[dict[str, Any]],
+) -> ToolResult | None:
+    if mode != "details":
+        return None
+    if len(selections) != 1 or not repeated:
+        return ToolResult(
+            ok=False,
+            error="details requires exactly one shown place",
+            internal_diagnostic=True,
+        )
+    if not owned["lead_in"]:
+        return ToolResult(
+            ok=False,
+            error="details requires concise grounded framing",
+            internal_diagnostic=True,
+        )
+    return None
+
+
+async def _emit_place_presentation(
+    owned: dict[str, Any], ctx: ToolContext
+) -> ToolResult:
     selections = owned["selections"]
     set_id = owned["set_id"]
     presented = [
@@ -374,6 +445,11 @@ def _emit_place_presentation(owned: dict[str, Any], ctx: ToolContext) -> ToolRes
     limit = 5 if str(getattr(ctx, "agent_mode", "") or "auto") != "quick" else 3
     selections = selections[:limit]
     details_only = owned["presentation_mode"] == "details"
+    queue_text, queue_sources = await _queue_presentation(
+        selections,
+        record=owned["record"],
+        ctx=ctx,
+    )
     if isinstance(ctx.session, dict):
         selections = discovery_store.record_presented_places(
             ctx.session,
@@ -403,6 +479,25 @@ def _emit_place_presentation(owned: dict[str, Any], ctx: ToolContext) -> ToolRes
     # but only server-owned continuation state may offer more work.
     follow_up = ""
     ctx.telemetry["place_presentation_emitted"] = True
+    canonical_events: list[agent_events.AgentEvent] = []
+    if not details_only:
+        canonical_events.append(agent_events.TokenEvent(text=text))
+    if queue_text:
+        canonical_events.append(agent_events.TokenEvent(text=f"\n\n{queue_text}"))
+    sources: list[dict[str, str]] = []
+    if not details_only:
+        sources.append(_GOOGLE_MAPS_SOURCE)
+    sources.extend(
+        {"title": source.title, "url": source.url}
+        for source in queue_sources
+    )
+    if sources:
+        canonical_events.append(
+            agent_events.SourcesEvent(
+                turn_id=ctx.turn_id,
+                sources=tuple(sources),
+            )
+        )
     return ToolResult(
         ok=True,
         data={
@@ -414,11 +509,196 @@ def _emit_place_presentation(owned: dict[str, Any], ctx: ToolContext) -> ToolRes
         },
         summary="Place options ready",
         events=framed_events(
-            [] if details_only else [agent_events.TokenEvent(text=text)],
+            canonical_events,
             lead_in,
             follow_up,
         ),
     )
+
+
+async def _queue_presentation(
+    selections: list[dict[str, Any]],
+    *,
+    record: dict[str, Any],
+    ctx: ToolContext,
+) -> tuple[str, tuple[damn_lines.QueueSource, ...]]:
+    queue_context = discovery_store.sanitized_queue_context(
+        record.get("queue_context")
+    )
+    mode = str((queue_context or {}).get("mode") or "ignore")
+    if mode == "ignore":
+        return "", ()
+
+    when = _presentation_time(ctx.now_et)
+    supported_ids = [
+        place_id
+        for place in selections
+        if (place_id := str(place.get("provider_place_id") or "").strip())
+        and damn_lines.get_supported_venue(place_id) is not None
+    ]
+    observations: dict[str, damn_lines.QueueObservation] = {}
+    if supported_ids and mode != "historical":
+        try:
+            current = await damn_lines.get_current_observations(
+                supported_ids, now=when
+            )
+            observations = current.observations
+        except (RuntimeError, TypeError, ValueError) as exc:
+            _LOGGER.warning(
+                "Damn Lines current queue presentation failed type=%s",
+                type(exc).__name__,
+            )
+            observations = {}
+
+    notes: list[str] = []
+    sourced_ids: list[str] = []
+    for place in selections:
+        note, sourced_id = _queue_note_for_place(
+            place, mode=mode, when=when, observations=observations
+        )
+        if note is not None:
+            notes.append(note)
+        if sourced_id is not None:
+            sourced_ids.append(sourced_id)
+
+    return "\n".join(notes), damn_lines.source_for_places(sourced_ids)
+
+
+def _queue_note_for_place(
+    place: dict[str, Any],
+    *,
+    mode: str,
+    when: datetime,
+    observations: dict[str, damn_lines.QueueObservation],
+) -> tuple[str | None, str | None]:
+    name = str(place.get("name") or "this place").strip()
+    place_id = str(place.get("provider_place_id") or "").strip()
+    if damn_lines.get_supported_venue(place_id) is None:
+        return _unsupported_queue_note(name, mode), None
+    if mode == "historical":
+        pattern = _historical_pattern(place_id, when)
+        note = (
+            _historical_note(name, pattern)
+            if pattern is not None
+            else f"There is no historical queue information for {name}."
+        )
+        return note, place_id
+    observation = observations.get(place_id)
+    if observation is not None:
+        return _current_queue_note(name, observation), place_id
+    return _missing_live_queue_note(name, place, place_id, mode, when)
+
+
+def _unsupported_queue_note(name: str, mode: str) -> str | None:
+    if mode in {"decision", "historical"}:
+        return f"There is no queue coverage for {name}."
+    return None
+
+
+def _missing_live_queue_note(
+    name: str,
+    place: dict[str, Any],
+    place_id: str,
+    mode: str,
+    when: datetime,
+) -> tuple[str | None, str | None]:
+    pattern = (
+        _historical_pattern(place_id, when)
+        if place.get("open_status") == "open"
+        else None
+    )
+    if pattern is not None:
+        return (
+            f"There is no live queue information for {name}. "
+            f"{_historical_note(name, pattern)}",
+            place_id,
+        )
+    if mode == "decision":
+        return f"There is no live queue information for {name}.", place_id
+    return None, None
+
+
+def _presentation_time(value: object) -> datetime:
+    raw = str(value or "").strip()
+    try:
+        parsed = datetime.fromisoformat(raw)
+        if parsed.tzinfo is not None:
+            return parsed.astimezone(_NYC)
+    except ValueError:
+        pass
+    return datetime.now(_NYC)
+
+
+def _historical_pattern(
+    place_id: str, when: datetime
+) -> damn_lines.HistoricalQueuePattern | None:
+    try:
+        return damn_lines.get_historical_pattern(place_id, when, now=when)
+    except (TypeError, ValueError):
+        return None
+
+
+def _current_queue_note(
+    name: str, observation: damn_lines.QueueObservation
+) -> str:
+    observed = _clock_time(observation.captured_at.astimezone(_NYC))
+    wait = observation.wait_minutes
+    people = observation.people_count
+    if wait is not None:
+        note = (
+            f"The latest estimated wait for {name} was about "
+            f"{_number(wait)} minutes"
+        )
+        if people is not None:
+            note += f", with {people} people in line"
+        return f"{note}, as of {observed}."
+    return f"The latest line count for {name} was {people} people as of {observed}."
+
+
+def _historical_note(
+    name: str, pattern: damn_lines.HistoricalQueuePattern
+) -> str:
+    hour = _hour_time(pattern.hour)
+    wait = pattern.wait_minutes_mean
+    people = pattern.people_mean
+    if pattern.comparable_dates == 1:
+        prefix = f"On {_calendar_date(pattern.date_from)} around {hour}, "
+        if wait is not None:
+            note = f"an estimated wait of about {_number(wait)} minutes was recorded for {name}"
+        else:
+            note = f"an average line count of {_number(people)} people was recorded for {name}"
+    else:
+        weekday = pattern.date_from.strftime("%A")
+        prefix = (
+            f"Across {pattern.comparable_dates} recorded {weekday} periods "
+            f"around {hour}, "
+        )
+        if wait is not None:
+            note = f"the historical average wait for {name} was about {_number(wait)} minutes"
+        else:
+            note = f"the historical average line count for {name} was {_number(people)} people"
+    if wait is not None and people is not None:
+        note += f", with an average of {_number(people)} people in line"
+    return f"{prefix}{note}."
+
+
+def _number(value: float | None) -> str:
+    if value is None:
+        return "0"
+    return f"{round(value, 1):.1f}".rstrip("0").rstrip(".")
+
+
+def _clock_time(value: datetime) -> str:
+    return value.strftime("%I:%M %p").lstrip("0")
+
+
+def _hour_time(hour: int) -> str:
+    suffix = "AM" if hour < 12 else "PM"
+    return f"{hour % 12 or 12} {suffix}"
+
+
+def _calendar_date(value) -> str:
+    return f"{value.strftime('%B')} {value.day}"
 
 
 def render_place_list(

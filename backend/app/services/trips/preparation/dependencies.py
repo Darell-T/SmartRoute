@@ -16,18 +16,21 @@ from __future__ import annotations
 
 import importlib
 import os
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
-from app.services.trips.location import resolve_named_place as resolve_neutral_named_place
+from app.services import evidence
+from app.services.trips import candidates, scoring
+from app.services.trips.crowds import evidence as crowd_evidence
+from app.services.trips.crowds import hotspots as crowd_hotspots
+from app.services.trips.location import (
+    resolve_named_place as resolve_neutral_named_place,
+)
 from app.services.trips.preparation.input import (
     derive_arrive_by_departure,
     route_with_recovery,
 )
 from app.services.trips.preparation.prepare import PreparationDependencies
-from app.services import evidence
-from app.services.trips import candidates, scoring
-from app.services.trips.crowds import evidence as crowd_evidence
-from app.services.trips.crowds import hotspots as crowd_hotspots
 from app.services.trips.route_incidents import scan as trip_incidents
 
 TRIP_CONTEXT_TIMEOUT_S = float(os.getenv("TRIP_CONTEXT_TIMEOUT_S", "2.0"))
@@ -119,20 +122,7 @@ def build_preparation_dependencies(
 def new_preparation_timings() -> dict[str, float]:
     """Create the timing accumulator shared by route preparation paths."""
 
-    return {
-        key: 0.0
-        for key in (
-            "place_resolution_ms",
-            "route_provider_ms",
-            "mta_ms",
-            "ticketmaster_ms",
-            "incident_ms",
-            "advisor_ms",
-            "scoring_ms",
-            "enrichment_ms",
-            "plan_trip_ms",
-        )
-    }
+    return dict.fromkeys(("place_resolution_ms", "route_provider_ms", "mta_ms", "ticketmaster_ms", "incident_ms", "advisor_ms", "scoring_ms", "enrichment_ms", "plan_trip_ms"), 0.0)
 
 
 __all__ = (

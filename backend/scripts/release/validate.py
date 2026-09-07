@@ -13,6 +13,11 @@ import json
 import re
 from dataclasses import dataclass
 
+from scripts.release.advisories import advisory_evidence
+from scripts.release.browser import browser_evidence
+from scripts.release.provider_fault_validation import (
+    run_provider_fault_jitter_validation,
+)
 from scripts.release.transport import (
     ExternalCheckResult,
     chat_check,
@@ -20,15 +25,11 @@ from scripts.release.transport import (
     endpoint_check,
     offline_check_specs,
     parse_chat_headers,
-    report_status,
     readiness_check,
+    report_status,
     rollback_evidence,
     validate_staging_url,
 )
-from scripts.release.provider_fault_validation import run_provider_fault_jitter_validation
-from scripts.release.advisories import advisory_evidence
-from scripts.release.browser import browser_evidence
-
 
 STATUS_PASSED = "PASSED"
 STATUS_FAILED = "FAILED"
@@ -42,7 +43,7 @@ SECRET_PATTERN = re.compile(
     r"(?i)\b(authorization|app[_-]?key|api[_-]?key|token|secret|password|cookie)"
     r"(?:\s*[:=]\s*|\s+)(?:bearer\s+)?[^\s&]+"
 )
-URL_SECRET_PATTERN = re.compile(r"([?&](?:token|key|secret|signature)=[^&\s]+)", re.I)
+URL_SECRET_PATTERN = re.compile(r"([?&](?:token|key|secret|signature)=[^&\s]+)", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -53,7 +54,7 @@ class Budget:
     max_estimated_cost_usd: float
     estimated_cost_per_request_usd: float
 
-    def validate(self, requested_requests: int, model_chat_enabled: bool) -> str | None:
+    def _request_budget(self, requested_requests: int) -> str | None:
         if self.max_requests < 0 or requested_requests < 0:
             return "request budgets must be non-negative"
         if requested_requests > self.max_requests:
@@ -65,6 +66,9 @@ class Budget:
             return f"timeout_seconds must be between zero and {MAX_REQUEST_TIMEOUT_SECONDS:g}"
         if self.concurrency < 1:
             return "concurrency must be at least one"
+        return None
+
+    def _cost_budget(self, model_chat_enabled: bool) -> str | None:
         if self.max_estimated_cost_usd < 0 or self.estimated_cost_per_request_usd < 0:
             return "cost budgets must be non-negative"
         if model_chat_enabled and (
@@ -79,6 +83,9 @@ class Budget:
             )
         return None
 
+    def validate(self, requested_requests: int, model_chat_enabled: bool) -> str | None:
+        return self._request_budget(requested_requests) or self._cost_budget(model_chat_enabled)
+
 
 def redact(value: object) -> str:
     """Remove credentials and query-string secrets from evidence and failures."""
@@ -89,7 +96,8 @@ def redact(value: object) -> str:
 
 def check(name: str, status: str, reason: str, **evidence: object) -> dict[str, object]:
     if status not in VALID_STATUSES:
-        raise ValueError(f"unsupported release-validation status: {status}")
+        unsupported = f"unsupported release-validation status: {status}"
+        raise ValueError(unsupported)
     return {
         "name": name,
         "status": status,
@@ -153,6 +161,44 @@ def report(
     }
 
 
+def _mode_error(
+    args: argparse.Namespace, commit_sha: str, budget: Budget, requests: int
+) -> tuple[str | None, Budget, int, str | None] | None:
+    if args.self_test == args.staging:
+        return None, budget, requests, "choose exactly one mode: --self-test or --staging"
+    if not SHA_PATTERN.fullmatch(commit_sha):
+        return None, budget, requests, "commit_sha must be a 7-64 character hexadecimal Git SHA"
+    if args.self_test and args.model_chat_smoke:
+        return commit_sha, budget, requests, "model_chat_smoke is available only in --staging mode"
+    return None
+
+
+def _sample_error(args: argparse.Namespace, budget: Budget) -> str | None:
+    if any(value < 0 for value in (args.load_requests, args.spike_requests, args.soak_requests)):
+        return "load, spike, and soak request counts must be non-negative"
+    if not 0 < args.max_chat_bytes <= MAX_CHAT_BYTES:
+        return f"max_chat_bytes must be between one and {MAX_CHAT_BYTES}"
+    if args.soak_interval_seconds < 0 or args.max_soak_seconds <= 0:
+        return "soak interval must be non-negative and max soak seconds must be greater than zero"
+    if args.max_soak_seconds > 60:
+        return "max_soak_seconds may not exceed 60"
+    soak_total_seconds = (
+        args.soak_requests * budget.timeout_seconds
+        + (args.soak_requests - 1) * args.soak_interval_seconds
+    )
+    if soak_total_seconds > args.max_soak_seconds:
+        return "planned soak sample exceeds max_soak_seconds"
+    return None
+
+
+def _staging_arg_error(args: argparse.Namespace) -> str | None:
+    if not args.staging:
+        return None
+    if not args.staging_url:
+        return "staging_url is required with --staging"
+    return validate_staging_url(args.staging_url)
+
+
 def validate_args(args: argparse.Namespace) -> tuple[str | None, Budget, int, str | None]:
     commit_sha = args.commit_sha.strip()
     budget = Budget(
@@ -163,40 +209,16 @@ def validate_args(args: argparse.Namespace) -> tuple[str | None, Budget, int, st
         estimated_cost_per_request_usd=args.estimated_cost_per_request_usd,
     )
     requests = requested_request_count(args)
-    if args.self_test == args.staging:
-        return None, budget, requests, "choose exactly one mode: --self-test or --staging"
-    if not SHA_PATTERN.fullmatch(commit_sha):
-        return None, budget, requests, "commit_sha must be a 7-64 character hexadecimal Git SHA"
-    if args.self_test and args.model_chat_smoke:
-        return commit_sha, budget, requests, "model_chat_smoke is available only in --staging mode"
-    if any(value < 0 for value in (args.load_requests, args.spike_requests, args.soak_requests)):
-        return commit_sha, budget, requests, "load, spike, and soak request counts must be non-negative"
-    if not 0 < args.max_chat_bytes <= MAX_CHAT_BYTES:
-        return commit_sha, budget, requests, f"max_chat_bytes must be between one and {MAX_CHAT_BYTES}"
-    if args.soak_interval_seconds < 0 or args.max_soak_seconds <= 0:
-        return (
-            commit_sha,
-            budget,
-            requests,
-            "soak interval must be non-negative and max soak seconds must be greater than zero",
-        )
-    if args.max_soak_seconds > 60:
-        return commit_sha, budget, requests, "max_soak_seconds may not exceed 60"
-    soak_total_seconds = (
-        args.soak_requests * budget.timeout_seconds
-        + (args.soak_requests - 1) * args.soak_interval_seconds
+    mode_error = _mode_error(args, commit_sha, budget, requests)
+    if mode_error is not None:
+        return mode_error
+    error = (
+        _sample_error(args, budget)
+        or budget.validate(requests, args.model_chat_smoke)
+        or _staging_arg_error(args)
     )
-    if soak_total_seconds > args.max_soak_seconds:
-        return commit_sha, budget, requests, "planned soak sample exceeds max_soak_seconds"
-    budget_error = budget.validate(requests, args.model_chat_smoke)
-    if budget_error:
-        return commit_sha, budget, requests, budget_error
-    if args.staging:
-        if not args.staging_url:
-            return commit_sha, budget, requests, "staging_url is required with --staging"
-        url_error = validate_staging_url(args.staging_url)
-        if url_error:
-            return commit_sha, budget, requests, url_error
+    if error:
+        return commit_sha, budget, requests, error
     if args.model_chat_smoke:
         try:
             parse_chat_headers(args.chat_header)
@@ -205,135 +227,46 @@ def validate_args(args: argparse.Namespace) -> tuple[str | None, Budget, int, st
     return commit_sha, budget, requests, None
 
 
-def run(args: argparse.Namespace) -> dict[str, object]:
-    commit_sha, budget, requests, validation_error = validate_args(args)
-    candidate = commit_sha or args.commit_sha.strip() or "missing"
-    if validation_error:
-        return report(
-            candidate,
-            [check("configuration", STATUS_FAILED, validation_error)],
-            requests,
-            budget,
-            args.model_chat_smoke,
-        )
-    if commit_sha is None:
-        return report(
-            candidate,
-            [check("configuration", STATUS_FAILED, "commit_sha is required")],
-            requests,
-            budget,
-            args.model_chat_smoke,
-        )
-    if args.self_test:
-        return report(
-            commit_sha,
-            offline_checks(commit_sha, args.browser_evidence),
-            requests,
-            budget,
-            False,
-        )
-
-    deployment = deployment_evidence(commit_sha, args.deployment_evidence)
-    rollback = rollback_evidence(commit_sha, args.rollback_evidence)
-    advisory = advisory_evidence(args.advisory_evidence, commit_sha)
-    deployment_check = check(
-        "deployment_evidence",
-        deployment.status,
-        deployment.reason,
-        **deployment.evidence,
-    )
-    rollback_check = check(
-        "rollback_evidence",
-        rollback.status,
-        rollback.reason,
-        **rollback.evidence,
-    )
+def _blocked_network_checks(model_chat_enabled: bool) -> list[dict[str, object]]:
     checks = [
         check(
-            "configuration_self_test",
-            STATUS_PASSED,
-            "budgets validated before network work",
-        ),
-        check("dependency_advisories", advisory.status, advisory.reason, **advisory.evidence),
-        deployment_check,
-        rollback_check,
+            name,
+            STATUS_BLOCKED,
+            "valid deployment and rollback evidence are required before staging network checks",
+        )
+        for name in (
+            "liveness",
+            "readiness",
+            "load_readiness_sample",
+            "spike_readiness_sample",
+            "soak_readiness_sample",
+        )
     ]
-    checks.append(
-        check(
-            "migration_restore",
-            STATUS_NOT_APPLICABLE,
-            "repository has no platform deployment, migration, or restore automation",
-        )
+    chat_status = STATUS_BLOCKED if model_chat_enabled else STATUS_NOT_APPLICABLE
+    chat_reason = (
+        "model chat smoke was not requested"
+        if not model_chat_enabled
+        else "release evidence gate is blocked"
     )
-    checks.append(browser_accessibility_check(commit_sha, args.browser_evidence))
-    checks.append(provider_fault_jitter_check())
+    checks.append(check("chat_smoke", chat_status, chat_reason))
+    return checks
 
-    if deployment_check["status"] != STATUS_PASSED or rollback_check["status"] != STATUS_PASSED:
-        checks.extend(
-            check(
-                name,
-                STATUS_BLOCKED,
-                "valid deployment and rollback evidence are required before staging network checks",
-            )
-            for name in (
-                "liveness",
-                "readiness",
-                "load_readiness_sample",
-                "spike_readiness_sample",
-                "soak_readiness_sample",
-            )
-        )
-        chat_status = STATUS_BLOCKED if args.model_chat_smoke else STATUS_NOT_APPLICABLE
-        chat_reason = (
-            "model chat smoke was not requested"
-            if not args.model_chat_smoke
-            else "release evidence gate is blocked"
-        )
-        checks.append(check("chat_smoke", chat_status, chat_reason))
-        return report(commit_sha, checks, requests, budget, args.model_chat_smoke)
 
-    chat_headers: dict[str, str] = {}
-    if args.model_chat_smoke:
-        try:
-            chat_headers = parse_chat_headers(args.chat_header)
-        except ValueError as exc:
-            checks.extend(
-                check(name, STATUS_BLOCKED, str(exc))
-                for name in (
-                    "chat_smoke",
-                    "liveness",
-                    "readiness",
-                    "load_readiness_sample",
-                    "spike_readiness_sample",
-                    "soak_readiness_sample",
-                )
-            )
-            return report(commit_sha, checks, requests, budget, True)
-
-    checks.append(
+def _staging_network_checks(
+    args: argparse.Namespace,
+    budget: Budget,
+    chat_headers: dict[str, str],
+) -> list[dict[str, object]]:
+    checks = [
         result_check(
             "liveness",
-            endpoint_check(
-                args.staging_url,
-                "/health",
-                "GET",
-                budget.timeout_seconds,
-                {},
-            ),
-        )
-    )
-    checks.append(
+            endpoint_check(args.staging_url, "/health", "GET", budget.timeout_seconds, {}),
+        ),
         result_check(
             "readiness",
-            endpoint_check(
-                args.staging_url,
-                "/ready",
-                "GET",
-                budget.timeout_seconds,
-                {},
-            ),
-        )
-    )
+            endpoint_check(args.staging_url, "/ready", "GET", budget.timeout_seconds, {}),
+        ),
+    ]
     if args.model_chat_smoke:
         checks.append(
             result_check(
@@ -359,11 +292,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         result_check(
             "load_readiness_sample",
             readiness_check(
-                args.staging_url,
-                budget.timeout_seconds,
-                budget.concurrency,
-                args.load_requests,
-                False,
+                args.staging_url, budget.timeout_seconds, budget.concurrency, args.load_requests, False
             ),
         )
     )
@@ -371,11 +300,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         result_check(
             "spike_readiness_sample",
             readiness_check(
-                args.staging_url,
-                budget.timeout_seconds,
-                budget.concurrency,
-                args.spike_requests,
-                True,
+                args.staging_url, budget.timeout_seconds, budget.concurrency, args.spike_requests, True
             ),
         )
     )
@@ -392,7 +317,95 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             ),
         )
     )
+    return checks
+
+
+def _failed_configuration(
+    candidate: str,
+    reason: str,
+    requests: int,
+    budget: Budget,
+    model_chat_enabled: bool,
+) -> dict[str, object]:
+    return report(
+        candidate,
+        [check("configuration", STATUS_FAILED, reason)],
+        requests,
+        budget,
+        model_chat_enabled,
+    )
+
+
+def _staging_release(
+    args: argparse.Namespace,
+    commit_sha: str,
+    budget: Budget,
+    requests: int,
+) -> dict[str, object]:
+    deployment = deployment_evidence(commit_sha, args.deployment_evidence)
+    rollback = rollback_evidence(commit_sha, args.rollback_evidence)
+    advisory = advisory_evidence(args.advisory_evidence, commit_sha)
+    checks = [
+        check(
+            "configuration_self_test",
+            STATUS_PASSED,
+            "budgets validated before network work",
+        ),
+        check("dependency_advisories", advisory.status, advisory.reason, **advisory.evidence),
+        check("deployment_evidence", deployment.status, deployment.reason, **deployment.evidence),
+        check("rollback_evidence", rollback.status, rollback.reason, **rollback.evidence),
+        check(
+            "migration_restore",
+            STATUS_NOT_APPLICABLE,
+            "repository has no platform deployment, migration, or restore automation",
+        ),
+        browser_accessibility_check(commit_sha, args.browser_evidence),
+        provider_fault_jitter_check(),
+    ]
+    if deployment.status != STATUS_PASSED or rollback.status != STATUS_PASSED:
+        checks.extend(_blocked_network_checks(args.model_chat_smoke))
+        return report(commit_sha, checks, requests, budget, args.model_chat_smoke)
+    chat_headers: dict[str, str] = {}
+    if args.model_chat_smoke:
+        try:
+            chat_headers = parse_chat_headers(args.chat_header)
+        except ValueError as exc:
+            checks.extend(
+                check(name, STATUS_BLOCKED, str(exc))
+                for name in (
+                    "chat_smoke",
+                    "liveness",
+                    "readiness",
+                    "load_readiness_sample",
+                    "spike_readiness_sample",
+                    "soak_readiness_sample",
+                )
+            )
+            return report(commit_sha, checks, requests, budget, True)
+    checks.extend(_staging_network_checks(args, budget, chat_headers))
     return report(commit_sha, checks, requests, budget, args.model_chat_smoke)
+
+
+def run(args: argparse.Namespace) -> dict[str, object]:
+    commit_sha, budget, requests, validation_error = validate_args(args)
+    candidate = commit_sha or args.commit_sha.strip() or "missing"
+    if validation_error:
+        return _failed_configuration(
+            candidate, validation_error, requests, budget, args.model_chat_smoke
+        )
+    if commit_sha is None:
+        return _failed_configuration(
+            candidate, "commit_sha is required", requests, budget, args.model_chat_smoke
+        )
+    if args.self_test:
+        return report(
+            commit_sha,
+            offline_checks(commit_sha, args.browser_evidence),
+            requests,
+            budget,
+            False,
+        )
+    return _staging_release(args, commit_sha, budget, requests)
 
 
 def arguments(argv: list[str] | None = None) -> argparse.Namespace:

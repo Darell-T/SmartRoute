@@ -12,7 +12,6 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
-
 _DIRECTION_ALIASES = {
     "uptown": "uptown",
     "northbound": "uptown",
@@ -76,7 +75,7 @@ def normalize_direction_text(value: object) -> str:
 
     raw = "" if value is None else str(value)
     return " ".join(
-        raw.replace("–", "-").replace("—", "-").replace("_", " ").split()
+        raw.replace("\u2013", "-").replace("\u2014", "-").replace("_", " ").split()
     ).casefold()
 
 
@@ -487,7 +486,7 @@ __all__ = [
     "direction_matches",
     "normalize_direction",
     "normalize_direction_text",
-    "resolve_model_direction",
     "resolve_direction",
+    "resolve_model_direction",
     "stop_id_direction",
 ]

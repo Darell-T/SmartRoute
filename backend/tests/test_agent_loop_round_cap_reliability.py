@@ -21,21 +21,13 @@ class AgentLoopRoundCapReliabilityTests(AgentLoopRoundCapTestCase):
         with patch.dict(os.environ, {"AGENT_AUTO_MAX_ROUNDS": "2"}):
             events_out, _session = await self._run(rounds, tool_registry=_test_registry())
 
-        self.assertEqual(len(self.loop.client.messages.calls), 2)
-        self.assertEqual(
-            [call["tool_choice"] for call in self.loop.client.messages.calls],
-            [{"type": "any"}, {"type": "any"}],
-        )
-        self.assertIn(
-            "verified result",
-            "".join(
-                event.text for event in events_out if event.type == "token"
-            ),
-        )
+        assert len(self.loop.client.messages.calls) == 2
+        assert [call["tool_choice"] for call in self.loop.client.messages.calls] == [{"type": "any"}, {"type": "any"}]
+        assert "verified result" in "".join(event.text for event in events_out if event.type == "token")
 
         done = events_out[-1]
-        self.assertEqual(done.type, "done")
-        self.assertEqual(done.stop_reason, "max_rounds")
+        assert done.type == "done"
+        assert done.stop_reason == "max_rounds"
 
     async def test_round_cap_preserves_each_mode_place_result_limit(self):
         rounds = [
@@ -69,5 +61,5 @@ class AgentLoopRoundCapReliabilityTests(AgentLoopRoundCapTestCase):
                     rounds, response_presentation=mode, tool_registry=_test_registry()
                 )
 
-            self.assertEqual(fallback.call_args.kwargs["limit"], expected_limit)
-            self.assertEqual(events[-1].stop_reason, "max_rounds")
+            assert fallback.call_args.kwargs["limit"] == expected_limit
+            assert events[-1].stop_reason == "max_rounds"

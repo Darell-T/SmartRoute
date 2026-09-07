@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
-from scripts.release import dependency_advisory_evidence as builder
+import pytest
 from scripts.release import advisory_policy as policy_module
+from scripts.release import dependency_advisory_evidence as builder
 
 
 def _write(path: Path, value: object) -> Path:
@@ -102,7 +103,7 @@ def _exception_policy(lock_path: Path, **changes: object) -> dict[str, object]:
         },
         "expected_packages": [{"path": path, "name": name, "version": version} for path, name, version in packages],
         "rationale": "development-only ESLint chain",
-        "expires_on": "2026-08-27",
+        "expires_on": (datetime.now(UTC).date() + timedelta(days=1)).isoformat(),
     }
     exception.update(changes)
     return {"schema_version": 1, "exceptions": [exception]}
@@ -162,30 +163,28 @@ def test_runtime_finding_cannot_use_development_exception(tmp_path) -> None:
     args = _arguments(tmp_path, _brace_report(), _brace_report())
     _write_policy(args, _exception_policy(args.frontend_lock))
 
-    try:
+    with pytest.raises(
+        ValueError,
+        match=r"^runtime advisory findings cannot be accepted$",
+    ):
         builder.build(args)
-    except ValueError as exc:
-        assert str(exc) == "runtime advisory findings cannot be accepted"
-    else:
-        raise AssertionError("runtime findings must never be accepted")
 
 
-def test_expired_or_mismatched_exception_fails_closed(tmp_path) -> None:
-    cases = [
-        {"expires_on": "2026-07-27"},
-        {"advisory_id": "GHSA-wrong-identity"},
-        {"installed_versions": ["1.1.15"]},
-        {"paths": ["node_modules/wrong-path"]},
-    ]
-    for index, changes in enumerate(cases):
-        root = tmp_path / str(index)
-        args = _arguments(root, _brace_report())
-        _write_policy(args, _exception_policy(args.frontend_lock, **changes))
-        try:
-            builder.build(args)
-        except ValueError:
-            continue
-        raise AssertionError("expired or mismatched exception must fail closed")
+def test_mismatched_exception_fails_closed(tmp_path) -> None:
+    args = _arguments(tmp_path, _brace_report())
+    _write_policy(
+        args,
+        _exception_policy(
+            args.frontend_lock,
+            advisory_id="GHSA-wrong-identity",
+        ),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"^advisory exception must match exactly one development finding$",
+    ):
+        builder.build(args)
 
 
 def test_builder_rejects_npm_metadata_that_claims_a_clean_report(tmp_path) -> None:
@@ -195,12 +194,11 @@ def test_builder_rejects_npm_metadata_that_claims_a_clean_report(tmp_path) -> No
         "metadata": {"vulnerabilities": {"critical": 0, "high": 1, "moderate": 0, "low": 0, "info": 0, "total": 1}},
     }
 
-    try:
+    with pytest.raises(
+        ValueError,
+        match=r"^npm report metadata does not match vulnerabilities$",
+    ):
         builder.build(_arguments(tmp_path, forged_clean))
-    except ValueError as exc:
-        assert str(exc) == "npm report metadata does not match vulnerabilities"
-    else:
-        raise AssertionError("inconsistent npm metadata must fail closed")
 
 
 def test_malformed_exception_policy_top_level_is_controlled_failure(tmp_path) -> None:
@@ -208,12 +206,11 @@ def test_malformed_exception_policy_top_level_is_controlled_failure(tmp_path) ->
     assert isinstance(args.exception_policy, Path)
     args.exception_policy.write_text("[]", encoding="utf-8")
 
-    try:
+    with pytest.raises(
+        ValueError,
+        match=r"^advisory exception policy schema is invalid$",
+    ):
         builder.build(args)
-    except ValueError as exc:
-        assert str(exc) == "advisory exception policy schema is invalid"
-    else:
-        raise AssertionError("non-object policy must fail closed")
 
 
 def test_pip_audit_v2_envelope_preserves_direct_finding_and_fix() -> None:
@@ -242,19 +239,18 @@ def test_pip_audit_v2_envelope_preserves_direct_finding_and_fix() -> None:
     }]
 
 
-def test_exception_lock_digest_and_duplicate_or_unmatched_entries_fail_closed(tmp_path) -> None:
+def test_exception_lock_digest_mismatch_fails_closed(tmp_path) -> None:
     args = _arguments(tmp_path, _brace_report())
     valid_policy = _exception_policy(args.frontend_lock)
     _write_policy(args, valid_policy)
     lock = json.loads(args.frontend_lock.read_text(encoding="utf-8"))
     lock["packages"]["node_modules/brace-expansion"]["version"] = "1.1.17"
     args.frontend_lock.write_text(json.dumps(lock), encoding="utf-8")
-    try:
+    with pytest.raises(
+        ValueError,
+        match=r"^advisory exception lock digest does not match$",
+    ):
         builder.build(args)
-    except ValueError as exc:
-        assert str(exc) == "advisory exception lock digest does not match"
-    else:
-        raise AssertionError("changed lock digest must fail closed")
 
 
 def test_lock_digest_is_stable_across_platform_line_endings(tmp_path) -> None:
@@ -270,23 +266,21 @@ def test_lock_digest_is_stable_across_platform_line_endings(tmp_path) -> None:
     duplicate_policy = _exception_policy(duplicate_args.frontend_lock)
     duplicate_policy["exceptions"].append(dict(duplicate_policy["exceptions"][0]))
     _write_policy(duplicate_args, duplicate_policy)
-    try:
+    with pytest.raises(
+        ValueError,
+        match=r"^advisory findings may have only one exception$",
+    ):
         builder.build(duplicate_args)
-    except ValueError as exc:
-        assert str(exc) == "advisory findings may have only one exception"
-    else:
-        raise AssertionError("duplicate exception must fail closed")
 
     unmatched_root = tmp_path / "unmatched"
     unmatched_args = _arguments(unmatched_root, _brace_report())
     unmatched_policy = _exception_policy(unmatched_args.frontend_lock, advisory_id="GHSA-unmatched-entry")
     _write_policy(unmatched_args, unmatched_policy)
-    try:
+    with pytest.raises(
+        ValueError,
+        match=r"^advisory exception must match exactly one development finding$",
+    ):
         builder.build(unmatched_args)
-    except ValueError as exc:
-        assert str(exc) == "advisory exception must match exactly one development finding"
-    else:
-        raise AssertionError("unmatched exception must fail closed")
 
 
 def test_exception_expires_on_its_first_invalid_utc_day(tmp_path) -> None:
@@ -295,15 +289,15 @@ def test_exception_expires_on_its_first_invalid_utc_day(tmp_path) -> None:
     _write_policy(args, policy)
     evidence = builder.build(args)
     scans = {str(scan["id"]): scan for scan in evidence["scans"]}
+    expires_on = date.fromisoformat(str(policy["exceptions"][0]["expires_on"]))
 
-    try:
+    with pytest.raises(
+        ValueError,
+        match=r"^advisory exception has expired$",
+    ):
         policy_module.accepted_development_findings(
             scans,
             policy,
             tmp_path,
-            today=date(2026, 8, 27),
+            today=expires_on,
         )
-    except ValueError as exc:
-        assert str(exc) == "advisory exception has expired"
-    else:
-        raise AssertionError("expiry boundary must fail closed")

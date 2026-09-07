@@ -50,9 +50,9 @@ class TripCandidateReasonTests(unittest.TestCase):
             event_impacts=[],
         )
 
-        self.assertEqual(score["vehicle_signal_count"], 1)
-        self.assertEqual(score["unconfirmed_vehicle_impacts"], ["possible delay signal on Q"])
-        self.assertEqual(score["service_condition_penalty"], 4.0)
+        assert score["vehicle_signal_count"] == 1
+        assert score["unconfirmed_vehicle_impacts"] == ["possible delay signal on Q"]
+        assert score["service_condition_penalty"] == 4.0
     def test_candidate_reason_cannot_reuse_stale_model_duration(self):
         route = _subway_route("Q", 46)
         rows = candidates._build_route_candidates(
@@ -76,8 +76,8 @@ class TripCandidateReasonTests(unittest.TestCase):
             ],
         )
 
-        self.assertNotIn("44 min", rows[0]["recommendation_reason"])
-        self.assertIn("46 min", rows[0]["recommendation_reason"])
+        assert "44 min" not in rows[0]["recommendation_reason"]
+        assert "46 min" in rows[0]["recommendation_reason"]
 
     def test_recommendation_reasons_surface_less_walking_before_alert_absence(self):
         reasons = direct_plan.build_recommendation_reasons(
@@ -103,12 +103,9 @@ class TripCandidateReasonTests(unittest.TestCase):
             ],
         )
 
-        self.assertEqual(reasons[0]["code"], "less_walking")
-        self.assertEqual(reasons[1]["code"], "fewer_transfers")
-        self.assertEqual(
-            direct_plan.format_recommendation_reason(reasons[0]),
-            "Uses 8 fewer minutes of walking (4 min on foot).",
-        )
+        assert reasons[0]["code"] == "less_walking"
+        assert reasons[1]["code"] == "fewer_transfers"
+        assert direct_plan.format_recommendation_reason(reasons[0]) == "Uses 8 fewer minutes of walking (4 min on foot)."
 
     def test_airtrain_tram_counts_as_a_transfer_and_route_line(self):
         route = _subway_route("F", 71)
@@ -126,8 +123,8 @@ class TripCandidateReasonTests(unittest.TestCase):
 
         score = scoring._route_score(route, [])
 
-        self.assertEqual(score["transfers"], 1)
-        self.assertEqual(scoring._route_lines(route), ["F", "JAMAICA AIRTRAIN"])
+        assert score["transfers"] == 1
+        assert scoring._route_lines(route) == ["F", "JAMAICA AIRTRAIN"]
 
     def test_candidate_fallback_recommends_fastest_without_using_alert_absence(self):
         rows = _candidate_reasons(
@@ -136,10 +133,7 @@ class TripCandidateReasonTests(unittest.TestCase):
             alerts=[],
         )
 
-        self.assertEqual(
-            rows[0]["recommendation_reason"],
-            "Fastest route at 20 min.",
-        )
+        assert rows[0]["recommendation_reason"] == "Fastest route at 20 min."
 
     def test_candidate_fallback_explains_slower_alternate_with_named_alert(self):
         rows = _candidate_reasons(
@@ -153,11 +147,8 @@ class TripCandidateReasonTests(unittest.TestCase):
             ],
         )
 
-        self.assertEqual(
-            rows[1]["rejection_reason"],
-            "Slower by 8 min and affected by Signal problem near DeKalb Av.",
-        )
-        self.assertEqual(rows[1]["score_breakdown"]["active_alerts"], 1)
+        assert rows[1]["rejection_reason"] == "Slower by 8 min and affected by Signal problem near DeKalb Av."
+        assert rows[1]["score_breakdown"]["active_alerts"] == 1
 
     def test_candidate_fallback_explains_faster_alternate_with_service_risk(self):
         rows = _candidate_reasons(
@@ -171,10 +162,7 @@ class TripCandidateReasonTests(unittest.TestCase):
             ],
         )
 
-        self.assertEqual(
-            rows[1]["rejection_reason"],
-            "Faster by 2 min, but affected by Stalled vehicle near 34 St.",
-        )
+        assert rows[1]["rejection_reason"] == "Faster by 2 min, but affected by Stalled vehicle near 34 St."
 
     def test_candidate_fallback_names_alert_when_recommended_route_has_one(self):
         rows = _candidate_reasons(
@@ -188,10 +176,7 @@ class TripCandidateReasonTests(unittest.TestCase):
             ],
         )
 
-        self.assertEqual(
-            rows[0]["recommendation_reason"],
-            "Fastest route despite an alert: Planned work on Q.",
-        )
+        assert rows[0]["recommendation_reason"] == "Fastest route despite an alert: Planned work on Q."
 
     def test_candidate_labels_are_passenger_facing_context(self):
         routes = [
@@ -232,16 +217,10 @@ class TripCandidateReasonTests(unittest.TestCase):
 
         labels = candidates._build_route_candidate_labels(routes)
 
-        self.assertEqual(labels[0]["displayLabel"], "Q route from A St")
-        self.assertEqual(
-            labels[1]["displayLabel"],
-            "B41 bus option from Flatbush Av/Church Av",
-        )
-        self.assertEqual(
-            labels[2]["displayLabel"],
-            "D/Q subway option via Atlantic Av-Barclays Ctr",
-        )
-        self.assertEqual(labels[2]["routeIds"], ["D", "Q"])
+        assert labels[0]["displayLabel"] == "Q route from A St"
+        assert labels[1]["displayLabel"] == "B41 bus option from Flatbush Av/Church Av"
+        assert labels[2]["displayLabel"] == "D/Q subway option via Atlantic Av-Barclays Ctr"
+        assert labels[2]["routeIds"] == ["D", "Q"]
 
 
 if __name__ == "__main__":

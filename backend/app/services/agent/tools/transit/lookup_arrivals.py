@@ -5,19 +5,29 @@ from __future__ import annotations
 import re
 import time
 
-from app.services.mta import realtime as mta_realtime
 from app.services.agent.tools._types import ToolContext, ToolResult
 from app.services.agent.tools.transit.lookup_arrivals_bus import execute as _execute_bus
 from app.services.agent.tools.transit.lookup_arrivals_common import (
     ARRIVAL_LIMIT_DEFAULT,
     ARRIVAL_LIMIT_MAX,
-    BOARDING_BUFFER_MINUTES as _BOARDING_BUFFER_MINUTES,
-    FEED_STALE_AFTER_S as _FEED_STALE_AFTER_S,
     _active_boarding,
+)
+from app.services.agent.tools.transit.lookup_arrivals_common import (
+    BOARDING_BUFFER_MINUTES as _BOARDING_BUFFER_MINUTES,
+)
+from app.services.agent.tools.transit.lookup_arrivals_common import (
+    FEED_STALE_AFTER_S as _FEED_STALE_AFTER_S,
+)
+from app.services.agent.tools.transit.lookup_arrivals_common import (
     assess_catchability as _assess_catchability,
+)
+from app.services.agent.tools.transit.lookup_arrivals_common import (
     canonical_station_query as _canonical_station_query,
 )
-from app.services.agent.tools.transit.lookup_arrivals_subway import execute as _execute_subway
+from app.services.agent.tools.transit.lookup_arrivals_subway import (
+    execute as _execute_subway,
+)
+from app.services.mta import realtime as mta_realtime
 
 assess_catchability = _assess_catchability
 BOARDING_BUFFER_MINUTES = _BOARDING_BUFFER_MINUTES

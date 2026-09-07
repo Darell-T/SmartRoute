@@ -15,6 +15,7 @@ import zipfile
 from pathlib import Path
 from unittest import mock
 
+import pytest
 from app.services.mta.static_gtfs import migration as migrate_gtfs
 
 STOPS_TXT = (
@@ -29,6 +30,8 @@ TRANSFERS_TXT = (
     "B01,C01,0,\n"
     "D01,D02,1,90\n"
 )
+CURSOR_CREATION_FAILED = "cursor creation failed"
+CURSOR_CLOSE_FAILED = "cursor close failed"
 
 
 def _write_fixture_zip(path: Path, entries: dict[str, str]) -> Path:
@@ -49,7 +52,7 @@ class _FakeCursor:
         self.executed.append(sql)
         self.events.append(("execute", sql))
 
-    def copy_from(self, file, table, columns=None, **kwargs) -> None:
+    def copy_from(self, file, table, columns=None, **_kwargs) -> None:
         file.seek(0)
         self.copies.append(
             {
@@ -78,19 +81,21 @@ class _FakeConnection:
 
 class _CursorFailureConnection(_FakeConnection):
     def cursor(self) -> _FakeCursor:
-        raise RuntimeError("cursor creation failed")
+        raise RuntimeError(CURSOR_CREATION_FAILED)
 
 
 class _CloseFailureCursor(_FakeCursor):
     def close(self) -> None:
         self.closed = True
-        raise RuntimeError("cursor close failed")
+        raise RuntimeError(CURSOR_CLOSE_FAILED)
 
 
 def _run_migrate(zip_path: Path, fake_conn: _FakeConnection) -> None:
-    with mock.patch.object(migrate_gtfs.psycopg2, "connect", return_value=fake_conn):
-        with mock.patch.object(migrate_gtfs, "download_gtfs", return_value=zip_path):
-            migrate_gtfs.migrate()
+    with (
+        mock.patch.object(migrate_gtfs.psycopg2, "connect", return_value=fake_conn),
+        mock.patch.object(migrate_gtfs, "download_gtfs", return_value=zip_path),
+    ):
+        migrate_gtfs.migrate()
 
 
 class MigrateGtfsTransfersTests(unittest.TestCase):
@@ -108,33 +113,42 @@ class MigrateGtfsTransfersTests(unittest.TestCase):
             fake_conn = _FakeConnection()
             _run_migrate(zip_path, fake_conn)
             # The downloaded temp input is removed after the migration.
-            self.assertFalse(zip_path.exists())
-            self.assertTrue(fake_conn.cursor().closed)
-            self.assertTrue(fake_conn.closed)
+            assert not zip_path.exists()
+            assert fake_conn.cursor().closed
+            assert fake_conn.closed
 
         cur = fake_conn.cursor()
 
         # The transfers table is declared in the same DDL as the other tables.
         create_sql = cur.executed[0]
-        self.assertIn("DROP TABLE IF EXISTS transfers;", create_sql)
-        self.assertIn("CREATE TABLE transfers (", create_sql)
-        for column in ("from_stop_id", "to_stop_id", "transfer_type", "min_transfer_time"):
-            self.assertIn(f"{column} TEXT", create_sql)
+        assert "DROP TABLE IF EXISTS transfers;" in create_sql
+        assert "CREATE TABLE transfers (" in create_sql
+        for column in (
+            "from_stop_id",
+            "to_stop_id",
+            "transfer_type",
+            "min_transfer_time",
+        ):
+            assert f"{column} TEXT" in create_sql
 
         # transfers.txt is copied with exactly the four GTFS fields, values kept
         # verbatim (including a blank min_transfer_time).
-        self.assertEqual(
-            [copy["table"] for copy in cur.copies],
-            ["stops", "trips", "stop_times", "transfers"],
-        )
+        assert [copy["table"] for copy in cur.copies] == [
+            "stops",
+            "trips",
+            "stop_times",
+            "transfers",
+        ]
         transfers_copy = cur.copies[-1]
-        self.assertEqual(
-            transfers_copy["columns"],
-            ("from_stop_id", "to_stop_id", "transfer_type", "min_transfer_time"),
+        assert transfers_copy["columns"] == (
+            "from_stop_id",
+            "to_stop_id",
+            "transfer_type",
+            "min_transfer_time",
         )
-        self.assertEqual(
-            transfers_copy["data"],
-            "A01\tA02\t2\t60\nB01\tC01\t0\t\nD01\tD02\t1\t90\n",
+        assert (
+            transfers_copy["data"]
+            == "A01\tA02\t2\t60\nB01\tC01\t0\t\nD01\tD02\t1\t90\n"
         )
 
         # The transaction commits through the existing final SQL statement,
@@ -144,13 +158,10 @@ class MigrateGtfsTransfersTests(unittest.TestCase):
             for event in cur.events
             if event[0] == "execute" and "COMMIT;" in event[1]
         )
-        self.assertLess(
-            cur.events.index(("copy", "transfers")),
-            cur.events.index(commit_event),
-        )
-        self.assertIn(
-            "CREATE INDEX idx_transfers_from ON transfers(from_stop_id);",
-            commit_event[1],
+        assert cur.events.index(("copy", "transfers")) < cur.events.index(commit_event)
+        assert (
+            "CREATE INDEX idx_transfers_from ON transfers(from_stop_id);"
+            in commit_event[1]
         )
 
     def test_missing_transfers_txt_fails_without_commit_and_cleans_up(self):
@@ -164,14 +175,14 @@ class MigrateGtfsTransfersTests(unittest.TestCase):
                 },
             )
             fake_conn = _FakeConnection()
-            with self.assertRaises(KeyError):
+            with pytest.raises(KeyError):
                 _run_migrate(zip_path, fake_conn)
-            self.assertFalse(zip_path.exists())
-            self.assertTrue(fake_conn.cursor().closed)
-            self.assertTrue(fake_conn.closed)
+            assert not zip_path.exists()
+            assert fake_conn.cursor().closed
+            assert fake_conn.closed
 
         cur = fake_conn.cursor()
-        self.assertFalse(any("COMMIT;" in sql for sql in cur.executed))
+        assert not any("COMMIT;" in sql for sql in cur.executed)
 
     def test_malformed_transfers_txt_fails_without_commit_and_cleans_up(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -185,14 +196,14 @@ class MigrateGtfsTransfersTests(unittest.TestCase):
                 },
             )
             fake_conn = _FakeConnection()
-            with self.assertRaises(KeyError):
+            with pytest.raises(KeyError):
                 _run_migrate(zip_path, fake_conn)
-            self.assertFalse(zip_path.exists())
-            self.assertTrue(fake_conn.cursor().closed)
-            self.assertTrue(fake_conn.closed)
+            assert not zip_path.exists()
+            assert fake_conn.cursor().closed
+            assert fake_conn.closed
 
         cur = fake_conn.cursor()
-        self.assertFalse(any("COMMIT;" in sql for sql in cur.executed))
+        assert not any("COMMIT;" in sql for sql in cur.executed)
 
     def test_cursor_creation_failure_closes_connection_and_unlinks_zip(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -206,11 +217,11 @@ class MigrateGtfsTransfersTests(unittest.TestCase):
                 },
             )
             fake_conn = _CursorFailureConnection()
-            with self.assertRaisesRegex(RuntimeError, "cursor creation failed"):
+            with pytest.raises(RuntimeError, match="cursor creation failed"):
                 _run_migrate(zip_path, fake_conn)
             # A created connection is still closed when cursor creation fails.
-            self.assertTrue(fake_conn.closed)
-            self.assertFalse(zip_path.exists())
+            assert fake_conn.closed
+            assert not zip_path.exists()
 
     def test_cursor_close_failure_still_closes_connection_and_unlinks_zip(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -224,12 +235,12 @@ class MigrateGtfsTransfersTests(unittest.TestCase):
                 },
             )
             fake_conn = _FakeConnection(cursor=_CloseFailureCursor())
-            with self.assertRaisesRegex(RuntimeError, "cursor close failed"):
+            with pytest.raises(RuntimeError, match="cursor close failed"):
                 _run_migrate(zip_path, fake_conn)
             # Cursor close raising must not skip connection close.
-            self.assertTrue(fake_conn.cursor().closed)
-            self.assertTrue(fake_conn.closed)
-            self.assertFalse(zip_path.exists())
+            assert fake_conn.cursor().closed
+            assert fake_conn.closed
+            assert not zip_path.exists()
 
 
 if __name__ == "__main__":

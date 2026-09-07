@@ -30,9 +30,10 @@ all run untouched. Synchronization is event/future based only (no sleeps).
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
-from tests.conversation.conversation_candidate_reference_fixtures import (  # noqa: F401
+from tests.conversation.conversation_candidate_reference_fixtures import (
     ALREADY_PRESENTED_MARKER,
     CANDIDATE_SET_UNKNOWN_MARKER,
     CANDIDATE_UNKNOWN_MARKER,
@@ -85,7 +86,7 @@ async def wait_for_seam_start(
 
     try:
         await asyncio.wait_for(event.wait(), SEAM_START_TIMEOUT_S)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         fail(
             f"{scenario_id} {cancellation_point}: provider seam never "
             f"started within {SEAM_START_TIMEOUT_S}s"
@@ -272,8 +273,8 @@ __all__ = (
     "ROUTE_MESSAGE",
     "ROUTE_NAVIGATION_TOOL_PROFILE",
     "SEAM_START_TIMEOUT_S",
-    "STREAM_COMPLETION_TIMEOUT_S",
     "STALE_PROBE_MESSAGE",
+    "STREAM_COMPLETION_TIMEOUT_S",
     "UNOFFERED_TOOL_MARKER",
     "WHAT_IF_CANCEL_MESSAGE",
     "WORK_DESTINATION",

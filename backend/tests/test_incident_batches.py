@@ -5,7 +5,6 @@ from __future__ import annotations
 import dataclasses
 
 import pytest
-
 from app.services.incidents.batches import (
     INCIDENT_BATCHES,
     NYC_ENVELOPE,
@@ -55,11 +54,14 @@ def test_bounds_valid_ordered_nonzero_inside_envelope() -> None:
     env_south, env_west, env_north, env_east = NYC_ENVELOPE
     for batch in INCIDENT_BATCHES:
         south, west, north, east = batch.bounds
-        assert isinstance(south, float) and isinstance(west, float)
-        assert isinstance(north, float) and isinstance(east, float)
+        assert isinstance(south, float)
+        assert isinstance(west, float)
+        assert isinstance(north, float)
+        assert isinstance(east, float)
         assert south < north, batch.batch_id
         assert west < east, batch.batch_id
-        assert north - south > 0.0 and east - west > 0.0
+        assert north - south > 0.0
+        assert east - west > 0.0
         assert env_south <= south < north <= env_north, batch.batch_id
         assert env_west <= west < east <= env_east, batch.batch_id
 
@@ -96,7 +98,8 @@ def test_no_per_station_or_station_sized_fanout_surface() -> None:
     for batch in INCIDENT_BATCHES:
         assert len(batch.focus_terms) <= 6
         assert len(batch.boroughs) <= 2
-        assert batch.bounds == tuple(batch.bounds) and len(batch.bounds) == 4
+        assert batch.bounds == tuple(batch.bounds)
+        assert len(batch.bounds) == 4
 
 
 def test_point_matches_one_canonical_batch() -> None:

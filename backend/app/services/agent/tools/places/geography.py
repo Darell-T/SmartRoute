@@ -1,6 +1,4 @@
-"""Normalize model-selected discovery scope after a capability choice.
-
-This is not a pre-model intent router. It only maps values the Agent already
+"""This is not a pre-model intent router. It only maps values the Agent already
 passed to discover_places onto canonical NYC geography.
 """
 
@@ -69,41 +67,57 @@ def canonical_borough(value: object) -> str | None:
 
 
 def normalize_scope(scope: object) -> tuple[dict[str, Any] | None, str | None]:
-    """Return a canonical scope or a closed validation error."""
-
     if not isinstance(scope, dict):
         return None, "scope is required"
     kind = _normalized(scope.get("kind")).replace(" ", "_")
     if kind not in SCOPE_KINDS:
         return None, "scope kind must be current_location, boroughs, nyc, or named_area"
-    raw_values = scope.get("values")
-    if raw_values is None:
-        values: list[str] = []
-    elif not isinstance(raw_values, list):
-        return None, "scope values must be an array"
-    else:
-        values = [str(item).strip() for item in raw_values if str(item).strip()]
-
+    values, values_error = _parsed_scope_values(scope.get("values"))
+    if values_error:
+        return None, values_error
     if kind == "current_location":
-        if values:
-            return None, "current_location scope requires an empty values array"
-        return {"kind": "current_location", "values": []}, None
+        return _scope_current_location(values)
     if kind == "nyc":
-        if values and not all(
-            _normalized(value) in _NYC_LOCALITY_WORDS for value in values
-        ):
-            return None, "nyc scope requires an empty values array"
-        return {"kind": "nyc", "values": []}, None
+        return _scope_nyc(values)
     if kind == "named_area":
-        if len(values) != 1:
-            return None, "named_area scope requires exactly one value"
-        mapped = canonical_borough(values[0])
-        if mapped is not None:
-            return {"kind": "boroughs", "values": [mapped]}, None
-        if _normalized(values[0]) in {"nyc", "new york city", "new york"}:
-            return {"kind": "nyc", "values": []}, None
-        return {"kind": "named_area", "values": [values[0][:120]]}, None
+        return _scope_named_area(values)
+    return _scope_boroughs(values)
 
+
+def _parsed_scope_values(raw_values: object) -> tuple[list[str], str | None]:
+    if raw_values is None:
+        return [], None
+    if not isinstance(raw_values, list):
+        return [], "scope values must be an array"
+    return [str(item).strip() for item in raw_values if str(item).strip()], None
+
+
+def _scope_current_location(values: list[str]) -> tuple[dict[str, Any] | None, str | None]:
+    if values:
+        return None, "current_location scope requires an empty values array"
+    return {"kind": "current_location", "values": []}, None
+
+
+def _scope_nyc(values: list[str]) -> tuple[dict[str, Any] | None, str | None]:
+    if values and not all(
+        _normalized(value) in _NYC_LOCALITY_WORDS for value in values
+    ):
+        return None, "nyc scope requires an empty values array"
+    return {"kind": "nyc", "values": []}, None
+
+
+def _scope_named_area(values: list[str]) -> tuple[dict[str, Any] | None, str | None]:
+    if len(values) != 1:
+        return None, "named_area scope requires exactly one value"
+    mapped = canonical_borough(values[0])
+    if mapped is not None:
+        return {"kind": "boroughs", "values": [mapped]}, None
+    if _normalized(values[0]) in {"nyc", "new york city", "new york"}:
+        return {"kind": "nyc", "values": []}, None
+    return {"kind": "named_area", "values": [values[0][:120]]}, None
+
+
+def _scope_boroughs(values: list[str]) -> tuple[dict[str, Any] | None, str | None]:
     boroughs: list[str] = []
     seen: set[str] = set()
     for value in values:
@@ -119,8 +133,6 @@ def normalize_scope(scope: object) -> tuple[dict[str, Any] | None, str | None]:
 
 
 def borough_from_address_components(components: object) -> str | None:
-    """Resolve a borough from Places address components, failing closed."""
-
     if not isinstance(components, list):
         return None
     sublocality = _component_text(components, "sublocality_level_1")

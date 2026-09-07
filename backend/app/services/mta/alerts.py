@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
+import httpx
 
 from app.services.mta.config import ALERTS_URL, NYC_TZ
 from app.services.mta.feeds import parse_feed_message
-
 
 _ALERTS_METADATA_KEY = f"{ALERTS_URL}:metadata"
 _ALERT_SOURCE = "mta_service_alerts"
@@ -49,41 +50,18 @@ async def fetch_service_alerts(
     from app.services.cache import cache_get, cache_set
     cached = cache_get(ALERTS_URL, fail_open=True)
     cached_observed_at = _cached_observed_at(cache_get, cached)
-    if cached:
-        if not force_refresh:
-            result = {
-                "content": cached,
-                "freshness": "cached",
-                "observed_at": cached_observed_at,
-            }
-            return result if with_metadata else cached
-    try:
-        import httpx
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(ALERTS_URL)
-        if response.status_code != 200:
-            raise RuntimeError(f"HTTP {response.status_code}")
-        observed_at = datetime.now(timezone.utc).isoformat()
-        if cache_result:
-            cache_set(ALERTS_URL, response.content, 60, fail_open=True)
-            cache_set(
-                _ALERTS_METADATA_KEY,
-                json.dumps(
-                    {
-                        "observed_at": observed_at,
-                        "content_sha256": _content_digest(response.content),
-                    }
-                ),
-                60,
-                fail_open=True,
-            )
+    if cached and not force_refresh:
         result = {
-            "content": response.content,
-            "freshness": "live",
-            "observed_at": observed_at,
+            "content": cached,
+            "freshness": "cached",
+            "observed_at": cached_observed_at,
         }
-        return result if with_metadata else response.content
-    except Exception as exc:
+        return result if with_metadata else cached
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:  # noqa: TID251
+            response = await client.get(ALERTS_URL)
+        _require_alerts_http_ok(response)
+    except Exception as exc:  # noqa: BLE001 alert-feed faults fall back to cache or empty
         print(f"[mta_feed] alerts feed failed: {type(exc).__name__}: {exc!r}")
         if cached:
             result = {
@@ -94,20 +72,43 @@ async def fetch_service_alerts(
             return result if with_metadata else cached
         result = {"content": b"", "freshness": "unavailable", "observed_at": None}
         return result if with_metadata else b""
+    observed_at = datetime.now(UTC).isoformat()
+    if cache_result:
+        cache_set(ALERTS_URL, response.content, 60, fail_open=True)
+        cache_set(
+            _ALERTS_METADATA_KEY,
+            json.dumps(
+                {
+                    "observed_at": observed_at,
+                    "content_sha256": _content_digest(response.content),
+                }
+            ),
+            60,
+            fail_open=True,
+        )
+    result = {
+        "content": response.content,
+        "freshness": "live",
+        "observed_at": observed_at,
+    }
+    return result if with_metadata else response.content
+
+
+def _require_alerts_http_ok(response) -> None:
+    if response.status_code != 200:
+        raise RuntimeError(f"HTTP {response.status_code}")
 
 
 def _period_bounds(period) -> tuple[int | None, int | None]:
-    start = period.start if period.start else None
-    end = period.end if period.end else None
+    start = period.start or None
+    end = period.end or None
     return start, end
 
 
 def _period_is_active(start: int | None, end: int | None, now: float) -> bool:
     if start and now < start:
         return False
-    if end and end > 0 and now > end:
-        return False
-    return True
+    return not (end and end > 0 and now > end)
 
 
 def _period_is_today_or_unexpired(start: int | None, end: int | None, now: float) -> bool:
@@ -272,7 +273,7 @@ def _epoch_iso(value: object) -> str | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
         return None
     try:
-        return datetime.fromtimestamp(float(value), tz=timezone.utc).isoformat()
+        return datetime.fromtimestamp(float(value), tz=UTC).isoformat()
     except (OverflowError, OSError, ValueError):
         return None
 
@@ -343,80 +344,111 @@ def _alert_semantics(
     return planned_status, change_type, service_operating, material_disruption
 
 
+def _alert_period(
+    alert, include_same_day: bool, now: float
+) -> tuple[int | None, int | None] | None:
+    if not alert.active_period:
+        return (None, None)
+    for period in alert.active_period:
+        period_start, period_end = _period_bounds(period)
+        matches = (
+            _period_is_today_or_unexpired(period_start, period_end, now)
+            if include_same_day
+            else _period_is_active(period_start, period_end, now)
+        )
+        if matches:
+            return _period_bounds(period)
+    return None
+
+
+def _direction_scope_label(direction_ids: set[str]) -> str:
+    values = sorted(direction_ids)
+    if len(values) > 1:
+        return "both_directions"
+    if values:
+        return "direction_specific"
+    return "unspecified"
+
+
+def _add_informed_entity(
+    informed_entity,
+    route_ids: set[str],
+    stop_ids: set[str],
+    direction_ids: set[str],
+    segments: list[dict[str, str]],
+) -> bool:
+    route_id = _bounded_text(informed_entity.route_id, _ALERT_ID_LIMIT)
+    stop_id = _bounded_text(informed_entity.stop_id, _ALERT_ID_LIMIT)
+    direction_id = _direction_id(informed_entity)
+    if route_id:
+        route_ids.add(route_id)
+    if stop_id:
+        stop_ids.add(stop_id)
+    if direction_id:
+        direction_ids.add(direction_id)
+    segment = {
+        key: value
+        for key, value in (
+            ("route_id", route_id),
+            ("stop_id", stop_id),
+            ("direction_id", direction_id or ""),
+        )
+        if value
+    }
+    if segment and segment not in segments:
+        segments.append(segment)
+        return len(segments) >= _SEGMENT_LIMIT
+    return False
+
+
+def _informed_scope(alert) -> tuple[list[str], list[str], list[str], list[dict[str, str]], str]:
+    route_ids: set[str] = set()
+    stop_ids: set[str] = set()
+    direction_ids: set[str] = set()
+    segments: list[dict[str, str]] = []
+    for informed_entity in alert.informed_entity:
+        if _add_informed_entity(
+            informed_entity, route_ids, stop_ids, direction_ids, segments
+        ):
+            break
+    return (
+        sorted(route_ids),
+        sorted(stop_ids),
+        sorted(direction_ids),
+        segments,
+        _direction_scope_label(direction_ids),
+    )
+
+
 def _parse_service_alerts(
-    rawBytes: bytes,
+    raw_bytes: bytes,
     *,
     include_same_day: bool,
     now_timestamp: float | None = None,
 ) -> list:
-    feed = parse_feed_message(rawBytes)
+    feed = parse_feed_message(raw_bytes)
     now = now_timestamp if now_timestamp is not None else datetime.now(tz=NYC_TZ).timestamp()
-    feed_observed_at = _epoch_iso(feed.header.timestamp if feed.header.timestamp else None)
+    feed_observed_at = _epoch_iso(feed.header.timestamp or None)
     local_verified_at = _epoch_iso(now)
     alerts = []
     for entity in feed.entity:
         if not entity.HasField("alert"):
             continue
-        alert = entity.alert
-        start = None
-        end = None
-        if alert.active_period:
-            matching_period = None
-            for period in alert.active_period:
-                period_start, period_end = _period_bounds(period)
-                matches = (
-                    _period_is_today_or_unexpired(period_start, period_end, now)
-                    if include_same_day
-                    else _period_is_active(period_start, period_end, now)
-                )
-                if matches:
-                    matching_period = period
-                    break
-            if matching_period is None:
-                continue
-            start, end = _period_bounds(matching_period)
-        header = _bounded_text(_english_text(alert.header_text), _TEXT_LIMIT)
+        period = _alert_period(entity.alert, include_same_day, now)
+        if period is None:
+            continue
+        start, end = period
+        header = _bounded_text(_english_text(entity.alert.header_text), _TEXT_LIMIT)
         description = _bounded_text(
-            _english_text(alert.description_text), _TEXT_LIMIT
+            _english_text(entity.alert.description_text), _TEXT_LIMIT
         )
         source_id = _bounded_text(entity.id, _ALERT_ID_LIMIT)
         planned_status, change_type, service_operating, material_disruption = (
             _alert_semantics(source_id, header, description)
         )
-        route_ids = set()
-        stop_ids = set()
-        direction_ids = set()
-        segments: list[dict[str, str]] = []
-        for informed_entity in alert.informed_entity:
-            route_id = _bounded_text(informed_entity.route_id, _ALERT_ID_LIMIT)
-            stop_id = _bounded_text(informed_entity.stop_id, _ALERT_ID_LIMIT)
-            direction_id = _direction_id(informed_entity)
-            if route_id:
-                route_ids.add(route_id)
-            if stop_id:
-                stop_ids.add(stop_id)
-            if direction_id:
-                direction_ids.add(direction_id)
-            segment = {
-                key: value
-                for key, value in (
-                    ("route_id", route_id),
-                    ("stop_id", stop_id),
-                    ("direction_id", direction_id or ""),
-                )
-                if value
-            }
-            if segment and segment not in segments:
-                segments.append(segment)
-                if len(segments) >= _SEGMENT_LIMIT:
-                    break
-        direction_values = sorted(direction_ids)
-        if len(direction_values) > 1:
-            direction_scope = "both_directions"
-        elif direction_values:
-            direction_scope = "direction_specific"
-        else:
-            direction_scope = "unspecified"
+        route_ids, stop_ids, direction_values, segments, direction_scope = (
+            _informed_scope(entity.alert)
+        )
         alerts.append(
             {
                 "source": _ALERT_SOURCE,
@@ -424,8 +456,8 @@ def _parse_service_alerts(
                 "alert_id": source_id,
                 "header": header,
                 "description": description,
-                "route_ids": sorted(route_ids),
-                "stop_ids": sorted(stop_ids),
+                "route_ids": route_ids,
+                "stop_ids": stop_ids,
                 "direction_ids": direction_values,
                 "direction_scope": direction_scope,
                 "affected_segments": segments,
@@ -447,12 +479,12 @@ def _parse_service_alerts(
     return alerts
 
 
-def parse_service_alerts(rawBytes: bytes) -> list:
-    return _parse_service_alerts(rawBytes, include_same_day=False)
+def parse_service_alerts(raw_bytes: bytes) -> list:
+    return _parse_service_alerts(raw_bytes, include_same_day=False)
 
 
-def parse_service_alerts_for_service_board(rawBytes: bytes) -> list:
-    return _parse_service_alerts(rawBytes, include_same_day=True)
+def parse_service_alerts_for_service_board(raw_bytes: bytes) -> list:
+    return _parse_service_alerts(raw_bytes, include_same_day=True)
 
 
 def filter_alerts_for_routes(alerts: list, route_ids: set) -> list:

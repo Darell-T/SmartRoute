@@ -10,7 +10,8 @@ the caller owns lookup orchestration and failure degradation.
 from __future__ import annotations
 
 import re
-from typing import Any, Iterable, Mapping
+from collections.abc import Iterable, Mapping
+from typing import Any
 
 from app.services.incidents.batches import coverage_batch_ids_for_point
 from app.services.trips.route_incidents.context import CandidateStopContext

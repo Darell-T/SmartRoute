@@ -8,20 +8,24 @@ from typing import Any
 
 from app.services.agent import events as agent_events
 from app.services.agent import transcript_store
-from app.services.agent.passenger_output import framed_events, validated_framing
-from app.services.agent.turn.contract import GoalKind, GoalState
 from app.services.agent.model.output_projection import project_presented_route
+from app.services.agent.passenger_output import framed_events, validated_framing
 from app.services.agent.tools._types import ToolContext, ToolResult
 from app.services.agent.tools.route.present_route_commit import (
     record_presentation as _record_presentation,
+)
+from app.services.agent.tools.route.present_route_commit import (
     reserve_and_commit as _reserve_and_commit,
 )
 from app.services.agent.tools.route.present_route_state import (
     ValidatedRoutePresentation,
     canonical_facts,
-    owned_candidate as _owned_candidate,
     rebind_to_entry,
 )
+from app.services.agent.tools.route.present_route_state import (
+    owned_candidate as _owned_candidate,
+)
+from app.services.agent.turn.contract import GoalKind, GoalState
 from app.services.trips.route_incidents.scan import (
     contains_unsafe_incident_clear,
     incident_scan_is_complete,
@@ -115,7 +119,7 @@ PRESENT_ROUTE_SCHEMA = {
     },
 }
 
-_REPLAY_LEAD_IN = "Here’s the accepted route again."
+_REPLAY_LEAD_IN = "Here\u2019s the accepted route again."
 
 
 async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
@@ -604,15 +608,6 @@ def _structured_reason_claim_error(
             return (
                 "lead_in names a different route factor than the validated "
                 f"structured reason_code {reason_code}"
-            )
-    if reason_code == "meets_hard_constraints":
-        # A comparative claim is not implied by hard validity.  `fastest` is
-        # checked even when it is not a supported alternative reason, because
-        # that explicit claim cannot be grounded by this reason code.
-        if re.search(r"\bfastest\b", normalized):
-            return (
-                "lead_in names a different route factor than the validated "
-                "structured reason_code meets_hard_constraints"
             )
     return None
 

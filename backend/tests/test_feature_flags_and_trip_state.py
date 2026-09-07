@@ -10,8 +10,10 @@ from app.services.agent import (
     candidate_store,
     discovery_store,
     profile,
-    session as session_module,
     trip_state,
+)
+from app.services.agent import (
+    session as session_module,
 )
 from app.services.agent.tools.route.route_input import merge_route_preparation_input
 
@@ -39,8 +41,8 @@ class TripStateTests(unittest.TestCase):
         )
 
         saved = profile.get_profile(session)["saved_places"]
-        self.assertEqual(len(saved), 1)
-        self.assertEqual(saved[0]["label"], "New label")
+        assert len(saved) == 1
+        assert saved[0]["label"] == "New label"
 
     def test_preference_and_destination_updates(self):
         session: dict = {}
@@ -48,9 +50,9 @@ class TripStateTests(unittest.TestCase):
         trip_state.apply_preference_patch(session, {"avoid_stairs": True})
         trip_state.add_waypoint_before_destination(session, "Whole Foods")
         state = trip_state.get_trip_state(session)
-        self.assertEqual(state["destination"], "Barclays Center")
-        self.assertTrue(state["preferences"]["avoid_stairs"])
-        self.assertEqual(state["waypoints"], ["Whole Foods"])
+        assert state["destination"] == "Barclays Center"
+        assert state["preferences"]["avoid_stairs"]
+        assert state["waypoints"] == ["Whole Foods"]
 
     def test_state_normalizes_waypoint_and_timing_bounds(self):
         state: dict = {}
@@ -64,16 +66,16 @@ class TripStateTests(unittest.TestCase):
             requested_departure="tomorrow morning",
         )
         normalized = trip_state.get_trip_state(state)
-        self.assertEqual(normalized["waypoints"], ["valid", "second", "third"])
-        self.assertEqual(normalized["planning_mode"], "leave_now")
-        self.assertIsNone(normalized["requested_departure"])
+        assert normalized["waypoints"] == ["valid", "second", "third"]
+        assert normalized["planning_mode"] == "leave_now"
+        assert normalized["requested_departure"] is None
 
     def test_unrelated_question_does_not_require_clearing(self):
         session: dict = {}
         trip_state.set_destination(session, "Penn Station")
         # Reading state alone must not erase destination.
         again = trip_state.get_trip_state(session)
-        self.assertEqual(again["destination"], "Penn Station")
+        assert again["destination"] == "Penn Station"
 
     def test_new_trip_reset_preserves_profile_and_unrelated_conversation(self):
         _session_id, state = session_module.new_session()
@@ -108,19 +110,19 @@ class TripStateTests(unittest.TestCase):
         session_module.reset_for_new_trip(state)
 
         reset = trip_state.get_trip_state(state)
-        self.assertIsNone(reset["origin"])
-        self.assertIsNone(reset["destination"])
-        self.assertEqual(reset["waypoints"], [])
-        self.assertIsNone(reset["requested_arrival"])
-        self.assertIsNone(reset["active_candidate_set_id"])
-        self.assertIsNone(reset["temporary_candidate_set_id"])
-        self.assertTrue(reset["preferences"]["avoid_stairs"])
-        self.assertEqual(reset["preferences"]["walking_tolerance_minutes"], 12)
-        self.assertEqual(profile.profile_place(state, "home")["label"], "Home")
-        self.assertEqual(state["history"][0]["text"], "keep this")
-        self.assertEqual(state["slots"]["unrelated"], "retain")
-        self.assertNotIn("origin", state["slots"])
-        self.assertEqual(state["route_cards"], [])
+        assert reset["origin"] is None
+        assert reset["destination"] is None
+        assert reset["waypoints"] == []
+        assert reset["requested_arrival"] is None
+        assert reset["active_candidate_set_id"] is None
+        assert reset["temporary_candidate_set_id"] is None
+        assert reset["preferences"]["avoid_stairs"]
+        assert reset["preferences"]["walking_tolerance_minutes"] == 12
+        assert profile.profile_place(state, "home")["label"] == "Home"
+        assert state["history"][0]["text"] == "keep this"
+        assert state["slots"]["unrelated"] == "retain"
+        assert "origin" not in state["slots"]
+        assert state["route_cards"] == []
 
     def test_explicit_false_route_preferences_override_saved_true(self):
         _session_id, state = session_module.new_session()
@@ -142,9 +144,9 @@ class TripStateTests(unittest.TestCase):
             },
             ctx,
         )
-        self.assertFalse(merged["avoid_stairs"])
-        self.assertFalse(merged["avoid_crowds"])
-        self.assertFalse(merged["accessibility_required"])
+        assert not merged["avoid_stairs"]
+        assert not merged["avoid_crowds"]
+        assert not merged["accessibility_required"]
         hypothetical = merge_route_preparation_input(
             {
                 "destination": "Airport",
@@ -155,9 +157,9 @@ class TripStateTests(unittest.TestCase):
             },
             ctx,
         )
-        self.assertFalse(hypothetical["avoid_stairs"])
-        self.assertFalse(hypothetical["avoid_crowds"])
-        self.assertFalse(hypothetical["accessibility_required"])
+        assert not hypothetical["avoid_stairs"]
+        assert not hypothetical["avoid_crowds"]
+        assert not hypothetical["accessibility_required"]
 
     def test_explicit_route_preference_correction_persists_exclusively(self):
         _session_id, state = session_module.new_session()
@@ -170,10 +172,10 @@ class TripStateTests(unittest.TestCase):
             },
             ctx,
         )
-        self.assertEqual(less_walking["routing_preference"], "LESS_WALKING")
+        assert less_walking["routing_preference"] == "LESS_WALKING"
         preferences = trip_state.get_trip_state(state)["preferences"]
-        self.assertEqual(preferences["walking_preference"], "less_walking")
-        self.assertFalse(preferences["prefer_fewer_transfers"])
+        assert preferences["walking_preference"] == "less_walking"
+        assert not preferences["prefer_fewer_transfers"]
 
         fewer_transfers = merge_route_preparation_input(
             {
@@ -182,24 +184,18 @@ class TripStateTests(unittest.TestCase):
             },
             ctx,
         )
-        self.assertEqual(fewer_transfers["routing_preference"], "FEWER_TRANSFERS")
-        self.assertEqual(
-            fewer_transfers["routing_preference_source"],
-            "current_turn",
-        )
+        assert fewer_transfers["routing_preference"] == "FEWER_TRANSFERS"
+        assert fewer_transfers["routing_preference_source"] == "current_turn"
         preferences = trip_state.get_trip_state(state)["preferences"]
-        self.assertEqual(preferences["walking_preference"], "any")
-        self.assertTrue(preferences["prefer_fewer_transfers"])
+        assert preferences["walking_preference"] == "any"
+        assert preferences["prefer_fewer_transfers"]
 
         next_route = merge_route_preparation_input(
             {"destination": "Third destination"},
             ctx,
         )
-        self.assertEqual(next_route["routing_preference"], "FEWER_TRANSFERS")
-        self.assertEqual(
-            next_route["routing_preference_source"],
-            "persisted_rider",
-        )
+        assert next_route["routing_preference"] == "FEWER_TRANSFERS"
+        assert next_route["routing_preference_source"] == "persisted_rider"
 
     def test_what_if_tool_finalization_does_not_overwrite_active_slots(self):
         _session_id, state = session_module.new_session()
@@ -233,10 +229,10 @@ class TripStateTests(unittest.TestCase):
             ],
         )
         current = trip_state.get_trip_state(state)
-        self.assertEqual(state["slots"]["destination"], "Work")
-        self.assertEqual(current["destination"], "Work")
-        self.assertEqual(current["waypoints"], ["Coffee"])
-        self.assertEqual(current["selected_candidate_id"], "cd_active")
+        assert state["slots"]["destination"] == "Work"
+        assert current["destination"] == "Work"
+        assert current["waypoints"] == ["Coffee"]
+        assert current["selected_candidate_id"] == "cd_active"
 
     def test_what_if_can_be_discarded_or_committed(self):
         _session_id, state = session_module.new_session()
@@ -255,9 +251,9 @@ class TripStateTests(unittest.TestCase):
         trip_state.bind_temporary_selected_candidate(state, "cd_temp")
         trip_state.discard_scenario(state)
         discarded = trip_state.get_trip_state(state)
-        self.assertEqual(discarded["active_candidate_set_id"], "cs_active")
-        self.assertEqual(discarded["selected_candidate_id"], "cd_active")
-        self.assertIsNone(discarded["temporary_candidate_set_id"])
+        assert discarded["active_candidate_set_id"] == "cs_active"
+        assert discarded["selected_candidate_id"] == "cd_active"
+        assert discarded["temporary_candidate_set_id"] is None
 
         trip_state.bind_temporary_candidate_set(state, "cs_temp")
         trip_state.bind_temporary_selected_candidate(state, "cd_temp")
@@ -273,11 +269,11 @@ class TripStateTests(unittest.TestCase):
             },
         )
         committed = trip_state.get_trip_state(state)
-        self.assertEqual(committed["active_candidate_set_id"], "cs_temp")
-        self.assertEqual(committed["selected_candidate_id"], "cd_temp")
-        self.assertEqual(committed["destination"], "Airport")
-        self.assertEqual(committed["waypoints"], ["Coffee"])
-        self.assertIsNone(committed["temporary_candidate_set_id"])
+        assert committed["active_candidate_set_id"] == "cs_temp"
+        assert committed["selected_candidate_id"] == "cd_temp"
+        assert committed["destination"] == "Airport"
+        assert committed["waypoints"] == ["Coffee"]
+        assert committed["temporary_candidate_set_id"] is None
 
     def test_what_if_route_exclusion_stays_temporary_until_explicit_commit(self):
         _session_id, state = session_module.new_session()
@@ -305,9 +301,9 @@ class TripStateTests(unittest.TestCase):
             ],
         )
         current = trip_state.get_trip_state(state)
-        self.assertEqual(current["active_candidate_set_id"], "cs_active")
-        self.assertEqual(current["selected_candidate_id"], "cd_active")
-        self.assertEqual(state["slots"]["constraints"]["excluded_route_ids"], ["R"])
+        assert current["active_candidate_set_id"] == "cs_active"
+        assert current["selected_candidate_id"] == "cd_active"
+        assert state["slots"]["constraints"]["excluded_route_ids"] == ["R"]
 
         # Discarding the temporary scenario leaves the active constraint set
         # and candidate selection unchanged.
@@ -315,9 +311,9 @@ class TripStateTests(unittest.TestCase):
         trip_state.bind_temporary_selected_candidate(state, "cd_temp")
         trip_state.discard_scenario(state)
         discarded = trip_state.get_trip_state(state)
-        self.assertEqual(discarded["active_candidate_set_id"], "cs_active")
-        self.assertEqual(discarded["selected_candidate_id"], "cd_active")
-        self.assertEqual(state["slots"]["constraints"]["excluded_route_ids"], ["R"])
+        assert discarded["active_candidate_set_id"] == "cs_active"
+        assert discarded["selected_candidate_id"] == "cd_active"
+        assert state["slots"]["constraints"]["excluded_route_ids"] == ["R"]
 
         # Explicitly committing the scenario activates its route exclusion.
         trip_state.bind_temporary_candidate_set(state, "cs_temp")
@@ -332,12 +328,9 @@ class TripStateTests(unittest.TestCase):
             },
         )
         committed = trip_state.get_trip_state(state)
-        self.assertEqual(committed["active_candidate_set_id"], "cs_temp")
-        self.assertEqual(committed["selected_candidate_id"], "cd_temp")
-        self.assertEqual(
-            sorted(state["slots"]["constraints"]["excluded_route_ids"]),
-            ["Q", "R"],
-        )
+        assert committed["active_candidate_set_id"] == "cs_temp"
+        assert committed["selected_candidate_id"] == "cd_temp"
+        assert sorted(state["slots"]["constraints"]["excluded_route_ids"]) == ["Q", "R"]
 
     def test_active_route_exclusion_persists_normalized_from_actual_tool_calls(self):
         _session_id, state = session_module.new_session()
@@ -354,10 +347,7 @@ class TripStateTests(unittest.TestCase):
                 )
             ],
         )
-        self.assertEqual(
-            state["slots"]["constraints"]["excluded_route_ids"],
-            ["Q", "B35", "M15"],
-        )
+        assert state["slots"]["constraints"]["excluded_route_ids"] == ["Q", "B35", "M15"]
 
 
 class CandidateStoreTests(unittest.TestCase):
@@ -372,14 +362,14 @@ class CandidateStoreTests(unittest.TestCase):
             ttl_seconds=120,
         )
         ok = candidate_store.load_candidate_set(set_id, session_id="sess-a")
-        self.assertIsNotNone(ok)
-        self.assertIsNone(candidate_store.load_candidate_set(set_id, session_id="sess-b"))
+        assert ok is not None
+        assert candidate_store.load_candidate_set(set_id, session_id="sess-b") is None
         record, entry, error = candidate_store.get_candidate(
             set_id, "invented", session_id="sess-a"
         )
-        self.assertIsNotNone(record)
-        self.assertIsNone(entry)
-        self.assertIn("unknown", error or "")
+        assert record is not None
+        assert entry is None
+        assert "unknown" in (error or "")
 
     def test_duplicate_presentation_rejected(self):
         set_id = candidate_store.store_candidate_set(
@@ -390,11 +380,9 @@ class CandidateStoreTests(unittest.TestCase):
             },
             ttl_seconds=120,
         )
-        self.assertIsNone(
-            candidate_store.mark_presented(set_id, "cd_one", session_id="sess-a")
-        )
+        assert candidate_store.mark_presented(set_id, "cd_one", session_id="sess-a") is None
         err = candidate_store.mark_presented(set_id, "cd_one", session_id="sess-a")
-        self.assertIn("already presented", err or "")
+        assert "already presented" in (err or "")
 
     def test_concurrent_presentation_reserves_exactly_once(self):
         set_id = candidate_store.store_candidate_set(
@@ -413,8 +401,8 @@ class CandidateStoreTests(unittest.TestCase):
                     (1, 2),
                 )
             )
-        self.assertEqual(results.count(None), 1)
-        self.assertEqual(sum("already presented" in str(value) for value in results), 1)
+        assert results.count(None) == 1
+        assert sum("already presented" in str(value) for value in results) == 1
 
 
 class DiscoveryStoreTests(unittest.TestCase):
@@ -429,15 +417,15 @@ class DiscoveryStoreTests(unittest.TestCase):
             discovery_set_id=set_id,
             ordinal=2,
         )
-        self.assertIsNone(error)
-        self.assertEqual(place["name"], "B Pizza")
+        assert error is None
+        assert place["name"] == "B Pizza"
         place_b, error_b = discovery_store.resolve_place_reference(
             session_id="sess-b",
             discovery_set_id=set_id,
             ordinal=2,
         )
-        self.assertIsNone(place_b)
-        self.assertIsNotNone(error_b)
+        assert place_b is None
+        assert error_b is not None
 
 
 if __name__ == "__main__":

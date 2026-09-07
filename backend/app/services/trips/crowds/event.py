@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-from datetime import datetime, timedelta, timezone
-from typing import Any, Awaitable, Callable, Iterable, Literal
+from collections.abc import Awaitable, Callable, Iterable
+from datetime import UTC, datetime, timedelta
+from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 from app.services.geography import distance_meters
@@ -43,12 +44,12 @@ def _parse_time(value: object) -> datetime | None:
     if not isinstance(value, str) or not value.strip():
         return None
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value)
     except ValueError:
         return None
     if parsed.tzinfo is None:
         return None
-    return parsed.astimezone(timezone.utc)
+    return parsed.astimezone(UTC)
 
 
 def _coordinate(value: object) -> tuple[float, float] | None:
@@ -303,7 +304,7 @@ async def collect_route_event_evidence(
         return "no_relevant_events", [], []
     travel_time = next((point.expected_at for point in hubs if point.expected_at), None)
     if travel_time is None:
-        travel_time = _parse_time(ctx.now_et) or datetime.now(timezone.utc)
+        travel_time = _parse_time(ctx.now_et) or datetime.now(UTC)
     date = travel_time.astimezone(_NYC_TZ).date().isoformat()
     (
         events,
@@ -352,7 +353,7 @@ async def _lookup_event_hubs(
     completed_route_indexes: set[int] = set()
     completed_lookups = 0
     seen: set[str] = set()
-    for hub, result in zip(hubs, results):
+    for hub, result in zip(hubs, results, strict=False):
         if isinstance(result, BaseException):
             failures.append(type(result).__name__)
             continue

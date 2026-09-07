@@ -23,6 +23,7 @@ from unittest.mock import AsyncMock, patch
 
 from app.services.agent import tools as agent_tools
 from app.services.agent.tools.transit import evidence as transit_evidence
+
 from tests.conversation.conversation_matrix_harness import (
     _turn_round,
     load_agent_loop,
@@ -31,12 +32,12 @@ from tests.conversation.conversation_matrix_harness import (
 from tests.conversation.conversation_unoffered_tool_fixtures import (
     CHECK_TRANSIT_FACT_INPUT,
     DISCOVERY_GOALS_INPUT,
+    DISCOVERY_MESSAGE,
+    DISCOVERY_PROFILE,
     DISCOVERY_STATE_VALID_PROFILE,
     FIXED_CANDIDATE_ID,
     GENERAL_RESPONSE_GOALS_INPUT,
     GENERAL_RESPONSE_STATE_VALID_PROFILE,
-    DISCOVERY_MESSAGE,
-    DISCOVERY_PROFILE,
     LOOKUP_FACTS_INPUT,
     PREPARE_ROUTE_OPTIONS_INPUT,
     PRESENT_ROUTE_FRAMING_INPUT,
@@ -45,16 +46,16 @@ from tests.conversation.conversation_unoffered_tool_fixtures import (
     ROUTE_PLANNING_TOOL_PROFILE,
     ROUTE_READY_PROFILE,
     ROUTE_STATE_VALID_PROFILE,
-    SERVICE_STATUS_GOALS_INPUT,
     SEARCH_LOCAL_PLACES_INPUT,
-    TRANSIT_FACT_MESSAGE,
+    SERVICE_STATUS_GOALS_INPUT,
     TRANSIT_FACT_GOALS_INPUT,
+    TRANSIT_FACT_MESSAGE,
     TRANSIT_FACT_TOOL_PROFILE,
-    TRANSIT_READY_PROFILE,
-    TRANSIT_STATE_VALID_PROFILE,
     TRANSIT_QUESTION_MESSAGE,
     TRANSIT_QUESTION_TOOL_PROFILE,
+    TRANSIT_READY_PROFILE,
     TRANSIT_SNAPSHOT_INPUT,
+    TRANSIT_STATE_VALID_PROFILE,
     UNKNOWN_TOOL_INPUT,
     UNKNOWN_TOOL_NAME,
     registered_tool_names,
@@ -81,7 +82,7 @@ class UnofferedToolEnforcementTests(_OfferedSurfaceBase):
 
     async def _case1(self, mode: str, scenario_id: str) -> None:
         # Premise: lookup_facts is registered internally but never offered.
-        self.assertIn("lookup_facts", registered_tool_names())
+        assert "lookup_facts" in registered_tool_names()
         seams = {
             "facts_seam": (LOOKUP_FACTS_SEAM, fail_loud_spy("lookup_facts seam"))
         }
@@ -121,9 +122,7 @@ class UnofferedToolEnforcementTests(_OfferedSurfaceBase):
         self._assert_offered_exact(
             ev, TRANSIT_QUESTION_TOOL_PROFILE, scenario_id
         )
-        self.assertEqual(
-            ev.offered_surfaces[1], TRANSIT_STATE_VALID_PROFILE, scenario_id
-        )
+        assert ev.offered_surfaces[1] == TRANSIT_STATE_VALID_PROFILE, scenario_id
         self._assert_unoffered_not_offered(ev, "lookup_facts", scenario_id)
         self._assert_unoffered_rejected(ev, "lookup_facts", scenario_id)
 
@@ -132,13 +131,8 @@ class UnofferedToolEnforcementTests(_OfferedSurfaceBase):
     ):
         await self._case1("auto", "F1-01a")
 
-    async def test_01b_transit_question_unoffered_lookup_facts_quick(
-        self,
-    ):
-        await self._case1("quick", "F1-01b")
-
     async def _case2(self, mode: str, scenario_id: str) -> None:
-        self.assertNotIn("search_local_places", registered_tool_names())
+        assert "search_local_places" not in registered_tool_names()
         seams = {"poi_seam": (POI_SEAM, fail_loud_spy("poi seam"))}
         rounds = [
             {
@@ -177,9 +171,7 @@ class UnofferedToolEnforcementTests(_OfferedSurfaceBase):
         self._assert_offered_exact(
             ev, TRANSIT_QUESTION_TOOL_PROFILE, scenario_id
         )
-        self.assertEqual(
-            ev.offered_surfaces[1], TRANSIT_STATE_VALID_PROFILE, scenario_id
-        )
+        assert ev.offered_surfaces[1] == TRANSIT_STATE_VALID_PROFILE, scenario_id
         self._assert_unoffered_not_offered(
             ev, "search_local_places", scenario_id
         )
@@ -193,13 +185,8 @@ class UnofferedToolEnforcementTests(_OfferedSurfaceBase):
     ):
         await self._case2("auto", "F1-02a")
 
-    async def test_02b_transit_question_unoffered_search_local_places_quick(
-        self,
-    ):
-        await self._case2("quick", "F1-02b")
-
     async def _case3(self, mode: str, scenario_id: str) -> None:
-        self.assertNotIn("search_local_places", registered_tool_names())
+        assert "search_local_places" not in registered_tool_names()
         seams = {"poi_seam": (POI_SEAM, fail_loud_spy("poi seam"))}
         rounds = [
             {
@@ -238,9 +225,7 @@ class UnofferedToolEnforcementTests(_OfferedSurfaceBase):
         self._assert_offered_exact(
             ev, ROUTE_PLANNING_TOOL_PROFILE, scenario_id
         )
-        self.assertEqual(
-            ev.offered_surfaces[1], ROUTE_STATE_VALID_PROFILE, scenario_id
-        )
+        assert ev.offered_surfaces[1] == ROUTE_STATE_VALID_PROFILE, scenario_id
         self._assert_unoffered_not_offered(
             ev, "search_local_places", scenario_id
         )
@@ -254,13 +239,8 @@ class UnofferedToolEnforcementTests(_OfferedSurfaceBase):
     ):
         await self._case3("auto", "F1-03a")
 
-    async def test_03b_route_planning_unoffered_search_local_places_quick(
-        self,
-    ):
-        await self._case3("quick", "F1-03b")
-
     async def _case4(self, mode: str, scenario_id: str) -> None:
-        self.assertIn("transit_snapshot", registered_tool_names())
+        assert "transit_snapshot" in registered_tool_names()
         seams = {"alerts_seam": (ALERTS_SEAM, fail_loud_spy("alerts seam"))}
         rounds = [
             {
@@ -296,9 +276,7 @@ class UnofferedToolEnforcementTests(_OfferedSurfaceBase):
         )
         self._assert_turn_shape(ev, scenario_id)
         self._assert_offered_exact(ev, DISCOVERY_PROFILE, scenario_id)
-        self.assertEqual(
-            ev.offered_surfaces[1], DISCOVERY_STATE_VALID_PROFILE, scenario_id
-        )
+        assert ev.offered_surfaces[1] == DISCOVERY_STATE_VALID_PROFILE, scenario_id
         self._assert_unoffered_not_offered(
             ev, "transit_snapshot", scenario_id
         )
@@ -308,9 +286,6 @@ class UnofferedToolEnforcementTests(_OfferedSurfaceBase):
 
     async def test_04a_discovery_unoffered_transit_snapshot_auto(self):
         await self._case4("auto", "F1-04a")
-
-    async def test_04b_discovery_unoffered_transit_snapshot_quick(self):
-        await self._case4("quick", "F1-04b")
 
 
 class UnofferedToolImpactTests(_OfferedSurfaceBase):
@@ -361,22 +336,13 @@ class UnofferedToolImpactTests(_OfferedSurfaceBase):
         self._assert_offered_exact(
             ev, TRANSIT_QUESTION_TOOL_PROFILE, scenario_id
         )
-        self.assertEqual(
-            ev.offered_surfaces[1], TRANSIT_STATE_VALID_PROFILE, scenario_id
-        )
+        assert ev.offered_surfaces[1] == TRANSIT_STATE_VALID_PROFILE, scenario_id
         self._assert_unoffered_not_offered(ev, "lookup_facts", scenario_id)
         self._assert_unoffered_rejected(ev, "lookup_facts", scenario_id)
-        self.assertEqual(
-            facts.await_count,
-            0,
-            f"{scenario_id}: successful leaf must still be rejected first",
-        )
+        assert facts.await_count == 0, f"{scenario_id}: successful leaf must still be rejected first"
 
     async def test_01c_transit_question_unoffered_lookup_facts_impact_auto(self):
         await self._case1_impact("auto", "F1-01c")
-
-    async def test_01d_transit_question_unoffered_lookup_facts_impact_quick(self):
-        await self._case1_impact("quick", "F1-01d")
 
 
 class RegistryCopyEnforcementTests(_OfferedSurfaceBase):
@@ -395,8 +361,8 @@ class RegistryCopyEnforcementTests(_OfferedSurfaceBase):
 
     async def _case12(self, mode: str, scenario_id: str) -> None:
         registry_copy = dict(agent_tools.COMBINED_TOOL_REGISTRY)
-        self.assertIsNot(registry_copy, agent_tools.COMBINED_TOOL_REGISTRY)
-        self.assertIn("lookup_facts", registry_copy)
+        assert registry_copy is not agent_tools.COMBINED_TOOL_REGISTRY
+        assert "lookup_facts" in registry_copy
         seams = {
             "facts_seam": (LOOKUP_FACTS_SEAM, fail_loud_spy("lookup_facts seam"))
         }
@@ -441,17 +407,12 @@ class RegistryCopyEnforcementTests(_OfferedSurfaceBase):
         self._assert_offered_exact(
             ev, TRANSIT_QUESTION_TOOL_PROFILE, scenario_id
         )
-        self.assertEqual(
-            ev.offered_surfaces[1], TRANSIT_STATE_VALID_PROFILE, scenario_id
-        )
+        assert ev.offered_surfaces[1] == TRANSIT_STATE_VALID_PROFILE, scenario_id
         self._assert_unoffered_not_offered(ev, "lookup_facts", scenario_id)
         self._assert_unoffered_rejected(ev, "lookup_facts", scenario_id)
 
     async def test_12a_registry_copy_still_rejects_unoffered_auto(self):
         await self._case12("auto", "F1-12a")
-
-    async def test_12b_registry_copy_still_rejects_unoffered_quick(self):
-        await self._case12("quick", "F1-12b")
 
 
 class OfferedSurfaceControlTests(_OfferedSurfaceBase):
@@ -462,7 +423,7 @@ class OfferedSurfaceControlTests(_OfferedSurfaceBase):
         cls.loop = load_agent_loop()
 
     async def _case5(self, mode: str, scenario_id: str) -> None:
-        self.assertNotIn(UNKNOWN_TOOL_NAME, registered_tool_names())
+        assert UNKNOWN_TOOL_NAME not in registered_tool_names()
         rounds = [
             {
                 "tool_use": [
@@ -496,25 +457,16 @@ class OfferedSurfaceControlTests(_OfferedSurfaceBase):
         self._assert_offered_exact(
             ev, TRANSIT_QUESTION_TOOL_PROFILE, scenario_id
         )
-        self.assertEqual(
-            ev.offered_surfaces[1], GENERAL_RESPONSE_STATE_VALID_PROFILE, scenario_id
-        )
+        assert ev.offered_surfaces[1] == GENERAL_RESPONSE_STATE_VALID_PROFILE, scenario_id
         # Unknown names use the same before-ledger boundary as registered
         # unoffered names: the bounded failure is observable, but the unknown
         # call is absent from the ledger and only terminal recovery executes.
         self._assert_unoffered_rejected(ev, UNKNOWN_TOOL_NAME, scenario_id)
-        self.assertEqual(
-            ev.emitted,
-            ("declare_goals", "complete_turn"),
-            scenario_id,
-        )
-        self.assertEqual(ev.provider_execution_count, 1, scenario_id)
+        assert ev.emitted == ("declare_goals", "complete_turn"), scenario_id
+        assert ev.provider_execution_count == 1, scenario_id
 
     async def test_05a_unknown_tool_name_normalized_failure_auto(self):
         await self._case5("auto", "F1-05a")
-
-    async def test_05b_unknown_tool_name_normalized_failure_quick(self):
-        await self._case5("quick", "F1-05b")
 
     async def _case6a(self, mode: str, scenario_id: str) -> None:
         # Offered transit-fact tool control: executes exactly once.
@@ -561,39 +513,26 @@ class OfferedSurfaceControlTests(_OfferedSurfaceBase):
         self._assert_offered_exact(
             ev, TRANSIT_FACT_TOOL_PROFILE, scenario_id
         )
-        self.assertEqual(ev.offered_surfaces[1], TRANSIT_READY_PROFILE, scenario_id)
-        self.assertIn("check_transit", ev.offered, scenario_id)
-        self.assertEqual(
-            ev.emitted,
-            ("declare_goals", "check_transit", "present_transit"),
-            scenario_id,
-        )
-        self.assertEqual(ev.provider_execution_count, 2, scenario_id)
+        assert ev.offered_surfaces[1] == TRANSIT_READY_PROFILE, scenario_id
+        assert "check_transit" in ev.offered, scenario_id
+        assert ev.emitted == ("declare_goals", "check_transit", "present_transit"), scenario_id
+        assert ev.provider_execution_count == 2, scenario_id
         ends = {
             tool: (ok, summary)
             for tool, ok, summary, _call_id in ev.tool_ends
         }
-        self.assertTrue(ends["check_transit"][0], scenario_id)
+        assert ends["check_transit"][0], scenario_id
         present_attempts = [
             attempt
             for attempt in ev.capability_attempts
             if attempt["capability"] == "present_transit"
         ]
-        self.assertTrue(
-            present_attempts and present_attempts[0]["ok"],
-            scenario_id,
-        )
-        self.assertEqual(
-            ev.spies["poi_seam"].await_count,
-            0,
-            f"{scenario_id}: poi seam must stay untouched",
-        )
+        assert present_attempts, scenario_id
+        assert present_attempts[0]["ok"], scenario_id
+        assert ev.spies["poi_seam"].await_count == 0, f"{scenario_id}: poi seam must stay untouched"
 
     async def test_06a_offered_check_transit_control_auto(self):
         await self._case6a("auto", "F1-06a")
-
-    async def test_06b_offered_check_transit_control_quick(self):
-        await self._case6a("quick", "F1-06b")
 
     async def _case6c(self, mode: str, scenario_id: str) -> None:
         # Offered route tool control: executes exactly once and commits.
@@ -643,33 +582,16 @@ class OfferedSurfaceControlTests(_OfferedSurfaceBase):
         self._assert_offered_exact(
             ev, ROUTE_PLANNING_TOOL_PROFILE, scenario_id
         )
-        self.assertEqual(ev.offered_surfaces[1], ROUTE_READY_PROFILE, scenario_id)
-        self.assertIn("prepare_route_options", ev.offered, scenario_id)
-        self.assertEqual(
-            ev.emitted,
-            ("declare_goals", "prepare_route_options", "present_route"),
-            scenario_id,
-        )
-        self.assertEqual(
-            ev.spies["prepare_seam"].await_count,
-            1,
-            f"{scenario_id}: offered prepare must execute exactly once",
-        )
-        self.assertEqual(ev.provider_execution_count, 2, scenario_id)
-        self.assertEqual(
-            ev.state_after["trip_state"]["destination"],
-            "Coney Island",
-            scenario_id,
-        )
-        self.assertEqual(
-            len(ev.stored_candidate_set_ids), 1, scenario_id
-        )
+        assert ev.offered_surfaces[1] == ROUTE_READY_PROFILE, scenario_id
+        assert "prepare_route_options" in ev.offered, scenario_id
+        assert ev.emitted == ("declare_goals", "prepare_route_options", "present_route"), scenario_id
+        assert ev.spies["prepare_seam"].await_count == 1, f"{scenario_id}: offered prepare must execute exactly once"
+        assert ev.provider_execution_count == 2, scenario_id
+        assert ev.state_after["trip_state"]["destination"] == "Coney Island", scenario_id
+        assert len(ev.stored_candidate_set_ids) == 1, scenario_id
 
     async def test_06c_offered_prepare_route_options_control_auto(self):
         await self._case6c("auto", "F1-06c")
-
-    async def test_06d_offered_prepare_route_options_control_quick(self):
-        await self._case6c("quick", "F1-06d")
 
     async def _case7(self, mode: str, scenario_id: str) -> None:
         # Duplicate offered calls: ledger dedup, not the surface guard.
@@ -724,38 +646,18 @@ class OfferedSurfaceControlTests(_OfferedSurfaceBase):
         self._assert_offered_exact(
             ev, ROUTE_PLANNING_TOOL_PROFILE, scenario_id
         )
-        self.assertEqual(ev.offered_surfaces[1], ROUTE_READY_PROFILE, scenario_id)
-        self.assertIn("prepare_route_options", ev.offered, scenario_id)
-        self.assertEqual(len(ev.emitted), 4, scenario_id)
-        self.assertEqual(
-            set(ev.emitted),
-            {"declare_goals", "prepare_route_options", "present_route"},
-            scenario_id,
-        )
-        self.assertEqual(
-            ev.spies["prepare_seam"].await_count,
-            1,
-            f"{scenario_id}: identical duplicates run once via the ledger",
-        )
-        self.assertEqual(ev.provider_execution_count, 2, scenario_id)
-        self.assertEqual(
-            len(ev.tool_starts),
-            1,
-            f"{scenario_id}: only the real route preparation is rider-visible",
-        )
-        self.assertEqual(
-            len(ev.tool_ends),
-            2,
-            f"{scenario_id}: duplicate prepare calls share one execution and "
-            "the internal presenter stays hidden",
-        )
-        self.assertEqual(len(ev.stored_candidate_set_ids), 1, scenario_id)
+        assert ev.offered_surfaces[1] == ROUTE_READY_PROFILE, scenario_id
+        assert "prepare_route_options" in ev.offered, scenario_id
+        assert len(ev.emitted) == 4, scenario_id
+        assert set(ev.emitted) == {"declare_goals", "prepare_route_options", "present_route"}, scenario_id
+        assert ev.spies["prepare_seam"].await_count == 1, f"{scenario_id}: identical duplicates run once via the ledger"
+        assert ev.provider_execution_count == 2, scenario_id
+        assert len(ev.tool_starts) == 1, f"{scenario_id}: only the real route preparation is rider-visible"
+        assert len(ev.tool_ends) == 2, f"{scenario_id}: duplicate prepare calls share one execution and " "the internal presenter stays hidden"
+        assert len(ev.stored_candidate_set_ids) == 1, scenario_id
 
     async def test_07a_duplicate_offered_tool_ledger_auto(self):
         await self._case7("auto", "F1-07a")
-
-    async def test_07b_duplicate_offered_tool_ledger_quick(self):
-        await self._case7("quick", "F1-07b")
 
 
 __all__ = ()

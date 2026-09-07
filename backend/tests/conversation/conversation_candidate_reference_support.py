@@ -30,6 +30,7 @@ from unittest.mock import patch
 
 from app.services.agent import candidate_store
 from app.services.agent import trip_state as trip_state_module
+
 from tests.conversation.conversation_candidate_reference_fixtures import (
     CANDIDATE_SET_UNKNOWN_MARKER,
     CANDIDATE_UNKNOWN_MARKER,
@@ -141,36 +142,21 @@ class _CandidateReferenceBase(unittest.IsolatedAsyncioTestCase):
             fixed_candidate_id=candidate_id,
         )
         names = [name for name, _input in ev.trace.tool_calls]
-        self.assertEqual(
-            ev.offered, ROUTE_NAVIGATION_TOOL_PROFILE,
-            f"{scenario_id} natural routing offers the canonical route profile; "
-            f"actual={sorted(ev.offered)}; executed={names}",
-        )
-        self.assertEqual(
-            names, ["prepare_route_options", "present_route"],
-            f"{scenario_id} natural routing sequence",
-        )
-        self.assertEqual(len(route_cards(ev.events)), 1,
-                         f"{scenario_id} natural routing emits exactly one card")
+        assert ev.offered == ROUTE_NAVIGATION_TOOL_PROFILE, f"{scenario_id} natural routing offers the canonical route profile; " f"actual={sorted(ev.offered)}; executed={names}"
+        assert names == ["prepare_route_options", "present_route"], f"{scenario_id} natural routing sequence"
+        assert len(route_cards(ev.events)) == 1, f"{scenario_id} natural routing emits exactly one card"
         set_id = ev.state["active_candidate_set_id"]
-        self.assertTrue(bool(set_id) and set_id.startswith("cs_"),
-                        f"{scenario_id} natural routing binds a real candidate set")
-        self.assertEqual(ev.state["selected_candidate_id"], candidate_id,
-                         f"{scenario_id} natural routing commits the selection")
-        self.assertEqual(len(ev.mocks["stored_candidate_set_ids"]), 1,
-                         f"{scenario_id} natural routing stores one candidate set")
-        self.assertEqual(ev.mocks["stored_candidate_set_ids"][0], set_id,
-                         f"{scenario_id} stored set is the bound set")
+        assert set_id
+        assert set_id.startswith("cs_"), f"{scenario_id} natural routing binds a real candidate set"
+        assert ev.state["selected_candidate_id"] == candidate_id, f"{scenario_id} natural routing commits the selection"
+        assert len(ev.mocks["stored_candidate_set_ids"]) == 1, f"{scenario_id} natural routing stores one candidate set"
+        assert ev.mocks["stored_candidate_set_ids"][0] == set_id, f"{scenario_id} stored set is the bound set"
         record = candidate_store.load_candidate_set(set_id, session_id=session_id)
-        self.assertIsNotNone(record, f"{scenario_id} stored candidate record")
-        self.assertTrue(record["presented"],
-                        f"{scenario_id} accepted set is presented")
-        self.assertEqual(record["selected_candidate_id"], candidate_id,
-                         f"{scenario_id} accepted set records the selection")
-        self.assertEqual(len(session.get("route_cards") or []), 1,
-                         f"{scenario_id} one persisted route card")
-        self.assertIsNotNone(session.get("active_trip"),
-                             f"{scenario_id} accepted active trip bound")
+        assert record is not None, f"{scenario_id} stored candidate record"
+        assert record["presented"], f"{scenario_id} accepted set is presented"
+        assert record["selected_candidate_id"] == candidate_id, f"{scenario_id} accepted set records the selection"
+        assert len(session.get("route_cards") or []) == 1, f"{scenario_id} one persisted route card"
+        assert session.get("active_trip") is not None, f"{scenario_id} accepted active trip bound"
         self._assert_policy(scenario_id, mode, ev)
         self._assert_meta_done(scenario_id, ev)
         return set_id, record
@@ -247,22 +233,18 @@ class _CandidateReferenceBase(unittest.IsolatedAsyncioTestCase):
         return copy.deepcopy(record) if record is not None else None
 
     def _assert_meta_done(self, scenario_id: str, ev: TurnSnapshot) -> None:
-        self.assertEqual(ev.events[0].type, "meta", f"{scenario_id} meta first")
-        self.assertEqual(ev.events[-1].type, "done", f"{scenario_id} done last")
+        assert ev.events[0].type == "meta", f"{scenario_id} meta first"
+        assert ev.events[-1].type == "done", f"{scenario_id} done last"
 
     def _assert_policy(self, scenario_id: str, mode: str, ev: TurnSnapshot) -> None:
         expected_mode, expected_model = policy_model(self.loop, mode)
-        self.assertEqual((ev.trace.initial_mode, ev.trace.final_mode),
-                         (expected_mode, expected_mode),
-                         f"{scenario_id} policy mode")
-        self.assertEqual(list(ev.models), [expected_model] * len(ev.models),
-                         f"{scenario_id} policy models; actual={list(ev.models)}")
+        assert (ev.trace.initial_mode, ev.trace.final_mode) == (expected_mode, expected_mode), f"{scenario_id} policy mode"
+        assert list(ev.models) == [expected_model] * len(ev.models), f"{scenario_id} policy models; actual={list(ev.models)}"
 
     def _assert_no_text_leak(self, scenario_id: str, ev: TurnSnapshot) -> None:
         lowered = ev.trace.final_text.casefold()
         for marker in LEAK_MARKERS:
-            self.assertNotIn(marker, lowered,
-                             f"{scenario_id} rider text leaked {marker}")
+            assert marker not in lowered, f"{scenario_id} rider text leaked {marker}"
 
     def _assert_rejected_present(
         self,
@@ -286,43 +268,23 @@ class _CandidateReferenceBase(unittest.IsolatedAsyncioTestCase):
              if event.type == "tool_end" and event.tool == "present_route"),
             None,
         )
-        self.assertTrue(
-            present_end is not None and present_end.ok is False,
+        assert present_end is not None, (
             f"{scenario_id} present_route must fail bounded; "
-            f"executed={names}; tool_ends={end_map}",
+            f"executed={names}; tool_ends={end_map}"
         )
-        self.assertEqual(
-            present_end.summary if present_end else None,
-            "The prepared route could not be shown",
-            f"{scenario_id} rider-safe bounded identity failure",
+        assert present_end.ok is False, (
+            f"{scenario_id} present_route must fail bounded; "
+            f"executed={names}; tool_ends={end_map}"
         )
-        self.assertNotIn(
-            marker,
-            (present_end.summary or "") if present_end else "",
-            f"{scenario_id} hides internal identity diagnostics",
-        )
-        self.assertEqual(route_cards(ev.events), [],
-                         f"{scenario_id} no route card on a rejected present")
-        self.assertEqual(len(ev.mocks["stored_candidate_set_ids"]), 0,
-                         f"{scenario_id} no candidate set stored on a rejected "
-                         f"present; actual={ev.mocks['stored_candidate_set_ids']}")
-        self.assertEqual(
-            self._snapshot_session(session),
-            session_before,
-            f"{scenario_id} rejected present mutates no session state",
-        )
-        self.assertEqual(
-            self._snapshot_record(set_id, session_id),
-            record_before,
-            f"{scenario_id} rejected present mutates no store record",
-        )
+        assert (present_end.summary if present_end else None) == "The prepared route could not be shown", f"{scenario_id} rider-safe bounded identity failure"
+        assert marker not in (present_end.summary or "" if present_end else ""), f"{scenario_id} hides internal identity diagnostics"
+        assert route_cards(ev.events) == [], f"{scenario_id} no route card on a rejected present"
+        assert len(ev.mocks["stored_candidate_set_ids"]) == 0, f"{scenario_id} no candidate set stored on a rejected " f"present; actual={ev.mocks['stored_candidate_set_ids']}"
+        assert self._snapshot_session(session) == session_before, f"{scenario_id} rejected present mutates no session state"
+        assert self._snapshot_record(set_id, session_id) == record_before, f"{scenario_id} rejected present mutates no store record"
         prepare = ev.mocks["prepare_single_leg"]
         if forbidden_provider:
-            self.assertTrue(
-                prepare is None or prepare.await_count == 0,
-                f"{scenario_id} provider route seam must not be reached; "
-                f"actual_await_count={prepare.await_count if prepare is not None else None}",
-            )
+            assert prepare is None or prepare.await_count == 0, f"{scenario_id} provider route seam must not be reached; " f"actual_await_count={prepare.await_count if prepare is not None else None}"
         self._assert_meta_done(scenario_id, ev)
         self._assert_no_text_leak(scenario_id, ev)
 
@@ -336,27 +298,16 @@ class _CandidateReferenceBase(unittest.IsolatedAsyncioTestCase):
         """Candidate/reference-like rider text never authors a candidate."""
 
         names = [name for name, _input in ev.trace.tool_calls]
-        self.assertEqual(route_cards(ev.events), [],
-                         f"{scenario_id} no route card")
-        self.assertEqual(ev.mocks["stored_candidate_set_ids"], [],
-                         f"{scenario_id} no candidate set stored; "
-                         f"actual={ev.mocks['stored_candidate_set_ids']}")
-        self.assertEqual(
-            ev.trace.provider_tool_execution_count,
-            expected_execution_count,
-            f"{scenario_id} bounded tool execution count; executed={names}",
-        )
+        assert route_cards(ev.events) == [], f"{scenario_id} no route card"
+        assert ev.mocks["stored_candidate_set_ids"] == [], f"{scenario_id} no candidate set stored; " f"actual={ev.mocks['stored_candidate_set_ids']}"
+        assert ev.trace.provider_tool_execution_count == expected_execution_count, f"{scenario_id} bounded tool execution count; executed={names}"
         for key in (
             "origin", "destination", "waypoints",
             "active_candidate_set_id", "selected_candidate_id",
             "temporary_candidate_set_id", "temporary_selected_candidate_id",
             "temporary_base_candidate_set_id",
         ):
-            self.assertEqual(
-                ev.state[key],
-                None if key != "waypoints" else [],
-                f"{scenario_id} trip-state [{key}] untouched",
-            )
+            assert ev.state[key] == (None if key != "waypoints" else []), f"{scenario_id} trip-state [{key}] untouched"
         self._assert_meta_done(scenario_id, ev)
         self._assert_no_text_leak(scenario_id, ev)
 
@@ -394,15 +345,8 @@ class _CandidateReferenceBase(unittest.IsolatedAsyncioTestCase):
         ev = await self._scripted_turn(
             mode=mode, session=session, session_id=session_id,
             message=message, rounds=rounds, turn_id=turn_id)
-        self.assertEqual(
-            ev.offered, ROUTE_NAVIGATION_TOOL_PROFILE,
-            f"{scenario_id} route profile; actual={sorted(ev.offered)}",
-        )
-        self.assertEqual(
-            [name for name, _input in ev.trace.tool_calls],
-            ["present_route"],
-            f"{scenario_id} only the real present executor runs",
-        )
+        assert ev.offered == ROUTE_NAVIGATION_TOOL_PROFILE, f"{scenario_id} route profile; actual={sorted(ev.offered)}"
+        assert [name for name, _input in ev.trace.tool_calls] == ["present_route"], f"{scenario_id} only the real present executor runs"
         self._assert_rejected_present(
             scenario_id=scenario_id, ev=ev, marker=marker,
             session_before=session_before, record_before=record_before,
@@ -429,18 +373,13 @@ class _CandidateReferenceBase(unittest.IsolatedAsyncioTestCase):
             ev = await self._scripted_turn(
                 mode=mode, session=session, session_id=session_id,
                 message=CHANGE_ROUTE_MESSAGE, rounds=rounds, turn_id="t2")
-            self.assertEqual(
-                [name for name, _input in ev.trace.tool_calls],
-                ["present_route"],
-                f"{s} expired follow-up runs the real executor")
-            self.assertIsNone(
-                candidate_store.load_candidate_set(set_id, session_id=session_id),
-                f"{s} expired set loads nothing under the store clock")
+            assert [name for name, _input in ev.trace.tool_calls] == ["present_route"], f"{s} expired follow-up runs the real executor"
+            assert candidate_store.load_candidate_set(set_id, session_id=session_id) is None, f"{s} expired set loads nothing under the store clock"
             probe = candidate_store.get_candidate(
                 set_id, CANDIDATE_V1, session_id=session_id)
-            self.assertTrue(probe[0] is None and probe[2] is not None,
-                            f"{s} expired identity never reactivates")
-            self.assertIn("expired", probe[2], f"{s} probe names expiry")
+            assert probe[0] is None, f"{s} expired identity never reactivates"
+            assert probe[2] is not None, f"{s} expired identity never reactivates"
+            assert "expired" in probe[2], f"{s} probe names expiry"
         # Store-record snapshots run under the real clock; the loop rejection
         # evidence itself is clock-independent.
         self._assert_rejected_present(
@@ -460,23 +399,17 @@ class _CandidateReferenceBase(unittest.IsolatedAsyncioTestCase):
                 message=REPLAN_MESSAGE, rounds=rounds, turn_id="t3",
                 prepare_leg=make_leg(destination="Coney Island"),
                 fixed_candidate_id=CANDIDATE_V2)
-            self.assertEqual(
-                [name for name, _input in ev.trace.tool_calls],
-                ["prepare_route_options", "present_route"],
-                f"{s} recovery runs the canonical chain")
-            self.assertEqual(len(route_cards(ev.events)), 1,
-                             f"{s} recovery emits exactly one card")
+            assert [name for name, _input in ev.trace.tool_calls] == ["prepare_route_options", "present_route"], f"{s} recovery runs the canonical chain"
+            assert len(route_cards(ev.events)) == 1, f"{s} recovery emits exactly one card"
             new_set_id = ev.state["active_candidate_set_id"]
-            self.assertTrue(bool(new_set_id) and new_set_id.startswith("cs_"),
-                            f"{s} recovery issues a new server set")
-            self.assertNotEqual(new_set_id, set_id, f"{s} recovery set is fresh")
-            self.assertEqual(ev.state["selected_candidate_id"], CANDIDATE_V2,
-                             f"{s} recovery commits the new candidate")
+            assert new_set_id
+            assert new_set_id.startswith("cs_"), f"{s} recovery issues a new server set"
+            assert new_set_id != set_id, f"{s} recovery set is fresh"
+            assert ev.state["selected_candidate_id"] == CANDIDATE_V2, f"{s} recovery commits the new candidate"
             new_record = candidate_store.load_candidate_set(
                 new_set_id, session_id=session_id)
-            self.assertTrue(new_record["presented"], f"{s} recovery set presented")
-            self.assertEqual(new_record["selected_candidate_id"], CANDIDATE_V2,
-                             f"{s} recovery set records selection")
+            assert new_record["presented"], f"{s} recovery set presented"
+            assert new_record["selected_candidate_id"] == CANDIDATE_V2, f"{s} recovery set records selection"
             rounds = [
                 _turn_round("present_route", "tu-old-again",
                             {"candidate_id": CANDIDATE_V1}),
@@ -495,10 +428,7 @@ class _CandidateReferenceBase(unittest.IsolatedAsyncioTestCase):
                 session_before=t4_session_before,
                 record_before=t4_record_before,
                 set_id=new_set_id, session_id=session_id, session=session)
-            self.assertEqual(
-                trip_state_module.get_trip_state(session)["selected_candidate_id"],
-                CANDIDATE_V2,
-                f"{s} recovery selection survives the old probe")
+            assert trip_state_module.get_trip_state(session)["selected_candidate_id"] == CANDIDATE_V2, f"{s} recovery selection survives the old probe"
 
 
 __all__ = ("TurnSnapshot", "_CandidateReferenceBase")

@@ -13,26 +13,31 @@ from __future__ import annotations
 import json
 import re
 import time
+from collections.abc import Iterable, Mapping
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any
 
-from evaluation.route_intelligence import advisor_context, advisor
-from app.services.agent.tools.transit import venue_crowd_window as venues
 from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools.transit import venue_crowd_window as venues
 from app.services.trips import scoring
 from app.services.trips.route_incidents.association import (
     attach_verified_match_association,
     normalize_matcher_association,
 )
-from app.services.trips.route_incidents.merge import filter_current_incidents, merge_incident_evidence
+from app.services.trips.route_incidents.merge import (
+    filter_current_incidents,
+    merge_incident_evidence,
+)
+
+from evaluation.route_intelligence import advisor, advisor_context
 
 from .replay import (
     CANONICAL_SOURCE_NAMES,
     ReplayFixtureAdapters,
     ReplayScenario,
-    ScenarioValidationError,
     SourceStatus,
+    _invalid,
     canonical_sources,
     load_all_scenarios,
     load_scenario,
@@ -151,8 +156,8 @@ def _matched_511_as_incident(
 
 def _inside_window(now: datetime, start: object, end: object) -> bool:
     try:
-        parsed_start = datetime.fromisoformat(str(start).replace("Z", "+00:00"))
-        parsed_end = datetime.fromisoformat(str(end).replace("Z", "+00:00"))
+        parsed_start = datetime.fromisoformat(str(start))
+        parsed_end = datetime.fromisoformat(str(end))
     except ValueError:
         return False
     if parsed_start.tzinfo is None or parsed_end.tzinfo is None:
@@ -292,9 +297,10 @@ def _intelligence_transcript(
     variants = inputs.advisor_ablation_outputs
     if variants:
         if source not in variants:
-            raise ScenarioValidationError(
+            missing_variant = (
                 f"advisor_outputs.ablations is missing the requested {source} variant"
             )
+            _invalid(missing_variant)
         return variants[source], f"ablation:{source}"
     # Older scenarios have no ablation recordings. They remain valid for the
     # ordinary comparison runner, but source-ablation reports flag them as not
@@ -302,33 +308,49 @@ def _intelligence_transcript(
     return inputs.advisor_outputs["intelligence"], "intelligence"
 
 
+def _require_expected_candidate_id(value: object, label: str) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"candidate-\d+", value):
+        _invalid(f"{label} must be a candidate id")
+    return value
+
+
+def _optional_expected_status(
+    expected: Mapping[str, Any], key: str, allowed: set[str]
+) -> str | None:
+    if key not in expected:
+        return None
+    value = expected[key]
+    if not isinstance(value, str) or value not in allowed:
+        _invalid(f"expected.{key} must be one of {sorted(allowed)}")
+    return value
+
+
 def _expectation(scenario: ReplayScenario) -> dict[str, Any]:
     expected = scenario.expected
     required = {"baseline_route_id", "intelligence_route_id", "route_should_change"}
     missing = required - set(expected)
     if missing:
-        raise ScenarioValidationError(f"expected is missing required fields: {sorted(missing)}")
-    baseline = expected["baseline_route_id"]
-    intelligence = expected["intelligence_route_id"]
+        _invalid(f"expected is missing required fields: {sorted(missing)}")
     changed = expected["route_should_change"]
-    if not isinstance(baseline, str) or not re.fullmatch(r"candidate-\d+", baseline):
-        raise ScenarioValidationError("expected.baseline_route_id must be a candidate id")
-    if not isinstance(intelligence, str) or not re.fullmatch(r"candidate-\d+", intelligence):
-        raise ScenarioValidationError("expected.intelligence_route_id must be a candidate id")
     if not isinstance(changed, bool):
-        raise ScenarioValidationError("expected.route_should_change must be boolean")
-    result = {"baseline_route_id": baseline, "intelligence_route_id": intelligence, "route_should_change": changed}
+        _invalid("expected.route_should_change must be boolean")
+    result = {
+        "baseline_route_id": _require_expected_candidate_id(
+            expected["baseline_route_id"], "expected.baseline_route_id"
+        ),
+        "intelligence_route_id": _require_expected_candidate_id(
+            expected["intelligence_route_id"], "expected.intelligence_route_id"
+        ),
+        "route_should_change": changed,
+    }
     optional_statuses = {
         "scan_status": {"complete", "partial", "failed", "disabled"},
         "ny511_snapshot_status": {"fresh", "stale", "unavailable", "disabled"},
     }
     for key, allowed in optional_statuses.items():
-        if key not in expected:
-            continue
-        value = expected[key]
-        if not isinstance(value, str) or value not in allowed:
-            raise ScenarioValidationError(f"expected.{key} must be one of {sorted(allowed)}")
-        result[key] = value
+        status = _optional_expected_status(expected, key, allowed)
+        if status is not None:
+            result[key] = status
     return result
 
 
@@ -408,7 +430,7 @@ async def compare_scenario(
     sources = frozenset(enabled_sources) if enabled_sources is not None else parsed.enabled_sources
     unknown = sources - {"vehicle_detection", *CANONICAL_SOURCE_NAMES}
     if unknown:
-        raise ScenarioValidationError(f"unknown enabled sources: {sorted(unknown)}")
+        _invalid(f"unknown enabled sources: {sorted(unknown)}")
     expected = _expectation(parsed)
     total_started = time.perf_counter()
     with network_disabled():

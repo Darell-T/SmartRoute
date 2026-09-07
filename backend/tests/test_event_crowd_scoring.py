@@ -66,14 +66,14 @@ class EventCrowdAssociationTests(unittest.TestCase):
             [_event()],
             fallback_time=event_crowd._parse_time("2026-07-25T23:15:00Z"),
         )
-        self.assertEqual(len(impacts), 1)
-        self.assertEqual(impacts[0]["route_index"], 0)
-        self.assertEqual(impacts[0]["exposure_window"], "ingress")
-        self.assertEqual(impacts[0]["impact_scope"], "station_crowding")
-        self.assertEqual(impacts[0]["lines"], ["A"])
-        self.assertEqual(impacts[0]["category"], "other")
-        self.assertEqual(impacts[0]["freshness_status"], "current")
-        self.assertEqual(impacts[0]["source_ref"], "structured:evt-msg")
+        assert len(impacts) == 1
+        assert impacts[0]["route_index"] == 0
+        assert impacts[0]["exposure_window"] == "ingress"
+        assert impacts[0]["impact_scope"] == "station_crowding"
+        assert impacts[0]["lines"] == ["A"]
+        assert impacts[0]["category"] == "other"
+        assert impacts[0]["freshness_status"] == "current"
+        assert impacts[0]["source_ref"] == "structured:evt-msg"
 
     def test_distant_event_does_not_affect_route(self):
         impacts = event_crowd.associate_events(
@@ -81,7 +81,7 @@ class EventCrowdAssociationTests(unittest.TestCase):
             [_event(latitude=40.8296, longitude=-73.9262)],
             fallback_time=event_crowd._parse_time("2026-07-25T23:15:00Z"),
         )
-        self.assertEqual(impacts, [])
+        assert impacts == []
 
     def test_event_outside_travel_window_does_not_affect_route(self):
         impacts = event_crowd.associate_events(
@@ -89,7 +89,7 @@ class EventCrowdAssociationTests(unittest.TestCase):
             [_event(start="2026-07-27T00:00:00Z", end="2026-07-27T03:00:00Z")],
             fallback_time=event_crowd._parse_time("2026-07-25T23:15:00Z"),
         )
-        self.assertEqual(impacts, [])
+        assert impacts == []
 
     def test_ingress_and_egress_are_distinct(self):
         ingress = event_crowd.associate_events(
@@ -102,8 +102,8 @@ class EventCrowdAssociationTests(unittest.TestCase):
             [_event()],
             fallback_time=event_crowd._parse_time("2026-07-26T02:45:00Z"),
         )
-        self.assertEqual(ingress[0]["exposure_window"], "ingress")
-        self.assertEqual(egress[0]["exposure_window"], "egress")
+        assert ingress[0]["exposure_window"] == "ingress"
+        assert egress[0]["exposure_window"] == "egress"
 
     def test_duplicate_provider_events_merge_per_candidate(self):
         impacts = event_crowd.associate_events(
@@ -111,7 +111,7 @@ class EventCrowdAssociationTests(unittest.TestCase):
             [_event(), _event()],
             fallback_time=event_crowd._parse_time("2026-07-25T23:15:00Z"),
         )
-        self.assertEqual(len(impacts), 1)
+        assert len(impacts) == 1
 
     def test_event_penalty_reaches_deterministic_route_score(self):
         routes = [_route(total_minutes=30), _route(stop_name="Canal St", latitude=40.718, longitude=-74.0, total_minutes=34)]
@@ -122,9 +122,9 @@ class EventCrowdAssociationTests(unittest.TestCase):
         )
         scored = scoring._score_routes(routes, [], ticketmaster_event_impacts=impacts)
         score_by_index = scoring._score_by_index(scored)
-        self.assertGreater(score_by_index[0]["event_crowd_penalty"], 0)
-        self.assertEqual(score_by_index[1]["event_crowd_penalty"], 0)
-        self.assertGreater(score_by_index[0]["score"], score_by_index[1]["score"])
+        assert score_by_index[0]["event_crowd_penalty"] > 0
+        assert score_by_index[1]["event_crowd_penalty"] == 0
+        assert score_by_index[0]["score"] > score_by_index[1]["score"]
 
     def test_official_x_penalty_is_reduced_and_capped(self):
         event = {
@@ -141,8 +141,8 @@ class EventCrowdAssociationTests(unittest.TestCase):
             fallback_time=event_crowd._parse_time("2026-07-25T23:15:00Z"),
         )
 
-        self.assertEqual(impacts[0]["risk_score"], 5.0)
-        self.assertEqual(impacts[0]["source_class"], "official_x")
+        assert impacts[0]["risk_score"] == 5.0
+        assert impacts[0]["source_class"] == "official_x"
 
     def test_independent_x_evidence_cannot_change_score(self):
         event = {
@@ -159,9 +159,9 @@ class EventCrowdAssociationTests(unittest.TestCase):
             fallback_time=event_crowd._parse_time("2026-07-25T23:15:00Z"),
         )
 
-        self.assertEqual(impacts[0]["risk_score"], 0)
-        self.assertIsNone(impacts[0]["crowd_level"])
-        self.assertEqual(event_crowd.route_event_penalty(0, impacts), 0)
+        assert impacts[0]["risk_score"] == 0
+        assert impacts[0]["crowd_level"] is None
+        assert event_crowd.route_event_penalty(0, impacts) == 0
 
 
 class EventCrowdCollectionTests(unittest.IsolatedAsyncioTestCase):
@@ -178,8 +178,8 @@ class EventCrowdCollectionTests(unittest.IsolatedAsyncioTestCase):
 
         hubs = event_crowd.search_hubs(routes)
 
-        self.assertLessEqual(len(hubs), event_crowd._MAX_SEARCH_HUBS)
-        self.assertEqual({hub.route_index for hub in hubs}, set(range(5)))
+        assert len(hubs) <= event_crowd._MAX_SEARCH_HUBS
+        assert {hub.route_index for hub in hubs} == set(range(5))
 
     def test_hub_selection_round_robins_secondary_points(self):
         routes = [
@@ -215,14 +215,8 @@ class EventCrowdCollectionTests(unittest.IsolatedAsyncioTestCase):
 
         hubs = event_crowd.search_hubs(routes)
 
-        self.assertEqual(
-            [hub.name for hub in hubs[:2]],
-            ["Destination A", "Destination B"],
-        )
-        self.assertEqual(
-            {hub.route_index for hub in hubs[2:]},
-            {0, 1},
-        )
+        assert [hub.name for hub in hubs[:2]] == ["Destination A", "Destination B"]
+        assert {hub.route_index for hub in hubs[2:]} == {0, 1}
 
     async def test_provider_failure_and_no_relevant_events_are_distinct(self):
         async def unavailable(_tool_input, _ctx):
@@ -244,8 +238,8 @@ class EventCrowdCollectionTests(unittest.IsolatedAsyncioTestCase):
             Ctx(),
             lookup=empty,
         )
-        self.assertEqual(failed[0], "provider_unavailable")
-        self.assertEqual(clear[0], "no_relevant_events")
+        assert failed[0] == "provider_unavailable"
+        assert clear[0] == "no_relevant_events"
 
     async def test_collection_deduplicates_events_from_concurrent_hub_queries(self):
         async def duplicate(_tool_input, _ctx):
@@ -259,9 +253,9 @@ class EventCrowdCollectionTests(unittest.IsolatedAsyncioTestCase):
             Ctx(),
             lookup=duplicate,
         )
-        self.assertEqual(status, "available")
-        self.assertEqual(len(impacts), 1)
-        self.assertEqual(failures, [])
+        assert status == "available"
+        assert len(impacts) == 1
+        assert failures == []
 
     async def test_mixed_event_lookup_with_relevant_impact_is_partial(self):
         travel_time = event_crowd._parse_time("2026-07-25T23:15:00Z")
@@ -299,9 +293,9 @@ class EventCrowdCollectionTests(unittest.IsolatedAsyncioTestCase):
             search_points=search_points,
         )
 
-        self.assertEqual(status, "partial")
-        self.assertEqual(len(impacts), 1)
-        self.assertEqual(failures, ["second event hub timed out"])
+        assert status == "partial"
+        assert len(impacts) == 1
+        assert failures == ["second event hub timed out"]
         coverage = route_option_evidence.coverage_for_prepared(
             SimpleNamespace(
                 event_evidence_status=status,
@@ -309,7 +303,7 @@ class EventCrowdCollectionTests(unittest.IsolatedAsyncioTestCase):
                 evidence_envelopes={},
             )
         )
-        self.assertEqual(coverage["events"], "partial")
+        assert coverage["events"] == "partial"
 
     async def test_mixed_event_lookup_without_impact_is_partial(self):
         travel_time = event_crowd._parse_time("2026-07-25T23:15:00Z")
@@ -347,9 +341,9 @@ class EventCrowdCollectionTests(unittest.IsolatedAsyncioTestCase):
             search_points=search_points,
         )
 
-        self.assertEqual(status, "partial")
-        self.assertEqual(impacts, [])
-        self.assertEqual(failures, ["second event hub timed out"])
+        assert status == "partial"
+        assert impacts == []
+        assert failures == ["second event hub timed out"]
 
     async def test_unrepresentable_candidate_makes_coverage_partial(self):
         async def empty(_tool_input, _ctx):
@@ -364,9 +358,9 @@ class EventCrowdCollectionTests(unittest.IsolatedAsyncioTestCase):
             lookup=empty,
         )
 
-        self.assertEqual(status, "partial")
-        self.assertEqual(impacts, [])
-        self.assertEqual(failures, [])
+        assert status == "partial"
+        assert impacts == []
+        assert failures == []
 
         selected = {
             "hard_constraints_satisfied": True,
@@ -390,11 +384,8 @@ class EventCrowdCollectionTests(unittest.IsolatedAsyncioTestCase):
             {"candidates": [{"digest": selected}, {"digest": alternative}]},
             {"digest": selected},
         )
-        self.assertNotIn(
-            "lower_event_crowd_exposure",
-            evaluation["supported_reason_codes"],
-        )
-        self.assertTrue(evaluation["crowd_limitation_required"])
+        assert "lower_event_crowd_exposure" not in evaluation["supported_reason_codes"]
+        assert evaluation["crowd_limitation_required"]
 
     async def test_failed_candidate_hub_makes_aggregate_partial(self):
         routes = [
@@ -421,9 +412,9 @@ class EventCrowdCollectionTests(unittest.IsolatedAsyncioTestCase):
             lookup=mixed,
         )
 
-        self.assertEqual(status, "partial")
-        self.assertEqual(impacts, [])
-        self.assertEqual(failures, ["candidate hub timed out"])
+        assert status == "partial"
+        assert impacts == []
+        assert failures == ["candidate hub timed out"]
 
 
 class RouteScoreFormulaRegressionTests(unittest.TestCase):
@@ -435,7 +426,7 @@ class RouteScoreFormulaRegressionTests(unittest.TestCase):
 
         scored = scoring._route_score(route, [])
 
-        self.assertEqual(scored["total_minutes"], 46)
+        assert scored["total_minutes"] == 46
 
     def test_route_score_matches_shared_component_formula(self):
         route = _route(total_minutes=30)
@@ -451,24 +442,14 @@ class RouteScoreFormulaRegressionTests(unittest.TestCase):
             routing_preference="LESS_WALKING",
             preferred_modes=["BUS"],
         )
-        self.assertEqual(scored["total_minutes"], 30)
-        self.assertEqual(scored["transfers"], 0)
-        self.assertEqual(scored["alert_count"], 1)
-        self.assertEqual(scored["event_crowd_penalty"], 5.0)
-        self.assertEqual(scored["walking_penalty"], 0)
-        self.assertEqual(scored["preferred_mode_penalty"], 4)
-        self.assertEqual(
-            scored["score"],
-            scoring._component_score_total(
-                total_minutes=scored["total_minutes"],
-                transfers=scored["transfers"],
-                alert_count=scored["alert_count"],
-                event_crowd_penalty=scored["event_crowd_penalty"],
-                walking_penalty=scored["walking_penalty"],
-                preferred_mode_penalty=scored["preferred_mode_penalty"],
-            ),
-        )
-        self.assertEqual(scored["score"], 30 + 0 + 8 + 5.0 + 0 + 4)
+        assert scored["total_minutes"] == 30
+        assert scored["transfers"] == 0
+        assert scored["alert_count"] == 1
+        assert scored["event_crowd_penalty"] == 5.0
+        assert scored["walking_penalty"] == 0
+        assert scored["preferred_mode_penalty"] == 4
+        assert scored["score"] == scoring._component_score_total(total_minutes=scored["total_minutes"], transfers=scored["transfers"], alert_count=scored["alert_count"], event_crowd_penalty=scored["event_crowd_penalty"], walking_penalty=scored["walking_penalty"], preferred_mode_penalty=scored["preferred_mode_penalty"])
+        assert scored["score"] == 30 + 0 + 8 + 5.0 + 0 + 4
 
     def test_transfer_and_street_walk_components_unchanged(self):
         route = [
@@ -477,21 +458,11 @@ class RouteScoreFormulaRegressionTests(unittest.TestCase):
             {"type": "SUBWAY", "route_id": "B", "departure_stop": "b", "arrival_stop": "c"},
         ]
         scored = scoring._route_score(route, [], routing_preference="LESS_WALKING")
-        self.assertEqual(scored["transfers"], 1)
-        self.assertEqual(scored["street_walking_seconds"], 120)
-        self.assertEqual(scored["walking_penalty"], 4)
-        self.assertEqual(scored["event_crowd_penalty"], 0)
-        self.assertEqual(
-            scored["score"],
-            scoring._component_score_total(
-                total_minutes=scored["total_minutes"],
-                transfers=scored["transfers"],
-                alert_count=scored["alert_count"],
-                event_crowd_penalty=scored["event_crowd_penalty"],
-                walking_penalty=scored["walking_penalty"],
-                preferred_mode_penalty=scored["preferred_mode_penalty"],
-            ),
-        )
+        assert scored["transfers"] == 1
+        assert scored["street_walking_seconds"] == 120
+        assert scored["walking_penalty"] == 4
+        assert scored["event_crowd_penalty"] == 0
+        assert scored["score"] == scoring._component_score_total(total_minutes=scored["total_minutes"], transfers=scored["transfers"], alert_count=scored["alert_count"], event_crowd_penalty=scored["event_crowd_penalty"], walking_penalty=scored["walking_penalty"], preferred_mode_penalty=scored["preferred_mode_penalty"])
 
     def test_alert_impact_is_weighted_by_rider_relevant_severity(self):
         route = _route(total_minutes=30)
@@ -509,11 +480,11 @@ class RouteScoreFormulaRegressionTests(unittest.TestCase):
             [{"header": "Service suspended", "route_ids": ["A"]}],
         )
 
-        self.assertEqual(elevator["alert_penalty"], 0)
-        self.assertEqual(minor["alert_penalty"], 4)
-        self.assertEqual(suspended["alert_penalty"], 24)
-        self.assertLess(elevator["score"], minor["score"])
-        self.assertLess(minor["score"], suspended["score"])
+        assert elevator["alert_penalty"] == 0
+        assert minor["alert_penalty"] == 4
+        assert suspended["alert_penalty"] == 24
+        assert elevator["score"] < minor["score"]
+        assert minor["score"] < suspended["score"]
 
     def test_planned_operating_service_change_is_not_a_material_alert(self):
         route = _route(total_minutes=30)
@@ -531,8 +502,8 @@ class RouteScoreFormulaRegressionTests(unittest.TestCase):
         }
 
         planned = scoring._route_score(route, [planned_local])
-        self.assertEqual(planned["alert_count"], 0)
-        self.assertEqual(planned["alert_penalty"], 0)
+        assert planned["alert_count"] == 0
+        assert planned["alert_penalty"] == 0
 
         suspended = scoring._route_score(
             route,
@@ -545,8 +516,8 @@ class RouteScoreFormulaRegressionTests(unittest.TestCase):
                 }
             ],
         )
-        self.assertEqual(suspended["alert_count"], 1)
-        self.assertEqual(suspended["alert_penalty"], 24)
+        assert suspended["alert_count"] == 1
+        assert suspended["alert_penalty"] == 24
 
         severe = scoring._route_score(
             route,
@@ -559,15 +530,15 @@ class RouteScoreFormulaRegressionTests(unittest.TestCase):
                 }
             ],
         )
-        self.assertEqual(severe["alert_count"], 1)
-        self.assertEqual(severe["alert_penalty"], 16)
+        assert severe["alert_count"] == 1
+        assert severe["alert_penalty"] == 16
 
         legacy = scoring._route_score(
             route,
             [{"header": "Unknown A service notice", "route_ids": ["A"]}],
         )
-        self.assertEqual(legacy["alert_count"], 1)
-        self.assertEqual(legacy["alert_penalty"], 8)
+        assert legacy["alert_count"] == 1
+        assert legacy["alert_penalty"] == 8
 
 
 if __name__ == "__main__":

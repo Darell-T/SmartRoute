@@ -1,4 +1,4 @@
-import type { LiveFeedResponse } from "@/types/api";
+import type { LiveArrival, LiveFeedResponse } from "@/types/api";
 import type {
   Arrival,
   NearbyGroupedArrival,
@@ -22,7 +22,10 @@ import {
 } from "./route-metadata";
 import type { ArrivalRows } from "./types";
 
-function normalizeWay(direction: unknown, stopId?: string): NearbyTransitDirection {
+function normalizeWay(
+  direction: LiveArrival["direction"],
+  stopId?: string,
+): NearbyTransitDirection {
   const label = String(direction ?? "").toLowerCase();
   if (
     label.includes("downtown")
@@ -44,7 +47,10 @@ function normalizeWay(direction: unknown, stopId?: string): NearbyTransitDirecti
   return "unknown";
 }
 
-function busWay(stopCompass: unknown, direction: unknown): NearbyTransitDirection {
+function busWay(
+  stopCompass: LiveArrival["stop_compass"],
+  direction: LiveArrival["direction"],
+): NearbyTransitDirection {
   // OBA bus stops carry a compass heading (NE, SW, E, ...). Manhattan's
   // grid tilt means uptown service reads as N/NE/NW and downtown as
   // S/SE/SW. Pure E/W and numeric BusTime directions are not passenger
@@ -69,7 +75,7 @@ function isDirectionOnlyDestination(value: string, direction: NearbyTransitDirec
 }
 
 function destinationForArrival(
-  arrival: Record<string, unknown>,
+  arrival: LiveArrival,
   line: string,
   direction: NearbyTransitDirection,
   mode: "subway" | "bus",
@@ -97,7 +103,7 @@ function destinationForArrival(
 }
 
 function servicePatternForArrival(
-  arrival: Record<string, unknown>,
+  arrival: LiveArrival,
   line: string,
   mode: "subway" | "bus",
 ): string | undefined {
@@ -114,32 +120,32 @@ function servicePatternForArrival(
 }
 
 function walkMinutesForDistance(meters: number | undefined): number | undefined {
-  if (typeof meters !== "number" || !Number.isFinite(meters)) return undefined;
+  if (meters === undefined || !Number.isFinite(meters)) return undefined;
   return Math.max(1, Math.round(meters / 84));
 }
 
 function distanceMilesForMeters(meters: number | undefined): number | undefined {
-  if (typeof meters !== "number" || !Number.isFinite(meters)) return undefined;
+  if (meters === undefined || !Number.isFinite(meters)) return undefined;
   return Number(Math.max(0.1, meters / 1609.344).toFixed(1));
 }
 
-function stationNameForArrival(arrival: Record<string, unknown>): string | undefined {
+function stationNameForArrival(arrival: LiveArrival): string | undefined {
   return (
     cleanDestinationLabel(arrival.station_name ?? arrival.parent_stop_name)
     || undefined
   );
 }
 
-function stationDistanceForArrival(arrival: Record<string, unknown>): number | undefined {
-  const distance = Number(arrival.distance_m);
-  return Number.isFinite(distance) ? distance : undefined;
+function stationDistanceForArrival(arrival: LiveArrival): number | undefined {
+  const distance = arrival.distance_m;
+  return distance !== undefined && Number.isFinite(distance) ? distance : undefined;
 }
 
 function isInsideHalfMile(distanceM: number | undefined): boolean {
-  return typeof distanceM !== "number" || distanceM <= HALF_MILE_METERS;
+  return distanceM === undefined || distanceM <= HALF_MILE_METERS;
 }
 
-function predictionTypeForArrival(arrival: Record<string, unknown>): "live" | "scheduled" {
+function predictionTypeForArrival(arrival: LiveArrival): "live" | "scheduled" {
   const raw = String(
     arrival.prediction_type
       ?? arrival.predictionType
@@ -229,7 +235,7 @@ function firstArrivalMinutes(arrival: Arrival): number {
 
 function longHeadwayPenalty(arrival: Arrival): number {
   const [first, second] = arrival.arrivalMinutes;
-  if (typeof first !== "number" || typeof second !== "number") return 0;
+  if (first === undefined || second === undefined) return 0;
   const gap = second - first;
   if (gap >= 20) return 3;
   if (gap >= 15) return 1.5;
@@ -475,8 +481,7 @@ export function buildArrivalRows(
   nowMs = Date.now(),
 ): ArrivalRows {
   const arrivals: Arrival[] = [];
-  for (const raw of liveFeed?.arrivals ?? []) {
-    const arrival = raw as unknown as Record<string, unknown>;
+  for (const arrival of liveFeed?.arrivals ?? []) {
     const arrivalTime = Number(arrival.arrival_time);
     if (!Number.isFinite(arrivalTime)) continue;
     const line = normalizeRouteId(String(arrival.route_id ?? "").trim());

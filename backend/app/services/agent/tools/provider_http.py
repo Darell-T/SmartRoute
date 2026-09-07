@@ -9,6 +9,8 @@ wrap the reason into whatever return shape their own executor needs
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
+
 import httpx
 
 
@@ -22,14 +24,12 @@ async def fetch_json(
     params: dict | None = None,
     json_body: dict | None = None,
     headers: dict | None = None,
+    on_response: Callable[[int, Mapping[str, str]], None] | None = None,
 ) -> tuple[dict | list | None, str | None]:
     """GET or POST `url` and return its parsed JSON body. `log_tag` (for
     example, ``agent-place-search``) prefixes the diagnostic line on failure;
     `what` (e.g. "place search") names the operation in both that line and
     the returned rider-facing reason string."""
-    # Only pass through kwargs each call actually uses -- matches each tool's
-    # original client.get/post call shape exactly (e.g. event_lookup never
-    # sent headers, accessibility_status sends neither params nor headers).
     kwargs: dict = {}
     if params is not None:
         kwargs["params"] = params
@@ -41,6 +41,8 @@ async def fetch_json(
                 response = await client.get(url, **kwargs)
             else:
                 response = await client.post(url, json=json_body, **kwargs)
+            if on_response is not None:
+                on_response(response.status_code, response.headers)
             response.raise_for_status()
             return response.json(), None
     except httpx.TimeoutException:
@@ -49,18 +51,22 @@ async def fetch_json(
     except httpx.HTTPStatusError as exc:
         status = exc.response.status_code
         print(f"[{log_tag}] {what} HTTP {status}")
-        if status in {401, 403}:
-            return None, f"{what} authentication failed"
-        if status == 429:
-            return None, f"{what} rate limited"
-        if status in {400, 404, 422}:
-            return None, f"{what} request was invalid"
-        if status >= 500:
-            return None, f"{what} is temporarily unavailable"
-        return None, f"{what} failed"
+        return None, _http_status_reason(status, what)
     except httpx.RequestError as exc:
         print(f"[{log_tag}] {what} request failed: {type(exc).__name__}")
         return None, f"{what} failed"
     except (ValueError, TypeError) as exc:
         print(f"[{log_tag}] {what} invalid JSON: {exc!r}")
         return None, f"{what} returned an unexpected response"
+
+
+def _http_status_reason(status: int, what: str) -> str:
+    if status in {401, 403}:
+        return f"{what} authentication failed"
+    if status == 429:
+        return f"{what} rate limited"
+    if status in {400, 404, 422}:
+        return f"{what} request was invalid"
+    if status >= 500:
+        return f"{what} is temporarily unavailable"
+    return f"{what} failed"

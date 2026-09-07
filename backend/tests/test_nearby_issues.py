@@ -1,5 +1,5 @@
-from types import SimpleNamespace
 import unittest
+from types import SimpleNamespace
 
 from app.services.live_feed.snapshot import build_nearby_transit_issues
 
@@ -58,45 +58,36 @@ class NearbyIssuesTest(unittest.TestCase):
     def test_confirmed_nearby_stall_uses_station_hops_and_product_copy(self):
         issues = build([alert()])
 
-        self.assertEqual(
-            issues,
-            [
-                {
-                    "id": "mta-1",
-                    "route_ids": ["Q"],
-                    "station_id": "D38",
-                    "station_name": "Prospect Park",
-                    "stops_away": 2,
-                    "confidence": "confirmed",
-                    "status": "stalled",
-                    "summary": (
-                        "Q train stalled near Prospect Park "
-                        "· 2 stops from Church Av"
-                    ),
-                    "source_types": ["mta_service_alert"],
-                    "observed_at": "2023-11-14T22:13:20+00:00",
-                    "relevance": "nearby_line",
-                }
-            ],
-        )
+        assert issues == [
+            {
+                "id": "mta-1",
+                "route_ids": ["Q"],
+                "station_id": "D38",
+                "station_name": "Prospect Park",
+                "stops_away": 2,
+                "confidence": "confirmed",
+                "status": "stalled",
+                "summary": (
+                    "Q train stalled near Prospect Park "
+                    "· 2 stops from Church Av"
+                ),
+                "source_types": ["mta_service_alert"],
+                "observed_at": "2023-11-14T22:13:20+00:00",
+                "relevance": "nearby_line",
+            }
+        ]
 
     def test_unrelated_distant_and_unlocalized_alerts_are_suppressed(self):
-        self.assertEqual(build([alert(route_id="A")]), [])
-        self.assertEqual(build([alert(stop_id="D44")]), [])
-        self.assertEqual(
-            build([alert(stop_id="", header="Stalled Q train")]),
-            [],
-        )
+        assert build([alert(route_id="A")]) == []
+        assert build([alert(stop_id="D44")]) == []
+        assert build([alert(stop_id="", header="Stalled Q train")]) == []
 
     def test_non_stall_provider_text_is_not_promoted_to_issue(self):
-        self.assertEqual(
-            build([alert(header="Q trains are delayed in both directions")]),
-            [],
-        )
+        assert build([alert(header="Q trains are delayed in both directions")]) == []
 
     def test_selected_route_marks_local_issue_as_planned_route_relevant(self):
         issue = build([alert()], selected={"Q"})[0]
-        self.assertEqual(issue["relevance"], "planned_route")
+        assert issue["relevance"] == "planned_route"
 
 
 if __name__ == "__main__":

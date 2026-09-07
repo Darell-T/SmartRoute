@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 from app.services.trips.preparation.prepare import PreparedLeg
 
@@ -17,8 +18,8 @@ def _direction_matches(left: object, right: object) -> bool:
     def normalize(value: object) -> str:
         return " ".join(
             str(value or "")
-            .replace("–", "-")
-            .replace("—", "-")
+            .replace("\u2013", "-")
+            .replace("\u2014", "-")
             .replace("_", " ")
             .split()
         ).casefold()
@@ -46,6 +47,7 @@ class _MergedEnvelope:
         self._payload = payload
 
     def status_at(self, now: Any = None) -> str:
+        del now
         return str(self._payload.get("status") or "unavailable")
 
     def current_payload(self, now: Any = None) -> Any:
@@ -54,6 +56,7 @@ class _MergedEnvelope:
         return self._payload.get("payload")
 
     def to_model_dict(self, *, empty: Any, now: Any = None) -> dict[str, Any]:
+        del now
         result = dict(self._payload)
         if result.get("status") != "current":
             result["payload"] = empty
@@ -282,9 +285,7 @@ def merge_coverage(legs: list[PreparedLeg]) -> dict[str, str]:
                 result.setdefault(key, value)
                 continue
             current = result.get(key)
-            if current in {None, "not_required"}:
-                result[key] = value
-            elif _STATUS_ORDER.get(value, 4) > _STATUS_ORDER.get(current, 0):
+            if current in {None, "not_required"} or _STATUS_ORDER.get(value, 4) > _STATUS_ORDER.get(current, 0):
                 result[key] = value
     return result
 
@@ -470,11 +471,11 @@ __all__ = (
     "candidate_evidence_for_route",
     "coverage_for_prepared",
     "merge_candidate_evidence",
-    "merge_evidence_envelopes",
+    "merge_coverage",
     "merge_event_status",
+    "merge_evidence_envelopes",
     "merge_incident_metadata",
     "merge_incident_metadata_values",
-    "merge_coverage",
     "merge_serialized_envelopes",
     "serialize_evidence_envelopes",
     "sum_timings",

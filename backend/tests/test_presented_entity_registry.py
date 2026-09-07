@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import unittest
 
-from app.services.agent import discovery_store
-from app.services.agent.tools.places import place_reference, present_places
-from app.services.agent.tools._types import ToolContext
 from app.services import cache
+from app.services.agent import discovery_store
+from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools.places import place_reference, present_places
 
 
 def _place(name: str, provider_id: str, address: str) -> dict:
@@ -42,9 +42,13 @@ class PresentedEntityRegistryTests(unittest.IsolatedAsyncioTestCase):
                 ],
                 "research_used": False,
             },
-            ToolContext(session=session, session_id=session_id),
+            ToolContext(
+                session=session,
+                session_id=session_id,
+                turn_id=f"turn-{set_id}",
+            ),
         )
-        self.assertGreaterEqual(len(session["presented_entity_registry"]), len(place_ids))
+        assert len(session["presented_entity_registry"]) >= len(place_ids)
 
     async def test_presented_places_survive_a_later_search_and_name_resolves(self):
         session_id = "sess-registry"
@@ -57,7 +61,9 @@ class PresentedEntityRegistryTests(unittest.IsolatedAsyncioTestCase):
         )
         first = discovery_store.load_discovery_set(first_set, session_id=session_id)
         assert first is not None
-        await self._present(session, session_id, first_set, [first["places"][0]["place_id"]])
+        await self._present(
+            session, session_id, first_set, [first["places"][0]["place_id"]]
+        )
 
         second_set = discovery_store.store_discovery_set(
             session_id=session_id,
@@ -70,12 +76,14 @@ class PresentedEntityRegistryTests(unittest.IsolatedAsyncioTestCase):
             session_id=session_id,
             description="Blue Bottle",
         )
-        self.assertIsNone(error)
-        self.assertEqual(resolved_set, first_set)
-        self.assertEqual(place["name"], "Blue Bottle")
-        self.assertNotEqual(first_set, second_set)
+        assert error is None
+        assert resolved_set == first_set
+        assert place["name"] == "Blue Bottle"
+        assert first_set != second_set
 
-    async def test_duplicate_names_require_clarification_but_same_identity_is_reused(self):
+    async def test_duplicate_names_require_clarification_but_same_identity_is_reused(
+        self,
+    ):
         session_id = "sess-ambiguous"
         session = {"presented_entity_registry": []}
         first_set = discovery_store.store_discovery_set(
@@ -95,7 +103,7 @@ class PresentedEntityRegistryTests(unittest.IsolatedAsyncioTestCase):
         )
         same = discovery_store.load_discovery_set(same_set, session_id=session_id)
         assert same is not None
-        self.assertEqual(same["places"][0]["place_id"], first_id)
+        assert same["places"][0]["place_id"] == first_id
 
         other_set = discovery_store.store_discovery_set(
             session_id=session_id,
@@ -115,8 +123,8 @@ class PresentedEntityRegistryTests(unittest.IsolatedAsyncioTestCase):
             session_id=session_id,
             description="Cafe",
         )
-        self.assertIsNone(place)
-        self.assertIn("multiple", error or "")
+        assert place is None
+        assert "multiple" in (error or "")
 
     async def test_ordinal_uses_newest_presentation_that_contains_it(self):
         session_id = "sess-ordinal"
@@ -155,11 +163,13 @@ class PresentedEntityRegistryTests(unittest.IsolatedAsyncioTestCase):
             session_id=session_id,
             ordinal=2,
         )
-        self.assertIsNone(error)
-        self.assertEqual(resolved_set, first_set)
-        self.assertEqual(place["name"], "Two")
+        assert error is None
+        assert resolved_set == first_set
+        assert place["name"] == "Two"
 
-    async def test_place_reference_rebinds_the_source_set_for_an_old_presented_name(self):
+    async def test_place_reference_rebinds_the_source_set_for_an_old_presented_name(
+        self,
+    ):
         session_id = "sess-bind"
         session = {"presented_entity_registry": []}
         first_set = discovery_store.store_discovery_set(
@@ -169,7 +179,9 @@ class PresentedEntityRegistryTests(unittest.IsolatedAsyncioTestCase):
         )
         first = discovery_store.load_discovery_set(first_set, session_id=session_id)
         assert first is not None
-        await self._present(session, session_id, first_set, [first["places"][0]["place_id"]])
+        await self._present(
+            session, session_id, first_set, [first["places"][0]["place_id"]]
+        )
         second_set = discovery_store.store_discovery_set(
             session_id=session_id,
             session=session,
@@ -179,14 +191,13 @@ class PresentedEntityRegistryTests(unittest.IsolatedAsyncioTestCase):
             {"description": "Old Place"},
             ToolContext(session=session, session_id=session_id),
         )
-        self.assertTrue(result.ok, result.error)
-        self.assertEqual(
+        assert result.ok, result.error
+        assert (
             session["trip_state"]["active_discovery_set_id"]
             if isinstance(session.get("trip_state"), dict)
-            else first_set,
-            first_set,
-        )
-        self.assertNotEqual(second_set, first_set)
+            else first_set
+        ) == first_set
+        assert second_set != first_set
 
 
 if __name__ == "__main__":

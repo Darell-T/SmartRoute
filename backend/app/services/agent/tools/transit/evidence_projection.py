@@ -6,12 +6,15 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from app.services.mta.alerts import project_service_alert
-from app.services.agent.tools.transit.direction import normalize_direction, stop_id_direction
+from app.services.agent.tools.transit.direction import (
+    normalize_direction,
+    stop_id_direction,
+)
 from app.services.agent.tools.transit.evidence_matching import (
     normalized_route_ids,
     normalized_text,
 )
+from app.services.mta.alerts import project_service_alert
 
 
 def safe_result(
@@ -37,21 +40,11 @@ def safe_result(
             continue
         if requested_direction:
             matched_direction = True
-        safe_arrivals = []
-        for item in group.get("arrivals") or []:
-            if isinstance(item, dict):
-                safe_arrivals.append(
-                    {
-                        key: item[key]
-                        for key in ("expected_at", "minutes", "realtime")
-                        if key in item
-                    }
-                )
         directions.append(
             {
                 "id": group.get("id"),
                 "label": group.get("label"),
-                "arrivals": safe_arrivals,
+                "arrivals": _safe_group_arrivals(group),
             }
         )
     result["directions"] = directions
@@ -61,6 +54,18 @@ def safe_result(
         if projected is not None:
             result["catchability"] = projected
     return result
+
+
+def _safe_group_arrivals(group: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            key: item[key]
+            for key in ("expected_at", "minutes", "realtime")
+            if key in item
+        }
+        for item in group.get("arrivals") or []
+        if isinstance(item, dict)
+    ]
 
 
 def _safe_catchability(
@@ -270,7 +275,7 @@ def _event_start_text(value: object) -> str:
     if not raw:
         return ""
     try:
-        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(raw)
         if parsed.tzinfo is not None:
             parsed = parsed.astimezone(ZoneInfo("America/New_York"))
     except ValueError:

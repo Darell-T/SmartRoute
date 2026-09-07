@@ -20,7 +20,6 @@ ALLOWED_COVERAGE = frozenset({"current", "partial", "stale", "unavailable", "uns
 DEFAULT_STATE = "unconfirmed"
 DEFAULT_COVERAGE = "unscanned"
 
-# (canonical field, alias, bound, uppercase)
 LIST_FIELDS = (
     ("affected_stop_ids", "stop_ids", 24, False),
     ("affected_route_ids", "route_ids", 24, True),
@@ -30,14 +29,13 @@ LIST_FIELDS = (
 SOURCE_COVERAGE_BOUND = 8
 SOURCE_RECORDS_BOUND = 8
 
-# (canonical field, aliases, bound) for the shallow source-record allowlist
 _SOURCE_RECORD_FIELDS = (
     ("source", ("source", "provider", "source_type"), 80),
     ("source_id", ("source_id", "id", "source_identity"), 120),
     ("source_url", ("source_url", "citation_url"), 240),
     ("observed_at", ("observed_at",), 64),
 )
-# Container values are never stringified into shallow provenance fields.
+
 _CONTAINER_TYPES = (dict, list, tuple, set, frozenset)
 
 
@@ -60,10 +58,7 @@ def bounded_int(value: object) -> int:
 
 def bounded_ids(raw: object, limit: int, *, upper: bool = False) -> list[str]:
     """Normalize an ID sequence; a scalar string is one value, never characters."""
-    if isinstance(raw, str):
-        items = [raw]
-    else:
-        items = raw or ()
+    items = [raw] if isinstance(raw, str) else raw or ()
     out: list[str] = []
     for item in items:
         text = " ".join(str(item).split()).strip()
@@ -136,10 +131,7 @@ def source_identity_pairs(incident: dict[str, Any]) -> list[tuple[str, str]]:
 
 
 def _unique_sorted_ids(raw: object) -> list[str]:
-    if isinstance(raw, str):
-        items = [raw]
-    else:
-        items = raw or ()
+    items = [raw] if isinstance(raw, str) else raw or ()
     return sorted({text for text in (identity_text(item) for item in items) if text})
 
 

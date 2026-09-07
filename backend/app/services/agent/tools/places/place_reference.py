@@ -54,39 +54,68 @@ GET_PLACE_DETAILS_SCHEMA = {
 }
 
 
-async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
-    """Bind a server-owned discovery place for routing by opaque place_id.
-
-    The returned destination_label is display-only; route preparation always
-    resolves coordinates from the stored discovery record via the opaque id.
-    """
-
-    from app.services.agent import discovery_store
-    from app.services.agent import trip_state as trip_state_module
-
-    session_id = str(getattr(ctx, "session_id", None) or "").strip()
-    if not session_id:
-        return ToolResult(ok=False, error="session is required")
+def _parsed_place_selector(
+    tool_input: dict,
+) -> tuple[str, int | None, str, ToolResult | None]:
     place_id = str(tool_input.get("place_id") or "").strip()
     ordinal = tool_input.get("ordinal")
     if isinstance(ordinal, bool):
-        return ToolResult(ok=False, error="ordinal must be a whole number")
+        return "", None, "", ToolResult(ok=False, error="ordinal must be a whole number")
     ordinal_int = None
     if ordinal is not None:
         try:
             ordinal_int = int(ordinal)
         except (TypeError, ValueError):
-            return ToolResult(ok=False, error="ordinal must be a whole number")
+            return "", None, "", ToolResult(ok=False, error="ordinal must be a whole number")
     description = str(tool_input.get("description") or "").strip()
     provided = sum(
         value is not None
         for value in (place_id or None, ordinal_int, description or None)
     )
     if provided != 1:
-        return ToolResult(
+        return "", None, "", ToolResult(
             ok=False,
             error="provide exactly one of place_id, ordinal, or description",
         )
+    return place_id, ordinal_int, description, None
+
+
+def _bind_resolved_place(
+    ctx: ToolContext,
+    *,
+    explicit_set_id: str,
+    contextual_set_id: str | None,
+    discovery_set_id: str,
+    place_id: str,
+) -> None:
+    from app.services.agent import trip_state as trip_state_module
+
+    if not isinstance(ctx.session, dict):
+        return
+    if explicit_set_id or contextual_set_id:
+        # Bind the set the rider actually selected so later ordinals
+        # do not follow a newer active set.
+        trip_state_module.bind_discovery_context(
+            ctx.session,
+            discovery_set_id=discovery_set_id,
+            selected_place_id=place_id,
+        )
+        return
+    trip_state_module.bind_selected_place(ctx.session, place_id)
+
+
+async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
+    from app.services.agent import discovery_store
+    from app.services.agent import trip_state as trip_state_module
+
+    session_id = str(getattr(ctx, "session_id", None) or "").strip()
+    if not session_id:
+        return ToolResult(ok=False, error="session is required")
+    place_id, ordinal_int, description, selector_error = _parsed_place_selector(
+        tool_input
+    )
+    if selector_error:
+        return selector_error
     session = ctx.session if isinstance(ctx.session, dict) else {}
     state = trip_state_module.get_trip_state(session)
     explicit_set_id = str(tool_input.get("discovery_set_id") or "").strip()
@@ -122,20 +151,13 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
     if resolve_error or place is None:
         return ToolResult(ok=False, error=resolve_error or "place not found")
     place_id = str(place.get("place_id") or "").strip()
-    if isinstance(ctx.session, dict):
-        if explicit_set_id or contextual_set_id:
-            # A contextual or explicit set was resolved successfully: bind it
-            # (and the resolved place) so later ordinal/description follow-ups
-            # target the set the rider actually selected, not a newer active
-            # set.
-            trip_state_module.bind_discovery_context(
-                ctx.session,
-                discovery_set_id=discovery_set_id,
-                selected_place_id=place_id,
-            )
-        else:
-            # The already-active default set was used; keep current behavior.
-            trip_state_module.bind_selected_place(ctx.session, place_id)
+    _bind_resolved_place(
+        ctx,
+        explicit_set_id=explicit_set_id,
+        contextual_set_id=contextual_set_id,
+        discovery_set_id=discovery_set_id,
+        place_id=place_id,
+    )
     label = str(place.get("name") or "").strip()
     address = str(place.get("address") or "").strip()
     destination = f"{label}, {address}" if label and address else (label or address)

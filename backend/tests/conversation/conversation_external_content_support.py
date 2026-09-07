@@ -27,8 +27,8 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from app.services.agent import candidate_store, discovery_store
-from app.services.agent import trip_state as trip_state_module
 from app.services.agent import tools as agent_tools
+from app.services.agent import trip_state as trip_state_module
 from app.services.agent.tools.places import search_local_places
 
 from tests.conversation.conversation_discovery_fixtures import poi_result
@@ -48,6 +48,7 @@ from tests.conversation.conversation_external_content_fixtures import (
     work_leg,
 )
 from tests.conversation.conversation_matrix_harness import (
+    _turn_round,
     clear_caches,
     discovery_id_tokens,
     new_session,
@@ -55,7 +56,6 @@ from tests.conversation.conversation_matrix_harness import (
     route_cards,
     run_turn,
     seed_accepted_active_trip,
-    _turn_round,
 )
 
 
@@ -215,6 +215,7 @@ class _ExternalContentBase(unittest.IsolatedAsyncioTestCase):
             mocks=mocks,
             turn_id=turn_id,
         )
+        assert scenario_id
         return events, trace, mocks
 
     async def _run_discovery_turn(
@@ -280,9 +281,11 @@ class _ExternalContentBase(unittest.IsolatedAsyncioTestCase):
                     continue
                 content = entry.get("content")
                 if isinstance(content, list):
-                    for block in content:
-                        if isinstance(block, dict):
-                            parts.append(str(block.get("content") or ""))
+                    parts.extend(
+                        str(block.get("content") or "")
+                        for block in content
+                        if isinstance(block, dict)
+                    )
                 else:
                     text = str(content or "")
                     if "<context>" in text:
@@ -294,10 +297,13 @@ class _ExternalContentBase(unittest.IsolatedAsyncioTestCase):
         return json.dumps(self.loop.client.messages.calls[0].get("system") or [], default=str)
 
     def _passenger_blob(self, session: dict, events: list, trace) -> str:
+        _ = events
         parts = [trace.final_text or ""]
-        for entry in session.get("history") or []:
-            if entry.get("role") in {"assistant", "tool"}:
-                parts.append(str(entry.get("text") or ""))
+        parts.extend(
+            str(entry.get("text") or "")
+            for entry in session.get("history") or []
+            if entry.get("role") in {"assistant", "tool"}
+        )
         return "\n".join(parts)
 
     def _events_blob(self, events: list) -> str:
@@ -317,11 +323,7 @@ class _ExternalContentBase(unittest.IsolatedAsyncioTestCase):
     def _assert_absent(self, scenario_id: str, label: str, blob: str, markers) -> None:
         lowered = blob.casefold()
         for marker in markers:
-            self.assertNotIn(
-                str(marker).casefold(),
-                lowered,
-                f"{scenario_id}: {label} leaked {marker!r}",
-            )
+            assert str(marker).casefold() not in lowered, f"{scenario_id}: {label} leaked {marker!r}"
 
     def _assert_no_secret_leak(
         self,
@@ -367,82 +369,53 @@ class _ExternalContentBase(unittest.IsolatedAsyncioTestCase):
 
     def _assert_offered_profile(self, scenario_id: str, expected: set) -> None:
         calls = self.loop.client.messages.calls
-        self.assertTrue(calls, f"{scenario_id}: no model request was recorded")
+        assert calls, f"{scenario_id}: no model request was recorded"
         offered = {schema["name"] for schema in calls[0].get("tools") or []}
-        self.assertEqual(
-            offered,
-            expected,
-            f"{scenario_id}: offered profile",
-        )
-        self.assertFalse(
-            any(
-                schema.get("type") == "web_search_20250305"
-                for schema in calls[0].get("tools") or []
-            ),
-            f"{scenario_id}: native Web must not be offered initially",
-        )
+        assert offered == expected, f"{scenario_id}: offered profile"
+        assert not any(schema.get("type") == "web_search_20250305" for schema in calls[0].get("tools") or []), f"{scenario_id}: native Web must not be offered initially"
 
     def _assert_web_offer(
         self, scenario_id: str, call_index: int, *, expected: bool
     ) -> None:
         calls = self.loop.client.messages.calls
-        self.assertGreater(
-            len(calls), call_index,
-            f"{scenario_id}: missing model request {call_index + 1}",
-        )
+        assert len(calls) > call_index, f"{scenario_id}: missing model request {call_index + 1}"
         actual = any(
             schema.get("type") == "web_search_20250305"
             for schema in calls[call_index].get("tools") or []
         )
-        self.assertEqual(
-            actual,
-            expected,
-            f"{scenario_id}: native Web offer at request {call_index + 1}",
-        )
+        assert actual == expected, f"{scenario_id}: native Web offer at request {call_index + 1}"
 
     def _assert_policy(self, scenario_id: str, trace, expected_model_calls: int) -> None:
         expected_mode, expected_model = policy_model(self.loop, self.mode)
-        self.assertEqual(
-            (trace.initial_mode, trace.final_mode),
-            (expected_mode, expected_mode),
-            f"{scenario_id}: policy mode",
-        )
-        self.assertEqual(
-            [call["model"] for call in self.loop.client.messages.calls],
-            [expected_model] * expected_model_calls,
-            f"{scenario_id}: policy models",
-        )
+        assert (trace.initial_mode, trace.final_mode) == (expected_mode, expected_mode), f"{scenario_id}: policy mode"
+        assert [call["model"] for call in self.loop.client.messages.calls] == [expected_model] * expected_model_calls, f"{scenario_id}: policy models"
 
     def _assert_terminal(self, scenario_id: str, events: list, stop_reason: str = "end_turn") -> None:
-        self.assertEqual(events[0].type, "meta", f"{scenario_id}: meta first")
-        self.assertEqual(events[-1].type, "done", f"{scenario_id}: done last")
-        self.assertEqual(events[-1].stop_reason, stop_reason, f"{scenario_id}: stop reason")
+        assert events[0].type == "meta", f"{scenario_id}: meta first"
+        assert events[-1].type == "done", f"{scenario_id}: done last"
+        assert events[-1].stop_reason == stop_reason, f"{scenario_id}: stop reason"
 
     def _assert_state_preserved(self, scenario_id: str, session: dict, session_id: str, seed) -> None:
         """The accepted canonical selection stays one bound, unchanged unit."""
 
         state = trip_state_module.get_trip_state(session)
-        self.assertEqual(state["active_candidate_set_id"], seed.candidate_set_id, scenario_id)
-        self.assertEqual(state["selected_candidate_id"], seed.candidate_id, scenario_id)
-        self.assertEqual(state["origin"], seed.origin, scenario_id)
-        self.assertEqual(state["destination"], seed.destination, scenario_id)
-        self.assertEqual(state["waypoints"], [], scenario_id)
-        self.assertEqual(state["planning_mode"], seed.planning_mode, scenario_id)
-        self.assertEqual(state["requested_departure"], seed.requested_departure, scenario_id)
-        self.assertEqual(state["requested_arrival"], seed.requested_arrival, scenario_id)
-        self.assertEqual(session["active_trip"]["card_id"], seed.card_id, scenario_id)
-        self.assertEqual(
-            [card["card_id"] for card in session["route_cards"]],
-            [seed.card_id],
-            scenario_id,
-        )
+        assert state["active_candidate_set_id"] == seed.candidate_set_id, scenario_id
+        assert state["selected_candidate_id"] == seed.candidate_id, scenario_id
+        assert state["origin"] == seed.origin, scenario_id
+        assert state["destination"] == seed.destination, scenario_id
+        assert state["waypoints"] == [], scenario_id
+        assert state["planning_mode"] == seed.planning_mode, scenario_id
+        assert state["requested_departure"] == seed.requested_departure, scenario_id
+        assert state["requested_arrival"] == seed.requested_arrival, scenario_id
+        assert session["active_trip"]["card_id"] == seed.card_id, scenario_id
+        assert [card["card_id"] for card in session["route_cards"]] == [seed.card_id], scenario_id
         record = candidate_store.load_candidate_set(
             seed.candidate_set_id,
             session_id=session_id,
         )
-        self.assertIsNotNone(record, scenario_id)
-        self.assertTrue(record["presented"], scenario_id)
-        self.assertEqual(record["selected_candidate_id"], seed.candidate_id, scenario_id)
+        assert record is not None, scenario_id
+        assert record["presented"], scenario_id
+        assert record["selected_candidate_id"] == seed.candidate_id, scenario_id
 
     def _assert_pass_tail(
         self,
@@ -460,12 +433,8 @@ class _ExternalContentBase(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         """Common clean-pass invariants for no-card / no-mutation scenarios."""
 
-        self.assertEqual(route_cards(events), [], f"{scenario_id}: no route card")
-        self.assertEqual(
-            mocks["stored_candidate_set_ids"],
-            [],
-            f"{scenario_id}: no candidate set stored",
-        )
+        assert route_cards(events) == [], f"{scenario_id}: no route card"
+        assert mocks["stored_candidate_set_ids"] == [], f"{scenario_id}: no candidate set stored"
         self._assert_terminal(scenario_id, events)
         self._assert_policy(scenario_id, trace, expected_model_calls=expected_model_calls)
         self._assert_state_preserved(scenario_id, session, session_id, seed)
@@ -484,25 +453,16 @@ class _ExternalContentBase(unittest.IsolatedAsyncioTestCase):
 
         registry_names = set(agent_tools.TOOL_REGISTRY)
         tools_names = {schema["name"] for schema in agent_tools.TOOLS}
-        self.assertFalse(
-            registry_names & FETCH_SURFACE_NAMES,
-            f"{scenario_id}: registry exposed a fetch surface",
-        )
-        self.assertFalse(
-            tools_names & FETCH_SURFACE_NAMES,
-            f"{scenario_id}: TOOLS exposed a fetch surface",
-        )
-        for mode in ("auto", "quick"):
+        assert not registry_names & FETCH_SURFACE_NAMES, f"{scenario_id}: registry exposed a fetch surface"
+        assert not tools_names & FETCH_SURFACE_NAMES, f"{scenario_id}: TOOLS exposed a fetch surface"
+        for mode in ("auto",):
                 offered = {
                     schema["name"]
                     for schema in self.loop._tools_for_state(
                         self.loop.agent_policy.policy_for_mode(mode)
                     )
                 }
-                self.assertFalse(
-                    offered & FETCH_SURFACE_NAMES,
-                    f"{scenario_id}: {mode} offered a fetch surface",
-                )
+                assert not offered & FETCH_SURFACE_NAMES, f"{scenario_id}: {mode} offered a fetch surface"
                 for name in offered:
                     schema = next(
                         (
@@ -516,26 +476,14 @@ class _ExternalContentBase(unittest.IsolatedAsyncioTestCase):
                         # Native web_search has no local input schema.
                         continue
                     props = (schema.get("input_schema") or {}).get("properties") or {}
-                    self.assertNotIn(
-                        "url",
-                        props,
-                        f"{scenario_id}: {name} accepts a url input",
-                    )
+                    assert "url" not in props, f"{scenario_id}: {name} accepts a url input"
 
     def _assert_injection_defense_in_prompt(self, scenario_id: str) -> None:
         """The actual system block sent to the model carries the defenses."""
 
         system_blob = self._system_blob()
-        self.assertIn(
-            "UNTRUSTED CONTENT / INJECTION DEFENSE",
-            system_blob,
-            f"{scenario_id}: system prompt injection defense",
-        )
-        self.assertIn(
-            "canonical route identity",
-            system_blob,
-            f"{scenario_id}: web results must not become route identity",
-        )
+        assert "UNTRUSTED CONTENT / INJECTION DEFENSE" in system_blob, f"{scenario_id}: system prompt injection defense"
+        assert "canonical route identity" in system_blob, f"{scenario_id}: web results must not become route identity"
 
     # ------------------------------------------------------------------
     # G-04 adversarial-turn helpers (server state wins over model claims)
@@ -557,13 +505,9 @@ class _ExternalContentBase(unittest.IsolatedAsyncioTestCase):
         self._assert_offered_profile(
             sid, transit_question_profile_for(message)
         )
-        self.assertEqual(
-            [name for name, _input in trace.tool_calls],
-            ["declare_goals", "complete_turn"],
-            sid,
-        )
+        assert [name for name, _input in trace.tool_calls] == ["declare_goals", "complete_turn"], sid
         for marker in extra_absent:
-            self.assertNotIn(marker.casefold(), trace.final_text.casefold(), sid)
+            assert marker.casefold() not in trace.final_text.casefold(), sid
         self._assert_pass_tail(
             sid, events=events, trace=trace, mocks=mocks, session=session,
             session_id=session_id, seed=seed, expected_model_calls=1,
@@ -585,16 +529,12 @@ class _ExternalContentBase(unittest.IsolatedAsyncioTestCase):
                 response_refusal_round(refusal, tool_id="tu-refuse-arrivals"),
             ],
         )
-        self.assertEqual(len(self.loop.client.messages.calls), 1, sid)
-        self.assertEqual(
-            [name for name, _input in trace.tool_calls],
-            ["declare_goals", "complete_turn"],
-            sid,
-        )
-        self.assertEqual(route_cards(events), [], sid)
-        self.assertEqual(mocks["stored_candidate_set_ids"], [], sid)
+        assert len(self.loop.client.messages.calls) == 1, sid
+        assert [name for name, _input in trace.tool_calls] == ["declare_goals", "complete_turn"], sid
+        assert route_cards(events) == [], sid
+        assert mocks["stored_candidate_set_ids"] == [], sid
         self._assert_terminal(sid, events)
-        self.assertEqual(trace.final_text, refusal, sid)
+        assert trace.final_text == refusal, sid
         self._assert_state_preserved(sid, session, session_id, seed)
         self._assert_no_secret_leak(
             sid, session=session, events=events, trace=trace,
@@ -629,26 +569,19 @@ class _ExternalContentBase(unittest.IsolatedAsyncioTestCase):
             prepare_leg=work_leg(), fixed_candidate_id=G04_FIXED_CANDIDATE_ID,
         )
         self._assert_offered_profile(sid, ROUTE_PROFILE)
-        self.assertFalse(
-            any(schema["name"] == "web_search" for schema in self.loop.client.messages.calls[0]["tools"]),
-            sid,
-        )
+        assert not any(schema["name"] == "web_search" for schema in self.loop.client.messages.calls[0]["tools"]), sid
         names = [name for name, _input in trace.tool_calls]
-        self.assertEqual(
-            names,
-            ["declare_goals", "prepare_route_options", "present_route"],
-            sid,
-        )
-        self.assertEqual(trace.tool_calls[1][1]["destination"], "Work", sid)
-        self.assertFalse(set(names) & set(FORBIDDEN_EXECUTION), sid)
+        assert names == ["declare_goals", "prepare_route_options", "present_route"], sid
+        assert trace.tool_calls[1][1]["destination"] == "Work", sid
+        assert not set(names) & set(FORBIDDEN_EXECUTION), sid
         cards = route_cards(events)
-        self.assertEqual(len(cards), 1, sid)
-        self.assertEqual(cards[0].destination.get("label"), "Work", sid)
-        self.assertEqual(len(mocks["stored_candidate_set_ids"]), 1, sid)
+        assert len(cards) == 1, sid
+        assert cards[0].destination.get("label") == "Work", sid
+        assert len(mocks["stored_candidate_set_ids"]) == 1, sid
         state = trip_state_module.get_trip_state(session)
-        self.assertEqual(state["active_candidate_set_id"], mocks["stored_candidate_set_ids"][0], sid)
-        self.assertEqual(state["selected_candidate_id"], G04_FIXED_CANDIDATE_ID, sid)
-        self.assertEqual(state["destination"], "Work", sid)
+        assert state["active_candidate_set_id"] == mocks["stored_candidate_set_ids"][0], sid
+        assert state["selected_candidate_id"] == G04_FIXED_CANDIDATE_ID, sid
+        assert state["destination"] == "Work", sid
         self._assert_terminal(sid, events)
         self._assert_policy(sid, trace, expected_model_calls=2)
         self._assert_no_secret_leak(

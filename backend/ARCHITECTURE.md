@@ -153,6 +153,15 @@ collection, or realtime refresh.
 | `discovery_store.py` | Place discovery sets |
 | `trip_state.py` | Accepted trip and rider constraints |
 
+Place discovery keeps Google Places as the physical venue authority.
+`tools/places/damn_lines.py` provides optional normalized queue observations
+and historical patterns for exact Google Place IDs in a manual registry. It
+uses the existing `discover_places` and `present_places` flow, so the public
+tool count remains eight. Provider capture times determine current freshness.
+Queue evidence never enters canonical itinerary arithmetic, cards, steps, or
+maps. The backend emits canonical queue prose and trusted source events only
+in the conversation stream.
+
 The model can see eight tools:
 
 - `declare_goals`
@@ -239,7 +248,7 @@ An empty result does not prove that a route is clear when a source is missing.
 
 | Path | Contents |
 |---|---|
-| `evaluation/route_intelligence/` | Deterministic replays, comparison, metrics, reports, and shadow records |
+| `evaluation/route_intelligence/` | Deterministic replays, comparison, metrics, and reports |
 | `scripts/live_checks/` | Explicit provider smoke commands |
 | `scripts/release/` | Release checks and provider fault cases |
 | `scripts/run_incident_refresh.py` | One deployed incident refresh cycle |

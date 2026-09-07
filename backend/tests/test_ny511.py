@@ -5,11 +5,12 @@ import json
 import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import ClassVar
 from unittest import IsolatedAsyncioTestCase, TestCase
 from unittest.mock import AsyncMock, patch
 
 import httpx
-
+import pytest
 from app.services.incidents.ny511 import (
     DEFAULT_API_URL,
     NY511Client,
@@ -59,111 +60,141 @@ class NormalizationTests(TestCase):
         incident = normalize_event(_event())
 
         assert incident is not None
-        self.assertEqual(incident.source_id, "event-1")
-        self.assertEqual(incident.severity_normalized, "high")
-        self.assertTrue(incident.is_full_closure)
-        self.assertEqual(incident.reported_at, datetime.fromtimestamp(1_700_000_000, UTC))
-        self.assertEqual(incident.geometry, {"encoded_polyline": "abc123"})
-        self.assertEqual(incident.secondary_latitude, 40.713)
+        assert incident.source_id == "event-1"
+        assert incident.severity_normalized == "high"
+        assert incident.is_full_closure
+        assert incident.reported_at == datetime.fromtimestamp(1700000000, UTC)
+        assert incident.geometry == {"encoded_polyline": "abc123"}
+        assert incident.secondary_latitude == 40.713
 
     def test_rejects_invalid_coordinates_and_outside_nyc(self):
-        self.assertIsNone(normalize_event(_event(Latitude=0)))
-        self.assertIsNone(normalize_event(_event(Latitude=float("nan"))))
-        self.assertIsNone(normalize_event(_event(Latitude=42.0, Longitude=-76.0)))
+        assert normalize_event(_event(Latitude=0)) is None
+        assert normalize_event(_event(Latitude=float("nan"))) is None
+        assert normalize_event(_event(Latitude=42.0, Longitude=-76.0)) is None
 
     def test_retains_unknown_severity_and_deduplicates_source_ids(self):
-        incidents = normalize_events([_event(), _event(Severity="Unclassified", Description="newer")])
+        incidents = normalize_events(
+            [_event(), _event(Severity="Unclassified", Description="newer")]
+        )
 
-        self.assertEqual(len(incidents), 1)
-        self.assertEqual(incidents[0].severity_normalized, "unknown")
-        self.assertEqual(incidents[0].description, "newer")
+        assert len(incidents) == 1
+        assert incidents[0].severity_normalized == "unknown"
+        assert incidents[0].description == "newer"
 
     def test_severity_mapping_handles_common_labels_without_escalating_unknowns(self):
         major = normalize_event(_event(Severity="Major"))
         highest = normalize_event(_event(Severity="Highest"))
         unknown = normalize_event(_event(Severity="Very High"))
 
-        assert major is not None and highest is not None and unknown is not None
-        self.assertEqual(major.severity_normalized, "high")
-        self.assertEqual(highest.severity_normalized, "critical")
-        self.assertEqual(unknown.severity_raw, "Very High")
-        self.assertEqual(unknown.severity_normalized, "unknown")
+        assert major is not None
+        assert highest is not None
+        assert unknown is not None
+        assert major.severity_normalized == "high"
+        assert highest.severity_normalized == "critical"
+        assert unknown.severity_raw == "Very High"
+        assert unknown.severity_normalized == "unknown"
 
     def test_county_filter_rejects_known_non_nyc_and_uses_bbox_for_missing_county(self):
         in_nyc = normalize_event(_event(County="Kings County"))
-        non_nyc = normalize_event(_event(County="Nassau County", Latitude=40.72, Longitude=-73.68))
-        missing_county = normalize_event(_event(County=None, Latitude=40.72, Longitude=-73.68))
+        non_nyc = normalize_event(
+            _event(County="Nassau County", Latitude=40.72, Longitude=-73.68)
+        )
+        missing_county = normalize_event(
+            _event(County=None, Latitude=40.72, Longitude=-73.68)
+        )
 
-        self.assertIsNotNone(in_nyc)
-        self.assertIsNone(non_nyc)
-        self.assertIsNotNone(missing_county)
+        assert in_nyc is not None
+        assert non_nyc is None
+        assert missing_county is not None
 
     def test_missing_optional_fields_do_not_reject_valid_event(self):
-        incident = normalize_event(_event(Severity=None, IsFullClosure="yes", LatitudeSecondary=0, LongitudeSecondary=0))
+        incident = normalize_event(
+            _event(
+                Severity=None,
+                IsFullClosure="yes",
+                LatitudeSecondary=0,
+                LongitudeSecondary=0,
+            )
+        )
 
         assert incident is not None
-        self.assertIsNone(incident.is_full_closure)
-        self.assertIsNone(incident.secondary_latitude)
-        self.assertEqual(incident.severity_normalized, "unknown")
+        assert incident.is_full_closure is None
+        assert incident.secondary_latitude is None
+        assert incident.severity_normalized == "unknown"
 
     def test_missing_key_and_invalid_configuration_disable_the_source(self):
-        with patch.dict("os.environ", {"NY511_API_KEY": "", "NY511_ENABLED": "true"}, clear=True):
+        with patch.dict(
+            "os.environ", {"NY511_API_KEY": "", "NY511_ENABLED": "true"}, clear=True
+        ):
             settings = NY511Settings.from_env()
-        self.assertFalse(settings.enabled)
-        self.assertEqual(settings.diagnostic, "API key not configured")
-        with patch.dict("os.environ", {"NY511_API_KEY": "key", "NY511_API_BASE_URL": "http://bad"}, clear=True):
+        assert not settings.enabled
+        assert settings.diagnostic == "API key not configured"
+        with patch.dict(
+            "os.environ",
+            {"NY511_API_KEY": "key", "NY511_API_BASE_URL": "http://bad"},
+            clear=True,
+        ):
             settings = NY511Settings.from_env()
-        self.assertFalse(settings.enabled)
-        self.assertNotIn("key", settings.diagnostic or "")
+        assert not settings.enabled
+        assert "key" not in (settings.diagnostic or "")
 
     def test_poll_interval_is_configurable_but_cannot_break_provider_throttle(self):
-        with patch.dict("os.environ", {"NY511_API_KEY": "configured", "NY511_POLL_INTERVAL_SECONDS": "1"}, clear=True):
+        with patch.dict(
+            "os.environ",
+            {"NY511_API_KEY": "configured", "NY511_POLL_INTERVAL_SECONDS": "1"},
+            clear=True,
+        ):
             settings = NY511Settings.from_env()
-        self.assertTrue(settings.enabled)
-        self.assertEqual(settings.poll_interval_seconds, 60.0)
+        assert settings.enabled
+        assert settings.poll_interval_seconds == 60.0
 
     def test_non_finite_numeric_configuration_disables_source(self):
-        variables = (
-            "NY511_POLL_INTERVAL_SECONDS",
-            "NY511_REQUEST_TIMEOUT_SECONDS",
-            "NY511_STALE_AFTER_SECONDS",
-            "NY511_MAX_STALE_SECONDS",
-            "NY511_NYC_BUFFER_DEGREES",
-        )
-        for variable in variables:
-            for value in ("nan", "inf", "-inf"):
-                with self.subTest(variable=variable, value=value), patch.dict(
-                    "os.environ",
-                    {"NY511_API_KEY": "configured", variable: value},
-                    clear=True,
-                ):
-                    settings = NY511Settings.from_env()
-                    self.assertFalse(settings.enabled)
-                    self.assertEqual(
-                        settings.diagnostic,
-                        "invalid 511NY numeric configuration",
-                    )
-                    self.assertNotIn("configured", settings.diagnostic or "")
+        with patch.dict(
+            "os.environ",
+            {"NY511_API_KEY": "configured", "NY511_POLL_INTERVAL_SECONDS": "nan"},
+            clear=True,
+        ):
+            settings = NY511Settings.from_env()
+        assert not settings.enabled
+        assert settings.diagnostic == "invalid 511NY numeric configuration"
+        assert "configured" not in (settings.diagnostic or "")
 
     def test_base_url_cannot_include_another_host_or_credential_query(self):
-        with patch.dict("os.environ", {"NY511_API_KEY": "configured", "NY511_API_BASE_URL": "https://example.test/event"}, clear=True):
-            self.assertFalse(NY511Settings.from_env().enabled)
-        with patch.dict("os.environ", {"NY511_API_KEY": "configured", "NY511_API_BASE_URL": "https://511ny.org/api/v2/get/event?key=secret"}, clear=True):
+        with patch.dict(
+            "os.environ",
+            {
+                "NY511_API_KEY": "configured",
+                "NY511_API_BASE_URL": "https://example.test/event",
+            },
+            clear=True,
+        ):
+            assert not NY511Settings.from_env().enabled
+        with patch.dict(
+            "os.environ",
+            {
+                "NY511_API_KEY": "configured",
+                "NY511_API_BASE_URL": "https://511ny.org/api/v2/get/event?key=secret",
+            },
+            clear=True,
+        ):
             settings = NY511Settings.from_env()
-        self.assertFalse(settings.enabled)
-        self.assertEqual(settings.diagnostic, "invalid API base URL")
+        assert not settings.enabled
+        assert settings.diagnostic == "invalid API base URL"
 
     def test_fixture_mode_is_explicit_development_only_and_needs_no_key(self):
         with patch.dict(
             "os.environ",
-            {"NY511_FIXTURE_PATH": "C:/fixtures/ny511.json", "SMARTROUTE_ENV": "development"},
+            {
+                "NY511_FIXTURE_PATH": "C:/fixtures/ny511.json",
+                "SMARTROUTE_ENV": "development",
+            },
             clear=True,
         ):
             settings = NY511Settings.from_env()
-        self.assertTrue(settings.enabled)
-        self.assertEqual(settings.fixture_path, "C:/fixtures/ny511.json")
-        self.assertEqual(settings.diagnostic, "using development 511NY fixture")
-        self.assertIsNone(settings.api_key)
+        assert settings.enabled
+        assert settings.fixture_path == "C:/fixtures/ny511.json"
+        assert settings.diagnostic == "using development 511NY fixture"
+        assert settings.api_key is None
 
     def test_fixture_mode_is_rejected_in_production_without_falling_back_to_live(self):
         with patch.dict(
@@ -176,176 +207,278 @@ class NormalizationTests(TestCase):
             clear=True,
         ):
             settings = NY511Settings.from_env()
-        self.assertFalse(settings.enabled)
-        self.assertIsNone(settings.fixture_path)
-        self.assertEqual(settings.diagnostic, "511NY fixture mode requires a development or test environment")
-        self.assertNotIn("live-key", settings.diagnostic or "")
-
-    def test_fixture_mode_is_rejected_when_environment_is_unset(self):
-        with patch.dict("os.environ", {"NY511_FIXTURE_PATH": "C:/fixtures/ny511.json"}, clear=True):
-            settings = NY511Settings.from_env()
-        self.assertFalse(settings.enabled)
-        self.assertIsNone(settings.fixture_path)
-        self.assertEqual(settings.diagnostic, "511NY fixture mode requires a development or test environment")
+        assert not settings.enabled
+        assert settings.fixture_path is None
+        assert (
+            settings.diagnostic
+            == "511NY fixture mode requires a development or test environment"
+        )
+        assert "live-key" not in (settings.diagnostic or "")
 
 
 class ClientTests(IsolatedAsyncioTestCase):
     async def test_success_uses_v2_endpoint_and_safe_query_params(self):
         class Response:
             status_code = 200
-            def json(self): return [_event()]
+
+            def json(self):
+                return [_event()]
 
         class Client:
-            calls = []
-            def __init__(self, **_kwargs): pass
-            async def __aenter__(self): return self
-            async def __aexit__(self, *_args): return False
+            calls: ClassVar[list[tuple[str, dict[str, str]]]] = []
+
+            def __init__(self, **_kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return False
+
             async def get(self, url, *, params):
                 type(self).calls.append((url, params))
                 return Response()
 
         with patch("app.services.incidents.ny511.httpx.AsyncClient", Client):
             result = await NY511Client(_settings()).fetch_events()
-        self.assertEqual(result, [_event()])
-        self.assertEqual(Client.calls, [(DEFAULT_API_URL, {"key": "not-a-real-key", "format": "json"})])
-
-    async def test_non_transient_http_errors_are_not_retried(self):
-        class Response:
-            status_code = 403
-        class Client:
-            calls = 0
-            def __init__(self, **_kwargs): pass
-            async def __aenter__(self): return self
-            async def __aexit__(self, *_args): return False
-            async def get(self, *_args, **_kwargs):
-                type(self).calls += 1
-                return Response()
-        with patch("app.services.incidents.ny511.httpx.AsyncClient", Client):
-            with self.assertRaisesRegex(NY511FetchError, "HTTP 403"):
-                await NY511Client(_settings()).fetch_events()
-        self.assertEqual(Client.calls, 1)
+        assert result == [_event()]
+        assert Client.calls == [
+            (DEFAULT_API_URL, {"key": "not-a-real-key", "format": "json"})
+        ]
 
     async def test_401_is_not_retried_and_does_not_leak_request_details(self):
         class Response:
             status_code = 401
+
         class Client:
             calls = 0
-            def __init__(self, **_kwargs): pass
-            async def __aenter__(self): return self
-            async def __aexit__(self, *_args): return False
+
+            def __init__(self, **_kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return False
+
             async def get(self, *_args, **_kwargs):
                 type(self).calls += 1
                 return Response()
-        with patch("app.services.incidents.ny511.httpx.AsyncClient", Client):
-            with self.assertRaises(NY511FetchError) as raised:
-                await NY511Client(_settings()).fetch_events()
-        self.assertEqual(Client.calls, 1)
-        self.assertEqual(str(raised.exception), "511NY request failed with HTTP 401")
+
+        with (
+            patch("app.services.incidents.ny511.httpx.AsyncClient", Client),
+            pytest.raises(NY511FetchError) as raised,
+        ):
+            await NY511Client(_settings()).fetch_events()
+        assert Client.calls == 1
+        assert str(raised.value) == "511NY request failed with HTTP 401"
 
     async def test_429_and_5xx_retry_with_bounded_backoff(self):
         class Response:
-            headers = {"Retry-After": "7"}
-            def __init__(self, status_code): self.status_code = status_code
+            headers: ClassVar[dict[str, str]] = {"Retry-After": "7"}
+
+            def __init__(self, status_code):
+                self.status_code = status_code
+
         class Client:
-            statuses = [429, 503, 503]
-            def __init__(self, **_kwargs): pass
-            async def __aenter__(self): return self
-            async def __aexit__(self, *_args): return False
-            async def get(self, *_args, **_kwargs): return Response(type(self).statuses.pop(0))
-        with patch("app.services.incidents.ny511.httpx.AsyncClient", Client), patch("app.services.incidents.ny511.asyncio.sleep", new=AsyncMock()) as sleep:
-            with self.assertRaisesRegex(NY511FetchError, "HTTP 503"):
-                await NY511Client(_settings()).fetch_events()
-        self.assertEqual(sleep.await_count, 2)
-        self.assertEqual(sleep.await_args_list[0].args, (7.0,))
+            statuses: ClassVar[list[int]] = [429, 503, 503]
+
+            def __init__(self, **_kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return False
+
+            async def get(self, *_args, **_kwargs):
+                return Response(type(self).statuses.pop(0))
+
+        with (
+            patch("app.services.incidents.ny511.httpx.AsyncClient", Client),
+            patch(
+                "app.services.incidents.ny511.asyncio.sleep", new=AsyncMock()
+            ) as sleep,
+            pytest.raises(NY511FetchError, match="HTTP 503"),
+        ):
+            await NY511Client(_settings()).fetch_events()
+        assert sleep.await_count == 2
+        assert sleep.await_args_list[0].args == (7.0,)
 
     async def test_excessive_retry_after_is_capped_and_diagnostics_hide_secrets(self):
         class Response:
             status_code = 429
-            headers = {"Retry-After": "999999"}
+            headers: ClassVar[dict[str, str]] = {"Retry-After": "999999"}
+
         class Client:
-            def __init__(self, **_kwargs): pass
-            async def __aenter__(self): return self
-            async def __aexit__(self, *_args): return False
-            async def get(self, *_args, **_kwargs): return Response()
-        with patch("app.services.incidents.ny511.httpx.AsyncClient", Client), patch("app.services.incidents.ny511.asyncio.sleep", new=AsyncMock()) as sleep:
-            with self.assertRaises(NY511FetchError) as raised:
-                await NY511Client(_settings(api_key="super-secret")).fetch_events()
-        self.assertEqual(sleep.await_args_list[0].args, (60.0,))
-        self.assertEqual(sleep.await_args_list[1].args, (60.0,))
-        self.assertNotIn("super-secret", str(raised.exception))
+            def __init__(self, **_kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return False
+
+            async def get(self, *_args, **_kwargs):
+                return Response()
+
+        with (
+            patch("app.services.incidents.ny511.httpx.AsyncClient", Client),
+            patch(
+                "app.services.incidents.ny511.asyncio.sleep", new=AsyncMock()
+            ) as sleep,
+            pytest.raises(NY511FetchError) as raised,
+        ):
+            await NY511Client(_settings(api_key="super-secret")).fetch_events()
+        assert sleep.await_args_list[0].args == (60.0,)
+        assert sleep.await_args_list[1].args == (60.0,)
+        assert "super-secret" not in str(raised.value)
 
     async def test_timeout_retries_with_bounded_backoff(self):
         class Client:
             calls = 0
-            def __init__(self, **_kwargs): pass
-            async def __aenter__(self): return self
-            async def __aexit__(self, *_args): return False
+
+            def __init__(self, **_kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return False
+
             async def get(self, *_args, **_kwargs):
                 type(self).calls += 1
-                raise httpx.ReadTimeout("slow", request=httpx.Request("GET", "https://example.test"))
-        with patch("app.services.incidents.ny511.httpx.AsyncClient", Client), patch("app.services.incidents.ny511.asyncio.sleep", new=AsyncMock()) as sleep:
-            with self.assertRaisesRegex(NY511FetchError, "timed out"):
-                await NY511Client(_settings()).fetch_events()
-        self.assertEqual(Client.calls, 3)
-        self.assertEqual(sleep.await_count, 2)
+                raise httpx.ReadTimeout(
+                    "slow", request=httpx.Request("GET", "https://example.test")
+                )
+
+        with (
+            patch("app.services.incidents.ny511.httpx.AsyncClient", Client),
+            patch(
+                "app.services.incidents.ny511.asyncio.sleep", new=AsyncMock()
+            ) as sleep,
+            pytest.raises(NY511FetchError, match="timed out"),
+        ):
+            await NY511Client(_settings()).fetch_events()
+        assert Client.calls == 3
+        assert sleep.await_count == 2
 
     async def test_one_attempt_client_never_retries_for_live_certification(self):
         class Client:
             calls = 0
-            def __init__(self, **_kwargs): pass
-            async def __aenter__(self): return self
-            async def __aexit__(self, *_args): return False
+
+            def __init__(self, **_kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return False
+
             async def get(self, *_args, **_kwargs):
                 type(self).calls += 1
-                raise httpx.ReadTimeout("slow", request=httpx.Request("GET", "https://example.test"))
-        with patch("app.services.incidents.ny511.httpx.AsyncClient", Client), patch(
-            "app.services.incidents.ny511.asyncio.sleep", new=AsyncMock()
-        ) as sleep:
-            with self.assertRaisesRegex(NY511FetchError, "timed out"):
-                await NY511Client(_settings(), max_attempts=1).fetch_events()
-        self.assertEqual(Client.calls, 1)
+                raise httpx.ReadTimeout(
+                    "slow", request=httpx.Request("GET", "https://example.test")
+                )
+
+        with (
+            patch("app.services.incidents.ny511.httpx.AsyncClient", Client),
+            patch(
+                "app.services.incidents.ny511.asyncio.sleep", new=AsyncMock()
+            ) as sleep,
+            pytest.raises(NY511FetchError, match="timed out"),
+        ):
+            await NY511Client(_settings(), max_attempts=1).fetch_events()
+        assert Client.calls == 1
         sleep.assert_not_awaited()
 
     async def test_connection_error_retries_and_is_sanitized(self):
         class Client:
             calls = 0
-            def __init__(self, **_kwargs): pass
-            async def __aenter__(self): return self
-            async def __aexit__(self, *_args): return False
+
+            def __init__(self, **_kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return False
+
             async def get(self, *_args, **_kwargs):
                 type(self).calls += 1
-                raise httpx.ConnectError("provider detail key=secret", request=httpx.Request("GET", "https://example.test"))
-        with patch("app.services.incidents.ny511.httpx.AsyncClient", Client), patch("app.services.incidents.ny511.asyncio.sleep", new=AsyncMock()):
-            with self.assertRaises(NY511FetchError) as raised:
-                await NY511Client(_settings()).fetch_events()
-        self.assertEqual(Client.calls, 3)
-        self.assertEqual(str(raised.exception), "511NY connection failed")
+                message = "provider detail key=secret"
+                raise httpx.ConnectError(
+                    message, request=httpx.Request("GET", "https://example.test")
+                )
+
+        with (
+            patch("app.services.incidents.ny511.httpx.AsyncClient", Client),
+            patch("app.services.incidents.ny511.asyncio.sleep", new=AsyncMock()),
+            pytest.raises(NY511FetchError) as raised,
+        ):
+            await NY511Client(_settings()).fetch_events()
+        assert Client.calls == 3
+        assert str(raised.value) == "511NY connection failed"
 
     async def test_malformed_and_unexpected_responses_fail_safely(self):
         class Response:
             status_code = 200
-            def json(self): raise ValueError("not json")
+
+            def json(self):
+                message = "not json"
+                raise ValueError(message)
+
         class Client:
-            def __init__(self, **_kwargs): pass
-            async def __aenter__(self): return self
-            async def __aexit__(self, *_args): return False
-            async def get(self, *_args, **_kwargs): return Response()
-        with patch("app.services.incidents.ny511.httpx.AsyncClient", Client):
-            with self.assertRaisesRegex(NY511FetchError, "malformed JSON"):
-                await NY511Client(_settings()).fetch_events()
+            def __init__(self, **_kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return False
+
+            async def get(self, *_args, **_kwargs):
+                return Response()
+
+        with (
+            patch("app.services.incidents.ny511.httpx.AsyncClient", Client),
+            pytest.raises(NY511FetchError, match="malformed JSON"),
+        ):
+            await NY511Client(_settings()).fetch_events()
 
     async def test_unexpected_schema_fails_without_retry(self):
         class Response:
             status_code = 200
-            def json(self): return {"events": []}
+
+            def json(self):
+                return {"events": []}
+
         class Client:
-            def __init__(self, **_kwargs): pass
-            async def __aenter__(self): return self
-            async def __aexit__(self, *_args): return False
-            async def get(self, *_args, **_kwargs): return Response()
-        with patch("app.services.incidents.ny511.httpx.AsyncClient", Client):
-            with self.assertRaisesRegex(NY511FetchError, "unexpected event schema"):
-                await NY511Client(_settings()).fetch_events()
+            def __init__(self, **_kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return False
+
+            async def get(self, *_args, **_kwargs):
+                return Response()
+
+        with (
+            patch("app.services.incidents.ny511.httpx.AsyncClient", Client),
+            pytest.raises(NY511FetchError, match="unexpected event schema"),
+        ):
+            await NY511Client(_settings()).fetch_events()
 
 
 class StoreAndPollerTests(IsolatedAsyncioTestCase):
@@ -354,44 +487,47 @@ class StoreAndPollerTests(IsolatedAsyncioTestCase):
 
         snapshot = await store.record_success([])
 
-        self.assertEqual(snapshot.status, "fresh")
-        self.assertEqual(snapshot.incidents, [])
-        self.assertEqual(snapshot.source_record_count, 0)
-        self.assertEqual(snapshot.invalid_record_count, 0)
+        assert snapshot.status == "fresh"
+        assert snapshot.incidents == []
+        assert snapshot.source_record_count == 0
+        assert snapshot.invalid_record_count == 0
 
     async def test_never_fetched_snapshot_has_no_source_origin(self):
         snapshot = await SnapshotStore(_settings()).get_snapshot()
-        self.assertEqual(snapshot.status, "unavailable")
-        self.assertIsNone(snapshot.source_origin)
+        assert snapshot.status == "unavailable"
+        assert snapshot.source_origin is None
 
     async def test_fixture_refresh_uses_normal_snapshot_path_and_marks_origin(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "events.json"
-            path.write_text(json.dumps([_event(), _event(ID="outside", Latitude=42.0)]), encoding="utf-8")
+            path.write_text(
+                json.dumps([_event(), _event(ID="outside", Latitude=42.0)]),
+                encoding="utf-8",
+            )
             settings = _settings(api_key=None, fixture_path=str(path))
             client = AsyncMock()
             poller = NY511Poller(settings, client=client)
 
-            self.assertTrue(await poller.refresh())
+            assert await poller.refresh()
             snapshot = await poller.store.get_snapshot()
 
-        self.assertEqual(client.fetch_events.await_count, 0)
-        self.assertEqual(snapshot.source_origin, "fixture")
-        self.assertEqual(snapshot.source_record_count, 2)
-        self.assertEqual(snapshot.nyc_record_count, 1)
-        self.assertEqual(snapshot.invalid_record_count, 0)
-        self.assertEqual(snapshot.status, "fresh")
+        assert client.fetch_events.await_count == 0
+        assert snapshot.source_origin == "fixture"
+        assert snapshot.source_record_count == 2
+        assert snapshot.nyc_record_count == 1
+        assert snapshot.invalid_record_count == 0
+        assert snapshot.status == "fresh"
 
     async def test_empty_fixture_is_a_fresh_complete_snapshot(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "events.json"
             path.write_text("[]", encoding="utf-8")
             poller = NY511Poller(_settings(api_key=None, fixture_path=str(path)))
-            self.assertTrue(await poller.refresh())
+            assert await poller.refresh()
             snapshot = await poller.store.get_snapshot()
-        self.assertEqual(snapshot.status, "fresh")
-        self.assertEqual(snapshot.source_origin, "fixture")
-        self.assertEqual(snapshot.incidents, [])
+        assert snapshot.status == "fresh"
+        assert snapshot.source_origin == "fixture"
+        assert snapshot.incidents == []
 
     async def test_malformed_fixture_preserves_a_good_snapshot(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -402,18 +538,18 @@ class StoreAndPollerTests(IsolatedAsyncioTestCase):
             await store.record_success([_event()])
             poller = NY511Poller(settings, store=store)
 
-            self.assertFalse(await poller.refresh())
+            assert not await poller.refresh()
             snapshot = await store.get_snapshot()
 
-        self.assertEqual(snapshot.source_origin, "live")
-        self.assertEqual(len(snapshot.incidents), 1)
-        self.assertEqual(snapshot.last_error, "511NY fixture is malformed or unreadable")
+        assert snapshot.source_origin == "live"
+        assert len(snapshot.incidents) == 1
+        assert snapshot.last_error == "511NY fixture is malformed or unreadable"
 
     async def test_mixed_valid_records_track_invalid_count(self):
         snapshot = await SnapshotStore(_settings()).record_success([_event(), {}])
 
-        self.assertEqual(len(snapshot.incidents), 1)
-        self.assertEqual(snapshot.invalid_record_count, 1)
+        assert len(snapshot.incidents) == 1
+        assert snapshot.invalid_record_count == 1
 
     async def test_all_malformed_records_fail_refresh_and_preserve_prior_snapshot(self):
         settings = _settings()
@@ -423,12 +559,12 @@ class StoreAndPollerTests(IsolatedAsyncioTestCase):
         client.fetch_events.return_value = [{}, _event(ID=None, Latitude=0)]
         poller = NY511Poller(settings, client=client, store=store)
 
-        self.assertFalse(await poller.refresh())
+        assert not await poller.refresh()
         snapshot = await store.get_snapshot()
 
-        self.assertEqual(len(snapshot.incidents), 1)
-        self.assertEqual(snapshot.invalid_record_count, 0)
-        self.assertEqual(snapshot.last_error, "511NY response contained no usable event records")
+        assert len(snapshot.incidents) == 1
+        assert snapshot.invalid_record_count == 0
+        assert snapshot.last_error == "511NY response contained no usable event records"
 
     async def test_snapshot_statuses_and_failure_preserves_last_success(self):
         settings = _settings(stale_after_seconds=10, max_stale_seconds=20)
@@ -440,12 +576,12 @@ class StoreAndPollerTests(IsolatedAsyncioTestCase):
         fresh = await store.get_snapshot(now=now + timedelta(seconds=10))
         stale = await store.get_snapshot(now=now + timedelta(seconds=11))
         unavailable = await store.get_snapshot(now=now + timedelta(seconds=21))
-        self.assertEqual(fresh.status, "fresh")
-        self.assertEqual(stale.status, "stale")
-        self.assertEqual(len(stale.incidents), 1)
-        self.assertEqual(unavailable.status, "unavailable")
-        self.assertEqual(unavailable.incidents, [])
-        self.assertEqual(unavailable.last_error, "511NY request timed out")
+        assert fresh.status == "fresh"
+        assert stale.status == "stale"
+        assert len(stale.incidents) == 1
+        assert unavailable.status == "unavailable"
+        assert unavailable.incidents == []
+        assert unavailable.last_error == "511NY request timed out"
 
     async def test_refresh_is_single_flight_and_failure_keeps_snapshot(self):
         settings = _settings()
@@ -454,19 +590,22 @@ class StoreAndPollerTests(IsolatedAsyncioTestCase):
         client = AsyncMock()
         entered = asyncio.Event()
         release = asyncio.Event()
+
         async def fetch():
             entered.set()
             await release.wait()
-            raise NY511FetchError("511NY request timed out", retryable=True)
+            message = "511NY request timed out"
+            raise NY511FetchError(message, retryable=True)
+
         client.fetch_events.side_effect = fetch
         poller = NY511Poller(settings, client=client, store=store)
         first = asyncio.create_task(poller.refresh())
         await entered.wait()
-        self.assertFalse(await poller.refresh())
+        assert not await poller.refresh()
         release.set()
-        self.assertFalse(await first)
-        self.assertEqual(client.fetch_events.await_count, 1)
-        self.assertEqual(len((await store.get_snapshot()).incidents), 1)
+        assert not await first
+        assert client.fetch_events.await_count == 1
+        assert len((await store.get_snapshot()).incidents) == 1
 
     async def test_start_does_initial_fetch_once_and_stop_is_clean(self):
         settings = _settings(poll_interval_seconds=3600)
@@ -474,22 +613,23 @@ class StoreAndPollerTests(IsolatedAsyncioTestCase):
         client.fetch_events.return_value = [_event()]
         poller = NY511Poller(settings, client=client)
         task = poller.start()
-        self.assertIs(task, poller.start())
+        assert task is poller.start()
         for _ in range(20):
             if client.fetch_events.await_count:
                 break
             await asyncio.sleep(0)
-        self.assertEqual(client.fetch_events.await_count, 1)
+        assert client.fetch_events.await_count == 1
         await poller.stop()
-        self.assertTrue(task is not None and task.done())
+        assert task is not None
+        assert task.done()
 
     async def test_disabled_poller_makes_no_request_and_reports_unavailable(self):
         settings = _settings(enabled=False, diagnostic="API key not configured")
         client = AsyncMock()
         poller = NY511Poller(settings, client=client)
-        self.assertIsNone(poller.start())
-        self.assertFalse(await poller.refresh())
-        self.assertEqual(client.fetch_events.await_count, 0)
+        assert poller.start() is None
+        assert not await poller.refresh()
+        assert client.fetch_events.await_count == 0
         snapshot = await poller.store.get_snapshot()
-        self.assertEqual(snapshot.status, "unavailable")
-        self.assertEqual(snapshot.last_error, "API key not configured")
+        assert snapshot.status == "unavailable"
+        assert snapshot.last_error == "API key not configured"

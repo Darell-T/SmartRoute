@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 import os
 from datetime import datetime
@@ -9,16 +10,17 @@ from urllib.parse import quote
 
 import httpx
 
+from app.services.cache import cache_get, cache_set
+from app.services.geography import distance_meters
+from app.services.mta import bus_runtime
 from app.services.mta.config import (
     BUS_STOP_MONITORING_URL,
     BUS_STOPS_FOR_LOCATION_URL,
     BUS_URL,
     NYC_TZ,
 )
-from app.services.mta import bus_runtime
-from app.services.cache import cache_get, cache_set
-from app.services.geography import distance_meters
 
+_LOGGER = logging.getLogger(__name__)
 NEARBY_STOPS_CACHE_TTL_S = 120
 STOP_MONITORING_CACHE_TTL_S = 15
 
@@ -53,7 +55,7 @@ def _parse_siri_time(value: str | None) -> int | None:
     if not value:
         return None
     try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(str(value))
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=NYC_TZ)
         return int(parsed.timestamp())
@@ -131,7 +133,6 @@ def _bus_stop_record(stop: dict, distance_m: float) -> dict:
 
 
 def _location_cache_key(lat: float, lng: float, radius_m: float) -> str:
-    # Nearby stops do not materially differ within roughly one city block.
     return f"{lat:.3f}:{lng:.3f}:{round(radius_m):d}"
 
 
@@ -176,7 +177,7 @@ async def fetch_nearby_bus_stops(
                     "reason": f"stops_for_location_http_{response.status_code}",
                 }
             payload = response.json()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 nearby-stop faults degrade arrivals
             return [], {"bus_arrivals_supported": False, "reason": type(exc).__name__}
 
         from app.services.geography import distance_meters
@@ -357,7 +358,6 @@ _AGENCY_PREFIXES = ("MTA NYCT_", "MTABC_")
 
 
 def _route_as_list(value):
-    """Keep stops-for-route parsing strict about provider list fields."""
     return value if isinstance(value, list) else []
 
 
@@ -373,18 +373,7 @@ def normalize_google_bus_route_id(route_id: str) -> list[str]:
     return candidates
 
 
-def parse_stops_for_route(payload: dict) -> dict:
-    """Normalize a stops-for-route payload into
-    {stops_by_id: {id: {name, lat, lon}}, ordered_groups: [[stop_id, ...]]}.
-
-    Tolerates both vanilla OneBusAway (data.entry.stopGroupings +
-    data.references.stops) and MTA's flat variant (data.stopGroupings +
-    data.stops) -- same defensive posture as _stops_for_location_list."""
-    empty = {"stops_by_id": {}, "ordered_groups": []}
-    data = payload.get("data") if isinstance(payload, dict) else None
-    if not isinstance(data, dict):
-        return empty
-
+def _stops_by_id_from_payload(data: dict) -> dict:
     references = data.get("references") if isinstance(data.get("references"), dict) else {}
     raw_stops = (
         data.get("stops")
@@ -405,7 +394,21 @@ def parse_stops_for_route(payload: dict) -> dict:
             "lat": float(lat),
             "lon": float(lon),
         }
+    return stops_by_id
 
+
+def parse_stops_for_route(payload: dict) -> dict:
+    """Normalize a stops-for-route payload into
+    {stops_by_id: {id: {name, lat, lon}}, ordered_groups: [[stop_id, ...]]}.
+
+    Tolerates both vanilla OneBusAway (data.entry.stopGroupings +
+    data.references.stops) and MTA's flat variant (data.stopGroupings +
+    data.stops) -- same defensive posture as _stops_for_location_list."""
+    empty = {"stops_by_id": {}, "ordered_groups": []}
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict):
+        return empty
+    stops_by_id = _stops_by_id_from_payload(data)
     entry = data.get("entry") if isinstance(data.get("entry"), dict) else {}
     raw_groupings = (
         data.get("stopGroupings")
@@ -422,14 +425,12 @@ def parse_stops_for_route(payload: dict) -> dict:
             stop_ids = [str(s) for s in _route_as_list(group.get("stopIds")) if s]
             if stop_ids:
                 ordered_groups.append(stop_ids)
-
     if not stops_by_id:
         return empty
     return {"stops_by_id": stops_by_id, "ordered_groups": ordered_groups}
 
 
 def _nearest_index(coords: dict, stop_ids: list, stops_by_id: dict):
-    """(index, distance_m) of the stop in the group nearest to coords."""
     lat = coords.get("latitude")
     lng = coords.get("longitude")
     if lat is None or lng is None:
@@ -482,6 +483,43 @@ def slice_route_stops(parsed: dict, board_coords: dict, exit_coords: dict, max_s
     ]
 
 
+async def _stops_payload_for_prefix(prefix: str, short_id: str, key: str):
+    client = await bus_runtime.bus_client()
+    try:
+        response = await client.get(
+            BUS_STOPS_FOR_ROUTE_URL.format(
+                route_id=quote(f"{prefix}{short_id}", safe=""),
+            ),
+            params={
+                "key": key,
+                "includePolylines": "false",
+                "version": 2,
+            },
+            timeout=8.0,
+        )
+    except httpx.RequestError as exc:
+        _LOGGER.debug(
+            "Bus stops-for-route request failed prefix=%s reason=%s",
+            prefix,
+            type(exc).__name__,
+        )
+        return None
+    if response.status_code != 200:
+        return None
+    try:
+        return response.json()
+    except ValueError:
+        return None
+
+
+def _parsed_cached_route_stops(cached) -> dict | None:
+    try:
+        parsed = parse_stops_for_route(json.loads(cached))
+    except (ValueError, TypeError):
+        return None
+    return parsed if parsed["stops_by_id"] else None
+
+
 async def fetch_bus_route_stop_groups(route_id: str) -> dict | None:
     """Fetch + parse stops-for-route for a Google bus route id. Tries each
     agency prefix and SBS normalization until one returns stops. Cached;
@@ -493,34 +531,14 @@ async def fetch_bus_route_stop_groups(route_id: str) -> dict | None:
     cache_key = f"oba:stops-for-route:{str(route_id or '').strip().upper()}"
     cached = cache_get(cache_key)
     if cached:
-        try:
-            parsed = parse_stops_for_route(json.loads(cached))
-            if parsed["stops_by_id"]:
-                return parsed
-        except (ValueError, TypeError):
-            pass
+        parsed = _parsed_cached_route_stops(cached)
+        if parsed is not None:
+            return parsed
 
     for short_id in normalize_google_bus_route_id(route_id):
         for prefix in _AGENCY_PREFIXES:
-            try:
-                async with httpx.AsyncClient(timeout=8.0) as client:
-                    response = await client.get(
-                        BUS_STOPS_FOR_ROUTE_URL.format(
-                            route_id=quote(f"{prefix}{short_id}", safe=""),
-                        ),
-                        params={
-                            "key": key,
-                            "includePolylines": "false",
-                            "version": 2,
-                        },
-                    )
-            except Exception:
-                continue
-            if response.status_code != 200:
-                continue
-            try:
-                payload = response.json()
-            except ValueError:
+            payload = await _stops_payload_for_prefix(prefix, short_id, key)
+            if not payload:
                 continue
             parsed = parse_stops_for_route(payload)
             if parsed["stops_by_id"]:

@@ -6,15 +6,15 @@ import argparse
 import hashlib
 import json
 import re
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
+from typing import NoReturn
 
-from scripts.release.advisory_policy import (
+from .advisory_policy import (
     accepted_development_findings,
     load_policy,
     policy_evidence,
 )
-
 
 NPM_SEVERITIES = ("critical", "high", "moderate", "low", "info")
 SEVERITIES = (*NPM_SEVERITIES, "unknown")
@@ -26,11 +26,16 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _invalid(message: str) -> NoReturn:
+    raise ValueError(message)
+
+
 def _read_json(path: Path) -> object:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError(f"scanner report could not be read: {path}") from exc
+        unreadable = f"scanner report could not be read: {path}"
+        raise ValueError(unreadable) from exc
 
 
 def _read_requirements(path: Path) -> set[str]:
@@ -41,13 +46,13 @@ def _read_requirements(path: Path) -> set[str]:
             continue
         match = REQUIREMENT_NAME.match(stripped)
         if not match:
-            raise ValueError(f"unsupported requirement syntax in {path.name}")
+            _invalid(f"unsupported requirement syntax in {path.name}")
         names.add(match.group(1).replace("_", "-").casefold())
     return names
 
 
 def _summary(findings: list[dict[str, object]]) -> dict[str, int]:
-    totals = {severity: 0 for severity in SEVERITIES}
+    totals = dict.fromkeys(SEVERITIES, 0)
     for finding in findings:
         severity = finding["severity"]
         assert isinstance(severity, str)
@@ -56,111 +61,150 @@ def _summary(findings: list[dict[str, object]]) -> dict[str, int]:
     return totals
 
 
-def _npm_findings(value: object, lock_path: Path) -> list[dict[str, object]]:
+def _npm_lock_packages(lock_path: Path) -> dict[str, object]:
+    lock = _read_json(lock_path)
+    packages = lock.get("packages") if isinstance(lock, dict) else None
+    if not isinstance(packages, dict):
+        _invalid("frontend lock has no packages object")
+    return packages
+
+
+def _npm_report_maps(value: object) -> tuple[dict[str, object], dict[str, object]]:
     if not isinstance(value, dict) or value.get("auditReportVersion") != 2:
-        raise ValueError("npm report must use audit report version 2")
+        _invalid("npm report must use audit report version 2")
     vulnerabilities = value.get("vulnerabilities")
     metadata = value.get("metadata")
     metadata_vulnerabilities = metadata.get("vulnerabilities") if isinstance(metadata, dict) else None
     if not isinstance(vulnerabilities, dict) or not isinstance(metadata_vulnerabilities, dict):
-        raise ValueError("npm report has no vulnerabilities object")
-    lock = _read_json(lock_path)
-    packages = lock.get("packages") if isinstance(lock, dict) else None
-    if not isinstance(packages, dict):
-        raise ValueError("frontend lock has no packages object")
+        _invalid("npm report has no vulnerabilities object")
+    return vulnerabilities, metadata_vulnerabilities
+
+
+def _npm_package_paths(details: dict[str, object]) -> tuple[bool, str, list[str]]:
+    direct = details.get("isDirect")
+    nodes = details.get("nodes")
+    via = details.get("via")
+    package_severity = details.get("severity")
+    if (
+        not isinstance(direct, bool)
+        or not isinstance(nodes, list)
+        or not isinstance(via, list)
+        or not isinstance(package_severity, str)
+        or package_severity not in NPM_SEVERITIES
+    ):
+        _invalid("npm vulnerability details are invalid")
+    paths = [node for node in nodes if isinstance(node, str)]
+    if len(paths) != len(nodes):
+        _invalid("npm vulnerability paths are invalid")
+    return direct, package_severity, paths
+
+
+def _npm_versions(paths: list[str], packages: dict[str, object]) -> list[str]:
+    return sorted(
+        {
+            entry["version"]
+            for path in paths
+            for entry in [packages.get(path)]
+            if isinstance(entry, dict) and isinstance(entry.get("version"), str)
+        }
+    )
+
+
+def _npm_advisory_finding(
+    package: str,
+    details: dict[str, object],
+    advisory: object,
+    packages: dict[str, object],
+) -> dict[str, object] | None:
+    if not isinstance(advisory, dict):
+        return None
+    direct, _package_severity, paths = _npm_package_paths(details)
+    severity = advisory.get("severity")
+    url = advisory.get("url")
+    if not isinstance(severity, str) or severity not in SEVERITIES or not isinstance(url, str):
+        _invalid("npm advisory details are invalid")
+    identifier = ADVISORY_ID.search(url)
+    if identifier is None:
+        _invalid("npm advisory has no recognized identifier")
+    fix = details.get("fixAvailable")
+    fixed_versions = [fix["version"]] if isinstance(fix, dict) and isinstance(fix.get("version"), str) else []
+    return {
+        "advisory_id": identifier.group(0),
+        "package": package,
+        "installed_versions": _npm_versions(paths, packages),
+        "severity": severity,
+        "direct": direct,
+        "paths": paths,
+        "fixed_versions": fixed_versions,
+    }
+
+
+def _npm_findings(value: object, lock_path: Path) -> list[dict[str, object]]:
+    vulnerabilities, metadata_vulnerabilities = _npm_report_maps(value)
+    packages = _npm_lock_packages(lock_path)
     findings: list[dict[str, object]] = []
-    package_severities = {severity: 0 for severity in NPM_SEVERITIES}
+    package_severities = dict.fromkeys(NPM_SEVERITIES, 0)
     for package, details in vulnerabilities.items():
         if not isinstance(package, str) or not isinstance(details, dict):
-            raise ValueError("npm vulnerability entry is invalid")
-        direct = details.get("isDirect")
-        nodes = details.get("nodes")
-        via = details.get("via")
-        package_severity = details.get("severity")
-        if (
-            not isinstance(direct, bool)
-            or not isinstance(nodes, list)
-            or not isinstance(via, list)
-            or not isinstance(package_severity, str)
-            or package_severity not in NPM_SEVERITIES
-        ):
-            raise ValueError("npm vulnerability details are invalid")
+            _invalid("npm vulnerability entry is invalid")
+        _direct, package_severity, _paths = _npm_package_paths(details)
         package_severities[package_severity] += 1
-        paths = [node for node in nodes if isinstance(node, str)]
-        if len(paths) != len(nodes):
-            raise ValueError("npm vulnerability paths are invalid")
-        versions = sorted(
-            {
-                entry["version"]
-                for path in paths
-                for entry in [packages.get(path)]
-                if isinstance(entry, dict) and isinstance(entry.get("version"), str)
-            }
-        )
-        fix = details.get("fixAvailable")
-        fixed_versions = [fix["version"]] if isinstance(fix, dict) and isinstance(fix.get("version"), str) else []
+        via = details.get("via")
+        assert isinstance(via, list)
         for advisory in via:
-            if not isinstance(advisory, dict):
-                continue
-            severity = advisory.get("severity")
-            url = advisory.get("url")
-            if not isinstance(severity, str) or severity not in SEVERITIES or not isinstance(url, str):
-                raise ValueError("npm advisory details are invalid")
-            identifier = ADVISORY_ID.search(url)
-            if identifier is None:
-                raise ValueError("npm advisory has no recognized identifier")
-            findings.append(
-                {
-                    "advisory_id": identifier.group(0),
-                    "package": package,
-                    "installed_versions": versions,
-                    "severity": severity,
-                    "direct": direct,
-                    "paths": paths,
-                    "fixed_versions": fixed_versions,
-                }
-            )
+            finding = _npm_advisory_finding(package, details, advisory, packages)
+            if finding is not None:
+                findings.append(finding)
     expected_metadata = {**package_severities, "total": len(vulnerabilities)}
     if any(metadata_vulnerabilities.get(key) != count for key, count in expected_metadata.items()):
-        raise ValueError("npm report metadata does not match vulnerabilities")
+        _invalid("npm report metadata does not match vulnerabilities")
     return findings
+
+
+def _pip_advisory_finding(
+    name: str,
+    version: str,
+    requirements: set[str],
+    advisory: object,
+) -> dict[str, object]:
+    if not isinstance(advisory, dict):
+        _invalid("pip-audit advisory entry is invalid")
+    identifier = advisory.get("id")
+    fixes = advisory.get("fix_versions")
+    if not isinstance(identifier, str) or not identifier or not isinstance(fixes, list):
+        _invalid("pip-audit advisory details are invalid")
+    fixed_versions = [item for item in fixes if isinstance(item, str)]
+    if len(fixed_versions) != len(fixes):
+        _invalid("pip-audit fix versions are invalid")
+    return {
+        "advisory_id": identifier,
+        "package": name,
+        "installed_versions": [version],
+        "severity": "unknown",
+        "direct": name.replace("_", "-").casefold() in requirements,
+        "paths": [],
+        "fixed_versions": fixed_versions,
+    }
 
 
 def _pip_findings(value: object, requirements: set[str]) -> list[dict[str, object]]:
     dependencies = value.get("dependencies") if isinstance(value, dict) else None
     fixes = value.get("fixes") if isinstance(value, dict) else None
     if not isinstance(dependencies, list) or not isinstance(fixes, list):
-        raise ValueError("pip-audit report must contain dependencies and fixes lists")
+        _invalid("pip-audit report must contain dependencies and fixes lists")
     findings: list[dict[str, object]] = []
     for dependency in dependencies:
         if not isinstance(dependency, dict):
-            raise ValueError("pip-audit dependency entry is invalid")
+            _invalid("pip-audit dependency entry is invalid")
         name = dependency.get("name")
         version = dependency.get("version")
         vulnerabilities = dependency.get("vulns")
         if not isinstance(name, str) or not isinstance(version, str) or not isinstance(vulnerabilities, list):
-            raise ValueError("pip-audit dependency details are invalid")
-        for advisory in vulnerabilities:
-            if not isinstance(advisory, dict):
-                raise ValueError("pip-audit advisory entry is invalid")
-            identifier = advisory.get("id")
-            fixes = advisory.get("fix_versions")
-            if not isinstance(identifier, str) or not identifier or not isinstance(fixes, list):
-                raise ValueError("pip-audit advisory details are invalid")
-            fixed_versions = [item for item in fixes if isinstance(item, str)]
-            if len(fixed_versions) != len(fixes):
-                raise ValueError("pip-audit fix versions are invalid")
-            findings.append(
-                {
-                    "advisory_id": identifier,
-                    "package": name,
-                    "installed_versions": [version],
-                    "severity": "unknown",
-                    "direct": name.replace("_", "-").casefold() in requirements,
-                    "paths": [],
-                    "fixed_versions": fixed_versions,
-                }
-            )
+            _invalid("pip-audit dependency details are invalid")
+        findings.extend(
+            _pip_advisory_finding(name, version, requirements, advisory)
+            for advisory in vulnerabilities
+        )
     return findings
 
 
@@ -177,12 +221,12 @@ def _scan(
     parse: Callable[[object], list[dict[str, object]]],
 ) -> dict[str, object]:
     if exit_code not in {0, 1}:
-        raise ValueError(f"{scan_id} scanner exit code must be zero or one")
+        _invalid(f"{scan_id} scanner exit code must be zero or one")
     if not scanner_version.strip():
-        raise ValueError(f"{scan_id} scanner version is required")
+        _invalid(f"{scan_id} scanner version is required")
     findings = parse(_read_json(report_path))
     if (exit_code == 0) != (not findings):
-        raise ValueError(f"{scan_id} scanner exit code does not match findings")
+        _invalid(f"{scan_id} scanner exit code does not match findings")
     return {
         "id": scan_id,
         "scanner": {"name": scanner_name, "version": scanner_version, "format": scanner_format},

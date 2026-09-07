@@ -11,12 +11,19 @@ incident_index_adapter.
 from __future__ import annotations
 
 import time
+from collections.abc import Iterable, Mapping
 from datetime import datetime
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 from app.services.incidents import index as incident_index
-from app.services.trips.route_incidents.context import CandidateStopContext, extract_candidate_stop_context
-from app.services.trips.route_incidents.index_adapter import extract_lookup_context, project_records
+from app.services.trips.route_incidents.context import (
+    CandidateStopContext,
+    extract_candidate_stop_context,
+)
+from app.services.trips.route_incidents.index_adapter import (
+    extract_lookup_context,
+    project_records,
+)
 
 COMPLETE_INCIDENT_SCAN_STATUS = "complete"
 
@@ -93,7 +100,7 @@ async def scan_route_incidents(
             route_ids=route_ids,
             coverage_ids=coverage_ids,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 incident-index faults stay unavailable
         print(f"[trip] incident index lookup failed: {type(exc).__name__}")
         return {
             "incidents": [],
@@ -138,7 +145,7 @@ def build_candidate_stop_context(gtfs: Any, routes: list[list[dict]]) -> list[Ca
                         step.get("departure_coords"),
                         step.get("arrival_coords"),
                     )
-                except Exception:
+                except Exception:  # noqa: BLE001 pattern-index faults omit intermediates
                     rows = []
                 if rows:
                     step["intermediate_stop_locations"] = [

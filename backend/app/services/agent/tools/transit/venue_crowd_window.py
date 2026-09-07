@@ -74,7 +74,7 @@ def _parse_timestamp(
     if not raw:
         return None, ToolResult(ok=False, error=f"{field_name} is required")
     try:
-        timestamp = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        timestamp = datetime.fromisoformat(raw)
     except ValueError:
         return None, ToolResult(
             ok=False,

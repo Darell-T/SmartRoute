@@ -4,6 +4,7 @@ import json
 import math
 import os
 import time
+from contextlib import suppress
 
 from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
@@ -12,21 +13,30 @@ from pydantic import BaseModel, ConfigDict
 from app.routers.live_feed import socket as _live_feed_socket
 from app.routers.live_feed import ticket as _live_feed_ticket
 from app.services import admission
-from app.services.mta import realtime as mta_realtime
-from app.services.live_feed.network_snapshot import network_snapshot_store
 from app.services.live_feed import snapshot as _live_feed_snapshot
-
+from app.services.live_feed.network_snapshot import network_snapshot_store
+from app.services.mta import realtime as mta_realtime
 
 router = APIRouter()
 ws_router = APIRouter()
+_background_bus_tasks: set[asyncio.Task] = set()
+
+
+def _remember_background_task(task: asyncio.Task) -> None:
+    _background_bus_tasks.add(task)
+    task.add_done_callback(_background_bus_tasks.discard)
+
+
+async def close_background_bus_tasks() -> None:
+    tasks = list(_background_bus_tasks)
+    for task in tasks:
+        task.cancel()
+    for task in tasks:
+        with suppress(asyncio.CancelledError):
+            await task
 
 
 async def _verify_ws_ticket(ticket: str, path: str) -> tuple[str | None, bool]:
-    """Validate a short-lived ticket minted by the Next /api/ws-ticket route.
-
-    The ticket is ``exp.nonce.principal.signature``. Its nonce is atomically
-    consumed before accept, preventing replays across backend instances.
-    """
     return await _live_feed_ticket.verify_ticket(
         ticket,
         path,
@@ -56,7 +66,6 @@ async def _send_json_safe(websocket: WebSocket, payload: dict) -> bool:
 
 
 async def _receive_bounded_ws_json(websocket: WebSocket) -> dict:
-    """Read one complete text/bytes frame before parsing untrusted JSON."""
     return await _live_feed_socket.receive_bounded_json(
         websocket,
         MAX_WS_MESSAGE_BYTES,
@@ -70,7 +79,6 @@ async def _guard_socket_lease(
     lease_failed: asyncio.Event,
     owner: asyncio.Task,
 ) -> None:
-    """Refresh independent of rider frames; never reads from the socket."""
     await _live_feed_socket.guard_lease(
         lease,
         stopped,
@@ -105,11 +113,9 @@ async def live_feed(request: Request, payload: LiveFeedRequest):
 
     try:
         return await _live_feed_impl(gtfs, payload)
-    except Exception:
+    except Exception:  # noqa: BLE001 snapshot faults degrade to 503
         import traceback
         print(f"[live_feed] UNHANDLED ERROR:\n{traceback.format_exc()}")
-        # Always return JSON so the Next.js proxy doesn't choke on FastAPI's
-        # default plain-text "Internal Server Error" body.
         return JSONResponse(
             {
                 "nearest_stop": None,
@@ -129,7 +135,7 @@ async def service_alerts(request: Request):
     gtfs = getattr(request.app.state, "gtfs", None)
     try:
         return JSONResponse(await _service_alerts_payload(gtfs))
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 snapshot faults degrade to 503
         print(f"[service_alerts] snapshot unavailable: {type(exc).__name__}")
         return JSONResponse(
             {
@@ -156,7 +162,7 @@ def _attach_alert_stop_names(alerts: list[dict], gtfs) -> None:
 
     try:
         stop_locations = gtfs.get_stop_locations(list(stop_ids))
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 stop-name enrichment is optional
         print(f"[service_alerts] stop-name enrichment failed: {type(exc).__name__}: {exc!r}")
         return
 
@@ -219,9 +225,7 @@ async def _live_feed_impl(gtfs, payload: LiveFeedRequest):
     snapshot = await _live_feed_snapshot.build_live_snapshot(
         gtfs, payload.lat, payload.lng
     )
-    # The REST contract is primary subway data only. Warm an optional BusTime
-    # result for the next request without adding its latency to this response.
-    asyncio.create_task(
+    bus_refresh = asyncio.create_task(
         mta_realtime.fetch_nearby_bus_update(
             payload.lat,
             payload.lng,
@@ -229,6 +233,7 @@ async def _live_feed_impl(gtfs, payload: LiveFeedRequest):
         ),
         name="live-feed-rest-bus-refresh",
     )
+    _remember_background_task(bus_refresh)
     return JSONResponse(
         {
             "nearest_stop": snapshot["nearest_stop"],
@@ -255,7 +260,7 @@ async def vehicles(route_ids: str | None = None):
             if route_filter is None
             or str(vehicle.get("route_id") or "").upper() in route_filter
         ]
-    except Exception:
+    except Exception:  # noqa: BLE001 snapshot faults degrade to 503
         import traceback
         print(f"[vehicles] UNHANDLED ERROR:\n{traceback.format_exc()}")
         return JSONResponse(

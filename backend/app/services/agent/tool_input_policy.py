@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from app.services.agent.model import policy as agent_policy
 from app.services.agent import public_surface
+from app.services.agent.model import policy as agent_policy
 from app.services.agent.tools import ToolContext
 from app.services.agent.turn.contract import GoalKind, GoalState
 from app.services.trips.preparation.input import normalize_route_ids
@@ -32,6 +32,18 @@ def _complete_turn_goal_error(tool_input: dict, contract) -> str | None:
         return "complete_turn requires at least one declared goal_key"
     if any(contract.get_goal(str(key or "").strip()) is None for key in goal_keys):
         return "complete_turn referenced an unknown goal_key"
+    return None
+
+
+def _evidence_capability_error(evidence, contract, goal_key: str) -> str | None:
+    if evidence.state_for(goal_key) not in {
+        GoalState.PENDING,
+        GoalState.ATTEMPTED_BUT_UNAVAILABLE,
+    }:
+        return "evidence capability is not valid for the goal's current state"
+    blockers = contract.dependency_blockers(goal_key, evidence)
+    if blockers:
+        return "goal dependencies are not ready: " + ", ".join(blockers)
     return None
 
 
@@ -78,53 +90,45 @@ def goal_error(name: str, tool_input: dict, ctx: ToolContext) -> str | None:
     ):
         return f"{name} cannot satisfy the declared {goal.kind.value} outcome"
     if public_surface.is_evidence_capability(name):
-        if evidence.state_for(goal_key) not in {
-            GoalState.PENDING,
-            GoalState.ATTEMPTED_BUT_UNAVAILABLE,
-        }:
-            return "evidence capability is not valid for the goal's current state"
-        blockers = contract.dependency_blockers(goal_key, evidence)
-        if blockers:
-            return "goal dependencies are not ready: " + ", ".join(blockers)
-    elif public_surface.is_presenter(name):
-        research_error = _place_research_error(name, tool_input, evidence)
-        if research_error:
-            return research_error
-        state = evidence.state_for(goal_key)
-        reuses_active_discovery = (
-            name == "present_places"
-            and state == GoalState.PENDING
-            and not contract.dependency_blockers(goal_key, evidence)
-            and str(tool_input.get("discovery_set_id") or "").strip()
-            == public_surface.active_discovery_set_id(
-                ctx.session,
-                session_id=ctx.session_id,
-            )
+        return _evidence_capability_error(evidence, contract, goal_key)
+    if not public_surface.is_presenter(name):
+        return None
+    research_error = _place_research_error(name, tool_input, evidence)
+    if research_error:
+        return research_error
+    state = evidence.state_for(goal_key)
+    deps_ready = not contract.dependency_blockers(goal_key, evidence)
+    preview = (
+        public_surface.active_temporary_route_preview(
+            ctx.session,
+            session_id=ctx.session_id,
         )
-        reuses_temporary_route = (
-            name == "present_route"
-            and state == GoalState.PENDING
-            and not contract.dependency_blockers(goal_key, evidence)
-            and public_surface.active_temporary_route_preview(
-                ctx.session,
-                session_id=ctx.session_id,
-            )
-            == (
-                str(
-                    (ctx.session or {})
-                    .get("trip_state", {})
-                    .get("temporary_candidate_set_id")
-                    or ""
-                ).strip(),
-                str(tool_input.get("candidate_id") or "").strip(),
-            )
+        if name == "present_route" and state == GoalState.PENDING and deps_ready
+        else None
+    )
+    reuses_active_discovery = (
+        name == "present_places"
+        and state == GoalState.PENDING
+        and deps_ready
+        and str(tool_input.get("discovery_set_id") or "").strip()
+        == public_surface.active_discovery_set_id(
+            ctx.session,
+            session_id=ctx.session_id,
         )
-        if (
-            state != GoalState.EVIDENCE_READY
-            and not reuses_active_discovery
-            and not reuses_temporary_route
-        ):
-            return "presenter requires ready server-owned evidence"
+    )
+    reuses_temporary_route = (
+        name == "present_route"
+        and state == GoalState.PENDING
+        and deps_ready
+        and preview is not None
+        and preview[1] == str(tool_input.get("candidate_id") or "").strip()
+    )
+    if (
+        state != GoalState.EVIDENCE_READY
+        and not reuses_active_discovery
+        and not reuses_temporary_route
+    ):
+        return "presenter requires ready server-owned evidence"
     return None
 
 
@@ -255,10 +259,10 @@ def constrained_tool_input(
 
 
 __all__ = [
-    "authoritative_discovery_input",
-    "constrained_tool_input",
     "CURRENT_DESTINATION_REQUIRED_ERROR",
     "DESTINATION_SOURCE_REQUIRED_ERROR",
+    "authoritative_discovery_input",
+    "constrained_tool_input",
     "goal_error",
     "missing_verified_destination",
     "rider_excluded_modes",

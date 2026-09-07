@@ -3,11 +3,13 @@
 # ruff: noqa: E402
 
 import asyncio
+import logging
 import os
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
+import redis
 from dotenv import load_dotenv
 
 # Load env before routers/services import (they read os.getenv at module load).
@@ -23,13 +25,12 @@ from app import observability
 
 observability.initialize()
 
-from app.services.agent.model import policy as agent_policy
 from app import runtime
+from app.services.agent.model import policy as agent_policy
+from app.services.agent.tools.places import damn_lines
 
 agent_policy.validate_agent_configuration()
 
-# Fail fast on missing required auth config instead of discovering it per request.
-# An unset APP_KEY would let the API key check and WebSocket auth fall through.
 if not os.getenv("APP_KEY"):
     raise RuntimeError("APP_KEY is not set; refusing to start.")
 
@@ -37,20 +38,19 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Securit
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security.api_key import APIKeyHeader
-from app.routers import trips, live_feed, subway, agent_chat, incident_refresh
-from app.services.live_feed.network_snapshot import network_snapshot_store
-from app.services.incidents.scout_provider import close_incident_scout_client
-from app.services.mta.bus_runtime import close_bus_client, start_bus_client
-from app.services.trips.crowds.search_provider import close_crowd_search_client
-from app.services.mta.static_gtfs.store import GTFSStaticData, close_pool, init_pool
-from app.services.mta.static_gtfs.migration import migrate
 
-# Active riders share one process-owned realtime snapshot. Poll no faster than
-# the upstream feed cadence, and stop polling shortly after the last REST or
-# WebSocket consumer leaves so an always-on Render instance does not download
-# and parse the full network indefinitely while idle.
+from app.routers import agent_chat, incident_refresh, live_feed, subway, trips
+from app.services.incidents.scout_provider import close_incident_scout_client
+from app.services.live_feed.network_snapshot import network_snapshot_store
+from app.services.mta.bus_runtime import close_bus_client, start_bus_client
+from app.services.mta.static_gtfs.migration import migrate
+from app.services.mta.static_gtfs.store import GTFSStaticData, close_pool, init_pool
+from app.services.trips.crowds.search_provider import close_crowd_search_client
+
 REALTIME_REFRESH_INTERVAL_S = 30
 REALTIME_ACTIVE_WINDOW_S = 45
+QUEUE_HISTORY_CHECK_INTERVAL_S = 60 * 60
+_LOGGER = logging.getLogger(__name__)
 
 # Render polls readiness frequently. PING is deliberately cheap but does not
 # prove that quota-enforced Redis commands used by admission and sessions are
@@ -78,8 +78,6 @@ def _allowed_origins() -> list[str]:
 
 
 def _allowed_origin_regex() -> str | None:
-    # Supports Vercel preview URLs like:
-    # https://transitagent-<hash>-<scope>.vercel.app
     raw = os.getenv("CORS_ORIGIN_REGEX", "").strip()
     return raw or None
 
@@ -90,23 +88,30 @@ async def _gtfs_refresh_loop():
             print("[gtfs] starting daily refresh...")
             await asyncio.to_thread(migrate)
             print("[gtfs] refresh complete")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 daily refresh must not kill the process
             print(f"[gtfs] refresh error: {e}")
 
 
 async def _realtime_warm_loop():
-    # The first rider request refreshes stale state itself. While riders remain
-    # active, this owner publishes later generations for all sockets to share.
     while True:
         if network_snapshot_store.has_recent_demand(REALTIME_ACTIVE_WINDOW_S):
             try:
                 await network_snapshot_store.refresh()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 parser faults must not kill the warm loop
                 print(
                     "[live_feed] network snapshot refresh failed: "
                     f"{type(exc).__name__}"
                 )
         await asyncio.sleep(REALTIME_REFRESH_INTERVAL_S)
+
+
+async def _queue_history_refresh_loop() -> None:
+    while True:
+        try:
+            await damn_lines.warm_history()
+        except Exception:
+            _LOGGER.exception("Damn Lines history refresh failed")
+        await asyncio.sleep(QUEUE_HISTORY_CHECK_INTERVAL_S)
 
 
 async def _init_pool_bg():
@@ -116,17 +121,13 @@ async def _init_pool_bg():
     try:
         await asyncio.to_thread(init_pool)
         print("[startup] DB pool ready (optional; trip enrichment is static)")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 optional pool must not delay startup
         print(f"[startup] DB pool init failed; continuing (enrichment is static): {exc!r}")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Trip enrichment resolves stop sequences from the in-memory static pattern
-    # index. Application startup must not depend on the optional database.
     gtfs = GTFSStaticData()
-    # Load the precomputed stop-pattern artifact once. On failure, enrichment
-    # degrades to empty stop lists rather than touching the remote DB.
     try:
         from app.services.mta.static_gtfs.stop_patterns import StopPatternIndex
         gtfs.set_pattern_index(StopPatternIndex.load())
@@ -134,32 +135,32 @@ async def lifespan(app: FastAPI):
             f"[startup] stop-pattern index loaded: {len(gtfs._pattern_index.patterns)} "
             f"patterns, {len(gtfs._pattern_index.stops)} stops"
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 missing index degrades enrichment
         print(f"[startup] stop-pattern index load FAILED (enrichment degraded): {exc!r}")
     try:
         schedule_loaded = gtfs.load_scheduled_arrivals()
         print(f"[startup] scheduled-arrival fallback loaded={int(schedule_loaded)}")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 missing schedule degrades fallback
         print(
             "[startup] scheduled-arrival fallback unavailable "
             f"type={type(exc).__name__}"
         )
     app.state.gtfs = gtfs
     await start_bus_client()
-    # Optional DB pool + daily GTFS refresh, both off the startup critical path.
     app.state.pool_task = asyncio.create_task(_init_pool_bg())
     refresh_task = asyncio.create_task(_gtfs_refresh_loop())
     warm_task = asyncio.create_task(_realtime_warm_loop())
+    queue_history_task = asyncio.create_task(_queue_history_refresh_loop())
     app.state.startup_complete = True
     yield
     app.state.startup_complete = False
     refresh_task.cancel()
     warm_task.cancel()
-    for task in (refresh_task, warm_task):
-        try:
+    queue_history_task.cancel()
+    for task in (refresh_task, warm_task, queue_history_task):
+        with suppress(asyncio.CancelledError):
             await task
-        except asyncio.CancelledError:
-            pass
+    await live_feed.close_background_bus_tasks()
     await network_snapshot_store.close()
     await close_bus_client()
     await close_incident_scout_client()
@@ -211,7 +212,7 @@ protected_api.include_router(subway.router)
 protected_api.include_router(agent_chat.router)
 app.include_router(protected_api)
 app.include_router(live_feed.ws_router)
-# Cron secret auth only; not behind X-App-Key so Render cron can call it.
+# Cron-secret auth only. Not behind X-App-Key.
 app.include_router(incident_refresh.router)
 
 @app.get("/health", dependencies=[])
@@ -222,7 +223,6 @@ async def health():
 
 
 async def _session_store_ready() -> bool:
-    """Verify Redis connectivity and periodically exercise a real command."""
     from app.services import cache
 
     client = cache.redis_client
@@ -232,7 +232,7 @@ async def _session_store_ready() -> bool:
         ping_ok = bool(
             await asyncio.wait_for(asyncio.to_thread(client.ping), timeout=0.25)
         )
-    except Exception:
+    except (redis.exceptions.RedisError, TimeoutError, OSError, RuntimeError):
         return False
     if not ping_ok:
         return False
@@ -260,7 +260,7 @@ async def _session_store_ready() -> bool:
                 timeout=0.25,
             )
         )
-    except Exception:
+    except (redis.exceptions.RedisError, TimeoutError, OSError, RuntimeError):
         functional = False
     _redis_functional_probe_client_id = client_id
     _redis_functional_probe_checked_at = now

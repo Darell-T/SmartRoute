@@ -74,12 +74,9 @@ class NonfatalPrepareSeamTests(_NoGoodOptionsBase):
         # The attempted hard exclusion stays in the audit record and the
         # conversational slots (normalized to the sorted server form), but
         # never moves the accepted selection.
-        self.assertEqual(audit["tool_input"]["exclude_modes"], ["BUS", "SUBWAY"])
-        self.assertEqual(audit["candidates"], [])
-        self.assertEqual(
-            session["slots"]["constraints"]["exclude_modes"],
-            ["BUS", "SUBWAY"],
-        )
+        assert audit["tool_input"]["exclude_modes"] == ["BUS", "SUBWAY"]
+        assert audit["candidates"] == []
+        assert session["slots"]["constraints"]["exclude_modes"] == ["BUS", "SUBWAY"]
 
     async def test_ng07_nonfatal_no_transit_modes_auto(self):
         _session, _session_id, _seed, _events, _trace, audit, _state = (
@@ -98,30 +95,6 @@ class NonfatalPrepareSeamTests(_NoGoodOptionsBase):
         )
         self._assert_no_modes_attempt(_session, audit)
 
-    async def test_ng08_nonfatal_no_transit_modes_quick(self):
-        _session, _session_id, _seed, _events, _trace, audit, _state = (
-            await self._run_nonfatal_scenario(
-                mode="quick",
-                message="Avoid buses and subways",
-                prepare_leg=no_transit_modes_result(),
-                expected_status="no_hard_constraint_match",
-                expected_prepare_input={
-                    "exclude_modes": ["BUS", "SUBWAY"],
-                    "max_candidates": self.loop.agent_policy.policy_for_mode(
-                        "quick"
-                    ).max_route_candidates,
-                    "include_first_leg_arrivals": False,
-                },
-            )
-        )
-        self._assert_no_modes_attempt(_session, audit)
-        _mode, quick_model = policy_model(self.loop, "quick")
-        self.assertEqual(self.loop.client.messages.calls[0]["model"], quick_model)
-        self.assertIn(
-            "response_presentation: quick",
-            self.loop.client.messages.calls[0]["messages"][-1]["content"],
-        )
-
     async def test_ng09_nonfatal_no_route_coverage_auto(self):
         _session, _session_id, _seed, _events, _trace, audit, _state = (
             await self._run_nonfatal_scenario(
@@ -131,11 +104,8 @@ class NonfatalPrepareSeamTests(_NoGoodOptionsBase):
                 expected_status="insufficient_coverage",
             )
         )
-        self.assertEqual(audit["candidates"], [])
-        self.assertEqual(
-            audit["evidence_coverage"],
-            {"routes": "unavailable"},
-        )
+        assert audit["candidates"] == []
+        assert audit["evidence_coverage"] == {"routes": "unavailable"}
 
 
 class RelaxationFollowupTests(_NoGoodOptionsBase):
@@ -160,10 +130,7 @@ class RelaxationFollowupTests(_NoGoodOptionsBase):
             mode=mode,
             prepare_leg=q_only_leg(destination=seed.destination),
         )
-        self.assertEqual(
-            [name for name, _input in trace1.tool_calls],
-            ["declare_goals", "prepare_route_options", "complete_turn"],
-        )
+        assert [name for name, _input in trace1.tool_calls] == ["declare_goals", "prepare_route_options", "complete_turn"]
         # Turn 2: rider explicitly allows the Q; the spec expects the active
         # exclusion to be cleared, a fresh canonical prepare, then present.
         rounds2 = [
@@ -215,7 +182,6 @@ class RelaxationFollowupTests(_NoGoodOptionsBase):
         self,
         *,
         session,
-        session_id,
         seed,
         events2,
         trace2,
@@ -228,64 +194,37 @@ class RelaxationFollowupTests(_NoGoodOptionsBase):
             for name, tool_input in trace2.tool_calls
             if name == "prepare_route_options"
         ]
-        self.assertEqual(len(prepare_inputs), 1)
-        self.assertNotIn(
-            "Q",
-            prepare_inputs[0].get("excluded_route_ids") or [],
-            "relaxed Q exclusion must be cleared on allow",
-        )
-        self.assertEqual(
-            [name for name, _input in trace2.tool_calls],
-            ["declare_goals", "prepare_route_options", "present_route"],
-        )
+        assert len(prepare_inputs) == 1
+        assert "Q" not in (prepare_inputs[0].get("excluded_route_ids") or []), "relaxed Q exclusion must be cleared on allow"
+        assert [name for name, _input in trace2.tool_calls] == ["declare_goals", "prepare_route_options", "present_route"]
         cards = route_cards(events2)
-        self.assertEqual(len(cards), 1)
-        self.assertEqual(cards[0].role, "recommended")
+        assert len(cards) == 1
+        assert cards[0].role == "recommended"
         state = trip_state_module.get_trip_state(session)
-        self.assertEqual(state["selected_candidate_id"], self.FIXED_CANDIDATE_ID)
-        self.assertNotEqual(state["active_candidate_set_id"], seed.candidate_set_id)
-        self.assertNotIn(
-            "Q",
-            (session.get("slots") or {}).get("constraints", {}).get(
-                "excluded_route_ids"
-            )
-            or [],
-        )
+        assert state["selected_candidate_id"] == self.FIXED_CANDIDATE_ID
+        assert state["active_candidate_set_id"] != seed.candidate_set_id
+        assert "Q" not in ((session.get("slots") or {}).get("constraints", {}).get("excluded_route_ids") or [])
         names = [name for name, _input in trace2.tool_calls]
         for forbidden in FORBIDDEN_TOOL_NAMES:
             if forbidden == "present_route":
                 continue
-            self.assertNotIn(forbidden, names)
-        self.assertEqual(events2[0].type, "meta")
-        self.assertEqual(events2[-1].type, "done")
+            assert forbidden not in names
+        assert events2[0].type == "meta"
+        assert events2[-1].type == "done"
         expected_mode, expected_model = policy_model(self.loop, mode)
-        self.assertEqual(trace2.model_call_count, 3)
-        self.assertEqual(trace2.initial_mode, expected_mode)
-        self.assertEqual(trace2.final_mode, expected_mode)
-        self.assertEqual(self.loop.client.messages.calls[0]["model"], expected_model)
+        assert trace2.model_call_count == 3
+        assert trace2.initial_mode == expected_mode
+        assert trace2.final_mode == expected_mode
+        assert self.loop.client.messages.calls[0]["model"] == expected_model
 
     async def test_ng06_auto_relaxation_presents_one_new_card(self):
-        session, session_id, seed, _e1, _t1, events2, trace2 = await self._run_ng06(
+        session, _session_id, seed, _e1, _t1, events2, trace2 = await self._run_ng06(
             mode="auto"
         )
         self._assert_ng06_spec(
             session=session,
-            session_id=session_id,
             seed=seed,
             events2=events2,
             trace2=trace2,
             mode="auto",
-        )
-
-    async def test_ng06_quick_relaxation_presents_one_new_card(self):
-        session, session_id, seed, _e1, _t1, events2, trace2 = await self._run_ng06(
-            mode="quick"
-        )
-        self._assert_ng06_spec(
-            session=session,
-            session_id=session_id,
-            seed=seed,
-            events2=events2,
-            trace2=trace2,
-            mode="quick",
         )

@@ -6,21 +6,22 @@ import unittest
 from unittest.mock import patch
 
 import redis
-
+from app.services import cache
 from app.services.agent import candidate_store, discovery_store
 from app.services.agent.tools.transit import evidence_store as transit_evidence_store
-from app.services import cache
+
+QUOTA_EXCEEDED = "quota exceeded"
 
 
 class _QuotaBlockedRedis:
     def pipeline(self):
-        raise redis.exceptions.ResponseError("quota exceeded")
+        raise redis.exceptions.ResponseError(QUOTA_EXCEEDED)
 
     def get(self, _key):
-        raise redis.exceptions.ResponseError("quota exceeded")
+        raise redis.exceptions.ResponseError(QUOTA_EXCEEDED)
 
     def setex(self, _key, _ttl, _value):
-        raise redis.exceptions.ResponseError("quota exceeded")
+        raise redis.exceptions.ResponseError(QUOTA_EXCEEDED)
 
 
 class _ReadMissPipeline:
@@ -45,7 +46,7 @@ class _WriteFailsReadMissRedis:
         return None
 
     def setex(self, _key, _ttl, _value):
-        raise redis.exceptions.ResponseError("quota exceeded")
+        raise redis.exceptions.ResponseError(QUOTA_EXCEEDED)
 
 
 class EphemeralStoreCacheFailOpenTests(unittest.TestCase):
@@ -68,8 +69,8 @@ class EphemeralStoreCacheFailOpenTests(unittest.TestCase):
                 session_id="sess-discovery",
             )
 
-        self.assertIsNotNone(record)
-        self.assertEqual(record["places"][0]["name"], "Cafe")
+        assert record is not None
+        assert record["places"][0]["name"] == "Cafe"
 
     def test_discovery_set_roundtrips_when_write_fails_and_redis_read_misses(self):
         with patch.object(cache, "redis_client", _WriteFailsReadMissRedis()):
@@ -83,8 +84,8 @@ class EphemeralStoreCacheFailOpenTests(unittest.TestCase):
                 session_id="sess-discovery-miss",
             )
 
-        self.assertIsNotNone(record)
-        self.assertEqual(record["places"][0]["name"], "Cafe")
+        assert record is not None
+        assert record["places"][0]["name"] == "Cafe"
 
     def test_presented_place_identity_rewrite_uses_the_discovery_fallback(self):
         session = {}
@@ -133,8 +134,8 @@ class EphemeralStoreCacheFailOpenTests(unittest.TestCase):
                 session_id="sess-presented",
             )
 
-        self.assertEqual(rewritten[0]["place_id"], "pl_first")
-        self.assertEqual(stored["places"][0]["place_id"], "pl_first")
+        assert rewritten[0]["place_id"] == "pl_first"
+        assert stored["places"][0]["place_id"] == "pl_first"
 
     def test_candidate_set_store_and_load_use_process_memory_when_redis_rejects(self):
         with patch.object(cache, "redis_client", _QuotaBlockedRedis()):
@@ -148,10 +149,12 @@ class EphemeralStoreCacheFailOpenTests(unittest.TestCase):
                 session_id="sess-candidate",
             )
 
-        self.assertIsNotNone(record)
-        self.assertEqual(record["candidates"][0]["candidate_id"], "cd_one")
+        assert record is not None
+        assert record["candidates"][0]["candidate_id"] == "cd_one"
 
-    def test_candidate_presentation_falls_back_to_process_memory_when_redis_rejects(self):
+    def test_candidate_presentation_falls_back_to_process_memory_when_redis_rejects(
+        self,
+    ):
         with patch.object(cache, "redis_client", _QuotaBlockedRedis()):
             set_id = candidate_store.store_candidate_set(
                 session_id="sess-present",
@@ -173,10 +176,10 @@ class EphemeralStoreCacheFailOpenTests(unittest.TestCase):
                 session_id="sess-present",
             )
 
-        self.assertIsNone(error)
-        self.assertIn("already presented", duplicate or "")
-        self.assertTrue(record["presented"])
-        self.assertEqual(record["selected_candidate_id"], "cd_one")
+        assert error is None
+        assert "already presented" in (duplicate or "")
+        assert record["presented"]
+        assert record["selected_candidate_id"] == "cd_one"
 
     def test_candidate_presentation_uses_mirror_when_write_fails_and_redis_misses(self):
         with patch.object(cache, "redis_client", _WriteFailsReadMissRedis()):
@@ -200,15 +203,20 @@ class EphemeralStoreCacheFailOpenTests(unittest.TestCase):
                 session_id="sess-present-miss",
             )
 
-        self.assertIsNone(error)
-        self.assertIn("already presented", duplicate or "")
-        self.assertTrue(record["presented"])
+        assert error is None
+        assert "already presented" in (duplicate or "")
+        assert record["presented"]
 
-    def test_transit_evidence_store_and_load_use_process_memory_when_redis_rejects(self):
+    def test_transit_evidence_store_and_load_use_process_memory_when_redis_rejects(
+        self,
+    ):
         with patch.object(cache, "redis_client", _QuotaBlockedRedis()):
             set_id = transit_evidence_store.store_evidence_set(
                 session_id="sess-evidence",
-                evidence={"evidence_set_id": "te_one", "requested_operation": "arrivals"},
+                evidence={
+                    "evidence_set_id": "te_one",
+                    "requested_operation": "arrivals",
+                },
                 ttl_seconds=60,
             )
             record = transit_evidence_store.load_evidence_set(
@@ -216,6 +224,6 @@ class EphemeralStoreCacheFailOpenTests(unittest.TestCase):
                 session_id="sess-evidence",
             )
 
-        self.assertEqual(set_id, "te_one")
-        self.assertIsNotNone(record)
-        self.assertEqual(record["requested_operation"], "arrivals")
+        assert set_id == "te_one"
+        assert record is not None
+        assert record["requested_operation"] == "arrivals"

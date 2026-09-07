@@ -20,9 +20,10 @@ production ids are never invented or hard-coded across turns.
 
 from __future__ import annotations
 
-from app.services.agent.tools.location_resolution import ResolvedPlace
 from app.services.agent.tools._types import ToolResult
+from app.services.agent.tools.location_resolution import ResolvedPlace
 from app.services.agent.tools.route.preparation_adapter import PreparedLeg
+
 from tests.conversation.conversation_matrix_harness import (
     PUBLIC_TOOL_PROFILE,
     discover_search_input,
@@ -55,12 +56,8 @@ FORBIDDEN_TOOLS = (
     "venue_crowd_window",
     "check_area_conditions",
 )
-REFERENCE_FORBIDDEN_TOOLS = FORBIDDEN_TOOLS + (
-    "prepare_route_options",
-    "present_route",
-    "search_local_places",
-)
-NAVIGATION_FORBIDDEN_TOOLS = FORBIDDEN_TOOLS + ("search_local_places",)
+REFERENCE_FORBIDDEN_TOOLS = (*FORBIDDEN_TOOLS, "prepare_route_options", "present_route", "search_local_places")
+NAVIGATION_FORBIDDEN_TOOLS = (*FORBIDDEN_TOOLS, "search_local_places")
 LEAK_MARKERS = ("pl_", "ds_", "cd_", "cs_", "rc_", "chij")
 
 # Raw provider-shaped fixture: three distinct places; ordinal 2 is "B Pizza".
@@ -158,8 +155,8 @@ __all__ = (
     "PLACES_FIXTURE",
     "REFERENCE_FORBIDDEN_TOOLS",
     "REFERENCE_MESSAGE",
-    "ROUTE_TOOL_PROFILE",
     "ROUTE_NAVIGATION_TOOL_PROFILE",
+    "ROUTE_TOOL_PROFILE",
     "SEARCH_INPUT",
     "discovery_leg_for",
     "poi_result",

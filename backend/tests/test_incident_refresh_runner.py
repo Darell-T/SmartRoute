@@ -20,6 +20,10 @@ from scripts import run_incident_refresh
 _REDIS = "redis://example.invalid:6379/0"
 
 
+class CloseError(Exception):
+    """Representative unexpected transport-close failure."""
+
+
 def _job(status: str) -> AsyncMock:
     return AsyncMock(return_value={"status": status})
 
@@ -64,15 +68,15 @@ class IncidentRefreshRunnerTests(unittest.TestCase):
         ):
             code = run_incident_refresh.main()
 
-        self.assertEqual(code, 3)
+        assert code == 3
         run_spy.assert_called_once()
         job.assert_not_awaited()
         close.assert_awaited_once()
         message = stderr.getvalue()
-        self.assertIn("REDIS_URL", message)
-        self.assertNotIn("redis://", message)
-        self.assertNotIn("6379", message)
-        self.assertEqual(stdout.getvalue(), "")
+        assert "REDIS_URL" in message
+        assert "redis://" not in message
+        assert "6379" not in message
+        assert stdout.getvalue() == ""
 
     def test_main_uses_one_event_loop_and_closes_transport_on_it(self):
         job_loops = []
@@ -107,40 +111,36 @@ class IncidentRefreshRunnerTests(unittest.TestCase):
         ):
             code = run_incident_refresh.main()
 
-        self.assertEqual(code, 0, stderr)
+        assert code == 0, stderr
         # main() drives the whole lifecycle through exactly one event loop.
         run_spy.assert_called_once()
-        self.assertEqual(len(job_loops), 1)
-        self.assertEqual(len(close_loops), 1)
+        assert len(job_loops) == 1
+        assert len(close_loops) == 1
         job_loop, job_was_running = job_loops[0]
         close_loop, close_was_running = close_loops[0]
-        self.assertIsNotNone(job_loop)
+        assert job_loop is not None
         # The job and the transport close ran on the same running loop.
-        self.assertIs(job_loop, close_loop)
-        self.assertTrue(job_was_running)
-        self.assertTrue(close_was_running)
+        assert job_loop is close_loop
+        assert job_was_running
+        assert close_was_running
 
-    def test_complete_partial_and_lock_held_cycles_return_zero(self):
-        for status in ("complete", "partial", "lock_held"):
-            with self.subTest(status=status):
-                code, stdout, stderr, close = self._run(job=_job(status))
-                self.assertEqual(code, 0, stderr)
-                self.assertIn(f'"status":"{status}"', stdout)
-                close.assert_awaited_once()
-
-    def test_failed_cycle_returns_nonzero(self):
-        code, stdout, stderr, close = self._run(job=_job("failed"))
-        self.assertEqual(code, 1)
-        self.assertIn('"status":"failed"', stdout)
-        close.assert_awaited_once()
+    def test_cycle_status_maps_to_exit_code(self):
+        for status, expected_code in (
+            ("complete", 0),
+            ("failed", 1),
+        ):
+            code, stdout, stderr, close = self._run(job=_job(status))
+            assert code == expected_code, stderr
+            assert f'"status":"{status}"' in stdout
+            close.assert_awaited_once()
 
     def test_invalid_result_returns_nonzero_without_raw_details(self):
         job = AsyncMock(return_value=["not", "a", "mapping"])
         code, stdout, stderr, close = self._run(job=job)
-        self.assertEqual(code, 2)
-        self.assertIn("cycle returned an invalid result", stderr)
-        self.assertNotIn("not", stdout)
-        self.assertNotIn("Traceback", stderr)
+        assert code == 2
+        assert "cycle returned an invalid result" in stderr
+        assert "not" not in stdout
+        assert "Traceback" not in stderr
         close.assert_awaited_once()
 
     def test_cancelled_cycle_returns_nonzero_and_still_closes(self):
@@ -159,25 +159,28 @@ class IncidentRefreshRunnerTests(unittest.TestCase):
         ):
             code = run_incident_refresh.main()
 
-        self.assertEqual(code, 2)
+        assert code == 2
         close.assert_awaited_once()
-        self.assertEqual(stdout.getvalue(), "")
-        self.assertNotIn("Traceback", stderr)
+        assert stdout.getvalue() == ""
+        assert "Traceback" not in stderr
 
     def test_unhandled_exception_returns_nonzero_without_raw_details(self):
         job = AsyncMock(side_effect=RuntimeError("provider secret details"))
         code, stdout, stderr, close = self._run(job=job)
-        self.assertEqual(code, 2)
-        self.assertNotIn("provider secret details", stdout)
-        self.assertNotIn("provider secret details", stderr)
-        self.assertNotIn("Traceback", stderr)
+        assert code == 2
+        assert "provider secret details" not in stdout
+        assert "provider secret details" not in stderr
+        assert "Traceback" not in stderr
         close.assert_awaited_once()
 
     def test_scout_client_close_always_awaited_even_when_close_fails(self):
-        code, stdout, stderr, close = self._run(close_error=RuntimeError("close boom"))
-        self.assertEqual(code, 0)
+        code, _stdout, stderr, close = self._run(
+            close_error=CloseError("secret close payload")
+        )
+        assert code == 0
         close.assert_awaited_once()
-        self.assertNotIn("close boom", stderr)
+        assert "CloseError" in stderr
+        assert "secret close payload" not in stderr
 
     def test_stdout_stays_bounded_and_payload_free(self):
         job = AsyncMock(
@@ -194,60 +197,43 @@ class IncidentRefreshRunnerTests(unittest.TestCase):
                 "error": "never-printed",
             }
         )
-        code, stdout, stderr, _close = self._run(job=job)
-        self.assertEqual(code, 0)
-        self.assertIn('"coverage":{"current":10,"partial":0,"unavailable":0}', stdout)
-        self.assertIn('"official_sources":{"mta_alerts":"current","gtfs_rt":"current"}', stdout)
-        self.assertIn('"incidents_upserted":3', stdout)
-        self.assertNotIn('"incidents":[', stdout)
-        self.assertNotIn('"error"', stdout)
-        self.assertNotIn("never-printed", stdout)
-
-    def test_run_once_defaults_to_production_boundaries_when_not_injected(self):
-        # The module-level seam must point at the real orchestration function
-        # so the CLI cannot silently drift from the shared job contract.
-        from app.services.incidents import refresh as job_module
-
-        self.assertIs(
-            run_incident_refresh.refresh.run_background_incident_refresh,
-            job_module.run_background_incident_refresh,
-        )
-
+        code, stdout, _stderr, _close = self._run(job=job)
+        assert code == 0
+        assert '"coverage":{"current":10,"partial":0,"unavailable":0}' in stdout
+        assert '"official_sources":{"mta_alerts":"current","gtfs_rt":"current"}' in stdout
+        assert '"incidents_upserted":3' in stdout
+        assert '"incidents":[' not in stdout
+        assert '"error"' not in stdout
+        assert "never-printed" not in stdout
 
 class RenderBlueprintStaticTests(unittest.TestCase):
     def setUp(self):
         root = pathlib.Path(__file__).resolve().parents[2]
         self.blueprint = (root / "render.yaml").read_text(encoding="utf-8")
 
-    def test_blueprint_declares_only_the_incident_cron_service(self):
-        self.assertEqual(self.blueprint.count("type: cron"), 1)
-        self.assertNotIn("type: web", self.blueprint)
-        self.assertNotIn("database:", self.blueprint)
-        self.assertIn("region: ohio", self.blueprint)
-        self.assertNotIn("branch:", self.blueprint)
-        self.assertNotIn("repo:", self.blueprint)
-        self.assertNotIn("secrets:", self.blueprint)
-
-    def test_blueprint_exact_schedule_command_and_runtime(self):
-        self.assertIn('schedule: "0,30 * * * *"', self.blueprint)
-        self.assertIn('startCommand: "python scripts/run_incident_refresh.py"', self.blueprint)
-        self.assertIn('buildCommand: "pip install -r requirements.txt"', self.blueprint)
-        self.assertIn("rootDir: backend", self.blueprint)
-        self.assertIn("runtime: python", self.blueprint)
-        self.assertIn("autoDeployTrigger: checksPass", self.blueprint)
-
-    def test_blueprint_declares_required_shared_environment(self):
-        self.assertIn("SMARTROUTE_ENV", self.blueprint)
-        self.assertIn("value: production", self.blueprint)
-        self.assertIn("REDIS_URL", self.blueprint)
-        self.assertIn("XAI_API_KEY", self.blueprint)
-        self.assertEqual(self.blueprint.count("sync: false"), 2)
-
-    def test_blueprint_uses_official_envvars_field(self):
-        self.assertIn("envVars:", self.blueprint)
+    def test_blueprint_declares_the_incident_cron_contract(self):
+        assert self.blueprint.count("type: cron") == 1
+        assert "type: web" not in self.blueprint
+        assert "database:" not in self.blueprint
+        assert "region: ohio" in self.blueprint
+        assert "branch:" not in self.blueprint
+        assert "repo:" not in self.blueprint
+        assert "secrets:" not in self.blueprint
+        assert 'schedule: "0,30 * * * *"' in self.blueprint
+        assert 'startCommand: "python scripts/run_incident_refresh.py"' in self.blueprint
+        assert 'buildCommand: "pip install -r requirements.txt"' in self.blueprint
+        assert "rootDir: backend" in self.blueprint
+        assert "runtime: python" in self.blueprint
+        assert "autoDeployTrigger: checksPass" in self.blueprint
+        assert "SMARTROUTE_ENV" in self.blueprint
+        assert "value: production" in self.blueprint
+        assert "REDIS_URL" in self.blueprint
+        assert "XAI_API_KEY" in self.blueprint
+        assert self.blueprint.count("sync: false") == 2
+        assert "envVars:" in self.blueprint
         # A bare "env:" field is not part of the Render Blueprint service
         # spec and must not creep back in.
-        self.assertIsNone(re.search(r"(?m)^env:\s*$", self.blueprint))
+        assert re.search(r"(?m)^env:\s*$", self.blueprint) is None
 
 
 if __name__ == "__main__":

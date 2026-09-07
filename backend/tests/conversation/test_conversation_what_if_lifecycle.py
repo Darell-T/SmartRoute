@@ -1,4 +1,4 @@
-"""Batch B: deterministic exhaustive what-if lifecycle scenarios (Auto+Quick).
+"""Deterministic what-if lifecycle scenarios.
 
 Drives the *real* agent loop (``app.services.agent.loop.run_agent_turn``)
 with production intent/tool filtering, the real ``TOOL_REGISTRY``
@@ -38,7 +38,7 @@ from tests.conversation.conversation_what_if_support import (
 
 
 class TemporalWhatIfTests(_WhatIfLifecycleBase):
-    """B-TEMP-PREVIEW / B-TEMP-ACCEPT / B-TEMP-REJECT (Auto + Quick)."""
+    """B-TEMP-PREVIEW / B-TEMP-ACCEPT / B-TEMP-REJECT."""
 
     @classmethod
     def setUpClass(cls):
@@ -46,9 +46,6 @@ class TemporalWhatIfTests(_WhatIfLifecycleBase):
 
     async def test_b_temp_preview_auto(self):
         await self._temporal_preview(mode="auto", scenario_id="B-TEMP-PREVIEW")
-
-    async def test_b_temp_preview_quick(self):
-        await self._temporal_preview(mode="quick", scenario_id="B-TEMP-PREVIEW")
 
     async def _temporal_accept(self, mode, scenario_id):
         session, session_id, seed = await self._temporal_preview(
@@ -91,9 +88,6 @@ class TemporalWhatIfTests(_WhatIfLifecycleBase):
     async def test_b_temp_accept_auto(self):
         await self._temporal_accept("auto", "B-TEMP-ACCEPT")
 
-    async def test_b_temp_accept_quick(self):
-        await self._temporal_accept("quick", "B-TEMP-ACCEPT")
-
     async def _temporal_reject(self, mode, scenario_id):
         session, session_id, seed = await self._temporal_preview(
             mode=mode, scenario_id=scenario_id
@@ -123,7 +117,7 @@ class TemporalWhatIfTests(_WhatIfLifecycleBase):
         session, session_id, seed = await self._temporal_preview(
             mode=mode, scenario_id=scenario_id
         )
-        set_id, candidate_id, _record = capture_temporary_candidate(
+        _set_id, candidate_id, _record = capture_temporary_candidate(
             session, session_id
         )
         await self._reject_turn(session=session, session_id=session_id, mode=mode)
@@ -139,14 +133,8 @@ class TemporalWhatIfTests(_WhatIfLifecycleBase):
     async def test_b_temp_reject_auto(self):
         await self._temporal_reject("auto", "B-TEMP-REJECT")
 
-    async def test_b_temp_reject_quick(self):
-        await self._temporal_reject("quick", "B-TEMP-REJECT")
-
     async def test_b_temp_reject_probe_auto(self):
         await self._temporal_reject_eligibility_probe("auto", "B-TEMP-REJECT")
-
-    async def test_b_temp_reject_probe_quick(self):
-        await self._temporal_reject_eligibility_probe("quick", "B-TEMP-REJECT")
 
 
 class BusWhatIfTests(_WhatIfLifecycleBase):
@@ -158,9 +146,6 @@ class BusWhatIfTests(_WhatIfLifecycleBase):
 
     async def test_b_bus_preview_auto(self):
         await self._bus_preview(mode="auto", scenario_id="B-BUS-PREVIEW")
-
-    async def test_b_bus_preview_quick(self):
-        await self._bus_preview(mode="quick", scenario_id="B-BUS-PREVIEW")
 
     async def _bus_accept(self, mode, scenario_id):
         session, session_id, seed = await self._bus_preview(
@@ -204,17 +189,10 @@ class BusWhatIfTests(_WhatIfLifecycleBase):
                 },
             },
         )
-        self.assertEqual(
-            session["profile"]["preferences"]["preferred_modes"],
-            ["BUS"],
-            f"{scenario_id} BUS preference applied to profile exactly once",
-        )
+        assert session["profile"]["preferences"]["preferred_modes"] == ["BUS"], f"{scenario_id} BUS preference applied to profile exactly once"
 
     async def test_b_bus_accept_auto(self):
         await self._bus_accept("auto", "B-BUS-ACCEPT")
-
-    async def test_b_bus_accept_quick(self):
-        await self._bus_accept("quick", "B-BUS-ACCEPT")
 
     async def _bus_reject(self, mode, scenario_id):
         session, session_id, seed = await self._bus_preview(
@@ -240,17 +218,13 @@ class BusWhatIfTests(_WhatIfLifecycleBase):
             preview_set_id=set_id,
             preview_candidate_id=candidate_id,
         )
-        self.assertEqual(
-            session["profile"]["preferences"]["preferred_modes"],
-            [],
-            f"{scenario_id} reject preserves original profile preferences",
-        )
+        assert session["profile"]["preferences"]["preferred_modes"] == [], f"{scenario_id} reject preserves original profile preferences"
 
     async def _bus_reject_eligibility_probe(self, mode, scenario_id):
         session, session_id, seed = await self._bus_preview(
             mode=mode, scenario_id=scenario_id
         )
-        set_id, candidate_id, _record = capture_temporary_candidate(
+        _set_id, candidate_id, _record = capture_temporary_candidate(
             session, session_id
         )
         await self._reject_turn(session=session, session_id=session_id, mode=mode)
@@ -266,14 +240,8 @@ class BusWhatIfTests(_WhatIfLifecycleBase):
     async def test_b_bus_reject_auto(self):
         await self._bus_reject("auto", "B-BUS-REJECT")
 
-    async def test_b_bus_reject_quick(self):
-        await self._bus_reject("quick", "B-BUS-REJECT")
-
     async def test_b_bus_reject_probe_auto(self):
         await self._bus_reject_eligibility_probe("auto", "B-BUS-REJECT")
-
-    async def test_b_bus_reject_probe_quick(self):
-        await self._bus_reject_eligibility_probe("quick", "B-BUS-REJECT")
 
 
 class ReplacementAndUnrelatedTests(_WhatIfLifecycleBase):
@@ -294,7 +262,7 @@ class ReplacementAndUnrelatedTests(_WhatIfLifecycleBase):
             seed=seed,
             state_before=state_before,
         )
-        set1, candidate1, record1 = capture_temporary_candidate(session, session_id)
+        _set1, candidate1, record1 = capture_temporary_candidate(session, session_id)
         session, session_id, seed = await self._bus_preview(
             mode=mode,
             scenario_id=f"{scenario_id}-t2",
@@ -306,22 +274,10 @@ class ReplacementAndUnrelatedTests(_WhatIfLifecycleBase):
         )
         set2, candidate2, _record2 = capture_temporary_candidate(session, session_id)
         state = trip_state_module.get_trip_state(session)
-        self.assertEqual(
-            state["temporary_candidate_set_id"],
-            set2,
-            f"{scenario_id} second preview replaces the temporary identity",
-        )
-        self.assertEqual(
-            state["temporary_selected_candidate_id"],
-            candidate2,
-            scenario_id,
-        )
-        self.assertEqual(
-            state["active_candidate_set_id"],
-            seed.candidate_set_id,
-            f"{scenario_id} active base stays the original accepted route",
-        )
-        self.assertFalse(record1["presented"], f"{scenario_id} stale preview unconsumed")
+        assert state["temporary_candidate_set_id"] == set2, f"{scenario_id} second preview replaces the temporary identity"
+        assert state["temporary_selected_candidate_id"] == candidate2, scenario_id
+        assert state["active_candidate_set_id"] == seed.candidate_set_id, f"{scenario_id} active base stays the original accepted route"
+        assert not record1["presented"], f"{scenario_id} stale preview unconsumed"
 
         probe_events, probe_trace = await self._stale_probe(
             session=session,
@@ -334,22 +290,12 @@ class ReplacementAndUnrelatedTests(_WhatIfLifecycleBase):
             for attempt in probe_trace.capability_attempts
             if attempt["capability"] == "present_route"
         ]
-        self.assertTrue(
-            present_attempts and present_attempts[0]["ok"] is False,
-            f"{scenario_id} stale identity present must fail",
-        )
-        self.assertEqual(route_cards(probe_events), [], scenario_id)
+        assert present_attempts
+        assert present_attempts[0]["ok"] is False, f"{scenario_id} stale identity present must fail"
+        assert route_cards(probe_events) == [], scenario_id
         state = trip_state_module.get_trip_state(session)
-        self.assertEqual(
-            state["temporary_candidate_set_id"],
-            set2,
-            f"{scenario_id} stale probe leaves the latest preview bound",
-        )
-        self.assertEqual(
-            state["active_candidate_set_id"],
-            seed.candidate_set_id,
-            scenario_id,
-        )
+        assert state["temporary_candidate_set_id"] == set2, f"{scenario_id} stale probe leaves the latest preview bound"
+        assert state["active_candidate_set_id"] == seed.candidate_set_id, scenario_id
 
         prefs_before = trip_state_module.get_trip_state(session)["preferences"]
         events3, trace3 = await self._accept_turn(
@@ -387,16 +333,10 @@ class ReplacementAndUnrelatedTests(_WhatIfLifecycleBase):
                 },
             },
         )
-        self.assertFalse(
-            record1["presented"],
-            f"{scenario_id} stale preview never consumed after latest commit",
-        )
+        assert not record1["presented"], f"{scenario_id} stale preview never consumed after latest commit"
 
     async def test_b_replacement_auto(self):
         await self._replacement("auto", "B-REPLACEMENT")
-
-    async def test_b_replacement_quick(self):
-        await self._replacement("quick", "B-REPLACEMENT")
 
     async def _unrelated(self, mode, scenario_id):
         session, session_id, seed = await self._temporal_preview(
@@ -417,10 +357,10 @@ class ReplacementAndUnrelatedTests(_WhatIfLifecycleBase):
             mocks={},
             turn_id="t2",
         )
-        self.assertEqual(trace.tool_calls, [], f"{scenario_id} unrelated runs no tools")
-        self.assertEqual(events[0].type, "meta", scenario_id)
-        self.assertEqual(events[-1].type, "done", scenario_id)
-        self.assertEqual(route_cards(events), [], scenario_id)
+        assert trace.tool_calls == [], f"{scenario_id} unrelated runs no tools"
+        assert events[0].type == "meta", scenario_id
+        assert events[-1].type == "done", scenario_id
+        assert route_cards(events) == [], scenario_id
         state = trip_state_module.get_trip_state(session)
         for key in (
             "origin",
@@ -433,23 +373,12 @@ class ReplacementAndUnrelatedTests(_WhatIfLifecycleBase):
             "selected_candidate_id",
             "preferences",
         ):
-            self.assertEqual(
-                state[key], state_before[key], f"{scenario_id} active [{key}]"
-            )
+            assert state[key] == state_before[key], f"{scenario_id} active [{key}]"
         # Unrelated conversation never implicitly accepts or discards.
-        self.assertEqual(state["temporary_candidate_set_id"], set1, scenario_id)
-        self.assertEqual(
-            state["temporary_selected_candidate_id"], candidate1, scenario_id
-        )
-        self.assertEqual(session["active_trip"]["card_id"], seed.card_id, scenario_id)
-        self.assertEqual(
-            [card["card_id"] for card in session["route_cards"]],
-            [seed.card_id],
-            scenario_id,
-        )
+        assert state["temporary_candidate_set_id"] == set1, scenario_id
+        assert state["temporary_selected_candidate_id"] == candidate1, scenario_id
+        assert session["active_trip"]["card_id"] == seed.card_id, scenario_id
+        assert [card["card_id"] for card in session["route_cards"]] == [seed.card_id], scenario_id
 
     async def test_b_unrelated_auto(self):
         await self._unrelated("auto", "B-UNRELATED")
-
-    async def test_b_unrelated_quick(self):
-        await self._unrelated("quick", "B-UNRELATED")

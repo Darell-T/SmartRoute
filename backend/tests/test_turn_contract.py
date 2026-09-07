@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 
+import pytest
 from app.services.agent.turn.contract import (
     ContractValidationError,
     GoalKind,
@@ -20,24 +21,21 @@ class TurnContractTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(contract.goal("route").depends_on, ("destination",))
-        self.assertEqual(contract.ready_goal_keys(), ("destination",))
-        self.assertEqual(
-            contract.ready_goal_keys({"destination": GoalState.EVIDENCE_READY}),
-            ("route",),
-        )
+        assert contract.goal("route").depends_on == ("destination",)
+        assert contract.ready_goal_keys() == ("destination",)
+        assert contract.ready_goal_keys({"destination": GoalState.EVIDENCE_READY}) == ("route",)
 
     def test_rejects_duplicate_unknown_and_cyclic_dependencies(self) -> None:
-        with self.assertRaises(ContractValidationError):
+        with pytest.raises(ContractValidationError):
             TurnContract(
                 (
                     OutcomeGoal("route", GoalKind.ROUTE),
                     OutcomeGoal("ROUTE", GoalKind.ROUTE),
                 )
             )
-        with self.assertRaises(ContractValidationError):
+        with pytest.raises(ContractValidationError):
             TurnContract((OutcomeGoal("route", GoalKind.ROUTE, ("missing",)),))
-        with self.assertRaises(ContractValidationError):
+        with pytest.raises(ContractValidationError):
             TurnContract(
                 (
                     OutcomeGoal("a", GoalKind.GENERAL_RESPONSE, ("b",)),
@@ -50,10 +48,10 @@ class TurnContractTests(unittest.TestCase):
             OutcomeGoal(str(index), GoalKind.GENERAL_RESPONSE) for index in range(6)
         )
         contract = TurnContract(goals)
-        with self.assertRaises(AttributeError):
-            setattr(contract, "goals", ())
-        with self.assertRaises(ContractValidationError):
-            TurnContract(goals + (OutcomeGoal("sixth-plus-one", GoalKind.ROUTE),))
+        with pytest.raises(AttributeError):
+            contract.goals = ()
+        with pytest.raises(ContractValidationError):
+            TurnContract((*goals, OutcomeGoal("sixth-plus-one", GoalKind.ROUTE)))
 
 
 if __name__ == "__main__":

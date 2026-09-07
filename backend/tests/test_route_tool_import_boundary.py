@@ -2,7 +2,7 @@
 
 ``prepare_route_options`` / ``present_route`` are the canonical
 conversational route surface. Their import graph (including the tool
-registry) must never load the evaluation-only advisor or shadow modules.
+registry) must never load the evaluation-only advisor modules.
 The probes run in a fresh interpreter so earlier in-process imports cannot
 mask a regression, and they assert the loaded-module set rather than a brittle
 substring grep against preparation module names.
@@ -10,105 +10,84 @@ substring grep against preparation module names.
 
 from __future__ import annotations
 
-import subprocess
+import importlib
+import multiprocessing
 import sys
 import unittest
-from pathlib import Path
-
-BACKEND_DIR = Path(__file__).resolve().parent.parent
 
 _BANNED_MODULES = {
     "evaluation.route_intelligence.advisor_context",
     "evaluation.route_intelligence.advisor",
-    "evaluation.route_intelligence.shadow",
-    "evaluation.route_intelligence.trip_shadow",
 }
 
-_PROBE_TEMPLATE = (
-    "import sys\n"
-    "{imports}\n"
-    "banned = {banned!r}\n"
-    "loaded = sorted(name for name in sys.modules if name in banned)\n"
-    "if loaded:\n"
-    "    print('LOADED:' + ','.join(loaded))\n"
-    "    sys.exit(1)\n"
-    "print('CLEAN')\n"
-)
+
+def _probe_modules(
+    module_names: tuple[str, ...],
+    banned: tuple[str, ...],
+    result_queue,
+) -> None:
+    for name in module_names:
+        importlib.import_module(name)
+    result_queue.put(sorted(name for name in sys.modules if name in banned))
 
 
-def _run_probe(imports: list[str], banned: set[str]) -> subprocess.CompletedProcess:
-    probe = _PROBE_TEMPLATE.format(
-        imports="\n".join(imports),
-        banned=sorted(banned),
+def _run_probe(module_names: tuple[str, ...], banned: set[str]) -> list[str]:
+    context = multiprocessing.get_context("spawn")
+    result_queue = context.Queue()
+    process = context.Process(
+        target=_probe_modules,
+        args=(module_names, tuple(sorted(banned)), result_queue),
     )
-    return subprocess.run(
-        [sys.executable, "-c", probe],
-        cwd=str(BACKEND_DIR),
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
+    process.start()
+    process.join(120)
+    loaded = result_queue.get(timeout=1)
+    result_queue.close()
+    assert process.exitcode == 0, f"probe failed with loaded={loaded}"
+    return loaded
 
 
 class RouteToolImportBoundaryTests(unittest.TestCase):
     def test_shared_route_preparation_imports_without_agent_modules(self):
         """Neutral preparation and projection do not pull agent adapters."""
 
-        completed = _run_probe(
-            imports=[
-                "from app.services.trips import direct_plan  # noqa: F401",
-                "from app.services.trips.preparation import prepare  # noqa: F401",
-                "from app.services.trips.preparation import constraints  # noqa: F401",
-                "from app.services.trips.preparation import evidence  # noqa: F401",
-                "from app.services.trips.preparation import multi_stop  # noqa: F401",
-            ],
-            banned={"app.services.agent", "app.services.agent.tools"},
+        loaded = _run_probe(
+            (
+                "app.services.trips.direct_plan",
+                "app.services.trips.preparation.prepare",
+                "app.services.trips.preparation.constraints",
+                "app.services.trips.preparation.evidence",
+                "app.services.trips.preparation.multi_stop",
+            ),
+            {"app.services.agent", "app.services.agent.tools"},
         )
-        self.assertEqual(
-            completed.returncode,
-            0,
-            msg=f"agent modules loaded by shared trips code: {completed.stdout}{completed.stderr}",
-        )
-        self.assertIn("CLEAN", completed.stdout)
+        assert loaded == []
 
     def test_conversational_route_tools_import_without_evaluation_stack(self):
         """The registry plus both active tools never load evaluation code."""
-        completed = _run_probe(
-            imports=[
-                "from app.services.agent.tools import TOOLS  # noqa: F401",
-                "from app.services.agent.tools.route import prepare_route_options  # noqa: F401",
-                "from app.services.agent.tools.route import present_route  # noqa: F401",
-                "from app.services.agent.tools.route import route_projection  # noqa: F401",
-                "from app.services.agent.tools.route import preparation_adapter  # noqa: F401",
-            ],
-            banned=_BANNED_MODULES,
+        loaded = _run_probe(
+            (
+                "app.services.agent.tools",
+                "app.services.agent.tools.route.prepare_route_options",
+                "app.services.agent.tools.route.present_route",
+                "app.services.agent.tools.route.route_projection",
+                "app.services.agent.tools.route.preparation_adapter",
+            ),
+            _BANNED_MODULES,
         )
-        self.assertEqual(
-            completed.returncode,
-            0,
-            msg=f"evaluation modules loaded: {completed.stdout}{completed.stderr}",
-        )
-        self.assertIn("CLEAN", completed.stdout)
+        assert loaded == []
 
     def test_live_map_graph_stays_projection_and_advisor_free(self):
         """/api/trip loads neither the advisor stack nor conversational projection."""
-        completed = _run_probe(
-            imports=[
-                "import app.routers.trips  # noqa: F401",
-            ],
-            banned={
+        loaded = _run_probe(
+            ("app.routers.trips",),
+            {
                 *_BANNED_MODULES,
                 "app.services.agent",
                 "app.services.agent.tools",
                 "app.services.agent.tools.route.route_projection",
             },
         )
-        self.assertEqual(
-            completed.returncode,
-            0,
-            msg=f"advisor/projection modules loaded: {completed.stdout}{completed.stderr}",
-        )
-        self.assertIn("CLEAN", completed.stdout)
+        assert loaded == []
 
 
 if __name__ == "__main__":

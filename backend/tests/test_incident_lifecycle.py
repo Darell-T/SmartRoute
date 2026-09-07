@@ -4,7 +4,6 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
-
 os.environ.setdefault("APP_KEY", "test-app-key")
 from app import main
 
@@ -36,17 +35,17 @@ class LiveRuntimeLifecycleTests(unittest.IsolatedAsyncioTestCase):
             main, "_realtime_warm_loop", _idle_loop
         ), patch.object(main, "close_pool"):
             async with main.lifespan(app):
-                self.assertIs(app.state.gtfs, gtfs)
-                self.assertTrue(app.state.startup_complete)
-                self.assertFalse(hasattr(app.state, "ny511_poller"))
+                assert app.state.gtfs is gtfs
+                assert app.state.startup_complete
+                assert not hasattr(app.state, "ny511_poller")
                 start_bus.assert_awaited_once_with()
 
-        self.assertFalse(app.state.startup_complete)
+        assert not app.state.startup_complete
         close_snapshot.assert_awaited_once_with()
         close_bus.assert_awaited_once_with()
         close_scout.assert_awaited_once_with()
         close_crowd.assert_awaited_once_with()
         # The dormant request-time incident_monitor client is no longer
         # imported or closed by the application lifecycle.
-        self.assertFalse(hasattr(main, "close_incident_client"))
-        self.assertTrue(callable(main.close_incident_scout_client))
+        assert not hasattr(main, "close_incident_client")
+        assert callable(main.close_incident_scout_client)

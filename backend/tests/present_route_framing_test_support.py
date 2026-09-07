@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
+
 from app.services.agent.tools.route import prepare_route_options
 from app.services.agent.turn.contract import (
     GoalKind,
@@ -10,9 +11,11 @@ from app.services.agent.turn.contract import (
     TurnContract,
 )
 from app.services.agent.turn.evidence import TurnEvidence
+from app.services.trips.selection_decision import evaluate_candidate_decision
+
 from tests.conversation.conversation_matrix_harness import clear_caches
 from tests.single_agent_route_test_support import _ctx, _prepared_leg
-from app.services.trips.selection_decision import evaluate_candidate_decision
+
 
 def _supported_reason_codes(record: dict, entry: dict) -> set[str]:
     return evaluate_candidate_decision(record, entry)["supported_reason_codes"]
@@ -43,11 +46,8 @@ class PresentRouteFramingTestMixin:
                 route_input,
                 ctx,
             )
-        self.assertTrue(prepared.ok, prepared.error)
-        self.assertNotIn(
-            "supported_reason_codes",
-            prepared.data["candidates"][0],
-        )
+        assert prepared.ok, prepared.error
+        assert "supported_reason_codes" not in prepared.data["candidates"][0]
         candidate_id = prepared.data["candidates"][0]["candidate_id"]
         evidence.record_goal_handle("route", prepared.data["candidate_set_id"])
         evidence.record_goal("route", GoalState.EVIDENCE_READY, attempted=True)

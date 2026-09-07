@@ -1,4 +1,3 @@
-# cache.py - Redis Caching Wrapper with in-memory fallback
 import asyncio
 import os
 import threading
@@ -20,7 +19,6 @@ redis_client = (
     else None
 )
 
-# In-memory cache used when Redis is not configured: {key: (value, expires_at)}
 _mem: dict = {}
 _mem_lock = threading.Lock()
 _FAIL_OPEN_LOG_COOLDOWN_SECONDS = 60
@@ -134,11 +132,12 @@ def cache_get_many(keys, *, fail_open: bool = False) -> dict:
                     key: value if value is not None else _memory_get(key)
                     for key, value in result.items()
                 }
-            return result
         except redis.exceptions.RedisError as exc:
             if not fail_open:
                 raise
             _log_fail_open("read", exc)
+        else:
+            return result
     return {key: _memory_get(key) for key in unique_keys}
 
 

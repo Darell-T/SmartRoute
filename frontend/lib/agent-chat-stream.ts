@@ -62,6 +62,17 @@ export interface ReasoningEvent {
   text: string;
 }
 
+export interface AgentSource {
+  title: string;
+  url: string;
+}
+
+/** `sources` — trusted provider attribution for the active assistant turn. */
+export interface SourcesEvent {
+  type: "sources";
+  sources: AgentSource[];
+}
+
 export type ProgressStage = "finding_routes" | "checking_live_conditions" | "comparing_options";
 export type ProgressStatus = "active" | "complete";
 export interface ProgressEvent {
@@ -190,6 +201,7 @@ export type AgentEvent =
   | MetaEvent
   | TokenEvent
   | ReasoningEvent
+  | SourcesEvent
   | ProgressEvent
   | ToolStartEvent
   | ToolEndEvent
@@ -203,6 +215,7 @@ const KNOWN_EVENT_TYPES: ReadonlySet<string> = new Set([
   "meta",
   "token",
   "reasoning",
+  "sources",
   "progress",
   "tool_start",
   "tool_end",
@@ -220,38 +233,6 @@ function warnSkip(reason: string, detail: unknown): void {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isString(value: unknown): value is string {
-  return typeof value === "string";
-}
-
-function isNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
-}
-
-function isBoolean(value: unknown): value is boolean {
-  return typeof value === "boolean";
-}
-
-function arrivalResolutionStatus(data: Record<string, unknown>): ArrivalResolutionStatus {
-  switch (data.resolution_status) {
-    case "resolved":
-    case "ambiguous":
-    case "location_required":
-    case "no_predictions":
-    case "provider_unavailable":
-      return data.resolution_status;
-    default:
-      if (data.source_status === "stop_not_resolved") {
-        return Array.isArray(data.ambiguity) && data.ambiguity.length > 0
-          ? "ambiguous"
-          : "location_required";
-      }
-      if (data.source_status === "provider_unavailable") return "provider_unavailable";
-      if (data.source_status === "no_predictions") return "no_predictions";
-      return "resolved";
-  }
 }
 
 /** Validates the decoded JSON payload against the event's minimum required

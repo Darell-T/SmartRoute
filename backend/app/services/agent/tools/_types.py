@@ -9,13 +9,13 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Awaitable, Callable
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from app.services.agent.events import ProgressStage, ProgressStatus
 
 
-class ToolOutcome(str, Enum):
+class ToolOutcome(StrEnum):
     """Passenger-relevant result of one completed capability execution."""
 
     READY = "ready"

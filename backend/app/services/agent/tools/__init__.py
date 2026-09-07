@@ -15,17 +15,21 @@ import dataclasses
 import hashlib
 import json
 import os
-from collections.abc import Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 from app.services.agent.public_surface import offered_custom_tools
 from app.services.agent.tools import (
     complete_turn,
     declare_goals,
 )
-from app.services.agent.tools.places import discover_places, place_reference, present_places
 from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.places import (
+    discover_places,
+    place_reference,
+    present_places,
+)
 from app.services.agent.tools.route import prepare_route_options, present_route
 from app.services.agent.tools.transit import (
     accessibility_status,
@@ -35,6 +39,8 @@ from app.services.agent.tools.transit import (
     lookup_facts,
     present_transit,
     transit_snapshot,
+)
+from app.services.agent.tools.transit import (
     venue_crowd_window as venues,
 )
 
@@ -75,6 +81,7 @@ def _lookup_arrivals_label(tool_input: dict) -> str:
 
 
 def _venue_crowd_window_label(tool_input: dict) -> str:
+    del tool_input
     return "Estimating post-event crowds…"
 
 
@@ -97,6 +104,7 @@ def _prepare_route_options_label(tool_input: dict) -> str:
 
 
 def _present_route_label(tool_input: dict) -> str:
+    del tool_input
     return "Presenting the recommended route…"
 
 
@@ -119,6 +127,7 @@ def _discover_places_label(tool_input: dict) -> str:
 
 
 def _present_places_label(tool_input: dict) -> str:
+    del tool_input
     return "Presenting verified places…"
 
 
@@ -155,27 +164,23 @@ def _check_transit_label(tool_input: dict) -> str:
 
 
 def _complete_turn_label(tool_input: dict) -> str:
+    del tool_input
     return "Finishing your answer…"
 
 
 def _declare_goals_label(tool_input: dict) -> str:
+    del tool_input
     return "Thinking through your request…"
 
 
 def _present_transit_label(tool_input: dict) -> str:
+    del tool_input
     return "Presenting verified transit information…"
 
 
-# ---- Fixture replay (eval harness hook -- plan doc section 7 Layer 2) ----
-#
-# AGENT_TOOL_FIXTURES=<dir>: every tool call is intercepted here and replayed
-# from {dir}/{tool_name}/{canonical_hash_of_input}.json instead of running
-# the real executor, so eval runs never touch a network and fail loudly (not
-# silently) on a missing fixture. AGENT_TOOL_FIXTURES_RECORD=1: run the real
-# executor AND write its result to that path before returning, to (re)record
-# fixtures against live API keys. Wrapping happens once here, at registry
-# build time, so route/transit tools get the hook without either
-# module knowing fixtures exist.
+def _get_place_details_label(tool_input: dict) -> str:
+    del tool_input
+    return "Checking place details…"
 
 
 def _canonical_hash(tool_input: dict) -> str:
@@ -265,7 +270,7 @@ INTERNAL_TOOL_REGISTRY: dict[str, ToolSpec] = {
     "get_place_details": _spec(
         place_reference.GET_PLACE_DETAILS_SCHEMA,
         place_reference.execute,
-        lambda tool_input: "Checking place details…",
+        _get_place_details_label,
         8.0,
     ),
 }
@@ -321,7 +326,6 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
     ),
 }
 
-# Executors remain reachable by name for internal dispatch and fixtures.
 COMBINED_TOOL_REGISTRY: dict[str, ToolSpec] = {**INTERNAL_TOOL_REGISTRY, **TOOL_REGISTRY}
 TOOLS: list[dict] = offered_custom_tools(spec.schema for spec in TOOL_REGISTRY.values())
 
@@ -352,9 +356,7 @@ def iter_unsupported_strict_keyword_paths(
     if isinstance(schema, Mapping):
         for key, value in schema.items():
             child = f"{path}.{key}"
-            if key in _UNSUPPORTED_STRICT_KEYWORDS:
-                findings.append(child)
-            elif key == "minItems" and value not in (0, 1):
+            if key in _UNSUPPORTED_STRICT_KEYWORDS or (key == "minItems" and value not in (0, 1)):
                 findings.append(child)
             findings.extend(iter_unsupported_strict_keyword_paths(value, path=child))
     elif isinstance(schema, list):
@@ -375,8 +377,10 @@ def assert_strict_tool_schemas_compatible(tools: Iterable[Mapping[str, Any]]) ->
         if not isinstance(input_schema, Mapping):
             problems.append(f"{name}: missing object input_schema")
             continue
-        for finding in iter_unsupported_strict_keyword_paths(input_schema):
-            problems.append(f"{name}: {finding}")
+        problems.extend(
+            f"{name}: {finding}"
+            for finding in iter_unsupported_strict_keyword_paths(input_schema)
+        )
     if problems:
         joined = "; ".join(problems)
         raise AssertionError(
@@ -390,11 +394,11 @@ assert_strict_tool_schemas_compatible(TOOLS)
 __all__ = [
     "COMBINED_TOOL_REGISTRY",
     "INTERNAL_TOOL_REGISTRY",
-    "TOOL_REGISTRY",
     "TOOLS",
-    "ToolSpec",
+    "TOOL_REGISTRY",
     "ToolContext",
     "ToolResult",
+    "ToolSpec",
     "assert_strict_tool_schemas_compatible",
     "iter_unsupported_strict_keyword_paths",
 ]

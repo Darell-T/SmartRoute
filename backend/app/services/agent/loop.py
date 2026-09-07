@@ -15,21 +15,18 @@ from collections.abc import AsyncIterator
 
 import anthropic
 
-from app import runtime
-from app import observability
-from app.services.agent.model import budget
+from app import observability, runtime
 from app.services.agent import events as agent_events
-from app.services.agent.model import mock_turn
-from app.services.agent.model import request as model_request
+from app.services.agent import public_surface, tool_input_policy
+from app.services.agent import session as session_module
+from app.services.agent.model import budget, mock_turn
 from app.services.agent.model import policy as agent_policy
 from app.services.agent.model import prompt as agent_prompt
-from app.services.agent import public_surface
-from app.services.agent import session as session_module
-from app.services.agent import tool_input_policy
+from app.services.agent.model import request as model_request
+from app.services.agent.tools import COMBINED_TOOL_REGISTRY, ToolContext, ToolResult
+from app.services.agent.turn import stream as turn_stream
 from app.services.agent.turn import tool_round
 from app.services.agent.turn.finalization import TurnTrace
-from app.services.agent.turn import stream as turn_stream
-from app.services.agent.tools import COMBINED_TOOL_REGISTRY, ToolContext, ToolResult
 from app.services.agent.turn.ledger import TurnToolLedger as _TurnToolLedger
 
 # Keep the active registry injectable at the turn entry point so deterministic
@@ -105,7 +102,6 @@ def _eval_math_node(node: ast.AST) -> int | float:
     raise ValueError("unsupported expression")
 
 
-_TurnDeadlineReached = tool_round.TurnDeadlineReached
 _rider_excluded_modes = tool_input_policy.rider_excluded_modes
 _rider_excluded_route_ids = tool_input_policy.rider_excluded_route_ids
 _constrained_tool_input = tool_input_policy.constrained_tool_input
@@ -200,7 +196,7 @@ def _build_stream_kwargs(
     )
 
 
-def _web_search_tool(mode_policy: agent_policy.AgentModePolicy) -> dict:
+def _web_search_tool() -> dict:
     return {
         "type": "web_search_20250305",
         "name": "web_search",
@@ -225,7 +221,7 @@ def _optional_parameter_count(tools: list[dict]) -> int:
 
 
 def _tools_for_state(
-    mode_policy: agent_policy.AgentModePolicy | None = None,
+    _mode_policy: agent_policy.AgentModePolicy | None = None,
     session: dict | None = None,
     include_web: bool = False,
     turn_evidence: object | None = None,
@@ -233,7 +229,6 @@ def _tools_for_state(
 ) -> list[dict]:
     """Return tools valid for current turn state, never for rider phrasing."""
 
-    mode_policy = mode_policy or agent_policy.policy_for_mode("auto")
     tools = [
         dict(schema)
         for schema in public_surface.schemas_for_state(
@@ -244,7 +239,7 @@ def _tools_for_state(
         )
     ]
     if include_web:
-        tools.append(_web_search_tool(mode_policy))
+        tools.append(_web_search_tool())
     return tools
 
 

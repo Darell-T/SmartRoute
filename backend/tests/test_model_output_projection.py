@@ -30,15 +30,9 @@ class ModelOutputProjectionTests(TestCase):
             {"destination_place_ids": ["pl_alpha", "pl_beta"]},
         )
 
-        self.assertIsInstance(projected, dict)
-        self.assertEqual(
-            [candidate["destination_place_id"] for candidate in projected["candidates"]],
-            ["pl_beta", "pl_alpha", "pl_beta", "pl_alpha"],
-        )
-        self.assertEqual(
-            [branch["place_id"] for branch in projected["branch_coverage"]],
-            ["pl_alpha", "pl_beta"],
-        )
+        assert isinstance(projected, dict)
+        assert [candidate["destination_place_id"] for candidate in projected["candidates"]] == ["pl_beta", "pl_alpha", "pl_beta", "pl_alpha"]
+        assert [branch["place_id"] for branch in projected["branch_coverage"]] == ["pl_alpha", "pl_beta"]
         self._assert_no_provider_identity(projected)
 
     def test_multi_destination_provider_shape_is_not_assigned_by_candidate_index(self) -> None:
@@ -59,12 +53,9 @@ class ModelOutputProjectionTests(TestCase):
             {"destination_place_ids": ["pl_alpha", "pl_beta"]},
         )
 
-        self.assertIsInstance(projected, dict)
-        self.assertNotIn("destination_place_id", projected["candidates"][0])
-        self.assertEqual(
-            projected["candidates"][1]["destination_place_id"],
-            "pl_beta",
-        )
+        assert isinstance(projected, dict)
+        assert "destination_place_id" not in projected["candidates"][0]
+        assert projected["candidates"][1]["destination_place_id"] == "pl_beta"
         self._assert_no_provider_identity(projected)
 
     @staticmethod
@@ -82,14 +73,11 @@ class ModelOutputProjectionTests(TestCase):
     def _assert_no_provider_identity(self, value: object) -> None:
         if isinstance(value, dict):
             for key, nested in value.items():
-                self.assertNotIn(
-                    str(key).casefold(),
-                    {"provider_place_id", "provider_place_ids"},
-                )
+                assert str(key).casefold() not in {"provider_place_id", "provider_place_ids"}
                 self._assert_no_provider_identity(nested)
             return
         if isinstance(value, (list, tuple)):
             for nested in value:
                 self._assert_no_provider_identity(nested)
             return
-        self.assertNotIn("chij", str(value or "").casefold())
+        assert "chij" not in str(value or "").casefold()

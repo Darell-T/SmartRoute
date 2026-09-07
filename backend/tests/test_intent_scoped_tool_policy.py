@@ -68,20 +68,17 @@ class PublicCapabilitySurfaceTests(unittest.TestCase):
         ):
             with self.subTest(message=message):
                 schemas = loop._tools_for_state()
-                self.assertEqual({schema["name"] for schema in schemas}, _INITIAL)
-                self.assertTrue(all("strict" not in schema for schema in schemas))
-                self.assertEqual(public_surface.optional_parameter_count(schemas), 0)
+                assert {schema["name"] for schema in schemas} == _INITIAL
+                assert all("strict" not in schema for schema in schemas)
+                assert public_surface.optional_parameter_count(schemas) == 0
 
     def test_full_public_vocabulary_is_registered_but_presenters_are_state_gated(self):
         offered = public_surface.offered_custom_tools(
             spec.schema for spec in TOOL_REGISTRY.values()
         )
-        self.assertEqual(
-            {schema["name"] for schema in offered},
-            set(public_surface.PUBLIC_TOOL_NAMES),
-        )
-        self.assertTrue(all("strict" not in schema for schema in offered))
-        self.assertEqual(_tool_names(), _INITIAL)
+        assert {schema["name"] for schema in offered} == set(public_surface.PUBLIC_TOOL_NAMES)
+        assert all("strict" not in schema for schema in offered)
+        assert _tool_names() == _INITIAL
 
     def test_pending_goals_offer_only_their_capability(self):
         cases = (
@@ -91,16 +88,10 @@ class PublicCapabilitySurfaceTests(unittest.TestCase):
         for kind, capability in cases:
             with self.subTest(kind=kind):
                 evidence = _evidence_for(("goal", kind, ()))
-                self.assertEqual(
-                    _tool_names(evidence=evidence),
-                    {"complete_turn", capability},
-                )
+                assert _tool_names(evidence=evidence) == {"complete_turn", capability}
 
         route_evidence = _evidence_for(("goal", "route", ()))
-        self.assertEqual(
-            _tool_names(evidence=route_evidence),
-            {"complete_turn", "discover_places", "prepare_route_options"},
-        )
+        assert _tool_names(evidence=route_evidence) == {"complete_turn", "discover_places", "prepare_route_options"}
 
     def test_ready_evidence_offers_only_the_matching_presenter(self):
         cases = (
@@ -114,34 +105,25 @@ class PublicCapabilitySurfaceTests(unittest.TestCase):
                     ("goal", kind, ()),
                     states={"goal": GoalState.EVIDENCE_READY},
                 )
-                self.assertEqual(
-                    _tool_names(evidence=evidence),
-                    {"complete_turn", presenter},
-                )
+                assert _tool_names(evidence=evidence) == {"complete_turn", presenter}
 
     def test_dependency_state_blocks_route_until_discovery_evidence_is_ready(self):
         evidence = _evidence_for(
             ("destination", "destination_selection", ()),
             ("route", "route", ("destination",)),
         )
-        self.assertEqual(
-            _tool_names(evidence=evidence),
-            {"complete_turn", "discover_places"},
-        )
+        assert _tool_names(evidence=evidence) == {"complete_turn", "discover_places"}
 
         evidence.record_goal("destination", GoalState.EVIDENCE_READY, attempted=True)
-        self.assertEqual(
-            _tool_names(evidence=evidence),
-            {"complete_turn", "prepare_route_options"},
-        )
+        assert _tool_names(evidence=evidence) == {"complete_turn", "prepare_route_options"}
 
     def test_registered_but_unoffered_leaf_tools_stay_internal(self):
         offered = _tool_names()
-        self.assertIn("prepare_route_options", TOOL_REGISTRY)
-        self.assertNotIn("search_local_places", INTERNAL_TOOL_REGISTRY)
-        self.assertNotIn("search_local_places", offered)
-        self.assertNotIn("transit_snapshot", offered)
-        self.assertNotIn("lookup_arrivals", offered)
+        assert "prepare_route_options" in TOOL_REGISTRY
+        assert "search_local_places" not in INTERNAL_TOOL_REGISTRY
+        assert "search_local_places" not in offered
+        assert "transit_snapshot" not in offered
+        assert "lookup_arrivals" not in offered
 
     def test_public_surface_does_not_change_for_compound_language(self):
         evidence = _evidence_for(
@@ -153,10 +135,7 @@ class PublicCapabilitySurfaceTests(unittest.TestCase):
             "Find accessible ramen, route me there by subway, and tell me if the Q is delayed.",
             evidence=evidence,
         )
-        self.assertEqual(
-            names,
-            {"complete_turn", "discover_places", "check_transit"},
-        )
+        assert names == {"complete_turn", "discover_places", "check_transit"}
 
 
 if __name__ == "__main__":

@@ -7,10 +7,10 @@ the candidate-scoped association returned by the local cached-511NY matcher.
 
 from __future__ import annotations
 
-from math import isfinite
 import re
-from typing import Any, Mapping
-
+from collections.abc import Mapping
+from math import isfinite
+from typing import Any
 
 MAX_ASSOCIATED_CANDIDATES = 12
 MAX_ASSOCIATED_MODES = 4

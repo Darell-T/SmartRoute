@@ -19,7 +19,7 @@ import os
 import secrets
 import time
 from collections.abc import Iterable, Mapping, Sequence
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from app.services import cache
@@ -37,16 +37,16 @@ MAX_CONTINUATION_ATTEMPTS = 3
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _items(value: object, field: str) -> tuple[str, ...]:
     if value is None:
         return ()
-    if isinstance(value, (str, bytes)) or isinstance(value, Mapping):
-        raise ValueError(f"{field} must be a sequence of strings")
+    if isinstance(value, (str, bytes, Mapping)):
+        raise TypeError(f"{field} must be a sequence of strings")
     if not isinstance(value, Sequence):
-        raise ValueError(f"{field} must be a sequence of strings")
+        raise TypeError(f"{field} must be a sequence of strings")
     result: list[str] = []
     seen: set[str] = set()
     for item in value:
@@ -61,10 +61,10 @@ def _items(value: object, field: str) -> tuple[str, ...]:
 
 def _utc(value: datetime) -> datetime:
     if not isinstance(value, datetime):
-        raise ValueError("expiry metadata must be datetime values")
+        raise TypeError("expiry metadata must be datetime values")
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -92,7 +92,7 @@ class PendingContinuation:
         if isinstance(self.attempt_count, bool) or not isinstance(
             self.attempt_count, int
         ):
-            raise ValueError("attempt_count must be an integer")
+            raise TypeError("attempt_count must be an integer")
         if not 1 <= self.attempt_count <= MAX_CONTINUATION_ATTEMPTS:
             raise ValueError(
                 f"attempt_count must be between 1 and {MAX_CONTINUATION_ATTEMPTS}"
@@ -120,7 +120,7 @@ class PendingContinuation:
         attempt_count: int = 1,
         now: datetime | None = None,
         ttl: timedelta = DEFAULT_TTL,
-    ) -> "PendingContinuation":
+    ) -> PendingContinuation:
         created = _utc(now or _now())
         if ttl <= timedelta(0):
             raise ValueError("ttl must be positive")
@@ -161,7 +161,7 @@ class PendingContinuation:
         }
 
     @classmethod
-    def from_dict(cls, payload: Mapping[str, Any]) -> "PendingContinuation":
+    def from_dict(cls, payload: Mapping[str, Any]) -> PendingContinuation:
         allowed = {
             "unresolved_outcomes",
             "missing_fields",

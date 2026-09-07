@@ -8,9 +8,10 @@ transport; evidence normalization stays in scout_normalization.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Mapping
+from datetime import UTC, datetime
+from typing import Any
 
 from app.services.incidents.batches import IncidentBatch
 from app.services.incidents.scout_normalization import (
@@ -24,7 +25,11 @@ from app.services.incidents.scout_provider import (
     ScoutSearchResult,
     has_client,
     sanitized_claims,
+)
+from app.services.incidents.scout_provider import (
     _run_web_search as transport_web_search,
+)
+from app.services.incidents.scout_provider import (
     _run_x_search as transport_x_search,
 )
 from app.services.trips.crowds.search_normalization import parse_json
@@ -43,11 +48,10 @@ class ScoutBatchResult:
 
 
 def _normalize_clock(clock: Callable[[], datetime] | None) -> datetime:
-    """UTC-aware scout time; naive injected clocks are rejected, never local."""
-    raw = clock() if clock is not None else datetime.now(timezone.utc)
+    raw = clock() if clock is not None else datetime.now(UTC)
     if raw.tzinfo is None or raw.utcoffset() is None:
         raise ValueError("incident scout clock must return an offset-aware datetime")
-    return raw.astimezone(timezone.utc)
+    return raw.astimezone(UTC)
 
 
 def _consume(
@@ -56,7 +60,6 @@ def _consume(
     now: datetime,
     claims_by_ref: Mapping[str, Any] | None = None,
 ) -> tuple[str, list[dict[str, Any]]]:
-    """Truthful status; records only when the phase contract is valid."""
     if result is None:
         return "unavailable", []
     if not isinstance(result, ScoutSearchResult):
@@ -76,7 +79,6 @@ def _consume(
 
 
 def _log_boundary_failure(phase: str, exc: BaseException) -> None:
-    # Provider boundary: one actionable line; never payloads or messages.
     print(f"[incident-scout] {phase} runner failed: {type(exc).__name__}")
 
 
@@ -97,7 +99,7 @@ async def scout_incident_batch(
         model_calls += 1
         try:
             x_result = await x_runner(batch, now=now)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 scout transport faults stay unavailable
             _log_boundary_failure("x", exc)
     x_status, claims = _consume(x_result, now=now)
     web_status = "not_triggered"
@@ -108,7 +110,7 @@ async def scout_incident_batch(
             web_result: ScoutSearchResult | None = None
             try:
                 web_result = await web_runner(sanitized_claims(claims), now=now)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 scout transport faults stay unavailable
                 _log_boundary_failure("web", exc)
             web_status, corroborations = _consume(
                 web_result,

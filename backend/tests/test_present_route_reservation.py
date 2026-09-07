@@ -1,17 +1,17 @@
 """Tests for the unflagged prepare_route_options / present_route path."""
 from __future__ import annotations
+
 import asyncio
 import copy
 import unittest
 from unittest.mock import AsyncMock, patch
-from app.services.agent import candidate_store
-from app.services.agent import transcript_store
+
+from app.services.agent import candidate_store, transcript_store, trip_state
+from app.services.agent.tools._types import ToolResult
 from app.services.agent.tools.route import (
     prepare_route_options,
     present_route,
 )
-from app.services.agent.tools._types import ToolResult
-from app.services.agent import trip_state
 from app.services.agent.turn.contract import GoalKind, OutcomeGoal, TurnContract
 from app.services.agent.turn.evidence import TurnEvidence
 
@@ -85,12 +85,9 @@ class PresentRouteReservationTests(unittest.IsolatedAsyncioTestCase):
     def test_active_accepted_route_card_requires_exact_transcript_ownership(self):
         session = _accepted_route_session()
         card = transcript_store.active_accepted_route_card(session)
-        self.assertEqual(card, session["_transcript"]["route_cards"][0])
+        assert card == session["_transcript"]["route_cards"][0]
         card["summary"]["eta_minutes"] = 99
-        self.assertEqual(
-            session["_transcript"]["route_cards"][0]["summary"]["eta_minutes"],
-            23,
-        )
+        assert session["_transcript"]["route_cards"][0]["summary"]["eta_minutes"] == 23
 
         invalid_cases = {
             "wrong_card_id": {"active_trip": {"card_id": "rc_other"}},
@@ -115,9 +112,7 @@ class PresentRouteReservationTests(unittest.IsolatedAsyncioTestCase):
                     active["active_trip"] = changes["active_trip"]
                 else:
                     active["_transcript"]["route_cards"][0].update(changes)
-                self.assertIsNone(
-                    transcript_store.active_accepted_route_card(active)
-                )
+                assert transcript_store.active_accepted_route_card(active) is None
 
     async def test_accepted_route_replay_uses_transcript_after_candidate_expiry(self):
         session = _accepted_route_session()
@@ -147,16 +142,14 @@ class PresentRouteReservationTests(unittest.IsolatedAsyncioTestCase):
                 ctx,
             )
 
-        self.assertTrue(result.ok, result.error)
-        self.assertEqual(result.session_route_cards, [])
-        self.assertEqual(
-            [event.type for event in result.events], ["token", "route_card"]
-        )
-        self.assertEqual(result.events[0].text, "Here’s the accepted route again.\n\n")
+        assert result.ok, result.error
+        assert result.session_route_cards == []
+        assert [event.type for event in result.events] == ["token", "route_card"]
+        assert result.events[0].text == "Here\u2019s the accepted route again.\n\n"
         replay = result.events[1].to_data()
         original = session["_transcript"]["route_cards"][0]
-        self.assertEqual(replay["card_id"], original["card_id"])
-        self.assertEqual(replay["turn_id"], "t2")
+        assert replay["card_id"] == original["card_id"]
+        assert replay["turn_id"] == "t2"
         for field in (
             "role",
             "origin",
@@ -169,8 +162,8 @@ class PresentRouteReservationTests(unittest.IsolatedAsyncioTestCase):
             "itinerary",
             "selection_decision",
         ):
-            self.assertEqual(replay.get(field), original.get(field), field)
-        self.assertTrue(evidence.presented_for("route"))
+            assert replay.get(field) == original.get(field), field
+        assert evidence.presented_for("route")
 
     async def test_invalid_replay_inputs_fall_through_to_normal_validation(self):
         session = _accepted_route_session()
@@ -191,9 +184,9 @@ class PresentRouteReservationTests(unittest.IsolatedAsyncioTestCase):
                 _present_route_input("cd_selected", goal_key="other"),
                 ctx,
             )
-        self.assertFalse(wrong_candidate.ok)
-        self.assertFalse(wrong_goal.ok)
-        self.assertEqual(owned.call_count, 2)
+        assert not wrong_candidate.ok
+        assert not wrong_goal.ok
+        assert owned.call_count == 2
 
     async def _prepare_candidate(self, ctx, **prepare_input):
         with patch(
@@ -208,7 +201,7 @@ class PresentRouteReservationTests(unittest.IsolatedAsyncioTestCase):
                 },
                 ctx,
             )
-        self.assertTrue(result.ok)
+        assert result.ok
         return (
             result.data["candidate_set_id"],
             result.data["candidates"][0]["candidate_id"],
@@ -231,15 +224,12 @@ class PresentRouteReservationTests(unittest.IsolatedAsyncioTestCase):
                 _present_route_input(candidate_id),
                 ctx,
             )
-        self.assertFalse(failed.ok)
-        self.assertIn("projection exploded", failed.error or "")
-        self.assertEqual(
-            stages,
-            [("comparing_options", "active"), ("comparing_options", "complete")],
-        )
+        assert not failed.ok
+        assert "projection exploded" in (failed.error or "")
+        assert stages == [("comparing_options", "active"), ("comparing_options", "complete")]
         record = candidate_store.load_candidate_set(set_id, session_id=ctx.session_id)
-        self.assertFalse(record["presented"])
-        self.assertIsNone(trip_state.get_trip_state(ctx.session)["selected_candidate_id"])
+        assert not record["presented"]
+        assert trip_state.get_trip_state(ctx.session)["selected_candidate_id"] is None
         # The same candidate stays retryable through the real pipeline.
         with patch(
             "app.services.trips.enrichment._enrich_route",
@@ -249,10 +239,10 @@ class PresentRouteReservationTests(unittest.IsolatedAsyncioTestCase):
                 _present_route_input(candidate_id),
                 ctx,
             )
-        self.assertTrue(retried.ok)
+        assert retried.ok
         record = candidate_store.load_candidate_set(set_id, session_id=ctx.session_id)
-        self.assertTrue(record["presented"])
-        self.assertEqual(record["selected_candidate_id"], candidate_id)
+        assert record["presented"]
+        assert record["selected_candidate_id"] == candidate_id
 
     async def test_canonical_snapshot_does_not_refresh_first_leg_context(self):
         ctx = _ctx()
@@ -265,14 +255,11 @@ class PresentRouteReservationTests(unittest.IsolatedAsyncioTestCase):
                 _present_route_input(candidate_id),
                 ctx,
             )
-        self.assertTrue(presented.ok, presented.error)
+        assert presented.ok, presented.error
         enrich.assert_not_awaited()
         record = candidate_store.load_candidate_set(set_id, session_id=ctx.session_id)
-        self.assertTrue(record["presented"])
-        self.assertEqual(
-            trip_state.get_trip_state(ctx.session)["selected_candidate_id"],
-            candidate_id,
-        )
+        assert record["presented"]
+        assert trip_state.get_trip_state(ctx.session)["selected_candidate_id"] == candidate_id
 
     async def test_concurrent_presentations_yield_at_most_one_success(self):
         ctx = _ctx()
@@ -285,15 +272,12 @@ class PresentRouteReservationTests(unittest.IsolatedAsyncioTestCase):
                 present_route.execute(_present_route_input(candidate_id), ctx),
                 present_route.execute(_present_route_input(candidate_id), ctx),
             )
-        self.assertEqual(sum(1 for result in results if result.ok), 1)
+        assert sum(1 for result in results if result.ok) == 1
         loser = next(result for result in results if not result.ok)
-        self.assertIn("already presented", loser.error or "")
-        self.assertEqual(
-            trip_state.get_trip_state(ctx.session)["selected_candidate_id"],
-            candidate_id,
-        )
+        assert "already presented" in (loser.error or "")
+        assert trip_state.get_trip_state(ctx.session)["selected_candidate_id"] == candidate_id
         record = candidate_store.load_candidate_set(set_id, session_id=ctx.session_id)
-        self.assertTrue(record["presented"])
+        assert record["presented"]
 
     async def test_what_if_preview_stays_unconsumed_until_successful_commit(self):
         ctx = _ctx()
@@ -306,10 +290,10 @@ class PresentRouteReservationTests(unittest.IsolatedAsyncioTestCase):
                 _present_route_input(candidate_id),
                 ctx,
             )
-        self.assertTrue(preview.ok)
-        self.assertEqual(preview.session_route_cards, [])
+        assert preview.ok
+        assert preview.session_route_cards == []
         record = candidate_store.load_candidate_set(set_id, session_id=ctx.session_id)
-        self.assertFalse(record["presented"])
+        assert not record["presented"]
         with patch(
             "app.services.trips.enrichment._enrich_route",
             new=AsyncMock(return_value=None),
@@ -322,8 +306,8 @@ class PresentRouteReservationTests(unittest.IsolatedAsyncioTestCase):
                 _present_route_input(candidate_id, commit_scenario=True),
                 ctx,
             )
-        self.assertTrue(repeated.ok)
-        self.assertTrue(committed.ok)
+        assert repeated.ok
+        assert committed.ok
         record = candidate_store.load_candidate_set(set_id, session_id=ctx.session_id)
-        self.assertTrue(record["presented"])
-        self.assertEqual(record["selected_candidate_id"], candidate_id)
+        assert record["presented"]
+        assert record["selected_candidate_id"] == candidate_id

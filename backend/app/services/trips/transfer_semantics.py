@@ -5,8 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from app.services.trips.itinerary import TRANSIT_MODES
 from app.services import geography as geo
+from app.services.trips.itinerary import TRANSIT_MODES
 
 WALK_SPEED_MPS = 1.4
 
@@ -36,34 +36,46 @@ def normalize_route(route: list[dict], gtfs: Any = None) -> list[dict]:
         start = index
         while index + 1 < len(route) and _mode(route[index + 1]) == "WALK":
             index += 1
-        end = index
-        previous = route[start - 1] if start > 0 else None
-        following = route[end + 1] if end + 1 < len(route) else None
-        if _is_transit(previous) and _is_transit(following):
-            fact = _transfer_fact(
-                previous,
-                following,
-                route[start : end + 1],
-                gtfs,
-                group_number,
-            )
-            group_number += 1
-            fragments = route[start : end + 1]
-            first_fragment = fragments[0]
-            last_fragment = fragments[-1]
-            if last_fragment.get("arrival_time_iso"):
-                first_fragment["arrival_time_iso"] = last_fragment["arrival_time_iso"]
-            if last_fragment.get("end_point"):
-                first_fragment["end_point"] = last_fragment["end_point"]
-            first_fragment["transfer_duration_seconds"] = fact["total_seconds"]
-            for fragment_index in range(start, end + 1):
-                route[fragment_index]["semantic_transfer_group_id"] = fact["group_id"]
-                route[fragment_index]["transfer_semantics"] = fact
-                route[fragment_index]["semantic_transfer"] = fact
-                route[fragment_index]["transfer_kind"] = fact["kind"]
-                route[fragment_index]["semantic_transfer_fragment"] = fragment_index != start
+        group_number = _annotate_walk_transfer(
+            route, start, index, gtfs, group_number
+        )
         index += 1
     return route
+
+
+def _annotate_walk_transfer(
+    route: list[dict],
+    start: int,
+    end: int,
+    gtfs: Any,
+    group_number: int,
+) -> int:
+    previous = route[start - 1] if start > 0 else None
+    following = route[end + 1] if end + 1 < len(route) else None
+    if not (_is_transit(previous) and _is_transit(following)):
+        return group_number
+    fact = _transfer_fact(
+        previous,
+        following,
+        route[start : end + 1],
+        gtfs,
+        group_number,
+    )
+    fragments = route[start : end + 1]
+    first_fragment = fragments[0]
+    last_fragment = fragments[-1]
+    if last_fragment.get("arrival_time_iso"):
+        first_fragment["arrival_time_iso"] = last_fragment["arrival_time_iso"]
+    if last_fragment.get("end_point"):
+        first_fragment["end_point"] = last_fragment["end_point"]
+    first_fragment["transfer_duration_seconds"] = fact["total_seconds"]
+    for fragment_index in range(start, end + 1):
+        route[fragment_index]["semantic_transfer_group_id"] = fact["group_id"]
+        route[fragment_index]["transfer_semantics"] = fact
+        route[fragment_index]["semantic_transfer"] = fact
+        route[fragment_index]["transfer_kind"] = fact["kind"]
+        route[fragment_index]["semantic_transfer_fragment"] = fragment_index != start
+    return group_number + 1
 
 
 def route_transfer_facts(route: list[dict]) -> list[dict[str, Any]]:
@@ -108,10 +120,12 @@ def route_accessibility(route: list[dict]) -> str:
     for step in route or []:
         if not _is_transit(step):
             continue
-        for side in ("departure", "arrival"):
-            for key in (f"{side}_accessibility", f"{side}_accessible"):
-                if key in step:
-                    statuses.append(_normalize_accessibility(step[key]))
+        statuses.extend(
+            _normalize_accessibility(step[key])
+            for side in ("departure", "arrival")
+            for key in (f"{side}_accessibility", f"{side}_accessible")
+            if key in step
+        )
     if "inaccessible" in statuses:
         return "inaccessible"
     if statuses and all(status == "accessible" for status in statuses):
@@ -245,16 +259,16 @@ def _normalize_accessibility(value: object) -> str:
 def _walk_seconds(step: dict) -> int:
     value = step.get("duration_seconds")
     if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return max(0, int(round(value)))
+        return max(0, round(value))
     dep = _parse_time(step.get("departure_time_iso"))
     arr = _parse_time(step.get("arrival_time_iso"))
     if dep is not None and arr is not None:
-        return max(0, int(round((arr - dep).total_seconds())))
+        return max(0, round((arr - dep).total_seconds()))
     start = _coords(step.get("start_point"))
     end = _coords(step.get("end_point"))
     if start is None or end is None:
         return 0
-    return max(0, int(round(geo.distance_meters(*start, *end) / WALK_SPEED_MPS)))
+    return max(0, round(geo.distance_meters(*start, *end) / WALK_SPEED_MPS))
 
 
 def _coords(value: object) -> tuple[float, float] | None:
@@ -272,7 +286,7 @@ def _parse_time(value: object) -> datetime | None:
     if not isinstance(value, str) or not value.strip():
         return None
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return datetime.fromisoformat(value)
     except ValueError:
         return None
 

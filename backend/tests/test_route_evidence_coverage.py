@@ -1,18 +1,20 @@
 """Tests for the unflagged prepare_route_options / present_route path."""
 
 from __future__ import annotations
+
 import copy
 import unittest
 from unittest.mock import AsyncMock, patch
+
 from app.services.agent import candidate_store
 from app.services.agent.tools.route import (
     prepare_route_options,
 )
+from app.services.trips.preparation import evidence as route_option_evidence
 from app.services.trips.preparation.constraints import (
     candidate_digest,
     route_status,
 )
-from app.services.trips.preparation import evidence as route_option_evidence
 
 from tests.single_agent_route_test_support import (
     _ctx,
@@ -30,9 +32,9 @@ class RouteEvidenceCoverageTests(unittest.IsolatedAsyncioTestCase):
         return leg
 
     def test_coverage_for_prepared_maps_not_required_events_explicitly(self):
-        self.assertEqual(
-            route_option_evidence.coverage_for_prepared(self._leg())["events"],
-            "not_required",
+        assert (
+            route_option_evidence.coverage_for_prepared(self._leg())["events"]
+            == "not_required"
         )
         for status, expected in (
             ("available", "current"),
@@ -43,13 +45,12 @@ class RouteEvidenceCoverageTests(unittest.IsolatedAsyncioTestCase):
             ("partial", "partial"),
             ("unknown", "unscanned"),
         ):
-            self.assertEqual(
+            assert (
                 route_option_evidence.coverage_for_prepared(
                     self._leg(event_evidence_status=status)
-                )["events"],
-                expected,
-                f"events coverage for raw status {status!r}",
-            )
+                )["events"]
+                == expected
+            ), f"events coverage for raw status {status!r}"
 
     def test_serialized_envelope_merge_preserves_worst_status_and_provenance(self):
         merged = route_option_evidence.merge_serialized_envelopes(
@@ -75,28 +76,22 @@ class RouteEvidenceCoverageTests(unittest.IsolatedAsyncioTestCase):
             ]
         )
 
-        self.assertEqual(
-            merged["alerts"],
-            {
-                "source": "mta",
-                "observedAt": "2026-08-24T12:01:00Z",
-                "validUntil": "2026-08-24T12:03:00Z",
-                "status": "stale",
-                "payload": [{"id": "a"}, {"id": "b"}],
-            },
-        )
-        self.assertEqual(
-            merged["vehicles"],
-            {
-                "source": "unknown",
-                "observedAt": "",
-                "status": "current",
-                "payload": [],
-            },
-        )
+        assert merged["alerts"] == {
+            "source": "mta",
+            "observedAt": "2026-08-24T12:01:00Z",
+            "validUntil": "2026-08-24T12:03:00Z",
+            "status": "stale",
+            "payload": [{"id": "a"}, {"id": "b"}],
+        }
+        assert merged["vehicles"] == {
+            "source": "unknown",
+            "observedAt": "",
+            "status": "current",
+            "payload": [],
+        }
 
     def test_current_route_with_not_required_events_stays_good(self):
-        self.assertEqual(
+        assert (
             route_status(
                 candidates=[{"hard_constraints_satisfied": True}],
                 coverage={
@@ -106,8 +101,8 @@ class RouteEvidenceCoverageTests(unittest.IsolatedAsyncioTestCase):
                     "events": "not_required",
                 },
                 incident_impacts=[],
-            ),
-            "good",
+            )
+            == "good"
         )
 
     def test_planned_operating_alert_stays_usable_but_material_alert_degrades(self):
@@ -123,7 +118,7 @@ class RouteEvidenceCoverageTests(unittest.IsolatedAsyncioTestCase):
             "header": "Q express trains run local",
         }
         coverage = {"mta": "current", "events": "not_required"}
-        self.assertEqual(
+        assert (
             route_status(
                 candidates=[
                     {
@@ -133,10 +128,10 @@ class RouteEvidenceCoverageTests(unittest.IsolatedAsyncioTestCase):
                 ],
                 coverage=coverage,
                 incident_impacts=[],
-            ),
-            "good",
+            )
+            == "good"
         )
-        self.assertEqual(
+        assert (
             route_status(
                 candidates=[
                     {
@@ -153,10 +148,10 @@ class RouteEvidenceCoverageTests(unittest.IsolatedAsyncioTestCase):
                 ],
                 coverage=coverage,
                 incident_impacts=[],
-            ),
-            "all_materially_degraded",
+            )
+            == "all_materially_degraded"
         )
-        self.assertEqual(
+        assert (
             route_status(
                 candidates=[
                     {
@@ -168,8 +163,8 @@ class RouteEvidenceCoverageTests(unittest.IsolatedAsyncioTestCase):
                 ],
                 coverage=coverage,
                 incident_impacts=[],
-            ),
-            "all_materially_degraded",
+            )
+            == "all_materially_degraded"
         )
 
     def test_candidate_digest_and_accepted_comparison_preserve_typed_alert(self):
@@ -209,16 +204,15 @@ class RouteEvidenceCoverageTests(unittest.IsolatedAsyncioTestCase):
             prepared_arrival_by=None,
             hard_constraints={"satisfied": True},
         )
-        self.assertEqual(
-            digest["official_service_impacts"][0]["source_id"],
-            "lmm:planned_work:33095",
+        assert (
+            digest["official_service_impacts"][0]["source_id"]
+            == "lmm:planned_work:33095"
         )
-        self.assertEqual(
-            digest["official_service_impacts"][0]["change_type"],
-            "express_to_local",
+        assert (
+            digest["official_service_impacts"][0]["change_type"] == "express_to_local"
         )
-        self.assertFalse(digest["official_service_impacts"][0]["material_disruption"])
-        self.assertEqual(digest["score_summary"]["reliability"], "high")
+        assert not digest["official_service_impacts"][0]["material_disruption"]
+        assert digest["score_summary"]["reliability"] == "high"
 
         record = {
             "candidates": [
@@ -234,49 +228,50 @@ class RouteEvidenceCoverageTests(unittest.IsolatedAsyncioTestCase):
             ]
         }
         comparison = candidate_store.accepted_route_comparison(record, "selected")
-        self.assertIsNotNone(comparison)
+        assert comparison is not None
         selected = comparison["options"][0]
-        self.assertFalse(selected["service_conditions"]["official_service_impact"])
-        self.assertTrue(selected["service_conditions"]["official_service_change"])
-        self.assertEqual(
-            selected["official_alerts"][0]["source_id"],
-            "lmm:planned_work:33095",
-        )
-        self.assertEqual(
-            selected["official_alerts"][0]["change_type"],
-            "express_to_local",
-        )
+        assert not selected["service_conditions"]["official_service_impact"]
+        assert selected["service_conditions"]["official_service_change"]
+        assert selected["official_alerts"][0]["source_id"] == "lmm:planned_work:33095"
+        assert selected["official_alerts"][0]["change_type"] == "express_to_local"
 
     def test_only_neutral_or_unusable_coverage_is_insufficient(self):
-        self.assertEqual(
+        assert (
+            route_status(
+                candidates=[],
+                coverage={"mta": "current"},
+                incident_impacts=[],
+            )
+            == "insufficient_coverage"
+        )
+        assert (
             route_status(
                 candidates=[{"hard_constraints_satisfied": True}],
                 coverage={"events": "not_required"},
                 incident_impacts=[],
-            ),
-            "insufficient_coverage",
+            )
+            == "insufficient_coverage"
         )
-        self.assertEqual(
+        assert (
             route_status(
                 candidates=[{"hard_constraints_satisfied": True}],
                 coverage={"events": "not_required", "mta": "unavailable"},
                 incident_impacts=[],
-            ),
-            "insufficient_coverage",
+            )
+            == "insufficient_coverage"
         )
 
     def test_applicable_degradation_statuses_still_degrade(self):
         for degraded in ("partial", "stale", "unavailable", "unscanned"):
-            self.assertEqual(
+            assert (
                 route_status(
                     candidates=[{"hard_constraints_satisfied": True}],
                     coverage={"mta": "current", "events": degraded},
                     incident_impacts=[],
-                ),
-                "degraded_usable",
-                f"events coverage {degraded!r} must degrade",
-            )
-            self.assertEqual(
+                )
+                == "degraded_usable"
+            ), f"events coverage {degraded!r} must degrade"
+            assert (
                 route_status(
                     candidates=[{"hard_constraints_satisfied": True}],
                     coverage={
@@ -285,10 +280,9 @@ class RouteEvidenceCoverageTests(unittest.IsolatedAsyncioTestCase):
                         "events": "not_required",
                     },
                     incident_impacts=[],
-                ),
-                "degraded_usable",
-                f"mta coverage {degraded!r} must degrade despite neutral events",
-            )
+                )
+                == "degraded_usable"
+            ), f"mta coverage {degraded!r} must degrade despite neutral events"
 
     def test_merge_coverage_keeps_not_required_neutral_across_legs(self):
         cases = (
@@ -301,10 +295,8 @@ class RouteEvidenceCoverageTests(unittest.IsolatedAsyncioTestCase):
         )
         for statuses, expected in cases:
             legs = [self._leg(event_evidence_status=status) for status in statuses]
-            self.assertEqual(
-                route_option_evidence.merge_coverage(legs)["events"],
-                expected,
-                f"events merge for {statuses!r}",
+            assert route_option_evidence.merge_coverage(legs)["events"] == expected, (
+                f"events merge for {statuses!r}"
             )
 
     async def test_prepare_fixture_reports_not_required_events_truthfully(self):
@@ -320,8 +312,8 @@ class RouteEvidenceCoverageTests(unittest.IsolatedAsyncioTestCase):
                 },
                 ctx,
             )
-        self.assertTrue(result.ok)
-        self.assertEqual(result.data["evidence_coverage"]["events"], "not_required")
+        assert result.ok
+        assert result.data["evidence_coverage"]["events"] == "not_required"
 
     async def test_prepare_route_options_not_downgraded_by_not_required_events(self):
         from app.services.evidence import evidence_envelope
@@ -344,6 +336,6 @@ class RouteEvidenceCoverageTests(unittest.IsolatedAsyncioTestCase):
                 },
                 ctx,
             )
-        self.assertTrue(result.ok)
-        self.assertEqual(result.data["evidence_coverage"]["events"], "not_required")
-        self.assertEqual(result.data["route_status"], "good")
+        assert result.ok
+        assert result.data["evidence_coverage"]["events"] == "not_required"
+        assert result.data["route_status"] == "good"

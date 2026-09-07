@@ -16,20 +16,20 @@ from __future__ import annotations
 
 import argparse
 import ast
-from collections import Counter
-from datetime import datetime
 import hashlib
 import json
-from pathlib import Path
 import platform
+import shutil
 import subprocess
-from typing import Iterable
+from collections import Counter
+from collections.abc import Iterable
+from datetime import datetime
+from pathlib import Path
 
 import coverage
 import radon
 from radon.complexity import cc_visit
 from radon.visitors import Class, Function
-
 
 FunctionNode = ast.FunctionDef | ast.AsyncFunctionDef
 
@@ -78,8 +78,20 @@ def source_manifest(files: Iterable[Path], base: Path) -> str:
 
 
 def git_value(repo_root: Path, *args: str) -> str:
-    result = subprocess.run(
-        ["git", *args],
+    allowed_args = {
+        ("status", "--porcelain=v1", "-z"),
+        ("rev-parse", "HEAD"),
+        ("rev-parse", "HEAD^{tree}"),
+    }
+    if args not in allowed_args:
+        message = "unsupported git arguments"
+        raise ValueError(message)
+    git = shutil.which("git")
+    if git is None:
+        message = "git executable was not found"
+        raise FileNotFoundError(message)
+    result = subprocess.run(  # noqa: S603 allowlisted git argv after which()
+        [git, *args],
         cwd=repo_root,
         check=True,
         capture_output=True,
@@ -88,25 +100,26 @@ def git_value(repo_root: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
+def _add_radon_function(measured: dict[tuple[int, str], int], item: Function) -> None:
+    measured[(item.lineno, item.name)] = item.complexity
+    for closure in item.closures:
+        _add_radon_function(measured, closure)
+
+
+def _add_radon_class(measured: dict[tuple[int, str], int], item: Class) -> None:
+    for method in item.methods:
+        _add_radon_function(measured, method)
+    for inner_class in item.inner_classes:
+        _add_radon_class(measured, inner_class)
+
+
 def radon_functions(source: str) -> dict[tuple[int, str], int]:
     measured: dict[tuple[int, str], int] = {}
-
-    def add_function(item: Function) -> None:
-        measured[(item.lineno, item.name)] = item.complexity
-        for closure in item.closures:
-            add_function(closure)
-
-    def add_class(item: Class) -> None:
-        for method in item.methods:
-            add_function(method)
-        for inner_class in item.inner_classes:
-            add_class(inner_class)
-
     for block in cc_visit(source):
         if isinstance(block, Function):
-            add_function(block)
+            _add_radon_function(measured, block)
         elif isinstance(block, Class):
-            add_class(block)
+            _add_radon_class(measured, block)
     return measured
 
 
@@ -187,6 +200,42 @@ def coverage_distribution(values: Iterable[float]) -> dict[str, int]:
     return buckets
 
 
+def _diagnosis(complexity: int, ratio: float) -> str:
+    if complexity >= 15 and ratio < 0.8:
+        return "mixed coverage and branching complexity"
+    if complexity >= 15:
+        return "branching complexity"
+    if ratio < 0.8:
+        return "coverage"
+    return "none"
+
+
+def _function_row(
+    relative_path: str,
+    qualified_name: str,
+    node: FunctionNode,
+    statements: set[int],
+    executed: set[int],
+    complexity: int,
+) -> dict[str, object]:
+    statement_count = len(statements)
+    ratio = len(executed) / statement_count if statement_count else 1.0
+    crap = complexity**2 * (1 - ratio) ** 3 + complexity
+    return {
+        "file": relative_path,
+        "function": qualified_name,
+        "line": node.lineno,
+        "loc": (node.end_lineno or node.lineno) - node.lineno + 1,
+        "complexity": complexity,
+        "statement_count": statement_count,
+        "executed_statement_count": len(executed),
+        "coverage": round(ratio, 6),
+        "crap": round(crap, 6),
+        "conceptual_responsibility_count": 1,
+        "diagnosis": _diagnosis(complexity, ratio),
+    }
+
+
 def measured_functions(
     files: list[Path],
     backend_root: Path,
@@ -207,40 +256,25 @@ def measured_functions(
         relative_path = path.relative_to(backend_root).as_posix()
         for qualified_name, node in inventory.functions:
             statements = function_statement_lines(node, executable_lines)
-            executed = statements.intersection(executed_lines)
-            statement_count = len(statements)
-            ratio = len(executed) / statement_count if statement_count else 1.0
             complexity = complexities.get((node.lineno, node.name))
             if complexity is None:
-                raise RuntimeError(
+                missing_radon = (
                     f"Radon did not report {relative_path}:{node.lineno} {qualified_name}"
                 )
-            crap = complexity**2 * (1 - ratio) ** 3 + complexity
-            conceptual_responsibility_count = 1
-            if complexity >= 15 and ratio < 0.8:
-                diagnosis = "mixed coverage and branching complexity"
-            elif complexity >= 15:
-                diagnosis = "branching complexity"
-            elif ratio < 0.8:
-                diagnosis = "coverage"
-            else:
-                diagnosis = "none"
+                raise RuntimeError(missing_radon)
             rows.append(
-                {
-                    "file": relative_path,
-                    "function": qualified_name,
-                    "line": node.lineno,
-                    "loc": (node.end_lineno or node.lineno) - node.lineno + 1,
-                    "complexity": complexity,
-                    "statement_count": statement_count,
-                    "executed_statement_count": len(executed),
-                    "coverage": round(ratio, 6),
-                    "crap": round(crap, 6),
-                    "conceptual_responsibility_count": conceptual_responsibility_count,
-                    "diagnosis": diagnosis,
-                }
+                _function_row(
+                    relative_path,
+                    qualified_name,
+                    node,
+                    statements,
+                    statements.intersection(executed_lines),
+                    complexity,
+                )
             )
-    return sorted(rows, key=lambda row: (-float(row["crap"]), str(row["file"]), int(row["line"])))
+    return sorted(
+        rows, key=lambda row: (-float(row["crap"]), str(row["file"]), int(row["line"]))
+    )
 
 
 def module_name(path: Path, backend_root: Path) -> str:
@@ -251,89 +285,138 @@ def module_name(path: Path, backend_root: Path) -> str:
     return ".".join(parts)
 
 
+def _skip_guarded_if(statement: ast.If) -> bool:
+    name = statement.test.id if isinstance(statement.test, ast.Name) else ""
+    is_main = (
+        isinstance(statement.test, ast.Compare)
+        and isinstance(statement.test.left, ast.Name)
+        and statement.test.left.id == "__name__"
+    )
+    return name == "TYPE_CHECKING" or is_main
+
+
+def _record_plain_import(statement: ast.Import, known_modules: set[str], imports: set[str]) -> None:
+    for alias in statement.names:
+        if alias.name in known_modules:
+            imports.add(alias.name)
+
+
+def _record_from_import(statement: ast.ImportFrom, known_modules: set[str], imports: set[str]) -> None:
+    if not statement.module:
+        return
+    base = statement.module
+    for alias in statement.names:
+        candidate = f"{base}.{alias.name}"
+        if candidate in known_modules:
+            imports.add(candidate)
+        elif base in known_modules:
+            imports.add(base)
+
+
+def _visit_if_imports(statement: ast.If, known_modules: set[str], imports: set[str]) -> None:
+    if _skip_guarded_if(statement):
+        return
+    _visit_import_statements(statement.body, known_modules, imports)
+    _visit_import_statements(statement.orelse, known_modules, imports)
+
+
+def _visit_try_imports(statement: ast.Try, known_modules: set[str], imports: set[str]) -> None:
+    _visit_import_statements(statement.body, known_modules, imports)
+    _visit_import_statements(statement.orelse, known_modules, imports)
+    _visit_import_statements(statement.finalbody, known_modules, imports)
+    for handler in statement.handlers:
+        _visit_import_statements(handler.body, known_modules, imports)
+
+
+def _dispatch_import_statement(
+    statement: ast.stmt, known_modules: set[str], imports: set[str]
+) -> None:
+    if isinstance(statement, ast.If):
+        _visit_if_imports(statement, known_modules, imports)
+        return
+    if isinstance(statement, ast.Try):
+        _visit_try_imports(statement, known_modules, imports)
+        return
+    if isinstance(statement, ast.Import):
+        _record_plain_import(statement, known_modules, imports)
+        return
+    if isinstance(statement, ast.ImportFrom):
+        _record_from_import(statement, known_modules, imports)
+
+
+def _visit_import_statements(
+    statements: list[ast.stmt], known_modules: set[str], imports: set[str]
+) -> None:
+    for statement in statements:
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        _dispatch_import_statement(statement, known_modules, imports)
+
+
 def imported_modules(tree: ast.Module, known_modules: set[str]) -> set[str]:
     imports: set[str] = set()
-
-    def visit_statements(statements: list[ast.stmt]) -> None:
-        for statement in statements:
-            if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                continue
-            if isinstance(statement, ast.If):
-                name = statement.test.id if isinstance(statement.test, ast.Name) else ""
-                is_main = (
-                    isinstance(statement.test, ast.Compare)
-                    and isinstance(statement.test.left, ast.Name)
-                    and statement.test.left.id == "__name__"
-                )
-                if name == "TYPE_CHECKING" or is_main:
-                    continue
-                visit_statements(statement.body)
-                visit_statements(statement.orelse)
-            elif isinstance(statement, ast.Try):
-                visit_statements(statement.body)
-                visit_statements(statement.orelse)
-                visit_statements(statement.finalbody)
-                for handler in statement.handlers:
-                    visit_statements(handler.body)
-            elif isinstance(statement, ast.Import):
-                for alias in statement.names:
-                    if alias.name in known_modules:
-                        imports.add(alias.name)
-            elif isinstance(statement, ast.ImportFrom) and statement.module:
-                base = statement.module
-                for alias in statement.names:
-                    candidate = f"{base}.{alias.name}"
-                    if candidate in known_modules:
-                        imports.add(candidate)
-                    elif base in known_modules:
-                        imports.add(base)
-
-    visit_statements(tree.body)
+    _visit_import_statements(tree.body, known_modules, imports)
     return imports
 
 
-def strongly_connected_components(graph: dict[str, set[str]]) -> list[list[str]]:
-    index = 0
-    indices: dict[str, int] = {}
-    lowlinks: dict[str, int] = {}
-    stack: list[str] = []
-    on_stack: set[str] = set()
-    components: list[list[str]] = []
+class _Tarjan:
+    def __init__(self, graph: dict[str, set[str]]) -> None:
+        self.graph = graph
+        self.index = 0
+        self.indices: dict[str, int] = {}
+        self.lowlinks: dict[str, int] = {}
+        self.stack: list[str] = []
+        self.on_stack: set[str] = set()
+        self.components: list[list[str]] = []
 
-    def visit(node: str) -> None:
-        nonlocal index
-        indices[node] = index
-        lowlinks[node] = index
-        index += 1
-        stack.append(node)
-        on_stack.add(node)
-        for dependency in graph[node]:
-            if dependency not in indices:
-                visit(dependency)
-                lowlinks[node] = min(lowlinks[node], lowlinks[dependency])
-            elif dependency in on_stack:
-                lowlinks[node] = min(lowlinks[node], indices[dependency])
-        if lowlinks[node] != indices[node]:
-            return
+    def run(self) -> list[list[str]]:
+        for node in self.graph:
+            if node not in self.indices:
+                self.visit(node)
+        return sorted(self.components)
+
+    def visit_edge(self, node: str, dependency: str) -> None:
+        if dependency not in self.indices:
+            self.visit(dependency)
+            self.lowlinks[node] = min(self.lowlinks[node], self.lowlinks[dependency])
+        elif dependency in self.on_stack:
+            self.lowlinks[node] = min(self.lowlinks[node], self.indices[dependency])
+
+    def pop_component(self, node: str) -> list[str]:
         component: list[str] = []
         while True:
-            member = stack.pop()
-            on_stack.remove(member)
+            member = self.stack.pop()
+            self.on_stack.remove(member)
             component.append(member)
             if member == node:
-                break
-        if len(component) > 1 or node in graph[node]:
-            components.append(sorted(component))
+                return component
 
-    for node in graph:
-        if node not in indices:
-            visit(node)
-    return sorted(components)
+    def visit(self, node: str) -> None:
+        self.indices[node] = self.index
+        self.lowlinks[node] = self.index
+        self.index += 1
+        self.stack.append(node)
+        self.on_stack.add(node)
+        for dependency in self.graph[node]:
+            self.visit_edge(node, dependency)
+        if self.lowlinks[node] != self.indices[node]:
+            return
+        component = self.pop_component(node)
+        if len(component) > 1 or node in self.graph[node]:
+            self.components.append(sorted(component))
+
+
+def strongly_connected_components(graph: dict[str, set[str]]) -> list[list[str]]:
+    return _Tarjan(graph).run()
 
 
 def is_forwarder(node: FunctionNode) -> bool:
     body = list(node.body)
-    if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+    ):
         body.pop(0)
     if len(body) != 1:
         return False
@@ -342,6 +425,81 @@ def is_forwarder(node: FunctionNode) -> bool:
     if isinstance(value, ast.Await):
         value = value.value
     return isinstance(value, ast.Call)
+
+
+def _is_module_docstring(node: ast.stmt) -> bool:
+    return (
+        isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, str)
+    )
+
+
+def _is_all_assignment(node: ast.stmt) -> bool:
+    return isinstance(node, ast.Assign) and any(
+        isinstance(target, ast.Name) and target.id == "__all__" for target in node.targets
+    )
+
+
+def _imported_name(node: ast.AST) -> str:
+    if isinstance(node, ast.ImportFrom) and node.module:
+        return node.module
+    if isinstance(node, ast.Import):
+        return ",".join(alias.name for alias in node.names)
+    return ""
+
+
+def _module_architecture(
+    name: str,
+    path: Path,
+    backend_root: Path,
+    modules: dict[str, Path],
+) -> tuple[set[str], Counter[tuple[str, str]], list[tuple[str, FunctionNode]], bool, bool, list[dict[str, object]]]:
+    source = path.read_text(encoding="utf-8-sig")
+    tree = ast.parse(source, filename=str(path))
+    inventory = FunctionInventory()
+    inventory.visit(tree)
+    top_level = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    same_module_calls: Counter[tuple[str, str]] = Counter()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in top_level:
+            same_module_calls[(name, node.func.id)] += 1
+    private_functions = [
+        (name, node)
+        for function_name, node in inventory.functions
+        if "." not in function_name and node.name.startswith("_")
+    ]
+    meaningful = [
+        node
+        for node in tree.body
+        if not isinstance(node, (ast.Import, ast.ImportFrom))
+        and not _is_module_docstring(node)
+        and not _is_all_assignment(node)
+    ]
+    agent_imports: list[dict[str, object]] = []
+    if not name.startswith("app.services.agent"):
+        for node in ast.walk(tree):
+            imported = _imported_name(node)
+            if "app.services.agent.tools" in imported:
+                agent_imports.append(
+                    {
+                        "file": path.relative_to(backend_root).as_posix(),
+                        "line": node.lineno,
+                        "import": imported,
+                    }
+                )
+    return (
+        imported_modules(tree, set(modules)),
+        same_module_calls,
+        private_functions,
+        not meaningful,
+        len(source.splitlines()) <= 75 and len(inventory.functions) <= 2,
+        agent_imports,
+    )
 
 
 def static_architecture(files: list[Path], backend_root: Path) -> dict[str, object]:
@@ -353,52 +511,17 @@ def static_architecture(files: list[Path], backend_root: Path) -> dict[str, obje
     reexport_modules: list[str] = []
     thin_modules: list[str] = []
     for name, path in modules.items():
-        source = path.read_text(encoding="utf-8-sig")
-        tree = ast.parse(source, filename=str(path))
-        graph[name] = imported_modules(tree, set(modules))
-        inventory = FunctionInventory()
-        inventory.visit(tree)
-        top_level = {
-            node.name: node
-            for node in tree.body
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        }
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-                if node.func.id in top_level:
-                    same_module_calls[(name, node.func.id)] += 1
-        private_functions.extend(
-            (name, node) for function_name, node in inventory.functions
-            if "." not in function_name and node.name.startswith("_")
+        imports, calls, privates, is_reexport, is_thin, agent_imports = _module_architecture(
+            name, path, backend_root, modules
         )
-        meaningful = [
-            node for node in tree.body
-            if not isinstance(node, (ast.Import, ast.ImportFrom))
-            and not (
-                isinstance(node, ast.Expr)
-                and isinstance(node.value, ast.Constant)
-                and isinstance(node.value.value, str)
-            )
-            and not (
-                isinstance(node, ast.Assign)
-                and any(isinstance(target, ast.Name) and target.id == "__all__" for target in node.targets)
-            )
-        ]
-        if not meaningful:
+        graph[name] = imports
+        same_module_calls.update(calls)
+        private_functions.extend(privates)
+        if is_reexport:
             reexport_modules.append(name)
-        if len(source.splitlines()) <= 75 and len(inventory.functions) <= 2:
+        if is_thin:
             thin_modules.append(name)
-        if not name.startswith("app.services.agent"):
-            for node in ast.walk(tree):
-                imported = ""
-                if isinstance(node, ast.ImportFrom) and node.module:
-                    imported = node.module
-                elif isinstance(node, ast.Import):
-                    imported = ",".join(alias.name for alias in node.names)
-                if "app.services.agent.tools" in imported:
-                    direct_agent_tool_imports.append(
-                        {"file": path.relative_to(backend_root).as_posix(), "line": node.lineno, "import": imported}
-                    )
+        direct_agent_tool_imports.extend(agent_imports)
     one_caller = [
         f"{module}.{node.name}"
         for module, node in private_functions
@@ -411,14 +534,18 @@ def static_architecture(files: list[Path], backend_root: Path) -> dict[str, obje
     ]
     return {
         "python_files": len(files),
-        "python_loc": sum(len(path.read_text(encoding="utf-8-sig").splitlines()) for path in files),
+        "python_loc": sum(
+            len(path.read_text(encoding="utf-8-sig").splitlines()) for path in files
+        ),
         "agent_files": sum("app/services/agent/" in path.as_posix() for path in files),
         "agent_loc": sum(
             len(path.read_text(encoding="utf-8-sig").splitlines())
             for path in files
             if "app/services/agent/" in path.as_posix()
         ),
-        "agent_tools_files": sum("app/services/agent/tools/" in path.as_posix() for path in files),
+        "agent_tools_files": sum(
+            "app/services/agent/tools/" in path.as_posix() for path in files
+        ),
         "agent_tools_loc": sum(
             len(path.read_text(encoding="utf-8-sig").splitlines())
             for path in files
@@ -464,15 +591,25 @@ def build_report(
             "head_commit": git_value(backend_root, "rev-parse", "HEAD"),
             "head_tree": git_value(backend_root, "rev-parse", "HEAD^{tree}"),
             "git_status_sha256": hashlib.sha256(status).hexdigest(),
-            "quality_source_manifest_sha256": source_manifest(quality_files, backend_root),
-            "architecture_source_manifest_sha256": source_manifest(architecture_files, backend_root),
+            "quality_source_manifest_sha256": source_manifest(
+                quality_files, backend_root
+            ),
+            "architecture_source_manifest_sha256": source_manifest(
+                architecture_files, backend_root
+            ),
         },
         "architecture": static_architecture(architecture_files, backend_root),
         "summary": {
             "function_count": len(functions),
-            "crap_distribution": crap_distribution(float(row["crap"]) for row in functions),
-            "complexity_distribution": complexity_distribution(int(row["complexity"]) for row in functions),
-            "coverage_distribution": coverage_distribution(float(row["coverage"]) for row in functions),
+            "crap_distribution": crap_distribution(
+                float(row["crap"]) for row in functions
+            ),
+            "complexity_distribution": complexity_distribution(
+                int(row["complexity"]) for row in functions
+            ),
+            "coverage_distribution": coverage_distribution(
+                float(row["coverage"]) for row in functions
+            ),
             "review_zone_count": sum(float(row["crap"]) >= 15 for row in functions),
             "high_zone_count": sum(float(row["crap"]) > 30 for row in functions),
         },

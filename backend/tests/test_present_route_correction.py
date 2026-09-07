@@ -1,16 +1,18 @@
 """Focused route-presentation framing and canonical-fact guards."""
 from __future__ import annotations
-import unittest
+
 import copy
+import unittest
 from unittest.mock import AsyncMock, Mock, patch
+
 from app.services.agent import candidate_store, trip_state
 from app.services.agent.tools.route import present_route
-from tests.single_agent_route_test_support import _ctx, _prepared_leg
 from app.services.trips import scoring
 
 from tests.present_route_framing_test_support import (
     PresentRouteFramingTestMixin,
 )
+from tests.single_agent_route_test_support import _ctx, _prepared_leg
 
 
 class PresentRouteCorrectionTests(PresentRouteFramingTestMixin, unittest.IsolatedAsyncioTestCase):
@@ -31,11 +33,11 @@ class PresentRouteCorrectionTests(PresentRouteFramingTestMixin, unittest.Isolate
                 ctx,
             )
 
-        self.assertTrue(result.ok, result.error)
+        assert result.ok, result.error
         enrich.assert_not_awaited()
 
     async def test_dominated_selection_is_rejected_before_card_or_reservation(self):
-        selected, alternative, record = self._dominated_selection_facts()
+        selected, _alternative, record = self._dominated_selection_facts()
         owned = {
             "candidate_set_id": "cs-dominated",
             "candidate_id": "cd-selected",
@@ -65,15 +67,13 @@ class PresentRouteCorrectionTests(PresentRouteFramingTestMixin, unittest.Isolate
                 ctx,
             )
 
-        self.assertFalse(result.ok)
-        self.assertTrue(result.internal_diagnostic)
-        self.assertEqual(result.events, [])
-        self.assertIn("existing Candidate Set", result.error)
-        self.assertIn("Do not prepare routes again", result.error)
+        assert not result.ok
+        assert result.internal_diagnostic
+        assert result.events == []
+        assert "existing Candidate Set" in result.error
+        assert "Do not prepare routes again" in result.error
         reserve.assert_not_called()
-        self.assertIsNone(
-            trip_state.get_trip_state(ctx.session)["selected_candidate_id"]
-        )
+        assert trip_state.get_trip_state(ctx.session)["selected_candidate_id"] is None
 
     def test_dominated_selection_uses_existing_correction_then_fallback(self):
         selected, alternative, record = self._dominated_selection_facts()
@@ -95,17 +95,14 @@ class PresentRouteCorrectionTests(PresentRouteFramingTestMixin, unittest.Isolate
             first = present_route.canonical_facts_with_fallback(owned, ctx)
             second = present_route.canonical_facts_with_fallback(owned, ctx)
 
-        self.assertFalse(first.ok)
-        self.assertTrue(first.internal_diagnostic)
-        self.assertIn("existing Candidate Set", first.error)
-        self.assertIsInstance(second, dict)
-        self.assertIs(second["entry"], alternative)
-        self.assertEqual(second["selection_source"], "deterministic_fallback")
-        self.assertEqual(second["selection_reason"], "deterministic_fallback")
-        self.assertEqual(
-            ctx.telemetry["route_decision_corrections"]["route:cs-dominated"],
-            2,
-        )
+        assert not first.ok
+        assert first.internal_diagnostic
+        assert "existing Candidate Set" in first.error
+        assert isinstance(second, dict)
+        assert second["entry"] is alternative
+        assert second["selection_source"] == "deterministic_fallback"
+        assert second["selection_reason"] == "deterministic_fallback"
+        assert ctx.telemetry["route_decision_corrections"]["route:cs-dominated"] == 2
 
     @staticmethod
     def _dominated_selection_facts():
@@ -172,16 +169,14 @@ class PresentRouteCorrectionTests(PresentRouteFramingTestMixin, unittest.Isolate
                     },
                     ctx,
                 )
-                self.assertFalse(result.ok)
-                self.assertTrue(result.internal_diagnostic)
-                self.assertEqual(result.events, [])
+                assert not result.ok
+                assert result.internal_diagnostic
+                assert result.events == []
                 record = candidate_store.load_candidate_set(
                     set_id, session_id="sess-route-framing"
                 )
-                self.assertFalse(record["presented"])
-                self.assertIsNone(
-                    trip_state.get_trip_state(ctx.session)["selected_candidate_id"]
-                )
+                assert not record["presented"]
+                assert trip_state.get_trip_state(ctx.session)["selected_candidate_id"] is None
 
     async def test_canonical_route_facts_request_correction_before_card_emission(self):
         for field, value in (
@@ -202,15 +197,10 @@ class PresentRouteCorrectionTests(PresentRouteFramingTestMixin, unittest.Isolate
                     },
                     ctx,
                 )
-                self.assertFalse(result.ok)
-                self.assertTrue(result.internal_diagnostic)
-                self.assertEqual(result.events, [])
-                self.assertFalse(
-                    candidate_store.load_candidate_set(
-                        set_id,
-                        session_id=ctx.session_id,
-                    )["presented"]
-                )
+                assert not result.ok
+                assert result.internal_diagnostic
+                assert result.events == []
+                assert not candidate_store.load_candidate_set(set_id, session_id=ctx.session_id)["presented"]
 
     async def test_route_framing_requires_a_supported_reason_reference(self):
         ctx, candidate_id, _set_id = await self._prepared_context()
@@ -223,9 +213,9 @@ class PresentRouteCorrectionTests(PresentRouteFramingTestMixin, unittest.Isolate
             },
             ctx,
         )
-        self.assertFalse(missing_reason.ok)
-        self.assertTrue(missing_reason.internal_diagnostic)
-        self.assertEqual(missing_reason.events, [])
+        assert not missing_reason.ok
+        assert missing_reason.internal_diagnostic
+        assert missing_reason.events == []
 
         ctx, candidate_id, _set_id = await self._prepared_context()
         unsupported_reason = await present_route.execute(
@@ -238,14 +228,11 @@ class PresentRouteCorrectionTests(PresentRouteFramingTestMixin, unittest.Isolate
             },
             ctx,
         )
-        self.assertFalse(unsupported_reason.ok)
-        self.assertTrue(unsupported_reason.internal_diagnostic)
-        self.assertEqual(unsupported_reason.events, [])
-        self.assertIn(
-            "reason_code values supported by the selected candidate:",
-            unsupported_reason.error,
-        )
-        self.assertIn("meets_hard_constraints", unsupported_reason.error)
+        assert not unsupported_reason.ok
+        assert unsupported_reason.internal_diagnostic
+        assert unsupported_reason.events == []
+        assert "reason_code values supported by the selected candidate:" in unsupported_reason.error
+        assert "meets_hard_constraints" in unsupported_reason.error
 
     async def test_generic_framing_is_rejected_even_with_supported_reason(self):
         for lead_in in (
@@ -266,10 +253,10 @@ class PresentRouteCorrectionTests(PresentRouteFramingTestMixin, unittest.Isolate
                     ctx,
                 )
 
-                self.assertFalse(result.ok)
-                self.assertTrue(result.internal_diagnostic)
-                self.assertIn("concrete supported route factor", result.error)
-                self.assertEqual(result.events, [])
+                assert not result.ok
+                assert result.internal_diagnostic
+                assert "concrete supported route factor" in result.error
+                assert result.events == []
 
     async def test_concrete_best_wording_is_allowed_when_grounded(self):
         ctx, candidate_id, _set_id = await self._prepared_context()
@@ -286,7 +273,7 @@ class PresentRouteCorrectionTests(PresentRouteFramingTestMixin, unittest.Isolate
             },
             ctx,
         )
-        self.assertTrue(result.ok, result.error)
+        assert result.ok, result.error
 
     async def test_explicit_fastest_claim_cannot_use_hard_constraint_reason(self):
         ctx, candidate_id, _set_id = await self._prepared_context()
@@ -301,10 +288,10 @@ class PresentRouteCorrectionTests(PresentRouteFramingTestMixin, unittest.Isolate
             ctx,
         )
 
-        self.assertFalse(result.ok)
-        self.assertTrue(result.internal_diagnostic)
-        self.assertIn("different route factor", result.error)
-        self.assertEqual(result.events, [])
+        assert not result.ok
+        assert result.internal_diagnostic
+        assert "different route factor" in result.error
+        assert result.events == []
 
     async def test_supported_correction_emits_explanation_and_card(self):
         ctx, candidate_id, _set_id = await self._prepared_context()
@@ -318,7 +305,7 @@ class PresentRouteCorrectionTests(PresentRouteFramingTestMixin, unittest.Isolate
             },
             ctx,
         )
-        self.assertFalse(rejected.ok)
+        assert not rejected.ok
 
         result = await present_route.execute(
             {
@@ -331,13 +318,10 @@ class PresentRouteCorrectionTests(PresentRouteFramingTestMixin, unittest.Isolate
             ctx,
         )
 
-        self.assertTrue(result.ok, result.error)
-        self.assertEqual(
-            [event.type for event in result.events],
-            ["token", "route_card"],
-        )
-        self.assertEqual(result.data["reason_code"], "meets_hard_constraints")
-        self.assertEqual(result.data["follow_up"], "")
+        assert result.ok, result.error
+        assert [event.type for event in result.events] == ["token", "route_card"]
+        assert result.data["reason_code"] == "meets_hard_constraints"
+        assert result.data["follow_up"] == ""
 
     async def test_neutral_follow_up_accompanies_a_grounded_explanation(self):
         ctx, candidate_id, _set_id = await self._prepared_context()
@@ -356,9 +340,9 @@ class PresentRouteCorrectionTests(PresentRouteFramingTestMixin, unittest.Isolate
                 ctx,
             )
 
-        self.assertTrue(result.ok, result.error)
-        self.assertEqual([event.type for event in result.events], ["token", "route_card"])
-        self.assertEqual(result.data["follow_up"], "")
+        assert result.ok, result.error
+        assert [event.type for event in result.events] == ["token", "route_card"]
+        assert result.data["follow_up"] == ""
 
     async def test_missing_explanation_gets_one_correction_before_grounded_fallback(self):
         ctx, candidate_id, set_id = await self._prepared_context()
@@ -375,11 +359,7 @@ class PresentRouteCorrectionTests(PresentRouteFramingTestMixin, unittest.Isolate
                 },
                 ctx,
             )
-            self.assertFalse(
-                candidate_store.load_candidate_set(
-                    set_id, session_id=ctx.session_id
-                )["presented"]
-            )
+            assert not candidate_store.load_candidate_set(set_id, session_id=ctx.session_id)["presented"]
             second = await present_route.execute(
                 {
                     "candidate_id": candidate_id,
@@ -390,27 +370,16 @@ class PresentRouteCorrectionTests(PresentRouteFramingTestMixin, unittest.Isolate
                 ctx,
             )
 
-        self.assertFalse(first.ok)
-        self.assertTrue(first.internal_diagnostic)
-        self.assertEqual(first.events, [])
-        self.assertTrue(second.ok, second.error)
-        self.assertEqual(
-            [event.type for event in second.events], ["token", "route_card"]
-        )
-        self.assertIn(
-            second.data["reason_code"],
-            {"coverage_gap", "meets_hard_constraints"},
-        )
-        self.assertTrue(
-            second.data["lead_in"].startswith("Here's the route I found.")
-        )
+        assert not first.ok
+        assert first.internal_diagnostic
+        assert first.events == []
+        assert second.ok, second.error
+        assert [event.type for event in second.events] == ["token", "route_card"]
+        assert second.data["reason_code"] in {"coverage_gap", "meets_hard_constraints"}
+        assert second.data["lead_in"].startswith("Here's the route I found.")
         card = next(event for event in second.events if event.type == "route_card")
-        self.assertEqual(
-            card.selection_decision["selection_source"], "deterministic_fallback"
-        )
-        self.assertEqual(
-            card.selection_decision["reason_code"], second.data["reason_code"]
-        )
+        assert card.selection_decision["selection_source"] == "deterministic_fallback"
+        assert card.selection_decision["reason_code"] == second.data["reason_code"]
 
     async def test_invalid_model_choice_falls_back_to_other_candidate_atomically(self):
         prepared = _prepared_leg()
@@ -461,8 +430,8 @@ class PresentRouteCorrectionTests(PresentRouteFramingTestMixin, unittest.Isolate
                     ctx,
                 )
 
-        self.assertFalse(first.ok)
-        self.assertTrue(second.ok, second.error)
+        assert not first.ok
+        assert second.ok, second.error
         card = next(event for event in second.events if event.type == "route_card")
         decision = card.selection_decision
         for private_key in (
@@ -473,19 +442,19 @@ class PresentRouteCorrectionTests(PresentRouteFramingTestMixin, unittest.Isolate
             "penalties",
             "evidence_ids",
         ):
-            self.assertNotIn(private_key, decision)
-        self.assertEqual(card.itinerary["selection_decision"], decision)
-        self.assertEqual(decision["selection_source"], "deterministic_fallback")
-        self.assertEqual(decision["selection_reason"], "deterministic_fallback")
-        self.assertEqual(decision["reason_code"], "fastest")
-        self.assertEqual(card.itinerary["total_duration_seconds"], 900)
+            assert private_key not in decision
+        assert card.itinerary["selection_decision"] == decision
+        assert decision["selection_source"] == "deterministic_fallback"
+        assert decision["selection_reason"] == "deterministic_fallback"
+        assert decision["reason_code"] == "fastest"
+        assert card.itinerary["total_duration_seconds"] == 900
         state = trip_state.get_trip_state(ctx.session)
-        self.assertEqual(state["selected_candidate_id"], "cd_fast")
+        assert state["selected_candidate_id"] == "cd_fast"
         record = candidate_store.load_candidate_set(
             set_id, session_id=ctx.session_id
         )
-        self.assertTrue(record["presented"])
-        self.assertEqual(record["selected_candidate_id"], "cd_fast")
+        assert record["presented"]
+        assert record["selected_candidate_id"] == "cd_fast"
 
     async def test_hard_constraint_violation_gets_one_retry_before_fallback(self):
         prepared = _prepared_leg()
@@ -544,30 +513,23 @@ class PresentRouteCorrectionTests(PresentRouteFramingTestMixin, unittest.Isolate
                 ctx,
             )
 
-        self.assertFalse(first.ok)
-        self.assertTrue(first.internal_diagnostic)
-        self.assertEqual(first.events, [])
-        self.assertFalse(record_after_first["presented"])
-        self.assertIsNone(record_after_first["selected_candidate_id"])
-        self.assertIsNone(selected_after_first)
-        self.assertEqual(corrections_after_first, 1)
+        assert not first.ok
+        assert first.internal_diagnostic
+        assert first.events == []
+        assert not record_after_first["presented"]
+        assert record_after_first["selected_candidate_id"] is None
+        assert selected_after_first is None
+        assert corrections_after_first == 1
 
-        self.assertTrue(second.ok, second.error)
+        assert second.ok, second.error
         card = next(event for event in second.events if event.type == "route_card")
-        self.assertNotIn("selected_candidate_id", card.selection_decision)
-        self.assertNotIn("selected_candidate_index", card.selection_decision)
-        self.assertEqual(
-            card.itinerary["selection_decision"], card.selection_decision
-        )
-        self.assertEqual(
-            card.selection_decision["selection_source"], "deterministic_fallback"
-        )
-        self.assertEqual(card.itinerary["total_street_walking_seconds"], 60)
-        self.assertEqual(
-            trip_state.get_trip_state(ctx.session)["selected_candidate_id"],
-            "cd_valid",
-        )
+        assert "selected_candidate_id" not in card.selection_decision
+        assert "selected_candidate_index" not in card.selection_decision
+        assert card.itinerary["selection_decision"] == card.selection_decision
+        assert card.selection_decision["selection_source"] == "deterministic_fallback"
+        assert card.itinerary["total_street_walking_seconds"] == 60
+        assert trip_state.get_trip_state(ctx.session)["selected_candidate_id"] == "cd_valid"
         record = candidate_store.load_candidate_set(
             set_id, session_id=ctx.session_id
         )
-        self.assertEqual(record["selected_candidate_id"], "cd_valid")
+        assert record["selected_candidate_id"] == "cd_valid"

@@ -8,14 +8,19 @@ inputs. Citation identity rules are reused from the incidents evidence module.
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime, timedelta, timezone
-from typing import Any, Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
-from app.services.incidents.normalization import (
-    bounded_ids, bounded_text, sanitize_source_records,
-)
 from app.services.incidents.evidence import (
-    canonical_citation_url, source_identity_from_url, source_type_matches_url,
+    canonical_citation_url,
+    source_identity_from_url,
+    source_type_matches_url,
+)
+from app.services.incidents.normalization import (
+    bounded_ids,
+    bounded_text,
+    sanitize_source_records,
 )
 
 SIX_HOURS = timedelta(hours=6)
@@ -58,12 +63,12 @@ def observed_at_iso(value: object, *, now: datetime) -> str | None:
     if not isinstance(value, str) or not value.strip():
         return None
     try:
-        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value.strip())
     except ValueError:
         return None
     if parsed.utcoffset() is None:
         return None
-    observed = parsed.astimezone(timezone.utc)
+    observed = parsed.astimezone(UTC)
     if observed < now - SIX_HOURS or observed > now + FUTURE_SKEW:
         return None
     return observed.isoformat().replace("+00:00", "Z")

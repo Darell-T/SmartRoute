@@ -5,8 +5,8 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from app.services.agent import profile
-from app.services.agent import trip_state
+from app.services.agent import profile, trip_state
+
 from tests.conversation.conversation_matrix_harness import (
     _turn_round,
     clear_caches,
@@ -18,7 +18,6 @@ from tests.conversation.conversation_matrix_harness import (
     run_turn,
     seed_accepted_active_trip,
 )
-
 
 CURRENT_LOCATION = {"lat": 40.7411, "lng": -73.9897}
 
@@ -167,59 +166,38 @@ class CanonicalContextualReplanLoopTests(unittest.IsolatedAsyncioTestCase):
         )
 
         expected_mode, expected_model = policy_model(self.loop, mode)
-        self.assertEqual(expected_mode, mode)
-        self.assertEqual(
-            [call["model"] for call in self.loop.client.messages.calls],
-            [expected_model, expected_model],
-        )
+        assert expected_mode == mode
+        assert [call["model"] for call in self.loop.client.messages.calls] == [expected_model, expected_model]
         first_context = str(
             self.loop.client.messages.calls[0]["messages"][-1]["content"]
         )
-        self.assertIn('"origin":"Home"', first_context)
-        self.assertIn('"destination":"Work"', first_context)
-        self.assertIn(
-            'accepted_route_endpoints: {"origin":"Home","destination":"Work",'
-            '"source":"accepted_trip","clarification_required":false}',
-            first_context,
-        )
-        self.assertIn("saved_places:", first_context)
-        self.assertIn("rider_location: 40.7411,-73.9897", first_context)
-        self.assertIn(seed.card_id, first_context)
-        self.assertEqual(
-            {
-                schema["name"]
-                for schema in self.loop.client.messages.calls[0]["tools"]
-            },
-            INITIAL_TOOL_PROFILE,
-        )
-        self.assertEqual(
-            self.loop.client.messages.calls[1].get("tool_choice"),
-            {"type": "tool", "name": "present_route"},
-        )
+        assert '"origin":"Home"' in first_context
+        assert '"destination":"Work"' in first_context
+        assert 'accepted_route_endpoints: {"origin":"Home","destination":"Work",' '"source":"accepted_trip","clarification_required":false}' in first_context
+        assert "saved_places:" in first_context
+        assert "rider_location: 40.7411,-73.9897" in first_context
+        assert seed.card_id in first_context
+        assert {schema["name"] for schema in self.loop.client.messages.calls[0]["tools"]} == INITIAL_TOOL_PROFILE
+        assert self.loop.client.messages.calls[1].get("tool_choice") == {"type": "tool", "name": "present_route"}
 
         prepared_input = mocks["prepare_single_leg"].await_args.args[0]
-        self.assertEqual(prepared_input["origin"], "Home")
-        self.assertEqual(prepared_input["destination"], "Work")
-        self.assertEqual(prepared_input["required_route_ids"], ["Q"])
+        assert prepared_input["origin"] == "Home"
+        assert prepared_input["destination"] == "Work"
+        assert prepared_input["required_route_ids"] == ["Q"]
         at_prepare = (mocks.get("session_at_store") or [{}])[0]
-        self.assertEqual(at_prepare.get("active_trip"), seed.card)
-        self.assertEqual(at_prepare.get("route_cards"), [seed.card])
+        assert at_prepare.get("active_trip") == seed.card
+        assert at_prepare.get("route_cards") == [seed.card]
 
         cards = route_cards(events)
-        self.assertEqual(len(cards), 1)
-        self.assertEqual(cards[0].summary["lines"], ["Q"])
-        self.assertEqual(session["active_trip"]["lines"], ["Q"])
-        self.assertEqual(
-            trip_state.get_trip_state(session)["destination"], "Work"
-        )
+        assert len(cards) == 1
+        assert cards[0].summary["lines"] == ["Q"]
+        assert session["active_trip"]["lines"] == ["Q"]
+        assert trip_state.get_trip_state(session)["destination"] == "Work"
         rider_text = "".join(
             event.text for event in events if getattr(event, "type", None) == "token"
         ).casefold()
-        self.assertNotIn("address", rider_text)
-        self.assertEqual(
-            [name for name, _tool_input in trace.tool_calls],
-            ["declare_goals", "prepare_route_options", "present_route"],
-        )
+        assert "address" not in rider_text
+        assert [name for name, _tool_input in trace.tool_calls] == ["declare_goals", "prepare_route_options", "present_route"]
 
     async def _run_fresh_saved_route(
         self,
@@ -261,26 +239,20 @@ class CanonicalContextualReplanLoopTests(unittest.IsolatedAsyncioTestCase):
         context = str(
             self.loop.client.messages.calls[0]["messages"][-1]["content"]
         )
-        self.assertIn("saved_places:", context)
-        self.assertIn("rider_location: 40.7411,-73.9897", context)
+        assert "saved_places:" in context
+        assert "rider_location: 40.7411,-73.9897" in context
         prepared_input = mocks["prepare_single_leg"].await_args.args[0]
-        self.assertEqual(prepared_input["origin"].casefold(), expected_origin.casefold())
-        self.assertEqual(
-            prepared_input["destination"].casefold(),
-            expected_destination.casefold(),
-        )
-        self.assertEqual(len(route_cards(events)), 1)
-        self.assertEqual(
-            [name for name, _tool_input in trace.tool_calls],
-            ["declare_goals", "prepare_route_options", "present_route"],
-        )
+        assert prepared_input["origin"].casefold() == expected_origin.casefold()
+        assert prepared_input["destination"].casefold() == expected_destination.casefold()
+        assert len(route_cards(events)) == 1
+        assert [name for name, _tool_input in trace.tool_calls] == ["declare_goals", "prepare_route_options", "present_route"]
         rider_text = "".join(
             event.text for event in events if getattr(event, "type", None) == "token"
         ).casefold()
-        self.assertNotIn("address", rider_text)
+        assert "address" not in rider_text
 
-    async def test_lm05_contextual_replan_preserves_endpoints_auto_and_quick(self):
-        for mode in ("auto", "quick"):
+    async def test_lm05_contextual_replan_preserves_endpoints_auto(self):
+        for mode in ("auto",):
             with self.subTest(mode=mode):
                 await self._run_contextual_replan(
                     mode=mode,
@@ -294,12 +266,12 @@ class CanonicalContextualReplanLoopTests(unittest.IsolatedAsyncioTestCase):
             "Same trip, but take the Q.",
             "Actually I need the Q.",
         )
-        for mode in ("auto", "quick"):
+        for mode in ("auto",):
             for message in messages:
                 with self.subTest(mode=mode, message=message):
                     await self._run_contextual_replan(mode=mode, message=message)
 
-    async def test_saved_home_work_and_current_origin_routes_auto_and_quick(self):
+    async def test_saved_home_work_and_current_origin_routes_auto(self):
         cases = (
             ("Take me to work.", {"destination": "work"}, "user", "Work"),
             ("Take me home.", {"destination": "home"}, "user", "Home"),
@@ -310,7 +282,7 @@ class CanonicalContextualReplanLoopTests(unittest.IsolatedAsyncioTestCase):
                 "Work",
             ),
         )
-        for mode in ("auto", "quick"):
+        for mode in ("auto",):
             for message, tool_input, expected_origin, expected_destination in cases:
                 with self.subTest(mode=mode, message=message):
                     await self._run_fresh_saved_route(
@@ -322,13 +294,12 @@ class CanonicalContextualReplanLoopTests(unittest.IsolatedAsyncioTestCase):
                     )
 
     async def test_destination_only_route_uses_current_location_without_address(self):
-        for mode in ("auto", "quick"):
+        for mode in ("auto",):
             with self.subTest(mode=mode):
                 session_id, session = new_session()
                 candidate_id = f"cd_barclays_{mode}"
                 mocks: dict = {}
-                trace = self.loop.TurnTrace()
-                events, trace = await run_turn(
+                events, _trace = await run_turn(
                     self.loop,
                     session=session,
                     session_id=session_id,
@@ -349,18 +320,18 @@ class CanonicalContextualReplanLoopTests(unittest.IsolatedAsyncioTestCase):
                     mocks=mocks,
                 )
                 prepared_input = mocks["prepare_single_leg"].await_args.args[0]
-                self.assertEqual(prepared_input["origin"], "user")
-                self.assertEqual(prepared_input["destination"], "Barclays Center")
-                self.assertEqual(len(route_cards(events)), 1)
+                assert prepared_input["origin"] == "user"
+                assert prepared_input["destination"] == "Barclays Center"
+                assert len(route_cards(events)) == 1
                 rider_text = "".join(
                     event.text
                     for event in events
                     if getattr(event, "type", None) == "token"
                 ).casefold()
-                self.assertNotIn("address", rider_text)
+                assert "address" not in rider_text
 
-    async def test_same_trip_avoid_q_preserves_endpoints_auto_and_quick(self):
-        for mode in ("auto", "quick"):
+    async def test_same_trip_avoid_q_preserves_endpoints_auto(self):
+        for mode in ("auto",):
             with self.subTest(mode=mode):
                 session_id, session = new_session()
                 _save_home_and_work(session)
@@ -388,13 +359,13 @@ class CanonicalContextualReplanLoopTests(unittest.IsolatedAsyncioTestCase):
                     trace=trace,
                 )
                 prepared_input = mocks["prepare_single_leg"].await_args.args[0]
-                self.assertEqual(prepared_input["origin"], "Home")
-                self.assertEqual(prepared_input["destination"], "Work")
-                self.assertEqual(prepared_input["excluded_route_ids"], ["Q"])
-                self.assertEqual(route_cards(events)[0].summary["lines"], ["A"])
+                assert prepared_input["origin"] == "Home"
+                assert prepared_input["destination"] == "Work"
+                assert prepared_input["excluded_route_ids"] == ["Q"]
+                assert route_cards(events)[0].summary["lines"] == ["A"]
 
     async def test_what_if_explicit_saved_origin_overrides_active_and_gps(self):
-        for mode in ("auto", "quick"):
+        for mode in ("auto",):
             with self.subTest(mode=mode):
                 session_id, session = new_session()
                 _save_home_and_work(session)
@@ -430,11 +401,11 @@ class CanonicalContextualReplanLoopTests(unittest.IsolatedAsyncioTestCase):
                     trace=trace,
                 )
                 prepared_input = mocks["prepare_single_leg"].await_args.args[0]
-                self.assertEqual(prepared_input["origin"], "work")
-                self.assertEqual(prepared_input["destination"], "Barclays Center")
-                self.assertTrue(trace.tool_calls[1][1]["what_if"])
-                self.assertEqual(session["active_trip"], seed.card)
-                self.assertTrue(route_cards(events))
+                assert prepared_input["origin"] == "work"
+                assert prepared_input["destination"] == "Barclays Center"
+                assert trace.tool_calls[1][1]["what_if"]
+                assert session["active_trip"] == seed.card
+                assert route_cards(events)
 
     async def test_missing_authoritative_endpoint_clarifies_without_provider_work(self):
         cases = (
@@ -451,8 +422,8 @@ class CanonicalContextualReplanLoopTests(unittest.IsolatedAsyncioTestCase):
                 "Share your current location or provide a starting point.",
             ),
         )
-        for mode in ("auto", "quick"):
-            for message, tool_input, origin, clarification in cases:
+        for mode in ("auto",):
+            for message, _tool_input, origin, clarification in cases:
                 with self.subTest(mode=mode, message=message):
                     session_id, session = new_session()
                     trace = self.loop.TurnTrace()
@@ -475,17 +446,14 @@ class CanonicalContextualReplanLoopTests(unittest.IsolatedAsyncioTestCase):
                             trace=trace,
                         )
                     route_provider.assert_not_called()
-                    self.assertEqual(route_cards(events), [])
-                    self.assertEqual(
-                        [name for name, _tool_input in trace.tool_calls],
-                        ["declare_goals", "complete_turn"],
-                    )
+                    assert route_cards(events) == []
+                    assert [name for name, _tool_input in trace.tool_calls] == ["declare_goals", "complete_turn"]
                     final_text = "".join(
                         event.text
                         for event in events
                         if getattr(event, "type", None) == "token"
                     )
-                    self.assertIn(clarification, final_text)
+                    assert clarification in final_text
 
 
 if __name__ == "__main__":

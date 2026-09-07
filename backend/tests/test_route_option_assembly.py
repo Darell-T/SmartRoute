@@ -72,8 +72,8 @@ class RouteOptionAssemblyTests(unittest.IsolatedAsyncioTestCase):
 
         choices = prepare_route_multi_stop._candidate_choices(prepared, 5)
 
-        self.assertEqual(choices, [0, 1, 2])
-        self.assertEqual(prepare_route_multi_stop._route_score(prepared, 1), 10)
+        assert choices == [0, 1, 2]
+        assert prepare_route_multi_stop._route_score(prepared, 1) == 10
 
     def test_route_family_dedupe_preserves_first_occurrence_and_distinct_topology(self):
         first = [
@@ -86,10 +86,7 @@ class RouteOptionAssemblyTests(unittest.IsolatedAsyncioTestCase):
             {"type": "SUBWAY", "route_id": "R", "departure_stop": "Gamma Sq", "arrival_stop": "Delta Pkwy"},
         ]
 
-        self.assertEqual(
-            candidates.dedupe_route_families([first, duplicate, distinct]),
-            [first, distinct],
-        )
+        assert candidates.dedupe_route_families([first, duplicate, distinct]) == [first, distinct]
 
     def test_multi_stop_dominance_removes_only_same_signature_route(self):
         route = self._line_route("Q")
@@ -134,7 +131,7 @@ class RouteOptionAssemblyTests(unittest.IsolatedAsyncioTestCase):
 
         choices = prepare_route_multi_stop._candidate_choices(prepared, 5)
 
-        self.assertEqual(choices, [0, 2])
+        assert choices == [0, 2]
 
     def test_multi_stop_beam_truncation_keeps_provider_order(self):
         prepared = self._selection_leg(
@@ -169,10 +166,7 @@ class RouteOptionAssemblyTests(unittest.IsolatedAsyncioTestCase):
 
         bounded = prepare_route_multi_stop._bounded_provider_order(chains, 3)
 
-        self.assertEqual(
-            [chain.legs[0][1] for chain in bounded],
-            [0, 1, 2],
-        )
+        assert [chain.legs[0][1] for chain in bounded] == [0, 1, 2]
 
     def test_multi_stop_choices_keep_hard_constraint_valid_routes(self):
         prepared = self._selection_leg(
@@ -186,7 +180,7 @@ class RouteOptionAssemblyTests(unittest.IsolatedAsyncioTestCase):
 
         choices = prepare_route_multi_stop._candidate_choices(prepared, 5)
 
-        self.assertEqual(choices, [1])
+        assert choices == [1]
 
     def test_arrival_by_is_a_hard_constraint_after_itinerary_finalization(self):
         base_input = {"arrival_by": "2026-08-06T13:00:00-04:00"}
@@ -207,10 +201,10 @@ class RouteOptionAssemblyTests(unittest.IsolatedAsyncioTestCase):
             itinerary={"arrival_at": "2026-08-06T13:01:00-04:00"},
         )
 
-        self.assertTrue(on_time["satisfied"])
-        self.assertTrue(early["satisfied"])
-        self.assertFalse(late["satisfied"])
-        self.assertEqual(late["violations"], ["arrival_by_missed"])
+        assert on_time["satisfied"]
+        assert early["satisfied"]
+        assert not late["satisfied"]
+        assert late["violations"] == ["arrival_by_missed"]
 
     def test_arrival_by_comparison_ignores_missing_or_unparseable_timestamps(self):
         tool_input = {"arrival_by": "2026-08-06T13:00:00-04:00"}
@@ -218,16 +212,16 @@ class RouteOptionAssemblyTests(unittest.IsolatedAsyncioTestCase):
         for itinerary in ({}, {"arrival_at": "not-a-timestamp"}):
             with self.subTest(itinerary=itinerary):
                 constraints = route_constraints([], tool_input, itinerary=itinerary)
-                self.assertTrue(constraints["satisfied"])
-                self.assertNotIn("arrival_by_missed", constraints["violations"])
+                assert constraints["satisfied"]
+                assert "arrival_by_missed" not in constraints["violations"]
 
         constraints = route_constraints(
             [],
             {"arrival_by": "not-a-timestamp"},
             itinerary={"arrival_at": "2026-08-06T13:30:00-04:00"},
         )
-        self.assertTrue(constraints["satisfied"])
-        self.assertNotIn("arrival_by_missed", constraints["violations"])
+        assert constraints["satisfied"]
+        assert "arrival_by_missed" not in constraints["violations"]
 
 
 __all__ = ()

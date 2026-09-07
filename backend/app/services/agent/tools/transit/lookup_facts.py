@@ -114,6 +114,7 @@ def _find_section(topic_raw: str) -> tuple[str, dict] | None:
 
 
 async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
+    del ctx
     topic_raw = str(tool_input.get("topic") or "").strip()
     if not topic_raw:
         return ToolResult(ok=False, error="topic is required")

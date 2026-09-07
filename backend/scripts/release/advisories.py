@@ -15,7 +15,6 @@ from scripts.release.advisory_policy import (
 )
 from scripts.release.transport import ExternalCheckResult
 
-
 SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{7,64}$")
 DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
@@ -37,7 +36,7 @@ def _invalid(reason: str) -> ExternalCheckResult:
 
 
 def _summary_matches(summary: dict[str, object], findings: list[object]) -> bool:
-    counts = {key: 0 for key in SUMMARY_KEYS[:-1]}
+    counts = dict.fromkeys(SUMMARY_KEYS[:-1], 0)
     for finding in findings:
         if not isinstance(finding, dict):
             return False
@@ -49,39 +48,45 @@ def _summary_matches(summary: dict[str, object], findings: list[object]) -> bool
     return summary == counts
 
 
-def advisory_evidence(path: str | None, candidate_sha: str) -> ExternalCheckResult:
-    """Accept only complete, zero-finding evidence for the current candidate inputs."""
+def _candidate_matches(candidate: object, candidate_sha: str) -> bool:
+    if not isinstance(candidate, dict):
+        return False
+    evidence_sha = candidate.get("commit_sha")
+    return (
+        isinstance(evidence_sha, str)
+        and bool(SHA_PATTERN.fullmatch(candidate_sha))
+        and bool(SHA_PATTERN.fullmatch(evidence_sha))
+        and evidence_sha.casefold() == candidate_sha.casefold()
+    )
 
+
+def _load_passed_evidence(path: str | None) -> ExternalCheckResult | dict[str, object]:
     if not path:
         return ExternalCheckResult("BLOCKED", "dependency advisory evidence was not supplied", {})
     try:
         value = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return _invalid("dependency advisory evidence could not be read")
-    if not isinstance(value, dict):
-        return _invalid("dependency advisory evidence must be an object")
-    candidate = value.get("candidate")
-    scans = value.get("scans")
-    policy = value.get("policy")
-    accepted = value.get("accepted_development_findings")
+    candidate = value.get("candidate") if isinstance(value, dict) else None
+    scans = value.get("scans") if isinstance(value, dict) else None
+    policy = value.get("policy") if isinstance(value, dict) else None
+    accepted = value.get("accepted_development_findings") if isinstance(value, dict) else None
     if (
-        value.get("schema_version") != 1
+        not isinstance(value, dict)
+        or value.get("schema_version") != 1
         or value.get("status") != "PASSED"
         or not isinstance(candidate, dict)
         or not isinstance(scans, list)
         or not isinstance(policy, dict)
         or not isinstance(accepted, list)
     ):
+        if not isinstance(value, dict):
+            return _invalid("dependency advisory evidence must be an object")
         return _invalid("dependency advisory evidence schema does not match")
-    evidence_sha = candidate.get("commit_sha")
-    if (
-        not isinstance(evidence_sha, str)
-        or not SHA_PATTERN.fullmatch(candidate_sha)
-        or not SHA_PATTERN.fullmatch(evidence_sha)
-        or evidence_sha.casefold() != candidate_sha.casefold()
-    ):
-        return _invalid("dependency advisory evidence candidate SHA is invalid")
+    return value
 
+
+def _index_scans(scans: list[object]) -> ExternalCheckResult | dict[str, object]:
     by_id: dict[str, object] = {}
     for scan in scans:
         if not isinstance(scan, dict) or not isinstance(scan.get("id"), str):
@@ -92,37 +97,55 @@ def advisory_evidence(path: str | None, candidate_sha: str) -> ExternalCheckResu
         by_id[scan_id] = scan
     if set(by_id) != {item[0] for item in REQUIRED_SCANS}:
         return _invalid("dependency advisory evidence has incomplete scanner coverage")
+    return by_id
 
-    for scan_id, scanner_name, scanner_format, scope, relative_input in REQUIRED_SCANS:
-        scan = by_id[scan_id]
+
+def _scan_details_valid(scan: dict[str, object], required: tuple[str, str, str, str, str]) -> bool:
+    _scan_id, scanner_name, scanner_format, scope, relative_input = required
+    scanner = scan.get("scanner")
+    scanner_input = scan.get("input")
+    summary = scan.get("summary")
+    findings = scan.get("findings")
+    return (
+        isinstance(scanner, dict)
+        and scanner.get("name") == scanner_name
+        and isinstance(scanner.get("version"), str)
+        and bool(scanner["version"].strip())
+        and scanner.get("format") == scanner_format
+        and scan.get("scope") == scope
+        and isinstance(scanner_input, dict)
+        and scanner_input.get("path") == relative_input
+        and isinstance(scanner_input.get("sha256"), str)
+        and bool(DIGEST_PATTERN.fullmatch(scanner_input["sha256"]))
+        and isinstance(summary, dict)
+        and isinstance(findings, list)
+        and scan.get("exit_code") == (1 if findings else 0)
+        and _summary_matches(summary, findings)
+    )
+
+
+def _verify_scans(by_id: dict[str, object]) -> ExternalCheckResult | None:
+    for required in REQUIRED_SCANS:
+        scan = by_id[required[0]]
         assert isinstance(scan, dict)
-        scanner = scan.get("scanner")
-        scanner_input = scan.get("input")
-        summary = scan.get("summary")
-        findings = scan.get("findings")
-        if (
-            not isinstance(scanner, dict)
-            or scanner.get("name") != scanner_name
-            or not isinstance(scanner.get("version"), str)
-            or not scanner["version"].strip()
-            or scanner.get("format") != scanner_format
-            or scan.get("scope") != scope
-            or not isinstance(scanner_input, dict)
-            or scanner_input.get("path") != relative_input
-            or not isinstance(scanner_input.get("sha256"), str)
-            or not DIGEST_PATTERN.fullmatch(scanner_input["sha256"])
-            or not isinstance(summary, dict)
-            or not isinstance(findings, list)
-            or scan.get("exit_code") != (1 if findings else 0)
-            or not _summary_matches(summary, findings)
-        ):
+        if not _scan_details_valid(scan, required):
             return _invalid("dependency advisory scan details are invalid")
+        scanner_input = scan.get("input")
+        assert isinstance(scanner_input, dict)
         try:
-            current_digest = _sha256(REPOSITORY_ROOT / relative_input)
+            current_digest = _sha256(REPOSITORY_ROOT / required[4])
         except OSError:
             return _invalid("dependency advisory input could not be verified")
         if scanner_input["sha256"] != current_digest:
             return _invalid("dependency advisory input digest does not match")
+    return None
+
+
+def _verify_policy(
+    by_id: dict[str, object],
+    policy: object,
+    accepted: object,
+) -> ExternalCheckResult | None:
     policy_path = REPOSITORY_ROOT / POLICY_RELATIVE_PATH
     try:
         current_policy = load_policy(policy_path)
@@ -132,6 +155,8 @@ def advisory_evidence(path: str | None, candidate_sha: str) -> ExternalCheckResu
         return _invalid("dependency advisory exception policy is invalid")
     if policy != expected_policy or accepted != expected_accepted:
         return _invalid("dependency advisory exceptions do not match policy")
+    if not isinstance(accepted, list):
+        return _invalid("dependency advisory exceptions are malformed")
     accepted_keys = {
         (item["scan_id"], json.dumps(item["finding"], sort_keys=True, separators=(",", ":")))
         for item in accepted
@@ -141,14 +166,44 @@ def advisory_evidence(path: str | None, candidate_sha: str) -> ExternalCheckResu
         return _invalid("dependency advisory exceptions are malformed")
     unresolved = [
         finding
-        for scan in scans
+        for scan in by_id.values()
+        if isinstance(scan, dict)
         for finding in scan["findings"]
         if (scan["id"], json.dumps(finding, sort_keys=True, separators=(",", ":"))) not in accepted_keys
     ]
     if unresolved:
         return _invalid("dependency advisory evidence contains open findings")
+    return None
+
+
+def advisory_evidence(path: str | None, candidate_sha: str) -> ExternalCheckResult:
+    """Accept only complete, zero-finding evidence for the current candidate inputs."""
+
+    value = _load_passed_evidence(path)
+    if isinstance(value, ExternalCheckResult):
+        return value
+    if not _candidate_matches(value.get("candidate"), candidate_sha):
+        return _invalid("dependency advisory evidence candidate SHA is invalid")
+    scans = value["scans"]
+    assert isinstance(scans, list)
+    by_id = _index_scans(scans)
+    if isinstance(by_id, ExternalCheckResult):
+        return by_id
+    scan_error = _verify_scans(by_id)
+    if scan_error is not None:
+        return scan_error
+    policy_error = _verify_policy(by_id, value.get("policy"), value.get("accepted_development_findings"))
+    if policy_error is not None:
+        return policy_error
+    accepted = value.get("accepted_development_findings")
+    accepted_count = len(accepted) if isinstance(accepted, list) else 0
     return ExternalCheckResult(
         "PASSED",
         "npm and pip dependency advisory scans passed for current release inputs",
-        {"required_scans": len(REQUIRED_SCANS), "runtime_scans": 2, "development_scans": 2, "accepted_development_findings": len(accepted)},
+        {
+            "required_scans": len(REQUIRED_SCANS),
+            "runtime_scans": 2,
+            "development_scans": 2,
+            "accepted_development_findings": accepted_count,
+        },
     )

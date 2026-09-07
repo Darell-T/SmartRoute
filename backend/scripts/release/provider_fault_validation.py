@@ -12,7 +12,6 @@ from pathlib import Path
 
 from scripts.release.provider_fault_cases import MODEL_CASES, run_model_fault_cases
 
-
 REPLAY_CASES = ("malformed_payload", "optional_provider_failure")
 
 
@@ -30,7 +29,11 @@ async def _replay_faults() -> None:
     from app.services.trips.itinerary import build_canonical_itinerary
     from evaluation.route_intelligence import advisor_context
     from evaluation.route_intelligence.comparison import compare_scenario
-    from evaluation.route_intelligence.replay import ReplayFixtureAdapters, ScenarioValidationError, load_scenario
+    from evaluation.route_intelligence.replay import (
+        ReplayFixtureAdapters,
+        ScenarioValidationError,
+        load_scenario,
+    )
 
     scenario = load_scenario("partial-source-failure")
     inputs = await ReplayFixtureAdapters(scenario).load()
@@ -63,7 +66,8 @@ async def _replay_faults() -> None:
             await ReplayFixtureAdapters(malformed).load()
         except ScenarioValidationError:
             return
-    raise FaultValidationError("malformed provider data was accepted")
+    accepted = "malformed provider data was accepted"
+    raise FaultValidationError(accepted)
 
 
 async def _validate() -> dict[str, object]:
@@ -83,6 +87,6 @@ def run_provider_fault_jitter_validation() -> tuple[str, str, dict[str, object]]
     try:
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             evidence = asyncio.run(_validate())
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 unexpected offline faults reduce to a sanitized error class
         return "FAILED", f"offline provider fault validation failed: {type(exc).__name__}", {}
     return "PASSED", "fixed-seed offline provider fault validation passed", evidence

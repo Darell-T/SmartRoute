@@ -10,18 +10,13 @@ from typing import TYPE_CHECKING, Literal
 
 from app import observability
 from app.services.agent import events as agent_events
-from app.services.agent.model import stream as model_stream
-from app.services.agent import passenger_output
-from app.services.agent.model import policy as agent_policy
-from app.services.agent import public_surface
-from app.services.agent.model import prompt as agent_prompt
+from app.services.agent import passenger_output, public_surface
 from app.services.agent import session as session_module
-from app.services.agent.turn import completion as turn_completion  # test patch point
-from app.services.agent.turn.tool_round import (
-    TurnDeadlineReached,
-    mixed_terminal_and_capability,
-)
+from app.services.agent.model import policy as agent_policy
+from app.services.agent.model import prompt as agent_prompt
+from app.services.agent.model import stream as model_stream
 from app.services.agent.tools import ToolContext
+from app.services.agent.turn import completion as turn_completion  # test patch point
 from app.services.agent.turn.evidence import TurnEvidence
 from app.services.agent.turn.finalization import (
     extract_safe_usage,
@@ -35,6 +30,10 @@ from app.services.agent.turn.finalization import (
     stage_timings,
 )
 from app.services.agent.turn.ledger import TurnToolLedger
+from app.services.agent.turn.tool_round import (
+    TurnDeadlineReachedError,
+    mixed_terminal_and_capability,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -68,7 +67,7 @@ class TurnState:
     session_id: str
     turn_id: str
     ctx: ToolContext
-    trace: "TurnTrace | None"
+    trace: TurnTrace | None
     dependencies: TurnDependencies
     mode_policy: agent_policy.AgentModePolicy
     initial_mode: str
@@ -273,6 +272,11 @@ async def _capture_model_events(
     ):
         if isinstance(event, model_stream.ModelCallCompleted):
             capture.outcome = event
+            if event.web_sources:
+                yield agent_events.SourcesEvent(
+                    turn_id=state.turn_id,
+                    sources=event.web_sources,
+                )
         elif isinstance(event, agent_events.TokenEvent):
             if capture.first_token_ms is None and event.text.strip():
                 capture.first_token_ms = (time.monotonic() - model_call_start) * 1000
@@ -363,6 +367,29 @@ def _record_conversation_timings(
         )
 
 
+def _apply_server_web_progress(
+    state: TurnState,
+    outcome: model_stream.ModelCallCompleted,
+    stop_reason: str,
+    turn_tools: list[dict],
+) -> ModelDirective | None:
+    """Hold web evidence until a pause_turn continuation finishes."""
+
+    if outcome.web_used:
+        state.pending_server_web_used = True
+        state.pending_server_web_succeeded = bool(
+            state.pending_server_web_succeeded and outcome.web_succeeded
+        )
+    if stop_reason == "pause_turn":
+        state.server_tool_continuation_tools = turn_tools
+        return ModelDirective("continue")
+    if state.pending_server_web_used:
+        state.ctx.turn_evidence.note_web(ok=state.pending_server_web_succeeded)
+        state.pending_server_web_used = False
+        state.pending_server_web_succeeded = True
+    return None
+
+
 def resolve_model_iteration(
     state: TurnState,
     iteration: ModelIteration,
@@ -379,8 +406,6 @@ def resolve_model_iteration(
     if outcome.error is not None:
         state.stop_reason = "deadline" if outcome.error.code == "deadline" else "error"
         return ModelDirective("stop", event=outcome.error)
-    if iteration.final_message is None:
-        raise RuntimeError("model stream completed without a final message")
 
     usage = extract_safe_usage(getattr(iteration.final_message, "usage", None))
     state.input_tokens += usage.get("input_tokens", 0)
@@ -400,18 +425,11 @@ def resolve_model_iteration(
     state.messages.append(
         {"role": "assistant", "content": iteration.final_message.content}
     )
-    if outcome.web_used:
-        state.pending_server_web_used = True
-        state.pending_server_web_succeeded = bool(
-            state.pending_server_web_succeeded and outcome.web_succeeded
-        )
-    if stop_reason == "pause_turn":
-        state.server_tool_continuation_tools = iteration.turn_tools
-        return ModelDirective("continue")
-    if state.pending_server_web_used:
-        state.ctx.turn_evidence.note_web(ok=state.pending_server_web_succeeded)
-        state.pending_server_web_used = False
-        state.pending_server_web_succeeded = True
+    web_directive = _apply_server_web_progress(
+        state, outcome, stop_reason, iteration.turn_tools
+    )
+    if web_directive is not None:
+        return web_directive
 
     action_attached = bool(iteration.tool_use_blocks) or bool(
         outcome.server_tool_call_count
@@ -430,9 +448,7 @@ def resolve_model_iteration(
         state.stop_reason = "end_turn"
         return ModelDirective("stop", event=state.fallback_event())
     if stop_reason != "tool_use" or not iteration.tool_use_blocks:
-        state.stop_reason = (
-            "clarification_required" if state.clarification_pending else "end_turn"
-        )
+        state.stop_reason = _terminal_stop_reason(state)
         return ModelDirective("stop")
     if mixed_terminal_and_capability(
         [str(getattr(block, "name", "") or "") for block in iteration.tool_use_blocks]
@@ -701,7 +717,7 @@ async def _stream_turn_body(state: TurnState) -> AsyncIterator[agent_events.Agen
             yield event
         async for event in _stream_post_loop_response(state):
             yield event
-    except TurnDeadlineReached:
+    except TurnDeadlineReachedError:
         state.stop_reason = "deadline"
     except Exception as exc:
         _LOGGER.exception(

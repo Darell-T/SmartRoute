@@ -24,7 +24,6 @@ from tests.conversation.conversation_matrix_harness import (
     seed_accepted_active_trip,
 )
 
-
 FORBIDDEN_TOOL_NAMES = (
     "present_route", "plan_trip", "web_search", "search_local_places",
     "get_place_details", "event_lookup", "transit_snapshot",
@@ -140,27 +139,24 @@ class _NoGoodOptionsBase(unittest.IsolatedAsyncioTestCase):
             fixed_candidate_id=VIABLE_CANDIDATE_ID,
         )
 
-        self.assertEqual(
-            [name for name, _tool_input in trace.tool_calls],
-            ["declare_goals", "prepare_route_options", "present_route"],
-        )
+        assert [name for name, _tool_input in trace.tool_calls] == ["declare_goals", "prepare_route_options", "present_route"]
         cards = route_cards(events)
-        self.assertEqual(len(cards), 1)
-        self.assertEqual(cards[0].role, "recommended")
-        self.assertEqual(trace.model_call_count, 3)
-        self.assertEqual(mocks["prepare_single_leg"].await_count, 1)
+        assert len(cards) == 1
+        assert cards[0].role == "recommended"
+        assert trace.model_call_count == 3
+        assert mocks["prepare_single_leg"].await_count == 1
 
         state = trip_state_module.get_trip_state(session)
-        self.assertNotEqual(state["active_candidate_set_id"], seed.candidate_set_id)
-        self.assertEqual(state["selected_candidate_id"], VIABLE_CANDIDATE_ID)
+        assert state["active_candidate_set_id"] != seed.candidate_set_id
+        assert state["selected_candidate_id"] == VIABLE_CANDIDATE_ID
         record = candidate_store.load_candidate_set(
             state["active_candidate_set_id"],
             session_id=session_id,
         )
-        self.assertIsNotNone(record)
-        self.assertEqual(record["route_status"], expected_status)
-        self.assertTrue(record["presented"])
-        self.assertEqual(record["selected_candidate_id"], VIABLE_CANDIDATE_ID)
+        assert record is not None
+        assert record["route_status"] == expected_status
+        assert record["presented"]
+        assert record["selected_candidate_id"] == VIABLE_CANDIDATE_ID
         return session, session_id, events, trace, record
 
     async def _run_scenario(
@@ -198,7 +194,7 @@ class _NoGoodOptionsBase(unittest.IsolatedAsyncioTestCase):
             expected_prepare_input=expected_prepare_input,
             stored_set_ids=mocks["stored_candidate_set_ids"],
         )
-        self.assertEqual(mocks["prepare_single_leg"].await_count, 1)
+        assert mocks["prepare_single_leg"].await_count == 1
         return session, session_id, seed, events, trace, audit, state
 
     def _assert_no_good_invariants(
@@ -219,12 +215,9 @@ class _NoGoodOptionsBase(unittest.IsolatedAsyncioTestCase):
         bound; the new set is stored only as a separate audit set."""
 
         names = [name for name, _tool_input in trace.tool_calls]
-        self.assertEqual(
-            names,
-            ["declare_goals", "prepare_route_options", "complete_turn"],
-        )
+        assert names == ["declare_goals", "prepare_route_options", "complete_turn"]
         for forbidden in FORBIDDEN_TOOL_NAMES:
-            self.assertNotIn(forbidden, names, f"forbidden tool used: {forbidden}")
+            assert forbidden not in names, f"forbidden tool used: {forbidden}"
         if expected_prepare_input is not None:
             prepare_input = next(
                 tool_input
@@ -232,69 +225,62 @@ class _NoGoodOptionsBase(unittest.IsolatedAsyncioTestCase):
                 if name == "prepare_route_options"
             )
             for key, value in expected_prepare_input.items():
-                self.assertEqual(prepare_input.get(key), value)
+                assert prepare_input.get(key) == value
 
-        self.assertEqual(events[0].type, "meta")
-        self.assertEqual(events[-1].type, "done")
-        self.assertEqual(events[-1].stop_reason, "end_turn")
-        self.assertEqual(route_cards(events), [], "no route card for a no-good prepare")
+        assert events[0].type == "meta"
+        assert events[-1].type == "done"
+        assert events[-1].stop_reason == "end_turn"
+        assert route_cards(events) == [], "no route card for a no-good prepare"
         # Truthful bounded model response: a real second model round completed
         # through the terminal capability, without inventing a winner or
         # leaking internal ids.
-        self.assertEqual(trace.model_call_count, 3)
-        self.assertIn("could not find", trace.final_text)
+        assert trace.model_call_count == 3
+        assert "could not find" in trace.final_text
         lowered = trace.final_text.casefold()
         for marker in ("recommended", "i'd take", "best option", "cd_", "cs_"):
-            self.assertNotIn(marker, lowered, f"winner/internal id leaked: {marker}")
+            assert marker not in lowered, f"winner/internal id leaked: {marker}"
 
         expected_mode, expected_model = policy_model(self.loop, mode)
-        self.assertEqual(trace.initial_mode, expected_mode)
-        self.assertEqual(trace.final_mode, expected_mode)
-        self.assertEqual(self.loop.client.messages.calls[0]["model"], expected_model)
+        assert trace.initial_mode == expected_mode
+        assert trace.final_mode == expected_mode
+        assert self.loop.client.messages.calls[0]["model"] == expected_model
 
         # P1: the accepted selection stays one bound unit -- active route
         # facts and active/selected candidate identity unchanged.
         state = trip_state_module.get_trip_state(session)
-        self.assertEqual(state["active_candidate_set_id"], seed.candidate_set_id)
-        self.assertEqual(state["selected_candidate_id"], seed.candidate_id)
-        self.assertEqual(state["origin"], seed.origin)
-        self.assertEqual(state["destination"], seed.destination)
-        self.assertEqual(state["waypoints"], [])
-        self.assertEqual(state["planning_mode"], seed.planning_mode)
-        self.assertEqual(state["requested_departure"], seed.requested_departure)
-        self.assertEqual(state["requested_arrival"], seed.requested_arrival)
-        self.assertEqual(session["active_trip"]["card_id"], seed.card_id)
-        self.assertEqual(
-            [card["card_id"] for card in session["route_cards"]],
-            [seed.card_id],
-        )
+        assert state["active_candidate_set_id"] == seed.candidate_set_id
+        assert state["selected_candidate_id"] == seed.candidate_id
+        assert state["origin"] == seed.origin
+        assert state["destination"] == seed.destination
+        assert state["waypoints"] == []
+        assert state["planning_mode"] == seed.planning_mode
+        assert state["requested_departure"] == seed.requested_departure
+        assert state["requested_arrival"] == seed.requested_arrival
+        assert session["active_trip"]["card_id"] == seed.card_id
+        assert [card["card_id"] for card in session["route_cards"]] == [seed.card_id]
         record = candidate_store.load_candidate_set(
             seed.candidate_set_id,
             session_id=session_id,
         )
-        self.assertIsNotNone(record)
-        self.assertEqual(record["presented"], True)
-        self.assertEqual(record["selected_candidate_id"], seed.candidate_id)
-        self.assertEqual(record["route_status"], "good")
+        assert record is not None
+        assert record["presented"] is True
+        assert record["selected_candidate_id"] == seed.candidate_id
+        assert record["route_status"] == "good"
 
         # The audit set is observed through the recording store wrapper (the
         # real store ran); never located via trip_state.active_candidate_set_id.
-        self.assertEqual(len(stored_set_ids), 1)
+        assert len(stored_set_ids) == 1
         audit_set_id = stored_set_ids[0]
-        self.assertNotEqual(audit_set_id, seed.candidate_set_id)
-        self.assertNotEqual(
-            audit_set_id,
-            state["active_candidate_set_id"],
-            "audit set must not replace the active server-owned selection",
-        )
+        assert audit_set_id != seed.candidate_set_id
+        assert audit_set_id != state["active_candidate_set_id"], "audit set must not replace the active server-owned selection"
         audit = candidate_store.load_candidate_set(
             audit_set_id,
             session_id=session_id,
         )
-        self.assertIsNotNone(audit)
-        self.assertEqual(audit["route_status"], expected_status)
-        self.assertFalse(audit["presented"])
-        self.assertIsNone(audit["selected_candidate_id"])
+        assert audit is not None
+        assert audit["route_status"] == expected_status
+        assert not audit["presented"]
+        assert audit["selected_candidate_id"] is None
         return state, audit
 
     def _prepare_rounds(

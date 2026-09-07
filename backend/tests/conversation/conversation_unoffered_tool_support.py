@@ -26,6 +26,7 @@ from unittest.mock import AsyncMock, patch
 
 from app.services.agent import discovery_store
 from app.services.agent import trip_state as trip_state_module
+
 from tests.conversation.conversation_matrix_harness import (
     clear_caches,
     new_session,
@@ -302,35 +303,23 @@ class _OfferedSurfaceBase(unittest.IsolatedAsyncioTestCase):
         )
 
     def _assert_turn_shape(self, ev: ProbeEvidence, scenario_id: str) -> None:
-        self.assertIn(
-            ev.stop_reason,
-            {"end_turn", "clarification_required"},
-            f"{scenario_id}: {ev.compact()}",
-        )
-        self.assertEqual(
-            ev.model_call_count, 2,
-            f"{scenario_id}: bounded recovery after the tool round; "
-            f"{ev.compact()}",
-        )
+        assert ev.stop_reason in {"end_turn", "clarification_required"}, f"{scenario_id}: {ev.compact()}"
+        assert ev.model_call_count == 2, f"{scenario_id}: bounded recovery after the tool round; " f"{ev.compact()}"
 
     def _assert_offered_exact(
         self, ev: ProbeEvidence, expected: frozenset, scenario_id: str
     ) -> None:
-        self.assertEqual(
-            ev.offered,
-            expected,
+        assert ev.offered == expected, (
             f"{scenario_id}: request must offer exactly {sorted(expected)}; "
-            f"{ev.compact()}",
+            f"{ev.compact()}"
         )
 
     def _assert_unoffered_not_offered(
         self, ev: ProbeEvidence, name: str, scenario_id: str
     ) -> None:
-        self.assertNotIn(
-            name,
-            ev.offered,
+        assert name not in ev.offered, (
             f"{scenario_id}: {name} must not be in the offered allowlist; "
-            f"{ev.compact()}",
+            f"{ev.compact()}"
         )
 
     def _assert_unoffered_rejected(
@@ -343,124 +332,87 @@ class _OfferedSurfaceBase(unittest.IsolatedAsyncioTestCase):
         seam, a store, session/trip/pending state, or a card; the model
         receives a bounded error tool-result so the next round can recover.
         """
-        self.assertEqual(
-            {key: mock.await_count for key, mock in ev.spies.items()},
-            {key: 0 for key in ev.spies},
+        spy_counts = {key: mock.await_count for key, mock in ev.spies.items()}
+        assert spy_counts == dict.fromkeys(ev.spies, 0), (
             f"{scenario_id}: unoffered {name} must not reach any provider "
-            f"seam; {ev.compact()}",
+            f"seam; {ev.compact()}"
         )
-        self.assertNotIn(
-            name,
-            [tool for tool, _input in ev.tool_calls],
+        ledger_names = [tool for tool, _input in ev.tool_calls]
+        assert name not in ledger_names, (
             f"{scenario_id}: unoffered {name} must not enter the ledger; "
-            f"{ev.compact()}",
+            f"{ev.compact()}"
         )
-        self.assertEqual(
-            ev.provider_execution_count,
-            len(
-                [
-                    tool
-                    for tool, _input in ev.tool_calls
-                    if tool != "declare_goals"
-                ]
-            ),
+        consumed = [tool for tool in ledger_names if tool != "declare_goals"]
+        assert ev.provider_execution_count == len(consumed), (
             f"{scenario_id}: only non-rejected calls may consume the ledger; "
-            f"{ev.compact()}",
+            f"{ev.compact()}"
         )
-        ends = {tool: (ok, summary, call_id) for tool, ok, summary, call_id in ev.tool_ends}
-        self.assertIn(
-            name,
-            ends,
+        ends = {
+            tool: (ok, summary, call_id)
+            for tool, ok, summary, call_id in ev.tool_ends
+        }
+        assert name in ends, (
             f"{scenario_id}: rejected {name} must surface a bounded ToolEnd "
-            f"failure; {ev.compact()}",
+            f"failure; {ev.compact()}"
         )
         ok, summary, _call_id = ends[name]
-        self.assertFalse(
-            ok,
+        assert not ok, (
             f"{scenario_id}: rejected {name} ToolEnd must report failure; "
-            f"{ev.compact()}",
+            f"{ev.compact()}"
         )
-        self.assertIn(
-            "not available",
-            summary,
+        assert "not available" in summary, (
             f"{scenario_id}: rejected {name} must carry a bounded error; "
-            f"{ev.compact()}",
+            f"{ev.compact()}"
         )
         after = _preamble_normalized(ev.state_after)
         before = _preamble_normalized(ev.state_before)
-        self.assertEqual(
-            after["trip_state"],
-            before["trip_state"],
+        assert after["trip_state"] == before["trip_state"], (
             f"{scenario_id}: unoffered {name} must not mutate trip state; "
-            f"{ev.compact()}",
+            f"{ev.compact()}"
         )
-        self.assertEqual(
-            after["slots"],
-            before["slots"],
+        assert after["slots"] == before["slots"], (
             f"{scenario_id}: unoffered {name} must not mutate slots; "
-            f"{ev.compact()}",
+            f"{ev.compact()}"
         )
-        self.assertEqual(ev.cards, (), f"{scenario_id}: rejected {name} emitted a card")
-        self.assertNotIn(
-            name,
-            ev.state_after["history_tool_summaries"],
+        assert ev.cards == (), f"{scenario_id}: rejected {name} emitted a card"
+        assert name not in ev.state_after["history_tool_summaries"], (
             f"{scenario_id}: rejected {name} must not append a summary; "
-            f"{ev.compact()}",
+            f"{ev.compact()}"
         )
-        self.assertEqual(
-            ev.state_after["pending_trip"],
-            ev.state_before["pending_trip"],
+        assert ev.state_after["pending_trip"] == ev.state_before["pending_trip"], (
             f"{scenario_id}: rejected {name} must not mutate pending trip; "
-            f"{ev.compact()}",
+            f"{ev.compact()}"
         )
-        self.assertEqual(
-            ev.state_after["active_trip"],
-            ev.state_before["active_trip"],
+        assert ev.state_after["active_trip"] == ev.state_before["active_trip"], (
             f"{scenario_id}: rejected {name} must not mutate active trip; "
-            f"{ev.compact()}",
+            f"{ev.compact()}"
         )
-        self.assertEqual(
-            ev.state_after["route_cards"],
-            ev.state_before["route_cards"],
+        assert ev.state_after["route_cards"] == ev.state_before["route_cards"], (
             f"{scenario_id}: rejected {name} must not mutate route cards; "
-            f"{ev.compact()}",
+            f"{ev.compact()}"
         )
-        self.assertEqual(
-            ev.stored_candidate_set_ids,
-            (),
+        assert ev.stored_candidate_set_ids == (), (
             f"{scenario_id}: rejected {name} must not store candidates; "
-            f"{ev.compact()}",
+            f"{ev.compact()}"
         )
-        self.assertEqual(
-            ev.discovery_store_calls,
-            (),
+        assert ev.discovery_store_calls == (), (
             f"{scenario_id}: rejected {name} must not write discovery state; "
-            f"{ev.compact()}",
+            f"{ev.compact()}"
         )
 
     def _assert_discovery_untouched(
         self, ev: ProbeEvidence, scenario_id: str
     ) -> None:
-        self.assertEqual(
-            ev.discovery_store_calls,
-            (),
-            f"{scenario_id}: no discovery set may bind; {ev.compact()}",
-        )
-        self.assertIsNone(
-            ev.state_after["trip_state"]["active_discovery_set_id"],
-            f"{scenario_id}: no active discovery set; {ev.compact()}",
-        )
-        self.assertIsNone(
-            ev.state_after["trip_state"]["selected_place_id"],
-            f"{scenario_id}: no selected place; {ev.compact()}",
-        )
+        assert ev.discovery_store_calls == (), f"{scenario_id}: no discovery set may bind; {ev.compact()}"
+        assert ev.state_after["trip_state"]["active_discovery_set_id"] is None, f"{scenario_id}: no active discovery set; {ev.compact()}"
+        assert ev.state_after["trip_state"]["selected_place_id"] is None, f"{scenario_id}: no selected place; {ev.compact()}"
 
 
 __all__ = (
     "ProbeEvidence",
+    "_OfferedSurfaceBase",
     "fail_loud_spy",
     "run_probe",
     "session_projection",
     "state_projection",
-    "_OfferedSurfaceBase",
 )

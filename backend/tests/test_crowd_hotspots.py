@@ -40,15 +40,9 @@ class CrowdHotspotTests(unittest.TestCase):
 
         hits = crowd_hotspots.find_hotspot_hits(_Gtfs(), routes)
 
-        self.assertEqual(
-            [(hit.hotspot_key, hit.station_name) for hit in hits],
-            [
-                ("midtown_34", "34 St-Herald Sq"),
-                ("columbus_lincoln", "57 St-7 Av"),
-            ],
-        )
-        self.assertEqual(hits[0].route_id, "Q")
-        self.assertIsNotNone(hits[0].expected_at)
+        assert [(hit.hotspot_key, hit.station_name) for hit in hits] == [("midtown_34", "34 St-Herald Sq"), ("columbus_lincoln", "57 St-7 Av")]
+        assert hits[0].route_id == "Q"
+        assert hits[0].expected_at is not None
 
     def test_route_outside_registry_does_not_trigger(self):
         routes = [
@@ -64,4 +58,4 @@ class CrowdHotspotTests(unittest.TestCase):
             ]
         ]
 
-        self.assertEqual(crowd_hotspots.find_hotspot_hits(None, routes), [])
+        assert crowd_hotspots.find_hotspot_hits(None, routes) == []

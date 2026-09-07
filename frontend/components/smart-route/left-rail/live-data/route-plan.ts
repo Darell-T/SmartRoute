@@ -1,4 +1,5 @@
 import type { RouteCandidate, RouteStep as ApiRouteStep } from "@/types/api";
+import { canonicalPlaceLabel } from "@/lib/canonical-itinerary-label";
 import type { RoutePlan } from "../types";
 import { cleanDestinationLabel, formatClockAt } from "./formatters";
 import { buildAlternatives, candidateEtaMinutes } from "./route-candidates";
@@ -13,18 +14,6 @@ import {
   routeStepToRailStep,
   stripFromSteps,
 } from "./route-steps";
-
-function canonicalPlaceLabel(place: unknown, fallback: string): string {
-  if (typeof place === "string" && place.trim()) return place.trim();
-  if (place && typeof place === "object" && !Array.isArray(place)) {
-    const record = place as Record<string, unknown>;
-    for (const key of ["display_name", "label", "name", "address"]) {
-      const value = record[key];
-      if (typeof value === "string" && value.trim()) return value.trim();
-    }
-  }
-  return fallback;
-}
 
 export function buildPlan(
   routeSteps: ApiRouteStep[] | undefined,
@@ -75,7 +64,7 @@ export function buildPlan(
   // Preference: canonical itinerary.arrival_at → now+eta (legacy).
   let selectedEta: string | null = null;
   const arrivalAtIso = activeRouteCandidate?.arrival_at;
-  if (typeof arrivalAtIso === "string" && arrivalAtIso.trim() && nowMs > 0) {
+  if (arrivalAtIso?.trim() && nowMs > 0) {
     const parsed = Date.parse(arrivalAtIso);
     if (Number.isFinite(parsed)) {
       selectedEta = formatClockAt(parsed);
@@ -102,7 +91,7 @@ export function buildPlan(
   const transitLegs = merged.filter(isTransitStep);
   const fromCandidate = activeRouteCandidate?.score_breakdown?.transfers;
   const transferCount =
-    typeof fromCandidate === "number" && Number.isFinite(fromCandidate)
+    fromCandidate !== undefined && Number.isFinite(fromCandidate)
       ? Math.max(0, Math.round(fromCandidate))
       : Math.max(0, transitLegs.length - 1);
 
@@ -110,16 +99,16 @@ export function buildPlan(
   // walk consumes the whole wait, it's simply "now".
   const firstWalkMinutes =
     merged[0]?.type === "WALK" &&
-    typeof merged[0].duration_minutes === "number"
+    merged[0].duration_minutes !== undefined
       ? Math.max(0, Math.round(merged[0].duration_minutes))
       : 0;
   const departsIn = transitStep?.minutes_until_train_arrives;
   const nextDepartureMinutes =
-    typeof departsIn === "number" && Number.isFinite(departsIn)
+    departsIn !== undefined && Number.isFinite(departsIn)
       ? Math.max(0, Math.round(departsIn))
       : undefined;
   let leaveByLabel: string | undefined;
-  if (typeof departsIn === "number" && Number.isFinite(departsIn) && nowMs > 0) {
+  if (departsIn !== undefined && Number.isFinite(departsIn) && nowMs > 0) {
     const minutesUntilLeave = departsIn - firstWalkMinutes;
     leaveByLabel =
       minutesUntilLeave <= 0

@@ -9,6 +9,7 @@ from app.services.agent.tools._types import ToolContext
 from app.services.trips.location import ResolvedPlace
 from app.services.trips.preparation.input import (
     derive_arrive_by_departure,
+    normalize_route_ids,
     parse_rfc3339,
     point_label,
     prepare_structural_candidates,
@@ -17,8 +18,6 @@ from app.services.trips.preparation.input import (
     summary_eta_minutes,
     validated_waypoints,
 )
-from app.services.trips.preparation.input import normalize_route_ids
-
 
 _RIDER_LOCATION_REFERENCES = {"user", "your location", "current location"}
 
@@ -109,13 +108,21 @@ def merge_route_preparation_input(tool_input: dict, ctx: ToolContext) -> dict:
     merged["preference_patch"] = trip_state_module.preference_patch_from_tool_input(
         tool_input
     )
-    if isinstance(ctx.session, dict) and merged["scenario"] == "active":
-        if merged["preference_patch"]:
-            trip_state_module.apply_preference_patch(
-                ctx.session,
-                merged["preference_patch"],
-            )
+    _apply_active_preference_patch(ctx, merged)
     return merged
+
+
+def _apply_active_preference_patch(ctx: ToolContext, merged: dict[str, Any]) -> None:
+    if not isinstance(ctx.session, dict):
+        return
+    if merged["scenario"] != "active":
+        return
+    if not merged["preference_patch"]:
+        return
+    trip_state_module.apply_preference_patch(
+        ctx.session,
+        merged["preference_patch"],
+    )
 
 
 def _apply_persisted_trip_constraints(

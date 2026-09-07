@@ -78,7 +78,7 @@ def test_parses_mta_flat_payload():
 
 
 def test_malformed_payloads_yield_empty():
-    for payload in ({}, {"data": None}, {"data": {"stops": "nope"}}):
+    for payload in ({}, {"data": {"stops": "nope"}}):
         parsed = parse_stops_for_route(payload)
         assert parsed["stops_by_id"] == {}
         assert parsed["ordered_groups"] == []

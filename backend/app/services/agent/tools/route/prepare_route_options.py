@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from app.services.agent.tools._types import ToolContext, ToolResult
@@ -12,13 +12,10 @@ from app.services.agent.tools.location_resolution import (
     resolve_waypoint_places,
 )
 from app.services.agent.tools.route.preparation_adapter import (
+    PreparedLeg,
     build_preparation_dependencies,
     new_preparation_timings,
-)
-from app.services.agent.tools.route.preparation_adapter import PreparedLeg, prepare_single_leg
-from app.services.agent.tools.route.route_input import (
-    merge_route_preparation_input,
-    validated_waypoints,
+    prepare_single_leg,
 )
 from app.services.agent.tools.route.prepare_route_branches import (
     is_current_location_discovery,
@@ -33,19 +30,23 @@ from app.services.agent.tools.route.prepare_route_persistence import (
     nonfatal_prepare_result,
     persist_route_candidates,
 )
+from app.services.agent.tools.route.route_input import (
+    merge_route_preparation_input,
+    validated_waypoints,
+)
+from app.services.agent.turn.contract import GoalKind
 from app.services.trips.preparation.combine import combine_prepared_chains
-from app.services.trips.preparation.finalize import finalize_aggregate
-from app.services.trips.preparation.multi_stop import prepare_multi_stop
 from app.services.trips.preparation.context import RoutePreparationFailure
 from app.services.trips.preparation.evidence import (
     candidate_evidence_for_route,
     coverage_for_prepared,
 )
+from app.services.trips.preparation.finalize import finalize_aggregate
+from app.services.trips.preparation.multi_stop import prepare_multi_stop
 from app.services.trips.preparation.prepare import (
     AggregatePreparation,
     PreparedChain,
 )
-from app.services.agent.turn.contract import GoalKind
 
 MAX_WAYPOINTS = 3
 MAX_WAYPOINT_CHARS = 160
@@ -337,7 +338,7 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
         await ctx.emit_progress("finding_routes", "complete")
         return nonfatal_prepare_result(prepared, merged, ctx, started)
 
-    snapshot_observed_at = datetime.now(timezone.utc).isoformat()
+    snapshot_observed_at = datetime.now(UTC).isoformat()
     snapshot_id = "route-snapshot:{session}:{turn}:{millis}".format(
         session=session_id,
         turn=str(getattr(ctx, "turn_id", None) or "turn"),

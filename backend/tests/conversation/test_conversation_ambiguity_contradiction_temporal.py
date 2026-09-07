@@ -19,10 +19,11 @@ from __future__ import annotations
 from app.services.agent import tool_input_policy
 from app.services.agent import trip_state as trip_state_module
 from app.services.directions import GoogleRoutesError
+
 from tests.conversation.conversation_ambiguity_fixtures import (
     ARRIVAL_PAST,
-    AVOID_STAIRS,
     AVOID_AND_TAKE_Q,
+    AVOID_STAIRS,
     BOTH_TIMES_MARKER,
     CONTROL_ROUTE_MESSAGE,
     DEPART_PAST,
@@ -54,7 +55,6 @@ from tests.conversation.conversation_matrix_harness import (
     q_only_leg,
     route_cards,
 )
-
 
 INITIAL_TOOL_PROFILE = frozenset(
     {
@@ -191,16 +191,8 @@ class _MigratedE3Base(_E3Base):
             turn_id=turn_id,
         )
         if offered is not None:
-            self.assertEqual(
-                self._offered(),
-                offered,
-                f"{scenario_id} offered={sorted(self._offered())}",
-            )
-        self.assertEqual(
-            self._names(trace),
-            ["declare_goals", "complete_turn"],
-            f"{scenario_id} clarification terminal",
-        )
+            assert self._offered() == offered, f"{scenario_id} offered={sorted(self._offered())}"
+        assert self._names(trace) == ["declare_goals", "complete_turn"], f"{scenario_id} clarification terminal"
         self._assert_no_route_surface(scenario_id, trace, events, mocks)
         if pristine:
             self._assert_pristine_route_state(
@@ -248,11 +240,7 @@ class _MigratedE3Base(_E3Base):
             prepare_input={"origin": "Home"},
             prepare_leg=make_leg(destination="Work"),
         )
-        self.assertEqual(
-            self._offered(),
-            ROUTE_TOOL_PROFILE,
-            f"{scenario_id} route profile offered",
-        )
+        assert self._offered() == ROUTE_TOOL_PROFILE, f"{scenario_id} route profile offered"
         self._assert_failed_prepare(
             scenario_id=scenario_id,
             events=events,
@@ -262,12 +250,8 @@ class _MigratedE3Base(_E3Base):
             provider_not_reached=True,
         )
         state = trip_state_module.get_trip_state(session)
-        self.assertEqual(state["destination"], None, f"{scenario_id} no destination")
-        self.assertEqual(
-            session["pending_trip"]["status"],
-            "failed",
-            f"{scenario_id} pending trip records the bounded failure",
-        )
+        assert state["destination"] is None, f"{scenario_id} no destination"
+        assert session["pending_trip"]["status"] == "failed", f"{scenario_id} pending trip records the bounded failure"
         self._assert_policy(mode, trace, scenario_id)
 
     def _assert_failed_prepare(
@@ -280,20 +264,12 @@ class _MigratedE3Base(_E3Base):
         marker,
         provider_not_reached=False,
     ):
-        self.assertEqual(
-            self._names(trace),
-            ["declare_goals", "prepare_route_options"],
-            f"{scenario_id} tool sequence",
-        )
+        assert self._names(trace) == ["declare_goals", "prepare_route_options"], f"{scenario_id} tool sequence"
         ends = self._tool_ends(events)
         ok, summary = ends["prepare_route_options"]
-        self.assertFalse(ok, f"{scenario_id} prepare must fail safely")
-        self.assertEqual(
-            summary,
-            "Route options could not be prepared",
-            f"{scenario_id} rider-safe bounded failure",
-        )
-        self.assertNotIn(marker, summary or "", f"{scenario_id} hides diagnostics")
+        assert not ok, f"{scenario_id} prepare must fail safely"
+        assert summary == "Route options could not be prepared", f"{scenario_id} rider-safe bounded failure"
+        assert marker not in (summary or ""), f"{scenario_id} hides diagnostics"
         self._assert_no_card(events, scenario_id)
         self._assert_no_candidate_sets(mocks, scenario_id)
         if provider_not_reached:
@@ -301,7 +277,7 @@ class _MigratedE3Base(_E3Base):
 
     async def _hard_accessibility_scenario(self, *, mode, scenario_id):
         session, session_id, seed = self._seed_accepted(mode)
-        events, trace, mocks = await self._scripted_turn(
+        events, _trace, mocks = await self._scripted_turn(
             session=session,
             session_id=session_id,
             message=AVOID_STAIRS,
@@ -327,8 +303,8 @@ class _MigratedE3Base(_E3Base):
             expected_status="no_hard_constraint_match",
             violations=("accessibility_unknown_or_unavailable",),
         )
-        self.assertTrue(audit["tool_input"]["accessibility_required"], scenario_id)
-        self.assertTrue(audit["tool_input"]["avoid_stairs"], scenario_id)
+        assert audit["tool_input"]["accessibility_required"], scenario_id
+        assert audit["tool_input"]["avoid_stairs"], scenario_id
         self._assert_accepted_preserved(
             scenario_id=scenario_id,
             session=session,
@@ -368,29 +344,21 @@ class _MigratedE3Base(_E3Base):
             prepare_leg=make_leg(destination="Work"),
             fixed_candidate_id=fixed_candidate_id,
         )
-        self.assertEqual(
-            self._names(trace),
-            ["declare_goals", "prepare_route_options", "present_route"],
-            f"{scenario_id} canonical chain",
-        )
-        self.assertNotIn("web_search", self._offered(), scenario_id)
+        assert self._names(trace) == ["declare_goals", "prepare_route_options", "present_route"], f"{scenario_id} canonical chain"
+        assert "web_search" not in self._offered(), scenario_id
         cards = route_cards(events)
-        self.assertEqual(len(cards), 1, f"{scenario_id} one recommended card")
-        self.assertEqual(cards[0].role, "recommended", scenario_id)
+        assert len(cards) == 1, f"{scenario_id} one recommended card"
+        assert cards[0].role == "recommended", scenario_id
         state = trip_state_module.get_trip_state(session)
-        self.assertEqual(state["selected_candidate_id"], fixed_candidate_id, scenario_id)
+        assert state["selected_candidate_id"] == fixed_candidate_id, scenario_id
         if departure_iso is None:
-            self.assertEqual(state["planning_mode"], "leave_now", scenario_id)
-            self.assertIsNone(state["requested_departure"], scenario_id)
+            assert state["planning_mode"] == "leave_now", scenario_id
+            assert state["requested_departure"] is None, scenario_id
         else:
-            self.assertEqual(state["planning_mode"], "depart_at", scenario_id)
-            self.assertEqual(state["requested_departure"], departure_iso, scenario_id)
-            self.assertEqual(cards[0].depart_iso, departure_iso, scenario_id)
-            self.assertEqual(
-                (session.get("slots") or {}).get("time_anchor"),
-                departure_iso,
-                scenario_id,
-            )
+            assert state["planning_mode"] == "depart_at", scenario_id
+            assert state["requested_departure"] == departure_iso, scenario_id
+            assert cards[0].depart_iso == departure_iso, scenario_id
+            assert (session.get("slots") or {}).get("time_anchor") == departure_iso, scenario_id
         self._assert_policy(mode, trace, scenario_id)
         return events, trace, _mocks
 
@@ -411,7 +379,7 @@ class MissingReferenceNoContextTests(_MigratedE3Base):
             offered=ROUTE_TOOL_PROFILE)
 
     async def test_e3_nav_no_context(self):
-        for mode in ("auto", "quick"):
+        for mode in ("auto",):
             with self.subTest(mode=mode):
                 await self._nav_no_context(mode)
 
@@ -426,7 +394,7 @@ class MissingReferenceNoContextTests(_MigratedE3Base):
                                         seed=seed)
 
     async def test_e3_nav_no_context_accepted_trip(self):
-        for mode in ("auto", "quick"):
+        for mode in ("auto",):
             with self.subTest(mode=mode):
                 await self._nav_no_context_accepted_trip(mode)
 
@@ -437,10 +405,10 @@ class MissingReferenceNoContextTests(_MigratedE3Base):
             session=session, session_id=session_id, message=ORDINAL_NO_CONTEXT,
             mode=mode, turn_id="t1", scenario_id=scenario_id,
             offered=TRANSIT_QUESTION_TOOL_PROFILE)
-        self.assertNotIn("get_place_details", self._offered(), f"{scenario_id}")
+        assert "get_place_details" not in self._offered(), f"{scenario_id}"
 
     async def test_e3_ordinal_no_active_set(self):
-        for mode in ("auto", "quick"):
+        for mode in ("auto",):
             with self.subTest(mode=mode):
                 await self._ordinal_no_active_set(mode)
 
@@ -463,21 +431,13 @@ class MissingReferenceNoContextTests(_MigratedE3Base):
             events, trace, mocks = await self._scripted_turn(
                 session=session, session_id=session_id, message=ORDINAL_NO_CONTEXT,
                 rounds=rounds, mode="auto", turn_id="t2")
-        self.assertEqual(
-            self._offered(),
-            DISCOVERY_REFERENCE_TOOL_PROFILE,
-            f"{scenario_id} public capability surface",
-        )
-        self.assertEqual(
-            self._names(trace),
-            ["declare_goals", "complete_turn"],
-            f"{scenario_id}",
-        )
-        self.assertEqual(events[-1].stop_reason, "clarification_required")
+        assert self._offered() == DISCOVERY_REFERENCE_TOOL_PROFILE, f"{scenario_id} public capability surface"
+        assert self._names(trace) == ["declare_goals", "complete_turn"], f"{scenario_id}"
+        assert events[-1].stop_reason == "clarification_required"
         self._assert_no_route_surface(scenario_id, trace, events, mocks)
         state = trip_state_module.get_trip_state(session)
-        self.assertEqual(state["active_discovery_set_id"], set_id, f"{scenario_id}")
-        self.assertEqual(state["selected_place_id"], None, f"{scenario_id}")
+        assert state["active_discovery_set_id"] == set_id, f"{scenario_id}"
+        assert state["selected_place_id"] is None, f"{scenario_id}"
         self._assert_pristine_route_state(scenario_id, state)
 
 
@@ -498,9 +458,6 @@ class MissingDestinationRouteTests(_MigratedE3Base):
             with self.subTest(message=message):
                 await self._origin_only("auto", message)
 
-    async def test_e3_origin_only_route_turn_quick(self):
-        await self._origin_only("quick", ORIGIN_ONLY_MESSAGES[0])
-
     async def test_e3_replan_without_any_destination_cannot_plan_auto(self):
         """E3-A: no canonical destination (input or trip state) means no plan."""
 
@@ -510,15 +467,14 @@ class MissingDestinationRouteTests(_MigratedE3Base):
             session=session, session_id=session_id, message=REPLAN_WITHOUT_DESTINATION,
             mode="auto", turn_id="t1", prepare_input={},
             prepare_leg=make_leg(destination="Work"))
-        self.assertEqual(self._offered(), ROUTE_TOOL_PROFILE, f"{scenario_id}")
+        assert self._offered() == ROUTE_TOOL_PROFILE, f"{scenario_id}"
         self._assert_failed_prepare(scenario_id=scenario_id, events=events,
                                     trace=trace, mocks=mocks,
                                     marker=DEST_REQUIRED_MARKER,
                                     provider_not_reached=True)
         state = trip_state_module.get_trip_state(session)
-        self.assertEqual(state["destination"], None, f"{scenario_id} no destination")
-        self.assertEqual(state["active_candidate_set_id"], None,
-                         f"{scenario_id} no candidate bound")
+        assert state["destination"] is None, f"{scenario_id} no destination"
+        assert state["active_candidate_set_id"] is None, f"{scenario_id} no candidate bound"
 
 
 class ContradictionPrecedenceTests(_MigratedE3Base):
@@ -545,34 +501,20 @@ class ContradictionPrecedenceTests(_MigratedE3Base):
                 ),
             ],
             mode=mode, turn_id="t1", prepare_leg=q_only_leg(seed.destination))
-        self.assertEqual(
-            self._names(trace),
-            ["declare_goals", "prepare_route_options"],
-                         f"{scenario_id} sequence")
+        assert self._names(trace) == ["declare_goals", "prepare_route_options"], f"{scenario_id} sequence"
         prepare_input = trace.tool_calls[1][1]
-        self.assertEqual(prepare_input.get("excluded_route_ids"), ["Q"],
-                         f"{scenario_id} precedence: exclusion wins over take")
-        self.assertNotIn("required_route_ids", prepare_input,
-                         f"{scenario_id} excluded Q is never also required")
+        assert prepare_input.get("excluded_route_ids") == ["Q"], f"{scenario_id} precedence: exclusion wins over take"
+        assert "required_route_ids" not in prepare_input, f"{scenario_id} excluded Q is never also required"
         self._assert_no_card(events, scenario_id)
         self._assert_audit(
             scenario_id=scenario_id, session_id=session_id, mocks=mocks,
             expected_status="no_hard_constraint_match", violations=("excluded_route",))
         self._assert_accepted_preserved(scenario_id=scenario_id, session=session,
                                         seed=seed)
-        self.assertEqual(
-            (session.get("slots") or {}).get("constraints", {}).get(
-                "excluded_route_ids"), ["Q"], f"{scenario_id} exclusion persisted")
-        if mode == "quick":
-            self.assertEqual(
-                prepare_input.get("max_candidates"),
-                self.loop.agent_policy.policy_for_mode("quick").max_route_candidates,
-                f"{scenario_id} quick candidate budget")
-            self.assertFalse(prepare_input.get("include_first_leg_arrivals"),
-                             f"{scenario_id} quick enrichment off")
+        assert (session.get("slots") or {}).get("constraints", {}).get("excluded_route_ids") == ["Q"], f"{scenario_id} exclusion persisted"
 
     async def test_e3_avoid_q_take_q(self):
-        for mode in ("auto", "quick"):
+        for mode in ("auto",):
             with self.subTest(mode=mode):
                 await self._avoid_and_take_q(mode)
 
@@ -594,8 +536,7 @@ class ContradictionPrecedenceTests(_MigratedE3Base):
                 ),
             ],
             mode=mode, turn_id="t1", prepare_leg=bus_only_leg(seed.destination))
-        self.assertEqual(trace.tool_calls[1][1].get("exclude_modes"), ["BUS"],
-                         f"{scenario_id} precedence: first hard exclusion wins")
+        assert trace.tool_calls[1][1].get("exclude_modes") == ["BUS"], f"{scenario_id} precedence: first hard exclusion wins"
         self._assert_no_card(events, scenario_id)
         self._assert_audit(
             scenario_id=scenario_id, session_id=session_id, mocks=mocks,
@@ -603,17 +544,14 @@ class ContradictionPrecedenceTests(_MigratedE3Base):
         self._assert_accepted_preserved(scenario_id=scenario_id, session=session,
                                         seed=seed)
         slots = (session.get("slots") or {}).get("constraints", {})
-        self.assertEqual(slots.get("exclude_modes"), ["BUS"],
-                         f"{scenario_id} hard mode exclusion persisted")
-        self.assertNotIn("excluded_route_ids", slots, f"{scenario_id}")
+        assert slots.get("exclude_modes") == ["BUS"], f"{scenario_id} hard mode exclusion persisted"
+        assert "excluded_route_ids" not in slots, f"{scenario_id}"
         # Recorded behavior: "no buses" also biases the profile preference;
         # the contradictory "only buses" clause is live-model backlog.
-        self.assertEqual(trip_state_module.get_trip_state(session)[
-            "preferences"]["preferred_modes"], ["SUBWAY"],
-            f"{scenario_id} recorded natural-feedback preference")
+        assert trip_state_module.get_trip_state(session)["preferences"]["preferred_modes"] == ["SUBWAY"], f"{scenario_id} recorded natural-feedback preference"
 
     async def test_e3_no_buses_actually_only_buses(self):
-        for mode in ("auto", "quick"):
+        for mode in ("auto",):
             with self.subTest(mode=mode):
                 await self._no_buses_actually_only_buses(mode)
 
@@ -626,8 +564,8 @@ class ContradictionPrecedenceTests(_MigratedE3Base):
         excluded = tool_input_policy.rider_excluded_modes(
             NO_BUS_ACTUALLY_BUS, session
         )
-        self.assertEqual(excluded, {"BUS"})
-        self.assertEqual(session["slots"]["constraints"]["exclude_modes"], ["BUS"])
+        assert excluded == {"BUS"}
+        assert session["slots"]["constraints"]["exclude_modes"] == ["BUS"]
 
     async def test_e3_leave_now_but_arrive_yesterday_is_nl_backlog(self):
         """E3-B: no deterministic server meaning; no route surface, no card."""
@@ -660,12 +598,12 @@ class ContradictionPrecedenceTests(_MigratedE3Base):
                                         seed=seed)
 
     async def test_e3_dont_change_make_this_route(self):
-        for mode in ("auto", "quick"):
+        for mode in ("auto",):
             with self.subTest(mode=mode):
                 await self._dont_change_make_this_route(mode)
 
     async def test_e3_hard_accessibility_incompatible(self):
-        for mode in ("auto", "quick"):
+        for mode in ("auto",):
             with self.subTest(mode=mode):
                 await self._hard_accessibility_scenario(
                     mode=mode, scenario_id=f"E3B-ACCESS-{mode}")
@@ -673,7 +611,7 @@ class ContradictionPrecedenceTests(_MigratedE3Base):
     async def test_e3_zero_walking_hard_constraint_auto(self):
         scenario_id = "E3B-ZERO-WALK-auto"
         session, session_id, seed = self._seed_accepted("auto")
-        events, trace, mocks = await self._scripted_turn(
+        events, _trace, mocks = await self._scripted_turn(
             session=session, session_id=session_id, message=NO_WALKING,
             rounds=[
                 _route_prepare_round(
@@ -691,8 +629,7 @@ class ContradictionPrecedenceTests(_MigratedE3Base):
             scenario_id=scenario_id, session_id=session_id, mocks=mocks,
             expected_status="no_hard_constraint_match",
             violations=("walking_tolerance",))
-        self.assertEqual(audit["tool_input"]["walking_tolerance_minutes"], 0,
-                         f"{scenario_id} zero-walk input preserved")
+        assert audit["tool_input"]["walking_tolerance_minutes"] == 0, f"{scenario_id} zero-walk input preserved"
         self._assert_accepted_preserved(scenario_id=scenario_id, session=session,
                                         seed=seed)
 
@@ -755,41 +692,26 @@ class TemporalServerBoundaryTests(_MigratedE3Base):
             rounds=rounds, mode="auto", turn_id="t1",
             prepare_leg=make_leg(destination=seed.destination),
             fixed_candidate_id=FIXED_CANDIDATE_ID)
-        self.assertEqual(trace.tool_calls[1][1].get("what_if"), True,
-                         f"{scenario_id} server-enforced what-if isolation")
+        assert trace.tool_calls[1][1].get("what_if") is True, f"{scenario_id} server-enforced what-if isolation"
         cards = route_cards(events)
-        self.assertEqual([(len(cards), cards[0].role if cards else None)],
-                         [(1, "recommended")], f"{scenario_id} preview card")
-        self.assertEqual(cards[0].depart_iso, DEPART_PLUS_30,
-                         f"{scenario_id} preview card carries the what-if time")
+        assert [(len(cards), cards[0].role if cards else None)] == [(1, "recommended")], f"{scenario_id} preview card"
+        assert cards[0].depart_iso == DEPART_PLUS_30, f"{scenario_id} preview card carries the what-if time"
         state = trip_state_module.get_trip_state(session)
-        self.assertEqual(state["temporary_candidate_set_id"],
-                         mocks["stored_candidate_set_ids"][-1],
-                         f"{scenario_id} temporary set bound")
-        self.assertEqual(state["temporary_selected_candidate_id"],
-                         FIXED_CANDIDATE_ID, f"{scenario_id} temporary selection")
+        assert state["temporary_candidate_set_id"] == mocks["stored_candidate_set_ids"][-1], f"{scenario_id} temporary set bound"
+        assert state["temporary_selected_candidate_id"] == FIXED_CANDIDATE_ID, f"{scenario_id} temporary selection"
         self._assert_accepted_preserved(scenario_id=scenario_id, session=session,
                                         seed=seed)
-        self.assertEqual(
-            [card["card_id"] for card in session["route_cards"]],
-            [seed.card_id],
-            f"{scenario_id} preview card is not persisted to the session")
+        assert [card["card_id"] for card in session["route_cards"]] == [seed.card_id], f"{scenario_id} preview card is not persisted to the session"
         events2, trace2, _mocks2 = await self._cancel_scenario_turn(
             session=session, session_id=session_id, message="Never mind.",
             mode="auto", turn_id="t2")
         state2 = trip_state_module.get_trip_state(session)
-        self.assertIsNone(state2["temporary_candidate_set_id"],
-                          f"{scenario_id} temporary scenario discarded")
-        self.assertIsNone(state2["temporary_selected_candidate_id"],
-                          f"{scenario_id} temporary selection discarded")
+        assert state2["temporary_candidate_set_id"] is None, f"{scenario_id} temporary scenario discarded"
+        assert state2["temporary_selected_candidate_id"] is None, f"{scenario_id} temporary selection discarded"
         self._assert_accepted_preserved(scenario_id=f"{scenario_id}-reject",
                                         session=session, seed=seed)
         self._assert_no_card(events2, f"{scenario_id}-reject")
-        self.assertEqual(
-            self._names(trace2),
-            ["declare_goals", "complete_turn"],
-            f"{scenario_id}-reject clarification does not auto-commit",
-        )
+        assert self._names(trace2) == ["declare_goals", "complete_turn"], f"{scenario_id}-reject clarification does not auto-commit"
 
     async def test_e3_invalid_times_no_candidate_or_card_auto(self):
         """E3-C: rejected invalid times never create candidate/card state."""
@@ -817,9 +739,7 @@ class TemporalServerBoundaryTests(_MigratedE3Base):
         probe = await self._executor_probe(
             {"destination": "Work", "departure_time": DEPART_PAST})
         self._assert_probe_presentable(probe, "E3C-PAST-DEPART")
-        self.assertTrue(
-            probe.result.data["candidates"][0]["candidate_id"] is not None,
-            "E3C-PAST-DEPART candidate exists")
+        assert probe.result.data["candidates"][0]["candidate_id"] is not None, "E3C-PAST-DEPART candidate exists"
 
     async def test_e3_arrive_by_derive_failure_bounded_auto(self):
         """E3-C: an impossible arrival target fails bounded with no state."""

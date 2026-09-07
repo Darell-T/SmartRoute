@@ -6,10 +6,12 @@ handoff. Moved out of test_single_agent_route_tools.py so that phase does
 not grow further.
 """
 from __future__ import annotations
+
 from app.services.agent import discovery_store
-from app.services.agent.tools.location_resolution import ResolvedPlace
 from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools.location_resolution import ResolvedPlace
 from app.services.agent.tools.route.preparation_adapter import PreparedLeg
+
 
 def _ctx(session_id: str = "sess-test") -> ToolContext:
     return ToolContext(

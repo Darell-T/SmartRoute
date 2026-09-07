@@ -8,11 +8,10 @@ import os
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
-
-from app.services.agent.tools.transit import venue_crowd_window as venues
 from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools.transit import venue_crowd_window as venues
 from app.services.trips.crowds import event_provider
+from dotenv import load_dotenv
 
 
 def _arguments() -> argparse.Namespace:
@@ -21,14 +20,21 @@ def _arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
-async def certify() -> dict[str, Any]:
-    """Use the production lookup parser while limiting this process to one page."""
-
-    api_key = os.getenv("TICKETMASTER_API_KEY", "").strip()
-    if not api_key:
+def _ticketmaster_skip() -> dict[str, Any] | None:
+    if not os.getenv("TICKETMASTER_API_KEY", "").strip():
         return {"status": "skipped", "reason": "TICKETMASTER_API_KEY is not configured"}
     if os.getenv("TICKETMASTER_ENABLED", "true").strip().lower() in {"0", "false", "no", "off"}:
         return {"status": "skipped", "reason": "Ticketmaster lookup is disabled"}
+    return None
+
+
+async def certify() -> dict[str, Any]:
+    """Use the production lookup parser while limiting this process to one page."""
+
+    skipped = _ticketmaster_skip()
+    if skipped is not None:
+        return skipped
+    api_key = os.getenv("TICKETMASTER_API_KEY", "").strip()
 
     # _lookup_uncached is the production HTTP + parsing path. Limit this
     # explicit opt-in certification to exactly one bounded NYC request.
@@ -41,7 +47,7 @@ async def certify() -> dict[str, Any]:
             event_provider.EVENT_LOOKUP_DEFAULT_RADIUS_MILES,
             max_pages=1,
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 unexpected provider failures reduce to an error class
         return {"status": "failed", "reason": "Ticketmaster request or normalization failed"}
 
     if not result.ok:

@@ -5,12 +5,11 @@ import time
 import types
 import unittest
 
-from app.services.agent.turn import tool_round
 from app.services.agent.model import output_projection as model_output_projection
 from app.services.agent.model import policy
-from app.services.agent.tools import ToolSpec
+from app.services.agent.tools import ToolSpec, complete_turn, declare_goals
 from app.services.agent.tools._types import ToolContext, ToolOutcome, ToolResult
-from app.services.agent.tools import complete_turn, declare_goals
+from app.services.agent.turn import tool_round
 from app.services.agent.turn.contract import GoalState
 from app.services.agent.turn.evidence import TurnEvidence
 from app.services.agent.turn.ledger import TurnToolLedger
@@ -38,19 +37,8 @@ class GoalAwareToolRoundTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
-        self.assertEqual(
-            receipt,
-            {
-                "presented": True,
-                "goal_key": "q_status",
-                "operation": "service_status",
-                "presentation_outcome": {
-                    "status": "presented",
-                    "goal_key": "q_status",
-                },
-            },
-        )
-        self.assertNotIn("passenger_text", json.dumps(receipt))
+        assert receipt == {"presented": True, "goal_key": "q_status", "operation": "service_status", "presentation_outcome": {"status": "presented", "goal_key": "q_status"}}
+        assert "passenger_text" not in json.dumps(receipt)
 
     async def test_identical_clarification_outcome_executes_only_once_per_turn(self) -> None:
         executions = 0
@@ -80,8 +68,32 @@ class GoalAwareToolRoundTests(unittest.IsolatedAsyncioTestCase):
             deadline_monotonic=time.monotonic() + 5,
         )
 
-        self.assertIs(first, second)
-        self.assertEqual(executions, 1)
+        assert first is second
+        assert executions == 1
+
+    async def test_tool_exception_becomes_a_bounded_failure(self) -> None:
+        provider_message = "provider payload must not escape"
+
+        async def explode(_tool_input, _ctx):
+            raise RuntimeError(provider_message)
+
+        result = await tool_round.run_one_tool(
+            "explode",
+            {},
+            ToolContext(session_id="session", turn_id="turn"),
+            tool_registry={
+                "explode": ToolSpec(
+                    {"name": "explode"},
+                    explode,
+                    lambda _input: "Testing",
+                    2,
+                )
+            },
+            deadline_monotonic=time.monotonic() + 5,
+        )
+
+        assert not result.ok
+        assert result.error == "tool failed"
 
     async def _run(
         self,
@@ -107,31 +119,32 @@ class GoalAwareToolRoundTests(unittest.IsolatedAsyncioTestCase):
             )
 
         ledger = TurnToolLedger(runner, 12, 4)
-        items = []
-        async for item in tool_round.execute_tool_round(
-            blocks,
-            ctx,
-            ctx.session,
-            [],
-            set(),
-            policy.policy_for_mode("auto"),
-            {},
-            time.monotonic() + 5,
-            ledger,
-            tool_registry=registry,
-            allowed_tool_names=(
-                frozenset(registry)
-                if allowed_tool_names is None
-                else allowed_tool_names
-            ),
-        ):
-            items.append(item)
+        items = [
+            item
+            async for item in tool_round.execute_tool_round(
+                blocks,
+                ctx,
+                ctx.session,
+                [],
+                set(),
+                policy.policy_for_mode("auto"),
+                {},
+                time.monotonic() + 5,
+                ledger,
+                tool_registry=registry,
+                allowed_tool_names=(
+                    frozenset(registry)
+                    if allowed_tool_names is None
+                    else allowed_tool_names
+                ),
+            )
+        ]
         return ctx, items
 
     async def test_declaration_executes_before_sibling_capability(self) -> None:
         observed = []
 
-        async def discover(tool_input, ctx):
+        async def discover(_tool_input, ctx):
             observed.append(ctx.turn_evidence.turn_contract is not None)
             return ToolResult(
                 ok=True,
@@ -172,11 +185,9 @@ class GoalAwareToolRoundTests(unittest.IsolatedAsyncioTestCase):
             registry,
         )
 
-        self.assertEqual(observed, [True])
-        self.assertIsNotNone(ctx.turn_evidence.turn_contract)
-        self.assertFalse(
-            any(getattr(item, "tool", None) == "declare_goals" for item in items)
-        )
+        assert observed == [True]
+        assert ctx.turn_evidence.turn_contract is not None
+        assert not any(getattr(item, "tool", None) == "declare_goals" for item in items)
 
     async def test_route_owned_discovery_is_not_rejected_as_unoffered(self) -> None:
         async def discover(_tool_input, _ctx):
@@ -229,14 +240,14 @@ class GoalAwareToolRoundTests(unittest.IsolatedAsyncioTestCase):
         )
 
         outcomes = items[-1]["__tool_outcomes__"]
-        self.assertTrue(outcomes[1][2].ok)
-        self.assertNotIn("tool not offered on this turn", outcomes[1][2].error or "")
+        assert outcomes[1][2].ok
+        assert "tool not offered on this turn" not in (outcomes[1][2].error or "")
         ctx.turn_evidence.record_capability_result(
             "discover_places",
             {"goal_key": "route"},
             outcomes[1][2],
         )
-        self.assertEqual(ctx.turn_evidence.state_for("route"), GoalState.PENDING)
+        assert ctx.turn_evidence.state_for("route") == GoalState.PENDING
 
     async def test_capability_without_declaration_is_rejected(self) -> None:
         called = False
@@ -265,10 +276,10 @@ class GoalAwareToolRoundTests(unittest.IsolatedAsyncioTestCase):
             registry,
         )
 
-        self.assertFalse(called)
+        assert not called
         final = items[-1]["__tool_outcomes__"][0][2]
-        self.assertFalse(final.ok)
-        self.assertIn("declare_goals", final.error)
+        assert not final.ok
+        assert "declare_goals" in final.error
 
     async def test_general_goal_can_complete_in_declaration_round(self) -> None:
         registry = {
@@ -313,9 +324,9 @@ class GoalAwareToolRoundTests(unittest.IsolatedAsyncioTestCase):
             registry,
         )
 
-        self.assertTrue(ctx.turn_evidence.terminal)
+        assert ctx.turn_evidence.terminal
         result = items[-1]["__tool_outcomes__"][1][2]
-        self.assertTrue(result.ok)
+        assert result.ok
 
     async def test_duplicate_terminal_calls_are_rejected_before_execution(self) -> None:
         executions = 0
@@ -377,16 +388,16 @@ class GoalAwareToolRoundTests(unittest.IsolatedAsyncioTestCase):
         )
 
         outcomes = items[-1]["__tool_outcomes__"]
-        self.assertEqual(executions, 1)
-        self.assertTrue(outcomes[1][2].ok)
-        self.assertFalse(outcomes[2][2].ok)
-        self.assertIn("once per tool round", outcomes[2][2].error or "")
+        assert executions == 1
+        assert outcomes[1][2].ok
+        assert not outcomes[2][2].ok
+        assert "once per tool round" in (outcomes[2][2].error or "")
         visible_text = [
             item.text
             for item in items
             if getattr(item, "text", None)
         ]
-        self.assertNotIn("Conflicting second answer.", visible_text)
+        assert "Conflicting second answer." not in visible_text
 
     async def test_contextual_activity_copy_is_display_only(self) -> None:
         executed_input = None
@@ -438,12 +449,9 @@ class GoalAwareToolRoundTests(unittest.IsolatedAsyncioTestCase):
         )
 
         starts = [item for item in items if getattr(item, "type", None) == "tool_start"]
-        self.assertEqual(
-            [item.label for item in starts],
-            ["Finding a quiet dinner spot near your theater…"],
-        )
-        self.assertIsNotNone(executed_input)
-        self.assertNotIn("activity_label", executed_input)
+        assert [item.label for item in starts] == ["Finding a quiet dinner spot near your theater…"]
+        assert executed_input is not None
+        assert "activity_label" not in executed_input
 
     async def test_invalid_activity_copy_uses_server_fallback(self) -> None:
         async def discover(_tool_input, _ctx):
@@ -491,7 +499,7 @@ class GoalAwareToolRoundTests(unittest.IsolatedAsyncioTestCase):
         )
 
         starts = [item for item in items if getattr(item, "type", None) == "tool_start"]
-        self.assertEqual([item.label for item in starts], ["Searching verified places near you…"])
+        assert [item.label for item in starts] == ["Searching verified places near you…"]
 
     async def test_unoffered_call_emits_no_activity_start(self) -> None:
         called = False
@@ -524,10 +532,8 @@ class GoalAwareToolRoundTests(unittest.IsolatedAsyncioTestCase):
             allowed_tool_names=frozenset(),
         )
 
-        self.assertFalse(called)
-        self.assertFalse(
-            any(getattr(item, "type", None) == "tool_start" for item in items)
-        )
+        assert not called
+        assert not any(getattr(item, "type", None) == "tool_start" for item in items)
 
     async def test_same_canonical_result_reuses_one_presentation_in_one_round(self) -> None:
         executions = 0
@@ -561,11 +567,11 @@ class GoalAwareToolRoundTests(unittest.IsolatedAsyncioTestCase):
             registry,
         )
 
-        self.assertEqual(executions, 1)
+        assert executions == 1
         outcomes = items[-1]["__tool_outcomes__"]
-        self.assertTrue(outcomes[0][2].ok)
-        self.assertTrue(outcomes[1][2].ok)
-        self.assertIs(outcomes[0][2], outcomes[1][2])
+        assert outcomes[0][2].ok
+        assert outcomes[1][2].ok
+        assert outcomes[0][2] is outcomes[1][2]
 
 
 if __name__ == "__main__":
