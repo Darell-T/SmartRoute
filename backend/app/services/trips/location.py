@@ -90,6 +90,11 @@ _register(
     KnownPlace("Penn Station", 40.7506, -73.9935, "New York, NY 10119"),
     "Penn Station",
     "NY Penn Station",
+    "34 St-Penn Station",
+    "34 St–Penn Station",
+    "34 St Penn Station",
+    "34th Penn Station",
+    "34th Street-Penn Station",
 )
 _register(
     KnownPlace(
