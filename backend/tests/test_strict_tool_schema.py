@@ -101,6 +101,7 @@ class StrictToolSchemaTests(unittest.TestCase):
         self.assertIn("expose backend language", lead_in)
         self.assertIn("canonical itinerary supports it", lead_in)
         self.assertIn("hard validity alone does not prove route shape", lead_in)
+        self.assertIn("spoken reply, not a caption", lead_in)
         self.assertIn("every successful route presentation requires one", reason_code)
         self.assertIn(
             "fits, satisfies constraints, is best, is practical, or satisfies the trip",

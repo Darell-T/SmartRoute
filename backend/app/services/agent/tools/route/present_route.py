@@ -74,7 +74,8 @@ PRESENT_ROUTE_SCHEMA = {
                     "or verified choice. Use route-shape wording such as "
                     "straightforward or direct only when the selected canonical "
                     "itinerary supports it; hard validity alone does not prove "
-                    "route shape. Do not restate canonical facts: no "
+                    "route shape. Write lead_in as a spoken reply, not a caption "
+                    "for the card. Do not restate canonical facts: no "
                     "digits, transit line names, exact times, counts, or invented "
                     "itinerary details."
                 ),

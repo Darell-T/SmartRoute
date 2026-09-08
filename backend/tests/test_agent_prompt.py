@@ -193,6 +193,10 @@ class SystemPromptGuardTests(unittest.TestCase):
         self.assertIn("simple greetings to one natural sentence", normalized)
         self.assertIn("do not list capabilities unless the rider asks", normalized)
         self.assertIn("concise contextual framing", normalized)
+        self.assertIn("the route card carries the itinerary", normalized)
+        self.assertIn("lead_in is the spoken reply", normalized)
+        self.assertIn("do not caption the card", normalized)
+        self.assertIn("this option", normalized)
 
     def test_prompt_is_non_empty_and_reasonably_sized(self):
         # Loose sanity bound -- guards against an accidental near-empty prompt
