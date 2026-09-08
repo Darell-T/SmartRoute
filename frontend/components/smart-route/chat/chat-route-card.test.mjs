@@ -165,6 +165,17 @@ test("Open on map remains a direct keyboard-accessible action", () => {
   assert.doesNotMatch(CARD_SOURCE, /onClick=\{\(\) => onPrimaryAction/);
 });
 
+test("chat shows route cards after the turn finishes even without assistant prose", () => {
+  assert.match(
+    CHAT_MESSAGE_SOURCE,
+    /const showCards = !turn\.isStreaming && isCaughtUp && turn\.routeCards\.length > 0;/,
+  );
+  assert.doesNotMatch(
+    CHAT_MESSAGE_SOURCE,
+    /showCards = !turn\.isStreaming && hasText && isCaughtUp/,
+  );
+});
+
 test("transit status exposes View alerts only from the typed action flag", () => {
   assert.match(CHAT_MESSAGE_SOURCE, /turn\.transitStatusAction === "view_alerts"/);
   assert.match(CHAT_MESSAGE_SOURCE, /className="sr-chat-transit-action"/);
