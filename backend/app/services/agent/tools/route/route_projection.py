@@ -24,7 +24,6 @@ from app.services.agent.tools._types import ToolContext, ToolResult
 from app.services.agent.tools.route.present_route_state import is_destination_comparison
 from app.services.agent.tools.route.route_input import point_label, summary_eta_minutes
 from app.services.trips import candidates, scoring, text
-from app.services.trips.itinerary import _canonical_stops_for_step
 from app.services.trips.route_incidents.scan import (
     INCOMPLETE_INCIDENT_DISCLOSURE,
     contains_unsafe_incident_clear,
@@ -85,7 +84,6 @@ def _emit_recommended_card(
     scored: list[dict],
 ) -> ToolResult:
     core = _canonical_card_core(presentation, evidence, scored)
-    attach_pattern_stop_lists(core["itinerary"], core["route"], ctx.gtfs)
     digest, event, session_card = _card_surfaces(presentation, ctx, evidence, core)
     metadata = dict(
         evidence.get("incident_scan_metadata")
@@ -265,109 +263,6 @@ def _project_card_endpoints(
         )
     destination_point["label"] = destination_label
     return origin_point, destination_point, destination_label
-
-
-def attach_pattern_stop_lists(
-    itinerary: dict[str, Any],
-    route: list[dict] | None,
-    gtfs: Any,
-) -> None:
-    """Fill empty transit-leg stop lists for the presented card.
-
-    Copies provider-enriched names when they already exist on the Google
-    steps, then falls back to the in-memory GTFS pattern index. Does not
-    mutate stored candidate steps and never calls request-time
-    ``_enrich_route``.
-    """
-    if not isinstance(itinerary, dict):
-        return
-    transit_steps = [
-        step
-        for step in (route or [])
-        if isinstance(step, dict)
-        and str(step.get("type") or "").upper() in _TRANSIT_MODES
-    ]
-    lookup = (
-        getattr(gtfs, "get_intermediate_stops_with_coords", None)
-        if gtfs is not None
-        else None
-    )
-    for index, leg in enumerate(_iter_transit_legs(itinerary)):
-        if _leg_has_named_stops(leg):
-            continue
-        step = transit_steps[index] if index < len(transit_steps) else {}
-        stops = _canonical_stops_for_step(step) if isinstance(step, dict) else []
-        if not stops:
-            stops = _pattern_stops_for_leg(lookup, leg, step)
-        if stops:
-            leg["stops"] = stops
-
-
-def _iter_transit_legs(itinerary: dict[str, Any]):
-    segments = itinerary.get("segments")
-    if isinstance(segments, list) and segments:
-        for segment in segments:
-            if not isinstance(segment, dict):
-                continue
-            for leg in segment.get("legs") or []:
-                if _is_transit_leg(leg):
-                    yield leg
-        return
-    for leg in itinerary.get("legs") or []:
-        if _is_transit_leg(leg):
-            yield leg
-
-
-def _is_transit_leg(leg: object) -> bool:
-    return (
-        isinstance(leg, dict)
-        and str(leg.get("mode") or "").upper() in _TRANSIT_MODES
-    )
-
-
-def _leg_has_named_stops(leg: dict[str, Any]) -> bool:
-    stops = leg.get("stops")
-    if not isinstance(stops, list) or not stops:
-        return False
-    return any(_stop_label(stop) for stop in stops)
-
-
-def _pattern_stops_for_leg(lookup: Any, leg: dict[str, Any], step: dict) -> list[dict]:
-    if not callable(lookup):
-        return []
-    route_id = str(
-        leg.get("service_id") or step.get("route_id") or step.get("train_line") or ""
-    ).strip()
-    origin = _stop_label(step.get("departure_stop")) or _stop_label(leg.get("board"))
-    dest = _stop_label(step.get("arrival_stop")) or _stop_label(leg.get("alight"))
-    if not route_id or not origin or not dest:
-        return []
-    try:
-        located = lookup(
-            route_id,
-            origin,
-            dest,
-            step.get("departure_coords"),
-            step.get("arrival_coords"),
-        )
-    except Exception:
-        return []
-    if isinstance(located, tuple):
-        located = located[0] if located else []
-    if not isinstance(located, list):
-        return []
-    return _canonical_stops_for_step({"intermediate_stop_locations": located})
-
-
-def _stop_label(value: object) -> str:
-    if isinstance(value, str):
-        return value.strip()
-    if isinstance(value, dict):
-        for key in ("name", "label", "display_name", "stop_name"):
-            text_value = str(value.get(key) or "").strip()
-            if text_value:
-                return text_value
-    return ""
 
 
 def _project_card_itinerary(
