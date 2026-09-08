@@ -32,9 +32,11 @@ type RecordValue = Record<string, unknown>;
 type Coordinate = { latitude: number; longitude: number };
 
 const MAX_TEXT = 300;
+const MAX_ALERT_HEADER = 480;
 const MAX_ALERT_DESCRIPTION = 16_384;
 const MAX_LIST = 256;
 const MAX_SECONDS = 86_400;
+const MAX_POLYLINE = 65_536;
 
 const record = (value: unknown): value is RecordValue => typeof value === "object" && value !== null && !Array.isArray(value);
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
@@ -68,16 +70,45 @@ function terminalState(value: unknown): value is "completed" | "clarification_re
 
 function coordinate(value: unknown): Coordinate | null {
   if (!record(value)) return null;
-  const keys = Object.keys(value).sort().join(",");
-  const latitude = keys === "latitude,longitude" && finite(value.latitude)
-    ? value.latitude
-    : keys === "lat,lng" && finite(value.lat) ? value.lat : null;
-  const longitude = keys === "latitude,longitude" && finite(value.longitude)
+  const latitude = finite(value.latitude) ? value.latitude : finite(value.lat) ? value.lat : null;
+  const longitude = finite(value.longitude)
     ? value.longitude
-    : keys === "lat,lng" && finite(value.lng) ? value.lng : null;
+    : finite(value.lng)
+      ? value.lng
+      : finite(value.lon)
+        ? value.lon
+        : null;
   return latitude !== null && longitude !== null && bounded(latitude, 40.2, 41.2) && bounded(longitude, -74.6, -73.2)
     ? { latitude, longitude }
     : null;
+}
+
+function routeType(value: unknown): AgentRouteStep["type"] | null {
+  if (
+    value === "WALK" || value === "SUBWAY" || value === "BUS" || value === "RAIL"
+    || value === "TRAIN" || value === "LIGHT_RAIL" || value === "TRAM"
+  ) {
+    return value;
+  }
+  if (
+    value === "COMMUTER_RAIL" || value === "HEAVY_RAIL" || value === "METRO_RAIL"
+    || value === "METRO" || value === "HIGH_SPEED_TRAIN" || value === "LONG_DISTANCE_TRAIN"
+    || value === "FERRY"
+  ) {
+    return "RAIL";
+  }
+  if (value === "INTERCITY_BUS" || value === "TROLLEYBUS" || value === "SHARE_TAXI") {
+    return "BUS";
+  }
+  if (value === "CABLE_CAR" || value === "FUNICULAR" || value === "GONDOLA" || value === "MONORAIL") {
+    return "TRAM";
+  }
+  return null;
+}
+
+function encodedPolyline(value: unknown): string | undefined {
+  if (!record(value) || !nonEmptyText(value.encodedPolyline, MAX_POLYLINE)) return undefined;
+  return value.encodedPolyline;
 }
 
 function endpoint(value: unknown): RouteCardEndpoint | null {
@@ -94,20 +125,24 @@ function endpoint(value: unknown): RouteCardEndpoint | null {
 }
 
 function summary(value: unknown): RouteCardSummary | null {
-  if (!record(value) || !bounded(value.eta_minutes, 0, 1_440) || !integer(value.transfers, 0, 64)
-    || !textList(value.lines, 32) || !nonEmptyText(value.reason)) return null;
+  if (!record(value) || !bounded(value.eta_minutes, 0, 1_440) || !integer(value.transfers, 0, 64)) return null;
+  const lines = Array.isArray(value.lines)
+    ? value.lines.filter((item): item is string => nonEmptyText(item)).slice(0, 32)
+    : null;
+  if (!lines || lines.length > 32) return null;
+  const reason = nonEmptyText(value.reason) ? value.reason : "Here's the route I found.";
   const first = value.first_leg_arrival;
-  if (first !== undefined && first !== null && (!record(first) || !optional(first.route_id, text)
-    || !optional(first.stop_name, text) || !optional(first.source_status, arrivalSourceStatus)
+  if (first !== undefined && first !== null && (!record(first) || !nullable(first.route_id, text)
+    || !nullable(first.stop_name, text) || !optional(first.source_status, arrivalSourceStatus)
     || !optional(first.walking_minutes, finite) || !nullable(first.catchable_arrival_minutes, finite)
-    || (first.arrival_minutes !== undefined && (!Array.isArray(first.arrival_minutes)
+    || (first.arrival_minutes !== undefined && first.arrival_minutes !== null && (!Array.isArray(first.arrival_minutes)
       || first.arrival_minutes.length > 32 || !first.arrival_minutes.every((item) => bounded(item, -1_440, 1_440)))))) return null;
   return {
-    eta_minutes: value.eta_minutes, transfers: value.transfers, lines: value.lines, reason: value.reason,
+    eta_minutes: value.eta_minutes, transfers: value.transfers, lines, reason,
     ...(first === null ? { first_leg_arrival: null } : first === undefined ? {} : {
       first_leg_arrival: {
-        ...(typeof first.route_id === "string" ? { route_id: first.route_id } : {}),
-        ...(typeof first.stop_name === "string" ? { stop_name: first.stop_name } : {}),
+        ...(typeof first.route_id === "string" && first.route_id.trim() ? { route_id: first.route_id } : {}),
+        ...(typeof first.stop_name === "string" && first.stop_name.trim() ? { stop_name: first.stop_name } : {}),
         ...(arrivalSourceStatus(first.source_status) ? { source_status: first.source_status } : {}),
         ...(finite(first.walking_minutes) ? { walking_minutes: first.walking_minutes } : {}),
         ...(first.catchable_arrival_minutes === null || finite(first.catchable_arrival_minutes) ? { catchable_arrival_minutes: first.catchable_arrival_minutes } : {}),
@@ -118,53 +153,83 @@ function summary(value: unknown): RouteCardSummary | null {
 }
 
 function routeStep(value: unknown): AgentRouteStep | null {
-  if (!record(value) || (value.type !== "WALK" && value.type !== "SUBWAY"
-    && value.type !== "BUS" && value.type !== "RAIL" && value.type !== "TRAIN"
-    && value.type !== "LIGHT_RAIL" && value.type !== "TRAM")) return null;
-  const start = value.start_point === undefined ? undefined : coordinate(value.start_point);
-  const end = value.end_point === undefined ? undefined : coordinate(value.end_point);
-  const departure = value.departure_coords === undefined ? undefined : coordinate(value.departure_coords);
-  const arrival = value.arrival_coords === undefined ? undefined : coordinate(value.arrival_coords);
-  if ((value.start_point !== undefined && !start) || (value.end_point !== undefined && !end)
-    || (value.departure_coords !== undefined && !departure) || (value.arrival_coords !== undefined && !arrival)
-    || !optional(value.train_line, text) || !optional(value.line_color, text) || !optional(value.direction, text)
-    || !optional(value.departure_stop, text) || !optional(value.arrival_stop, text) || !optional(value.route_id, text)
-    || !optional(value.departure_time_iso, (item): item is string => text(item, 64)) || !optional(value.arrival_time_iso, (item): item is string => text(item, 64))
+  const type = record(value) ? routeType(value.type) : null;
+  if (!type) return null;
+  const start = value.start_point === undefined || value.start_point === null ? undefined : coordinate(value.start_point);
+  const end = value.end_point === undefined || value.end_point === null ? undefined : coordinate(value.end_point);
+  const departure = value.departure_coords === undefined || value.departure_coords === null ? undefined : coordinate(value.departure_coords);
+  const arrival = value.arrival_coords === undefined || value.arrival_coords === null ? undefined : coordinate(value.arrival_coords);
+  if ((value.start_point !== undefined && value.start_point !== null && !start)
+    || (value.end_point !== undefined && value.end_point !== null && !end)
+    || (value.departure_coords !== undefined && value.departure_coords !== null && !departure)
+    || (value.arrival_coords !== undefined && value.arrival_coords !== null && !arrival)
+    || !nullable(value.train_line, text) || !nullable(value.line_color, text) || !nullable(value.direction, text)
+    || !nullable(value.departure_stop, text) || !nullable(value.arrival_stop, text) || !nullable(value.route_id, text)
+    || !nullable(value.departure_time_iso, (item): item is string => text(item, 64)) || !nullable(value.arrival_time_iso, (item): item is string => text(item, 64))
     || !optional(value.minutes_until_train_arrives, (item): item is number => bounded(item, -1_440, 1_440))
     || !optional(value.minutes_until_arrival, (item): item is number => bounded(item, -1_440, 1_440))
     || !optional(value.route_total_minutes, (item): item is number => bounded(item, 0, 1_440))
     || !optional(value.route_total_seconds, (item): item is number => bounded(item, 0, MAX_SECONDS))
     || !optional(value.duration_minutes, (item): item is number => bounded(item, 0, 1_440))
     || !optional(value.distance_meters, (item): item is number => bounded(item, 0, 1_000_000))
-    || !optional(value.stop_count, (item): item is number => integer(item, 0, 256))
+    || !optional(value.stop_count, (item): item is number => finite(item) && item >= 0 && item <= 256)
     || !optional(value.segment_index, (item): item is number => integer(item, 0, 64))) return null;
-  const encodedPolyline = record(value.polyline) && nonEmptyText(value.polyline.encodedPolyline, 8_192) ? value.polyline.encodedPolyline : null;
-  if (value.polyline !== undefined && !encodedPolyline) return null;
-  if (value.intermediate_stops !== undefined && !textList(value.intermediate_stops, 64)) return null;
-  if (value.intermediate_stop_locations !== undefined && (!Array.isArray(value.intermediate_stop_locations)
-    || value.intermediate_stop_locations.length > 64 || !value.intermediate_stop_locations.every((stop) => record(stop)
-      && nonEmptyText(stop.name) && bounded(stop.lat, 40.2, 41.2) && bounded(stop.lng, -74.6, -73.2)))) return null;
+  const polyline = encodedPolyline(value.polyline);
+  const intermediateStops = Array.isArray(value.intermediate_stops)
+    ? value.intermediate_stops.filter((item): item is string => nonEmptyText(item)).slice(0, MAX_LIST)
+    : undefined;
+  const intermediateStopLocations = Array.isArray(value.intermediate_stop_locations)
+    ? value.intermediate_stop_locations.flatMap((stop) => {
+      if (!record(stop) || !nonEmptyText(stop.name)) return [];
+      const lat = finite(stop.lat) ? stop.lat : finite(stop.latitude) ? stop.latitude : null;
+      const lng = finite(stop.lng) ? stop.lng : finite(stop.longitude) ? stop.longitude : finite(stop.lon) ? stop.lon : null;
+      if (lat === null || lng === null || !bounded(lat, 40.2, 41.2) || !bounded(lng, -74.6, -73.2)) return [];
+      return [{ name: stop.name, lat, lng }];
+    }).slice(0, MAX_LIST)
+    : undefined;
   return {
-    type: value.type,
+    type,
     ...(start ? { start_point: start } : {}), ...(end ? { end_point: end } : {}),
     ...(departure ? { departure_coords: departure } : {}), ...(arrival ? { arrival_coords: arrival } : {}),
-    ...(encodedPolyline ? { polyline: { encodedPolyline } } : {}),
+    ...(polyline ? { polyline: { encodedPolyline: polyline } } : {}),
     ...(typeof value.train_line === "string" ? { train_line: value.train_line } : {}), ...(typeof value.line_color === "string" ? { line_color: value.line_color } : {}),
     ...(typeof value.direction === "string" ? { direction: value.direction } : {}), ...(typeof value.departure_stop === "string" ? { departure_stop: value.departure_stop } : {}),
     ...(typeof value.arrival_stop === "string" ? { arrival_stop: value.arrival_stop } : {}), ...(typeof value.route_id === "string" ? { route_id: value.route_id } : {}),
     ...(typeof value.departure_time_iso === "string" ? { departure_time_iso: value.departure_time_iso } : {}), ...(typeof value.arrival_time_iso === "string" ? { arrival_time_iso: value.arrival_time_iso } : {}),
     ...(finite(value.minutes_until_train_arrives) ? { minutes_until_train_arrives: value.minutes_until_train_arrives } : {}), ...(finite(value.minutes_until_arrival) ? { minutes_until_arrival: value.minutes_until_arrival } : {}),
-    ...(finite(value.route_total_minutes) ? { route_total_minutes: value.route_total_minutes } : {}), ...(finite(value.stop_count) ? { stop_count: value.stop_count } : {}), ...(finite(value.segment_index) ? { segment_index: value.segment_index } : {}),
+    ...(finite(value.route_total_minutes) ? { route_total_minutes: value.route_total_minutes } : {}), ...(finite(value.stop_count) ? { stop_count: Math.round(value.stop_count) } : {}), ...(finite(value.segment_index) ? { segment_index: value.segment_index } : {}),
     ...(finite(value.route_total_seconds) ? { route_total_seconds: value.route_total_seconds } : {}), ...(finite(value.duration_minutes) ? { duration_minutes: value.duration_minutes } : {}), ...(finite(value.distance_meters) ? { distance_meters: value.distance_meters } : {}),
-    ...(Array.isArray(value.intermediate_stops) ? { intermediate_stops: value.intermediate_stops } : {}),
-    ...(Array.isArray(value.intermediate_stop_locations) ? { intermediate_stop_locations: value.intermediate_stop_locations.map((stop) => ({ name: stop.name, lat: stop.lat, lng: stop.lng })) } : {}),
+    ...(intermediateStops && intermediateStops.length > 0 ? { intermediate_stops: intermediateStops } : {}),
+    ...(intermediateStopLocations && intermediateStopLocations.length > 0 ? { intermediate_stop_locations: intermediateStopLocations } : {}),
   };
 }
 
 function alert(value: unknown): ServiceAlert | null {
-  if (!record(value) || !nonEmptyText(value.header) || !optional(value.description, (item): item is string => text(item, MAX_ALERT_DESCRIPTION))
-    || (value.routeIds !== undefined && !textList(value.routeIds, 64)) || (value.route_ids !== undefined && !textList(value.route_ids, 64))) return null;
-  return { header: value.header, ...(typeof value.description === "string" ? { description: value.description } : {}), ...(Array.isArray(value.routeIds) ? { routeIds: value.routeIds } : {}), ...(Array.isArray(value.route_ids) ? { route_ids: value.route_ids } : {}) };
+  if (typeof value === "string" && nonEmptyText(value, MAX_ALERT_HEADER)) {
+    return { header: value };
+  }
+  if (!record(value)) return null;
+  const header = nonEmptyText(value.header, MAX_ALERT_HEADER)
+    ? value.header
+    : nonEmptyText(value.title, MAX_ALERT_HEADER)
+      ? value.title
+      : null;
+  if (!header) return null;
+  const description = typeof value.description === "string" && text(value.description, MAX_ALERT_DESCRIPTION)
+    ? value.description
+    : undefined;
+  const routeIds = Array.isArray(value.routeIds)
+    ? value.routeIds.filter((item): item is string => nonEmptyText(item)).slice(0, 64)
+    : undefined;
+  const route_ids = Array.isArray(value.route_ids)
+    ? value.route_ids.filter((item): item is string => nonEmptyText(item)).slice(0, 64)
+    : undefined;
+  return {
+    header,
+    ...(description ? { description } : {}),
+    ...(routeIds && routeIds.length > 0 ? { routeIds } : {}),
+    ...(route_ids && route_ids.length > 0 ? { route_ids } : {}),
+  };
 }
 
 function selection(value: unknown): RouteSelectionDecision | null {
@@ -177,7 +242,7 @@ function selection(value: unknown): RouteSelectionDecision | null {
     !record(value) ||
     Object.keys(value).some((field) => !publicFields.has(field)) ||
     !selectionReason(value.selection_reason) ||
-    !optional(value.reason_code, routeReasonCode) ||
+    !nullable(value.reason_code, routeReasonCode) ||
     !selectionSource(value.selection_source)
   ) {
     return null;
@@ -238,9 +303,10 @@ function legReference(value: unknown): boolean {
     || nonEmptyText(value.station_name);
 }
 
-function legGeometry(value: unknown): boolean {
-  return value === undefined || value === null
-    || (record(value) && Object.keys(value).length === 1 && nonEmptyText(value.encodedPolyline, 8_192));
+function legGeometry(value: unknown): { encodedPolyline: string } | null | undefined {
+  if (value === undefined || value === null) return value;
+  const polyline = encodedPolyline(value);
+  return polyline ? { encodedPolyline: polyline } : undefined;
 }
 
 function transferKind(value: unknown): value is CanonicalTransferKind {
@@ -285,30 +351,43 @@ function transferSemantics(value: unknown): CanonicalTransferSemantics | null | 
 }
 
 function itineraryLeg(value: unknown): CanonicalItineraryLeg | null {
-  if (!record(value) || !nonEmptyText(value.mode) || !nullable(value.service_id, text) || !nullable(value.departure_at, text) || !nullable(value.arrival_at, text) || !optional(value.service_data_basis, text) || !legReference(value.board) || !legReference(value.alight) || !legGeometry(value.geometry)) return null;
+  if (!record(value) || !nonEmptyText(value.mode) || !nullable(value.service_id, text) || !nullable(value.departure_at, text) || !nullable(value.arrival_at, text) || !optional(value.service_data_basis, text) || !legReference(value.board) || !legReference(value.alight)) return null;
   const numeric = ["walk_seconds", "wait_seconds", "ride_seconds", "transfer_seconds", "segment_index"];
   const semantic = transferSemantics(value.transfer_semantics);
-  if (!nullable(value.stop_count, (item): item is number => integer(item, 0, MAX_LIST)) || !numeric.every((field) => optional(value[field], (item): item is number => integer(item, 0, field === "segment_index" ? 64 : MAX_SECONDS))) || !nullable(value.transfer_kind, transferKind) || !nullable(value.accessibility, accessibility) || !optional(value.street_walking_seconds, (item): item is number => integer(item, 0, MAX_SECONDS)) || !optional(value.in_station_transfer_seconds, (item): item is number => integer(item, 0, MAX_SECONDS)) || (value.transfer_semantics !== undefined && value.transfer_semantics !== null && semantic === null) || (value.stops !== undefined && (!Array.isArray(value.stops) || value.stops.length > MAX_LIST || !value.stops.every((stop) => record(stop) && nonEmptyText(stop.name) && optional(stop.lat, finite) && optional(stop.lng, finite))))) return null;
-  return { mode: value.mode, ...(typeof value.service_id === "string" || value.service_id === null ? { service_id: value.service_id } : {}), ...(value.board !== undefined ? { board: value.board } : {}), ...(value.alight !== undefined ? { alight: value.alight } : {}), ...(typeof value.departure_at === "string" || value.departure_at === null ? { departure_at: value.departure_at } : {}), ...(typeof value.arrival_at === "string" || value.arrival_at === null ? { arrival_at: value.arrival_at } : {}), ...(typeof value.service_data_basis === "string" ? { service_data_basis: value.service_data_basis } : {}), ...(value.stop_count === null || finite(value.stop_count) ? { stop_count: value.stop_count } : {}), ...(finite(value.walk_seconds) ? { walk_seconds: value.walk_seconds } : {}), ...(finite(value.wait_seconds) ? { wait_seconds: value.wait_seconds } : {}), ...(finite(value.ride_seconds) ? { ride_seconds: value.ride_seconds } : {}), ...(finite(value.transfer_seconds) ? { transfer_seconds: value.transfer_seconds } : {}), ...(finite(value.segment_index) ? { segment_index: value.segment_index } : {}), ...(transferKind(value.transfer_kind) || value.transfer_kind === null ? { transfer_kind: value.transfer_kind } : {}), ...(accessibility(value.accessibility) || value.accessibility === null ? { accessibility: value.accessibility } : {}), ...(finite(value.street_walking_seconds) ? { street_walking_seconds: value.street_walking_seconds } : {}), ...(finite(value.in_station_transfer_seconds) ? { in_station_transfer_seconds: value.in_station_transfer_seconds } : {}), ...(semantic !== undefined ? { transfer_semantics: semantic } : {}), ...(value.geometry !== undefined ? { geometry: value.geometry } : {}), ...(Array.isArray(value.stops) ? { stops: value.stops.map((stop): CanonicalItineraryStop => ({ name: stop.name, ...(finite(stop.lat) ? { lat: stop.lat } : {}), ...(finite(stop.lng) ? { lng: stop.lng } : {}) })) } : {}) };
+  const geometry = value.geometry === undefined ? undefined : legGeometry(value.geometry);
+  if (!nullable(value.stop_count, (item): item is number => integer(item, 0, MAX_LIST) || (finite(item) && item >= 0 && item <= MAX_LIST)) || !numeric.every((field) => optional(value[field], (item): item is number => integer(item, 0, field === "segment_index" ? 64 : MAX_SECONDS) || (finite(item) && item >= 0 && item <= (field === "segment_index" ? 64 : MAX_SECONDS)))) || !nullable(value.transfer_kind, transferKind) || !nullable(value.accessibility, accessibility) || !optional(value.street_walking_seconds, (item): item is number => integer(item, 0, MAX_SECONDS) || (finite(item) && item >= 0 && item <= MAX_SECONDS)) || !optional(value.in_station_transfer_seconds, (item): item is number => integer(item, 0, MAX_SECONDS) || (finite(item) && item >= 0 && item <= MAX_SECONDS)) || (value.stops !== undefined && (!Array.isArray(value.stops) || value.stops.length > MAX_LIST))) return null;
+  const stops = Array.isArray(value.stops)
+    ? value.stops.flatMap((stop): CanonicalItineraryStop[] => {
+      if (!record(stop) || !nonEmptyText(stop.name)) return [];
+      const lat = finite(stop.lat) ? stop.lat : finite(stop.latitude) ? stop.latitude : undefined;
+      const lng = finite(stop.lng) ? stop.lng : finite(stop.longitude) ? stop.longitude : finite(stop.lon) ? stop.lon : undefined;
+      return [{ name: stop.name, ...(lat !== undefined ? { lat } : {}), ...(lng !== undefined ? { lng } : {}) }];
+    })
+    : undefined;
+  return { mode: value.mode, ...(typeof value.service_id === "string" || value.service_id === null ? { service_id: value.service_id } : {}), ...(value.board !== undefined ? { board: value.board } : {}), ...(value.alight !== undefined ? { alight: value.alight } : {}), ...(typeof value.departure_at === "string" || value.departure_at === null ? { departure_at: value.departure_at } : {}), ...(typeof value.arrival_at === "string" || value.arrival_at === null ? { arrival_at: value.arrival_at } : {}), ...(typeof value.service_data_basis === "string" ? { service_data_basis: value.service_data_basis } : {}), ...(value.stop_count === null || finite(value.stop_count) ? { stop_count: value.stop_count === null ? null : Math.round(value.stop_count) } : {}), ...(finite(value.walk_seconds) ? { walk_seconds: Math.round(value.walk_seconds) } : {}), ...(finite(value.wait_seconds) ? { wait_seconds: Math.round(value.wait_seconds) } : {}), ...(finite(value.ride_seconds) ? { ride_seconds: value.ride_seconds } : {}), ...(finite(value.transfer_seconds) ? { transfer_seconds: value.transfer_seconds } : {}), ...(finite(value.segment_index) ? { segment_index: value.segment_index } : {}), ...(transferKind(value.transfer_kind) || value.transfer_kind === null ? { transfer_kind: value.transfer_kind } : {}), ...(accessibility(value.accessibility) || value.accessibility === null ? { accessibility: value.accessibility } : {}), ...(finite(value.street_walking_seconds) ? { street_walking_seconds: value.street_walking_seconds } : {}), ...(finite(value.in_station_transfer_seconds) ? { in_station_transfer_seconds: value.in_station_transfer_seconds } : {}), ...(semantic !== undefined ? { transfer_semantics: semantic } : {}), ...(geometry ? { geometry } : {}), ...(stops ? { stops } : {}) };
 }
 
 function itinerary(value: unknown): CanonicalItinerary | null {
-  if (!record(value) || !nonEmptyText(value.itinerary_id) || !integer(value.total_duration_seconds, 0, MAX_SECONDS) || !integer(value.transfer_count, 0, 64) || !Array.isArray(value.legs) || value.legs.length > MAX_LIST) return null;
-  const legs = value.legs.map(itineraryLeg);
-  if (legs.some((leg) => !leg)) return null;
+  const totalDuration = record(value) && finite(value.total_duration_seconds) ? Math.round(value.total_duration_seconds) : null;
+  const transferCount = record(value) && finite(value.transfer_count) ? Math.round(value.transfer_count) : null;
+  if (!record(value) || !nonEmptyText(value.itinerary_id) || totalDuration === null || totalDuration < 0 || totalDuration > MAX_SECONDS || transferCount === null || transferCount < 0 || transferCount > 64 || !Array.isArray(value.legs) || value.legs.length > MAX_LIST) return null;
+  const legs = value.legs.map(itineraryLeg).filter((leg): leg is CanonicalItineraryLeg => leg !== null);
+  if (legs.length === 0 && value.legs.length > 0) return null;
   const origin = value.origin === undefined || typeof value.origin === "string" ? value.origin : place(value.origin);
   const destination = value.destination === undefined || typeof value.destination === "string" ? value.destination : place(value.destination);
   if (origin === null || destination === null || !optional(value.timezone, text) || !optional(value.planning_mode, text) || !nullable(value.requested_departure, text) || !nullable(value.requested_arrival, text) || !nullable(value.generated_at, text) || !optional(value.data_basis, text) || !nullable(value.data_freshness, text) || !nullable(value.departure_at, text) || !nullable(value.arrival_at, text)) return null;
   const totals = ["total_walk_seconds", "total_wait_seconds", "total_in_vehicle_seconds", "total_dwell_seconds"];
-  if (!totals.every((field) => optional(value[field], (item): item is number => integer(item, 0, MAX_SECONDS)) || value[field] === null)) return null;
+  if (!totals.every((field) => optional(value[field], (item): item is number => finite(item) && item >= 0 && item <= MAX_SECONDS) || value[field] === null)) return null;
   if (value.waypoints !== undefined && (!Array.isArray(value.waypoints) || value.waypoints.length > 64 || value.waypoints.map(place).some((item) => !item))) return null;
   if (value.structured_recommendation_reasons !== undefined && (!Array.isArray(value.structured_recommendation_reasons) || value.structured_recommendation_reasons.length > 32 || !value.structured_recommendation_reasons.every(recommendationReason))) return null;
-  const itinerarySelection = value.selection_decision === undefined ? undefined : selection(value.selection_decision);
-  if (value.selection_decision !== undefined && !itinerarySelection) return null;
-  // Segment/dwell records repeat the same typed leg/place constraints. Reject malformed records rather than silently ignoring them.
-  if (value.segments !== undefined && (!Array.isArray(value.segments) || value.segments.length > 64 || value.segments.some((item) => segment(item) === null))) return null;
-  if (value.dwell_events !== undefined && (!Array.isArray(value.dwell_events) || value.dwell_events.length > 64 || value.dwell_events.some((item) => dwellEvent(item) === null))) return null;
-  return { itinerary_id: value.itinerary_id, total_duration_seconds: value.total_duration_seconds, transfer_count: value.transfer_count, legs: legs.filter((leg): leg is CanonicalItineraryLeg => leg !== null), ...(origin !== undefined ? { origin } : {}), ...(destination !== undefined ? { destination } : {}), ...(Array.isArray(value.waypoints) ? { waypoints: value.waypoints.map((item) => place(item)).filter((item): item is CanonicalItineraryPlace => item !== null) } : {}), ...(typeof value.timezone === "string" ? { timezone: value.timezone } : {}), ...(typeof value.planning_mode === "string" ? { planning_mode: value.planning_mode } : {}), ...(typeof value.requested_departure === "string" || value.requested_departure === null ? { requested_departure: value.requested_departure } : {}), ...(typeof value.requested_arrival === "string" || value.requested_arrival === null ? { requested_arrival: value.requested_arrival } : {}), ...(typeof value.generated_at === "string" || value.generated_at === null ? { generated_at: value.generated_at } : {}), ...(typeof value.data_basis === "string" ? { data_basis: value.data_basis } : {}), ...(typeof value.data_freshness === "string" || value.data_freshness === null ? { data_freshness: value.data_freshness } : {}), ...(typeof value.departure_at === "string" || value.departure_at === null ? { departure_at: value.departure_at } : {}), ...(typeof value.arrival_at === "string" || value.arrival_at === null ? { arrival_at: value.arrival_at } : {}), ...(finite(value.total_walk_seconds) ? { total_walk_seconds: value.total_walk_seconds } : {}), ...(finite(value.total_wait_seconds) ? { total_wait_seconds: value.total_wait_seconds } : {}), ...(finite(value.total_in_vehicle_seconds) ? { total_in_vehicle_seconds: value.total_in_vehicle_seconds } : {}), ...(finite(value.total_dwell_seconds) ? { total_dwell_seconds: value.total_dwell_seconds } : {}), ...(Array.isArray(value.segments) ? { segments: value.segments.map((item) => segment(item)).filter((item): item is CanonicalItinerarySegment => item !== null) } : {}), ...(Array.isArray(value.dwell_events) ? { dwell_events: value.dwell_events.map((item) => dwellEvent(item)).filter((item): item is CanonicalDwellEvent => item !== null) } : {}), ...(Array.isArray(value.structured_recommendation_reasons) ? { structured_recommendation_reasons: value.structured_recommendation_reasons } : {}), ...(itinerarySelection ? { selection_decision: itinerarySelection } : {}) };
+  const itinerarySelection = value.selection_decision === undefined || value.selection_decision === null ? undefined : selection(value.selection_decision);
+  const segments = Array.isArray(value.segments)
+    ? value.segments.map(segment).filter((item): item is CanonicalItinerarySegment => item !== null)
+    : undefined;
+  const dwellEvents = Array.isArray(value.dwell_events)
+    ? value.dwell_events.map(dwellEvent).filter((item): item is CanonicalDwellEvent => item !== null)
+    : undefined;
+  return { itinerary_id: value.itinerary_id, total_duration_seconds: totalDuration, transfer_count: transferCount, legs, ...(origin !== undefined ? { origin } : {}), ...(destination !== undefined ? { destination } : {}), ...(Array.isArray(value.waypoints) ? { waypoints: value.waypoints.map((item) => place(item)).filter((item): item is CanonicalItineraryPlace => item !== null) } : {}), ...(typeof value.timezone === "string" ? { timezone: value.timezone } : {}), ...(typeof value.planning_mode === "string" ? { planning_mode: value.planning_mode } : {}), ...(typeof value.requested_departure === "string" || value.requested_departure === null ? { requested_departure: value.requested_departure } : {}), ...(typeof value.requested_arrival === "string" || value.requested_arrival === null ? { requested_arrival: value.requested_arrival } : {}), ...(typeof value.generated_at === "string" || value.generated_at === null ? { generated_at: value.generated_at } : {}), ...(typeof value.data_basis === "string" ? { data_basis: value.data_basis } : {}), ...(typeof value.data_freshness === "string" || value.data_freshness === null ? { data_freshness: value.data_freshness } : {}), ...(typeof value.departure_at === "string" || value.departure_at === null ? { departure_at: value.departure_at } : {}), ...(typeof value.arrival_at === "string" || value.arrival_at === null ? { arrival_at: value.arrival_at } : {}), ...(finite(value.total_walk_seconds) ? { total_walk_seconds: value.total_walk_seconds } : {}), ...(finite(value.total_wait_seconds) ? { total_wait_seconds: value.total_wait_seconds } : {}), ...(finite(value.total_in_vehicle_seconds) ? { total_in_vehicle_seconds: value.total_in_vehicle_seconds } : {}), ...(finite(value.total_dwell_seconds) ? { total_dwell_seconds: value.total_dwell_seconds } : {}), ...(segments && segments.length > 0 ? { segments } : {}), ...(dwellEvents && dwellEvents.length > 0 ? { dwell_events: dwellEvents } : {}), ...(Array.isArray(value.structured_recommendation_reasons) ? { structured_recommendation_reasons: value.structured_recommendation_reasons } : {}), ...(itinerarySelection ? { selection_decision: itinerarySelection } : {}) };
 }
 
 function segment(value: unknown): CanonicalItinerarySegment | null {
@@ -421,11 +500,16 @@ export function parseAgentEvent(eventType: string, data: unknown): AgentEvent | 
   if (eventType === "tool_end" && nonEmptyText(data.tool_call_id) && nonEmptyText(data.tool) && typeof data.ok === "boolean" && bounded(data.duration_ms, 0, 300_000) && optional(data.summary, text)) return { type: "tool_end", tool_call_id: data.tool_call_id, tool: data.tool, ok: data.ok, duration_ms: data.duration_ms, ...(typeof data.summary === "string" ? { summary: data.summary } : {}) };
   if (eventType === "route_card") {
     const origin = endpoint(data.origin); const destination = endpoint(data.destination); const cardSummary = summary(data.summary);
-    const route = Array.isArray(data.route) && data.route.length <= MAX_LIST ? data.route.map(routeStep) : null;
-    const alerts = Array.isArray(data.alerts) && data.alerts.length <= MAX_LIST ? data.alerts.map(alert) : null;
-    const cardItinerary = data.itinerary === undefined ? undefined : itinerary(data.itinerary); const cardSelection = data.selection_decision === undefined ? undefined : selection(data.selection_decision);
-    if (!nonEmptyText(data.card_id) || !nonEmptyText(data.turn_id) || (data.role !== "recommended" && data.role !== "alternative") || !origin || !destination || !cardSummary || !route || route.some((item) => !item) || !alerts || alerts.some((item) => !item) || (data.itinerary !== undefined && !cardItinerary) || (data.selection_decision !== undefined && !cardSelection) || !optional(data.leg_label, text) || !optional(data.depart_iso, text)) return null;
-    return { type: "route_card", card_id: data.card_id, turn_id: data.turn_id, role: data.role, origin, destination, summary: cardSummary, route: route.filter((item): item is AgentRouteStep => item !== null), alerts: alerts.filter((item): item is ServiceAlert => item !== null), ...(typeof data.leg_label === "string" ? { leg_label: data.leg_label } : {}), ...(typeof data.depart_iso === "string" ? { depart_iso: data.depart_iso } : {}), ...(cardItinerary ? { itinerary: cardItinerary } : {}), ...(cardSelection ? { selection_decision: cardSelection } : {}) };
+    const route = Array.isArray(data.route)
+      ? data.route.map(routeStep).filter((item): item is AgentRouteStep => item !== null)
+      : [];
+    const alerts = Array.isArray(data.alerts)
+      ? data.alerts.map(alert).filter((item): item is ServiceAlert => item !== null)
+      : [];
+    const cardItinerary = data.itinerary === undefined || data.itinerary === null ? undefined : itinerary(data.itinerary);
+    const cardSelection = data.selection_decision === undefined || data.selection_decision === null ? undefined : selection(data.selection_decision);
+    if (!nonEmptyText(data.card_id) || !nonEmptyText(data.turn_id) || (data.role !== "recommended" && data.role !== "alternative") || !origin || !destination || !cardSummary || !optional(data.leg_label, text) || !optional(data.depart_iso, text)) return null;
+    return { type: "route_card", card_id: data.card_id, turn_id: data.turn_id, role: data.role, origin, destination, summary: cardSummary, route, alerts, ...(typeof data.leg_label === "string" ? { leg_label: data.leg_label } : {}), ...(typeof data.depart_iso === "string" ? { depart_iso: data.depart_iso } : {}), ...(cardItinerary ? { itinerary: cardItinerary } : {}), ...(cardSelection ? { selection_decision: cardSelection } : {}) };
   }
   if (eventType === "arrival_card") return arrival(data);
   if (eventType === "transit_status_action") return transitStatusAction(data);
