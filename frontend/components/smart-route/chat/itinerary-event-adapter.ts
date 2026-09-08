@@ -134,11 +134,7 @@ export function collapsedStopChainLabel(event: {
   toLabel?: string;
 }): string | null {
   const names = intermediateStopNames(event);
-  const fromCount =
-    typeof event.stopCount === "number" && Number.isFinite(event.stopCount)
-      ? Math.max(0, Math.round(event.stopCount))
-      : 0;
-  const count = fromCount > 0 ? fromCount : names.length;
+  const count = event.stopCount && event.stopCount > 0 ? event.stopCount : names.length;
   if (count <= 0) return null;
   return `${count} ${count === 1 ? "stop" : "stops"}`;
 }

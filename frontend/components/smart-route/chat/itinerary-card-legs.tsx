@@ -70,26 +70,20 @@ function RouteGlyph({
   return <TrainBullet line={normalized} size={24} />;
 }
 
-function intermediateStops(event: ItineraryEvent): string[] {
-  return intermediateStopNames(event);
-}
-
 function StopChain({
   event,
   expanded,
-  rideLabel,
-  canExpand,
   onToggle,
   reduceMotion,
 }: {
   event: ItineraryEvent;
   expanded: boolean;
-  rideLabel: string;
-  canExpand: boolean;
   onToggle: () => void;
   reduceMotion: boolean;
 }) {
-  const stops = intermediateStops(event);
+  const stops = intermediateStopNames(event);
+  const rideLabel = collapsedStopChainLabel(event);
+  const canExpand = stops.length > 0;
   const disclosure = rideLabel ? (
     canExpand ? (
       <button
@@ -186,8 +180,6 @@ function TransitLeg({
   onToggle: () => void;
   reduceMotion: boolean;
 }) {
-  const stopNames = intermediateStops(event);
-  const rideLabel = collapsedStopChainLabel(event) ?? "";
   return (
     <section className="sr-itinerary-card__leg" aria-label={`${event.kind} leg`}>
       <div className="sr-itinerary-card__leg-glyph">
@@ -205,8 +197,6 @@ function TransitLeg({
         <StopChain
           event={event}
           expanded={expanded}
-          rideLabel={rideLabel}
-          canExpand={stopNames.length > 0}
           onToggle={onToggle}
           reduceMotion={reduceMotion}
         />
