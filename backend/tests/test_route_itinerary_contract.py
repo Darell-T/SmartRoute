@@ -147,5 +147,119 @@ class RouteCardEventItineraryWireTests(unittest.TestCase):
         self.assertEqual(data["itinerary"], itinerary)
 
 
+class PatternStopListProjectionTests(unittest.TestCase):
+    def test_copies_provider_stop_names_onto_empty_itinerary_legs(self):
+        itinerary = {
+            "legs": [
+                {
+                    "mode": "WALK",
+                    "board": {"name": "Your location"},
+                    "alight": {"name": "Canal St"},
+                },
+                {
+                    "mode": "SUBWAY",
+                    "service_id": "A",
+                    "board": {"name": "Canal St"},
+                    "alight": {"name": "Jay St-MetroTech"},
+                    "stop_count": 4,
+                    "stops": [],
+                },
+            ]
+        }
+        route = [
+            {"type": "WALK"},
+            {
+                "type": "SUBWAY",
+                "route_id": "A",
+                "departure_stop": "Canal St",
+                "arrival_stop": "Jay St-MetroTech",
+                "intermediate_stops": [
+                    "Canal St",
+                    "Chambers St",
+                    "Fulton St",
+                    "High St",
+                    "Jay St-MetroTech",
+                ],
+            },
+        ]
+
+        route_projection.attach_pattern_stop_lists(itinerary, route, gtfs=None)
+
+        self.assertEqual(
+            [stop["name"] for stop in itinerary["legs"][1]["stops"]],
+            [
+                "Canal St",
+                "Chambers St",
+                "Fulton St",
+                "High St",
+                "Jay St-MetroTech",
+            ],
+        )
+
+    def test_fills_empty_legs_from_local_pattern_index_without_mutating_route(self):
+        itinerary = {
+            "legs": [
+                {
+                    "mode": "SUBWAY",
+                    "service_id": "A",
+                    "board": {"name": "Canal St"},
+                    "alight": {"name": "Jay St-MetroTech"},
+                    "stop_count": 4,
+                }
+            ]
+        }
+        route = [
+            {
+                "type": "SUBWAY",
+                "route_id": "A",
+                "departure_stop": "Canal St",
+                "arrival_stop": "Jay St-MetroTech",
+            }
+        ]
+        calls = []
+
+        class FakeGtfs:
+            def get_intermediate_stops_with_coords(
+                self, route_id, origin, dest, origin_coords=None, dest_coords=None
+            ):
+                calls.append((route_id, origin, dest, origin_coords, dest_coords))
+                return [
+                    {"name": origin, "lat": 40.718, "lng": -74.0},
+                    {"name": "Chambers St", "lat": 40.715, "lng": -74.009},
+                    {"name": dest, "lat": 40.692, "lng": -73.987},
+                ]
+
+        route_projection.attach_pattern_stop_lists(itinerary, route, FakeGtfs())
+
+        self.assertEqual(
+            [stop["name"] for stop in itinerary["legs"][0]["stops"]],
+            ["Canal St", "Chambers St", "Jay St-MetroTech"],
+        )
+        self.assertEqual(calls, [("A", "Canal St", "Jay St-MetroTech", None, None)])
+        self.assertNotIn("intermediate_stops", route[0])
+
+    def test_does_not_overwrite_existing_named_stops(self):
+        itinerary = {
+            "legs": [
+                {
+                    "mode": "SUBWAY",
+                    "service_id": "A",
+                    "stops": [{"name": "Spring St"}],
+                }
+            ]
+        }
+
+        class FakeGtfs:
+            def get_intermediate_stops_with_coords(self, *_args, **_kwargs):
+                return [{"name": "Should not replace"}]
+
+        route_projection.attach_pattern_stop_lists(
+            itinerary,
+            [{"type": "SUBWAY", "route_id": "A"}],
+            FakeGtfs(),
+        )
+        self.assertEqual(itinerary["legs"][0]["stops"], [{"name": "Spring St"}])
+
+
 if __name__ == "__main__":
     unittest.main()

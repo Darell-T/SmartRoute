@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildItineraryViewModel, condensePreviewEvents, formatClockTime, formatDurationMinutes, formatStructuredRecommendationReason, isSupportedSubwayRoute, parseRationale, PREVIEW_EVENT_MAX, shouldCollapseEvents, transferLabel } from "./itinerary-view-model.ts";
+import { buildItineraryViewModel, collapsedStopChainLabel, condensePreviewEvents, formatClockTime, formatDurationMinutes, formatStructuredRecommendationReason, isSupportedSubwayRoute, parseRationale, PREVIEW_EVENT_MAX, shouldCollapseEvents, transferLabel } from "./itinerary-view-model.ts";
 
 const card = {
   card_id: "rc_1", turn_id: "t1", role: "recommended",
@@ -46,6 +46,38 @@ test("canonical stop count and route identity stay attached to transit legs", ()
   const model = buildItineraryViewModel(card);
   assert.deepEqual(model.events[1].routeIds, ["A"]);
   assert.equal(model.events[1].stopCount, 8);
+});
+
+test("collapsed stop chain names the stop count and never ride duration", () => {
+  assert.equal(
+    collapsedStopChainLabel({
+      stopCount: 8,
+      durationLabel: "31 min",
+      fromLabel: "A station",
+      toLabel: "Costco",
+    }),
+    "8 stops",
+  );
+  assert.equal(
+    collapsedStopChainLabel({
+      stopCount: 1,
+      durationLabel: "4 min",
+    }),
+    "1 stop",
+  );
+  assert.equal(
+    collapsedStopChainLabel({
+      durationLabel: "31 min",
+      fromLabel: "Canal St",
+      toLabel: "Jay St-MetroTech",
+      stops: ["Canal St", "Chambers St", "Fulton St", "Jay St-MetroTech"],
+    }),
+    "2 stops",
+  );
+  assert.equal(
+    collapsedStopChainLabel({ durationLabel: "31 min" }),
+    null,
+  );
 });
 
 test("canonical walk duration is displayed without route identifiers", () => {
