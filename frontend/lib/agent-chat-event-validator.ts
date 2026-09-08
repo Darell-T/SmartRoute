@@ -153,7 +153,8 @@ function summary(value: unknown): RouteCardSummary | null {
 }
 
 function routeStep(value: unknown): AgentRouteStep | null {
-  const type = record(value) ? routeType(value.type) : null;
+  if (!record(value)) return null;
+  const type = routeType(value.type);
   if (!type) return null;
   const start = value.start_point === undefined || value.start_point === null ? undefined : coordinate(value.start_point);
   const end = value.end_point === undefined || value.end_point === null ? undefined : coordinate(value.end_point);
