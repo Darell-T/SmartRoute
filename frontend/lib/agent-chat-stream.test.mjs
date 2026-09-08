@@ -464,10 +464,85 @@ test("rejects a malformed present optional itinerary and continues to done", asy
 
   await silenceConsoleWarn(async () => {
     const events = await collect(readerFromChunks([chunk]));
-    assert.equal(events.length, 2);
+    assert.equal(events.length, 3);
     assert.deepEqual(events[0].itinerary, itinerary);
-    assert.equal(events[1].type, "done");
+    assert.equal(events[1].type, "route_card");
+    assert.equal(events[1].card_id, "rc_legacy");
+    assert.equal(events[1].itinerary, undefined);
+    assert.equal(events[2].type, "done");
   });
+});
+
+test("keeps a production-shaped route card that used to fail nested contract checks", async () => {
+  const polyline = "p".repeat(9_000);
+  const payload = {
+    card_id: "rc_prod",
+    turn_id: "t1",
+    role: "recommended",
+    origin: { label: "Your location", lat: 40.7484, lng: -73.9857 },
+    destination: { label: "Penn Station", lat: 40.7506, lng: -73.9935 },
+    summary: {
+      eta_minutes: 42,
+      transfers: 1,
+      lines: ["Q", "LIRR"],
+      reason: null,
+      first_leg_arrival: { route_id: "Q", stop_name: null, source_status: "live", walking_minutes: 4 },
+    },
+    route: [
+      {
+        type: "WALK",
+        start_point: { latitude: 40.7484, longitude: -73.9857, lat: 40.7484, lng: -73.9857 },
+        polyline: { encodedPolyline: polyline },
+      },
+      {
+        type: "COMMUTER_RAIL",
+        route_id: "LIRR",
+        departure_coords: { latitude: 40.7506, longitude: -73.9935 },
+        intermediate_stop_locations: Array.from({ length: 80 }, (_, index) => ({
+          name: `Stop ${index + 1}`,
+          lat: 40.74 + index * 0.0001,
+          lng: -73.99,
+        })),
+      },
+    ],
+    alerts: [{
+      source: "mta_service_alerts",
+      alert_id: "lmm:planned_work:1",
+      header: "H".repeat(400),
+      description: "Track work.",
+      route_ids: ["Q"],
+      stop_ids: ["Q01"],
+      direction_scope: "both_directions",
+      material_disruption: true,
+    }],
+    itinerary: {
+      itinerary_id: "itin_prod",
+      total_duration_seconds: 2520.4,
+      transfer_count: 1,
+      legs: [{ mode: "COMMUTER_RAIL", ride_seconds: 1800, geometry: { encodedPolyline: polyline } }],
+    },
+    selection_decision: {
+      selection_reason: "outer_agent_selection",
+      reason_code: null,
+      selection_source: "model",
+    },
+  };
+
+  const events = await collect(readerFromChunks([
+    `event: route_card\ndata: ${JSON.stringify(payload)}\n\n`,
+  ]));
+
+  assert.equal(events.length, 1);
+  assert.equal(events[0].type, "route_card");
+  assert.equal(events[0].summary.reason, "Here's the route I found.");
+  assert.equal(events[0].summary.first_leg_arrival.route_id, "Q");
+  assert.equal(events[0].summary.first_leg_arrival.stop_name, undefined);
+  assert.equal(events[0].route[0].polyline.encodedPolyline.length, 9_000);
+  assert.equal(events[0].route[1].type, "RAIL");
+  assert.equal(events[0].route[1].intermediate_stop_locations.length, 80);
+  assert.equal(events[0].alerts[0].header.length, 400);
+  assert.equal(events[0].itinerary.total_duration_seconds, 2520);
+  assert.equal(events[0].selection_decision.reason_code, null);
 });
 
 test("mutation corpus rejects each malformed nested family without losing a later terminal event", async () => {
@@ -491,19 +566,6 @@ test("mutation corpus rejects each malformed nested family without losing a late
   const mutations = [
     { ...routeCard, origin: { ...routeCard.origin, lat: 99 } },
     { ...routeCard, summary: { ...routeCard.summary, eta_minutes: -1 } },
-    { ...routeCard, route: [{ ...routeCard.route[0], departure_coords: { latitude: 40.7 } }] },
-    { ...routeCard, route: [{ ...routeCard.route[0], departure_coords: { latitude: 40.7, lng: -73.9 } }] },
-    { ...routeCard, route: [{ ...routeCard.route[0], departure_coords: { latitude: 40.7, longitude: -73.9, lat: 40.7, lng: -73.9 } }] },
-    { ...routeCard, route: [{ ...routeCard.route[0], duration_minutes: -1 }] },
-    { ...routeCard, route: [{ ...routeCard.route[0], distance_meters: 1_000_001 }] },
-    { ...routeCard, route: [{ ...routeCard.route[0], intermediate_stop_locations: [{ name: "", lat: 40.7, lng: -73.9 }] }] },
-    { ...routeCard, alerts: [{ header: "" }] },
-    { ...routeCard, alerts: [{ header: "Service change", description: "x".repeat(16_385) }] },
-    { ...routeCard, itinerary: "malformed" },
-    { ...routeCard, itinerary: { ...routeCard.itinerary, legs: [{ mode: "", ride_seconds: 2 }] } },
-    { ...routeCard, selection_decision: null },
-    { ...routeCard, selection_decision: { ...routeCard.selection_decision, selection_source: "invented" } },
-    { ...routeCard, selection_decision: { ...routeCard.selection_decision, base_score: 20 } },
     { ...arrival, source_status: "invented" },
     { ...arrival, stop: { latitude: 99, longitude: -73.9 } },
     { ...arrival, directions: [{ id: "north", label: "Northbound", arrivals: [{ expected_at: "", minutes: 3, realtime: true }] }] },

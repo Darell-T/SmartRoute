@@ -69,7 +69,7 @@ function AssistantMessage({
     (chip) => isSearchActivityTool(chip.tool) && chip.status === "running",
   );
   const orbState = isSearching ? "searching" : "composing";
-  const showCards = !turn.isStreaming && hasText && isCaughtUp && turn.routeCards.length > 0;
+  const showCards = !turn.isStreaming && isCaughtUp && turn.routeCards.length > 0;
   const showArrivals = !turn.isStreaming && isCaughtUp && Boolean(turn.arrivals);
   const showAlertsAction =
     !turn.isStreaming &&
