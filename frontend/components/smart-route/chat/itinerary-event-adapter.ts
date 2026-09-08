@@ -127,6 +127,18 @@ export function intermediateStopNames(event: {
   return stops;
 }
 
+export function collapsedStopChainLabel(event: {
+  stopCount?: number;
+  stops?: string[];
+  fromLabel?: string;
+  toLabel?: string;
+}): string | null {
+  const names = intermediateStopNames(event);
+  const count = event.stopCount && event.stopCount > 0 ? event.stopCount : names.length;
+  if (count <= 0) return null;
+  return `${count} ${count === 1 ? "stop" : "stops"}`;
+}
+
 function transferRouteIds(semantics: CanonicalTransferSemantics): string[] {
   const routeId = semantics.to_route_id?.trim().toUpperCase();
   return routeId ? [routeId] : [];

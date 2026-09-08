@@ -124,17 +124,19 @@ test("validates nested transfer semantics without dropping later terminal events
 
   await silenceConsoleWarn(async (calls) => {
     const events = await collect(readerFromChunks([frames]));
-    assert.equal(events.length, 2);
+    assert.equal(events.length, 3);
     assert.equal(events[0].type, "route_card");
     assert.equal(events[0].itinerary.legs[0].transfer_semantics.kind, "same_station");
-    assert.deepEqual(events[1], {
+    assert.equal(events[1].type, "route_card");
+    assert.equal(events[1].card_id, "rc_bad_transfer");
+    assert.deepEqual(events[2], {
       type: "done",
       session_id: "s1",
       turn_id: "t1",
       stop_reason: "end_turn",
       usage: {},
     });
-    assert.equal(calls.length, 1);
+    assert.equal(calls.length, 0);
   });
 });
 
@@ -248,13 +250,15 @@ test("rejects private route selection fields at both passenger boundaries", asyn
 
   await silenceConsoleWarn(async (calls) => {
     const events = await collect(readerFromChunks([frames]));
-    assert.deepEqual(events, [{
-      type: "done",
-      session_id: "s1",
-      turn_id: "t1",
-      stop_reason: "end_turn",
-      usage: {},
-    }]);
-    assert.equal(calls.length, payloads.length);
+    const cards = events.filter((event) => event.type === "route_card");
+    assert.equal(cards.length, payloads.length);
+    assert.equal(events.at(-1).type, "done");
+    for (const card of cards) {
+      const serialized = JSON.stringify(card);
+      for (const field of Object.keys(privateFields)) {
+        assert.equal(serialized.includes(`"${field}"`), false, field);
+      }
+    }
+    assert.equal(calls.length, 0);
   });
 });

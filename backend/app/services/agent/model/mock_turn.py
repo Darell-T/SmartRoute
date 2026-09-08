@@ -129,6 +129,8 @@ async def stream_mock_turn(
         yield agent_events.TokenEvent(text=chunk)
 
     card_id = f"mock-{turn_id}"
+    walk_seconds = 180
+    ride_seconds = max(60, eta_minutes * 60 - walk_seconds)
     route_card = agent_events.RouteCardEvent(
         card_id=card_id,
         turn_id=turn_id,
@@ -141,8 +143,54 @@ async def stream_mock_turn(
             "lines": lines,
             "reason": "A simple sample route with a short final walk.",
         },
-        route=[],
+        route=[
+            {"type": "WALK", "duration_minutes": 3},
+            {
+                "type": "SUBWAY",
+                "route_id": lines[0],
+                "duration_minutes": max(1, eta_minutes - 3),
+            },
+        ],
         alerts=[],
+        itinerary={
+            "itinerary_id": card_id,
+            "total_duration_seconds": walk_seconds + ride_seconds,
+            "transfer_count": max(0, len(lines) - 1),
+            "origin": {
+                "display_name": mock_origin["label"],
+                "lat": mock_origin["lat"],
+                "lng": mock_origin["lng"],
+            },
+            "destination": {
+                "display_name": destination["label"],
+                "lat": destination["lat"],
+                "lng": destination["lng"],
+            },
+            "legs": [
+                {
+                    "mode": "WALK",
+                    "walk_seconds": walk_seconds,
+                    "board": {"name": mock_origin["label"]},
+                    "alight": {"name": "Canal St"},
+                },
+                {
+                    "mode": "SUBWAY",
+                    "service_id": lines[0],
+                    "ride_seconds": ride_seconds,
+                    "board": {"name": "Canal St"},
+                    "alight": {"name": destination["label"]},
+                    "stop_count": 5,
+                    "stops": [
+                        {"name": "Canal St"},
+                        {"name": "Chambers St"},
+                        {"name": "Fulton St"},
+                        {"name": "High St"},
+                        {"name": "Jay St-MetroTech"},
+                        {"name": destination["label"]},
+                    ],
+                },
+            ],
+        },
     )
     yield route_card
     session_module.add_visible_events(session, [route_card])

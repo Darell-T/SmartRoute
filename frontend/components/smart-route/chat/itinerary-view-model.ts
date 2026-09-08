@@ -20,6 +20,7 @@ import {
 } from "./itinerary-event-adapter";
 
 export {
+  collapsedStopChainLabel,
   condensePreviewEvents,
   formatDurationMinutes,
   intermediateStopNames,

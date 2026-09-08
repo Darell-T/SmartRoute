@@ -59,6 +59,8 @@ test("recommendation card keeps transit details collapsed by default", () => {
   assert.match(LEG_SOURCE, /aria-controls=\{`\$\{event\.id\}-stops`\}/);
   assert.match(LEG_SOURCE, /onClick=\{onToggle\}/);
   assert.match(LEG_SOURCE, /\{expanded && stops\.length > 0 \?/);
+  assert.match(LEG_SOURCE, /collapsedStopChainLabel\(event\)/);
+  assert.doesNotMatch(LEG_SOURCE, /stopsLabel, event\.durationLabel/);
   assert.match(
     CARD_SOURCE,
     /if \(next\.has\(eventId\)\) next\.delete\(eventId\);[\s\S]*else next\.add\(eventId\);/,
@@ -163,6 +165,17 @@ test("Open on map remains a direct keyboard-accessible action", () => {
   assert.match(CARD_SOURCE, /disabled=\{!onPrimaryAction\}/);
   assert.match(CARD_SOURCE, /onClick=\{onPrimaryAction\}/);
   assert.doesNotMatch(CARD_SOURCE, /onClick=\{\(\) => onPrimaryAction/);
+});
+
+test("chat shows route cards after the turn finishes even without assistant prose", () => {
+  assert.match(
+    CHAT_MESSAGE_SOURCE,
+    /const showCards = !turn\.isStreaming && isCaughtUp && turn\.routeCards\.length > 0;/,
+  );
+  assert.doesNotMatch(
+    CHAT_MESSAGE_SOURCE,
+    /showCards = !turn\.isStreaming && hasText && isCaughtUp/,
+  );
 });
 
 test("transit status exposes View alerts only from the typed action flag", () => {
