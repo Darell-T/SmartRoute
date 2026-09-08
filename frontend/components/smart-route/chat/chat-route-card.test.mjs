@@ -59,6 +59,9 @@ test("recommendation card keeps transit details collapsed by default", () => {
   assert.match(LEG_SOURCE, /aria-controls=\{`\$\{event\.id\}-stops`\}/);
   assert.match(LEG_SOURCE, /onClick=\{onToggle\}/);
   assert.match(LEG_SOURCE, /\{expanded && stops\.length > 0 \?/);
+  assert.match(LEG_SOURCE, /collapsedStopChainLabel\(event\)/);
+  assert.match(LEG_SOURCE, /canExpand=\{stopNames\.length > 0\}/);
+  assert.doesNotMatch(LEG_SOURCE, /stopsLabel, event\.durationLabel/);
   assert.match(
     CARD_SOURCE,
     /if \(next\.has\(eventId\)\) next\.delete\(eventId\);[\s\S]*else next\.add\(eventId\);/,
