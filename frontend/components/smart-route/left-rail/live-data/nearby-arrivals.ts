@@ -483,7 +483,7 @@ function liveHeadsignFields(
   line: string,
   direction: NearbyTransitDirection,
   mode: "subway" | "bus",
-): { destination: string; servicePattern: string | undefined } {
+) {
   const headsign = destinationForArrival(arrival, line, direction, mode);
   if (mode !== "bus") {
     return { destination: headsign, servicePattern: servicePatternForArrival(arrival, line, mode) };

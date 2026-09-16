@@ -3460,3 +3460,54 @@ Google Maps and Damn Lines attribution render through the PromptKit source
 row. Normal sources use `SourceTrigger` with favicon display. Google
 attribution remains visible as `Place data by Google Maps` after the
 recommendation prose.
+
+## Frontend simplification after wave 5, 2026-09-16
+
+Record plan 3.2 metrics at fixed point `5193b08` and after Wave 5. Decision
+rows are in [`.audit/frontend-refactor/decisions.tsv`](../.audit/frontend-refactor/decisions.tsv).
+
+| Metric | Fixed point `5193b08` | After Wave 5 |
+|---|---|---|
+| Non-test LOC `frontend/app` | 945 | 938 |
+| Non-test LOC `frontend/lib` | 4980 | 4975 |
+| Non-test LOC `frontend/components` | 15582 | 15569 |
+| Oxlint total | 264 | 181 |
+| `anti-slop(no-runtime-typeof)` | 101 | 59 |
+| `anti-slop(require-safety-comment-for-type-assertion)` | 52 | 48 |
+| `anti-slop(no-known-value-widening)` | 33 | 19 |
+| `anti-slop(no-unknown-parameters)` | 22 | 20 |
+| `anti-slop(no-unsafe-dictionary-type)` | 19 | 18 |
+| `anti-slop(no-conditional-empty-object-spread)` | 11 | 2 |
+| `anti-slop(no-shape-in-symbol-names)` | 7 | 7 |
+| `anti-slop(no-chained-type-assertions)` | 6 | 6 |
+| `unicorn(prefer-string-starts-ends-with)` | 5 | 0 |
+| `eslint(no-unused-vars)` | 4 | 0 |
+| `eslint(no-useless-escape)` | 2 | 0 |
+| `eslint(require-yield)` | 2 | 2 |
+| Duplicate helper names | 6 `POST`, 5 `GET`, 3 `boundedInteger`, 2 `normalizeIssueText`, 2 `clamp`, 2 `limitedText`, 2 `isLocalBackendBase`, 2 `canonicalDurationMinutes`, 2 `boundedNumber`, 2 `nonEmptyText`, 2 `nonEmptyTextList`, 2 `read`, 2 `isRecord` | 6 `POST`, 5 `GET`, 2 `read` |
+| Files above 500 non-test lines | `frontend/components/map/subway-network.ts` 1299, `frontend/components/smart-route/map/smart-route-map.tsx` 585, `frontend/components/smart-route/left-rail/route-view-itinerary.tsx` 564, `frontend/components/smart-route/left-rail/live-data/nearby-arrivals.ts` 509 | `frontend/components/map/subway-network.ts` 1295, `frontend/components/smart-route/map/smart-route-map.tsx` 580, `frontend/components/smart-route/left-rail/route-view/itinerary.tsx` 566, `frontend/components/smart-route/left-rail/live-data/nearby-arrivals.ts` 509 |
+| Merged coverage lines | 97.36% (45495/46729) | 97.35% (45466/46700) |
+| Merged coverage branches | 91.92% (11701/12729) | 91.88% (11656/12686) |
+
+Regenerate non-test LOC from `frontend` with:
+
+```powershell
+foreach ($root in 'app','lib','components') { Get-ChildItem -Recurse -File $root -Include *.ts,*.tsx | Where-Object { $_.Name -notmatch '\.test\.|\.check\.' } | ForEach-Object { (Get-Content $_.FullName | Measure-Object -Line).Lines } | Measure-Object -Sum | ForEach-Object { "$root $($_.Sum)" } }
+```
+
+Regenerate Oxlint totals from `frontend` with:
+
+```powershell
+$out = npm run lint:oxlint 2>&1 | Out-String -Stream | Where-Object { $_ -match '^\S+:\d+:\d+: (error|warning) ' }; "total $($out.Count)"; $out | ForEach-Object { if ($_ -match '(error|warning) (\S+):') { $matches[2] } } | Group-Object | Sort-Object Count -Descending | Select-Object Count,Name; $out | ForEach-Object { ($_ -split ':')[0] } | Group-Object | Sort-Object Count -Descending | Select-Object Count,Name
+```
+
+Regenerate duplicate helper names from `frontend` with:
+
+```powershell
+rg -o --no-filename '^(?:export )?(?:async )?function ([A-Za-z_][A-Za-z0-9_]*)|^(?:export )?const ([A-Za-z_][A-Za-z0-9_]*) = (?:\(|async \(|[A-Za-z_][A-Za-z0-9_]*\) =>|<)' -r '$1$2' app lib components --glob '!*.test.*' | Group-Object | Where-Object { $_.Count -ge 2 } | Sort-Object Count -Descending | Select-Object Count,Name
+```
+
+Regenerate files above 500 lines from the same LOC pipeline. Keep a row when the per-file `Measure-Object -Line` count is greater than 500.
+
+Regenerate merged coverage by running `npm --prefix frontend run test:coverage` and summarizing `frontend/coverage/coverage-final.json`.
+

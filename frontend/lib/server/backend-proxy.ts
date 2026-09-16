@@ -82,15 +82,20 @@ export async function proxyToBackend(path: string, options: ProxyOptions = {}, r
   const headers = buildProxyHeaders(appKey, request, body !== undefined);
   if (headers instanceof NextResponse) return headers;
 
+  const init: Omit<RequestInit, "signal"> = {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  };
+  if (cache) {
+    init.cache = cache;
+  }
+  if (next) {
+    init.next = next;
+  }
   const result = await fetchBackendText(
     `${backendBase}${path}`,
-    {
-      method,
-      headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
-      ...(cache ? { cache } : {}),
-      ...(next ? { next } : {}),
-    },
+    init,
     timeoutMs,
   );
 
