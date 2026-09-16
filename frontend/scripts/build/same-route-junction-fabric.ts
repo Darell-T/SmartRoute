@@ -20,7 +20,6 @@ type JunctionFeatureProperties = {
   same_route_junction_fabric?: boolean;
   same_route_junction_fabric_repair_count?: number;
   same_route_junction_fabric_repairs?: Array<{ side: EndpointSide; distance_m: number }>;
-  [key: string]: unknown;
 };
 
 type JunctionFeature = Feature<LineStringGeometry, JunctionFeatureProperties>;
@@ -58,6 +57,12 @@ type JunctionRepair = {
   other_index: number;
 };
 
+type SameRouteJunctionResult = {
+  features: JunctionFeature[];
+  repairCount: number;
+  repairs: JunctionRepair[];
+};
+
 function metersPerDegLng(lat: number): number {
   return 111320 * Math.cos((lat * Math.PI) / 180);
 }
@@ -76,12 +81,13 @@ function activeRouteIdsForFeature(feature: JunctionFeature): string[] {
   const properties = feature.properties ?? {};
   const colorRouteIds = properties.color_route_ids;
   if (Array.isArray(colorRouteIds)) return colorRouteIds.map(String);
-  if (colorRouteIds && typeof colorRouteIds === "object") {
-    const color = properties.color;
-    if (color && Array.isArray(colorRouteIds[color])) return colorRouteIds[color].map(String);
-    return [...new Set(Object.values(colorRouteIds).flat().filter(Boolean).map(String))];
+  if (!colorRouteIds) {
+    return Array.isArray(properties.route_ids) ? properties.route_ids.map(String) : [];
   }
-  return Array.isArray(properties.route_ids) ? properties.route_ids.map(String) : [];
+  const color = properties.color;
+  const keyed = color ? colorRouteIds[color] : undefined;
+  if (Array.isArray(keyed)) return keyed.map(String);
+  return [...new Set(Object.values(colorRouteIds).flat().filter(Boolean).map(String))];
 }
 
 function shareActiveRoute(a: JunctionFeature, b: JunctionFeature): boolean {
@@ -143,6 +149,10 @@ function cumulativeArc(coords: Position[]): number[] {
   return arcs;
 }
 
+function cloneCoordinate(position: Position): Position {
+  return [position[0], position[1]];
+}
+
 function cloneFeatureWithCoordinates(feature: JunctionFeature, coordinates: Position[]): JunctionFeature {
   return {
     ...feature,
@@ -151,7 +161,7 @@ function cloneFeatureWithCoordinates(feature: JunctionFeature, coordinates: Posi
       coordinates,
     },
     properties: {
-      ...(feature.properties ?? {}),
+      ...feature.properties,
       same_route_junction_fabric: true,
       same_route_junction_fabric_repair_count:
         Number(feature.properties?.same_route_junction_fabric_repair_count ?? 0) + 1,
@@ -166,7 +176,7 @@ function normalizeEndpoint(
   minSegmentM: number,
   segmentIndex: number | null = null,
 ): Position[] {
-  const next = coordinates.map((coordinate) => coordinate.slice() as Position);
+  const next = coordinates.map(cloneCoordinate);
   if (side === "start") {
     if (segmentIndex !== null && segmentIndex > 0) {
       next.splice(0, segmentIndex, point);
@@ -188,6 +198,11 @@ function normalizeEndpoint(
   }
   return next;
 }
+
+type IndexedLine = {
+  feature: JunctionFeature;
+  index: number;
+};
 
 function candidateForSegment(
   coords: Position[],
@@ -223,107 +238,114 @@ function candidateForSegment(
   return null;
 }
 
-/**
- * @param {Array<GeoJSON.Feature>} features
- * @param {object} [options]
- * @param {number} [options.maxEndpointOvershootM=70]
- * @param {number} [options.minSegmentM=0.5]
- * @returns {{ features: Array, repairCount: number, repairs: Array }}
- */
-export function repairSameRouteEndpointCrossings(
-  features: JunctionFeature[],
-  options: SameRouteJunctionOptions = {},
-): { features: JunctionFeature[]; repairCount: number; repairs: JunctionRepair[] } {
-  const {
-    maxEndpointOvershootM = 70,
-    minSegmentM = 0.5,
-    allowSameColorSiblingRoutes = true,
-  } = options;
+function keepCloserCandidate(
+  bestByFeatureSide: Map<string, IndexedEndpointCandidate>,
+  index: number,
+  candidate: EndpointCandidate | null,
+  otherIndex: number,
+): void {
+  if (!candidate) return;
+  const key = `${index}:${candidate.side}`;
+  const existing = bestByFeatureSide.get(key);
+  if (!existing || candidate.distanceM < existing.distanceM) {
+    bestByFeatureSide.set(key, { ...candidate, index, otherIndex });
+  }
+}
 
-  const lines = features
-    .map((feature, index) => ({ feature, index }))
-    .filter(({ feature }) =>
-      feature.geometry?.type === "LineString" &&
-      Array.isArray(feature.geometry.coordinates) &&
-      feature.geometry.coordinates.length >= 2,
-    );
-
-  const bestByFeatureSide = new Map();
-
-  function consider(index: number, candidate: EndpointCandidate | null, otherIndex: number): void {
-    if (!candidate) return;
-    const key = `${index}:${candidate.side}`;
-    const existing = bestByFeatureSide.get(key);
-    if (!existing || candidate.distanceM < existing.distanceM) {
-      bestByFeatureSide.set(key, { ...candidate, index, otherIndex });
+function considerPairIntersections(
+  left: IndexedLine,
+  right: IndexedLine,
+  maxEndpointOvershootM: number,
+  bestByFeatureSide: Map<string, IndexedEndpointCandidate>,
+): void {
+  const leftCoords = left.feature.geometry.coordinates;
+  const rightCoords = right.feature.geometry.coordinates;
+  const leftArcs = cumulativeArc(leftCoords);
+  const rightArcs = cumulativeArc(rightCoords);
+  for (let leftIndex = 0; leftIndex < leftCoords.length - 1; leftIndex += 1) {
+    for (let rightIndex = 0; rightIndex < rightCoords.length - 1; rightIndex += 1) {
+      const intersection = segmentIntersection(
+        leftCoords[leftIndex],
+        leftCoords[leftIndex + 1],
+        rightCoords[rightIndex],
+        rightCoords[rightIndex + 1],
+      );
+      if (!intersection) continue;
+      keepCloserCandidate(
+        bestByFeatureSide,
+        left.index,
+        candidateForSegment(leftCoords, leftArcs, leftIndex, intersection, maxEndpointOvershootM),
+        right.index,
+      );
+      keepCloserCandidate(
+        bestByFeatureSide,
+        right.index,
+        candidateForSegment(
+          rightCoords,
+          rightArcs,
+          rightIndex,
+          { ...intersection, t: intersection.u },
+          maxEndpointOvershootM,
+        ),
+        left.index,
+      );
     }
   }
+}
 
+function collectBestEndpointCrossings(
+  lines: IndexedLine[],
+  maxEndpointOvershootM: number,
+  allowSameColorSiblingRoutes: boolean,
+): Map<string, IndexedEndpointCandidate> {
+  const bestByFeatureSide = new Map<string, IndexedEndpointCandidate>();
   for (let i = 0; i < lines.length; i += 1) {
-    const left = lines[i].feature;
-    const leftCoords = left.geometry.coordinates;
     for (let j = i + 1; j < lines.length; j += 1) {
-      const right = lines[j].feature;
-      if (!compatibleJunctionColor(left, right, allowSameColorSiblingRoutes)) continue;
-
-      const rightCoords = right.geometry.coordinates;
-      const leftArcs = cumulativeArc(leftCoords);
-      const rightArcs = cumulativeArc(rightCoords);
-      for (let li = 0; li < leftCoords.length - 1; li += 1) {
-        for (let ri = 0; ri < rightCoords.length - 1; ri += 1) {
-          const intersection = segmentIntersection(
-            leftCoords[li],
-            leftCoords[li + 1],
-            rightCoords[ri],
-            rightCoords[ri + 1],
-          );
-          if (!intersection) continue;
-
-          consider(
-            lines[i].index,
-            candidateForSegment(leftCoords, leftArcs, li, intersection, maxEndpointOvershootM),
-            lines[j].index,
-          );
-          const rightIntersection = {
-            ...intersection,
-            t: intersection.u,
-          };
-          consider(
-            lines[j].index,
-            candidateForSegment(rightCoords, rightArcs, ri, rightIntersection, maxEndpointOvershootM),
-            lines[i].index,
-          );
-        }
-      }
+      if (!compatibleJunctionColor(lines[i].feature, lines[j].feature, allowSameColorSiblingRoutes)) continue;
+      considerPairIntersections(lines[i], lines[j], maxEndpointOvershootM, bestByFeatureSide);
     }
   }
+  return bestByFeatureSide;
+}
 
+function groupCandidatesByFeature(
+  bestByFeatureSide: Map<string, IndexedEndpointCandidate>,
+): Map<number, IndexedEndpointCandidate[]> {
+  const repairsByIndex = new Map<number, IndexedEndpointCandidate[]>();
+  for (const candidate of bestByFeatureSide.values()) {
+    const bucket = repairsByIndex.get(candidate.index);
+    if (bucket) bucket.push(candidate);
+    else repairsByIndex.set(candidate.index, [candidate]);
+  }
+  return repairsByIndex;
+}
+
+function applyCollectedEndpointRepairs(
+  features: JunctionFeature[],
+  bestByFeatureSide: Map<string, IndexedEndpointCandidate>,
+  minSegmentM: number,
+): SameRouteJunctionResult {
   if (bestByFeatureSide.size === 0) {
     return { features, repairCount: 0, repairs: [] };
   }
 
-  const repairsByIndex = new Map<number, IndexedEndpointCandidate[]>();
-  for (const candidate of bestByFeatureSide.values()) {
-    if (!repairsByIndex.has(candidate.index)) repairsByIndex.set(candidate.index, []);
-    repairsByIndex.get(candidate.index)?.push(candidate);
-  }
-
   const nextFeatures = features.slice();
   const repairs: JunctionRepair[] = [];
-  for (const [index, candidates] of repairsByIndex.entries()) {
+  for (const [index, candidates] of groupCandidatesByFeature(bestByFeatureSide).entries()) {
     let coords = features[index].geometry.coordinates;
-    for (const candidate of candidates.sort((a, b) => a.side.localeCompare(b.side))) {
+    const ordered = candidates.sort((left, right) => left.side.localeCompare(right.side));
+    for (const candidate of ordered) {
       coords = normalizeEndpoint(coords, candidate.side, candidate.point, minSegmentM, candidate.segmentIndex);
-      repairs.push({
-        corridor_id: features[index].properties?.corridor_id ?? features[index].properties?.bundle_id ?? null,
-        side: candidate.side,
-        distance_m: Number(candidate.distanceM.toFixed(2)),
-        point: candidate.point,
-        other_index: candidate.otherIndex,
-      });
+      repairs.push(({
+    corridor_id: (features[index]).properties?.corridor_id ?? (features[index]).properties?.bundle_id ?? null,
+    side: (candidate).side,
+    distance_m: Number((candidate).distanceM.toFixed(2)),
+    point: (candidate).point,
+    other_index: (candidate).otherIndex,
+}));
     }
     nextFeatures[index] = cloneFeatureWithCoordinates(features[index], coords);
-    nextFeatures[index].properties.same_route_junction_fabric_repairs = candidates.map((candidate) => ({
+    nextFeatures[index].properties.same_route_junction_fabric_repairs = ordered.map((candidate) => ({
       side: candidate.side,
       distance_m: Number(candidate.distanceM.toFixed(2)),
     }));
@@ -334,4 +356,32 @@ export function repairSameRouteEndpointCrossings(
     repairCount: repairs.length,
     repairs,
   };
+}
+
+function lineFeaturesWithIndex(features: JunctionFeature[]): IndexedLine[] {
+  return features
+    .map((feature, index) => ({ feature, index }))
+    .filter(({ feature }) =>
+      feature.geometry?.type === "LineString" &&
+      Array.isArray(feature.geometry.coordinates) &&
+      feature.geometry.coordinates.length >= 2,
+    );
+}
+
+export function repairSameRouteEndpointCrossings(
+  features: JunctionFeature[],
+  options: SameRouteJunctionOptions = {},
+): SameRouteJunctionResult {
+  const maxEndpointOvershootM = options.maxEndpointOvershootM ?? 70;
+  const minSegmentM = options.minSegmentM ?? 0.5;
+  const allowSameColorSiblingRoutes = options.allowSameColorSiblingRoutes ?? true;
+  return applyCollectedEndpointRepairs(
+    features,
+    collectBestEndpointCrossings(
+      lineFeaturesWithIndex(features),
+      maxEndpointOvershootM,
+      allowSameColorSiblingRoutes,
+    ),
+    minSegmentM,
+  );
 }

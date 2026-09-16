@@ -86,3 +86,45 @@ test("simplifyTightCurves returns inputs < 5 points unchanged", () => {
   const a: Position[] = [[-73.98, 40.69], [-73.97, 40.70], [-73.96, 40.70]];
   assert.equal(simplifyTightCurves(a, {}), a);
 });
+
+test("maxTurnDensityDegPerM is zero for empty and two-point polylines", () => {
+  assert.equal(maxTurnDensityDegPerM([]), 0);
+  assert.equal(maxTurnDensityDegPerM([[-73.98, 40.69], [-73.97, 40.70]]), 0);
+});
+
+test("simplifyTightCurves extends a tight run by marginVerts and stays deterministic", () => {
+  const coords = tightHairpin();
+  const first = simplifyTightCurves(coords, {
+    tightTurnDeg: 70,
+    windowM: 50,
+    iterations: 8,
+    lambda: 0.5,
+    marginVerts: 3,
+  });
+  const second = simplifyTightCurves(coords, {
+    tightTurnDeg: 70,
+    windowM: 50,
+    iterations: 8,
+    lambda: 0.5,
+    marginVerts: 3,
+  });
+  assert.deepEqual(first[0], coords[0]);
+  assert.deepEqual(first[first.length - 1], coords[coords.length - 1]);
+  assert.notEqual(first, coords);
+  assert.deepEqual(first, second);
+});
+
+test("simplifyTightCurves still rounds a clockwise hairpin", () => {
+  const origin: Position = [-73.928, 40.818];
+  const coords = [P(...origin, 0, -120), P(...origin, 0, -60), P(...origin, 0, -10)];
+  const radiusM = 18;
+  for (let deg = 0; deg <= 180; deg += 20) {
+    const a = (deg * Math.PI) / 180;
+    coords.push(P(...origin, radiusM - radiusM * Math.cos(a), -radiusM * Math.sin(a)));
+  }
+  coords.push(P(...origin, 2 * radiusM, -10), P(...origin, 2 * radiusM, -60), P(...origin, 2 * radiusM, -120));
+  const out = simplifyTightCurves(coords, { tightTurnDeg: 70, windowM: 50, iterations: 16, lambda: 0.5 });
+  assert.deepEqual(out[0], coords[0]);
+  assert.deepEqual(out[out.length - 1], coords[coords.length - 1]);
+  assert.ok(maxTurnDensityDegPerM(out, 40) <= maxTurnDensityDegPerM(coords, 40));
+});

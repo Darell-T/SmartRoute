@@ -14,6 +14,37 @@ export type GeometrySmoothingPassResult = {
   smoothedCornerCount: number;
 };
 
+function samePoint(left: Position, right: Position): boolean {
+  return left[0] === right[0] && left[1] === right[1];
+}
+
+function smoothLineStringFeature(
+  feature: LineFeature,
+  input: Omit<GeometrySmoothingPassInput, "features">,
+): number {
+  if (feature.geometry?.type !== "LineString") return 0;
+  const before = feature.geometry.coordinates;
+  if (!Array.isArray(before) || before.length < 3) return 0;
+  const sharpBefore = countSharpCorners(before, input.angleThresholdDeg);
+  if (sharpBefore === 0) return 0;
+  const after = smoothSharpCorners(before, {
+    angleThresholdDeg: input.angleThresholdDeg,
+    iterations: input.iterations,
+    ratio: input.ratio,
+    maxFilletM: input.maxFilletM,
+  });
+  if (after === before) return 0;
+  // Endpoint-preservation invariant: junctions must not move.
+  if (!(samePoint((after)[0], (before)[0]) && samePoint((after)[(after).length - 1], (before)[(before).length - 1]))) {
+    console.error(
+      `[visual-network] *** smoothing moved an endpoint on ${feature.properties?.bundle_id ?? "?"} -- refusing. ***`,
+    );
+    process.exit(1);
+  }
+  feature.geometry.coordinates = after;
+  return sharpBefore;
+}
+
 export function applyGeometrySmoothingPass({
   features,
   angleThresholdDeg,
@@ -23,32 +54,16 @@ export function applyGeometrySmoothingPass({
 }: GeometrySmoothingPassInput): GeometrySmoothingPassResult {
   let smoothedFeatureCount = 0;
   let smoothedCornerCount = 0;
-  if (features) {
-    for (const f of features) {
-      if (f.geometry?.type !== "LineString") continue;
-      const before = f.geometry.coordinates;
-      if (!Array.isArray(before) || before.length < 3) continue;
-      const sharpBefore = countSharpCorners(before, angleThresholdDeg);
-      if (sharpBefore === 0) continue;
-      const after = smoothSharpCorners(before, {
-        angleThresholdDeg,
-        iterations,
-        ratio,
-        maxFilletM,
-      });
-      if (after === before) continue;
-      // Endpoint-preservation invariant: junctions must not move.
-      const eqPt = (p: Position, q: Position) => p[0] === q[0] && p[1] === q[1];
-      if (!eqPt(after[0], before[0]) || !eqPt(after[after.length - 1], before[before.length - 1])) {
-        console.error(
-          `[visual-network] *** smoothing moved an endpoint on ${f.properties?.bundle_id ?? "?"} -- refusing. ***`,
-        );
-        process.exit(1);
-      }
-      f.geometry.coordinates = after;
-      smoothedFeatureCount += 1;
-      smoothedCornerCount += sharpBefore;
-    }
+  for (const feature of features ?? []) {
+    const corners = smoothLineStringFeature(feature, {
+      angleThresholdDeg,
+      iterations,
+      ratio,
+      maxFilletM,
+    });
+    if (corners === 0) continue;
+    smoothedFeatureCount += 1;
+    smoothedCornerCount += corners;
   }
 
   return {

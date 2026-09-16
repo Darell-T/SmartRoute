@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import {
   buildMottHavenFiveSchematicLens,
   buildMottHavenSixSchematicMerge,
-  distanceMeters,
 } from "./mott-haven-schematic.ts";
 import type { Position } from "./types.ts";
 
@@ -26,6 +25,22 @@ function local(coord: Position): Position {
     (coord[0] - ORIGIN[0]) * metersPerDegLng(ORIGIN[1]),
     (coord[1] - ORIGIN[1]) * M_PER_DEG_LAT,
   ];
+}
+
+function distanceMeters(a: Position, b: Position): number {
+  const eastM = (a[0] - b[0]) * metersPerDegLng((a[1] + b[1]) / 2);
+  const northM = (a[1] - b[1]) * M_PER_DEG_LAT;
+  return Math.hypot(eastM, northM);
+}
+
+function requireDiagnosticNumber(value: number | undefined, label: string): number {
+  if (value === undefined) throw new TypeError(`expected ${label}`);
+  return value;
+}
+
+function requireDiagnosticPoint(value: Position | undefined, label: string): Position {
+  if (!value) throw new TypeError(`expected ${label}`);
+  return value;
 }
 
 test("Mott Haven schematic lens closes at the 4/5 trunk, bows west, and rejoins lower", () => {
@@ -52,12 +67,19 @@ test("Mott Haven schematic lens closes at the 4/5 trunk, bows west, and rejoins 
     sampleM: 8,
   });
 
+  const again = buildMottHavenFiveSchematicLens({
+    branchCoords,
+    trunkCoords,
+    mergeDistanceM: 310,
+    sampleM: 8,
+  });
   assert.equal(result.diagnostics.ok, true);
+  assert.equal(JSON.stringify(result), JSON.stringify(again));
   assert.ok(result.coordinates.length > branchCoords.length * 4);
-  assert.ok(result.diagnostics.topApproachLatSpreadM! < 8);
-  assert.ok(result.diagnostics.maxTrunkDistanceM! > 145);
-  assert.ok(result.diagnostics.mergeDistanceM! < 1);
-  assert.ok(result.diagnostics.maxTurnDeg! < 55);
+  assert.ok(requireDiagnosticNumber(result.diagnostics.topApproachLatSpreadM, "topApproachLatSpreadM") < 8);
+  assert.ok(requireDiagnosticNumber(result.diagnostics.maxTrunkDistanceM, "maxTrunkDistanceM") > 145);
+  assert.ok(requireDiagnosticNumber(result.diagnostics.mergeDistanceM, "mergeDistanceM") < 1);
+  assert.ok(requireDiagnosticNumber(result.diagnostics.maxTurnDeg, "maxTurnDeg") < 55);
 
   const topHit = Math.min(...result.coordinates.map((coord) => distanceMeters(coord, trunkCoords[0])));
   assert.ok(topHit < 1, `expected the 5 to meet the 4/5 trunk at the top split, got ${topHit.toFixed(1)}m`);
@@ -67,7 +89,7 @@ test("Mott Haven schematic lens closes at the 4/5 trunk, bows west, and rejoins 
 
   const afterTop = result.coordinates.slice(result.diagnostics.prefixCutIndex);
   const midLens = afterTop.filter((coord) => {
-    const [x, y] = local(coord);
+    const [, y] = local(coord);
     return y < -25 && y > -285;
   });
   assert.ok(
@@ -99,9 +121,13 @@ test("Mott Haven schematic lens preserves a street-aligned east approach before 
   });
 
   assert.equal(result.diagnostics.ok, true);
+  const topApproachLatSpreadM = requireDiagnosticNumber(
+    result.diagnostics.topApproachLatSpreadM,
+    "topApproachLatSpreadM",
+  );
   assert.ok(
-    result.diagnostics.topApproachLatSpreadM! < 5,
-    `expected flat E 149 St entry, got ${result.diagnostics.topApproachLatSpreadM!.toFixed(1)}m spread`,
+    topApproachLatSpreadM < 5,
+    `expected flat E 149 St entry, got ${topApproachLatSpreadM.toFixed(1)}m spread`,
   );
 
   const topRun = result.coordinates.filter((coord) => {
@@ -144,13 +170,13 @@ test("Mott Haven schematic lens follows the 2 line until the 4/5 trunk crossing"
   });
 
   assert.equal(result.diagnostics.ok, true);
-  const topLocal = local(result.diagnostics.topPoint!);
+  const topLocal = local(requireDiagnosticPoint(result.diagnostics.topPoint, "topPoint"));
   assert.ok(
     Math.abs(topLocal[1] - 100) < 15,
     `expected the 5 peel to start at the 2/4 crossing latitude, got local y=${topLocal[1].toFixed(1)}m`,
   );
 
-  const entryLocal = local(result.diagnostics.entryPoint!);
+  const entryLocal = local(requireDiagnosticPoint(result.diagnostics.entryPoint, "entryPoint"));
   const slope = (76 - 110) / 440;
   const expectedEntryY = 110 + slope * entryLocal[0] - 10;
   assert.ok(
@@ -202,9 +228,10 @@ test("Mott Haven schematic turn diagnostics ignore preserved upstream branch geo
   });
 
   assert.equal(result.diagnostics.ok, true);
+  const maxTurnDeg = requireDiagnosticNumber(result.diagnostics.maxTurnDeg, "maxTurnDeg");
   assert.ok(
-    result.diagnostics.maxTurnDeg! < 65,
-    `expected the junction diagnostic to ignore preserved upstream branch kinks, got ${result.diagnostics.maxTurnDeg!.toFixed(1)}deg`,
+    maxTurnDeg < 65,
+    `expected the junction diagnostic to ignore preserved upstream branch kinks, got ${maxTurnDeg.toFixed(1)}deg`,
   );
 });
 
@@ -235,12 +262,22 @@ test("Mott Haven 6 schematic merge removes the lower teardrop and ends on the tr
     sampleM: 8,
   });
 
+  const again = buildMottHavenSixSchematicMerge({
+    branchCoords,
+    mainlineCoords,
+    mergeDistanceM: 430,
+    entryEastM: 330,
+    entryNorthM: 80,
+    sampleM: 8,
+  });
   assert.equal(result.diagnostics.ok, true);
+  assert.equal(JSON.stringify(result), JSON.stringify(again));
   assert.ok(result.coordinates.length > 12);
   assert.ok(result.sharedMainlineCoords.length >= 2);
+  const mergeDistanceM = requireDiagnosticNumber(result.diagnostics.mergeDistanceM, "mergeDistanceM");
   assert.ok(
-    result.diagnostics.mergeDistanceM! < 1,
-    `expected the 6 merge to terminate on the trunk, got ${result.diagnostics.mergeDistanceM!.toFixed(1)}m`,
+    mergeDistanceM < 1,
+    `expected the 6 merge to terminate on the trunk, got ${mergeDistanceM.toFixed(1)}m`,
   );
 
   const localXs = result.coordinates.map((coord) => local(coord)[0]);
@@ -252,7 +289,136 @@ test("Mott Haven 6 schematic merge removes the lower teardrop and ends on the tr
   const sharedStart = result.sharedMainlineCoords[0];
   assert.ok(sharedStart);
   assert.ok(
-    distanceMeters(sharedStart, result.diagnostics.mergePoint!) < 1,
+    distanceMeters(sharedStart, requireDiagnosticPoint(result.diagnostics.mergePoint, "mergePoint")) < 1,
     "shared 4/6 mainline should begin exactly where the 6 branch merges",
   );
+});
+
+test("Mott Haven schematic builders reject empty and malformed polylines", () => {
+  const missingBranch = buildMottHavenFiveSchematicLens({
+    branchCoords: [],
+    trunkCoords: [p(0, 0), p(0, -100)],
+  });
+  const missingTrunk = buildMottHavenFiveSchematicLens({
+    branchCoords: [p(100, 0), p(0, 0)],
+    trunkCoords: [p(0, 0)],
+  });
+  const missingSixBranch = buildMottHavenSixSchematicMerge({
+    branchCoords: null,
+    mainlineCoords: [p(0, 0), p(0, -100)],
+  });
+  assert.equal(missingBranch.diagnostics.ok, false);
+  assert.equal(missingBranch.diagnostics.reason, "missing_branch");
+  assert.equal(missingTrunk.diagnostics.ok, false);
+  assert.equal(missingTrunk.diagnostics.reason, "missing_trunk");
+  assert.equal(missingSixBranch.diagnostics.ok, false);
+  assert.equal(missingSixBranch.diagnostics.reason, "missing_branch");
+  assert.deepEqual(missingSixBranch.sharedMainlineCoords, []);
+
+  const missingSixMainline = buildMottHavenSixSchematicMerge({
+    branchCoords: [p(100, 0), p(0, 0)],
+    mainlineCoords: [p(0, 0)],
+  });
+  assert.equal(missingSixMainline.diagnostics.ok, false);
+  assert.equal(missingSixMainline.diagnostics.reason, "missing_mainline");
+  assert.deepEqual(missingSixMainline.sharedMainlineCoords, []);
+
+  const missingSixBranchEmpty = buildMottHavenSixSchematicMerge({
+    branchCoords: [],
+    mainlineCoords: [p(0, 0), p(0, -100)],
+  });
+  assert.equal(missingSixBranchEmpty.diagnostics.ok, false);
+  assert.equal(missingSixBranchEmpty.diagnostics.reason, "missing_branch");
+  assert.deepEqual(missingSixBranchEmpty.coordinates, []);
+});
+
+test("Mott Haven schematic builders still close on a trunk shorter than the requested merge distance", () => {
+  const shortTrunk = [p(0, 0), p(0, -40)];
+  const branchCoords = [
+    p(900, 70),
+    p(650, 40),
+    p(430, -10),
+    p(250, -25),
+    p(90, -45),
+    p(20, -35),
+  ];
+  const five = buildMottHavenFiveSchematicLens({
+    branchCoords,
+    trunkCoords: shortTrunk,
+    mergeDistanceM: 310,
+    sampleM: 8,
+  });
+  assert.equal(five.diagnostics.ok, true);
+  assert.ok(five.diagnostics.mergePoint);
+  assert.ok(
+    distanceMeters(five.diagnostics.mergePoint, shortTrunk[shortTrunk.length - 1]) < 1,
+    "merge beyond the trunk must clamp to the trunk end",
+  );
+
+  const six = buildMottHavenSixSchematicMerge({
+    branchCoords: [
+      p(400, 80),
+      p(250, 40),
+      p(80, 10),
+    ],
+    mainlineCoords: shortTrunk,
+    mergeDistanceM: 430,
+    entryEastM: 120,
+    entryNorthM: 20,
+    sampleM: 8,
+  });
+  assert.equal(six.diagnostics.ok, true);
+  assert.ok(six.diagnostics.mergePoint);
+  assert.ok(
+    distanceMeters(six.diagnostics.mergePoint, shortTrunk[shortTrunk.length - 1]) < 1,
+    "6 merge beyond the mainline must clamp to the mainline end",
+  );
+  assert.ok(six.sharedMainlineCoords.length >= 1);
+});
+
+test("Mott Haven schematic builders use defaults and keep a prefix already on the entry", () => {
+  const empty = buildMottHavenFiveSchematicLens();
+  assert.equal(empty.diagnostics.ok, false);
+  assert.equal(empty.diagnostics.reason, "missing_branch");
+
+  const trunkCoords = [p(0, 0), p(0, -100), p(0, -220), p(0, -340)];
+  const onEntry = buildMottHavenFiveSchematicLens({
+    branchCoords: [p(420, 0), p(200, 0), p(40, -40)],
+    trunkCoords,
+    mergeDistanceM: 0,
+    sampleM: 10,
+    eastEntryM: 420,
+  });
+  assert.equal(onEntry.diagnostics.ok, true);
+  assert.ok(onEntry.coordinates.length >= 2);
+
+  const farReference = buildMottHavenFiveSchematicLens({
+    branchCoords: [p(900, 70), p(650, 40), p(430, -10), p(250, -25), p(90, -45), p(20, -35)],
+    trunkCoords,
+    parallelReferenceCoords: [p(2000, 2000), p(2100, 2100)],
+    mergeDistanceM: 300,
+    sampleM: 10,
+  });
+  assert.equal(farReference.diagnostics.ok, true);
+  assert.equal(farReference.diagnostics.parallelReferenceUsed, false);
+
+  const duplicateTrunk = [p(0, 0), p(0, 0), p(0, -120), p(0, -240)];
+  const withDup = buildMottHavenFiveSchematicLens({
+    branchCoords: [p(400, 0), p(40, -40)],
+    trunkCoords: duplicateTrunk,
+    mergeDistanceM: 200,
+    sampleM: 8,
+  });
+  assert.equal(withDup.diagnostics.ok, true);
+
+  const sixOnMerge = buildMottHavenSixSchematicMerge({
+    branchCoords: [p(80, 10), p(0, -40)],
+    mainlineCoords: [p(0, 0), p(0, -40), p(0, -80)],
+    mergeDistanceM: 45,
+    entryEastM: 0,
+    entryNorthM: 0,
+    sampleM: 8,
+  });
+  assert.equal(sixOnMerge.diagnostics.ok, true);
+  assert.ok(sixOnMerge.coordinates.length >= 2);
 });

@@ -16,6 +16,14 @@ import type { Position } from "./types.ts";
 const EARTH_RADIUS_M = 6371000;
 const M_PER_DEG_LAT = 110574;
 
+type SimplifyTightCurvesOptions = {
+  tightTurnDeg?: number;
+  windowM?: number;
+  iterations?: number;
+  lambda?: number;
+  marginVerts?: number;
+};
+
 function mPerDegLng(lat: number): number {
   return 111320 * Math.cos((lat * Math.PI) / 180);
 }
@@ -42,10 +50,77 @@ function turnAt(p: Position, c: Position, n: Position): number {
   return t;
 }
 
+function clonePoint(point: Position): Position {
+  return [point[0], point[1]];
+}
+
 function segLengths(coords: Position[]): number[] {
-  const seg = new Array(coords.length - 1);
-  for (let i = 0; i < coords.length - 1; i += 1) seg[i] = haversineM(coords[i], coords[i + 1]);
+  const seg: number[] = [];
+  for (let i = 0; i < coords.length - 1; i += 1) seg.push(haversineM(coords[i], coords[i + 1]));
   return seg;
+}
+
+function absTurns(coords: Position[]): number[] {
+  const turn = Array.from({ length: coords.length }, () => 0);
+  for (let i = 1; i < coords.length - 1; i += 1) {
+    turn[i] = Math.abs(turnAt(coords[i - 1], coords[i], coords[i + 1]));
+  }
+  return turn;
+}
+
+function windowedAbsTurn(turn: number[], seg: number[], index: number, windowM: number): number {
+  let sum = turn[index];
+  let d = 0;
+  for (let l = index; l > 1; l -= 1) {
+    if (d + seg[l - 1] > windowM) break;
+    d += seg[l - 1];
+    sum += turn[l - 1];
+  }
+  let dr = 0;
+  for (let r = index; r < turn.length - 2; r += 1) {
+    if (dr + seg[r] > windowM) break;
+    dr += seg[r];
+    sum += turn[r + 1];
+  }
+  return sum;
+}
+
+function markTightVertices(turn: number[], seg: number[], windowM: number, tightTurnDeg: number): boolean[] {
+  const tight = Array.from({ length: turn.length }, () => false);
+  for (let i = 1; i < turn.length - 1; i += 1) {
+    if (windowedAbsTurn(turn, seg, i, windowM) >= tightTurnDeg) tight[i] = true;
+  }
+  return tight;
+}
+
+function extendTightRuns(tight: boolean[], marginVerts: number): boolean[] {
+  const mark = tight.slice();
+  for (let i = 0; i < tight.length; i += 1) {
+    if (!tight[i]) continue;
+    for (let k = -marginVerts; k <= marginVerts; k += 1) {
+      const j = i + k;
+      if (j > 0 && j < tight.length - 1) mark[j] = true;
+    }
+  }
+  mark[0] = false;
+  mark[tight.length - 1] = false;
+  return mark;
+}
+
+function relaxMarkedVertices(coords: Position[], mark: boolean[], iterations: number, lambda: number): Position[] {
+  let pts = coords.map(clonePoint);
+  for (let it = 0; it < iterations; it += 1) {
+    const next = pts.map(clonePoint);
+    for (let i = 1; i < coords.length - 1; i += 1) {
+      if (!mark[i]) continue;
+      const midX = 0.5 * (pts[i - 1][0] + pts[i + 1][0]);
+      const midY = 0.5 * (pts[i - 1][1] + pts[i + 1][1]);
+      next[i][0] = (1 - lambda) * pts[i][0] + lambda * midX;
+      next[i][1] = (1 - lambda) * pts[i][1] + lambda * midY;
+    }
+    pts = next;
+  }
+  return pts;
 }
 
 // Highest "turn density" (sum of |turn| in degrees per meter of arc) found in any
@@ -53,38 +128,25 @@ function segLengths(coords: Position[]): number[] {
 // a straight or gently curving line scores near zero.
 export function maxTurnDensityDegPerM(coords: Position[], windowM = 40): number {
   if (!Array.isArray(coords) || coords.length < 3) return 0;
-  const n = coords.length;
   const seg = segLengths(coords);
-  const turn = new Array(n).fill(0);
-  for (let i = 1; i < n - 1; i += 1) turn[i] = Math.abs(turnAt(coords[i - 1], coords[i], coords[i + 1]));
+  const turn = absTurns(coords);
   let best = 0;
-  for (let i = 1; i < n - 1; i += 1) {
-    let sum = turn[i];
+  for (let i = 1; i < coords.length - 1; i += 1) {
+    const sum = windowedAbsTurn(turn, seg, i, windowM);
     let d = 0;
     for (let l = i; l > 1; l -= 1) {
       if (d + seg[l - 1] > windowM) break;
       d += seg[l - 1];
-      sum += turn[l - 1];
     }
     let dr = 0;
-    for (let r = i; r < n - 2; r += 1) {
+    for (let r = i; r < coords.length - 2; r += 1) {
       if (dr + seg[r] > windowM) break;
       dr += seg[r];
-      sum += turn[r + 1];
     }
-    const arc = Math.max(d + dr, 1e-6);
-    best = Math.max(best, sum / arc);
+    best = Math.max(best, sum / Math.max(d + dr, 1e-6));
   }
   return best;
 }
-
-type SimplifyTightCurvesOptions = {
-  tightTurnDeg?: number;
-  windowM?: number;
-  iterations?: number;
-  lambda?: number;
-  marginVerts?: number;
-};
 
 /**
  * Round tight hairpins into gentler arcs. Pure; returns the SAME array reference
@@ -100,69 +162,19 @@ type SimplifyTightCurvesOptions = {
  * @returns {Array<[number,number]>}
  */
 export function simplifyTightCurves(coords: Position[], options: SimplifyTightCurvesOptions = {}): Position[] {
-  const {
-    tightTurnDeg = 70,
-    windowM = 50,
-    iterations = 16,
-    lambda = 0.5,
-    marginVerts = 1,
-  } = options;
+  const resolved = ({
+    tightTurnDeg: (options).tightTurnDeg ?? 70,
+    windowM: (options).windowM ?? 50,
+    iterations: (options).iterations ?? 16,
+    lambda: (options).lambda ?? 0.5,
+    marginVerts: (options).marginVerts ?? 1,
+});
   if (!Array.isArray(coords) || coords.length < 5) return coords;
 
-  const n = coords.length;
   const seg = segLengths(coords);
-  const turn = new Array(n).fill(0);
-  for (let i = 1; i < n - 1; i += 1) turn[i] = Math.abs(turnAt(coords[i - 1], coords[i], coords[i + 1]));
-
-  // Mark vertices whose neighbourhood (+/- windowM) packs >= tightTurnDeg of turning.
-  const tight = new Array(n).fill(false);
-  let any = false;
-  for (let i = 1; i < n - 1; i += 1) {
-    let sum = turn[i];
-    let d = 0;
-    for (let l = i; l > 1; l -= 1) {
-      if (d + seg[l - 1] > windowM) break;
-      d += seg[l - 1];
-      sum += turn[l - 1];
-    }
-    let dr = 0;
-    for (let r = i; r < n - 2; r += 1) {
-      if (dr + seg[r] > windowM) break;
-      dr += seg[r];
-      sum += turn[r + 1];
-    }
-    if (sum >= tightTurnDeg) {
-      tight[i] = true;
-      any = true;
-    }
-  }
-  if (!any) return coords;
-
-  // Extend each tight run by marginVerts so the relaxation blends into the curve.
-  const mark = tight.slice();
-  for (let i = 0; i < n; i += 1) {
-    if (!tight[i]) continue;
-    for (let k = -marginVerts; k <= marginVerts; k += 1) {
-      const j = i + k;
-      if (j > 0 && j < n - 1) mark[j] = true;
-    }
-  }
-  mark[0] = false;
-  mark[n - 1] = false;
-
-  // Laplacian relaxation on marked vertices only; unmarked vertices stay pinned,
-  // which anchors each tight run to the surrounding (untouched) geometry.
-  let pts = coords.map((p) => p.slice() as Position);
-  for (let it = 0; it < iterations; it += 1) {
-    const next = pts.map((p) => p.slice() as Position);
-    for (let i = 1; i < n - 1; i += 1) {
-      if (!mark[i]) continue;
-      const midX = 0.5 * (pts[i - 1][0] + pts[i + 1][0]);
-      const midY = 0.5 * (pts[i - 1][1] + pts[i + 1][1]);
-      next[i][0] = (1 - lambda) * pts[i][0] + lambda * midX;
-      next[i][1] = (1 - lambda) * pts[i][1] + lambda * midY;
-    }
-    pts = next;
-  }
-  return pts;
+  const turn = absTurns(coords);
+  const tight = markTightVertices(turn, seg, resolved.windowM, resolved.tightTurnDeg);
+  if (!tight.some(Boolean)) return coords;
+  const mark = extendTightRuns(tight, resolved.marginVerts);
+  return relaxMarkedVertices(coords, mark, resolved.iterations, resolved.lambda);
 }

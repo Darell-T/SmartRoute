@@ -254,8 +254,36 @@ function scriptKindFor(filePath) {
   return ts.ScriptKind.Unknown;
 }
 
-function inventoryFromSource(relative, text) {
+function hasRuntimeEmit(text, fileName) {
+  const { outputText } = ts.transpileModule(text, {
+    compilerOptions: {
+      module: ts.ModuleKind.ESNext,
+      target: ts.ScriptTarget.ESNext,
+      isolatedModules: true,
+    },
+    fileName,
+    reportDiagnostics: false,
+  });
+  const stripped = String(outputText)
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/.*$/gm, "")
+    .replace(/["']use strict["'];?/g, "")
+    .replace(/export\s*\{\s*\};?/g, "")
+    .replace(/\s+/g, "");
+  return stripped.length > 0;
+}
+
+function fileEntry(relative, text) {
   const { role, batch } = classify(relative);
+  return {
+    file: relative,
+    role,
+    batch,
+    runtime: hasRuntimeEmit(text, relative),
+  };
+}
+
+function inventoryFromSource(relative, text) {
   const sourceFile = ts.createSourceFile(
     relative,
     text,
@@ -263,13 +291,14 @@ function inventoryFromSource(relative, text) {
     true,
     scriptKindFor(relative),
   );
+  const meta = fileEntry(relative, text);
   return {
-    files: [{ file: relative, role, batch }],
+    files: [meta],
     functions: collectFunctions(sourceFile).map((row) => ({
       file: relative,
       language: "TypeScript",
-      role,
-      batch,
+      role: meta.role,
+      batch: meta.batch,
       ...row,
     })),
   };
@@ -281,8 +310,8 @@ function inventory(kind) {
   for (const filePath of walkSourceFiles(kind)) {
     const relative = path.relative(frontendRoot, filePath).replaceAll("\\", "/");
     const { role, batch } = classify(relative);
-    files.push({ file: relative, role, batch });
     const text = fs.readFileSync(filePath, "utf8");
+    files.push(fileEntry(relative, text));
     const sourceFile = ts.createSourceFile(
       relative,
       text,
@@ -347,6 +376,12 @@ export function formatNycRouteClock(value) {
         `classify(${relative}) => ${JSON.stringify(actual)}, expected ${role}/${batch}`,
       );
     }
+  }
+  if (hasRuntimeEmit("export type Foo = string;\n", "type-only.ts")) {
+    throw new Error("type-only module must not emit runtime");
+  }
+  if (!hasRuntimeEmit("export const n = 1;\n", "value.ts")) {
+    throw new Error("value export must count as runtime");
   }
 }
 

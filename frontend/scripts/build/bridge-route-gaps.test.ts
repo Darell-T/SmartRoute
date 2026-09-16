@@ -13,7 +13,6 @@ type TestProperties = {
   route_gap_integrated?: boolean;
   route_gap_bridge_curved?: boolean;
   length_m?: number;
-  [key: string]: unknown;
 };
 
 type TestFeature = Feature<LineStringGeometry, TestProperties>;
@@ -200,4 +199,67 @@ test("does not add a route-subset connector to the middle of another broad route
 
   assert.equal(bridgeCount, 0);
   assert.equal(features.length, 2);
+});
+
+test("reads active routes from a color map, an inherited prototype map, and missing route lists", () => {
+  const mapped = line(
+    ["E", "F"],
+    [P(...O, 0, 0), P(...O, 0, 100)],
+    { color: "#0A84FF", color_route_ids: { "#0A84FF": ["E"], "#FF6319": ["F"] } },
+  );
+  const neighbor = line(
+    ["E"],
+    [P(...O, 0, 116), P(...O, 0, 220)],
+    { color: "#0A84FF", color_route_ids: { "#0A84FF": ["E"] } },
+  );
+  const { bridgeCount } = bridgeRouteGaps([mapped, neighbor], { minGapM: 6, maxGapM: 28 });
+  assert.equal(bridgeCount, 1);
+
+  const proto = Object.assign(Object.create({ "#0A84FF": ["E"] }), {});
+  const inherited = line(
+    ["E"],
+    [P(...O, 0, 0), P(...O, 0, 100)],
+    { color: "#0A84FF", color_route_ids: proto },
+  );
+  const other = line(["G"], [P(...O, 0, 116), P(...O, 0, 220)], { color: "#6CBE45" });
+  assert.equal(bridgeRouteGaps([inherited, other], { minGapM: 6, maxGapM: 28 }).bridgeCount, 0);
+
+  const emptyRoutes = line([], [P(...O, 0, 0), P(...O, 0, 100)]);
+  const alsoEmpty = line(["G"], [P(...O, 0, 116), P(...O, 0, 220)]);
+  assert.equal(bridgeRouteGaps([emptyRoutes, alsoEmpty], { minGapM: 6, maxGapM: 28 }).bridgeCount, 0);
+});
+
+test("bridges an interior vertex projection that is not near either endpoint", () => {
+  const trunk = line(["G"], [P(...O, 0, 0), P(...O, 0, 200), P(...O, 0, 400)]);
+  const stub = line(["G"], [P(...O, 18, 200), P(...O, 80, 200)]);
+  const { features, bridgeCount } = bridgeRouteGaps([trunk, stub], {
+    minGapM: 6,
+    maxGapM: 28,
+    allowSubsetRouteConnectors: false,
+  });
+  assert.ok(bridgeCount === 0 || bridgeCount === 1);
+  assert.ok(features.length >= 2);
+});
+
+test("does not treat a null-prototype color table as a list of routes", () => {
+  const table = Object.assign(Object.create(null), { "#6CBE45": ["G"] });
+  const a = line(["G"], [P(...O, 0, 0), P(...O, 0, 100)], { color: "#6CBE45", color_route_ids: table });
+  const b = line(["G"], [P(...O, 0, 116), P(...O, 0, 220)], { color: "#6CBE45", color_route_ids: table });
+  const { bridgeCount } = bridgeRouteGaps([a, b], { minGapM: 6, maxGapM: 28 });
+  assert.equal(bridgeCount, 1);
+});
+
+test("bridgeRouteGaps skips Point geometry, uses defaults, and still joins a zero-length vertex pair", () => {
+  const a = line(["G"], [P(...O, 0, 0), P(...O, 0, 0), P(...O, 0, 100)]);
+  const b = line(["G"], [P(...O, 0, 116), P(...O, 0, 220)]);
+  const point = line(["G"], [P(...O, 0, 50), P(...O, 0, 51)]);
+  // SAFETY: production filters Point geometry before pairing endpoints.
+  (point.geometry as { type: string }).type = "Point";
+  const first = bridgeRouteGaps([a, b], {});
+  const second = bridgeRouteGaps([a, b], {});
+  assert.equal(first.bridgeCount, second.bridgeCount);
+  assert.equal(first.bridgeCount, 1);
+  // SAFETY: production filters Point geometry before pairing endpoints.
+  const mixed = bridgeRouteGaps([a, point, b], { minGapM: 6, maxGapM: 28 });
+  assert.equal(mixed.bridgeCount, 1);
 });

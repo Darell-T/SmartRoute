@@ -7,11 +7,19 @@ import {
   splitStationAnchorCollections,
   stripRuntimeStationAnchorDebugProperties,
 } from "./build/station-anchors/index.ts";
+import type { JsonValue } from "./build/types.ts";
+import { isJsonObject, parsedJson } from "./build/visual-network/shared/route-config.ts";
 
-type FeatureCollection = {
+type MarkerFeature = {
+  properties?: {
+    marker_type?: string;
+  };
+};
+
+type JsonFeatureCollection = {
   type: "FeatureCollection";
-  features?: Array<{ properties?: Record<string, any> }>;
-  metadata?: Record<string, any>;
+  features: JsonValue[];
+  metadata?: JsonValue;
 };
 
 const frontendRoot = process.cwd();
@@ -46,15 +54,31 @@ const OUTPUT_AMBIGUOUS = path.join(
   "subway-network.station-anchors-debug-ambiguous.geojson",
 );
 
-async function readJson(filePath: string) {
-  return JSON.parse(await readFile(filePath, "utf8"));
+function featureCollectionFromJson(value: JsonValue, filePath: string): JsonFeatureCollection {
+  if (
+    !isJsonObject(value) ||
+    value.type !== "FeatureCollection" ||
+    !Array.isArray(value.features)
+  ) {
+    throw new Error(`${filePath} must be a FeatureCollection`);
+  }
+  const collection: JsonFeatureCollection = {
+    type: "FeatureCollection",
+    features: value.features,
+  };
+  if ("metadata" in value) collection.metadata = value.metadata;
+  return collection;
 }
 
-async function writeJson(filePath: string, value: unknown) {
+async function readFeatureCollection(filePath: string): Promise<JsonFeatureCollection> {
+  return featureCollectionFromJson(parsedJson(await readFile(filePath, "utf8")), filePath);
+}
+
+async function writeJson(filePath: string, value: { type?: string; features?: MarkerFeature[] }): Promise<void> {
   await writeFile(filePath, `${JSON.stringify(value)}\n`);
 }
 
-function countByMarkerType(collection: FeatureCollection) {
+function countByMarkerType(collection: { features?: MarkerFeature[] }) {
   const counts: Record<string, number> = {};
   for (const feature of collection.features ?? []) {
     const type = feature.properties?.marker_type ?? "missing";
@@ -71,16 +95,9 @@ async function main() {
   }
 
   const [visual, stations] = await Promise.all([
-    readJson(INPUT_VISUAL),
-    readJson(INPUT_STATIONS),
+    readFeatureCollection(INPUT_VISUAL),
+    readFeatureCollection(INPUT_STATIONS),
   ]);
-
-  if (visual.type !== "FeatureCollection") {
-    throw new Error(`${INPUT_VISUAL} must be a FeatureCollection`);
-  }
-  if (stations.type !== "FeatureCollection") {
-    throw new Error(`${INPUT_STATIONS} must be a FeatureCollection`);
-  }
 
   const result = buildStationAnchors({ visual, stations });
   const collections = splitStationAnchorCollections(result.anchors);

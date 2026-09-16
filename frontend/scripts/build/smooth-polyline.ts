@@ -101,6 +101,35 @@ function cutToward(
   return [corner[0] + (toward[0] - corner[0]) * t, corner[1] + (toward[1] - corner[1]) * t];
 }
 
+function markSharpCorners(pts: Coordinate[], angleThresholdDeg: number): boolean[] {
+  const sharp = Array.from({ length: pts.length }, () => false);
+  for (let i = 1; i < pts.length - 1; i += 1) {
+    if (turnDeg(pts[i - 1], pts[i], pts[i + 1]) >= angleThresholdDeg) {
+      sharp[i] = true;
+    }
+  }
+  return sharp;
+}
+
+function chaikinCutOnce(
+  pts: Coordinate[],
+  sharp: boolean[],
+  ratio: number,
+  maxFilletM: number,
+): Coordinate[] {
+  const out: Coordinate[] = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i += 1) {
+    if (sharp[i]) {
+      out.push(cutToward(pts[i], pts[i - 1], ratio, maxFilletM));
+      out.push(cutToward(pts[i], pts[i + 1], ratio, maxFilletM));
+    } else {
+      out.push(pts[i]);
+    }
+  }
+  out.push(pts[pts.length - 1]);
+  return out;
+}
+
 /**
  * Endpoint-pinned, threshold-gated Chaikin corner smoothing.
  */
@@ -119,27 +148,10 @@ export function smoothSharpCorners(
   let pts = coords;
   let changed = false;
   for (let it = 0; it < iterations; it += 1) {
-    const sharp = new Array<boolean>(pts.length).fill(false);
-    let any = false;
-    for (let i = 1; i < pts.length - 1; i += 1) {
-      if (turnDeg(pts[i - 1], pts[i], pts[i + 1]) >= angleThresholdDeg) {
-        sharp[i] = true;
-        any = true;
-      }
-    }
-    if (!any) break;
-    const out: Coordinate[] = [pts[0]];
-    for (let i = 1; i < pts.length - 1; i += 1) {
-      if (sharp[i]) {
-        out.push(cutToward(pts[i], pts[i - 1], ratio, maxFilletM)); // back cut
-        out.push(cutToward(pts[i], pts[i + 1], ratio, maxFilletM)); // forward cut
-        changed = true;
-      } else {
-        out.push(pts[i]);
-      }
-    }
-    out.push(pts[pts.length - 1]);
-    pts = out;
+    const sharp = markSharpCorners(pts, angleThresholdDeg);
+    if (!sharp.some(Boolean)) break;
+    pts = chaikinCutOnce(pts, sharp, ratio, maxFilletM);
+    changed = true;
   }
   return changed ? pts : coords;
 }

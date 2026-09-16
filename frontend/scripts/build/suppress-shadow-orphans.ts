@@ -9,9 +9,15 @@
 // and Transit suppress these. The route's primary geometry (carried by a different,
 // non-orphan feature) is untouched.
 
-import type { Position, Feature, LineStringGeometry, VisualFeatureProperties } from "./types.ts";
+import type { Position, Feature, LineStringGeometry, FeatureProps } from "./types.ts";
+import { propertyString, routeIdsOf } from "./visual-network/shared/route-config.ts";
 
-type LineFeature = Feature<LineStringGeometry, VisualFeatureProperties>;
+type LineFeature = Feature<LineStringGeometry, FeatureProps>;
+
+type ShadowOrphanResult = {
+  features: LineFeature[];
+  removedIds: string[];
+};
 
 const EARTH_RADIUS_M = 6371000;
 
@@ -34,6 +40,45 @@ function nearestM(p: Position, coords: Position[]): number {
   return best;
 }
 
+function vertexShadowsOtherColor(
+  pt: Position,
+  feature: LineFeature,
+  lines: LineFeature[],
+  myRoutes: Set<string>,
+  color: string,
+  shadowDistM: number,
+): boolean {
+  for (const other of lines) {
+    if (other === feature) continue;
+    if (other.properties?.color === color) continue;
+    const otherRoutes = routeIdsOf(other.properties);
+    if (otherRoutes.length && otherRoutes.every((routeId: string) => myRoutes.has(routeId)) && myRoutes.size === otherRoutes.length) {
+      continue;
+    }
+    if (nearestM(pt, other.geometry.coordinates) <= shadowDistM) return true;
+  }
+  return false;
+}
+
+function isShadowOrphan(
+  feature: LineFeature,
+  lines: LineFeature[],
+  shadowDistM: number,
+  shadowFracMin: number,
+): boolean {
+  const p = feature.properties ?? {};
+  if (p.qa_orphan_severity !== "error") return false;
+  const color = propertyString(p.color) ?? "";
+  if (!color) return false;
+  const myRoutes = new Set(routeIdsOf(p));
+  const sample = feature.geometry.coordinates.filter((_, i) => i % 3 === 0);
+  let shadow = 0;
+  for (const pt of sample) {
+    if (vertexShadowsOtherColor(pt, feature, lines, myRoutes, color, shadowDistM)) shadow += 1;
+  }
+  return Boolean(sample.length && shadow / sample.length >= shadowFracMin);
+}
+
 /**
  * @param {Array} features
  * @param {object} [options]
@@ -44,7 +89,7 @@ function nearestM(p: Position, coords: Position[]): number {
 export function suppressShadowOrphans(
   features: LineFeature[],
   options: { shadowDistM?: number; shadowFracMin?: number } = {},
-): { features: LineFeature[]; removedIds: string[] } {
+): ShadowOrphanResult {
   const { shadowDistM = 18, shadowFracMin = 0.7 } = options;
   const lines = features.filter(
     (f) => f.geometry?.type === "LineString" && Array.isArray(f.geometry.coordinates) && f.geometry.coordinates.length >= 2,
@@ -54,32 +99,10 @@ export function suppressShadowOrphans(
   const removedIds: string[] = [];
 
   for (const f of lines) {
+    if (!isShadowOrphan(f, lines, shadowDistM, shadowFracMin)) continue;
+    removed.add(f);
     const p = f.properties ?? {};
-    if (p.qa_orphan_severity !== "error") continue;
-    const color = p.color;
-    if (!color) continue;
-    const myRoutes = new Set(p.route_ids ?? []);
-
-    // sample this feature's vertices and test how many shadow a DIFFERENT-color,
-    // not-fully-shared other line.
-    const sample = f.geometry.coordinates.filter((_, i) => i % 3 === 0);
-    let shadow = 0;
-    for (const pt of sample) {
-      let near = false;
-      for (const other of lines) {
-        if (other === f) continue;
-        if (other.properties?.color === color) continue; // different color only
-        // skip lines that carry exactly the same route set (true shared trunk)
-        const otherRoutes = other.properties?.route_ids ?? [];
-        if (otherRoutes.length && otherRoutes.every((r) => myRoutes.has(r)) && myRoutes.size === otherRoutes.length) continue;
-        if (nearestM(pt, other.geometry.coordinates) <= shadowDistM) { near = true; break; }
-      }
-      if (near) shadow += 1;
-    }
-    if (sample.length && shadow / sample.length >= shadowFracMin) {
-      removed.add(f);
-      removedIds.push(String(p.corridor_id ?? p.bundle_id ?? "?"));
-    }
+    removedIds.push(String(p.corridor_id ?? p.bundle_id ?? "?"));
   }
 
   return { features: features.filter((f) => !removed.has(f)), removedIds };

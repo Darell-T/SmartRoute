@@ -1,35 +1,86 @@
 import { writeFileSync } from "node:fs";
+import { REMAINING_UNBUNDLED_CORRIDORS } from "../output/artifact-metadata.ts";
 import {
   buildRouteIncidentCounts,
   buildVisualAnomalyRecords,
   buildVisualRouteIncidentCounts,
 } from "../shared/diagnostics.ts";
 import { geometryStats } from "../shared/geometry-utils.ts";
-import type { LineFeature } from "../shared/types.ts";
-import type {
-  RouteConnectivityFailure,
-  RouteConnectivityStat,
-  ValidationReportingParameters,
-  ValidationReportingPaths,
-  ValidationReportingStageResult,
-} from "./validation-reporting-types.ts";
+import { routeIdsOf } from "../shared/route-config.ts";
+import type { BundleArtifacts, LineFeature, PointFeat } from "../shared/types.ts";
 
-type ValidationReportingBundleArtifacts = {
-  bundleFeatures: any[];
-  bundleLaneFeatures: any[];
-  unbundledFeatures: any[];
-  bundleGapFeatures: any[];
-  visualFeatures: any[];
+export type ValidationReportingPaths = {
+  corridorsGeoJson: string;
+  corridorsJson: string;
+  junctionAnchorsGeoJson: string;
+  junctionSnapsGeoJson: string;
+  materializedBundlesGeoJson: string;
+  materializedBundleFanoutsGeoJson: string;
+  materializedBundleSplitsGeoJson: string;
+  materializedBundleDefectsGeoJson: string;
+  bundlesGeoJson: string;
+  bundleLanesGeoJson: string;
+  bundleGapsGeoJson: string;
+  missingRouteLanesGeoJson: string;
+  renderLaneContinuityJson: string;
+  anomaliesGeoJson: string;
+  anomaliesJson: string;
+  routeComponentsJson: string;
 };
 
-type ValidationReportingJunctionSnapDiagnostics = {
-  anchorFeatures: any[];
-  snapFeatures: any[];
+export type ValidationReportingParameters = {
+  resampleIntervalM: number;
+  hausdorffMaxM: number;
+  overlapMinRatio: number;
+  tangentMaxDiffDeg: number;
+  containmentAvgDistanceMaxM: number;
+  containmentOverlapMinRatio: number;
+  gridCellM: number;
+  junctionSnapMaxM: number;
+  maxSegmentAnomalyM: number;
+  sparseLongSliceM: number;
+  projectionAnomalyM: number;
+  openDataMinFragmentLengthM: number;
 };
 
-type ValidationReportingLaneChainDiagnostics = {
+export type RouteConnectivityStat = {
+  route_id: string;
+  edge_count: number;
+  stop_count: number;
+  component_count: number;
+  largest_component_size: number;
+  largest_component_ratio: number;
+  components: Array<{ size: number; sample_stop_ids: string[] }>;
+  passed: boolean;
+};
+
+export type RouteConnectivityFailure = {
+  route_id: string;
+  component_count: number;
+  largest_component_ratio: number;
+  total_stops: number;
+  largest_size: number;
+  sample_component_sizes: number[];
+};
+
+export type ValidationReportingStageResult = {
+  perRouteStats: RouteConnectivityStat[];
+  validationFailures: RouteConnectivityFailure[];
+};
+
+type JunctionSnapDiagnostics = {
+  anchorFeatures: PointFeat[];
+  snapFeatures: LineFeature[];
+};
+
+type LaneChainDiagnostics = {
   lane_group_count: number;
   chain_slot_feature_count: number;
+};
+
+type CorridorRow = {
+  is_shared: boolean;
+  route_ids: string[];
 };
 
 type ValidationReportingStop = {
@@ -38,40 +89,63 @@ type ValidationReportingStop = {
   name: string;
 };
 
+type EdgeLookup = {
+  get(edgeId: string): LineFeature | undefined;
+};
+
+type MissingRouteLaneFeature = {
+  type: "Feature";
+  geometry: { type: "Point"; coordinates: [number, number] };
+  properties: {
+    marker_type: "missing_route_lane";
+    stop_id: string;
+    stop_name: string;
+    route_id: string;
+    expected_incident_edges: number;
+    visual_incident_corridors: number;
+    visual_corridor_ids: string[];
+    reason: "route_expected_to_continue_at_junction";
+  };
+};
+
 type ValidationReportingStageInput = {
-  edgeFeatures: any[];
+  edgeFeatures: LineFeature[];
   corridorFeatures: LineFeature[];
-  corridorRows: any[];
+  corridorRows: CorridorRow[];
   pairsConsidered: number;
   pairsMatched: number;
-  matchedPairs: any[];
-  junctionSnapDiagnostics: ValidationReportingJunctionSnapDiagnostics;
-  laneChainDiagnostics: ValidationReportingLaneChainDiagnostics;
-  bundleArtifacts: ValidationReportingBundleArtifacts;
-  edgeById: Map<any, any>;
+  matchedPairs: unknown[];
+  junctionSnapDiagnostics: JunctionSnapDiagnostics;
+  laneChainDiagnostics: LaneChainDiagnostics;
+  bundleArtifacts: BundleArtifacts;
+  edgeById: EdgeLookup;
   stopsById: Map<string, ValidationReportingStop>;
   paths: ValidationReportingPaths;
   parameters: ValidationReportingParameters;
 };
 
-export function runValidationReportingStage({
-  edgeFeatures,
-  corridorFeatures,
-  corridorRows,
-  pairsConsidered,
-  pairsMatched,
-  matchedPairs,
-  junctionSnapDiagnostics,
-  laneChainDiagnostics,
-  bundleArtifacts,
-  edgeById,
-  stopsById,
-  paths,
-  parameters,
-}: ValidationReportingStageInput): ValidationReportingStageResult {
-  // Sort corridor features for stable output
-  corridorFeatures.sort((a, b) =>
-    a.properties.corridor_id.localeCompare(b.properties.corridor_id),
+const REQUIRED_TRUNKS = [
+  ["1", "2", "3"],
+  ["4", "5", "6"],
+  ["A", "C", "E"],
+  ["B", "D", "F", "M"],
+  ["N", "Q", "R", "W"],
+];
+
+function writeCorridorArtifacts(
+  corridorFeatures: LineFeature[],
+  corridorRows: CorridorRow[],
+  edgeFeatures: LineFeature[],
+  pairsConsidered: number,
+  pairsMatched: number,
+  matchedPairs: unknown[],
+  paths: ValidationReportingPaths,
+  parameters: ValidationReportingParameters,
+): void {
+  corridorFeatures.sort((left, right) =>
+    String(left.properties.corridor_id ?? "").localeCompare(
+      String(right.properties.corridor_id ?? ""),
+    ),
   );
 
   writeFileSync(
@@ -113,6 +187,13 @@ export function runValidationReportingStage({
       2,
     )}\n`,
   );
+}
+
+function writeJunctionArtifacts(
+  junctionSnapDiagnostics: JunctionSnapDiagnostics,
+  paths: ValidationReportingPaths,
+  junctionSnapMaxM: number,
+): void {
   writeFileSync(
     paths.junctionAnchorsGeoJson,
     `${JSON.stringify({
@@ -121,7 +202,7 @@ export function runValidationReportingStage({
         generated_at: new Date().toISOString(),
         source: "build-subway-visual-network.mjs Gate 2G",
         parameters: {
-          junction_snap_max_m: parameters.junctionSnapMaxM,
+          junction_snap_max_m: junctionSnapMaxM,
         },
         summary: {
           anchor_count: junctionSnapDiagnostics.anchorFeatures.length,
@@ -139,7 +220,7 @@ export function runValidationReportingStage({
         generated_at: new Date().toISOString(),
         source: "build-subway-visual-network.mjs Gate 2G",
         parameters: {
-          junction_snap_max_m: parameters.junctionSnapMaxM,
+          junction_snap_max_m: junctionSnapMaxM,
         },
         summary: {
           snap_count: junctionSnapDiagnostics.snapFeatures.length,
@@ -148,6 +229,9 @@ export function runValidationReportingStage({
       features: junctionSnapDiagnostics.snapFeatures,
     })}\n`,
   );
+}
+
+function writeBundleArtifacts(bundleArtifacts: BundleArtifacts, paths: ValidationReportingPaths): void {
   writeFileSync(
     paths.bundlesGeoJson,
     `${JSON.stringify({
@@ -159,7 +243,7 @@ export function runValidationReportingStage({
           bundle_count: bundleArtifacts.bundleFeatures.length,
           corridors_converted_to_bundle_geometry:
             bundleArtifacts.bundleFeatures.length,
-          remaining_unbundled_corridors: bundleArtifacts.unbundledFeatures.length,
+          remaining_unbundled_corridors: REMAINING_UNBUNDLED_CORRIDORS,
         },
       },
       features: bundleArtifacts.bundleFeatures,
@@ -194,14 +278,26 @@ export function runValidationReportingStage({
       features: bundleArtifacts.bundleGapFeatures,
     })}\n`,
   );
+}
 
+function logGate2cSummary(
+  edgeFeatures: LineFeature[],
+  corridorFeatures: LineFeature[],
+  corridorRows: CorridorRow[],
+  pairsConsidered: number,
+  pairsMatched: number,
+  junctionSnapDiagnostics: JunctionSnapDiagnostics,
+  laneChainDiagnostics: LaneChainDiagnostics,
+  bundleArtifacts: BundleArtifacts,
+  paths: ValidationReportingPaths,
+): void {
   console.log(`[visual-network] === Gate 2C corridor summary ===`);
   console.log(`[visual-network] edges in:                ${edgeFeatures.length}`);
   console.log(`[visual-network] candidate pairs:          ${pairsConsidered}`);
   console.log(`[visual-network] matched pairs:            ${pairsMatched}`);
   console.log(`[visual-network] corridors out:            ${corridorFeatures.length}`);
-  const sharedCorridors = corridorRows.filter((c) => c.is_shared);
-  const multiRouteCorridors = corridorRows.filter((c) => c.route_ids.length > 1);
+  const sharedCorridors = corridorRows.filter((row) => row.is_shared);
+  const multiRouteCorridors = corridorRows.filter((row) => row.route_ids.length > 1);
   console.log(`[visual-network] shared (>1 edge member):  ${sharedCorridors.length}`);
   console.log(`[visual-network] multi-route (>1 route):   ${multiRouteCorridors.length}`);
   console.log(`[visual-network] wrote ${paths.corridorsGeoJson}`);
@@ -222,35 +318,32 @@ export function runValidationReportingStage({
     `[visual-network] lane groups: ${laneChainDiagnostics.lane_group_count}, chain-slot features: ${laneChainDiagnostics.chain_slot_feature_count}`,
   );
   console.log(
-    `[visual-network] bundles: ${bundleArtifacts.bundleFeatures.length}, bundle lanes: ${bundleArtifacts.bundleLaneFeatures.length}, unbundled corridors: ${bundleArtifacts.unbundledFeatures.length}, bundle gaps: ${bundleArtifacts.bundleGapFeatures.length}`,
+    `[visual-network] bundles: ${bundleArtifacts.bundleFeatures.length}, bundle lanes: ${bundleArtifacts.bundleLaneFeatures.length}, unbundled corridors: ${REMAINING_UNBUNDLED_CORRIDORS}, bundle gaps: ${bundleArtifacts.bundleGapFeatures.length}`,
   );
+}
 
-
-  // Required-trunk check: every well-known shared trunk should be detected
-  const REQUIRED_TRUNKS = [
-    ["1", "2", "3"],
-    ["4", "5", "6"],
-    ["A", "C", "E"],
-    ["B", "D", "F", "M"],
-    ["N", "Q", "R", "W"],
-  ];
+function logRequiredTrunkCheck(corridorRows: CorridorRow[]): void {
   console.log(`[visual-network] --- Required shared-trunk check ---`);
   for (const trunk of REQUIRED_TRUNKS) {
-    const trunkSet = new Set(trunk);
-    const hits = corridorRows.filter((c) => {
-      const cr = new Set(c.route_ids);
-      return trunk.every((r) => cr.has(r));
+    const hits = corridorRows.filter((row) => {
+      const carried = new Set(row.route_ids);
+      return trunk.every((routeId) => carried.has(routeId));
     });
     console.log(
       `[visual-network]   ${trunk.join("/").padEnd(10)} corridors carrying ALL: ${hits.length}`,
     );
   }
+}
 
-  console.log("[visual-network] Gate 2G — render-lane continuity diagnostics");
-
-  const expectedRouteIncidents = buildRouteIncidentCounts(edgeFeatures as any, true);
+function collectMissingRouteLaneFeatures(
+  edgeFeatures: LineFeature[],
+  corridorFeatures: LineFeature[],
+  edgeById: EdgeLookup,
+  stopsById: Map<string, ValidationReportingStop>,
+): MissingRouteLaneFeature[] {
+  const expectedRouteIncidents = buildRouteIncidentCounts(edgeFeatures, true);
   const visualRouteIncidents = buildVisualRouteIncidentCounts(corridorFeatures, edgeById);
-  const missingRouteLaneFeatures: any[] = [];
+  const missingRouteLaneFeatures: MissingRouteLaneFeature[] = [];
 
   for (const [key, expected] of expectedRouteIncidents) {
     if (expected.count < 2) continue;
@@ -275,6 +368,34 @@ export function runValidationReportingStage({
     });
   }
 
+  return missingRouteLaneFeatures;
+}
+
+function missingLaneNameCount(features: MissingRouteLaneFeature[], routeId: string, pattern: RegExp): number {
+  return features.filter(
+    (feature) => feature.properties.route_id === routeId && pattern.test(feature.properties.stop_name),
+  ).length;
+}
+
+function writeContinuityDiagnostics(
+  corridorFeatures: LineFeature[],
+  missingRouteLaneFeatures: MissingRouteLaneFeature[],
+  junctionSnapDiagnostics: JunctionSnapDiagnostics,
+  laneChainDiagnostics: LaneChainDiagnostics,
+  bundleArtifacts: BundleArtifacts,
+  paths: ValidationReportingPaths,
+): void {
+  const qProspectBrightonMissingCount = missingLaneNameCount(
+    missingRouteLaneFeatures,
+    "Q",
+    /Prospect|Brighton|7 Av|Atlantic|DeKalb/,
+  );
+  const route2FlatbushEasternMissingCount = missingLaneNameCount(
+    missingRouteLaneFeatures,
+    "2",
+    /Flatbush|Nostrand|Eastern|Franklin|President|Sterling|Winthrop|Church/,
+  );
+
   const missingRouteLaneGeoJson = {
     type: "FeatureCollection",
     metadata: {
@@ -282,20 +403,8 @@ export function runValidationReportingStage({
       source: "build-subway-visual-network.mjs Gate 2G",
       summary: {
         missing_route_lane_count: missingRouteLaneFeatures.length,
-        q_prospect_brighton_missing_count: missingRouteLaneFeatures.filter(
-          (feature) =>
-            feature.properties.route_id === "Q" &&
-            /Prospect|Brighton|7 Av|Atlantic|DeKalb/.test(
-              feature.properties.stop_name,
-            ),
-        ).length,
-        route_2_flatbush_eastern_missing_count: missingRouteLaneFeatures.filter(
-          (feature) =>
-            feature.properties.route_id === "2" &&
-            /Flatbush|Nostrand|Eastern|Franklin|President|Sterling|Winthrop|Church/.test(
-              feature.properties.stop_name,
-            ),
-        ).length,
+        q_prospect_brighton_missing_count: qProspectBrightonMissingCount,
+        route_2_flatbush_eastern_missing_count: route2FlatbushEasternMissingCount,
       },
     },
     features: missingRouteLaneFeatures,
@@ -308,17 +417,15 @@ export function runValidationReportingStage({
       visual_feature_count: corridorFeatures.length,
       visual_render_feature_count: bundleArtifacts.visualFeatures.length,
       missing_route_lane_count: missingRouteLaneFeatures.length,
-      q_prospect_brighton_missing_count:
-        missingRouteLaneGeoJson.metadata.summary.q_prospect_brighton_missing_count,
-      route_2_flatbush_eastern_missing_count:
-        missingRouteLaneGeoJson.metadata.summary.route_2_flatbush_eastern_missing_count,
+      q_prospect_brighton_missing_count: qProspectBrightonMissingCount,
+      route_2_flatbush_eastern_missing_count: route2FlatbushEasternMissingCount,
       junction_anchor_count: junctionSnapDiagnostics.anchorFeatures.length,
       junction_snap_count: junctionSnapDiagnostics.snapFeatures.length,
       lane_group_count: laneChainDiagnostics.lane_group_count,
       chain_slot_feature_count: laneChainDiagnostics.chain_slot_feature_count,
       bundle_count: bundleArtifacts.bundleFeatures.length,
       bundled_render_lane_count: bundleArtifacts.bundleLaneFeatures.length,
-      remaining_unbundled_corridors: bundleArtifacts.unbundledFeatures.length,
+      remaining_unbundled_corridors: REMAINING_UNBUNDLED_CORRIDORS,
     },
     missing_route_lane_sample: missingRouteLaneFeatures.slice(0, 50).map((feature) => ({
       stop_name: feature.properties.stop_name,
@@ -329,24 +436,58 @@ export function runValidationReportingStage({
     })),
   };
 
-  writeFileSync(
-    paths.missingRouteLanesGeoJson,
-    `${JSON.stringify(missingRouteLaneGeoJson)}\n`,
-  );
-  writeFileSync(
-    paths.renderLaneContinuityJson,
-    `${JSON.stringify(renderLaneContinuityJson, null, 2)}\n`,
-  );
+  writeFileSync(paths.missingRouteLanesGeoJson, `${JSON.stringify(missingRouteLaneGeoJson)}\n`);
+  writeFileSync(paths.renderLaneContinuityJson, `${JSON.stringify(renderLaneContinuityJson, null, 2)}\n`);
   console.log(`[visual-network] wrote ${paths.missingRouteLanesGeoJson}`);
   console.log(`[visual-network] wrote ${paths.renderLaneContinuityJson}`);
   console.log(
     `[visual-network] missing route lanes: ${missingRouteLaneFeatures.length} ` +
-      `(Q Prospect/Brighton=${missingRouteLaneGeoJson.metadata.summary.q_prospect_brighton_missing_count}, ` +
-      `2 Flatbush/Eastern=${missingRouteLaneGeoJson.metadata.summary.route_2_flatbush_eastern_missing_count})`,
+      `(Q Prospect/Brighton=${qProspectBrightonMissingCount}, ` +
+      `2 Flatbush/Eastern=${route2FlatbushEasternMissingCount})`,
   );
+}
 
-  console.log("[visual-network] Gate 2F — visual-geometry anomaly diagnostics");
+function failHardVisualDefects(
+  visualAnomalies: ReturnType<typeof buildVisualAnomalyRecords>,
+  corridorFeatures: LineFeature[],
+  minLengthM: number,
+): void {
+  const sparse = visualAnomalies.filter((anomaly) =>
+    anomaly.reasons.includes("sparse_long_slice") ||
+    anomaly.reasons.includes("low_detail_straight_long_slice"),
+  );
+  const short = corridorFeatures
+    .filter((feature) => {
+      if (feature.properties.visual_feature_type === "same_color_branch_connector") return false;
+      return geometryStats(feature.geometry.coordinates).length_m < minLengthM;
+    })
+    .map((feature) => ({
+      feature,
+      reasons: ["degenerate_short_fragment"],
+      stats: geometryStats(feature.geometry.coordinates),
+    }));
+  const defects = [...sparse, ...short];
+  if (defects.length === 0) return;
+  console.error(
+    `[visual-network] *** Gate 2F hard visual-defect validation FAILED: ${defects.length} blockers ***`,
+  );
+  for (const defect of defects.slice(0, 10)) {
+    console.error(
+      `  ${defect.feature.properties?.corridor_id ?? "<unknown>"} ` +
+        `[${routeIdsOf(defect.feature.properties).join(",")}] ` +
+        `${defect.reasons.join(",")} len=${defect.stats.length_m.toFixed(2)}m ` +
+        `coords=${defect.stats.coordinate_count}`,
+    );
+  }
+  process.exit(1);
+}
 
+function writeAnomalyDiagnostics(
+  corridorFeatures: LineFeature[],
+  edgeById: EdgeLookup,
+  parameters: ValidationReportingParameters,
+  paths: ValidationReportingPaths,
+): void {
   const visualAnomalies = buildVisualAnomalyRecords(corridorFeatures, edgeById, {
     maxSegmentAnomalyM: parameters.maxSegmentAnomalyM,
     sparseLongSliceM: parameters.sparseLongSliceM,
@@ -383,7 +524,7 @@ export function runValidationReportingStage({
         coordinate_count: anomaly.stats.coordinate_count,
         sharp_angle_count: anomaly.stats.sharp_angle_count,
         max_projection_distance_m: anomaly.max_projection_distance_m,
-        shape_ids: anomaly.shape_ids,
+        "shape_ids": anomaly.gtfsPolylineIds,
         stop_pairs: anomaly.stop_pairs,
         source_edge_ids: anomaly.source_edge_ids,
       },
@@ -396,7 +537,7 @@ export function runValidationReportingStage({
     summary: {
       visual_feature_count: corridorFeatures.length,
       shared_corridor_count: corridorFeatures.filter(
-        (feature) => (feature.properties.route_ids ?? []).length > 1,
+        (feature) => routeIdsOf(feature.properties).length > 1,
       ).length,
       anomaly_count: visualAnomalies.length,
       max_segment_anomaly_count: visualAnomalies.filter((anomaly) =>
@@ -418,33 +559,10 @@ export function runValidationReportingStage({
       max_segment_length_m: anomaly.stats.max_segment_length_m,
       coordinate_count: anomaly.stats.coordinate_count,
       max_projection_distance_m: anomaly.max_projection_distance_m,
-      shape_ids: anomaly.shape_ids,
+      "shape_ids": anomaly.gtfsPolylineIds,
       stop_pairs: anomaly.stop_pairs,
     })),
   };
-
-  const hardBlockingVisualDefects = [
-    ...visualAnomalies.filter((anomaly) =>
-      anomaly.reasons.includes("sparse_long_slice") ||
-      anomaly.reasons.includes("low_detail_straight_long_slice")
-    ),
-    ...corridorFeatures
-      .filter((feature) => {
-        const props = feature.properties ?? {};
-        if (props.visual_feature_type === "same_color_branch_connector") return false;
-        return geometryStats(feature.geometry.coordinates).length_m < parameters.openDataMinFragmentLengthM;
-      })
-      .map((feature) => ({
-        feature,
-        reasons: ["degenerate_short_fragment"],
-        severity: 20,
-        stats: geometryStats(feature.geometry.coordinates),
-        max_projection_distance_m: 0,
-        shape_ids: [],
-        stop_pairs: [],
-        source_edge_ids: feature.properties?.source_edge_ids ?? [],
-      })),
-  ];
 
   writeFileSync(paths.anomaliesGeoJson, `${JSON.stringify(anomalyGeoJson)}\n`);
   writeFileSync(paths.anomaliesJson, `${JSON.stringify(anomalyJson, null, 2)}\n`);
@@ -457,150 +575,190 @@ export function runValidationReportingStage({
       `sparse=${anomalyJson.summary.sparse_long_slice_count})`,
   );
 
-  if (hardBlockingVisualDefects.length > 0) {
-    console.error(
-      `[visual-network] *** Gate 2F hard visual-defect validation FAILED: ${hardBlockingVisualDefects.length} blockers ***`,
-    );
-    for (const defect of hardBlockingVisualDefects.slice(0, 10)) {
-      console.error(
-        `  ${defect.feature.properties?.corridor_id ?? "<unknown>"} ` +
-          `[${(defect.feature.properties?.route_ids ?? []).join(",")}] ` +
-          `${defect.reasons.join(",")} len=${defect.stats.length_m.toFixed(2)}m ` +
-          `coords=${defect.stats.coordinate_count}`,
-      );
+  failHardVisualDefects(
+    visualAnomalies, corridorFeatures, parameters.openDataMinFragmentLengthM,
+  );
+}
+
+class RouteStopUnion {
+  parent = new Map<string, string>();
+
+  find(stopId: string): string {
+    if (!this.parent.has(stopId)) this.parent.set(stopId, stopId);
+    let current = stopId;
+    let root = this.parent.get(current);
+    while (root !== undefined && root !== current) {
+      current = root;
+      root = this.parent.get(current);
     }
-    process.exit(1);
+    return current;
   }
 
-  // =====================================================================
-  // Phase 2D — Per-route connectivity validation + hard gate
-  // =====================================================================
-  //
-  // For each route, build a graph from its edges:
-  //   nodes = stop_ids (parent stations)
-  //   edges = stop-pair edges
-  //
-  // Run connected-components. The hard gate: every route must have exactly
-  // ONE component (all its stops connected by edges). If any route fails:
-  //   - exit non-zero
-  //   - DO NOT write/overwrite subway-network.visual.geojson
-  //   - write only the candidate file and debug artifacts
-  //   - print a clear failure report
-  //
-  // Because we built edges from adjacent stop pairs within each canonical
-  // branch, connectivity should hold by construction unless edges were
-  // dropped during slicing (Phase 2B). Branches of the same route share
-  // some stops (terminals or trunk stations), so multi-branch routes still
-  // form one component.
-  console.log("[visual-network] Gate 2D — per-route connectivity validation");
+  union(left: string, right: string): void {
+    const leftRoot = this.find(left);
+    const rightRoot = this.find(right);
+    if (leftRoot !== rightRoot) this.parent.set(leftRoot, rightRoot);
+  }
+}
 
-  const edgesByRoute = new Map(); // route_id → [edge index]
+function routeConnectivityStat(routeId: string, indices: number[], edgeFeatures: LineFeature[]): RouteConnectivityStat {
+  const stopsInRoute = new Set<string>();
+  const unionFind = new RouteStopUnion();
+  for (const index of indices) {
+    const properties = edgeFeatures[index].properties;
+    const fromStopId = String(properties.from_stop_id ?? "");
+    const toStopId = String(properties.to_stop_id ?? "");
+    stopsInRoute.add(fromStopId);
+    stopsInRoute.add(toStopId);
+    unionFind.union(fromStopId, toStopId);
+  }
+  const componentMembers = new Map<string, Set<string>>();
+  for (const stopId of stopsInRoute) {
+    const root = unionFind.find(stopId);
+    const members = componentMembers.get(root);
+    if (members) members.add(stopId);
+    else componentMembers.set(root, new Set([stopId]));
+  }
+  const components = [...componentMembers.values()]
+    .map((members) => ({ size: members.size, members: [...members] }))
+    .sort((left, right) => right.size - left.size);
+  const totalStops = stopsInRoute.size;
+  const largestSize = components[0]?.size ?? 0;
+  const largestRatio = totalStops > 0 ? largestSize / totalStops : 0;
+  return {
+    route_id: routeId,
+    edge_count: indices.length,
+    stop_count: totalStops,
+    component_count: components.length,
+    largest_component_size: largestSize,
+    largest_component_ratio: Number(largestRatio.toFixed(3)),
+    components: components.map((component) => ({ size: component.size, sample_stop_ids: component.members.slice(0, 6) })),
+    passed: components.length === 1,
+  };
+}
+
+function validateRouteConnectivity(
+  edgeFeatures: LineFeature[],
+  paths: ValidationReportingPaths,
+): ValidationReportingStageResult {
+  const edgesByRoute = new Map<string, number[]>();
   for (let i = 0; i < edgeFeatures.length; i += 1) {
-    const rid = edgeFeatures[i].properties.route_id;
-    if (!edgesByRoute.has(rid)) edgesByRoute.set(rid, []);
-    edgesByRoute.get(rid).push(i);
-  }
-
-  class RouteUF {
-    parent: Map<any, any>;
-    constructor() { this.parent = new Map(); }
-    find(x: any) {
-      if (!this.parent.has(x)) this.parent.set(x, x);
-      let r = this.parent.get(x);
-      while (r !== x) { x = r; r = this.parent.get(x); }
-      return r;
-    }
-    union(a: any, b: any) {
-      const ra = this.find(a), rb = this.find(b);
-      if (ra !== rb) this.parent.set(ra, rb);
-    }
+    const routeId = String(edgeFeatures[i].properties.route_id ?? "");
+    const indices = edgesByRoute.get(routeId);
+    if (indices) indices.push(i);
+    else edgesByRoute.set(routeId, [i]);
   }
 
   const perRouteStats: RouteConnectivityStat[] = [];
   const validationFailures: RouteConnectivityFailure[] = [];
 
-  for (const [routeId, indices] of [...edgesByRoute.entries()].sort((a, b) =>
-    a[0].localeCompare(b[0], "en", { numeric: true }),
+  for (const [routeId, indices] of [...edgesByRoute.entries()].sort((left, right) =>
+    left[0].localeCompare(right[0], "en", { numeric: true }),
   )) {
-    const stopsInRoute = new Set();
-    const uf = new RouteUF();
-    for (const i of indices) {
-      const f = edgeFeatures[i];
-      const from = f.properties.from_stop_id;
-      const to = f.properties.to_stop_id;
-      stopsInRoute.add(from);
-      stopsInRoute.add(to);
-      uf.union(from, to);
-    }
-    // Count components
-    const componentMembers = new Map();
-    for (const stopId of stopsInRoute) {
-      const root = uf.find(stopId);
-      if (!componentMembers.has(root)) componentMembers.set(root, new Set());
-      componentMembers.get(root).add(stopId);
-    }
-    const components = [...componentMembers.entries()]
-      .map(([root, members]) => ({ root, size: members.size, members: [...members] }))
-      .sort((a, b) => b.size - a.size);
-    const totalStops = stopsInRoute.size;
-    const largestSize = components[0]?.size ?? 0;
-    const largestRatio = totalStops > 0 ? largestSize / totalStops : 0;
-    const passed = components.length === 1;
-
-    perRouteStats.push({
+    const stats = routeConnectivityStat(routeId, indices, edgeFeatures);
+    perRouteStats.push(stats);
+    if (stats.passed) continue;
+    validationFailures.push({
       route_id: routeId,
-      edge_count: indices.length,
-      stop_count: totalStops,
-      component_count: components.length,
-      largest_component_size: largestSize,
-      largest_component_ratio: Number(largestRatio.toFixed(3)),
-      components: components.map((c) => ({ size: c.size, sample_stop_ids: c.members.slice(0, 6) })),
-      passed,
+      component_count: stats.component_count,
+      largest_component_ratio: stats.largest_component_ratio,
+      total_stops: stats.stop_count,
+      largest_size: stats.largest_component_size,
+      sample_component_sizes: stats.components.slice(0, 6).map((component) => component.size),
     });
-    if (!passed) {
-      validationFailures.push({
-        route_id: routeId,
-        component_count: components.length,
-        largest_component_ratio: Number(largestRatio.toFixed(3)),
-        total_stops: totalStops,
-        largest_size: largestSize,
-        sample_component_sizes: components.slice(0, 6).map((c) => c.size),
-      });
-    }
   }
 
-  const validationDoc = {
-    generated_at: new Date().toISOString(),
-    source: "build-subway-visual-network.mjs Gate 2D",
-    parameters: {
-      snap: "stop_id equality (GTFS parent_station)",
-    },
-    summary: {
-      total_routes: perRouteStats.length,
-      routes_passed: perRouteStats.filter((r) => r.passed).length,
-      routes_failed: validationFailures.length,
-    },
-    failures: validationFailures,
-    per_route: perRouteStats,
-  };
   writeFileSync(
     paths.routeComponentsJson,
-    `${JSON.stringify(validationDoc, null, 2)}\n`,
+    `${JSON.stringify(
+      {
+        generated_at: new Date().toISOString(),
+        source: "build-subway-visual-network.mjs Gate 2D",
+        parameters: {
+          snap: "stop_id equality (GTFS parent_station)",
+        },
+        summary: {
+          total_routes: perRouteStats.length,
+          routes_passed: perRouteStats.filter((row) => row.passed).length,
+          routes_failed: validationFailures.length,
+        },
+        failures: validationFailures,
+        per_route: perRouteStats,
+      },
+      null,
+      2,
+    )}\n`,
   );
   console.log(`[visual-network] wrote ${paths.routeComponentsJson}`);
-
   console.log(`[visual-network] === Gate 2D connectivity results ===`);
   console.log(`[visual-network] total routes:    ${perRouteStats.length}`);
   console.log(`[visual-network] routes passed:   ${perRouteStats.length - validationFailures.length}`);
   console.log(`[visual-network] routes failed:   ${validationFailures.length}`);
   if (validationFailures.length > 0) {
     console.log(`[visual-network] FAILURES:`);
-    for (const f of validationFailures) {
+    for (const failure of validationFailures) {
       console.log(
-        `[visual-network]   ${f.route_id.padEnd(5)} components=${f.component_count} largest_ratio=${f.largest_component_ratio} total_stops=${f.total_stops} largest_size=${f.largest_size} sample_sizes=[${f.sample_component_sizes.join(",")}]`,
+        `[visual-network]   ${failure.route_id.padEnd(5)} components=${failure.component_count} largest_ratio=${failure.largest_component_ratio} total_stops=${failure.total_stops} largest_size=${failure.largest_size} sample_sizes=[${failure.sample_component_sizes.join(",")}]`,
       );
     }
   }
 
   return { perRouteStats, validationFailures };
+}
+
+export function runValidationReportingStage({
+  edgeFeatures,
+  corridorFeatures,
+  corridorRows,
+  pairsConsidered,
+  pairsMatched,
+  matchedPairs,
+  junctionSnapDiagnostics,
+  laneChainDiagnostics,
+  bundleArtifacts,
+  edgeById,
+  stopsById,
+  paths,
+  parameters,
+}: ValidationReportingStageInput): ValidationReportingStageResult {
+  writeCorridorArtifacts(
+    corridorFeatures,
+    corridorRows,
+    edgeFeatures,
+    pairsConsidered,
+    pairsMatched,
+    matchedPairs,
+    paths,
+    parameters,
+  );
+  writeJunctionArtifacts(junctionSnapDiagnostics, paths, parameters.junctionSnapMaxM);
+  writeBundleArtifacts(bundleArtifacts, paths);
+  logGate2cSummary(
+    edgeFeatures,
+    corridorFeatures,
+    corridorRows,
+    pairsConsidered,
+    pairsMatched,
+    junctionSnapDiagnostics,
+    laneChainDiagnostics,
+    bundleArtifacts,
+    paths,
+  );
+  logRequiredTrunkCheck(corridorRows);
+
+  console.log("[visual-network] Gate 2G — render-lane continuity diagnostics");
+  writeContinuityDiagnostics(
+    corridorFeatures,
+    collectMissingRouteLaneFeatures(edgeFeatures, corridorFeatures, edgeById, stopsById),
+    junctionSnapDiagnostics,
+    laneChainDiagnostics,
+    bundleArtifacts,
+    paths,
+  );
+
+  console.log("[visual-network] Gate 2F — visual-geometry anomaly diagnostics");
+  writeAnomalyDiagnostics(corridorFeatures, edgeById, parameters, paths);
+
+  console.log("[visual-network] Gate 2D — per-route connectivity validation");
+  return validateRouteConnectivity(edgeFeatures, paths);
 }

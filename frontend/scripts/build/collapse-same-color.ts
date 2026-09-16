@@ -11,19 +11,19 @@
 import type { Feature, LineStringGeometry, Position, RouteId } from "./types.ts";
 
 type CollapseFeatureProperties = {
-  corridor_id?: unknown;
-  segment_id?: unknown;
-  id?: unknown;
-  route_id?: unknown;
-  route_ids?: RouteId[];
-  color?: unknown;
-  color_route_ids?: unknown;
-  representative_route_id?: unknown;
+  corridor_id?: string;
+  segment_id?: string;
+  id?: string | number;
+  route_id?: string;
+  route_ids?: RouteId[] | string;
+  color?: string;
+  color_route_ids?: RouteId[];
+  representative_route_id?: string;
   length_m?: number;
-  qa_orphan_origin?: unknown;
-  qa_orphan_from_is_terminal?: unknown;
-  qa_orphan_to_is_terminal?: unknown;
-  qa_orphan_severity?: unknown;
+  qa_orphan_origin?: boolean;
+  qa_orphan_from_is_terminal?: boolean;
+  qa_orphan_to_is_terminal?: boolean;
+  qa_orphan_severity?: string;
   same_color_tail?: boolean;
   same_color_tail_source_corridor_id?: string;
   same_color_shared_run?: boolean;
@@ -33,8 +33,7 @@ type CollapseFeatureProperties = {
   same_color_shared_end_m?: number;
   same_color_target_tail?: boolean;
   same_color_collapsed_representative?: boolean;
-  lane_slot_source?: unknown;
-  [key: string]: unknown;
+  lane_slot_source?: string;
 };
 
 type CollapseFeature = Feature<LineStringGeometry, CollapseFeatureProperties>;
@@ -125,12 +124,12 @@ const ROUTE_ORDER = [
   "SI",
 ];
 
-function routeRank(routeId: unknown): number {
-  const index = ROUTE_ORDER.indexOf(String(routeId));
-  return index === -1 ? ROUTE_ORDER.length + String(routeId).charCodeAt(0) : index;
+function routeRank(routeId: string): number {
+  const index = ROUTE_ORDER.indexOf(routeId);
+  return index === -1 ? ROUTE_ORDER.length + routeId.charCodeAt(0) : index;
 }
 
-function sortRouteIds(routeIds: unknown[]): RouteId[] {
+function sortRouteIds(routeIds: Array<string | number>): RouteId[] {
   return [...new Set(routeIds.map(String))].sort(
     (left, right) => routeRank(left) - routeRank(right) || left.localeCompare(right, "en", { numeric: true }),
   );
@@ -255,7 +254,7 @@ function featureRouteRank(feature: CollapseFeature): number {
   return ranks.length === 0 ? Number.MAX_SAFE_INTEGER : Math.min(...ranks);
 }
 
-function unionRoutes(...routeLists: unknown[][]): RouteId[] {
+function unionRoutes(...routeLists: RouteId[][]): RouteId[] {
   return sortRouteIds(routeLists.flat().filter(Boolean));
 }
 
@@ -503,20 +502,160 @@ function isFullFeatureCollapse(run: OverlapRun, sourceLengthM: number, targetLen
   return sourceCoverage >= 0.9 && targetCoverage >= 0.9;
 }
 
+type CollapseAccumulator = {
+  targetRouteUnions: Map<CollapseFeature, RouteId[]>;
+  targetSuppressionIntervals: Map<CollapseFeature, ArcInterval[]>;
+  replacementParts: Map<CollapseFeature, CollapseFeature[]>;
+  dropped: Set<CollapseFeature>;
+  sharedRuns: CollapseFeature[];
+  collapsedCount: number;
+};
+
+function collapseSourceAgainstTargets(
+  source: CollapseFeature,
+  targets: CollapseFeature[],
+  collapseDistM: number,
+  minOverlapM: number,
+  targetMeta: Map<CollapseFeature, TargetMeta>,
+  accumulator: CollapseAccumulator,
+): void {
+  const sourceMeta = targetMeta.get(source);
+  if (!sourceMeta || targets.length === 0) return;
+  const hits = buildHits(source, targets, collapseDistM, targetMeta);
+  const runs = findOverlapRuns(source, hits, minOverlapM, sourceMeta.arcs);
+  if (runs.length === 0) return;
+
+  const fullRun = runs.find((run) =>
+    isFullFeatureCollapse(run, sourceMeta.lengthM, targetMeta.get(run.target)?.lengthM ?? 0),
+  );
+  if (fullRun) {
+    const current = accumulator.targetRouteUnions.get(fullRun.target) ?? featureRouteIds(fullRun.target);
+    accumulator.targetRouteUnions.set(fullRun.target, unionRoutes(current, featureRouteIds(source)));
+    accumulator.dropped.add(source);
+    accumulator.replacementParts.set(source, []);
+    accumulator.collapsedCount += 1;
+    return;
+  }
+
+  const acceptedRuns = runs.filter(
+    (run) =>
+      run.sourceRunLengthM >= MIN_SHARED_RUN_M &&
+      run.targetEndArc - run.targetStartArc >= MIN_SHARED_RUN_M * 0.6,
+  );
+  if (acceptedRuns.length === 0) return;
+  const tails = buildSourceTails(source, acceptedRuns, sourceMeta.lengthM);
+  for (const run of acceptedRuns) {
+    const intervals = accumulator.targetSuppressionIntervals.get(run.target);
+    if (intervals) intervals.push({ startArc: run.targetStartArc, endArc: run.targetEndArc });
+    else accumulator.targetSuppressionIntervals.set(run.target, [{ startArc: run.targetStartArc, endArc: run.targetEndArc }]);
+    const shared = buildSharedRunFeature(run, accumulator.sharedRuns.length + 1);
+    if (shared) accumulator.sharedRuns.push(shared);
+  }
+  accumulator.replacementParts.set(source, tails);
+  accumulator.collapsedCount += 1;
+}
+
+function collapseColorGroup(
+  group: CollapseFeature[],
+  collapseDistM: number,
+  minOverlapM: number,
+  accumulator: CollapseAccumulator,
+): void {
+  if (group.length < 2) return;
+  const targetMeta = new Map(
+    group.map((feature) => [
+      feature,
+      {
+        arcs: cumulativeArcs(feature.geometry.coordinates),
+        lengthM: lengthM(feature.geometry.coordinates),
+      },
+    ]),
+  );
+  const ranked = group
+    .map((feature) => ({ feature, length: targetMeta.get(feature)?.lengthM ?? 0 }))
+    .sort(
+      (left, right) =>
+        featureRouteRank(left.feature) - featureRouteRank(right.feature) ||
+        right.length - left.length ||
+        corridorId(left.feature).localeCompare(corridorId(right.feature), "en", { numeric: true }),
+    )
+    .map((entry) => entry.feature);
+  for (let index = 1; index < ranked.length; index += 1) {
+    const source = ranked[index];
+    if (accumulator.dropped.has(source)) continue;
+    collapseSourceAgainstTargets(
+      source,
+      ranked.slice(0, index).filter((target) => !accumulator.dropped.has(target)),
+      collapseDistM,
+      minOverlapM,
+      targetMeta,
+      accumulator,
+    );
+  }
+}
+
+function collapsedRepresentative(
+  feature: CollapseFeature,
+  routeIds: RouteId[],
+): CollapseFeature {
+  return {
+    ...feature,
+    properties: clearStaleOrphanQa({
+      ...feature.properties,
+      route_ids: routeIds,
+      color_route_ids: Array.isArray(feature.properties?.color_route_ids)
+        ? routeIds
+        : feature.properties?.color_route_ids,
+      same_color_collapsed_representative: true,
+    }),
+  };
+}
+
+function assembleCollapsedFeatures(
+  features: CollapseFeature[],
+  accumulator: CollapseAccumulator,
+): CollapseFeature[] {
+  const output: CollapseFeature[] = [];
+  for (const feature of features) {
+    const replacements = accumulator.replacementParts.get(feature);
+    if (replacements) {
+      output.push(...replacements);
+      continue;
+    }
+    const intervals = accumulator.targetSuppressionIntervals.get(feature);
+    if (intervals) {
+      output.push(
+        ...(buildTailsForIntervals((feature), (intervals), lengthM((feature).geometry.coordinates), {
+    route_ids: (accumulator.targetRouteUnions.get(feature) ?? featureRouteIds(feature)),
+    color_route_ids: Array.isArray((feature).properties?.color_route_ids)
+        ?
+            (accumulator.targetRouteUnions.get(feature) ?? featureRouteIds(feature))
+        : (feature).properties?.color_route_ids,
+    same_color_target_tail: true,
+    same_color_tail_source_corridor_id: corridorId((feature)),
+})),
+      );
+      continue;
+    }
+    const unioned = accumulator.targetRouteUnions.get(feature);
+    if (unioned) {
+      output.push(collapsedRepresentative(feature, unioned));
+      continue;
+    }
+    output.push(feature);
+  }
+  output.push(...accumulator.sharedRuns);
+  return output;
+}
+
 /**
  * Collapse same-color overlaps (run-based, partial-length aware).
- *
- * @param {Array} features
- * @param {object} [options]
- * @param {number} [options.collapseDistM=12]
- * @param {number} [options.minOverlapM=120]
- * @returns {{ features: Array, collapsedCount: number }}
  */
 export function collapseSameColorOverlaps(
   features: CollapseFeature[],
   options: CollapseOptions = {},
 ): CollapseResult {
-  const { collapseDistM = 12 } = options;
+  const collapseDistM = options.collapseDistM ?? 12;
   const minOverlapM = options.minOverlapM ?? 120;
   const lines = features.filter(
     (feature) =>
@@ -525,134 +664,28 @@ export function collapseSameColorOverlaps(
       feature.geometry.coordinates.length >= 2,
   );
 
-  const byColor = new Map<unknown, CollapseFeature[]>();
+  const accumulator: CollapseAccumulator = {
+    targetRouteUnions: new Map(),
+    targetSuppressionIntervals: new Map(),
+    replacementParts: new Map(),
+    dropped: new Set(),
+    sharedRuns: [],
+    collapsedCount: 0,
+  };
+  const linesByColor = new Map<string, CollapseFeature[]>();
   for (const feature of lines) {
-    const color = feature.properties?.color;
+    const color = feature.properties.color;
     if (!color) continue;
-    if (!byColor.has(color)) byColor.set(color, []);
-    byColor.get(color)?.push(feature);
+    const bucket = linesByColor.get(color);
+    if (bucket) bucket.push(feature);
+    else linesByColor.set(color, [feature]);
+  }
+  for (const group of linesByColor.values()) {
+    collapseColorGroup(group, collapseDistM, minOverlapM, accumulator);
   }
 
-  const targetRouteUnions = new Map<CollapseFeature, RouteId[]>();
-  const targetSuppressionIntervals = new Map<CollapseFeature, ArcInterval[]>();
-  const replacementParts = new Map<CollapseFeature, CollapseFeature[]>();
-  const dropped = new Set<CollapseFeature>();
-  const sharedRuns: CollapseFeature[] = [];
-  let collapsedCount = 0;
-
-  for (const group of byColor.values()) {
-    if (group.length < 2) continue;
-    const targetMeta = new Map<CollapseFeature, TargetMeta>(
-      group.map((feature) => [
-        feature,
-        {
-          arcs: cumulativeArcs(feature.geometry.coordinates),
-          lengthM: lengthM(feature.geometry.coordinates),
-        },
-      ]),
-    );
-    const ranked = group
-      .map((feature) => ({ feature, length: targetMeta.get(feature)?.lengthM ?? 0 }))
-      .sort(
-        (left, right) =>
-          featureRouteRank(left.feature) - featureRouteRank(right.feature) ||
-          right.length - left.length ||
-          corridorId(left.feature).localeCompare(corridorId(right.feature), "en", { numeric: true }),
-      )
-      .map((entry) => entry.feature);
-
-    for (let index = 1; index < ranked.length; index += 1) {
-      const source = ranked[index];
-      if (dropped.has(source)) continue;
-      const targets = ranked.slice(0, index).filter((target) => !dropped.has(target));
-      if (targets.length === 0) continue;
-
-      const sourceMeta = targetMeta.get(source);
-      if (!sourceMeta) continue;
-      const hits = buildHits(source, targets, collapseDistM, targetMeta);
-      const runs = findOverlapRuns(source, hits, minOverlapM, sourceMeta.arcs);
-      if (runs.length === 0) continue;
-
-      const fullRun = runs.find((run) =>
-        isFullFeatureCollapse(run, sourceMeta.lengthM, targetMeta.get(run.target)?.lengthM ?? 0),
-      );
-      if (fullRun) {
-        const current = targetRouteUnions.get(fullRun.target) ?? featureRouteIds(fullRun.target);
-        targetRouteUnions.set(fullRun.target, unionRoutes(current, featureRouteIds(source)));
-        dropped.add(source);
-        replacementParts.set(source, []);
-        collapsedCount += 1;
-        continue;
-      }
-
-      // Drop short overlaps: leave them as overlapping same-color geometry rather
-      // than carving a stub. Only genuinely long shared runs become their own
-      // route-unioned feature with the source split around them.
-      const acceptedRuns = runs.filter(
-        (run) =>
-          run.sourceRunLengthM >= MIN_SHARED_RUN_M &&
-          run.targetEndArc - run.targetStartArc >= MIN_SHARED_RUN_M * 0.6,
-      );
-      if (acceptedRuns.length === 0) continue;
-      const tails = buildSourceTails(source, acceptedRuns, sourceMeta.lengthM);
-      for (const run of acceptedRuns) {
-        if (!targetSuppressionIntervals.has(run.target)) targetSuppressionIntervals.set(run.target, []);
-        targetSuppressionIntervals.get(run.target)?.push({ startArc: run.targetStartArc, endArc: run.targetEndArc });
-        const shared = buildSharedRunFeature(run, sharedRuns.length + 1);
-        if (shared) sharedRuns.push(shared);
-      }
-      replacementParts.set(source, tails);
-      collapsedCount += 1;
-    }
-  }
-
-  const output: CollapseFeature[] = [];
-  for (const feature of features) {
-    if (replacementParts.has(feature)) {
-      const replacements = replacementParts.get(feature);
-      if (replacements) output.push(...replacements);
-      continue;
-    }
-
-    if (targetSuppressionIntervals.has(feature)) {
-      const routeIds = targetRouteUnions.get(feature) ?? featureRouteIds(feature);
-      const intervals = targetSuppressionIntervals.get(feature);
-      if (!intervals) continue;
-      const tails = buildTailsForIntervals(
-        feature,
-        intervals,
-        lengthM(feature.geometry.coordinates),
-        {
-          route_ids: routeIds,
-          color_route_ids: Array.isArray(feature.properties?.color_route_ids) ? routeIds : feature.properties?.color_route_ids,
-          same_color_target_tail: true,
-          same_color_tail_source_corridor_id: corridorId(feature),
-        },
-      );
-      output.push(...tails);
-      continue;
-    }
-
-    if (targetRouteUnions.has(feature)) {
-      const routeIds = targetRouteUnions.get(feature);
-      output.push({
-        ...feature,
-        properties: {
-          ...clearStaleOrphanQa({
-            ...feature.properties,
-            route_ids: routeIds,
-            color_route_ids: Array.isArray(feature.properties?.color_route_ids) ? routeIds : feature.properties?.color_route_ids,
-            same_color_collapsed_representative: true,
-          }),
-        },
-      });
-      continue;
-    }
-
-    output.push(feature);
-  }
-
-  output.push(...sharedRuns);
-
-  return { features: output, collapsedCount };
+  return {
+    features: assembleCollapsedFeatures(features, accumulator),
+    collapsedCount: accumulator.collapsedCount,
+  };
 }

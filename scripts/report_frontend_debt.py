@@ -114,7 +114,13 @@ def in_coverage_denominator(relative: str, scope: Mapping[str, object]) -> bool:
     return classify_relative(relative, scope)["role"] == "production"
 
 
-def run_tool(executable: str, args: Sequence[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+def run_tool(
+    executable: str,
+    args: Sequence[str],
+    *,
+    cwd: Path,
+    input_text: str | None = None,
+) -> subprocess.CompletedProcess[str]:
     resolved = shutil.which(executable)
     if resolved is None:
         raise RuntimeError(f"{executable} is required")
@@ -125,6 +131,7 @@ def run_tool(executable: str, args: Sequence[str], *, cwd: Path) -> subprocess.C
         capture_output=True,
         text=True,
         encoding="utf-8",
+        input=input_text,
     )
 
 
@@ -145,6 +152,14 @@ def report_identity(*, quality_ref: str, current_head: str | None = None) -> dic
         "fixed_point": resolve_git_ref(quality_ref),
         "current_head": current_head if current_head is not None else git_head(),
     }
+
+
+def type_only_files(inventory: Mapping[str, object]) -> list[str]:
+    return [
+        str(item["file"])
+        for item in inventory.get("files", [])
+        if isinstance(item, dict) and item.get("runtime") is False
+    ]
 
 
 def run_js_inventory(kind: str) -> dict[str, object]:
@@ -268,14 +283,20 @@ def coverage_metrics(
     records: Mapping[str, Mapping[str, object]],
     *,
     production_rows: Sequence[Mapping[str, object]] = (),
+    type_only_files: Sequence[str] = (),
 ) -> dict[str, object]:
     by_file: dict[str, list[Mapping[str, object]]] = defaultdict(list)
     for row in production_rows:
         by_file[posix(str(row["file"])).removeprefix("frontend/")].append(row)
+    type_only = {
+        posix(name).removeprefix("frontend/") for name in type_only_files
+    }
     line_total = line_hit = 0
     branch_total = branch_hit = 0
     unexecuted = []
     for relative in production_files:
+        if relative in type_only:
+            continue
         record = records.get(relative)
         file_line_total, file_line_hit = line_hits(record or {})
         if record is None:
@@ -371,19 +392,48 @@ def unexecuted_count(value: object) -> int:
     return int(value or 0)
 
 
-def resolve_branch_gate(file_coverage: Mapping[str, object]) -> dict[str, object]:
+def resolve_branch_gate(
+    file_coverage: Mapping[str, object],
+    *,
+    stable_denominator: bool = True,
+) -> dict[str, object]:
     unexecuted = unexecuted_count(file_coverage["unexecuted_files"])
     total = int(file_coverage["branch_total"])
     hit = int(file_coverage["branch_hit"])
     proxy = 0.0 if total == 0 else hit / total
-    unresolved = unexecuted > 0
+    unresolved = unexecuted > 0 or not stable_denominator
     return {
         "branch_proxy": proxy,
         "branch_coverage": None if unresolved else proxy,
         "branch_status": "unresolved" if unresolved else "exact",
         "meets_branch_target": (not unresolved)
         and (total == 0 or proxy >= TARGET_COVERAGE),
+        "branch_denominator_stable": stable_denominator and unexecuted == 0,
     }
+
+
+def branch_counts(metrics: Mapping[str, object]) -> tuple[int, int]:
+    return int(metrics["branch_total"]), int(metrics["branch_hit"])
+
+
+def mark_unstable_branch_report(report: Mapping[str, object]) -> dict[str, object]:
+    coverage = dict(report["coverage"])
+    coverage["branch"] = None
+    coverage["branch_status"] = "unresolved"
+    coverage["meets_branch_target"] = False
+    coverage["branch_denominator_stable"] = False
+    coverage["branch_proxy_note"] = (
+        "two unfiltered source-mapped c8 artifacts over the same sources "
+        "produced different branch totals"
+    )
+    batches: dict[str, dict[str, object]] = {}
+    for name, bucket in dict(report["by_batch"]).items():
+        updated = dict(bucket)
+        updated["branch_coverage"] = None
+        updated["branch_status"] = "unresolved"
+        updated["meets_branch_target"] = False
+        batches[str(name)] = updated
+    return {**dict(report), "coverage": coverage, "by_batch": batches}
 
 
 def resolve_function_gate(
@@ -543,6 +593,7 @@ def build_report(
     identity: Mapping[str, str],
     growth: Mapping[str, int],
     browser_source_mapped: bool,
+    type_only: Sequence[str] = (),
 ) -> dict[str, object]:
     production_metrics = function_metrics(production)
     authored_metrics = function_metrics(authored)
@@ -561,7 +612,10 @@ def build_report(
             production_rows=prod_rows,
             authored_rows=[row for row in authored if str(row["batch"]) == batch],
             file_coverage=coverage_metrics(
-                files, records, production_rows=prod_rows
+                files,
+                records,
+                production_rows=prod_rows,
+                type_only_files=type_only,
             ),
             records=records,
             production_files=files,
@@ -596,8 +650,12 @@ def build_report(
                 "files remain is unresolved"
             ),
             "branch_unexecuted_inventory": "mccabe_decision_points",
+            "branch_executed_inventory": "source_mapped_c8",
             "branch_status": coverage["branch_status"],
             "branch_proxy": coverage["branch_proxy"],
+            "branch_denominator_stable": coverage.get(
+                "branch_denominator_stable", coverage["branch_status"] == "exact"
+            ),
             "branch_proxy_note": (
                 "upper bound mixing c8 outcomes for executed files with McCabe "
                 "decision points for unexecuted files"
@@ -663,9 +721,9 @@ def print_summary(report: Mapping[str, object]) -> None:
         )
     else:
         print(f"  branch coverage: {_pct(float(coverage['branch']))}")
-    print(
-        "  unexecuted branch inventory: McCabe decision points (complexity-1)"
-    )
+        print(
+            "  executed branch inventory: unfiltered source-mapped c8"
+        )
     if coverage["function_status"] == "unresolved":
         print(
             "  function coverage: unresolved "
@@ -1157,6 +1215,69 @@ def _self_test_discovery() -> None:
         raise AssertionError("generated artifact hash lock must stay off the unit contract")
 
 
+def _self_test_type_only_coverage() -> None:
+    type_only = ["scripts/build/types.ts"]
+    missing = coverage_metrics(
+        ["scripts/build/types.ts", "app/page.tsx"],
+        {},
+        production_rows=[
+            {"file": "frontend/scripts/build/types.ts", "complexity": 1},
+            {"file": "frontend/app/page.tsx", "complexity": 50},
+        ],
+        type_only_files=type_only,
+    )
+    if "frontend/scripts/build/types.ts" in missing["unexecuted_files"]:
+        raise AssertionError("type-only modules must not be executable coverage")
+    if "frontend/app/page.tsx" not in missing["unexecuted_files"]:
+        raise AssertionError("runtime modules without hits stay unexecuted")
+    if int(missing["branch_total"]) != 49:
+        raise AssertionError(
+            f"type-only files must not add branch debt, got {missing['branch_total']}"
+        )
+    executed_type_only = coverage_metrics(
+        ["scripts/build/types.ts"],
+        {
+            "scripts/build/types.ts": {
+                "s": {"0": 1},
+                "statementMap": {"0": {"start": {"line": 1}}},
+                "b": {"0": [0, 0, 0]},
+            }
+        },
+        type_only_files=type_only,
+    )
+    if executed_type_only["line_total"] != 0:
+        raise AssertionError("type-only modules must not enter the line denominator")
+    if executed_type_only["unexecuted_files"]:
+        raise AssertionError("type-only modules must not be marked unexecuted")
+    if executed_type_only["branch_status"] != "exact":
+        raise AssertionError("dropping type-only files must keep the exact branch gate")
+
+
+def _self_test_runtime_inventory() -> None:
+    typed = run_tool(
+        "node",
+        [str(JS_METRICS), "--source", "scripts/build/types-self.ts"],
+        cwd=ROOT,
+        input_text="export type Foo = string;\n",
+    )
+    valued = run_tool(
+        "node",
+        [str(JS_METRICS), "--source", "scripts/build/value-self.ts"],
+        cwd=ROOT,
+        input_text="export const n = 1;\n",
+    )
+    if typed.returncode != 0 or valued.returncode != 0:
+        raise RuntimeError(typed.stderr or valued.stderr or "runtime inventory failed")
+    typed_payload = json.loads(typed.stdout)
+    valued_payload = json.loads(valued.stdout)
+    if typed_payload["files"][0]["runtime"] is not False:
+        raise AssertionError("pure type module must be runtime=false")
+    if valued_payload["files"][0]["runtime"] is not True:
+        raise AssertionError("value export must be runtime=true")
+    if typed_payload["functions"]:
+        raise AssertionError("pure type module must have no runtime functions")
+
+
 def _self_test_live_ownership() -> None:
     inventory = run_js_inventory("production")
     unassigned = [
@@ -1168,6 +1289,130 @@ def _self_test_live_ownership() -> None:
         raise AssertionError(f"unassigned production files: {unassigned[:20]}")
 
 
+def _self_test_true_if_does_not_cover_false() -> None:
+    record = {
+        "s": {"0": 1, "1": 1},
+        "statementMap": {
+            "0": {"start": {"line": 1}},
+            "1": {"start": {"line": 2}},
+        },
+        "b": {"if": [1, 0]},
+    }
+    metrics = coverage_metrics(["app/page.tsx"], {"app/page.tsx": record})
+    if metrics["branch_total"] != 2 or metrics["branch_hit"] != 1:
+        raise AssertionError(
+            "executing only the true side of an if must leave the false "
+            f"outcome missing, got {metrics['branch_hit']}/{metrics['branch_total']}"
+        )
+    if metrics["meets_branch_target"]:
+        raise AssertionError("a missing if outcome must not meet the 95% gate")
+
+
+def _self_test_untested_short_circuit_remains_missing() -> None:
+    record = {
+        "s": {"0": 1},
+        "statementMap": {"0": {"start": {"line": 1}}},
+        "b": {
+            "nullish": [1],
+            "or": [0],
+            "and": [1],
+            "optional": [0],
+        },
+    }
+    metrics = coverage_metrics(["app/page.tsx"], {"app/page.tsx": record})
+    if metrics["branch_total"] != 4 or metrics["branch_hit"] != 2:
+        raise AssertionError(
+            "untested ??, ||, &&, or optional-chaining outcomes must remain "
+            f"missing, got {metrics['branch_hit']}/{metrics['branch_total']}"
+        )
+
+
+def _self_test_wrappers_do_not_inflate() -> None:
+    records = {
+        "app/page.tsx": {
+            "s": {"0": 1},
+            "statementMap": {"0": {"start": {"line": 1}}},
+            "b": {"real": [1, 0]},
+        },
+        "node_modules/c8/wrapper.js": {
+            "s": {"0": 1},
+            "statementMap": {"0": {"start": {"line": 1}}},
+            "b": {"wrap": [0, 0, 0, 0, 0]},
+        },
+        "scripts/build/types.ts": {
+            "s": {"0": 1},
+            "statementMap": {"0": {"start": {"line": 1}}},
+            "b": {"wrap": [0, 0, 0]},
+        },
+    }
+    metrics = coverage_metrics(
+        ["app/page.tsx", "scripts/build/types.ts"],
+        records,
+        type_only_files=["scripts/build/types.ts"],
+    )
+    if metrics["branch_total"] != 2 or metrics["branch_hit"] != 1:
+        raise AssertionError(
+            "wrapper artifacts and type-only files must not inflate the "
+            f"branch denominator, got {metrics['branch_hit']}/{metrics['branch_total']}"
+        )
+
+
+def _self_test_saved_artifact_is_stable() -> None:
+    record = {
+        "s": {"0": 1},
+        "statementMap": {"0": {"start": {"line": 1}}},
+        "b": {"if": [1, 0], "nullish": [0], "or": [1]},
+    }
+    records = {"app/page.tsx": record}
+    first = coverage_metrics(["app/page.tsx"], records)
+    second = coverage_metrics(["app/page.tsx"], records)
+    if branch_counts(first) != branch_counts(second):
+        raise AssertionError(
+            "two reports over the same coverage artifact must have identical "
+            f"branch counts, got {branch_counts(first)} vs {branch_counts(second)}"
+        )
+    if first["branch_hit"] != second["branch_hit"]:
+        raise AssertionError("saved coverage hit counts must be identical")
+
+
+def _self_test_unstable_denominator_cannot_pass() -> None:
+    high = {
+        "branch_hit": 99,
+        "branch_total": 100,
+        "unexecuted_files": [],
+    }
+    exact = resolve_branch_gate(high, stable_denominator=True)
+    if exact["branch_status"] != "exact" or exact["meets_branch_target"] is not True:
+        raise AssertionError("a stable all-executed 99% c8 result may meet 95%")
+    unstable = resolve_branch_gate(high, stable_denominator=False)
+    if unstable["branch_status"] != "unresolved" or unstable["meets_branch_target"]:
+        raise AssertionError("unresolved evidence cannot pass the 95% branch gate")
+    if unstable["branch_coverage"] is not None:
+        raise AssertionError("unstable denominators must not report exact coverage")
+    report = {
+        "coverage": {
+            "branch": 0.99,
+            "branch_status": "exact",
+            "meets_branch_target": True,
+            "branch_total": 100,
+            "branch_hit": 99,
+            "branch_proxy": 0.99,
+        },
+        "by_batch": {
+            "9": {
+                "branch_coverage": 0.99,
+                "branch_status": "exact",
+                "meets_branch_target": True,
+                "branch_total": 50,
+                "branch_hit": 49,
+            }
+        },
+    }
+    marked = mark_unstable_branch_report(report)
+    if marked["coverage"]["meets_branch_target"] or marked["by_batch"]["9"]["meets_branch_target"]:
+        raise AssertionError("a mismatched repeat run cannot pass the 95% gate")
+
+
 def self_test() -> None:
     _self_test_policy()
     _self_test_thresholds()
@@ -1177,10 +1422,17 @@ def self_test() -> None:
     _self_test_unexecuted_branches_use_decisions()
     _self_test_branch_gate_stays_unresolved()
     _self_test_c8_function_gate()
+    _self_test_type_only_coverage()
+    _self_test_runtime_inventory()
     _self_test_untracked_production_growth()
     _self_test_fixed_point()
     _self_test_discovery()
     _self_test_live_ownership()
+    _self_test_true_if_does_not_cover_false()
+    _self_test_untested_short_circuit_remains_missing()
+    _self_test_wrappers_do_not_inflate()
+    _self_test_saved_artifact_is_stable()
+    _self_test_unstable_denominator_cannot_pass()
     print("self-test passed")
 
 
@@ -1189,8 +1441,68 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT))
     parser.add_argument("--coverage-file", default=str(DEFAULT_COVERAGE))
+    parser.add_argument("--coverage-repeat", default=None)
     parser.add_argument("--quality-ref", default="HEAD")
     return parser.parse_args(argv)
+
+
+def resolve_coverage_path(raw: str) -> Path:
+    path = Path(raw)
+    return path if path.is_absolute() else ROOT / path
+
+
+def write_json(path: Path, payload: Mapping[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def assemble_report(
+    *,
+    args: argparse.Namespace,
+    quality,
+    scope: Mapping[str, object],
+    authored_inventory: Mapping[str, object],
+    production_inventory: Mapping[str, object],
+    production_files: Sequence[str],
+) -> dict[str, object]:
+    records = coverage_index(resolve_coverage_path(args.coverage_file))
+    type_only = type_only_files(production_inventory)
+    v8 = quality.load_v8_coverage(DEFAULT_V8)
+    authored = decorate_functions(authored_inventory["functions"], v8=v8, quality=quality)
+    production = decorate_functions(
+        production_inventory["functions"], v8=v8, quality=quality
+    )
+    coverage = coverage_metrics(
+        production_files,
+        records,
+        production_rows=production,
+        type_only_files=type_only,
+    )
+    identity = report_identity(quality_ref=args.quality_ref)
+    report = build_report(
+        authored=authored,
+        production=production,
+        production_files=production_files,
+        coverage=coverage,
+        records=records,
+        scope=scope,
+        identity=identity,
+        growth=production_growth(identity["fixed_point"], scope),
+        browser_source_mapped=detect_browser_source_mapped(),
+        type_only=type_only,
+    )
+    if not args.coverage_repeat:
+        return report
+    repeat_records = coverage_index(resolve_coverage_path(args.coverage_repeat))
+    repeat = coverage_metrics(
+        production_files,
+        repeat_records,
+        production_rows=production,
+        type_only_files=type_only,
+    )
+    if branch_counts(coverage) == branch_counts(repeat):
+        return report
+    return mark_unstable_branch_report(report)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -1215,37 +1527,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     ]
     if unassigned:
         raise RuntimeError(f"unassigned production files: {unassigned[:20]}")
-    coverage_file = Path(args.coverage_file)
-    if not coverage_file.is_absolute():
-        coverage_file = ROOT / coverage_file
-    records = coverage_index(coverage_file)
-    v8 = quality.load_v8_coverage(DEFAULT_V8)
-    authored = decorate_functions(authored_inventory["functions"], v8=v8, quality=quality)
-    production = decorate_functions(
-        production_inventory["functions"], v8=v8, quality=quality
-    )
-    coverage = coverage_metrics(
-        production_files, records, production_rows=production
-    )
-    identity = report_identity(quality_ref=args.quality_ref)
-    growth = production_growth(identity["fixed_point"], scope)
-    report = build_report(
-        authored=authored,
-        production=production,
-        production_files=production_files,
-        coverage=coverage,
-        records=records,
+    report = assemble_report(
+        args=args,
+        quality=quality,
         scope=scope,
-        identity=identity,
-        growth=growth,
-        browser_source_mapped=detect_browser_source_mapped(),
+        authored_inventory=authored_inventory,
+        production_inventory=production_inventory,
+        production_files=production_files,
     )
     print_summary(report)
-    output = Path(args.output)
-    if not output.is_absolute():
-        output = ROOT / output
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    output = resolve_coverage_path(args.output)
+    write_json(output, report)
     print(f"Wrote {output}")
     return 0
 

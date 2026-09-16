@@ -30,8 +30,8 @@ export function reportFinalTopologySummaryStage({
   for (const r of topologyDoc.per_route) {
     const terminals = r.branches
       .slice(0, 4)
-      .map((b: any) =>
-        `${(b.direction_id || "?")}:${(stopsById.get(b.terminal_start)?.name ?? b.terminal_start)} → ${(stopsById.get(b.terminal_end)?.name ?? b.terminal_end)} (${b.total_trips_in_branch}tr)`,
+      .map((branch) =>
+        `${(branch.direction_id || "?")}:${(stopsById.get(branch.terminal_start)?.name ?? branch.terminal_start)} → ${(stopsById.get(branch.terminal_end)?.name ?? branch.terminal_end)} (${branch.total_trips_in_branch}tr)`,
       )
       .join("; ");
     console.log(

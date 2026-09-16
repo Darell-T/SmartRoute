@@ -6,9 +6,9 @@ import type { Feature, LineStringGeometry, Position } from "./types.ts";
 
 type TestProperties = {
   visual_feature_type: "bundle_lane";
-  corridor_id: string;
+  corridor_id?: string;
   color: string;
-  route_ids: string[];
+  route_ids: string[] | string;
   color_route_ids: string[];
   lane_offset_baked: boolean;
   culver_fg_prospect_smoothing?: boolean;
@@ -104,7 +104,13 @@ test("Culver F/G Prospect smoothing removes a connected-but-jagged G seam", () =
     "fixture starts with a visible seam kink",
   );
 
-  const { features, diagnostics } = applyCulverFgProspectSmoothing([orange, greenSouth, greenNorth], {
+  const firstInput = [orange, greenSouth, greenNorth];
+  const secondInput = [
+    structuredClone(orange),
+    structuredClone(greenSouth),
+    structuredClone(greenNorth),
+  ];
+  const { features, diagnostics } = applyCulverFgProspectSmoothing(firstInput, {
     bbox: {
       minLon: LON - 0.004,
       maxLon: LON + 0.004,
@@ -116,6 +122,19 @@ test("Culver F/G Prospect smoothing removes a connected-but-jagged G seam", () =
     sampleM: 5,
     smoothingPasses: 2,
   });
+  const again = applyCulverFgProspectSmoothing(secondInput, {
+    bbox: {
+      minLon: LON - 0.004,
+      maxLon: LON + 0.004,
+      minLat: LAT - 0.004,
+      maxLat: LAT + 0.004,
+    },
+    marginM: 180,
+    targetSeparationM: 14,
+    sampleM: 5,
+    smoothingPasses: 2,
+  });
+  assert.equal(JSON.stringify(diagnostics), JSON.stringify(again.diagnostics));
 
   assert.equal(diagnostics.applied, true);
   const south = features.find((feature) => feature.properties.corridor_id === "g-south");
@@ -155,4 +174,143 @@ test("Culver F/G Prospect smoothing leaves features unchanged when required line
   assert.equal(result.features, features);
   assert.equal(result.diagnostics.applied, false);
   assert.equal(result.diagnostics.reason, "missing_fg_features");
+});
+
+test("Culver F/G Prospect smoothing is a no-op for empty lists and malformed route_ids", () => {
+  const empty = applyCulverFgProspectSmoothing([]);
+  assert.equal(empty.diagnostics.applied, false);
+  assert.deepEqual(empty.features, []);
+
+  const orange = line("f", "#FF6319", ["F"], [P(0, -60), P(0, 60)]);
+  orange.properties.route_ids = "F";
+  const greenA = line("g-a", "#6CBE45", ["G"], [P(14, -60), P(14, 0)]);
+  const greenB = line("g-b", "#6CBE45", ["G"], [P(14, 0), P(14, 60)]);
+  const result = applyCulverFgProspectSmoothing([orange, greenA, greenB]);
+  assert.equal(result.diagnostics.applied, false);
+  assert.equal(result.diagnostics.reason, "missing_fg_features");
+});
+
+test("Culver F/G Prospect smoothing skips G pieces that never meet at a seam", () => {
+  const orange = line("f", "#FF6319", ["F"], [P(0, -260), P(0, 0), P(0, 260)]);
+  const greenSouth = line("g-south", "#6CBE45", ["G"], [P(14, -260), P(14, -80)]);
+  const greenNorth = line("g-north", "#6CBE45", ["G"], [P(14, 80), P(14, 260)]);
+  const { features, diagnostics } = applyCulverFgProspectSmoothing(
+    [orange, greenSouth, greenNorth],
+    { seamMaxM: 18 },
+  );
+  assert.equal(diagnostics.applied, false);
+  assert.equal(diagnostics.reason, "missing_connected_g_chain");
+  assert.equal(features[0], orange);
+});
+
+test("Culver F/G Prospect smoothing skips a G seam that sits at the edge of the Prospect window", () => {
+  const orange = line("f", "#FF6319", ["F"], [
+    P(0, -80),
+    P(0, 0),
+    P(0, 80),
+  ]);
+  const greenSouth = line("g-south", "#6CBE45", ["G"], [
+    P(14, -80),
+    P(14, -20),
+    P(14, 0),
+  ]);
+  const greenNorth = line("g-north", "#6CBE45", ["G"], [
+    P(14, 0),
+    P(14, 80),
+    P(14, 200),
+  ]);
+  const { diagnostics } = applyCulverFgProspectSmoothing([orange, greenSouth, greenNorth], {
+    bbox: {
+      minLon: LON - 0.0004,
+      maxLon: LON + 20 / M_PER_DEG_LNG,
+      minLat: LAT - 90 / M_PER_DEG_LAT,
+      maxLat: LAT + 8 / M_PER_DEG_LAT,
+    },
+    marginM: 0,
+    seamMaxM: 18,
+  });
+  assert.equal(diagnostics.applied, false);
+  assert.equal(diagnostics.reason, "range_does_not_span_g_seam");
+});
+
+test("Culver F/G Prospect smoothing skips a one-vertex Prospect window", () => {
+  const orange = line("f", "#FF6319", ["F"], [P(0, -80), P(0, 0), P(0, 80)]);
+  const greenSouth = line("g-south", "#6CBE45", ["G"], [P(14, -80), P(14, 0)]);
+  const greenNorth = line("g-north", "#6CBE45", ["G"], [P(14, 0), P(14, 80)]);
+  const { diagnostics } = applyCulverFgProspectSmoothing([orange, greenSouth, greenNorth], {
+    bbox: {
+      minLon: LON - 0.00005,
+      maxLon: LON + 0.0002,
+      minLat: LAT - 0.00005,
+      maxLat: LAT + 0.00005,
+    },
+    marginM: 0,
+    seamMaxM: 18,
+  });
+  assert.equal(diagnostics.applied, false);
+  assert.ok(
+    diagnostics.reason === "degenerate_local_segment" ||
+      diagnostics.reason === "missing_bbox_arc_range" ||
+      diagnostics.reason === "range_does_not_span_g_seam",
+  );
+});
+
+test("Culver F/G Prospect smoothing still rebuilds when the F runs opposite the G chain", () => {
+  const orange = line("f", "#FF6319", ["F"], [
+    P(2, 300),
+    P(4, 180),
+    P(4, 60),
+    P(3, -60),
+    P(2, -160),
+    P(0, -260),
+  ]);
+  const greenSouth = line("g-south", "#6CBE45", ["G"], [
+    P(14, -260),
+    P(15, -160),
+    P(13, -70),
+    P(8, -20),
+    P(1, 0),
+  ]);
+  const greenNorth = line("g-north", "#6CBE45", ["G"], [
+    P(4, 300),
+    P(3, 190),
+    P(2, 95),
+    P(1, 0),
+  ]);
+  const { features, diagnostics } = applyCulverFgProspectSmoothing(
+    [orange, greenSouth, greenNorth],
+    {
+      bbox: {
+        minLon: LON - 0.004,
+        maxLon: LON + 0.004,
+        minLat: LAT - 0.004,
+        maxLat: LAT + 0.004,
+      },
+      marginM: 180,
+      targetSeparationM: 14,
+      sampleM: 5,
+    },
+  );
+  assert.equal(diagnostics.applied, true);
+  const south = features.find((item) => item.properties.corridor_id === "g-south");
+  const north = features.find((item) => item.properties.corridor_id === "g-north");
+  assert.ok(south);
+  assert.ok(north);
+  assert.equal(south.properties.culver_fg_prospect_smoothing, true);
+  assert.equal(north.properties.culver_fg_prospect_smoothing, true);
+  assert.ok(Array.isArray(south.properties.route_ids));
+  assert.equal(south.properties.route_ids[0], "G");
+  assert.deepEqual(orange.geometry.coordinates[0], P(2, 300));
+});
+
+test("Culver F/G Prospect smoothing treats string route_ids as missing and keeps unlabeled greens", () => {
+  const orange = line("f", "#FF6319", ["F"], [P(0, -60), P(0, 60)]);
+  const greenA = line("g-a", "#6CBE45", ["G"], [P(14, -60), P(14, 0)]);
+  const greenB = line("g-b", "#6CBE45", ["G"], [P(14, 0), P(14, 60)]);
+  delete greenA.properties.corridor_id;
+  greenB.properties.route_ids = "G";
+  const { diagnostics } = applyCulverFgProspectSmoothing([orange, greenA, greenB]);
+  assert.equal(diagnostics.applied, false);
+  assert.equal(diagnostics.reason, "missing_fg_features");
+  assert.equal(diagnostics.green_corridor_ids.includes(null), true);
 });

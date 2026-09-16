@@ -17,9 +17,13 @@ const hav = (a: Position, b: Position): number => {
   return 2 * R * Math.asin(Math.sqrt(Math.sin(dy / 2) ** 2 + Math.cos(a[1] * r) * Math.cos(b[1] * r) * Math.sin(dx / 2) ** 2));
 };
 
+function copyPolyline(coords: Position[]): Position[] {
+  return coords.map(([lon, lat]): Position => [lon, lat]);
+}
+
 function feat(cid: string, color: string, coords: Position[]): CrossColorFeature & {
   geometry: LineStringGeometry;
-  properties: { corridor_id: string; color: string };
+  properties: { corridor_id: string; color?: string };
 } {
   return { type: "Feature", geometry: { type: "LineString", coordinates: coords }, properties: { corridor_id: cid, color } };
 }
@@ -42,9 +46,16 @@ function findFeature(features: CrossColorFeature[], corridorId: string): CrossCo
 }
 
 function lineCoords(feature: CrossColorFeature): Position[] {
-  assert.equal(feature.geometry?.type, "LineString");
-  assert.ok(Array.isArray(feature.geometry.coordinates));
-  return feature.geometry.coordinates as Position[];
+  const geometry = feature.geometry;
+  assert.equal(geometry?.type, "LineString");
+  const coordinates = geometry?.coordinates;
+  assert.ok(Array.isArray(coordinates));
+  const rows: Position[] = [];
+  for (const row of coordinates) {
+    assert.ok(Array.isArray(row));
+    rows.push(row);
+  }
+  return rows;
 }
 
 function props(feature: CrossColorFeature): NonNullable<CrossColorFeature["properties"]> {
@@ -180,4 +191,73 @@ test("preserves input order, unrelated features, and shifted feature properties"
   assert.deepEqual(shiftedProps.route_ids, ["5"]);
   assert.equal(shiftedProps.cross_color_parallelized, true);
   assert.deepEqual(green.geometry.coordinates, straight, "source feature geometry remains unchanged");
+});
+
+test("merges overlapping offset ranges when a higher-rank line sits on two lower-rank trunks", () => {
+  const straight = Array.from({ length: 40 }, (_, i) => P(...O, 0, i * 30));
+  const red = feat("red2", RED, straight);
+  const blue = feat("blue", "#0A84FF", straight.map((c) => [...c]));
+  const green = feat("grn5", GREEN, straight.map((c) => [...c]));
+  const { shiftedCount, features } = parallelOffsetCrossColor([red, blue, green], {
+    colorOrder: [RED, "#0A84FF", GREEN],
+    overlapDistM: 8,
+    minOverlapM: 150,
+    laneWidthM: 8,
+  });
+  assert.equal(shiftedCount, 2, "blue and green are both higher rank than red; green also vs blue");
+  assert.equal(props(findFeature(features, "grn5")).cross_color_parallelized, true);
+});
+
+test("default options skip shifting; unknown colors rank last; invalid vertices are ignored", () => {
+  const straight = Array.from({ length: 40 }, (_, i) => P(...O, 0, i * 30));
+  const red = feat("red", RED, straight);
+  const green = feat("grn", GREEN, straight.map((c) => [...c]));
+  const { shiftedCount } = parallelOffsetCrossColor([red, green]);
+  assert.equal(shiftedCount, 0, "empty colorOrder means no lower-rank target");
+
+  const unknown = feat("unk", "#123456", straight.map((c) => [...c]));
+  const { shiftedCount: unknownShift } = parallelOffsetCrossColor([red, unknown], { colorOrder: ORDER });
+  assert.equal(unknownShift, 1, "a color missing from colorOrder ranks last and shifts off red");
+
+  const noColor = feat("grn2", GREEN, straight.map((c) => [...c]));
+  delete noColor.properties.color;
+  assert.equal(parallelOffsetCrossColor([red, noColor], { colorOrder: ORDER }).shiftedCount, 0);
+
+  const invalidVertex: Position = [Number.NaN, Number.NaN];
+  const bad = feat("bad", GREEN, [invalidVertex, ...straight.slice(1)]);
+  assert.equal(parallelOffsetCrossColor([red, bad], { colorOrder: ORDER }).shiftedCount, 0);
+});
+
+test("a duplicate vertex on the higher-rank line still parallelizes a coincident trunk", () => {
+  const straight = Array.from({ length: 40 }, (_, i) => P(...O, 0, i * 30));
+  const red = feat("red2", RED, straight);
+  const greenCoords = copyPolyline(straight);
+  greenCoords.splice(10, 0, greenCoords[10]);
+  const green = feat("grn5", GREEN, greenCoords);
+  const { shiftedCount } = parallelOffsetCrossColor([red, green], {
+    colorOrder: ORDER,
+    overlapDistM: 8,
+    minOverlapM: 150,
+    laneWidthM: 8,
+  });
+  assert.equal(shiftedCount, 1);
+});
+
+test("a later invalid vertex is ignored and a duplicate on the lower-rank trunk still parallelizes", () => {
+  const straight = Array.from({ length: 40 }, (_, i) => P(...O, 0, i * 30));
+  const redCoords = copyPolyline(straight);
+  redCoords.splice(12, 0, redCoords[12]);
+  const red = feat("red-dup", RED, redCoords);
+  const green = feat("grn-ok", GREEN, straight.map((c) => [...c]));
+  const { shiftedCount } = parallelOffsetCrossColor([red, green], {
+    colorOrder: ORDER,
+    overlapDistM: 8,
+    minOverlapM: 150,
+    laneWidthM: 8,
+  });
+  assert.equal(shiftedCount, 1);
+
+  const laterInvalid: Position = [Number.NaN, 40.84];
+  const laterBad = feat("bad-later", GREEN, [straight[0], laterInvalid, ...straight.slice(2)]);
+  assert.equal(parallelOffsetCrossColor([red, laterBad], { colorOrder: ORDER }).shiftedCount, 0);
 });

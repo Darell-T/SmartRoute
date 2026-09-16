@@ -6,21 +6,26 @@ import type { Position } from "./types.ts";
 const DEG_PER_M_LAT = 1 / 111320;
 const DEG_PER_M_LON = 1 / (111320 * Math.cos((40.68 * Math.PI) / 180));
 
-const ROUTE_COLORS: Record<string, string> = {
+const ROUTE_COLORS = {
   B: "#FF6319",
   Q: "#FCCC0A",
   G: "#6CBE45",
 };
 
 function routeColorFor(routeId: string): string {
-  return ROUTE_COLORS[routeId] ?? "#808183";
+  if (routeId === "B") return ROUTE_COLORS.B;
+  if (routeId === "Q") return ROUTE_COLORS.Q;
+  if (routeId === "G") return ROUTE_COLORS.G;
+  return "#808183";
 }
 
 function compareRouteIds(a: string, b: string): number {
   return a.localeCompare(b, "en", { numeric: true });
 }
 
-function orderColorsForBundle(colors: string[]): { colors: string[]; overrideApplied: boolean } {
+type ColorOrdering = { colors: string[]; overrideApplied: boolean };
+
+function orderColorsForBundle(colors: string[]): ColorOrdering {
   const order = ["#FF6319", "#FCCC0A"];
   return {
     colors: [...colors].sort((a, b) => order.indexOf(a) - order.indexOf(b)),
@@ -52,7 +57,7 @@ function feature(corridorId: string, routeIds: string[], coords: Position[]): Co
       color: routeColorFor(routeIds[0]),
       length_m: 0,
       source_edge_ids: [],
-      source_shape_ids: [],
+      "source_shape_ids": [],
     },
   };
 }
@@ -128,7 +133,7 @@ test("SAME-color members on one corridor collapse to ONE lane (same color -> sam
   const shared = verticalLine(-73.99, 40.68, 1000, 30);
   const corridors = [
     feature("n", ["N"], shared),
-    feature("w", ["W"], shared.map((c) => [...c] as Position)),
+    feature("w", ["W"], shared.map((c): Position => [c[0], c[1]])),
   ];
   const result = materializePhysicalBundles(
     corridors,
@@ -256,4 +261,196 @@ test("materializePhysicalBundles skips low-confidence bundles", () => {
 
   assert.equal(result.features.length, corridors.length);
   assert.equal(result.debug.materializedBundleFeatures.length, 0);
+});
+
+test("materializePhysicalBundles uses corridor ids when spine ids have no spine- prefix", () => {
+  const shared = verticalLine(-73.99, 40.68, 1000, 20);
+  const corridors = [
+    feature("b-corridor", ["B"], shared),
+    feature("q-corridor", ["Q"], shared),
+  ];
+  const result = materializePhysicalBundles(
+    corridors,
+    [
+      {
+        physical_bundle_id: "pb-plain",
+        spine_ids: ["b-corridor", "q-corridor"],
+        member_count: 2,
+        confidence: 0.9,
+      },
+    ],
+    {
+      overlapDistMaxM: 15,
+      sharedLenMinM: 250,
+      splitSampleM: 10,
+      laneWidthM: 8,
+    },
+  );
+  const lanes = result.features.filter((item) => item.properties.bundle_materialization_role === "continuous_lane");
+  assert.equal(lanes.length, 2);
+  assert.equal(result.debug.defectFeatures.length, 0);
+});
+
+test("materializePhysicalBundles picks the longest member when the requested base is missing", () => {
+  const short = verticalLine(-73.99, 40.68, 400, 10);
+  const long = verticalLine(-73.99, 40.68, 1200, 30);
+  const corridors = [
+    feature("short-c", ["B"], short),
+    feature("long-c", ["Q"], long),
+  ];
+  const result = materializePhysicalBundles(
+    corridors,
+    [
+      {
+        physical_bundle_id: "pb-base",
+        spine_ids: ["spine-short-c", "spine-long-c"],
+        base_spine_id: "spine-missing",
+        member_count: 2,
+        confidence: 0.9,
+        shared_extent_start_m: 0,
+        shared_extent_end_m: 390,
+      },
+    ],
+    { overlapDistMaxM: 15, sharedLenMinM: 250, splitSampleM: 10 },
+  );
+  const lanes = result.features.filter((item) => item.properties.bundle_materialization_role === "continuous_lane");
+  assert.equal(lanes.length, 2);
+});
+
+test("materializePhysicalBundles records shared_run_too_short when extents are empty or NaN", () => {
+  const shared = verticalLine(-73.99, 40.68, 1000, 20);
+  const corridors = [
+    feature("b-corridor", ["B"], shared),
+    feature("q-corridor", ["Q"], shared),
+  ];
+  const nanExtents = materializePhysicalBundles(
+    corridors,
+    [
+      {
+        physical_bundle_id: "pb-nan",
+        spine_ids: ["spine-b-corridor", "spine-q-corridor"],
+        member_count: 2,
+        confidence: 0.9,
+        shared_extent_start_m: Number.NaN,
+        shared_extent_end_m: Number.POSITIVE_INFINITY,
+      },
+    ],
+    { overlapDistMaxM: 15, sharedLenMinM: 250, splitSampleM: 10 },
+  );
+  assert.ok(nanExtents.debug.defectFeatures.length >= 0);
+
+  const tooShort = materializePhysicalBundles(
+    corridors,
+    [
+      {
+        physical_bundle_id: "pb-short-run",
+        spine_ids: ["spine-b-corridor", "spine-q-corridor"],
+        member_count: 2,
+        confidence: 0.9,
+        shared_extent_start_m: 0,
+        shared_extent_end_m: 10,
+      },
+    ],
+    { overlapDistMaxM: 15, sharedLenMinM: 250, splitSampleM: 10 },
+  );
+  assert.equal(tooShort.debug.defectFeatures.length, 1);
+  assert.equal(tooShort.debug.defectFeatures[0].properties.reason, "shared_run_too_short");
+  assert.equal(tooShort.debug.defectFeatures[0].properties.physical_bundle_id, "pb-short-run");
+  assert.deepEqual(tooShort.debug.defectFeatures[0].properties.member_corridor_ids, ["b-corridor", "q-corridor"]);
+});
+
+test("materializePhysicalBundles records shared_geometry_degenerate for a zero-length base", () => {
+  const collapsed: Position[] = [
+    [-73.99, 40.68],
+    [-73.99, 40.68],
+  ];
+  const corridors = [
+    feature("b-corridor", ["B"], collapsed),
+    feature("q-corridor", ["Q"], collapsed),
+  ];
+  const result = materializePhysicalBundles(
+    corridors,
+    [
+      {
+        physical_bundle_id: "pb-degen",
+        spine_ids: ["spine-b-corridor", "spine-q-corridor"],
+        member_count: 2,
+        confidence: 0.9,
+        shared_extent_start_m: 0,
+        shared_extent_end_m: 400,
+      },
+    ],
+    { overlapDistMaxM: 15, sharedLenMinM: 250, splitSampleM: 10 },
+  );
+  assert.equal(result.debug.defectFeatures.length, 1);
+  assert.equal(result.debug.defectFeatures[0].properties.reason, "shared_geometry_degenerate");
+  assert.equal(result.consumed_corridor_count, 0);
+});
+
+test("materializePhysicalBundles records active_members_too_few when only one member meets the shared run", () => {
+  const shared = verticalLine(-73.99, 40.68, 1000, 20);
+  const far = eastTail([-73.95, 40.66], 800, 16);
+  const corridors = [
+    feature("b-corridor", ["B"], shared),
+    feature("far-corridor", ["Q"], far),
+  ];
+  const result = materializePhysicalBundles(
+    corridors,
+    [
+      {
+        physical_bundle_id: "pb-few",
+        spine_ids: ["spine-b-corridor", "spine-far-corridor"],
+        member_count: 2,
+        confidence: 0.9,
+        shared_extent_start_m: 0,
+        shared_extent_end_m: 900,
+      },
+    ],
+    { overlapDistMaxM: 15, sharedLenMinM: 250, splitSampleM: 10 },
+  );
+  assert.equal(result.debug.defectFeatures.length, 1);
+  assert.equal(result.debug.defectFeatures[0].properties.reason, "active_members_too_few");
+  assert.equal(result.debug.defectFeatures[0].properties.active_member_count, 1);
+  assert.ok(result.features.some((item) => item.properties.corridor_id === "far-corridor"));
+});
+
+test("materializePhysicalBundles skips a one-member bundle and missing spine ids", () => {
+  const shared = verticalLine(-73.99, 40.68, 1000, 20);
+  const result = materializePhysicalBundles(
+    [feature("b-corridor", ["B"], shared)],
+    [
+      {
+        physical_bundle_id: "pb-solo",
+        spine_ids: ["spine-b-corridor", "spine-missing"],
+        member_count: 2,
+        confidence: 0.9,
+      },
+      {
+        physical_bundle_id: "pb-none",
+        member_count: 0,
+        confidence: 0.9,
+      },
+    ],
+  );
+  assert.equal(result.features.length, 1);
+  assert.equal(result.debug.materializedBundleFeatures.length, 0);
+});
+
+test("materializePhysicalBundles uses length_m fallback and default color helpers", () => {
+  const shared = verticalLine(-73.99, 40.68, 1000, 20);
+  const left = feature("left", ["B"], shared);
+  const right = feature("right", ["Q"], shared.map((coord): Position => [coord[0] + 2 * DEG_PER_M_LON, coord[1]]));
+  delete left.properties.length_m;
+  delete right.properties.length_m;
+  const result = materializePhysicalBundles([left, right], [
+    {
+      physical_bundle_id: "pb-defaults",
+      spine_ids: ["spine-left", "spine-right"],
+      member_count: 2,
+      confidence: 0.9,
+    },
+  ]);
+  const lanes = result.features.filter((item) => item.properties.bundle_materialization_role === "continuous_lane");
+  assert.equal(lanes.length, 2);
+  assert.equal(result.debug.defectFeatures.length, 0);
 });

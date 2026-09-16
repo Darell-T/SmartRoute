@@ -12,7 +12,7 @@
 // it adds F to the route set of the orange features that traverse the tunnel
 // bbox. Geometry is never touched; the color stays #FF6319.
 
-import type { Feature, LineStringGeometry, Position } from "./types.ts";
+import type { LineStringGeometry, Position } from "./types.ts";
 
 type TunnelBbox = {
   minLon: number;
@@ -26,10 +26,13 @@ type SixtyThirdStreetFeatureProperties = {
   color_route_ids?: string[];
   color?: string;
   sixty_third_f_membership_added?: boolean;
-  [key: string]: unknown;
 };
 
-type SixtyThirdStreetFeature = Feature<LineStringGeometry, SixtyThirdStreetFeatureProperties>;
+type SixtyThirdStreetFeature = {
+  type: "Feature";
+  geometry?: LineStringGeometry;
+  properties?: SixtyThirdStreetFeatureProperties;
+};
 
 type AddSixtyThirdStreetFOptions = {
   bbox?: TunnelBbox;
@@ -61,6 +64,45 @@ function inBbox(coord: Position, bbox: TunnelBbox): boolean {
   );
 }
 
+function sortedUniqueRoutes(routeIds: string[]): string[] {
+  return [...routeIds].sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
+}
+
+function vertexHitsInTunnel(coordinates: Position[], bbox: TunnelBbox): number {
+  let hits = 0;
+  for (const coord of coordinates) {
+    if (!inBbox(coord, bbox)) continue;
+    hits += 1;
+    if (hits >= MIN_VERTICES_IN_BBOX) return hits;
+  }
+  return hits;
+}
+
+function isOrangeMTunnelWithoutF(
+  feature: SixtyThirdStreetFeature,
+  bbox: TunnelBbox,
+): feature is SixtyThirdStreetFeature & { geometry: LineStringGeometry; properties: SixtyThirdStreetFeatureProperties } {
+  if (feature.geometry?.type !== "LineString") return false;
+  const props = feature.properties;
+  if (!props) return false;
+  if (String(props.color ?? "").toUpperCase() !== ORANGE) return false;
+  const routeIds = props.route_ids ?? [];
+  if (!routeIds.includes("M") || routeIds.includes("F")) return false;
+  return vertexHitsInTunnel(feature.geometry.coordinates, bbox) >= MIN_VERTICES_IN_BBOX;
+}
+
+function addFMembership(props: SixtyThirdStreetFeatureProperties): void {
+  const routeIds = props.route_ids ?? [];
+  props.route_ids = sortedUniqueRoutes(["F", ...routeIds]);
+  if (Array.isArray(props.color_route_ids)) {
+    props.color_route_ids = sortedUniqueRoutes([
+      "F",
+      ...props.color_route_ids.filter((routeId) => routeId !== "F"),
+    ]);
+  }
+  props.sixty_third_f_membership_added = true;
+}
+
 export function addSixtyThirdStreetF(
   features: SixtyThirdStreetFeature[] | null | undefined,
   options: AddSixtyThirdStreetFOptions = {},
@@ -69,29 +111,8 @@ export function addSixtyThirdStreetF(
   let updated = 0;
 
   for (const feature of features ?? []) {
-    if (feature?.geometry?.type !== "LineString") continue;
-    const props = feature.properties ?? {};
-    if (String(props.color ?? "").toUpperCase() !== ORANGE) continue;
-    const routeIds = props.route_ids ?? [];
-    if (!routeIds.includes("M") || routeIds.includes("F")) continue;
-
-    let hits = 0;
-    for (const coord of feature.geometry.coordinates) {
-      if (inBbox(coord, bbox)) {
-        hits += 1;
-        if (hits >= MIN_VERTICES_IN_BBOX) break;
-      }
-    }
-    if (hits < MIN_VERTICES_IN_BBOX) continue;
-
-    props.route_ids = ["F", ...routeIds].sort((a, b) =>
-      a.localeCompare(b, "en", { numeric: true }),
-    );
-    if (Array.isArray(props.color_route_ids)) {
-      props.color_route_ids = ["F", ...props.color_route_ids.filter((r) => r !== "F")]
-        .sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
-    }
-    props.sixty_third_f_membership_added = true;
+    if (!isOrangeMTunnelWithoutF(feature, bbox)) continue;
+    addFMembership(feature.properties);
     updated += 1;
   }
 

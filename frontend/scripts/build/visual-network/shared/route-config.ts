@@ -1,5 +1,27 @@
 import { BUNDLE_COLOR_ORDER } from "../../lane-order.ts";
 import { MTA_ROUTE_COLORS } from "../../mta-colors.ts";
+import type { JsonObject, JsonValue } from "../../types.ts";
+
+const OBJECT_TAG = "[object Object]";
+const STRING_TAG = "[object String]";
+const NUMBER_TAG = "[object Number]";
+const jsonTag = Object.prototype.toString;
+
+export function parsedJson(text: string): JsonValue {
+  return JSON.parse(text);
+}
+
+export function isJsonString(value: JsonValue | null | undefined): value is string {
+  return jsonTag.call(value) === STRING_TAG;
+}
+
+export function isJsonNumber(value: JsonValue | null | undefined): value is number {
+  return jsonTag.call(value) === NUMBER_TAG;
+}
+
+export function isJsonObject(value: JsonValue | null | undefined): value is JsonObject {
+  return value != null && jsonTag.call(value) === OBJECT_TAG;
+}
 
 // Route ID normalization. The MTA publishes some service variants as
 // distinct route_ids (e.g., "6X" for express 6, "FX" for F express); these
@@ -62,4 +84,28 @@ export function bundleColorRank(color: string) {
 
 export function compareRouteIds(a: string, b: string) {
   return a.localeCompare(b, "en", { numeric: true });
+}
+
+export function stringListOf(value: JsonValue | null | undefined): string[] {
+  return Array.isArray(value) ? value.map(String) : [];
+}
+
+export function routeIdsOf(
+  properties: { route_ids?: JsonValue } | null | undefined,
+): string[] {
+  return stringListOf(properties?.route_ids);
+}
+
+export function propertyString(value: JsonValue | null | undefined): string | undefined {
+  return isJsonString(value) ? value : undefined;
+}
+
+export function propertyKey(value: JsonValue | null | undefined): string {
+  if (isJsonString(value)) return value;
+  if (value == null) return "";
+  return String(value);
+}
+
+export function propertyNumber(value: JsonValue | null | undefined): number | undefined {
+  return isJsonNumber(value) && Number.isFinite(value) ? value : undefined;
 }

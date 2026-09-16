@@ -93,3 +93,34 @@ test("replaceEndpointHairpin preserves unrelated feature objects and properties"
   assert.equal(rewritten.properties, hairpinProperties);
   assert.notEqual(rewritten.geometry.coordinates, hairpin.geometry.coordinates);
 });
+
+test("replaceEndpointHairpin returns the same reference for short, empty, and start-only hairpins", () => {
+  const short = Array.from({ length: 9 }, (_, i) => p([-73.95, 40.7], i * 10, 0));
+  assert.equal(replaceEndpointHairpin(short), short);
+  const empty: Position[] = [];
+  assert.equal(replaceEndpointHairpin(empty), empty);
+  const startHairpin = endpointHairpin().slice().reverse();
+  assert.equal(replaceEndpointHairpin(startHairpin, undefined, undefined, { maxArcM: 40 }), startHairpin);
+});
+
+test("replaceEndpointHairpin uses an explicit target tangent and stays deterministic", () => {
+  const coords = endpointHairpin();
+  const target = coords[coords.length - 1];
+  const tangent: [number, number] = [0, -1];
+  const first = replaceEndpointHairpin(coords, target, tangent, { sampleM: 5, handleFrac: 0.4 });
+  const second = replaceEndpointHairpin(coords, target, tangent, { sampleM: 5, handleFrac: 0.4 });
+  assert.notEqual(first, coords);
+  assert.deepEqual(first[first.length - 1], target);
+  assert.deepEqual(first, second);
+  assert.deepEqual(first.slice(0, 4), coords.slice(0, 4));
+});
+
+test("replaceEndpointHairpin leaves a long reversal outside maxArcM unchanged", () => {
+  const origin: Position = [-73.928, 40.818];
+  const coords = Array.from({ length: 20 }, (_, i) => p(origin, 0, i * 40));
+  const out = replaceEndpointHairpin(coords, undefined, undefined, {
+    minReversalDeg: 120,
+    maxArcM: 30,
+  });
+  assert.equal(out, coords);
+});

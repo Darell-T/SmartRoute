@@ -19,14 +19,13 @@
 // This script does NOT delete the legacy skeleton artifacts; they remain
 // orphan debug data until the runtime opt-in flips over.
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import {
   OPEN_DATA_SOURCE_DATASET_ID,
   OPEN_DATA_SOURCE_NAME,
 } from "./build/opendata-subway-lines.ts";
 import {
-  compareRouteIds,
   normalizeRouteId,
 } from "./build/visual-network/shared/route-config.ts";
 import { parseZipEntries } from "./build/visual-network/inputs/gtfs-ingest.ts";

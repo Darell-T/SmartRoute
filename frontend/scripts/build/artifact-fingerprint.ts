@@ -38,8 +38,11 @@ function parseOutputArg(): string {
 
 function featureCountForJson(bytes: Buffer): number | undefined {
   try {
-    const parsed = JSON.parse(bytes.toString("utf8")) as { features?: unknown };
-    return Array.isArray(parsed.features) ? parsed.features.length : undefined;
+    const parsed: unknown = JSON.parse(bytes.toString("utf8"));
+    if (parsed === null || Array.isArray(parsed) || parsed !== Object(parsed)) return undefined;
+    // SAFETY: GeoJSON FeatureCollection is an object after the predicates above.
+    const features = (parsed as { features?: unknown }).features;
+    return Array.isArray(features) ? features.length : undefined;
   } catch {
     return undefined;
   }
@@ -55,12 +58,13 @@ function fingerprintArtifact(relativeFile: string): ArtifactFingerprint | null {
   const sha256 = createHash("sha256").update(bytes).digest("hex");
   const featureCount = relativeFile.endsWith(".geojson") ? featureCountForJson(bytes) : undefined;
 
-  return {
+  const fingerprint: ArtifactFingerprint = {
     file: toPosixPath(relativeFile),
     sha256,
     bytes: bytes.length,
-    ...(featureCount === undefined ? {} : { featureCount }),
   };
+  if (featureCount !== undefined) fingerprint.featureCount = featureCount;
+  return fingerprint;
 }
 
 const outputPath = parseOutputArg();

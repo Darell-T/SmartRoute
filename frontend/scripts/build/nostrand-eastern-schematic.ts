@@ -9,22 +9,13 @@
 // 2/5 branches can begin by backtracking. This helper owns only that local
 // split and replaces the branch starts with tangent-matched curves.
 
-import type { Feature, LineStringGeometry, Position } from "./types.ts";
+import type { Feature, FeatureProps, LineStringGeometry, Position } from "./types.ts";
 
 type Vector = [number, number];
 type Direction = "forward" | "backward";
 type EndpointSide = "start" | "end";
 
-type NostrandProperties = {
-  corridor_id?: string;
-  color?: unknown;
-  route_ids?: unknown;
-  color_route_ids?: unknown;
-  length_m?: number;
-  [key: string]: unknown;
-};
-
-type NostrandFeature = Feature<LineStringGeometry, NostrandProperties>;
+type NostrandFeature = Feature<LineStringGeometry, FeatureProps>;
 
 type BBox = {
   minLon: number;
@@ -308,7 +299,7 @@ function polylineLengthM(coords: Position[]): number {
   return cumulativeArcs(coords).at(-1) ?? 0;
 }
 
-function cloneWithCoordinates(feature: NostrandFeature, coordinates: Position[], properties: NostrandProperties = {}): NostrandFeature {
+function cloneWithCoordinates(feature: NostrandFeature, coordinates: Position[], properties: FeatureProps = {}): NostrandFeature {
   return {
     ...feature,
     geometry: {
@@ -316,14 +307,19 @@ function cloneWithCoordinates(feature: NostrandFeature, coordinates: Position[],
       coordinates,
     },
     properties: {
-      ...(feature.properties ?? {}),
+      ...feature.properties,
       ...properties,
       length_m: Number(polylineLengthM(coordinates).toFixed(2)),
     },
   };
 }
 
-function stableStraightTailEnd(coords: Position[], windowSize = 12): { index: number; point: Position } {
+type StraightTailEnd = {
+  index: number;
+  point: Position;
+};
+
+function stableStraightTailEnd(coords: Position[], windowSize = 12): StraightTailEnd {
   const start = Math.max(0, coords.length - windowSize);
   let bestIndex = coords.length - 1;
   // The bad local bridge bends south. The intended Eastern Parkway tail is the
@@ -438,17 +434,14 @@ function isExactRoute(feature: NostrandFeature, ids: string[]): boolean {
   return actual === [...ids].sort().join(",");
 }
 
-/**
- * @param {Array<GeoJSON.Feature>} features
- * @returns {{features:Array<GeoJSON.Feature>, diagnostics: object}}
- */
-export function applyNostrandEasternSchematic(features: NostrandFeature[], options: PartialArcOptions = {}): SchematicResult {
-  const {
-    branchTurnSpanM = 420,
-    trunkBlendM = 170,
-    sampleM = 6,
-  } = options;
+type NostrandSplit = {
+  redTrunk?: NostrandFeature;
+  redBranch?: NostrandFeature;
+  greenTail?: NostrandFeature;
+  greenBranch?: NostrandFeature;
+};
 
+function findNostrandSplitFeatures(features: NostrandFeature[]): NostrandSplit {
   const redTrunk = features.find((feature) =>
     touchesNostrand(feature) &&
     color(feature) === RED &&
@@ -471,29 +464,36 @@ export function applyNostrandEasternSchematic(features: NostrandFeature[], optio
     hasRoute(feature, "5") &&
     feature !== greenTail,
   );
+  return { redTrunk, redBranch, greenTail, greenBranch };
+}
 
-  const diagnostics: Diagnostics = {
-    applied: false,
-    reason: null,
-    red_branch_rebuilt: false,
-    green_tail_straightened: false,
-    green_branch_rebuilt: false,
-  };
+function hasNostrandSplit(split: NostrandSplit): split is Required<NostrandSplit> {
+  return Boolean(split.redTrunk && split.redBranch && split.greenTail && split.greenBranch);
+}
 
-  if (!redTrunk || !redBranch || !greenTail || !greenBranch) {
-    diagnostics.reason = "missing_required_features";
-    return { features, diagnostics };
-  }
+type RedBranchJoin = {
+  point: Position;
+  side: EndpointSide;
+};
 
+function redBranchJoin(redBranch: NostrandFeature, redTrunk: NostrandFeature): RedBranchJoin {
+  const candidate = endpointCandidate(redBranch, redTrunk);
+  if (!candidate) return { point: redBranch.geometry.coordinates[0], side: "start" };
+  return { point: candidate.projection.point, side: candidate.side };
+}
+
+function rebuildNostrandSplit(
+  features: NostrandFeature[],
+  split: Required<NostrandSplit>,
+  arc: ArcOptions,
+  diagnostics: Diagnostics,
+): SchematicResult {
   const next = features.slice();
-
-  const greenTailCoords = greenTail.geometry.coordinates;
+  const greenTailCoords = split.greenTail.geometry.coordinates;
   const stableTail = stableStraightTailEnd(greenTailCoords);
   const greenSplit = stableTail.point;
-  const straightTailCoords = greenTailCoords.slice(0, stableTail.index + 1);
-
-  const greenTailIndex = next.indexOf(greenTail);
-  next[greenTailIndex] = cloneWithCoordinates(greenTail, straightTailCoords, {
+  const greenTailIndex = next.indexOf(split.greenTail);
+  next[greenTailIndex] = cloneWithCoordinates(split.greenTail, greenTailCoords.slice(0, stableTail.index + 1), {
     nostrand_eastern_straight_tail: true,
     nostrand_eastern_removed_terminal_hook: true,
     qa_orphan_origin: false,
@@ -501,47 +501,64 @@ export function applyNostrandEasternSchematic(features: NostrandFeature[], optio
   });
   diagnostics.green_tail_straightened = true;
 
-  const redCandidate = endpointCandidate(redBranch, redTrunk);
-  const redSplit = redCandidate?.projection?.point ?? redBranch.geometry.coordinates[0];
-  const redTangent = horizontalTangentAtProjection(redTrunk, redSplit);
-  const redBranchCoords = rebuildEndpointBranch(
-    redBranch,
-    redCandidate?.side ?? "start",
-    redSplit,
-    redTangent,
-    { branchTurnSpanM, sampleM },
+  const redJoin = redBranchJoin(split.redBranch, split.redTrunk);
+  const redTangent = horizontalTangentAtProjection(split.redTrunk, redJoin.point);
+  const redBranchIndex = next.indexOf(split.redBranch);
+  next[redBranchIndex] = cloneWithCoordinates(
+    split.redBranch,
+    rebuildEndpointBranch(split.redBranch, redJoin.side, redJoin.point, redTangent, {
+      branchTurnSpanM: arc.branchTurnSpanM,
+      sampleM: arc.sampleM,
+    }),
+    {
+      nostrand_eastern_branch_curve: true,
+      nostrand_eastern_split_point: redJoin.point,
+      qa_orphan_origin: false,
+      qa_orphan_severity: null,
+    },
   );
-  const redBranchIndex = next.indexOf(redBranch);
-  next[redBranchIndex] = cloneWithCoordinates(redBranch, redBranchCoords, {
-    nostrand_eastern_branch_curve: true,
-    nostrand_eastern_split_point: redSplit,
-    qa_orphan_origin: false,
-    qa_orphan_severity: null,
-  });
   diagnostics.red_branch_rebuilt = true;
 
   const greenTangent = horizontalTangentAtProjection(next[greenTailIndex], greenSplit);
-  const greenBranchCoords = rebuildInternalBranch(
-    greenBranch,
-    greenSplit,
-    greenTangent,
-    { branchTurnSpanM, trunkBlendM, sampleM },
-  );
+  const greenBranchCoords = rebuildInternalBranch(split.greenBranch, greenSplit, greenTangent, arc);
   if (!greenBranchCoords) {
     diagnostics.reason = "green_branch_split_not_found";
     return { features, diagnostics };
   }
-  const greenBranchIndex = next.indexOf(greenBranch);
-  next[greenBranchIndex] = cloneWithCoordinates(greenBranch, greenBranchCoords, {
+  const greenBranchIndex = next.indexOf(split.greenBranch);
+  next[greenBranchIndex] = cloneWithCoordinates(split.greenBranch, greenBranchCoords, {
     nostrand_eastern_branch_curve: true,
     nostrand_eastern_split_point: greenSplit,
     qa_orphan_origin: false,
     qa_orphan_severity: null,
   });
   diagnostics.green_branch_rebuilt = true;
-
   diagnostics.applied = true;
   diagnostics.green_split_point = greenSplit;
-  diagnostics.red_split_point = redSplit;
+  diagnostics.red_split_point = redJoin.point;
   return { features: next, diagnostics };
+}
+
+/**
+ * @param {Array<GeoJSON.Feature>} features
+ * @returns {{features:Array<GeoJSON.Feature>, diagnostics: object}}
+ */
+export function applyNostrandEasternSchematic(features: NostrandFeature[], options: PartialArcOptions = {}): SchematicResult {
+  const diagnostics: Diagnostics = {
+    applied: false,
+    reason: null,
+    red_branch_rebuilt: false,
+    green_tail_straightened: false,
+    green_branch_rebuilt: false,
+  };
+  const split = findNostrandSplitFeatures(features);
+  if (!hasNostrandSplit(split)) {
+    diagnostics.reason = "missing_required_features";
+    return { features, diagnostics };
+  }
+  return rebuildNostrandSplit(features, split, {
+    branchTurnSpanM: options.branchTurnSpanM ?? 420,
+    trunkBlendM: options.trunkBlendM ?? 170,
+    sampleM: options.sampleM ?? 6,
+  }, diagnostics);
 }

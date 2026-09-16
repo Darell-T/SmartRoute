@@ -9,6 +9,11 @@ type DistanceContext = {
   t: number;
 };
 
+type NearestVertex = {
+  index: number;
+  distanceM: number;
+};
+
 type ClosestPoint = {
   point: Vector;
   t: number;
@@ -61,7 +66,7 @@ function metersPerDegLng(lat: number): number {
   return 111320 * Math.cos((lat * Math.PI) / 180);
 }
 
-export function distanceMeters([lon1, lat1]: Position, [lon2, lat2]: Position): number {
+function distanceMeters([lon1, lat1]: Position, [lon2, lat2]: Position): number {
   const r = Math.PI / 180;
   const dLat = (lat2 - lat1) * r;
   const dLon = (lon2 - lon1) * r;
@@ -91,11 +96,6 @@ function projectAtLat(point: Position, lat0: number): Vector {
 
 function unprojectAtLat(point: Vector, lat0: number): Position {
   return [point[0] / metersPerDegLng(lat0), point[1] / M_PER_DEG_LAT];
-}
-
-function vectorMeters(a: Position, b: Position): Vector {
-  const k = metersPerDegLng((a[1] + b[1]) / 2);
-  return [(b[0] - a[0]) * k, (b[1] - a[1]) * M_PER_DEG_LAT];
 }
 
 function tangentAt(coords: Position[], index: number, forward = true): Vector {
@@ -179,24 +179,7 @@ function append(out: Position[], coords: Position[]): void {
   }
 }
 
-function smoothWaypointPath(points: Position[], startTangent: Vector, endTangent: Vector, sampleM: number): Position[] {
-  if (points.length < 2) return points;
-  const tangents = points.map((point, index) => {
-    if (index === 0) return startTangent;
-    if (index === points.length - 1) return endTangent;
-    return normalize(vectorMeters(points[index - 1], points[index + 1]), startTangent);
-  });
-  const out = [points[0]];
-  for (let i = 0; i < points.length - 1; i += 1) {
-    append(out, hermiteBetween(points[i], points[i + 1], tangents[i], tangents[i + 1], {
-      handleFrac: 0.34,
-      sampleM,
-    }).slice(1));
-  }
-  return out;
-}
-
-function nearestIndex(coords: Position[], point: Position): { index: number; distanceM: number } {
+function nearestIndex(coords: Position[], point: Position): NearestVertex {
   let best = 0;
   let bestDistance = Infinity;
   coords.forEach((coord, index) => {
@@ -358,28 +341,52 @@ function findPolylineCrossingOrClosest(trunkCoords: Position[], referenceCoords:
   return best;
 }
 
-export function buildMottHavenFiveSchematicLens({
-  branchCoords,
-  trunkCoords,
-  parallelReferenceCoords = null,
-  parallelOffsetM = 10,
-  mergeDistanceM = 310,
-  sampleM = 6,
-  eastEntryM = 420,
-  westShoulderM = 118,
-  westOuterM = 214,
-  westLowerM = 160,
-  shoulderSouthM = 18,
-  outerSouthM = 128,
-  lowerSouthM = 240,
-}: FiveLensOptions = {}) {
-  if (!Array.isArray(branchCoords) || branchCoords.length < 2) {
-    return { coordinates: branchCoords ?? [], diagnostics: { ok: false, reason: "missing_branch" } };
-  }
-  if (!Array.isArray(trunkCoords) || trunkCoords.length < 2) {
-    return { coordinates: branchCoords, diagnostics: { ok: false, reason: "missing_trunk" } };
-  }
+type ResolvedFiveLensOptions = {
+  branchCoords?: Position[] | null;
+  trunkCoords?: Position[] | null;
+  parallelReferenceCoords: Position[] | null;
+  parallelOffsetM: number;
+  mergeDistanceM: number;
+  sampleM: number;
+  eastEntryM: number;
+  westShoulderM: number;
+  westOuterM: number;
+  westLowerM: number;
+  shoulderSouthM: number;
+  outerSouthM: number;
+  lowerSouthM: number;
+};
 
+type FiveLensTop = {
+  referenceCrossing: ReferenceCrossing | null;
+  usableReferenceCrossing: ReferenceCrossing | null;
+  topPoint: Position;
+  trunkFromTop: Position[];
+};
+
+function resolveFiveLensOptions(options: FiveLensOptions): ResolvedFiveLensOptions {
+  return {
+    branchCoords: options.branchCoords,
+    trunkCoords: options.trunkCoords,
+    parallelReferenceCoords: options.parallelReferenceCoords ?? null,
+    parallelOffsetM: options.parallelOffsetM ?? 10,
+    mergeDistanceM: options.mergeDistanceM ?? 310,
+    sampleM: options.sampleM ?? 6,
+    eastEntryM: options.eastEntryM ?? 420,
+    westShoulderM: options.westShoulderM ?? 118,
+    westOuterM: options.westOuterM ?? 214,
+    westLowerM: options.westLowerM ?? 160,
+    shoulderSouthM: options.shoulderSouthM ?? 18,
+    outerSouthM: options.outerSouthM ?? 128,
+    lowerSouthM: options.lowerSouthM ?? 240,
+  };
+}
+
+function resolveFiveLensTop(
+  trunkCoords: Position[],
+  parallelReferenceCoords: Position[] | null,
+  parallelOffsetM: number,
+): FiveLensTop {
   const referenceCrossing = findPolylineCrossingOrClosest(trunkCoords, parallelReferenceCoords);
   const usableReferenceCrossing = referenceCrossing && referenceCrossing.referenceDistanceM <= 90
     ? referenceCrossing
@@ -394,61 +401,91 @@ export function buildMottHavenFiveSchematicLens({
   const trunkFromTop = usableReferenceCrossing
     ? lineFromPointOnSegment(trunkCoords, usableReferenceCrossing.trunkSegmentIndex, usableReferenceCrossing.trunkT)
     : trunkCoords;
-  const mergePoint = pointAtDistance(trunkFromTop, mergeDistanceM);
+  return { referenceCrossing, usableReferenceCrossing, topPoint, trunkFromTop };
+}
+
+function fiveLensEntryPoint(
+  topPoint: Position,
+  usableReferenceCrossing: ReferenceCrossing | null,
+  eastEntryM: number,
+): Position {
+  if (!usableReferenceCrossing) return addMeters(topPoint, eastEntryM, 0);
+  return addVectorMeters(topPoint, [
+    usableReferenceCrossing.referenceTangentEast[0] * eastEntryM,
+    usableReferenceCrossing.referenceTangentEast[1] * eastEntryM,
+  ]);
+}
+
+function fiveLensTopControl(topPoint: Position, usableReferenceCrossing: ReferenceCrossing | null): Position {
+  if (!usableReferenceCrossing) return addMeters(topPoint, -255, -2);
+  return addVectorMeters(topPoint, [
+    -usableReferenceCrossing.referenceTangentEast[0] * 255,
+    -usableReferenceCrossing.referenceTangentEast[1] * 255,
+  ]);
+}
+
+function appendBranchToEntry(
+  out: Position[],
+  branchCoords: Position[],
+  prefixEnd: Position | undefined,
+  entryPoint: Position,
+  cutIndex: number,
+  sampleM: number,
+): void {
+  if (prefixEnd && distanceMeters(prefixEnd, entryPoint) > 2) {
+    append(out, hermiteBetween(prefixEnd, entryPoint, tangentAt(branchCoords, cutIndex, false), [-1, 0], {
+      handleFrac: 0.18,
+      sampleM,
+    }));
+    return;
+  }
+  append(out, [entryPoint]);
+}
+
+export function buildMottHavenFiveSchematicLens(options: FiveLensOptions = {}) {
+  const resolved = resolveFiveLensOptions(options);
+  const branchCoords = resolved.branchCoords;
+  const trunkCoords = resolved.trunkCoords;
+  if (!Array.isArray(branchCoords) || branchCoords.length < 2) {
+    return { coordinates: branchCoords ?? [], diagnostics: { ok: false, reason: "missing_branch" } };
+  }
+  if (!Array.isArray(trunkCoords) || trunkCoords.length < 2) {
+    return { coordinates: branchCoords, diagnostics: { ok: false, reason: "missing_trunk" } };
+  }
+
+  const top = resolveFiveLensTop(trunkCoords, resolved.parallelReferenceCoords, resolved.parallelOffsetM);
+  const mergePoint = pointAtDistance(top.trunkFromTop, resolved.mergeDistanceM);
   if (!mergePoint) {
     return { coordinates: branchCoords, diagnostics: { ok: false, reason: "missing_merge" } };
   }
 
-  const entryPoint = usableReferenceCrossing
-    ? addVectorMeters(topPoint, [
-        usableReferenceCrossing.referenceTangentEast[0] * eastEntryM,
-        usableReferenceCrossing.referenceTangentEast[1] * eastEntryM,
-      ])
-    : addMeters(topPoint, eastEntryM, 0);
-  const westShoulder = addMeters(topPoint, -westShoulderM, -shoulderSouthM);
-  const westOuter = addMeters(topPoint, -westOuterM, -outerSouthM);
-  const westLower = addMeters(topPoint, -westLowerM, -lowerSouthM);
-
+  const entryPoint = fiveLensEntryPoint(top.topPoint, top.usableReferenceCrossing, resolved.eastEntryM);
+  const westShoulder = addMeters(top.topPoint, -resolved.westShoulderM, -resolved.shoulderSouthM);
+  const westOuter = addMeters(top.topPoint, -resolved.westOuterM, -resolved.outerSouthM);
+  const westLower = addMeters(top.topPoint, -resolved.westLowerM, -resolved.lowerSouthM);
   const cut = nearestIndex(branchCoords, entryPoint);
   const prefix = branchCoords.slice(0, cut.index + 1);
   const out = prefix.slice(0, -1);
+  appendBranchToEntry(out, branchCoords, prefix[prefix.length - 1], entryPoint, cut.index, resolved.sampleM);
 
-  const prefixEnd = prefix[prefix.length - 1];
-  if (prefixEnd && distanceMeters(prefixEnd, entryPoint) > 2) {
-    append(out, hermiteBetween(prefixEnd, entryPoint, tangentAt(branchCoords, cut.index, false), [-1, 0], {
-      handleFrac: 0.18,
-      sampleM,
-    }));
-  } else {
-    append(out, [entryPoint]);
-  }
-
-  const topRun = linearlySampleSegment(entryPoint, topPoint, sampleM);
+  const topRun = linearlySampleSegment(entryPoint, top.topPoint, resolved.sampleM);
   const topApproachLatSpreadM =
     (Math.max(...topRun.map((coord) => coord[1])) - Math.min(...topRun.map((coord) => coord[1]))) *
     M_PER_DEG_LAT;
   append(out, topRun.slice(1));
   const topPointOutputIndex = out.length - 1;
-  const topControl = usableReferenceCrossing
-    ? addVectorMeters(topPoint, [
-        -usableReferenceCrossing.referenceTangentEast[0] * 255,
-        -usableReferenceCrossing.referenceTangentEast[1] * 255,
-      ])
-    : addMeters(topPoint, -255, -2);
+  const topControl = fiveLensTopControl(top.topPoint, top.usableReferenceCrossing);
   const mergeControl = addMeters(mergePoint, -235, 88);
-  append(out, cubicBezier(topPoint, topControl, mergeControl, mergePoint, sampleM).slice(1));
+  append(out, cubicBezier(top.topPoint, topControl, mergeControl, mergePoint, resolved.sampleM).slice(1));
 
   const bowCoords = out.slice(topPointOutputIndex);
   const schematicCoords = out.slice(Math.max(0, topPointOutputIndex - 2));
-  const maxTrunkDistanceM = Math.max(...bowCoords.map((coord) => distanceToPolylineM(coord, trunkCoords)));
-  const mergeDistance = distanceMeters(out[out.length - 1], mergePoint);
-
   return {
     coordinates: out,
     diagnostics: {
       ok: true,
       entryPoint,
-      topPoint,
+      topPoint: top.topPoint,
       westShoulder,
       westOuter,
       westLower,
@@ -458,24 +495,45 @@ export function buildMottHavenFiveSchematicLens({
       prefixCutIndex: cut.index,
       prefixCutDistanceM: cut.distanceM,
       topApproachLatSpreadM,
-      maxTrunkDistanceM,
-      mergeDistanceM: mergeDistance,
+      maxTrunkDistanceM: Math.max(...bowCoords.map((coord) => distanceToPolylineM(coord, trunkCoords))),
+      mergeDistanceM: distanceMeters(out[out.length - 1], mergePoint),
       minLon: Math.min(...out.map((coord) => coord[0])),
       maxTurnDeg: maxTurnDegrees(schematicCoords),
-      parallelReferenceDistanceM: referenceCrossing?.referenceDistanceM ?? null,
-      parallelReferenceUsed: Boolean(usableReferenceCrossing),
+      parallelReferenceDistanceM: top.referenceCrossing?.referenceDistanceM ?? null,
+      parallelReferenceUsed: Boolean(top.usableReferenceCrossing),
     },
   };
 }
 
-export function buildMottHavenSixSchematicMerge({
-  branchCoords,
-  mainlineCoords,
-  mergeDistanceM = 620,
-  entryEastM = 430,
-  entryNorthM = 120,
-  sampleM = 6,
-}: SixMergeOptions = {}) {
+function appendSixMergeCurve(
+  out: Position[],
+  prefixEnd: Position | undefined,
+  mergePoint: Position,
+  startTangent: Vector,
+  endTangent: Vector,
+  sampleM: number,
+): void {
+  if (prefixEnd && distanceMeters(prefixEnd, mergePoint) > 1) {
+    append(out, hermiteBetween(prefixEnd, mergePoint, startTangent, endTangent, {
+      handleFrac: 0.42,
+      sampleM,
+    }).slice(1));
+    return;
+  }
+  append(out, [mergePoint]);
+}
+
+export function buildMottHavenSixSchematicMerge(options: SixMergeOptions = {}) {
+  const resolved = ({
+    branchCoords: (options).branchCoords,
+    mainlineCoords: (options).mainlineCoords,
+    mergeDistanceM: (options).mergeDistanceM ?? 620,
+    entryEastM: (options).entryEastM ?? 430,
+    entryNorthM: (options).entryNorthM ?? 120,
+    sampleM: (options).sampleM ?? 6,
+});
+  const branchCoords = resolved.branchCoords;
+  const mainlineCoords = resolved.mainlineCoords;
   if (!Array.isArray(branchCoords) || branchCoords.length < 2) {
     return { coordinates: branchCoords ?? [], sharedMainlineCoords: [], diagnostics: { ok: false, reason: "missing_branch" } };
   }
@@ -483,29 +541,25 @@ export function buildMottHavenSixSchematicMerge({
     return { coordinates: branchCoords, sharedMainlineCoords: [], diagnostics: { ok: false, reason: "missing_mainline" } };
   }
 
-  const merge = pointAtDistanceWithContext(mainlineCoords, mergeDistanceM);
+  const merge = pointAtDistanceWithContext(mainlineCoords, resolved.mergeDistanceM);
   if (!merge) {
     return { coordinates: branchCoords, sharedMainlineCoords: [], diagnostics: { ok: false, reason: "missing_merge" } };
   }
 
   const mergePoint = merge.point;
-  const entryTarget = addMeters(mergePoint, entryEastM, entryNorthM);
+  const entryTarget = addMeters(mergePoint, resolved.entryEastM, resolved.entryNorthM);
   const cut = nearestIndex(branchCoords, entryTarget);
-  const prefix = branchCoords.slice(0, cut.index + 1);
-  const out = [...prefix];
+  const out = branchCoords.slice(0, cut.index + 1);
   const prefixEnd = out[out.length - 1];
   const sharedMainlineCoords = lineFromPointOnSegment(mainlineCoords, merge.segmentIndex, merge.t);
-  const endTangent = tangentAt(sharedMainlineCoords, 0, true);
-  const startTangent = tangentAt(branchCoords, cut.index, true);
-
-  if (prefixEnd && distanceMeters(prefixEnd, mergePoint) > 1) {
-    append(out, hermiteBetween(prefixEnd, mergePoint, startTangent, endTangent, {
-      handleFrac: 0.42,
-      sampleM,
-    }).slice(1));
-  } else {
-    append(out, [mergePoint]);
-  }
+  appendSixMergeCurve(
+    out,
+    prefixEnd,
+    mergePoint,
+    tangentAt(branchCoords, cut.index, true),
+    tangentAt(sharedMainlineCoords, 0, true),
+    resolved.sampleM,
+  );
 
   return {
     coordinates: out,

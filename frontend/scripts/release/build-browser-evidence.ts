@@ -32,7 +32,7 @@ interface PlaywrightTest {
   expectedStatus: string;
   projectName: string;
   status: string;
-  results: unknown[];
+  results: PlaywrightJson[];
 }
 
 interface PlaywrightSpec {
@@ -41,60 +41,70 @@ interface PlaywrightSpec {
   tests: PlaywrightTest[];
 }
 
+type PlaywrightJson = {
+  errors?: PlaywrightJson[];
+  stats?: PlaywrightJson;
+  suites?: PlaywrightJson[];
+  specs?: PlaywrightJson[];
+  tags?: string[];
+  tests?: PlaywrightJson[];
+  title?: string;
+  expectedStatus?: string;
+  projectName?: string;
+  status?: string;
+  results?: PlaywrightJson[];
+  unexpected?: number;
+  flaky?: number;
+  message?: string;
+};
+
 function fail(reason: string): never {
   throw new Error(`browser evidence rejected: ${reason}`);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+function asJson(node: PlaywrightJson, label: string): PlaywrightJson {
+  if (Array.isArray(node)) fail(`${label} must be an object`);
+  return node;
 }
 
-function record(value: unknown, label: string): Record<string, unknown> {
-  if (!isRecord(value)) {
-    fail(`${label} must be an object`);
-  }
-  return value;
-}
-
-function text(value: unknown, label: string): string {
-  if (typeof value !== "string" || !value) {
+function asText(value: string | undefined, label: string): string {
+  if (value === undefined || value === "") {
     fail(`${label} must be a non-empty string`);
   }
   return value;
 }
 
-function list(value: unknown, label: string): unknown[] {
-  if (!Array.isArray(value)) {
-    fail(`${label} must be an array`);
-  }
+function asNodes(value: PlaywrightJson[] | undefined, label: string): PlaywrightJson[] {
+  if (!Array.isArray(value)) fail(`${label} must be an array`);
   return value;
 }
 
-function specsFromSuite(value: unknown): PlaywrightSpec[] {
-  const suite = record(value, "Playwright suite");
-  const specs = list(suite.specs, "Playwright suite specs").map((spec) => {
-    const row = record(spec, "Playwright spec");
-    const tags = list(row.tags ?? [], "Playwright spec tags").map((tag) =>
-      text(tag, "Playwright tag"),
-    );
-    const tests = list(row.tests, "Playwright spec tests").map((test) => {
-      const result = record(test, "Playwright test");
+function asStrings(value: string[] | undefined, label: string): string[] {
+  if (!Array.isArray(value)) fail(`${label} must be an array`);
+  return value.map((tag) => asText(tag, "Playwright tag"));
+}
+
+function specsFromSuite(suite: PlaywrightJson): PlaywrightSpec[] {
+  const specs = asNodes(suite.specs, "Playwright suite specs").map((spec) => {
+    const row = asJson(spec, "Playwright spec");
+    const tests = asNodes(row.tests, "Playwright spec tests").map((test) => {
+      const result = asJson(test, "Playwright test");
       return {
-        expectedStatus: text(result.expectedStatus, "Playwright expected test status"),
-        projectName: text(result.projectName, "Playwright project name"),
-        status: text(result.status, "Playwright test status"),
-        results: list(result.results, "Playwright test results"),
+        expectedStatus: asText(result.expectedStatus, "Playwright expected test status"),
+        projectName: asText(result.projectName, "Playwright project name"),
+        status: asText(result.status, "Playwright test status"),
+        results: asNodes(result.results, "Playwright test results"),
       };
     });
     return {
-      title: text(row.title, "Playwright spec title"),
-      tags,
+      title: asText(row.title, "Playwright spec title"),
+      tags: asStrings(row.tags ?? [], "Playwright spec tags"),
       tests,
     };
   });
   const nestedSuites = suite.suites === undefined
     ? []
-    : list(suite.suites, "Playwright nested suites");
+    : asNodes(suite.suites, "Playwright nested suites");
   return [...specs, ...nestedSuites.flatMap(specsFromSuite)];
 }
 
@@ -126,10 +136,10 @@ function passedCaseIds(
     if (test.status !== "expected" || test.results.length !== 1) {
       fail(`${project} ${id} did not complete as one expected result`);
     }
-    const result = record(test.results[0], "Playwright result");
+    const result = asJson(test.results[0], "Playwright result");
     if (
-      text(result.status, "Playwright result status") !== "passed"
-      || list(result.errors, "Playwright result errors").length
+      asText(result.status, "Playwright result status") !== "passed"
+      || asNodes(result.errors, "Playwright result errors").length
     ) {
       fail(`${project} ${id} did not pass cleanly`);
     }
@@ -145,14 +155,14 @@ function validateAllTests(specs: PlaywrightSpec[]): void {
         fail(`${test.projectName} has an ${test.status} test`);
       }
       for (const rawResult of test.results) {
-        const result = record(rawResult, "Playwright result");
-        const status = text(result.status, "Playwright result status");
+        const result = asJson(rawResult, "Playwright result");
+        const status = asText(result.status, "Playwright result status");
         if (
           ["failed", "timedOut", "interrupted", "unexpected", "flaky"].includes(status)
         ) {
           fail(`${test.projectName} contains a ${status} result`);
         }
-        if (list(result.errors, "Playwright result errors").length) {
+        if (asNodes(result.errors, "Playwright result errors").length) {
           fail(`${test.projectName} contains a result error`);
         }
       }
@@ -160,36 +170,12 @@ function validateAllTests(specs: PlaywrightSpec[]): void {
   }
 }
 
-export function buildBrowserEvidence(
-  report: unknown,
-  commitSha: string,
-): BrowserEvidence {
-  if (!SHA_PATTERN.test(commitSha)) {
-    fail("candidate SHA must be a 7-64 character hexadecimal Git SHA");
-  }
-  const root = record(report, "Playwright report");
-  if (list(root.errors, "Playwright report errors").length) {
-    fail("Playwright report contains errors");
-  }
-  const stats = record(root.stats, "Playwright report stats");
-  for (const name of ["unexpected", "flaky"] as const) {
-    if (stats[name] !== 0) {
-      fail(`Playwright report has ${name} cases`);
-    }
-  }
-  const specs = list(root.suites, "Playwright report suites").flatMap(
-    specsFromSuite,
-  );
-  if (
-    specs.some(
-      (spec) => spec.tags.includes("visual") || spec.title.startsWith("@visual"),
-    )
-  ) {
-    fail("visual comparison must remain excluded from Linux CI evidence");
-  }
-  validateAllTests(specs);
-  const desktop = passedCaseIds(specs, "desktop", REQUIRED_CASES);
-  const mobile = passedCaseIds(specs, "mobile", REQUIRED_CASES.slice(0, -1));
+function rejectUnstableStats(stats: PlaywrightJson) {
+  if (stats.unexpected !== 0) fail("Playwright report has unexpected cases");
+  if (stats.flaky !== 0) fail("Playwright report has flaky cases");
+}
+
+function assertMobileZoomSkip(specs: PlaywrightSpec[]): RequiredCaseId {
   const [zoomId, zoomTitle] = REQUIRED_CASES.at(-1)
     ?? fail("zoom coverage is not configured");
   const mobileZoom = matchingTest(specs, "mobile", zoomId, zoomTitle);
@@ -200,16 +186,43 @@ export function buildBrowserEvidence(
   ) {
     fail("mobile zoom coverage must remain an expected skip");
   }
-  const mobileZoomResult = record(
+  const mobileZoomResult = asJson(
     mobileZoom.results[0],
     "Playwright mobile zoom result",
   );
   if (
-    text(mobileZoomResult.status, "Playwright mobile zoom result status") !== "skipped"
-    || list(mobileZoomResult.errors, "Playwright mobile zoom result errors").length
+    asText(mobileZoomResult.status, "Playwright mobile zoom result status") !== "skipped"
+    || asNodes(mobileZoomResult.errors, "Playwright mobile zoom result errors").length
   ) {
     fail("mobile zoom coverage did not skip cleanly");
   }
+  return zoomId;
+}
+
+export function buildBrowserEvidence(
+  report: PlaywrightJson,
+  commitSha: string,
+): BrowserEvidence {
+  if (!SHA_PATTERN.test(commitSha)) {
+    fail("candidate SHA must be a 7-64 character hexadecimal Git SHA");
+  }
+  const root = asJson(report, "Playwright report");
+  if (asNodes(root.errors, "Playwright report errors").length) {
+    fail("Playwright report contains errors");
+  }
+  rejectUnstableStats(asJson(root.stats ?? {}, "Playwright report stats"));
+  const specs = asNodes(root.suites, "Playwright report suites").flatMap(specsFromSuite);
+  if (
+    specs.some(
+      (spec) => spec.tags.includes("visual") || spec.title.startsWith("@visual"),
+    )
+  ) {
+    fail("visual comparison must remain excluded from Linux CI evidence");
+  }
+  validateAllTests(specs);
+  const desktop = passedCaseIds(specs, "desktop", REQUIRED_CASES);
+  const mobile = passedCaseIds(specs, "mobile", REQUIRED_CASES.slice(0, -1));
+  const zoomId = assertMobileZoomSkip(specs);
   return {
     schema_version: 1,
     candidate: { commit_sha: commitSha.toLowerCase() },
@@ -240,15 +253,20 @@ async function main(): Promise<void> {
   } catch {
     fail("Playwright JSON result is missing or malformed");
   }
+  if (parsed === null || Array.isArray(parsed) || parsed !== Object(parsed)) {
+    fail("Playwright JSON result must be an object");
+  }
+  // SAFETY: Playwright JSON is a plain object after the predicates above.
+  const report = parsed as PlaywrightJson;
   await writeFile(
     output,
-    `${JSON.stringify(buildBrowserEvidence(parsed, commitSha))}\n`,
+    `${JSON.stringify(buildBrowserEvidence(report, commitSha))}\n`,
     "utf8",
   );
 }
 
 if (process.argv[1]?.endsWith("build-browser-evidence.ts")) {
-  void main().catch((error: unknown) => {
+  void main().catch((error) => {
     const message = error instanceof Error
       ? error.message
       : "browser evidence generation failed";

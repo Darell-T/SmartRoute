@@ -22,7 +22,12 @@ function hashArtifact(name: string): string {
 }
 
 test("artifact manifest hashes match runtime GeoJSON artifacts", () => {
-  const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as ArtifactManifest;
+  const parsed: unknown = JSON.parse(readFileSync(manifestPath, "utf8"));
+  if (parsed === null || Array.isArray(parsed) || parsed !== Object(parsed)) {
+    throw new Error("artifact-manifest.json must be a JSON object");
+  }
+  // SAFETY: the manifest is a JSON object of artifact name to hash after the predicates above.
+  const manifest = parsed as ArtifactManifest;
 
   for (const name of Object.keys(manifest)) {
     assert.equal(

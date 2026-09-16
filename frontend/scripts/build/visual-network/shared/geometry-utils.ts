@@ -125,67 +125,134 @@ export function resampleEdgeAt5m(coordsLngLat: Position[]) {
   return samples;
 }
 
-export function bidirectionalHausdorff(
-  samplesA: Array<{ x: number; y: number; tx: number; ty: number }>,
-  samplesB: Array<{ x: number; y: number; tx: number; ty: number }>,
-) {
-  let maxA = 0;
-  let withinA = 0;
-  let distanceSumA = 0;
-  let tanSumA = 0;
-  let tanCountA = 0;
-  for (const a of samplesA) {
-    let best = Infinity;
-    let bestB = null;
-    for (const b of samplesB) {
-      const dx = a.x - b.x;
-      const dy = a.y - b.y;
-      const d2 = dx * dx + dy * dy;
-      if (d2 < best) { best = d2; bestB = b; }
-    }
-    const d = Math.sqrt(best);
-    distanceSumA += d;
-    if (d > maxA) maxA = d;
-    if (d <= HAUSDORFF_MAX_M) withinA += 1;
-    if (bestB) {
-      const dot = Math.abs(a.tx * bestB.tx + a.ty * bestB.ty);
-      const angleDeg = Math.acos(Math.min(1, Math.max(-1, dot))) * 180 / Math.PI;
-      tanSumA += angleDeg;
-      tanCountA += 1;
+type TangentSample = {
+  x: number;
+  y: number;
+  tx: number;
+  ty: number;
+};
+
+function nearestSample(target: TangentSample, others: TangentSample[]): TangentSample | null {
+  let best = Infinity;
+  let bestB: TangentSample | null = null;
+  for (const other of others) {
+    const dx = target.x - other.x;
+    const dy = target.y - other.y;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < best) {
+      best = d2;
+      bestB = other;
     }
   }
-  let maxB = 0;
-  let withinB = 0;
-  let distanceSumB = 0;
-  for (const b of samplesB) {
-    let best = Infinity;
-    for (const a of samplesA) {
-      const dx = a.x - b.x;
-      const dy = a.y - b.y;
-      const d2 = dx * dx + dy * dy;
-      if (d2 < best) best = d2;
-    }
-    const d = Math.sqrt(best);
-    distanceSumB += d;
-    if (d > maxB) maxB = d;
-    if (d <= HAUSDORFF_MAX_M) withinB += 1;
+  return bestB;
+}
+
+function directedDistanceStats(samples: TangentSample[], others: TangentSample[]) {
+  let max = 0;
+  let within = 0;
+  let distanceSum = 0;
+  for (const sample of samples) {
+    const best = nearestSample(sample, others);
+    const d = best ? Math.hypot(sample.x - best.x, sample.y - best.y) : Infinity;
+    distanceSum += d;
+    if (d > max) max = d;
+    if (d <= HAUSDORFF_MAX_M) within += 1;
   }
-  const overlapA = samplesA.length > 0 ? withinA / samplesA.length : 0;
-  const overlapB = samplesB.length > 0 ? withinB / samplesB.length : 0;
   return {
-    hausdorff: Math.max(maxA, maxB),
-    overlap: Math.min(overlapA, overlapB),
-    overlapA,
-    overlapB,
-    avgDistanceA: samplesA.length > 0 ? distanceSumA / samplesA.length : Infinity,
-    avgDistanceB: samplesB.length > 0 ? distanceSumB / samplesB.length : Infinity,
-    avgTangentDeg: tanCountA > 0 ? tanSumA / tanCountA : 180,
+    max,
+    overlap: samples.length > 0 ? within / samples.length : 0,
+    avgDistance: samples.length > 0 ? distanceSum / samples.length : Infinity,
+  };
+}
+
+function meanAbsTangentDeg(samples: TangentSample[], others: TangentSample[]): number {
+  let tanSum = 0;
+  let tanCount = 0;
+  for (const sample of samples) {
+    const best = nearestSample(sample, others);
+    if (!best) continue;
+    const dot = Math.abs(sample.tx * best.tx + sample.ty * best.ty);
+    tanSum += Math.acos(Math.min(1, Math.max(-1, dot))) * 180 / Math.PI;
+    tanCount += 1;
+  }
+  return tanCount > 0 ? tanSum / tanCount : 180;
+}
+
+export function bidirectionalHausdorff(
+  samplesA: TangentSample[],
+  samplesB: TangentSample[],
+) {
+  const a = directedDistanceStats(samplesA, samplesB);
+  const b = directedDistanceStats(samplesB, samplesA);
+  return {
+    hausdorff: Math.max(a.max, b.max),
+    overlap: Math.min(a.overlap, b.overlap),
+    overlapA: a.overlap,
+    overlapB: b.overlap,
+    avgDistanceA: a.avgDistance,
+    avgDistanceB: b.avgDistance,
+    avgTangentDeg: meanAbsTangentDeg(samplesA, samplesB),
   };
 }
 
 export function routeSetsIntersect(left: string[], right: string[]) {
   const rightSet = new Set(right);
   return left.some((routeId) => rightSet.has(routeId));
+}
+
+function segmentRightNormals(projected: number[][]): number[][] {
+  const segNormals = [];
+  for (let i = 0; i < projected.length - 1; i += 1) {
+    const dx = projected[i + 1][0] - projected[i][0];
+    const dy = projected[i + 1][1] - projected[i][1];
+    const len = Math.hypot(dx, dy);
+    if (len === 0) {
+      segNormals.push([0, 0]);
+      continue;
+    }
+    segNormals.push([dy / len, -dx / len]);
+  }
+  return segNormals;
+}
+
+function miterVertexNormal(
+  prev: number[],
+  next: number[],
+  offsetMeters: number,
+  miterCap: number,
+): number[] {
+  const sumX = prev[0] + next[0];
+  const sumY = prev[1] + next[1];
+  const sumLen = Math.hypot(sumX, sumY);
+  if (sumLen < 1e-9) return next;
+  const nx = sumX / sumLen;
+  const ny = sumY / sumLen;
+  const cosHalf = prev[0] * nx + prev[1] * ny;
+  const miterLen = Math.abs(offsetMeters) / Math.max(0.05, Math.abs(cosHalf));
+  if (miterLen > miterCap) return next;
+  const scale = 1 / cosHalf;
+  return [nx * scale, ny * scale];
+}
+
+function vertexMiterNormals(
+  projected: number[][],
+  segNormals: number[][],
+  offsetMeters: number,
+  miterCap: number,
+): number[][] {
+  const vertexNormals = [];
+  for (let i = 0; i < projected.length; i += 1) {
+    if (i === 0) {
+      vertexNormals.push(segNormals[0]);
+      continue;
+    }
+    if (i === projected.length - 1) {
+      vertexNormals.push(segNormals[segNormals.length - 1]);
+      continue;
+    }
+    vertexNormals.push(miterVertexNormal(segNormals[i - 1], segNormals[i], offsetMeters, miterCap));
+  }
+  return vertexNormals;
 }
 
 // Compute pre-baked offset geometry. Walks the polyline vertex by vertex,
@@ -199,73 +266,17 @@ export function offsetPolylineByLaneSlot(coords: Position[], laneSlot: number) {
   if (!Number.isFinite(laneSlot) || laneSlot === 0) return coords;
   const offsetMeters = laneSlot * LANE_WIDTH_METERS;
   const miterCap = LANE_WIDTH_METERS * MITER_LENGTH_CAP_RATIO;
-
-  // Pre-compute per-vertex meters-per-degree-longitude (varies with lat).
   const mPerLngAt = coords.map((c) => metersPerDegLng(c[1]));
-
-  // Project to meters using each vertex's lat-corrected scale.
   const projected = coords.map((c, i) => [c[0] * mPerLngAt[i], c[1] * M_PER_DEG_LAT]);
-
-  // Per-segment unit normal (right-hand perpendicular to segment direction).
-  const segNormals = [];
-  for (let i = 0; i < projected.length - 1; i += 1) {
-    const dx = projected[i + 1][0] - projected[i][0];
-    const dy = projected[i + 1][1] - projected[i][1];
-    const len = Math.hypot(dx, dy);
-    if (len === 0) {
-      segNormals.push([0, 0]);
-      continue;
-    }
-    // Right-hand normal: rotate +90 degrees clockwise (dx, dy) -> (dy, -dx)
-    segNormals.push([dy / len, -dx / len]);
-  }
-
-  // Per-vertex normal (averaged miter join) with bevel fallback.
-  const vertexNormals = [];
-  for (let i = 0; i < projected.length; i += 1) {
-    if (i === 0) {
-      vertexNormals.push(segNormals[0]);
-      continue;
-    }
-    if (i === projected.length - 1) {
-      vertexNormals.push(segNormals[segNormals.length - 1]);
-      continue;
-    }
-    const a = segNormals[i - 1];
-    const b = segNormals[i];
-    const sumX = a[0] + b[0];
-    const sumY = a[1] + b[1];
-    const sumLen = Math.hypot(sumX, sumY);
-    if (sumLen < 1e-9) {
-      vertexNormals.push(b);
-      continue;
-    }
-    const nx = sumX / sumLen;
-    const ny = sumY / sumLen;
-    // Miter scale: the offset along the miter axis must be (offset / cos(half-angle)).
-    // cos(half-angle) = dot(a, miter) which equals (a dot miter). Equivalently, the
-    // miter length factor is 1 / (a dot n) where n is the average unit normal.
-    const cosHalf = a[0] * nx + a[1] * ny;
-    const miterLen = Math.abs(offsetMeters) / Math.max(0.05, Math.abs(cosHalf));
-    if (miterLen > miterCap) {
-      // Sharp corner - fall back to the segment that's about to start
-      vertexNormals.push(b);
-    } else {
-      // Scale the unit normal so projection onto a yields offsetMeters
-      const scale = 1 / cosHalf;
-      vertexNormals.push([nx * scale, ny * scale]);
-    }
-  }
-
-  // Apply offset in projected meter space; convert back to lng/lat.
+  const segNormals = segmentRightNormals(projected);
+  const vertexNormals = vertexMiterNormals(projected, segNormals, offsetMeters, miterCap);
   const out: Position[] = [];
   for (let i = 0; i < projected.length; i += 1) {
     const n = vertexNormals[i];
-    const nx = n[0] * offsetMeters;
-    const ny = n[1] * offsetMeters;
-    const x = projected[i][0] + nx;
-    const y = projected[i][1] + ny;
-    out.push([x / mPerLngAt[i], y / M_PER_DEG_LAT]);
+    out.push([
+      (projected[i][0] + n[0] * offsetMeters) / mPerLngAt[i],
+      (projected[i][1] + n[1] * offsetMeters) / M_PER_DEG_LAT,
+    ]);
   }
   return out;
 }

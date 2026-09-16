@@ -7,7 +7,8 @@
 //
 // Pure + in-place: mutates feature.geometry like the other late passes.
 
-import type { Feature, FeatureCollection, LineStringGeometry, PointGeometry, Position } from "./types.ts";
+import type { Feature, JsonValue, LineStringGeometry, Position } from "./types.ts";
+import { isJsonObject } from "./visual-network/shared/route-config.ts";
 
 const DEG_LAT_M = 111320;
 const GRACE_M = 20; // keep this much line past the outermost stop
@@ -26,24 +27,13 @@ type TrimLineProperties = {
   route_ids?: string[];
   visual_feature_type?: string;
   length_m?: number;
-  [key: string]: unknown;
 };
 
 type TrimLineFeature = Feature<LineStringGeometry, TrimLineProperties>;
 
-type StationProperties = {
-  station_id?: string;
-  name?: string;
-  route_ids?: string[];
-  [key: string]: unknown;
-};
-
-type StationFeature = Feature<PointGeometry, StationProperties>;
-type StationCollection = FeatureCollection<StationFeature>;
-
 type TerminalEntry = {
   route: string;
-  coord: Position;
+  coord?: Position;
 };
 
 type TrimOptions = {
@@ -51,16 +41,31 @@ type TrimOptions = {
   minTrimM?: number;
 };
 
+function hasTerminalCoord(entry: TerminalEntry): entry is TerminalEntry & { coord: Position } {
+  return Array.isArray(entry.coord);
+}
+
 type TrimTerminalArgs = {
   features: TrimLineFeature[];
-  stations?: StationCollection | null;
+  stations?: JsonValue;
   terminals?: TerminalEntry[];
   options?: TrimOptions;
+};
+
+type StationAnchor = {
+  coord: Position | undefined;
+  routes: Set<string>;
 };
 
 type Projection = {
   t: number;
   lateral: number;
+  total: number;
+};
+
+type StationWindow = {
+  minT: number;
+  maxT: number;
   total: number;
 };
 
@@ -170,6 +175,229 @@ const SPUR_FREE_END_STATION_M = 300;
 // fragmented source segments (the shattered SIR taught us this) — never drop.
 const MIN_SPUR_LENGTH_M = 150;
 
+type LaneTrimAccount = {
+  trimmedEnds: number;
+  removedM: number;
+  droppedSpurs: number;
+  spursToDrop: Set<TrimLineFeature>;
+  actions: TrimAction[];
+};
+
+type LineMeta = {
+  routes: Set<string>;
+  minLon: number;
+  maxLon: number;
+  minLat: number;
+  maxLat: number;
+};
+
+function stationAnchorFromValue(value: JsonValue | undefined): StationAnchor | null {
+  if (!isJsonObject(value)) return null;
+  const geometry = value.geometry;
+  if (!isJsonObject(geometry) || !Array.isArray(geometry.coordinates)) return null;
+  const coordinates = geometry.coordinates;
+  let coord: Position | undefined;
+  if (coordinates.length >= 2) {
+    const lon = Number(coordinates[0]);
+    const lat = Number(coordinates[1]);
+    if ([Number.isFinite(lon), coordinates[0] === lon, Number.isFinite(lat), coordinates[1] === lat].includes(false)) {
+      return null;
+    }
+    coord = [lon, lat];
+  }
+  const properties = value.properties;
+  const routeIds = isJsonObject(properties) && Array.isArray(properties.route_ids)
+    ? properties.route_ids.map(String)
+    : [];
+  return { coord, routes: expandRouteIds(routeIds) };
+}
+
+function stationAnchorsFromDoc(stations: TrimTerminalArgs["stations"]): StationAnchor[] {
+  if (!isJsonObject(stations) || !Array.isArray(stations.features)) return [];
+  const anchors: StationAnchor[] = [];
+  for (const value of stations.features) {
+    const anchor = stationAnchorFromValue(value);
+    if (anchor) anchors.push(anchor);
+  }
+  return anchors;
+}
+
+function polylineLengthM(coords: Position[], lat0: number): number {
+  return coords.reduce(
+    (sum, _coord, i) => (i === 0 ? 0 : sum + distM(coords[i - 1], coords[i], lat0)),
+    0,
+  );
+}
+
+function projectionIsJunctionCapture(
+  proj: Projection,
+  startAttached: boolean,
+  endAttached: boolean,
+): boolean {
+  if (proj.t <= 1 && startAttached && proj.lateral > 30) return true;
+  return proj.t >= proj.total - 1 && endAttached && proj.lateral > 30;
+}
+
+function stationWindowOnLane(
+  coords: Position[],
+  lat0: number,
+  routeSet: Set<string>,
+  startAttached: boolean,
+  endAttached: boolean,
+  stationFeatures: StationAnchor[],
+): StationWindow {
+  let minT = Infinity;
+  let maxT = -Infinity;
+  let total = 0;
+  for (const station of stationFeatures) {
+    if (!station.coord) continue;
+    if (![...routeSet].some((routeId) => station.routes.has(routeId))) continue;
+    const proj = projectOntoLine(station.coord, coords, lat0);
+    if (!proj || proj.lateral > MAX_STATION_LATERAL_M) continue;
+    if (projectionIsJunctionCapture(proj, startAttached, endAttached)) continue;
+    total = proj.total;
+    minT = Math.min(minT, proj.t);
+    maxT = Math.max(maxT, proj.t);
+  }
+  return { minT, maxT, total };
+}
+
+function dropStationlessSpur(
+  feature: TrimLineFeature,
+  coords: Position[],
+  lat0: number,
+  startAttached: boolean,
+  endAttached: boolean,
+  stationFeatures: StationAnchor[],
+  account: LaneTrimAccount,
+): void {
+  const anchorsAnyStation = stationFeatures.some((station) => {
+    if (!station.coord) return false;
+    const proj = projectOntoLine(station.coord, coords, lat0);
+    if (!proj || proj.lateral > MAX_STATION_LATERAL_M) return false;
+    return !projectionIsJunctionCapture(proj, startAttached, endAttached);
+  });
+  if (anchorsAnyStation) return;
+  const freeEnd = startAttached ? coords[coords.length - 1] : coords[0];
+  const stationNearFreeEnd = stationFeatures.some(
+    (station) => station.coord && distM(station.coord, freeEnd, lat0) <= SPUR_FREE_END_STATION_M,
+  );
+  const spurLen = polylineLengthM(coords, lat0);
+  if (startAttached === endAttached || stationNearFreeEnd || spurLen < MIN_SPUR_LENGTH_M) return;
+  const routeSet = expandRouteIds(feature.properties?.route_ids);
+  account.spursToDrop.add(feature);
+  account.droppedSpurs += 1;
+  account.removedM += spurLen;
+  account.actions.push({
+    action: "drop-spur",
+    routes: [...routeSet].join(","),
+    at: coords[0].map((value) => +value.toFixed(4)),
+    removed_m: Math.round(spurLen),
+  });
+}
+
+function terminalArcPositions(
+  terminalEntries: Array<{ coord: Position; routes: Set<string> }>,
+  routeSet: Set<string>,
+  coords: Position[],
+  lat0: number,
+): number[] {
+  const terminalTs: number[] = [];
+  for (const terminal of terminalEntries) {
+    if (![...routeSet].some((routeId) => terminal.routes.has(routeId))) continue;
+    const projection = projectOntoLine(terminal.coord, coords, lat0);
+    if (projection && projection.lateral <= TERMINAL_LATERAL_M) terminalTs.push(projection.t);
+  }
+  return terminalTs;
+}
+
+function trimFreeTerminalEnds(
+  feature: TrimLineFeature,
+  coords: Position[],
+  lat0: number,
+  routeSet: Set<string>,
+  startAttached: boolean,
+  endAttached: boolean,
+  window: StationWindow,
+  terminalEntries: Array<{ coord: Position; routes: Set<string> }>,
+  grace: number,
+  minTrim: number,
+  account: LaneTrimAccount,
+): void {
+  const fullLen = window.total || polylineLengthM(coords, lat0);
+  const terminalTs = terminalArcPositions(terminalEntries, routeSet, coords, lat0);
+  const boundaryIsTerminal = (t: number): boolean =>
+    terminalTs.some((tt) => Math.abs(tt - t) <= TERMINAL_BOUNDARY_TOLERANCE_M);
+  let fromT = 0;
+  if (!startAttached && window.minT - grace > minTrim && boundaryIsTerminal(window.minT)) {
+    fromT = window.minT - grace;
+    account.trimmedEnds += 1;
+    account.removedM += fromT;
+    account.actions.push({
+      action: "trim-start",
+      routes: [...routeSet].join(","),
+      at: coords[0].map((value) => +value.toFixed(4)),
+      removed_m: Math.round(fromT),
+    });
+  }
+  let toT = fullLen;
+  if (!endAttached && fullLen - (window.maxT + grace) > minTrim && boundaryIsTerminal(window.maxT)) {
+    toT = window.maxT + grace;
+    account.trimmedEnds += 1;
+    account.removedM += fullLen - toT;
+    account.actions.push({
+      action: "trim-end",
+      routes: [...routeSet].join(","),
+      at: coords[coords.length - 1].map((value) => +value.toFixed(4)),
+      removed_m: Math.round(fullLen - toT),
+    });
+  }
+  if (fromT === 0 && toT === fullLen) return;
+  feature.geometry = {
+    type: "LineString",
+    coordinates: sliceByArc(coords, fromT, toT, lat0),
+  };
+  if (feature.properties.length_m !== undefined) {
+    feature.properties.length_m = Math.max(0, toT - fromT);
+  }
+}
+
+function processLaneTrim(
+  feature: TrimLineFeature,
+  idx: number,
+  nearbySameRoute: (endpoint: Position, selfIdx: number, routeSet: Set<string>, lat0: number) => boolean,
+  stationFeatures: StationAnchor[],
+  terminalEntries: Array<{ coord: Position; routes: Set<string> }>,
+  grace: number,
+  minTrim: number,
+  account: LaneTrimAccount,
+): void {
+  const coords = feature.geometry.coordinates;
+  const lat0 = coords[0][1];
+  const routeSet = expandRouteIds(feature.properties?.route_ids);
+  if (routeSet.size === 0) return;
+  const startAttached = nearbySameRoute(coords[0], idx, routeSet, lat0);
+  const endAttached = nearbySameRoute(coords[coords.length - 1], idx, routeSet, lat0);
+  const window = stationWindowOnLane(coords, lat0, routeSet, startAttached, endAttached, stationFeatures);
+  if (!Number.isFinite(window.minT)) {
+    dropStationlessSpur(feature, coords, lat0, startAttached, endAttached, stationFeatures, account);
+    return;
+  }
+  trimFreeTerminalEnds(
+    feature,
+    coords,
+    lat0,
+    routeSet,
+    startAttached,
+    endAttached,
+    window,
+    terminalEntries,
+    grace,
+    minTrim,
+    account,
+  );
+}
+
 export function trimTerminalOverhang({
   features,
   stations,
@@ -179,7 +407,7 @@ export function trimTerminalOverhang({
   const grace = options.graceM ?? GRACE_M;
   const minTrim = options.minTrimM ?? MIN_TRIM_M;
   const terminalEntries = (terminals ?? [])
-    .filter((t) => Array.isArray(t?.coord))
+    .filter(hasTerminalCoord)
     .map((t) => ({ coord: t.coord, routes: expandRouteIds([t.route]) }));
   const lines = features.filter(
     (f) => f?.geometry?.type === "LineString" && f.geometry.coordinates.length >= 2,
@@ -191,7 +419,7 @@ export function trimTerminalOverhang({
   // join a sparse-vertex trunk mid-segment as dangling -- which deleted the
   // B/D 6th Av merge and the authored Nostrand 5 peel.
   const MARGIN_DEG = 0.0006; // ~50m bbox expansion, > ATTACH_RADIUS_M
-  const lineMeta = lines.map((f) => {
+  const lineMeta: LineMeta[] = lines.map((f) => {
     let minLon = Infinity;
     let maxLon = -Infinity;
     let minLat = Infinity;
@@ -229,157 +457,38 @@ export function trimTerminalOverhang({
     return false;
   };
 
-  const stationFeatures = (stations?.features ?? []).map((s) => ({
-    coord: s.geometry?.coordinates,
-    routes: expandRouteIds(s.properties?.route_ids),
-  }));
-
-  let trimmedEnds = 0;
-  let removedM = 0;
-  let droppedSpurs = 0;
-  const spursToDrop = new Set<TrimLineFeature>();
-  const actions: TrimAction[] = [];
+  const stationFeatures = stationAnchorsFromDoc(stations);
+  const account: LaneTrimAccount = {
+    trimmedEnds: 0,
+    removedM: 0,
+    droppedSpurs: 0,
+    spursToDrop: new Set<TrimLineFeature>(),
+    actions: [],
+  };
 
   lines.forEach((feature, idx) => {
-    const coords = feature.geometry.coordinates;
-    const lat0 = coords[0][1];
-    const routeSet = expandRouteIds(feature.properties?.route_ids);
-    if (routeSet.size === 0) return;
-
-    const startAttached = nearbySameRoute(coords[0], idx, routeSet, lat0);
-    const endAttached = nearbySameRoute(
-      coords[coords.length - 1],
+    processLaneTrim(
+      feature,
       idx,
-      routeSet,
-      lat0,
+      nearbySameRoute,
+      stationFeatures,
+      terminalEntries,
+      grace,
+      minTrim,
+      account,
     );
-
-    // Outermost station projections on this lane.
-    let minT = Infinity;
-    let maxT = -Infinity;
-    let total = 0;
-    for (const s of stationFeatures) {
-      if (!s.coord) continue;
-      if (![...routeSet].some((r) => s.routes.has(r))) continue;
-      const proj = projectOntoLine(s.coord, coords, lat0);
-      if (!proj || proj.lateral > MAX_STATION_LATERAL_M) continue;
-      // A projection clamped to an ATTACHED endpoint is junction capture (a
-      // station beside the junction grabbing the spur that branches off
-      // there) — not a real anchor. Clamped at a FREE endpoint is the normal
-      // terminal-station case and counts.
-      if (proj.t <= 1 && startAttached && proj.lateral > 30) continue;
-      if (proj.t >= proj.total - 1 && endAttached && proj.lateral > 30) continue;
-      total = proj.total;
-      minT = Math.min(minT, proj.t);
-      maxT = Math.max(maxT, proj.t);
-    }
-    if (!Number.isFinite(minT)) {
-      // No stations anywhere along this feature. If it hangs off the network
-      // (attached at exactly one end, free at the other) it is a yard lead /
-      // non-revenue spur: drop it whole. Connectors attached at both ends and
-      // isolated fragments are left alone.
-      // Spur classification ignores route membership: stations.geojson route
-      // lists are weekday-pattern (Rockaway Park stations say "S" while the
-      // A also serves the leg), so ANY station along the feature or near its
-      // free end vetoes the drop — revenue track must never look like a yard
-      // lead because of a route-list mismatch.
-      const anchorsAnyStation = stationFeatures.some((s) => {
-        if (!s.coord) return false;
-        const proj = projectOntoLine(s.coord, coords, lat0);
-        if (!proj || proj.lateral > MAX_STATION_LATERAL_M) return false;
-        if (proj.t <= 1 && startAttached && proj.lateral > 30) return false;
-        if (proj.t >= proj.total - 1 && endAttached && proj.lateral > 30) return false;
-        return true;
-      });
-      if (anchorsAnyStation) return;
-      const freeEnd = startAttached ? coords[coords.length - 1] : coords[0];
-      const stationNearFreeEnd = stationFeatures.some(
-        (s) => s.coord && distM(s.coord, freeEnd, lat0) <= SPUR_FREE_END_STATION_M,
-      );
-      const spurLen = coords.reduce(
-        (sum: number, c: Position, i: number) => (i === 0 ? 0 : sum + distM(coords[i - 1], c, lat0)),
-        0,
-      );
-      if (
-        startAttached !== endAttached &&
-        !stationNearFreeEnd &&
-        spurLen >= MIN_SPUR_LENGTH_M
-      ) {
-        spursToDrop.add(feature);
-        droppedSpurs += 1;
-        removedM += spurLen;
-        actions.push({
-          action: "drop-spur",
-          routes: [...routeSet].join(","),
-          at: coords[0].map((v) => +v.toFixed(4)),
-          removed_m: Math.round(spurLen),
-        });
-      }
-      return;
-    }
-
-    let fromT = 0;
-    let toT = total ||
-      coords.reduce(
-        (sum: number, c: Position, i: number) => (i === 0 ? 0 : sum + distM(coords[i - 1], c, lat0)),
-        0,
-      );
-    const fullLen = toT;
-
-    const startFree = !startAttached;
-    const endFree = !endAttached;
-
-    // Terminal gate: the trim boundary (outermost anchoring station) must be
-    // a true GTFS terminal of one of this feature's routes. Without that
-    // evidence the "overhang" is mid-service geometry (merge approach, branch
-    // with weekday-only station route lists, ...) and must not be touched.
-    const terminalTs: number[] = [];
-    for (const term of terminalEntries) {
-      if (![...routeSet].some((r) => term.routes.has(r))) continue;
-      const proj = projectOntoLine(term.coord, coords, lat0);
-      if (proj && proj.lateral <= TERMINAL_LATERAL_M) terminalTs.push(proj.t);
-    }
-    const boundaryIsTerminal = (t: number): boolean =>
-      terminalTs.some((tt) => Math.abs(tt - t) <= TERMINAL_BOUNDARY_TOLERANCE_M);
-
-    if (startFree && minT - grace > minTrim && boundaryIsTerminal(minT)) {
-      fromT = minT - grace;
-      trimmedEnds += 1;
-      removedM += fromT;
-      actions.push({
-        action: "trim-start",
-        routes: [...routeSet].join(","),
-        at: coords[0].map((v) => +v.toFixed(4)),
-        removed_m: Math.round(fromT),
-      });
-    }
-    if (endFree && fullLen - (maxT + grace) > minTrim && boundaryIsTerminal(maxT)) {
-      toT = maxT + grace;
-      trimmedEnds += 1;
-      removedM += fullLen - toT;
-      actions.push({
-        action: "trim-end",
-        routes: [...routeSet].join(","),
-        at: coords[coords.length - 1].map((v) => +v.toFixed(4)),
-        removed_m: Math.round(fullLen - toT),
-      });
-    }
-    if (fromT > 0 || toT < fullLen) {
-      feature.geometry = {
-        type: "LineString",
-        coordinates: sliceByArc(coords, fromT, toT, lat0),
-      };
-      if (typeof feature.properties?.length_m === "number") {
-        feature.properties.length_m = Math.max(0, toT - fromT);
-      }
-    }
   });
 
-  if (spursToDrop.size > 0) {
+  if (account.spursToDrop.size > 0) {
     for (let i = features.length - 1; i >= 0; i -= 1) {
-      if (spursToDrop.has(features[i])) features.splice(i, 1);
+      if (account.spursToDrop.has(features[i])) features.splice(i, 1);
     }
   }
 
-  return { trimmedEnds, removedM: Math.round(removedM), droppedSpurs, actions };
+  return {
+    trimmedEnds: account.trimmedEnds,
+    removedM: Math.round(account.removedM),
+    droppedSpurs: account.droppedSpurs,
+    actions: account.actions,
+  };
 }

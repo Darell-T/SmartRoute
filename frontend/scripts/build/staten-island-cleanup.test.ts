@@ -97,3 +97,73 @@ test("non-SI features are never touched", () => {
   cleanStatenIslandLine(features, { fromCoord: FROM, toCoord: TO });
   assert.ok(features.some((f) => f.properties.corridor_id === "red"));
 });
+
+test("Staten Island cleanup leaves an empty list empty and is deterministic", () => {
+  const first: Feature<LineStringGeometry, TestFeatureProperties>[] = [];
+  const second: Feature<LineStringGeometry, TestFeatureProperties>[] = [];
+  const firstSummary = cleanStatenIslandLine(first, { fromCoord: FROM, toCoord: TO });
+  const secondSummary = cleanStatenIslandLine(second, { fromCoord: FROM, toCoord: TO });
+  assert.deepEqual(first, []);
+  assert.equal(JSON.stringify(firstSummary), JSON.stringify(secondSummary));
+});
+
+test("Staten Island cleanup returns early for a single SI fragment", () => {
+  const features = [si("only", 0, 4000)];
+  const summary = cleanStatenIslandLine(features, { fromCoord: FROM, toCoord: TO });
+  assert.equal(summary.kept, 1);
+  assert.equal(summary.dropped, 0);
+  assert.equal(summary.stitches, 0);
+  assert.equal(summary.connected, undefined);
+  assert.equal(features[0].properties.corridor_id, "only");
+});
+
+test("Staten Island cleanup leaves disconnected SI islands untouched", () => {
+  const features = [
+    si("west", 0, 2000),
+    si("east", 8000, 10000),
+  ];
+  const before = features.map((item) => item.properties.corridor_id);
+  const summary = cleanStatenIslandLine(features, { fromCoord: FROM, toCoord: TO });
+  assert.equal(summary.connected, false);
+  assert.equal(summary.dropped, 0);
+  assert.deepEqual(features.map((item) => item.properties.corridor_id), before);
+});
+
+test("Staten Island cleanup does not stitch seams that already touch or exceed 100m", () => {
+  const touching = [
+    si("main-1", 0, 4000),
+    si("main-2", 4000, 10000),
+  ];
+  const touchingSummary = cleanStatenIslandLine(touching, { fromCoord: FROM, toCoord: TO });
+  assert.equal(touchingSummary.stitches, 0);
+  assert.equal(touching.some((item) => String(item.properties.corridor_id).startsWith("si-stitch")), false);
+
+  const wide = [
+    si("main-1", 0, 4000),
+    si("main-2", 4200, 10000),
+  ];
+  const wideSummary = cleanStatenIslandLine(wide, { fromCoord: FROM, toCoord: TO });
+  assert.equal(wideSummary.stitches, 0);
+});
+
+test("Staten Island cleanup skips non-lines and sub-vertex SI geometry", () => {
+  const features = [
+    si("main-1", 0, 4000),
+    si("main-2", 4050, 10000),
+    {
+      type: "Feature" as const,
+      properties: { corridor_id: "point", route_ids: ["SI"], color: "#0078C6", visual_feature_type: "bundle_lane" },
+      geometry: { type: "Point" as const, coordinates: FROM },
+    },
+    {
+      type: "Feature" as const,
+      properties: { corridor_id: "stub", route_ids: ["SI"], color: "#0078C6", visual_feature_type: "bundle_lane" },
+      geometry: { type: "LineString" as const, coordinates: [FROM] },
+    },
+  ];
+  // SAFETY: production skips non-LineString and sub-2-vertex SI fragments.
+  const summary = cleanStatenIslandLine(features as ReturnType<typeof si>[], { fromCoord: FROM, toCoord: TO });
+  assert.ok(summary.kept >= 2);
+  assert.ok(features.some((item) => item.properties.corridor_id === "point"));
+  assert.ok(features.some((item) => item.properties.corridor_id === "stub"));
+});

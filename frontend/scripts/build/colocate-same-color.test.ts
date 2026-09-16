@@ -10,7 +10,7 @@ const M_PER_DEG_LNG = 111320 * Math.cos((LAT * Math.PI) / 180);
 
 type TestFeatureProperties = {
   visual_feature_type: string;
-  route_ids: string[];
+  route_ids?: string[];
   color: string;
   corridor_id: string;
   same_color_colocated?: boolean;
@@ -129,4 +129,63 @@ test("different colors and short overlaps are ignored", () => {
     colocateSameColorStretches([shortA, shortB], { minStretchM: 500 }).count,
     0,
   );
+});
+
+test("empty and malformed lanes are a no-op and the Queens Blvd pull is deterministic", () => {
+  const emptyFirst = colocateSameColorStretches([]);
+  const emptySecond = colocateSameColorStretches([]);
+  assert.deepEqual(emptyFirst, { count: 0, stretches: [] });
+  assert.deepEqual(emptyFirst, emptySecond);
+
+  const stub = lane([pt(0, 0)], ["F"], "#FF6319", "stub");
+  assert.equal(colocateSameColorStretches([stub]).count, 0);
+  assert.equal(stub.properties.corridor_id, "stub");
+
+  const gates = { minGapM: 10, maxGapM: 30, minStretchM: 500, blendM: 100 };
+  const firstExpress = lane(expressCoords(), ["F"], "#FF6319", "express");
+  const firstLocal = lane(line(0, 4000, 0), ["F", "M"], "#FF6319", "local");
+  const secondExpress = lane(expressCoords(), ["F"], "#FF6319", "express");
+  const secondLocal = lane(line(0, 4000, 0), ["F", "M"], "#FF6319", "local");
+  const first = colocateSameColorStretches([firstExpress, firstLocal], gates);
+  const second = colocateSameColorStretches([secondExpress, secondLocal], gates);
+  assert.deepEqual(first, second);
+  assert.deepEqual(firstExpress.geometry.coordinates, secondExpress.geometry.coordinates);
+  assert.equal(first.stretches[0]?.routes, "F");
+});
+
+test("a duplicate vertex on the overlay still co-locates the parallel stretch", () => {
+  const coords = expressCoords();
+  coords.splice(20, 0, coords[20]);
+  const express = lane(coords, ["F"], "#FF6319", "express-dup");
+  const local = lane(line(0, 4000, 0), ["F", "M"], "#FF6319", "local");
+  const result = colocateSameColorStretches([express, local], {
+    minGapM: 10,
+    maxGapM: 30,
+    minStretchM: 500,
+    blendM: 100,
+  });
+  assert.equal(result.count, 1);
+  assert.equal(express.properties.same_color_colocated, true);
+});
+
+test("missing color and empty route_ids do not co-locate", () => {
+  const express = lane(expressCoords(), [], "", "express-empty");
+  const local = lane(line(0, 4000, 0), ["F", "M"], "#FF6319", "local");
+  assert.equal(colocateSameColorStretches([express, local], { minStretchM: 500 }).count, 0);
+});
+
+test("a duplicate vertex on the carrier still co-locates an overlay that omits route_ids", () => {
+  const express = lane(expressCoords(), ["F"], "#FF6319", "express-omit");
+  delete express.properties.route_ids;
+  const localCoords = line(0, 4000, 0);
+  localCoords.splice(20, 0, localCoords[20]);
+  const local = lane(localCoords, ["F", "M"], "#FF6319", "local-dup");
+  const result = colocateSameColorStretches([express, local], {
+    minGapM: 10,
+    maxGapM: 30,
+    minStretchM: 500,
+    blendM: 100,
+  });
+  assert.equal(result.count, 1, "carrier duplicate vertices must not block the Queens Blvd pull");
+  assert.equal(express.properties.same_color_colocated, true);
 });

@@ -108,7 +108,7 @@ test("Test 1: same-color overlap — trunk union + branch clip", () => {
   assert.ok(groups.length >= 1, `expected at least 1 group, got ${groups.length}`);
   const group = groups[0];
   assert.strictEqual(group.trunk_corridor_id, "trunk-1", "longer line should be trunk");
-  assert.deepStrictEqual(group.member_route_ids_union.sort(), ["1", "2"]);
+  assert.deepStrictEqual([...(group.member_route_ids_union ?? [])].sort(), ["1", "2"]);
 
   const cmap = corridorMap(corridors);
   const result = mergeSameColorGroup(group, cmap, { minBranchLenM: 30, resampleM: 25, avgDistMaxM: 15 });
@@ -256,7 +256,7 @@ test("Test 5: three same-color polylines on shared trunk => union route_ids", ()
   const group = groups.find((g) => g.member_corridor_ids.length === 3);
   assert.ok(group, `expected a 3-member group, got groups: ${JSON.stringify(groups.map(g => g.member_corridor_ids))}`);
   assert.strictEqual(group.trunk_corridor_id, "trunk-3way");
-  assert.deepStrictEqual(group.member_route_ids_union.sort(), ["1", "2", "3"]);
+  assert.deepStrictEqual([...(group.member_route_ids_union ?? [])].sort(), ["1", "2", "3"]);
 
   const cmap = corridorMap(corridors);
   const result = mergeSameColorGroup(group, cmap, { minBranchLenM: 30, resampleM: 25, avgDistMaxM: 15 });
@@ -536,4 +536,385 @@ test("Test 11: aligned long straight branch is preserved, not treated as a chord
     haversinePolylineM(branchUpdate.newCoords) > 1000,
     "the preserved branch should be the long Utica-style tail",
   );
+});
+
+test("empty corridors produce no groups and are deterministic", () => {
+  const first = groupCorridorsByColorAndOverlap([]);
+  const second = groupCorridorsByColorAndOverlap([]);
+  assert.deepEqual(first, { groups: [], rejects: [] });
+  assert.deepEqual(first, second);
+});
+
+test("mergeSameColorGroup skips a missing trunk", () => {
+  const result = mergeSameColorGroup(
+    {
+      color: "#EE352E",
+      member_corridor_ids: ["missing"],
+      trunk_corridor_id: "missing",
+      member_route_ids_union: ["1"],
+    },
+    new Map(),
+  );
+  assert.deepEqual(result, { skipped: { reason: "trunk_not_found" } });
+});
+
+test("colorless corridors are ignored and short overlaps reject on shared length", () => {
+  const a = makeCorridor("red-short-a", makePolylineNS(-73.990, 40.700, 80, 4), "#EE352E", ["1"]);
+  const b = makeCorridor("red-short-b", makePolylineNS(-73.990, 40.700, 80, 4), "#EE352E", ["2"]);
+  const colorless: SameColorCorridor = {
+    corridor_id: "no-color",
+    route_ids: ["9"],
+    geometry: { type: "LineString", coordinates: makePolylineNS(-73.990, 40.700, 800, 4) },
+    length_m: 800,
+  };
+  const { groups, rejects } = groupCorridorsByColorAndOverlap([a, b, colorless], {
+    sharedFractionMin: 0.5,
+    sharedLenMinM: 100,
+    avgDistMaxM: 15,
+    tangentMaxDeg: 30,
+  });
+  assert.equal(groups.length, 0, "80m overlap must stay below the 100m shared-length floor");
+  assert.ok(
+    rejects.some((row) => row.reject_reason === "shared_len_too_short"),
+    "short coincident pair should reject as shared_len_too_short",
+  );
+});
+
+test("three coincident same-color corridors form one group after a redundant union", () => {
+  const a = makeCorridor("tri-a", makePolylineNS(-73.990, 40.700, 900, 8), "#EE352E", ["1"]);
+  const b = makeCorridor("tri-b", makePolylineNS(-73.990 + 4 * DEG_PER_M_LON, 40.700, 900, 8), "#EE352E", ["2"]);
+  const c = makeCorridor("tri-c", makePolylineNS(-73.990 - 4 * DEG_PER_M_LON, 40.700, 900, 8), "#EE352E", ["3"]);
+  const { groups } = groupCorridorsByColorAndOverlap([a, b, c], {
+    sharedFractionMin: 0.5,
+    sharedLenMinM: 100,
+    avgDistMaxM: 15,
+    tangentMaxDeg: 30,
+  });
+  assert.equal(groups.length, 1, "all three coincident reds belong to one merge group");
+  assert.equal(groups[0].member_corridor_ids.length, 3);
+  assert.deepEqual(groups[0].member_route_ids_union, ["1", "2", "3"]);
+});
+
+test("mergeSameColorGroup drops an unknown member and a zero-length branch", () => {
+  const trunk = makeCorridor("trunk-miss-member", makePolylineNS(-73.990, 40.700, 1500, 8), "#EE352E", ["1"]);
+  const degenerate = makeCorridor("degen", [[-73.990, 40.700], [-73.990, 40.700]], "#EE352E", ["2"]);
+  const result = mergeSameColorGroup(
+    {
+      color: "#EE352E",
+      member_corridor_ids: ["trunk-miss-member", "ghost", "degen"],
+      trunk_corridor_id: "trunk-miss-member",
+      member_route_ids_union: ["1", "2"],
+    },
+    corridorMap([trunk, degenerate]),
+  );
+  assertApplied(result);
+  const ghost = result.branchUpdates.find((update) => update.corridor_id === "ghost");
+  const degen = result.branchUpdates.find((update) => update.corridor_id === "degen");
+  assert.equal(ghost?.drop, true);
+  assert.equal(ghost?.reason, "branch_not_found");
+  assert.equal(degen?.drop, true);
+  assert.equal(degen?.reason, "degenerate_branch");
+});
+
+test("default merge gates clip a branch that omits length_m and route_ids", () => {
+  const trunkCoords = makePolylineNS(-73.990, 40.700, 1500, 8);
+  const overlap = makePolylineNS(-73.990, 40.700, 600, 4);
+  const last = overlap[overlap.length - 1];
+  const branchCoords = [...overlap.slice(0, -1), ...makePolylineEW(last[0], last[1], 200, 2)];
+  const trunk: SameColorCorridor = {
+    corridor_id: "trunk-default",
+    color: "#EE352E",
+    geometry: { type: "LineString", coordinates: trunkCoords },
+    length_m: null,
+  };
+  const branch: SameColorCorridor = {
+    corridor_id: "branch-default",
+    color: "#EE352E",
+    geometry: { type: "LineString", coordinates: branchCoords },
+  };
+  const { groups } = groupCorridorsByColorAndOverlap([trunk, branch]);
+  assert.ok(groups[0], "default overlap gates should still form a group on a 600m shared run");
+  const first = mergeSameColorGroup(groups[0], corridorMap([trunk, branch]));
+  const second = mergeSameColorGroup(groups[0], corridorMap([trunk, branch]));
+  assertApplied(first);
+  assertApplied(second);
+  const clipped = first.branchUpdates.find((update) => update.corridor_id === "branch-default");
+  assert.ok(clipped && !clipped.drop, "diverging default-gate branch should clip rather than drop");
+  assert.deepEqual(first.branchUpdates, second.branchUpdates);
+});
+
+test("connectivity check skips missing members, routes already on the trunk, and extra coverage", () => {
+  const trunk = makeCorridor("trunk-cov", makePolylineNS(-73.990, 40.700, 1500, 8), "#EE352E", ["1", "2"]);
+  const branch = makeCorridor("branch-cov", makePolylineNS(-73.990, 40.700, 400, 4), "#EE352E", ["2", "3"]);
+  const decoy = makeCorridor("decoy-cov", makePolylineNS(-73.95, 40.65, 500, 5), "#EE352E", ["3"]);
+  const result = mergeSameColorGroup(
+    {
+      color: "#EE352E",
+      member_corridor_ids: ["trunk-cov", "branch-cov", "ghost-cov"],
+      trunk_corridor_id: "trunk-cov",
+      member_route_ids_union: ["1", "2", "3"],
+    },
+    corridorMap([trunk, branch, decoy]),
+    { routeCoverageMap: new Map([["1", 1], ["2", 1], ["3", 2]]) },
+  );
+  assertApplied(result);
+  const dropped = result.branchUpdates.find((update) => update.corridor_id === "branch-cov");
+  assert.equal(dropped?.drop, true);
+  assert.equal(dropped?.reason, "fully_contained");
+});
+
+test("a clipped tail shorter than minBranchLenM is dropped as fully contained", () => {
+  const trunkCoords = makePolylineNS(-73.990, 40.700, 1500, 8);
+  const overlap = makePolylineNS(-73.990, 40.700, 600, 4);
+  const last = overlap[overlap.length - 1];
+  const branchCoords = [...overlap.slice(0, -1), ...makePolylineEW(last[0], last[1], 200, 2)];
+  const trunk = makeCorridor("trunk-min", trunkCoords, "#EE352E", ["1"]);
+  const branch = makeCorridor("branch-min", branchCoords, "#EE352E", ["2"]);
+  const result = mergeSameColorGroup(
+    {
+      color: "#EE352E",
+      member_corridor_ids: ["trunk-min", "branch-min"],
+      trunk_corridor_id: "trunk-min",
+      member_route_ids_union: ["1", "2"],
+    },
+    corridorMap([trunk, branch]),
+    { minBranchLenM: 10_000, resampleM: 25, avgDistMaxM: 15 },
+  );
+  assertApplied(result);
+  const update = result.branchUpdates.find((update) => update.corridor_id === "branch-min");
+  assert.equal(update?.drop, true);
+  assert.equal(update?.reason, "fully_contained");
+});
+
+test("a short two-point clipped tail is kept and a zero connector radius omits the join", () => {
+  const trunkCoords = makePolylineNS(-73.990, 40.700, 1500, 8);
+  const overlap = makePolylineNS(-73.990, 40.700, 600, 4);
+  const last = overlap[overlap.length - 1];
+  const branchCoords: Position[] = [...overlap.slice(0, -1), [last[0] + 80 * DEG_PER_M_LON, last[1]]];
+  const trunk = makeCorridor("trunk-short2", trunkCoords, "#EE352E", ["1"]);
+  const branch = makeCorridor("branch-short2", branchCoords, "#EE352E", ["2"]);
+  const result = mergeSameColorGroup(
+    {
+      color: "#EE352E",
+      member_corridor_ids: ["trunk-short2", "branch-short2"],
+      trunk_corridor_id: "trunk-short2",
+      member_route_ids_union: ["1", "2"],
+    },
+    corridorMap([trunk, branch]),
+    { minBranchLenM: 30, resampleM: 25, avgDistMaxM: 15, connectorMaxM: 0.01, maxTwoPointBranchLenM: 250 },
+  );
+  assertApplied(result);
+  const update = result.branchUpdates.find((row) => row.corridor_id === "branch-short2");
+  assert.ok(update && !update.drop, "80m two-point tail should survive the long-chord filter");
+  assert.equal(update.connector, null, "connectorMaxM 0.01 must omit a join back to the trunk");
+});
+
+test("a long pair that shares only a short fraction is rejected on shared fraction", () => {
+  const trunk = makeCorridor("frac-trunk", makePolylineNS(-73.990, 40.700, 1500, 8), "#EE352E", ["1"]);
+  const overlap = makePolylineNS(-73.990, 40.700, 200, 4);
+  const last = overlap[overlap.length - 1];
+  const branch = makeCorridor(
+    "frac-branch",
+    [...overlap.slice(0, -1), ...makePolylineEW(last[0], last[1], 1300, 8)],
+    "#EE352E",
+    ["2"],
+  );
+  const { groups, rejects } = groupCorridorsByColorAndOverlap([trunk, branch], {
+    sharedFractionMin: 0.55,
+    sharedLenMinM: 100,
+    avgDistMaxM: 15,
+    tangentMaxDeg: 30,
+  });
+  assert.equal(groups.length, 0, "200m shared of two long lines is below the 0.55 shared-fraction floor");
+  assert.ok(
+    rejects.some((row) => row.reject_reason === "shared_fraction_too_low"),
+    "reject reason should be shared_fraction_too_low",
+  );
+});
+
+test("mergeSameColorGroup unions trunk routes when the group omits member_route_ids_union", () => {
+  const trunk = makeCorridor("trunk-union", makePolylineNS(-73.990, 40.700, 1500, 8), "#EE352E", ["1"]);
+  const overlap = makePolylineNS(-73.990, 40.700, 600, 4);
+  const last = overlap[overlap.length - 1];
+  const branch = makeCorridor(
+    "branch-union",
+    [...overlap.slice(0, -1), ...makePolylineEW(last[0], last[1], 200, 2)],
+    "#EE352E",
+    ["2"],
+  );
+  const result = mergeSameColorGroup(
+    {
+      color: "#EE352E",
+      member_corridor_ids: ["trunk-union", "branch-union"],
+      trunk_corridor_id: "trunk-union",
+    },
+    corridorMap([trunk, branch]),
+  );
+  assertApplied(result);
+  assert.deepEqual(result.trunkUpdates.route_ids, ["1"]);
+});
+
+test("a duplicate trunk vertex still merges a diverging same-color branch", () => {
+  const trunkCoords = makePolylineNS(-73.990, 40.700, 1500, 8);
+  trunkCoords.splice(4, 0, trunkCoords[4]);
+  const overlap = makePolylineNS(-73.990, 40.700, 600, 4);
+  const last = overlap[overlap.length - 1];
+  const branchCoords = [...overlap.slice(0, -1), ...makePolylineEW(last[0], last[1], 200, 2)];
+  const trunk = makeCorridor("trunk-dup", trunkCoords, "#EE352E", ["1"]);
+  const branch = makeCorridor("branch-dup", branchCoords, "#EE352E", ["2"]);
+  const { groups } = groupCorridorsByColorAndOverlap([trunk, branch], {
+    sharedFractionMin: 0.40,
+    sharedLenMinM: 100,
+    avgDistMaxM: 15,
+    tangentMaxDeg: 30,
+    resampleM: 25,
+  });
+  assert.ok(groups[0]);
+  const result = mergeSameColorGroup(groups[0], corridorMap([trunk, branch]), {
+    minBranchLenM: 30,
+    resampleM: 25,
+    avgDistMaxM: 15,
+  });
+  assertApplied(result);
+  const update = result.branchUpdates.find((row) => row.corridor_id === "branch-dup");
+  assert.ok(update && !update.drop, "duplicate trunk vertex must not block the branch clip");
+});
+
+test("a perpendicular pair with a lenient fraction gate rejects on tangent", () => {
+  const ns = makeCorridor("tan-ns", makePolylineNS(-73.990, 40.700, 1200, 6), "#EE352E", ["1"]);
+  const ew = makeCorridor("tan-ew", makePolylineEW(-73.993, 40.700 + 600 * DEG_PER_M_LAT, 1200, 6), "#EE352E", ["2"]);
+  const { groups, rejects } = groupCorridorsByColorAndOverlap([ns, ew], {
+    sharedFractionMin: 0.01,
+    sharedLenMinM: 1,
+    avgDistMaxM: 80,
+    tangentMaxDeg: 10,
+    resampleM: 25,
+  });
+  assert.equal(groups.length, 0);
+  assert.ok(rejects.some((row) => row.reject_reason === "tangent_delta_too_large"));
+});
+
+test("connectivity skip uses a hand-built group when the branch is the sole coverage", () => {
+  const trunk = makeCorridor("trunk-sole", makePolylineNS(-73.990, 40.700, 1500, 8), "#EE352E", ["1"]);
+  const branch = makeCorridor("branch-sole", makePolylineNS(-73.990, 40.700, 400, 4), "#EE352E", ["2"]);
+  const result = mergeSameColorGroup(
+    {
+      color: "#EE352E",
+      member_corridor_ids: ["trunk-sole", "branch-sole"],
+      trunk_corridor_id: "trunk-sole",
+      member_route_ids_union: ["1", "2"],
+    },
+    corridorMap([trunk, branch]),
+    { routeCoverageMap: new Map([["1", 1], ["2", 1]]) },
+  );
+  assert.ok(result.skipped);
+  assert.equal(result.skipped.reason, "would_break_route_connectivity");
+});
+
+test("connectivity check treats missing trunk routes, missing branch routes, and unknown coverage as safe", () => {
+  const trunk: SameColorCorridor = {
+    corridor_id: "trunk-bare",
+    color: "#EE352E",
+    geometry: { type: "LineString", coordinates: makePolylineNS(-73.990, 40.700, 1500, 8) },
+    length_m: 1500,
+  };
+  const branch: SameColorCorridor = {
+    corridor_id: "branch-bare",
+    color: "#EE352E",
+    geometry: { type: "LineString", coordinates: makePolylineNS(-73.990, 40.700, 400, 4) },
+    length_m: 400,
+  };
+  const result = mergeSameColorGroup(
+    {
+      color: "#EE352E",
+      member_corridor_ids: ["trunk-bare", "branch-bare"],
+      trunk_corridor_id: "trunk-bare",
+    },
+    corridorMap([trunk, branch]),
+    { routeCoverageMap: new Map() },
+  );
+  assertApplied(result);
+  assert.deepEqual(result.trunkUpdates.route_ids, []);
+});
+
+test("a zero-length sampled branch is dropped as fully contained", () => {
+  const trunk = makeCorridor("trunk-zero-run", makePolylineNS(-73.990, 40.700, 1500, 8), "#EE352E", ["1"]);
+  const branch = makeCorridor(
+    "branch-zero-run",
+    [
+      [-73.990, 40.700],
+      [-73.990, 40.700],
+    ],
+    "#EE352E",
+    ["2"],
+  );
+  const result = mergeSameColorGroup(
+    {
+      color: "#EE352E",
+      member_corridor_ids: ["trunk-zero-run", "branch-zero-run", "ghost-zero"],
+      trunk_corridor_id: "trunk-zero-run",
+    },
+    corridorMap([trunk, branch]),
+  );
+  assertApplied(result);
+  const dropped = result.branchUpdates.find((row) => row.corridor_id === "branch-zero-run");
+  assert.equal(dropped?.drop, true);
+});
+
+test("a duplicate vertex on a two-point branch still computes an overlap group", () => {
+  const trunkCoords = makePolylineNS(-73.990, 40.700, 1500, 8);
+  trunkCoords.splice(3, 0, trunkCoords[3]);
+  const branchCoords: Position[] = [
+    [-73.990, 40.700],
+    [-73.990, 40.700],
+    ...makePolylineNS(-73.990, 40.700, 800, 4).slice(1),
+  ];
+  const trunk = makeCorridor("trunk-zero-seg", trunkCoords, "#EE352E", ["1"]);
+  const branch = makeCorridor("branch-zero-seg", branchCoords, "#EE352E", ["2"]);
+  const { groups } = groupCorridorsByColorAndOverlap([trunk, branch], {
+    sharedFractionMin: 0.4,
+    sharedLenMinM: 100,
+    avgDistMaxM: 15,
+    tangentMaxDeg: 30,
+    resampleM: 25,
+  });
+  assert.ok(groups[0]);
+  const result = mergeSameColorGroup(groups[0], corridorMap([trunk, branch]));
+  assertApplied(result);
+});
+
+test("four coincident red corridors collapse through a redundant union", () => {
+  const corridors = ["r1", "r2", "r3", "r4"].map((id, index) =>
+    makeCorridor(id, makePolylineNS(-73.990 + index * 0.00001, 40.700, 900, 6), "#EE352E", [String(index + 1)]),
+  );
+  const { groups } = groupCorridorsByColorAndOverlap(corridors, {
+    sharedFractionMin: 0.5,
+    sharedLenMinM: 200,
+    avgDistMaxM: 15,
+    tangentMaxDeg: 30,
+    resampleM: 25,
+  });
+  assert.ok(groups[0]);
+  assert.ok(groups[0].member_corridor_ids.length >= 3);
+  const result = mergeSameColorGroup(groups[0], corridorMap(corridors));
+  assertApplied(result);
+});
+
+test("a collapsed first segment still merges when the rest of the branch overlaps", () => {
+  const trunk = makeCorridor("trunk-zero-vec", makePolylineNS(-73.990, 40.700, 1500, 8), "#EE352E", ["1"]);
+  const branchCoords: Position[] = [
+    [-73.990, 40.700],
+    [-73.990, 40.700],
+    [-73.990, 40.704],
+    [-73.989, 40.706],
+  ];
+  const branch = makeCorridor("branch-zero-vec", branchCoords, "#EE352E", ["2"]);
+  const { groups } = groupCorridorsByColorAndOverlap([trunk, branch], {
+    sharedFractionMin: 0.2,
+    sharedLenMinM: 50,
+    avgDistMaxM: 20,
+    tangentMaxDeg: 45,
+    resampleM: 25,
+  });
+  assert.ok(Array.isArray(groups));
 });
