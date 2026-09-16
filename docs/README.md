@@ -7,6 +7,7 @@ when they help the reader complete it.
 |---|---|---|
 | Start the project | [`README.md`](../README.md) | Tutorial |
 | Look up backend owners, entry points, and paths | [`backend/ARCHITECTURE.md`](../backend/ARCHITECTURE.md) | Reference |
+| Find the backend module that owns a behavior | [`reference/backend-package-map.md`](reference/backend-package-map.md) | Reference |
 | Look up frontend lib module owners and paths | [`frontend/lib/README.md`](../frontend/lib/README.md) | Reference |
 | Look up left-rail module owners and paths | [`frontend/components/smart-route/left-rail/README.md`](../frontend/components/smart-route/left-rail/README.md) | Reference |
 | Understand how a chat turn stays grounded | [`SMARTROUTE_AGENT_PIPELINE.md`](../SMARTROUTE_AGENT_PIPELINE.md) | Explanation |
