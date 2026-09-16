@@ -644,7 +644,7 @@ async def _build_live_snapshot(
         stop_locations,
     )
     for arrival in arrivals:
-        vehicle_enrichment._attach_terminal_stop(
+        vehicle_enrichment.attach_terminal_stop(
             arrival,
             trip_stop_context.get(arrival.get("trip_id") or ""),
         )

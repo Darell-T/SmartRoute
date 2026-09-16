@@ -191,7 +191,7 @@ class ActiveTemporaryRoutePresenterAsyncTests(unittest.IsolatedAsyncioTestCase):
         )
         ctx.turn_evidence = evidence
         with patch(
-            "app.services.trips.enrichment._enrich_route",
+            "app.services.trips.enrichment.enrich_route",
             new=AsyncMock(return_value=None),
         ):
             presented = await present_route.execute(

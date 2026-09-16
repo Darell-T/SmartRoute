@@ -81,7 +81,7 @@ async def _discover(
     )
     with patch.object(
         discover_places.search_local_places,
-        "_provider_search",
+        "provider_search",
         new=provider,
     ):
         return await discover_places.execute(

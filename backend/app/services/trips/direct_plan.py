@@ -430,13 +430,13 @@ def project_route_candidates(
     event_impacts: list[dict],
 ) -> tuple[list[dict], str, dict]:
     """Build REST candidates, canonical itineraries, and selection facts."""
-    route_candidates = candidates._build_route_candidates(
+    route_candidates = candidates.build_route_candidates(
         parsed_routes,
         chosen_index,
         {},
         scored,
     )
-    score_by_index = scoring._score_by_index(scored)
+    score_by_index = scoring.score_by_index(scored)
     chosen_score = score_by_index.get(chosen_index, {})
     origin_point = {
         "label": origin_place.name,
@@ -541,7 +541,7 @@ async def _plan_direct_trip_once(
 
     enrichment_started = time.monotonic()
     chosen_route = prepared.parsed_routes[chosen_index]
-    await enrichment._enrich_route(gtfs, chosen_route)
+    await enrichment.enrich_route(gtfs, chosen_route)
     timings["enrichment_ms"] = (time.monotonic() - enrichment_started) * 1000
 
     route_candidates, recommendation, selection_decision = project_route_candidates(

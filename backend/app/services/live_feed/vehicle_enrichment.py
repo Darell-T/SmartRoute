@@ -27,7 +27,7 @@ def _arrival_lookup_key(trip_id: str | None, stop_id: str | None):
     return (trip_id, stop_id)
 
 
-def _attach_terminal_stop(record: dict, trip_stops: list[dict] | None):
+def attach_terminal_stop(record: dict, trip_stops: list[dict] | None):
     if not trip_stops:
         return
     terminal = trip_stops[-1]
@@ -168,7 +168,7 @@ def place_vehicle_markers(
     tallies = {"polyline_estimate": 0, "stop_id": 0, "missing": 0}
     for vehicle in vehicles:
         trip_stops = trip_stop_context.get(vehicle.get("trip_id") or "")
-        _attach_terminal_stop(vehicle, trip_stops)
+        attach_terminal_stop(vehicle, trip_stops)
         placed = _attach_map_position(
             vehicle, trip_stops, stop_locations, arrival_lookup, now
         )

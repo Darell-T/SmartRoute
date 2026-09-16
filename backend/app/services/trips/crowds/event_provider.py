@@ -399,7 +399,7 @@ def _calculate_estimated_end(
     return (start_dt + duration).strftime("%Y-%m-%dT%H:%M:%SZ"), basis
 
 
-def _parse_event(event: dict) -> dict:
+def parse_event(event: dict) -> dict:
     name = text.safe_text(event.get("name"), 120)
     first_venue = _select_event_venue(event)
     venue_name_raw = first_venue.get("name") if first_venue else None
@@ -539,7 +539,7 @@ def _select_page_events(
     if remaining <= 0:
         return selected, accepted
     for raw_event in raw_events:
-        parsed = _parse_event(raw_event)
+        parsed = parse_event(raw_event)
         if not _event_in_search(parsed, accepted, latitude, longitude, radius_miles):
             continue
         accepted.add(_event_identity(parsed))

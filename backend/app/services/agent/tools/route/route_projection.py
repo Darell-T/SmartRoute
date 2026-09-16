@@ -50,7 +50,7 @@ def passenger_explanation(recommendation: str, incident_scan_metadata: dict) -> 
     """Keep incomplete incident evidence truthful without duplicate rider copy."""
     explanation = text.safe_text(
         text.sanitize_recommendation(
-            candidates._strip_model_control_blocks(recommendation)
+            candidates.strip_model_control_blocks(recommendation)
         ),
         600,
     )
@@ -147,13 +147,13 @@ def _canonical_card_core(
 ) -> dict[str, Any]:
     index = presentation.chosen_index
     route = presentation.parsed_routes[index]
-    display = candidates._build_route_candidates(
+    display = candidates.build_route_candidates(
         presentation.parsed_routes,
         index,
         {index: {"recommendation_reason": "", "rejection_reason": ""}},
         scored,
     )
-    scores = scoring._score_by_index(scored)
+    scores = scoring.score_by_index(scored)
     card_id = f"rc_{secrets.token_hex(4)}"
     event_impacts = list(evidence.get("event_impacts") or [])
     event_status = str(evidence.get("event_evidence_status") or "unscanned")
@@ -490,7 +490,7 @@ def _selected_digest_destination_name(entry: object) -> str | None:
 
 def first_boarding_context(gtfs, step: dict, walking_minutes: int) -> dict:
     """Resolve canonical stop/direction ids for one transit boarding."""
-    route_id = scoring._step_route_id(step).strip().upper()
+    route_id = scoring.step_route_id(step).strip().upper()
     headsign = step.get("headsign") or step.get("direction")
     context = {
         "route_id": route_id,

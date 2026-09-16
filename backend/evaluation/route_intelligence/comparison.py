@@ -364,7 +364,7 @@ def _summarize_selection(
     selected_reason = analysis.get(selected_index, {}).get("recommendation_reason") or ""
     # This is explicitly non-decision diagnostic data. The selection always
     # comes from the production parser over the recorded advisor transcript.
-    core_diagnostics = scoring._score_routes(routes, payload.get("service_alerts") or [])
+    core_diagnostics = scoring.score_routes(routes, payload.get("service_alerts") or [])
     return {
         "mode": mode,
         "selected_route_id": _candidate_id(selected_index),

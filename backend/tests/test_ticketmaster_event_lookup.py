@@ -198,12 +198,12 @@ class TicketmasterEventLookupTests(unittest.IsolatedAsyncioTestCase):
             ("date-only", {"localDate": "2026-07-16"}),
         ]
         for event_id, start in cases:
-            parsed = event_provider._parse_event(_event(event_id, start=start))
+            parsed = event_provider.parse_event(_event(event_id, start=start))
             assert parsed["start_iso"] is None, event_id
             assert parsed["estimated_end_iso"] is None, event_id
 
     def test_local_event_time_is_converted_using_the_reported_timezone(self):
-        parsed = event_provider._parse_event(
+        parsed = event_provider.parse_event(
             _event("local-time", start={"localDate": "2026-07-16", "localTime": "20:00:00"})
         )
         assert parsed["start_iso"] == "2026-07-17T00:00:00Z"

@@ -147,7 +147,7 @@ class QueueContextTests(unittest.IsolatedAsyncioTestCase):
         )
         with patch.object(
             discover_places.search_local_places,
-            "_provider_search",
+            "provider_search",
             new=provider,
         ):
             result = await discover_places.execute(_request(), _ctx())
@@ -178,7 +178,7 @@ class QueueContextTests(unittest.IsolatedAsyncioTestCase):
             }
             with patch.object(
                 discover_places.search_local_places,
-                "_provider_search",
+                "provider_search",
                 new=provider,
             ):
                 result = await discover_places.execute(request, _ctx())
@@ -255,7 +255,7 @@ class DiscoveryContinuationTests(unittest.IsolatedAsyncioTestCase):
         )
         with patch.object(
             discover_places.search_local_places,
-            "_provider_search",
+            "provider_search",
             new=provider,
         ):
             first = await discover_places.execute(_request(), ctx)
@@ -305,7 +305,7 @@ class DiscoveryContinuationTests(unittest.IsolatedAsyncioTestCase):
                 )
                 with patch.object(
                     discover_places.search_local_places,
-                    "_provider_search",
+                    "provider_search",
                     new=provider,
                 ):
                     await discover_places.execute(_request(), ctx)
@@ -346,7 +346,7 @@ class DiscoveryContinuationTests(unittest.IsolatedAsyncioTestCase):
         )
         with patch.object(
             discover_places.search_local_places,
-            "_provider_search",
+            "provider_search",
             new=provider,
         ):
             first = await discover_places.execute(_request(scope=scope), ctx)
@@ -378,7 +378,7 @@ class DiscoveryContinuationTests(unittest.IsolatedAsyncioTestCase):
         )
         with patch.object(
             discover_places.search_local_places,
-            "_provider_search",
+            "provider_search",
             new=provider,
         ):
             first = await discover_places.execute(_request(), ctx)
@@ -413,7 +413,7 @@ class DiscoveryContinuationTests(unittest.IsolatedAsyncioTestCase):
         )
         with patch.object(
             discover_places.search_local_places,
-            "_provider_search",
+            "provider_search",
             new=provider,
         ):
             result = await discover_places.execute(_request(scope=scope), ctx)

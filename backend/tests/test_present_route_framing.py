@@ -42,7 +42,7 @@ class PresentRouteFramingTests(PresentRouteFramingTestMixin, unittest.IsolatedAs
     async def test_framing_wraps_card_without_replacing_canonical_facts(self):
         ctx, candidate_id, set_id = await self._prepared_context()
         with patch(
-            "app.services.trips.enrichment._enrich_route",
+            "app.services.trips.enrichment.enrich_route",
             new=AsyncMock(return_value=None),
         ):
             result = await present_route.execute(
@@ -148,7 +148,7 @@ class PresentRouteFramingTests(PresentRouteFramingTestMixin, unittest.IsolatedAs
                 set_id, session_id=ctx.session_id
             )
             with patch(
-                "app.services.trips.enrichment._enrich_route",
+                "app.services.trips.enrichment.enrich_route",
                 new=AsyncMock(return_value=None),
             ):
                 if correction:
@@ -228,7 +228,7 @@ class PresentRouteFramingTests(PresentRouteFramingTestMixin, unittest.IsolatedAs
         prepared.incidents = [{"description": "Track obstruction near Church Av"}]
         ctx, candidate_id, _set_id = await self._prepared_context(prepared)
         with patch(
-            "app.services.trips.enrichment._enrich_route",
+            "app.services.trips.enrichment.enrich_route",
             new=AsyncMock(return_value=None),
         ):
             result = await present_route.execute(

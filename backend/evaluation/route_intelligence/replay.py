@@ -594,7 +594,7 @@ class ReplayFixtureAdapters:
         )
         if raw_events is None:
             _invalid("invalid Ticketmaster provider fixture")
-        return [event_provider._parse_event(event) for event in raw_events]
+        return [event_provider.parse_event(event) for event in raw_events]
 
     async def load(self) -> ReplayInputs:
         """Normalize one recorded scenario while enforcing offline execution."""

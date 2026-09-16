@@ -1,0 +1,3 @@
+backend/app/services/agent/loop.py	473
+computed_from=git show 5193b08:backend/app/services/agent/loop.py
+method=all lines including blanks

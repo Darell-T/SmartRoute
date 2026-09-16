@@ -1,0 +1,7 @@
+backend/app/services/agent	23764
+backend/app/services/trips	9788
+backend/app/services/incidents	2379
+backend/app/services/live_feed	954
+backend/app/services/mta	3213
+backend/app/routers	1680
+command=Get-ChildItem -Recurse -File backend/app/<pkg> -Include *.py | Where-Object { $_.FullName -notmatch '__pycache__' } | ForEach-Object { (Get-Content $_.FullName | Measure-Object -Line).Lines } | Measure-Object -Sum

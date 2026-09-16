@@ -182,7 +182,7 @@ def _score_chain(
     local_scores = [_local_score(leg, route_index) for leg, route_index in chain.legs]
     total_minutes = round(int(canonical["total_duration_seconds"]) / 60)
     evidence = merge_candidate_evidence(built.evidence_groups)
-    alert_hits = scoring._route_alert_hits(built.flat, evidence.get("alerts"))
+    alert_hits = scoring.route_alert_hits(built.flat, evidence.get("alerts"))
     event_penalty = event_crowd.route_event_penalty(
         aggregate_index,
         _distinct_event_impacts(evidence.get("event_impacts")),
@@ -192,14 +192,14 @@ def _score_chain(
     transfers = int(canonical.get("transfer_count") or 0)
     score = {
         "index": aggregate_index,
-        "score": scoring._component_score_total(
+        "score": scoring.component_score_total(
             total_minutes=total_minutes,
             transfers=transfers,
             alert_count=len(alert_hits),
             event_crowd_penalty=event_penalty,
             walking_penalty=walking_penalty,
             preferred_mode_penalty=preferred_mode_penalty,
-            alert_penalty=scoring._route_alert_penalty(
+            alert_penalty=scoring.route_alert_penalty(
                 built.flat, evidence.get("alerts")
             ),
         ),

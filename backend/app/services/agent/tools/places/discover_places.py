@@ -292,13 +292,13 @@ def _all_failed(error: str, results: list[ToolResult]) -> ToolResult:
     return ToolResult(
         ok=False,
         error=error,
-        timings=search_local_places._merged_timings(results),
+        timings=search_local_places.merged_timings(results),
     )
 
 
 async def _search(request: DiscoveryRequest, ctx: ToolContext) -> ToolResult:
     scope = request.scope
-    targets = search_local_places._search_targets(scope)
+    targets = search_local_places.search_targets(scope)
     prior_tokens = (
         _matching_continuation_tokens(request, ctx)
         if request.exclude_presented
@@ -318,7 +318,7 @@ async def _search(request: DiscoveryRequest, ctx: ToolContext) -> ToolResult:
         token = prior_tokens.get(f"target_{index}")
         if token:
             provider_request["page_token"] = token
-        requests.append(search_local_places._provider_search(provider_request, ctx))
+        requests.append(search_local_places.provider_search(provider_request, ctx))
     results = await _provider_results(requests)
     if not any(result.ok for result in results):
         return _all_failed(
@@ -326,7 +326,7 @@ async def _search(request: DiscoveryRequest, ctx: ToolContext) -> ToolResult:
             results,
         )
     source, unmatched = _interleaved_sources(targets, results, scope)
-    coverage = search_local_places._coverage(
+    coverage = search_local_places.coverage(
         targets,
         results,
         unmatched if scope["kind"] in {"boroughs", "nyc"} else (),
@@ -335,7 +335,7 @@ async def _search(request: DiscoveryRequest, ctx: ToolContext) -> ToolResult:
         request,
         ctx,
         source_places=source,
-        timings=search_local_places._merged_timings(results),
+        timings=search_local_places.merged_timings(results),
         unverified_names=[],
         coverage=coverage,
         continuation_tokens=_response_continuation_tokens(results),
@@ -344,14 +344,14 @@ async def _search(request: DiscoveryRequest, ctx: ToolContext) -> ToolResult:
 
 async def _verify(request: DiscoveryRequest, ctx: ToolContext) -> ToolResult:
     scope = request.scope
-    targets = search_local_places._search_targets(scope)
+    targets = search_local_places.search_targets(scope)
     pairs = []
     pending = []
     coverage_targets = []
     for name, target in product(request.names, targets):
         pairs.append((name, target))
         pending.append(
-            search_local_places._provider_search(
+            search_local_places.provider_search(
                 {
                     "query": name,
                     "near": target["near"],
@@ -384,9 +384,9 @@ async def _verify(request: DiscoveryRequest, ctx: ToolContext) -> ToolResult:
         request,
         ctx,
         source_places=source,
-        timings=search_local_places._merged_timings(results),
+        timings=search_local_places.merged_timings(results),
         unverified_names=unverified,
-        coverage=search_local_places._coverage(coverage_targets, results),
+        coverage=search_local_places.coverage(coverage_targets, results),
         continuation_tokens={},
     )
 
@@ -399,8 +399,8 @@ def _first_verified_place(
 ) -> tuple[dict, str] | None:
     matches = [
         place
-        for place in search_local_places._provider_places(result)
-        if search_local_places._target_accepts_place(place, target, scope)
+        for place in search_local_places.provider_places(result)
+        if search_local_places.target_accepts_place(place, target, scope)
         and _name_matches(name, place)
     ]
     if not matches:
@@ -422,8 +422,8 @@ def _interleaved_sources(
         label = str(target["label"])
         accepted = [
             (place, label)
-            for place in search_local_places._provider_places(result)
-            if search_local_places._target_accepts_place(place, target, scope)
+            for place in search_local_places.provider_places(result)
+            if search_local_places.target_accepts_place(place, target, scope)
         ]
         buckets.append(accepted)
         if not accepted:
@@ -445,7 +445,7 @@ def _normalized_discovery_places(
     seen: set[tuple[str, str]] = set()
     origin = _coordinates(ctx.origin)
     for place, search_area in source_places:
-        ranked = search_local_places._normalize_discovery_place(
+        ranked = search_local_places.normalize_discovery_place(
             place, request.query, search_area
         )
         if not _ranked_place_eligible(
@@ -455,7 +455,7 @@ def _normalized_discovery_places(
             presented=presented,
         ):
             continue
-        identity = discovery_store._place_identity(ranked)
+        identity = discovery_store.place_identity(ranked)
         if identity in seen:
             continue
         seen.add(identity)
@@ -545,7 +545,7 @@ async def _persist(
         set_id, session_id=request.session_id
     ) or {}
     stored_places = record.get("places") or []
-    model_places = list(map(search_local_places._model_place, stored_places))
+    model_places = list(map(search_local_places.model_place, stored_places))
     model_places, queue_max_wait = await _queue_digest(
         model_places,
         stored_places,
@@ -794,8 +794,8 @@ async def _provider_results(
 
 
 def _name_matches(requested: str, place: dict) -> bool:
-    wanted = discovery_store._normalized_name(requested)
-    actual = discovery_store._normalized_name(place.get("name"))
+    wanted = discovery_store.normalized_name(requested)
+    actual = discovery_store.normalized_name(place.get("name"))
     if not wanted or not actual:
         return False
     return (

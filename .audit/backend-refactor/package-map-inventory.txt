@@ -1,0 +1,1240 @@
+================================================================================
+backend/app/__init__.py
+DOTTED app.
+INIT True
+DOC NONE
+PUB 
+IMPORTS none-from-form
+PUBCOUNT 0
+================================================================================
+backend/app/main.py
+DOTTED app.main
+INIT False
+DOC NONE
+PUB REALTIME_REFRESH_INTERVAL_S, REALTIME_ACTIVE_WINDOW_S, QUEUE_HISTORY_CHECK_INTERVAL_S, REDIS_FUNCTIONAL_PROBE_SUCCESS_TTL_S, REDIS_FUNCTIONAL_PROBE_FAILURE_TTL_S, lifespan, MAX_PUBLIC_BODY_BYTES, reject_oversize_public_json, health, readiness
+IMPORTS none-from-form
+PUBCOUNT 10
+================================================================================
+backend/app/observability.py
+DOTTED app.observability
+INIT False
+DOC Fail-open, privacy-minimized telemetry.dev integration.
+PUB initialize, shutdown, wrap_anthropic, start_turn, finish_turn, start_tool, finish_tool, activate
+IMPORTS none-from-form
+PUBCOUNT 8
+================================================================================
+backend/app/routers/__init__.py
+DOTTED app.routers
+INIT True
+DOC NONE
+PUB 
+IMPORTS agent_chat(1), incident_refresh(1), live_feed(1), subway(1), trips(1)
+PUBCOUNT 0
+================================================================================
+backend/app/routers/agent_chat.py
+DOTTED app.routers.agent_chat
+INIT False
+DOC POST /api/agent/chat -- SSE-over-POST endpoint for the conversational transit agent. Mounted under `protected_api` in main.py (X-App-Key auth applies automatically, same as every other route). Budget/rate/kill-switch checks happen inside loop.run_agent_turn() itself, before any model call -- this ro
+PUB HEARTBEAT_INTERVAL_S, AGENT_ALLOW_MEMORY_SESSIONS, AgentOrigin, AgentChatRequest, SessionRequest, agent_chat, agent_chat_session_snapshot, agent_chat_session_reset
+IMPORTS module-name via parent package
+PUBCOUNT 8
+================================================================================
+backend/app/routers/incident_refresh.py
+DOTTED app.routers.incident_refresh
+INIT False
+DOC Internal cron entrypoint for background incident intelligence.
+PUB incident_refresh
+IMPORTS module-name via parent package
+PUBCOUNT 1
+================================================================================
+backend/app/routers/live_feed/__init__.py
+DOTTED app.routers.live_feed
+INIT True
+DOC NONE
+PUB 
+IMPORTS socket(1), ticket(1)
+PUBCOUNT 0
+================================================================================
+backend/app/routers/live_feed/router.py
+DOTTED app.routers.live_feed.router
+INIT False
+DOC NONE
+PUB close_background_bus_tasks, MAX_WS_MESSAGE_BYTES, MAX_SELECTED_ROUTE_IDS, LEASE_GUARD_INTERVAL_S, LiveFeedRequest, live_feed, service_alerts, service_alert_id, service_alert_signatures, vehicles, service_alerts_socket, live_feed_socket
+IMPORTS none-from-form
+PUBCOUNT 12
+================================================================================
+backend/app/routers/live_feed/socket.py
+DOTTED app.routers.live_feed.socket
+INIT False
+DOC WebSocket message validation and streaming coordination for live feed.
+PUB SERVICE_ALERT_REFRESH_INTERVAL_S, LeaseRefresher, LiveFeedSocketDependencies, send_json_safe, close_socket_safe, cancel_and_await, receive_bounded_json, wait_for_client_disconnect, guard_lease, next_service_alert_message, stream_service_alerts, stream_live_feed
+IMPORTS module-name via parent package
+PUBCOUNT 12
+================================================================================
+backend/app/routers/live_feed/ticket.py
+DOTTED app.routers.live_feed.ticket
+INIT False
+DOC WebSocket ticket verification for the live-feed transport.
+PUB verify_ticket
+IMPORTS module-name via parent package
+PUBCOUNT 1
+================================================================================
+backend/app/routers/subway.py
+DOTTED app.routers.subway
+INIT False
+DOC NONE
+PUB subway_stops
+IMPORTS module-name via parent package
+PUBCOUNT 1
+================================================================================
+backend/app/routers/trips.py
+DOTTED app.routers.trips
+INIT False
+DOC Direct REST trip planning for the Live Map surface. Thin controller: validates the request, admits it, delegates the whole model-free planning pipeline (routing, normalization, evidence, scoring, constraints, selection, enrichment, itinerary, recommendation) to ``app.services.trips.direct_plan``, an
+PUB TRIP_CONTEXT_TIMEOUT_S, TripRequest, EnrichRouteRequest, enrich_route, plan_trip
+IMPORTS module-name via parent package
+PUBCOUNT 5
+================================================================================
+backend/app/runtime.py
+DOTTED app.runtime
+INIT False
+DOC Small, shared runtime-profile guardrails for deployment-only behavior.
+PUB runtime_profile, is_production, is_render_runtime, allows_mock_modes, enabled, env_int, env_float, runtime_mode_label, validate_mock_safeguards
+IMPORTS none-from-form
+PUBCOUNT 9
+================================================================================
+backend/app/services/__init__.py
+DOTTED app.services
+INIT True
+DOC NONE
+PUB 
+IMPORTS cache(13), text(11), geography(8), admission(3), evidence(2)
+PUBCOUNT 0
+================================================================================
+backend/app/services/admission.py
+DOTTED app.services.admission
+INIT False
+DOC Shared Redis admission with orphan-safe, expiring lease membership.
+PUB WEBSOCKET_LEASE_TTL_S, REDIS_CONNECT_TIMEOUT_S, REDIS_READ_TIMEOUT_S, AdmissionDenied, AdmissionLease, principal_from_request, acquire, release, refresh, consume_nonce
+IMPORTS module-name via parent package
+PUBCOUNT 10
+================================================================================
+backend/app/services/agent/__init__.py
+DOTTED app.services.agent
+INIT True
+DOC NONE
+PUB 
+IMPORTS events(15), trip_state(11), candidate_store(8), session(8), discovery_store(7), public_surface(7)
+PUBCOUNT 0
+================================================================================
+backend/app/services/agent/candidate_store.py
+DOTTED app.services.agent.candidate_store
+INIT False
+DOC Server-owned route candidate sets for outer-agent selection. Candidate IDs are opaque, session-scoped, expiring, and rejected when invented or reused across sessions. Full canonical route objects stay server-side; the model only sees compact comparison digests.
+PUB CANDIDATE_SET_PREFIX, DEFAULT_TTL_S, MAX_CANDIDATES, new_candidate_set_id, new_candidate_id, store_candidate_set, load_candidate_set, get_candidate, accepted_route_comparison, load_accepted_route_comparison, mark_presented
+IMPORTS module-name via parent package
+PUBCOUNT 11
+================================================================================
+backend/app/services/agent/discovery_store.py
+DOTTED app.services.agent.discovery_store
+INIT False
+DOC Server-owned, session-scoped discovery sets and place references.
+PUB DISCOVERY_SET_PREFIX, DEFAULT_TTL_S, MAX_PLACES, new_discovery_set_id, new_place_id, is_opaque_place_id, normalize_price_level, sanitized_ranking_factors, sanitized_queue_context, sanitized_continuation_tokens, display_waypoint_labels, presented_entity_registry, key, store_discovery_set, place_identity, load_discovery_set, record_presented_places, resolve_presented_place_reference, normalized_name, resolve_place_reference
+IMPORTS normalize_price_level(1)
+PUBCOUNT 21
+================================================================================
+backend/app/services/agent/events.py
+DOTTED app.services.agent.events
+INIT False
+DOC SSE event types streamed to the frontend by the conversational agent. Each event is a small frozen dataclass with a fixed `type` and a `to_data()` method producing the JSON-serializable payload. `sse_format()` renders any of them to a standard SSE frame (`event: <type>\ndata: <one-line-json>\n\n`). 
+PUB MetaEvent, TokenEvent, ReasoningEvent, normalized_source, SourcesEvent, ProgressEvent, ToolStartEvent, ToolEndEvent, RouteCardEvent, ArrivalCardEvent, TransitStatusActionEvent, ErrorEvent, DoneEvent, sse_format
+IMPORTS ProgressStage(1), ProgressStatus(1)
+PUBCOUNT 14
+================================================================================
+backend/app/services/agent/loop.py
+DOTTED app.services.agent.loop
+INIT False
+DOC Public facade for the conversational agent's turn lifecycle. `run_agent_turn()` preserves the SSE contract: a `meta` event first and one terminal `done` event last. This facade owns request admission and the local preview fixture; focused collaborators own live execution and finalization.
+PUB TOOL_REGISTRY, AGENT_MOCK_MODE, evaluate_simple_arithmetic, run_agent_turn
+IMPORTS module-name via parent package
+PUBCOUNT 4
+================================================================================
+backend/app/services/agent/model/__init__.py
+DOTTED app.services.agent.model
+INIT True
+DOC NONE
+PUB 
+IMPORTS policy(7), budget(2), prompt(2), request(2), mock_turn(1), stream(1)
+PUBCOUNT 0
+================================================================================
+backend/app/services/agent/model/budget.py
+DOTTED app.services.agent.model.budget
+INIT False
+DOC Cost + concurrency guardrails for the conversational agent. These are the AUTHORITATIVE limits -- the frontend/proxy rate limit is advisory only (see the plan doc's Security section). Checked inside loop.run_agent_turn() before any model call is made, so a turn that trips a limit never reaches the A
+PUB AGENT_MAX_CONCURRENT_STREAMS, AGENT_TURNS_PER_SESSION_PER_MIN, AGENT_DAILY_SPEND_LIMIT_USD, AGENT_INPUT_COST_PER_TOKEN_USD, AGENT_OUTPUT_COST_PER_TOKEN_USD, agent_enabled, concurrency_semaphore, check_session_rate_limit, daily_spend_usd, daily_spend_exceeded, record_usage_cost
+IMPORTS module-name via parent package
+PUBCOUNT 11
+================================================================================
+backend/app/services/agent/model/mock_turn.py
+DOTTED app.services.agent.model.mock_turn
+INIT False
+DOC Deterministic local-development turn fixture for the conversational agent.
+PUB mock_trip_copy, stream_mock_turn
+IMPORTS module-name via parent package
+PUBCOUNT 2
+================================================================================
+backend/app/services/agent/model/output_projection.py
+DOTTED app.services.agent.model.output_projection
+INIT False
+DOC NONE
+PUB opaque_place_id, project_model_value, project_route_preparation, project_place_point, project_tool_result_data, project_presented_route
+IMPORTS project_presented_route(1), project_tool_result_data(1)
+PUBCOUNT 6
+================================================================================
+backend/app/services/agent/model/policy.py
+DOTTED app.services.agent.model.policy
+INIT False
+DOC Central response-mode policy for the conversational SmartRoute agent. Auto and Quick share one Sonnet model and the same state-scoped capability contract. This module owns the only differences allowed between them: candidate, place, output, web, and retry budgets.
+PUB AgentModePolicy, ModelRequestCapabilities, policy_for_mode, safe_model_label, request_capabilities, validate_agent_configuration, NO_TOOL_CORRECTION, WEB_TIMEOUT_CONTINUATION
+IMPORTS module-name via parent package
+PUBCOUNT 8
+================================================================================
+backend/app/services/agent/model/prompt.py
+DOTTED app.services.agent.model.prompt
+INIT False
+DOC NONE
+PUB SINGLE_AGENT_SYSTEM_PROMPT, SYSTEM_PROMPT, active_system_prompt, build_turn_context
+IMPORTS module-name via parent package
+PUBCOUNT 4
+================================================================================
+backend/app/services/agent/model/request.py
+DOTTED app.services.agent.model.request
+INIT False
+DOC Anthropic request construction, diagnostics, and retry classification.
+PUB ProviderErrorDetails, build_stream_kwargs, system_blocks, messages_from_history, web_search_tool, tools_for_state, request_diagnostics, provider_error_details, should_retry, error_event_for, format_failure_log, log_provider_failure
+IMPORTS module-name via parent package
+PUBCOUNT 12
+================================================================================
+backend/app/services/agent/model/stream.py
+DOTTED app.services.agent.model.stream
+INIT False
+DOC Immediate model-round streaming with bounded server-tool progress.
+PUB MODEL_ATTEMPT_TIMEOUT_S, ModelCallCompleted, WebResearchTimeoutError, stream_model_call
+IMPORTS module-name via parent package
+PUBCOUNT 4
+================================================================================
+backend/app/services/agent/passenger_output.py
+DOTTED app.services.agent.passenger_output
+INIT False
+DOC Rider-language safety for activity labels, framing, and recovery copy. Display-only text never reaches capability executors, deduplication keys, provider boundaries, or authoritative state.
+PUB ACTIVITY_LABEL_FIELD, MAX_ACTIVITY_LABEL_CHARS, MAX_PRESENTATION_FRAMING_CHARS, MAX_RESEARCH_PRESENTATION_FRAMING_CHARS, MAX_TERMINAL_MESSAGE_CHARS, validated_activity_label, validated_presentation_framing, validated_terminal_message, SUSPICIOUS_RIDER_TEXT, sanitize_rider_text, pop_activity_label, validated_framing, framed_events, append_text, truthful_failure_text
+IMPORTS framed_events(2), validated_framing(2), SUSPICIOUS_RIDER_TEXT(1), pop_activity_label(1), validated_terminal_message(1)
+PUBCOUNT 15
+================================================================================
+backend/app/services/agent/presented_entity_registry.py
+DOTTED app.services.agent.presented_entity_registry
+INIT False
+DOC Bounded memory for places the rider has actually seen. The registry is deliberately separate from discovery-set storage. Discovery sets are short-lived provider results; this registry is the session-level reference surface that lets a rider refer back to an older visible place after a later search. 
+PUB MAX_ENTRIES, REGISTRY_FIELD, snapshot, place_ids, record, resolve, resolve_description
+IMPORTS module-name via parent package
+PUBCOUNT 7
+================================================================================
+backend/app/services/agent/profile.py
+DOTTED app.services.agent.profile
+INIT False
+DOC Small, explicit session-scoped profile fallback for conversational turns.
+PUB MAX_SAVED_PLACES, MAX_FREQUENT_PLACES, default_preferences, empty_profile, get_profile, save_place, profile_place, resolve_profile_place, update_preferences, normalize_profile, normalize_preferences, normalize_place
+IMPORTS module-name via parent package
+PUBCOUNT 12
+================================================================================
+backend/app/services/agent/public_surface.py
+DOTTED app.services.agent.public_surface
+INIT False
+DOC Stable vocabulary with a small, state-valid tool surface per round.
+PUB STRICT_TOOL_BUDGET, STRICT_OPTIONAL_FIELD_BUDGET, OPTIONAL_FIELD_HARD_LIMIT, STRICT_UNION_FIELD_BUDGET, UNION_FIELD_HARD_LIMIT, schema_optional_parameter_count, optional_parameter_count, schema_union_parameter_count, union_parameter_count, offered_custom_tools, active_discovery_set_id, active_temporary_route_preview, active_route_replay, state_valid_tool_names, required_presenter_tool, schemas_for_state, tool_supports_goal, is_evidence_capability, called_evidence_capabilities, is_presenter
+IMPORTS offered_custom_tools(1)
+PUBCOUNT 21
+================================================================================
+backend/app/services/agent/session.py
+DOTTED app.services.agent.session
+INIT False
+DOC Conversational-agent session state, persisted through utils/cache.py. The bounded model/session state and the complete rider-visible transcript are stored under separate keys with the same sliding TTL. This prevents the model context limits below from erasing the transcript restored after a page ref
+PUB DEFAULT_TTL, MAX_PERSISTED_CONTINUATIONS, MAX_CONTINUATION_ATTEMPTS, PendingContinuation, retain_continuations, get_pending_continuations, add_pending_continuation, clear_pending_continuations, resolve_pending_continuations, SESSION_KEY_PREFIX, SCHEMA_VERSION, AGENT_SESSION_TTL_S, SESSION_LEASE_KEY_PREFIX, AGENT_TURN_DEADLINE_S, SESSION_LEASE_TTL_S, MAX_HISTORY_MESSAGES, MAX_HISTORY_BYTES, MAX_SESSION_BYTES, MAX_ROUTE_CARDS, acquire_session_lease
+IMPORTS module-name via parent package
+PUBCOUNT 41
+================================================================================
+backend/app/services/agent/tool_input_policy.py
+DOTTED app.services.agent.tool_input_policy
+INIT False
+DOC Validate and normalize model capability inputs before execution.
+PUB WEB_PLACE_REQUIRED_ERROR, DISCOVERY_PLACE_REQUIRED_ERROR, GOALS_REQUIRED_ERROR, DESTINATION_SOURCE_REQUIRED_ERROR, CURRENT_DESTINATION_REQUIRED_ERROR, goal_error, validated_goal_key, missing_verified_destination, authoritative_discovery_input, rider_excluded_modes, rider_excluded_route_ids, constrained_tool_input
+IMPORTS validated_goal_key(2)
+PUBCOUNT 12
+================================================================================
+backend/app/services/agent/tools/__init__.py
+DOTTED app.services.agent.tools
+INIT True
+DOC Tool registry for the rider-facing conversational transit agent. The public vocabulary is stable while each model round receives only the tools valid for current server-owned turn state. Internal leaf executors stay registered for dispatch and are never model-offered. The legacy nested- selector ``p
+PUB ToolSpec, iter_unsupported_strict_keyword_paths, assert_strict_tool_schemas_compatible
+IMPORTS ToolContext(4), ToolResult(3), COMBINED_TOOL_REGISTRY(2), ToolSpec(1)
+PUBCOUNT 3
+================================================================================
+backend/app/services/agent/tools/base.py
+DOTTED app.services.agent.tools.base
+INIT False
+DOC Shared types for agent tool executors. Leaf module: no imports from sibling `agent.tools` modules, so both `tools/__init__.py` (the registry) and each tool module can depend on it without a circular import.
+PUB ToolOutcome, ToolContext, ToolResult
+IMPORTS ToolContext(27), ToolResult(25), ToolOutcome(4)
+PUBCOUNT 3
+================================================================================
+backend/app/services/agent/tools/complete_turn.py
+DOTTED app.services.agent.tools.complete_turn
+INIT False
+DOC Terminal conversational answer, clarification, refusal, or unavailable outcome.
+PUB COMPLETE_TURN_SCHEMA, execute
+IMPORTS none-from-form
+PUBCOUNT 2
+================================================================================
+backend/app/services/agent/tools/declare_goals.py
+DOTTED app.services.agent.tools.declare_goals
+INIT False
+DOC Model tool for declaring rider outcomes before capability execution.
+PUB DECLARE_GOALS_SCHEMA, execute
+IMPORTS none-from-form
+PUBCOUNT 2
+================================================================================
+backend/app/services/agent/tools/location_resolution.py
+DOTTED app.services.agent.tools.location_resolution
+INIT False
+DOC Agent-owned location resolution for named and discovered endpoints.
+PUB resolve_discovery_place, resolve_destination_reference, resolve_waypoint_places, resolve_named_point, resolve_named_place
+IMPORTS ResolvedPlace(2), resolve_named_place(2), resolve_named_point(2), parse_coordinates(1)
+PUBCOUNT 5
+================================================================================
+backend/app/services/agent/tools/places/__init__.py
+DOTTED app.services.agent.tools.places
+INIT True
+DOC NONE
+PUB 
+IMPORTS damn_lines(3), geography(2), search_local_places(1)
+PUBCOUNT 0
+================================================================================
+backend/app/services/agent/tools/places/damn_lines.py
+DOTTED app.services.agent.tools.places.damn_lines
+INIT False
+DOC Optional Damn Lines queue evidence for exact Google Places venues.
+PUB SupportedVenue, QueueSource, QueueObservation, CurrentQueueResult, HistoricalQueuePattern, get_supported_venue, source_for_places, get_current_observations, refresh_history, warm_history, get_historical_pattern, historical_pattern
+IMPORTS module-name via parent package
+PUBCOUNT 12
+================================================================================
+backend/app/services/agent/tools/places/discover_places.py
+DOTTED app.services.agent.tools.places.discover_places
+INIT False
+DOC NONE
+PUB DiscoveryRequest, validate_request, DISCOVER_PLACES_SCHEMA, execute
+IMPORTS none-from-form
+PUBCOUNT 4
+================================================================================
+backend/app/services/agent/tools/places/geography.py
+DOTTED app.services.agent.tools.places.geography
+INIT False
+DOC This is not a pre-model intent router. It only maps values the Agent already passed to discover_places onto canonical NYC geography.
+PUB canonical_borough, normalize_scope, borough_from_address_components, borough_from_formatted_address, resolve_place_borough
+IMPORTS module-name via parent package
+PUBCOUNT 5
+================================================================================
+backend/app/services/agent/tools/places/place_reference.py
+DOTTED app.services.agent.tools.places.place_reference
+INIT False
+DOC Server-owned place-reference resolution for conversational discovery. ``get_place_details`` binds a discovery place (opaque place_id, ordinal, or a deterministic description) as the selected place and returns the opaque place_id for route preparation. The destination_label is display-only and is nev
+PUB GET_PLACE_DETAILS_SCHEMA, execute
+IMPORTS none-from-form
+PUBCOUNT 2
+================================================================================
+backend/app/services/agent/tools/places/present_places.py
+DOTTED app.services.agent.tools.places.present_places
+INIT False
+DOC NONE
+PUB REASON_CODES, OBJECTIVE_REASONS, PRESENT_PLACES_SCHEMA, execute, render_place_list, try_deterministic_fallback, deterministic_fallback_text
+IMPORTS none-from-form
+PUBCOUNT 7
+================================================================================
+backend/app/services/agent/tools/places/search_local_places.py
+DOTTED app.services.agent.tools.places.search_local_places
+INIT False
+DOC NONE
+PUB PLACES_SEARCH_URL, PLACES_FIELD_MASK, POI_SEARCH_TIMEOUT_S, baseline_ranking, execute, provider_search, coverage, target_accepts_place, search_targets, normalize_discovery_place, model_place, provider_places, merged_timings
+IMPORTS module-name via parent package
+PUBCOUNT 13
+================================================================================
+backend/app/services/agent/tools/provider_http.py
+DOTTED app.services.agent.tools.provider_http
+INIT False
+DOC Shared single-request JSON fetch for tools that hit one REST endpoint. Google Places, Ticketmaster, and the MTA ENE feed use this boundary. Every branch returns `(payload, None)` on success or `(None, short_reason)` on failure -- nothing here ever raises. Callers wrap the reason into whatever return
+PUB fetch_json
+IMPORTS fetch_json(3)
+PUBCOUNT 1
+================================================================================
+backend/app/services/agent/tools/route/__init__.py
+DOTTED app.services.agent.tools.route
+INIT True
+DOC NONE
+PUB 
+IMPORTS prepare_route_options(1), present_route(1)
+PUBCOUNT 0
+================================================================================
+backend/app/services/agent/tools/route/preparation_adapter.py
+DOTTED app.services.agent.tools.route.preparation_adapter
+INIT False
+DOC Agent adapters for the shared route-preparation implementation. The route computation and dependency bundle live under services.trips. This module supplies agent-owned location resolution, progress timing, and the existing provider and failure-adaptation seams used by route tools.
+PUB build_preparation_dependencies, prepare_single_leg
+IMPORTS PreparedLeg(1)
+PUBCOUNT 2
+================================================================================
+backend/app/services/agent/tools/route/prepare_route_branches.py
+DOTTED app.services.agent.tools.route.prepare_route_branches
+INIT False
+DOC Server-owned destination-branch resolution and route preparation.
+PUB MAX_DESTINATION_OPTIONS, limit_final_branch_chains, reasonable_branch_indexes, stage_a_factors, candidate_budget, prepare_destination_branches, resolve_destination_options, is_current_location_discovery, aggregate_destination_ids
+IMPORTS none-from-form
+PUBCOUNT 9
+================================================================================
+backend/app/services/agent/tools/route/prepare_route_options.py
+DOTTED app.services.agent.tools.route.prepare_route_options
+INIT False
+DOC Prepare server-owned route candidates for one outer conversational model.
+PUB MAX_WAYPOINTS, MAX_WAYPOINT_CHARS, as_aggregate, PREPARE_ROUTE_OPTIONS_SCHEMA, RoutePreparationAdmission, execute
+IMPORTS module-name via parent package
+PUBCOUNT 6
+================================================================================
+backend/app/services/agent/tools/route/prepare_route_persistence.py
+DOTTED app.services.agent.tools.route.prepare_route_persistence
+INIT False
+DOC Persist and project one finalized route candidate set.
+PUB candidate_evidence, nonfatal_prepare_result, persist_route_candidates, bind_canonical_destination_identities, public_candidate_digest
+IMPORTS none-from-form
+PUBCOUNT 5
+================================================================================
+backend/app/services/agent/tools/route/present_route.py
+DOTTED app.services.agent.tools.route.present_route
+INIT False
+DOC Present one validated server-owned route candidate as the route card.
+PUB PRESENT_ROUTE_SCHEMA, execute, load_validated_presentation, canonical_facts_with_fallback, with_optional_framing
+IMPORTS module-name via parent package
+PUBCOUNT 5
+================================================================================
+backend/app/services/agent/tools/route/present_route_commit.py
+DOTTED app.services.agent.tools.route.present_route_commit
+INIT False
+DOC Reserve, commit, and record a validated route presentation.
+PUB reserve_and_commit, record_presentation, activate_stored_discovery_context
+IMPORTS none-from-form
+PUBCOUNT 3
+================================================================================
+backend/app/services/agent/tools/route/present_route_state.py
+DOTTED app.services.agent.tools.route.present_route_state
+INIT False
+DOC Load and validate the immutable candidate facts owned by present_route.
+PUB ValidatedRoutePresentation, owned_candidate, canonical_facts, rebind_to_entry, destination_selection_mode, is_destination_comparison
+IMPORTS is_destination_comparison(1)
+PUBCOUNT 6
+================================================================================
+backend/app/services/agent/tools/route/route_input.py
+DOTTED app.services.agent.tools.route.route_input
+INIT False
+DOC Agent adapter for route input and session/profile preference composition.
+PUB merge_route_preparation_input
+IMPORTS point_label(1), summary_eta_minutes(1)
+PUBCOUNT 1
+================================================================================
+backend/app/services/agent/tools/route/route_projection.py
+DOTTED app.services.agent.tools.route.route_projection
+INIT False
+DOC Canonical route projection for ``present_route``. Builds one recommended route card and truthful copy from a validated candidate. Does not mutate session or candidate state.
+PUB passenger_explanation, project_canonical_route, first_boarding_context
+IMPORTS none-from-form
+PUBCOUNT 3
+================================================================================
+backend/app/services/agent/tools/transit/__init__.py
+DOTTED app.services.agent.tools.transit
+INIT True
+DOC NONE
+PUB 
+IMPORTS evidence(3), venue_crowd_window(2), evidence_binding(1)
+PUBCOUNT 0
+================================================================================
+backend/app/services/agent/tools/transit/accessibility_status.py
+DOTTED app.services.agent.tools.transit.accessibility_status
+INIT False
+DOC NONE
+PUB MTA_ENE_URL, ACCESSIBILITY_STATUS_TIMEOUT_S, ENE_CACHE_TTL_S, ENE_CACHE_KEY, ACCESSIBILITY_STATUS_SCHEMA, execute
+IMPORTS none-from-form
+PUBCOUNT 6
+================================================================================
+backend/app/services/agent/tools/transit/check_area_conditions.py
+DOTTED app.services.agent.tools.transit.check_area_conditions
+INIT False
+DOC Bounded current-condition evidence for one rider-named NYC area. This is intentionally not a second route planner. It resolves one specific area, scopes incident evidence to nearby actual GTFS stops, and reads the shared background incident index (never a request-time provider scan). The existing Gr
+PUB AREA_CONDITIONS_SCHEMA, execute
+IMPORTS none-from-form
+PUBCOUNT 2
+================================================================================
+backend/app/services/agent/tools/transit/check_transit.py
+DOTTED app.services.agent.tools.transit.check_transit
+INIT False
+DOC NONE
+PUB OperationServices, prepare_direction, arrivals, accessibility, fact, area_conditions, event_schedule, EVENT_LOOKUP_SCHEMA, execute_event_lookup, venue_window, CHECK_TRANSIT_SCHEMA, execute, grounding_succeeded
+IMPORTS none-from-form
+PUBCOUNT 13
+================================================================================
+backend/app/services/agent/tools/transit/direction.py
+DOTTED app.services.agent.tools.transit.direction
+INIT False
+DOC Bounded semantic direction handling for transit evidence. The conversational model owns the meaning of a rider's direction field. This module only canonicalizes the small set of provider direction values that are safe to recognize and matches destination/headsign text against authoritative route or 
+PUB DirectionResolution, normalize_direction, normalize_direction_text, stop_id_direction, resolve_direction, resolve_model_direction, direction_clarification, direction_matches, accepted_trip_direction
+IMPORTS none-from-form
+PUBCOUNT 9
+================================================================================
+backend/app/services/agent/tools/transit/evidence.py
+DOTTED app.services.agent.tools.transit.evidence
+INIT False
+DOC Compact, server-owned evidence produced by the existing transit tools.
+PUB build_evidence_set
+IMPORTS module-name via parent package
+PUBCOUNT 1
+================================================================================
+backend/app/services/agent/tools/transit/evidence_binding.py
+DOTTED app.services.agent.tools.transit.evidence_binding
+INIT False
+DOC Bind provider transit evidence to entities in the accepted itinerary.
+PUB bind_accessibility_target, accessibility_result_matches, decision_evidence_for_status, decision_alert_continuity
+IMPORTS module-name via parent package
+PUBCOUNT 4
+================================================================================
+backend/app/services/agent/tools/transit/evidence_matching.py
+DOTTED app.services.agent.tools.transit.evidence_matching
+INIT False
+DOC Route, direction, concern, and coverage matching for transit evidence.
+PUB normalized_text, unique_evidence_values, normalized_route_ids, route_match, concern_match, confirmed, coverage, arrival_coverage, concerns
+IMPORTS none-from-form
+PUBCOUNT 9
+================================================================================
+backend/app/services/agent/tools/transit/evidence_projection.py
+DOTTED app.services.agent.tools.transit.evidence_projection
+INIT False
+DOC Passenger-safe projection helpers for typed transit evidence.
+PUB safe_result, operation_facts, renderable_arrival_card, accessibility_text, operation_facts_text, arrivals_text, safe_stop, safe_accessibility, safe_alert, safe_incident, safe_unconfirmed_signal, row_direction
+IMPORTS none-from-form
+PUBCOUNT 12
+================================================================================
+backend/app/services/agent/tools/transit/evidence_store.py
+DOTTED app.services.agent.tools.transit.evidence_store
+INIT False
+DOC Bounded persistence for server-owned transit evidence sets.
+PUB EVIDENCE_SET_PREFIX, DEFAULT_TTL_S, TransitEvidenceSet, new_evidence_set_id, store_evidence_set, load_evidence_set
+IMPORTS none-from-form
+PUBCOUNT 6
+================================================================================
+backend/app/services/agent/tools/transit/lookup_arrivals.py
+DOTTED app.services.agent.tools.transit.lookup_arrivals
+INIT False
+DOC Public dispatcher for deterministic subway and bus arrival lookups.
+PUB BOARDING_BUFFER_MINUTES, FEED_STALE_AFTER_S, LOOKUP_ARRIVALS_SCHEMA, execute
+IMPORTS none-from-form
+PUBCOUNT 4
+================================================================================
+backend/app/services/agent/tools/transit/lookup_arrivals_bus.py
+DOTTED app.services.agent.tools.transit.lookup_arrivals_bus
+INIT False
+DOC BusTime-backed bus arrival lookup.
+PUB execute
+IMPORTS execute(1)
+PUBCOUNT 1
+================================================================================
+backend/app/services/agent/tools/transit/lookup_arrivals_common.py
+DOTTED app.services.agent.tools.transit.lookup_arrivals_common
+INIT False
+DOC Shared normalization and payload shaping for arrival providers.
+PUB ARRIVAL_LIMIT_DEFAULT, ARRIVAL_LIMIT_MAX, FEED_STALE_AFTER_S, BOARDING_BUFFER_MINUTES, canonical_station_query, assess_catchability
+IMPORTS none-from-form
+PUBCOUNT 6
+================================================================================
+backend/app/services/agent/tools/transit/lookup_arrivals_subway.py
+DOTTED app.services.agent.tools.transit.lookup_arrivals_subway
+INIT False
+DOC GTFS-realtime subway arrival lookup.
+PUB execute
+IMPORTS none-from-form
+PUBCOUNT 1
+================================================================================
+backend/app/services/agent/tools/transit/lookup_facts.py
+DOTTED app.services.agent.tools.transit.lookup_facts
+INIT False
+DOC lookup_facts tool: pure local grounding for static NYC transit knowledge (fares, transfers, service hours, accessibility policy, airport connections, boroughs/express-local, Staten Island Ferry, regional rail, service alerts). No network -- the adjacent `transit_facts.md` asset is parsed once at imp
+PUB FACTS_PATH, MAX_DIGEST_CHARS, FARE_FACTS_VERSION, FARE_FACTS_SOURCE_URL, FARE_FACTS_EFFECTIVE_DATE, FARE_FACTS_REVIEW_BY, LOOKUP_FACTS_SCHEMA, execute
+IMPORTS none-from-form
+PUBCOUNT 8
+================================================================================
+backend/app/services/agent/tools/transit/present_transit.py
+DOTTED app.services.agent.tools.transit.present_transit
+INIT False
+DOC Facade for presenting one server-owned transit evidence set.
+PUB PRESENT_TRANSIT_SCHEMA, execute, StatusView, service_status_text
+IMPORTS none-from-form
+PUBCOUNT 4
+================================================================================
+backend/app/services/agent/tools/transit/transit_snapshot.py
+DOTTED app.services.agent.tools.transit.transit_snapshot
+INIT False
+DOC NONE
+PUB ARRIVAL_LIMIT, ALERT_LIMIT, TRANSIT_SNAPSHOT_SCHEMA, execute, collect_service_status
+IMPORTS collect_service_status(1)
+PUBCOUNT 5
+================================================================================
+backend/app/services/agent/tools/transit/venue_crowd_window.py
+DOTTED app.services.agent.tools.transit.venue_crowd_window
+INIT False
+DOC Hidden-agent adapter for neutral venue crowd-window facts.
+PUB PRE_EVENT_START_OFFSET_MIN, PRE_EVENT_END_OFFSET_MIN, SURGE_START_OFFSET_MIN, SURGE_END_OFFSET_MIN, VENUE_CROWD_TABLE, VENUE_CROWD_WINDOW_SCHEMA, execute
+IMPORTS module-name via parent package
+PUBCOUNT 7
+================================================================================
+backend/app/services/agent/transcript_store.py
+DOTTED app.services.agent.transcript_store
+INIT False
+DOC Complete rider-visible conversation storage for one agent session.
+PUB TRANSCRIPT_KEY_PREFIX, REVOKED_KEY_PREFIX, TRANSCRIPT_SCHEMA_VERSION, SESSION_FIELD, MAX_EARLIER_CONTEXT_BYTES, MAX_EARLIER_TURNS, transcript_key, revoked_key, empty, ensure, attach_empty, attach_loaded, save, append_entry, add_visible_events, snapshot, active_accepted_route_card, model_history, project_model_history, is_revoked
+IMPORTS module-name via parent package
+PUBCOUNT 22
+================================================================================
+backend/app/services/agent/trip_state.py
+DOTTED app.services.agent.trip_state
+INIT False
+DOC Validated, session-owned conversational trip and scenario state.
+PUB MAX_WAYPOINTS, MAX_WAYPOINT_CHARS, empty_trip_state, get_trip_state, save_trip_state, update_trip_state, apply_preference_patch, preference_patch_from_tool_input, set_destination, replace_waypoints, add_waypoint_before_destination, set_planning_time, bind_candidate_set, bind_selected_candidate, bind_temporary_candidate_set, bind_temporary_selected_candidate, bind_discovery_set, bind_discovery_context, bind_selected_place, discard_scenario
+IMPORTS module-name via parent package
+PUBCOUNT 22
+================================================================================
+backend/app/services/agent/turn/__init__.py
+DOTTED app.services.agent.turn
+INIT True
+DOC NONE
+PUB 
+IMPORTS completion(4), stream(1), tool_round(1)
+PUBCOUNT 0
+================================================================================
+backend/app/services/agent/turn/completion.py
+DOTTED app.services.agent.turn.completion
+INIT False
+DOC Pure completion decision plus bounded continuation persistence.
+PUB TurnResolution, CompletionDecision, evaluate_completion, completion_telemetry, apply_completion, fallback_text
+IMPORTS module-name via parent package
+PUBCOUNT 6
+================================================================================
+backend/app/services/agent/turn/contract.py
+DOTTED app.services.agent.turn.contract
+INIT False
+DOC Immutable declarations for the outcomes of one agent turn. The model declares rider outcomes, never provider or capability names. The backend records execution state elsewhere and uses the lookup helpers here to decide which declared outcomes are ready to work on.
+PUB MAX_GOALS, MAX_GOAL_KEY_LENGTH, ContractValidationError, GoalKind, GoalState, OutcomeGoal, TurnContract
+IMPORTS GoalState(12), GoalKind(10), TurnContract(3), OutcomeGoal(1)
+PUBCOUNT 7
+================================================================================
+backend/app/services/agent/turn/evidence.py
+DOTTED app.services.agent.turn.evidence
+INIT False
+DOC Turn-local evidence, obligations, and terminal enforcement. Capability results update this state. It is not a pre-model intent router.
+PUB TurnEvidence
+IMPORTS TurnEvidence(3)
+PUBCOUNT 1
+================================================================================
+backend/app/services/agent/turn/finalization.py
+DOTTED app.services.agent.turn.finalization
+INIT False
+DOC Turn finalization, development trace, and safe terminal telemetry.
+PUB FinalizationResult, stage_timings, finalize_turn, extract_safe_usage, record_model_call, record_phase_ms, record_first_visible_token, TurnTrace, record_model_round, record_capability_attempts, finalize_trace
+IMPORTS record_phase_ms(3), TurnTrace(1)
+PUBCOUNT 11
+================================================================================
+backend/app/services/agent/turn/ledger.py
+DOTTED app.services.agent.turn.ledger
+INIT False
+DOC Per-turn tool execution accounting for the conversational agent. The ledger owns deduplication and call caps only. The loop supplies the executor so provider behavior and the loop's compatibility patch points stay at the orchestration boundary.
+PUB MAX_TOOL_EXECUTIONS_PER_TURN, MAX_TOOL_EXECUTIONS_PER_NAME, run_one_tool, ToolProgressRelay, TurnToolLedger
+IMPORTS TurnToolLedger(2)
+PUBCOUNT 5
+================================================================================
+backend/app/services/agent/turn/stream.py
+DOTTED app.services.agent.turn.stream
+INIT False
+DOC Deadline-bound live-model turn execution for the conversational agent.
+PUB TurnDependencies, TurnState, ModelIteration, ModelDirective, CapabilityIteration, stream_model_iteration, resolve_model_iteration, stream_capability_iteration, apply_capability_iteration, stream_turn
+IMPORTS module-name via parent package
+PUBCOUNT 10
+================================================================================
+backend/app/services/agent/turn/tool_round.py
+DOTTED app.services.agent.turn.tool_round
+INIT False
+DOC Tool input policy and one parallel model-tool round for an agent turn.
+PUB TurnDeadlineReachedError, ToolRoundResultMessage, mixed_terminal_and_capability, public_failure_summary, execute_tool_round
+IMPORTS module-name via parent package
+PUBCOUNT 5
+================================================================================
+backend/app/services/cache.py
+DOTTED app.services.cache
+INIT False
+DOC NONE
+PUB REDIS_CONNECT_TIMEOUT_S, REDIS_READ_TIMEOUT_S, cache_get, cache_get_many, cache_get_many_async, cache_set, cache_set_preserve_ttl, cache_delete, cache_add, cache_delete_if_value
+IMPORTS cache_get(1), cache_set(1)
+PUBCOUNT 10
+================================================================================
+backend/app/services/directions.py
+DOTTED app.services.directions
+INIT False
+DOC NONE
+PUB ROUTES_URL, GOOGLE_ROUTES_TIMEOUT_S, GOOGLE_ROUTES_RETRIES, GOOGLE_ROUTES_ALTERNATIVES, ALLOWED_TRAVEL_MODES, ALLOWED_ROUTING_PREFERENCES, FIELD_MASK, GoogleRoutesError, get_transit_route, parse_response, get_transfer_route_pair, route_at_transfer
+IMPORTS none-from-form
+PUBCOUNT 12
+================================================================================
+backend/app/services/evidence.py
+DOTTED app.services.evidence
+INIT False
+DOC Small, shared freshness contract for model- and scoring-facing evidence.
+PUB parse_timestamp, EvidenceEnvelope, evidence_envelope, current_payload
+IMPORTS EvidenceEnvelope(1), current_payload(1), evidence_envelope(1), parse_timestamp(1)
+PUBCOUNT 4
+================================================================================
+backend/app/services/geography.py
+DOTTED app.services.geography
+INIT False
+DOC NONE
+PUB NYC_GEOSEARCH_URL, NYC_BOUNDS, geocode_address_with_reason, is_in_nyc, distance_meters, find_nearest_stops
+IMPORTS distance_meters(8), NYC_BOUNDS(2), find_nearest_stops(2)
+PUBCOUNT 6
+================================================================================
+backend/app/services/incidents/__init__.py
+DOTTED app.services.incidents
+INIT True
+DOC NONE
+PUB 
+IMPORTS index(3), refresh(1)
+PUBCOUNT 0
+================================================================================
+backend/app/services/incidents/batches.py
+DOTTED app.services.incidents.batches
+INIT False
+DOC Coarse NYC geographic batches for the background incident job. Centralizes the fixed citywide coverage taxonomy so the scheduler, scout, and coverage index share one deterministic view. Batches are deliberately coarse corridors/regions: the job must never fan out station-by-station, and subway route
+PUB IncidentBatch, incident_batch_ids, get_incident_batch, coverage_batch_ids_for_point
+IMPORTS IncidentBatch(3), INCIDENT_BATCHES(1), coverage_batch_ids_for_point(1)
+PUBCOUNT 4
+================================================================================
+backend/app/services/incidents/evidence.py
+DOTTED app.services.incidents.evidence
+INIT False
+DOC Pure validation for cited incident evidence shared by scanning and caching.
+PUB canonical_citation_url, source_type_matches_url, source_identity_from_url
+IMPORTS canonical_citation_url(1)
+PUBCOUNT 3
+================================================================================
+backend/app/services/incidents/index.py
+DOTTED app.services.incidents.index
+INIT False
+DOC Deterministic cache-backed incident index and coverage metadata. Background workers write; the rider-request path only reads. Identity is stable (SHA-256 over normalized source identities or a canonical fallback) so equivalent records dedupe. Empty lookups never imply all-clear; coverage truth comes
+PUB INCIDENT_PREFIX, COVERAGE_PREFIX, STOP_INDEX_PREFIX, ROUTE_INDEX_PREFIX, CORRIDOR_INDEX_PREFIX, BATCH_INDEX_PREFIX, DEFAULT_TTL_S, INCIDENT_LOOKUP_TIMEOUT_S, upsert_incident, set_incident_state, set_coverage, get_coverage, lookup_incidents, lookup_incidents_async
+IMPORTS module-name via parent package
+PUBCOUNT 14
+================================================================================
+backend/app/services/incidents/normalization.py
+DOTTED app.services.incidents.normalization
+INIT False
+DOC Normalization and deterministic identity for incident records. Cohesive helpers behind the incident index: bounded scalar text, bounded/deduped ID lists (a scalar string is one value, never characters), enum normalization, the source-record allowlist, and the stable SHA-256 identity. Kept separate s
+PUB ALLOWED_STATES, ALLOWED_COVERAGE, DEFAULT_STATE, DEFAULT_COVERAGE, LIST_FIELDS, SOURCE_COVERAGE_BOUND, SOURCE_RECORDS_BOUND, identity_text, bounded_text, bounded_int, bounded_ids, normalize_enum, sanitize_source_records, source_identity_pairs, fallback_material, incident_id_for, normalize_incident_record, record_is_expired
+IMPORTS none-from-form
+PUBCOUNT 18
+================================================================================
+backend/app/services/incidents/ny511.py
+DOTTED app.services.incidents.ny511
+INIT False
+DOC Process-local 511NY event snapshots. This module deliberately has no FastAPI imports and starts no background work on import. The application lifecycle owns ``NY511Poller.start``/``stop`` so a deployment can designate one process to poll rather than accidentally adding a poller to every worker. Rout
+PUB DEFAULT_API_URL, DEFAULT_POLL_INTERVAL_SECONDS, DEFAULT_TIMEOUT_SECONDS, DEFAULT_STALE_AFTER_SECONDS, DEFAULT_MAX_STALE_SECONDS, NYC_BOUNDS, DEFAULT_NYC_BUFFER_DEGREES, MAX_ATTEMPTS, NYC_COUNTIES, KNOWN_NON_NYC_COUNTIES, Normalized511Incident, IncidentSnapshot, NY511Settings, NY511FetchError, normalize_event, normalize_events, NY511Client, SnapshotStore, NY511Poller
+IMPORTS NY511Settings(1), SnapshotStore(1)
+PUBCOUNT 19
+================================================================================
+backend/app/services/incidents/official.py
+DOTTED app.services.incidents.official
+INIT False
+DOC Official incident normalization and bounded source snapshots. Pure helpers normalize MTA service alerts and stalled GTFS-RT positions into bounded incident-index inputs. The background collector owns the two provider boundaries and reports explicit source status; no request path calls this module.
+PUB SOURCE_ALERTS, SOURCE_GTFS_RT, STALLED_EXPIRY_S, expected_feed_groups, normalize_alert, normalize_stalled, canonical_incident, provenance, epoch_to_iso, epoch_value, stalled_key, position_identity_pairs, stalled_source_id, dedupe_incidents, STATUS_CURRENT, STATUS_PARTIAL, STATUS_UNAVAILABLE, OfficialIncidentSnapshot, collect_official_incidents
+IMPORTS none-from-form
+PUBCOUNT 19
+================================================================================
+backend/app/services/incidents/refresh.py
+DOTTED app.services.incidents.refresh
+INIT False
+DOC Thirty-minute background incident refresh orchestration (cron only). Never runs on rider requests and never selects routes. Acquires a distributed lock, collects one official MTA snapshot, scouts the ten canonical batches under a bounded concurrency cap, upserts incidents and per-batch coverage, sto
+PUB JOB_LOCK_KEY, JOB_LOCK_TTL_S, JOB_METRICS_KEY, SCOUT_CONCURRENCY, SCOUT_BATCH_TIMEOUT_S, acquire_job_lock, release_job_lock, run_background_incident_refresh, last_job_metrics
+IMPORTS module-name via parent package
+PUBCOUNT 9
+================================================================================
+backend/app/services/incidents/scout.py
+DOTTED app.services.incidents.scout
+INIT False
+DOC Bounded background Grok X scouting with conditional Web corroboration. Scouts the ten coarse IncidentBatch regions outside rider requests; never selects routes and must never run from a rider request. Orchestrates exactly one X-only model call and one conditional Web-only call through the optional t
+PUB ScoutBatchResult, scout_incident_batch
+IMPORTS ScoutBatchResult(1), scout_incident_batch(1)
+PUBCOUNT 2
+================================================================================
+backend/app/services/incidents/scout_normalization.py
+DOTTED app.services.incidents.scout_normalization
+INIT False
+DOC Pure parsing and evidence normalization for the background incident scout. Owns no transport or policy: untrusted model JSON plus exact citations become bounded, deterministic claim/evidence records and canonical incident-index inputs. Citation identity rules are reused from the incidents evidence m
+PUB SIX_HOURS, FUTURE_SKEW, ALLOWED_SEVERITIES, ALLOWED_SCOPES, per_post_source_id, claim_ref_for, observed_at_iso, is_valid_x_payload, is_valid_web_payload, normalize_x_claims, normalize_web_corroborations, build_incident_inputs
+IMPORTS SIX_HOURS(1)
+PUBCOUNT 12
+================================================================================
+backend/app/services/incidents/scout_provider.py
+DOTTED app.services.incidents.scout_provider
+INIT False
+DOC Optional xAI transport for the bounded background incident scout. Owns the optional SDK import, the shared client lifecycle, the search prompts, and the two server-side-tool requests (one X-only, then one Web-only). It never accepts or normalizes evidence: orchestration lives in the scout module and
+PUB ScoutSearchResult, has_client, X_PROMPT, WEB_PROMPT, render_x_prompt, render_web_prompt, sanitized_claims, response_citations, close_incident_scout_client
+IMPORTS close_incident_scout_client(1)
+PUBCOUNT 9
+================================================================================
+backend/app/services/live_feed/__init__.py
+DOTTED app.services.live_feed
+INIT True
+DOC Live-feed service ownership. ``snapshot`` owns the rider-specific response projection, nearby issue derivation, and vehicle-enrichment orchestration. ``network_snapshot`` owns the process-wide realtime generation, while ``vehicle_enrichment`` remains a separate helper for bounded segment and stop co
+PUB 
+IMPORTS snapshot(1), vehicle_enrichment(1)
+PUBCOUNT 0
+================================================================================
+backend/app/services/live_feed/network_snapshot.py
+DOTTED app.services.live_feed.network_snapshot
+INIT False
+DOC Process-owned normalized MTA realtime state. The refresh loop is the only routine that parses network-wide GTFS-RT data. Sockets and HTTP callers read the latest completed generation and perform only location-specific filtering and enrichment.
+PUB NetworkSnapshot, build_network_snapshot, NetworkSnapshotStore
+IMPORTS network_snapshot_store(2)
+PUBCOUNT 3
+================================================================================
+backend/app/services/live_feed/snapshot.py
+DOTTED app.services.live_feed.snapshot
+INIT False
+DOC NONE
+PUB NEARBY_ARRIVAL_RADIUS_M, NEARBY_ARRIVAL_STOP_LIMIT, MAX_NEARBY_STATION_HOPS, build_nearby_transit_issues, build_live_snapshot
+IMPORTS build_live_snapshot(1)
+PUBCOUNT 5
+================================================================================
+backend/app/services/live_feed/vehicle_enrichment.py
+DOTTED app.services.live_feed.vehicle_enrichment
+INIT False
+DOC Place a train along its trip stop sequence when GTFS-RT omits coordinates.
+PUB attach_terminal_stop, place_vehicle_markers
+IMPORTS module-name via parent package
+PUBCOUNT 2
+================================================================================
+backend/app/services/mta/__init__.py
+DOTTED app.services.mta
+INIT True
+DOC MTA provider integrations.
+PUB 
+IMPORTS realtime(4), bus_runtime(2), alerts(1), bus(1), subway(1)
+PUBCOUNT 0
+================================================================================
+backend/app/services/mta/alerts.py
+DOTTED app.services.mta.alerts
+INIT False
+DOC NONE
+PUB fetch_service_alerts, is_material_service_alert, project_service_alert, parse_service_alerts, parse_service_alerts_for_service_board, filter_alerts_for_routes
+IMPORTS project_service_alert(5), is_material_service_alert(4)
+PUBCOUNT 6
+================================================================================
+backend/app/services/mta/bus.py
+DOTTED app.services.mta.bus
+INIT False
+DOC NONE
+PUB NEARBY_STOPS_CACHE_TTL_S, STOP_MONITORING_CACHE_TTL_S, fetch_bus_positions, fetch_nearby_bus_stops, fetch_bus_stop_monitoring, parse_bus_stop_monitoring, get_stalled_buses, parse_stalled_bus_positions, BUS_STOPS_FOR_ROUTE_URL, normalize_google_bus_route_id, parse_stops_for_route, slice_route_stops, fetch_bus_route_stop_groups
+IMPORTS fetch_bus_route_stop_groups(1), get_stalled_buses(1), slice_route_stops(1)
+PUBCOUNT 13
+================================================================================
+backend/app/services/mta/bus_runtime.py
+DOTTED app.services.mta.bus_runtime
+INIT False
+DOC Lifecycle-owned transport and bounded sharing for BusTime requests.
+PUB BUS_REQUEST_TIMEOUT_S, NEARBY_STOPS_CACHE_MAX_ENTRIES, STOP_MONITORING_CACHE_MAX_ENTRIES, NEARBY_ARRIVALS_CACHE_MAX_ENTRIES, BoundedCache, start_bus_client, bus_client, close_bus_client, get_cached, get_last_cached, set_cached, share_inflight
+IMPORTS close_bus_client(1), start_bus_client(1)
+PUBCOUNT 12
+================================================================================
+backend/app/services/mta/bus_updates.py
+DOTTED app.services.mta.bus_updates
+INIT False
+DOC Bounded BusTime arrival updates for live-feed consumers.
+PUB NEARBY_ARRIVALS_CACHE_TTL_S, BUS_UPDATE_MAX_STALE_S, BUS_TOTAL_TIMEOUT_S, BusUpdate, BusUpdateData, BusUpdateEvent, fetch_nearby_bus_update, cached_nearby_bus_update
+IMPORTS BusUpdate(1), BusUpdateData(1), BusUpdateEvent(1)
+PUBCOUNT 8
+================================================================================
+backend/app/services/mta/config.py
+DOTTED app.services.mta.config
+INIT False
+DOC NONE
+PUB BASE_URL, ALERTS_URL, BUS_URL, BUS_STOPS_FOR_LOCATION_URL, BUS_STOP_MONITORING_URL, MTA_COLORS, get_route_color, ALL_SUBWAY_ROUTES
+IMPORTS route_to_feed(4), ALL_SUBWAY_ROUTES(3), NYC_TZ(3), ALERTS_URL(2), BASE_URL(1), get_route_color(1)
+PUBCOUNT 8
+================================================================================
+backend/app/services/mta/feeds.py
+DOTTED app.services.mta.feeds
+INIT False
+DOC NONE
+PUB fetch_feeds_with_metadata, fetch_feeds, parse_feed_message, parse_bytes
+IMPORTS parse_feed_message(2), _gtfs_realtime_pb2(1), fetch_feeds(1), fetch_feeds_with_metadata(1), parse_bytes(1)
+PUBCOUNT 4
+================================================================================
+backend/app/services/mta/realtime.py
+DOTTED app.services.mta.realtime
+INIT False
+DOC Concrete realtime MTA service interface. Consumers import this module when they need a small cross-provider realtime surface; implementation remains split by feed, vehicle, alert, and BusTime lifecycle underneath.
+PUB 
+IMPORTS module-name via parent package
+PUBCOUNT 0
+================================================================================
+backend/app/services/mta/static_gtfs/__init__.py
+DOTTED app.services.mta.static_gtfs
+INIT True
+DOC NONE
+PUB 
+IMPORTS none-from-form
+PUBCOUNT 0
+================================================================================
+backend/app/services/mta/static_gtfs/migration.py
+DOTTED app.services.mta.static_gtfs.migration
+INIT False
+DOC NONE
+PUB SUPPLEMENTED_URL, DATABASE_URL, download_gtfs, migrate
+IMPORTS migrate(1)
+PUBCOUNT 4
+================================================================================
+backend/app/services/mta/static_gtfs/scheduled_arrivals.py
+DOTTED app.services.mta.static_gtfs.scheduled_arrivals
+INIT False
+DOC NONE
+PUB ScheduledArrivalIndex
+IMPORTS ScheduledArrivalIndex(1)
+PUBCOUNT 1
+================================================================================
+backend/app/services/mta/static_gtfs/stop_patterns.py
+DOTTED app.services.mta.static_gtfs.stop_patterns
+INIT False
+DOC NONE
+PUB DEFAULT_ARTIFACT, normalize_station_name, StopPatternIndex
+IMPORTS normalize_station_name(6)
+PUBCOUNT 3
+================================================================================
+backend/app/services/mta/static_gtfs/store.py
+DOTTED app.services.mta.static_gtfs.store
+INIT False
+DOC Bounded intermediate-stop cache lives with the static-pattern store. The cache is private to this GTFS lifecycle. Hits resolve from the in-memory index and never query Postgres on the trip request path.
+PUB init_pool, close_pool, INTERMEDIATE_STOPS_CACHE_MAXSIZE, BoundedIntermediateStopsCache, GTFSStaticData
+IMPORTS GTFSStaticData(1), close_pool(1), init_pool(1)
+PUBCOUNT 5
+================================================================================
+backend/app/services/mta/subway.py
+DOTTED app.services.mta.subway
+INIT False
+DOC NONE
+PUB parse_vehicle_positions, build_subway_vehicle_positions, get_stalled_trains, detect_stalled_trains
+IMPORTS build_subway_vehicle_positions(1), get_stalled_trains(1)
+PUBCOUNT 4
+================================================================================
+backend/app/services/parsing.py
+DOTTED app.services.parsing
+INIT False
+DOC NONE
+PUB finite_float, nonnegative_int
+IMPORTS finite_float(3), nonnegative_int(1)
+PUBCOUNT 2
+================================================================================
+backend/app/services/text.py
+DOTTED app.services.text
+INIT False
+DOC Rider-facing text sanitization for trip narration. Leaf module: no internal trips dependencies. Scoring, candidates, and incidents all import ``safe_text`` from here, which is why it lives on its own.
+PUB collapse_whitespace, sanitize_recommendation, safe_text
+IMPORTS collapse_whitespace(3)
+PUBCOUNT 3
+================================================================================
+backend/app/services/trips/__init__.py
+DOTTED app.services.trips
+INIT True
+DOC NONE
+PUB 
+IMPORTS scoring(10), candidates(6), enrichment(2), direct_plan(1)
+PUBCOUNT 0
+================================================================================
+backend/app/services/trips/candidates.py
+DOTTED app.services.trips.candidates
+INIT False
+DOC Build deterministic route candidates and rider-facing comparison copy.
+PUB strip_model_control_blocks, build_route_candidates, collect_route_and_bus_ids, build_route_candidate_labels, route_family_signature, dedupe_route_families
+IMPORTS module-name via parent package
+PUBCOUNT 6
+================================================================================
+backend/app/services/trips/crowds/__init__.py
+DOTTED app.services.trips.crowds
+INIT True
+DOC NONE
+PUB 
+IMPORTS event_provider(4), event(3), search(2), evidence(1), hotspots(1)
+PUBCOUNT 0
+================================================================================
+backend/app/services/trips/crowds/event.py
+DOTTED app.services.trips.crowds.event
+INIT False
+DOC Associate neutral event-provider facts with concrete route candidates. Raw Ticketmaster payloads never reach scoring or the conversational model.
+PUB RoutePoint, route_points, associate_events, search_hubs, collect_route_event_evidence, route_event_penalty
+IMPORTS module-name via parent package
+PUBCOUNT 6
+================================================================================
+backend/app/services/trips/crowds/event_provider.py
+DOTTED app.services.trips.crowds.event_provider
+INIT False
+DOC Ticketmaster event facts and neutral venue/event normalization. This module owns provider I/O, bounded caching, Ticketmaster payload parsing, and the static venue facts used by trip crowd evidence. Agent capabilities adapt its result into ``ToolResult``; trip services can call it directly.
+PUB TICKETMASTER_EVENTS_URL, TICKETMASTER_NYC_LATLONG, EVENT_LOOKUP_DEFAULT_RADIUS_MILES, EVENT_LOOKUP_MAX_RADIUS_MILES, EVENT_LOOKUP_DEFAULT_TIMEOUT_S, EVENT_LOOKUP_MAX_TIMEOUT_S, EVENT_LOOKUP_CACHE_TTL_S, EVENT_LOOKUP_CACHE_PREFIX, EVENT_LOOKUP_PAGE_SIZE, EVENT_LOOKUP_MAX_PAGES, EVENT_LOOKUP_MAX_RESULTS, EventLookupResult, VENUE_CROWD_TABLE, estimate_event_duration, normalize_venue_name, fetch_json, parse_event, lookup_events
+IMPORTS module-name via parent package
+PUBCOUNT 18
+================================================================================
+backend/app/services/trips/crowds/evidence.py
+DOTTED app.services.trips.crowds.evidence
+INIT False
+DOC Provider-neutral collection and verification of route crowd evidence.
+PUB collect
+IMPORTS module-name via parent package
+PUBCOUNT 1
+================================================================================
+backend/app/services/trips/crowds/hotspots.py
+DOTTED app.services.trips.crowds.hotspots
+INIT False
+DOC Curated event clusters associated with complete candidate transit paths.
+PUB CrowdHotspot, HotspotHit, HOTSPOTS, find_hotspot_hits
+IMPORTS HotspotHit(5)
+PUBCOUNT 4
+================================================================================
+backend/app/services/trips/crowds/search.py
+DOTTED app.services.trips.crowds.search
+INIT False
+DOC Five-minute cache boundary for bounded Grok crowd research.
+PUB search_hotspots
+IMPORTS module-name via parent package
+PUBCOUNT 1
+================================================================================
+backend/app/services/trips/crowds/search_normalization.py
+DOTTED app.services.trips.crowds.search_normalization
+INIT False
+DOC Validate and normalize untrusted Grok crowd-search output.
+PUB parse_json, response_text, normalize_search_payload
+IMPORTS parse_json(1), response_text(1)
+PUBCOUNT 3
+================================================================================
+backend/app/services/trips/crowds/search_provider.py
+DOTTED app.services.trips.crowds.search_provider
+INIT False
+DOC Bounded async Grok transport for route-scoped crowd research.
+PUB PROMPT, run_search, close_crowd_search_client
+IMPORTS close_crowd_search_client(1)
+PUBCOUNT 3
+================================================================================
+backend/app/services/trips/direct_plan.py
+DOTTED app.services.trips.direct_plan
+INIT False
+DOC Direct Live Map trip planning: shared preparation, deterministic selection. The non-conversational ``POST /api/trip`` endpoint consumes the same model-free canonical pipeline as the agent path (``prepare_single_leg``): routing, semantic transfer normalization, MTA context, incident-index evidence, c
+PUB DirectTripError, DIRECT_TRIP_DEADLINE_S, NEUTRAL_RECOMMENDATION_FALLBACK, build_recommendation_reasons, format_recommendation_reason, project_route_candidates, plan_direct_trip
+IMPORTS module-name via parent package
+PUBCOUNT 7
+================================================================================
+backend/app/services/trips/enrichment.py
+DOTTED app.services.trips.enrichment
+INIT False
+DOC GTFS + bus leg enrichment for a single route. Independent module: enriches a route's SUBWAY/BUS steps in place with intermediate stop names + coordinates. Strictly fail-open per leg.
+PUB TRIP_GTFS_ENRICH_TIMEOUT_S, enrich_route
+IMPORTS module-name via parent package
+PUBCOUNT 2
+================================================================================
+backend/app/services/trips/itinerary.py
+DOTTED app.services.trips.itinerary
+INIT False
+DOC Canonical itinerary normalizer. Turns already-parsed Google route steps into one immutable dict with seconds-based totals. Pure functions only: no network, no LLM. Google Routes remains the path engine; this module only normalizes.
+PUB TIMEZONE_NAME, TRANSIT_MODES, DEFAULT_DWELL_MINUTES, BOUNDARY_WALK_MIN_METERS, TripClocks, ItineraryTotals, ChainSegment, ChainProjection, LegTiming, LegCursor, build_canonical_itinerary, build_chained_itinerary, build_legs
+IMPORTS TRANSIT_MODES(2), DEFAULT_DWELL_MINUTES(1), build_canonical_itinerary(1), build_chained_itinerary(1)
+PUBCOUNT 13
+================================================================================
+backend/app/services/trips/location.py
+DOTTED app.services.trips.location
+INIT False
+DOC Neutral location value objects and model-free named-place resolution. The route planner and the agent both need the same verified endpoint shape. The agent still owns discovery and profile composition; this module only handles the values and the bounded fallback resolver used when no session-owned p
+PUB KnownPlace, ResolvedPlace, known_place, canonical_display_name, parse_coordinates, resolve_named_place
+IMPORTS ResolvedPlace(4), canonical_display_name(1)
+PUBCOUNT 6
+================================================================================
+backend/app/services/trips/preparation/__init__.py
+DOTTED app.services.trips.preparation
+INIT True
+DOC NONE
+PUB 
+IMPORTS dependencies(1)
+PUBCOUNT 0
+================================================================================
+backend/app/services/trips/preparation/combine.py
+DOTTED app.services.trips.preparation.combine
+INIT False
+DOC Combine prepared legs into index-aligned route candidate chains.
+PUB combine_prepared_chains
+IMPORTS combine_prepared_chains(3)
+PUBCOUNT 1
+================================================================================
+backend/app/services/trips/preparation/constraints.py
+DOTTED app.services.trips.preparation.constraints
+INIT False
+DOC Canonical route constraints and passenger-safe candidate digests.
+PUB ROUTE_STATUSES, RouteConstraintFacts, route_constraints, candidate_digest, route_status
+IMPORTS route_constraints(4)
+PUBCOUNT 5
+================================================================================
+backend/app/services/trips/preparation/context.py
+DOTTED app.services.trips.preparation.context
+INIT False
+DOC Neutral boundaries for the shared route-preparation pipeline. Agent ``ToolContext`` and ``ToolResult`` stay at the capability boundary. The model-free planner uses these small values so direct REST planning can consume the same computation without importing agent runtime state.
+PUB RoutePreparationContext, RoutePreparationFailure, is_route_preparation_failure
+IMPORTS RoutePreparationFailure(2)
+PUBCOUNT 3
+================================================================================
+backend/app/services/trips/preparation/dependencies.py
+DOTTED app.services.trips.preparation.dependencies
+INIT False
+DOC Neutral preparation-only bindings for the shared ``prepare_single_leg``. The direct Live Map endpoint (``app.routers.trips`` -> ``app.services.trips.direct_plan``) must never load the nested-advisor stack. This module builds the narrow ``PreparationDependencies`` consumed by ``prepare_single_leg`` (
+PUB TRIP_CONTEXT_TIMEOUT_S, LIVE_EVIDENCE_TTL_S, EVENT_EVIDENCE_TTL_S, build_preparation_dependencies, new_preparation_timings
+IMPORTS module-name via parent package
+PUBCOUNT 5
+================================================================================
+backend/app/services/trips/preparation/evidence.py
+DOTTED app.services.trips.preparation.evidence
+INIT False
+DOC Evidence scoping and coverage helpers for prepared route options.
+PUB coverage_for_prepared, serialize_evidence_envelopes, merge_evidence_envelopes, merge_serialized_envelopes, candidate_evidence_for_route, merge_candidate_evidence, vehicle_claims_for_route, merge_coverage, merge_incident_metadata, merge_incident_metadata_values, merge_event_status, sum_timings
+IMPORTS _vehicle_claim_is_layover(1)
+PUBCOUNT 12
+================================================================================
+backend/app/services/trips/preparation/finalize.py
+DOTTED app.services.trips.preparation.finalize
+INIT False
+DOC Bind prepared route rows to one immutable canonical evidence snapshot.
+PUB finalize_aggregate
+IMPORTS finalize_aggregate(1)
+PUBCOUNT 1
+================================================================================
+backend/app/services/trips/preparation/input.py
+DOTTED app.services.trips.preparation.input
+INIT False
+DOC Neutral route-request validation and provider-recovery helpers.
+PUB MAX_ROUTE_ID_LENGTH, MAX_NORMALIZED_ROUTE_IDS, normalize_route_id, normalize_route_ids, point_label, summary_eta_minutes, parse_rfc3339, route_with_recovery, recover_structural_route, prepare_structural_candidates, derive_arrive_by_departure, validated_waypoints
+IMPORTS normalize_route_ids(4), parse_rfc3339(1)
+PUBCOUNT 12
+================================================================================
+backend/app/services/trips/preparation/multi_stop.py
+DOTTED app.services.trips.preparation.multi_stop
+INIT False
+DOC Bounded, candidate-dependent preparation for ordered multi-stop trips.
+PUB MULTI_STOP_BEAM_WIDTH, MULTI_STOP_PROVIDER_WIDTH, MAX_CANDIDATES, prepare_multi_stop
+IMPORTS prepare_multi_stop(1)
+PUBCOUNT 4
+================================================================================
+backend/app/services/trips/preparation/prepare.py
+DOTTED app.services.trips.preparation.prepare
+INIT False
+DOC Gather, enrich, and score route candidates without nested model selection. Shared by the conversational ``prepare_route_options`` path and the direct Live Map trip endpoint.
+PUB PreparationDependencies, PreparedLeg, AggregatePreparation, PreparedChain, prepare_single_leg
+IMPORTS AggregatePreparation(2), PreparationDependencies(1), PreparedLeg(1), prepare_single_leg(1)
+PUBCOUNT 5
+================================================================================
+backend/app/services/trips/route_incidents/__init__.py
+DOTTED app.services.trips.route_incidents
+INIT True
+DOC NONE
+PUB 
+IMPORTS scan(2)
+PUBCOUNT 0
+================================================================================
+backend/app/services/trips/route_incidents/association.py
+DOTTED app.services.trips.route_incidents.association
+INIT False
+DOC Bounded candidate evidence associations shared by incident handoff paths. This leaf module deliberately has no dependency on the incident scanner, route advisor, or provider clients. It establishes one serialization contract for the candidate-scoped association returned by the local cached-511NY mat
+PUB MAX_ASSOCIATED_CANDIDATES, MAX_ASSOCIATED_MODES, MAX_NEARBY_STOP_ASSOCIATIONS, ALLOWED_ASSOCIATED_MODES, ALLOWED_RELEVANCE, ALLOWED_IMPACT_SCOPES, ALLOWED_MATCH_SOURCES, normalize_matcher_association, attach_verified_match_association
+IMPORTS _CANDIDATE_ROUTE_ID(1)
+PUBCOUNT 9
+================================================================================
+backend/app/services/trips/route_incidents/context.py
+DOTTED app.services.trips.route_incidents.context
+INIT False
+DOC Candidate-aware stop context for local incident searches. This module intentionally works on the parsed Google Routes dictionaries used by both trip entry points. It does not enrich a route or contact GTFS/any upstream service; callers may pass already-enriched intermediate stops.
+PUB valid_coordinate_pair, CandidateStopAssociation, CandidateStopContext, extract_candidate_stop_context
+IMPORTS CandidateStopContext(1), extract_candidate_stop_context(1), valid_coordinate_pair(1)
+PUBCOUNT 4
+================================================================================
+backend/app/services/trips/route_incidents/index_adapter.py
+DOTTED app.services.trips.route_incidents.index_adapter
+INIT False
+DOC Pure context matching and projection for the incident-index lookup. Normal rider routing performs exactly one immediate synchronous index lookup: no provider scan, X/web search, cache, retry, timeout, or background queue runs on the request path. These helpers only translate candidate stop contexts 
+PUB extract_lookup_context, project_records
+IMPORTS none-from-form
+PUBCOUNT 2
+================================================================================
+backend/app/services/trips/route_incidents/matching.py
+DOTTED app.services.trips.route_incidents.matching
+INIT False
+DOC Deterministic local matching of cached 511NY incidents to route stops. No function here fetches 511NY (or accepts URLs, credentials, or arbitrary geography). The only searchable geography is the supplied candidate context.
+PUB MILES_TO_METERS, DEFAULT_SEARCH_RADIUS_MILES, MAX_SEARCH_RADIUS_MILES, MAX_NEARBY_STOP_MATCHES, MAX_TOOL_INCIDENTS, LOCAL_511NY_SEARCH_TOOL_SCHEMA, incident_points, IncidentStopMatch, MatchedIncident, match_cached_incidents, Cached511NYSearchTool
+IMPORTS _as_mapping(1), match_cached_incidents(1)
+PUBCOUNT 11
+================================================================================
+backend/app/services/trips/route_incidents/merge.py
+DOTTED app.services.trips.route_incidents.merge
+INIT False
+DOC Conservative, source-aware incident evidence filtering and merging.
+PUB filter_current_incidents, merge_incident_evidence
+IMPORTS none-from-form
+PUBCOUNT 2
+================================================================================
+backend/app/services/trips/route_incidents/scan.py
+DOTTED app.services.trips.route_incidents.scan
+INIT False
+DOC Candidate-scoped incident evidence from the deterministic incident index. Normal rider routing performs exactly one immediate batched index lookup, bounded and off the async event loop: no provider scan, X/web search, retry, or background queue runs on the request path. The background incident job o
+PUB COMPLETE_INCIDENT_SCAN_STATUS, INCOMPLETE_INCIDENT_DISCLOSURE, incident_scan_is_complete, contains_unsafe_incident_clear, incident_lookup_succeeded, scan_route_incidents, build_candidate_stop_context
+IMPORTS incident_scan_is_complete(1)
+PUBCOUNT 7
+================================================================================
+backend/app/services/trips/scoring.py
+DOTTED app.services.trips.scoring
+INIT False
+DOC Route scoring + route-step accessors. Pure functions over Google-parsed route step dicts. Depends only on ``text`` (for ``safe_text``). ``step_route_id`` lives here for route scoring and shared candidate display helpers.
+PUB route_total_minutes, route_transfer_count, step_route_id, route_alert_hits, route_alert_penalty, finalized_route_score, component_score_total, alert_penalty_from_score, route_score, score_routes, score_by_index, normalized_mode
+IMPORTS module-name via parent package
+PUBCOUNT 12
+================================================================================
+backend/app/services/trips/selection_decision.py
+DOTTED app.services.trips.selection_decision
+INIT False
+DOC Grounded route-candidate evaluation and deterministic fallback choice.
+PUB CandidateDecisionEvaluation, FallbackCandidateDecision, DominatedSelectionDecision, evaluate_candidate_decision, evaluate_dominated_selection, select_fallback_candidate
+IMPORTS none-from-form
+PUBCOUNT 6
+================================================================================
+backend/app/services/trips/selection_record.py
+DOTTED app.services.trips.selection_record
+INIT False
+DOC Canonical persisted record for a completed route-selection decision.
+PUB RoutePenalty, RouteSelectionDecision, build_route_selection_decision
+IMPORTS build_route_selection_decision(2)
+PUBCOUNT 3
+================================================================================
+backend/app/services/trips/transfer_semantics.py
+DOTTED app.services.trips.transfer_semantics
+INIT False
+DOC Normalize transit transfer movement before scoring and projection.
+PUB WALK_SPEED_MPS, EndpointIdentity, normalize_routes, normalize_route, route_transfer_facts, route_walking_totals, route_accessibility, endpoint_fields, endpoint_id, endpoint_identity, stop_details, endpoint_label
+IMPORTS normalize_routes(2), route_accessibility(1)
+PUBCOUNT 12

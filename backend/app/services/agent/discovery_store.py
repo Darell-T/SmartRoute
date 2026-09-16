@@ -203,7 +203,7 @@ def display_waypoint_labels(
 def _identity_key(place: dict[str, Any]) -> str:
     """Return the private, stable identity used by the session registry."""
 
-    kind, value = _place_identity(place)
+    kind, value = place_identity(place)
     return f"{kind}:{value}"
 
 
@@ -213,7 +213,7 @@ def presented_entity_registry(session: dict | None) -> list[dict[str, Any]]:
     return entity_registry.snapshot(session)
 
 
-def _key(discovery_set_id: str) -> str:
+def cache_key(discovery_set_id: str) -> str:
     return f"{DISCOVERY_SET_PREFIX}{discovery_set_id}"
 
 
@@ -266,7 +266,7 @@ def store_discovery_set(
     for place in places:
         if not isinstance(place, dict):
             continue
-        identity = _place_identity(place)
+        identity = place_identity(place)
         if identity in seen:
             continue
         seen.add(identity)
@@ -292,7 +292,7 @@ def store_discovery_set(
         "places": normalized,
     }
     cache.cache_set(
-        _key(set_id),
+        cache_key(set_id),
         json.dumps(record, separators=(",", ":"), default=str),
         int(ttl_seconds),
         fail_open=True,
@@ -300,11 +300,11 @@ def store_discovery_set(
     return set_id
 
 
-def _place_identity(place: dict[str, Any]) -> tuple[str, str]:
+def place_identity(place: dict[str, Any]) -> tuple[str, str]:
     provider_id = str(place.get("provider_place_id") or "").strip().casefold()
     if provider_id:
         return "provider", provider_id
-    name = _normalized_name(place.get("name"))
+    name = normalized_name(place.get("name"))
     address = " ".join(str(place.get("address") or "").casefold().split())
     if name or address:
         return "name_address", f"{name}|{address}"
@@ -404,7 +404,7 @@ def load_discovery_set(
 ) -> dict[str, Any] | None:
     if not discovery_set_id or not session_id:
         return None
-    raw = cache.cache_get(_key(discovery_set_id), fail_open=True)
+    raw = cache.cache_get(cache_key(discovery_set_id), fail_open=True)
     if raw is None:
         return None
     try:
@@ -455,7 +455,7 @@ def resolve_presented_place_reference(
     )
 
 
-def _normalized_name(value: object) -> str:
+def normalized_name(value: object) -> str:
     """Normalize a rider-visible place name for conservative name matching."""
 
     text = str(value or "").casefold().replace("\u2019", "'")

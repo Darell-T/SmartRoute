@@ -553,7 +553,7 @@ async def _enrich_and_score_leg(
     def mark(name: str) -> None:
         _mark_phase(name, plan_origin, timings, dependencies, ctx)
 
-    route_ids, bus_route_ids = dependencies.candidates._collect_route_and_bus_ids(
+    route_ids, bus_route_ids = dependencies.candidates.collect_route_and_bus_ids(
         parsed_routes
     )
     avoid_crowds = bool(tool_input.get("avoid_crowds"))
@@ -647,7 +647,7 @@ async def _enrich_and_score_leg(
             evidence_envelopes["advisor"], empty=[]
         )
         scoring_started = time.monotonic()
-        scored = dependencies.scoring._score_routes(
+        scored = dependencies.scoring.score_routes(
             parsed_routes,
             relevant_alerts,
             ticketmaster_event_impacts=event_impacts,

@@ -130,7 +130,7 @@ async def _enrich_bus_legs(steps: list[dict]) -> dict:
     return metrics
 
 
-async def _enrich_route(gtfs, route: list[dict]) -> dict:
+async def enrich_route(gtfs, route: list[dict]) -> dict:
     """Enrich one route's SUBWAY + BUS legs in place. Returns leg metrics."""
     sub = await _enrich_subway_legs(gtfs, route)
     bus = await _enrich_bus_legs(route)

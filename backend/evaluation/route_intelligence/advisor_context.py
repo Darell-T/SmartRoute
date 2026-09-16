@@ -187,7 +187,7 @@ def build_advisor_payload(
 
     payload: dict[str, Any] = {
         "routes": routes,
-        "route_candidate_labels": candidates._build_route_candidate_labels(routes),
+        "route_candidate_labels": candidates.build_route_candidate_labels(routes),
         "service_alerts": fresh_values("alerts", service_alerts),
         "planning_mode": parsed_mode.value,
         "incidents": [],

@@ -240,7 +240,7 @@ class AnthropicPlanLiveFixtureContractTests(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(
             discover_places.search_local_places,
-            "_provider_search",
+            "provider_search",
             new=provider,
         ):
             result = await discover_places.execute(
@@ -274,7 +274,7 @@ class AnthropicPlanReliabilityLiveTests(
         with (
             patch.object(
                 discover_places.search_local_places,
-                "_provider_search",
+                "provider_search",
                 new=AsyncMock(return_value=_kyuramen_branches()),
             ),
             patch(

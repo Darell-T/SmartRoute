@@ -6,7 +6,7 @@ collects it. Drives the *real* agent loop (``loop.run_agent_turn``), the real
 the real candidate/discovery/trip/session stores, the real tool ledger, and
 real SSE events. Only deterministic Anthropic rounds and the documented
 genuine provider/data seams are scripted (``prepare_single_leg`` provider
-route/evidence seam, ``_enrich_route`` legacy enrichment guard, ``lookup_arrivals``
+route/evidence seam, ``enrich_route`` legacy enrichment guard, ``lookup_arrivals``
 live MTA arrivals, ``new_candidate_id`` opaque id generation, the
 Google-Routes/MTA provider seams of ``tests.conversation.conversation_cancellation_fixtures``,
 plus a recording wrapper around the real candidate store).
@@ -127,7 +127,7 @@ class CancellationBase(unittest.IsolatedAsyncioTestCase):
             return_value=ToolResult(ok=False, error="fixture: no live arrivals")
         )
         patchers = [
-            patch("app.services.trips.enrichment._enrich_route", new=enrich),
+            patch("app.services.trips.enrichment.enrich_route", new=enrich),
             patch("app.services.agent.tools.transit.lookup_arrivals.execute", new=arrivals),
         ]
         if mocks is not None:

@@ -19,7 +19,7 @@ class PresentRouteCorrectionTests(PresentRouteFramingTestMixin, unittest.Isolate
     async def test_present_does_not_refresh_canonical_snapshot(self):
         ctx, candidate_id, _set_id = await self._prepared_context()
         with patch(
-            "app.services.trips.enrichment._enrich_route",
+            "app.services.trips.enrichment.enrich_route",
             new=AsyncMock(side_effect=AssertionError("snapshot was refreshed")),
         ) as enrich:
             result = await present_route.execute(
@@ -326,7 +326,7 @@ class PresentRouteCorrectionTests(PresentRouteFramingTestMixin, unittest.Isolate
     async def test_neutral_follow_up_accompanies_a_grounded_explanation(self):
         ctx, candidate_id, _set_id = await self._prepared_context()
         with patch(
-            "app.services.trips.enrichment._enrich_route",
+            "app.services.trips.enrichment.enrich_route",
             new=AsyncMock(return_value=None),
         ):
             result = await present_route.execute(
@@ -347,7 +347,7 @@ class PresentRouteCorrectionTests(PresentRouteFramingTestMixin, unittest.Isolate
     async def test_missing_explanation_gets_one_correction_before_grounded_fallback(self):
         ctx, candidate_id, set_id = await self._prepared_context()
         with patch(
-            "app.services.trips.enrichment._enrich_route",
+            "app.services.trips.enrichment.enrich_route",
             new=AsyncMock(return_value=None),
         ):
             first = await present_route.execute(
@@ -391,7 +391,7 @@ class PresentRouteCorrectionTests(PresentRouteFramingTestMixin, unittest.Isolate
         prepared.scored = [
             {
                 "index": index,
-                **scoring._route_score(
+                **scoring.route_score(
                     route,
                     [],
                     route_index=index,
@@ -406,7 +406,7 @@ class PresentRouteCorrectionTests(PresentRouteFramingTestMixin, unittest.Isolate
         ):
             ctx, _candidate_id, set_id = await self._prepared_context(prepared)
             with patch(
-                "app.services.trips.enrichment._enrich_route",
+                "app.services.trips.enrichment.enrich_route",
                 new=AsyncMock(return_value=None),
             ):
                 first = await present_route.execute(
@@ -466,7 +466,7 @@ class PresentRouteCorrectionTests(PresentRouteFramingTestMixin, unittest.Isolate
         prepared.scored = [
             {
                 "index": index,
-                **scoring._route_score(
+                **scoring.route_score(
                     route,
                     [],
                     route_index=index,
