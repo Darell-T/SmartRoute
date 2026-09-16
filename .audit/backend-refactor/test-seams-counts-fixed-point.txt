@@ -1,0 +1,16 @@
+name	count
+loop.client	136
+loop.TurnTrace	90
+loop.run_agent_turn	24
+_tools_for_state	24
+agent_policy	16
+budget	49
+evaluate_simple_arithmetic	3
+_sanitize_rider_text	3
+TOOL_REGISTRY	45
+turn_stream	14
+_messages_from_history	1
+_build_stream_kwargs	3
+_web_search_tool	1
+TurnToolLedger	4
+public_surface	63

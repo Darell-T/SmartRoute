@@ -6,15 +6,6 @@ from typing import Any
 
 MAX_SAVED_PLACES = 8
 MAX_FREQUENT_PLACES = 8
-_PREFERENCE_KEYS = (
-    "avoid_stairs",
-    "avoid_crowds",
-    "prefer_fewer_transfers",
-    "walking_preference",
-    "walking_tolerance_minutes",
-    "preferred_modes",
-    "accessibility_required",
-)
 
 
 def default_preferences() -> dict[str, Any]:

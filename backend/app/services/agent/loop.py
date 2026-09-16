@@ -41,7 +41,6 @@ client = observability.wrap_anthropic(
     anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"), max_retries=0)
 )
 
-AGENT_TURN_DEADLINE_S = float(os.getenv("AGENT_TURN_DEADLINE_S", "50"))
 AGENT_MOCK_MODE = runtime.enabled("AGENT_MOCK_MODE")
 MAX_TOOL_EXECUTIONS_PER_TURN = 12
 MAX_TOOL_EXECUTIONS_PER_NAME = 4
@@ -289,7 +288,7 @@ def _turn_dependencies(session_id: str = "") -> turn_stream.TurnDependencies:
         return _tools_for_state(*args, **kwargs)
 
     return turn_stream.TurnDependencies(
-        deadline_s=AGENT_TURN_DEADLINE_S,
+        deadline_s=session_module.AGENT_TURN_DEADLINE_S,
         client=client,
         tool_registry=TOOL_REGISTRY,
         make_ledger=TurnToolLedger,

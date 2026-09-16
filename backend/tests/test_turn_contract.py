@@ -24,6 +24,12 @@ class TurnContractTests(unittest.TestCase):
         assert contract.goal("route").depends_on == ("destination",)
         assert contract.ready_goal_keys() == ("destination",)
         assert contract.ready_goal_keys({"destination": GoalState.EVIDENCE_READY}) == ("route",)
+        assert contract.ready_goal_keys(
+            {"destination": {"state": GoalState.EVIDENCE_READY}}
+        ) == ("route",)
+        assert contract.ready_goal_keys({"destination": {}}) == ("destination",)
+        with pytest.raises(ContractValidationError):
+            contract.ready_goal_keys({"destination": "not-a-state"})
 
     def test_rejects_duplicate_unknown_and_cyclic_dependencies(self) -> None:
         with pytest.raises(ContractValidationError):

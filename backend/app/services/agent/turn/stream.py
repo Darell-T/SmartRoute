@@ -31,6 +31,7 @@ from app.services.agent.turn.finalization import (
 )
 from app.services.agent.turn.ledger import TurnToolLedger
 from app.services.agent.turn.tool_round import (
+    ToolRoundResultMessage,
     TurnDeadlineReachedError,
     mixed_terminal_and_capability,
 )
@@ -530,12 +531,12 @@ def resolve_model_iteration(
 
 
 def _capture_tool_round_message(item: object) -> CapabilityIteration | None:
-    if not isinstance(item, dict) or "__tool_result_message__" not in item:
+    if not isinstance(item, ToolRoundResultMessage):
         return None
     return CapabilityIteration(
-        result_message=item["__tool_result_message__"],
-        outcomes=tuple(item.get("__tool_outcomes__") or ()),
-        deadline_reached=bool(item.get("__deadline_reached__")),
+        result_message={"role": item.role, "content": item.content},
+        outcomes=tuple(item.tool_outcomes),
+        deadline_reached=bool(item.deadline_reached),
     )
 
 

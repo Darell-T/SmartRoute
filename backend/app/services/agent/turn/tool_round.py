@@ -39,6 +39,15 @@ from app.services.agent.turn.ledger import (
 class TurnDeadlineReachedError(Exception):
     """Internal control flow that still reaches the turn's single DoneEvent."""
 
+
+@dataclass(frozen=True)
+class ToolRoundResultMessage:
+    role: str
+    content: object
+    deadline_reached: bool
+    tool_outcomes: tuple[tuple[str, dict, object], ...]
+
+
 _UNOFFERED_TOOL_ERROR = "tool not offered on this turn"
 _TERMINAL_TOOLS = frozenset({"complete_turn"})
 _CAPABILITY_TOOLS = frozenset(
@@ -311,17 +320,18 @@ class _ToolRoundExecution:
             content.append(result_content)
             for event in events:
                 yield event
-        yield {
-            "__tool_result_message__": {"role": "user", "content": content},
-            "__deadline_reached__": any(
+        yield ToolRoundResultMessage(
+            role="user",
+            content=content,
+            deadline_reached=any(
                 not result.ok and result.error == "turn deadline reached"
                 for result in outcomes
             ),
-            "__tool_outcomes__": [
+            tool_outcomes=tuple(
                 (block.name, self.tool_inputs[block.id], result)
                 for block, result in zip(self.blocks, outcomes, strict=False)
-            ],
-        }
+            ),
+        )
 
     def _record_result(self, block, result: ToolResult) -> tuple[dict, list]:
         name = getattr(block, "name", "")
