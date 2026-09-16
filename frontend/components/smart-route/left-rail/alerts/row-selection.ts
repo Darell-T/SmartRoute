@@ -4,10 +4,12 @@ export function toggleAlertRowSelection(open: boolean): boolean {
   return !open;
 }
 
-export function useAlertRowSelection(initialOpen = false): {
+type AlertRowSelection = {
   open: boolean;
   toggle: () => void;
-} {
+};
+
+export function useAlertRowSelection(initialOpen = false): AlertRowSelection {
   const [open, setOpen] = useState(initialOpen);
 
   return {

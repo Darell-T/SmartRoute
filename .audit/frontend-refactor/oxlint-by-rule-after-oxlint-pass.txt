@@ -1,0 +1,10 @@
+total 99
+
+BY RULE
+40	anti-slop(no-runtime-typeof)
+32	anti-slop(require-safety-comment-for-type-assertion)
+12	anti-slop(no-unknown-parameters)
+9	anti-slop(no-unsafe-dictionary-type)
+2	anti-slop(no-chained-type-assertions)
+2	anti-slop(no-known-value-widening)
+2	eslint(require-yield)

@@ -47,11 +47,11 @@ export function ChatSuggestions({
 
   function handleRailKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-    const current = (event.target as HTMLElement).closest("button");
+    const current = event.target instanceof Element ? event.target.closest("button") : null;
     const buttons = Array.from(
       railRef.current?.querySelectorAll<HTMLButtonElement>("button") ?? [],
     );
-    const currentIndex = current ? buttons.indexOf(current as HTMLButtonElement) : -1;
+    const currentIndex = current instanceof HTMLButtonElement ? buttons.indexOf(current) : -1;
     if (currentIndex < 0) return;
     const offset = event.key === "ArrowRight" ? 1 : -1;
     const next = buttons[currentIndex + offset];

@@ -307,14 +307,14 @@ export type RailToneKey =
   | "coral"
   | "sage";
 
-export const RAIL_TONE_COLORS: Record<RailToneKey, string> = {
+export const RAIL_TONE_COLORS = {
   muted: "var(--sr-muted)",
   ink: "var(--sr-fg)",
   cyan: "var(--sr-cyan)",
   amber: "var(--sr-amber)",
   coral: "var(--sr-coral)",
   sage: "var(--sr-sage)",
-};
+} satisfies Record<RailToneKey, string>;
 
 /* ── MTA line palette (canonical brand colors) ─────────────────── */
 // Single source of truth lives in lib/mta-colors.json.

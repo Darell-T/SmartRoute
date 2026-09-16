@@ -131,7 +131,7 @@ function AlternateRouteCard({
   const path = alternatePath(alternative);
   const leaves = alternateLeaves(alternative);
   const duration =
-    typeof alternative.totalMinutes === "number"
+    alternative.totalMinutes != null
       ? formatDurationLabel(`${alternative.totalMinutes} min`)
       : "Live";
   const motionState = altMotion(shouldReduceMotion);

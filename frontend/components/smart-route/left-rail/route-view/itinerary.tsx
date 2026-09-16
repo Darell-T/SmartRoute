@@ -192,7 +192,7 @@ function TypedRouteReasoning({ text }: { text: string }) {
 
   useEffect(() => {
     let animationFrame = 0;
-    let timer: number | undefined;
+    let timer: number | null = null;
 
     if (!cleaned) {
       animationFrame = window.requestAnimationFrame(() => {
@@ -218,15 +218,16 @@ function TypedRouteReasoning({ text }: { text: string }) {
       timer = window.setInterval(() => {
         index = Math.min(cleaned.length, index + charactersPerTick);
         setVisibleText(cleaned.slice(0, index));
-        if (index >= cleaned.length && typeof timer === "number") {
+        if (index >= cleaned.length && timer !== null) {
           window.clearInterval(timer);
+          timer = null;
         }
       }, typingDelayMs);
     });
 
     return () => {
       window.cancelAnimationFrame(animationFrame);
-      if (typeof timer === "number") {
+      if (timer !== null) {
         window.clearInterval(timer);
       }
     };

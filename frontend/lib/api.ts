@@ -36,7 +36,7 @@ type PlanTripOptions = {
 function signalWithTimeout(
   timeoutMs: number,
   externalSignal?: AbortSignal,
-): { signal: AbortSignal; cleanup: () => void } {
+) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 

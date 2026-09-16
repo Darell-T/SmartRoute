@@ -10,6 +10,9 @@ const backendHost = safeBackendHost(backendBase);
 const CONNECT_TIMEOUT_MS = 10_000;
 const REQUEST_ID_HEADER = "X-SmartRoute-Request-Id";
 
+interface StreamProxyHeaders {
+  [headerName: string]: string;
+}
 type FailurePhase = "connect" | "upstream_status" | "stream";
 type AbortSource = "client" | "connect_timeout" | "unknown";
 
@@ -218,15 +221,18 @@ export async function streamProxyToBackend(
 
   let upstream: Response;
   try {
+    const headers: StreamProxyHeaders = {
+      "X-App-Key": appKey,
+      [REQUEST_ID_HEADER]: correlationId,
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+    };
+    if (principal) {
+      headers["X-SmartRoute-Principal"] = principal;
+    }
     upstream = await fetch(`${backendBase}${path}`, {
       method: "POST",
-      headers: {
-        "X-App-Key": appKey,
-        [REQUEST_ID_HEADER]: correlationId,
-        ...(principal ? { "X-SmartRoute-Principal": principal } : {}),
-        "Content-Type": "application/json",
-        Accept: "text/event-stream",
-      },
+      headers,
       body: JSON.stringify(body),
       cache: "no-store",
       signal: controller.signal,

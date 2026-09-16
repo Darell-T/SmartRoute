@@ -18,6 +18,7 @@ import { groupAlertThreads, sortAlertFeedItems, normalizeIssueText } from "./fee
 import type {
   AlertFeedItem,
   AlertFeedSeverity,
+  AlertFeedSource,
   AlertLifecycle,
   AlertUpdateEntry,
   FeedEvent,
@@ -331,10 +332,12 @@ function feedSeverity(
   return severity === "minor" ? "minor" : "notice";
 }
 
-function sourceFromFeedEvent(event: FeedEvent): {
-  source: "mta" | "nyc-alert" | "social" | "internal";
+type FeedEventSource = {
+  source: AlertFeedSource;
   sourceLabel?: string;
-} {
+};
+
+function sourceFromFeedEvent(event: FeedEvent): FeedEventSource {
   const sourceLabel = event.detail.match(/@[\w_]+/)?.[0];
   if (sourceLabel) {
     return { source: "social", sourceLabel };

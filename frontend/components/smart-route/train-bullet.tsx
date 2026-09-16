@@ -2,7 +2,11 @@
 
 import Image from "next/image";
 
-const BULLET_NAME_BY_ROUTE: Record<string, string> = {
+interface BulletNameByRoute {
+  [routeId: string]: string;
+}
+
+const BULLET_NAME_BY_ROUTE: BulletNameByRoute = {
   "6X": "6d",
   "7X": "7d",
   FX: "fd",

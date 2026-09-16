@@ -68,7 +68,7 @@ export function InlineArrivalCountdown({
   minutes: number | undefined;
   fallback?: string;
 }) {
-  if (typeof minutes !== "number" || !Number.isFinite(minutes)) {
+  if (minutes == null || !Number.isFinite(minutes)) {
     return <span>{fallback}</span>;
   }
 
