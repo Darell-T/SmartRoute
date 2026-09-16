@@ -16,7 +16,7 @@ from app.services.agent import session as session_module
 from app.services.agent.tools import (
     complete_turn,
 )
-from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools.base import ToolContext
 from app.services.agent.tools.route import (
     prepare_route_options,
     present_route,

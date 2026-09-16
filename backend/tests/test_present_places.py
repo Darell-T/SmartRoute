@@ -6,7 +6,7 @@ import unittest
 
 from app.services import cache
 from app.services.agent import discovery_store, trip_state
-from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools.base import ToolContext
 from app.services.agent.tools.places import present_places
 from app.services.agent.turn.completion import evaluate_completion
 from app.services.agent.turn.contract import (

@@ -4,7 +4,7 @@ import json
 import os
 
 from app.services import cache
-from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.base import ToolContext, ToolResult
 from app.services.agent.tools.provider_http import fetch_json
 from app.services.trips import text
 

@@ -8,7 +8,7 @@ import unittest
 from app.services.agent.model import output_projection as model_output_projection
 from app.services.agent.model import policy
 from app.services.agent.tools import ToolSpec, complete_turn, declare_goals
-from app.services.agent.tools._types import ToolContext, ToolOutcome, ToolResult
+from app.services.agent.tools.base import ToolContext, ToolOutcome, ToolResult
 from app.services.agent.turn import tool_round
 from app.services.agent.turn.contract import GoalState
 from app.services.agent.turn.evidence import TurnEvidence

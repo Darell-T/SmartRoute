@@ -4,7 +4,7 @@ import unittest
 
 from app.services.agent import public_surface
 from app.services.agent.passenger_output import truthful_failure_text
-from app.services.agent.tools._types import ToolOutcome, ToolResult
+from app.services.agent.tools.base import ToolOutcome, ToolResult
 from app.services.agent.turn import completion as turn_completion
 from app.services.agent.turn.contract import (
     GoalKind,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 
-from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools.base import ToolContext
 from app.services.agent.turn.evidence import TurnEvidence
 from app.services.agent.turn.tool_round import _missing_verified_destination
 

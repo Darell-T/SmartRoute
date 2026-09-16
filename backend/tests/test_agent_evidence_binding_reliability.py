@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from app.services import cache
-from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.base import ToolContext, ToolResult
 from app.services.agent.tools.transit import check_transit, present_transit
 from app.services.agent.tools.transit import evidence as transit_evidence
 from app.services.agent.turn.contract import GoalKind, OutcomeGoal, TurnContract

@@ -8,7 +8,7 @@ import time
 
 from app.services import geography as geo
 from app.services.agent.discovery_store import normalize_price_level
-from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.base import ToolContext, ToolResult
 from app.services.agent.tools.location_resolution import resolve_named_point
 from app.services.agent.tools.places import geography as conversational_geography
 from app.services.agent.tools.provider_http import fetch_json

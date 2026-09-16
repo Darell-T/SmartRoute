@@ -12,7 +12,7 @@ import dataclasses
 import importlib
 from typing import Any
 
-from app.services.agent.tools._types import ToolResult
+from app.services.agent.tools.base import ToolResult
 from app.services.agent.tools.location_resolution import resolve_named_place
 from app.services.agent.turn.finalization import record_phase_ms
 from app.services.trips.preparation import dependencies as _shared

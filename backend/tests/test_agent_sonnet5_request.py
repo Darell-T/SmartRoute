@@ -7,7 +7,6 @@ import unittest
 from contextlib import asynccontextmanager
 from unittest.mock import patch
 
-from app.services.agent import loop as agent_loop
 from app.services.agent.model import policy
 from app.services.agent.model import request as model_request
 from app.services.agent.turn import stream as turn_stream
@@ -79,8 +78,8 @@ class Sonnet5RequestTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ, {}, clear=False):
             _clear_env("AGENT_AUTO_MODEL", "AGENT_SONNET_MODEL", "AGENT_MODEL")
             mode = policy.policy_for_mode("auto")
-        tools = agent_loop._tools_for_state(mode)
-        kwargs = agent_loop._build_stream_kwargs(
+        tools = model_request.tools_for_state(mode)
+        kwargs = model_request.build_stream_kwargs(
             messages=[{"role": "user", "content": "shape-only"}],
             system_blocks=[{"type": "text", "text": "system"}],
             mode_policy=mode,
@@ -157,13 +156,13 @@ class Sonnet5RequestTests(unittest.IsolatedAsyncioTestCase):
     def test_initial_request_requires_goal_declaration_without_disabling_parallel_calls(self) -> None:
         mode = policy.policy_for_mode("auto")
         evidence = TurnEvidence()
-        tools = agent_loop._tools_for_state(mode, turn_evidence=evidence)
+        tools = model_request.tools_for_state(mode, turn_evidence=evidence)
         request_options = turn_stream._initial_goal_request_options(
             evidence,
             frozenset(tool["name"] for tool in tools),
         )
 
-        kwargs = agent_loop._build_stream_kwargs(
+        kwargs = model_request.build_stream_kwargs(
             messages=[{"role": "user", "content": "shape-only"}],
             system_blocks=[{"type": "text", "text": "system"}],
             mode_policy=mode,
@@ -180,13 +179,13 @@ class Sonnet5RequestTests(unittest.IsolatedAsyncioTestCase):
         evidence.bind_contract(
             TurnContract((OutcomeGoal("response", GoalKind.GENERAL_RESPONSE),))
         )
-        tools = agent_loop._tools_for_state(mode, turn_evidence=evidence)
+        tools = model_request.tools_for_state(mode, turn_evidence=evidence)
         request_options = turn_stream._initial_goal_request_options(
             evidence,
             frozenset(tool["name"] for tool in tools),
         )
 
-        kwargs = agent_loop._build_stream_kwargs(
+        kwargs = model_request.build_stream_kwargs(
             messages=[{"role": "user", "content": "shape-only"}],
             system_blocks=[{"type": "text", "text": "system"}],
             mode_policy=mode,
@@ -208,7 +207,7 @@ class Sonnet5RequestTests(unittest.IsolatedAsyncioTestCase):
             GoalState.EVIDENCE_READY,
             attempted=True,
         )
-        tools = agent_loop._tools_for_state(mode, turn_evidence=evidence)
+        tools = model_request.tools_for_state(mode, turn_evidence=evidence)
         request_options = turn_stream._initial_goal_request_options(
             evidence,
             frozenset(tool["name"] for tool in tools),
@@ -233,7 +232,7 @@ class Sonnet5RequestTests(unittest.IsolatedAsyncioTestCase):
                 GoalState.EVIDENCE_READY,
                 attempted=True,
             )
-        tools = agent_loop._tools_for_state(mode, turn_evidence=evidence)
+        tools = model_request.tools_for_state(mode, turn_evidence=evidence)
         request_options = turn_stream._initial_goal_request_options(
             evidence,
             frozenset(tool["name"] for tool in tools),
@@ -257,7 +256,7 @@ class Sonnet5RequestTests(unittest.IsolatedAsyncioTestCase):
             GoalState.EVIDENCE_READY,
             attempted=True,
         )
-        tools = agent_loop._tools_for_state(mode, turn_evidence=evidence)
+        tools = model_request.tools_for_state(mode, turn_evidence=evidence)
         request_options = turn_stream._initial_goal_request_options(
             evidence,
             frozenset(tool["name"] for tool in tools),

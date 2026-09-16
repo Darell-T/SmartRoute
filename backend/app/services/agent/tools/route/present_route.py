@@ -10,7 +10,7 @@ from app.services.agent import events as agent_events
 from app.services.agent import transcript_store
 from app.services.agent.model.output_projection import project_presented_route
 from app.services.agent.passenger_output import framed_events, validated_framing
-from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.base import ToolContext, ToolResult
 from app.services.agent.tools.route.present_route_commit import (
     record_presentation as _record_presentation,
 )

@@ -31,7 +31,7 @@ from app.routers import agent_chat
 from app.services import admission
 from app.services.agent import candidate_store
 from app.services.agent import trip_state as trip_state_module
-from app.services.agent.tools._types import ToolResult
+from app.services.agent.tools.base import ToolResult
 
 from tests.conversation.conversation_cancellation_fixtures import (
     ACCEPTED_DESTINATION,

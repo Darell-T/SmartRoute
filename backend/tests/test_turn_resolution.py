@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 
 from app.services.agent import session as session_module
-from app.services.agent.tools._types import ToolResult
+from app.services.agent.tools.base import ToolResult
 from app.services.agent.turn import completion as turn_completion
 from app.services.agent.turn.contract import GoalState, OutcomeGoal, TurnContract
 from app.services.agent.turn.evidence import TurnEvidence

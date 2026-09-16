@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import unittest
 
-from app.services.agent import loop, public_surface
+from app.services.agent import public_surface
+from app.services.agent.model import request as model_request
 from app.services.agent.tools import INTERNAL_TOOL_REGISTRY, TOOL_REGISTRY
 from app.services.agent.turn.contract import GoalState, TurnContract
 from app.services.agent.turn.evidence import TurnEvidence
@@ -49,7 +50,7 @@ def _evidence_for(*goals: tuple[str, str, tuple[str, ...]], states=None) -> Turn
 
 def _tool_names(message: str = "", *, evidence: TurnEvidence | None = None) -> set[str]:
     del message
-    schemas = loop._tools_for_state(turn_evidence=evidence)
+    schemas = model_request.tools_for_state(turn_evidence=evidence)
     return {schema["name"] for schema in schemas}
 
 
@@ -67,7 +68,7 @@ class PublicCapabilitySurfaceTests(unittest.TestCase):
             "Tell me a joke.",
         ):
             with self.subTest(message=message):
-                schemas = loop._tools_for_state()
+                schemas = model_request.tools_for_state()
                 assert {schema["name"] for schema in schemas} == _INITIAL
                 assert all("strict" not in schema for schema in schemas)
                 assert public_surface.optional_parameter_count(schemas) == 0

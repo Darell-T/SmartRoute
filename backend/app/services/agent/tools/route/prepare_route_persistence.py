@@ -9,7 +9,7 @@ from typing import Any
 
 from app.services.agent import candidate_store, discovery_store
 from app.services.agent import trip_state as trip_state_module
-from app.services.agent.tools._types import ToolContext, ToolOutcome, ToolResult
+from app.services.agent.tools.base import ToolContext, ToolOutcome, ToolResult
 from app.services.agent.tools.location_resolution import ResolvedPlace
 from app.services.agent.tools.route.preparation_adapter import PreparedLeg
 from app.services.agent.tools.route.prepare_route_branches import (

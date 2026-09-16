@@ -37,7 +37,7 @@ from unittest.mock import patch
 
 from app.services.agent import candidate_store
 from app.services.agent import trip_state as trip_state_module
-from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools.base import ToolContext
 from app.services.agent.tools.route import present_route
 
 from tests.conversation.conversation_cancellation_fixtures import (

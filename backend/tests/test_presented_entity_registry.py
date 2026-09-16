@@ -6,7 +6,7 @@ import unittest
 
 from app.services import cache
 from app.services.agent import discovery_store
-from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools.base import ToolContext
 from app.services.agent.tools.places import place_reference, present_places
 
 

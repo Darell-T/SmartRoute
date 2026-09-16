@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 from app.services import cache
 from app.services.agent import discovery_store
-from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.base import ToolContext, ToolResult
 from app.services.agent.tools.places import discover_places
 from app.services.agent.turn.contract import GoalKind, OutcomeGoal, TurnContract
 from app.services.agent.turn.evidence import TurnEvidence

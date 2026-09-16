@@ -17,7 +17,7 @@ from app.services.agent.model.output_projection import (
     project_model_value,
     project_place_point,
 )
-from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.base import ToolContext, ToolResult
 from app.services.agent.tools.route.present_route_state import is_destination_comparison
 from app.services.agent.tools.route.route_input import point_label, summary_eta_minutes
 from app.services.mta.static_gtfs.stop_patterns import normalize_station_name

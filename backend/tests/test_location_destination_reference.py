@@ -24,7 +24,7 @@ from app.services.agent import (
     presented_entity_registry,
     trip_state,
 )
-from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools.base import ToolContext
 from app.services.agent.tools.location_resolution import resolve_destination_reference
 from app.services.agent.tools.route import prepare_route_options
 

@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 from app.services.agent import candidate_store, loop
 from app.services.agent import session as session_module
 from app.services.agent import trip_state as trip_state_module
-from app.services.agent.tools._types import ToolResult
+from app.services.agent.tools.base import ToolResult
 from app.services.agent.tools.places import discover_places
 from app.services.agent.tools.transit import check_transit
 

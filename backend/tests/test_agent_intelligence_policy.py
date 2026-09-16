@@ -9,7 +9,7 @@ import pytest
 from app.services.agent import loop, session
 from app.services.agent.model import policy
 from app.services.agent.tools import location_resolution as _location
-from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools.base import ToolContext
 from app.services.trips.preparation.input import (
     MAX_NORMALIZED_ROUTE_IDS,
     normalize_route_id,

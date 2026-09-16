@@ -12,7 +12,8 @@ from typing import Any
 from app.services import geography as geo
 from app.services.agent import discovery_store, presented_entity_registry
 from app.services.agent import trip_state as trip_state_module
-from app.services.agent.tools._types import ToolContext, ToolOutcome, ToolResult
+from app.services.agent.tool_input_policy import validated_goal_key
+from app.services.agent.tools.base import ToolContext, ToolOutcome, ToolResult
 from app.services.agent.tools.places import damn_lines, search_local_places
 from app.services.agent.tools.places import geography as conversational_geography
 from app.services.agent.turn.contract import GoalKind
@@ -269,40 +270,14 @@ DISCOVER_PLACES_SCHEMA = {
 }
 
 
-def _validate_goal_key(tool_input: dict, ctx: ToolContext) -> ToolResult | None:
-    evidence = getattr(ctx, "turn_evidence", None)
-    contract = getattr(evidence, "turn_contract", None)
-    if contract is None:
-        return None
-    raw_goal_key = tool_input.get("goal_key")
-    if not isinstance(raw_goal_key, str) or not raw_goal_key.strip():
-        return ToolResult(
-            ok=False,
-            error="goal_key is required when a turn contract is active",
-            internal_diagnostic=True,
-        )
-    goal_key = raw_goal_key.strip()
-    goal = contract.get_goal(goal_key)
-    if goal is None:
-        return ToolResult(
-            ok=False,
-            error="goal_key is unknown for this turn contract",
-            internal_diagnostic=True,
-        )
-    if goal.kind not in _DISCOVERY_GOAL_KINDS or (
-        goal.kind == GoalKind.ROUTE
-        and not contract.route_allows_internal_discovery(goal_key)
-    ):
-        return ToolResult(
-            ok=False,
-            error="goal_key is incompatible with discover_places",
-            internal_diagnostic=True,
-        )
-    return None
-
-
 async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
-    goal_error = _validate_goal_key(tool_input, ctx)
+    _goal_key, goal_error = validated_goal_key(
+        tool_input,
+        ctx,
+        compatible_kinds=_DISCOVERY_GOAL_KINDS,
+        incompatible_error="goal_key is incompatible with discover_places",
+        require_route_internal_discovery=True,
+    )
     if goal_error:
         return goal_error
     request = validate_request(tool_input, ctx)

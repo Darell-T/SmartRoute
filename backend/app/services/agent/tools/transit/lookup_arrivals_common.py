@@ -6,7 +6,7 @@ import re
 from collections.abc import Iterable
 from datetime import UTC, datetime
 
-from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools.base import ToolContext
 from app.services.agent.tools.location_resolution import (
     _origin_latlng,
     parse_coordinates,

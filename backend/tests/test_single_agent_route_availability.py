@@ -6,10 +6,11 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from app.services.agent import candidate_store, loop, trip_state
+from app.services.agent import candidate_store, trip_state
 from app.services.agent.model import policy
+from app.services.agent.model import request as model_request
 from app.services.agent.public_surface import INITIAL_TOOL_NAMES
-from app.services.agent.tools._types import ToolResult
+from app.services.agent.tools.base import ToolResult
 from app.services.agent.tools.route import (
     prepare_route_options,
     present_route,
@@ -229,7 +230,7 @@ class SingleAgentRouteAvailabilityTests(unittest.IsolatedAsyncioTestCase):
     def test_route_tools_use_initial_model_led_surface_without_legacy_plan_trip(self):
         names = {
             tool.get("name")
-            for tool in loop._tools_for_state(policy.policy_for_mode("auto"))
+            for tool in model_request.tools_for_state(policy.policy_for_mode("auto"))
         }
         assert names == set(INITIAL_TOOL_NAMES)
         assert "plan_trip" not in names
