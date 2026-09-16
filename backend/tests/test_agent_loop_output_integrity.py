@@ -6,6 +6,8 @@ from unittest.mock import patch
 
 from app.services.agent import events as agent_events
 from app.services.agent import session as session_module
+from app.services.agent.model import request as model_request
+from app.services.agent.passenger_output import sanitize_rider_text
 from app.services.agent.tools import ToolResult, ToolSpec
 
 from tests.agent_loop_reliability_support import (
@@ -40,7 +42,7 @@ class AgentLoopOutputIntegrityTests(AgentLoopReliabilityTestCase):
         assert tokens == ["Hello. World."]
 
     def test_persisted_tool_summaries_are_not_replayed_as_assistant_prose(self):
-        messages = self.loop._messages_from_history(
+        messages = model_request.messages_from_history(
             [
                 {"role": "user", "text": "Get me to MSG"},
                 {
@@ -55,7 +57,7 @@ class AgentLoopOutputIntegrityTests(AgentLoopReliabilityTestCase):
         assert messages == [{"role": "user", "content": "Get me to MSG"}, {"role": "assistant", "content": "I found a route."}]
 
     def test_runtime_syntax_and_fake_waiting_are_removed_from_rider_text(self):
-        sanitized = self.loop._sanitize_rider_text(
+        sanitized = sanitize_rider_text(
             "[prepare_route_options destination_place_id=pl_secret]\n"
             "[get_place_details place_id=pl_other]\n"
             "Give me a moment for the results."
@@ -215,8 +217,8 @@ class AgentLoopOutputIntegrityTests(AgentLoopReliabilityTestCase):
         with (
             patch.object(self.loop, "TOOL_REGISTRY", registry),
             patch.object(
-                self.loop,
-                "_tools_for_state",
+                model_request,
+                "tools_for_state",
                 lambda *_args, **_kwargs: _offered_schemas_for_registry(
                     registry
                 ),

@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from app.services import directions
-from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools.base import ToolContext
 from app.services.agent.tools.location_resolution import ResolvedPlace
 from app.services.agent.tools.route import route_input as plan_trip_input
 from app.services.agent.tools.route.preparation_adapter import (

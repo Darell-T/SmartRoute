@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from app.services import cache
-from app.services.agent.tools._types import ToolResult
+from app.services.agent.tools.base import ToolResult
 from app.services.agent.tools.location_resolution import ResolvedPlace
 from app.services.agent.tools.route.preparation_adapter import PreparedLeg
 from app.services.trips import scoring

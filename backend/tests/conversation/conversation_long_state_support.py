@@ -27,7 +27,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from app.services.agent import candidate_store, discovery_store
 from app.services.agent import trip_state as trip_state_module
-from app.services.agent.tools._types import ToolResult
+from app.services.agent.tools.base import ToolResult
 from app.services.agent.tools.places import discover_places
 from app.services.agent.tools.transit import evidence as transit_evidence
 from app.services.agent.tools.transit import lookup_arrivals

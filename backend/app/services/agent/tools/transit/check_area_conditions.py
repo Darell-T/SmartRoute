@@ -18,7 +18,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from app.services import geography as geo
-from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.base import ToolContext, ToolResult
 from app.services.agent.tools.location_resolution import resolve_named_place
 from app.services.geography import find_nearest_stops
 from app.services.trips import text

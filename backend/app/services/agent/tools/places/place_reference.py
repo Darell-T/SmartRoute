@@ -8,7 +8,7 @@ never used to resolve routing coordinates.
 
 from __future__ import annotations
 
-from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.base import ToolContext, ToolResult
 
 GET_PLACE_DETAILS_SCHEMA = {
     "name": "get_place_details",

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools.base import ToolContext
 
 from tests.conversation.conversation_matrix_harness import make_leg
 

@@ -24,6 +24,9 @@ _LOGGER = logging.getLogger(__name__)
 
 ToolRunner = Callable[..., Awaitable[ToolResult]]
 
+MAX_TOOL_EXECUTIONS_PER_TURN = 12
+MAX_TOOL_EXECUTIONS_PER_NAME = 4
+
 
 async def run_one_tool(
     name: str,
@@ -129,8 +132,8 @@ class TurnToolLedger:
     """Provider-work ledger scoped to one rider turn only."""
 
     run_tool: ToolRunner
-    max_executions: int
-    max_executions_per_name: int
+    max_executions: int = MAX_TOOL_EXECUTIONS_PER_TURN
+    max_executions_per_name: int = MAX_TOOL_EXECUTIONS_PER_NAME
     reusable_results: dict[str, ToolResult] = dataclasses.field(default_factory=dict)
     total_executions: int = 0
     executions_by_name: dict[str, int] = dataclasses.field(default_factory=dict)

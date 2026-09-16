@@ -30,9 +30,12 @@ from app.services.agent import events as agent_events
 from app.services.agent import session as session_module
 from app.services.agent import trip_state as trip_state_module
 from app.services.agent.model import mock_turn
+from app.services.agent.model import request as model_request
 from app.services.agent.model import stream as model_stream
+from app.services.agent.passenger_output import sanitize_rider_text
 from app.services.agent.tools import ToolContext, ToolResult, ToolSpec, declare_goals
 from app.services.agent.tools import complete_turn as complete_turn_tool
+from app.services.agent.turn.ledger import TurnToolLedger
 
 from tests._fake_anthropic import reload_agent_loop_module
 
@@ -642,13 +645,13 @@ class _AgentLoopHelpers:
         )
         surface_patcher = (
             patch.object(
-                self.loop,
-                "_tools_for_state",
+                model_request,
+                "tools_for_state",
                 lambda *_args, **kwargs: (
                     _offered_schemas_for_registry(tool_registry)
                     + (
                         [
-                            self.loop._web_search_tool()
+                            model_request.web_search_tool()
                         ]
                         if kwargs.get("include_web")
                         else []
@@ -724,13 +727,13 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         assert assistant_turns[-1]["text"] == "OK, taking the Q"
 
     def test_internal_card_ids_and_markdown_do_not_reach_rider_prose(self):
-        prose = self.loop._sanitize_rider_text(
+        prose = sanitize_rider_text(
             "**Recommended: Card rc_b87e6f1a — Q/D trains, 1 transfer, ~31 min**"
         )
         assert prose == "Recommended: Q/D trains, 1 transfer, about 31 min"
 
     def test_opaque_candidate_ids_do_not_reach_rider_prose(self):
-        sanitized = self.loop._sanitize_rider_text(
+        sanitized = sanitize_rider_text(
             "Selected cd_test_only from cs_test_only."
         )
         assert "cd_test_only" not in sanitized
@@ -950,7 +953,7 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         expected_tools = set(self.loop.public_surface.INITIAL_TOOL_NAMES)
         for message in cases:
             with self.subTest(message=message):
-                schemas = self.loop._tools_for_state()
+                schemas = model_request.tools_for_state()
                 total = sum(
                     optional_parameter_count(schema.get("input_schema"))
                     for schema in schemas
@@ -984,7 +987,7 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         assert len(session["route_cards"]) == 1
         # The harness explicitly offers the injected fake-registry schemas;
         # the real route-planning surface (which never offers the legacy
-        # REST plan_trip) is asserted on the real _tools_for_state path.
+        # REST plan_trip) is asserted on the real tools_for_state path.
         assert {schema["name"] for schema in self.loop.client.messages.calls[0]["tools"]} == set(_model_led_registry())
 
     async def test_route_rounds_keep_the_selected_outer_model(self):
@@ -1543,9 +1546,9 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
                 # The harness explicitly offers the injected fake-registry
                 # schemas, so the real discovery surface (including the
                 # native web_search appended by state policy) is asserted on
-                # the real _tools_for_state path.
+                # the real tools_for_state path.
                 assert "discover_places" in {schema["name"] for schema in self.loop.client.messages.calls[0]["tools"]}
-                schemas = self.loop._tools_for_state(
+                schemas = model_request.tools_for_state(
                     self.loop.agent_policy.policy_for_mode(mode)
                 )
                 names = {schema["name"] for schema in schemas}
@@ -1945,16 +1948,15 @@ class DeterministicAndDeduplicationTests(
             calls += 1
             return ToolResult(ok=True, data={})
 
-        ledger = self.loop.TurnToolLedger()
-        with (
-            patch.object(self.loop, "MAX_TOOL_EXECUTIONS_PER_TURN", 2),
-            patch.object(self.loop, "MAX_TOOL_EXECUTIONS_PER_NAME", 1),
-            patch.object(self.loop, "_run_one_tool", fake_run),
-        ):
-            assert (await ledger.execute("one", {"value": 1}, ToolContext(), deadline_monotonic=999999)).ok
-            assert not (await ledger.execute("one", {"value": 2}, ToolContext(), deadline_monotonic=999999)).ok
-            assert (await ledger.execute("two", {"value": 1}, ToolContext(), deadline_monotonic=999999)).ok
-            assert not (await ledger.execute("three", {"value": 1}, ToolContext(), deadline_monotonic=999999)).ok
+        ledger = TurnToolLedger(
+            run_tool=fake_run,
+            max_executions=2,
+            max_executions_per_name=1,
+        )
+        assert (await ledger.execute("one", {"value": 1}, ToolContext(), deadline_monotonic=999999)).ok
+        assert not (await ledger.execute("one", {"value": 2}, ToolContext(), deadline_monotonic=999999)).ok
+        assert (await ledger.execute("two", {"value": 1}, ToolContext(), deadline_monotonic=999999)).ok
+        assert not (await ledger.execute("three", {"value": 1}, ToolContext(), deadline_monotonic=999999)).ok
 
         assert calls == 2
 

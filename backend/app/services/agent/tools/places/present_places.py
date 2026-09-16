@@ -15,7 +15,7 @@ from app.services.agent.passenger_output import (
     framed_events,
     validated_framing,
 )
-from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.base import ToolContext, ToolResult
 from app.services.agent.tools.places import damn_lines
 from app.services.agent.turn.contract import GoalKind, GoalState
 
@@ -803,7 +803,7 @@ def try_deterministic_fallback(
         return None
     if any(
         goal.kind == GoalKind.ROUTE
-        and _goal_is_unresolved(evidence, goal.goal_key)
+        and evidence.goal_is_unresolved(goal.goal_key)
         for goal in contract.goals
     ):
         return None
@@ -831,15 +831,6 @@ def try_deterministic_fallback(
             selection_source="deterministic_fallback",
         )
     return text
-
-
-def _goal_is_unresolved(evidence: Any, goal_key: str) -> bool:
-    state = evidence.state_for(goal_key)
-    if state in {GoalState.SATISFIED, GoalState.CANCELLED_BY_RIDER, GoalState.SUPERSEDED}:
-        return False
-    return not (
-        state == GoalState.EVIDENCE_READY and evidence.presented_for(goal_key)
-    )
 
 
 def deterministic_fallback_text(record: dict[str, Any], limit: int = 3) -> str:

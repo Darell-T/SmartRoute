@@ -17,17 +17,27 @@ import anthropic
 
 from app import observability, runtime
 from app.services.agent import events as agent_events
-from app.services.agent import public_surface, tool_input_policy
+from app.services.agent import public_surface
 from app.services.agent import session as session_module
 from app.services.agent.model import budget, mock_turn
 from app.services.agent.model import policy as agent_policy
-from app.services.agent.model import prompt as agent_prompt
-from app.services.agent.model import request as model_request
 from app.services.agent.tools import COMBINED_TOOL_REGISTRY, ToolContext, ToolResult
 from app.services.agent.turn import stream as turn_stream
 from app.services.agent.turn import tool_round
 from app.services.agent.turn.finalization import TurnTrace
-from app.services.agent.turn.ledger import TurnToolLedger as _TurnToolLedger
+from app.services.agent.turn.ledger import TurnToolLedger
+
+__all__ = [
+    "TOOL_REGISTRY",
+    "TurnTrace",
+    "agent_policy",
+    "budget",
+    "client",
+    "evaluate_simple_arithmetic",
+    "public_surface",
+    "run_agent_turn",
+    "turn_stream",
+]
 
 # Keep the active registry injectable at the turn entry point so deterministic
 # tests and replay runners can replace executors without changing production
@@ -42,8 +52,6 @@ client = observability.wrap_anthropic(
 )
 
 AGENT_MOCK_MODE = runtime.enabled("AGENT_MOCK_MODE")
-MAX_TOOL_EXECUTIONS_PER_TURN = 12
-MAX_TOOL_EXECUTIONS_PER_NAME = 4
 
 _SUPPORTED_BINOPS = {
     ast.Add: operator.add,
@@ -108,10 +116,6 @@ def _eval_math_node(node: ast.AST) -> int | float:
     raise ValueError("unsupported expression")
 
 
-_rider_excluded_modes = tool_input_policy.rider_excluded_modes
-_rider_excluded_route_ids = tool_input_policy.rider_excluded_route_ids
-
-
 async def _run_one_tool(
     name: str,
     tool_input: dict,
@@ -128,178 +132,14 @@ async def _run_one_tool(
     )
 
 
-class TurnToolLedger(_TurnToolLedger):
-    """Loop-compatible ledger that reads patchable loop policy at creation."""
-
-    def __init__(self) -> None:
-        super().__init__(
-            run_tool=_run_one_tool,
-            max_executions=MAX_TOOL_EXECUTIONS_PER_TURN,
-            max_executions_per_name=MAX_TOOL_EXECUTIONS_PER_NAME,
-        )
-
-    async def execute(self, *args, **kwargs) -> ToolResult:
-        # Keep historical loop-level patch points dynamic for focused tests and
-        # local instrumentation that alter caps or the tool runner mid-turn.
-        self.run_tool = _run_one_tool
-        self.max_executions = MAX_TOOL_EXECUTIONS_PER_TURN
-        self.max_executions_per_name = MAX_TOOL_EXECUTIONS_PER_NAME
-        return await super().execute(*args, **kwargs)
-
-
-async def _execute_tool_round(*args, **kwargs) -> AsyncIterator:
-    kwargs.pop("tool_registry", None)
-    async for item in tool_round.execute_tool_round(
-        *args, tool_registry=TOOL_REGISTRY, **kwargs
-    ):
-        yield item
-
-
-def _system_blocks() -> list[dict]:
-    return [
-        {
-            "type": "text",
-            "text": agent_prompt.active_system_prompt(),
-            "cache_control": {"type": "ephemeral"},
-        }
-    ]
-
-
-def _messages_from_history(history: list[dict]) -> list[dict]:
-    """Restore conversational prose without fabricating protocol messages.
-
-    Tool summaries are persisted for bounded audit/context purposes, but an
-    old tool result is not a valid Anthropic ``tool_result`` in a later
-    request.  Replaying it as bracketed assistant prose taught the model to
-    imitate tool syntax instead of emitting a structured tool call.
-    """
-
-    messages: list[dict] = []
-    for entry in history or []:
-        role = entry.get("role")
-        if role in {"user", "assistant"}:
-            messages.append({"role": role, "content": entry.get("text", "")})
-    return messages
-
-
-def _build_stream_kwargs(
-    *,
-    messages: list[dict],
-    system_blocks: list[dict],
-    mode_policy: agent_policy.AgentModePolicy,
-    tools: list[dict],
-    request_options: dict | None = None,
-    allow_server_tool_continuation: bool = False,
-) -> dict:
-    return model_request.build_stream_kwargs(
-        messages=messages,
-        system_blocks=system_blocks,
-        mode_policy=mode_policy,
-        tools=tools,
-        request_options=request_options,
-        allow_server_tool_continuation=allow_server_tool_continuation,
-    )
-
-
-def _web_search_tool() -> dict:
-    return {
-        "type": "web_search_20250305",
-        "name": "web_search",
-        "max_uses": 1,
-        "allowed_callers": ["direct"],
-        "user_location": {
-            "type": "approximate",
-            "city": "New York City",
-            "region": "New York",
-            "country": "US",
-            "timezone": "America/New_York",
-        },
-    }
-
-
-def _tools_for_state(
-    _mode_policy: agent_policy.AgentModePolicy | None = None,
-    session: dict | None = None,
-    include_web: bool = False,
-    turn_evidence: object | None = None,
-    session_id: str | None = None,
-) -> list[dict]:
-    """Return tools valid for current turn state, never for rider phrasing."""
-
-    tools = [
-        dict(schema)
-        for schema in public_surface.schemas_for_state(
-            (spec.schema for spec in TOOL_REGISTRY.values()),
-            turn_evidence,
-            session=session,
-            session_id=session_id,
-        )
-    ]
-    if include_web:
-        tools.append(_web_search_tool())
-    return tools
-
-
-_INTERNAL_CARD_REFERENCE = re.compile(
-    r"\b(?:route\s+)?card\s+[`'\"]?(?:rc|mock)[_-][A-Za-z0-9_-]+[`'\"]?\s*(?:[\u2014\u2013-]\s*)?",
-    re.IGNORECASE,
-)
-_OPAQUE_CARD_ID = re.compile(r"\b(?:rc|mock)[_-][A-Za-z0-9_-]{4,}\b", re.IGNORECASE)
-_OPAQUE_CANDIDATE_ID = re.compile(r"\b(?:cd|cs)_[A-Za-z0-9_-]{4,}\b", re.IGNORECASE)
-_OPAQUE_PLACE_ID = re.compile(
-    r"\b(?:pl|ds)_[A-Za-z0-9_-]{4,}\b|\bChIJ[A-Za-z0-9_-]{6,}\b",
-    re.IGNORECASE,
-)
-_INTERNAL_RUNTIME_LINE = re.compile(
-    r"(?im)^.*\b(?:prepare_route_options|present_route|get_place_details|"
-    r"search_local_places|accessibility_status|lookup_arrivals|"
-    r"check_area_conditions|transit_snapshot|event_lookup|venue_crowd_window|"
-    r"lookup_facts|web_search|plan_trip|destination_place_id|place_id|"
-    r"candidate_id|candidate_set_id|discovery_set_id|tool_use|tool_result|"
-    r"function\s*call)\b.*(?:\r?\n|$)"
-)
-_FAKE_WAIT_SENTENCE = re.compile(
-    r"(?i)(?:^|(?<=[.!?])\s+)(?:please\s+)?(?:give\s+me\s+(?:a\s+)?moment"
-    r"(?:\s+for\s+(?:the\s+)?results)?|i(?:'m|\s+am)\s+waiting\s+for\s+"
-    r"(?:the\s+)?(?:results|alternatives)|i\s+should\s+have\s+(?:those\s+)?"
-    r"(?:results|candidates)\s+shortly|let\s+me\s+call\s+that\s+now)"
-    r"[.!?]*(?=\s|$)"
-)
-
-
-def _sanitize_rider_text(text: str) -> str:
-    sanitized = _INTERNAL_CARD_REFERENCE.sub("", text)
-    sanitized = _OPAQUE_CARD_ID.sub("the route", sanitized)
-    sanitized = _OPAQUE_CANDIDATE_ID.sub("the route", sanitized)
-    sanitized = _OPAQUE_PLACE_ID.sub("the selected place", sanitized)
-    sanitized = _INTERNAL_RUNTIME_LINE.sub("", sanitized)
-    sanitized = _FAKE_WAIT_SENTENCE.sub("", sanitized)
-    sanitized = re.sub(r"\*\*(.*?)\*\*", r"\1", sanitized, flags=re.DOTALL)
-    sanitized = re.sub(r"__(.*?)__", r"\1", sanitized, flags=re.DOTALL)
-    sanitized = re.sub(r"`([^`]+)`", r"\1", sanitized)
-    sanitized = re.sub(r"(?m)^\s*#{1,6}\s+", "", sanitized)
-    sanitized = re.sub(r"~(?=\d)", "about ", sanitized)
-    return re.sub(r"[ \t]{2,}", " ", sanitized)
-
-
-def _turn_dependencies(session_id: str = "") -> turn_stream.TurnDependencies:
-    def tools_for_turn(*args, **kwargs):
-        kwargs.setdefault("session_id", session_id)
-        return _tools_for_state(*args, **kwargs)
+def _turn_dependencies() -> turn_stream.TurnDependencies:
+    def make_ledger() -> TurnToolLedger:
+        return TurnToolLedger(run_tool=_run_one_tool)
 
     return turn_stream.TurnDependencies(
-        deadline_s=session_module.AGENT_TURN_DEADLINE_S,
         client=client,
         tool_registry=TOOL_REGISTRY,
-        make_ledger=TurnToolLedger,
-        system_blocks=_system_blocks,
-        messages_from_history=_messages_from_history,
-        build_stream_kwargs=_build_stream_kwargs,
-        tools_for_state=tools_for_turn,
-        sanitize_rider_text=_sanitize_rider_text,
-        rider_excluded_modes=_rider_excluded_modes,
-        rider_excluded_route_ids=_rider_excluded_route_ids,
-        execute_tool_round=_execute_tool_round,
+        make_ledger=make_ledger,
     )
 
 
@@ -408,7 +248,7 @@ async def _live_turn_events(
             selected_card_id=selected_card_id,
             response_presentation=response_presentation,
             trace=trace,
-            dependencies=_turn_dependencies(session_id),
+            dependencies=_turn_dependencies(),
         ):
             yield event
 

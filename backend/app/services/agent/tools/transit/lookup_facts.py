@@ -14,7 +14,7 @@ import re
 from datetime import date
 from pathlib import Path
 
-from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.base import ToolContext, ToolResult
 
 FACTS_PATH = Path(__file__).resolve().parent / "transit_facts.md"
 MAX_DIGEST_CHARS = 1200

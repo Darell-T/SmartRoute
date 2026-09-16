@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
-from app.services.agent.tools._types import ToolResult
+from app.services.agent.tools.base import ToolResult
 from app.services.trips import scoring, selection_decision
 from app.services.trips.crowds import event as event_crowd
 from app.services.trips.preparation import evidence as route_option_evidence

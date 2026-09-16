@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from app.services.agent import candidate_store, trip_state
-from app.services.agent.tools._types import ToolResult
+from app.services.agent.tools.base import ToolResult
 from app.services.agent.tools.route import prepare_route_options, present_route
 from app.services.trips import candidates
 from app.services.trips.preparation.constraints import (

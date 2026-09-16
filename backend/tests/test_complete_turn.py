@@ -6,7 +6,7 @@ import unittest
 
 from app.services.agent import trip_state as trip_state_module
 from app.services.agent.tools import complete_turn
-from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools.base import ToolContext
 from app.services.agent.turn.contract import (
     GoalKind,
     GoalState,

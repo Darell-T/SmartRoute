@@ -82,7 +82,7 @@ class _CandidateReferenceBase(unittest.IsolatedAsyncioTestCase):
         return session_id, session
 
     def _tool_ctx(self, session: dict, session_id: str):
-        from app.services.agent.tools._types import ToolContext
+        from app.services.agent.tools.base import ToolContext
 
         return ToolContext(
             session=session,

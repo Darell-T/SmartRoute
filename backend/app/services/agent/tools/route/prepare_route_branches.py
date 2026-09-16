@@ -7,7 +7,7 @@ from typing import Any
 
 from app.services import geography as geo
 from app.services.agent import candidate_store, discovery_store
-from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.base import ToolContext, ToolResult
 from app.services.agent.tools.location_resolution import (
     ResolvedPlace,
     resolve_destination_reference,

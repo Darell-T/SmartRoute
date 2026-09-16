@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.services.agent import candidate_store, trip_state
-from app.services.agent.tools._types import ToolContext, ToolOutcome, ToolResult
+from app.services.agent.tools.base import ToolContext, ToolOutcome, ToolResult
 from app.services.agent.tools.transit import (
     accessibility_status,
     check_area_conditions,
