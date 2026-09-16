@@ -1,0 +1,3 @@
+6	POST
+5	GET
+2	read

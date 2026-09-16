@@ -1,0 +1,12 @@
+lib\backend-stream-proxy.ts:57:  console.error("[agent-chat-proxy]", JSON.stringify(details));
+lib\agent-chat-stream.ts:231:  console.warn(`[agent-chat-stream] skipping malformed SSE frame: ${reason}`, detail);
+lib\agent-chat-stream.ts:239: *  shape and returns a typed `AgentEvent`, or `null` (after a console.warn)
+lib\agent-chat-stream.ts:256: *  `console.warn` so a bad frame is visible in dev tools without breaking
+components\smart-route\map\smart-route-map.tsx:166:          console.info("[smart-route-map/qa-map] window.__smartRouteMap exposed");
+components\smart-route\map\smart-route-map.tsx:187:          console.info("[smart-route-map/subway-visual-click]", {
+components\smart-route\map\smart-route-map.tsx:333:            console.warn("Geolocation unavailable:", error.message);
+components\smart-route\map\smart-route-map.tsx:371:          console.warn(
+components\smart-route\map\smart-route-map.tsx:417:          console.warn("[smart-route-map/subway-network] failed to load geometry", error);
+components\smart-route\map\smart-route-map-helpers.ts:37:      console.warn(
+components\smart-route\map\smart-route-map-helpers.ts:65:      console.warn(
+components\smart-route\chat\itinerary-view-model.ts:282:  console.warn(`[itinerary-card] unsupported subway route id "${routeId}"`);

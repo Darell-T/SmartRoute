@@ -16,11 +16,9 @@ import { SUBWAY_BULLET_ROUTES } from "@/components/smart-route/train-bullet";
 import {
   buildEventsFromCanonicalItinerary,
   canonicalPlaceLabel,
-  condensePreviewEvents,
   durationMinutesFromSeconds,
   formatDurationMinutes,
   type ItineraryEvent,
-  type ItineraryEventKind,
 } from "./itinerary-event-adapter";
 
 export {

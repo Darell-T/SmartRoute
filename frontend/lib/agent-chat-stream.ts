@@ -9,7 +9,7 @@
  * first, `done` always last — even after an `error`.
  */
 
-import { parseAgentEvent } from "./agent-chat-event-validator";
+import { eventRecordSchema, parseAgentEvent } from "./agent-chat-event-validator";
 import type {
   ArrivalSourceStatus,
   RouteCardEvent,
@@ -231,10 +231,6 @@ function warnSkip(reason: string, detail: unknown): void {
   console.warn(`[agent-chat-stream] skipping malformed SSE frame: ${reason}`, detail);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 /** Validates the decoded JSON payload against the event's minimum required
  *  shape and returns a typed `AgentEvent`, or `null` (after a console.warn)
  *  when the frame doesn't match — a single bad frame must never crash the
@@ -271,11 +267,12 @@ function decodeSsePayload(eventType: string, raw: string): Record<string, unknow
     warnSkip(`invalid JSON in "${eventType}" frame`, err);
     return null;
   }
-  if (!isRecord(data)) {
+  const parsed = eventRecordSchema.safeParse(data);
+  if (!parsed.success) {
     warnSkip(`"${eventType}" data is not an object`, data);
     return null;
   }
-  return data;
+  return parsed.data;
 }
 
 function parseSseFrame(frame: string): AgentEvent | null {

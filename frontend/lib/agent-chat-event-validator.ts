@@ -22,26 +22,14 @@ import {
   routeStepSchema,
   selectionDecisionSchema,
 } from "./canonical-itinerary-schema";
+import { MAX_LIST, boundedInteger, boundedNumber, limitedText, nonEmptyText, nonEmptyTextList } from "./schema-primitives";
 
-const MAX_TEXT = 300;
-const MAX_LIST = 256;
-const MAX_SECONDS = 86_400;
 const MAX_SOURCES = 8;
 const MAX_SOURCE_TITLE = 100;
 const MAX_SOURCE_URL = 2_048;
 
-const eventRecordSchema = z.record(z.unknown());
+export const eventRecordSchema = z.record(z.unknown());
 type AgentEventPayload = z.input<typeof eventRecordSchema>;
-
-const limitedText = (max = MAX_TEXT) => z.string().max(max);
-const nonEmptyText = (max = MAX_TEXT) =>
-  limitedText(max).refine((value) => value.trim().length > 0);
-const boundedNumber = (minimum: number, maximum: number) =>
-  z.number().finite().min(minimum).max(maximum);
-const boundedInteger = (minimum = 0, maximum = MAX_LIST) =>
-  z.number().int().min(minimum).max(maximum);
-const nonEmptyTextList = (maximum = MAX_LIST) =>
-  z.array(nonEmptyText()).max(maximum);
 
 function normalizedSourceUrl(value: string): string | null {
   let url: URL;

@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createHmac, randomBytes } from "node:crypto";
 import { rateLimit } from "@/lib/rate-limit";
 import { requestPrincipal } from "@/lib/request-principal";
+import { isLocalBackendBase } from "@/lib/ws-ticket";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,15 +12,6 @@ export const dynamic = "force-dynamic";
 const TICKET_TTL_S = 90;
 const ALLOWED_WS_PATHS = new Set(["/ws/live-feed", "/ws/service-alerts"]);
 const PROD_API_FALLBACK = "https://jarvis-mta-assistant.onrender.com";
-
-function isLocalBackendBase(base: string): boolean {
-  try {
-    const parsed = new URL(base);
-    return /^(localhost|127\.0\.0\.1|0\.0\.0\.0)$/.test(parsed.hostname);
-  } catch {
-    return false;
-  }
-}
 
 function backendBaseUrl(): string {
   const configured = process.env.API_URL ?? process.env.NEXT_PUBLIC_API_URL;
