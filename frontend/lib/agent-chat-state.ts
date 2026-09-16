@@ -137,7 +137,7 @@ function actionHasType<T extends string>(
   action: ChatReducerAction,
   types: readonly T[],
 ): action is Extract<ChatReducerAction, { type: T }> {
-  return (types as readonly string[]).includes(action.type);
+  return types.some((type) => action.type === type);
 }
 
 export function createChatState(sessionId: string | null): ChatState {
@@ -179,18 +179,14 @@ export function arrivalsFromEvent(event: ArrivalCardEvent): ArrivalsTurnPayload 
   const distance = event.stop.distance_meters;
   const walking = event.catchability?.walking_minutes;
   const guidance = [
-    typeof walking === "number" ? `${walking} min walk` : null,
-    typeof distance === "number" ? `${Math.max(0.1, distance / 1609.344).toFixed(1)} mi away` : null,
+    walking != null ? `${walking} min walk` : null,
+    distance != null ? `${Math.max(0.1, distance / 1609.344).toFixed(1)} mi away` : null,
   ].filter((value): value is string => Boolean(value));
   const latitude = event.stop.latitude;
   const longitude = event.stop.longitude;
-  return {
+  const payload: ArrivalsTurnPayload = {
     routeId: event.route_id,
     stationName: event.stop.name || "Transit stop",
-    ...(guidance.length > 0 ? { stationGuidance: guidance.join(" · ") } : {}),
-    ...(typeof latitude === "number" && typeof longitude === "number"
-      ? { stationCoordinates: { lat: latitude, lng: longitude } }
-      : {}),
     groups: event.directions.flatMap((direction) => {
       const minutes = direction.arrivals
         .map((arrival) => arrival.minutes)
@@ -201,8 +197,13 @@ export function arrivalsFromEvent(event: ArrivalCardEvent): ArrivalsTurnPayload 
     }),
     sourceStatus: event.source_status,
     updatedAt: event.updated_at,
-    ...(event.catchability ? { catchability: event.catchability } : {}),
   };
+  if (guidance.length > 0) payload.stationGuidance = guidance.join(" · ");
+  if (latitude != null && longitude != null) {
+    payload.stationCoordinates = { lat: latitude, lng: longitude };
+  }
+  if (event.catchability) payload.catchability = event.catchability;
+  return payload;
 }
 
 function isEmptyFailedTurn(turn: AssistantTurn | null): boolean {
@@ -378,24 +379,24 @@ function upsertRunningToolChip(turn: AssistantTurn, action: Extract<AgentEvent, 
 }
 
 function applyToolEnd(turn: AssistantTurn, action: Extract<AgentEvent, { type: "tool_end" }>): AssistantTurn {
-  return {
-    ...turn,
-    toolChips: turn.toolChips.map((chip) =>
-      chip.id === action.tool_call_id
-        ? {
-            ...chip,
-            status: action.ok ? "ok" : "failed",
-            durationMs: action.ok ? action.duration_ms : undefined,
-            summary: action.summary,
-            // The start label is the only rider-facing activity copy. A tool
-            // receipt can contain counts, provider wording, or execution
-            // details, so it must never replace the contextual label.
-            label: chip.label,
-          }
-        : chip,
-    ),
-    ...(isRouteWorkflowTool(action.tool) && !action.ok ? { progress: undefined } : {}),
-  };
+  const toolChips = turn.toolChips.map((chip): ToolChip => {
+    if (chip.id !== action.tool_call_id) return chip;
+    const status: ToolChip["status"] = action.ok ? "ok" : "failed";
+    return {
+      ...chip,
+      status,
+      durationMs: action.ok ? action.duration_ms : undefined,
+      summary: action.summary,
+      // The start label is the only rider-facing activity copy. A tool
+      // receipt can contain counts, provider wording, or execution
+      // details, so it must never replace the contextual label.
+      label: chip.label,
+    };
+  });
+  if (isRouteWorkflowTool(action.tool) && !action.ok) {
+    return { ...turn, toolChips, progress: undefined };
+  }
+  return { ...turn, toolChips };
 }
 
 function applyToolLifecycle(state: ChatState, action: ToolLifecycleAction): ChatState {
@@ -473,18 +474,22 @@ function applyTerminal(state: ChatState, action: TerminalAction): ChatState {
       const turn = lastAssistantTurn(state.messages);
       if (shouldIgnoreDone(turn, action.turn_id)) return state;
       const clarification = action.stop_reason === "clarification_required";
-      return {
-        ...updateLastAssistantTurn(state, (current) => ({
-          ...current,
-          isStreaming: false,
-          stopReason: action.stop_reason,
-          progress: undefined,
-          ...(clarification ? { error: undefined } : {}),
-        })),
+      const next: ChatState = {
+        ...updateLastAssistantTurn(state, (current) => {
+          const updated: AssistantTurn = {
+            ...current,
+            isStreaming: false,
+            stopReason: action.stop_reason,
+            progress: undefined,
+          };
+          if (clarification) updated.error = undefined;
+          return updated;
+        }),
         sessionId: action.session_id,
         isStreaming: false,
-        ...(clarification ? { error: null } : {}),
       };
+      if (clarification) next.error = null;
+      return next;
     }
     case "stream_cancelled":
       return {

@@ -1,0 +1,37 @@
+FIXED_POINT merged (unit+browser):
+Statements : 97.36% (45495/46729)
+Branches   : 91.92% (11701/12729)
+Functions  : 96.68% (2885/2984)
+Lines      : 97.36% (45495/46729)
+
+AFTER WAVE 1 merged (unit+browser):
+Statements : 97.43% (45518/46717)
+Branches   : 91.89% (11654/12682)
+Functions  : 96.66% (2869/2968)
+Lines      : 97.43% (45518/46717)
+
+AFTER WAVE 2 merged (unit+browser):
+Statements : 97.43% (45497/46695)
+Branches   : 91.90% (11649/12676)
+Functions  : 96.67% (2873/2972)
+Lines      : 97.43% (45497/46695)
+
+FIXED_POINT unit-only c8 text-summary:
+Statements   : 94.37% ( 44100/46729 )
+Branches     : 90.01% ( 10617/11795 )
+Functions    : 95.33% ( 2823/2961 )
+Lines        : 94.37% ( 44100/46729 )
+
+AFTER WAVE 1 unit-only c8 text-summary:
+Statements   : 94.45% ( 44126/46717 )
+Branches     : 89.97% ( 10586/11765 )
+Functions    : 95.34% ( 2824/2962 )
+Lines        : 94.45% ( 44126/46717 )
+
+AFTER WAVE 2 unit-only c8 text-summary:
+Statements   : 94.46% ( 44109/46695 )
+Branches     : 90% ( 10603/11780 )
+Functions    : 95.34% ( 2829/2967 )
+Lines        : 94.46% ( 44109/46695 )
+
+Note: merged line stayed 97.43. Branch miss 1028->1027. Function miss stayed 99.

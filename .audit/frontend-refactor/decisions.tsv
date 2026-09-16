@@ -17,3 +17,39 @@ w1-9-canonical	lib/smart-route.ts,lib/nyc-route-clock.ts,components/smart-route/
 w1-9-arrival	lib/smart-route.ts	inline	formatArrival body was identical to formatNycRouteClock; call it directly	typecheck pass; lint pass; oxlint 237 file count 1 unchanged; test:unit 1542 pass	-4	0	ok
 w1-wave-boundary	app,lib,components	leave	wave 1 complete; boundary checks	typecheck pass (retry after missing .next types); lint pass; oxlint 264->237; test:unit 1542 pass; coverage merged line 97.36->97.43 branch 91.92->91.89 function 96.68->96.66; build pass	0	-27	ok
 
+w2-skip-mapbox	lib/mapbox-search.ts	leave	per-field coercion semantics; Wave 1 rewrite rejected	work order; current oxlint 12	0	0	ok
+w2-skip-require-yield	lib/use-agent-chat.test.mjs	leave	test fakes; require-yield	work order	0	0	ok
+w2-1-subway-widening	components/map/subway-network.ts	delete	remove explicit Record/return widening; keep inference via satisfies	typecheck pass; lint pass; test:unit 1542 pass; oxlint 31->28	-4	-3	ok
+w2-1-subway-artifact	components/map/subway-network.ts	leave	artifact boundary; VisualFeatureProperties too thin to drop runtime GeoJSON guards; MapLibre/window platform; source_shape_ids is artifact field name	scripts/build/types.ts VisualFeatureProperties; import type would not make stringIds/Number coercions redundant	0	0	ok
+w2-2-use-live-feed	lib/use-live-feed.ts	leave	websocket envelope: arrays pass typeof object and are ignored; undefined keys pass in-operator; z.object would change both	JSON.parse snapshot/bus_update/error branches	0	0	ok
+w2-3-agent-chat-state	lib/agent-chat-state.ts	delete-redundant-check	ArrivalCardEvent already schema-parsed; replace typeof/spreads/assertion with typed fields and if-assign	typecheck pass; lint pass; test:unit 1542 pass; oxlint 11->0 total 247->236	+5	-11	ok
+w2-4-smart-route-map	components/smart-route/map/smart-route-map.tsx	delete-redundant-check	typed accuracy/dwell/label fields; drop boardingBadgeStyle widening	typecheck pass; lint pass; test:unit 1542 pass; oxlint 9->4	-5	-5	ok
+w2-4-smart-route-map-leave	components/smart-route/map/smart-route-map.tsx	leave	platform window; artifact json assertion; source_shape_ids artifact field name	remaining 4 findings	0	0	ok
+w2-5-map-helpers	components/smart-route/map/smart-route-map-helpers.ts	delete-redundant-check	artifactUrl without Record assertion; waypoint coords already number|null	typecheck pass; lint pass; test:unit 1542 pass; oxlint 7->4	+2	-3	ok
+w2-5-map-helpers-leave	components/smart-route/map/smart-route-map-helpers.ts	leave	artifact json assertion; MapLibre property string|array narrowing in mapFeatureArrayProperty	remaining 4 findings	0	0	ok
+w2-6-itinerary-view-model	components/smart-route/chat/itinerary-view-model.ts	delete-redundant-check	typed first-leg/transfer/difference numbers; drop STRUCTURED_REASON_COPY Record widening	typecheck pass; lint pass; test:unit 1542 pass; oxlint 7->3	+3	-4	ok
+w2-6-itinerary-view-model-leave	components/smart-route/chat/itinerary-view-model.ts	leave	string|RecommendationReason union discriminant cannot drop typeof without dropping string reasons	formatStructuredRecommendationReason	0	0	ok
+w2-7-agent-route-selection	lib/agent-route-selection.ts	delete-redundant-check	typed RouteCoordinateFields from RouteStep/RouteCardEndpoint; drop unknown/typeof and empty spread	typecheck pass; lint pass; test:unit 1542 pass; oxlint 6->0	0	-6	ok
+w2-8-route-metadata	components/smart-route/left-rail/live-data/route-metadata.ts	delete-redundant-check	Map.get returns number|undefined; drop typeof	typecheck pass; lint pass; test:unit 1542 pass; oxlint 6->2	0	-4	ok
+w2-8-route-metadata-leave	components/smart-route/left-rail/live-data/route-metadata.ts	leave	Record lookups indexed by string from nearby-arrivals; satisfies would break callers	ROUTE_DESTINATION_FALLBACKS ROUTE_SERVICE_PATTERNS	0	0	ok
+w2-9-route-stops	components/map/route-stops.ts	leave	platform boundary; MapLibre getSource GeoJSONSource assertions	oxlint 6 require-safety-comment-for-type-assertion	0	0	ok
+w2-10-formatters	components/smart-route/left-rail/live-data/formatters.ts	delete-redundant-check	typed meters and match.index; drop TRANSIT_ABBREVIATIONS Record widening	typecheck pass; lint pass; test:unit 1542 pass; oxlint 6->1	+4	-5	ok
+w2-10-formatters-leave	components/smart-route/left-rail/live-data/formatters.ts	leave	cleanDestinationLabel unknown is mixed live-feed label boundary	no-unknown-parameters remaining	0	0	ok
+w2-11-route-view-itinerary	components/smart-route/left-rail/route-view-itinerary.tsx	delete-redundant-check	typed walkMinutes/nextDepartureMinutes/segment.minutes	typecheck pass; lint pass; test:unit 1542 pass; oxlint 6->2	+2	-4	ok
+w2-11-route-view-itinerary-leave	components/smart-route/left-rail/route-view-itinerary.tsx	leave	platform boundary; window.setInterval id is number in browsers and Timeout in Node tests	typeof timer === number	0	0	ok
+w2-12-alert-detail	components/smart-route/left-rail/alert-detail.tsx	delete-redundant-check	AlertFeedItem string fields already typed; drop disruptionAndGuidance widening	typecheck pass; lint pass; test:unit 1542 pass; oxlint 5->0	0	-5	ok
+w2-13-use-mobile-rail-sheet	components/smart-route/page/use-mobile-rail-sheet.ts	delete-redundant-check	drop Record widening; nearest detent without Object.entries assertion	typecheck pass; lint pass; test:unit 1542 pass; oxlint 4->2	0	-2	ok
+w2-13-use-mobile-rail-sheet-leave	components/smart-route/page/use-mobile-rail-sheet.ts	leave	platform boundary window and document	remaining 2 typeof findings	0	0	ok
+w2-14-ws-ticket	lib/ws-ticket.ts	parse-at-boundary	zod parse of /api/ws-ticket JSON; per-field catch so bad ws_base_url does not drop a valid ticket	typecheck pass; lint pass; test:unit 1542 pass; oxlint 4->1; equiv pass: 21 payloads compared equal	+3	-3	ok
+w2-14-ws-ticket-leave	lib/ws-ticket.ts	leave	platform boundary typeof window	isLocalBrowserHost	0	0	ok
+w2-deferred-route-view-nearby	components/smart-route/left-rail/route-view-nearby.tsx	leave	deferred; 14-unit cap	oxlint 4	0	0	deferred
+w2-deferred-route-candidates	components/smart-route/left-rail/live-data/route-candidates.ts	leave	deferred; 14-unit cap	oxlint 4	0	0	deferred
+w2-deferred-agent-chat-stream	lib/agent-chat-stream.ts	leave	deferred; 14-unit cap	oxlint 4	0	0	deferred
+w2-deferred-route-stops-features	components/map/route-stops-features.ts	leave	deferred; 14-unit cap	oxlint 3	0	0	deferred
+w2-deferred-camera	components/map/camera.ts	leave	deferred; 14-unit cap	oxlint 3	0	0	deferred
+w2-deferred-route-reasoning	components/smart-route/left-rail/live-data/route-reasoning.ts	leave	deferred; 14-unit cap	oxlint 3	0	0	deferred
+w2-deferred-agent-route-card-contract	lib/agent-route-card-contract.ts	leave	deferred; 14-unit cap	oxlint 3	0	0	deferred
+w2-deferred-backend-proxy	lib/backend-proxy.ts	leave	deferred; 14-unit cap	oxlint 3	0	0	deferred
+w2-deferred-remaining-le2	app,lib,components files with 2 or fewer oxlint findings	leave	stop after 3+ files or 14 units; remaining le2 deferred	oxlint-by-file-after-wave1.txt	0	0	deferred
+w2-skip-viewport-test	lib/use-mobile-visible-viewport.test.ts	leave	test file; not in production unit	oxlint 12	0	0	ok
+w2-wave-boundary	app,lib,components	leave	wave 2 complete; boundary checks	typecheck pass; lint pass; oxlint 237 snapshot/250 HEAD -> 195; test:unit 1542 pass; coverage merged line 97.43 branch 91.90 function 96.67; verify:transit-artifacts pass; build pass	-28	-42	ok

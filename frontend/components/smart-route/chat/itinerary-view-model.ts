@@ -66,7 +66,7 @@ function firstLegArrivalLabel(card: RouteCard): string | null {
   const routeId = context?.route_id?.trim();
   if (
     !routeId ||
-    typeof minutes !== "number" ||
+    minutes == null ||
     !Number.isFinite(minutes) ||
     !["live", "scheduled"].includes(context?.source_status ?? "")
   ) {
@@ -88,7 +88,7 @@ function structuredFastestCopy(
   reason: Extract<RecommendationReason, { code: "fastest" }>,
 ): string {
   const seconds =
-    typeof reason.difference_seconds === "number" && Number.isFinite(reason.difference_seconds)
+    reason.difference_seconds != null && Number.isFinite(reason.difference_seconds)
       ? Math.max(0, reason.difference_seconds)
       : 0;
   if (seconds >= 60) return `About ${Math.round(seconds / 60)} min faster than the next option`;
@@ -103,13 +103,13 @@ function structuredFewerTransfersCopy(
   return `Uses ${difference} fewer ${difference === 1 ? "transfer" : "transfers"}`;
 }
 
-const STRUCTURED_REASON_COPY: Record<string, string> = {
+const STRUCTURED_REASON_COPY = {
   less_walking: "Less walking than the other options",
   avoids_active_disruption: "Avoids active service alerts on another option",
   lower_event_crowd_exposure: "Lower exposure to nearby event crowds",
   accessibility: "Meets the accessibility requirement",
   reasonable_local_option: "Nearby option with a reasonable overall trip",
-};
+} satisfies Record<string, string>;
 
 export function formatStructuredRecommendationReason(
   reason: RecommendationReason | string | unknown,
@@ -119,7 +119,10 @@ export function formatStructuredRecommendationReason(
   const structured = reason as RecommendationReason;
   if (structured.code === "fastest") return structuredFastestCopy(structured);
   if (structured.code === "fewer_transfers") return structuredFewerTransfersCopy(structured);
-  return STRUCTURED_REASON_COPY[structured.code] ?? null;
+  for (const [code, copy] of Object.entries(STRUCTURED_REASON_COPY)) {
+    if (code === structured.code) return copy;
+  }
+  return null;
 }
 
 function isValidCard(
@@ -141,7 +144,7 @@ function cardTotalMinutes(card: RouteCard): number {
 
 function cardTransferCount(card: RouteCard): number {
   const canonical = card.itinerary?.transfer_count;
-  return typeof canonical === "number" && Number.isFinite(canonical)
+  return canonical != null && Number.isFinite(canonical)
     ? Math.max(0, Math.round(canonical))
     : 0;
 }

@@ -36,7 +36,7 @@ export type MobileRailSheetController = {
   handleMobileRailKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => void;
 };
 
-const MOBILE_RAIL_SHEET_HEIGHTS: Record<MobileRailSheetState, string> = {
+const MOBILE_RAIL_SHEET_HEIGHTS = {
   small: "calc(7.75rem + env(safe-area-inset-bottom))",
   medium: "calc(var(--visual-viewport-height, 100dvh) * 0.5)",
   full: "min(calc(var(--visual-viewport-height, 100dvh) * 0.9), calc(100dvh - max(0.75rem, env(safe-area-inset-top))))",
@@ -154,15 +154,15 @@ export function useMobileRailSheet(): MobileRailSheetController {
   const settleMobileRailSheet = useCallback(
     (height: number) => {
       const snaps = getMobileRailSnapHeights();
-      const next = (
-        Object.entries(snaps) as Array<[MobileRailSheetState, number]>
-      ).reduce<[MobileRailSheetState, number]>(
-        (best, current) => {
-          const distance = Math.abs(height - current[1]);
-          return distance < best[1] ? [current[0], distance] : best;
-        },
-        ["medium", Number.POSITIVE_INFINITY],
-      )[0];
+      let next: MobileRailSheetState = "medium";
+      let nearest = Number.POSITIVE_INFINITY;
+      for (const state of MOBILE_RAIL_DETENT_ORDER) {
+        const distance = Math.abs(height - snaps[state]);
+        if (distance < nearest) {
+          next = state;
+          nearest = distance;
+        }
+      }
 
       setMobileRailSheet(next);
       setMobileRailDragHeight(null);

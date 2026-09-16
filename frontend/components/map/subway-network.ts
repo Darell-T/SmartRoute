@@ -126,7 +126,7 @@ export const SUBWAY_STATION_ROUTE_BADGES_LAYER_ID =
 // Stable rank for visual_z_order / line-sort-key. Lower number draws
 // first (under). Utility/shuttle colors at the bottom; prominent route
 // families on top.
-const COLOR_VISUAL_Z_ORDER: Record<string, number> = {
+const COLOR_VISUAL_Z_ORDER = {
   "#808183": 0, // S/FS/H gray shuttles
   "#A7A9AC": 1, // L gray
   "#996633": 2, // J/Z brown
@@ -138,10 +138,13 @@ const COLOR_VISUAL_Z_ORDER: Record<string, number> = {
   "#FF6319": 8, // B/D/F/M orange
   "#00933C": 9, // 4/5/6 green
   "#EE352E": 10, // 1/2/3 red
-};
+} satisfies Record<string, number>;
 
 function visualZOrderForColor(color: string): number {
-  return COLOR_VISUAL_Z_ORDER[color] ?? 100;
+  for (const [swatch, rank] of Object.entries(COLOR_VISUAL_Z_ORDER)) {
+    if (swatch === color) return rank;
+  }
+  return 100;
 }
 
 // Normalize segment direction so MapLibre's perpendicular line-offset is
@@ -220,7 +223,7 @@ function stopPairLabel(props: Record<string, unknown>): string | null {
 function bundleLaneIdentity(
   rawProps: Record<string, unknown>,
   routeIds: string[],
-): { color: string; colorRouteIds: string[]; representativeRouteId: string } {
+) {
   const color = String(
     rawProps.color ?? getLineColor(String(rawProps.route_id ?? routeIds[0])),
   );
@@ -389,14 +392,7 @@ export function buildSubwayLaneFeaturesFromVisual(
  */
 export function summarizeVisualLanes(
   features: GeoJSON.FeatureCollection<GeoJSON.LineString, VisualLaneProps>,
-): {
-  renderFeatures: number;
-  distinctRoutes: number;
-  distinctColorGroups: number;
-  distinctColorLanes: number;
-  multiColorCorridors: number;
-  corridorsWithMultipleRoutes: number;
-} {
+) {
   const routes = new Set<string>();
   const colors = new Set<string>();
   const corridorColorCounts = new Map<string, Set<string>>();

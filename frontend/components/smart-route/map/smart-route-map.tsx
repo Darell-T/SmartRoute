@@ -286,8 +286,7 @@ export function SmartRouteMap({
       });
       originRef.current = [coords.lng, coords.lat];
       originAccuracyRef.current =
-        typeof coords.accuracyMeters === "number" &&
-        Number.isFinite(coords.accuracyMeters)
+        coords.accuracyMeters != null && Number.isFinite(coords.accuracyMeters)
           ? coords.accuracyMeters
           : null;
 
@@ -569,7 +568,7 @@ export function SmartRouteMap({
       if (!point) continue;
       const label = canonicalWaypointLabel(waypoint);
       if (!label) continue;
-      const dwell = typeof waypoint.dwell_minutes === "number"
+      const dwell = waypoint.dwell_minutes != null
         ? waypoint.dwell_minutes
         : undefined;
       const marker = new maplibregl.Marker({
@@ -592,11 +591,7 @@ export function SmartRouteMap({
   );
 }
 
-function boardingBadgeStyle(step: RouteStep): {
-  color: string;
-  letter: string;
-  isSubway: boolean;
-} {
+function boardingBadgeStyle(step: RouteStep) {
   if (step.type === "BUS") {
     return { color: "#0057B8", letter: step.train_line || "BUS", isSubway: false };
   }
@@ -635,7 +630,7 @@ function canonicalWaypointLabel(waypoint: {
   address?: string | null;
 }): string | null {
   for (const value of [waypoint.display_name, waypoint.label, waypoint.name, waypoint.address]) {
-    if (typeof value === "string" && value.trim()) return value.trim();
+    if (value?.trim()) return value.trim();
   }
   return null;
 }
