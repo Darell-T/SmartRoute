@@ -133,6 +133,8 @@ docs/*
 !docs/*.md
 !docs/adr/
 !docs/adr/*.md
+!docs/reference/
+!docs/reference/*.md
 docs/SMARTROUTE_INTERVIEW_HANDBOOK.md
 !docs/assets/
 docs/assets/*

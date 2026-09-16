@@ -3511,3 +3511,65 @@ Regenerate files above 500 lines from the same LOC pipeline. Keep a row when the
 
 Regenerate merged coverage by running `npm --prefix frontend run test:coverage` and summarizing `frontend/coverage/coverage-final.json`.
 
+## Backend waves 7 and 8 on 2026-09-16
+
+Wave 7 published cross-module private names that were still imported across `backend/app`. Wave 8 added `docs/reference/backend-package-map.md`. Every leave and rename is in [`.audit/backend-refactor/decisions.tsv`](../.audit/backend-refactor/decisions.tsv).
+
+| Metric | 5193b08 | After Wave 7 |
+|---|---:|---:|
+| Non-test LOC `backend/app/services/agent` | 23859 | 23764 |
+| Non-test LOC `backend/app/services/trips` | 9807 | 9788 |
+| Non-test LOC `backend/app/services/incidents` | 2357 | 2379 |
+| Non-test LOC `backend/app/services/live_feed` | 948 | 954 |
+| Non-test LOC `backend/app/services/mta` | 3247 | 3213 |
+| Non-test LOC `backend/app/routers` | 1666 | 1680 |
+| Functions above cognitive 10, total | 47 | 47 |
+| Functions above cognitive 10, agent | 26 | 26 |
+| Functions above cognitive 10, elsewhere | 21 | 21 |
+| Baseline entry count | 59 | 59 |
+| Duplicate private helper names | 37 | 27 |
+| Cross-module private names | 37 | 9 |
+| Production `print(` count | 78 | 10 |
+| Logger module count | 13 | 32 |
+| `backend/app/services/agent/loop.py` line count | 473 | 312 |
+
+Regenerate non-test LOC from the repo root with:
+
+```powershell
+Get-ChildItem -Recurse -File backend/app/<pkg> -Include *.py | Where-Object { $_.FullName -notmatch '__pycache__' } | ForEach-Object { (Get-Content $_.FullName | Measure-Object -Line).Lines } | Measure-Object -Sum
+```
+
+Replace `<pkg>` with `services/agent`, `services/trips`, `services/incidents`, `services/live_feed`, `services/mta`, or `routers`. After Wave 7 values are in `.audit/backend-refactor/loc-after-wave7.txt`. Fixed-point values are in `.audit/backend-refactor/loc-fixed-point.txt`.
+
+Regenerate functions above cognitive 10 from `backend` with:
+
+```powershell
+py -c "from complexipy import file_complexity; import pathlib; rows=[(f.complexity,str(p).replace('\\','/'),f.name) for p in pathlib.Path('app').rglob('*.py') if '__pycache__' not in str(p) for f in file_complexity(str(p)).functions if f.complexity>10]; rows.sort(reverse=True); print(len(rows)); agent=sum(1 for r in rows if '/services/agent/' in r[1]); print(f'agent={agent}'); print(f'elsewhere={len(rows)-agent}')"
+```
+
+Regenerate baseline entry count from the repo root with:
+
+```powershell
+Select-String -Path quality/baseline.json -Pattern '"file": "(backend/[^"]+)"' | Measure-Object
+```
+
+Regenerate duplicate private helper names from `backend` by counting `_`-prefixed names with at least two `def` hits:
+
+```powershell
+rg -o --no-filename '^(?:async )?def (_?[a-z][a-z0-9_]*)' -r '$1' app | Group-Object | Where-Object { $_.Count -ge 2 -and $_.Name -like '_*' } | Measure-Object
+```
+
+Regenerate cross-module private names from `backend` by counting unique `module._name(` hits:
+
+```powershell
+rg -o --no-filename '\b(?!self|cls)([a-z][a-z0-9_]*)\._([a-z][a-z0-9_]*)\(' -r '$1._$2' app --pcre2 | Group-Object | Measure-Object
+```
+
+Regenerate production `print(` count from the repo root with `rg -c 'print\(' backend/app`. Sum the per-file counts. The total includes `_condition_fingerprint(` hits in `backend/app/services/trips/selection_decision.py`.
+
+Regenerate logger module count from the repo root with `rg -l "logging\.getLogger" backend/app -g "*.py" | Measure-Object`.
+
+Regenerate `loop.py` line count with `(Get-Content backend/app/services/agent/loop.py).Count`. That counts every line, including blanks.
+
+Footnote: logger module count and `loop.py` line count were not in the Wave 0 snapshot files. The 5193b08 logger count is 13 files from `git grep -l "logging.getLogger" 5193b08 -- backend/app`. The 5193b08 `loop.py` count is 473 from `git show 5193b08:backend/app/services/agent/loop.py`. Fixed-point LOC in `loc-fixed-point.txt` is Python all-lines on LF blobs. After Wave 7 LOC uses the plan 3.2 `Measure-Object -Line` command on the working tree.
+
