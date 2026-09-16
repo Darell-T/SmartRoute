@@ -7,6 +7,7 @@ Live Map trip endpoint.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -24,6 +25,8 @@ from app.services.trips.preparation.input import (
     prepare_structural_candidates,
 )
 from app.services.trips.transfer_semantics import normalize_routes
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -278,7 +281,7 @@ async def _fetch_provider_routes(
             departure_time=departure_time,
         )
     except dependencies.directions_service.GoogleRoutesError as exc:
-        print(f"[agent-plan_trip] routing failed code={exc.code}")
+        _LOGGER.warning("[agent-plan_trip] routing failed code=%s", exc.code)
         return RoutePreparationFailure(f"routing failed ({exc.code})")
     return parsed_routes
 
@@ -389,7 +392,10 @@ async def _completed_crowd_evidence(
     try:
         return await event_task
     except Exception as exc:  # noqa: BLE001 crowd-provider faults stay unavailable
-        print(f"[agent-plan_trip] event enrichment failed: {type(exc).__name__}")
+        _LOGGER.warning(
+            "[agent-plan_trip] event enrichment failed: %s",
+            type(exc).__name__,
+        )
         return "provider_unavailable", [], [type(exc).__name__], {"grok_status": "not_required"}
 
 
@@ -450,7 +456,10 @@ async def _completed_incident_scan(
         if isinstance(leg_telemetry, dict):
             leg_telemetry["incident_status"] = "failed"
             leg_telemetry["incident_cache_hit"] = False
-        print(f"[agent-plan_trip] incident index lookup failed: {type(exc).__name__}")
+        _LOGGER.warning(
+            "[agent-plan_trip] incident index lookup failed: %s",
+            type(exc).__name__,
+        )
     return incidents, incident_scan_metadata, advisor_evidence_available
 
 

@@ -15,7 +15,7 @@ from app.services.agent.tools.route.prepare_route_branches import (
     aggregate_destination_ids,
 )
 from app.services.agent.turn.finalization import record_phase_ms
-from app.services.parsing import finite_float as _finite_coordinate
+from app.services.parsing import finite_float
 from app.services.trips.preparation.constraints import (
     ROUTE_STATUSES,
     candidate_digest,
@@ -361,8 +361,8 @@ def _place_match_key(place: Any) -> tuple[Any, ...]:
             return ("provider", provider_id)
         return (
             "coordinates",
-            _finite_coordinate(place.latitude),
-            _finite_coordinate(place.longitude),
+            finite_float(place.latitude),
+            finite_float(place.longitude),
         )
     if isinstance(place, dict):
         provider_id = _provider_match_id(
@@ -373,8 +373,8 @@ def _place_match_key(place: Any) -> tuple[Any, ...]:
             return ("provider", provider_id)
         return (
             "coordinates",
-            _finite_coordinate(place.get("latitude", place.get("lat"))),
-            _finite_coordinate(place.get("longitude", place.get("lng"))),
+            finite_float(place.get("latitude", place.get("lat"))),
+            finite_float(place.get("longitude", place.get("lng"))),
         )
     return ("unknown", str(place or "").strip().casefold())
 

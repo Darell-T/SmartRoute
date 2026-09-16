@@ -15,7 +15,6 @@ SUPPLEMENTED_URL = "https://rrgtfsfeeds.s3.amazonaws.com/gtfs_supplemented.zip"
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 def download_gtfs() -> Path:
-    print("Downloading GTFS zip...")
     with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as f:
         with httpx.stream("GET", SUPPLEMENTED_URL, timeout=60, follow_redirects=True) as resp:
             for chunk in resp.iter_bytes():
@@ -68,7 +67,6 @@ _GTFS_INDEXES = """
 
 
 def _copy_gtfs_table(cur, zf, filename, table, columns, format_row) -> None:
-    print(f"Loading {table}...")
     with zf.open(filename) as handle:
         buffer = io.StringIO()
         reader = csv.DictReader(line.decode() for line in handle)
@@ -76,7 +74,6 @@ def _copy_gtfs_table(cur, zf, filename, table, columns, format_row) -> None:
             buffer.write(format_row(row))
         buffer.seek(0)
         cur.copy_from(buffer, table, columns=columns)
-        print(f"{table} loaded")
 
 
 def migrate():
@@ -86,7 +83,6 @@ def migrate():
         try:
             cur = conn.cursor()
             try:
-                print("Creating tables...")
                 cur.execute(_GTFS_SCHEMA)
                 with zipfile.ZipFile(zip_path) as zf:
                     _copy_gtfs_table(
@@ -116,9 +112,7 @@ def migrate():
                             f"{row.get('transfer_type','')}\t{row.get('min_transfer_time','')}\n"
                         ),
                     )
-                print("Building indexes...")
                 cur.execute(_GTFS_INDEXES)
-                print("Migration complete.")
             finally:
                 cur.close()
         finally:

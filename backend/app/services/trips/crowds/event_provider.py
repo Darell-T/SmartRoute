@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import math
 import os
 from collections.abc import Awaitable, Callable
@@ -19,6 +20,8 @@ from zoneinfo import ZoneInfo
 
 from app.services import cache, text
 from app.services.geography import distance_meters
+
+_LOGGER = logging.getLogger(__name__)
 
 TICKETMASTER_EVENTS_URL = "https://app.ticketmaster.com/discovery/v2/events.json"
 TICKETMASTER_NYC_LATLONG = "40.7128,-74.0060"
@@ -212,7 +215,10 @@ def _read_cache(key: str) -> dict | None:
     try:
         raw = cache.cache_get(key)
     except Exception as exc:  # noqa: BLE001 cache faults miss this lookup
-        print(f"[event-provider] cache read failed: {type(exc).__name__}")
+        _LOGGER.warning(
+            "[event-provider] cache read failed: %s",
+            type(exc).__name__,
+        )
         return None
     if raw is None:
         return None
@@ -227,7 +233,10 @@ def _write_cache(key: str, value: dict) -> None:
     try:
         cache.cache_set(key, json.dumps(value, default=str), EVENT_LOOKUP_CACHE_TTL_S)
     except Exception as exc:  # noqa: BLE001 cache faults skip storing this lookup
-        print(f"[event-provider] cache write failed: {type(exc).__name__}")
+        _LOGGER.warning(
+            "[event-provider] cache write failed: %s",
+            type(exc).__name__,
+        )
 
 
 def _positive_float_env(name: str, default: float, maximum: float) -> float:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import time
 from datetime import UTC, datetime
@@ -11,6 +12,8 @@ from app.services.live_feed.network_snapshot import (
     network_snapshot_store,
 )
 from app.services.mta import realtime as mta_realtime
+
+_LOGGER = logging.getLogger(__name__)
 
 _LAST_EMPTY_VEHICLE_LOG = 0.0
 NEARBY_ARRIVAL_RADIUS_M = 804.672
@@ -489,12 +492,16 @@ def _log_empty_vehicle_scope(
     log_now = time.monotonic()
     if log_now - _LAST_EMPTY_VEHICLE_LOG <= 60:
         return
-    print(
+    _LOGGER.warning(
         "[live_feed] MTA snapshot had no usable vehicle or stop coordinates "
-        f"for scoped vehicle feeds. nearest_routes={sorted(route_ids)} "
-        f"selected_routes={sorted(selected_route_ids)} "
-        f"stop_fallbacks={stop_fallback_count} "
-        f"missing_stop_coords={missing_stop_coord_count}"
+        "for scoped vehicle feeds. nearest_routes=%s "
+        "selected_routes=%s "
+        "stop_fallbacks=%s "
+        "missing_stop_coords=%s",
+        sorted(route_ids),
+        sorted(selected_route_ids),
+        stop_fallback_count,
+        missing_stop_coord_count,
     )
     _LAST_EMPTY_VEHICLE_LOG = log_now
 

@@ -5,9 +5,12 @@ intermediate stop names + coordinates. Strictly fail-open per leg.
 """
 
 import asyncio
+import logging
 import os
 
 from app.services.mta.bus import fetch_bus_route_stop_groups, slice_route_stops
+
+_LOGGER = logging.getLogger(__name__)
 
 # The per-leg GTFS stop enrichment runs a GROUP BY over all of a route's
 # stop_times on a remote Postgres; 1.25s was too tight and timed out, dropping
@@ -33,13 +36,18 @@ async def _enrich_subway_step_with_gtfs(gtfs, step: dict) -> list[dict]:
 
 def _select_subway_located_stops(step: dict, result: object) -> list[dict]:
     if isinstance(result, asyncio.TimeoutError):
-        print(
-            f"[trip] subway stop enrichment timed out "
-            f"({step.get('route_id')}, {TRIP_GTFS_ENRICH_TIMEOUT_S:.2f}s)"
+        _LOGGER.warning(
+            "[trip] subway stop enrichment timed out (%s, %.2fs)",
+            step.get("route_id"),
+            TRIP_GTFS_ENRICH_TIMEOUT_S,
         )
         return []
     if isinstance(result, BaseException):
-        print(f"[trip] subway stop enrichment skipped ({step.get('route_id')}): {result}")
+        _LOGGER.warning(
+            "[trip] subway stop enrichment skipped (%s): %s",
+            step.get("route_id"),
+            result,
+        )
         return []
     return list(result)
 
@@ -67,11 +75,6 @@ async def _enrich_subway_legs(gtfs, steps: list[dict]) -> dict:
         if located:
             metrics["with_stops"] += 1
             continue
-        print(
-            "[trip] subway leg has no intermediate stops "
-            f"({step.get('route_id')}: {step.get('departure_stop')} "
-            f"-> {step.get('arrival_stop')})"
-        )
     return metrics
 
 
@@ -123,7 +126,7 @@ async def _enrich_bus_legs(steps: list[dict]) -> dict:
             step["intermediate_stops"] = [s["name"] for s in located]
             metrics["with_stops"] += 1
     except Exception as exc:  # noqa: BLE001 bus-stop enrichment faults skip intermediates
-        print(f"[trip] bus stop enrichment skipped: {exc}")
+        _LOGGER.warning("[trip] bus stop enrichment skipped: %s", exc)
     return metrics
 
 

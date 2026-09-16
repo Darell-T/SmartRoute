@@ -311,7 +311,11 @@ async def _fetch_source(
             return await default()
         return await fetch()
     except Exception as exc:  # noqa: BLE001 official source faults report unavailable
-        print(f"[incident-official] {label} fetch failed: {type(exc).__name__}")
+        _LOGGER.warning(
+            "[incident-official] %s fetch failed: %s",
+            label,
+            type(exc).__name__,
+        )
         return None
 
 

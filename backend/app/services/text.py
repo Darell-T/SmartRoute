@@ -4,7 +4,10 @@ Leaf module: no internal trips dependencies. Scoring, candidates, and incidents
 all import ``safe_text`` from here, which is why it lives on its own.
 """
 
+import logging
 import re
+
+_LOGGER = logging.getLogger(__name__)
 
 _INTERNAL_LEAK_PATTERN = re.compile(
     r"\b(backend|frontend|api|json|payload|database|sql|gtfs|server|model|prompt|route index)\b",
@@ -24,7 +27,9 @@ def collapse_whitespace(value: object) -> str:
 def sanitize_recommendation(text: str) -> str:
     if not _INTERNAL_LEAK_PATTERN.search(text) and not _TELEMETRY_LEAK_PATTERN.search(text):
         return text
-    print("[trip] model output included internal/telemetry details; using rider-facing fallback")
+    _LOGGER.warning(
+        "[trip] model output included internal/telemetry details; using rider-facing fallback"
+    )
     return (
         "Take the next recommended train from your departure station, then follow the transfer shown on your map, sir. "
         "There may be minor operational delays, and total time should stay close to the displayed estimate."

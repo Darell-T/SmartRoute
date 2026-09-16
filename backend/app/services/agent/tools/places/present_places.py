@@ -17,10 +17,9 @@ from app.services.agent.passenger_output import (
 from app.services.agent.tools.base import ToolContext, ToolResult
 from app.services.agent.tools.places import damn_lines
 from app.services.agent.turn.contract import GoalKind, GoalState
-from app.services.parsing import finite_float as _finite
+from app.services.parsing import finite_float
 
 _LOGGER = logging.getLogger(__name__)
-_historical_pattern = damn_lines.historical_pattern
 
 _PLACE_GOAL_KINDS = frozenset({GoalKind.PLACE_RECOMMENDATION, GoalKind.DESTINATION_SELECTION})
 _GOOGLE_MAPS_SOURCE = {
@@ -650,7 +649,7 @@ def _queue_note_for_place(
     if damn_lines.get_supported_venue(place_id) is None:
         return _unsupported_queue_note(name, mode), None
     if mode == "historical":
-        pattern = _historical_pattern(place_id, when)
+        pattern = damn_lines.historical_pattern(place_id, when)
         note = (
             _historical_note(name, pattern)
             if pattern is not None
@@ -677,7 +676,7 @@ def _missing_live_queue_note(
     when: datetime,
 ) -> tuple[str | None, str | None]:
     pattern = (
-        _historical_pattern(place_id, when)
+        damn_lines.historical_pattern(place_id, when)
         if place.get("open_status") == "open"
         else None
     )
@@ -921,9 +920,9 @@ def _objective_reason_holds(
 
 
 def _is_extreme(place: dict, places: list[dict], field: str, *, maximum: bool) -> bool:
-    values = [_finite(item.get(field)) for item in places]
+    values = [finite_float(item.get(field)) for item in places]
     known = [value for value in values if value is not None]
-    current = _finite(place.get(field))
+    current = finite_float(place.get(field))
     if current is None or not known:
         return False
     target = max(known) if maximum else min(known)
@@ -937,7 +936,7 @@ def _facts(place: dict) -> list[str]:
     ).strip()
     if location:
         facts.append(location)
-    rating = _finite(place.get("rating"))
+    rating = finite_float(place.get("rating"))
     if rating is not None:
         facts.append(f"{rating:.1f}★")
     open_status = str(place.get("open_status") or "")
