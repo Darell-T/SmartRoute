@@ -4,6 +4,7 @@ import asyncio
 from datetime import UTC, datetime
 from typing import Any
 
+from app.services import text
 from app.services.agent.tools.base import ToolContext, ToolResult
 from app.services.agent.tools.location_resolution import resolve_named_point
 from app.services.agent.tools.transit import evidence as transit_evidence
@@ -14,7 +15,6 @@ from app.services.incidents import index as incident_index
 from app.services.live_feed.snapshot import build_live_snapshot as _build_live_snapshot
 from app.services.mta import realtime as mta_realtime
 from app.services.mta.alerts import project_service_alert
-from app.services.trips import text
 
 ARRIVAL_LIMIT = 8
 ALERT_LIMIT = 5
@@ -59,8 +59,8 @@ def _safe_alert(alert: dict) -> dict:
     )
     result = project_service_alert(source) or {}
     if "header" in result:
-        result["header"] = text._safe_text(result.get("header"), 200)
-    direction = text._safe_text(
+        result["header"] = text.safe_text(result.get("header"), 200)
+    direction = text.safe_text(
         alert.get("direction") or alert.get("direction_label"), 80
     )
     if direction:
@@ -70,8 +70,8 @@ def _safe_alert(alert: dict) -> dict:
 
 def _safe_arrival(arrival: dict) -> dict:
     return {
-        "route_id": text._safe_text(arrival.get("route_id"), 12),
-        "station_name": text._safe_text(arrival.get("station_name") or arrival.get("parent_stop_name"), 80),
+        "route_id": text.safe_text(arrival.get("route_id"), 12),
+        "station_name": text.safe_text(arrival.get("station_name") or arrival.get("parent_stop_name"), 80),
         "arrival_time": arrival.get("arrival_time"),
     }
 
@@ -80,8 +80,8 @@ def _safe_stop(stop: dict | None) -> dict | None:
     if not stop:
         return None
     result = {
-        "id": text._safe_text(stop.get("stop_id") or stop.get("id"), 40),
-        "stop_name": text._safe_text(stop.get("stop_name") or stop.get("name"), 80),
+        "id": text.safe_text(stop.get("stop_id") or stop.get("id"), 40),
+        "stop_name": text.safe_text(stop.get("stop_name") or stop.get("name"), 80),
         "distance_m": stop.get("distance_m"),
     }
     for output, source in (("latitude", "stop_lat"), ("longitude", "stop_lon")):
@@ -126,7 +126,7 @@ async def _nearby_snapshot(near_raw: str, ctx: ToolContext) -> ToolResult:
         "alerts": [_safe_alert(a) for a in alerts[:ALERT_LIMIT]],
         "network_status": (snapshot.get("signals") or {}).get("network_status"),
     }
-    summary = f"{len(arrivals)} arrival(s), {len(alerts)} alert(s) near {text._safe_text(near_raw, 60)}"
+    summary = f"{len(arrivals)} arrival(s), {len(alerts)} alert(s) near {text.safe_text(near_raw, 60)}"
     return ToolResult(ok=True, data=data, summary=summary)
 
 

@@ -8,6 +8,7 @@ import httpx
 
 from app.services.mta.config import ALERTS_URL, NYC_TZ
 from app.services.mta.feeds import parse_feed_message
+from app.services.text import collapse_whitespace
 
 _ALERTS_METADATA_KEY = f"{ALERTS_URL}:metadata"
 _ALERT_SOURCE = "mta_service_alerts"
@@ -237,7 +238,7 @@ def project_service_alert(alert: object) -> dict[str, object] | None:
 
 
 def _bounded_text(value: object, limit: int) -> str:
-    return " ".join(str(value or "").split()).strip()[:limit]
+    return collapse_whitespace(value)[:limit]
 
 
 def _whitelisted_text(

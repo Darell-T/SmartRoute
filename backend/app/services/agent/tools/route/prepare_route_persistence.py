@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import dataclasses
-import math
 import time
 from typing import Any
 
@@ -16,6 +15,7 @@ from app.services.agent.tools.route.prepare_route_branches import (
     aggregate_destination_ids,
 )
 from app.services.agent.turn.finalization import record_phase_ms
+from app.services.parsing import finite_float as _finite_coordinate
 from app.services.trips.preparation.constraints import (
     ROUTE_STATUSES,
     candidate_digest,
@@ -385,14 +385,6 @@ def _provider_match_id(provider_id: str, current_id: str) -> str:
     if current_id and not discovery_store.is_opaque_place_id(current_id):
         return current_id.casefold()
     return ""
-
-
-def _finite_coordinate(value: object) -> float | None:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
 
 
 def _build_digests(

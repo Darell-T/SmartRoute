@@ -10,6 +10,8 @@ import re
 from collections.abc import Iterator, Mapping
 from typing import Any
 
+from app.services.text import collapse_whitespace
+
 _SDK: Any = None
 _MAX_TEXT = 80
 _TRACE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
@@ -76,7 +78,7 @@ def shutdown() -> None:
 
 
 def _text(value: object, *, default: str = "unknown") -> str:
-    return " ".join(str(value or "").split()).strip()[:_MAX_TEXT] or default
+    return collapse_whitespace(value)[:_MAX_TEXT] or default
 
 
 def _session_hash(session_id: object) -> str:
