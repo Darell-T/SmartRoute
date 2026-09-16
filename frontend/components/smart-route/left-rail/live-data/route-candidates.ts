@@ -17,11 +17,11 @@ export function canonicalDurationMinutes(
   candidate: RouteCandidate | null | undefined,
 ): number | null {
   const seconds = candidate?.itinerary?.total_duration_seconds;
-  if (typeof seconds === "number" && Number.isFinite(seconds) && seconds >= 0) {
+  if (seconds != null && Number.isFinite(seconds) && seconds >= 0) {
     return Math.round(seconds / 60);
   }
   const minutes = candidate?.total_minutes;
-  if (typeof minutes === "number" && Number.isFinite(minutes) && minutes >= 0) {
+  if (minutes != null && Number.isFinite(minutes) && minutes >= 0) {
     return Math.round(minutes);
   }
   return null;
@@ -31,7 +31,7 @@ export function canonicalTransferCount(
   candidate: RouteCandidate | null | undefined,
 ): number | undefined {
   const count = candidate?.itinerary?.transfer_count;
-  if (typeof count === "number" && Number.isFinite(count) && count >= 0) {
+  if (count != null && Number.isFinite(count) && count >= 0) {
     return Math.round(count);
   }
   return undefined;
@@ -81,7 +81,7 @@ export function transitRouteIdsFromSteps(steps: ApiRouteStep[] | undefined): str
 }
 
 function finiteMinutes(value: number | undefined): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  if (value == null || !Number.isFinite(value)) return undefined;
   return Math.max(0, Math.round(value));
 }
 

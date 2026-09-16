@@ -1,7 +1,7 @@
 /**
  * SmartRoute agent chat — card→map selection
  *
- * Pure translation of a tapped `RouteCard` (from `lib/agent-chat-stream.ts`)
+ * Pure translation of a tapped `RouteCard` (from `lib/agent-chat/stream.ts`)
  * into the shape `page.tsx` needs to drive the Live Map tab: the plain
  * `RouteStep[]` the map renderer already knows how to draw, plus the
  * destination coordinates for the camera flight. No React, no fetch --

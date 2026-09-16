@@ -151,10 +151,10 @@ function NearbyStationGroup({ group }: { group: NearbyTransitGroup }) {
 
 function StationGroupHeader({ group }: { group: NearbyTransitGroup }) {
   const meta = [
-    typeof group.walkMinutes === "number"
+    group.walkMinutes != null
       ? `${group.walkMinutes} min walk`
       : null,
-    typeof group.distanceMiles === "number"
+    group.distanceMiles != null
       ? `${group.distanceMiles.toFixed(1)} mi`
       : null,
   ].filter(Boolean);
@@ -210,7 +210,7 @@ function ArrivalRow({ arrival }: { arrival: Arrival }) {
   const details = [
     arrival.servicePattern,
     arrival.stopName,
-    typeof arrival.walkMinutes === "number"
+    arrival.walkMinutes != null
       ? `${arrival.walkMinutes} min walk`
       : null,
   ].filter(Boolean);

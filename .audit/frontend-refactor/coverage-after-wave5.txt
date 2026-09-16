@@ -1,0 +1,47 @@
+FIXED_POINT merged (unit+browser):
+Statements : 97.36% (45495/46729)
+Branches   : 91.92% (11701/12729)
+Functions  : 96.68% (2885/2984)
+Lines      : 97.36% (45495/46729)
+
+AFTER WAVE 4 snapshot merged (unit+browser):
+Statements : 97.43% (45496/46695)
+Branches   : 91.90% (11648/12675)
+Functions  : 96.67% (2873/2972)
+Lines      : 97.43% (45496/46695)
+
+LIVE WAVE 4 FRONTEND TREE remasured this session (HEAD 2e379ee, frontend match of 442c526):
+Statements : 97.35% (45461/46695)
+Branches   : 91.90% (11675/12704)
+Functions  : 96.66% (2873/2972)
+Lines      : 97.35% (45461/46695)
+
+AFTER WAVE 5 merged (unit+browser):
+Statements : 97.35% (45466/46700)
+Branches   : 91.88% (11656/12686)
+Functions  : 96.66% (2873/2972)
+Lines      : 97.35% (45466/46700)
+
+FIXED_POINT unit-only c8 text-summary:
+Statements   : 94.37% ( 44100/46729 )
+Branches     : 90.01% ( 10617/11795 )
+Functions    : 95.33% ( 2823/2961 )
+Lines        : 94.37% ( 44100/46729 )
+
+AFTER WAVE 4 unit-only c8 text-summary:
+Statements   : 94.46% ( 44109/46695 )
+Branches     : 90% ( 10604/11781 )
+Functions    : 95.34% ( 2829/2967 )
+Lines        : 94.46% ( 44109/46695 )
+
+LIVE WAVE 4 FRONTEND TREE unit-only remasured this session:
+Statements   : 94.38% ( 44074/46695 )
+Lines        : 94.38% ( 44074/46695 )
+
+AFTER WAVE 5 unit-only c8 text-summary:
+Statements   : 94.38% ( 44079/46700 )
+Branches     : 89.99% ( 10617/11797 )
+Functions    : 95.34% ( 2829/2967 )
+Lines        : 94.38% ( 44079/46700 )
+
+Note: live remasurement of the Wave 4 frontend tree is 35 statement hits below the Wave 4 snapshot (45461 vs 45496) at the same 46695 denominator. Wave 5 adds 5 covered backend-proxy statements (45466/46700). Merged line rate matches the live Wave 4 remasurement at 97.35.
