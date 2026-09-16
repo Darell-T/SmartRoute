@@ -82,7 +82,7 @@ class DiscoveryRouteProviderHandoffTests(
             },
             current_payload=lambda envelope, empty: envelope.get("payload") or empty,
             scoring=SimpleNamespace(
-                _score_routes=lambda routes, _alerts, **_kwargs: [
+                score_routes=lambda routes, _alerts, **_kwargs: [
                     {
                         "index": 0,
                         "score": 1,
@@ -108,7 +108,7 @@ class DiscoveryRouteProviderHandoffTests(
             ),
             crowd_hotspots=SimpleNamespace(find_hotspot_hits=lambda _gtfs, _routes: []),
             candidates=SimpleNamespace(
-                _collect_route_and_bus_ids=lambda _routes: (set(), set())
+                collect_route_and_bus_ids=lambda _routes: (set(), set())
             ),
             route_service_ids=lambda _route: set(),
             context_timeout_seconds=5.0,

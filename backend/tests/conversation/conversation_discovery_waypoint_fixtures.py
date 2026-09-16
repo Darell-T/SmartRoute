@@ -23,7 +23,7 @@ documented Batch A/B/C harness seams:
 - ``prepare_route_options.prepare_single_leg`` -- the provider route/evidence
   seam of the real canonical prepare executor (also the per-segment seam of
   the real multi-stop path).
-- ``trips.enrichment._enrich_route`` and ``tools.lookup_arrivals.execute`` --
+- ``trips.enrichment.enrich_route`` and ``tools.lookup_arrivals.execute`` --
   live enrichment/arrival fetches the real ``present_route`` may call.
 - ``candidate_store.new_candidate_id`` -- opaque id generation, only for a
   deterministic server-issued candidate id in scripted ``present_route`` input

@@ -66,7 +66,7 @@ class DiscoverPlacesTests(unittest.IsolatedAsyncioTestCase):
         )
         with patch.object(
             discover_places.search_local_places,
-            "_provider_search",
+            "provider_search",
             new=provider,
         ):
             result = await discover_places.execute(
@@ -221,7 +221,7 @@ class DiscoverPlacesTests(unittest.IsolatedAsyncioTestCase):
         provider = AsyncMock(return_value=ToolResult(ok=True, data={"results": []}))
         with patch.object(
             discover_places.search_local_places,
-            "_provider_search",
+            "provider_search",
             new=provider,
         ):
             result = await discover_places.execute(
@@ -312,7 +312,7 @@ class DiscoverPlacesTests(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(
             discover_places.search_local_places,
-            "_provider_search",
+            "provider_search",
             new=search,
         ):
             result = await discover_places.execute(
@@ -346,7 +346,7 @@ class DiscoverPlacesTests(unittest.IsolatedAsyncioTestCase):
         )
         with patch.object(
             discover_places.search_local_places,
-            "_provider_search",
+            "provider_search",
             new=provider,
         ):
             first = await discover_places.execute(
@@ -409,7 +409,7 @@ class DiscoverPlacesTests(unittest.IsolatedAsyncioTestCase):
         ctx = _ctx()
         with patch.object(
             discover_places.search_local_places,
-            "_provider_search",
+            "provider_search",
             new=AsyncMock(return_value=poi),
         ):
             result = await discover_places.execute(

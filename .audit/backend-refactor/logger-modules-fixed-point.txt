@@ -1,0 +1,14 @@
+count=13
+backend/app/main.py
+backend/app/observability.py
+backend/app/services/agent/candidate_store.py
+backend/app/services/agent/model/request.py
+backend/app/services/agent/session.py
+backend/app/services/agent/tools/places/discover_places.py
+backend/app/services/agent/tools/places/present_places.py
+backend/app/services/agent/tools/places/search_local_places.py
+backend/app/services/agent/tools/transit/lookup_arrivals_subway.py
+backend/app/services/agent/turn/ledger.py
+backend/app/services/agent/turn/stream.py
+backend/app/services/incidents/official.py
+backend/app/services/mta/bus.py

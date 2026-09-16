@@ -12,7 +12,7 @@ _CANDIDATE_ANALYSIS_PATTERN = re.compile(
 )
 
 
-def _strip_model_control_blocks(raw_text: str) -> str:
+def strip_model_control_blocks(raw_text: str) -> str:
     without_route = re.sub(r"\s*\[ROUTE:\d+\]\s*", "", raw_text or "")
     return _CANDIDATE_ANALYSIS_PATTERN.sub("", without_route).strip()
 
@@ -23,8 +23,8 @@ def _build_fallback_candidate_reason(
     route_score: dict | None = None,
     chosen_score: dict | None = None,
 ) -> str:
-    route_score = route_score or scoring._route_score(route, [])
-    chosen_score = chosen_score or scoring._route_score(chosen_route, [])
+    route_score = route_score or scoring.route_score(route, [])
+    chosen_score = chosen_score or scoring.route_score(chosen_route, [])
     route_alerts = route_score.get("alerts") or []
     chosen_alerts = chosen_score.get("alerts") or []
     route_alert = text.safe_text(route_alerts[0], 72) if route_alerts else ""
@@ -118,7 +118,7 @@ def _alert_only_reason(alert_delta: int, route_alert: str) -> str | None:
     return "Affected by service alerts."
 
 
-def _build_route_candidates(
+def build_route_candidates(
     routes: list[list[dict]],
     chosen_index: int,
     candidate_analysis: dict[int, dict[str, str]],
@@ -126,8 +126,8 @@ def _build_route_candidates(
 ) -> list[dict]:
     del candidate_analysis
     chosen_route = routes[chosen_index] if routes else []
-    scores = scoring._score_by_index(scored_routes or scoring._score_routes(routes, []))
-    chosen_score = scores.get(chosen_index, scoring._route_score(chosen_route, []))
+    scores = scoring.score_by_index(scored_routes or scoring.score_routes(routes, []))
+    chosen_score = scores.get(chosen_index, scoring.route_score(chosen_route, []))
     candidates = []
     for index, route in enumerate(routes):
         is_recommended = index == chosen_index
@@ -135,7 +135,7 @@ def _build_route_candidates(
         # alternate duration/walking/transfer facts.  It remains useful for
         # validating the model's choice, but the rider-facing reason must be
         # derived from this server-owned score row instead.
-        route_score = scores.get(index, scoring._route_score(route, []))
+        route_score = scores.get(index, scoring.route_score(route, []))
         fallback = _build_fallback_candidate_reason(
             route,
             chosen_route,
@@ -191,7 +191,7 @@ def _transit_steps(route: list[dict]) -> list[dict]:
     ]
 
 
-def _collect_route_and_bus_ids(routes: list[list[dict]]) -> tuple[set[str], set[str]]:
+def collect_route_and_bus_ids(routes: list[list[dict]]) -> tuple[set[str], set[str]]:
     """Collects the set of subway/bus route ids and the subset that are bus
     routes across every candidate route, and stamps each transit step with
     empty `intermediate_stops`/`intermediate_stop_locations` keys -- present
@@ -216,7 +216,7 @@ def _collect_route_and_bus_ids(routes: list[list[dict]]) -> tuple[set[str], set[
 def _route_ids(route: list[dict]) -> list[str]:
     route_ids: list[str] = []
     for step in _transit_steps(route):
-        route_id = scoring._step_route_id(step)
+        route_id = scoring.step_route_id(step)
         if route_id and route_id not in route_ids:
             route_ids.append(route_id)
     return route_ids
@@ -250,7 +250,7 @@ def _candidate_display_label(route: list[dict]) -> str:
     return f"{base} from {board_stop}" if board_stop else base
 
 
-def _build_route_candidate_labels(routes: list[list[dict]]) -> list[dict]:
+def build_route_candidate_labels(routes: list[list[dict]]) -> list[dict]:
     return [
         {
             "index": index,
@@ -267,7 +267,7 @@ def _parse_family_step(step: object) -> tuple[str, str, str, str] | None:
     mode = str(step.get("type") or "").upper()
     if mode not in {"SUBWAY", "BUS"}:
         return None
-    route_id = scoring._step_route_id(step)
+    route_id = scoring.step_route_id(step)
     boarding = step.get("departure_stop_id") or step.get("departure_stop")
     alighting = step.get("arrival_stop_id") or step.get("arrival_stop")
     return (

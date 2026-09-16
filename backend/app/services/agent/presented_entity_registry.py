@@ -37,7 +37,7 @@ def _identity_key(place: dict[str, Any]) -> str:
 
 
 def _normalized_name(value: object) -> str:
-    return _store()._normalized_name(value)
+    return _store().normalized_name(value)
 
 
 def _description_reference(value: str) -> str:
@@ -269,7 +269,7 @@ def record(
     if source_changed:
         remaining_ttl = max(1, int(expires_at - time.time()))
         cache.cache_set(
-            store._key(discovery_set_id),
+            store.cache_key(discovery_set_id),
             json.dumps(source, separators=(",", ":"), default=str),
             remaining_ttl,
             fail_open=True,

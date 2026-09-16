@@ -5,7 +5,7 @@ Probes drive the REAL agent loop (``loop.run_agent_turn``) with the real
 ``TOOL_REGISTRY``, per-turn ledger, candidate/discovery/trip stores, and SSE
 path. Anthropic inference is scripted through ``tests._fake_anthropic``; only
 genuine provider/data/id seams are patched (poi_search.execute,
-prepare_route_options.prepare_single_leg, trips.enrichment._enrich_route,
+prepare_route_options.prepare_single_leg, trips.enrichment.enrich_route,
 tools.lookup_arrivals.execute, mta.realtime.fetch/parse_service_alerts,
 discovery_store.new_place_id, candidate_store.new_candidate_id).
 ``store_discovery_set`` is observed, never replaced. Every unoffered-case seam

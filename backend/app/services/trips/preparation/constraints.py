@@ -129,10 +129,10 @@ def _route_ids_and_modes(route: list[dict] | None) -> tuple[set[str], set[str]]:
     route_ids: set[str] = set()
     route_modes: set[str] = set()
     for step in route or []:
-        mode = scoring._normalized_mode(step.get("type"))
+        mode = scoring.normalized_mode(step.get("type"))
         if mode:
             route_modes.add(mode)
-        route_id = scoring._step_route_id(step)
+        route_id = scoring.step_route_id(step)
         if route_id:
             route_ids.add(route_id)
     return route_ids, route_modes
@@ -276,8 +276,8 @@ def _route_or_score_timing(route: list[dict], score: dict[str, Any]) -> _TimingF
         transfers = int(score.get("transfers") or 0)
     else:
         street_seconds, in_station_seconds = route_walking_totals(route)
-        duration_minutes = scoring._route_total_minutes(route)
-        transfers = scoring._route_transfer_count(route)
+        duration_minutes = scoring.route_total_minutes(route)
+        transfers = scoring.route_transfer_count(route)
     return _TimingFacts(
         duration_minutes=duration_minutes,
         street_seconds=street_seconds,
@@ -406,7 +406,7 @@ def _route_lines(route: list[dict]) -> list[str]:
     for step in route:
         if str(step.get("type") or "").upper() not in {"SUBWAY", "BUS", "RAIL"}:
             continue
-        line = scoring._step_route_id(step)
+        line = scoring.step_route_id(step)
         if line and line not in lines:
             lines.append(line)
     return lines

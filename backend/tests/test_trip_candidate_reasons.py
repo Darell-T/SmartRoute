@@ -23,11 +23,11 @@ def _candidate_reasons(
     chosen_index: int,
     alerts: list[dict] | None = None,
 ) -> list[dict]:
-    return candidates._build_route_candidates(
+    return candidates.build_route_candidates(
         routes,
         chosen_index,
         {},
-        scoring._score_routes(routes, alerts or []),
+        scoring.score_routes(routes, alerts or []),
     )
 
 
@@ -55,7 +55,7 @@ class TripCandidateReasonTests(unittest.TestCase):
         assert score["service_condition_penalty"] == 4.0
     def test_candidate_reason_cannot_reuse_stale_model_duration(self):
         route = _subway_route("Q", 46)
-        rows = candidates._build_route_candidates(
+        rows = candidates.build_route_candidates(
             [route],
             chosen_index=0,
             candidate_analysis={
@@ -125,7 +125,7 @@ class TripCandidateReasonTests(unittest.TestCase):
             }
         )
 
-        score = scoring._route_score(route, [])
+        score = scoring.route_score(route, [])
 
         assert score["transfers"] == 1
         assert scoring._route_lines(route) == ["F", "JAMAICA AIRTRAIN"]
@@ -219,7 +219,7 @@ class TripCandidateReasonTests(unittest.TestCase):
             ],
         ]
 
-        labels = candidates._build_route_candidate_labels(routes)
+        labels = candidates.build_route_candidate_labels(routes)
 
         assert labels[0]["displayLabel"] == "Q route from A St"
         assert labels[1]["displayLabel"] == "B41 bus option from Flatbush Av/Church Av"

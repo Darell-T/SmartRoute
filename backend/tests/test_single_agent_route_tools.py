@@ -162,7 +162,7 @@ class SingleAgentToolSurfaceTests(unittest.IsolatedAsyncioTestCase):
             )
         candidate = prepared_result.data["candidates"][0]
         with patch(
-            "app.services.trips.enrichment._enrich_route",
+            "app.services.trips.enrichment.enrich_route",
             new=AsyncMock(return_value=None),
         ):
             result = await present_route.execute(
@@ -256,7 +256,7 @@ class SingleAgentToolSurfaceTests(unittest.IsolatedAsyncioTestCase):
             )
         candidate = prepared_result.data["candidates"][0]
         with patch(
-            "app.services.trips.enrichment._enrich_route",
+            "app.services.trips.enrichment.enrich_route",
             new=AsyncMock(return_value=None),
         ):
             result = await present_route.execute(
@@ -327,7 +327,7 @@ class SingleAgentToolSurfaceTests(unittest.IsolatedAsyncioTestCase):
         )
         trip_state.bind_candidate_set(ctx.session, set_id)
         with patch(
-            "app.services.trips.enrichment._enrich_route",
+            "app.services.trips.enrichment.enrich_route",
             new=AsyncMock(return_value=None),
         ):
             result = await present_route.execute(
@@ -389,7 +389,7 @@ class SingleAgentToolSurfaceTests(unittest.IsolatedAsyncioTestCase):
         trip_state.bind_candidate_set(ctx.session, set_id)
 
         with patch(
-            "app.services.trips.enrichment._enrich_route",
+            "app.services.trips.enrichment.enrich_route",
             new=AsyncMock(return_value=None),
         ):
             result = await present_route.execute(

@@ -194,7 +194,7 @@ async def enrich_route(request: Request, payload: EnrichRouteRequest):
     if not _enrichment_steps_are_bounded(steps):
         raise HTTPException(status_code=400, detail="Invalid route enrichment request")
     try:
-        await enrichment._enrich_route(gtfs, steps)
+        await enrichment.enrich_route(gtfs, steps)
     except Exception as exc:  # noqa: BLE001 enrichment faults return un-enriched steps
         _LOGGER.warning("[enrich-route] failed, returning un-enriched: %r", exc)
         return {"steps": steps, "enriched": False}

@@ -74,7 +74,7 @@ class AgentRouteStageAReliabilityTests(
         ]
         with patch.object(
             discover_places.search_local_places,
-            "_provider_search",
+            "provider_search",
             new=AsyncMock(return_value=provider_search_result(*branches)),
         ):
             discovery = await discover_places.execute(
@@ -255,7 +255,7 @@ class AgentRouteStageAReliabilityTests(
         ]
         with patch.object(
             discover_places.search_local_places,
-            "_provider_search",
+            "provider_search",
             new=AsyncMock(
                 return_value=provider_search_result(*brooklyn_places)
             ),

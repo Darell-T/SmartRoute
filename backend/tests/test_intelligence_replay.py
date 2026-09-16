@@ -66,7 +66,7 @@ class ReplayScenarioTests(unittest.IsolatedAsyncioTestCase):
                 replay, "match_cached_incidents", wraps=replay.match_cached_incidents
             ) as matching_spy,
             patch.object(
-                event_provider, "_parse_event", wraps=event_provider._parse_event
+                event_provider, "parse_event", wraps=event_provider.parse_event
             ) as event_spy,
         ):
             inputs = await ReplayFixtureAdapters(scenario).load()
