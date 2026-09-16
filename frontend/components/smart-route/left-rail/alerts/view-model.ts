@@ -21,7 +21,7 @@ export function partitionAlertItems(
   items: AlertFeedItem[],
   nearbyRouteIds: string[],
   featuredLimit: number,
-): { featured: AlertFeedItem[]; rest: AlertFeedItem[] } {
+) {
   const near = new Set(nearbyRouteIds.map((route) => route.toUpperCase()));
   const eligible = items.filter(
     (item) =>

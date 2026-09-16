@@ -31,13 +31,13 @@ type DestinationInputActionState =
   | "finalizing"
   | "clear";
 
-const ACTION_LABELS: Record<DestinationInputActionState, string> = {
+const ACTION_LABELS = {
   empty: "Search route",
   submit: "Search route",
   stop: "Stop route planning",
   finalizing: "Finalizing route",
   clear: "Clear route",
-};
+} satisfies Record<DestinationInputActionState, string>;
 
 export type DestinationComboboxCommand =
   | { type: "none" }

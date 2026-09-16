@@ -97,3 +97,51 @@ w5-3-route-reasoning-restored	components/smart-route/left-rail/live-data/route-r
 w5-wave-boundary	app,lib,components	leave	wave 5 complete; subway-network not split	typecheck pass; lint pass; oxlint 195->181; test:unit 1542 pass; coverage merged line live 97.35 (45466/46700) vs live wave4 remasure 97.35 (45461/46695) vs snapshot 97.43; verify:transit-artifacts pass; build pass	+5	-14	ok
 w6-docs-readme	docs/README.md	rename	two module-map rows for frontend/lib/README.md and left-rail/README.md	one line each in the documentation map table	0	0	ok
 w6-docs-handoff	docs/lint-cleanup-handoff.md	leave	appended 2026-09-16 frontend simplification after wave 5 section	plan 3.2 before 5193b08 and after wave 5 table	0	0	ok
+ox-1	components/map/subway-network.ts	parse-at-boundary	visualArtifactPropertiesSchema and stationArtifactPropertiesSchema parse artifact properties once; quoted source_shape_ids	subway-network.ts: 81 payloads compared equal; typecheck lint test:unit pass; oxlint 28->8 total 181->161	+54	-20	ok
+ox-2	lib/hooks/use-live-feed.ts	leave	honest fix would need a real envelope schema that changes partial-payload behavior	reverted; arrays pass typeof object and are ignored; undefined keys pass in-operator	0	0	ok
+ox-3	lib/mapbox-search.ts	parse-at-boundary	optionalSearchTextSchema catch undefined no trim; finiteSearchNumberSchema; suggest/retrieve parse	mapbox-search.ts: 47 payloads compared equal; typecheck lint test:unit pass; oxlint 12->0 total 149->137	+31	-12	ok
+ox-4	components/map/route-stops.ts	leave	getSource GeoJSONSource; type===geojson and setData in failed tsc	one attempt then git checkout; remaining 6; assertion is the contract, no comment policy	0	0	ok
+ox-5	components/smart-route/map/smart-route-map-helpers.ts	parse-at-boundary	mapFeatureArrayPropertySchema at MapLibre property boundary; fetch FeatureCollection schema failed tsc	smart-route-map-helpers.ts: 25 payloads compared equal; oxlint 4->3 total 137->136	+6	-1	ok
+ox-6	components/smart-route/map/smart-route-map.tsx	rename	quoted source_shape_ids artifact field; left window and json assertion	typecheck lint test:unit pass; oxlint 4->2	0	-2	ok
+ox-7	lib/agent-chat/stream.ts	delete-redundant-check	removed DoneUsage index signature; restored Record<string, unknown> on buildEvent and decodeSsePayload	AgentEventRecord alias deleted; warnSkip detail left unknown	-1	-1	ok
+ox-8	components/map/camera.ts	leave	typeof window platform guards	remaining 3; leave: platform boundary	0	0	ok
+ox-9	components/map/route-stops-features.ts	leave	owned typed value, rule remedy is deletion but the typed contract is a union that still needs the check	reverted; stop.lat/lng and stop_count typeof number	0	0	ok
+ox-10	components/smart-route/chat/itinerary-view-model.ts	leave	owned typed value, rule remedy is deletion but the typed contract is a union that still needs the check	reverted; RecommendationReason | string | unknown discriminant	0	0	ok
+ox-11	lib/agent-chat/route-card-contract.ts	leave	CanonicalItinerary* index signatures; no closed schema-derived value type without dropping extras	remaining 3; would need a metric helper	0	0	ok
+ox-12	lib/canonical-itinerary-schema.ts	restructure-spread	selectionDecisionSchema if-assign reason_code; left parseCanonicalItinerary unknown	oxlint 2->1	+3	-1	ok
+ox-13	components/map/route-layers.ts	named-contract	StepDurationTable; dropped segmentLengths return annotation	oxlint 2->0	+1	-2	ok
+ox-14	components/smart-route/left-rail/live-data/route-steps.ts	inference	dropped liveDepartureFields anonymous return type	oxlint 2->0	0	-2	ok
+ox-15	components/smart-route/left-rail/alerts/feed-normalizer.ts	named-contract	FeedEventSource return type	oxlint 2->0	+3	-2	ok
+ox-16	components/smart-route/chat/itinerary-event-adapter.ts	inference	dropped anonymous return types on legEndpoints and walkSectionEndpoints	oxlint 2->0	0	-2	ok
+ox-17	components/smart-route/left-rail/live-data/route-metadata.ts	named-contract	RouteDestinationFallbackTable and RouteServicePatternTable	oxlint 2->0	+5	-2	ok
+ox-18	lib/agent-chat/session.ts	leave	owned typed value, rule remedy is deletion but the typed contract is a union that still needs the check	reverted SnapshotEventRecord alias; snapshot cards stay Record<string, unknown>[]	0	0	ok
+ox-19	components/prompt-kit/prompt-suggestion.tsx	leave	owned typed value, rule remedy is deletion but the typed contract is a union that still needs the check	reverted; children ReactNode still needs typeof string for highlight	0	0	ok
+ox-20	lib/server/backend-stream-proxy.ts	restructure-spread	StreamProxyHeaders if-assign principal; left body unknown	oxlint 2->1	+6	-1	ok
+ox-21	components/smart-route/left-rail/route-view/itinerary.tsx	timer-ref	timer number|null; clear when non-null	oxlint 2->0	+1	-2	ok
+ox-22	components/smart-route/chat/chat-welcome.tsx	restructure-assertion	instanceof Element/HTMLButtonElement instead of as	oxlint 2->0	0	-2	ok
+ox-23	components/prompt-kit/prompt-input.tsx	leave	owned typed value, rule remedy is deletion but the typed contract is a union that still needs the check	reverted; maxHeight number | string still needs typeof number	0	0	ok
+ox-24	components/smart-route/left-rail/live-data/route-reason-copy.ts	delete-redundant-check	departsIn and activeAlerts are number|undefined; != null	oxlint 2->0	0	-2	ok
+ox-25	lib/api.ts	inference	dropped signalWithTimeout anonymous return type	oxlint 1->0	0	-1	ok
+ox-26	components/smart-route/chat/chat-sidebar.tsx	satisfies	SIDEBAR_ICON_MOTION satisfies Record<IconMotion, SidebarTransform>	oxlint 1->0	0	-1	ok
+ox-27	components/smart-route/left-rail/route-view/actions.tsx	satisfies	ACTION_LABELS satisfies Record<DestinationInputActionState, string>	oxlint 1->0	0	-1	ok
+ox-28	components/smart-route/left-rail/types.ts	satisfies	RAIL_TONE_COLORS satisfies Record<RailToneKey, string>	oxlint 1->0	0	-1	ok
+ox-29	components/smart-route/train-bullet.tsx	named-contract	BulletNameByRoute	oxlint 1->0	+4	-1	ok
+ox-30	components/smart-route/left-rail/alerts/view-model.ts	inference	dropped partitionAlertItems anonymous return type	oxlint 1->0	0	-1	ok
+ox-31	components/smart-route/left-rail/alerts/row-selection.ts	named-contract	AlertRowSelection	oxlint 1->0	+2	-1	ok
+ox-32	lib/nyc-route-clock.ts	delete-redundant-check	new Date(value) for string|number; both branches were identical	nyc-route-clock.ts: 20 payloads compared equal; oxlint 1->0	0	-1	ok
+ox-33	components/smart-route/left-rail/arrival-countdown.tsx	delete-redundant-check	minutes number|undefined; == null || !Number.isFinite	oxlint 1->0	0	-1	ok
+ox-34	lib/smart-route.ts	delete-redundant-check	Number.isFinite(total_minutes) covers undefined	oxlint 1->0	-1	-1	ok
+ox-35	components/smart-route/left-rail/route-view/display-compat.ts	delete-redundant-check	parseMinutes returns number|undefined; == null	oxlint 1->0	0	-1	ok
+ox-36	components/smart-route/map/route-preview-markers.ts	delete-redundant-check	accuracyMeters number|null|undefined; != null && Number.isFinite	oxlint 1->0	0	-1	ok
+ox-37	components/smart-route/chat/chat-arrivals-card.tsx	delete-redundant-check	catchable_arrival_minutes number|null; != null	oxlint 1->0	0	-1	ok
+ox-38	components/smart-route/chat/chat-working-panel.tsx	delete-redundant-check	durationMs number|undefined; != null	oxlint 1->0	0	-1	ok
+ox-39	components/smart-route/left-rail/route-view/alternatives.tsx	delete-redundant-check	totalMinutes number|undefined; != null	oxlint 1->0	0	-1	ok
+ox-40	components/smart-route/chat/itinerary-card-legs.tsx	delete-redundant-check	stopCount number|undefined; != null; left CSSProperties assertion	oxlint 2->1	0	-1	ok
+ox-41	lib/hooks/use-mobile-visible-viewport.ts	propagate-type	structural ViewportWindow/ViewportRoot so tests need no Window cast	oxlint src stays 2 platform; test 12->0	+6	-12	ok
+ox-42	lib/hooks/use-mobile-visible-viewport.test.ts	restructure-assertion	dropped as unknown as Window/HTMLElement	oxlint 12->0	0	-12	ok
+ox-43	tests/release/smartroute-chat.spec.ts	leave	unchained Window&axe failed next build TS2352; restored as unknown as	one attempt; remaining 3; assertion is the contract, no comment policy	0	0	ok
+ox-1-review	components/map/subway-network.ts	parse-at-boundary	station route_ids z.array(z.unknown()).catch([]); deleted dead lane_color_slots array-or branch	subway-network.ts: 89 payloads compared equal including visual artifact and array-valued lane_color_slots mutation	-5	0	ok
+ox-5-review	components/smart-route/map/smart-route-map-helpers.ts	parse-at-boundary	restored MapLibre CSV comment in JSON.parse catch; schema .catch would skip CSV split	comment restored; try/catch kept because JSON.parse throws are not Zod issues	+1	0	ok
+ox-pass	frontend	leave	remaining 74: platform, boundary decoders, MapLibre/DOM assertions, test typeof/yield, index signatures	typecheck lint oxlint 181->74 test:unit 1542 coverage merged lines 97.44 (45667/46868) artifacts pass build pass	+168	-107	ok
+ox-review	frontend	leave	remaining 99 after reverting owned typeof/in respellings	typecheck lint pass; oxlint 74->99; test:unit 1542; verify:transit-artifacts pass	-6	+25	ok
+

@@ -100,13 +100,16 @@ export const selectionDecisionSchema = z
     selection_source: z.enum(["model", "deterministic_fallback"]),
   })
   .passthrough()
-  .transform(
-    (record): RouteSelectionDecision => ({
+  .transform((record): RouteSelectionDecision => {
+    const decision: RouteSelectionDecision = {
       selection_reason: record.selection_reason,
       selection_source: record.selection_source,
-      ...(record.reason_code !== undefined ? { reason_code: record.reason_code } : {}),
-    }),
-  );
+    };
+    if (record.reason_code !== undefined) {
+      decision.reason_code = record.reason_code;
+    }
+    return decision;
+  });
 
 const placeFieldsSchema = z.object({
   display_name: limitedText().nullable().optional(),

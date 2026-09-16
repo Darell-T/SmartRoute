@@ -18,7 +18,7 @@ function durationOrFallback(
   return `${Math.round(minutes)} min`;
 }
 
-function liveDepartureFields(step: ApiRouteStep): { note?: string; live?: true } {
+function liveDepartureFields(step: ApiRouteStep) {
   const departsIn = step.minutes_until_train_arrives;
   if (departsIn === undefined || !Number.isFinite(departsIn)) return {};
   return {

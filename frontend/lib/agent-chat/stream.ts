@@ -184,7 +184,6 @@ export type AgentStopReason =
 export interface DoneUsage {
   input_tokens?: number;
   output_tokens?: number;
-  [key: string]: unknown;
 }
 
 /** `done` — always the last event of a turn. */

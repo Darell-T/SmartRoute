@@ -43,7 +43,7 @@ export function updateCurrentLocationDot(
   // more pixels, so the "general area" disc grows; zoom out and it shrinks
   // below the threshold and hides, leaving just the dot.
   const radiusPx =
-    typeof accuracyMeters === "number" && Number.isFinite(accuracyMeters)
+    accuracyMeters != null && Number.isFinite(accuracyMeters)
       ? accuracyMeters / metersPerPixelAtLatitude(lat, zoom)
       : 0;
   const visible = radiusPx >= 24;

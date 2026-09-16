@@ -26,10 +26,10 @@ test("visible viewport variables track iOS height and offset with one scheduled 
     },
     addEventListener() {},
     removeEventListener() {},
-  } as unknown as Window;
+  };
   const root = {
     style: { setProperty: (name: string, value: string) => values.set(name, value) },
-  } as unknown as HTMLElement;
+  };
 
   const cleanup = installMobileViewportVariables(targetWindow, root);
   assert.equal(values.get("--visible-viewport-height"), "844px");
@@ -65,10 +65,10 @@ test("visible viewport falls back to innerHeight when visualViewport is absent",
     cancelAnimationFrame() {},
     addEventListener() {},
     removeEventListener() {},
-  } as unknown as Window;
+  };
   const root = {
     style: { setProperty: (name: string, value: string) => values.set(name, value) },
-  } as unknown as HTMLElement;
+  };
 
   const cleanup = installMobileViewportVariables(targetWindow, root);
   assert.equal(values.get("--visible-viewport-height"), "667px");

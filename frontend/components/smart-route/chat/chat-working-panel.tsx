@@ -77,7 +77,7 @@ function ToolRow({ chip }: { chip: ToolChipData }) {
       )}
       <span className="sr-chat-tool-row__label">
         {chip.label}
-        {typeof chip.durationMs === "number" ? ` · ${(chip.durationMs / 1000).toFixed(1)}s` : ""}
+        {chip.durationMs != null ? ` · ${(chip.durationMs / 1000).toFixed(1)}s` : ""}
       </span>
     </div>
   );

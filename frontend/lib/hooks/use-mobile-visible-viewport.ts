@@ -7,17 +7,23 @@ const MOBILE_VISIBLE_HEIGHT = "--mobile-visible-height";
 const MOBILE_VIEWPORT_OFFSET_TOP = "--mobile-viewport-offset-top";
 const LEGACY_VISIBLE_HEIGHT = "--visual-viewport-height";
 
-type ViewportWindow = Pick<
-  Window,
-  | "innerHeight"
-  | "visualViewport"
-  | "requestAnimationFrame"
-  | "cancelAnimationFrame"
-  | "addEventListener"
-  | "removeEventListener"
->;
+type MobileVisualViewport = EventTarget & {
+  height: number;
+  offsetTop: number;
+};
 
-type ViewportRoot = Pick<HTMLElement, "style">;
+type ViewportWindow = {
+  innerHeight: number;
+  visualViewport: MobileVisualViewport | null;
+  requestAnimationFrame: Window["requestAnimationFrame"];
+  cancelAnimationFrame: Window["cancelAnimationFrame"];
+  addEventListener: Window["addEventListener"];
+  removeEventListener: Window["removeEventListener"];
+};
+
+type ViewportRoot = {
+  style: Pick<CSSStyleDeclaration, "setProperty">;
+};
 
 /**
  * Keeps the mobile shell aligned to the viewport iOS is actually showing.

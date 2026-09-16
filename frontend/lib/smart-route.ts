@@ -15,7 +15,6 @@ export function formatCanonicalRouteSummary(
 ): CanonicalRouteSummary | null {
   if (
     !candidate?.itinerary?.itinerary_id ||
-    typeof candidate.total_minutes !== "number" ||
     !Number.isFinite(candidate.total_minutes)
   ) {
     return null;

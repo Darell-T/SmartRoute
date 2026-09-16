@@ -195,7 +195,7 @@ export function SmartRouteMap({
             visual_feature_type: properties.visual_feature_type,
             stop_pair: properties.stop_pair,
             length_m: properties.length_m,
-            source_shape_ids: mapFeatureArrayProperty(properties.source_shape_ids),
+            ["source_shape_ids"]: mapFeatureArrayProperty(properties["source_shape_ids"]),
             source_edge_ids: mapFeatureArrayProperty(properties.source_edge_ids),
             lane_slot: properties.lane_slot,
             lane_group_id: properties.lane_group_id,

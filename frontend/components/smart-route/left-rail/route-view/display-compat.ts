@@ -29,7 +29,7 @@ export function routeResultKey(plan: RoutePlan): string {
 
 export function formatDurationLabel(totalTime: string): string {
   const minutes = parseMinutes(totalTime);
-  if (typeof minutes !== "number") {
+  if (minutes == null) {
     return totalTime;
   }
   if (minutes < 60) {

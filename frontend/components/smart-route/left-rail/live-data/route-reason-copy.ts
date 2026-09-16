@@ -17,13 +17,13 @@ function derivePublicRationale(
       : "Fastest available option",
   ];
   const departsIn = firstTransitStep(steps)?.minutes_until_train_arrives;
-  if (typeof departsIn === "number" && Number.isFinite(departsIn)) {
+  if (departsIn != null && Number.isFinite(departsIn)) {
     parts.push(`live arrival in ${Math.max(1, Math.round(departsIn))} min`);
   }
   const activeAlerts = candidate?.score_breakdown?.active_alerts;
   if (activeAlerts === 0) {
     parts.push("no service alerts");
-  } else if (typeof activeAlerts === "number" && activeAlerts > 0) {
+  } else if (activeAlerts != null && activeAlerts > 0) {
     parts.push(
       `${activeAlerts} service alert${activeAlerts === 1 ? "" : "s"} on route`,
     );

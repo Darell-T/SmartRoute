@@ -1,6 +1,7 @@
 "use client";
 
 import maplibregl from "maplibre-gl";
+import { z } from "zod";
 import type { Coordinates } from "@/types";
 import artifactManifest from "@/lib/artifact-manifest.json";
 
@@ -73,23 +74,29 @@ export async function loadSubwayStationAnchorsOrNull(): Promise<GeoJSON.FeatureC
   }
 }
 
-export function mapFeatureArrayProperty(value: unknown): string[] {
-  if (Array.isArray(value)) return value.map((item) => String(item)).filter(Boolean);
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value);
-      if (Array.isArray(parsed)) {
-        return parsed.map((item) => String(item)).filter(Boolean);
+const mapFeatureArrayPropertySchema = z
+  .array(z.unknown())
+  .transform((items) => items.map((item) => String(item)).filter(Boolean))
+  .or(
+    z.string().transform((value) => {
+      try {
+        const parsed = JSON.parse(value);
+        if (Array.isArray(parsed)) {
+          return parsed.map((item) => String(item)).filter(Boolean);
+        }
+      } catch {
+        // MapLibre may expose string properties as plain comma-separated text.
       }
-    } catch {
-      // MapLibre may expose string properties as plain comma-separated text.
-    }
-    return value
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean);
-  }
-  return [];
+      return value
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+    }),
+  )
+  .catch([]);
+
+export function mapFeatureArrayProperty(value: unknown): string[] {
+  return mapFeatureArrayPropertySchema.parse(value);
 }
 
 export function firstSymbolLayerId(m: maplibregl.Map) {
