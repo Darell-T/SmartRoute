@@ -8,6 +8,13 @@
  * `NEXT_PUBLIC_*` value would be).
  */
 
+import { z } from "zod";
+
+const wsTicketPayloadSchema = z.object({
+  ticket: z.string().min(1),
+  ws_base_url: z.string().min(1).optional().catch(undefined),
+});
+
 /** Requests a fresh path-bound ticket from the server-side minting route. Throws on failure. */
 export async function fetchWsTicket(
   path: "/ws/live-feed" | "/ws/service-alerts",
@@ -16,16 +23,12 @@ export async function fetchWsTicket(
   const res = await fetch(`/api/ws-ticket?path=${encodeURIComponent(path)}`, { cache: "no-store", signal });
   if (!res.ok) throw new Error(`ws-ticket request failed (${res.status})`);
   const data: unknown = await res.json();
-  if (!data || typeof data !== "object" || Array.isArray(data)) {
-    throw new Error("ws-ticket response missing ticket");
+  const parsed = wsTicketPayloadSchema.safeParse(data);
+  if (!parsed.success) throw new Error("ws-ticket response missing ticket");
+  if (parsed.data.ws_base_url) {
+    serverWsBaseUrl = parsed.data.ws_base_url.replace(/\/+$/, "");
   }
-  const ticket = "ticket" in data ? data.ticket : undefined;
-  const wsBase = "ws_base_url" in data ? data.ws_base_url : undefined;
-  if (typeof ticket !== "string" || !ticket) throw new Error("ws-ticket response missing ticket");
-  if (typeof wsBase === "string" && wsBase) {
-    serverWsBaseUrl = wsBase.replace(/\/+$/, "");
-  }
-  return ticket;
+  return parsed.data.ticket;
 }
 
 /**

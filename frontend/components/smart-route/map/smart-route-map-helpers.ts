@@ -11,8 +11,10 @@ export function toLngLat(c: Coordinates): [number, number] {
 }
 
 export function artifactUrl(name: string): string {
-  const version = (artifactManifest as Record<string, string>)[name];
-  return version ? `/${name}?v=${version}` : `/${name}`;
+  for (const [file, version] of Object.entries(artifactManifest)) {
+    if (file === name) return `/${name}?v=${version}`;
+  }
+  return `/${name}`;
 }
 
 export async function loadVisualSubwayNetworkOrNull(): Promise<GeoJSON.FeatureCollection | null> {
@@ -178,8 +180,8 @@ export function canonicalWaypointCoordinates(waypoint: {
 }): [number, number] | null {
   const lat = waypoint.lat ?? waypoint.latitude;
   const lng = waypoint.lng ?? waypoint.longitude;
-  return typeof lat === "number" && Number.isFinite(lat) &&
-    typeof lng === "number" && Number.isFinite(lng)
+  return lat != null && Number.isFinite(lat) &&
+    lng != null && Number.isFinite(lng)
     ? [lng, lat]
     : null;
 }

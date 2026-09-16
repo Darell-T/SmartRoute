@@ -86,10 +86,10 @@ export function normalizeRouteId(routeId: string): string {
 export function compareRouteId(left: string, right: string): number {
   const leftIndex = SUBWAY_ROUTE_SORT_INDEX.get(left);
   const rightIndex = SUBWAY_ROUTE_SORT_INDEX.get(right);
-  if (typeof leftIndex === "number" && typeof rightIndex === "number") {
+  if (leftIndex !== undefined && rightIndex !== undefined) {
     return leftIndex - rightIndex;
   }
-  if (typeof leftIndex === "number") return -1;
-  if (typeof rightIndex === "number") return 1;
+  if (leftIndex !== undefined) return -1;
+  if (rightIndex !== undefined) return 1;
   return left.localeCompare(right, undefined, { numeric: true });
 }

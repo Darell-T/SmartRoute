@@ -132,7 +132,7 @@ export function featuredAlertBody(item: AlertFeedItem): string | undefined {
     item.details?.currentStatus,
     item.summary,
   ].filter((value): value is string => {
-    if (typeof value !== "string" || !value.trim()) {
+    if (value == null || !value.trim()) {
       return false;
     }
 
@@ -169,7 +169,7 @@ export function lineAlertSubtitle(item: AlertFeedItem): string | undefined {
     item.details?.currentStatus,
     item.routeIds.length > 2 ? "Multiple lines affected" : item.serviceName,
   ].filter((value): value is string => {
-    if (typeof value !== "string" || !value.trim()) {
+    if (value == null || !value.trim()) {
       return false;
     }
 
@@ -214,7 +214,7 @@ export function alertSeverityLabel(severity: AlertFeedSeverity): string {
 function disruptionAndGuidance(
   item: AlertFeedItem,
   raw = detailSummary(item),
-): { impact?: string; alternatives?: string } {
+) {
   const parsed = item.details?.alternatives?.trim();
   if (!raw) {
     return { impact: undefined, alternatives: parsed };

@@ -21,23 +21,24 @@ export interface AgentRouteSelection {
   destCoords: { lat: number; lng: number };
 }
 
+export type RouteCoordinateFields = {
+  latitude?: number;
+  longitude?: number;
+  lat?: number;
+  lng?: number;
+};
+
 export function normalizeRouteCoordinate(
-  value: unknown,
+  value: RouteCoordinateFields | null | undefined,
 ): { lat: number; lng: number } | null {
-  if (!value || typeof value !== "object") return null;
+  if (!value) return null;
 
-  const coordinate = value as {
-    latitude?: unknown;
-    longitude?: unknown;
-    lat?: unknown;
-    lng?: unknown;
-  };
-  const lat = coordinate.latitude ?? coordinate.lat;
-  const lng = coordinate.longitude ?? coordinate.lng;
+  const lat = value.latitude ?? value.lat;
+  const lng = value.longitude ?? value.lng;
 
-  return typeof lat === "number" &&
+  return lat != null &&
     Number.isFinite(lat) &&
-    typeof lng === "number" &&
+    lng != null &&
     Number.isFinite(lng)
     ? { lat, lng }
     : null;
@@ -102,30 +103,29 @@ export function agentRoutePlanFromCards(
     const itinerary = parseCanonicalItinerary(card.itinerary);
     if (!route || !itinerary) return [];
     const totalMinutes = Math.round(itinerary.total_duration_seconds / 60);
-    return [
-      {
-        id: card.card_id,
-        index,
-        steps: route.steps,
-        itinerary,
-        itinerary_id: itinerary.itinerary_id,
-        origin: card.origin,
-        destination: card.destination,
-        is_recommended: card.role === "recommended",
-        total_minutes: totalMinutes,
-        ...(itinerary.arrival_at ? { arrival_at: itinerary.arrival_at } : {}),
-        score_breakdown: {
-          duration_minutes: totalMinutes,
-          transfers: itinerary.transfer_count,
-          active_alerts: card.alerts.length,
-          transit_lines: card.summary.lines,
-        },
-        enriched: true,
-        can_enrich_on_select: false,
-        recommendation_reason: card.role === "recommended" ? card.summary.reason : undefined,
-        rejection_reason: card.role === "recommended" ? undefined : card.summary.reason,
+    const candidate: ValidatedRouteCandidate = {
+      id: card.card_id,
+      index,
+      steps: route.steps,
+      itinerary,
+      itinerary_id: itinerary.itinerary_id,
+      origin: card.origin,
+      destination: card.destination,
+      is_recommended: card.role === "recommended",
+      total_minutes: totalMinutes,
+      score_breakdown: {
+        duration_minutes: totalMinutes,
+        transfers: itinerary.transfer_count,
+        active_alerts: card.alerts.length,
+        transit_lines: card.summary.lines,
       },
-    ];
+      enriched: true,
+      can_enrich_on_select: false,
+      recommendation_reason: card.role === "recommended" ? card.summary.reason : undefined,
+      rejection_reason: card.role === "recommended" ? undefined : card.summary.reason,
+    };
+    if (itinerary.arrival_at) candidate.arrival_at = itinerary.arrival_at;
+    return [candidate];
   });
   if (!candidates.some((candidate) => candidate.id === selectedCardId)) return null;
 

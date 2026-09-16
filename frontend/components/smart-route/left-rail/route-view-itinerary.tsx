@@ -24,7 +24,9 @@ function recommendedFootMeta(
   const transfers = plan.transferCount ?? candidate.transfers ?? 0;
   return [
     `${transfers} transfer${transfers === 1 ? "" : "s"}`,
-    typeof candidate.walkMinutes === "number" ? `${candidate.walkMinutes} min walk` : null,
+    candidate.walkMinutes != null && Number.isFinite(candidate.walkMinutes)
+      ? `${candidate.walkMinutes} min walk`
+      : null,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -87,7 +89,7 @@ export function RecommendedRouteCard({
   const etaLabel = plan.eta && plan.eta !== "Live" ? `${plan.eta} arrival` : null;
   const leaveByLabel = leaveByCopy(plan.leaveByLabel);
   const hasNextDeparture =
-    typeof plan.nextDepartureMinutes === "number" && Number.isFinite(plan.nextDepartureMinutes);
+    plan.nextDepartureMinutes != null && Number.isFinite(plan.nextDepartureMinutes);
   const meta = recommendedFootMeta(plan, candidate);
 
   return (
@@ -165,7 +167,7 @@ function RecommendedNextDeparture({
   routeId: string;
   minutes: number | undefined;
 }) {
-  if (typeof minutes !== "number" || !Number.isFinite(minutes)) return null;
+  if (minutes == null || !Number.isFinite(minutes)) return null;
 
   const line = routeId ? routeId.toUpperCase() : "train";
   const value = Math.max(0, Math.round(minutes));
@@ -287,7 +289,7 @@ export function RouteStepStrip({ segments }: { segments: RouteStripSegment[] }) 
             <span
               className="sr-route-strip__walk"
               title={
-                typeof segment.minutes === "number"
+                segment.minutes != null && Number.isFinite(segment.minutes)
                   ? `Walk ${segment.minutes} min`
                   : "Walk"
               }
