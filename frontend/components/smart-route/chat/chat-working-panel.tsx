@@ -20,8 +20,8 @@ import { Loader2, X } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
 import { Shimmer } from "@/components/ai-elements/shimmer";
-import type { ToolChip as ToolChipData } from "@/lib/use-agent-chat";
-import { isHiddenActivityTool, isSearchActivityTool } from "@/lib/agent-route-tools";
+import type { ToolChip as ToolChipData } from "@/lib/agent-chat/use-agent-chat";
+import { isHiddenActivityTool, isSearchActivityTool } from "@/lib/agent-chat/route-tools";
 
 const PROGRESS_COPY = {
   finding_routes: "Finding viable routes",

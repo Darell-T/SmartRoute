@@ -13,7 +13,7 @@ import {
   Sun,
 } from "lucide-react";
 import type { AppTab } from "@/app/page-parts";
-import type { ChatTheme } from "@/lib/use-chat-theme";
+import type { ChatTheme } from "@/lib/hooks/use-chat-theme";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 

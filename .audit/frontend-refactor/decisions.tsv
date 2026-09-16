@@ -53,3 +53,14 @@ w2-deferred-backend-proxy	lib/backend-proxy.ts	leave	deferred; 14-unit cap	oxlin
 w2-deferred-remaining-le2	app,lib,components files with 2 or fewer oxlint findings	leave	stop after 3+ files or 14 units; remaining le2 deferred	oxlint-by-file-after-wave1.txt	0	0	deferred
 w2-skip-viewport-test	lib/use-mobile-visible-viewport.test.ts	leave	test file; not in production unit	oxlint 12	0	0	ok
 w2-wave-boundary	app,lib,components	leave	wave 2 complete; boundary checks	typecheck pass; lint pass; oxlint 237 snapshot/250 HEAD -> 195; test:unit 1542 pass; coverage merged line 97.43 branch 91.90 function 96.67; verify:transit-artifacts pass; build pass	-28	-42	ok
+w3-g1-server	lib/backend-proxy.ts,lib/backend-proxy-core.ts,lib/backend-stream-proxy.ts,lib/rate-limit.ts,lib/request-principal.ts + sibling tests	move	imported only from app/api, sibling server modules, and tests	typecheck pass; lint pass; test:unit 1542 pass; skipped import server-only (not in frontend/package.json or next package.json)	0	0	ok
+w3-g1-server-only	lib/server/*	leave	did not add import server-only	package not installed; frontend/package.json and next/package.json have no server-only dependency	0	0	ok
+w3-g1-docs-handoff	docs/lint-cleanup-handoff.md	leave	historical path list from a dated audit, not a current module map	AGENTS.md dated audits are historical records	0	0	ok
+w3-g2-agent-chat	11 lib/agent-chat-* and agent-route-* plus use-agent-chat.ts, chat-failure-copy.ts and tests	move	browser agent chat pipeline into lib/agent-chat/	typecheck pass; lint pass; test:unit 1542 pass	0	0	ok
+w3-g2-comment	lib/agent-chat/route-selection.ts	leave	comment still names lib/agent-chat-stream.ts; import-only wave forbids comment edits	pure move wave rule	0	0	ok
+w3-g3-hooks	6 use-*.ts plus sibling tests	move	React hooks not tied to agent chat into lib/hooks/	typecheck pass; lint pass; test:unit 1542 pass	0	0	ok
+w3-readme	frontend/lib/README.md	rename	rewrite as lib/ module map, keep PROD_API_FALLBACK and APP_KEY sections verbatim	wave 3 procedure	0	0	ok
+w4-g1-alerts	12 alert sources plus tests including alerts-ui.test.mjs	move	drop alert- prefix under left-rail/alerts/	typecheck pass; lint pass; test:unit 1542 pass	0	0	ok
+w4-g2-route-view	7 route-view and route-display-compat sources plus tests	move	left-rail/route-view/ with prefix dropped	typecheck pass; lint pass; test:unit 1542 pass	0	0	ok
+w4-index	left-rail/index.ts	leave	barrel only re-exports left-rail.tsx and types.ts, which stayed	no specifier change required	0	0	ok
+w4-wave-boundary	app,lib,components	leave	waves 3 and 4 complete; boundary checks	typecheck pass; lint pass; oxlint 195; test:unit 1542 pass; coverage merged line 97.43; verify:transit-artifacts pass; build pass	0	0	ok

@@ -1,4 +1,4 @@
-import type { RouteCard } from "@/lib/agent-chat-stream";
+import type { RouteCard } from "@/lib/agent-chat/stream";
 
 /**
  * Chat presents one recommendation. Alternatives stay on the source turn for

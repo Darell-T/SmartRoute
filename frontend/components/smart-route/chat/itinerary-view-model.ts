@@ -10,7 +10,7 @@ import type {
   CanonicalItinerary,
   RecommendationReason,
   RouteCard,
-} from "@/lib/agent-chat-stream";
+} from "@/lib/agent-chat/stream";
 import { formatNycRouteClock } from "@/lib/nyc-route-clock";
 import { SUBWAY_BULLET_ROUTES } from "@/components/smart-route/train-bullet";
 import {

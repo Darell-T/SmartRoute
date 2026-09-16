@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createHmac, randomBytes } from "node:crypto";
-import { rateLimit } from "@/lib/rate-limit";
-import { requestPrincipal } from "@/lib/request-principal";
+import { rateLimit } from "@/lib/server/rate-limit";
+import { requestPrincipal } from "@/lib/server/request-principal";
 import { isLocalBackendBase } from "@/lib/ws-ticket";
 
 export const runtime = "nodejs";

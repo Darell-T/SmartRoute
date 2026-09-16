@@ -11,7 +11,7 @@
 import Image from "next/image";
 import { createContext, useContext, type ReactNode } from "react";
 
-import type { AgentSource } from "@/lib/agent-chat-stream";
+import type { AgentSource } from "@/lib/agent-chat/stream";
 
 const GOOGLE_MAPS_URL = "https://www.google.com/maps";
 
