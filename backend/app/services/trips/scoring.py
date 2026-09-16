@@ -7,7 +7,7 @@ shared candidate display helpers.
 
 from app.services import text
 from app.services.mta.alerts import is_material_service_alert
-from app.services.parsing import nonnegative_int as _nonnegative_int
+from app.services.parsing import nonnegative_int
 from app.services.trips.crowds import event as event_crowd
 from app.services.trips.itinerary import TRANSIT_MODES
 from app.services.trips.transfer_semantics import (
@@ -221,8 +221,8 @@ def _vehicle_signal_hits(claims: list[dict] | None) -> list[str]:
 def _select_walking_seconds(
     canonical: dict, route: list[dict]
 ) -> tuple[int, int]:
-    street_seconds = _nonnegative_int(canonical.get("total_street_walking_seconds"))
-    in_station_seconds = _nonnegative_int(
+    street_seconds = nonnegative_int(canonical.get("total_street_walking_seconds"))
+    in_station_seconds = nonnegative_int(
         canonical.get("total_in_station_transfer_seconds")
     )
     if street_seconds or in_station_seconds:
@@ -279,7 +279,7 @@ def finalized_route_score(
 
     canonical = itinerary if isinstance(itinerary, dict) else {}
     total_minutes = _canonical_total_minutes(canonical, route)
-    transfers = _nonnegative_int(
+    transfers = nonnegative_int(
         canonical.get("transfer_count"),
         default=_route_transfer_count(route),
     )

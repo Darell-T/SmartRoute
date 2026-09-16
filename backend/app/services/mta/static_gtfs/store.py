@@ -4,6 +4,7 @@ The cache is private to this GTFS lifecycle. Hits resolve from the in-memory
 index and never query Postgres on the trip request path.
 """
 
+import logging
 import os
 import threading
 from datetime import datetime
@@ -16,6 +17,8 @@ from psycopg2.extras import RealDictCursor
 
 from app.services.mta.static_gtfs.scheduled_arrivals import ScheduledArrivalIndex
 from app.services.mta.static_gtfs.stop_patterns import normalize_station_name
+
+_LOGGER = logging.getLogger(__name__)
 
 # DATABASE_URL points at a remote Postgres; without a connect timeout and TCP
 # keepalives a dead peer leaves connections blocked indefinitely.
@@ -160,21 +163,15 @@ class BoundedIntermediateStopsCache:
             )
             counter = "_static_hits" if metadata["hit"] else "_static_misses"
             gtfs.__dict__[counter] = gtfs.__dict__.get(counter, 0) + 1
-            if not metadata["hit"]:
-                print(
-                    f"[gtfs] static MISS route={route_id} origin={origin!r} "
-                    f"dest={destination!r} "
-                    f"norm_origin={normalize_station_name(origin)!r} "
-                    f"norm_dest={normalize_station_name(destination)!r} "
-                    f"patterns={metadata['patterns_considered']}"
-                )
             return _freeze_rows(rows)
 
         if not gtfs._db_fallback_enabled():
-            print(
+            _LOGGER.warning(
                 "[gtfs] no static pattern index and DB fallback disabled; "
-                f"returning empty for route={route_id} "
-                f"{origin!r}->{destination!r}"
+                "returning empty for route=%s %r->%r",
+                route_id,
+                origin,
+                destination,
             )
             return ()
 

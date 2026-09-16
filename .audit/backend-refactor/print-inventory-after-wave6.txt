@@ -1,0 +1,10 @@
+backend/app\routers\live_feed\router.py:59:        print(message)
+backend/app\services\geography.py:25:        print(f"[geo] provider=input outcome=coordinates in_service_area={int(in_nyc)}")
+backend/app\services\geography.py:30:    print("[geo] provider=nyc_geosearch outcome=request_started")
+backend/app\services\geography.py:40:        print(f"[geo] provider=nyc_geosearch outcome=error error_type={type(err).__name__}")
+backend/app\services\geography.py:43:        print("[geo] provider=nyc_geosearch outcome=no_result")
+backend/app\services\geography.py:48:    print(f"[geo] provider=nyc_geosearch outcome=result in_service_area={int(in_nyc)}")
+backend/app\services\mta\feeds.py:55:    print(message)
+backend/app\services\trips\selection_decision.py:473:        fingerprint = _condition_fingerprint(item)
+backend/app\services\trips\selection_decision.py:480:def _condition_fingerprint(value: object) -> str | None:
+backend/app\services\agent\turn\finalization.py:122:    print(

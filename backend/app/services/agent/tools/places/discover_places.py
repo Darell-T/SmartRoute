@@ -23,7 +23,6 @@ _DISCOVERY_GOAL_KINDS = frozenset(
 )
 _LOGGER = logging.getLogger(__name__)
 _MISSING = object()
-_historical_pattern = damn_lines.historical_pattern
 
 
 @dataclass(frozen=True, slots=True)
@@ -678,7 +677,7 @@ def _place_queue_evidence(
     if damn_lines.get_supported_venue(place_id) is None:
         return {"coverage": "unmonitored"}
     if mode == "historical":
-        pattern = _historical_pattern(place_id, when)
+        pattern = damn_lines.historical_pattern(place_id, when)
         return (
             _historical_evidence(pattern)
             if pattern is not None
@@ -688,7 +687,7 @@ def _place_queue_evidence(
     if observation is not None:
         return _current_queue_evidence(observation)
     if stored.get("open_status") == "open":
-        pattern = _historical_pattern(place_id, when)
+        pattern = damn_lines.historical_pattern(place_id, when)
         if pattern is not None:
             return {**_historical_evidence(pattern), "current_available": False}
     return {

@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+import logging
 import math
 import os
 import time
@@ -19,6 +20,7 @@ from app.services.mta import realtime as mta_realtime
 
 router = APIRouter()
 ws_router = APIRouter()
+_LOGGER = logging.getLogger(__name__)
 _background_bus_tasks: set[asyncio.Task] = set()
 
 
@@ -115,7 +117,7 @@ async def live_feed(request: Request, payload: LiveFeedRequest):
         return await _live_feed_impl(gtfs, payload)
     except Exception:  # noqa: BLE001 snapshot faults degrade to 503
         import traceback
-        print(f"[live_feed] UNHANDLED ERROR:\n{traceback.format_exc()}")
+        _LOGGER.warning("[live_feed] UNHANDLED ERROR:\n%s", traceback.format_exc())
         return JSONResponse(
             {
                 "nearest_stop": None,
@@ -136,7 +138,10 @@ async def service_alerts(request: Request):
     try:
         return JSONResponse(await _service_alerts_payload(gtfs))
     except Exception as exc:  # noqa: BLE001 snapshot faults degrade to 503
-        print(f"[service_alerts] snapshot unavailable: {type(exc).__name__}")
+        _LOGGER.warning(
+            "[service_alerts] snapshot unavailable: %s",
+            type(exc).__name__,
+        )
         return JSONResponse(
             {
                 "alerts": [],
@@ -177,7 +182,11 @@ def _attach_alert_stop_names(alerts: list[dict], gtfs) -> None:
     try:
         stop_locations = gtfs.get_stop_locations(list(stop_ids))
     except Exception as exc:  # noqa: BLE001 stop-name enrichment is optional
-        print(f"[service_alerts] stop-name enrichment failed: {type(exc).__name__}: {exc!r}")
+        _LOGGER.warning(
+            "[service_alerts] stop-name enrichment failed: %s: %r",
+            type(exc).__name__,
+            exc,
+        )
         return
     for alert in alerts:
         names = _unique_alert_stop_names(alert.get("stop_ids", []), stop_locations)
@@ -265,7 +274,7 @@ async def vehicles(route_ids: str | None = None):
         ]
     except Exception:  # noqa: BLE001 snapshot faults degrade to 503
         import traceback
-        print(f"[vehicles] UNHANDLED ERROR:\n{traceback.format_exc()}")
+        _LOGGER.warning("[vehicles] UNHANDLED ERROR:\n%s", traceback.format_exc())
         return JSONResponse(
             {
                 "vehicles": [],

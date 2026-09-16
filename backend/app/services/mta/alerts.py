@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from datetime import UTC, datetime
 
 import httpx
@@ -9,6 +10,8 @@ import httpx
 from app.services.mta.config import ALERTS_URL, NYC_TZ
 from app.services.mta.feeds import parse_feed_message
 from app.services.text import collapse_whitespace
+
+_LOGGER = logging.getLogger(__name__)
 
 _ALERTS_METADATA_KEY = f"{ALERTS_URL}:metadata"
 _ALERT_SOURCE = "mta_service_alerts"
@@ -117,7 +120,11 @@ async def fetch_service_alerts(
             response = await client.get(ALERTS_URL)
         _require_alerts_http_ok(response)
     except Exception as exc:  # noqa: BLE001 alert-feed faults fall back to cache or empty
-        print(f"[mta_feed] alerts feed failed: {type(exc).__name__}: {exc!r}")
+        _LOGGER.warning(
+            "[mta_feed] alerts feed failed: %s: %r",
+            type(exc).__name__,
+            exc,
+        )
         if cached:
             return _alerts_payload(cached, "stale", cached_observed_at, with_metadata)
         return _alerts_payload(b"", "unavailable", None, with_metadata)

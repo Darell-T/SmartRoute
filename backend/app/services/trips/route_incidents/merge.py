@@ -7,7 +7,7 @@ from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from app.services.evidence import parse_timestamp as _parse_time
+from app.services.evidence import parse_timestamp
 from app.services.geography import distance_meters
 from app.services.trips.route_incidents.context import valid_coordinate_pair
 from app.services.trips.route_incidents.matching import _as_mapping
@@ -55,14 +55,14 @@ def _resolved_narrative(item: Mapping[str, Any]) -> bool:
 
 
 def _ended_before(item: Mapping[str, Any], now: datetime) -> bool:
-    end = _parse_time(item.get("expected_end_at") or item.get("ends_at") or item.get("end_time"))
+    end = parse_timestamp(item.get("expected_end_at") or item.get("ends_at") or item.get("end_time"))
     return bool(end and end < now)
 
 
 def _stale_unofficial(item: Mapping[str, Any], now: datetime, social_max_age: timedelta) -> bool:
     if _source(item) in _OFFICIAL_SOURCES:
         return False
-    observed = _parse_time(item.get("observed_at") or item.get("updated_at") or item.get("reported_at"))
+    observed = parse_timestamp(item.get("observed_at") or item.get("updated_at") or item.get("reported_at"))
     return bool(observed and observed < now - social_max_age)
 
 
@@ -92,7 +92,7 @@ def _coordinates(item: Mapping[str, Any]) -> tuple[float, float] | None:
 
 def _event_time(item: Mapping[str, Any]) -> datetime | None:
     for key in ("updated_at", "reported_at", "observed_at", "starts_at"):
-        parsed = _parse_time(item.get(key))
+        parsed = parse_timestamp(item.get(key))
         if parsed:
             return parsed
     return None
