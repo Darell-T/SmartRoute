@@ -1,0 +1,226 @@
+file	name	hit_lines	caller	callee_cc	caller_cc	baselined	decision	reason
+backend/app/services/agent/candidate_store.py	_optional_text	5	store_candidate_set;store_candidate_set;store_candidate_set;store_candidate_set			no	leave	4 same-file callers
+backend/app/services/agent/candidate_store.py	_candidate_set_evidence	2	store_candidate_set	7	5	false	leave	inlining would likely exceed 10
+backend/app/services/agent/candidate_store.py	_candidate_set_coverage	2	store_candidate_set	6	5	false	try	one caller
+backend/app/services/agent/candidate_store.py	_candidate_set_constraints	2	store_candidate_set	8	5	false	leave	inlining would likely exceed 10
+backend/app/services/agent/candidate_store.py	_service_conditions	2	_comparison_option	6	7	false	leave	inlining would likely exceed 10
+backend/app/services/agent/candidate_store.py	_timing_metrics	2	_comparison_option	2	7	false	try	one caller
+backend/app/services/agent/candidate_store.py	_comparison_option	2	accepted_route_comparison	7	6	false	leave	inlining would likely exceed 10
+backend/app/services/agent/candidate_store.py	_admit_watched_record	3	load_candidate_set;_attempt_watched_presentation			no	leave	2 same-file callers
+backend/app/services/agent/candidate_store.py	_attempt_watched_presentation	2	_mark_presented_redis	4	7	false	try	one caller
+backend/app/services/agent/discovery_store.py	_waypoint_label	2	display_waypoint_labels	3	7	false	try	one caller
+backend/app/services/agent/discovery_store.py	_normalized_place	2	store_discovery_set	2	9	false	try	one caller
+backend/app/services/agent/discovery_store.py	_bounded_scope_values	4	_borough_scope;_named_area_scope;_sanitized_search_scope			no	leave	3 same-file callers
+backend/app/services/agent/discovery_store.py	_borough_scope	2	_sanitized_search_scope	1	10	true	leave	caller at 10
+backend/app/services/agent/discovery_store.py	_named_area_scope	2	_sanitized_search_scope	2	10	true	leave	inlining would likely exceed 10
+backend/app/services/agent/discovery_store.py	_named_near_scope	2	_sanitized_search_scope	1	10	true	leave	caller at 10
+backend/app/services/agent/discovery_store.py	_place_by_id	2	resolve_place_reference	4	8	false	leave	inlining would likely exceed 10
+backend/app/services/agent/discovery_store.py	_place_by_ordinal	2	resolve_place_reference	4	8	false	leave	inlining would likely exceed 10
+backend/app/services/agent/discovery_store.py	_presented_context_rows	2	sanitized_discovery_context	1	7	false	try	one caller
+backend/app/services/agent/discovery_store.py	_record_context	2	sanitized_discovery_context	1	7	false	try	one caller
+backend/app/services/agent/events.py	_trusted_https_url	2	normalized_source	3	3	false	try	one caller
+backend/app/services/agent/loop.py	_eval_bounded_binop	2	_eval_math_node	4	8	false	leave	inlining would likely exceed 10
+backend/app/services/agent/loop.py	_arithmetic_shortcut_events	2	run_agent_turn	1	10	false	leave	caller at 10
+backend/app/services/agent/loop.py	_live_turn_events	2	run_agent_turn	4	10	false	leave	inlining would likely exceed 10
+backend/app/services/agent/model/output_projection.py	_project_mapping	2	project_model_value	10	5	false	leave	inlining would likely exceed 10
+backend/app/services/agent/model/output_projection.py	_projected_place_ids	2	_project_mapping	1	10	false	leave	caller at 10
+backend/app/services/agent/model/output_projection.py	_restore_row_place_id	2	project_route_preparation	2	10	false	leave	inlining would likely exceed 10
+backend/app/services/agent/model/prompt.py	_place_label	3	_saved_place_labels;_saved_place_labels			no	leave	2 same-file callers
+backend/app/services/agent/model/prompt.py	_saved_place_labels	2	build_turn_context	9	9	false	leave	inlining would likely exceed 10
+backend/app/services/agent/model/prompt.py	_trip_digest	2	build_turn_context	2	9	false	try	one caller
+backend/app/services/agent/model/prompt.py	_accepted_endpoint_digest	2	build_turn_context	2	9	false	try	one caller
+backend/app/services/agent/model/prompt.py	_accepted_route_comparison	2	build_turn_context	2	9	false	try	one caller
+backend/app/services/agent/model/prompt.py	_route_card_digest	2	build_turn_context	2	9	false	try	one caller
+backend/app/services/agent/model/prompt.py	_active_trip_digest	2	build_turn_context	1	9	false	try	one caller
+backend/app/services/agent/model/prompt.py	_pending_trip_digest	2	build_turn_context	2	9	false	try	one caller
+backend/app/services/agent/model/prompt.py	_json_context_lines	3	build_turn_context;build_turn_context			no	leave	2 same-file callers
+backend/app/services/agent/model/request.py	_strip_unsupported_sampling_and_thinking	2	build_stream_kwargs	7	4	false	try	one caller
+backend/app/services/agent/model/request.py	_reject_unsupported_prefill	2	build_stream_kwargs	2	4	false	try	one caller
+backend/app/services/agent/model/stream.py	_next_item_timeout_s	2	_paced_provider_iter	4	9	false	leave	inlining would likely exceed 10
+backend/app/services/agent/model/stream.py	_web_research_expired	2	_paced_provider_iter	2	9	false	try	one caller
+backend/app/services/agent/model/stream.py	_citation_source	2	_extend_cited_sources	5	7	false	leave	inlining would likely exceed 10
+backend/app/services/agent/model/stream.py	_extend_cited_sources	2	_web_sources	7	7	false	leave	inlining would likely exceed 10
+backend/app/services/agent/model/stream.py	_on_web_search_start	2	_stream_provider_events	0	12	true	leave	caller already above 10
+backend/app/services/agent/model/stream.py	_on_web_search_result	2	_stream_provider_events	0	12	true	leave	caller already above 10
+backend/app/services/agent/model/stream.py	_on_text_delta	2	_stream_provider_events	3	12	true	leave	caller already above 10
+backend/app/services/agent/model/stream.py	_on_text_stop	2	_stream_provider_events	2	12	true	leave	caller already above 10
+backend/app/services/agent/model/stream.py	_apply_follow_up	2	stream_model_call	6	12	false	leave	caller already above 10
+backend/app/services/agent/model/stream.py	_required_attempt_completion	2	stream_model_call	1	12	false	leave	caller already above 10
+backend/app/services/agent/model/stream.py	_timeout_attempt_result	2	_stream_attempt	1	10	false	leave	caller at 10
+backend/app/services/agent/model/stream.py	_provider_error_result	2	_stream_attempt	2	10	false	leave	inlining would likely exceed 10
+backend/app/services/agent/passenger_output.py	_activity_copy_rejected	2	validated_activity_label	8	5	false	leave	inlining would likely exceed 10
+backend/app/services/agent/passenger_output.py	_normalized_terminal_message	2	validated_terminal_message	8	5	false	leave	inlining would likely exceed 10
+backend/app/services/agent/presented_entity_registry.py	_admitted_aliases	3	_admit_registry_entry;_entry			no	leave	2 same-file callers
+backend/app/services/agent/presented_entity_registry.py	_registry_identity_fields	2	_admit_registry_entry	2	5	false	try	one caller
+backend/app/services/agent/presented_entity_registry.py	_admit_registry_entry	2	_entries	5	5	false	try	one caller
+backend/app/services/agent/presented_entity_registry.py	_rewrite_canonical_place	2	record	6	11	true	leave	caller already above 10
+backend/app/services/agent/presented_entity_registry.py	_reused_aliases	2	record	2	11	true	leave	caller already above 10
+backend/app/services/agent/presented_entity_registry.py	_upsert_registry_item	2	record	1	11	true	leave	caller already above 10
+backend/app/services/agent/presented_entity_registry.py	_place_in_source	2	_entry_place	10	2	false	leave	inlining would likely exceed 10
+backend/app/services/agent/presented_entity_registry.py	_scoped_entries	2	resolve	5	11	true	leave	caller already above 10
+backend/app/services/agent/presented_entity_registry.py	_latest_by_sequence	3	_latest_ordinal_entry;resolve			no	leave	2 same-file callers
+backend/app/services/agent/presented_entity_registry.py	_latest_ordinal_entry	2	resolve	5	11	true	leave	caller already above 10
+backend/app/services/agent/presented_entity_registry.py	_name_alias_matches	2	_unique_description_entry	4	8	false	leave	inlining would likely exceed 10
+backend/app/services/agent/presented_entity_registry.py	_unique_description_entry	2	resolve	8	11	true	leave	caller already above 10
+backend/app/services/agent/presented_entity_registry.py	_price_description_match	2	resolve_description	7	3	false	try	one caller
+backend/app/services/agent/presented_entity_registry.py	_borough_description_match	2	resolve_description	5	3	false	try	one caller
+backend/app/services/agent/presented_entity_registry.py	_text_description_match	2	resolve_description	5	3	false	try	one caller
+backend/app/services/agent/profile.py	_matching_saved_places	2	resolve_profile_place	9	4	false	leave	inlining would likely exceed 10
+backend/app/services/agent/profile.py	_unique_place	2	resolve_profile_place	5	4	false	try	one caller
+backend/app/services/agent/profile.py	_admitted_coordinates	2	normalize_place	5	6	true	try	one caller
+backend/app/services/agent/public_surface.py	_assert_public_tool_budget	2	offered_custom_tools	9	10	false	leave	inlining would likely exceed 10
+backend/app/services/agent/public_surface.py	_live_what_if_selection	2	active_temporary_route_preview	6	2	false	try	one caller
+backend/app/services/agent/public_surface.py	_presentable_what_if	2	active_temporary_route_preview	6	2	false	try	one caller
+backend/app/services/agent/public_surface.py	_ready_presenter_name	2	state_valid_tool_names	4	7	false	try	one caller
+backend/app/services/agent/public_surface.py	_pending_place_presenter	2	_pending_tool_names	7	7	false	leave	inlining would likely exceed 10
+backend/app/services/agent/public_surface.py	_pending_route_presenter	2	_pending_tool_names	7	7	false	leave	inlining would likely exceed 10
+backend/app/services/agent/public_surface.py	_pending_tool_names	2	state_valid_tool_names	7	7	false	leave	inlining would likely exceed 10
+backend/app/services/agent/session.py	_trimmed_session_blob	2	save_session	8	7	false	leave	inlining would likely exceed 10
+backend/app/services/agent/session.py	_route_endpoint_slots	2	extract_slots	3	7	false	try	one caller
+backend/app/services/agent/session.py	_route_constraint_slots	2	extract_slots	3	7	false	try	one caller
+backend/app/services/agent/tool_input_policy.py	_stripped	9	_presenter_reuse_allowed;_presenter_reuse_allowed;goal_error;_has_destination_ids;_current_turn_destination_error;_current_turn_destination_error;_current_turn_destination_error;missing_verified_destination			no	leave	8 same-file callers
+backend/app/services/agent/tool_input_policy.py	_tool_satisfies_declared_goal	2	goal_error	2	11	true	leave	caller already above 10
+backend/app/services/agent/tool_input_policy.py	_presenter_reuse_allowed	2	goal_error	5	11	true	leave	caller already above 10
+backend/app/services/agent/tool_input_policy.py	_has_destination_ids	2	_current_turn_destination_error	2	9	false	try	one caller
+backend/app/services/agent/tool_input_policy.py	_current_turn_destination_error	2	missing_verified_destination	9	3	false	leave	inlining would likely exceed 10
+backend/app/services/agent/tool_input_policy.py	_constrained_route_modes	2	constrained_tool_input	8	7	false	leave	inlining would likely exceed 10
+backend/app/services/agent/tool_input_policy.py	_constrained_route_ids	2	constrained_tool_input	5	7	false	leave	inlining would likely exceed 10
+backend/app/services/agent/transcript_store.py	_record_route_card	2	add_visible_events	1	10	false	leave	caller at 10
+backend/app/services/agent/transcript_store.py	_record_arrival_card	2	add_visible_events	1	10	false	leave	caller at 10
+backend/app/services/agent/transcript_store.py	_record_sources	2	add_visible_events	3	10	false	leave	inlining would likely exceed 10
+backend/app/services/agent/transcript_store.py	_accepted_trip_identity	2	active_accepted_route_card	3	5	false	try	one caller
+backend/app/services/agent/transcript_store.py	_owned_route_card	2	active_accepted_route_card	7	5	false	leave	inlining would likely exceed 10
+backend/app/services/agent/transcript_store.py	_card_matches_itinerary	2	active_accepted_route_card	1	5	false	try	one caller
+backend/app/services/agent/transcript_store.py	_priority_turn_indexes	2	project_model_history	6	1	false	try	one caller
+backend/app/services/agent/transcript_store.py	_bounded_earlier_turns	2	project_model_history	8	1	false	try	one caller
+backend/app/services/agent/trip_state.py	_apply_scenario_endpoints	2	commit_scenario	3	5	false	try	one caller
+backend/app/services/agent/trip_state.py	_apply_scenario_preferences	2	commit_scenario	3	5	false	try	one caller
+backend/app/services/agent/trip_state.py	_normalized_planning_mode	2	_normalize	6	4	false	try	one caller
+backend/app/services/agent/trip_state.py	_normalized_waypoints	2	_normalize	1	4	false	try	one caller
+backend/app/services/agent/trip_state.py	_normalize	3	get_trip_state;save_trip_state			no	leave	2 same-file callers
+backend/app/services/agent/turn/completion.py	_mapping_facts	2				no	skip	already deleted in w1-u3
+backend/app/services/agent/turn/completion.py	_object_facts	2	_facts	4	2	false	try	one caller
+backend/app/services/agent/turn/completion.py	_facts	7				no	leave	not single production file
+backend/app/services/agent/turn/completion.py	_remaining_action	2	_goal_progress	8	6	false	leave	inlining would likely exceed 10
+backend/app/services/agent/turn/contract.py	_admit_goal_sequence	2	__post_init__	4	0	false	try	one caller
+backend/app/services/agent/turn/contract.py	_validate_goal_graph	2	__post_init__	7	0	false	try	one caller
+backend/app/services/agent/turn/evidence.py	_apply_goal_flag	3	record_goal;record_goal			no	leave	2 same-file callers
+backend/app/services/agent/turn/evidence.py	_normalized_recovery_options	2	record_goal	3	5	false	try	one caller
+backend/app/services/agent/turn/evidence.py	_route_internal_discovery_ready	2	_record_discovery_result	1	2	false	try	one caller
+backend/app/services/agent/turn/stream.py	_capture_model_completion_sources	2	_capture_model_events	2	12	false	leave	caller already above 10
+backend/app/services/agent/turn/stream.py	_count_tool_end_failure	3	_capture_model_events;_normalize_capability_event			no	leave	2 same-file callers
+backend/app/services/agent/turn/stream.py	_continue_after_web_timeout	2	resolve_model_iteration	1	11	true	leave	caller already above 10
+backend/app/services/agent/turn/stream.py	_stop_on_max_tokens	2	resolve_model_iteration	1	11	true	leave	caller already above 10
+backend/app/services/agent/turn/stream.py	_resolve_unattached_action	2	resolve_model_iteration	4	11	true	leave	caller already above 10
+backend/app/services/agent/turn/stream.py	_continue_after_mixed_terminal	2	resolve_model_iteration	3	11	true	leave	caller already above 10
+backend/app/services/agent/turn/stream.py	_capture_tool_round_message	2	stream_capability_iteration	1	5	false	try	one caller
+backend/app/services/agent/turn/stream.py	_record_plan_trip_start	2	stream_capability_iteration	3	5	false	try	one caller
+backend/app/services/agent/turn/stream.py	_normalize_capability_event	2	stream_capability_iteration	4	5	false	try	one caller
+backend/app/services/agent/turn/stream.py	_resolve_capability_iteration	2	_stream_capability_phase	3	6	false	try	one caller
+backend/app/services/agent/loop.py	_web_search_tool	3	_tools_for_state	0	3	false	try	one caller
+backend/app/services/agent/presented_entity_registry.py	_rewrite_source_place_id	2	_rewrite_canonical_place	5	6	false	try	one caller
+backend/app/services/agent/tool_input_policy.py	_evidence_capability_error	2	goal_error	2	11	true	leave	caller already above 10
+backend/app/services/agent/turn/stream.py	_apply_server_web_progress	2	resolve_model_iteration	4	11	true	leave	caller already above 10
+backend/app/services/agent/tools/__init__.py	_discover_places_where	2	_discover_places_label	9	2	false	try	one caller
+backend/app/services/agent/tools/__init__.py	_discover_places_label	2				no	leave	0 same-file callers
+backend/app/services/agent/tools/__init__.py	_arrivals_status_label	2	_check_transit_label	4	3	false	try	one caller
+backend/app/services/agent/tools/__init__.py	_label_route_ids	3	_arrivals_status_label;_check_transit_label			no	leave	2 same-file callers
+backend/app/services/agent/tools/__init__.py	_check_transit_label	2				no	leave	0 same-file callers
+backend/app/services/agent/tools/complete_turn.py	_answer_goal_facts	2	_projected_facts	3	3	false	try	one caller
+backend/app/services/agent/tools/complete_turn.py	_interrupt_goal_facts	2	_projected_facts	3	3	false	try	one caller
+backend/app/services/agent/tools/complete_turn.py	_interrupt_goal_error	2	_interrupt_goal_facts	5	3	false	try	one caller
+backend/app/services/agent/tools/complete_turn.py	_unavailable_goal_facts	2	_projected_facts	7	3	false	try	one caller
+backend/app/services/agent/tools/complete_turn.py	_bound_turn_contract	2	execute	1	8	false	try	one caller
+backend/app/services/agent/tools/complete_turn.py	_terminate_turn	2	execute	2	8	false	try	one caller
+backend/app/services/agent/tools/location_resolution.py	_stops_on_named_route	2	_route_qualified_station	5	8	false	leave	inlining would likely exceed 10
+backend/app/services/agent/tools/location_resolution.py	_gtfs_stop_place	2	_route_qualified_station	3	8	false	try	one caller
+backend/app/services/agent/tools/location_resolution.py	_station_or_geocoded_place	2	resolve_named_place	2	9	false	try	one caller
+backend/app/services/agent/tools/location_resolution.py	_known_alias_place	2	resolve_named_place	1	9	false	try	one caller
+backend/app/services/agent/tools/location_resolution.py	_saved_profile_coords	2	resolve_named_point	1	10	false	leave	caller at 10
+backend/app/services/agent/tools/location_resolution.py	_saved_profile_place	3	resolve_named_place;_saved_profile_coords			no	leave	2 same-file callers
+backend/app/services/agent/tools/places/damn_lines.py	_accumulate_history_row	2	_aggregate_history	7	4	false	try	one caller
+backend/app/services/agent/tools/places/damn_lines.py	_pattern_from_bucket	2	_aggregate_history	0	4	false	try	one caller
+backend/app/services/agent/tools/places/damn_lines.py	_decoded_history_payload	2	_install_history	7	5	false	leave	inlining would likely exceed 10
+backend/app/services/agent/tools/places/damn_lines.py	_admitted_history_pattern	2	_install_history	4	5	false	try	one caller
+backend/app/services/agent/tools/places/damn_lines.py	_history_pattern_admissible	2	_admitted_history_pattern	6	4	false	try	one caller
+backend/app/services/agent/tools/places/damn_lines.py	_bounded_int	2	_history_pattern_admissible;_history_pattern_admissible			no	leave	2 same-file callers
+backend/app/services/agent/tools/places/damn_lines.py	_positive_int	13				no	leave	not single production file
+backend/app/services/agent/tools/places/damn_lines.py	_fetch_venue_history_rows	2	_fetch_history_rows	10	3	false	leave	inlining would likely exceed 10
+backend/app/services/agent/tools/places/damn_lines.py	_history_page	2	_fetch_venue_history_rows	6	10	false	leave	inlining would likely exceed 10
+backend/app/services/agent/tools/places/discover_places.py	_first_verified_place	2	_verify	4	11	false	leave	caller already above 10
+backend/app/services/agent/tools/places/discover_places.py	_enrich_queue_places	2	_queue_digest	4	7	false	try	one caller
+backend/app/services/agent/tools/places/discover_places.py	_current_queue_lookup	2	_queue_digest	3	7	false	try	one caller
+backend/app/services/agent/tools/places/discover_places.py	_current_queue_evidence	2	_place_queue_evidence	2	8	false	try	one caller
+backend/app/services/agent/tools/places/place_reference.py	_resolve_owned_place	2	execute	4	4	false	try	one caller
+backend/app/services/agent/tools/places/place_reference.py	_place_details_result	2	execute	3	4	false	try	one caller
+backend/app/services/agent/tools/places/present_places.py	_single_opaque_selection_id	2	_rebind_researched_details	4	6	false	try	one caller
+backend/app/services/agent/tools/places/present_places.py	_owned_authoritative_record	2	_rebind_researched_details	7	6	false	leave	inlining would likely exceed 10
+backend/app/services/agent/tools/places/present_places.py	_destination_selection_goal	2	_destination_selection_replay_allowed	4	6	false	try	one caller
+backend/app/services/agent/tools/places/present_places.py	_owned_place_index	2	_selected_places	6	5	false	try	one caller
+backend/app/services/agent/tools/places/present_places.py	_repeated_selections	2	_selected_places	5	5	false	try	one caller
+backend/app/services/agent/tools/places/present_places.py	_research_claim_error	2	_selected_places	5	5	false	try	one caller
+backend/app/services/agent/tools/places/present_places.py	_presented_refs	3	_emit_place_presentation;_emit_place_presentation			no	leave	2 same-file callers
+backend/app/services/agent/tools/places/present_places.py	_already_shown_result	2	_emit_place_presentation	0	8	false	try	one caller
+backend/app/services/agent/tools/places/present_places.py	_mark_place_goal_satisfied	2	_emit_place_presentation	3	8	false	try	one caller
+backend/app/services/agent/tools/places/present_places.py	_place_presentation_events	2	_emit_place_presentation	5	8	false	leave	inlining would likely exceed 10
+backend/app/services/agent/tools/places/present_places.py	_live_queue_observations	2	_queue_presentation	6	7	false	leave	inlining would likely exceed 10
+backend/app/services/agent/tools/places/present_places.py	_admitted_selection	2	_validated_selections	5	5	false	try	one caller
+backend/app/services/agent/tools/places/present_places.py	_objective_reason_holds	2	_normalize_reasons	6	3	false	try	one caller
+backend/app/services/agent/tools/places/search_local_places.py	_search_request_body	2	execute	3	5	false	try	one caller
+backend/app/services/agent/tools/places/search_local_places.py	_nyc_provider_place	2	_nyc_provider_places	5	4	false	try	one caller
+backend/app/services/agent/tools/places/search_local_places.py	_nyc_place_coordinates	2	_nyc_provider_place	3	5	false	try	one caller
+backend/app/services/agent/tools/places/search_local_places.py	_nyc_provider_places	2	execute	4	5	false	try	one caller
+backend/app/services/agent/tools/places/search_local_places.py	_next_page_token	2	execute	2	5	false	try	one caller
+backend/app/services/agent/tools/route/prepare_route_branches.py	_resolve_comparison_branches	2	resolve_destination_options	10	6	false	leave	inlining would likely exceed 10
+backend/app/services/agent/tools/route/prepare_route_options.py	_admit_route_preparation	2	execute	5	3	false	try	one caller
+backend/app/services/agent/tools/route/prepare_route_options.py	_route_snapshot_identity	2	execute	0	3	false	try	one caller
+backend/app/services/agent/tools/route/prepare_route_options.py	_selected_branch_place_ids	2	_finalize_branch_candidates	4	5	false	try	one caller
+backend/app/services/agent/tools/route/prepare_route_options.py	_exclude_unselected_branches	2	_finalize_branch_candidates	4	5	false	try	one caller
+backend/app/services/agent/tools/route/prepare_route_options.py	_rebuild_selected_aggregate	2	_finalize_branch_candidates	0	5	false	try	one caller
+backend/app/services/agent/tools/route/prepare_route_persistence.py	_prepared_candidate_result	2	persist_route_candidates	0	3	false	try	one caller
+backend/app/services/agent/tools/route/prepare_route_persistence.py	_provider_match_id	3	_resolved_place_match_key;_dict_place_match_key			no	leave	2 same-file callers
+backend/app/services/agent/tools/route/prepare_route_persistence.py	_resolved_place_match_key	2	_place_match_key	1	2	false	try	one caller
+backend/app/services/agent/tools/route/prepare_route_persistence.py	_dict_place_match_key	2	_place_match_key	1	2	false	try	one caller
+backend/app/services/agent/tools/route/prepare_route_persistence.py	_digest_for_candidate	2	_build_digests	3	1	false	try	one caller
+backend/app/services/agent/tools/route/prepare_route_persistence.py	_digest_soft_preferences	2	_digest_for_candidate	4	3	false	try	one caller
+backend/app/services/agent/tools/route/prepare_route_persistence.py	_snapshot_route_identity	2	_candidate_set_payload	8	2	false	try	one caller
+backend/app/services/agent/tools/route/prepare_route_persistence.py	_snapshot_route_evidence	2	_candidate_set_payload	0	2	false	try	one caller
+backend/app/services/agent/tools/route/prepare_route_persistence.py	_bind_active_trip	2	_update_trip_state	0	4	false	try	one caller
+backend/app/services/agent/tools/route/prepare_route_persistence.py	_bind_destination_discovery	2	_update_trip_state	5	4	false	try	one caller
+backend/app/services/agent/tools/route/prepare_route_persistence.py	_public_branch_row	2	_public_branch_coverage	3	3	false	try	one caller
+backend/app/services/agent/tools/route/prepare_route_persistence.py	_public_text	5	_public_branch_row;_public_branch_row;_public_branch_row;_public_branch_row			no	leave	4 same-file callers
+backend/app/services/agent/tools/route/prepare_route_persistence.py	_public_stage_a_row	2	_public_stage_a_factors	6	3	false	try	one caller
+backend/app/services/agent/tools/route/present_route.py	_present_fresh_route	2	execute	3	1	false	try	one caller
+backend/app/services/agent/tools/route/present_route.py	_replay_route_goal	2	_accepted_route_replay	3	6	false	try	one caller
+backend/app/services/agent/tools/route/present_route.py	_selected_candidate_id	2	_accepted_route_replay	1	6	false	try	one caller
+backend/app/services/agent/tools/route/present_route.py	_selection_correction_error	2	canonical_facts_with_fallback	3	11	true	leave	caller already above 10
+backend/app/services/agent/tools/route/present_route.py	_incident_metadata	2	_requested_framing	4	5	false	try	one caller
+backend/app/services/agent/tools/route/present_route.py	_parsed_reason_code	2	_requested_framing	4	5	false	try	one caller
+backend/app/services/agent/tools/route/present_route_commit.py	_bind_presented_route	2	reserve_and_commit	1	7	false	try	one caller
+backend/app/services/agent/tools/route/present_route_commit.py	_bind_what_if_route	2	_bind_presented_route	1	1	false	try	one caller
+backend/app/services/agent/tools/route/present_route_commit.py	_opaque_discovery_place_ids	3	activate_stored_discovery_context;_candidate_discovery_place_id			no	leave	2 same-file callers
+backend/app/services/agent/tools/route/present_route_commit.py	_owned_place_id	3	activate_stored_discovery_context;activate_stored_discovery_context			no	leave	2 same-file callers
+backend/app/services/agent/tools/route/present_route_state.py	_canonical_owned_fields	2	canonical_facts	7	8	false	leave	inlining would likely exceed 10
+backend/app/services/agent/tools/route/present_route_state.py	_unsatisfied_constraint_error	2	canonical_facts	2	8	false	try	one caller
+backend/app/services/agent/tools/route/present_route_state.py	_owned_endpoint_places	2	canonical_facts	2	8	false	try	one caller
+backend/app/services/agent/tools/route/present_route_state.py	_has_selected_score	2	canonical_facts	2	8	false	try	one caller
+backend/app/services/agent/tools/route/present_route_state.py	_opaque_id_set	2	_destination_identity_groups	3	3	false	try	one caller
+backend/app/services/agent/tools/route/present_route_state.py	_candidate_destination_ids	2	_destination_identity_groups	4	3	false	try	one caller
+backend/app/services/agent/tools/route/present_route_state.py	_branch_place_ids	2	_destination_identity_groups	3	3	false	try	one caller
+backend/app/services/agent/tools/route/present_route_state.py	_presentation_identity	4				no	leave	not single production file
+backend/app/services/agent/tools/route/present_route_state.py	_candidate_set_ownership_error	2	_candidate_binding	3	3	false	try	one caller
+backend/app/services/agent/tools/route/present_route_state.py	_candidate_membership_error	2	_load_candidate_entry	2	7	false	try	one caller
+backend/app/services/agent/tools/route/present_route_state.py	_parsed_chosen_route	2	_load_candidate_entry	5	7	false	leave	inlining would likely exceed 10
+backend/app/services/agent/tools/route/present_route_state.py	_legacy_candidate_evidence	2	_candidate_evidence	9	2	false	try	one caller
+backend/app/services/agent/tools/route/present_route_state.py	_event_impacts_for_index	2	_legacy_candidate_evidence	4	9	false	leave	inlining would likely exceed 10
+backend/app/services/agent/tools/route/route_input.py	_merged_destination	2	merge_route_preparation_input	2	8	false	try	one caller
+backend/app/services/agent/tools/route/route_input.py	_merged_waypoints	2	merge_route_preparation_input	4	8	false	leave	inlining would likely exceed 10
+backend/app/services/agent/tools/route/route_input.py	_routing_preference	2	merge_route_preparation_input	3	8	false	try	one caller
+backend/app/services/agent/tools/route/route_input.py	_turn_or_persisted_source	2	merge_route_preparation_input	2	8	false	try	one caller
+backend/app/services/agent/tools/route/route_input.py	_merged_accessibility_required	2	merge_route_preparation_input	2	8	false	try	one caller
+backend/app/services/agent/tools/route/route_projection.py	_pattern_matches_headsign	2	_validated_pattern_context	6	8	true	leave	inlining would likely exceed 10
+backend/app/services/agent/tools/route/route_projection.py	_catchable_offset_seconds	0				no	leave	not single production file
+backend/app/services/agent/tools/route/route_projection.py	_first_transit_index	0				no	leave	not single production file
+backend/app/services/agent/tools/route/route_projection.py	_itinerary_component_totals	0				no	leave	not single production file
+backend/app/services/agent/tools/route/route_projection.py	_leg_seconds	0				no	leave	not single production file
+backend/app/services/agent/tools/route/route_projection.py	_stamp_reconciled_clocks	0				no	leave	not single production file

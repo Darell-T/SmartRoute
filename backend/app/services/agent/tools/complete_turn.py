@@ -10,6 +10,7 @@ from app.services.agent.passenger_output import validated_terminal_message
 from app.services.agent.tools._types import ToolContext, ToolResult
 from app.services.agent.turn import completion as turn_completion
 from app.services.agent.turn.contract import GoalKind, GoalState, TurnContract
+from app.services.agent.turn.evidence import TurnEvidence
 
 COMPLETE_TURN_SCHEMA = {
     "name": "complete_turn",
@@ -422,6 +423,18 @@ def _bound_turn_contract(ctx: ToolContext) -> tuple[TurnContract | None, ToolRes
     )
 
 
+def _evidence_from_projected(projected: dict[str, dict[str, object]]) -> TurnEvidence:
+    snapshot = TurnEvidence()
+    for key, row in projected.items():
+        snapshot.record_goal(
+            key,
+            row["state"],
+            attempted=bool(row["attempted"]),
+            presented=bool(row["presented"]),
+        )
+    return snapshot
+
+
 def _terminate_turn(
     ctx: ToolContext,
     evidence: object,
@@ -429,9 +442,11 @@ def _terminate_turn(
     goal_keys: tuple[str, ...],
     outcome: str,
     message: str,
-    projected: object,
+    projected: dict[str, dict[str, object]],
 ) -> ToolResult:
-    decision = turn_completion.evaluate_completion(contract, projected)
+    decision = turn_completion.evaluate_completion(
+        contract, _evidence_from_projected(projected)
+    )
     if not decision.may_terminate:
         detail = ", ".join(decision.required_next_actions) or ", ".join(
             decision.remaining_goal_keys

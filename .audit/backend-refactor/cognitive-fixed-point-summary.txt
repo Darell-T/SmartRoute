@@ -1,0 +1,3 @@
+total=47
+agent=26
+elsewhere=21

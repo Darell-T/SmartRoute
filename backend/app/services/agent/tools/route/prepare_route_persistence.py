@@ -353,9 +353,29 @@ def _opaque_id(value: object) -> str | None:
 
 def _place_match_key(place: Any) -> tuple[Any, ...]:
     if isinstance(place, ResolvedPlace):
-        return _resolved_place_match_key(place)
+        provider_id = _provider_match_id(
+            str(place.provider_place_id or "").strip().casefold(),
+            str(place.place_id or "").strip(),
+        )
+        if provider_id:
+            return ("provider", provider_id)
+        return (
+            "coordinates",
+            _finite_coordinate(place.latitude),
+            _finite_coordinate(place.longitude),
+        )
     if isinstance(place, dict):
-        return _dict_place_match_key(place)
+        provider_id = _provider_match_id(
+            str(place.get("provider_place_id") or "").strip().casefold(),
+            str(place.get("place_id") or "").strip(),
+        )
+        if provider_id:
+            return ("provider", provider_id)
+        return (
+            "coordinates",
+            _finite_coordinate(place.get("latitude", place.get("lat"))),
+            _finite_coordinate(place.get("longitude", place.get("lng"))),
+        )
     return ("unknown", str(place or "").strip().casefold())
 
 
@@ -365,34 +385,6 @@ def _provider_match_id(provider_id: str, current_id: str) -> str:
     if current_id and not discovery_store.is_opaque_place_id(current_id):
         return current_id.casefold()
     return ""
-
-
-def _resolved_place_match_key(place: ResolvedPlace) -> tuple[Any, ...]:
-    provider_id = _provider_match_id(
-        str(place.provider_place_id or "").strip().casefold(),
-        str(place.place_id or "").strip(),
-    )
-    if provider_id:
-        return ("provider", provider_id)
-    return (
-        "coordinates",
-        _finite_coordinate(place.latitude),
-        _finite_coordinate(place.longitude),
-    )
-
-
-def _dict_place_match_key(place: dict) -> tuple[Any, ...]:
-    provider_id = _provider_match_id(
-        str(place.get("provider_place_id") or "").strip().casefold(),
-        str(place.get("place_id") or "").strip(),
-    )
-    if provider_id:
-        return ("provider", provider_id)
-    return (
-        "coordinates",
-        _finite_coordinate(place.get("latitude", place.get("lat"))),
-        _finite_coordinate(place.get("longitude", place.get("lng"))),
-    )
 
 
 def _finite_coordinate(value: object) -> float | None:
@@ -520,14 +512,29 @@ def _candidate_set_payload(
             destination_option_ids=destination_option_ids,
             waypoints=waypoints,
         ),
-        **_snapshot_route_evidence(
-            aggregate=aggregate,
-            candidates=candidates,
-            coverage=coverage,
-            status=status,
-            snapshot_id=snapshot_id,
-            snapshot_observed_at=snapshot_observed_at,
+        "parsed_routes": aggregate.parsed_routes,
+        "scored": aggregate.scored,
+        "relevant_alerts": aggregate.relevant_alerts,
+        "incidents": aggregate.incidents,
+        "event_evidence_status": aggregate.event_evidence_status,
+        "event_impacts": aggregate.event_impacts,
+        "event_failures": aggregate.event_failures,
+        "crowd_search_metadata": aggregate.crowd_search_metadata,
+        "incident_scan_metadata": aggregate.incident_scan_metadata,
+        "evidence_envelopes": serialize_evidence_envelopes(
+            aggregate.evidence_envelopes
         ),
+        "candidate_evidence": aggregate.candidate_evidence,
+        "branch_coverage": aggregate.branch_coverage,
+        "collect_crowd_evidence": aggregate.collect_crowd_evidence,
+        "candidates": candidates,
+        "evidence_coverage": coverage,
+        "route_status": status,
+        "hard_constraints": {"required": True},
+        "aggregate_segments": aggregate.aggregate_segments,
+        "timings": aggregate.timings,
+        "snapshot_id": snapshot_id,
+        "snapshot_observed_at": snapshot_observed_at,
     }
 
 
@@ -568,42 +575,6 @@ def _snapshot_route_identity(
         "candidate_kind": "multi_stop" if waypoints else "single_leg",
         "scenario_mode": merged["scenario"],
         "waypoints": merged.get("waypoints") or [],
-    }
-
-
-def _snapshot_route_evidence(
-    *,
-    aggregate: AggregatePreparation,
-    candidates: list[dict[str, Any]],
-    coverage: dict[str, str],
-    status: str,
-    snapshot_id: str,
-    snapshot_observed_at: str,
-) -> dict[str, Any]:
-    return {
-        "parsed_routes": aggregate.parsed_routes,
-        "scored": aggregate.scored,
-        "relevant_alerts": aggregate.relevant_alerts,
-        "incidents": aggregate.incidents,
-        "event_evidence_status": aggregate.event_evidence_status,
-        "event_impacts": aggregate.event_impacts,
-        "event_failures": aggregate.event_failures,
-        "crowd_search_metadata": aggregate.crowd_search_metadata,
-        "incident_scan_metadata": aggregate.incident_scan_metadata,
-        "evidence_envelopes": serialize_evidence_envelopes(
-            aggregate.evidence_envelopes
-        ),
-        "candidate_evidence": aggregate.candidate_evidence,
-        "branch_coverage": aggregate.branch_coverage,
-        "collect_crowd_evidence": aggregate.collect_crowd_evidence,
-        "candidates": candidates,
-        "evidence_coverage": coverage,
-        "route_status": status,
-        "hard_constraints": {"required": True},
-        "aggregate_segments": aggregate.aggregate_segments,
-        "timings": aggregate.timings,
-        "snapshot_id": snapshot_id,
-        "snapshot_observed_at": snapshot_observed_at,
     }
 
 

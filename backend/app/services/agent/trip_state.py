@@ -340,19 +340,6 @@ def _normalized_planning_mode(
     return mode, requested_departure, requested_arrival
 
 
-def _normalized_waypoints(raw: dict[str, Any]) -> list[str]:
-    waypoints = raw.get("waypoints")
-    if not isinstance(waypoints, list):
-        return []
-    return [
-        item.strip()
-        for item in waypoints
-        if isinstance(item, str)
-        and item.strip()
-        and len(item.strip()) <= MAX_WAYPOINT_CHARS
-    ][:MAX_WAYPOINTS]
-
-
 def _normalize(
     raw: dict[str, Any],
     profile_preferences: dict[str, Any] | None = None,
@@ -370,10 +357,22 @@ def _normalize(
     preferences = dict(base_preferences)
     if isinstance(raw.get("preferences"), dict):
         preferences.update(raw["preferences"])
+    waypoints = raw.get("waypoints")
+    normalized_waypoints = (
+        [
+            item.strip()
+            for item in waypoints
+            if isinstance(item, str)
+            and item.strip()
+            and len(item.strip()) <= MAX_WAYPOINT_CHARS
+        ][:MAX_WAYPOINTS]
+        if isinstance(waypoints, list)
+        else []
+    )
     return {
         "origin": _optional_str(raw.get("origin")),
         "destination": _optional_str(raw.get("destination")),
-        "waypoints": _normalized_waypoints(raw),
+        "waypoints": normalized_waypoints,
         "planning_mode": mode,
         "requested_departure": requested_departure,
         "requested_arrival": requested_arrival,

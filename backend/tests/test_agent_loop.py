@@ -1468,7 +1468,7 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
                 self.loop = _load_agent_loop()
                 trace = self.loop.TurnTrace()
                 with (
-                    patch.object(self.loop, "AGENT_TURN_DEADLINE_S", 60),
+                    patch.object(self.loop.session_module, "AGENT_TURN_DEADLINE_S", 60),
                     patch.object(self.loop.budget, "AGENT_DAILY_SPEND_LIMIT_USD", 5),
                 ):
                     events_out, _session = await self._run(
@@ -1615,7 +1615,7 @@ class DeadlineTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         # the much slower executor still deterministically crosses the turn
         # deadline and exercises in-flight cancellation rather than scheduler
         # timing before the tool starts.
-        with patch.object(self.loop, "AGENT_TURN_DEADLINE_S", 0.1):
+        with patch.object(self.loop.session_module, "AGENT_TURN_DEADLINE_S", 0.1):
             events_out, _session = await self._run(
                 [
                     {
@@ -1710,7 +1710,7 @@ class DeadlineTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
 
         started = time.monotonic()
         with (
-            patch.object(self.loop, "AGENT_TURN_DEADLINE_S", 0.2),
+            patch.object(self.loop.session_module, "AGENT_TURN_DEADLINE_S", 0.2),
             patch.object(model_stream, "stream_model_call", scripted_stream),
         ):
             events_out, session = await self._run(

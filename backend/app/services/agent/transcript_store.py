@@ -225,16 +225,6 @@ def _owned_route_card(transcript: dict, card_id: str) -> dict | None:
     return card
 
 
-def _card_matches_itinerary(card: dict, itinerary: dict) -> bool:
-    transcript_itinerary = card.get("itinerary")
-    return (
-        isinstance(transcript_itinerary, dict)
-        and isinstance(transcript_itinerary.get("legs"), list)
-        and bool(transcript_itinerary.get("legs"))
-        and transcript_itinerary == itinerary
-    )
-
-
 def active_accepted_route_card(session: object) -> dict | None:
     """Return the accepted route card only when transcript ownership aligns."""
 
@@ -248,7 +238,13 @@ def active_accepted_route_card(session: object) -> dict | None:
         return None
     card_id, itinerary = identity
     card = _owned_route_card(transcript, card_id)
-    if card is None or not _card_matches_itinerary(card, itinerary):
+    transcript_itinerary = card.get("itinerary") if card is not None else None
+    if card is None or not (
+        isinstance(transcript_itinerary, dict)
+        and isinstance(transcript_itinerary.get("legs"), list)
+        and bool(transcript_itinerary.get("legs"))
+        and transcript_itinerary == itinerary
+    ):
         return None
     return deepcopy(card)
 
