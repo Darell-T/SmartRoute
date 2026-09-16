@@ -76,3 +76,47 @@ test("no-op outside the wye or when legs are missing", () => {
   assert.equal(summary.connected, false);
   assert.equal(features.length, 1);
 });
+
+test("Rockaway wye is a no-op for empty lists and A legs that never share a node", () => {
+  const empty = connectRockawayWye([]);
+  assert.equal(empty.connected, false);
+  assert.equal(empty.stubsRemoved, 0);
+
+  const split = [
+    feature("cross-bay", [[-73.8095, 40.6093], [-73.80955, 40.59339], SHORT]),
+    feature("east-leg", [[-73.7545, 40.6046], [-73.8000, 40.5930]]),
+    feature("west-leg", [[-73.81517, 40.58817], [-73.837, 40.5805]]),
+  ];
+  const summary = connectRockawayWye(split);
+  assert.equal(summary.connected, false);
+  assert.equal(split.length, 3);
+});
+
+test("Rockaway wye extends a short start endpoint onto the junction and updates length_m", () => {
+  const features = [
+    feature("cross-bay", [SHORT, [-73.80955, 40.59339], [-73.8095, 40.6093]]),
+    feature("east-leg", [[-73.7545, 40.6046], [-73.80933, 40.59287], J]),
+    feature("west-leg", [J, [-73.81517, 40.58817], [-73.837, 40.5805]]),
+  ];
+  features[0].properties.length_m = 1800;
+  const beforeLength = features[0].properties.length_m;
+  const summary = connectRockawayWye(features);
+  assert.equal(summary.connected, true);
+  assert.equal(summary.extended, 1);
+  assert.deepEqual(features[0].geometry.coordinates[0], J);
+  assert.equal(features[0].properties.rockaway_wye_connected, true);
+  assert.ok((features[0].properties.length_m ?? 0) > beforeLength);
+  assert.equal(features[0].properties.route_ids[0], "A");
+});
+
+test("Rockaway wye ignores non-A geometry and endpoints outside the wye", () => {
+  const features = [
+    feature("s-shuttle", [[-73.8095, 40.5930], SHORT], ["S"]),
+    feature("elsewhere", [[-73.9, 40.7], [-73.91, 40.71]]),
+    ...makeWye(),
+  ];
+  const summary = connectRockawayWye(features);
+  assert.equal(summary.connected, true);
+  assert.ok(features.some((item) => item.properties.corridor_id === "s-shuttle"));
+  assert.ok(features.some((item) => item.properties.corridor_id === "elsewhere"));
+});

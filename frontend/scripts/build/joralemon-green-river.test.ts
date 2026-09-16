@@ -8,8 +8,8 @@ const GREEN = "#00933C";
 
 type TestFeatureProperties = {
   corridor_id: string;
-  color: string;
-  route_ids: string[];
+  color?: string;
+  route_ids?: string[];
   joralemon_green_river_smoothed?: boolean;
   joralemon_green_river_start_arc_m?: number;
   joralemon_green_river_end_arc_m?: number;
@@ -67,7 +67,9 @@ test("Joralemon green river smoothing removes the local water-crossing wiggle", 
     [-74.0100, 40.7110],
   ];
 
-  const { features, diagnostics } = applyJoralemonGreenRiverSmoothing([feature(before)], {
+  const firstInput = [feature(before)];
+  const secondInput = [feature(before)];
+  const options = {
     bbox: {
       minLon: -74.0115,
       maxLon: -74.0065,
@@ -76,7 +78,10 @@ test("Joralemon green river smoothing removes the local water-crossing wiggle", 
     },
     marginM: 260,
     sampleM: 6,
-  });
+  };
+  const { features, diagnostics } = applyJoralemonGreenRiverSmoothing(firstInput, options);
+  const again = applyJoralemonGreenRiverSmoothing(secondInput, options);
+  assert.equal(JSON.stringify(diagnostics), JSON.stringify(again.diagnostics));
 
   const after = features[0].geometry.coordinates;
   assert.ok(features[0]);
@@ -89,4 +94,138 @@ test("Joralemon green river smoothing removes the local water-crossing wiggle", 
     maxTurn(after) < maxTurn(before) * 0.45,
     `expected max turn to drop substantially: before=${maxTurn(before)} after=${maxTurn(after)}`,
   );
+});
+
+test("Joralemon green river smoothing is a no-op for empty lists and unmatched colors", () => {
+  const emptyFirst = applyJoralemonGreenRiverSmoothing([]);
+  const emptySecond = applyJoralemonGreenRiverSmoothing([]);
+  assert.equal(emptyFirst.diagnostics.applied, false);
+  assert.deepEqual(emptyFirst.features, []);
+  assert.equal(JSON.stringify(emptyFirst), JSON.stringify(emptySecond));
+
+  const red: Feature<LineStringGeometry, TestFeatureProperties> = {
+    type: "Feature",
+    geometry: {
+      type: "LineString",
+      coordinates: [
+        [-74.0085, 40.6982],
+        [-74.0087, 40.6988],
+      ],
+    },
+    properties: {
+      corridor_id: "red",
+      color: "#EE352E",
+      route_ids: ["2"],
+    },
+  };
+  const unmatched = applyJoralemonGreenRiverSmoothing([red]);
+  assert.equal(unmatched.diagnostics.applied, false);
+  assert.equal(unmatched.features[0], red);
+  assert.deepEqual(unmatched.features[0].geometry.coordinates, red.geometry.coordinates);
+});
+
+test("Joralemon green river smoothing clamps replacement to the green 4/5 endpoints", () => {
+  const before: Position[] = [
+    [-74.0085, 40.6982],
+    [-74.0087, 40.6988],
+    [-74.0092, 40.6996],
+    [-74.0100, 40.7010],
+    [-74.0110, 40.7030],
+    [-74.0120, 40.7050],
+  ];
+  const { features, diagnostics } = applyJoralemonGreenRiverSmoothing([feature(before)], {
+    bbox: {
+      minLon: -74.0115,
+      maxLon: -74.0065,
+      minLat: 40.6970,
+      maxLat: 40.7000,
+    },
+    marginM: 800,
+    sampleM: 6,
+  });
+  assert.equal(diagnostics.applied, true);
+  assert.deepEqual(features[0].geometry.coordinates[0], before[0]);
+  assert.deepEqual(features[0].geometry.coordinates.at(-1), before.at(-1));
+  const joralemonRouteIds = features[0].properties.route_ids;
+  assert.ok(Array.isArray(joralemonRouteIds));
+  assert.equal(joralemonRouteIds.join(","), "4,5,6,6X");
+});
+
+test("Joralemon green river smoothing leaves a river window shorter than 40m unchanged", () => {
+  const before: Position[] = [
+    [-74.0085, 40.6982],
+    [-74.00855, 40.69825],
+    [-74.0086, 40.6983],
+  ];
+  const input = [feature(before)];
+  const { features, diagnostics } = applyJoralemonGreenRiverSmoothing(input, {
+    bbox: {
+      minLon: -74.0115,
+      maxLon: -74.0065,
+      minLat: 40.6970,
+      maxLat: 40.7000,
+    },
+    marginM: 0,
+    sampleM: 6,
+  });
+  assert.equal(diagnostics.applied, false);
+  assert.equal(features[0], input[0]);
+  assert.deepEqual(features[0].geometry.coordinates, before);
+});
+
+test("Joralemon green river smoothing ignores green geometry that is not the 4/5 trunk", () => {
+  const sixOnly: Feature<LineStringGeometry, TestFeatureProperties> = {
+    type: "Feature",
+    geometry: {
+      type: "LineString",
+      coordinates: [
+        [-74.0085, 40.6982],
+        [-74.0087, 40.6988],
+        [-74.0110, 40.7020],
+      ],
+    },
+    properties: {
+      corridor_id: "green-6",
+      color: GREEN,
+      route_ids: ["6"],
+    },
+  };
+  const { features, diagnostics } = applyJoralemonGreenRiverSmoothing([sixOnly]);
+  assert.equal(diagnostics.applied, false);
+  assert.equal(features[0], sixOnly);
+});
+
+test("Joralemon green river smoothing skips missing color, missing route ids, and default-bbox misses", () => {
+  const noColor: Feature<LineStringGeometry, TestFeatureProperties> = {
+    type: "Feature",
+    geometry: {
+      type: "LineString",
+      coordinates: [
+        [-74.0085, 40.6982],
+        [-74.0087, 40.6988],
+        [-74.0110, 40.7020],
+      ],
+    },
+    properties: {
+      corridor_id: "no-color",
+      color: "",
+      route_ids: ["4", "5"],
+    },
+  };
+  delete noColor.properties.color;
+  const noRoutes = feature([
+    [-74.0085, 40.6982],
+    [-74.0087, 40.6988],
+    [-74.0110, 40.7020],
+  ]);
+  delete noRoutes.properties.route_ids;
+  const { diagnostics } = applyJoralemonGreenRiverSmoothing([noColor, noRoutes]);
+  assert.equal(diagnostics.applied, false);
+  const distant = applyJoralemonGreenRiverSmoothing([
+    feature([
+      [-73.90, 40.70],
+      [-73.90, 40.71],
+    ]),
+  ]);
+  assert.equal(distant.diagnostics.applied, false);
 });

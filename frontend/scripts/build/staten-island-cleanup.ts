@@ -14,7 +14,7 @@
 //   3. Drop everything else that is a parallel shadow of the kept chain or a
 //      short dangling twig. Long genuinely-offset geometry survives.
 
-import type { Feature, LineStringGeometry, Position } from "./types.ts";
+import type { LineStringGeometry, Position } from "./types.ts";
 
 type StatenIslandProperties = {
   corridor_id?: string | null;
@@ -26,10 +26,13 @@ type StatenIslandProperties = {
   lane_offset_baked?: boolean;
   si_stitch?: boolean;
   length_m?: number;
-  [key: string]: unknown;
 };
 
-type StatenIslandFeature = Feature<LineStringGeometry, StatenIslandProperties>;
+type StatenIslandFeature = {
+  type: "Feature";
+  geometry: LineStringGeometry;
+  properties: StatenIslandProperties;
+};
 
 type StatenIslandOptions = {
   fromCoord?: Position;
@@ -96,85 +99,105 @@ function minDistToLine(point: Position, coords: Position[], lat0: number): numbe
   return best;
 }
 
-export function cleanStatenIslandLine(
-  features: StatenIslandFeature[],
-  options: StatenIslandOptions = {},
-): StatenIslandSummary {
-  const fromCoord = options.fromCoord ?? TOTTENVILLE;
-  const toCoord = options.toCoord ?? ST_GEORGE;
+type SiGraph = {
+  nodes: Position[];
+  edges: StatenEdge[];
+};
 
+type SiPathSearch = {
+  distArr: number[];
+  prevEdge: Array<PreviousStep | null>;
+};
+
+type SiChain = {
+  chain: Set<number>;
+  chainOrder: StatenEdge[];
+};
+
+function collectSiIndexes(features: StatenIslandFeature[]): number[] {
   const siIdx: number[] = [];
-  features.forEach((f, i) => {
-    if (
-      f?.geometry?.type === "LineString" &&
-      (f.properties?.route_ids ?? []).includes("SI") &&
-      f.geometry.coordinates.length >= 2
-    ) {
-      siIdx.push(i);
-    }
+  features.forEach((feature, i) => {
+    if (feature.geometry?.type !== "LineString") return;
+    if (!(feature.properties?.route_ids ?? []).includes("SI")) return;
+    if (feature.geometry.coordinates.length < 2) return;
+    siIdx.push(i);
   });
-  if (siIdx.length < 2) return { kept: siIdx.length, dropped: 0, stitches: 0 };
-  const lat0 = features[siIdx[0]!]!.geometry.coordinates[0]![1];
+  return siIdx;
+}
 
-  // --- Endpoint nodes (clustered within JOIN_M) ---
+function clusterEndpointNode(nodes: Position[], coord: Position, lat0: number): number {
+  for (let n = 0; n < nodes.length; n += 1) {
+    if (distM(nodes[n], coord, lat0) <= JOIN_M) return n;
+  }
+  nodes.push(coord);
+  return nodes.length - 1;
+}
+
+function buildSiEdges(features: StatenIslandFeature[], siIdx: number[], lat0: number): SiGraph {
   const nodes: Position[] = [];
-  const nodeOf = (coord: Position): number => {
-    for (let n = 0; n < nodes.length; n += 1) {
-      if (distM(nodes[n], coord, lat0) <= JOIN_M) return n;
-    }
-    nodes.push(coord);
-    return nodes.length - 1;
-  };
   const edges = siIdx.map((idx) => {
     const cs = features[idx].geometry.coordinates;
     return {
       idx,
-      a: nodeOf(cs[0]!),
-      b: nodeOf(cs[cs.length - 1]!),
+      a: clusterEndpointNode(nodes, cs[0], lat0),
+      b: clusterEndpointNode(nodes, cs[cs.length - 1], lat0),
       len: lineLength(cs, lat0),
     };
   });
+  return { nodes, edges };
+}
 
-  // --- Dijkstra from the node nearest fromCoord to the node nearest toCoord ---
-  const nearestNode = (coord: Position): number => {
-    let best = 0;
-    let bestD = Infinity;
-    nodes.forEach((n, i) => {
-      const d = distM(n, coord, lat0);
-      if (d < bestD) { bestD = d; best = i; }
-    });
-    return best;
-  };
-  const src = nearestNode(fromCoord);
-  const dst = nearestNode(toCoord);
-  const distArr = new Array(nodes.length).fill(Infinity);
-  const prevEdge: Array<PreviousStep | null> = new Array(nodes.length).fill(null);
+function nearestNodeIndex(nodes: Position[], coord: Position, lat0: number): number {
+  let best = 0;
+  let bestD = Infinity;
+  nodes.forEach((node, i) => {
+    const d = distM(node, coord, lat0);
+    if (d < bestD) {
+      bestD = d;
+      best = i;
+    }
+  });
+  return best;
+}
+
+function shortestSiPath(
+  nodes: Position[],
+  edges: StatenEdge[],
+  src: number,
+  _dst: number,
+): SiPathSearch {
+  const distArr = Array.from({ length: nodes.length }, () => Infinity);
+  const prevEdge: Array<PreviousStep | null> = Array.from({ length: nodes.length }, () => null);
   distArr[src] = 0;
   const visited = new Set<number>();
   while (visited.size < nodes.length) {
     let u = -1;
     let uD = Infinity;
     for (let i = 0; i < nodes.length; i += 1) {
-      if (!visited.has(i) && distArr[i] < uD) { uD = distArr[i]; u = i; }
+      if (!visited.has(i) && distArr[i] < uD) {
+        uD = distArr[i];
+        u = i;
+      }
     }
     if (u === -1) break;
     visited.add(u);
-    for (const e of edges) {
-      for (const [x, y] of [[e.a, e.b], [e.b, e.a]]) {
+    for (const edge of edges) {
+      for (const [x, y] of [[edge.a, edge.b], [edge.b, edge.a]]) {
         if (x !== u) continue;
-        if (distArr[u] + e.len < distArr[y]) {
-          distArr[y] = distArr[u] + e.len;
-          prevEdge[y] = { edge: e, from: u };
-        }
+        if (distArr[u] + edge.len >= distArr[y]) continue;
+        distArr[y] = distArr[u] + edge.len;
+        prevEdge[y] = { edge, from: u };
       }
     }
   }
+  return { distArr, prevEdge };
+}
 
-  if (!Number.isFinite(distArr[dst])) {
-    // No connected chain between the terminals: do nothing (safety).
-    return { kept: siIdx.length, dropped: 0, stitches: 0, connected: false };
-  }
-
+function reconstructChain(
+  prevEdge: Array<PreviousStep | null>,
+  src: number,
+  dst: number,
+): SiChain {
   const chain = new Set<number>();
   const chainOrder: StatenEdge[] = [];
   for (let n = dst; n !== src;) {
@@ -184,64 +207,100 @@ export function cleanStatenIslandLine(
     chainOrder.push(step.edge);
     n = step.from;
   }
+  return { chain, chainOrder };
+}
 
-  // --- Classify non-chain SI fragments ---
+function shadowAndTwigIndexes(
+  features: StatenIslandFeature[],
+  edges: StatenEdge[],
+  chain: Set<number>,
+  lat0: number,
+): Set<number> {
   const chainCoords = [...chain].map((idx) => features[idx].geometry.coordinates);
   const toDrop = new Set<number>();
-  for (const e of edges) {
-    if (chain.has(e.idx)) continue;
-    const cs = features[e.idx].geometry.coordinates;
-    const isShadow = cs.every((c) =>
-      chainCoords.some((cc) => minDistToLine(c, cc, lat0) <= SHADOW_M),
+  for (const edge of edges) {
+    if (chain.has(edge.idx)) continue;
+    const cs = features[edge.idx].geometry.coordinates;
+    const isShadow = cs.every((coord) =>
+      chainCoords.some((line) => minDistToLine(coord, line, lat0) <= SHADOW_M),
     );
-    if (isShadow || e.len < TWIG_MAX_M) toDrop.add(e.idx);
+    if (isShadow || edge.len < TWIG_MAX_M) toDrop.add(edge.idx);
   }
+  return toDrop;
+}
 
-  // --- Stitch seams between consecutive chain fragments ---
+function endNearSharedNode(
+  features: StatenIslandFeature[],
+  edge: StatenEdge,
+  nodes: Position[],
+  sharedNode: number,
+  lat0: number,
+): Position {
+  const cs = features[edge.idx].geometry.coordinates;
+  const candidates: Position[] = [cs[0], cs[cs.length - 1]];
+  return candidates.reduce((best, coord) =>
+    distM(coord, nodes[sharedNode], lat0) < distM(best, nodes[sharedNode], lat0) ? coord : best,
+  );
+}
+
+function stitchChainSeams(
+  features: StatenIslandFeature[],
+  chainOrder: StatenEdge[],
+  nodes: Position[],
+  lat0: number,
+): StatenIslandFeature[] {
   const stitchFeatures: StatenIslandFeature[] = [];
   chainOrder.forEach((edge, i) => {
     const next = chainOrder[i + 1];
     if (!next) return;
-    // shared node between consecutive chain edges; find the actual endpoint
-    // coords on each fragment closest to that node and bridge them if they
-    // don't touch.
     const sharedNode = [edge.a, edge.b].find((n) => n === next.a || n === next.b);
     if (sharedNode == null) return;
-    const endNear = (e: StatenEdge): Position => {
-      const cs = features[e.idx].geometry.coordinates;
-      const candidates: Position[] = [cs[0]!, cs[cs.length - 1]!];
-      return candidates.reduce((best, c) =>
-        distM(c, nodes[sharedNode], lat0) < distM(best, nodes[sharedNode], lat0) ? c : best,
-      );
-    };
-    const p1 = endNear(edge);
-    const p2 = endNear(next);
+    const p1 = endNearSharedNode(features, edge, nodes, sharedNode, lat0);
+    const p2 = endNearSharedNode(features, next, nodes, sharedNode, lat0);
     const gap = distM(p1, p2, lat0);
-    if (gap > 5 && gap <= STITCH_MAX_M) {
-      stitchFeatures.push({
-        type: "Feature",
-        properties: {
-          corridor_id: `si-stitch-${stitchFeatures.length}`,
-          route_ids: ["SI"],
-          color_route_ids: ["SI"],
-          color: "#0078C6",
-          visual_feature_type: "bundle_lane",
-          lane_slot: 0,
-          lane_offset_baked: true,
-          si_stitch: true,
-          length_m: gap,
-        },
-        geometry: { type: "LineString", coordinates: [p1, p2] },
-      });
-    }
+    if (gap <= 5 || gap > STITCH_MAX_M) return;
+    stitchFeatures.push({
+      type: "Feature",
+      properties: {
+        corridor_id: `si-stitch-${stitchFeatures.length}`,
+        route_ids: ["SI"],
+        color_route_ids: ["SI"],
+        color: "#0078C6",
+        visual_feature_type: "bundle_lane",
+        lane_slot: 0,
+        lane_offset_baked: true,
+        si_stitch: true,
+        length_m: gap,
+      },
+      geometry: { type: "LineString", coordinates: [p1, p2] },
+    });
   });
+  return stitchFeatures;
+}
 
-  // Apply drops + stitches.
+export function cleanStatenIslandLine(
+  features: StatenIslandFeature[],
+  options: StatenIslandOptions = {},
+): StatenIslandSummary {
+  const fromCoord = options.fromCoord ?? TOTTENVILLE;
+  const toCoord = options.toCoord ?? ST_GEORGE;
+  const siIdx = collectSiIndexes(features);
+  if (siIdx.length < 2) return { kept: siIdx.length, dropped: 0, stitches: 0 };
+  const lat0 = features[siIdx[0]].geometry.coordinates[0][1];
+  const { nodes, edges } = buildSiEdges(features, siIdx, lat0);
+  const src = nearestNodeIndex(nodes, fromCoord, lat0);
+  const dst = nearestNodeIndex(nodes, toCoord, lat0);
+  const { distArr, prevEdge } = shortestSiPath(nodes, edges, src, dst);
+  if (!Number.isFinite(distArr[dst])) {
+    return { kept: siIdx.length, dropped: 0, stitches: 0, connected: false };
+  }
+  const { chain, chainOrder } = reconstructChain(prevEdge, src, dst);
+  const toDrop = shadowAndTwigIndexes(features, edges, chain, lat0);
+  const stitchFeatures = stitchChainSeams(features, chainOrder, nodes, lat0);
   for (let i = features.length - 1; i >= 0; i -= 1) {
     if (toDrop.has(i)) features.splice(i, 1);
   }
   features.push(...stitchFeatures);
-
   return {
     kept: siIdx.length - toDrop.size,
     dropped: toDrop.size,

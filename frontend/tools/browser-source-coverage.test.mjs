@@ -78,6 +78,12 @@ test("normalizes webpack, file, Windows, and query-string original paths", () =>
     ),
     false,
   );
+  assert.equal(
+    isOwnedWebpackModule(
+      "about://React/Server/webpack-internal:///(rsc)/./app/layout.tsx",
+    ),
+    false,
+  );
 });
 
 test("maps a synthetic webpack source map onto original fixture lines", async () => {
@@ -119,6 +125,20 @@ test("rejects an owned webpack module that has no original source map", async ()
       ),
     /failed to map original sources/,
   );
+});
+
+test("skips Next RSC about:// records that embed a webpack-internal path", async () => {
+  const map = await mapBrowserCoverage(
+    [
+      {
+        url: "about://React/Server/webpack-internal:///(rsc)/./app/layout.tsx",
+        source: "function orphan() { return 1 }",
+        functions: [],
+      },
+    ],
+    frontendRoot,
+  );
+  assert.deepEqual(Object.keys(map.toJSON()), []);
 });
 
 function coverageForLines(relative, lines, hit) {

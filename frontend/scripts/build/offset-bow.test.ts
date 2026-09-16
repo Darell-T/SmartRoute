@@ -63,3 +63,28 @@ test("bow has no kink (monotone smooth offset profile near the middle)", () => {
   for (let i = 1; i <= peakIdx; i += 1) assert.ok(d[i] >= d[i - 1] - 0.5, "rising to peak");
   for (let i = peakIdx + 1; i < d.length; i += 1) assert.ok(d[i] <= d[i - 1] + 0.5, "falling after peak");
 });
+
+test("plateau profile holds max offset then linearly rejoins", () => {
+  const spine = Array.from({ length: 21 }, (_, i) => P(i * 20, 0));
+  const bow = offsetBow(spine, { maxOffsetM: 80, side: "left", plateau: [0.3, 0.7] });
+  const d = bow.map((p, i) => hav(p, spine[i]));
+  assert.ok(d[0] < 1 && d[d.length - 1] < 1);
+  assert.ok(Math.abs(d[10] - 80) < 8, `plateau mid ${d[10]}`);
+  const again = offsetBow(spine, { maxOffsetM: 80, side: "left", plateau: [0.3, 0.7] });
+  assert.deepEqual(again, bow);
+});
+
+test("peakAt profile peels with smoothstep then linearly rejoins", () => {
+  const spine = Array.from({ length: 21 }, (_, i) => P(i * 20, 0));
+  const bow = offsetBow(spine, { maxOffsetM: 80, side: "left", peakAt: 0.35 });
+  const d = bow.map((p, i) => hav(p, spine[i]));
+  let peakIdx = 0;
+  for (let i = 1; i < d.length; i += 1) if (d[i] > d[peakIdx]) peakIdx = i;
+  assert.ok(peakIdx < 10, `peak skewed toward 0.35, got ${peakIdx}`);
+  assert.ok(d[0] < 1 && d[d.length - 1] < 1);
+});
+
+test("offsetBow returns the input when the polyline is too short", () => {
+  const one: Position[] = [P(0, 0)];
+  assert.equal(offsetBow(one, { maxOffsetM: 80 }), one);
+});

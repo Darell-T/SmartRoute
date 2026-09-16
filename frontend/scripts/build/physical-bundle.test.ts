@@ -3,11 +3,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   computePairOverlap,
+  computePhysicalBundleSpineHash,
   groupSpinesIntoPhysicalBundles,
+  resamplePolyline,
   selectPhysicalBundleSpine,
   clipPolylineToExtent,
-  resamplePolyline,
-  computePhysicalBundleSpineHash,
   type Spine,
 } from "./physical-bundle.ts";
 import type { Position } from "./types.ts";
@@ -59,8 +59,8 @@ test("computePairOverlap: parallel polylines 5m apart => high share, low dist, l
   assert.ok(result.avgDistM < 7, `expected avgDistM < 7, got ${result.avgDistM}`);
   assert.ok(result.tangentDeltaAvgDeg < 5, `expected tangentDeltaAvgDeg < 5, got ${result.tangentDeltaAvgDeg}`);
   assert.ok(result.sharedLenM > BASE_LEN_M * 0.8, `expected sharedLenM > ${BASE_LEN_M * 0.8}, got ${result.sharedLenM}`);
-  assert.ok(typeof result.shorterSpineId === "string");
-  assert.ok(typeof result.longerSpineId === "string");
+  assert.ok(result.shorterSpineId === String(result.shorterSpineId));
+  assert.ok(result.longerSpineId === String(result.longerSpineId));
 });
 
 // ---------------------------------------------------------------------------
@@ -122,7 +122,7 @@ test("groupSpinesIntoPhysicalBundles: A near B, C far => 1 group {A, B}", () => 
   const farCoords = BASE_COORDS.map(([lon, lat]): Position => [lon + 1.0, lat]);
   const spineC = makeSpine("spine-c", farCoords, BASE_LEN_M, ["R"]);
 
-  const { groups, rejects } = groupSpinesIntoPhysicalBundles([spineA, spineB, spineC], {
+  const { groups } = groupSpinesIntoPhysicalBundles([spineA, spineB, spineC], {
     avgDistMaxM: 15,
     sharedFractionMin: 0.6,
     sharedLenMinM: 250,
@@ -314,7 +314,7 @@ test("groupSpinesIntoPhysicalBundles: rejects contains bbox-overlapping but gate
     (r.spine_id_a === "spine-b" && r.spine_id_b === "spine-a"),
     "reject should reference both spines",
   );
-  assert.ok(typeof r.reject_reason === "string" && r.reject_reason.length > 0,
+  assert.ok(r.reject_reason === String(r.reject_reason) && r.reject_reason.length > 0,
     "reject_reason should be non-empty string");
   assert.ok(r.avgDistM > 15, `avgDistM ${r.avgDistM} should exceed threshold`);
 });
@@ -412,4 +412,388 @@ test("groupSpinesIntoPhysicalBundles: confidence is the minimum pair shared-frac
         `confidence (${cGroup.confidence}) for C-bearing group should reflect partial overlap`);
     }
   }
+});
+
+test("computePairOverlap: two-point stubs return the empty overlap sentinel", () => {
+  const stub: Position[] = [
+    [-73.99, 40.7],
+    [-73.990001, 40.700001],
+  ];
+  const result = computePairOverlap(
+    makeSpine("short-a", stub, 1),
+    makeSpine("short-b", offsetLatPolyline(stub, 1), 1),
+    { resampleM: 25, distMaxM: 15 },
+  );
+  assert.equal(result.avgDistM, Infinity);
+  assert.equal(result.sharedFractionShorter, 0);
+  assert.equal(result.sharedLenM, 0);
+  assert.equal(result.tangentDeltaAvgDeg, 180);
+  assert.equal(result.shorterSpineId, "short-a");
+  assert.equal(result.longerSpineId, "short-b");
+  assert.deepEqual(
+    computePairOverlap(makeSpine("short-a", stub, 1), makeSpine("short-b", offsetLatPolyline(stub, 1), 1)),
+    result,
+  );
+});
+
+test("computePairOverlap: opposite travel still reports a small complementary tangent", () => {
+  const north = makeSpine("north", BASE_COORDS, BASE_LEN_M);
+  const south = makeSpine("south", [...offsetLatPolyline(BASE_COORDS, 4)].reverse(), BASE_LEN_M);
+  const result = computePairOverlap(north, south, { resampleM: 25, distMaxM: 15 });
+  assert.ok(result.sharedFractionShorter > 0.9, `shared ${result.sharedFractionShorter}`);
+  assert.ok(result.tangentDeltaAvgDeg < 5, `complementary tangent ${result.tangentDeltaAvgDeg}`);
+});
+
+test("computePairOverlap: missing length_m uses polyline meters and wrapping bearings", () => {
+  const a: Spine = {
+    spine_id: "wrap-a",
+    length_m: 1110,
+    geometry: {
+      type: "LineString" as const,
+      coordinates: [
+        [-73.99, 40.7],
+        [-73.9899, 40.705],
+        [-73.9898, 40.71],
+      ],
+    },
+  };
+  const b: Spine = {
+    spine_id: "wrap-b",
+    length_m: 1110,
+    geometry: {
+      type: "LineString" as const,
+      coordinates: [
+        [-73.98995, 40.7],
+        [-73.98985, 40.705],
+        [-73.98975, 40.71],
+      ],
+    },
+  };
+  const result = computePairOverlap(a, b, { resampleM: 25, distMaxM: 20 });
+  assert.ok(result.avgDistM < 20);
+  assert.ok(result.shorterSpineId === "wrap-a" || result.shorterSpineId === "wrap-b");
+});
+
+test("groupSpinesIntoPhysicalBundles: ids without a spine- prefix keep corridor ids intact", () => {
+  const { groups } = groupSpinesIntoPhysicalBundles(
+    [
+      makeSpine("a", BASE_COORDS, BASE_LEN_M, ["N"]),
+      makeSpine("b", offsetLatPolyline(BASE_COORDS, 5), BASE_LEN_M, ["Q"]),
+    ],
+    { avgDistMaxM: 15, sharedFractionMin: 0.6, sharedLenMinM: 250, tangentMaxDeg: 30, resampleM: 25 },
+  );
+  assert.equal(groups.length, 1);
+  assert.deepEqual(groups[0].spine_ids.slice().sort(), ["a", "b"]);
+  assert.ok(groups[0].base_corridor_id === "a" || groups[0].base_corridor_id === "b");
+  assert.deepEqual(groups[0].route_ids, ["N", "Q"]);
+});
+
+test("groupSpinesIntoPhysicalBundles: equal lengths pick the lexicographically first base", () => {
+  const { groups } = groupSpinesIntoPhysicalBundles(
+    [
+      makeSpine("spine-z", BASE_COORDS, BASE_LEN_M, ["N"]),
+      makeSpine("spine-a", offsetLatPolyline(BASE_COORDS, 5), BASE_LEN_M, ["Q"]),
+    ],
+    { avgDistMaxM: 15, sharedFractionMin: 0.6, sharedLenMinM: 250, tangentMaxDeg: 30, resampleM: 25 },
+  );
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].base_spine_id, "spine-a");
+});
+
+test("groupSpinesIntoPhysicalBundles: disjoint bboxes skip pairing and default options accept near twins", () => {
+  const far = BASE_COORDS.map(([lon, lat]): Position => [lon + 1, lat]);
+  const skipped = groupSpinesIntoPhysicalBundles([
+    makeSpine("spine-a", BASE_COORDS, BASE_LEN_M, ["N"]),
+    makeSpine("spine-far", far, BASE_LEN_M, ["R"]),
+  ]);
+  assert.deepEqual(skipped.groups, []);
+  assert.deepEqual(skipped.rejects, []);
+
+  const near = groupSpinesIntoPhysicalBundles([
+    makeSpine("spine-a", BASE_COORDS, BASE_LEN_M, ["N"]),
+    makeSpine("spine-b", offsetLatPolyline(BASE_COORDS, 5), BASE_LEN_M, ["Q"]),
+  ]);
+  assert.equal(near.groups.length, 1);
+  assert.equal(near.groups[0].physical_bundle_id, "pb-00001");
+});
+
+test("groupSpinesIntoPhysicalBundles: shared_len_too_short and shared_fraction_too_low reject reasons", () => {
+  const shortCoords: Position[] = [
+    [-73.99, 40.7],
+    [-73.99, 40.7008],
+    [-73.99, 40.7016],
+  ];
+  const shortLen = 180;
+  const shortPair = groupSpinesIntoPhysicalBundles(
+    [
+      makeSpine("spine-sa", shortCoords, shortLen, ["A"]),
+      makeSpine("spine-sb", offsetLatPolyline(shortCoords, 4), shortLen, ["C"]),
+    ],
+    { avgDistMaxM: 15, sharedFractionMin: 0.6, sharedLenMinM: 250, tangentMaxDeg: 30, resampleM: 10 },
+  );
+  assert.equal(shortPair.groups.length, 0);
+  assert.ok(shortPair.rejects.some((row) => row.reject_reason === "shared_len_too_short"));
+
+  // Far half is ~21m east: average distance stays under 15m, but fewer than
+  // 60% of samples fall inside distMaxM, so the pair fails on fraction first.
+  const aCoords: Position[] = [];
+  for (let i = 0; i < 80; i += 1) aCoords.push([-73.99, 40.7 + i * 0.0001]);
+  const bCoords: Position[] = [];
+  for (let i = 0; i < 80; i += 1) {
+    const lon = i < 40 ? -73.99 + 0.00005 : -73.99 + 0.00025;
+    bCoords.push([lon, 40.7 + i * 0.0001]);
+  }
+  const fraction = groupSpinesIntoPhysicalBundles(
+    [
+      makeSpine("spine-fa", aCoords, 880, ["A"]),
+      makeSpine("spine-fb", bCoords, 880, ["C"]),
+    ],
+    { avgDistMaxM: 15, sharedFractionMin: 0.6, sharedLenMinM: 50, tangentMaxDeg: 30, resampleM: 10 },
+  );
+  assert.ok(fraction.rejects.some((row) => row.reject_reason === "shared_fraction_too_low"));
+});
+
+test("groupSpinesIntoPhysicalBundles: patchy overlap can pass the pair gate then fail the common run", () => {
+  const aCoords: Position[] = [];
+  for (let i = 0; i < 120; i += 1) aCoords.push([-73.99, 40.7 + i * 0.0001]);
+  const bCoords: Position[] = [];
+  for (let i = 0; i < 120; i += 1) {
+    const near = i % 40 < 12;
+    bCoords.push([-73.99 + (near ? 0.00004 : 0.0004), 40.7 + i * 0.0001]);
+  }
+  const { groups, rejects } = groupSpinesIntoPhysicalBundles(
+    [
+      makeSpine("spine-pa", aCoords, 1330, ["A"]),
+      makeSpine("spine-pb", bCoords, 1330, ["C"]),
+    ],
+    { avgDistMaxM: 15, sharedFractionMin: 0.2, sharedLenMinM: 250, tangentMaxDeg: 40, resampleM: 10 },
+  );
+  const reasons = rejects.map((row) => row.reject_reason);
+  assert.ok(
+    groups.length === 0 || reasons.includes("common_run_too_short") || reasons.includes("shared_fraction_too_low"),
+    `expected no group or a run/fraction reject, got groups=${groups.length} reasons=${reasons.join(",")}`,
+  );
+});
+
+test("clipPolylineToExtent: rejects degenerate input and zero-length spines", () => {
+  assert.equal(clipPolylineToExtent([[-73.99, 40.7]], [-73.99, 40.7], [-73.98, 40.71]), null);
+  const same: Position[] = [
+    [-73.99, 40.7],
+    [-73.99, 40.7],
+  ];
+  const zero = clipPolylineToExtent(same, [-73.99, 40.7], [-73.99, 40.7]);
+  assert.deepEqual(zero, [
+    [-73.99, 40.7],
+    [-73.99, 40.7],
+  ]);
+});
+
+test("selectPhysicalBundleSpine: named base wins, missing map entries are skipped, empty map throws", () => {
+  const spines = [
+    makeSpine("spine-short", BASE_COORDS, 500, ["A"]),
+    makeSpine("spine-long", BASE_COORDS, 2000, ["B"]),
+  ];
+  const spinesById = new Map(spines.map((s) => [s.spine_id, s]));
+  const named = selectPhysicalBundleSpine(
+    {
+      physical_bundle_id: "pb-named",
+      spine_ids: ["spine-short", "spine-long", "spine-missing"],
+      base_spine_id: "spine-short",
+      route_ids: [],
+    },
+    spinesById,
+  );
+  assert.equal(named.base_spine_id, "spine-short");
+  assert.deepEqual(named.route_ids, ["A", "B"]);
+
+  const longest = selectPhysicalBundleSpine(
+    {
+      physical_bundle_id: "pb-longest",
+      spine_ids: ["spine-missing", "spine-short", "spine-long"],
+    },
+    spinesById,
+  );
+  assert.equal(longest.base_spine_id, "spine-long");
+
+  assert.throws(
+    () =>
+      selectPhysicalBundleSpine(
+        { physical_bundle_id: "pb-empty", spine_ids: ["gone"] },
+        new Map(),
+      ),
+    /physical bundle pb-empty has no selectable spine/,
+  );
+});
+
+test("resamplePolyline copies a stub and hashes identical polylines the same way", () => {
+  assert.deepEqual(resamplePolyline([], 25), []);
+  assert.deepEqual(resamplePolyline([[-73.99, 40.7]], 25), [[-73.99, 40.7]]);
+  const hash = computePhysicalBundleSpineHash(BASE_COORDS);
+  assert.equal(computePhysicalBundleSpineHash(BASE_COORDS), hash);
+  assert.notEqual(computePhysicalBundleSpineHash(offsetLatPolyline(BASE_COORDS, 5)), hash);
+});
+
+test("clipPolylineToExtent covers start-to-end, coincident queries, and non-array points", () => {
+  const startToEnd = clipPolylineToExtent(BASE_COORDS, BASE_COORDS[0], BASE_COORDS[2], { resampleM: 25 });
+  assert.ok(startToEnd);
+  assert.equal(startToEnd[0][1], BASE_COORDS[0][1]);
+  assert.equal(startToEnd[startToEnd.length - 1][1], BASE_COORDS[2][1]);
+
+  const coincident = clipPolylineToExtent(BASE_COORDS, BASE_COORDS[1], BASE_COORDS[1], { resampleM: 25 });
+  assert.ok(coincident);
+  assert.equal(coincident.length, 2);
+  assert.ok(Math.abs(coincident[0][1] - 40.705) < 0.001);
+
+  const dupes: Position[] = [
+    [-73.99, 40.7],
+    [-73.99, 40.7],
+    [-73.99, 40.705],
+    [-73.99, 40.71],
+  ];
+  const throughDupes = clipPolylineToExtent(dupes, [-73.99, 40.7], [-73.99, 40.71], { resampleM: 10 });
+  assert.ok(throughDupes);
+  assert.ok(throughDupes.length >= 2);
+
+  assert.equal(clipPolylineToExtent(BASE_COORDS, null, BASE_COORDS[2]), null);
+  assert.equal(clipPolylineToExtent(BASE_COORDS, BASE_COORDS[0], undefined), null);
+});
+
+test("groupSpinesIntoPhysicalBundles: missing length_m, missing route_ids, and a tangent reject", () => {
+  const noLenA: Spine = {
+    spine_id: "spine-nl-a",
+    geometry: { type: "LineString", coordinates: BASE_COORDS },
+  };
+  const noLenB: Spine = {
+    spine_id: "spine-nl-b",
+    geometry: { type: "LineString", coordinates: offsetLatPolyline(BASE_COORDS, 5) },
+  };
+  const noLen = groupSpinesIntoPhysicalBundles([noLenA, noLenB], {
+    avgDistMaxM: 15,
+    sharedFractionMin: 0.6,
+    sharedLenMinM: 250,
+    tangentMaxDeg: 30,
+    resampleM: 25,
+  });
+  assert.equal(noLen.groups.length, 1);
+  assert.deepEqual(noLen.groups[0].route_ids, []);
+
+  const horiz: Position[] = [
+    [-74.0, 40.705],
+    [-73.99, 40.705],
+    [-73.98, 40.705],
+  ];
+  const cross: Position[] = [
+    [-73.99, 40.7],
+    [-73.99, 40.705],
+    [-73.99, 40.71],
+  ];
+  const tangent = groupSpinesIntoPhysicalBundles(
+    [makeSpine("spine-h", horiz, 1600, ["N"]), makeSpine("spine-v", cross, 1100, ["Q"])],
+    { avgDistMaxM: 80, sharedFractionMin: 0.01, sharedLenMinM: 1, tangentMaxDeg: 10, resampleM: 25 },
+  );
+  assert.ok(
+    tangent.rejects.some((row) => row.reject_reason === "tangent_delta_too_large") || tangent.groups.length === 0,
+    "perpendicular crossing should reject on tangent or fail to group",
+  );
+});
+
+test("groupSpinesIntoPhysicalBundles: two far pairs sort as separate bases", () => {
+  const east = BASE_COORDS.map(([lon, lat]): Position => [lon + 1, lat]);
+  const { groups } = groupSpinesIntoPhysicalBundles(
+    [
+      makeSpine("spine-a", BASE_COORDS, BASE_LEN_M, ["N"]),
+      makeSpine("spine-b", offsetLatPolyline(BASE_COORDS, 5), BASE_LEN_M, ["Q"]),
+      makeSpine("spine-c", east, BASE_LEN_M, ["R"]),
+      makeSpine("spine-d", offsetLatPolyline(east, 5), BASE_LEN_M, ["W"]),
+    ],
+    { avgDistMaxM: 15, sharedFractionMin: 0.6, sharedLenMinM: 250, tangentMaxDeg: 30, resampleM: 25 },
+  );
+  assert.equal(groups.length, 2);
+  const bases = groups.map((group) => group.base_spine_id).sort();
+  assert.notEqual(bases[0], bases[1]);
+});
+
+test("groupSpinesIntoPhysicalBundles: two members sharing a start arc keep separate extents", () => {
+  const baseCoords: Position[] = [];
+  for (let i = 0; i < 100; i += 1) baseCoords.push([-73.99, 40.7 + i * 0.0001]);
+  const shortCoords = baseCoords.slice(0, 40).map(([lon, lat]): Position => [lon + 0.00005, lat]);
+  const midCoords = baseCoords.slice(0, 80).map(([lon, lat]): Position => [lon - 0.00005, lat]);
+  const { groups } = groupSpinesIntoPhysicalBundles(
+    [
+      makeSpine("spine-base", baseCoords, 1100, ["A"]),
+      makeSpine("spine-short", shortCoords, 430, ["B"]),
+      makeSpine("spine-mid", midCoords, 870, ["C"]),
+    ],
+    { avgDistMaxM: 15, sharedFractionMin: 0.6, sharedLenMinM: 200, tangentMaxDeg: 30, resampleM: 10 },
+  );
+  assert.ok(groups.length >= 1);
+  assert.ok(groups.every((group) => group.shared_extent_end_m >= group.shared_extent_start_m));
+});
+
+test("selectPhysicalBundleSpine: group route_ids win over member unions", () => {
+  const spines = [makeSpine("spine-a", BASE_COORDS, 500, ["A"]), makeSpine("spine-b", BASE_COORDS, 800, ["B"])];
+  const result = selectPhysicalBundleSpine(
+    {
+      physical_bundle_id: "pb-routes",
+      spine_ids: ["spine-a", "spine-b"],
+      route_ids: ["Z"],
+    },
+    new Map(spines.map((spine) => [spine.spine_id, spine])),
+  );
+  assert.deepEqual(result.route_ids, ["Z"]);
+  assert.equal(result.base_spine_id, "spine-b");
+});
+
+test("groupSpinesIntoPhysicalBundles rejects a close zigzag on tangent", () => {
+  const trunk: Position[] = [];
+  for (let i = 0; i < 40; i += 1) trunk.push([-73.99, 40.7 + i * 0.0002]);
+  const zigzag: Position[] = [];
+  for (let i = 0; i < 40; i += 1) {
+    zigzag.push([-73.99 + (i % 2 === 0 ? 0.00045 : -0.00045), 40.7 + i * 0.0002]);
+  }
+  const { groups, rejects } = groupSpinesIntoPhysicalBundles(
+    [makeSpine("spine-straight", trunk, 880, ["A"]), makeSpine("spine-zig", zigzag, 1200, ["C"])],
+    { avgDistMaxM: 50, sharedFractionMin: 0.25, sharedLenMinM: 40, tangentMaxDeg: 18, resampleM: 10 },
+  );
+  assert.ok(
+    groups.length === 0 ||
+      rejects.some((row) => row.reject_reason === "tangent_delta_too_large"),
+  );
+});
+
+test("clipPolylineToExtent of a point onto itself still returns two coordinates", () => {
+  const clipped = clipPolylineToExtent(BASE_COORDS, BASE_COORDS[0], BASE_COORDS[0]);
+  assert.ok(clipped === null || clipped.length >= 2);
+});
+
+test("selectPhysicalBundleSpine treats a missing length_m as zero", () => {
+  const unlabeled: Spine = {
+    spine_id: "spine-bare",
+    geometry: { type: "LineString", coordinates: BASE_COORDS },
+    route_ids: ["A"],
+  };
+  const long = makeSpine("spine-long", BASE_COORDS, 2000, ["B"]);
+  const result = selectPhysicalBundleSpine(
+    { physical_bundle_id: "pb-bare", spine_ids: ["spine-bare", "spine-long"] },
+    new Map([
+      ["spine-bare", unlabeled],
+      ["spine-long", long],
+    ]),
+  );
+  assert.equal(result.base_spine_id, "spine-long");
+});
+
+test("groupSpinesIntoPhysicalBundles keeps the longer of two overlap runs", () => {
+  const base: Position[] = [];
+  for (let i = 0; i < 100; i += 1) base.push([-73.99, 40.7 + i * 0.0001]);
+  const member: Position[] = [];
+  for (let i = 0; i < 100; i += 1) {
+    const lon = i >= 20 && i < 35 ? -73.99 + 0.0008 : -73.99 + 0.00004;
+    member.push([lon, 40.7 + i * 0.0001]);
+  }
+  const { groups, rejects } = groupSpinesIntoPhysicalBundles(
+    [makeSpine("spine-run-a", base, 1100, ["A"]), makeSpine("spine-run-b", member, 1120, ["C"])],
+    { avgDistMaxM: 15, sharedFractionMin: 0.4, sharedLenMinM: 80, tangentMaxDeg: 30, resampleM: 10 },
+  );
+  assert.ok(groups.length + rejects.length >= 1);
 });

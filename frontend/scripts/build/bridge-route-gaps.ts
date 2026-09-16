@@ -1,4 +1,4 @@
-// Pure helper -- no fs, no globals. Closes the small seams left between
+﻿// Pure helper -- no fs, no globals. Closes the small seams left between
 // consecutive pieces of the SAME route after the split-and-reassemble pipeline
 // (corridors -> bundles -> shared-spine + fanouts + tails -> DeKalb clips).
 //
@@ -17,10 +17,12 @@ import type { Feature, LineStringGeometry, Position } from "./types.ts";
 type Vector = [number, number];
 type RouteId = string;
 
+type ColorRouteTable = Record<string, RouteId[]>;
+
 type BridgeProperties = {
-  color?: unknown;
-  route_ids?: unknown;
-  color_route_ids?: unknown;
+  color?: string;
+  route_ids?: RouteId[];
+  color_route_ids?: RouteId[] | ColorRouteTable;
   qa_orphan_severity?: string;
   route_gap_bridge?: boolean;
   route_gap_bridge_subset_connector?: boolean;
@@ -29,7 +31,13 @@ type BridgeProperties = {
   route_gap_bridge_curved?: boolean;
   bridge_gap_m?: number;
   length_m?: number;
-  [key: string]: unknown;
+  visual_feature_type?: string;
+  route_id?: RouteId;
+  representative_route_id?: RouteId;
+  bundle_materialization_role?: string | null;
+  lane_slot?: number;
+  render_lane_slot?: number;
+  lane_offset_baked?: boolean;
 };
 
 type BridgeFeature = Feature<LineStringGeometry, BridgeProperties>;
@@ -99,11 +107,6 @@ function haversineM([lon1, lat1]: Position, [lon2, lat2]: Position): number {
   return 2 * EARTH_RADIUS_M * Math.asin(Math.sqrt(a));
 }
 
-function shareRoute(aRouteIds: RouteId[], bRouteIds: RouteId[]): boolean {
-  const set = new Set(aRouteIds);
-  return bRouteIds.some((r) => set.has(r));
-}
-
 function sharedRouteIds(aRouteIds: RouteId[], bRouteIds: RouteId[]): RouteId[] {
   const bSet = new Set(bRouteIds);
   return [...new Set(aRouteIds.filter((routeId) => bSet.has(routeId)))];
@@ -127,17 +130,46 @@ function midpoint(a: Position, b: Position): Position {
   return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
 }
 
+function routeIdsFromList(value: RouteId[] | null | undefined): RouteId[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((routeId) => Boolean(routeId)).map(String);
+}
+
+function colorRouteEntries(value: ColorRouteTable): Array<[string, RouteId[]]> {
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) return [];
+  const collected: Array<[string, RouteId[]]> = [];
+  for (const [key, routes] of Object.entries(value)) {
+    if (Array.isArray(routes)) collected.push([key, routes]);
+  }
+  return collected;
+}
+
+function routeIdsFromColorMap(colorRouteIds: ColorRouteTable, color: string | undefined): RouteId[] {
+  const entries = colorRouteEntries(colorRouteIds);
+  if (color != null) {
+    const colorKey = String(color);
+    for (const [key, routes] of entries) {
+      if (key === colorKey) return routeIdsFromList(routes);
+    }
+  }
+  const collected: RouteId[] = [];
+  for (const [, routes] of entries) {
+    collected.push(...routeIdsFromList(routes));
+  }
+  return [...new Set(collected.filter(Boolean))];
+}
+
 function activeRouteIdsForFeature(feature: BridgeFeature): RouteId[] {
   const properties = feature.properties ?? {};
   const colorRouteIds = properties.color_route_ids;
-  if (Array.isArray(colorRouteIds)) return colorRouteIds as RouteId[];
-  if (colorRouteIds && typeof colorRouteIds === "object") {
-    const colorRouteMap = colorRouteIds as Record<string, unknown>;
-    const color = properties.color;
-    if (color && Array.isArray(colorRouteMap[String(color)])) return colorRouteMap[String(color)] as RouteId[];
-    return [...new Set(Object.values(colorRouteMap).flat().filter(Boolean))] as RouteId[];
+  if (Array.isArray(colorRouteIds)) return routeIdsFromList(colorRouteIds);
+  if (colorRouteIds == null) return routeIdsFromList(properties.route_ids);
+  const proto = Object.getPrototypeOf(colorRouteIds);
+  if (proto === Object.prototype || proto === null) {
+    return routeIdsFromColorMap(colorRouteIds, properties.color);
   }
-  return Array.isArray(properties.route_ids) ? properties.route_ids as RouteId[] : [];
+  return routeIdsFromList(properties.route_ids);
 }
 
 // Downsample a polyline to roughly one point per stepM for proximity tests.
@@ -312,6 +344,255 @@ function polylineLengthM(coords: Position[]): number {
   return total;
 }
 
+type ResolvedBridgeOptions = {
+  minGapM: number;
+  maxGapM: number;
+  sampleM: number;
+  maxJoinTurnDeg: number;
+  curveSampleM: number;
+  allowSubsetRouteConnectors: boolean;
+  subsetConnectorMaxGapM: number;
+  subsetConnectorEndpointSnapM: number;
+};
+
+function resolveBridgeOptions(options: BridgeOptions): ResolvedBridgeOptions {
+  const maxGapM = options.maxGapM ?? 28;
+  return {
+    minGapM: options.minGapM ?? 6,
+    maxGapM,
+    sampleM: options.sampleM ?? 6,
+    maxJoinTurnDeg: options.maxJoinTurnDeg ?? 60,
+    curveSampleM: options.curveSampleM ?? 5,
+    allowSubsetRouteConnectors: options.allowSubsetRouteConnectors ?? false,
+    subsetConnectorMaxGapM: options.subsetConnectorMaxGapM ?? maxGapM,
+    subsetConnectorEndpointSnapM: options.subsetConnectorEndpointSnapM ?? 12,
+  };
+}
+
+function isSubsetRouteConnector(
+  allowSubsetRouteConnectors: boolean,
+  routeSafeIntegratedRepair: boolean,
+  sharedRoutes: RouteId[],
+  targetRoutes: RouteId[],
+  source: BridgeFeature,
+  target: BridgeFeature,
+  near: ProximityCandidate,
+  endpointSnapM: number,
+): boolean {
+  return (
+    allowSubsetRouteConnectors &&
+    !routeSafeIntegratedRepair &&
+    !sameRouteSet(sharedRoutes, targetRoutes) &&
+    sameColor(source, target) &&
+    projectedPointIsNearEndpoint(near, target.geometry.coordinates, endpointSnapM)
+  );
+}
+
+function considerTargetLine(
+  source: BridgeFeature,
+  endpoint: Position,
+  target: BridgeFeature,
+  targetSamples: Position[],
+  sourceRoutes: RouteId[],
+  options: ResolvedBridgeOptions,
+  current: RepairTarget | null,
+): { kind: "skip" } | { kind: "connected" } | { kind: "candidate"; candidate: RepairTarget } {
+  if (target.properties.qa_orphan_severity === "error") return { kind: "skip" };
+  const targetRoutes = activeRouteIdsForFeature(target);
+  const sharedRoutes = sharedRouteIds(sourceRoutes, targetRoutes);
+  if (sharedRoutes.length === 0) return { kind: "skip" };
+  const near = nearestPointOnPolyline(endpoint, target.geometry.coordinates) ?? nearestVertex(endpoint, targetSamples);
+  if (!near) return { kind: "skip" };
+  const routeSafeIntegratedRepair = sameRouteSet(sharedRoutes, sourceRoutes);
+  const routeSubsetConnector = isSubsetRouteConnector(
+    options.allowSubsetRouteConnectors,
+    routeSafeIntegratedRepair,
+    sharedRoutes,
+    targetRoutes,
+    source,
+    target,
+    near,
+    options.subsetConnectorEndpointSnapM,
+  );
+  if (!routeSafeIntegratedRepair && !routeSubsetConnector) return { kind: "skip" };
+  if (near.d <= options.minGapM) return { kind: "connected" };
+  const candidateMaxGapM = routeSubsetConnector ? options.subsetConnectorMaxGapM : options.maxGapM;
+  if (near.d > candidateMaxGapM || (current && near.d >= current.d)) return { kind: "skip" };
+  return {
+    kind: "candidate",
+    candidate: { ...near, fj: target, samples: targetSamples, sharedRoutes, routeSubsetConnector },
+  };
+}
+
+function bridgeDebugFeature(
+  source: BridgeFeature,
+  candidate: RepairTarget,
+  bridgeCoordinates: Position[],
+  shouldCurve: boolean,
+  bridgeLengthM: number,
+): BridgeFeature {
+  return {
+    type: "Feature",
+    geometry: { type: "LineString", coordinates: bridgeCoordinates },
+    properties: {
+      ...source.properties,
+      visual_feature_type: "route_gap_bridge",
+      route_id: candidate.sharedRoutes[0],
+      representative_route_id: candidate.sharedRoutes[0],
+      route_ids: candidate.sharedRoutes,
+      color_route_ids: candidate.sharedRoutes,
+      route_gap_bridge: true,
+      route_gap_bridge_subset_connector: candidate.routeSubsetConnector,
+      bridge_gap_m: Number(candidate.d.toFixed(2)),
+      route_gap_bridge_curved: shouldCurve,
+      length_m: Number(bridgeLengthM.toFixed(2)),
+      bundle_materialization_role: null,
+      lane_slot: 0,
+      render_lane_slot: 0,
+      lane_offset_baked: true,
+    },
+  };
+}
+
+function repairCandidateFromEndpoint(
+  source: BridgeFeature,
+  sourceIndex: number,
+  endpointIndex: number,
+  endpoint: Position,
+  candidate: RepairTarget,
+  options: ResolvedBridgeOptions,
+): RepairCandidate {
+  const sourceContinuation = endpointContinuationVector(source.geometry.coordinates, endpointIndex);
+  const connectorVector = vectorMeters(endpoint, candidate.point);
+  const candidateVectors = candidate.coords && candidate.t != null
+    ? projectedContinuationVectors({ ...candidate, coords: candidate.coords, t: candidate.t })
+    : vertexContinuationVectors(candidate.samples, candidate.index);
+  const shouldCurve =
+    angleBetweenDeg(sourceContinuation, connectorVector) > options.maxJoinTurnDeg ||
+    minJoinAngleDeg(candidateVectors, connectorVector) > options.maxJoinTurnDeg;
+  const bridgeCoordinates = shouldCurve
+    ? hermiteConnector(
+      endpoint,
+      candidate.point,
+      normalizeVector(sourceContinuation),
+      bestContinuationVector(candidateVectors, connectorVector),
+      options.curveSampleM,
+    )
+    : [endpoint, candidate.point];
+  const bridgeLengthM = polylineLengthM(bridgeCoordinates);
+  return {
+    sourceIndex,
+    endpointIndex,
+    endpoint,
+    targetPoint: candidate.point,
+    routeKey: routeSetKey(candidate.sharedRoutes),
+    midpoint: midpoint(endpoint, candidate.point),
+    distanceM: candidate.d,
+    bridgeCoordinates,
+    bridgeLengthM,
+    shouldCurve,
+    sharedRoutes: candidate.sharedRoutes,
+    integrationMode: candidate.routeSubsetConnector ? "append" : "integrate",
+    sourceIsOrphan: source.properties.qa_orphan_severity === "error",
+    debugFeature: bridgeDebugFeature(source, candidate, bridgeCoordinates, shouldCurve, bridgeLengthM),
+  };
+}
+
+function collectRepairCandidates(
+  lines: BridgeFeature[],
+  samples: Position[][],
+  options: ResolvedBridgeOptions,
+): RepairCandidate[] {
+  const repairCandidates: RepairCandidate[] = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const source = lines[i];
+    const coords = source.geometry.coordinates;
+    const sourceRoutes = activeRouteIdsForFeature(source);
+    const endpoints: Array<[number, Position]> = [
+      [0, coords[0]],
+      [coords.length - 1, coords[coords.length - 1]],
+    ];
+    for (const [endpointIndex, endpoint] of endpoints) {
+      let candidate: RepairTarget | null = null;
+      let connected = false;
+      for (let j = 0; j < lines.length; j += 1) {
+        if (j === i) continue;
+        const hit = considerTargetLine(source, endpoint, lines[j], samples[j], sourceRoutes, options, candidate);
+        if (hit.kind === "connected") {
+          connected = true;
+          break;
+        }
+        if (hit.kind === "candidate") candidate = hit.candidate;
+      }
+      if (connected || !candidate) continue;
+      repairCandidates.push(repairCandidateFromEndpoint(source, i, endpointIndex, endpoint, candidate, options));
+    }
+  }
+  return repairCandidates;
+}
+
+function selectAcceptedRepairs(repairCandidates: RepairCandidate[], maxGapM: number): RepairCandidate[] {
+  const ranked = [...repairCandidates].sort((left, right) => {
+    if (left.sourceIsOrphan !== right.sourceIsOrphan) return left.sourceIsOrphan ? -1 : 1;
+    return left.distanceM - right.distanceM;
+  });
+  const acceptedRepairs: RepairCandidate[] = [];
+  const usedEndpoints = new Set<string>();
+  for (const candidate of ranked) {
+    const endpointKey = `${candidate.sourceIndex}:${candidate.endpointIndex}`;
+    if (usedEndpoints.has(endpointKey)) continue;
+    const overlapsExistingSeam = acceptedRepairs.some((existing) => (
+      existing.routeKey === candidate.routeKey &&
+      haversineM(existing.midpoint, candidate.midpoint) <= maxGapM
+    ));
+    if (overlapsExistingSeam) continue;
+    usedEndpoints.add(endpointKey);
+    acceptedRepairs.push(candidate);
+  }
+  return acceptedRepairs;
+}
+
+function applyIntegratedRepairs(
+  features: BridgeFeature[],
+  lines: BridgeFeature[],
+  acceptedRepairs: RepairCandidate[],
+): BridgeFeature[] {
+  const repairsByLine = new Map<number, { start?: RepairCandidate; end?: RepairCandidate }>();
+  for (const repair of acceptedRepairs) {
+    if (repair.integrationMode === "append") continue;
+    const current = repairsByLine.get(repair.sourceIndex) ?? {};
+    if (repair.endpointIndex === 0) current.start = repair;
+    else current.end = repair;
+    repairsByLine.set(repair.sourceIndex, current);
+  }
+  const lineIndexByFeature = new Map(lines.map((feature, index) => [feature, index]));
+  return features.map((feature) => {
+    const lineIndex = lineIndexByFeature.get(feature);
+    const repairs = lineIndex == null ? undefined : repairsByLine.get(lineIndex);
+    if (!repairs) return feature;
+    let coordinates = feature.geometry.coordinates;
+    const repairList = [repairs.start, repairs.end].filter((repair): repair is RepairCandidate => Boolean(repair));
+    if (repairs.start) {
+      coordinates = [...repairs.start.bridgeCoordinates.slice().reverse(), ...coordinates.slice(1)];
+    }
+    if (repairs.end) {
+      coordinates = [...coordinates.slice(0, -1), ...repairs.end.bridgeCoordinates];
+    }
+    return {
+      ...feature,
+      geometry: { ...feature.geometry, coordinates },
+      properties: {
+        ...feature.properties,
+        route_gap_integrated: true,
+        route_gap_integrated_count: repairList.length,
+        route_gap_bridge_curved: repairList.some((repair) => repair.shouldCurve),
+        bridge_gap_m: Number(Math.max(...repairList.map((repair) => repair.distanceM)).toFixed(2)),
+        length_m: Number(polylineLengthM(coordinates).toFixed(2)),
+      },
+    };
+  });
+}
+
 /**
  * Bridge small same-route gaps with additive connector features.
  *
@@ -327,194 +608,16 @@ function polylineLengthM(coords: Position[]): number {
  *          features = original features + appended connectors
  */
 export function bridgeRouteGaps(features: BridgeFeature[], options: BridgeOptions = {}) {
-  const {
-    minGapM = 6,
-    maxGapM = 28,
-    sampleM = 6,
-    maxJoinTurnDeg = 60,
-    curveSampleM = 5,
-    allowSubsetRouteConnectors = false,
-    subsetConnectorMaxGapM = maxGapM,
-    subsetConnectorEndpointSnapM = 12,
-  } = options;
-
+  const resolved = resolveBridgeOptions(options);
   const lines = features.filter(
-    (f) => f.geometry?.type === "LineString" && Array.isArray(f.geometry.coordinates) && f.geometry.coordinates.length >= 2,
+    (feature) => feature.geometry?.type === "LineString" && Array.isArray(feature.geometry.coordinates) && feature.geometry.coordinates.length >= 2,
   );
-  const samples = lines.map((f) => sampleVertices(f.geometry.coordinates, sampleM));
-  const routeIdsOf = activeRouteIdsForFeature;
-
-  const repairCandidates: RepairCandidate[] = [];
-
-  for (let i = 0; i < lines.length; i += 1) {
-    const fi = lines[i];
-    const ci = fi.geometry.coordinates;
-    const riRoutes = routeIdsOf(fi);
-    const endpoints: Array<[number, Position]> = [
-      [0, ci[0]],
-      [ci.length - 1, ci[ci.length - 1]],
-    ];
-    for (const [endpointIndex, endpoint] of endpoints) {
-      // already connected to a same-route piece? then it is not a dangling seam.
-      let connected = false;
-      let candidate: RepairTarget | null = null; // {d, point, fj}
-      for (let j = 0; j < lines.length; j += 1) {
-        if (j === i) continue;
-        if (lines[j].properties?.qa_orphan_severity === "error") continue;
-        const targetRoutes = routeIdsOf(lines[j]);
-        const sharedRoutes = sharedRouteIds(riRoutes, targetRoutes);
-        if (sharedRoutes.length === 0) continue;
-        const near = nearestPointOnPolyline(endpoint, lines[j].geometry.coordinates) ?? nearestVertex(endpoint, samples[j]);
-        if (!near) continue;
-        const routeSafeIntegratedRepair = sameRouteSet(sharedRoutes, riRoutes);
-        const routeSubsetConnector =
-          allowSubsetRouteConnectors &&
-          !routeSafeIntegratedRepair &&
-          !sameRouteSet(sharedRoutes, targetRoutes) &&
-          sameColor(fi, lines[j]) &&
-          projectedPointIsNearEndpoint(near, lines[j].geometry.coordinates, subsetConnectorEndpointSnapM);
-        if (!routeSafeIntegratedRepair && !routeSubsetConnector) continue;
-        if (near.d <= minGapM) {
-          connected = true;
-          break;
-        }
-        const candidateMaxGapM = routeSubsetConnector ? subsetConnectorMaxGapM : maxGapM;
-        if (near.d <= candidateMaxGapM && (!candidate || near.d < candidate.d)) {
-          candidate = { ...near, fj: lines[j], samples: samples[j], sharedRoutes, routeSubsetConnector };
-        }
-      }
-      if (connected || !candidate) continue;
-      const sourceContinuation = endpointContinuationVector(ci, endpointIndex);
-      const connectorVector = vectorMeters(endpoint, candidate.point);
-      const candidateVectors = candidate.coords && candidate.t != null
-        ? projectedContinuationVectors(candidate as ProjectedCandidate)
-        : vertexContinuationVectors(candidate.samples, candidate.index);
-      const sourceAngle = angleBetweenDeg(sourceContinuation, connectorVector);
-      const candidateAngle = minJoinAngleDeg(candidateVectors, connectorVector);
-      const shouldCurve = sourceAngle > maxJoinTurnDeg || candidateAngle > maxJoinTurnDeg;
-      const bridgeCoordinates = shouldCurve
-        ? hermiteConnector(
-          endpoint,
-          candidate.point,
-          normalizeVector(sourceContinuation),
-          bestContinuationVector(candidateVectors, connectorVector),
-          curveSampleM,
-        )
-        : [endpoint, candidate.point];
-      const bridgeLengthM = polylineLengthM(bridgeCoordinates);
-
-      repairCandidates.push({
-        sourceIndex: i,
-        endpointIndex,
-        endpoint,
-        targetPoint: candidate.point,
-        routeKey: routeSetKey(candidate.sharedRoutes),
-        midpoint: midpoint(endpoint, candidate.point),
-        distanceM: candidate.d,
-        bridgeCoordinates,
-        bridgeLengthM,
-        shouldCurve,
-        sharedRoutes: candidate.sharedRoutes,
-        integrationMode: candidate.routeSubsetConnector ? "append" : "integrate",
-        sourceIsOrphan: fi.properties?.qa_orphan_severity === "error",
-        debugFeature: {
-          type: "Feature",
-          geometry: { type: "LineString", coordinates: bridgeCoordinates },
-          properties: {
-            ...fi.properties,
-            visual_feature_type: "route_gap_bridge",
-            route_id: candidate.sharedRoutes[0],
-            representative_route_id: candidate.sharedRoutes[0],
-            route_ids: candidate.sharedRoutes,
-            color_route_ids: candidate.sharedRoutes,
-            route_gap_bridge: true,
-            route_gap_bridge_subset_connector: candidate.routeSubsetConnector,
-            bridge_gap_m: Number(candidate.d.toFixed(2)),
-            route_gap_bridge_curved: shouldCurve,
-            length_m: Number(bridgeLengthM.toFixed(2)),
-            bundle_materialization_role: null,
-            lane_slot: 0,
-            render_lane_slot: 0,
-            lane_offset_baked: true,
-          },
-        },
-      });
-    }
-  }
-
-  repairCandidates.sort((a, b) => {
-    if (a.sourceIsOrphan !== b.sourceIsOrphan) return a.sourceIsOrphan ? -1 : 1;
-    return a.distanceM - b.distanceM;
-  });
-
-  const acceptedRepairs: RepairCandidate[] = [];
-  const usedEndpoints = new Set();
-
-  for (const candidate of repairCandidates) {
-    const endpointKey = `${candidate.sourceIndex}:${candidate.endpointIndex}`;
-    if (usedEndpoints.has(endpointKey)) continue;
-
-    const overlapsExistingSeam = acceptedRepairs.some((existing) => (
-      existing.routeKey === candidate.routeKey &&
-      haversineM(existing.midpoint, candidate.midpoint) <= maxGapM
-    ));
-    if (overlapsExistingSeam) continue;
-
-    usedEndpoints.add(endpointKey);
-    acceptedRepairs.push(candidate);
-  }
-
-  const repairsByLine = new Map<number, { start?: RepairCandidate; end?: RepairCandidate }>();
-  for (const repair of acceptedRepairs) {
-    if (repair.integrationMode === "append") continue;
-    const current = repairsByLine.get(repair.sourceIndex) ?? {};
-    if (repair.endpointIndex === 0) {
-      current.start = repair;
-    } else {
-      current.end = repair;
-    }
-    repairsByLine.set(repair.sourceIndex, current);
-  }
-
-  const lineIndexByFeature = new Map(lines.map((feature, index) => [feature, index]));
-  const repairedFeatures = features.map((feature) => {
-    const lineIndex = lineIndexByFeature.get(feature);
-    const repairs = lineIndex == null ? undefined : repairsByLine.get(lineIndex);
-    if (!repairs) return feature;
-
-    let coordinates = feature.geometry.coordinates;
-    const repairList = [repairs.start, repairs.end].filter((repair): repair is RepairCandidate => Boolean(repair));
-
-    if (repairs.start) {
-      coordinates = [
-        ...repairs.start.bridgeCoordinates.slice().reverse(),
-        ...coordinates.slice(1),
-      ];
-    }
-    if (repairs.end) {
-      coordinates = [
-        ...coordinates.slice(0, -1),
-        ...repairs.end.bridgeCoordinates,
-      ];
-    }
-
-    return {
-      ...feature,
-      geometry: {
-        ...feature.geometry,
-        coordinates,
-      },
-      properties: {
-        ...feature.properties,
-        route_gap_integrated: true,
-        route_gap_integrated_count: repairList.length,
-        route_gap_bridge_curved: repairList.some((repair) => repair.shouldCurve),
-        bridge_gap_m: Number(Math.max(...repairList.map((repair) => repair.distanceM)).toFixed(2)),
-        length_m: Number(polylineLengthM(coordinates).toFixed(2)),
-      },
-    };
-  });
-
+  const samples = lines.map((feature) => sampleVertices(feature.geometry.coordinates, resolved.sampleM));
+  const acceptedRepairs = selectAcceptedRepairs(
+    collectRepairCandidates(lines, samples, resolved),
+    resolved.maxGapM,
+  );
+  const repairedFeatures = applyIntegratedRepairs(features, lines, acceptedRepairs);
   const bridges: BridgeFeature[] = acceptedRepairs.map((repair, index) => ({
     ...repair.debugFeature,
     properties: {
@@ -523,8 +626,6 @@ export function bridgeRouteGaps(features: BridgeFeature[], options: BridgeOption
       bundle_id: `gap-bridge-${index}`,
     },
   }));
-
   const appendedConnectors = bridges.filter((bridge) => bridge.properties.route_gap_bridge_subset_connector);
-
   return { features: [...repairedFeatures, ...appendedConnectors], bridgeCount: acceptedRepairs.length, bridges };
 }

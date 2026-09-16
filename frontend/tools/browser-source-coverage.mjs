@@ -8,7 +8,7 @@ const v8toIstanbul = require("v8-to-istanbul");
 const libCoverage = require("istanbul-lib-coverage");
 
 const OWNED_MODULE =
-  /(?:webpack-internal:\/\/\/\([^)]+\)\/|webpack:\/\/[^/]*\/)\.\/(components|app|lib|scripts)\//;
+  /^(?:webpack-internal:\/\/\/\([^)]+\)\/|webpack:\/\/[^/]*\/)\.\/(components|app|lib|scripts)\//;
 
 export function stripQueryAndHash(url) {
   return String(url).replace(/[?#].*$/, "");

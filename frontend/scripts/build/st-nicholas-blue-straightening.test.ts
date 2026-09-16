@@ -4,19 +4,18 @@ import path from "node:path";
 import test from "node:test";
 
 import { applyStNicholasBlueStraightening } from "./st-nicholas-blue-straightening.ts";
-import type { Feature, LineStringGeometry, Position } from "./types.ts";
+import type { Feature, JsonValue, LineStringGeometry, Position } from "./types.ts";
 
 type Vector = [number, number];
 
 type TestProperties = {
-  bundle_id?: unknown;
-  corridor_id?: unknown;
-  color?: unknown;
-  route_id?: unknown;
-  route_ids?: unknown;
-  color_route_ids?: unknown;
+  bundle_id?: JsonValue;
+  corridor_id?: JsonValue;
+  color?: JsonValue;
+  route_id?: JsonValue;
+  route_ids?: JsonValue;
+  color_route_ids?: JsonValue;
   st_nicholas_blue_straightened?: boolean;
-  [key: string]: unknown;
 };
 
 type TestFeature = Feature<LineStringGeometry, TestProperties>;
@@ -128,7 +127,9 @@ test("St Nicholas blue straightening aligns A/C seam pieces onto one straight ax
     [-73.9440, 40.8240],
   ]);
 
-  const { features, diagnostics } = applyStNicholasBlueStraightening([north, south, orange], {
+  const firstInput = [north, south, orange];
+  const secondInput = [structuredClone(north), structuredClone(south), structuredClone(orange)];
+  const options = {
     bbox: {
       minLon: -73.946,
       maxLon: -73.941,
@@ -136,7 +137,10 @@ test("St Nicholas blue straightening aligns A/C seam pieces onto one straight ax
       maxLat: 40.829,
     },
     endpointSnapM: 18,
-  });
+  };
+  const { features, diagnostics } = applyStNicholasBlueStraightening(firstInput, options);
+  const again = applyStNicholasBlueStraightening(secondInput, options);
+  assert.equal(JSON.stringify(diagnostics), JSON.stringify(again.diagnostics));
 
   assert.equal(diagnostics.applied, true);
   assert.equal(diagnostics.target_feature_count, 2);
@@ -167,7 +171,7 @@ test("St Nicholas blue straightening aligns A/C seam pieces onto one straight ax
   assert.ok(maxDistance < 1.0, `expected straightened blue points to be on one axis, max=${maxDistance}`);
   const maxAfter = diagnostics.max_perpendicular_after_m;
   const maxBefore = diagnostics.max_perpendicular_before_m;
-  if (typeof maxAfter !== "number" || typeof maxBefore !== "number") {
+  if (maxAfter === undefined || maxBefore === undefined) {
     throw new TypeError("expected numeric St Nicholas drift diagnostics");
   }
   assert.ok(
@@ -260,65 +264,105 @@ test("straightening extends to nearby endpoint vertices so bbox boundaries do no
   );
 });
 
+function visualNetworkFeatures(filePath: string): TestFeature[] {
+  const parsed: unknown = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  if (parsed === null || Array.isArray(parsed) || parsed !== Object(parsed)) return [];
+  // SAFETY: the visual network artifact is a GeoJSON FeatureCollection after the predicates above.
+  const doc = parsed as { features?: TestFeature[] };
+  return Array.isArray(doc.features) ? doc.features : [];
+}
+
+type HandoffOffender = {
+  featureIndex: number;
+  bundle_id: unknown;
+  corridor_id: unknown;
+  index: number;
+  turn: number;
+  inLength: number;
+  outLength: number;
+  point: Position;
+};
+
+function isQaBlueAcFeature(feature: TestFeature, qaBBox: BBox): boolean {
+  if (String(feature.properties?.color ?? "").toUpperCase() !== BLUE) return false;
+  const routes = routeIdsOf(feature);
+  if (!routes.includes("A") && !routes.includes("C")) return false;
+  const coords = feature.geometry?.coordinates ?? [];
+  return coords.some((coord) => inBBox(coord, qaBBox));
+}
+
+type VertexHandoff = {
+  turn: number;
+  inLength: number;
+  outLength: number;
+  point: Position;
+};
+
+function vertexHandoff(
+  previous: Position,
+  point: Position,
+  next: Position,
+  qaBBox: BBox,
+): VertexHandoff | null {
+  if (![previous, point, next].some((coord) => inBBox(coord, qaBBox))) return null;
+  const inLength = distanceM(previous, point);
+  const outLength = distanceM(point, next);
+  const turn = turnDeg(previous, point, next);
+  if (turn <= 35 || Math.max(inLength, outLength) <= 20) return null;
+  return {
+    turn: Number(turn.toFixed(1)),
+    inLength: Number(inLength.toFixed(1)),
+    outLength: Number(outLength.toFixed(1)),
+    point,
+  };
+}
+
+function stNicholasHandoffOffenders(features: TestFeature[], qaBBox: BBox): HandoffOffender[] {
+  const offenders: HandoffOffender[] = [];
+  for (const [featureIndex, feature] of features.entries()) {
+    if (!isQaBlueAcFeature(feature, qaBBox)) continue;
+    const coords = feature.geometry?.coordinates ?? [];
+    for (let index = 1; index < coords.length - 1; index += 1) {
+      const hit = vertexHandoff(coords[index - 1], coords[index], coords[index + 1], qaBBox);
+      if (!hit) continue;
+      offenders.push({
+        featureIndex,
+        bundle_id: feature.properties?.bundle_id,
+        corridor_id: feature.properties?.corridor_id,
+        index,
+        ...hit,
+      });
+    }
+  }
+  return offenders;
+}
+
+test("real St Nicholas A/C corridor applies straightening", () => {
+  const artifactPath = path.join(process.cwd(), "public", "subway-network.visual.geojson");
+  const input = visualNetworkFeatures(artifactPath);
+  const first = applyStNicholasBlueStraightening(input);
+  const second = applyStNicholasBlueStraightening(input);
+  assert.equal(first.diagnostics.applied, true);
+  assert.equal(JSON.stringify(first.diagnostics), JSON.stringify(second.diagnostics));
+});
+
 test("real St Nicholas A/C corridor has no straightening handoff doglegs", () => {
   const artifactPath = path.join(process.cwd(), "public", "subway-network.visual.geojson");
-  const artifact = JSON.parse(fs.readFileSync(artifactPath, "utf8")) as { features?: TestFeature[] };
-  const { features, diagnostics } = applyStNicholasBlueStraightening(artifact.features ?? []);
+  const { features, diagnostics } = applyStNicholasBlueStraightening(visualNetworkFeatures(artifactPath));
   assert.equal(diagnostics.applied, true);
-
   const qaBBox = {
     minLon: -73.9495,
     maxLon: -73.9355,
     minLat: 40.8200,
     maxLat: 40.8395,
   };
-  const offenders: Array<{
-    featureIndex: number;
-    bundle_id: unknown;
-    corridor_id: unknown;
-    index: number;
-    turn: number;
-    inLength: number;
-    outLength: number;
-    point: Position;
-  }> = [];
-  for (const [featureIndex, feature] of features.entries()) {
-    if (String(feature.properties?.color ?? "").toUpperCase() !== BLUE) continue;
-    const routes = routeIdsOf(feature);
-    if (!routes.includes("A") && !routes.includes("C")) continue;
-    const coords = feature.geometry?.coordinates ?? [];
-    if (!coords.some((coord) => inBBox(coord, qaBBox))) continue;
-
-    for (let index = 1; index < coords.length - 1; index += 1) {
-      const previous = coords[index - 1];
-      const point = coords[index];
-      const next = coords[index + 1];
-      if (![previous, point, next].some((coord) => inBBox(coord, qaBBox))) continue;
-      const inLength = distanceM(previous, point);
-      const outLength = distanceM(point, next);
-      const turn = turnDeg(previous, point, next);
-      if (turn > 35 && Math.max(inLength, outLength) > 20) {
-        offenders.push({
-          featureIndex,
-          bundle_id: feature.properties?.bundle_id,
-          corridor_id: feature.properties?.corridor_id,
-          index,
-          turn: Number(turn.toFixed(1)),
-          inLength: Number(inLength.toFixed(1)),
-          outLength: Number(outLength.toFixed(1)),
-          point,
-        });
-      }
-    }
-  }
-
+  const offenders = stNicholasHandoffOffenders(features, qaBBox);
   assert.deepEqual(offenders.slice(0, 5), [], `sharp handoff doglegs remain: ${JSON.stringify(offenders.slice(0, 5))}`);
 });
 
 test("real St Nicholas A/C corridor follows the A/C station spine, not the B/D branch", () => {
   const artifactPath = path.join(process.cwd(), "public", "subway-network.visual.geojson");
-  const artifact = JSON.parse(fs.readFileSync(artifactPath, "utf8")) as { features?: TestFeature[] };
-  const { features, diagnostics } = applyStNicholasBlueStraightening(artifact.features ?? []);
+  const { features, diagnostics } = applyStNicholasBlueStraightening(visualNetworkFeatures(artifactPath));
   assert.equal(diagnostics.applied, true);
 
   const stationSpine: Position[] = [
@@ -351,4 +395,189 @@ test("real St Nicholas A/C corridor follows the A/C station spine, not the B/D b
     maxDistance <= 45,
     `A/C St Nicholas corridor drifted away from station spine: max=${maxDistance.toFixed(1)}m`,
   );
+});
+
+test("St Nicholas blue straightening is a no-op for empty lists and unmatched colors", () => {
+  const emptyFirst = applyStNicholasBlueStraightening([]);
+  const emptySecond = applyStNicholasBlueStraightening([]);
+  assert.equal(emptyFirst.diagnostics.applied, false);
+  assert.deepEqual(emptyFirst.features, []);
+  assert.equal(JSON.stringify(emptyFirst.diagnostics), JSON.stringify(emptySecond.diagnostics));
+
+  const yellow = lineFeature("yellow", "#FCCC0A", ["N"], [
+    [-73.9430, 40.8272],
+    [-73.9438, 40.8256],
+  ]);
+  const unmatched = applyStNicholasBlueStraightening([yellow]);
+  assert.equal(unmatched.diagnostics.applied, false);
+  assert.deepEqual(unmatched.features[0].geometry.coordinates, yellow.geometry.coordinates);
+  assert.equal(unmatched.features[0].properties.st_nicholas_blue_straightened, undefined);
+});
+
+test("St Nicholas blue straightening fits an orange B/D axis when no station spine is supplied", () => {
+  const north = lineFeature("north", BLUE, ["A", "C"], [
+    [-73.9420, 40.8280],
+    [-73.9424, 40.8272],
+    [-73.9428, 40.8264],
+    [-73.9432, 40.8256],
+  ]);
+  const south = lineFeature("south", BLUE, ["A", "C", "E"], [
+    [-73.94322, 40.82558],
+    [-73.9436, 40.8248],
+    [-73.9440, 40.8240],
+    [-73.9444, 40.8232],
+  ]);
+  const orange = lineFeature("orange", ORANGE, ["B", "D"], [
+    [-73.9410, 40.8280],
+    [-73.9415, 40.8268],
+    [-73.9420, 40.8256],
+    [-73.9425, 40.8244],
+    [-73.9430, 40.8232],
+  ]);
+  const options = {
+    bbox: {
+      minLon: -73.946,
+      maxLon: -73.940,
+      minLat: 40.8225,
+      maxLat: 40.8295,
+    },
+    spineCoordinates: null,
+    maxReferenceDistanceM: 150,
+  };
+  const first = applyStNicholasBlueStraightening([north, south, orange], options);
+  const second = applyStNicholasBlueStraightening(
+    [structuredClone(north), structuredClone(south), structuredClone(orange)],
+    options,
+  );
+  assert.equal(first.diagnostics.applied, true);
+  assert.equal(first.diagnostics.reference_axis_source, "orange_bd");
+  assert.ok((first.diagnostics.reference_offset_point_count ?? 0) >= 4);
+  assert.equal(JSON.stringify(first.diagnostics), JSON.stringify(second.diagnostics));
+  const outNorth = first.features.find((item) => item.properties.bundle_id === "north");
+  const outOrange = first.features.find((item) => item.properties.bundle_id === "orange");
+  assert.ok(outNorth);
+  assert.ok(outOrange);
+  assert.equal(outNorth.properties.st_nicholas_blue_straightened, true);
+  assert.deepEqual(outNorth.properties.route_ids, ["A", "C"]);
+  assert.deepEqual(outOrange.geometry.coordinates, orange.geometry.coordinates);
+});
+
+test("St Nicholas blue straightening falls back to a blue-only axis when B/D is too far", () => {
+  const north = lineFeature("north", BLUE, ["A"], [
+    [-73.9426, 40.8280],
+    [-73.9410, 40.8274],
+    [-73.9394, 40.8268],
+    [-73.9378, 40.8262],
+  ]);
+  const south = lineFeature("south", BLUE, ["C"], [
+    [-73.93778, 40.82618],
+    [-73.9362, 40.8256],
+    [-73.9346, 40.8250],
+    [-73.9330, 40.8244],
+  ]);
+  const orange = lineFeature("orange", ORANGE, ["B", "D"], [
+    [-73.9600, 40.8380],
+    [-73.9590, 40.8370],
+    [-73.9580, 40.8360],
+    [-73.9570, 40.8350],
+    [-73.9560, 40.8340],
+  ]);
+  const { diagnostics } = applyStNicholasBlueStraightening([north, south, orange], {
+    bbox: {
+      minLon: -73.9435,
+      maxLon: -73.9325,
+      minLat: 40.8238,
+      maxLat: 40.8288,
+    },
+    spineCoordinates: null,
+    maxReferenceDistanceM: 20,
+  });
+  assert.equal(diagnostics.applied, true);
+  assert.equal(diagnostics.reference_axis_source, "blue_fit");
+  assert.equal(diagnostics.reference_offset_point_count, 0);
+});
+
+test("St Nicholas blue straightening merges two nearby bbox ranges on one A/C run", () => {
+  const north = lineFeature("north", BLUE, ["A", "C"], [
+    [-73.9416, 40.8308],
+    [-73.9418, 40.8300],
+    [-73.9400, 40.8294],
+    [-73.9420, 40.8288],
+    [-73.9424, 40.8280],
+    [-73.9428, 40.8272],
+  ]);
+  const south = lineFeature("south", BLUE, ["A", "C"], [
+    [-73.94282, 40.82718],
+    [-73.9432, 40.8264],
+    [-73.9436, 40.8256],
+  ]);
+  const { features, diagnostics } = applyStNicholasBlueStraightening([north, south], {
+    bbox: {
+      minLon: -73.9430,
+      maxLon: -73.9414,
+      minLat: 40.8270,
+      maxLat: 40.8310,
+    },
+    marginM: 0,
+    rangeExtensionM: 220,
+    spineCoordinates: null,
+  });
+  assert.equal(diagnostics.applied, true);
+  const outNorth = features.find((item) => item.properties.bundle_id === "north");
+  const outSouth = features.find((item) => item.properties.bundle_id === "south");
+  assert.ok(outNorth);
+  assert.ok(outSouth);
+  assert.equal(outNorth.properties.st_nicholas_blue_straightened, true);
+  assert.equal(outSouth.properties.st_nicholas_blue_straightened, true);
+  assert.deepEqual(outNorth.properties.route_ids, ["A", "C"]);
+  const axisStart = outNorth.geometry.coordinates[0];
+  const axisEnd = outSouth.geometry.coordinates.at(-1);
+  assert.ok(axisEnd);
+  const maxDistance = Math.max(
+    ...outNorth.geometry.coordinates.map((point) => perpendicularDistanceM(point, axisStart, axisEnd)),
+    ...outSouth.geometry.coordinates.map((point) => perpendicularDistanceM(point, axisStart, axisEnd)),
+  );
+  assert.ok(maxDistance < 2, `merged ranges should lie on one axis, max=${maxDistance}`);
+});
+
+test("St Nicholas blue straightening uses route_id alone and rejects insufficient geometry", () => {
+  const north = lineFeature("north", BLUE, [], [
+    [-73.9426, 40.8280],
+    [-73.9430, 40.8272],
+    [-73.9437, 40.8263],
+    [-73.9438, 40.8256],
+  ]);
+  north.properties.route_id = "A";
+  delete north.properties.route_ids;
+  delete north.properties.color_route_ids;
+  const south = lineFeature("south", BLUE, [], [
+    [-73.94368, 40.82557],
+    [-73.9443, 40.8246],
+    [-73.9449, 40.8237],
+  ]);
+  south.properties.route_id = "C";
+  delete south.properties.route_ids;
+  const { diagnostics, features } = applyStNicholasBlueStraightening([north, south], {
+    bbox: {
+      minLon: -73.946,
+      maxLon: -73.941,
+      minLat: 40.823,
+      maxLat: 40.829,
+    },
+    spineCoordinates: [],
+  });
+  assert.equal(diagnostics.applied, true);
+  assert.equal(features[0].properties.st_nicholas_blue_straightened, true);
+
+  const one = applyStNicholasBlueStraightening([north]);
+  assert.equal(one.diagnostics.applied, false);
+  assert.equal(one.diagnostics.reason, "insufficient_target_geometry");
+
+  const colorless = lineFeature("plain", "", ["A"], [
+    [-73.9426, 40.8280],
+    [-73.9438, 40.8256],
+  ]);
+  delete colorless.properties.color;
+  const skipped = applyStNicholasBlueStraightening([colorless, south]);
+  assert.equal(skipped.diagnostics.applied, false);
 });

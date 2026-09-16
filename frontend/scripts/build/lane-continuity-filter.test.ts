@@ -27,7 +27,6 @@ type TestFeatureProperties = {
   qa_orphan_from_is_terminal?: boolean;
   qa_orphan_to_is_terminal?: boolean;
   qa_orphan_severity?: string;
-  [key: string]: unknown;
 };
 
 type TestFeature = Feature<LineStringGeometry, TestFeatureProperties>;
@@ -162,7 +161,7 @@ test("filterBogusTransitions: drops safe_same_route_continuation with empty inte
     ["b2", new Set(["C"])],
   ]);
 
-  const { kept, dropped } = filterBogusTransitions([b1, b2, t], index);
+  const { dropped } = filterBogusTransitions([b1, b2, t], index);
   assert.equal(dropped.length, 1);
   assert.ok(dropped[0].reason.includes("bogus_classification:safe_same_route_but_empty_intersect"));
 });
@@ -177,7 +176,7 @@ test("filterBogusTransitions: drops likely_branch_exit longer than 25m", () => {
     ["b2", new Set(["B"])],
   ]);
 
-  const { kept, dropped } = filterBogusTransitions([b1, b2, t], index);
+  const { dropped } = filterBogusTransitions([b1, b2, t], index);
   assert.equal(dropped.length, 1);
   assert.ok(dropped[0].reason.includes("length_exceeds_25m"));
 });
@@ -300,4 +299,71 @@ test("markOrphanLanes: returns the same array (mutation, not copy)", () => {
   ];
   const result = markOrphanLanes(features, new Set());
   assert.strictEqual(result, features, "should return same array reference");
+});
+
+test("filterBogusTransitions: missing endpoint ids, color_route_ids, and length use empty defaults", () => {
+  const t = makeTransition("b1", "b2", "anc-2", "#0A84FF", ["A"], ["A"], "likely_branch_exit", 10);
+  delete t.properties.bundle_id_from;
+  delete t.properties.bundle_id_to;
+  delete t.properties.color_route_ids;
+  delete t.properties.length_m;
+  const { dropped } = filterBogusTransitions([t], new Map());
+  assert.equal(dropped.length, 1);
+  assert.ok(dropped[0].reason.includes("bogus_route_mismatch"));
+});
+
+test("filterBogusTransitions: missing classification and length keep a color-present transition", () => {
+  const t = makeTransition("b1", "b2", "anc-2", "#0A84FF", ["A"], ["A"], "likely_branch_exit", 10);
+  delete t.properties.transition_classification;
+  delete t.properties.length_m;
+  const index = new Map([
+    ["b1", new Set(["A"])],
+    ["b2", new Set(["C"])],
+  ]);
+  const { kept, dropped } = filterBogusTransitions([t], index);
+  assert.equal(dropped.length, 0);
+  assert.equal(kept.length, 1);
+});
+
+test("markOrphanLanes: coordinate keys connect neighbors when anchors are missing", () => {
+  const a: Position = [-73.99, 40.70];
+  const b: Position = [-73.99, 40.71];
+  const c: Position = [-73.99, 40.72];
+  const f1 = makeLine([a, b], { lane_slot_source: "bundle", route_ids: ["1"] });
+  const f2 = makeLine([b, c], { lane_slot_source: "bundle", route_ids: ["1"] });
+  markOrphanLanes([f1, f2], new Set());
+  assert.equal(f1.properties.qa_orphan_origin, undefined);
+  assert.equal(f2.properties.qa_orphan_origin, undefined);
+});
+
+test("markOrphanLanes: isolated coordinate-keyed piece is orphaned; empty routes and stubs are not", () => {
+  const isolated = makeLine([[-73.98, 40.70], [-73.98, 40.71]], {
+    lane_slot_source: "bundle",
+    route_ids: ["X"],
+  });
+  const emptyRoutes = makeLine([[-73.97, 40.70], [-73.97, 40.71]], {
+    lane_slot_source: "bundle",
+    route_ids: [],
+  });
+  const stub = makeLine([[-73.96, 40.70]], { lane_slot_source: "bundle", route_ids: ["Y"] });
+  markOrphanLanes([isolated, emptyRoutes, stub], new Set());
+  assert.equal(isolated.properties.qa_orphan_origin, true);
+  assert.equal(emptyRoutes.properties.qa_orphan_origin, undefined);
+  assert.equal(stub.properties.qa_orphan_origin, undefined);
+});
+
+test("filterBogusTransitions: unknown bundle ids and missing route_ids use empty lookups", () => {
+  const t = makeTransition("ghost-from", "b2", "anc-2", "#0A84FF", ["A"], ["A"], "safe_same_route_continuation", 8);
+  delete t.properties.route_ids;
+  const index = new Map([["b2", new Set(["A"])]]);
+  const { dropped } = filterBogusTransitions([t], index);
+  assert.equal(dropped.length, 1);
+  assert.ok(dropped[0].reason.includes("safe_same_route_but_empty_intersect"));
+});
+
+test("markOrphanLanes: omitted route_ids are treated as empty and are not orphaned", () => {
+  const unlabeled = makeLine([[-73.95, 40.70], [-73.95, 40.71]], { lane_slot_source: "bundle" });
+  delete unlabeled.properties.route_ids;
+  markOrphanLanes([unlabeled], new Set());
+  assert.equal(unlabeled.properties.qa_orphan_origin, undefined);
 });

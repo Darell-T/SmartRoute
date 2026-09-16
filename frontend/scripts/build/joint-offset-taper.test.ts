@@ -150,3 +150,27 @@ test("short lanes clamp the blend instead of warping past their start", () => {
   // Start may move some (blend clamped to lane length) but never past target.
   assert.ok(lateralM(coords[0]) > 0 && lateralM(coords[0]) <= 6.01, "start stays between 0 and 6m");
 });
+
+test("warps the start of a more-offset lane onto the upstream neighbor", () => {
+  const north = lane(bakedLine(0, 600, 0), ["G"], 0, "north");
+  const south = lane(bakedLine(600, 1200, 6), ["G"], 0.5, "south");
+  const result = taperBakedJointSteps([north, south], { blendM: 100 });
+  assert.equal(result.count, 1);
+  const start = south.geometry.coordinates[0];
+  assert.ok(start);
+  assert.ok(Math.abs(lateralM(start)) < 0.01, `start lands at 0m, got ${lateralM(start)}`);
+});
+
+test("flags a reversed two-point stitch that already spans the post-warp endpoints", () => {
+  const mover = lane(bakedLine(0, 600, 6), ["G"], 0.5, "mover");
+  const north = lane(bakedLine(600, 1200, 0), ["G"], 0, "north");
+  const stitch = lane(
+    [north.geometry.coordinates[0], mover.geometry.coordinates[mover.geometry.coordinates.length - 1]],
+    ["G"],
+    0,
+    "stitch-rev",
+  );
+  const result = taperBakedJointSteps([mover, north, stitch], { blendM: 100 });
+  assert.equal(result.count, 1);
+  assert.equal(stitch.properties.joint_offset_taper_drop, true);
+});

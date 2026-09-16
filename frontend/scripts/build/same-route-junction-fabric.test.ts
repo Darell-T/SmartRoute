@@ -12,13 +12,12 @@ type TestFeatureProperties = {
   corridor_id: string;
   bundle_id: string;
   route_ids: string[];
-  color_route_ids: string[];
+  color_route_ids: string[] | Record<string, string[]>;
   color: string;
-  [key: string]: unknown;
+  same_route_junction_fabric?: boolean;
 };
 
 type TestFeature = Feature<LineStringGeometry, TestFeatureProperties>;
-type LineFeature = Feature<LineStringGeometry, { [key: string]: unknown }>;
 
 function line(
   id: string,
@@ -62,7 +61,10 @@ function segmentIntersection(a: Position, b: Position, c: Position, d: Position)
   return null;
 }
 
-function hasInteriorIntersection(a: LineFeature, b: LineFeature): boolean {
+function hasInteriorIntersection(
+  a: { geometry: LineStringGeometry },
+  b: { geometry: LineStringGeometry },
+): boolean {
   const ac = a.geometry.coordinates;
   const bc = b.geometry.coordinates;
   for (let i = 1; i < ac.length; i += 1) {
@@ -140,4 +142,128 @@ test("does not clip an interior crossing that is not an endpoint overshoot", () 
   });
 
   assert.equal(result.repairCount, 0, "interior crossings need a fuller junction model");
+});
+
+test("empty and malformed features are a no-op and an endpoint snap is deterministic", () => {
+  const emptyFirst = repairSameRouteEndpointCrossings([]);
+  const emptySecond = repairSameRouteEndpointCrossings([]);
+  assert.equal(emptyFirst.repairCount, 0);
+  assert.deepEqual(emptyFirst.features, []);
+  assert.deepEqual(emptyFirst, emptySecond);
+
+  const stub = line("stub", ["5"], [P(0, 0)]);
+  const stubResult = repairSameRouteEndpointCrossings([stub]);
+  assert.equal(stubResult.repairCount, 0);
+  assert.equal(stubResult.features[0], stub);
+
+  const trunkCoords: Position[] = [P(0, -100), P(0, 160)];
+  const branchCoords: Position[] = [P(-14, -16), P(18, 80), P(45, 150)];
+  const first = repairSameRouteEndpointCrossings(
+    [line("trunk", ["5"], trunkCoords), line("branch", ["5"], branchCoords)],
+    { maxEndpointOvershootM: 60 },
+  );
+  const second = repairSameRouteEndpointCrossings(
+    [line("trunk", ["5"], trunkCoords), line("branch", ["5"], branchCoords)],
+    { maxEndpointOvershootM: 60 },
+  );
+  assert.equal(first.repairCount, 1);
+  assert.equal(second.repairCount, 1);
+  assert.deepEqual(
+    first.features.find((feature) => feature.properties.corridor_id === "branch")?.geometry.coordinates,
+    second.features.find((feature) => feature.properties.corridor_id === "branch")?.geometry.coordinates,
+  );
+});
+
+test("keyed color_route_ids still count as the same active route", () => {
+  const trunk = line("trunk", ["5"], [P(0, -100), P(0, 160)], {
+    color_route_ids: { "#00933C": ["5"] },
+  });
+  const branch = line("branch", ["5"], [P(-14, -16), P(18, 80), P(45, 150)], {
+    color_route_ids: { "#00933C": ["5"] },
+  });
+  const result = repairSameRouteEndpointCrossings([trunk, branch], { maxEndpointOvershootM: 60 });
+  assert.equal(result.repairCount, 1);
+});
+
+test("color_route_ids keyed to another color still union via object values", () => {
+  const trunk = line("trunk", ["5"], [P(0, -100), P(0, 160)], {
+    color_route_ids: { "#EE352E": ["5"] },
+  });
+  const branch = line("branch", ["5"], [P(-14, -16), P(18, 80), P(45, 150)], {
+    color_route_ids: { "#EE352E": ["5"] },
+  });
+  const result = repairSameRouteEndpointCrossings([trunk, branch], { maxEndpointOvershootM: 60 });
+  assert.equal(result.repairCount, 1);
+});
+
+test("route_ids are used when color_route_ids is omitted", () => {
+  const trunk = line("trunk", ["5"], [P(0, -100), P(0, 160)], { color_route_ids: undefined });
+  const branch = line("branch", ["5"], [P(-14, -16), P(18, 80), P(45, 150)], {
+    color_route_ids: undefined,
+  });
+  const result = repairSameRouteEndpointCrossings([trunk, branch], { maxEndpointOvershootM: 60 });
+  assert.equal(result.repairCount, 1);
+});
+
+test("clips a start-side overshoot several vertices from the first point", () => {
+  const trunk = line("trunk", ["5"], [P(0, -100), P(0, 160)]);
+  const branch = line("branch", ["5"], [
+    P(-20, 10),
+    P(-10, 10),
+    P(-5, 10),
+    P(25, 40),
+    P(45, 80),
+  ]);
+  assert.equal(hasInteriorIntersection(branch, trunk), true);
+  const result = repairSameRouteEndpointCrossings([trunk, branch], { maxEndpointOvershootM: 80, minSegmentM: 8 });
+  assert.equal(result.repairCount, 1);
+  const fixed = result.features.find((feature) => feature.properties.corridor_id === "branch");
+  assert.ok(fixed);
+  assert.equal(hasInteriorIntersection(fixed, trunk), false);
+  assert.ok(Math.abs(mxy(fixed.geometry.coordinates[0])[0]) < 0.5, "start should snap onto the trunk");
+});
+
+test("clips an end-side overshoot and drops a leftover sub-minSegment stub", () => {
+  const trunk = line("trunk", ["5"], [P(0, -100), P(0, 180)]);
+  const branch = line("branch", ["5"], [
+    P(-80, -80),
+    P(-30, -20),
+    P(12, 55),
+    P(1, 70),
+    P(8, 80),
+    P(4, 96),
+  ]);
+  assert.equal(hasInteriorIntersection(branch, trunk), true);
+  const result = repairSameRouteEndpointCrossings([trunk, branch], {
+    maxEndpointOvershootM: 90,
+    minSegmentM: 15,
+  });
+  assert.equal(result.repairCount, 1);
+  const fixed = result.features.find((feature) => feature.properties.corridor_id === "branch");
+  assert.ok(fixed);
+  assert.equal(hasInteriorIntersection(fixed, trunk), false);
+  const end = fixed.geometry.coordinates.at(-1);
+  assert.ok(end);
+  assert.ok(Math.abs(mxy(end)[0]) < 0.5, "end should snap onto the trunk");
+});
+
+test("an end-side overshoot on the last segment moves the endpoint and drops a stub shorter than minSegmentM", () => {
+  const trunk = line("trunk", ["5"], [P(0, -100), P(0, 180)]);
+  const branch = line("branch", ["5"], [
+    P(-80, -40),
+    P(-20, 70),
+    P(18, 78),
+  ]);
+  assert.equal(hasInteriorIntersection(branch, trunk), true);
+  const result = repairSameRouteEndpointCrossings([trunk, branch], {
+    maxEndpointOvershootM: 80,
+    minSegmentM: 25,
+  });
+  assert.equal(result.repairCount, 1);
+  const fixed = result.features.find((feature) => feature.properties.corridor_id === "branch");
+  assert.ok(fixed);
+  assert.equal(hasInteriorIntersection(fixed, trunk), false);
+  const end = fixed.geometry.coordinates.at(-1);
+  assert.ok(end);
+  assert.ok(Math.abs(mxy(end)[0]) < 0.5, "last-segment overshoot should snap the endpoint onto the trunk");
 });

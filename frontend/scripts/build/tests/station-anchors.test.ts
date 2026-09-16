@@ -1,21 +1,99 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
 
 import {
   buildStationAnchors,
   splitStationAnchorCollections,
   stripRuntimeStationAnchorDebugProperties,
+  subwayBulletName,
 } from "../station-anchors/index.ts";
+import {
+  ambiguousDebugFeature,
+  rawStationDebugFeature,
+  rejectedDebugFeature,
+} from "../station-anchors/debug-features.ts";
 import { darkenHexColor } from "../mta-colors.ts";
+import type {
+  AnyGeometry,
+  Feature,
+  FeatureCollection,
+  JsonValue,
+  LineStringGeometry,
+  PointGeometry,
+} from "../types.ts";
+import type { StationFeature } from "../station-anchors/types.ts";
+import {
+  isJsonNumber,
+  isJsonObject,
+  isJsonString,
+  parsedJson,
+  propertyKey,
+  propertyNumber,
+  stringListOf,
+} from "../visual-network/shared/route-config.ts";
 
 type Position = [number, number];
-type FeatureProperties = Record<string, any>;
+const ORIGIN_POINT: Position = [-73, 40];
+
+function isPosition(value: JsonValue | undefined): value is Position {
+  return (
+    Array.isArray(value) &&
+    value.length === 2 &&
+    Number.isFinite(value[0]) &&
+    Number.isFinite(value[1])
+  );
+}
+
+function isPointGeometry(value: JsonValue | undefined): value is PointGeometry {
+  return isJsonObject(value) && value.type === "Point" && isPosition(value.coordinates);
+}
+
+function isLineStringGeometry(value: JsonValue | undefined): value is LineStringGeometry {
+  return (
+    isJsonObject(value) &&
+    value.type === "LineString" &&
+    Array.isArray(value.coordinates) &&
+    value.coordinates.every(isPosition)
+  );
+}
+
+function isFeature(value: JsonValue | undefined): value is Feature<AnyGeometry> {
+  return (
+    isJsonObject(value) &&
+    value.type === "Feature" &&
+    isJsonObject(value.properties) &&
+    (isPointGeometry(value.geometry) || isLineStringGeometry(value.geometry))
+  );
+}
+
+function readFeatureCollection(relativePath: string): FeatureCollection {
+  const parsed = parsedJson(readFileSync(join(process.cwd(), relativePath), "utf8"));
+  assert.ok(isJsonObject(parsed));
+  assert.equal(parsed.type, "FeatureCollection");
+  assert.ok(Array.isArray(parsed.features));
+  assert.ok(parsed.features.every(isFeature));
+  return { type: "FeatureCollection", features: parsed.features };
+}
+
+function pos(lon: number, lat: number): Position {
+  return [lon, lat];
+}
+type StationTestProperties = {
+  color?: string;
+  corridor_id?: string;
+  physical_bundle_id?: string;
+  route_ids?: string[];
+  color_route_ids?: string[];
+  lane_offset_baked?: boolean;
+};
 
 function lineFeature(
   id: string,
   routeIds: string[],
   coordinates: Position[],
-  extra: FeatureProperties = {},
+  extra: StationTestProperties = {},
 ) {
   return {
     type: "Feature" as const,
@@ -100,7 +178,7 @@ test("runtime station anchor stripping removes debug-only properties without mut
           debug_rejected_candidate_count: 2,
           debug_cluster_id: "101-cluster-0",
         },
-        geometry: { type: "Point" as const, coordinates: [-73, 40] as Position },
+        geometry: { type: "Point" as const, coordinates: ORIGIN_POINT },
       },
     ],
   };
@@ -183,6 +261,7 @@ test("multi-color shared stop emits one normal-crossing shared stop bar", () => 
   assert.ok(Math.abs(shared[0].geometry.coordinates[0][1] - shared[0].geometry.coordinates[1][1]) < 0.00018);
   const label = splitStationAnchorCollections(result.anchors).labels.features[0];
   assert.equal(label.properties.label_anchor, "bottom");
+  assert.ok(label.properties.label_offset);
   assert.ok(label.properties.label_offset[1] < 0);
 });
 
@@ -214,7 +293,9 @@ test("shared stop bar spans every served lane and centers on the bundle", () => 
   const bar = shared[0];
   assert.ok(bar);
   assert.equal(bar.geometry.type, "LineString");
-  const lats = (bar.geometry.coordinates as Position[]).map((coord) => coord[1]);
+  const barCoordinates = bar.geometry.coordinates;
+  assert.ok(Array.isArray(barCoordinates[0]));
+  const lats = barCoordinates.map((coord: Position) => coord[1]);
   const lo = Math.min(...lats);
   const hi = Math.max(...lats);
   const midLat = (lo + hi) / 2;
@@ -231,6 +312,7 @@ test("shared stop bar spans every served lane and centers on the bundle", () => 
     Math.abs(midLat - 40.00009) < 0.00002,
     `bar should center between the lanes, got ${midLat}`,
   );
+  assert.ok(bar.properties.snapped_coordinate);
   assert.ok(
     Math.abs(bar.properties.snapped_coordinate[1] - midLat) < 1e-6,
     "snapped_coordinate matches the bar midpoint",
@@ -332,6 +414,7 @@ test("single-route badge clears the label text below the station", () => {
   const result = buildStationAnchors({ visual, stations });
   const badge = splitStationAnchorCollections(result.anchors).badges.features[0];
 
+  assert.ok(badge.properties.icon_offset);
   assert.ok(
     badge.properties.icon_offset[1] >= 60,
     `single-route badge y offset should clear the label (got ${badge.properties.icon_offset[1]})`,
@@ -368,6 +451,8 @@ test("long wrapped names push the single-route badge further down", () => {
   assert.ok(shortBadge);
   assert.ok(longBadge);
 
+  assert.ok(shortBadge.properties.icon_offset);
+  assert.ok(longBadge.properties.icon_offset);
   assert.ok(
     longBadge.properties.icon_offset[1] > shortBadge.properties.icon_offset[1],
     "wrapped names need a larger badge clearance",
@@ -395,6 +480,7 @@ test("multi-route badges keep the compact below-point offset", () => {
   const badges = splitStationAnchorCollections(result.anchors).badges.features;
 
   for (const badge of badges) {
+    assert.ok(badge.properties.icon_offset);
     assert.ok(
       badge.properties.icon_offset[1] < 45,
       `multi-route badge should stay compact (got ${badge.properties.icon_offset[1]})`,
@@ -526,4 +612,503 @@ test("stations slightly past the strict snap gate fall back to a relaxed tier", 
   assert.equal(result.ambiguous.features.length, 0);
   assert.equal(dots.length, 1);
   assert.equal(dots[0].properties.snap_confidence, "low");
+});
+
+test("diamond, shuttle, and unknown route badges use the MTA icon ids", () => {
+  const routes = ["6X", "7X", "FX", "FS", "SI", "ZZ"];
+  const visual = {
+    type: "FeatureCollection" as const,
+    features: [
+      lineFeature("mixed-bullets", routes, [
+        [-73.001, 40],
+        [-72.999, 40],
+      ], { color: "#808183" }),
+    ],
+  };
+  const stations = {
+    type: "FeatureCollection" as const,
+    features: [station("icon-1", "Icons", routes, [-73, 40.00004])],
+  };
+  const badges = splitStationAnchorCollections(
+    buildStationAnchors({ visual, stations }).anchors,
+  ).badges.features;
+  const byRoute = Object.fromEntries(badges.map((badge) => [badge.properties.route_id, badge.properties.icon_id]));
+  assert.equal(byRoute["6X"], "6d");
+  assert.equal(byRoute["7X"], "7d");
+  assert.equal(byRoute["FX"], "fd");
+  assert.equal(byRoute["FS"], "sf");
+  assert.equal(byRoute["SI"], "sir");
+  assert.equal(byRoute.ZZ, "zz");
+});
+
+test("SIR station aliases snap onto SI visual lanes", () => {
+  const visual = {
+    type: "FeatureCollection" as const,
+    features: [
+      lineFeature("sir", ["SI"], [
+        [-73.001, 40],
+        [-72.999, 40],
+      ], { color: "#0039A6" }),
+    ],
+  };
+  const stations = {
+    type: "FeatureCollection" as const,
+    features: [station("sir-1", "St George", ["SIR"], [-73, 40.00004])],
+  };
+  const result = buildStationAnchors({ visual, stations });
+  const dots = splitStationAnchorCollections(result.anchors).dots.features;
+  assert.equal(dots.length, 1);
+  assert.equal(dots[0].properties.route_ids[0], "SIR");
+  assert.equal(result.ambiguous.features.length, 0);
+});
+
+test("unknown route color falls back to gray and color_route_ids maps still snap", () => {
+  const visual = {
+    type: "FeatureCollection" as const,
+    features: [
+      {
+        type: "Feature" as const,
+        properties: {
+          corridor_id: "mapped-lane",
+          physical_bundle_id: "mapped-lane",
+          route_ids: [],
+          color_route_ids: { "#00FF00": ["ZZ"] },
+        },
+        geometry: {
+          type: "LineString" as const,
+          coordinates: [
+            pos(-73.001, 40),
+            pos(-72.999, 40),
+          ],
+        },
+      },
+    ],
+  };
+  const stations = {
+    type: "FeatureCollection" as const,
+    features: [station("zz-1", "Mystery", ["ZZ"], [-73, 40.00004])],
+  };
+  const result = buildStationAnchors({ visual, stations });
+  const dots = splitStationAnchorCollections(result.anchors).dots.features;
+  assert.equal(dots.length, 1);
+  assert.equal(dots[0].properties.color, "#808183");
+});
+
+test("invalid visual geometry and non-point stations are skipped", () => {
+  const visual = {
+    type: "FeatureCollection" as const,
+    features: [
+      {
+        type: "Feature" as const,
+        properties: { corridor_id: "point-not-line", route_ids: ["1"] },
+        geometry: { type: "Point" as const, coordinates: pos(-73, 40) },
+      },
+      lineFeature("dup-vertex", ["1"], [
+        [-73.001, 40],
+        [-73.001, 40],
+        [-72.999, 40],
+      ]),
+      lineFeature("no-routes", ["1"], [
+        [-73.001, 40.002],
+        [-72.999, 40.002],
+      ], { route_ids: [], color_route_ids: [] }),
+    ],
+  };
+  const stations = {
+    type: "FeatureCollection" as const,
+    features: [
+      {
+        type: "Feature" as const,
+        properties: { station_id: "line-station", name: "Nope", route_ids: ["1"] },
+        geometry: {
+          type: "LineString" as const,
+          coordinates: [
+            pos(-73, 40),
+            pos(-72.999, 40),
+          ],
+        },
+      },
+      station("ok", "Ok", ["1"], [-73, 40.00004]),
+      {
+        type: "Feature" as const,
+        properties: { name: "Bare" },
+        geometry: { type: "Point" as const, coordinates: pos(-73, 40.00004) },
+      },
+    ],
+  };
+  const result = buildStationAnchors({ visual, stations });
+  assert.equal(result.metadata.station_count, 3);
+  assert.equal(splitStationAnchorCollections(result.anchors).dots.features.length, 1);
+  assert.equal(result.raw.features.length, 2);
+});
+
+test("empty collections stay empty and split treats missing features as none", () => {
+  const empty = { type: "FeatureCollection" as const, features: [] };
+  const result = buildStationAnchors({ visual: empty, stations: empty });
+  assert.equal(result.anchors.features.length, 0);
+  assert.equal(result.metadata.station_count, 0);
+  // SAFETY: split and strip treat a missing features array as empty.
+  const missingFeatures = { type: "FeatureCollection" as const };
+  const split = splitStationAnchorCollections(missingFeatures);
+  assert.equal(split.dots.features.length, 0);
+  const stripped = stripRuntimeStationAnchorDebugProperties(missingFeatures);
+  assert.equal(stripped.features.length, 0);
+});
+
+test("a near-miss sibling route is rejected while the matching route still snaps", () => {
+  const visual = {
+    type: "FeatureCollection" as const,
+    features: [
+      lineFeature("red-near", ["1"], [
+        [-73.001, 40],
+        [-72.999, 40],
+      ]),
+      lineFeature("red-far", ["2"], [
+        [-73.01, 40.01],
+        [-73.00, 40.01],
+      ]),
+    ],
+  };
+  const stations = {
+    type: "FeatureCollection" as const,
+    features: [station("mix", "Mix", ["1", "2"], [-73, 40.00004])],
+  };
+  const result = buildStationAnchors({ visual, stations });
+  assert.ok(result.rejected.features.length >= 1);
+  assert.equal(result.rejected.features[0].properties.reason, "snap_distance_above_threshold");
+  const dots = splitStationAnchorCollections(result.anchors).dots.features;
+  assert.ok(dots.some((feature) => feature.properties.route_ids.includes("1")));
+});
+
+test("nearby same-bundle projections merge into one shared stop", () => {
+  const visual = {
+    type: "FeatureCollection" as const,
+    features: [
+      lineFeature("lane-a", ["4"], [
+        [-73.001, 40],
+        [-72.999, 40],
+      ], { physical_bundle_id: "green-lex", corridor_id: "lex-a", color: "#00933C" }),
+      lineFeature("lane-b", ["5"], [
+        [-73.001, 40.0004],
+        [-72.999, 40.0004],
+      ], { physical_bundle_id: "green-lex", corridor_id: "lex-b", color: "#00933C" }),
+    ],
+  };
+  const stations = {
+    type: "FeatureCollection" as const,
+    features: [station("lex", "Union Sq", ["4", "5"], [-73, 40.00008])],
+  };
+  const result = buildStationAnchors({ visual, stations });
+  const shared = splitStationAnchorCollections(result.anchors).sharedStops.features;
+  assert.equal(shared.length, 1);
+  assert.deepEqual(shared[0].properties.route_ids, ["4", "5"]);
+});
+
+test("routes on lanes farther than the cluster merge gate stay as separate stops", () => {
+  const visual = {
+    type: "FeatureCollection" as const,
+    features: [
+      lineFeature("south", ["2"], [
+        [-73.001, 40],
+        [-72.999, 40],
+      ], { color: "#EE352E" }),
+      lineFeature("north", ["5"], [
+        [-73.001, 40.0009],
+        [-72.999, 40.0009],
+      ], { color: "#00933C" }),
+    ],
+  };
+  const stations = {
+    type: "FeatureCollection" as const,
+    features: [station("gap", "Gap", ["2", "5"], [-73, 40.00045])],
+  };
+  const result = buildStationAnchors({ visual, stations });
+  const collections = splitStationAnchorCollections(result.anchors);
+  assert.equal(collections.dots.features.length, 2);
+  assert.equal(collections.sharedStops.features.length, 0);
+  assert.equal(result.metadata.station_count, 1);
+});
+
+test("a string route_ids value is not a visual lane and still counts the station", () => {
+  const visual = {
+    type: "FeatureCollection" as const,
+    features: [
+      {
+        type: "Feature" as const,
+        properties: { corridor_id: "s", route_ids: "1", color: "#EE352E" },
+        geometry: {
+          type: "LineString" as const,
+          coordinates: [pos(-73.001, 40), pos(-72.999, 40)],
+        },
+      },
+      { type: "NotAFeature" as const, properties: { route_ids: ["1"] } },
+    ],
+  };
+  const stations = {
+    type: "FeatureCollection" as const,
+    features: [
+      station("s1", "S1", ["1"], [-73, 40.00004]),
+      12,
+      null,
+    ],
+  };
+  const result = buildStationAnchors({ visual, stations });
+  assert.equal(result.metadata.visual_feature_count, 0);
+  assert.equal(result.metadata.station_count, 3);
+  assert.equal(result.anchors.features.length, 0);
+  assert.equal(result.ambiguous.features.length, 1);
+});
+
+test("subwayBulletName maps diamond, shuttle, and SIR ids and lowercases the rest", () => {
+  assert.equal(subwayBulletName("6X"), "6d");
+  assert.equal(subwayBulletName("7X"), "7d");
+  assert.equal(subwayBulletName("FX"), "fd");
+  assert.equal(subwayBulletName("FS"), "sf");
+  assert.equal(subwayBulletName("SI"), "sir");
+  assert.equal(subwayBulletName("SIR"), "sir");
+  assert.equal(subwayBulletName("A"), "a");
+  assert.equal(subwayBulletName("  q  "), "q");
+  assert.equal(subwayBulletName(""), "");
+  assert.equal(subwayBulletName(), "");
+  assert.equal(subwayBulletName(null), "");
+});
+
+test("visual lanes fall back through id fields and skip sparse vertices", () => {
+  const sparseCoords: Array<Position | undefined> = [pos(-73.001, 40.01), undefined, pos(-72.999, 40.01)];
+  const visual = {
+    type: "FeatureCollection" as const,
+    metadata: {
+      generated_at: "2026-01-01",
+      visual_geometry_source: "opendata",
+      visual_geometry_source_dataset_id: "s692-irgq",
+    },
+    features: [
+      {
+        type: "Feature" as const,
+        properties: { bundle_id: "only-bundle", route_ids: ["1"], color: "#EE352E" },
+        geometry: { type: "LineString" as const, coordinates: [pos(-73.001, 40), pos(-72.999, 40)] },
+      },
+      {
+        type: "Feature" as const,
+        properties: { lane_group_id: "only-group", route_ids: ["2"], color: "#EE352E" },
+        geometry: { type: "LineString" as const, coordinates: [pos(-73.001, 40.002), pos(-72.999, 40.002)] },
+      },
+      {
+        type: "Feature" as const,
+        properties: { source_corridor_id: "only-source", route_ids: ["3"], color: "#EE352E" },
+        geometry: { type: "LineString" as const, coordinates: [pos(-73.001, 40.004), pos(-72.999, 40.004)] },
+      },
+      {
+        type: "Feature" as const,
+        properties: { segment_id: "only-segment", route_ids: ["4"], color: "#00933C" },
+        geometry: { type: "LineString" as const, coordinates: [pos(-73.001, 40.006), pos(-72.999, 40.006)] },
+      },
+      {
+        type: "Feature" as const,
+        properties: { route_ids: ["5"], color: "#00933C" },
+        geometry: { type: "LineString" as const, coordinates: [pos(-73.001, 40.008), pos(-72.999, 40.008)] },
+      },
+      {
+        type: "Feature" as const,
+        properties: { corridor_id: "sparse", route_ids: ["6"], color: "#00933C" },
+        geometry: {
+          type: "LineString" as const,
+          // SAFETY: projectPointToLineString skips missing vertices after a runtime check.
+          coordinates: sparseCoords as Position[],
+        },
+      },
+    ],
+  };
+  const stations = {
+    type: "FeatureCollection" as const,
+    features: [
+      station("bundle-st", "Bundle", ["1"], pos(-73, 40.00004)),
+      station("group-st", "Group", ["2"], pos(-73, 40.00204)),
+    ],
+  };
+  const result = buildStationAnchors({
+    visual,
+    stations,
+    options: { maxSnapDistanceM: 80 },
+  });
+  assert.equal(result.metadata.max_snap_distance_m, 80);
+  assert.equal(result.metadata.visual_generated_at, "2026-01-01");
+  assert.equal(result.metadata.visual_geometry_source, "opendata");
+  const dots = splitStationAnchorCollections(result.anchors).dots.features;
+  assert.ok(dots.some((feature) => feature.properties.snapped_visual_feature_ids.includes("only-bundle")));
+  assert.ok(dots.some((feature) => feature.properties.snapped_visual_feature_ids.includes("only-group")));
+});
+
+test("color_route_ids accepts a null-prototype map and skips class-prototype bags", () => {
+  const nullProto = Object.assign(Object.create(null), { "#00FF00": ["ZZ"] });
+  const classProto = Object.assign(Object.create(Date.prototype), { "#00FF00": ["YY"] });
+  const mixedValues = { "#00FF00": "not-an-array", "#EE352E": ["1"] };
+  const visual = {
+    type: "FeatureCollection" as const,
+    features: [
+      {
+        type: "Feature" as const,
+        properties: {
+          corridor_id: "null-proto",
+          route_ids: [],
+          color_route_ids: nullProto,
+        },
+        geometry: { type: "LineString" as const, coordinates: [pos(-73.001, 40), pos(-72.999, 40)] },
+      },
+      {
+        type: "Feature" as const,
+        properties: {
+          corridor_id: "class-proto",
+          route_ids: [],
+          color_route_ids: classProto,
+        },
+        geometry: { type: "LineString" as const, coordinates: [pos(-73.001, 40.002), pos(-72.999, 40.002)] },
+      },
+      {
+        type: "Feature" as const,
+        properties: {
+          corridor_id: "mixed-values",
+          route_ids: [],
+          color_route_ids: mixedValues,
+        },
+        geometry: { type: "LineString" as const, coordinates: [pos(-73.001, 40.004), pos(-72.999, 40.004)] },
+      },
+    ],
+  };
+  const stations = {
+    type: "FeatureCollection" as const,
+    features: [
+      station("zz", "NullProto", ["ZZ"], pos(-73, 40.00004)),
+      station("yy", "ClassProto", ["YY"], pos(-73, 40.00204)),
+      station("one", "Mixed", ["1"], pos(-73, 40.00404)),
+    ],
+  };
+  const result = buildStationAnchors({
+    visual,
+    stations,
+  });
+  const dots = splitStationAnchorCollections(result.anchors).dots.features;
+  assert.ok(dots.some((feature) => feature.properties.route_ids.includes("ZZ")));
+  assert.equal(dots.some((feature) => feature.properties.route_ids.includes("YY")), false);
+  assert.ok(dots.some((feature) => feature.properties.route_ids.includes("1")));
+});
+
+test("debug constructors fall back to feature id and empty name", () => {
+  const station: StationFeature = {
+    type: "Feature",
+    id: "feat-id",
+    geometry: { type: "Point", coordinates: ORIGIN_POINT },
+    properties: {},
+  };
+  const raw = rawStationDebugFeature(station, ["1"]);
+  assert.equal(raw.properties.station_id, "feat-id");
+  assert.equal(raw.properties.name, "");
+  const rejected = rejectedDebugFeature(station, {
+    routeId: "1",
+    visualFeature: {
+      feature: lineFeature("lane", ["1"], [pos(-73.001, 40), pos(-72.999, 40)]),
+      index: 0,
+      id: "lane",
+      coordinates: [pos(-73.001, 40), pos(-72.999, 40)],
+      routeIds: ["1"],
+      colorRouteIds: ["1"],
+      allRouteIds: ["1"],
+      color: "#EE352E",
+      corridorId: "lane",
+      physicalBundleId: "lane",
+    },
+    score: 99,
+    coordinate: ORIGIN_POINT,
+    distance_m: 99,
+    segment_index: 0,
+    segment_t: 0,
+    tangent_bearing: 90,
+  });
+  assert.equal(rejected.properties.station_id, "feat-id");
+  const nameless: StationFeature = {
+    type: "Feature",
+    geometry: { type: "Point", coordinates: ORIGIN_POINT },
+    properties: { station_id: "named-id" },
+  };
+  const ambiguous = ambiguousDebugFeature(nameless, ["1"], "no_valid_projection");
+  assert.equal(ambiguous.properties.station_id, "named-id");
+  assert.equal(ambiguous.properties.name, "");
+});
+
+test("a station identified only by feature id still snaps", () => {
+  const visual = {
+    type: "FeatureCollection" as const,
+    features: [lineFeature("red-id", ["1"], [pos(-73.001, 40), pos(-72.999, 40)])],
+  };
+  const stations = {
+    type: "FeatureCollection" as const,
+    features: [{
+      type: "Feature" as const,
+      id: "only-id",
+      properties: { route_ids: ["1"] },
+      geometry: { type: "Point" as const, coordinates: pos(-73, 40.00004) },
+    }],
+  };
+  const result = buildStationAnchors({ visual, stations });
+  const dots = splitStationAnchorCollections(result.anchors).dots.features;
+  assert.equal(dots.length, 1);
+  assert.equal(dots[0].properties.station_id, "only-id");
+});
+
+test("unknown route ids sort after MTA order and equal unknown ranks compare by name", () => {
+  const visual = {
+    type: "FeatureCollection" as const,
+    features: [
+      lineFeature("unk", ["YA", "YB"], [pos(-73.001, 40), pos(-72.999, 40)], { color: "#808183" }),
+    ],
+  };
+  const stations = {
+    type: "FeatureCollection" as const,
+    features: [station("unk", "Unknowns", ["YB", "YA"], pos(-73, 40.00004))],
+  };
+  const result = buildStationAnchors({ visual, stations });
+  const anchors = result.anchors.features.filter((feature) =>
+    ["single_stop_dot", "shared_stop_dot", "shared_stop_bar"].includes(feature.properties.marker_type),
+  );
+  assert.ok(anchors.length >= 1);
+  assert.deepEqual(anchors[0].properties.route_ids, ["YA", "YB"]);
+});
+
+test("the shipped network projects every station into a runtime or diagnostic collection", () => {
+  const visual = readFeatureCollection("public/subway-network.visual.geojson");
+  const stations = readFeatureCollection("public/subway-network.stations.geojson");
+
+  const result = buildStationAnchors({ visual, stations });
+  const projectedStationIds = new Set(
+    [result.anchors, result.ambiguous].flatMap((collection) =>
+      collection.features
+        .map((feature) => feature.properties.station_id)
+        .filter((stationId): stationId is string => isJsonString(stationId)),
+    ),
+  );
+  const inputStationIds = stations.features
+    .map((feature) => feature.properties.station_id)
+    .filter((stationId): stationId is string => isJsonString(stationId));
+
+  assert.equal(result.metadata.station_count, stations.features.length);
+  assert.ok(inputStationIds.length > 0);
+  assert.ok(inputStationIds.every((stationId) => projectedStationIds.has(stationId)));
+  assert.ok(splitStationAnchorCollections(result.anchors).badges.features.length > 0);
+});
+
+test("JSON property decoders keep strings, drop non-finite numbers, and stringify the rest", () => {
+  assert.equal(propertyKey("A"), "A");
+  assert.equal(propertyKey(null), "");
+  assert.equal(propertyKey(undefined), "");
+  assert.equal(propertyKey(6), "6");
+  assert.equal(propertyNumber(12.5), 12.5);
+  assert.equal(propertyNumber(Number.NaN), undefined);
+  assert.equal(propertyNumber("12"), undefined);
+  assert.equal(isJsonNumber(1), true);
+  assert.equal(isJsonNumber(null), false);
+  assert.deepEqual(stringListOf(["B", 1]), ["B", "1"]);
+  assert.deepEqual(stringListOf("B"), []);
+  const parsed = parsedJson("{\"type\":\"FeatureCollection\",\"features\":[]}");
+  assert.ok(isJsonObject(parsed));
+  assert.equal(parsed.type, "FeatureCollection");
 });
