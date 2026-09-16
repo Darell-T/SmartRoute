@@ -118,6 +118,7 @@ class TurnState:
                 include_web=self.ctx.turn_evidence.may_offer_web(),
                 turn_evidence=self.ctx.turn_evidence,
                 session_id=self.session_id,
+                tool_registry=self.dependencies.tool_registry,
             )
         )
         self.server_tool_continuation_tools = None

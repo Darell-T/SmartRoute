@@ -17,9 +17,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from app.services import cache
+from app.services import cache, text
 from app.services.geography import distance_meters
-from app.services.trips import text
 
 TICKETMASTER_EVENTS_URL = "https://app.ticketmaster.com/discovery/v2/events.json"
 TICKETMASTER_NYC_LATLONG = "40.7128,-74.0060"
@@ -392,21 +391,21 @@ def _calculate_estimated_end(
 
 
 def _parse_event(event: dict) -> dict:
-    name = text._safe_text(event.get("name"), 120)
+    name = text.safe_text(event.get("name"), 120)
     first_venue = _select_event_venue(event)
     venue_name_raw = first_venue.get("name") if first_venue else None
-    venue_name = text._safe_text(venue_name_raw, 80) if venue_name_raw else None
+    venue_name = text.safe_text(venue_name_raw, 80) if venue_name_raw else None
     venue_key = normalize_venue_name(venue_name_raw)
     latitude, longitude = _venue_coordinates(first_venue)
     venue_context = VENUE_CROWD_TABLE.get(venue_key or "") or {}
     start_iso = _event_start_iso(event)
     dates = _event_dates(event)
-    status = text._safe_text(_mapping(dates.get("status")).get("code"), 32).lower() or "unknown"
+    status = text.safe_text(_mapping(dates.get("status")).get("code"), 32).lower() or "unknown"
     estimated_end_iso, end_estimate_basis = _calculate_estimated_end(
         event, start_iso, status
     )
     return {
-        "event_id": text._safe_text(event.get("id"), 80) or None,
+        "event_id": text.safe_text(event.get("id"), 80) or None,
         "name": name,
         "venue_name": venue_name,
         "venue_key": venue_key,
@@ -416,7 +415,7 @@ def _parse_event(event: dict) -> dict:
         "nearby_lines": list(venue_context.get("lines") or []),
         "status": status,
         "start_time_status": _start_time_status(event),
-        "local_date": text._safe_text(_mapping(dates.get("start")).get("localDate"), 10) or None,
+        "local_date": text.safe_text(_mapping(dates.get("start")).get("localDate"), 10) or None,
         "start_iso": start_iso,
         "estimated_end_iso": estimated_end_iso,
         "end_estimate_basis": end_estimate_basis,

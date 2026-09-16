@@ -14,8 +14,9 @@ from collections.abc import Iterable, Mapping
 from enum import StrEnum
 from typing import Any, NoReturn, TypeGuard
 
+from app.services import text
 from app.services.evidence import EvidenceEnvelope, current_payload
-from app.services.trips import candidates, text
+from app.services.trips import candidates
 
 
 class PlanningMode(StrEnum):
@@ -58,7 +59,7 @@ def parse_planning_mode(value: PlanningMode | str | None) -> PlanningMode:
 
 
 def _bounded_text(value: object, limit: int) -> str:
-    sanitized = text._safe_text(str(value or ""), limit).strip()
+    sanitized = text.safe_text(str(value or ""), limit).strip()
     # Event evidence does not need a provider URL, and a copied query string
     # could contain a credential. Preserve the rider-facing description while
     # removing URL-shaped material before it reaches a model prompt or log.
@@ -287,12 +288,12 @@ def _lenient_analysis_row(row: object) -> tuple[int, dict[str, str]] | None:
         return None
     is_recommended = bool(row.get("is_recommended"))
     generic_reason = row.get("reason") or ""
-    recommendation_reason = text._safe_text(
+    recommendation_reason = text.safe_text(
         row.get("recommendation_reason")
         or (generic_reason if is_recommended else "")
         or ""
     )
-    rejection_reason = text._safe_text(
+    rejection_reason = text.safe_text(
         row.get("rejection_reason")
         or (generic_reason if not is_recommended else "")
         or ""
@@ -364,8 +365,8 @@ def _strict_row_reasons(
     selected_index: int,
     recommended: bool,
 ) -> tuple[str, str]:
-    recommendation_reason = text._safe_text(row.get("recommendation_reason") or "").strip()
-    rejection_reason = text._safe_text(row.get("rejection_reason") or "").strip()
+    recommendation_reason = text.safe_text(row.get("recommendation_reason") or "").strip()
+    rejection_reason = text.safe_text(row.get("rejection_reason") or "").strip()
     if recommended:
         if index != selected_index or not recommendation_reason:
             _raise_value("selected candidate requires recommendation_reason")

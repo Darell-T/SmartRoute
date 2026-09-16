@@ -28,6 +28,7 @@ except Exception:  # noqa: BLE001 optional SDK import faults leave scout unavail
     web_search = None
     x_search = None
 
+from app import runtime
 from app.services.incidents.batches import IncidentBatch
 from app.services.incidents.evidence import canonical_citation_url
 from app.services.incidents.scout_normalization import SIX_HOURS
@@ -46,13 +47,6 @@ class ScoutSearchResult:
     response_text: str
     citations: tuple[str, ...]
     tool_completed: bool
-
-
-def _bounded_timeout() -> float:
-    try:
-        return min(30.0, max(1.0, float(os.getenv("XAI_INCIDENT_TIMEOUT_S", "12"))))
-    except ValueError:
-        return 12.0
 
 
 _client = None
@@ -77,7 +71,12 @@ def _get_client() -> Any | None:
 
     loop = asyncio.get_running_loop()
     if _client is None:
-        _client = AsyncClient(api_key=api_key, timeout=_bounded_timeout())
+        _client = AsyncClient(
+            api_key=api_key,
+            timeout=runtime.env_float(
+                "XAI_INCIDENT_TIMEOUT_S", 12.0, minimum=1.0, maximum=30.0
+            ),
+        )
         _client_loop = loop
     elif _client_loop is not loop:
         raise RuntimeError("incident scout client used from a different event loop")

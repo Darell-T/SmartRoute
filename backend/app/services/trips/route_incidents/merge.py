@@ -7,6 +7,7 @@ from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from app.services.evidence import parse_timestamp as _parse_time
 from app.services.geography import distance_meters
 from app.services.trips.route_incidents.context import valid_coordinate_pair
 from app.services.trips.route_incidents.matching import _as_mapping
@@ -15,21 +16,6 @@ _OFFICIAL_SOURCES = {"511ny", "mta", "mta_alert", "vehicle"}
 # "Closed" often describes an active roadway closure.  Only unambiguously
 # terminal semantics remove an item in the absence of an expired end time.
 _TERMINAL_MARKERS = ("resolved", "cleared", "cancelled", "canceled", "expired", "ended", "completed")
-
-
-def _parse_time(value: object) -> datetime | None:
-    if isinstance(value, datetime):
-        result = value
-    elif isinstance(value, str):
-        try:
-            result = datetime.fromisoformat(value)
-        except ValueError:
-            return None
-    else:
-        return None
-    if result.tzinfo is None or result.utcoffset() is None:
-        return None
-    return result.astimezone(UTC)
 
 
 def _source(item: Mapping[str, Any]) -> str:

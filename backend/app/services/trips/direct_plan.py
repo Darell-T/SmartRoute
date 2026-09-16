@@ -19,7 +19,8 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
 
-from app.services.trips import candidates, enrichment, scoring, text
+from app.services import text
+from app.services.trips import candidates, enrichment, scoring
 from app.services.trips.itinerary import build_canonical_itinerary
 from app.services.trips.location import ResolvedPlace
 from app.services.trips.preparation.constraints import route_constraints
@@ -371,7 +372,7 @@ def _select_recommendation_copy(
         )
         if rendered
     ]
-    recommendation = text._sanitize_recommendation(
+    recommendation = text.sanitize_recommendation(
         rendered_reasons[0] if rendered_reasons else NEUTRAL_RECOMMENDATION_FALLBACK
     )
     if not incident_scan_is_complete(incident_scan_metadata):

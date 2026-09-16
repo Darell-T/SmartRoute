@@ -1,12 +1,13 @@
 """Route scoring + route-step accessors.
 
 Pure functions over Google-parsed route step dicts. Depends only on ``text``
-(for ``_safe_text``). ``_step_route_id`` lives here for route scoring and
+(for ``safe_text``). ``_step_route_id`` lives here for route scoring and
 shared candidate display helpers.
 """
 
+from app.services import text
 from app.services.mta.alerts import is_material_service_alert
-from app.services.trips import text
+from app.services.parsing import nonnegative_int as _nonnegative_int
 from app.services.trips.crowds import event as event_crowd
 from app.services.trips.itinerary import TRANSIT_MODES
 from app.services.trips.transfer_semantics import (
@@ -117,7 +118,7 @@ def _select_matching_alerts(
 def _route_alert_hits(route: list[dict], alerts: list[dict] | None) -> list[str]:
     hits: list[str] = []
     for alert in _select_matching_alerts(route, alerts):
-        title = text._safe_text(alert.get("header") or "active alert", 80)
+        title = text.safe_text(alert.get("header") or "active alert", 80)
         if title and title not in hits:
             hits.append(title)
     return hits
@@ -183,7 +184,7 @@ def _route_incident_hits(incidents: list[dict] | None) -> list[str]:
     for incident in incidents or []:
         if not isinstance(incident, dict):
             continue
-        description = text._safe_text(
+        description = text.safe_text(
             incident.get("description")
             or incident.get("location")
             or incident.get("title")
@@ -480,12 +481,3 @@ def _score_by_index(scored_routes: list[dict]) -> dict[int, dict]:
 def _normalized_mode(value: object) -> str:
     mode = str(value or "").strip().upper()
     return "RAIL" if mode in {"TRAIN", "LIGHT_RAIL", "TRAM"} else mode
-
-
-def _nonnegative_int(value: object, *, default: int = 0) -> int:
-    try:
-        if value is None or isinstance(value, bool):
-            return max(0, int(default))
-        return max(0, round(float(value)))
-    except (TypeError, ValueError, OverflowError):
-        return max(0, int(default))

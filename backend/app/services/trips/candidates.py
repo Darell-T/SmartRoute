@@ -2,8 +2,9 @@
 
 import re
 
+from app.services import text
 from app.services.mta.static_gtfs.stop_patterns import normalize_station_name
-from app.services.trips import scoring, text
+from app.services.trips import scoring
 
 _CANDIDATE_ANALYSIS_PATTERN = re.compile(
     r"\[CANDIDATE_ANALYSIS\](.*?)\[/CANDIDATE_ANALYSIS\]",
@@ -26,8 +27,8 @@ def _build_fallback_candidate_reason(
     chosen_score = chosen_score or scoring._route_score(chosen_route, [])
     route_alerts = route_score.get("alerts") or []
     chosen_alerts = chosen_score.get("alerts") or []
-    route_alert = text._safe_text(route_alerts[0], 72) if route_alerts else ""
-    chosen_alert = text._safe_text(chosen_alerts[0], 72) if chosen_alerts else ""
+    route_alert = text.safe_text(route_alerts[0], 72) if route_alerts else ""
+    chosen_alert = text.safe_text(chosen_alerts[0], 72) if chosen_alerts else ""
     if is_recommended:
         return _recommended_fallback_reason(route_score, route_alert)
     return _alternate_fallback_reason(
@@ -222,7 +223,7 @@ def _route_ids(route: list[dict]) -> list[str]:
 
 
 def _display_stop(value: object) -> str:
-    return text._safe_text(str(value or ""), 44).strip()
+    return text.safe_text(str(value or ""), 44).strip()
 
 
 def _candidate_display_label(route: list[dict]) -> str:

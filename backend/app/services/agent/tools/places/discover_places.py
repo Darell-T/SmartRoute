@@ -23,6 +23,7 @@ _DISCOVERY_GOAL_KINDS = frozenset(
 )
 _LOGGER = logging.getLogger(__name__)
 _MISSING = object()
+_historical_pattern = damn_lines.historical_pattern
 
 
 @dataclass(frozen=True, slots=True)
@@ -709,15 +710,6 @@ def _current_queue_evidence(observation: damn_lines.QueueObservation) -> dict[st
     if observation.wait_minutes is not None:
         evidence["wait_minutes"] = observation.wait_minutes
     return evidence
-
-
-def _historical_pattern(
-    place_id: str, when: datetime
-) -> damn_lines.HistoricalQueuePattern | None:
-    try:
-        return damn_lines.get_historical_pattern(place_id, when, now=when)
-    except (TypeError, ValueError):
-        return None
 
 
 def _historical_evidence(

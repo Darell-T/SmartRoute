@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import math
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -18,8 +17,10 @@ from app.services.agent.passenger_output import (
 from app.services.agent.tools.base import ToolContext, ToolResult
 from app.services.agent.tools.places import damn_lines
 from app.services.agent.turn.contract import GoalKind, GoalState
+from app.services.parsing import finite_float as _finite
 
 _LOGGER = logging.getLogger(__name__)
+_historical_pattern = damn_lines.historical_pattern
 
 _PLACE_GOAL_KINDS = frozenset({GoalKind.PLACE_RECOMMENDATION, GoalKind.DESTINATION_SELECTION})
 _GOOGLE_MAPS_SOURCE = {
@@ -702,15 +703,6 @@ def _presentation_time(value: object) -> datetime:
     return datetime.now(_NYC)
 
 
-def _historical_pattern(
-    place_id: str, when: datetime
-) -> damn_lines.HistoricalQueuePattern | None:
-    try:
-        return damn_lines.get_historical_pattern(place_id, when, now=when)
-    except (TypeError, ValueError):
-        return None
-
-
 def _current_queue_note(
     name: str, observation: damn_lines.QueueObservation
 ) -> str:
@@ -936,14 +928,6 @@ def _is_extreme(place: dict, places: list[dict], field: str, *, maximum: bool) -
         return False
     target = max(known) if maximum else min(known)
     return current == target
-
-
-def _finite(value: object) -> float | None:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
 
 
 def _facts(place: dict) -> list[str]:

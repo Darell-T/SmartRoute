@@ -10,6 +10,7 @@ from typing import Any
 from app.services import evidence as evidence_service
 from app.services.agent import candidate_store, trip_state
 from app.services.mta.alerts import project_service_alert
+from app.services.text import collapse_whitespace as _text
 
 _STATION_ENTITY_TYPES = frozenset(
     {"SUBWAY_STATION", "AIRTRAIN_STATION", "RAIL_STATION"}
@@ -30,10 +31,6 @@ _NAME_TOKEN_MAP = {
 _OFFICIAL_ALERT_SOURCE = "mta_service_alerts"
 _ALERT_LIMIT = 12
 _ROW_LIMIT = 12
-
-
-def _text(value: object) -> str:
-    return " ".join(str(value or "").split()).strip()
 
 
 def bind_accessibility_target(

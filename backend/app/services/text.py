@@ -1,7 +1,7 @@
 """Rider-facing text sanitization for trip narration.
 
 Leaf module: no internal trips dependencies. Scoring, candidates, and incidents
-all import ``_safe_text`` from here, which is why it lives on its own.
+all import ``safe_text`` from here, which is why it lives on its own.
 """
 
 import re
@@ -17,7 +17,11 @@ _TELEMETRY_LEAK_PATTERN = re.compile(
 )
 
 
-def _sanitize_recommendation(text: str) -> str:
+def collapse_whitespace(value: object) -> str:
+    return " ".join(str(value or "").split()).strip()
+
+
+def sanitize_recommendation(text: str) -> str:
     if not _INTERNAL_LEAK_PATTERN.search(text) and not _TELEMETRY_LEAK_PATTERN.search(text):
         return text
     print("[trip] model output included internal/telemetry details; using rider-facing fallback")
@@ -27,8 +31,8 @@ def _sanitize_recommendation(text: str) -> str:
     )
 
 
-def _safe_text(value: object, max_len: int = 150) -> str:
-    text = " ".join(str(value or "").split()).strip()
+def safe_text(value: object, max_len: int = 150) -> str:
+    text = collapse_whitespace(value)
     if len(text) <= max_len:
         return text
     return text[: max_len - 1].rstrip() + "…"

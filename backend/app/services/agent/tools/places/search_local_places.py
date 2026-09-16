@@ -7,12 +7,13 @@ import re
 import time
 
 from app.services import geography as geo
+from app.services import text
 from app.services.agent.discovery_store import normalize_price_level
 from app.services.agent.tools.base import ToolContext, ToolResult
 from app.services.agent.tools.location_resolution import resolve_named_point
 from app.services.agent.tools.places import geography as conversational_geography
 from app.services.agent.tools.provider_http import fetch_json
-from app.services.trips import text
+from app.services.parsing import finite_float
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -37,14 +38,6 @@ _COORD_RE = re.compile(r"^-?\d+\.?\d*,\s*-?\d+\.?\d*$")
 _OPEN_BONUS = {"open": 0.15, "unknown": 0.05, "closed": 0.0}
 
 
-def _finite(value: object, default: float = 0.0) -> float:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return default
-    return number if math.isfinite(number) else default
-
-
 def _finite_or_none(value: object) -> float | None:
     if isinstance(value, bool):
         return None
@@ -56,8 +49,8 @@ def _finite_or_none(value: object) -> float | None:
 
 
 def baseline_ranking(place: dict) -> dict[str, object]:
-    rating = max(0.0, min(5.0, _finite(place.get("rating")))) / 5.0
-    review = max(0.0, min(5000.0, _finite(place.get("review_count")))) / 5000.0
+    rating = max(0.0, min(5.0, finite_float(place.get("rating"), 0.0))) / 5.0
+    review = max(0.0, min(5000.0, finite_float(place.get("review_count"), 0.0))) / 5000.0
     open_status = str(place.get("open_status") or "unknown")
     open_bonus = _OPEN_BONUS.get(open_status, 0.05)
     score = round(0.50 * rating + 0.25 * review + 0.25 * open_bonus, 4)
@@ -143,8 +136,8 @@ def _nyc_provider_place(place: object) -> dict | None:
     place_lat, place_lng = coords
     opening_hours = place.get("currentOpeningHours") or {}
     return {
-        "name": text._safe_text((place.get("displayName") or {}).get("text"), 80),
-        "address": text._safe_text(place.get("formattedAddress"), 120),
+        "name": text.safe_text((place.get("displayName") or {}).get("text"), 80),
+        "address": text.safe_text(place.get("formattedAddress"), 120),
         "place_id": str(place.get("id") or "").strip() or None,
         "lat": place_lat,
         "lng": place_lng,

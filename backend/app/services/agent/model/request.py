@@ -13,6 +13,7 @@ from app.services.agent import events as agent_events
 from app.services.agent import public_surface
 from app.services.agent.model import policy as agent_policy
 from app.services.agent.model import prompt as agent_prompt
+from app.services.agent.tools import COMBINED_TOOL_REGISTRY, ToolSpec
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -128,13 +129,14 @@ def tools_for_state(
     include_web: bool = False,
     turn_evidence: object | None = None,
     session_id: str | None = None,
+    *,
+    tool_registry: Mapping[str, ToolSpec] | None = None,
 ) -> list[dict]:
-    from app.services.agent.loop import TOOL_REGISTRY
-
+    registry = COMBINED_TOOL_REGISTRY if tool_registry is None else tool_registry
     tools = [
         dict(schema)
         for schema in public_surface.schemas_for_state(
-            (spec.schema for spec in TOOL_REGISTRY.values()),
+            (spec.schema for spec in registry.values()),
             turn_evidence,
             session=session,
             session_id=session_id,
