@@ -1,7 +1,7 @@
 import type { RouteRailStatus } from "@/components/smart-route/left-rail";
-import type { RouteCard } from "@/lib/agent-route-card-contract";
-import { normalizeRouteCoordinate } from "@/lib/agent-route-selection";
-import type { ArrivalsTurnPayload, ChatTurn } from "@/lib/agent-chat-state";
+import type { RouteCard } from "@/lib/agent-chat/route-card-contract";
+import { normalizeRouteCoordinate } from "@/lib/agent-chat/route-selection";
+import type { ArrivalsTurnPayload, ChatTurn } from "@/lib/agent-chat/state";
 import type { DestinationSelection, RouteStep } from "@/types";
 
 /** Imperative handle the map exposes to the shell for camera controls. */

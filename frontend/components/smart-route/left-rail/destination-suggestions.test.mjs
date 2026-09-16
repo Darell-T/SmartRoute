@@ -11,7 +11,7 @@ import {
   DestinationInput,
   cleanDestinationSubmit,
   destinationComboboxCommand,
-} from "./route-view-actions.tsx";
+} from "./route-view/actions.tsx";
 
 const jay = {
   id: "jay",

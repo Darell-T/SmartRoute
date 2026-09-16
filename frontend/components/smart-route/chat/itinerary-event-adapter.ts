@@ -4,7 +4,7 @@ import type {
   CanonicalItineraryLeg,
   CanonicalTransferKind,
   CanonicalTransferSemantics,
-} from "@/lib/agent-route-card-contract";
+} from "@/lib/agent-chat/route-card-contract";
 import {
   canonicalPlaceLabel,
   canonicalStopLabel,

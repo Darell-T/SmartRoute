@@ -11,7 +11,7 @@
 
 import { MapPin } from "iconoir-react";
 import { motion, useReducedMotion } from "motion/react";
-import type { ArrivalsTurnPayload } from "@/lib/use-agent-chat";
+import type { ArrivalsTurnPayload } from "@/lib/agent-chat/use-agent-chat";
 import { LineBadge } from "./line-badge";
 import { WalkingIcon } from "./walking-icon";
 

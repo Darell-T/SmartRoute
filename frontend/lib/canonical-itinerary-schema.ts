@@ -4,7 +4,7 @@ import type {
   CanonicalItinerary,
   CanonicalItineraryPlace,
   RouteSelectionDecision,
-} from "./agent-route-card-contract";
+} from "./agent-chat/route-card-contract";
 import { MAX_LIST, boundedInteger, boundedNumber, limitedText, nonEmptyText, nonEmptyTextList } from "./schema-primitives";
 
 const MAX_SECONDS = 86_400;

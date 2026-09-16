@@ -4,7 +4,7 @@ import type {
   CanonicalItinerary,
   CanonicalItineraryLeg,
   CanonicalItineraryPlace,
-} from "./agent-route-card-contract";
+} from "./agent-chat/route-card-contract";
 
 const canonicalLabelFields = z.object({
   display_name: z.string().nullable().optional(),

@@ -2,7 +2,7 @@ import type { RouteStep as ApiRouteStep } from "@/types/api";
 import type {
   CanonicalItinerary,
   CanonicalItineraryLeg,
-} from "@/lib/agent-chat-stream";
+} from "@/lib/agent-chat/stream";
 import { canonicalPlaceLabel } from "@/lib/canonical-itinerary-label";
 import type { RouteDetailStep, RouteStep, RouteStripSegment } from "../types";
 import { isTransitStep } from "@/lib/route-planning";

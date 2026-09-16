@@ -6,8 +6,8 @@ import { createRoot } from "react-dom/client";
 import { renderToString } from "react-dom/server";
 import test from "node:test";
 
-import { SmartRouteThemeProvider, useSmartRouteTheme } from "@/lib/use-chat-theme";
-import { useVoiceInput } from "@/lib/use-voice-input";
+import { SmartRouteThemeProvider, useSmartRouteTheme } from "@/lib/hooks/use-chat-theme";
+import { useVoiceInput } from "@/lib/hooks/use-voice-input";
 
 const cssStubLoader = `
 export function resolve(specifier, context, nextResolve) {

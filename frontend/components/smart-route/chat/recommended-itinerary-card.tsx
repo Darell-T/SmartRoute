@@ -3,7 +3,7 @@
 import { useId, useMemo, useState } from "react";
 import { motion, useReducedMotion } from "motion/react";
 import { Map as MapIcon } from "iconoir-react";
-import type { RouteCard as RouteCardData } from "@/lib/agent-chat-stream";
+import type { RouteCard as RouteCardData } from "@/lib/agent-chat/stream";
 import {
   buildItineraryViewModel,
   buildMergedItineraryViewModel,

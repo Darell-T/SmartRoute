@@ -1,4 +1,4 @@
-import type { CanonicalItinerary } from "@/lib/agent-route-card-contract";
+import type { CanonicalItinerary } from "@/lib/agent-chat/route-card-contract";
 
 export interface Coordinates {
   latitude: number;

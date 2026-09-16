@@ -23,7 +23,7 @@ const mobileShellCss = readFileSync(
   "utf8",
 );
 const viewportSource = readFileSync(
-  new URL("../../../lib/use-mobile-visible-viewport.ts", import.meta.url),
+  new URL("../../../lib/hooks/use-mobile-visible-viewport.ts", import.meta.url),
   "utf8",
 );
 

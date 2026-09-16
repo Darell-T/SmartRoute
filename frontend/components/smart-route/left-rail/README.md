@@ -1,13 +1,24 @@
-# SmartRoute Left Rail
+# SmartRoute left rail
 
 The left rail renders passenger-facing display models. Backend payloads should
 be normalized before they reach React markup.
 
-## Display Adapters
+## Folder listing
+
+- `left-rail.tsx` and `index.ts` are the public rail shell and barrel.
+- `atoms.tsx` and `types.ts` own shared rail markup primitives and display types.
+- `arrival-countdown.tsx` owns live arrival countdown rendering.
+- `destination-suggestions.tsx` owns destination combobox suggestion markup.
+- `live-data.ts` and `live-data/` own nearby transit, route planning, arrivals, and loading-status adapters.
+- `alerts/` owns service-alert feed adapters and alert views.
+- `route-view/` owns the Route tab, destination input, itinerary, nearby panel, and display-compat helpers.
+- Cross-cutting tests stay here: `hydration.test.mjs`, `coverage-tail.test.mjs`, `nearby-arrivals-edges.test.mjs`.
+
+## Display adapters
 
 - `live-data.ts` formats nearby transit, route planning, arrivals, and public
   loading status into rail-ready rows.
-- `alert-feed.ts` formats MTA service alerts and recent live-feed events into
+- `alerts/feed.ts` formats MTA service alerts and recent live-feed events into
   `AlertFeedItem` rows. It also owns the shared subway line-family table used
   for alert grouping and service-name labels.
 
@@ -15,15 +26,15 @@ Keep grouping, title cleanup, arrival formatting, and alert text compaction in
 these adapters. Components should render the display shape instead of parsing
 raw backend fields inline.
 
-Do not render backend fields directly in `route-view.tsx` or
-`alerts-view.tsx` when the value needs passenger-facing cleanup. Add or update a
+Do not render backend fields directly in `route-view/route-view.tsx` or
+`alerts/alerts-view.tsx` when the value needs passenger-facing cleanup. Add or update a
 display adapter first, then render the normalized field.
 
-## Guard Tests
+## Guard tests
 
 The `.test.mjs` files in this folder are intentional source guards, not only
 runtime tests. `hydration.test.mjs`, `live-data.test.mjs`, and
-`alert-feed.test.mjs` check product and markup invariants such as no fake rows,
+`alerts/feed.test.mjs` check product and markup invariants such as no fake rows,
 stable grouped feeds, and no legacy public copy. Update those assertions only
 when the visible contract changes.
 
