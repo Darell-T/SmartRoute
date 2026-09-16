@@ -52,10 +52,6 @@ export interface AgentRoutePlan {
   entryContext: "chat";
 }
 
-function canonicalDurationMinutes(seconds: number): number {
-  return Math.round(seconds / 60);
-}
-
 /**
  * Builds the map-ready selection for a tapped route card. Returns `null`
  * when the card carries no route geometry (empty or missing `route` array)
@@ -105,7 +101,7 @@ export function agentRoutePlanFromCards(
     const route = agentRouteFromCard(card);
     const itinerary = parseCanonicalItinerary(card.itinerary);
     if (!route || !itinerary) return [];
-    const totalMinutes = canonicalDurationMinutes(itinerary.total_duration_seconds);
+    const totalMinutes = Math.round(itinerary.total_duration_seconds / 60);
     return [
       {
         id: card.card_id,

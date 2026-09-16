@@ -121,7 +121,7 @@ function rewriteDelayTitle(text: string): string | null {
   const runningDelays = text.match(/\btrains?\s+(?:are\s+)?running with delays\b(.*)$/i);
   if (runningDelays) return sentenceCase(`Delays${runningDelays[1]}`.trim());
   const noService = text.match(
-    /\bthere is no (?:[A-Za-z0-9/ ]{1,12}\s)?service (?:in either direction )?(between [A-Za-z0-9 .'\-\/]+?)(?:[.,]|$)/i,
+    /\bthere is no (?:[A-Za-z0-9/ ]{1,12}\s)?service (?:in either direction )?(between [A-Za-z0-9 .'\-/]+?)(?:[.,]|$)/i,
   );
   if (noService) return sentenceCase(`No service ${noService[1].trim()}`);
   const everyMinutes = text.match(/\bruns?\s+(?:about\s+)?every\s+(\d+)\s+minutes?\b([^.,]*)/i);

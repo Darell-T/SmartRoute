@@ -79,7 +79,7 @@ export function sortAlertFeedItems(items: AlertFeedItem[]): AlertFeedItem[] {
 function issueSignature(item: AlertFeedItem): string {
   const source = `${item.summary ?? ""} ${item.title} ${item.context ?? ""}`;
   const near = source.match(
-    /\b(?:near|at|between)\s+([A-Za-z0-9][A-Za-z0-9 .'\-\/]{3,40})/i,
+    /\b(?:near|at|between)\s+([A-Za-z0-9][A-Za-z0-9 .'\-/]{3,40})/i,
   );
   const place = near
     ? normalizeIssueText(near[1])
@@ -92,7 +92,7 @@ function issueSignature(item: AlertFeedItem): string {
     : `${item.routeIds.join(",")}|${normalizeIssueText(item.title)}`;
 }
 
-function normalizeIssueText(value: string): string {
+export function normalizeIssueText(value: string): string {
   return cleanPassengerAlertText(value)
     .toLowerCase()
     .replace(/[^a-z0-9 ]+/g, "")

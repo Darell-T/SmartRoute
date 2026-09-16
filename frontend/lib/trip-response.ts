@@ -7,11 +7,9 @@ import {
   routeStepSchema,
   type ValidatedCanonicalItinerary,
 } from "./canonical-itinerary-schema";
+import { boundedInteger } from "./schema-primitives";
 
 export const TRIP_PLAN_FAILED = "Failed to plan trip";
-
-const boundedInteger = (minimum: number, maximum: number) =>
-  z.number().int().min(minimum).max(maximum);
 
 const absentWhenNull = <Schema extends z.ZodTypeAny>(schema: Schema) =>
   z.preprocess((value) => (value === null ? undefined : value), schema);

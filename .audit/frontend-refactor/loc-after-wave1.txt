@@ -1,0 +1,3 @@
+app 938
+lib 5000
+components 15567

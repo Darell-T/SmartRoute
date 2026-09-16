@@ -1,3 +1,5 @@
+import { clamp } from "@/lib/utils";
+
 const CURRENT_LOCATION_STYLE_ID = "smart-route-current-location-marker-style";
 
 const EARTH_CIRCUMFERENCE_METERS = 40075016.686;
@@ -160,10 +162,6 @@ function metersPerPixelAtLatitude(lat: number, zoom: number): number {
     (Math.cos(latitudeRadians) * EARTH_CIRCUMFERENCE_METERS) /
     (TILE_SIZE * 2 ** zoom)
   );
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
 }
 
 export function createDestinationPin(): HTMLDivElement {

@@ -1,0 +1,11 @@
+MERGED coverage-final.json (unit + browser)
+Statements : 97.36% (45495/46729)
+Branches   : 91.92% (11701/12729)
+Functions  : 96.68% (2885/2984)
+Lines      : 97.36% (45495/46729)
+
+UNIT-ONLY c8 text-summary (before browser merge):
+Statements   : 94.37% ( 44100/46729 )
+Branches     : 90.01% ( 10617/11795 )
+Functions    : 95.33% ( 2823/2961 )
+Lines        : 94.37% ( 44100/46729 )

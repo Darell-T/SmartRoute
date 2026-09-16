@@ -14,7 +14,7 @@ import {
   normalizeAlertRoutes,
   serviceNameForRoutes,
 } from "./alert-line-identities";
-import { groupAlertThreads, sortAlertFeedItems } from "./alert-feed-threading";
+import { groupAlertThreads, sortAlertFeedItems, normalizeIssueText } from "./alert-feed-threading";
 import type {
   AlertFeedItem,
   AlertFeedSeverity,
@@ -388,14 +388,4 @@ function severityStatusPhrase(
   return severity === "minor"
     ? "Trains are running with delays."
     : "Service change in effect.";
-}
-
-function normalizeIssueText(value: string): string {
-  return cleanPassengerAlertText(value)
-    .toLowerCase()
-    .replace(/[^a-z0-9 ]+/g, "")
-    .replace(/\b(?:college|station|av|avenue|st|street)\b/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 40);
 }

@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { clamp } from "@/lib/utils";
 
 export type MobileRailSheetState = "small" | "medium" | "full";
 
@@ -65,10 +66,6 @@ const MOBILE_RAIL_FLICK_WINDOW_MS = 90;
 const MOBILE_RAIL_SAMPLE_RETENTION_MS = 250;
 
 type MobileRailPointerSample = { time: number; y: number };
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(Math.max(value, min), max);
-}
 
 // Signed px/ms velocity over the trailing window, using the same sign
 // convention as the drag delta (startY - currentY): positive means the

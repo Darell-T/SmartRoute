@@ -41,7 +41,7 @@ function isLocalBrowserHost(): boolean {
   return /^(localhost|127\.0\.0\.1|0\.0\.0\.0)$/.test(window.location.hostname);
 }
 
-function isLocalBackendBase(base: string): boolean {
+export function isLocalBackendBase(base: string): boolean {
   try {
     const parsed = new URL(base);
     return /^(localhost|127\.0\.0\.1|0\.0\.0\.0)$/.test(parsed.hostname);

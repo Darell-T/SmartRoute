@@ -159,23 +159,23 @@ function whyNotPhrase(
   if (/^\d+ extra transfer/.test(lower)) {
     return `${line} because it adds ${lower}`;
   }
-  if (/^more walking/.test(lower)) {
+  if (lower.startsWith("more walking")) {
     return `${line} because it has more walking`;
   }
-  if (/^later departure/.test(lower)) {
+  if (lower.startsWith("later departure")) {
     return `${line} because it leaves later`;
   }
-  if (/^affected by delays/.test(lower)) {
+  if (lower.startsWith("affected by delays")) {
     return `${line} because it is affected by delays`;
   }
   const fasterRisk = reason.match(/^faster by (\d+) min · (.+)$/i);
   if (fasterRisk) {
     return `${line} because it is affected by ${fasterRisk[2]} despite being ${fasterRisk[1]} min faster`;
   }
-  if (/^faster/.test(lower)) {
+  if (lower.startsWith("faster")) {
     return `${line} because it trades speed for lower reliability`;
   }
-  if (/^slower/.test(lower)) {
+  if (lower.startsWith("slower")) {
     return `${line} because it is ${lower}`;
   }
   return `${line} because ${lower}`;
