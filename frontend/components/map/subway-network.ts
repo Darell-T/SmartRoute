@@ -118,25 +118,24 @@ export const SUBWAY_STATION_ROUTE_BADGES_LAYER_ID =
 // Stable rank for visual_z_order / line-sort-key. Lower number draws
 // first (under). Utility/shuttle colors at the bottom; prominent route
 // families on top.
-const COLOR_VISUAL_Z_ORDER = {
-  "#808183": 0, // S/FS/H gray shuttles
-  "#A7A9AC": 1, // L gray
-  "#996633": 2, // J/Z brown
-  "#6CBE45": 3, // G light green
-  "#0078C6": 4, // SI blue
-  "#FCCC0A": 5, // N/Q/R/W yellow
-  "#B933AD": 6, // 7 purple
-  "#0A84FF": 7, // A/C/E Apple system blue
-  "#FF6319": 8, // B/D/F/M orange
-  "#00933C": 9, // 4/5/6 green
-  "#EE352E": 10, // 1/2/3 red
-} satisfies Record<string, number>;
+const COLOR_VISUAL_Z_ORDER = new Map<string, number>(
+  Object.entries({
+    "#808183": 0, // S/FS/H gray shuttles
+    "#A7A9AC": 1, // L gray
+    "#996633": 2, // J/Z brown
+    "#6CBE45": 3, // G light green
+    "#0078C6": 4, // SI blue
+    "#FCCC0A": 5, // N/Q/R/W yellow
+    "#B933AD": 6, // 7 purple
+    "#0A84FF": 7, // A/C/E Apple system blue
+    "#FF6319": 8, // B/D/F/M orange
+    "#00933C": 9, // 4/5/6 green
+    "#EE352E": 10, // 1/2/3 red
+  }),
+);
 
 function visualZOrderForColor(color: string): number {
-  for (const [swatch, rank] of Object.entries(COLOR_VISUAL_Z_ORDER)) {
-    if (swatch === color) return rank;
-  }
-  return 100;
+  return COLOR_VISUAL_Z_ORDER.get(color) ?? 100;
 }
 
 // Normalize segment direction so MapLibre's perpendicular line-offset is

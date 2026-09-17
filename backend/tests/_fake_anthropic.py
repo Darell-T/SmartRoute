@@ -161,11 +161,6 @@ def reload_agent_loop_module(*, rounds: list[dict] | None = None, env: dict | No
     sys.modules["anthropic"] = fake_anthropic_module
     try:
         with patch.dict(os.environ, env or {}, clear=False):
-            session_mod = sys.modules.get("app.services.agent.session")
-            if session_mod is not None:
-                session_mod.AGENT_TURN_DEADLINE_S = float(
-                    os.environ.get("AGENT_TURN_DEADLINE_S", "50")
-                )
             if "app.services.agent.loop" in sys.modules:
                 return importlib.reload(sys.modules["app.services.agent.loop"])
             return importlib.import_module("app.services.agent.loop")

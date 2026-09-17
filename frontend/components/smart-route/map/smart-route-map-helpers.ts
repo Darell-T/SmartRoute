@@ -6,16 +6,15 @@ import type { Coordinates } from "@/types";
 import artifactManifest from "@/lib/artifact-manifest.json";
 
 export const DEBUG_LIVE_MAP = process.env.NODE_ENV !== "production";
+const ARTIFACT_VERSIONS = new Map<string, string>(Object.entries(artifactManifest));
 
 export function toLngLat(c: Coordinates): [number, number] {
   return [c.longitude, c.latitude];
 }
 
 export function artifactUrl(name: string): string {
-  for (const [file, version] of Object.entries(artifactManifest)) {
-    if (file === name) return `/${name}?v=${version}`;
-  }
-  return `/${name}`;
+  const version = ARTIFACT_VERSIONS.get(name);
+  return version ? `/${name}?v=${version}` : `/${name}`;
 }
 
 export async function loadVisualSubwayNetworkOrNull(): Promise<GeoJSON.FeatureCollection | null> {

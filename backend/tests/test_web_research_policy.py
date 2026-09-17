@@ -383,9 +383,10 @@ class _ScriptedStream:
 class PauseTurnTests(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls):
-        cls.loop = reload_agent_loop_module(
-            env={"AGENT_AUTO_MAX_ROUNDS": "4", "AGENT_TURN_DEADLINE_S": "60"}
-        )
+        cls.loop = reload_agent_loop_module(env={"AGENT_AUTO_MAX_ROUNDS": "4"})
+        deadline = patch.object(cls.loop.session_module, "AGENT_TURN_DEADLINE_S", 60)
+        deadline.start()
+        cls.addClassCleanup(deadline.stop)
 
     def setUp(self):
         cache._mem.clear()
