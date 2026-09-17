@@ -17,13 +17,13 @@ function derivePublicRationale(
       : "Fastest available option",
   ];
   const departsIn = firstTransitStep(steps)?.minutes_until_train_arrives;
-  if (typeof departsIn === "number" && Number.isFinite(departsIn)) {
+  if (departsIn != null && Number.isFinite(departsIn)) {
     parts.push(`live arrival in ${Math.max(1, Math.round(departsIn))} min`);
   }
   const activeAlerts = candidate?.score_breakdown?.active_alerts;
   if (activeAlerts === 0) {
     parts.push("no service alerts");
-  } else if (typeof activeAlerts === "number" && activeAlerts > 0) {
+  } else if (activeAlerts != null && activeAlerts > 0) {
     parts.push(
       `${activeAlerts} service alert${activeAlerts === 1 ? "" : "s"} on route`,
     );
@@ -159,23 +159,23 @@ function whyNotPhrase(
   if (/^\d+ extra transfer/.test(lower)) {
     return `${line} because it adds ${lower}`;
   }
-  if (/^more walking/.test(lower)) {
+  if (lower.startsWith("more walking")) {
     return `${line} because it has more walking`;
   }
-  if (/^later departure/.test(lower)) {
+  if (lower.startsWith("later departure")) {
     return `${line} because it leaves later`;
   }
-  if (/^affected by delays/.test(lower)) {
+  if (lower.startsWith("affected by delays")) {
     return `${line} because it is affected by delays`;
   }
   const fasterRisk = reason.match(/^faster by (\d+) min · (.+)$/i);
   if (fasterRisk) {
     return `${line} because it is affected by ${fasterRisk[2]} despite being ${fasterRisk[1]} min faster`;
   }
-  if (/^faster/.test(lower)) {
+  if (lower.startsWith("faster")) {
     return `${line} because it trades speed for lower reliability`;
   }
-  if (/^slower/.test(lower)) {
+  if (lower.startsWith("slower")) {
     return `${line} because it is ${lower}`;
   }
   return `${line} because ${lower}`;

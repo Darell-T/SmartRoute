@@ -10,7 +10,7 @@ from app.services.agent.events import (
     TokenEvent,
     TransitStatusActionEvent,
 )
-from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools.base import ToolContext
 from app.services.agent.tools.transit import evidence as transit_evidence
 from app.services.agent.tools.transit import present_transit
 from app.services.agent.tools.transit.direction import DirectionResolution

@@ -12,7 +12,7 @@ import {
 import { Map as MapIcon } from "iconoir-react";
 import { useEffect, useRef, type ComponentType, type SVGProps } from "react";
 import type { AppTab } from "@/app/page-parts";
-import type { ChatTheme } from "@/lib/use-chat-theme";
+import type { ChatTheme } from "@/lib/hooks/use-chat-theme";
 
 type NavigationIcon = LucideIcon | ComponentType<SVGProps<SVGSVGElement>>;
 

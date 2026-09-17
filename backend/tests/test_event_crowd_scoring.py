@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
-from app.services.agent.tools._types import ToolResult
+from app.services.agent.tools.base import ToolResult
 from app.services.trips import scoring, selection_decision
 from app.services.trips.crowds import event as event_crowd
 from app.services.trips.preparation import evidence as route_option_evidence
@@ -120,8 +120,8 @@ class EventCrowdAssociationTests(unittest.TestCase):
             [_event()],
             fallback_time=event_crowd._parse_time("2026-07-25T23:15:00Z"),
         )
-        scored = scoring._score_routes(routes, [], ticketmaster_event_impacts=impacts)
-        score_by_index = scoring._score_by_index(scored)
+        scored = scoring.score_routes(routes, [], ticketmaster_event_impacts=impacts)
+        score_by_index = scoring.score_by_index(scored)
         assert score_by_index[0]["event_crowd_penalty"] > 0
         assert score_by_index[1]["event_crowd_penalty"] == 0
         assert score_by_index[0]["score"] > score_by_index[1]["score"]
@@ -424,7 +424,7 @@ class RouteScoreFormulaRegressionTests(unittest.TestCase):
         route = _route(total_minutes=44)
         route[0]["route_total_seconds"] = 46 * 60
 
-        scored = scoring._route_score(route, [])
+        scored = scoring.route_score(route, [])
 
         assert scored["total_minutes"] == 46
 
@@ -434,7 +434,7 @@ class RouteScoreFormulaRegressionTests(unittest.TestCase):
         impacts = [
             {"event_id": "ev-1", "title": "Game", "route_index": 0, "risk_score": 5.0}
         ]
-        scored = scoring._route_score(
+        scored = scoring.route_score(
             route,
             alerts,
             route_index=0,
@@ -448,7 +448,7 @@ class RouteScoreFormulaRegressionTests(unittest.TestCase):
         assert scored["event_crowd_penalty"] == 5.0
         assert scored["walking_penalty"] == 0
         assert scored["preferred_mode_penalty"] == 4
-        assert scored["score"] == scoring._component_score_total(total_minutes=scored["total_minutes"], transfers=scored["transfers"], alert_count=scored["alert_count"], event_crowd_penalty=scored["event_crowd_penalty"], walking_penalty=scored["walking_penalty"], preferred_mode_penalty=scored["preferred_mode_penalty"])
+        assert scored["score"] == scoring.component_score_total(total_minutes=scored["total_minutes"], transfers=scored["transfers"], alert_count=scored["alert_count"], event_crowd_penalty=scored["event_crowd_penalty"], walking_penalty=scored["walking_penalty"], preferred_mode_penalty=scored["preferred_mode_penalty"])
         assert scored["score"] == 30 + 0 + 8 + 5.0 + 0 + 4
 
     def test_transfer_and_street_walk_components_unchanged(self):
@@ -457,25 +457,25 @@ class RouteScoreFormulaRegressionTests(unittest.TestCase):
             {"type": "WALK", "duration_seconds": 120},
             {"type": "SUBWAY", "route_id": "B", "departure_stop": "b", "arrival_stop": "c"},
         ]
-        scored = scoring._route_score(route, [], routing_preference="LESS_WALKING")
+        scored = scoring.route_score(route, [], routing_preference="LESS_WALKING")
         assert scored["transfers"] == 1
         assert scored["street_walking_seconds"] == 120
         assert scored["walking_penalty"] == 4
         assert scored["event_crowd_penalty"] == 0
-        assert scored["score"] == scoring._component_score_total(total_minutes=scored["total_minutes"], transfers=scored["transfers"], alert_count=scored["alert_count"], event_crowd_penalty=scored["event_crowd_penalty"], walking_penalty=scored["walking_penalty"], preferred_mode_penalty=scored["preferred_mode_penalty"])
+        assert scored["score"] == scoring.component_score_total(total_minutes=scored["total_minutes"], transfers=scored["transfers"], alert_count=scored["alert_count"], event_crowd_penalty=scored["event_crowd_penalty"], walking_penalty=scored["walking_penalty"], preferred_mode_penalty=scored["preferred_mode_penalty"])
 
     def test_alert_impact_is_weighted_by_rider_relevant_severity(self):
         route = _route(total_minutes=30)
 
-        elevator = scoring._route_score(
+        elevator = scoring.route_score(
             route,
             [{"header": "Elevator outage", "route_ids": ["A"]}],
         )
-        minor = scoring._route_score(
+        minor = scoring.route_score(
             route,
             [{"header": "Minor delays", "route_ids": ["A"]}],
         )
-        suspended = scoring._route_score(
+        suspended = scoring.route_score(
             route,
             [{"header": "Service suspended", "route_ids": ["A"]}],
         )
@@ -501,11 +501,11 @@ class RouteScoreFormulaRegressionTests(unittest.TestCase):
             "description": "A runs local in both directions",
         }
 
-        planned = scoring._route_score(route, [planned_local])
+        planned = scoring.route_score(route, [planned_local])
         assert planned["alert_count"] == 0
         assert planned["alert_penalty"] == 0
 
-        suspended = scoring._route_score(
+        suspended = scoring.route_score(
             route,
             [
                 {
@@ -519,7 +519,7 @@ class RouteScoreFormulaRegressionTests(unittest.TestCase):
         assert suspended["alert_count"] == 1
         assert suspended["alert_penalty"] == 24
 
-        severe = scoring._route_score(
+        severe = scoring.route_score(
             route,
             [
                 {
@@ -533,7 +533,7 @@ class RouteScoreFormulaRegressionTests(unittest.TestCase):
         assert severe["alert_count"] == 1
         assert severe["alert_penalty"] == 16
 
-        legacy = scoring._route_score(
+        legacy = scoring.route_score(
             route,
             [{"header": "Unknown A service notice", "route_ids": ["A"]}],
         )

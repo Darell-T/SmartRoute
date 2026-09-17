@@ -6,7 +6,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { LeftRail } from "./left-rail.tsx";
-import { RouteView } from "./route-view.tsx";
+import { RouteView } from "./route-view/route-view.tsx";
 
 const ROOT = path.resolve(import.meta.dirname, "../../..");
 
@@ -72,12 +72,12 @@ test("left rail exposes a controlled tab seam without mirroring props in an effe
 
 test("left rail uses restrained transit product surfaces", () => {
   const routeView = [
-    "route-view.tsx",
-    "route-view-actions.tsx",
-    "route-view-alternatives.tsx",
-    "route-view-itinerary.tsx",
-    "route-view-nearby.tsx",
-    "route-view-state.tsx",
+    "route-view/route-view.tsx",
+    "route-view/actions.tsx",
+    "route-view/alternatives.tsx",
+    "route-view/itinerary.tsx",
+    "route-view/nearby.tsx",
+    "route-view/state.tsx",
   ]
     .map((file) =>
       fs.readFileSync(
@@ -87,15 +87,15 @@ test("left rail uses restrained transit product surfaces", () => {
     )
     .join("\n");
   const nearbyView = fs.readFileSync(
-    path.join(ROOT, "components/smart-route/left-rail/route-view-nearby.tsx"),
+    path.join(ROOT, "components/smart-route/left-rail/route-view/nearby.tsx"),
     "utf8",
   );
   const alertsView = [
-    "alerts-view.tsx",
-    "alert-featured-card.tsx",
-    "alert-line-list.tsx",
-    "alert-detail.tsx",
-    "alert-view-model.ts",
+    "alerts/alerts-view.tsx",
+    "alerts/featured-card.tsx",
+    "alerts/line-list.tsx",
+    "alerts/detail.tsx",
+    "alerts/view-model.ts",
   ].map((file) => fs.readFileSync(
     path.join(ROOT, "components/smart-route/left-rail", file),
     "utf8",
@@ -112,23 +112,23 @@ test("left rail uses restrained transit product surfaces", () => {
     "utf8",
   );
   const alertFeed = fs.readFileSync(
-    path.join(ROOT, "components/smart-route/left-rail/alert-feed.ts"),
+    path.join(ROOT, "components/smart-route/left-rail/alerts/feed.ts"),
     "utf8",
   );
   const alertLineIdentities = fs.readFileSync(
-    path.join(ROOT, "components/smart-route/left-rail/alert-line-identities.ts"),
+    path.join(ROOT, "components/smart-route/left-rail/alerts/line-identities.ts"),
     "utf8",
   );
   const alertFeedNormalizer = fs.readFileSync(
-    path.join(ROOT, "components/smart-route/left-rail/alert-feed-normalizer.ts"),
+    path.join(ROOT, "components/smart-route/left-rail/alerts/feed-normalizer.ts"),
     "utf8",
   );
   const alertFeedThreading = fs.readFileSync(
-    path.join(ROOT, "components/smart-route/left-rail/alert-feed-threading.ts"),
+    path.join(ROOT, "components/smart-route/left-rail/alerts/feed-threading.ts"),
     "utf8",
   );
   const alertFeedCopy = fs.readFileSync(
-    path.join(ROOT, "components/smart-route/left-rail/alert-feed-copy.ts"),
+    path.join(ROOT, "components/smart-route/left-rail/alerts/feed-copy.ts"),
     "utf8",
   );
   const atoms = fs.readFileSync(
@@ -239,7 +239,7 @@ test("left rail uses restrained transit product surfaces", () => {
     "the destination command input should not render the old heading, search icon, or green spinner",
   );
   const voice = fs.readFileSync(
-    path.join(ROOT, "lib/use-voice-input.ts"),
+    path.join(ROOT, "lib/hooks/use-voice-input.ts"),
     "utf8",
   );
   assert.match(

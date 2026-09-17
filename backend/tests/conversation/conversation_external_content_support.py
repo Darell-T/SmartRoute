@@ -29,6 +29,7 @@ from unittest.mock import AsyncMock, patch
 from app.services.agent import candidate_store, discovery_store
 from app.services.agent import tools as agent_tools
 from app.services.agent import trip_state as trip_state_module
+from app.services.agent.model import request as model_request
 from app.services.agent.tools.places import search_local_places
 
 from tests.conversation.conversation_discovery_fixtures import poi_result
@@ -458,7 +459,7 @@ class _ExternalContentBase(unittest.IsolatedAsyncioTestCase):
         for mode in ("auto",):
                 offered = {
                     schema["name"]
-                    for schema in self.loop._tools_for_state(
+                    for schema in model_request.tools_for_state(
                         self.loop.agent_policy.policy_for_mode(mode)
                     )
                 }

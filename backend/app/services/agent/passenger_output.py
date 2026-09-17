@@ -6,6 +6,7 @@ provider boundaries, or authoritative state.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 
 from app.services.agent import events as agent_events
@@ -239,6 +240,57 @@ def validated_terminal_message(
     return message
 
 
+_INTERNAL_CARD_REFERENCE = re.compile(
+    r"\b(?:route\s+)?card\s+[`'\"]?(?:rc|mock)[_-][A-Za-z0-9_-]+[`'\"]?\s*(?:[\u2014\u2013-]\s*)?",
+    re.IGNORECASE,
+)
+_OPAQUE_CARD_ID = re.compile(r"\b(?:rc|mock)[_-][A-Za-z0-9_-]{4,}\b", re.IGNORECASE)
+_OPAQUE_CANDIDATE_ID = re.compile(r"\b(?:cd|cs)_[A-Za-z0-9_-]{4,}\b", re.IGNORECASE)
+_OPAQUE_PLACE_ID = re.compile(
+    r"\b(?:pl|ds)_[A-Za-z0-9_-]{4,}\b|\bChIJ[A-Za-z0-9_-]{6,}\b",
+    re.IGNORECASE,
+)
+_INTERNAL_RUNTIME_LINE = re.compile(
+    r"(?im)^.*\b(?:prepare_route_options|present_route|get_place_details|"
+    r"search_local_places|accessibility_status|lookup_arrivals|"
+    r"check_area_conditions|transit_snapshot|event_lookup|venue_crowd_window|"
+    r"lookup_facts|web_search|plan_trip|destination_place_id|place_id|"
+    r"candidate_id|candidate_set_id|discovery_set_id|tool_use|tool_result|"
+    r"function\s*call)\b.*(?:\r?\n|$)"
+)
+_FAKE_WAIT_SENTENCE = re.compile(
+    r"(?i)(?:^|(?<=[.!?])\s+)(?:please\s+)?(?:give\s+me\s+(?:a\s+)?moment"
+    r"(?:\s+for\s+(?:the\s+)?results)?|i(?:'m|\s+am)\s+waiting\s+for\s+"
+    r"(?:the\s+)?(?:results|alternatives)|i\s+should\s+have\s+(?:those\s+)?"
+    r"(?:results|candidates)\s+shortly|let\s+me\s+call\s+that\s+now)"
+    r"[.!?]*(?=\s|$)"
+)
+SUSPICIOUS_RIDER_TEXT = re.compile(
+    r"[*_`~]|\bcard\s*$|\b(?:rc|mock|cd|cs|pl|ds)[_-]|\bChIJ|"
+    r"\b(?:prepare_route_options|present_route|get_place_details|"
+    r"search_local_places|destination_place_id|place_id|candidate_id|"
+    r"candidate_set_id|discovery_set_id|tool_use|tool_result)\b|"
+    r"\b(?:give\s+me\s+(?:a\s+)?moment|"
+    r"waiting\s+for\s+(?:the\s+)?results|results\s+shortly|let\s+me\s+call)",
+    re.IGNORECASE,
+)
+
+
+def sanitize_rider_text(text: str) -> str:
+    sanitized = _INTERNAL_CARD_REFERENCE.sub("", text)
+    sanitized = _OPAQUE_CARD_ID.sub("the route", sanitized)
+    sanitized = _OPAQUE_CANDIDATE_ID.sub("the route", sanitized)
+    sanitized = _OPAQUE_PLACE_ID.sub("the selected place", sanitized)
+    sanitized = _INTERNAL_RUNTIME_LINE.sub("", sanitized)
+    sanitized = _FAKE_WAIT_SENTENCE.sub("", sanitized)
+    sanitized = re.sub(r"\*\*(.*?)\*\*", r"\1", sanitized, flags=re.DOTALL)
+    sanitized = re.sub(r"__(.*?)__", r"\1", sanitized, flags=re.DOTALL)
+    sanitized = re.sub(r"`([^`]+)`", r"\1", sanitized)
+    sanitized = re.sub(r"(?m)^\s*#{1,6}\s+", "", sanitized)
+    sanitized = re.sub(r"~(?=\d)", "about ", sanitized)
+    return re.sub(r"[ \t]{2,}", " ", sanitized)
+
+
 def pop_activity_label(tool_input: dict) -> str | None:
     """Remove and validate display metadata before capability execution."""
     return validated_activity_label(tool_input.pop(ACTIVITY_LABEL_FIELD, None))
@@ -292,9 +344,6 @@ _UNRESOLVED_ACTION_FALLBACK = (
     "I couldn't complete that request in this turn, so I don't have a "
     "verified result to share."
 )
-_RESOLVED_GOAL_STATES = frozenset(
-    {GoalState.SATISFIED, GoalState.CANCELLED_BY_RIDER, GoalState.SUPERSEDED}
-)
 
 
 def truthful_failure_text(evidence: object) -> str:
@@ -314,20 +363,13 @@ def truthful_failure_text(evidence: object) -> str:
     return _unresolved_goal_failure_text(evidence) or _UNRESOLVED_ACTION_FALLBACK
 
 
-def _goal_is_unresolved(evidence: object, goal_key: str) -> bool:
-    state = evidence.state_for(goal_key)
-    if state in _RESOLVED_GOAL_STATES:
-        return False
-    return not (state == GoalState.EVIDENCE_READY and evidence.presented_for(goal_key))
-
-
 def _route_goal_is_unresolved(evidence: object) -> bool:
     contract = getattr(evidence, "turn_contract", None)
     if contract is None:
         return False
     route_goals = [goal for goal in contract.goals if goal.kind == GoalKind.ROUTE]
     return bool(route_goals) and any(
-        _goal_is_unresolved(evidence, goal.goal_key) for goal in route_goals
+        evidence.goal_is_unresolved(goal.goal_key) for goal in route_goals
     )
 
 
@@ -336,7 +378,7 @@ def _first_unresolved_goal(evidence: object) -> tuple[GoalKind, GoalState] | Non
     if contract is None:
         return None
     for goal in contract.goals:
-        if _goal_is_unresolved(evidence, goal.goal_key):
+        if evidence.goal_is_unresolved(goal.goal_key):
             return goal.kind, evidence.state_for(goal.goal_key)
     return None
 
@@ -393,9 +435,11 @@ __all__ = [
     "MAX_PRESENTATION_FRAMING_CHARS",
     "MAX_RESEARCH_PRESENTATION_FRAMING_CHARS",
     "MAX_TERMINAL_MESSAGE_CHARS",
+    "SUSPICIOUS_RIDER_TEXT",
     "append_text",
     "framed_events",
     "pop_activity_label",
+    "sanitize_rider_text",
     "truthful_failure_text",
     "validated_activity_label",
     "validated_framing",

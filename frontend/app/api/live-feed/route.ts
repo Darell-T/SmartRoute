@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { z } from "zod";
-import { postProxy } from "@/lib/backend-proxy";
+import { postProxy } from "@/lib/server/backend-proxy";
 
 const LiveFeedSchema = z.object({
   lat: z.number().finite().gte(40.2).lte(41.2),

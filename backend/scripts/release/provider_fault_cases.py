@@ -230,7 +230,7 @@ async def _agent_turn_deadline_fault() -> None:
     session_id, session = session_module.new_session()
     client = SimpleNamespace(messages=_Messages(_StalledStream()))
     started = time.monotonic()
-    with patch.object(loop, "AGENT_MOCK_MODE", False), patch.object(loop, "AGENT_TURN_DEADLINE_S", DEADLINE_SECONDS), patch.object(
+    with patch.object(loop, "AGENT_MOCK_MODE", False), patch.object(loop.session_module, "AGENT_TURN_DEADLINE_S", DEADLINE_SECONDS), patch.object(
         loop, "client", client
     ), patch.object(loop.budget, "agent_enabled", return_value=True), patch.object(
         loop.budget, "check_session_rate_limit", return_value=True

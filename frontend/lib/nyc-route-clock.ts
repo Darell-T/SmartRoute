@@ -23,7 +23,7 @@ export function formatNycRouteClock(
   value: string | number | null | undefined,
 ): string | null {
   if (value == null || value === "") return null;
-  const date = typeof value === "number" ? new Date(value) : new Date(value);
+  const date = new Date(value);
   if (Number.isNaN(date.getTime())) return null;
   return nycClockFormatter.format(date);
 }

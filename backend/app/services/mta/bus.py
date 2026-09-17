@@ -329,7 +329,7 @@ async def get_stalled_buses(route_ids: set) -> list:
     results = await asyncio.gather(*tasks, return_exceptions=True)
     for result in results:
         if isinstance(result, Exception):
-            print(f"[mta_feed] bus feed fetch error: {result}")
+            _LOGGER.warning("[mta_feed] bus feed fetch error: %s", result)
             continue
         stalled_buses.extend(parse_stalled_bus_positions(result))
 

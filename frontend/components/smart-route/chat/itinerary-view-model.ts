@@ -10,17 +10,15 @@ import type {
   CanonicalItinerary,
   RecommendationReason,
   RouteCard,
-} from "@/lib/agent-chat-stream";
+} from "@/lib/agent-chat/stream";
 import { formatNycRouteClock } from "@/lib/nyc-route-clock";
 import { SUBWAY_BULLET_ROUTES } from "@/components/smart-route/train-bullet";
 import {
   buildEventsFromCanonicalItinerary,
   canonicalPlaceLabel,
-  condensePreviewEvents,
   durationMinutesFromSeconds,
   formatDurationMinutes,
   type ItineraryEvent,
-  type ItineraryEventKind,
 } from "./itinerary-event-adapter";
 
 export {
@@ -68,7 +66,7 @@ function firstLegArrivalLabel(card: RouteCard): string | null {
   const routeId = context?.route_id?.trim();
   if (
     !routeId ||
-    typeof minutes !== "number" ||
+    minutes == null ||
     !Number.isFinite(minutes) ||
     !["live", "scheduled"].includes(context?.source_status ?? "")
   ) {
@@ -90,7 +88,7 @@ function structuredFastestCopy(
   reason: Extract<RecommendationReason, { code: "fastest" }>,
 ): string {
   const seconds =
-    typeof reason.difference_seconds === "number" && Number.isFinite(reason.difference_seconds)
+    reason.difference_seconds != null && Number.isFinite(reason.difference_seconds)
       ? Math.max(0, reason.difference_seconds)
       : 0;
   if (seconds >= 60) return `About ${Math.round(seconds / 60)} min faster than the next option`;
@@ -105,13 +103,15 @@ function structuredFewerTransfersCopy(
   return `Uses ${difference} fewer ${difference === 1 ? "transfer" : "transfers"}`;
 }
 
-const STRUCTURED_REASON_COPY: Record<string, string> = {
-  less_walking: "Less walking than the other options",
-  avoids_active_disruption: "Avoids active service alerts on another option",
-  lower_event_crowd_exposure: "Lower exposure to nearby event crowds",
-  accessibility: "Meets the accessibility requirement",
-  reasonable_local_option: "Nearby option with a reasonable overall trip",
-};
+const STRUCTURED_REASON_COPY = new Map<string, string>(
+  Object.entries({
+    less_walking: "Less walking than the other options",
+    avoids_active_disruption: "Avoids active service alerts on another option",
+    lower_event_crowd_exposure: "Lower exposure to nearby event crowds",
+    accessibility: "Meets the accessibility requirement",
+    reasonable_local_option: "Nearby option with a reasonable overall trip",
+  }),
+);
 
 export function formatStructuredRecommendationReason(
   reason: RecommendationReason | string | unknown,
@@ -121,7 +121,7 @@ export function formatStructuredRecommendationReason(
   const structured = reason as RecommendationReason;
   if (structured.code === "fastest") return structuredFastestCopy(structured);
   if (structured.code === "fewer_transfers") return structuredFewerTransfersCopy(structured);
-  return STRUCTURED_REASON_COPY[structured.code] ?? null;
+  return STRUCTURED_REASON_COPY.get(structured.code) ?? null;
 }
 
 function isValidCard(
@@ -143,7 +143,7 @@ function cardTotalMinutes(card: RouteCard): number {
 
 function cardTransferCount(card: RouteCard): number {
   const canonical = card.itinerary?.transfer_count;
-  return typeof canonical === "number" && Number.isFinite(canonical)
+  return canonical != null && Number.isFinite(canonical)
     ? Math.max(0, Math.round(canonical))
     : 0;
 }

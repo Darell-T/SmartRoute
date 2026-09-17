@@ -10,7 +10,10 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from app.services.agent import events as agent_events
+from app.services.agent import public_surface
 from app.services.agent.model import policy as agent_policy
+from app.services.agent.model import prompt as agent_prompt
+from app.services.agent.tools import COMBINED_TOOL_REGISTRY, ToolSpec
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -83,6 +86,65 @@ def build_stream_kwargs(
     if tools and "tool_choice" not in kwargs:
         kwargs["tool_choice"] = {"type": "any"}
     return kwargs
+
+
+def system_blocks() -> list[dict]:
+    return [
+        {
+            "type": "text",
+            "text": agent_prompt.active_system_prompt(),
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+
+
+def messages_from_history(history: list[dict]) -> list[dict]:
+    messages: list[dict] = []
+    for entry in history or []:
+        role = entry.get("role")
+        if role in {"user", "assistant"}:
+            messages.append({"role": role, "content": entry.get("text", "")})
+    return messages
+
+
+def web_search_tool() -> dict:
+    return {
+        "type": "web_search_20250305",
+        "name": "web_search",
+        "max_uses": 1,
+        "allowed_callers": ["direct"],
+        "user_location": {
+            "type": "approximate",
+            "city": "New York City",
+            "region": "New York",
+            "country": "US",
+            "timezone": "America/New_York",
+        },
+    }
+
+
+def tools_for_state(
+    _mode_policy: agent_policy.AgentModePolicy | None = None,
+    session: dict | None = None,
+    include_web: bool = False,
+    turn_evidence: object | None = None,
+    session_id: str | None = None,
+    *,
+    tool_registry: Mapping[str, ToolSpec] | None = None,
+) -> list[dict]:
+    registry = COMBINED_TOOL_REGISTRY if tool_registry is None else tool_registry
+    tools = [
+        dict(schema)
+        for schema in public_surface.schemas_for_state(
+            (spec.schema for spec in registry.values()),
+            turn_evidence,
+            session=session,
+            session_id=session_id,
+        )
+    ]
+    if include_web:
+        tools.append(web_search_tool())
+    return tools
 
 
 def _strip_unsupported_sampling_and_thinking(

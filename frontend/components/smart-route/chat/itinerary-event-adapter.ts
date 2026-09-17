@@ -4,7 +4,7 @@ import type {
   CanonicalItineraryLeg,
   CanonicalTransferKind,
   CanonicalTransferSemantics,
-} from "@/lib/agent-route-card-contract";
+} from "@/lib/agent-chat/route-card-contract";
 import {
   canonicalPlaceLabel,
   canonicalStopLabel,
@@ -187,7 +187,7 @@ function legEndpoints(
   semantics: CanonicalTransferSemantics | undefined,
   leg: CanonicalItineraryLeg,
   stops: string[],
-): { fromLabel?: string; toLabel?: string } {
+) {
   return {
     fromLabel: firstPresentLabel(
       transfer ? canonicalStopLabel(semantics?.from_station_label) : null,
@@ -325,7 +325,7 @@ function walkSectionEndpoints(
   atEnd: boolean,
   originLabel: string,
   destinationLabel: string,
-): { fromLabel?: string; toLabel?: string; hasExplicitIdentity: boolean } {
+) {
   const explicitFrom = group.find((item) => item.fromLabel)?.fromLabel;
   const explicitTo = [...group].reverse().find((item) => item.toLabel)?.toLabel;
   return {

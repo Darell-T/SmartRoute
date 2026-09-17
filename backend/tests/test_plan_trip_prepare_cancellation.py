@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools.base import ToolContext
 from app.services.agent.tools.location_resolution import ResolvedPlace
 from app.services.agent.tools.route.preparation_adapter import prepare_single_leg
 
@@ -109,7 +109,7 @@ def _dependencies(
             "payload": payload,
         },
         current_payload=lambda envelope, empty: envelope.get("payload") or empty,
-        scoring=SimpleNamespace(_score_routes=lambda _routes, _alerts, **_kwargs: []),
+        scoring=SimpleNamespace(score_routes=lambda _routes, _alerts, **_kwargs: []),
         trip_incidents=SimpleNamespace(
             build_candidate_stop_context=lambda _gtfs, _routes: [],
             scan_route_incidents=_blocking_provider(
@@ -128,7 +128,7 @@ def _dependencies(
             )
         ),
         candidates=SimpleNamespace(
-            _collect_route_and_bus_ids=lambda _routes: (set(), set())
+            collect_route_and_bus_ids=lambda _routes: (set(), set())
         ),
         route_service_ids=lambda _route: set(),
         context_timeout_seconds=60.0,

@@ -21,7 +21,7 @@ def geocode_address_with_reason(address: str) -> tuple[tuple[float, float] | Non
     if coord_pattern.match(address.strip()):
         lat, lng = address.strip().split(",")
         lat, lng = float(lat.strip()), float(lng.strip())
-        in_nyc = _is_in_nyc(lat, lng)
+        in_nyc = is_in_nyc(lat, lng)
         print(f"[geo] provider=input outcome=coordinates in_service_area={int(in_nyc)}")
         if not in_nyc:
             return None, "Coordinates are outside NYC bounds."
@@ -44,14 +44,14 @@ def geocode_address_with_reason(address: str) -> tuple[tuple[float, float] | Non
         return None, "Address not found in NYC."
 
     lng, lat = features[0]["geometry"]["coordinates"]  # GeoJSON is [lng, lat]
-    in_nyc = _is_in_nyc(lat, lng)
+    in_nyc = is_in_nyc(lat, lng)
     print(f"[geo] provider=nyc_geosearch outcome=result in_service_area={int(in_nyc)}")
     if not in_nyc:
         return None, "Address is outside NYC bounds."
     return (lat, lng), None
 
 
-def _is_in_nyc(lat: float, lon: float) -> bool:
+def is_in_nyc(lat: float, lon: float) -> bool:
     return (
         NYC_BOUNDS["min_lat"] <= lat <= NYC_BOUNDS["max_lat"]
         and NYC_BOUNDS["min_lon"] <= lon <= NYC_BOUNDS["max_lon"]

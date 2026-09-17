@@ -5,8 +5,9 @@ from __future__ import annotations
 import copy
 import unittest
 
-from app.services.agent import loop, public_surface
+from app.services.agent import public_surface
 from app.services.agent.model import policy
+from app.services.agent.model import request as model_request
 from app.services.agent.tools import (
     INTERNAL_TOOL_REGISTRY,
     TOOL_REGISTRY,
@@ -97,7 +98,7 @@ class PublicToolSurfaceTests(unittest.TestCase):
         assert expected_initial == public_surface.INITIAL_TOOL_NAMES
         for mode in ("auto", "quick"):
             with self.subTest(mode=mode):
-                tools = loop._tools_for_state(policy.policy_for_mode(mode))
+                tools = model_request.tools_for_state(policy.policy_for_mode(mode))
                 custom = [
                     tool
                     for tool in tools

@@ -19,7 +19,8 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
 
-from app.services.trips import candidates, enrichment, scoring, text
+from app.services import text
+from app.services.trips import candidates, enrichment, scoring
 from app.services.trips.itinerary import build_canonical_itinerary
 from app.services.trips.location import ResolvedPlace
 from app.services.trips.preparation.constraints import route_constraints
@@ -371,7 +372,7 @@ def _select_recommendation_copy(
         )
         if rendered
     ]
-    recommendation = text._sanitize_recommendation(
+    recommendation = text.sanitize_recommendation(
         rendered_reasons[0] if rendered_reasons else NEUTRAL_RECOMMENDATION_FALLBACK
     )
     if not incident_scan_is_complete(incident_scan_metadata):
@@ -429,13 +430,13 @@ def project_route_candidates(
     event_impacts: list[dict],
 ) -> tuple[list[dict], str, dict]:
     """Build REST candidates, canonical itineraries, and selection facts."""
-    route_candidates = candidates._build_route_candidates(
+    route_candidates = candidates.build_route_candidates(
         parsed_routes,
         chosen_index,
         {},
         scored,
     )
-    score_by_index = scoring._score_by_index(scored)
+    score_by_index = scoring.score_by_index(scored)
     chosen_score = score_by_index.get(chosen_index, {})
     origin_point = {
         "label": origin_place.name,
@@ -540,7 +541,7 @@ async def _plan_direct_trip_once(
 
     enrichment_started = time.monotonic()
     chosen_route = prepared.parsed_routes[chosen_index]
-    await enrichment._enrich_route(gtfs, chosen_route)
+    await enrichment.enrich_route(gtfs, chosen_route)
     timings["enrichment_ms"] = (time.monotonic() - enrichment_started) * 1000
 
     route_candidates, recommendation, selection_decision = project_route_candidates(

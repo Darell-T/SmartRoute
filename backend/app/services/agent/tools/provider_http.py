@@ -9,9 +9,12 @@ wrap the reason into whatever return shape their own executor needs
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Mapping
 
 import httpx
+
+_LOGGER = logging.getLogger(__name__)
 
 
 async def fetch_json(
@@ -46,17 +49,22 @@ async def fetch_json(
             response.raise_for_status()
             return response.json(), None
     except httpx.TimeoutException:
-        print(f"[{log_tag}] {what} timed out")
+        _LOGGER.warning("[%s] %s timed out", log_tag, what)
         return None, f"{what} timed out"
     except httpx.HTTPStatusError as exc:
         status = exc.response.status_code
-        print(f"[{log_tag}] {what} HTTP {status}")
+        _LOGGER.warning("[%s] %s HTTP %s", log_tag, what, status)
         return None, _http_status_reason(status, what)
     except httpx.RequestError as exc:
-        print(f"[{log_tag}] {what} request failed: {type(exc).__name__}")
+        _LOGGER.warning(
+            "[%s] %s request failed: %s",
+            log_tag,
+            what,
+            type(exc).__name__,
+        )
         return None, f"{what} failed"
     except (ValueError, TypeError) as exc:
-        print(f"[{log_tag}] {what} invalid JSON: {exc!r}")
+        _LOGGER.warning("[%s] %s invalid JSON: %r", log_tag, what, exc)
         return None, f"{what} returned an unexpected response"
 
 

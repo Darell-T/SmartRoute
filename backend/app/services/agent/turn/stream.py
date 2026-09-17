@@ -14,7 +14,12 @@ from app.services.agent import passenger_output, public_surface
 from app.services.agent import session as session_module
 from app.services.agent.model import policy as agent_policy
 from app.services.agent.model import prompt as agent_prompt
+from app.services.agent.model import request as model_request
 from app.services.agent.model import stream as model_stream
+from app.services.agent.tool_input_policy import (
+    rider_excluded_modes,
+    rider_excluded_route_ids,
+)
 from app.services.agent.tools import ToolContext
 from app.services.agent.turn import completion as turn_completion  # test patch point
 from app.services.agent.turn.evidence import TurnEvidence
@@ -31,7 +36,9 @@ from app.services.agent.turn.finalization import (
 )
 from app.services.agent.turn.ledger import TurnToolLedger
 from app.services.agent.turn.tool_round import (
+    ToolRoundResultMessage,
     TurnDeadlineReachedError,
+    execute_tool_round,
     mixed_terminal_and_capability,
 )
 
@@ -45,18 +52,9 @@ if TYPE_CHECKING:
 class TurnDependencies:
     """Loop-owned seams kept injectable for compatibility and test patches."""
 
-    deadline_s: float
     client: object
     tool_registry: dict
     make_ledger: Callable[[], TurnToolLedger]
-    system_blocks: Callable[[], list[dict]]
-    messages_from_history: Callable[[list[dict]], list[dict]]
-    build_stream_kwargs: Callable[..., dict]
-    tools_for_state: Callable[..., list[dict]]
-    sanitize_rider_text: Callable[[str], str]
-    rider_excluded_modes: Callable[[str, dict], set[str]]
-    rider_excluded_route_ids: Callable[[str, dict], tuple[str, ...]]
-    execute_tool_round: Callable[..., AsyncIterator]
 
 
 @dataclass
@@ -114,11 +112,13 @@ class TurnState:
         tools = (
             self.server_tool_continuation_tools
             if self.server_tool_continuation_tools is not None
-            else self.dependencies.tools_for_state(
+            else model_request.tools_for_state(
                 self.mode_policy,
                 session=self.session,
                 include_web=self.ctx.turn_evidence.may_offer_web(),
                 turn_evidence=self.ctx.turn_evidence,
+                session_id=self.session_id,
+                tool_registry=self.dependencies.tool_registry,
             )
         )
         self.server_tool_continuation_tools = None
@@ -219,9 +219,9 @@ async def stream_model_iteration(
         state.ctx.turn_evidence,
         allowed_tool_names,
     )
-    stream_kwargs = state.dependencies.build_stream_kwargs(
+    stream_kwargs = model_request.build_stream_kwargs(
         messages=state.messages,
-        system_blocks=state.dependencies.system_blocks(),
+        system_blocks=model_request.system_blocks(),
         mode_policy=state.mode_policy,
         tools=turn_tools,
         request_options=request_options,
@@ -289,7 +289,7 @@ async def _capture_model_events(
         stream_kwargs=stream_kwargs,
         log_tag="model call",
         retry_count=state.mode_policy.retry_count,
-        sanitize_text=state.dependencies.sanitize_rider_text,
+        sanitize_text=passenger_output.sanitize_rider_text,
         deadline_monotonic=state.deadline_monotonic,
         web_timeout_s=state.mode_policy.web_research_timeout_s,
     ):
@@ -530,12 +530,12 @@ def resolve_model_iteration(
 
 
 def _capture_tool_round_message(item: object) -> CapabilityIteration | None:
-    if not isinstance(item, dict) or "__tool_result_message__" not in item:
+    if not isinstance(item, ToolRoundResultMessage):
         return None
     return CapabilityIteration(
-        result_message=item["__tool_result_message__"],
-        outcomes=tuple(item.get("__tool_outcomes__") or ()),
-        deadline_reached=bool(item.get("__deadline_reached__")),
+        result_message={"role": item.role, "content": item.content},
+        outcomes=tuple(item.tool_outcomes),
+        deadline_reached=item.deadline_reached,
     )
 
 
@@ -582,7 +582,7 @@ async def stream_capability_iteration(
     result_message: dict | None = None
     outcomes: tuple[tuple[str, dict, object], ...] = ()
     deadline_reached = False
-    async for item in state.dependencies.execute_tool_round(
+    async for item in execute_tool_round(
         list(tool_use_blocks),
         state.ctx,
         state.session,
@@ -679,7 +679,6 @@ def _initialize_turn_context(
 
 def _prepare_turn_messages(
     *,
-    dependencies: TurnDependencies,
     session: dict,
     message: str,
     ctx: ToolContext,
@@ -687,7 +686,7 @@ def _prepare_turn_messages(
     response_presentation: str,
     turn_id: str,
 ) -> list[dict]:
-    messages = dependencies.messages_from_history(
+    messages = model_request.messages_from_history(
         session_module.model_context_history(session, message)
     )
     context_block = agent_prompt.build_turn_context(
@@ -722,7 +721,6 @@ def _create_turn_state(
     if trace is not None:
         trace.rider_message = message
     messages = _prepare_turn_messages(
-        dependencies=dependencies,
         session=session,
         message=message,
         ctx=ctx,
@@ -740,12 +738,12 @@ def _create_turn_state(
         mode_policy=mode_policy,
         initial_mode=mode_policy.mode,
         turn_start=turn_start,
-        deadline_monotonic=turn_start + dependencies.deadline_s,
+        deadline_monotonic=turn_start + session_module.AGENT_TURN_DEADLINE_S,
         stage_ms=stage_timings(trace, preprocessing_started),
         messages=messages,
         tool_ledger=dependencies.make_ledger(),
-        excluded_modes=dependencies.rider_excluded_modes(message, session),
-        excluded_route_ids=dependencies.rider_excluded_route_ids(message, session),
+        excluded_modes=rider_excluded_modes(message, session),
+        excluded_route_ids=rider_excluded_route_ids(message, session),
     )
 
 

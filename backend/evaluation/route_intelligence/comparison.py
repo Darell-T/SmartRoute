@@ -18,7 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools.base import ToolContext
 from app.services.agent.tools.transit import venue_crowd_window as venues
 from app.services.trips import scoring
 from app.services.trips.route_incidents.association import (
@@ -364,7 +364,7 @@ def _summarize_selection(
     selected_reason = analysis.get(selected_index, {}).get("recommendation_reason") or ""
     # This is explicitly non-decision diagnostic data. The selection always
     # comes from the production parser over the recorded advisor transcript.
-    core_diagnostics = scoring._score_routes(routes, payload.get("service_alerts") or [])
+    core_diagnostics = scoring.score_routes(routes, payload.get("service_alerts") or [])
     return {
         "mode": mode,
         "selected_route_id": _candidate_id(selected_index),

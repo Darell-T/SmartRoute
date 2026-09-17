@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, patch
 
 from app.services.agent import loop
 from app.services.agent import session as session_module
-from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.base import ToolContext, ToolResult
 from app.services.agent.tools.location_resolution import ResolvedPlace
 from app.services.agent.tools.places import discover_places
 from app.services.agent.tools.route.route_projection import first_boarding_context
@@ -240,7 +240,7 @@ class AnthropicPlanLiveFixtureContractTests(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(
             discover_places.search_local_places,
-            "_provider_search",
+            "provider_search",
             new=provider,
         ):
             result = await discover_places.execute(
@@ -274,7 +274,7 @@ class AnthropicPlanReliabilityLiveTests(
         with (
             patch.object(
                 discover_places.search_local_places,
-                "_provider_search",
+                "provider_search",
                 new=AsyncMock(return_value=_kyuramen_branches()),
             ),
             patch(

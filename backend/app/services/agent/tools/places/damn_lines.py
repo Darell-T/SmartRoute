@@ -571,3 +571,12 @@ def get_historical_pattern(
         raise ValueError
     local = when.astimezone(_NYC)
     return _history_index.get((google_place_id, local.weekday(), local.hour))
+
+
+def historical_pattern(
+    place_id: str, when: datetime
+) -> HistoricalQueuePattern | None:
+    try:
+        return get_historical_pattern(place_id, when, now=when)
+    except (TypeError, ValueError):
+        return None

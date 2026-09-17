@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 from app.services import cache, evidence
 from app.services.agent import candidate_store, trip_state
-from app.services.agent.tools._types import ToolContext, ToolOutcome, ToolResult
+from app.services.agent.tools.base import ToolContext, ToolOutcome, ToolResult
 from app.services.agent.tools.transit import (
     check_transit,
     lookup_arrivals,

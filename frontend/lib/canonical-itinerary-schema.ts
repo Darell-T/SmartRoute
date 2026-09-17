@@ -4,21 +4,10 @@ import type {
   CanonicalItinerary,
   CanonicalItineraryPlace,
   RouteSelectionDecision,
-} from "./agent-route-card-contract";
+} from "./agent-chat/route-card-contract";
+import { MAX_LIST, boundedInteger, boundedNumber, limitedText, nonEmptyText, nonEmptyTextList } from "./schema-primitives";
 
-const MAX_TEXT = 300;
-const MAX_LIST = 256;
 const MAX_SECONDS = 86_400;
-
-const limitedText = (max = MAX_TEXT) => z.string().max(max);
-const nonEmptyText = (max = MAX_TEXT) =>
-  limitedText(max).refine((value) => value.trim().length > 0);
-const boundedNumber = (minimum: number, maximum: number) =>
-  z.number().finite().min(minimum).max(maximum);
-const boundedInteger = (minimum = 0, maximum = MAX_LIST) =>
-  z.number().int().min(minimum).max(maximum);
-const nonEmptyTextList = (maximum = MAX_LIST) =>
-  z.array(nonEmptyText()).max(maximum);
 
 const MAX_ALERT_DESCRIPTION = 16_384;
 
@@ -111,13 +100,16 @@ export const selectionDecisionSchema = z
     selection_source: z.enum(["model", "deterministic_fallback"]),
   })
   .passthrough()
-  .transform(
-    (record): RouteSelectionDecision => ({
+  .transform((record): RouteSelectionDecision => {
+    const decision: RouteSelectionDecision = {
       selection_reason: record.selection_reason,
       selection_source: record.selection_source,
-      ...(record.reason_code !== undefined ? { reason_code: record.reason_code } : {}),
-    }),
-  );
+    };
+    if (record.reason_code !== undefined) {
+      decision.reason_code = record.reason_code;
+    }
+    return decision;
+  });
 
 const placeFieldsSchema = z.object({
   display_name: limitedText().nullable().optional(),

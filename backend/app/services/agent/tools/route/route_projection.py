@@ -11,17 +11,18 @@ import secrets
 from collections.abc import Mapping
 from typing import Any
 
+from app.services import text
 from app.services.agent import events as agent_events
 from app.services.agent.model.output_projection import (
     opaque_place_id,
     project_model_value,
     project_place_point,
 )
-from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.base import ToolContext, ToolResult
 from app.services.agent.tools.route.present_route_state import is_destination_comparison
 from app.services.agent.tools.route.route_input import point_label, summary_eta_minutes
 from app.services.mta.static_gtfs.stop_patterns import normalize_station_name
-from app.services.trips import candidates, scoring, text
+from app.services.trips import candidates, scoring
 from app.services.trips.route_incidents.scan import (
     INCOMPLETE_INCIDENT_DISCLOSURE,
     contains_unsafe_incident_clear,
@@ -47,9 +48,9 @@ _TRANSIT_MODES = frozenset({"SUBWAY", "BUS", "RAIL", "TRAIN", "LIGHT_RAIL", "TRA
 
 def passenger_explanation(recommendation: str, incident_scan_metadata: dict) -> str:
     """Keep incomplete incident evidence truthful without duplicate rider copy."""
-    explanation = text._safe_text(
-        text._sanitize_recommendation(
-            candidates._strip_model_control_blocks(recommendation)
+    explanation = text.safe_text(
+        text.sanitize_recommendation(
+            candidates.strip_model_control_blocks(recommendation)
         ),
         600,
     )
@@ -146,13 +147,13 @@ def _canonical_card_core(
 ) -> dict[str, Any]:
     index = presentation.chosen_index
     route = presentation.parsed_routes[index]
-    display = candidates._build_route_candidates(
+    display = candidates.build_route_candidates(
         presentation.parsed_routes,
         index,
         {index: {"recommendation_reason": "", "rejection_reason": ""}},
         scored,
     )
-    scores = scoring._score_by_index(scored)
+    scores = scoring.score_by_index(scored)
     card_id = f"rc_{secrets.token_hex(4)}"
     event_impacts = list(evidence.get("event_impacts") or [])
     event_status = str(evidence.get("event_evidence_status") or "unscanned")
@@ -313,7 +314,7 @@ def _card_digest(
         "arrives_iso": last_step.get("arrival_time_iso"),
         "walk_minutes": round(int(core["itinerary"]["total_walk_seconds"]) / 60),
         "alert_headlines": [
-            text._safe_text(alert.get("header") or "", 80) for alert in alerts
+            text.safe_text(alert.get("header") or "", 80) for alert in alerts
         ][:3],
         "reason": presentation.lead_in,
         "structured_recommendation_reasons": core["structured"],
@@ -489,7 +490,7 @@ def _selected_digest_destination_name(entry: object) -> str | None:
 
 def first_boarding_context(gtfs, step: dict, walking_minutes: int) -> dict:
     """Resolve canonical stop/direction ids for one transit boarding."""
-    route_id = scoring._step_route_id(step).strip().upper()
+    route_id = scoring.step_route_id(step).strip().upper()
     headsign = step.get("headsign") or step.get("direction")
     context = {
         "route_id": route_id,

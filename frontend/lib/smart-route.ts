@@ -6,10 +6,6 @@ export interface CanonicalRouteSummary {
   totalLabel: string | null;
 }
 
-function formatArrival(iso: string | undefined): string | null {
-  return formatNycRouteClock(iso);
-}
-
 /**
  * Formats server-owned route facts without deriving a duration, arrival, or
  * transfer fallback from route steps. Missing canonical facts stay unavailable.
@@ -19,13 +15,12 @@ export function formatCanonicalRouteSummary(
 ): CanonicalRouteSummary | null {
   if (
     !candidate?.itinerary?.itinerary_id ||
-    typeof candidate.total_minutes !== "number" ||
     !Number.isFinite(candidate.total_minutes)
   ) {
     return null;
   }
   return {
-    arriveLabel: formatArrival(candidate.arrival_at),
+    arriveLabel: formatNycRouteClock(candidate.arrival_at),
     totalLabel: `${candidate.total_minutes} min`,
   };
 }

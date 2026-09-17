@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import secrets
 import time
 from collections.abc import Awaitable, Callable
@@ -35,6 +36,7 @@ JOB_LOCK_TTL_S = 25 * 60
 JOB_METRICS_KEY = "incident:job:last_metrics"
 SCOUT_CONCURRENCY = 2
 SCOUT_BATCH_TIMEOUT_S = 60.0
+_LOGGER = logging.getLogger(__name__)
 
 
 def acquire_job_lock(*, ttl_seconds: int = JOB_LOCK_TTL_S) -> str | None:
@@ -68,7 +70,10 @@ async def _collect_official_once(
     try:
         snapshot = await collector()
     except Exception as exc:  # noqa: BLE001 official fetch faults report unavailable
-        print(f"[incident-job] official collection failed: {type(exc).__name__}")
+        _LOGGER.warning(
+            "[incident-job] official collection failed: %s",
+            type(exc).__name__,
+        )
         snapshot = None
     if not isinstance(snapshot, OfficialIncidentSnapshot):
         return OfficialIncidentSnapshot(
@@ -102,7 +107,10 @@ async def _scout_one(
         except TimeoutError:
             return _unavailable_result(batch.batch_id, attempted_at), True
         except Exception as exc:  # noqa: BLE001 scout batch faults report unavailable
-            print(f"[incident-job] batch scout failed: {type(exc).__name__}")
+            _LOGGER.warning(
+                "[incident-job] batch scout failed: %s",
+                type(exc).__name__,
+            )
             return _unavailable_result(batch.batch_id, attempted_at), False
     if not isinstance(result, ScoutBatchResult):
         return _unavailable_result(batch.batch_id, attempted_at), False
@@ -234,7 +242,10 @@ async def run_background_incident_refresh(
         _store_metrics(metrics)
         raise
     except Exception as exc:  # noqa: BLE001 job faults report failed without killing the process
-        print(f"[incident-job] refresh failed: {type(exc).__name__}")
+        _LOGGER.warning(
+            "[incident-job] refresh failed: %s",
+            type(exc).__name__,
+        )
         metrics["status"] = "failed"
         metrics["error"] = type(exc).__name__
         metrics["duration_ms"] = _duration_ms(started, monotonic)

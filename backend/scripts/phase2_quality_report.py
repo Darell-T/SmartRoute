@@ -26,10 +26,11 @@ from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
 
-import coverage
 import radon
 from radon.complexity import cc_visit
 from radon.visitors import Class, Function
+
+import coverage
 
 FunctionNode = ast.FunctionDef | ast.AsyncFunctionDef
 

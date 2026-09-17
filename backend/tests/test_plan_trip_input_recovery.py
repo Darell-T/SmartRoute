@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from app.services import directions
-from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools.base import ToolContext
 from app.services.agent.tools.location_resolution import ResolvedPlace
 from app.services.agent.tools.route import route_input as plan_trip_input
 from app.services.agent.tools.route.preparation_adapter import (
@@ -398,7 +398,7 @@ class PrepareSingleLegRecoveryIntegrationTests(unittest.IsolatedAsyncioTestCase)
             filter_alerts_for_routes=lambda alerts, route_ids: observed["mta"].append(route_ids) or alerts,
             evidence_envelope=evidence,
             current_payload=lambda envelope, empty: envelope.get("payload", empty),
-            scoring=SimpleNamespace(_score_routes=score),
+            scoring=SimpleNamespace(score_routes=score),
             trip_incidents=SimpleNamespace(
                 build_candidate_stop_context=lambda _gtfs, routes: observed["incidents"].append(routes) or {},
                 scan_route_incidents=AsyncMock(return_value={"scan_metadata": {"status": "complete"}, "incidents": []}),

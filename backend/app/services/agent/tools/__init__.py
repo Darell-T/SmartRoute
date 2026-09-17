@@ -19,12 +19,10 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
+import app.services.agent.tools.complete_turn as complete_turn
+import app.services.agent.tools.declare_goals as declare_goals
 from app.services.agent.public_surface import offered_custom_tools
-from app.services.agent.tools import (
-    complete_turn,
-    declare_goals,
-)
-from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.base import ToolContext, ToolResult
 from app.services.agent.tools.places import (
     discover_places,
     place_reference,

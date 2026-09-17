@@ -1642,7 +1642,6 @@ test("direct-leg canonical timings replace cumulative step clocks in plan detail
 });
 
 test("buildPlan uses itinerary clocks and duration when steps and score_breakdown conflict", () => {
-  const nowMs = Date.parse("2026-07-16T12:00:00-04:00");
   const steps = [
     {
       type: "WALK",

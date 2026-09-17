@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { z } from "zod";
-import { postProxy } from "@/lib/backend-proxy";
+import { postProxy } from "@/lib/server/backend-proxy";
 
 // Node runtime keeps parity with the chat proxy (fetch + standard primitives).
 export const runtime = "nodejs";

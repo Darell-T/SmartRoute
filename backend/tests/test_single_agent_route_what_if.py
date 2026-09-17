@@ -40,7 +40,7 @@ class SingleAgentRouteWhatIfTests(unittest.IsolatedAsyncioTestCase):
         assert state["temporary_candidate_set_id"] == result.data["candidate_set_id"]
         candidate_id = result.data["candidates"][0]["candidate_id"]
         with patch(
-            "app.services.trips.enrichment._enrich_route",
+            "app.services.trips.enrichment.enrich_route",
             new=AsyncMock(return_value=None),
         ):
             presented = await present_route.execute(
@@ -77,7 +77,7 @@ class SingleAgentRouteWhatIfTests(unittest.IsolatedAsyncioTestCase):
             )
         candidate_id = result.data["candidates"][0]["candidate_id"]
         with patch(
-            "app.services.trips.enrichment._enrich_route",
+            "app.services.trips.enrichment.enrich_route",
             new=AsyncMock(return_value=None),
         ):
             preview = await present_route.execute(
@@ -131,7 +131,7 @@ class SingleAgentRouteWhatIfTests(unittest.IsolatedAsyncioTestCase):
         assert state["temporary_candidate_set_id"] == result.data["candidate_set_id"]
         candidate_id = result.data["candidates"][0]["candidate_id"]
         with patch(
-            "app.services.trips.enrichment._enrich_route",
+            "app.services.trips.enrichment.enrich_route",
             new=AsyncMock(return_value=None),
         ):
             preview = await present_route.execute(

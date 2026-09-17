@@ -3,10 +3,9 @@ from __future__ import annotations
 import json
 import os
 
-from app.services import cache
-from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services import cache, text
+from app.services.agent.tools.base import ToolContext, ToolResult
 from app.services.agent.tools.provider_http import fetch_json
-from app.services.trips import text
 
 MTA_ENE_URL = os.getenv(
     "MTA_ENE_URL",
@@ -168,15 +167,15 @@ def _matched_outages(
 def _accessibility_result(station_raw: str, matched_raw: list[dict]) -> ToolResult:
     elevator_outages = [
         {
-            "equipment": text._safe_text(raw.get("equipment") or raw.get("equipmentno"), 20),
-            "serving": text._safe_text(raw.get("serving"), 120),
-            "estimated_return": text._safe_text(raw.get("estimatedreturntoservice"), 40),
+            "equipment": text.safe_text(raw.get("equipment") or raw.get("equipmentno"), 20),
+            "serving": text.safe_text(raw.get("serving"), 120),
+            "estimated_return": text.safe_text(raw.get("estimatedreturntoservice"), 40),
         }
         for raw in matched_raw
         if _equipment_type(raw) == "EL"
     ]
     escalator_count = sum(1 for raw in matched_raw if _equipment_type(raw) == "ES")
-    station_matched = text._safe_text(station_raw, 80)
+    station_matched = text.safe_text(station_raw, 80)
     data = {
         "station_matched": station_matched,
         "elevator_outages": elevator_outages,

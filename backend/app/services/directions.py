@@ -1,3 +1,4 @@
+import logging
 import os
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
@@ -7,6 +8,7 @@ import httpx
 from app.services.geography import distance_meters
 from app.services.mta.static_gtfs.stop_patterns import normalize_station_name
 
+_LOGGER = logging.getLogger(__name__)
 ROUTES_URL = "https://routes.googleapis.com/directions/v2:computeRoutes"
 key = (os.getenv("GOOGLE_ROUTES_API_KEY") or "").strip()
 GOOGLE_ROUTES_TIMEOUT_S = float(os.getenv("GOOGLE_ROUTES_TIMEOUT_S", "12.0"))
@@ -125,20 +127,28 @@ async def _compute_google_routes(request_body: dict, headers: dict) -> dict:
                 try:
                     return response.json()
                 except (ValueError, TypeError) as exc:
-                    print(f"[directions] Google Routes invalid JSON: {type(exc).__name__}")
+                    _LOGGER.warning(
+                        "[directions] Google Routes invalid JSON: %s",
+                        type(exc).__name__,
+                    )
                     raise GoogleRoutesError(
                         "invalid_json",
                         "Google Routes API returned invalid JSON",
                     ) from exc
             except httpx.TimeoutException as exc:
                 last_exc = exc
-                print(f"[directions] Google Routes timeout (attempt {attempt})")
+                _LOGGER.warning(
+                    "[directions] Google Routes timeout (attempt %s)",
+                    attempt,
+                )
             except httpx.HTTPStatusError as exc:
                 status_code = exc.response.status_code
                 summary = _provider_error_summary(exc.response)
-                print(
-                    "[directions] Google Routes HTTP "
-                    f"{status_code} code=http_{status_code} summary={summary or 'none'}"
+                _LOGGER.warning(
+                    "[directions] Google Routes HTTP %s code=http_%s summary=%s",
+                    status_code,
+                    status_code,
+                    summary or "none",
                 )
                 raise GoogleRoutesError(
                     f"http_{status_code}",
@@ -147,7 +157,10 @@ async def _compute_google_routes(request_body: dict, headers: dict) -> dict:
                     provider_summary=summary,
                 ) from exc
             except httpx.RequestError as exc:
-                print(f"[directions] Google Routes request failed: {type(exc).__name__}")
+                _LOGGER.warning(
+                    "[directions] Google Routes request failed: %s",
+                    type(exc).__name__,
+                )
                 raise GoogleRoutesError(
                     "request_failed",
                     "Google Routes API request failed",
@@ -235,7 +248,7 @@ def parse_response(response: dict) -> list:
         try:
             routes.append(_parse_leg_steps(legs[0]))
         except (KeyError, TypeError, ValueError, AttributeError) as exc:
-            print(f"[directions] skipping malformed route: {exc!r}")
+            _LOGGER.warning("[directions] skipping malformed route: %r", exc)
     return routes
 
 

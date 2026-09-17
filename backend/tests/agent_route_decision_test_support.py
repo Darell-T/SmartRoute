@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from app.services import cache
-from app.services.agent.tools._types import ToolResult
+from app.services.agent.tools.base import ToolResult
 from app.services.agent.tools.location_resolution import ResolvedPlace
 from app.services.agent.tools.route.preparation_adapter import PreparedLeg
 from app.services.trips import scoring
@@ -19,7 +19,7 @@ from tests._fake_anthropic import reload_agent_loop_module
 
 
 def provider_search_result(*places: dict) -> ToolResult:
-    """Envelope `_provider_search` returns after `execute` flattens Google rows."""
+    """Envelope `provider_search` returns after `execute` flattens Google rows."""
 
     results: list[dict] = []
     for place in places:
@@ -97,7 +97,7 @@ def _prepared_leg(
     scored = [
         {
             "index": index,
-            **scoring._route_score(
+            **scoring.route_score(
                 route,
                 [],
                 route_index=index,

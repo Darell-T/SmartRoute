@@ -12,7 +12,7 @@ Only genuine provider/data seams are scripted:
 
 - ``prepare_single_leg`` -- the narrow provider-scoring seam inside the real
   canonical prepare executor (route/evidence fixtures come from here).
-- ``trips.enrichment._enrich_route`` -- live route enrichment called by the
+- ``trips.enrichment.enrich_route`` -- live route enrichment called by the
   real canonical ``present_route`` executor.
 - ``tools.lookup_arrivals.execute`` -- live MTA arrival fetch that the real
   presentation path may call for first-leg context.
@@ -42,7 +42,7 @@ from app.services.agent import candidate_store
 from app.services.agent import session as session_module
 from app.services.agent import trip_state as trip_state_module
 from app.services.agent.public_surface import PUBLIC_TOOL_NAMES
-from app.services.agent.tools._types import ToolResult
+from app.services.agent.tools.base import ToolResult
 from app.services.agent.tools.location_resolution import ResolvedPlace
 from app.services.agent.tools.route.preparation_adapter import PreparedLeg
 
@@ -458,7 +458,7 @@ def _turn_seam_patchers(
 ):
     patchers = [
         patch(
-            "app.services.trips.enrichment._enrich_route",
+            "app.services.trips.enrichment.enrich_route",
             new=enrich_mock,
         ),
         patch(

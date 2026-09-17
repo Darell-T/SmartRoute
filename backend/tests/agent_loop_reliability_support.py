@@ -82,6 +82,5 @@ class AgentLoopRoundCapTestCase(AgentLoopReliabilityTestCase):
             {
                 "AGENT_AUTO_MAX_ROUNDS": "2",
                 "AGENT_QUICK_MAX_ROUNDS": "2",
-                "AGENT_TURN_DEADLINE_S": "60",
             }
         )

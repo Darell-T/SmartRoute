@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools.base import ToolContext
 
 DEFAULT_NOW_ET = "2026-07-15T21:00:00-04:00"
 

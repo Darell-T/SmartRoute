@@ -11,7 +11,7 @@
 
 import { MapPin } from "iconoir-react";
 import { motion, useReducedMotion } from "motion/react";
-import type { ArrivalsTurnPayload } from "@/lib/use-agent-chat";
+import type { ArrivalsTurnPayload } from "@/lib/agent-chat/use-agent-chat";
 import { LineBadge } from "./line-badge";
 import { WalkingIcon } from "./walking-icon";
 
@@ -117,7 +117,7 @@ export function ChatArrivalsCard({
         ) : (
           <p className="sr-chat-arrivals-card__empty">{emptyCopy}</p>
         )}
-        {typeof catchable === "number" ? (
+        {catchable != null ? (
           <p className="sr-chat-arrivals-card__empty">
             {`The ${catchable} min arrival is the first one with enough walking time.`}
           </p>

@@ -1,4 +1,4 @@
-import { proxyToBackend } from "@/lib/backend-proxy";
+import { proxyToBackend } from "@/lib/server/backend-proxy";
 
 // Stops are static-ish — let the edge cache hold them for an hour to match
 // the backend cache TTL.

@@ -8,7 +8,7 @@ import unittest
 from app.services.agent.model import output_projection as model_output_projection
 from app.services.agent.model import policy
 from app.services.agent.tools import ToolSpec, complete_turn, declare_goals
-from app.services.agent.tools._types import ToolContext, ToolOutcome, ToolResult
+from app.services.agent.tools.base import ToolContext, ToolOutcome, ToolResult
 from app.services.agent.turn import tool_round
 from app.services.agent.turn.contract import GoalState
 from app.services.agent.turn.evidence import TurnEvidence
@@ -239,7 +239,7 @@ class GoalAwareToolRoundTests(unittest.IsolatedAsyncioTestCase):
             registry,
         )
 
-        outcomes = items[-1]["__tool_outcomes__"]
+        outcomes = items[-1].tool_outcomes
         assert outcomes[1][2].ok
         assert "tool not offered on this turn" not in (outcomes[1][2].error or "")
         ctx.turn_evidence.record_capability_result(
@@ -277,7 +277,7 @@ class GoalAwareToolRoundTests(unittest.IsolatedAsyncioTestCase):
         )
 
         assert not called
-        final = items[-1]["__tool_outcomes__"][0][2]
+        final = items[-1].tool_outcomes[0][2]
         assert not final.ok
         assert "declare_goals" in final.error
 
@@ -325,7 +325,7 @@ class GoalAwareToolRoundTests(unittest.IsolatedAsyncioTestCase):
         )
 
         assert ctx.turn_evidence.terminal
-        result = items[-1]["__tool_outcomes__"][1][2]
+        result = items[-1].tool_outcomes[1][2]
         assert result.ok
 
     async def test_duplicate_terminal_calls_are_rejected_before_execution(self) -> None:
@@ -387,7 +387,7 @@ class GoalAwareToolRoundTests(unittest.IsolatedAsyncioTestCase):
             registry,
         )
 
-        outcomes = items[-1]["__tool_outcomes__"]
+        outcomes = items[-1].tool_outcomes
         assert executions == 1
         assert outcomes[1][2].ok
         assert not outcomes[2][2].ok
@@ -568,7 +568,7 @@ class GoalAwareToolRoundTests(unittest.IsolatedAsyncioTestCase):
         )
 
         assert executions == 1
-        outcomes = items[-1]["__tool_outcomes__"]
+        outcomes = items[-1].tool_outcomes
         assert outcomes[0][2].ok
         assert outcomes[1][2].ok
         assert outcomes[0][2] is outcomes[1][2]

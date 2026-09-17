@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { planTrip } from "./api.ts";
 import { parseCanonicalItinerary } from "./canonical-itinerary-schema.ts";
-import { parseSseStream } from "./agent-chat-stream.ts";
+import { parseSseStream } from "./agent-chat/stream.ts";
 import { deriveTransitRouteIds, isAlertForRouteIds, normalizeTripCandidates } from "./route-planning.ts";
 import { parseTripResponse, TRIP_PLAN_FAILED } from "./trip-response.ts";
 

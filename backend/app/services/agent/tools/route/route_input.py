@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.services.agent import trip_state as trip_state_module
-from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools.base import ToolContext
 from app.services.trips.location import ResolvedPlace
 from app.services.trips.preparation.input import (
     derive_arrive_by_departure,

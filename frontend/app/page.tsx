@@ -13,20 +13,20 @@ import {
   visibleMapLocation,
   type InitialLocationState,
 } from "@/lib/initial-geolocation";
-import { useLiveFeed } from "@/lib/use-live-feed";
-import { useServiceAlerts } from "@/lib/use-service-alerts";
-import { useMobileVisibleViewport } from "@/lib/use-mobile-visible-viewport";
+import { useLiveFeed } from "@/lib/hooks/use-live-feed";
+import { useServiceAlerts } from "@/lib/hooks/use-service-alerts";
+import { useMobileVisibleViewport } from "@/lib/hooks/use-mobile-visible-viewport";
 import { deriveTransitRouteIds } from "@/lib/route-planning";
 import { formatCanonicalRouteSummary } from "@/lib/smart-route";
-import { useAgentChat, type ArrivalsTurnPayload } from "@/lib/use-agent-chat";
+import { useAgentChat, type ArrivalsTurnPayload } from "@/lib/agent-chat/use-agent-chat";
 import {
   SmartRouteThemeProvider,
   useSmartRouteTheme,
-} from "@/lib/use-chat-theme";
-import type { RouteCard } from "@/lib/agent-chat-stream";
+} from "@/lib/hooks/use-chat-theme";
+import type { RouteCard } from "@/lib/agent-chat/stream";
 import {
   agentRoutePlanFromCards,
-} from "@/lib/agent-route-selection";
+} from "@/lib/agent-chat/route-selection";
 import {
   type TabId,
 } from "@/components/smart-route/left-rail";

@@ -20,7 +20,7 @@ production ids are never invented or hard-coded across turns.
 
 from __future__ import annotations
 
-from app.services.agent.tools._types import ToolResult
+from app.services.agent.tools.base import ToolResult
 from app.services.agent.tools.location_resolution import ResolvedPlace
 from app.services.agent.tools.route.preparation_adapter import PreparedLeg
 

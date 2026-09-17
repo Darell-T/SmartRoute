@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools.base import ToolContext
 from app.services.agent.tools.transit import venue_crowd_window as venues
 from app.services.trips.crowds import event_provider
 from dotenv import load_dotenv

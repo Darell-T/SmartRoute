@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
 from app.services.agent import session as session_module
-from app.services.agent.tools._types import ToolResult
+from app.services.agent.tools.base import ToolResult
 from app.services.agent.tools.places import damn_lines, discover_places
 from app.services.agent.tools.transit import check_transit
 

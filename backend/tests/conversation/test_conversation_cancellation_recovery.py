@@ -590,7 +590,7 @@ class DeadlineRecoveryTests(_ModelLedCancellationMixin, CancellationBase):
             destination=ACCEPTED_DESTINATION,
         )
         # 2) Expired-deadline turn: no model call, no tool, terminal deadline.
-        with patch.object(self.loop, "AGENT_TURN_DEADLINE_S", -1.0):
+        with patch.object(self.loop.session_module, "AGENT_TURN_DEADLINE_S", -1.0):
             deadline_events, _deadline_trace = await run_turn(
                 self.loop,
                 session=session,

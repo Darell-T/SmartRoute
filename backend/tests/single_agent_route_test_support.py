@@ -1,7 +1,7 @@
 """Tests for the unflagged prepare_route_options / present_route path."""
 from __future__ import annotations
 
-from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools.base import ToolContext
 from app.services.agent.tools.location_resolution import ResolvedPlace
 from app.services.agent.tools.route.preparation_adapter import PreparedLeg
 from app.services.trips.itinerary import build_canonical_itinerary

@@ -202,7 +202,7 @@ function TransitLeg({
 }) {
   const stopNames = intermediateStopNames(event);
   const stopsLabel =
-    typeof event.stopCount === "number"
+    event.stopCount != null
       ? `${event.stopCount} ${event.stopCount === 1 ? "stop" : "stops"}`
       : null;
   const rideLabel = [stopsLabel, event.durationLabel].filter(Boolean).join(", ");

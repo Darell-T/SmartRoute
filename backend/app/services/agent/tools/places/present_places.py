@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import math
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -15,9 +14,10 @@ from app.services.agent.passenger_output import (
     framed_events,
     validated_framing,
 )
-from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.base import ToolContext, ToolResult
 from app.services.agent.tools.places import damn_lines
 from app.services.agent.turn.contract import GoalKind, GoalState
+from app.services.parsing import finite_float
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -649,7 +649,7 @@ def _queue_note_for_place(
     if damn_lines.get_supported_venue(place_id) is None:
         return _unsupported_queue_note(name, mode), None
     if mode == "historical":
-        pattern = _historical_pattern(place_id, when)
+        pattern = damn_lines.historical_pattern(place_id, when)
         note = (
             _historical_note(name, pattern)
             if pattern is not None
@@ -676,7 +676,7 @@ def _missing_live_queue_note(
     when: datetime,
 ) -> tuple[str | None, str | None]:
     pattern = (
-        _historical_pattern(place_id, when)
+        damn_lines.historical_pattern(place_id, when)
         if place.get("open_status") == "open"
         else None
     )
@@ -700,15 +700,6 @@ def _presentation_time(value: object) -> datetime:
     except ValueError:
         pass
     return datetime.now(_NYC)
-
-
-def _historical_pattern(
-    place_id: str, when: datetime
-) -> damn_lines.HistoricalQueuePattern | None:
-    try:
-        return damn_lines.get_historical_pattern(place_id, when, now=when)
-    except (TypeError, ValueError):
-        return None
 
 
 def _current_queue_note(
@@ -803,7 +794,7 @@ def try_deterministic_fallback(
         return None
     if any(
         goal.kind == GoalKind.ROUTE
-        and _goal_is_unresolved(evidence, goal.goal_key)
+        and evidence.goal_is_unresolved(goal.goal_key)
         for goal in contract.goals
     ):
         return None
@@ -831,15 +822,6 @@ def try_deterministic_fallback(
             selection_source="deterministic_fallback",
         )
     return text
-
-
-def _goal_is_unresolved(evidence: Any, goal_key: str) -> bool:
-    state = evidence.state_for(goal_key)
-    if state in {GoalState.SATISFIED, GoalState.CANCELLED_BY_RIDER, GoalState.SUPERSEDED}:
-        return False
-    return not (
-        state == GoalState.EVIDENCE_READY and evidence.presented_for(goal_key)
-    )
 
 
 def deterministic_fallback_text(record: dict[str, Any], limit: int = 3) -> str:
@@ -938,21 +920,13 @@ def _objective_reason_holds(
 
 
 def _is_extreme(place: dict, places: list[dict], field: str, *, maximum: bool) -> bool:
-    values = [_finite(item.get(field)) for item in places]
+    values = [finite_float(item.get(field)) for item in places]
     known = [value for value in values if value is not None]
-    current = _finite(place.get(field))
+    current = finite_float(place.get(field))
     if current is None or not known:
         return False
     target = max(known) if maximum else min(known)
     return current == target
-
-
-def _finite(value: object) -> float | None:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
 
 
 def _facts(place: dict) -> list[str]:
@@ -962,7 +936,7 @@ def _facts(place: dict) -> list[str]:
     ).strip()
     if location:
         facts.append(location)
-    rating = _finite(place.get("rating"))
+    rating = finite_float(place.get("rating"))
     if rating is not None:
         facts.append(f"{rating:.1f}★")
     open_status = str(place.get("open_status") or "")

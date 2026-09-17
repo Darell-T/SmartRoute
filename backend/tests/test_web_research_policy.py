@@ -1,4 +1,4 @@
-﻿"""Phase 2B web research policy (replaces test_browser_tools.py).
+"""Phase 2B web research policy (replaces test_browser_tools.py).
 
 Proves the single native server-side web_search path: state-valid tool exposure,
 the direct-only server tool shape, the removed custom browser-tool surface,
@@ -18,12 +18,12 @@ from unittest.mock import patch
 
 from app.services import cache
 from app.services.agent import events as agent_events
-from app.services.agent import loop as agent_loop
 from app.services.agent import public_surface, tool_input_policy
 from app.services.agent import session as session_module
 from app.services.agent.model import policy
+from app.services.agent.model import request as model_request
 from app.services.agent.model import stream as model_stream
-from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools.base import ToolContext
 from app.services.agent.turn.contract import (
     GoalKind,
     GoalState,
@@ -36,7 +36,7 @@ from tests._fake_anthropic import reload_agent_loop_module
 
 
 def _state_tools(mode: str) -> list[dict]:
-    return agent_loop._tools_for_state(policy.policy_for_mode(mode))
+    return model_request.tools_for_state(policy.policy_for_mode(mode))
 
 
 class WebSearchPolicyTests(unittest.TestCase):
@@ -51,7 +51,7 @@ class WebSearchPolicyTests(unittest.TestCase):
                     place_count=1,
                     operation="search",
                 )
-                tools = agent_loop._tools_for_state(
+                tools = model_request.tools_for_state(
                     policy.policy_for_mode(mode),
                     include_web=evidence.may_offer_web(),
                     turn_evidence=evidence,
@@ -79,7 +79,7 @@ class WebSearchPolicyTests(unittest.TestCase):
                     place_count=5,
                     operation="search",
                 )
-                tools = agent_loop._tools_for_state(
+                tools = model_request.tools_for_state(
                     policy.policy_for_mode(mode),
                     include_web=search_evidence.may_offer_web(),
                     turn_evidence=search_evidence,
@@ -95,7 +95,7 @@ class WebSearchPolicyTests(unittest.TestCase):
                     place_count=5,
                     operation="verify",
                 )
-                verify_tools = agent_loop._tools_for_state(
+                verify_tools = model_request.tools_for_state(
                     policy.policy_for_mode(mode),
                     include_web=verify_evidence.may_offer_web(),
                     turn_evidence=verify_evidence,
@@ -168,7 +168,7 @@ class WebSearchPolicyTests(unittest.TestCase):
         )
 
         assert evidence.may_offer_web()
-        tools = agent_loop._tools_for_state(
+        tools = model_request.tools_for_state(
             policy.policy_for_mode("auto"),
             include_web=evidence.may_offer_web(),
             turn_evidence=evidence,
@@ -383,9 +383,10 @@ class _ScriptedStream:
 class PauseTurnTests(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls):
-        cls.loop = reload_agent_loop_module(
-            env={"AGENT_AUTO_MAX_ROUNDS": "4", "AGENT_TURN_DEADLINE_S": "60"}
-        )
+        cls.loop = reload_agent_loop_module(env={"AGENT_AUTO_MAX_ROUNDS": "4"})
+        deadline = patch.object(cls.loop.session_module, "AGENT_TURN_DEADLINE_S", 60)
+        deadline.start()
+        cls.addClassCleanup(deadline.stop)
 
     def setUp(self):
         cache._mem.clear()

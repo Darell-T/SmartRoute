@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 
 from google.protobuf.message import DecodeError
 
-from app.services.agent.tools._types import ToolContext, ToolOutcome, ToolResult
+from app.services.agent.tools.base import ToolContext, ToolOutcome, ToolResult
 from app.services.agent.tools.location_resolution import parse_coordinates
 from app.services.agent.tools.transit.lookup_arrivals_common import (
     FEED_STALE_AFTER_S,

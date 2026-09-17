@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from app.services import cache
-from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.base import ToolContext, ToolResult
 from app.services.agent.tools.route.route_projection import first_boarding_context
 from app.services.agent.tools.transit import check_transit, present_transit
 from app.services.agent.tools.transit import evidence as transit_evidence

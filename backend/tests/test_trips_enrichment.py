@@ -321,7 +321,7 @@ class TripEnrichmentTests(unittest.IsolatedAsyncioTestCase):
             }
         )
 
-        with patch.object(trips.direct_plan.enrichment, "_enrich_route", enrich):
+        with patch.object(trips.direct_plan.enrichment, "enrich_route", enrich):
             result = await trips.enrich_route(
                 _request_with_gtfs(), trips.EnrichRouteRequest(steps=[step])
             )
@@ -362,7 +362,7 @@ class TripEnrichmentTests(unittest.IsolatedAsyncioTestCase):
         )
         rejected_enrich = AsyncMock()
         with patch.object(
-            trips.direct_plan.enrichment, "_enrich_route", rejected_enrich
+            trips.direct_plan.enrichment, "enrich_route", rejected_enrich
         ):
             for invalid_step in invalid_steps:
                 with (
@@ -398,7 +398,7 @@ class TripEnrichmentTests(unittest.IsolatedAsyncioTestCase):
                 "bus_with_stops": 0,
             }
         )
-        with patch.object(trips.direct_plan.enrichment, "_enrich_route", enrich):
+        with patch.object(trips.direct_plan.enrichment, "enrich_route", enrich):
             result = await trips.enrich_route(
                 _request_with_gtfs(), trips.EnrichRouteRequest(steps=[tram_step])
             )
@@ -463,7 +463,7 @@ class TripEnrichmentTests(unittest.IsolatedAsyncioTestCase):
         payload = trips_mod.EnrichRouteRequest(steps=[{"type": "WALK"}])
         with patch.object(
             trips_mod.enrichment,
-            "_enrich_route",
+            "enrich_route",
             AsyncMock(side_effect=OSError("gtfs down")),
         ):
             result = await trips_mod.enrich_route(request, payload)

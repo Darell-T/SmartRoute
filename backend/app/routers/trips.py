@@ -8,9 +8,9 @@ established HTTP contract. No conversational SSE, no agent session state,
 no advisor/shadow selection, no ``[ROUTE:N]`` control parsing.
 """
 
+import logging
 import math
 import os
-import time
 import traceback
 
 from fastapi import APIRouter, HTTPException, Request
@@ -20,6 +20,7 @@ from app.services import admission
 from app.services.trips import direct_plan, enrichment
 
 router = APIRouter()
+_LOGGER = logging.getLogger(__name__)
 
 TRIP_CONTEXT_TIMEOUT_S = float(os.getenv("TRIP_CONTEXT_TIMEOUT_S", "2.0"))
 
@@ -188,23 +189,15 @@ def _enrichment_steps_are_bounded(steps: object) -> bool:
 
 async def enrich_route(request: Request, payload: EnrichRouteRequest):
     """Enrich an alternate on demand without making the initial trip wait."""
-    started = time.monotonic()
     gtfs = getattr(request.app.state, "gtfs", None)
     steps = payload.steps or []
     if not _enrichment_steps_are_bounded(steps):
         raise HTTPException(status_code=400, detail="Invalid route enrichment request")
-    query_count = getattr(gtfs, "_query_count", 0) if gtfs else 0
     try:
-        metrics = await enrichment._enrich_route(gtfs, steps)
+        await enrichment.enrich_route(gtfs, steps)
     except Exception as exc:  # noqa: BLE001 enrichment faults return un-enriched steps
-        print(f"[enrich-route] failed, returning un-enriched: {exc!r}")
+        _LOGGER.warning("[enrich-route] failed, returning un-enriched: %r", exc)
         return {"steps": steps, "enriched": False}
-    print(
-        f"[enrich-route] subway_legs={metrics['subway_legs']} bus_legs={metrics['bus_legs']} "
-        f"legs_with_stops={metrics['subway_with_stops'] + metrics['bus_with_stops']} "
-        f"db_queries={(getattr(gtfs, '_query_count', 0) - query_count) if gtfs else 0} "
-        f"total={time.monotonic() - started:.2f}s"
-    )
     return {"steps": steps, "enriched": True}
 
 
@@ -249,7 +242,6 @@ def _trip_payload_is_bounded(payload: TripRequest) -> bool:
 async def plan_trip(request: Request, payload: TripRequest):
     if not _trip_payload_is_bounded(payload):
         raise HTTPException(status_code=400, detail="Invalid trip request")
-    t0 = time.monotonic()
     lease = None
     timings: dict[str, float] = {}
     try:
@@ -283,14 +275,6 @@ async def plan_trip(request: Request, payload: TripRequest):
             context_timeout_s=TRIP_CONTEXT_TIMEOUT_S,
             timings=timings,
         )
-        elapsed = time.monotonic() - t0
-        print(
-            f"[trip] route={timings.get('route_provider_ms', 0.0) / 1000:.2f}s "
-            f"mta={timings.get('mta_ms', 0.0) / 1000:.2f}s "
-            f"incidents={timings.get('incident_ms', 0.0) / 1000:.2f}s "
-            f"enrich={timings.get('enrichment_ms', 0.0) / 1000:.2f}s "
-            f"total={elapsed:.2f}s"
-        )
     except direct_plan.DirectTripError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
     except HTTPException:
@@ -298,7 +282,7 @@ async def plan_trip(request: Request, payload: TripRequest):
     except Exception:  # noqa: BLE001 unhandled plan faults stay a generic 500
         # Full detail goes to the server log only; the public 500 stays generic
         # so internal exception text is never exposed to the browser.
-        print(f"[trip] UNHANDLED ERROR:\n{traceback.format_exc()}")
+        _LOGGER.warning("[trip] UNHANDLED ERROR:\n%s", traceback.format_exc())
         raise HTTPException(status_code=500, detail="Trip planning failed") from None
     else:
         return result

@@ -1,6 +1,6 @@
 "use client";
 
-import type { RouteCard as RouteCardData } from "@/lib/agent-chat-stream";
+import type { RouteCard as RouteCardData } from "@/lib/agent-chat/stream";
 import { RecommendedItineraryFromCards } from "./recommended-itinerary-card";
 import { recommendedCardsForChat } from "./recommended-card-selection";
 

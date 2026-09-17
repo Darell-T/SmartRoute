@@ -43,10 +43,10 @@ mta_realtime = importlib.import_module("app.services.mta.realtime")
 
 def _route_service_ids(route: list[dict]) -> set[str]:
     return {
-        scoring._step_route_id(step).strip().upper()
+        scoring.step_route_id(step).strip().upper()
         for step in route or []
         if step.get("type") in {"SUBWAY", "BUS"}
-        and scoring._step_route_id(step).strip()
+        and scoring.step_route_id(step).strip()
     }
 
 

@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from app.services import cache
 from app.services.agent import discovery_store
 from app.services.agent import events as agent_events
-from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools.base import ToolContext
 from app.services.agent.tools.places import damn_lines, present_places
 
 LINDUSTRIE_ID = "ChIJ92OsaJVZwokRsC54kf-J-3g"
