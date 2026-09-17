@@ -21,7 +21,7 @@ from unittest.mock import AsyncMock, patch
 
 from app.services.agent import candidate_store, discovery_store
 from app.services.agent import trip_state as trip_state_module
-from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools.base import ToolContext
 from app.services.agent.tools.location_resolution import ResolvedPlace
 from app.services.agent.tools.route import prepare_route_options
 

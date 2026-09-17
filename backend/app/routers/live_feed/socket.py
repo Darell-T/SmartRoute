@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import math
 import time
 from collections.abc import Awaitable, Callable
@@ -15,6 +16,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from app.services.mta.bus_updates import BusUpdate, BusUpdateData, BusUpdateEvent
 
+_LOGGER = logging.getLogger(__name__)
 SERVICE_ALERT_REFRESH_INTERVAL_S = 60
 
 
@@ -227,7 +229,10 @@ async def _service_alert_tick(
         payload, signatures, previous, sent_snapshot
     )
     if not await deps.send(websocket, message):
-        print(f"[ws_service_alerts:{connection_id}] client closed before send")
+        _LOGGER.warning(
+            "[ws_service_alerts:%s] client closed before send",
+            connection_id,
+        )
         return None
     if await wait_for_client_disconnect(websocket, SERVICE_ALERT_REFRESH_INTERVAL_S):
         return None
@@ -253,7 +258,7 @@ async def _service_alert_loop(
         except deps.disconnect_error:
             return
         except Exception as exc:  # noqa: BLE001 provider faults keep the socket open
-            print(deps.failure_log("ws_service_alerts", exc))
+            _LOGGER.warning("%s", deps.failure_log("ws_service_alerts", exc))
             if not await deps.send(
                 websocket,
                 {
@@ -481,12 +486,15 @@ async def _publish_live_snapshot(
     except deps.disconnect_error:
         return False
     except Exception as exc:  # noqa: BLE001 parser faults must not drop the socket
-        print(deps.failure_log("ws_live_feed", exc))
+        _LOGGER.warning("%s", deps.failure_log("ws_live_feed", exc))
         if not await deps.send(
             websocket,
             {"type": "error", "message": "live feed temporarily unavailable"},
         ):
-            print(f"[ws_live_feed:{connection_id}] client closed before error send")
+            _LOGGER.warning(
+                "[ws_live_feed:%s] client closed before error send",
+                connection_id,
+            )
             return False
         await asyncio.sleep(5)
     return True
@@ -513,7 +521,10 @@ async def _send_located_snapshot(
     )
     snapshot["bus_generation"] = conn.location_generation
     if not await deps.send(websocket, {"type": "snapshot", "data": snapshot}):
-        print(f"[ws_live_feed:{connection_id}] client closed before snapshot send")
+        _LOGGER.warning(
+            "[ws_live_feed:%s] client closed before snapshot send",
+            connection_id,
+        )
         return False
     _log_live_snapshot(deps, connection_id, snapshot)
     conn.last_sent = time.monotonic()

@@ -11,7 +11,7 @@ import pytest
 from app.services.agent import events as agent_events
 from app.services.agent.model import policy as agent_policy
 from app.services.agent.tools import ToolSpec
-from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.base import ToolContext, ToolResult
 from app.services.agent.turn.tool_round import execute_tool_round
 
 

@@ -10,6 +10,7 @@ incident_index_adapter.
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Iterable, Mapping
 from datetime import datetime
@@ -26,6 +27,7 @@ from app.services.trips.route_incidents.index_adapter import (
 )
 
 COMPLETE_INCIDENT_SCAN_STATUS = "complete"
+_LOGGER = logging.getLogger(__name__)
 
 # Single canonical rider disclosure for incomplete incident coverage. The
 # agent projection and the direct Live Map path both import this exact
@@ -101,7 +103,10 @@ async def scan_route_incidents(
             coverage_ids=coverage_ids,
         )
     except Exception as exc:  # noqa: BLE001 incident-index faults stay unavailable
-        print(f"[trip] incident index lookup failed: {type(exc).__name__}")
+        _LOGGER.warning(
+            "[trip] incident index lookup failed: %s",
+            type(exc).__name__,
+        )
         return {
             "incidents": [],
             "warnings": [],

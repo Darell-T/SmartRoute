@@ -6,8 +6,9 @@ from unittest.mock import patch
 
 from app.services import cache
 from app.services.agent import events as agent_events
-from app.services.agent import loop, public_surface
+from app.services.agent import public_surface
 from app.services.agent.model import policy
+from app.services.agent.model import request as model_request
 from app.services.agent.model import stream as model_stream
 from app.services.agent.tools import ToolResult, ToolSpec, declare_goals
 
@@ -238,7 +239,7 @@ class TurnLatencyGuardTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase)
 
 class ToolSurfaceAndTimeoutDefaultsTests(unittest.TestCase):
     def test_plain_route_surface_is_initial_state_surface(self) -> None:
-        tools = loop._tools_for_state()
+        tools = model_request.tools_for_state()
         assert {schema["name"] for schema in tools} == set(public_surface.INITIAL_TOOL_NAMES)
         assert all("strict" not in schema for schema in tools)
 

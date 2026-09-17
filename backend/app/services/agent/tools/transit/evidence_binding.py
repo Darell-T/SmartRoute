@@ -10,6 +10,7 @@ from typing import Any
 from app.services import evidence as evidence_service
 from app.services.agent import candidate_store, trip_state
 from app.services.mta.alerts import project_service_alert
+from app.services.text import collapse_whitespace
 
 _STATION_ENTITY_TYPES = frozenset(
     {"SUBWAY_STATION", "AIRTRAIN_STATION", "RAIL_STATION"}
@@ -32,10 +33,6 @@ _ALERT_LIMIT = 12
 _ROW_LIMIT = 12
 
 
-def _text(value: object) -> str:
-    return " ".join(str(value or "").split()).strip()
-
-
 def bind_accessibility_target(
     station: object,
     session: object,
@@ -55,7 +52,7 @@ def bind_accessibility_target(
     matching_routes = requested.intersection(routes) if requested else routes
     if requested and routes and not matching_routes:
         return None, "accessibility target is outside the accepted route"
-    query = _text(station)
+    query = collapse_whitespace(station)
     if not query:
         return None, "accessibility requires a station"
     selected, error = _select_accessibility_station(
@@ -113,7 +110,7 @@ def _accessibility_binding(
 ) -> dict[str, Any]:
     return {
         "bound": True,
-        "card_id": _text(active.get("card_id")) or None,
+        "card_id": collapse_whitespace(active.get("card_id")) or None,
         "route_ids": sorted(
             route for route in (matching_routes or {selected["route_id"]}) if route
         ),
@@ -149,8 +146,8 @@ def _itinerary_accessibility_entities(
     for raw_leg in itinerary.get("legs") or []:
         if not isinstance(raw_leg, Mapping):
             continue
-        mode = _text(raw_leg.get("mode") or raw_leg.get("type")).upper()
-        route_id = _text(raw_leg.get("service_id") or raw_leg.get("route_id")).upper()
+        mode = collapse_whitespace(raw_leg.get("mode") or raw_leg.get("type")).upper()
+        route_id = collapse_whitespace(raw_leg.get("service_id") or raw_leg.get("route_id")).upper()
         if route_id:
             routes.add(route_id)
         default_type = "BUS_STOP" if mode == "BUS" else _MODE_ENTITY_TYPES.get(mode, "")
@@ -229,9 +226,9 @@ def _entity(
     *, name: object, entity_id: object, entity_type: object, mode: str, route_id: str
 ) -> dict[str, str]:
     return {
-        "name": _text(name),
-        "id": _text(entity_id),
-        "entity_type": _text(entity_type).upper(),
+        "name": collapse_whitespace(name),
+        "id": collapse_whitespace(entity_id),
+        "entity_type": collapse_whitespace(entity_type).upper(),
         "mode": mode,
         "route_id": route_id,
     }
@@ -253,13 +250,13 @@ def _name_matches(left: object, right: object) -> bool:
 
 
 def _normalized_name(value: object) -> str:
-    tokens = _text(value).casefold().replace("-", " ").replace("/", " ").split()
+    tokens = collapse_whitespace(value).casefold().replace("-", " ").replace("/", " ").split()
     return " ".join(_NAME_TOKEN_MAP.get(token, token) for token in tokens)
 
 
 def _route_values(value: object) -> set[str]:
     values = value if isinstance(value, (list, tuple, set)) else []
-    return {_text(item).upper() for item in values if _text(item)}
+    return {collapse_whitespace(item).upper() for item in values if collapse_whitespace(item)}
 
 
 @dataclass(frozen=True)
@@ -311,11 +308,11 @@ def _admit_status_evidence(
     session_id: object,
     now: datetime | None,
 ) -> _StatusEvidenceAdmission | None:
-    owner = _text(session_id)
+    owner = collapse_whitespace(session_id)
     if not requested or not owner or not isinstance(session, Mapping):
         return None
     state = trip_state.get_trip_state(dict(session))
-    set_id = _text(state.get("active_candidate_set_id"))
+    set_id = collapse_whitespace(state.get("active_candidate_set_id"))
     if not set_id:
         return None
     record = candidate_store.load_candidate_set(set_id, session_id=owner)
@@ -453,14 +450,14 @@ def decision_alert_continuity(
     if not isinstance(binding, Mapping) or binding.get("comparable") is not True:
         return None
     previous = binding.get("previous_alert_ids")
-    if not isinstance(previous, list) or not all(_text(item) for item in previous):
+    if not isinstance(previous, list) or not all(collapse_whitespace(item) for item in previous):
         return None
     current = _official_alert_ids(alerts, binding.get("route_ids") or ())
     if current is None:
         return None
     return {
         "comparable": True,
-        "changed": sorted(_text(item) for item in previous) != sorted(current),
+        "changed": sorted(collapse_whitespace(item) for item in previous) != sorted(current),
     }
 
 
@@ -474,7 +471,7 @@ def _official_alert_rows(value: object, routes: object) -> list[dict[str, Any]] 
         if (
             not isinstance(projected, dict)
             or projected.get("source") != _OFFICIAL_ALERT_SOURCE
-            or not _text(projected.get("source_id"))
+            or not collapse_whitespace(projected.get("source_id"))
             or (wanted
             and not _route_values(projected.get("route_ids")).intersection(wanted))
         ):
@@ -496,7 +493,7 @@ def _official_alert_ids(value: object, routes: object) -> set[str] | None:
             continue
         if wanted and not _route_values(projected.get("route_ids")).intersection(wanted):
             continue
-        source_id = _text(projected.get("source_id"))
+        source_id = collapse_whitespace(projected.get("source_id"))
         if source_id:
             ids.add(source_id)
     if ids or not value:
@@ -506,8 +503,8 @@ def _official_alert_ids(value: object, routes: object) -> set[str] | None:
 
 def _alert_ids(rows: object) -> set[str]:
     return {
-        _text(row.get("source_id"))
-        for row in rows if isinstance(row, Mapping) and _text(row.get("source_id"))
+        collapse_whitespace(row.get("source_id"))
+        for row in rows if isinstance(row, Mapping) and collapse_whitespace(row.get("source_id"))
     }
 
 
@@ -518,11 +515,11 @@ def _alert_envelope(
 ) -> dict[str, Any] | None:
     if not isinstance(value, Mapping):
         return None
-    if _text(value.get("source")) != _OFFICIAL_ALERT_SOURCE:
+    if collapse_whitespace(value.get("source")) != _OFFICIAL_ALERT_SOURCE:
         return None
     observed = evidence_service.parse_timestamp(value.get("observedAt"))
     valid_until = evidence_service.parse_timestamp(value.get("validUntil"))
-    status = _text(value.get("status")).casefold()
+    status = collapse_whitespace(value.get("status")).casefold()
     payload = _official_alert_rows(value.get("payload"), routes)
     if observed is None or valid_until is None or status not in {"current", "stale"}:
         return None
@@ -597,7 +594,7 @@ def _collect_status_findings(
             signals,
             seen_signals,
         )
-        match_observed_at = _text(
+        match_observed_at = collapse_whitespace(
             (match.get("envelope") or {}).get("observed_at")
         )
         observed_at = observed_at or match_observed_at
@@ -608,7 +605,7 @@ def _append_unique_alerts(
     rows: object, alerts: list[dict[str, Any]], seen: set[str]
 ) -> None:
     for alert in rows or []:
-        alert_id = _text(alert.get("source_id"))
+        alert_id = collapse_whitespace(alert.get("source_id"))
         if alert_id and alert_id not in seen:
             seen.add(alert_id)
             alerts.append(alert)
@@ -621,7 +618,7 @@ def _append_unique_incidents(
 ) -> None:
     for raw in rows:
         incident = _incident_projection(raw, routes)
-        incident_id = _text(incident.get("incident_id"))
+        incident_id = collapse_whitespace(incident.get("incident_id"))
         if incident and incident_id and incident_id not in seen:
             seen.add(incident_id)
             incidents.append(incident)
@@ -635,14 +632,14 @@ def _append_unique_signals(
 ) -> None:
     for raw in rows:
         signal = _signal_projection(raw, routes)
-        key = (_text(signal.get("route_id")), _text(signal.get("location")))
+        key = (collapse_whitespace(signal.get("route_id")), collapse_whitespace(signal.get("location")))
         if signal and key not in seen:
             seen.add(key)
             signals.append(signal)
 
 
 def _merge_coverage(target: dict[str, str], key: str, value: object) -> None:
-    status = _text(value).casefold()
+    status = collapse_whitespace(value).casefold()
     if status in {"current", "partial", "stale", "unavailable", "unscanned"}:
         target[key] = status
 
@@ -653,13 +650,13 @@ def _incident_projection(value: object, routes: list[str]) -> dict[str, Any]:
     if routes and not set(route_ids).intersection(routes):
         return {}
     result = {
-        "incident_id": _text(row.get("incident_id") or row.get("id")),
-        "header": _text(row.get("location_name") or row.get("location")),
-        "description": _text(row.get("description"))[:500],
+        "incident_id": collapse_whitespace(row.get("incident_id") or row.get("id")),
+        "header": collapse_whitespace(row.get("location_name") or row.get("location")),
+        "description": collapse_whitespace(row.get("description"))[:500],
         "route_ids": route_ids,
-        "state": _text(row.get("state") or row.get("confirmation")),
+        "state": collapse_whitespace(row.get("state") or row.get("confirmation")),
     }
-    direction = _text(row.get("direction") or row.get("direction_label"))
+    direction = collapse_whitespace(row.get("direction") or row.get("direction_label"))
     if direction:
         result["direction"] = direction[:80]
     return {key: value for key, value in result.items() if value not in (None, "", [])}
@@ -667,14 +664,14 @@ def _incident_projection(value: object, routes: list[str]) -> dict[str, Any]:
 
 def _signal_projection(value: object, routes: list[str]) -> dict[str, Any]:
     row = value if isinstance(value, Mapping) else {}
-    route_id = _text(row.get("route_id") or row.get("route")).upper()
+    route_id = collapse_whitespace(row.get("route_id") or row.get("route")).upper()
     if routes and route_id not in routes:
         return {}
     result = {
-        "kind": _text(row.get("kind") or row.get("status")) or "possible_delay_unconfirmed",
+        "kind": collapse_whitespace(row.get("kind") or row.get("status")) or "possible_delay_unconfirmed",
         "route_id": route_id,
-        "mode": _text(row.get("mode")).casefold(),
-        "location": _text(row.get("location"))[:96],
+        "mode": collapse_whitespace(row.get("mode")).casefold(),
+        "location": collapse_whitespace(row.get("location"))[:96],
         "confirmed": False,
     }
     return {key: value for key, value in result.items() if value not in (None, "", [])}

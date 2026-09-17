@@ -1,9 +1,12 @@
 import asyncio
+import logging
 import os
 import threading
 import time
 
 import redis
+
+_LOGGER = logging.getLogger(__name__)
 
 REDIS_CONNECT_TIMEOUT_S = float(os.getenv("REDIS_CONNECT_TIMEOUT_S", "0.5"))
 REDIS_READ_TIMEOUT_S = float(os.getenv("REDIS_READ_TIMEOUT_S", "1.0"))
@@ -25,7 +28,7 @@ _FAIL_OPEN_LOG_COOLDOWN_SECONDS = 60
 _last_fail_open_log = 0.0
 
 if redis_client is None:
-    print("[cache] REDIS_URL not set — using in-memory cache")
+    _LOGGER.warning("[cache] REDIS_URL not set — using in-memory cache")
 
 
 _DELETE_IF_VALUE_SCRIPT = """
@@ -98,9 +101,11 @@ def _log_fail_open(operation: str, exc: Exception) -> None:
     if now - _last_fail_open_log < _FAIL_OPEN_LOG_COOLDOWN_SECONDS:
         return
     _last_fail_open_log = now
-    print(
-        f"[cache] Redis {operation} failed; optional provider cache is using "
-        f"process memory ({type(exc).__name__})"
+    _LOGGER.warning(
+        "[cache] Redis %s failed; optional provider cache is using "
+        "process memory (%s)",
+        operation,
+        type(exc).__name__,
     )
 
 

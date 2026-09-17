@@ -8,7 +8,7 @@ import re
 
 from app.services import geography as geo
 from app.services.agent import profile as profile_module
-from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools.base import ToolContext
 from app.services.mta.static_gtfs.stop_patterns import normalize_station_name
 from app.services.trips.location import (
     KnownPlace,

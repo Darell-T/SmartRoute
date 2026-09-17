@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 from app.services import cache
 from app.services.agent import discovery_store
-from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.base import ToolContext, ToolResult
 from app.services.agent.tools.places import damn_lines, discover_places
 
 LINDUSTRIE_ID = "ChIJ92OsaJVZwokRsC54kf-J-3g"
@@ -81,7 +81,7 @@ async def _discover(
     )
     with patch.object(
         discover_places.search_local_places,
-        "_provider_search",
+        "provider_search",
         new=provider,
     ):
         return await discover_places.execute(

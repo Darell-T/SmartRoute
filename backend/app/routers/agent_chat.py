@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import os
 import time
 from datetime import datetime
@@ -28,6 +29,7 @@ from app.services.agent import session as session_module
 from app.services.geography import NYC_BOUNDS
 
 router = APIRouter()
+_LOGGER = logging.getLogger(__name__)
 
 _SSE_HEADERS = {"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"}
 HEARTBEAT_INTERVAL_S = 15
@@ -148,7 +150,11 @@ async def _wait_event_or_ping(
         return "ready"
     if await request.is_disconnected():
         pending.cancel()
-        print(f"[agent-chat] client disconnected sess[{_log_sess(session_id)}] turn={turn_id}")
+        _LOGGER.warning(
+            "[agent-chat] client disconnected sess[%s] turn=%s",
+            _log_sess(session_id),
+            turn_id,
+        )
         return "disconnect"
     return "ping"
 
@@ -295,11 +301,15 @@ def _streaming_chat_response(
     turn_id = session_module.next_turn_id(session)
     now_et = datetime.now(ZoneInfo("America/New_York")).isoformat()
     origin_source = "request" if incoming_origin else "session" if origin else "missing"
-    print(
-        f"[agent-chat] sess[{_log_sess(session_id)}] turn={turn_id} "
-        f"msg_len={len(payload.message)} origin_source={origin_source} "
-        f"selected_card={'yes' if payload.selected_card_id else 'no'}"
-        f" presentation={payload.response_presentation}"
+    _LOGGER.info(
+        "[agent-chat] sess[%s] turn=%s msg_len=%s origin_source=%s selected_card=%s"
+        " presentation=%s",
+        _log_sess(session_id),
+        turn_id,
+        len(payload.message),
+        origin_source,
+        "yes" if payload.selected_card_id else "no",
+        payload.response_presentation,
     )
     return StreamingResponse(
         _sse_stream(

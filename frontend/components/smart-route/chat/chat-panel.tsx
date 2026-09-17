@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import type { ArrivalsTurnPayload, useAgentChat } from "@/lib/use-agent-chat";
-import type { RouteCard } from "@/lib/agent-chat-stream";
-import type { ChatTheme } from "@/lib/use-chat-theme";
+import type { ArrivalsTurnPayload, useAgentChat } from "@/lib/agent-chat/use-agent-chat";
+import type { RouteCard } from "@/lib/agent-chat/stream";
+import type { ChatTheme } from "@/lib/hooks/use-chat-theme";
 import { responsePresentationModeStore } from "@/lib/response-presentation";
 import {
   ChatContainerContent,

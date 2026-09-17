@@ -42,6 +42,21 @@ def enabled(name: str) -> bool:
     return os.getenv(name, "").strip().casefold() in _TRUE_VALUES
 
 
+def env_int(name: str, default: int, *, minimum: int = 0) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+    return max(minimum, value)
+
+
+def env_float(name: str, default: float, *, minimum: float, maximum: float) -> float:
+    try:
+        return min(maximum, max(minimum, float(os.getenv(name, str(default)))))
+    except ValueError:
+        return default
+
+
 def runtime_mode_label() -> str:
     """A diagnostic-safe profile label; never returns raw environment values."""
 

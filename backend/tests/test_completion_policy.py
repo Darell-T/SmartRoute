@@ -45,12 +45,15 @@ class CompletionPolicyTests(unittest.TestCase):
 
     def test_unavailable_claim_requires_a_real_attempt(self) -> None:
         contract = _contract(("arrivals", GoalKind.ARRIVALS, ()))
-        evidence = {"arrivals": {"state": GoalState.ATTEMPTED_BUT_UNAVAILABLE}}
+        evidence = TurnEvidence()
+        evidence.record_goal("arrivals", GoalState.ATTEMPTED_BUT_UNAVAILABLE)
         rejected = evaluate_completion(contract, evidence)
         assert not rejected.may_terminate
         assert rejected.required_next_actions == ("attempt:arrivals",)
 
-        evidence["arrivals"]["attempted"] = True
+        evidence.record_goal(
+            "arrivals", GoalState.ATTEMPTED_BUT_UNAVAILABLE, attempted=True
+        )
         allowed = evaluate_completion(contract, evidence)
         assert allowed.may_terminate
         assert allowed.turn_resolution == TurnResolution.ATTEMPTED_BUT_UNAVAILABLE
@@ -88,15 +91,14 @@ class CompletionPolicyTests(unittest.TestCase):
             ("route", GoalKind.ROUTE, ("place",)),
             ("place", GoalKind.DESTINATION_SELECTION, ()),
         )
-        evidence = {
-            "place": {
-                "state": GoalState.IN_FLIGHT,
-                "attempted": True,
-                "approved_recovery_options": ("try a wider window",),
-                "recovery_options": ("ignored alias",),
-            },
-            "route": {"state": GoalState.PENDING},
-        }
+        evidence = TurnEvidence()
+        evidence.record_goal(
+            "place",
+            GoalState.IN_FLIGHT,
+            attempted=True,
+            approved_recovery_options=("try a wider window",),
+        )
+        evidence.record_goal("route", GoalState.PENDING)
         blocked = evaluate_completion(contract, evidence)
         assert not blocked.may_terminate
         assert blocked.required_next_actions == (
@@ -105,7 +107,12 @@ class CompletionPolicyTests(unittest.TestCase):
         )
         assert blocked.recovery_options == ("try a wider window",)
 
-        evidence["place"]["state"] = GoalState.EVIDENCE_READY
+        evidence.record_goal(
+            "place",
+            GoalState.EVIDENCE_READY,
+            attempted=True,
+            approved_recovery_options=("try a wider window",),
+        )
         presented = evaluate_completion(
             contract, evidence, presented_goal_keys=("place",)
         )

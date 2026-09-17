@@ -2,11 +2,14 @@
 
 import asyncio
 import json
+import logging
 import os
 from pathlib import Path
 
 import anthropic
 from app import observability, runtime
+
+_LOGGER = logging.getLogger(__name__)
 
 client = observability.wrap_anthropic(
     anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
@@ -265,13 +268,21 @@ async def _stream_model_with_retries(
             if not _is_overload_error(error):
                 raise
             wait = 2**attempt
-            print(f"[claude] {model} overloaded (attempt {attempt + 1}), waiting {wait}s")
+            _LOGGER.warning(
+                "[claude] %s overloaded (attempt %s), waiting %ss",
+                model,
+                attempt + 1,
+                wait,
+            )
             await asyncio.sleep(wait)
             continue
         else:
             succeeded.append(True)
             return
-    print(f"[claude] {model} still overloaded after retries, trying next model")
+    _LOGGER.warning(
+        "[claude] %s still overloaded after retries, trying next model",
+        model,
+    )
 
 
 async def _stream_for_models(

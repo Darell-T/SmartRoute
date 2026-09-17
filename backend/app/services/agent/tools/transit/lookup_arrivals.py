@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import time
 
-from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.base import ToolContext, ToolResult
 from app.services.agent.tools.transit.lookup_arrivals_bus import execute as _execute_bus
 from app.services.agent.tools.transit.lookup_arrivals_common import (
     ARRIVAL_LIMIT_DEFAULT,

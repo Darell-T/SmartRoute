@@ -11,7 +11,7 @@ from app.services.agent import (
     tool_input_policy,
     trip_state,
 )
-from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools.base import ToolContext
 from app.services.agent.tools.places import present_places
 from app.services.agent.turn.contract import (
     GoalKind,

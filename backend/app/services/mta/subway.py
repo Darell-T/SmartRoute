@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from datetime import datetime
 
 from app.services.mta.config import NYC_TZ, get_route_color, route_to_feed
@@ -115,34 +114,6 @@ def parse_vehicle_positions(
     if diagnostics is not None:
         diagnostics.append(stats)
     return vehicle_positions
-
-
-def _log_vehicle_diagnostics(debug: dict):
-    if os.getenv("BACKEND_VERBOSE_LOGS", "0") != "1":
-        return
-    print(
-        "[mta_feed][vehicles] "
-        f"scope={debug['scope']} requested_routes={debug['requested_routes']} "
-        f"feeds_ok={debug['feeds_ok']} feed_failures={debug['feed_failures']} "
-        f"entities={debug['entities']} trip_updates={debug['trip_updates']} "
-        f"vehicle_entities={debug['vehicle_entities']} "
-        f"with_position={debug['vehicles_with_position']} "
-        f"without_position={debug['vehicles_without_position']} "
-        f"zero_coords={debug['zero_coordinates']} raw_positions={debug['raw_positions']} "
-        f"stop_only_candidates={debug.get('stop_only_candidates', 0)} "
-        f"final_markers={debug['final_markers']}"
-    )
-    for feed in debug["feeds"]:
-        sample = feed.get("sample_without_position") or []
-        print(
-            "[mta_feed][vehicles][feed] "
-            f"{feed['source']} bytes={feed['bytes']} entities={feed['entities']} "
-            f"trip_updates={feed['trip_updates']} vehicle_entities={feed['vehicle_entities']} "
-            f"with_position={feed['vehicles_with_position']} "
-            f"without_position={feed['vehicles_without_position']} "
-            f"valid_positions={feed['valid_positions']} routes={feed['routes']} "
-            f"sample_without_position={sample}"
-        )
 
 
 def _unique_requested_vehicle_id(pos, requested_set, seen_ids):
@@ -270,7 +241,6 @@ def build_subway_vehicle_positions(raw_feeds, requested_set, route_ids, debug, i
     debug_payload = _vehicle_position_debug(
         raw_feeds, requested_set, route_ids, all_positions, vehicles, feed_diagnostics
     )
-    _log_vehicle_diagnostics(debug_payload)
     return vehicles, debug_payload
 
 

@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from app.services.agent import public_surface
 from app.services.agent.model import policy as agent_policy
-from app.services.agent.tools import ToolContext
 from app.services.agent.turn.contract import GoalKind, GoalState
 from app.services.trips.preparation.input import normalize_route_ids
+
+if TYPE_CHECKING:
+    from app.services.agent.tools.base import ToolContext, ToolResult
 
 WEB_PLACE_REQUIRED_ERROR = (
     "web-introduced places must be verified with discover_places before "
@@ -140,6 +144,54 @@ def goal_error(name: str, tool_input: dict, ctx: ToolContext) -> str | None:
     ):
         return "presenter requires ready server-owned evidence"
     return None
+
+
+def validated_goal_key(
+    tool_input: dict,
+    ctx: ToolContext,
+    *,
+    compatible_kinds: frozenset[GoalKind] | None = None,
+    incompatible_error: str = "goal_key is incompatible with this capability",
+    require_route_internal_discovery: bool = False,
+) -> tuple[str | None, ToolResult | None]:
+    from app.services.agent.tools.base import ToolResult
+
+    evidence = getattr(ctx, "turn_evidence", None)
+    contract = getattr(evidence, "turn_contract", None)
+    if contract is None:
+        return None, None
+    raw_goal_key = tool_input.get("goal_key")
+    if not isinstance(raw_goal_key, str) or not raw_goal_key.strip():
+        return None, ToolResult(
+            ok=False,
+            error="goal_key is required when a turn contract is active",
+            internal_diagnostic=True,
+        )
+    goal_key = raw_goal_key.strip()
+    goal = contract.get_goal(goal_key)
+    if goal is None:
+        return None, ToolResult(
+            ok=False,
+            error="goal_key is unknown for this turn contract",
+            internal_diagnostic=True,
+        )
+    if compatible_kinds is not None and goal.kind not in compatible_kinds:
+        return None, ToolResult(
+            ok=False,
+            error=incompatible_error,
+            internal_diagnostic=True,
+        )
+    if (
+        require_route_internal_discovery
+        and goal.kind == GoalKind.ROUTE
+        and not contract.route_allows_internal_discovery(goal_key)
+    ):
+        return None, ToolResult(
+            ok=False,
+            error=incompatible_error,
+            internal_diagnostic=True,
+        )
+    return goal_key, None
 
 
 def _has_destination_ids(destination_ids: object) -> bool:

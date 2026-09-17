@@ -10,6 +10,10 @@ from typing import Any, Literal
 
 from app.services.agent.turn.contract import GoalKind, GoalState, TurnContract
 
+_RESOLVED_GOAL_STATES = frozenset(
+    {GoalState.SATISFIED, GoalState.CANCELLED_BY_RIDER, GoalState.SUPERSEDED}
+)
+
 TerminalPath = Literal[
     "complete_turn",
     "present_places",
@@ -150,6 +154,12 @@ class TurnEvidence:
 
     def presented_for(self, goal_key: str) -> bool:
         return str(goal_key) in self.goal_presented
+
+    def goal_is_unresolved(self, goal_key: str) -> bool:
+        state = self.state_for(goal_key)
+        if state in _RESOLVED_GOAL_STATES:
+            return False
+        return not (state == GoalState.EVIDENCE_READY and self.presented_for(goal_key))
 
     def recovery_options_for(self, goal_key: str) -> tuple[str, ...]:
         return self.goal_recovery_options.get(str(goal_key), ())

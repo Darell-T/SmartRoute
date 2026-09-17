@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import os
-import re
 import time
 from collections.abc import AsyncIterator, Callable
 from typing import Any, Literal
@@ -14,19 +13,10 @@ import anthropic
 
 from app.services.agent import events as agent_events
 from app.services.agent.model import request as model_request
+from app.services.agent.passenger_output import SUSPICIOUS_RIDER_TEXT
 
 MODEL_ATTEMPT_TIMEOUT_S = max(
     1.0, float(os.getenv("AGENT_MODEL_ATTEMPT_TIMEOUT_S", "15"))
-)
-
-_SUSPICIOUS_TEXT = re.compile(
-    r"[*_`~]|\bcard\s*$|\b(?:rc|mock|cd|cs|pl|ds)[_-]|\bChIJ|"
-    r"\b(?:prepare_route_options|present_route|get_place_details|"
-    r"search_local_places|destination_place_id|place_id|candidate_id|"
-    r"candidate_set_id|discovery_set_id|tool_use|tool_result)\b|"
-    r"\b(?:give\s+me\s+(?:a\s+)?moment|"
-    r"waiting\s+for\s+(?:the\s+)?results|results\s+shortly|let\s+me\s+call)",
-    re.IGNORECASE,
 )
 
 
@@ -112,7 +102,7 @@ class _RiderTextSanitizer:
 
     def feed(self, text: str) -> str:
         candidate = self._pending + text
-        if self._pending or _SUSPICIOUS_TEXT.search(candidate):
+        if self._pending or SUSPICIOUS_RIDER_TEXT.search(candidate):
             self._pending = candidate
             return ""
         return self._sanitize(candidate)

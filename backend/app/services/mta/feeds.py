@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import time
 
 import httpx
 
 from app.services.mta.config import BASE_URL, route_to_feed
+
+_LOGGER = logging.getLogger(__name__)
 
 _FETCH_FAILURE_LOGS: dict[str, float] = {}
 _FETCH_SUMMARY_LOGS: dict[str, float] = {}
@@ -26,7 +29,7 @@ def _log_fetch_failure(url: str, message: str):
     if now - last < _FETCH_FAILURE_LOG_COOLDOWN:
         return
     _FETCH_FAILURE_LOGS[url] = now
-    print(message)
+    _LOGGER.warning("%s", message)
 
 
 def _feed_url_for_suffix(suffix: str) -> str:
@@ -135,7 +138,7 @@ async def fetch_feeds_with_metadata(
         if route in route_to_feed:
             unique_suffixes.add(route_to_feed[route])
     if not unique_suffixes:
-        print("Error: No valid train routes provided.")
+        _LOGGER.warning("Error: No valid train routes provided.")
         return []
 
     feed_requests = [

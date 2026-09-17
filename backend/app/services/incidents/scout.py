@@ -8,6 +8,7 @@ transport; evidence normalization stays in scout_normalization.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -33,6 +34,8 @@ from app.services.incidents.scout_provider import (
     _run_x_search as transport_x_search,
 )
 from app.services.trips.crowds.search_normalization import parse_json
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,7 +82,11 @@ def _consume(
 
 
 def _log_boundary_failure(phase: str, exc: BaseException) -> None:
-    print(f"[incident-scout] {phase} runner failed: {type(exc).__name__}")
+    _LOGGER.warning(
+        "[incident-scout] %s runner failed: %s",
+        phase,
+        type(exc).__name__,
+    )
 
 
 async def _scout_x_phase(

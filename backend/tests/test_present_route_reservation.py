@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from app.services.agent import candidate_store, transcript_store, trip_state
-from app.services.agent.tools._types import ToolResult
+from app.services.agent.tools.base import ToolResult
 from app.services.agent.tools.route import (
     prepare_route_options,
     present_route,
@@ -232,7 +232,7 @@ class PresentRouteReservationTests(unittest.IsolatedAsyncioTestCase):
         assert trip_state.get_trip_state(ctx.session)["selected_candidate_id"] is None
         # The same candidate stays retryable through the real pipeline.
         with patch(
-            "app.services.trips.enrichment._enrich_route",
+            "app.services.trips.enrichment.enrich_route",
             new=AsyncMock(return_value=None),
         ):
             retried = await present_route.execute(
@@ -248,7 +248,7 @@ class PresentRouteReservationTests(unittest.IsolatedAsyncioTestCase):
         ctx = _ctx()
         set_id, candidate_id = await self._prepare_candidate(ctx)
         with patch(
-            "app.services.trips.enrichment._enrich_route",
+            "app.services.trips.enrichment.enrich_route",
             new=AsyncMock(side_effect=AssertionError("route was enriched again")),
         ) as enrich:
             presented = await present_route.execute(
@@ -265,7 +265,7 @@ class PresentRouteReservationTests(unittest.IsolatedAsyncioTestCase):
         ctx = _ctx()
         set_id, candidate_id = await self._prepare_candidate(ctx)
         with patch(
-            "app.services.trips.enrichment._enrich_route",
+            "app.services.trips.enrichment.enrich_route",
             new=AsyncMock(return_value=None),
         ):
             results = await asyncio.gather(
@@ -283,7 +283,7 @@ class PresentRouteReservationTests(unittest.IsolatedAsyncioTestCase):
         ctx = _ctx()
         set_id, candidate_id = await self._prepare_candidate(ctx, what_if=True)
         with patch(
-            "app.services.trips.enrichment._enrich_route",
+            "app.services.trips.enrichment.enrich_route",
             new=AsyncMock(return_value=None),
         ):
             preview = await present_route.execute(
@@ -295,7 +295,7 @@ class PresentRouteReservationTests(unittest.IsolatedAsyncioTestCase):
         record = candidate_store.load_candidate_set(set_id, session_id=ctx.session_id)
         assert not record["presented"]
         with patch(
-            "app.services.trips.enrichment._enrich_route",
+            "app.services.trips.enrichment.enrich_route",
             new=AsyncMock(return_value=None),
         ):
             repeated = await present_route.execute(

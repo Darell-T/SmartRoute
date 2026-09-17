@@ -18,10 +18,10 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from app.services import geography as geo
-from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services import text
+from app.services.agent.tools.base import ToolContext, ToolResult
 from app.services.agent.tools.location_resolution import resolve_named_place
 from app.services.geography import find_nearest_stops
-from app.services.trips import text
 from app.services.trips.crowds import search as crowd_search
 from app.services.trips.crowds.hotspots import HotspotHit
 from app.services.trips.route_incidents import scan as trip_incidents
@@ -143,7 +143,7 @@ def _nearby_stop_context(
     for stop in stops:
         if not isinstance(stop, Mapping):
             continue
-        name = text._safe_text(stop.get("stop_name"), 80)
+        name = text.safe_text(stop.get("stop_name"), 80)
         try:
             stop_latitude = float(stop.get("stop_lat"))
             stop_longitude = float(stop.get("stop_lon"))
@@ -153,7 +153,7 @@ def _nearby_stop_context(
             continue
         contexts.append(
             CandidateStopContext(
-                stop_id=text._safe_text(stop.get("stop_id"), 80) or None,
+                stop_id=text.safe_text(stop.get("stop_id"), 80) or None,
                 stop_name=name,
                 latitude=stop_latitude,
                 longitude=stop_longitude,
@@ -170,13 +170,13 @@ def _safe_events(value: object) -> list[dict[str, Any]]:
             continue
         events.append(
             {
-                "name": text._safe_text(row.get("name"), 140),
-                "category": text._safe_text(row.get("category"), 24),
-                "venue_name": text._safe_text(row.get("venue_name"), 100),
+                "name": text.safe_text(row.get("name"), 140),
+                "category": text.safe_text(row.get("category"), 24),
+                "venue_name": text.safe_text(row.get("venue_name"), 100),
                 "start_iso": row.get("start_iso") if isinstance(row.get("start_iso"), str) else None,
                 "estimated_end_iso": row.get("estimated_end_iso") if isinstance(row.get("estimated_end_iso"), str) else None,
-                "source_class": text._safe_text(row.get("source_class"), 32),
-                "verification_tier": text._safe_text(row.get("verification_tier"), 32),
+                "source_class": text.safe_text(row.get("source_class"), 32),
+                "verification_tier": text.safe_text(row.get("verification_tier"), 32),
             }
         )
         if len(events) >= _MAX_EVENTS:
@@ -201,11 +201,11 @@ def _incident_display_row(row: object) -> dict[str, Any] | None:
         return None
     severity = str(row.get("severity") or "medium").casefold()
     display: dict[str, Any] = {
-        "location": text._safe_text(row.get("location") or row.get("location_name"), 100),
-        "nearby_station": text._safe_text(row.get("nearby_station"), 80),
+        "location": text.safe_text(row.get("location") or row.get("location_name"), 100),
+        "nearby_station": text.safe_text(row.get("nearby_station"), 80),
         "severity": severity if severity in {"low", "medium", "high", "critical"} else "medium",
-        "description": text._safe_text(row.get("description"), 220),
-        "source": text._safe_text(row.get("source"), 60),
+        "description": text.safe_text(row.get("description"), 220),
+        "source": text.safe_text(row.get("source"), 60),
     }
     state = str(row.get("state") or "").casefold()
     if state in {"unconfirmed", "confirmed", "rejected", "refreshing", "stale", "resolved"}:
@@ -220,8 +220,8 @@ def _display_incidents(value: object) -> list[dict[str, Any]]:
     for row in value if isinstance(value, list) else []:
         if not isinstance(row, Mapping):
             continue
-        incident_id = text._safe_text(row.get("incident_id"), 120)
-        key = incident_id or text._safe_text(
+        incident_id = text.safe_text(row.get("incident_id"), 120)
+        key = incident_id or text.safe_text(
             row.get("location") or row.get("location_name"), 100
         )
         if key and key not in merged:
@@ -237,7 +237,7 @@ def _safe_sources(value: object) -> dict[str, list[str]] | None:
         values = value.get(key)
         if isinstance(values, list):
             result[key] = [
-                text._safe_text(item, 80) for item in values[:6] if text._safe_text(item, 80)
+                text.safe_text(item, 80) for item in values[:6] if text.safe_text(item, 80)
             ]
     return result or None
 
@@ -278,9 +278,9 @@ def _copy_lookup_metadata(evidence: dict[str, Any], metadata: Mapping[str, Any])
     requested = metadata.get("requested_coverage_ids")
     if isinstance(requested, list):
         evidence["requested_coverage_ids"] = [
-            text._safe_text(item, 120)
+            text.safe_text(item, 120)
             for item in requested[:16]
-            if text._safe_text(item, 120)
+            if text.safe_text(item, 120)
         ]
     sources = _safe_sources(metadata.get("sources"))
     if sources is not None:
@@ -300,7 +300,7 @@ def _event_evidence(value: object, *, travel_at: datetime) -> dict[str, Any]:
     completed = result.get("completed_sources")
     if isinstance(completed, list):
         evidence["completed_sources"] = [
-            text._safe_text(item, 40) for item in completed[:4] if text._safe_text(item, 40)
+            text.safe_text(item, 40) for item in completed[:4] if text.safe_text(item, 40)
         ]
     return evidence
 
@@ -367,7 +367,7 @@ async def _admit_area_query(
     )
     if place is None:
         return ToolResult(ok=False, error=resolution_error or "could not resolve that NYC area")
-    area_name = text._safe_text(place.name, 100) or text._safe_text(area_raw, 100)
+    area_name = text.safe_text(place.name, 100) or text.safe_text(area_raw, 100)
     if not _is_nyc_area(area_name, place.latitude, place.longitude):
         return ToolResult(ok=False, error=_OUTSIDE_AREA_MESSAGE)
     return area_name, place, travel_at

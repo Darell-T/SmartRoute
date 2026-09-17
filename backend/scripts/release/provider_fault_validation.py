@@ -41,9 +41,9 @@ async def _replay_faults() -> None:
     selected_index, candidate_analysis = advisor_context.parse_advisor_selection(
         inputs.advisor_outputs["intelligence"], len(inputs.route_candidates)
     )
-    projected_candidates = candidates._build_route_candidates(
+    projected_candidates = candidates.build_route_candidates(
         inputs.route_candidates, selected_index, candidate_analysis,
-        scoring._score_routes(inputs.route_candidates, []),
+        scoring.score_routes(inputs.route_candidates, []),
     )
     selected_candidate = projected_candidates[selected_index]
     selected_id = str(selected_candidate["id"])

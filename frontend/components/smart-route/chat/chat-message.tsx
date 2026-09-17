@@ -12,14 +12,14 @@
    to the backend.
    ════════════════════════════════════════════════════════════════════════ */
 
-import type { ArrivalsTurnPayload, AssistantTurn, ChatTurn } from "@/lib/use-agent-chat";
-import type { RouteCard } from "@/lib/agent-chat-stream";
-import type { ChatTheme } from "@/lib/use-chat-theme";
+import type { ArrivalsTurnPayload, AssistantTurn, ChatTurn } from "@/lib/agent-chat/use-agent-chat";
+import type { RouteCard } from "@/lib/agent-chat/stream";
+import type { ChatTheme } from "@/lib/hooks/use-chat-theme";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { ThinkingOrb } from "thinking-orbs";
 import { Message, MessageContent } from "@/components/prompt-kit/message";
 import { Sources } from "@/components/prompt-kit/source";
-import { isSearchActivityTool } from "@/lib/agent-route-tools";
+import { isSearchActivityTool } from "@/lib/agent-chat/route-tools";
 import { ChatWorkingPanel } from "./chat-working-panel";
 import { ChatRouteCardList } from "./chat-route-card";
 import { ChatArrivalsCard } from "./chat-arrivals-card";

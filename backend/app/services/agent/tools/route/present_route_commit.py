@@ -7,7 +7,7 @@ from typing import Any
 
 from app.services.agent import candidate_store
 from app.services.agent import trip_state as trip_state_module
-from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.base import ToolContext, ToolResult
 from app.services.agent.tools.route.present_route_state import (
     ValidatedRoutePresentation,
     destination_selection_mode,

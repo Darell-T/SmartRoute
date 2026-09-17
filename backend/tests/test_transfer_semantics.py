@@ -215,7 +215,7 @@ class TransferSemanticsTests(unittest.TestCase):
         assert canonical["legs"][1]["transfer_kind"] == "same_platform"
         assert canonical["legs"][1]["transfer_seconds"] == 90
 
-        scored = scoring._route_score(route, [], routing_preference="LESS_WALKING")
+        scored = scoring.route_score(route, [], routing_preference="LESS_WALKING")
         assert scored["in_station_transfer_seconds"] == 90
         assert scored["walking_penalty"] == 0
 
@@ -223,7 +223,7 @@ class TransferSemanticsTests(unittest.TestCase):
         street_route[1]["start_point"] = {"latitude": 40.70, "longitude": -74.0}
         street_route[1]["end_point"] = {"latitude": 40.71, "longitude": -74.0}
         normalize_route(street_route)
-        street_score = scoring._route_score(
+        street_score = scoring.route_score(
             street_route,
             [],
             routing_preference="LESS_WALKING",

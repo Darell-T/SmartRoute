@@ -8,7 +8,7 @@ import type {
 
 function closestAccessGroup(groups: NearbyTransitGroup[]): NearbyTransitGroup | undefined {
   return groups
-    .filter((group) => typeof group.walkMinutes === "number" && group.routeIds.length > 0)
+    .filter((group) => group.walkMinutes != null && group.routeIds.length > 0)
     .sort((left, right) => (left.walkMinutes ?? 99) - (right.walkMinutes ?? 99))[0];
 }
 
@@ -20,7 +20,7 @@ function soonestLiveTrain(
   for (const group of groups) {
     for (const arrival of group.arrivals) {
       const first = arrival.arrivalMinutes[0];
-      if (typeof first !== "number" || first >= mins) continue;
+      if (first == null || first >= mins) continue;
       if (arrival.predictionType === "scheduled" || !arrival.routeIds[0]) continue;
       mins = first;
       line = arrival.routeIds[0];
@@ -57,7 +57,7 @@ function soonestBusWait(busArrivals: Arrival[]): { line: string; mins: number } 
       mins: arrival.arrivalMinutes[0],
     }))
     .filter((entry): entry is { line: string; mins: number } =>
-      Boolean(entry.line) && typeof entry.mins === "number",
+      Boolean(entry.line) && entry.mins != null,
     )
     .sort((left, right) => left.mins - right.mins)[0];
 }

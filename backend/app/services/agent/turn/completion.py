@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Sequence
 from enum import StrEnum
 
 from app.services.agent import session as session_module
@@ -53,20 +53,6 @@ def _state(value: object) -> GoalState:
     return value if isinstance(value, GoalState) else GoalState(str(value))
 
 
-def _mapping_facts(
-    evidence: Mapping, key: str
-) -> tuple[object, bool, bool, object]:
-    raw = evidence.get(key)
-    if not isinstance(raw, Mapping):
-        return raw, False, False, ()
-    return (
-        raw.get("state", GoalState.PENDING),
-        bool(raw.get("attempted", False)),
-        bool(raw.get("presented", False)),
-        raw.get("approved_recovery_options") or raw.get("recovery_options") or (),
-    )
-
-
 def _object_facts(evidence: object, key: str) -> tuple[object, bool, bool, object]:
     raw: object = None
     attempted = presented = False
@@ -87,14 +73,9 @@ def _object_facts(evidence: object, key: str) -> tuple[object, bool, bool, objec
 
 
 def _facts(evidence: object, key: str) -> tuple[GoalState, bool, bool, tuple[str, ...]]:
-    """Read the narrow execution interface without mutating the ledger."""
-
-    if isinstance(evidence, Mapping):
-        raw, attempted, presented, options = _mapping_facts(evidence, key)
-    elif evidence is not None:
+    raw, attempted, presented, options = None, False, False, ()
+    if evidence is not None:
         raw, attempted, presented, options = _object_facts(evidence, key)
-    else:
-        raw, attempted, presented, options = None, False, False, ()
     if raw is None:
         raw = GoalState.PENDING
     return _state(raw), attempted, presented, _normalise(options)

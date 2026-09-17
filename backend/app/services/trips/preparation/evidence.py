@@ -473,7 +473,7 @@ def _route_ids(route: list[dict]) -> set[str]:
     return {
         line
         for step in route or []
-        if (line := scoring._step_route_id(step))
+        if (line := scoring.step_route_id(step))
     }
 
 

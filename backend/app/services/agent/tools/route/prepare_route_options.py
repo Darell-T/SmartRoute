@@ -7,7 +7,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tool_input_policy import validated_goal_key
+from app.services.agent.tools.base import ToolContext, ToolResult
 from app.services.agent.tools.location_resolution import (
     ResolvedPlace,
     resolve_waypoint_places,
@@ -241,37 +242,6 @@ PREPARE_ROUTE_OPTIONS_SCHEMA = {
 }
 
 
-def _validate_goal_key(
-    tool_input: dict, ctx: ToolContext
-) -> tuple[str | None, ToolResult | None]:
-    evidence = getattr(ctx, "turn_evidence", None)
-    contract = getattr(evidence, "turn_contract", None)
-    if contract is None:
-        return None, None
-    raw_goal_key = tool_input.get("goal_key")
-    if not isinstance(raw_goal_key, str) or not raw_goal_key.strip():
-        return None, ToolResult(
-            ok=False,
-            error="goal_key is required when a turn contract is active",
-            internal_diagnostic=True,
-        )
-    goal_key = raw_goal_key.strip()
-    goal = contract.get_goal(goal_key)
-    if goal is None:
-        return None, ToolResult(
-            ok=False,
-            error="goal_key is unknown for this turn contract",
-            internal_diagnostic=True,
-        )
-    if goal.kind != GoalKind.ROUTE:
-        return None, ToolResult(
-            ok=False,
-            error="goal_key is incompatible with prepare_route_options",
-            internal_diagnostic=True,
-        )
-    return goal_key, None
-
-
 def _apply_destination_branch_input(
     merged: dict[str, Any],
     destination_options: list[tuple[ResolvedPlace, str | None]],
@@ -379,7 +349,12 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
 async def _admit_route_preparation(
     tool_input: dict, ctx: ToolContext
 ) -> RoutePreparationAdmission | ToolResult:
-    _goal_key, goal_error = _validate_goal_key(tool_input, ctx)
+    _goal_key, goal_error = validated_goal_key(
+        tool_input,
+        ctx,
+        compatible_kinds=frozenset({GoalKind.ROUTE}),
+        incompatible_error="goal_key is incompatible with prepare_route_options",
+    )
     if goal_error:
         return goal_error
     session_id = str(getattr(ctx, "session_id", None) or "").strip()

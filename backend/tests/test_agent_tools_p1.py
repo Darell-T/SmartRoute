@@ -24,7 +24,7 @@ from unittest.mock import patch
 from app.services import cache
 from app.services.agent import tools as agent_tools
 from app.services.agent.tools import provider_http as _http
-from app.services.agent.tools._types import ToolResult
+from app.services.agent.tools.base import ToolResult
 from app.services.agent.tools.places import search_local_places
 from app.services.agent.tools.transit import check_transit
 from app.services.agent.tools.transit import venue_crowd_window as venues

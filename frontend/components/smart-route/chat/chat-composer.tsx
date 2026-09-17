@@ -23,9 +23,9 @@ import {
   PromptInputTextarea,
 } from "@/components/prompt-kit/prompt-input";
 import { Button } from "@/components/ui/button";
-import { useVoiceInput } from "@/lib/use-voice-input";
+import { useVoiceInput } from "@/lib/hooks/use-voice-input";
 import type { ResponsePresentationMode } from "@/lib/response-presentation";
-import type { ChatTheme } from "@/lib/use-chat-theme";
+import type { ChatTheme } from "@/lib/hooks/use-chat-theme";
 import { ResponseModeMenu } from "./response-mode-menu";
 
 const MAX_MESSAGE_LENGTH = 500;

@@ -4,8 +4,8 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { HomeNearYou } from "../chat/home-near-you.tsx";
-import { AlertRouteBadgeGroup } from "./alert-badges.tsx";
-import { AlertCard } from "./alert-featured-card.tsx";
+import { AlertRouteBadgeGroup } from "./alerts/badges.tsx";
+import { AlertCard } from "./alerts/featured-card.tsx";
 
 function nearby(overrides = {}) {
   return {

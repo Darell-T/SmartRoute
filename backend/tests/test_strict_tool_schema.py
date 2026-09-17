@@ -7,8 +7,9 @@ import unittest
 from unittest.mock import patch
 
 import pytest
-from app.services.agent import loop, public_surface
+from app.services.agent import public_surface
 from app.services.agent.model import policy
+from app.services.agent.model import request as model_request
 from app.services.agent.tools import (
     TOOL_REGISTRY,
     TOOLS,
@@ -52,7 +53,7 @@ class StrictToolSchemaTests(unittest.TestCase):
         expected_strict: set[str] = set()
         for mode in ("auto", "quick"):
             with self.subTest(mode=mode):
-                tools = loop._tools_for_state(policy.policy_for_mode(mode))
+                tools = model_request.tools_for_state(policy.policy_for_mode(mode))
                 assert_strict_tool_schemas_compatible(tools)
                 names = {tool.get("name") for tool in tools}
                 strict_names = {

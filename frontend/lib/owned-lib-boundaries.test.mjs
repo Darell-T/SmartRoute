@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { NextRequest } from "next/server";
 
-import { rateLimit } from "./rate-limit.ts";
+import { rateLimit } from "./server/rate-limit.ts";
 import { cn } from "./utils.ts";
 import { getRouteColor } from "./mta-colors.ts";
 import { deriveTransitRouteIds, isAlertForRouteIds, normalizeTripCandidates, routeCandidateLabel } from "./route-planning.ts";
@@ -12,8 +12,8 @@ import {
   DestinationRequestGate,
   publishDestinationSearch,
   visibleDestinationSuggestions,
-} from "./use-destination-search.ts";
-import { installMobileViewportVariables } from "./use-mobile-visible-viewport.ts";
+} from "./hooks/use-destination-search.ts";
+import { installMobileViewportVariables } from "./hooks/use-mobile-visible-viewport.ts";
 import {
   createResponsePresentationModeStore,
   persistResponsePresentationMode,
@@ -21,13 +21,13 @@ import {
 } from "./response-presentation.ts";
 import { parseTripResponse, TRIP_PLAN_FAILED } from "./trip-response.ts";
 import { apiBaseUrl, fetchWsTicket, wsUrlWithTicket } from "./ws-ticket.ts";
-import { buildAgentChatRequest } from "./agent-chat-request.ts";
+import { buildAgentChatRequest } from "./agent-chat/request.ts";
 import { canonicalPlaceLabel, canonicalStopLabel } from "./canonical-itinerary-label.ts";
-import { withLiveFeedNow } from "./use-live-feed.ts";
-import { fetchSessionSnapshot, clearPersistedSession, resetSession } from "./agent-chat-session.ts";
-import { appendRequestSearch, readJsonBody, resolveBackendBaseUrl } from "./backend-proxy-core.ts";
-import { parseSseStream } from "./agent-chat-stream.ts";
-import "./agent-route-card-contract.ts";
+import { withLiveFeedNow } from "./hooks/use-live-feed.ts";
+import { fetchSessionSnapshot, clearPersistedSession, resetSession } from "./agent-chat/session.ts";
+import { appendRequestSearch, readJsonBody, resolveBackendBaseUrl } from "./server/backend-proxy-core.ts";
+import { parseSseStream } from "./agent-chat/stream.ts";
+import "./agent-chat/route-card-contract.ts";
 
 test("rateLimit returns 429 after the window is exhausted for one client", () => {
   const req = new NextRequest("http://localhost/api/trip", {

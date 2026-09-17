@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 from app.services.agent import candidate_store, public_surface, trip_state
 from app.services.agent.tool_input_policy import goal_error
-from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools.base import ToolContext
 from app.services.agent.tools.route import prepare_route_options, present_route
 from app.services.agent.turn.contract import (
     GoalKind,
@@ -191,7 +191,7 @@ class ActiveTemporaryRoutePresenterAsyncTests(unittest.IsolatedAsyncioTestCase):
         )
         ctx.turn_evidence = evidence
         with patch(
-            "app.services.trips.enrichment._enrich_route",
+            "app.services.trips.enrichment.enrich_route",
             new=AsyncMock(return_value=None),
         ):
             presented = await present_route.execute(

@@ -275,7 +275,7 @@ class AgentRouteDecisionReliabilityTests(AgentRouteDecisionTestMixin, unittest.I
 
         with patch.object(
             discover_places.search_local_places,
-            "_provider_search",
+            "provider_search",
             new=AsyncMock(
                 return_value=provider_search_result(
                     far_branch, coordinate_missing_branch, nearby_branch
@@ -596,7 +596,7 @@ class ProviderSearchResultContractTests(unittest.IsolatedAsyncioTestCase):
         )
         with patch.object(
             discover_places.search_local_places,
-            "_provider_search",
+            "provider_search",
             new=AsyncMock(
                 return_value=provider_search_result(
                     {

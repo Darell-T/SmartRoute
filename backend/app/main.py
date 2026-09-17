@@ -85,11 +85,9 @@ async def _gtfs_refresh_loop():
     while True:
         await asyncio.sleep(86400)
         try:
-            print("[gtfs] starting daily refresh...")
             await asyncio.to_thread(migrate)
-            print("[gtfs] refresh complete")
         except Exception as e:  # noqa: BLE001 daily refresh must not kill the process
-            print(f"[gtfs] refresh error: {e}")
+            _LOGGER.warning("[gtfs] refresh error: %s", e)
 
 
 async def _realtime_warm_loop():
@@ -98,9 +96,9 @@ async def _realtime_warm_loop():
             try:
                 await network_snapshot_store.refresh()
             except Exception as exc:  # noqa: BLE001 parser faults must not kill the warm loop
-                print(
-                    "[live_feed] network snapshot refresh failed: "
-                    f"{type(exc).__name__}"
+                _LOGGER.warning(
+                    "[live_feed] network snapshot refresh failed: %s",
+                    type(exc).__name__,
                 )
         await asyncio.sleep(REALTIME_REFRESH_INTERVAL_S)
 
@@ -120,9 +118,11 @@ async def _init_pool_bg():
     # the optional pool can initialize without delaying application startup.
     try:
         await asyncio.to_thread(init_pool)
-        print("[startup] DB pool ready (optional; trip enrichment is static)")
     except Exception as exc:  # noqa: BLE001 optional pool must not delay startup
-        print(f"[startup] DB pool init failed; continuing (enrichment is static): {exc!r}")
+        _LOGGER.warning(
+            "DB pool init failed; continuing (enrichment is static): %r",
+            exc,
+        )
 
 
 @asynccontextmanager
@@ -131,19 +131,17 @@ async def lifespan(app: FastAPI):
     try:
         from app.services.mta.static_gtfs.stop_patterns import StopPatternIndex
         gtfs.set_pattern_index(StopPatternIndex.load())
-        print(
-            f"[startup] stop-pattern index loaded: {len(gtfs._pattern_index.patterns)} "
-            f"patterns, {len(gtfs._pattern_index.stops)} stops"
-        )
     except Exception as exc:  # noqa: BLE001 missing index degrades enrichment
-        print(f"[startup] stop-pattern index load FAILED (enrichment degraded): {exc!r}")
+        _LOGGER.warning(
+            "stop-pattern index load FAILED (enrichment degraded): %r",
+            exc,
+        )
     try:
-        schedule_loaded = gtfs.load_scheduled_arrivals()
-        print(f"[startup] scheduled-arrival fallback loaded={int(schedule_loaded)}")
+        gtfs.load_scheduled_arrivals()
     except Exception as exc:  # noqa: BLE001 missing schedule degrades fallback
-        print(
-            "[startup] scheduled-arrival fallback unavailable "
-            f"type={type(exc).__name__}"
+        _LOGGER.warning(
+            "scheduled-arrival fallback unavailable type=%s",
+            type(exc).__name__,
         )
     app.state.gtfs = gtfs
     await start_bus_client()

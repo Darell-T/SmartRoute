@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import math
 import os
 from collections.abc import Awaitable, Callable
@@ -17,9 +18,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from app.services import cache
+from app.services import cache, text
 from app.services.geography import distance_meters
-from app.services.trips import text
+
+_LOGGER = logging.getLogger(__name__)
 
 TICKETMASTER_EVENTS_URL = "https://app.ticketmaster.com/discovery/v2/events.json"
 TICKETMASTER_NYC_LATLONG = "40.7128,-74.0060"
@@ -213,7 +215,10 @@ def _read_cache(key: str) -> dict | None:
     try:
         raw = cache.cache_get(key)
     except Exception as exc:  # noqa: BLE001 cache faults miss this lookup
-        print(f"[event-provider] cache read failed: {type(exc).__name__}")
+        _LOGGER.warning(
+            "[event-provider] cache read failed: %s",
+            type(exc).__name__,
+        )
         return None
     if raw is None:
         return None
@@ -228,7 +233,10 @@ def _write_cache(key: str, value: dict) -> None:
     try:
         cache.cache_set(key, json.dumps(value, default=str), EVENT_LOOKUP_CACHE_TTL_S)
     except Exception as exc:  # noqa: BLE001 cache faults skip storing this lookup
-        print(f"[event-provider] cache write failed: {type(exc).__name__}")
+        _LOGGER.warning(
+            "[event-provider] cache write failed: %s",
+            type(exc).__name__,
+        )
 
 
 def _positive_float_env(name: str, default: float, maximum: float) -> float:
@@ -391,22 +399,22 @@ def _calculate_estimated_end(
     return (start_dt + duration).strftime("%Y-%m-%dT%H:%M:%SZ"), basis
 
 
-def _parse_event(event: dict) -> dict:
-    name = text._safe_text(event.get("name"), 120)
+def parse_event(event: dict) -> dict:
+    name = text.safe_text(event.get("name"), 120)
     first_venue = _select_event_venue(event)
     venue_name_raw = first_venue.get("name") if first_venue else None
-    venue_name = text._safe_text(venue_name_raw, 80) if venue_name_raw else None
+    venue_name = text.safe_text(venue_name_raw, 80) if venue_name_raw else None
     venue_key = normalize_venue_name(venue_name_raw)
     latitude, longitude = _venue_coordinates(first_venue)
     venue_context = VENUE_CROWD_TABLE.get(venue_key or "") or {}
     start_iso = _event_start_iso(event)
     dates = _event_dates(event)
-    status = text._safe_text(_mapping(dates.get("status")).get("code"), 32).lower() or "unknown"
+    status = text.safe_text(_mapping(dates.get("status")).get("code"), 32).lower() or "unknown"
     estimated_end_iso, end_estimate_basis = _calculate_estimated_end(
         event, start_iso, status
     )
     return {
-        "event_id": text._safe_text(event.get("id"), 80) or None,
+        "event_id": text.safe_text(event.get("id"), 80) or None,
         "name": name,
         "venue_name": venue_name,
         "venue_key": venue_key,
@@ -416,7 +424,7 @@ def _parse_event(event: dict) -> dict:
         "nearby_lines": list(venue_context.get("lines") or []),
         "status": status,
         "start_time_status": _start_time_status(event),
-        "local_date": text._safe_text(_mapping(dates.get("start")).get("localDate"), 10) or None,
+        "local_date": text.safe_text(_mapping(dates.get("start")).get("localDate"), 10) or None,
         "start_iso": start_iso,
         "estimated_end_iso": estimated_end_iso,
         "end_estimate_basis": end_estimate_basis,
@@ -531,7 +539,7 @@ def _select_page_events(
     if remaining <= 0:
         return selected, accepted
     for raw_event in raw_events:
-        parsed = _parse_event(raw_event)
+        parsed = parse_event(raw_event)
         if not _event_in_search(parsed, accepted, latitude, longitude, radius_miles):
             continue
         accepted.add(_event_identity(parsed))

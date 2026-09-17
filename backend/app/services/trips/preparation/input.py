@@ -8,8 +8,9 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
+from app.services import text
 from app.services.mta.static_gtfs.stop_patterns import normalize_station_name
-from app.services.trips import candidates, text
+from app.services.trips import candidates
 from app.services.trips.location import ResolvedPlace, canonical_display_name
 
 MAX_ROUTE_ID_LENGTH = 12
@@ -53,7 +54,7 @@ def point_label(raw_value: str) -> str:
     value = (raw_value or "").strip()
     if not value or value.lower() == "user":
         return "your location"
-    return text._safe_text(canonical_display_name(value), 80)
+    return text.safe_text(canonical_display_name(value), 80)
 
 
 def summary_eta_minutes(route: list[dict], total_duration_seconds: int) -> int:

@@ -12,7 +12,8 @@ from typing import Any
 from app.services import geography as geo
 from app.services.agent import discovery_store, presented_entity_registry
 from app.services.agent import trip_state as trip_state_module
-from app.services.agent.tools._types import ToolContext, ToolOutcome, ToolResult
+from app.services.agent.tool_input_policy import validated_goal_key
+from app.services.agent.tools.base import ToolContext, ToolOutcome, ToolResult
 from app.services.agent.tools.places import damn_lines, search_local_places
 from app.services.agent.tools.places import geography as conversational_geography
 from app.services.agent.turn.contract import GoalKind
@@ -269,40 +270,14 @@ DISCOVER_PLACES_SCHEMA = {
 }
 
 
-def _validate_goal_key(tool_input: dict, ctx: ToolContext) -> ToolResult | None:
-    evidence = getattr(ctx, "turn_evidence", None)
-    contract = getattr(evidence, "turn_contract", None)
-    if contract is None:
-        return None
-    raw_goal_key = tool_input.get("goal_key")
-    if not isinstance(raw_goal_key, str) or not raw_goal_key.strip():
-        return ToolResult(
-            ok=False,
-            error="goal_key is required when a turn contract is active",
-            internal_diagnostic=True,
-        )
-    goal_key = raw_goal_key.strip()
-    goal = contract.get_goal(goal_key)
-    if goal is None:
-        return ToolResult(
-            ok=False,
-            error="goal_key is unknown for this turn contract",
-            internal_diagnostic=True,
-        )
-    if goal.kind not in _DISCOVERY_GOAL_KINDS or (
-        goal.kind == GoalKind.ROUTE
-        and not contract.route_allows_internal_discovery(goal_key)
-    ):
-        return ToolResult(
-            ok=False,
-            error="goal_key is incompatible with discover_places",
-            internal_diagnostic=True,
-        )
-    return None
-
-
 async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
-    goal_error = _validate_goal_key(tool_input, ctx)
+    _goal_key, goal_error = validated_goal_key(
+        tool_input,
+        ctx,
+        compatible_kinds=_DISCOVERY_GOAL_KINDS,
+        incompatible_error="goal_key is incompatible with discover_places",
+        require_route_internal_discovery=True,
+    )
     if goal_error:
         return goal_error
     request = validate_request(tool_input, ctx)
@@ -317,13 +292,13 @@ def _all_failed(error: str, results: list[ToolResult]) -> ToolResult:
     return ToolResult(
         ok=False,
         error=error,
-        timings=search_local_places._merged_timings(results),
+        timings=search_local_places.merged_timings(results),
     )
 
 
 async def _search(request: DiscoveryRequest, ctx: ToolContext) -> ToolResult:
     scope = request.scope
-    targets = search_local_places._search_targets(scope)
+    targets = search_local_places.search_targets(scope)
     prior_tokens = (
         _matching_continuation_tokens(request, ctx)
         if request.exclude_presented
@@ -343,7 +318,7 @@ async def _search(request: DiscoveryRequest, ctx: ToolContext) -> ToolResult:
         token = prior_tokens.get(f"target_{index}")
         if token:
             provider_request["page_token"] = token
-        requests.append(search_local_places._provider_search(provider_request, ctx))
+        requests.append(search_local_places.provider_search(provider_request, ctx))
     results = await _provider_results(requests)
     if not any(result.ok for result in results):
         return _all_failed(
@@ -351,7 +326,7 @@ async def _search(request: DiscoveryRequest, ctx: ToolContext) -> ToolResult:
             results,
         )
     source, unmatched = _interleaved_sources(targets, results, scope)
-    coverage = search_local_places._coverage(
+    coverage = search_local_places.coverage(
         targets,
         results,
         unmatched if scope["kind"] in {"boroughs", "nyc"} else (),
@@ -360,7 +335,7 @@ async def _search(request: DiscoveryRequest, ctx: ToolContext) -> ToolResult:
         request,
         ctx,
         source_places=source,
-        timings=search_local_places._merged_timings(results),
+        timings=search_local_places.merged_timings(results),
         unverified_names=[],
         coverage=coverage,
         continuation_tokens=_response_continuation_tokens(results),
@@ -369,14 +344,14 @@ async def _search(request: DiscoveryRequest, ctx: ToolContext) -> ToolResult:
 
 async def _verify(request: DiscoveryRequest, ctx: ToolContext) -> ToolResult:
     scope = request.scope
-    targets = search_local_places._search_targets(scope)
+    targets = search_local_places.search_targets(scope)
     pairs = []
     pending = []
     coverage_targets = []
     for name, target in product(request.names, targets):
         pairs.append((name, target))
         pending.append(
-            search_local_places._provider_search(
+            search_local_places.provider_search(
                 {
                     "query": name,
                     "near": target["near"],
@@ -409,9 +384,9 @@ async def _verify(request: DiscoveryRequest, ctx: ToolContext) -> ToolResult:
         request,
         ctx,
         source_places=source,
-        timings=search_local_places._merged_timings(results),
+        timings=search_local_places.merged_timings(results),
         unverified_names=unverified,
-        coverage=search_local_places._coverage(coverage_targets, results),
+        coverage=search_local_places.coverage(coverage_targets, results),
         continuation_tokens={},
     )
 
@@ -424,8 +399,8 @@ def _first_verified_place(
 ) -> tuple[dict, str] | None:
     matches = [
         place
-        for place in search_local_places._provider_places(result)
-        if search_local_places._target_accepts_place(place, target, scope)
+        for place in search_local_places.provider_places(result)
+        if search_local_places.target_accepts_place(place, target, scope)
         and _name_matches(name, place)
     ]
     if not matches:
@@ -447,8 +422,8 @@ def _interleaved_sources(
         label = str(target["label"])
         accepted = [
             (place, label)
-            for place in search_local_places._provider_places(result)
-            if search_local_places._target_accepts_place(place, target, scope)
+            for place in search_local_places.provider_places(result)
+            if search_local_places.target_accepts_place(place, target, scope)
         ]
         buckets.append(accepted)
         if not accepted:
@@ -470,7 +445,7 @@ def _normalized_discovery_places(
     seen: set[tuple[str, str]] = set()
     origin = _coordinates(ctx.origin)
     for place, search_area in source_places:
-        ranked = search_local_places._normalize_discovery_place(
+        ranked = search_local_places.normalize_discovery_place(
             place, request.query, search_area
         )
         if not _ranked_place_eligible(
@@ -480,7 +455,7 @@ def _normalized_discovery_places(
             presented=presented,
         ):
             continue
-        identity = discovery_store._place_identity(ranked)
+        identity = discovery_store.place_identity(ranked)
         if identity in seen:
             continue
         seen.add(identity)
@@ -570,7 +545,7 @@ async def _persist(
         set_id, session_id=request.session_id
     ) or {}
     stored_places = record.get("places") or []
-    model_places = list(map(search_local_places._model_place, stored_places))
+    model_places = list(map(search_local_places.model_place, stored_places))
     model_places, queue_max_wait = await _queue_digest(
         model_places,
         stored_places,
@@ -702,7 +677,7 @@ def _place_queue_evidence(
     if damn_lines.get_supported_venue(place_id) is None:
         return {"coverage": "unmonitored"}
     if mode == "historical":
-        pattern = _historical_pattern(place_id, when)
+        pattern = damn_lines.historical_pattern(place_id, when)
         return (
             _historical_evidence(pattern)
             if pattern is not None
@@ -712,7 +687,7 @@ def _place_queue_evidence(
     if observation is not None:
         return _current_queue_evidence(observation)
     if stored.get("open_status") == "open":
-        pattern = _historical_pattern(place_id, when)
+        pattern = damn_lines.historical_pattern(place_id, when)
         if pattern is not None:
             return {**_historical_evidence(pattern), "current_available": False}
     return {
@@ -734,15 +709,6 @@ def _current_queue_evidence(observation: damn_lines.QueueObservation) -> dict[st
     if observation.wait_minutes is not None:
         evidence["wait_minutes"] = observation.wait_minutes
     return evidence
-
-
-def _historical_pattern(
-    place_id: str, when: datetime
-) -> damn_lines.HistoricalQueuePattern | None:
-    try:
-        return damn_lines.get_historical_pattern(place_id, when, now=when)
-    except (TypeError, ValueError):
-        return None
 
 
 def _historical_evidence(
@@ -828,8 +794,8 @@ async def _provider_results(
 
 
 def _name_matches(requested: str, place: dict) -> bool:
-    wanted = discovery_store._normalized_name(requested)
-    actual = discovery_store._normalized_name(place.get("name"))
+    wanted = discovery_store.normalized_name(requested)
+    actual = discovery_store.normalized_name(place.get("name"))
     if not wanted or not actual:
         return False
     return (

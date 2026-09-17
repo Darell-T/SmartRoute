@@ -35,8 +35,8 @@ const eslintConfig = [
     // warnings remain visible but non-blocking.
     files: [
       "app/page.tsx",
-      "lib/use-live-feed.ts",
-      "lib/use-destination-search.ts",
+      "lib/hooks/use-live-feed.ts",
+      "lib/hooks/use-destination-search.ts",
       "lib/initial-geolocation.ts",
       "components/smart-route/chat/use-progressive-text.ts",
     ],

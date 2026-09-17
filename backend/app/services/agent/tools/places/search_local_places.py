@@ -7,12 +7,13 @@ import re
 import time
 
 from app.services import geography as geo
+from app.services import text
 from app.services.agent.discovery_store import normalize_price_level
-from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.base import ToolContext, ToolResult
 from app.services.agent.tools.location_resolution import resolve_named_point
 from app.services.agent.tools.places import geography as conversational_geography
 from app.services.agent.tools.provider_http import fetch_json
-from app.services.trips import text
+from app.services.parsing import finite_float
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -37,14 +38,6 @@ _COORD_RE = re.compile(r"^-?\d+\.?\d*,\s*-?\d+\.?\d*$")
 _OPEN_BONUS = {"open": 0.15, "unknown": 0.05, "closed": 0.0}
 
 
-def _finite(value: object, default: float = 0.0) -> float:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return default
-    return number if math.isfinite(number) else default
-
-
 def _finite_or_none(value: object) -> float | None:
     if isinstance(value, bool):
         return None
@@ -56,8 +49,8 @@ def _finite_or_none(value: object) -> float | None:
 
 
 def baseline_ranking(place: dict) -> dict[str, object]:
-    rating = max(0.0, min(5.0, _finite(place.get("rating")))) / 5.0
-    review = max(0.0, min(5000.0, _finite(place.get("review_count")))) / 5000.0
+    rating = max(0.0, min(5.0, finite_float(place.get("rating"), 0.0))) / 5.0
+    review = max(0.0, min(5000.0, finite_float(place.get("review_count"), 0.0))) / 5000.0
     open_status = str(place.get("open_status") or "unknown")
     open_bonus = _OPEN_BONUS.get(open_status, 0.05)
     score = round(0.50 * rating + 0.25 * review + 0.25 * open_bonus, 4)
@@ -143,8 +136,8 @@ def _nyc_provider_place(place: object) -> dict | None:
     place_lat, place_lng = coords
     opening_hours = place.get("currentOpeningHours") or {}
     return {
-        "name": text._safe_text((place.get("displayName") or {}).get("text"), 80),
-        "address": text._safe_text(place.get("formattedAddress"), 120),
+        "name": text.safe_text((place.get("displayName") or {}).get("text"), 80),
+        "address": text.safe_text(place.get("formattedAddress"), 120),
         "place_id": str(place.get("id") or "").strip() or None,
         "lat": place_lat,
         "lng": place_lng,
@@ -162,7 +155,7 @@ def _nyc_place_coordinates(place: dict) -> tuple[object, object] | None:
     location = place.get("location") or {}
     place_lat = location.get("latitude")
     place_lng = location.get("longitude")
-    if place_lat is None or place_lng is None or not geo._is_in_nyc(place_lat, place_lng):
+    if place_lat is None or place_lng is None or not geo.is_in_nyc(place_lat, place_lng):
         return None
     return place_lat, place_lng
 
@@ -258,7 +251,7 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
     )
 
 
-async def _provider_search(tool_input: dict, ctx: ToolContext) -> ToolResult:
+async def provider_search(tool_input: dict, ctx: ToolContext) -> ToolResult:
     try:
         return await execute(tool_input, ctx)
     except (RuntimeError, TypeError, ValueError) as exc:
@@ -269,7 +262,7 @@ async def _provider_search(tool_input: dict, ctx: ToolContext) -> ToolResult:
         return ToolResult(ok=False, error="place search is temporarily unavailable")
 
 
-def _coverage(
+def coverage(
     areas: list[dict[str, str | None]],
     results: list[ToolResult],
     extra_unavailable: tuple[str, ...] | list[str] = (),
@@ -288,7 +281,7 @@ def _coverage(
     }
 
 
-def _target_accepts_place(
+def target_accepts_place(
     place: dict,
     target: dict[str, str | None],
     scope: dict,
@@ -304,7 +297,7 @@ def _target_accepts_place(
     return borough == conversational_geography.canonical_borough(target.get("label"))
 
 
-def _search_targets(scope: dict) -> list[dict[str, str | None]]:
+def search_targets(scope: dict) -> list[dict[str, str | None]]:
     kind = scope["kind"]
     if kind == "current_location":
         return [{"near": "user", "label": ""}]
@@ -316,7 +309,7 @@ def _search_targets(scope: dict) -> list[dict[str, str | None]]:
     return [{"near": value, "label": value or ""} for value in values]
 
 
-def _normalize_discovery_place(
+def normalize_discovery_place(
     place: dict, query: str, search_area: str
 ) -> dict:
     address = place.get("address") or ""
@@ -346,7 +339,7 @@ def _normalize_discovery_place(
     }
 
 
-def _model_place(place: dict) -> dict:
+def model_place(place: dict) -> dict:
     model = {
         "place_id": place.get("place_id"),
         "ordinal": place.get("ordinal"),
@@ -366,7 +359,7 @@ def _model_place(place: dict) -> dict:
     return model
 
 
-def _provider_places(result: ToolResult) -> list[dict]:
+def provider_places(result: ToolResult) -> list[dict]:
     data = result.data if isinstance(result.data, dict) else {}
     return [
         place
@@ -375,7 +368,7 @@ def _provider_places(result: ToolResult) -> list[dict]:
     ]
 
 
-def _merged_timings(results: list[ToolResult]) -> dict[str, float]:
+def merged_timings(results: list[ToolResult]) -> dict[str, float]:
     timings: dict[str, float] = {}
     for result in results:
         for name, duration in result.timings.items():

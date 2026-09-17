@@ -13,7 +13,7 @@ import {
   Sun,
 } from "lucide-react";
 import type { AppTab } from "@/app/page-parts";
-import type { ChatTheme } from "@/lib/use-chat-theme";
+import type { ChatTheme } from "@/lib/hooks/use-chat-theme";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
@@ -22,11 +22,11 @@ type IconMotion = "lift" | "rotate" | "open";
 type SidebarTransform = { x: number; y: number; rotate: number; scale: number };
 
 const SIDEBAR_ICON_REST: SidebarTransform = { x: 0, y: 0, rotate: 0, scale: 1 };
-const SIDEBAR_ICON_MOTION: Record<IconMotion, SidebarTransform> = {
+const SIDEBAR_ICON_MOTION = {
   lift: { x: 0, y: -1, rotate: 0, scale: 1.025 },
   rotate: { x: 0, y: 0, rotate: 9, scale: 1.025 },
   open: { x: 0.8, y: 0, rotate: 0, scale: 1.025 },
-};
+} satisfies Record<IconMotion, SidebarTransform>;
 
 function subscribeToHydration() {
   return () => undefined;

@@ -1,7 +1,8 @@
-export const ROUTE_DESTINATION_FALLBACKS: Record<
-  string,
-  Partial<Record<"uptown" | "downtown", string>>
-> = {
+interface RouteDestinationFallbackTable {
+  [routeId: string]: Partial<Record<"uptown" | "downtown", string>>;
+}
+
+export const ROUTE_DESTINATION_FALLBACKS: RouteDestinationFallbackTable = {
   "1": { uptown: "Van Cortlandt Park-242 St", downtown: "South Ferry" },
   "2": { uptown: "Wakefield-241 St", downtown: "Flatbush Av-Brooklyn College" },
   "3": { uptown: "Harlem-148 St", downtown: "New Lots Av" },
@@ -28,7 +29,11 @@ export const ROUTE_DESTINATION_FALLBACKS: Record<
   S: { uptown: "Shuttle", downtown: "Shuttle" },
 };
 
-export const ROUTE_SERVICE_PATTERNS: Record<string, string> = {
+interface RouteServicePatternTable {
+  [routeId: string]: string;
+}
+
+export const ROUTE_SERVICE_PATTERNS: RouteServicePatternTable = {
   "1": "Broadway-7 Av Local",
   "2": "Broadway-7 Av Express",
   "3": "Broadway-7 Av Express",
@@ -86,10 +91,10 @@ export function normalizeRouteId(routeId: string): string {
 export function compareRouteId(left: string, right: string): number {
   const leftIndex = SUBWAY_ROUTE_SORT_INDEX.get(left);
   const rightIndex = SUBWAY_ROUTE_SORT_INDEX.get(right);
-  if (typeof leftIndex === "number" && typeof rightIndex === "number") {
+  if (leftIndex !== undefined && rightIndex !== undefined) {
     return leftIndex - rightIndex;
   }
-  if (typeof leftIndex === "number") return -1;
-  if (typeof rightIndex === "number") return 1;
+  if (leftIndex !== undefined) return -1;
+  if (rightIndex !== undefined) return 1;
   return left.localeCompare(right, undefined, { numeric: true });
 }

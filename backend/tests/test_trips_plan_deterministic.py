@@ -108,7 +108,7 @@ class TripPlanDeterministicTests(unittest.IsolatedAsyncioTestCase):
         assert not hasattr(trips.direct_plan.candidates, "_parse_candidate_analysis"), "evaluation-only control parsing must stay outside production trips"
         strip_controls = patch.object(
             trips.direct_plan.candidates,
-            "_strip_model_control_blocks",
+            "strip_model_control_blocks",
             new=lambda *_args, **_kwargs: (_ for _ in ()).throw(
                 AssertionError("[ROUTE:N] stripping must never run")
             ),

@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 
 from app.services.agent import public_surface
-from app.services.agent.tools._types import ToolResult
+from app.services.agent.tools.base import ToolResult
 from app.services.agent.turn.completion import evaluate_completion
 from app.services.agent.turn.contract import (
     GoalKind,

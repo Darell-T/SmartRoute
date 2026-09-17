@@ -6,7 +6,7 @@ from app.services.agent.tools import (
     assert_strict_tool_schemas_compatible,
     declare_goals,
 )
-from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools.base import ToolContext
 from app.services.agent.turn.contract import GoalKind, TurnContract
 from app.services.agent.turn.evidence import TurnEvidence
 

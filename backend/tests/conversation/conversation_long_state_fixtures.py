@@ -15,7 +15,7 @@ Batch A-D harness):
 
 - ``prepare_route_options.prepare_single_leg`` -- the provider route/evidence
   seam inside the real canonical prepare executor.
-- ``trips.enrichment._enrich_route`` -- live route enrichment the real
+- ``trips.enrichment.enrich_route`` -- live route enrichment the real
   ``present_route`` executor may call.
 - ``tools.lookup_arrivals.execute`` -- the module-attribute patch the harness
   installs is inert for the registry (executors are captured at registry

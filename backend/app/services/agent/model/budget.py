@@ -9,6 +9,7 @@ limit never reaches the Anthropic API.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import time
 from datetime import UTC, datetime
@@ -16,6 +17,8 @@ from datetime import UTC, datetime
 from redis.exceptions import RedisError
 
 from app.services import cache
+
+_LOGGER = logging.getLogger(__name__)
 
 AGENT_MAX_CONCURRENT_STREAMS = int(os.getenv("AGENT_MAX_CONCURRENT_STREAMS", "4"))
 AGENT_TURNS_PER_SESSION_PER_MIN = int(os.getenv("AGENT_TURNS_PER_SESSION_PER_MIN", "6"))
@@ -123,5 +126,8 @@ def record_usage_cost(input_tokens: int, output_tokens: int) -> float:
         else:
             cache.cache_set(key, str(daily_spend_usd() + cost), ttl)
     except (RedisError, OSError, TypeError, ValueError) as exc:
-        print(f"[agent-budget] spend counter update failed (continuing): {exc!r}")
+        _LOGGER.warning(
+            "[agent-budget] spend counter update failed (continuing): %r",
+            exc,
+        )
     return cost

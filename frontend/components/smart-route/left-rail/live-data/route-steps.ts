@@ -2,7 +2,7 @@ import type { RouteStep as ApiRouteStep } from "@/types/api";
 import type {
   CanonicalItinerary,
   CanonicalItineraryLeg,
-} from "@/lib/agent-chat-stream";
+} from "@/lib/agent-chat/stream";
 import { canonicalPlaceLabel } from "@/lib/canonical-itinerary-label";
 import type { RouteDetailStep, RouteStep, RouteStripSegment } from "../types";
 import { isTransitStep } from "@/lib/route-planning";
@@ -18,7 +18,7 @@ function durationOrFallback(
   return `${Math.round(minutes)} min`;
 }
 
-function liveDepartureFields(step: ApiRouteStep): { note?: string; live?: true } {
+function liveDepartureFields(step: ApiRouteStep) {
   const departsIn = step.minutes_until_train_arrives;
   if (departsIn === undefined || !Number.isFinite(departsIn)) return {};
   return {

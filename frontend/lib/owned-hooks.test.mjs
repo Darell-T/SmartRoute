@@ -4,14 +4,14 @@ import { createRoot } from "react-dom/client";
 import { renderToString } from "react-dom/server";
 import test from "node:test";
 
-import { useAgentChat } from "./use-agent-chat.ts";
-import { persistSessionId } from "./agent-chat-session.ts";
-import { SmartRouteThemeProvider, useSmartRouteTheme } from "./use-chat-theme.ts";
-import { useDestinationSearch } from "./use-destination-search.ts";
-import { useLiveFeed } from "./use-live-feed.ts";
-import { useMobileVisibleViewport } from "./use-mobile-visible-viewport.ts";
-import { useServiceAlerts } from "./use-service-alerts.ts";
-import { useVoiceInput } from "./use-voice-input.ts";
+import { useAgentChat } from "./agent-chat/use-agent-chat.ts";
+import { persistSessionId } from "./agent-chat/session.ts";
+import { SmartRouteThemeProvider, useSmartRouteTheme } from "./hooks/use-chat-theme.ts";
+import { useDestinationSearch } from "./hooks/use-destination-search.ts";
+import { useLiveFeed } from "./hooks/use-live-feed.ts";
+import { useMobileVisibleViewport } from "./hooks/use-mobile-visible-viewport.ts";
+import { useServiceAlerts } from "./hooks/use-service-alerts.ts";
+import { useVoiceInput } from "./hooks/use-voice-input.ts";
 
 const realSetTimeout = globalThis.setTimeout;
 globalThis.setTimeout = (callback, ms, ...args) =>

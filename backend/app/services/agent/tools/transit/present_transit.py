@@ -7,7 +7,7 @@ from typing import Any
 
 from app.services.agent import events as agent_events
 from app.services.agent.passenger_output import framed_events, validated_framing
-from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.base import ToolContext, ToolResult
 from app.services.agent.tools.transit import evidence as transit_evidence
 from app.services.agent.tools.transit.evidence_projection import (
     accessibility_text,

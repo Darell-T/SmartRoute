@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from app.services.agent import candidate_store, trip_state
-from app.services.agent.tools._types import ToolResult
+from app.services.agent.tools.base import ToolResult
 from app.services.agent.tools.route import prepare_route_options, present_route
 from app.services.trips import candidates
 from app.services.trips.preparation.constraints import (
@@ -82,7 +82,7 @@ class RouteOptionAssemblyIntegrationTests(unittest.IsolatedAsyncioTestCase):
         )
         assert digest["score_summary"]["reliability"] == "medium"
         # The real candidate projection consumes the row without fallbacks.
-        built = candidates._build_route_candidates(
+        built = candidates.build_route_candidates(
             aggregate.parsed_routes,
             0,
             {},
@@ -186,7 +186,7 @@ class RouteOptionAssemblyIntegrationTests(unittest.IsolatedAsyncioTestCase):
         assert record["waypoints"] == ["B Pizza"]
         with (
             patch(
-                "app.services.trips.enrichment._enrich_route",
+                "app.services.trips.enrichment.enrich_route",
                 new=AsyncMock(return_value=None),
             ),
             patch(
@@ -253,7 +253,7 @@ class RouteOptionAssemblyIntegrationTests(unittest.IsolatedAsyncioTestCase):
         assert record["waypoints"] == []
         assert record["aggregate_segments"] == []
         with patch(
-            "app.services.trips.enrichment._enrich_route",
+            "app.services.trips.enrichment.enrich_route",
             new=AsyncMock(return_value=None),
         ):
             presented = await present_route.execute(

@@ -22,7 +22,7 @@ from unittest.mock import AsyncMock, patch
 
 from app.services.agent import discovery_store
 from app.services.agent import trip_state as trip_state_module
-from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools.base import ToolContext
 from app.services.agent.tools.places import discover_places
 
 from tests.conversation.conversation_discovery_support import _DiscoveryRouteBase
