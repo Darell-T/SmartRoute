@@ -103,13 +103,15 @@ function structuredFewerTransfersCopy(
   return `Uses ${difference} fewer ${difference === 1 ? "transfer" : "transfers"}`;
 }
 
-const STRUCTURED_REASON_COPY = {
-  less_walking: "Less walking than the other options",
-  avoids_active_disruption: "Avoids active service alerts on another option",
-  lower_event_crowd_exposure: "Lower exposure to nearby event crowds",
-  accessibility: "Meets the accessibility requirement",
-  reasonable_local_option: "Nearby option with a reasonable overall trip",
-} satisfies Record<string, string>;
+const STRUCTURED_REASON_COPY = new Map<string, string>(
+  Object.entries({
+    less_walking: "Less walking than the other options",
+    avoids_active_disruption: "Avoids active service alerts on another option",
+    lower_event_crowd_exposure: "Lower exposure to nearby event crowds",
+    accessibility: "Meets the accessibility requirement",
+    reasonable_local_option: "Nearby option with a reasonable overall trip",
+  }),
+);
 
 export function formatStructuredRecommendationReason(
   reason: RecommendationReason | string | unknown,
@@ -119,10 +121,7 @@ export function formatStructuredRecommendationReason(
   const structured = reason as RecommendationReason;
   if (structured.code === "fastest") return structuredFastestCopy(structured);
   if (structured.code === "fewer_transfers") return structuredFewerTransfersCopy(structured);
-  for (const [code, copy] of Object.entries(STRUCTURED_REASON_COPY)) {
-    if (code === structured.code) return copy;
-  }
-  return null;
+  return STRUCTURED_REASON_COPY.get(structured.code) ?? null;
 }
 
 function isValidCard(

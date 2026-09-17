@@ -16,30 +16,32 @@ export function formatWalk(meters: number | null | undefined): string {
   return `${Math.max(1, Math.round(meters / 84))} min walk`;
 }
 
-const TRANSIT_ABBREVIATIONS = {
-  AV: "Av",
-  AVE: "Av",
-  ST: "St",
-  STS: "Sts",
-  SQ: "Sq",
-  BLVD: "Blvd",
-  BL: "Bl",
-  PKWY: "Pkwy",
-  PKY: "Pkwy",
-  STA: "Sta",
-  RD: "Rd",
-  DR: "Dr",
-  PL: "Pl",
-  PK: "Pk",
-  HTS: "Hts",
-  CTR: "Ctr",
-  JCT: "Jct",
-  TER: "Ter",
-  EXPY: "Expy",
-  HWY: "Hwy",
-  BCH: "Bch",
-  TPKE: "Tpke",
-};
+const TRANSIT_ABBREVIATIONS = new Map<string, string>(
+  Object.entries({
+    AV: "Av",
+    AVE: "Av",
+    ST: "St",
+    STS: "Sts",
+    SQ: "Sq",
+    BLVD: "Blvd",
+    BL: "Bl",
+    PKWY: "Pkwy",
+    PKY: "Pkwy",
+    STA: "Sta",
+    RD: "Rd",
+    DR: "Dr",
+    PL: "Pl",
+    PK: "Pk",
+    HTS: "Hts",
+    CTR: "Ctr",
+    JCT: "Jct",
+    TER: "Ter",
+    EXPY: "Expy",
+    HWY: "Hwy",
+    BCH: "Bch",
+    TPKE: "Tpke",
+  }),
+);
 
 /* Real acronyms stay all-caps; everything else all-caps is shouting. */
 const KEEP_ALL_CAPS = new Set([
@@ -65,13 +67,7 @@ function titleCaseTransitToken(token: string): string {
   if (upper === "VIA") return "via";
   if (KEEP_ALL_CAPS.has(upper)) return upper;
   const bare = upper.replace(/[^A-Z0-9]/g, "");
-  let abbreviation: string | undefined;
-  for (const [token, replacement] of Object.entries(TRANSIT_ABBREVIATIONS)) {
-    if (token === bare) {
-      abbreviation = replacement;
-      break;
-    }
-  }
+  const abbreviation = TRANSIT_ABBREVIATIONS.get(bare);
   if (abbreviation) {
     return upper.replace(bare, abbreviation);
   }

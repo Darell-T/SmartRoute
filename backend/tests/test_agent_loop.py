@@ -1575,9 +1575,10 @@ class LoopMechanicsTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
 class RoundCapTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls):
-        cls.loop = _load_agent_loop(
-            {"AGENT_AUTO_MAX_ROUNDS": "2", "AGENT_TURN_DEADLINE_S": "60"}
-        )
+        cls.loop = _load_agent_loop({"AGENT_AUTO_MAX_ROUNDS": "2"})
+        deadline = patch.object(cls.loop.session_module, "AGENT_TURN_DEADLINE_S", 60)
+        deadline.start()
+        cls.addClassCleanup(deadline.stop)
 
     def setUp(self):
         cache._mem.clear()
@@ -1588,9 +1589,10 @@ class DeadlineTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
     def setUpClass(cls):
         # A deadline in the past trips on the very first check, before any
         # real round -- deterministic without needing to fake wall-clock time.
-        cls.loop = _load_agent_loop(
-            {"AGENT_MAX_ROUNDS": "50", "AGENT_TURN_DEADLINE_S": "-1"}
-        )
+        cls.loop = _load_agent_loop({"AGENT_MAX_ROUNDS": "50"})
+        deadline = patch.object(cls.loop.session_module, "AGENT_TURN_DEADLINE_S", -1)
+        deadline.start()
+        cls.addClassCleanup(deadline.stop)
 
     def setUp(self):
         cache._mem.clear()
