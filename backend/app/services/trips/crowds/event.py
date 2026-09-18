@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-from datetime import datetime, timedelta, timezone
-from typing import Any, Awaitable, Callable, Iterable, Literal
+from collections.abc import Awaitable, Callable, Iterable
+from datetime import UTC, datetime, timedelta
+from itertools import zip_longest
+from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 from app.services.geography import distance_meters
@@ -43,12 +45,12 @@ def _parse_time(value: object) -> datetime | None:
     if not isinstance(value, str) or not value.strip():
         return None
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value)
     except ValueError:
         return None
     if parsed.tzinfo is None:
         return None
-    return parsed.astimezone(timezone.utc)
+    return parsed.astimezone(UTC)
 
 
 def _coordinate(value: object) -> tuple[float, float] | None:
@@ -64,33 +66,49 @@ def _coordinate(value: object) -> tuple[float, float] | None:
     return latitude, longitude
 
 
+def _parse_step_route_point(
+    route_index: int,
+    step: dict,
+    name_key: str,
+    coord_key: str,
+    time_key: str,
+) -> RoutePoint | None:
+    coords = _coordinate(step.get(coord_key))
+    if coords is None:
+        return None
+    return RoutePoint(
+        route_index=route_index,
+        name=str(step.get(name_key) or "route stop")[:100],
+        latitude=coords[0],
+        longitude=coords[1],
+        expected_at=_parse_time(step.get(time_key)),
+        route_id=str(step.get("route_id") or step.get("train_line") or "")
+        .strip()
+        .upper(),
+    )
+
+
+def _select_step_route_points(route_index: int, step: dict) -> list[RoutePoint]:
+    if step.get("type") not in {"SUBWAY", "BUS"}:
+        return []
+    points: list[RoutePoint] = []
+    for name_key, coord_key, time_key in (
+        ("departure_stop", "departure_coords", "departure_time_iso"),
+        ("arrival_stop", "arrival_coords", "arrival_time_iso"),
+    ):
+        point = _parse_step_route_point(
+            route_index, step, name_key, coord_key, time_key
+        )
+        if point is not None:
+            points.append(point)
+    return points
+
+
 def route_points(routes: list[list[dict]]) -> list[RoutePoint]:
     points: list[RoutePoint] = []
     for route_index, route in enumerate(routes):
         for step in route:
-            if step.get("type") not in {"SUBWAY", "BUS"}:
-                continue
-            for name_key, coord_key, time_key in (
-                ("departure_stop", "departure_coords", "departure_time_iso"),
-                ("arrival_stop", "arrival_coords", "arrival_time_iso"),
-            ):
-                coords = _coordinate(step.get(coord_key))
-                if coords is None:
-                    continue
-                points.append(
-                    RoutePoint(
-                        route_index=route_index,
-                        name=str(step.get(name_key) or "route stop")[:100],
-                        latitude=coords[0],
-                        longitude=coords[1],
-                        expected_at=_parse_time(step.get(time_key)),
-                        route_id=str(
-                            step.get("route_id") or step.get("train_line") or ""
-                        )
-                        .strip()
-                        .upper(),
-                    )
-                )
+            points.extend(_select_step_route_points(route_index, step))
     return points
 
 
@@ -106,6 +124,12 @@ def _exposure_window(point_time: datetime, event: dict) -> tuple[str, float] | N
     if end and start + timedelta(minutes=30) < point_time < end - timedelta(minutes=30):
         return "during", 4.0
     return None
+
+
+def _select_closer_impact(previous: dict | None, row: dict) -> dict:
+    if previous is None or row["distance_meters"] < previous["distance_meters"]:
+        return row
+    return previous
 
 
 def associate_events(
@@ -129,9 +153,7 @@ def associate_events(
             if row is None:
                 continue
             key = (point.route_index, event_id)
-            previous = closest.get(key)
-            if previous is None or row["distance_meters"] < previous["distance_meters"]:
-                closest[key] = row
+            closest[key] = _select_closer_impact(closest.get(key), row)
     return sorted(
         closest.values(),
         key=lambda item: (
@@ -142,9 +164,9 @@ def associate_events(
     )
 
 
-def search_hubs(routes: list[list[dict]]) -> list[RoutePoint]:
-    """Select a bounded hub set that represents each candidate route first."""
-
+def _select_unique_route_points(
+    routes: list[list[dict]],
+) -> dict[int, list[RoutePoint]]:
     points_by_route: dict[int, list[RoutePoint]] = {}
     seen_by_route: dict[int, set[tuple[int, int]]] = {}
     for point in route_points(routes):
@@ -154,7 +176,29 @@ def search_hubs(routes: list[list[dict]]) -> list[RoutePoint]:
             continue
         seen.add(key)
         points_by_route.setdefault(point.route_index, []).append(point)
+    return points_by_route
 
+
+def _select_secondary_hubs(
+    points_by_route: dict[int, list[RoutePoint]],
+    route_indexes: list[int],
+    selected: list[RoutePoint],
+    budget: int,
+) -> list[RoutePoint]:
+    columns = [list(reversed(points_by_route[index][:-1])) for index in route_indexes]
+    extras = [
+        point
+        for group in zip_longest(*columns)
+        for point in group
+        if point is not None
+    ]
+    return selected + extras[: budget - len(selected)]
+
+
+def search_hubs(routes: list[list[dict]]) -> list[RoutePoint]:
+    """Select a bounded hub set that represents each candidate route first."""
+
+    points_by_route = _select_unique_route_points(routes)
     route_indexes = sorted(points_by_route)
     if not route_indexes:
         return []
@@ -172,23 +216,9 @@ def search_hubs(routes: list[list[dict]]) -> list[RoutePoint]:
 
     # Spend the remaining bounded budget round-robin on transfer/origin-side
     # points so one route cannot monopolize secondary coverage.
-    remaining = {
-        index: list(reversed(points_by_route[index][:-1]))
-        for index in route_indexes[:budget]
-    }
-    while len(selected) < budget:
-        added = False
-        for index in route_indexes[:budget]:
-            candidates = remaining[index]
-            if not candidates:
-                continue
-            selected.append(candidates.pop(0))
-            added = True
-            if len(selected) == budget:
-                break
-        if not added:
-            break
-    return selected
+    return _select_secondary_hubs(
+        points_by_route, route_indexes[:budget], selected, budget
+    )
 
 
 def _event_coordinates(event: dict) -> tuple[float, float] | None:
@@ -303,7 +333,7 @@ async def collect_route_event_evidence(
         return "no_relevant_events", [], []
     travel_time = next((point.expected_at for point in hubs if point.expected_at), None)
     if travel_time is None:
-        travel_time = _parse_time(ctx.now_et) or datetime.now(timezone.utc)
+        travel_time = _parse_time(ctx.now_et) or datetime.now(UTC)
     date = travel_time.astimezone(_NYC_TZ).date().isoformat()
     (
         events,
@@ -325,6 +355,14 @@ async def collect_route_event_evidence(
         completed_route_indexes,
     )
     return status, impacts, failures
+
+
+def _parse_hub_lookup(result: object) -> tuple[list[dict] | None, str | None]:
+    if isinstance(result, BaseException):
+        return None, type(result).__name__
+    if not result.ok:
+        return None, str(result.error or "event lookup failed")
+    return list((result.data or {}).get("events") or []), None
 
 
 async def _lookup_event_hubs(
@@ -352,16 +390,14 @@ async def _lookup_event_hubs(
     completed_route_indexes: set[int] = set()
     completed_lookups = 0
     seen: set[str] = set()
-    for hub, result in zip(hubs, results):
-        if isinstance(result, BaseException):
-            failures.append(type(result).__name__)
-            continue
-        if not result.ok:
-            failures.append(str(result.error or "event lookup failed"))
+    for hub, result in zip(hubs, results, strict=False):
+        page_events, failure = _parse_hub_lookup(result)
+        if failure is not None:
+            failures.append(failure)
             continue
         completed_lookups += 1
         completed_route_indexes.add(hub.route_index)
-        for event in (result.data or {}).get("events") or []:
+        for event in page_events or []:
             event_id = str(event.get("event_id") or "")
             if not event_id or event_id in seen:
                 continue

@@ -10,18 +10,18 @@ from typing import TYPE_CHECKING, Literal
 
 from app import observability
 from app.services.agent import events as agent_events
-from app.services.agent.model import stream as model_stream
-from app.services.agent import passenger_output
-from app.services.agent.model import policy as agent_policy
-from app.services.agent import public_surface
-from app.services.agent.model import prompt as agent_prompt
+from app.services.agent import passenger_output, public_surface
 from app.services.agent import session as session_module
-from app.services.agent.turn import completion as turn_completion  # test patch point
-from app.services.agent.turn.tool_round import (
-    TurnDeadlineReached,
-    mixed_terminal_and_capability,
+from app.services.agent.model import policy as agent_policy
+from app.services.agent.model import prompt as agent_prompt
+from app.services.agent.model import request as model_request
+from app.services.agent.model import stream as model_stream
+from app.services.agent.tool_input_policy import (
+    rider_excluded_modes,
+    rider_excluded_route_ids,
 )
 from app.services.agent.tools import ToolContext
+from app.services.agent.turn import completion as turn_completion  # test patch point
 from app.services.agent.turn.evidence import TurnEvidence
 from app.services.agent.turn.finalization import (
     extract_safe_usage,
@@ -35,6 +35,12 @@ from app.services.agent.turn.finalization import (
     stage_timings,
 )
 from app.services.agent.turn.ledger import TurnToolLedger
+from app.services.agent.turn.tool_round import (
+    ToolRoundResultMessage,
+    TurnDeadlineReachedError,
+    execute_tool_round,
+    mixed_terminal_and_capability,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -46,18 +52,9 @@ if TYPE_CHECKING:
 class TurnDependencies:
     """Loop-owned seams kept injectable for compatibility and test patches."""
 
-    deadline_s: float
     client: object
     tool_registry: dict
     make_ledger: Callable[[], TurnToolLedger]
-    system_blocks: Callable[[], list[dict]]
-    messages_from_history: Callable[[list[dict]], list[dict]]
-    build_stream_kwargs: Callable[..., dict]
-    tools_for_state: Callable[..., list[dict]]
-    sanitize_rider_text: Callable[[str], str]
-    rider_excluded_modes: Callable[[str, dict], set[str]]
-    rider_excluded_route_ids: Callable[[str, dict], tuple[str, ...]]
-    execute_tool_round: Callable[..., AsyncIterator]
 
 
 @dataclass
@@ -68,7 +65,7 @@ class TurnState:
     session_id: str
     turn_id: str
     ctx: ToolContext
-    trace: "TurnTrace | None"
+    trace: TurnTrace | None
     dependencies: TurnDependencies
     mode_policy: agent_policy.AgentModePolicy
     initial_mode: str
@@ -115,11 +112,13 @@ class TurnState:
         tools = (
             self.server_tool_continuation_tools
             if self.server_tool_continuation_tools is not None
-            else self.dependencies.tools_for_state(
+            else model_request.tools_for_state(
                 self.mode_policy,
                 session=self.session,
                 include_web=self.ctx.turn_evidence.may_offer_web(),
                 turn_evidence=self.ctx.turn_evidence,
+                session_id=self.session_id,
+                tool_registry=self.dependencies.tool_registry,
             )
         )
         self.server_tool_continuation_tools = None
@@ -220,9 +219,9 @@ async def stream_model_iteration(
         state.ctx.turn_evidence,
         allowed_tool_names,
     )
-    stream_kwargs = state.dependencies.build_stream_kwargs(
+    stream_kwargs = model_request.build_stream_kwargs(
         messages=state.messages,
-        system_blocks=state.dependencies.system_blocks(),
+        system_blocks=model_request.system_blocks(),
         mode_policy=state.mode_policy,
         tools=turn_tools,
         request_options=request_options,
@@ -256,6 +255,29 @@ async def stream_model_iteration(
     )
 
 
+def _capture_model_completion_sources(
+    state: TurnState,
+    event: object,
+    capture: _StreamCapture,
+) -> tuple[agent_events.SourcesEvent, ...] | None:
+    if not isinstance(event, model_stream.ModelCallCompleted):
+        return None
+    capture.outcome = event
+    if not event.web_sources:
+        return ()
+    return (
+        agent_events.SourcesEvent(
+            turn_id=state.turn_id,
+            sources=event.web_sources,
+        ),
+    )
+
+
+def _count_tool_end_failure(state: TurnState, event: object) -> None:
+    if isinstance(event, agent_events.ToolEndEvent) and not event.ok:
+        state.tool_failures += 1
+
+
 async def _capture_model_events(
     state: TurnState,
     stream_kwargs: dict,
@@ -267,19 +289,21 @@ async def _capture_model_events(
         stream_kwargs=stream_kwargs,
         log_tag="model call",
         retry_count=state.mode_policy.retry_count,
-        sanitize_text=state.dependencies.sanitize_rider_text,
+        sanitize_text=passenger_output.sanitize_rider_text,
         deadline_monotonic=state.deadline_monotonic,
         web_timeout_s=state.mode_policy.web_research_timeout_s,
     ):
-        if isinstance(event, model_stream.ModelCallCompleted):
-            capture.outcome = event
-        elif isinstance(event, agent_events.TokenEvent):
+        completion = _capture_model_completion_sources(state, event, capture)
+        if completion is not None:
+            for item in completion:
+                yield item
+            continue
+        if isinstance(event, agent_events.TokenEvent):
             if capture.first_token_ms is None and event.text.strip():
                 capture.first_token_ms = (time.monotonic() - model_call_start) * 1000
-        else:
-            if isinstance(event, agent_events.ToolEndEvent) and not event.ok:
-                state.tool_failures += 1
-            yield event
+            continue
+        _count_tool_end_failure(state, event)
+        yield event
 
 
 def _finish_model_iteration(
@@ -363,6 +387,101 @@ def _record_conversation_timings(
         )
 
 
+def _apply_server_web_progress(
+    state: TurnState,
+    outcome: model_stream.ModelCallCompleted,
+    stop_reason: str,
+    turn_tools: list[dict],
+) -> ModelDirective | None:
+    """Hold web evidence until a pause_turn continuation finishes."""
+
+    if outcome.web_used:
+        state.pending_server_web_used = True
+        state.pending_server_web_succeeded = bool(
+            state.pending_server_web_succeeded and outcome.web_succeeded
+        )
+    if stop_reason == "pause_turn":
+        state.server_tool_continuation_tools = turn_tools
+        return ModelDirective("continue")
+    if state.pending_server_web_used:
+        state.ctx.turn_evidence.note_web(ok=state.pending_server_web_succeeded)
+        state.pending_server_web_used = False
+        state.pending_server_web_succeeded = True
+    return None
+
+
+def _continue_after_web_timeout(
+    state: TurnState,
+    outcome: model_stream.ModelCallCompleted,
+) -> ModelDirective | None:
+    if not outcome.web_timed_out:
+        return None
+    state.ctx.turn_evidence.note_web(ok=False)
+    state.messages.append(
+        {"role": "user", "content": agent_policy.WEB_TIMEOUT_CONTINUATION}
+    )
+    return ModelDirective("continue")
+
+
+def _stop_on_max_tokens(state: TurnState, stop_reason: str) -> ModelDirective | None:
+    if stop_reason != "max_tokens":
+        return None
+    state.stop_reason = "error"
+    return ModelDirective(
+        "stop",
+        event=agent_events.ErrorEvent(
+            code="response_incomplete",
+            message="SmartRoute could not finish that response. Please try again.",
+            retryable=True,
+        ),
+    )
+
+
+def _resolve_unattached_action(
+    state: TurnState,
+    iteration: ModelIteration,
+) -> ModelDirective | None:
+    action_attached = bool(iteration.tool_use_blocks) or bool(
+        iteration.outcome.server_tool_call_count
+    )
+    if action_attached:
+        return None
+    state.ctx.turn_evidence.prose_without_tool_rounds += 1
+    if (
+        state.ctx.turn_evidence.prose_without_tool_rounds == 1
+        and state.round_num < state.mode_policy.max_rounds
+        and time.monotonic() < state.deadline_monotonic
+    ):
+        state.messages.append(
+            {"role": "user", "content": agent_policy.NO_TOOL_CORRECTION}
+        )
+        return ModelDirective("continue")
+    state.stop_reason = "end_turn"
+    return ModelDirective("stop", event=state.fallback_event())
+
+
+def _continue_after_mixed_terminal(
+    state: TurnState,
+    iteration: ModelIteration,
+) -> ModelDirective | None:
+    names = [
+        str(getattr(block, "name", "") or "") for block in iteration.tool_use_blocks
+    ]
+    if not mixed_terminal_and_capability(names):
+        return None
+    state.messages.append(
+        {
+            "role": "user",
+            "content": (
+                "A terminal tool cannot be mixed with another capability in "
+                "the same round. Call one terminal tool alone, or finish the "
+                "capability first."
+            ),
+        }
+    )
+    return ModelDirective("continue")
+
+
 def resolve_model_iteration(
     state: TurnState,
     iteration: ModelIteration,
@@ -370,89 +489,86 @@ def resolve_model_iteration(
     """Translate provider protocol state into the agent loop's next operation."""
 
     outcome = iteration.outcome
-    if outcome.web_timed_out:
-        state.ctx.turn_evidence.note_web(ok=False)
-        state.messages.append(
-            {"role": "user", "content": agent_policy.WEB_TIMEOUT_CONTINUATION}
-        )
-        return ModelDirective("continue")
+    web_timeout = _continue_after_web_timeout(state, outcome)
+    if web_timeout is not None:
+        return web_timeout
     if outcome.error is not None:
         state.stop_reason = "deadline" if outcome.error.code == "deadline" else "error"
         return ModelDirective("stop", event=outcome.error)
-    if iteration.final_message is None:
-        raise RuntimeError("model stream completed without a final message")
 
     usage = extract_safe_usage(getattr(iteration.final_message, "usage", None))
     state.input_tokens += usage.get("input_tokens", 0)
     state.output_tokens += usage.get("output_tokens", 0)
     stop_reason = str(getattr(iteration.final_message, "stop_reason", "") or "")
-    if stop_reason == "max_tokens":
-        state.stop_reason = "error"
-        return ModelDirective(
-            "stop",
-            event=agent_events.ErrorEvent(
-                code="response_incomplete",
-                message="SmartRoute could not finish that response. Please try again.",
-                retryable=True,
-            ),
-        )
+    max_tokens_stop = _stop_on_max_tokens(state, stop_reason)
+    if max_tokens_stop is not None:
+        return max_tokens_stop
 
     state.messages.append(
         {"role": "assistant", "content": iteration.final_message.content}
     )
-    if outcome.web_used:
-        state.pending_server_web_used = True
-        state.pending_server_web_succeeded = bool(
-            state.pending_server_web_succeeded and outcome.web_succeeded
-        )
-    if stop_reason == "pause_turn":
-        state.server_tool_continuation_tools = iteration.turn_tools
-        return ModelDirective("continue")
-    if state.pending_server_web_used:
-        state.ctx.turn_evidence.note_web(ok=state.pending_server_web_succeeded)
-        state.pending_server_web_used = False
-        state.pending_server_web_succeeded = True
-
-    action_attached = bool(iteration.tool_use_blocks) or bool(
-        outcome.server_tool_call_count
+    web_directive = _apply_server_web_progress(
+        state, outcome, stop_reason, iteration.turn_tools
     )
-    if not action_attached:
-        state.ctx.turn_evidence.prose_without_tool_rounds += 1
-        if (
-            state.ctx.turn_evidence.prose_without_tool_rounds == 1
-            and state.round_num < state.mode_policy.max_rounds
-            and time.monotonic() < state.deadline_monotonic
-        ):
-            state.messages.append(
-                {"role": "user", "content": agent_policy.NO_TOOL_CORRECTION}
-            )
-            return ModelDirective("continue")
-        state.stop_reason = "end_turn"
-        return ModelDirective("stop", event=state.fallback_event())
+    if web_directive is not None:
+        return web_directive
+
+    unattached = _resolve_unattached_action(state, iteration)
+    if unattached is not None:
+        return unattached
     if stop_reason != "tool_use" or not iteration.tool_use_blocks:
-        state.stop_reason = (
-            "clarification_required" if state.clarification_pending else "end_turn"
-        )
+        state.stop_reason = _terminal_stop_reason(state)
         return ModelDirective("stop")
-    if mixed_terminal_and_capability(
-        [str(getattr(block, "name", "") or "") for block in iteration.tool_use_blocks]
-    ):
-        state.messages.append(
-            {
-                "role": "user",
-                "content": (
-                    "A terminal tool cannot be mixed with another capability in "
-                    "the same round. Call one terminal tool alone, or finish the "
-                    "capability first."
-                ),
-            }
-        )
-        return ModelDirective("continue")
+    mixed = _continue_after_mixed_terminal(state, iteration)
+    if mixed is not None:
+        return mixed
     return ModelDirective(
         "tools",
         tool_use_blocks=iteration.tool_use_blocks,
         allowed_tool_names=iteration.allowed_tool_names,
     )
+
+
+def _capture_tool_round_message(item: object) -> CapabilityIteration | None:
+    if not isinstance(item, ToolRoundResultMessage):
+        return None
+    return CapabilityIteration(
+        result_message={"role": item.role, "content": item.content},
+        outcomes=tuple(item.tool_outcomes),
+        deadline_reached=item.deadline_reached,
+    )
+
+
+def _record_plan_trip_start(state: TurnState, item: object) -> None:
+    if not isinstance(item, agent_events.ToolStartEvent):
+        return
+    if item.tool != "prepare_route_options":
+        return
+    if "plan_trip_tool_start_ms" in state.stage_ms:
+        return
+    state.stage_ms["plan_trip_tool_start_ms"] = (
+        time.monotonic() - state.turn_start
+    ) * 1000
+    record_phase_ms(
+        state.ctx.telemetry,
+        "plan_trip_tool_start_ms",
+        state.stage_ms["plan_trip_tool_start_ms"],
+    )
+
+
+def _normalize_capability_event(
+    state: TurnState,
+    item: object,
+) -> object | None:
+    if isinstance(item, agent_events.TokenEvent):
+        return state.text_event(item.text)
+    if isinstance(item, agent_events.ArrivalCardEvent):
+        state.clarification_pending = item.resolution_status == "ambiguous"
+    elif isinstance(item, agent_events.RouteCardEvent):
+        state.record_route_card(item)
+    else:
+        _count_tool_end_failure(state, item)
+    return item
 
 
 async def stream_capability_iteration(
@@ -466,7 +582,7 @@ async def stream_capability_iteration(
     result_message: dict | None = None
     outcomes: tuple[tuple[str, dict, object], ...] = ()
     deadline_reached = False
-    async for item in state.dependencies.execute_tool_round(
+    async for item in execute_tool_round(
         list(tool_use_blocks),
         state.ctx,
         state.session,
@@ -480,38 +596,16 @@ async def stream_capability_iteration(
         excluded_route_ids=state.excluded_route_ids,
         allowed_tool_names=allowed_tool_names,
     ):
-        if isinstance(item, dict) and "__tool_result_message__" in item:
-            result_message = item["__tool_result_message__"]
-            deadline_reached = bool(item.get("__deadline_reached__"))
-            outcomes = tuple(item.get("__tool_outcomes__") or ())
+        captured = _capture_tool_round_message(item)
+        if captured is not None:
+            result_message = captured.result_message
+            deadline_reached = captured.deadline_reached
+            outcomes = captured.outcomes
             continue
-        if isinstance(item, agent_events.ToolStartEvent):
-            if (
-                item.tool == "prepare_route_options"
-                and "plan_trip_tool_start_ms" not in state.stage_ms
-            ):
-                state.stage_ms["plan_trip_tool_start_ms"] = (
-                    time.monotonic() - state.turn_start
-                ) * 1000
-                record_phase_ms(
-                    state.ctx.telemetry,
-                    "plan_trip_tool_start_ms",
-                    state.stage_ms["plan_trip_tool_start_ms"],
-                )
-            yield item
-            continue
-        if isinstance(item, agent_events.TokenEvent):
-            event = state.text_event(item.text)
-            if event is not None:
-                yield event
-            continue
-        if isinstance(item, agent_events.ArrivalCardEvent):
-            state.clarification_pending = item.resolution_status == "ambiguous"
-        elif isinstance(item, agent_events.RouteCardEvent):
-            state.record_route_card(item)
-        elif isinstance(item, agent_events.ToolEndEvent) and not item.ok:
-            state.tool_failures += 1
-        yield item
+        _record_plan_trip_start(state, item)
+        event = _normalize_capability_event(state, item)
+        if event is not None:
+            yield event
     state.tools_ms_total += (time.monotonic() - started) * 1000
     yield CapabilityIteration(
         result_message=result_message,
@@ -548,22 +642,22 @@ def apply_capability_iteration(
 
 @dataclass
 class _ModelPhase:
-    iteration: ModelIteration | None = None
+    directive: ModelDirective | None = None
 
-    def result(self) -> ModelIteration:
-        if self.iteration is None:
+    def result(self) -> ModelDirective:
+        if self.directive is None:
             raise RuntimeError("model iteration ended without a result")
-        return self.iteration
+        return self.directive
 
 
 @dataclass
 class _CapabilityPhase:
-    iteration: CapabilityIteration | None = None
+    directive: ModelDirective | None = None
 
-    def result(self) -> CapabilityIteration:
-        if self.iteration is None:
+    def result(self) -> ModelDirective:
+        if self.directive is None:
             raise RuntimeError("capability iteration ended without a result")
-        return self.iteration
+        return self.directive
 
 
 def _initialize_turn_context(
@@ -585,7 +679,6 @@ def _initialize_turn_context(
 
 def _prepare_turn_messages(
     *,
-    dependencies: TurnDependencies,
     session: dict,
     message: str,
     ctx: ToolContext,
@@ -593,7 +686,7 @@ def _prepare_turn_messages(
     response_presentation: str,
     turn_id: str,
 ) -> list[dict]:
-    messages = dependencies.messages_from_history(
+    messages = model_request.messages_from_history(
         session_module.model_context_history(session, message)
     )
     context_block = agent_prompt.build_turn_context(
@@ -628,7 +721,6 @@ def _create_turn_state(
     if trace is not None:
         trace.rider_message = message
     messages = _prepare_turn_messages(
-        dependencies=dependencies,
         session=session,
         message=message,
         ctx=ctx,
@@ -646,12 +738,12 @@ def _create_turn_state(
         mode_policy=mode_policy,
         initial_mode=mode_policy.mode,
         turn_start=turn_start,
-        deadline_monotonic=turn_start + dependencies.deadline_s,
+        deadline_monotonic=turn_start + session_module.AGENT_TURN_DEADLINE_S,
         stage_ms=stage_timings(trace, preprocessing_started),
         messages=messages,
         tool_ledger=dependencies.make_ledger(),
-        excluded_modes=dependencies.rider_excluded_modes(message, session),
-        excluded_route_ids=dependencies.rider_excluded_route_ids(message, session),
+        excluded_modes=rider_excluded_modes(message, session),
+        excluded_route_ids=rider_excluded_route_ids(message, session),
     )
 
 
@@ -701,7 +793,7 @@ async def _stream_turn_body(state: TurnState) -> AsyncIterator[agent_events.Agen
             yield event
         async for event in _stream_post_loop_response(state):
             yield event
-    except TurnDeadlineReached:
+    except TurnDeadlineReachedError:
         state.stop_reason = "deadline"
     except Exception as exc:
         _LOGGER.exception(
@@ -727,6 +819,30 @@ async def _stream_turn_body(state: TurnState) -> AsyncIterator[agent_events.Agen
     )
 
 
+def _resolve_capability_iteration(
+    state: TurnState,
+    iteration: CapabilityIteration,
+) -> ModelDirective:
+    if iteration.deadline_reached:
+        state.stop_reason = "deadline"
+        return ModelDirective(
+            "stop",
+            event=agent_events.ErrorEvent(
+                code="deadline",
+                message="The response took too long. Please try again.",
+                retryable=True,
+            ),
+        )
+    apply_capability_iteration(state, iteration)
+    if state.ctx.turn_evidence.terminal:
+        state.stop_reason = _terminal_stop_reason(state)
+        return ModelDirective("stop")
+    if time.monotonic() >= state.deadline_monotonic:
+        state.stop_reason = "deadline"
+        return ModelDirective("stop")
+    return ModelDirective("continue")
+
+
 async def _stream_react_loop(
     state: TurnState,
 ) -> AsyncIterator[agent_events.AgentEvent]:
@@ -734,10 +850,7 @@ async def _stream_react_loop(
         model_phase = _ModelPhase()
         async for event in _stream_model_phase(state, model_phase):
             yield event
-
-        directive = resolve_model_iteration(state, model_phase.result())
-        if directive.event is not None:
-            yield directive.event
+        directive = model_phase.result()
         if directive.kind == "continue":
             continue
         if directive.kind == "stop":
@@ -751,23 +864,7 @@ async def _stream_react_loop(
             directive.allowed_tool_names,
         ):
             yield event
-
-        capability_iteration = capability_phase.result()
-        if capability_iteration.deadline_reached:
-            yield agent_events.ErrorEvent(
-                code="deadline",
-                message="The response took too long. Please try again.",
-                retryable=True,
-            )
-            state.stop_reason = "deadline"
-            break
-
-        apply_capability_iteration(state, capability_iteration)
-        if state.ctx.turn_evidence.terminal:
-            state.stop_reason = _terminal_stop_reason(state)
-            break
-        if time.monotonic() >= state.deadline_monotonic:
-            state.stop_reason = "deadline"
+        if capability_phase.result().kind == "stop":
             break
 
 
@@ -775,14 +872,20 @@ async def _stream_model_phase(
     state: TurnState,
     phase: _ModelPhase,
 ) -> AsyncIterator[agent_events.AgentEvent]:
+    iteration: ModelIteration | None = None
     async for event in stream_model_iteration(
         state,
         request_options_for=_initial_goal_request_options,
     ):
         if isinstance(event, ModelIteration):
-            phase.iteration = event
+            iteration = event
         else:
             yield event
+    if iteration is None:
+        raise RuntimeError("model iteration ended without a result")
+    phase.directive = resolve_model_iteration(state, iteration)
+    if phase.directive.event is not None:
+        yield phase.directive.event
 
 
 async def _stream_capability_phase(
@@ -791,15 +894,21 @@ async def _stream_capability_phase(
     tool_use_blocks: tuple[object, ...],
     allowed_tool_names: frozenset[str],
 ) -> AsyncIterator[agent_events.AgentEvent]:
+    iteration: CapabilityIteration | None = None
     async for event in stream_capability_iteration(
         state,
         tool_use_blocks,
         allowed_tool_names,
     ):
         if isinstance(event, CapabilityIteration):
-            phase.iteration = event
+            iteration = event
         else:
             yield event
+    if iteration is None:
+        raise RuntimeError("capability iteration ended without a result")
+    phase.directive = _resolve_capability_iteration(state, iteration)
+    if phase.directive.event is not None:
+        yield phase.directive.event
 
 
 async def _stream_post_loop_response(

@@ -59,28 +59,27 @@ class FakeStreamContext:
     async def __aexit__(self, *_exc_info):
         return False
 
-    async def _iter_text(self):
+    async def __aiter__(self):
         for chunk in self._round_spec.get("text", []):
-            yield chunk
-
-    @property
-    def text_stream(self):
-        return self._iter_text()
+            yield FakeContentBlock(
+                "content_block_delta",
+                delta=FakeContentBlock("text_delta", text=chunk),
+            )
 
     async def get_final_message(self) -> FakeMessage:
         blocks: list = []
         joined_text = "".join(self._round_spec.get("text", []))
         if joined_text:
             blocks.append(FakeContentBlock("text", text=joined_text))
-        for tool_use in self._round_spec.get("tool_use", []):
-            blocks.append(
-                FakeContentBlock(
-                    "tool_use",
-                    id=tool_use["id"],
-                    name=tool_use["name"],
-                    input=tool_use.get("input", {}),
-                )
+        blocks.extend(
+            FakeContentBlock(
+                "tool_use",
+                id=tool_use["id"],
+                name=tool_use["name"],
+                input=tool_use.get("input", {}),
             )
+            for tool_use in self._round_spec.get("tool_use", [])
+        )
         usage = FakeUsage(**self._round_spec.get("usage", {}))
         stop_reason = self._round_spec.get("stop_reason", "end_turn")
         return FakeMessage(blocks, stop_reason, usage)

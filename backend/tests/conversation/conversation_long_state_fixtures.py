@@ -15,7 +15,7 @@ Batch A-D harness):
 
 - ``prepare_route_options.prepare_single_leg`` -- the provider route/evidence
   seam inside the real canonical prepare executor.
-- ``trips.enrichment._enrich_route`` -- live route enrichment the real
+- ``trips.enrichment.enrich_route`` -- live route enrichment the real
   ``present_route`` executor may call.
 - ``tools.lookup_arrivals.execute`` -- the module-attribute patch the harness
   installs is inert for the registry (executors are captured at registry
@@ -43,6 +43,7 @@ from __future__ import annotations
 
 from app.services.agent.tools.location_resolution import ResolvedPlace
 from app.services.agent.tools.route.preparation_adapter import PreparedLeg
+
 from tests.conversation.conversation_discovery_fixtures import discovery_leg_for
 from tests.conversation.conversation_matrix_harness import PUBLIC_TOOL_PROFILE, make_leg
 

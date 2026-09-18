@@ -37,7 +37,7 @@ def _identity_key(place: dict[str, Any]) -> str:
 
 
 def _normalized_name(value: object) -> str:
-    return _store()._normalized_name(value)
+    return _store().normalized_name(value)
 
 
 def _description_reference(value: str) -> str:
@@ -47,6 +47,45 @@ def _description_reference(value: str) -> str:
     if words and words[-1] in {"one", "place"}:
         words = words[:-1]
     return " ".join(words)
+
+
+def _admitted_aliases(names: object) -> list[str]:
+    if not isinstance(names, list):
+        return []
+    return [str(alias).strip()[:120] for alias in names if str(alias).strip()][:4]
+
+
+def _registry_identity_fields(raw_entry: dict[str, Any]) -> tuple[str, str, str] | None:
+    place_id = str(raw_entry.get("place_id") or "").strip()
+    set_id = str(raw_entry.get("discovery_set_id") or "").strip()
+    identity = str(raw_entry.get("canonical_identity") or "").strip()
+    if not place_id or not set_id or not identity:
+        return None
+    return place_id, set_id, identity
+
+
+def _admit_registry_entry(raw_entry: object, now: float) -> dict[str, Any] | None:
+    if not isinstance(raw_entry, dict):
+        return None
+    try:
+        expires_at = float(raw_entry.get("expires_at") or 0)
+    except (TypeError, ValueError):
+        return None
+    if expires_at < now:
+        return None
+    identity_fields = _registry_identity_fields(raw_entry)
+    if identity_fields is None:
+        return None
+    place_id, set_id, identity = identity_fields
+    entry = dict(raw_entry)
+    entry["place_id"] = place_id
+    entry["canonical_place_id"] = str(
+        raw_entry.get("canonical_place_id") or place_id
+    ).strip()
+    entry["discovery_set_id"] = set_id
+    entry["canonical_identity"] = identity
+    entry["name_aliases"] = _admitted_aliases(raw_entry.get("name_aliases"))
+    return entry
 
 
 def _entries(session: dict | None) -> list[dict[str, Any]]:
@@ -59,33 +98,9 @@ def _entries(session: dict | None) -> list[dict[str, Any]]:
     now = time.time()
     entries: list[dict[str, Any]] = []
     for raw_entry in raw:
-        if not isinstance(raw_entry, dict):
-            continue
-        try:
-            expires_at = float(raw_entry.get("expires_at") or 0)
-        except (TypeError, ValueError):
-            continue
-        if expires_at < now:
-            continue
-        place_id = str(raw_entry.get("place_id") or "").strip()
-        set_id = str(raw_entry.get("discovery_set_id") or "").strip()
-        identity = str(raw_entry.get("canonical_identity") or "").strip()
-        if not place_id or not set_id or not identity:
-            continue
-        entry = dict(raw_entry)
-        entry["place_id"] = place_id
-        entry["canonical_place_id"] = str(
-            raw_entry.get("canonical_place_id") or place_id
-        ).strip()
-        entry["discovery_set_id"] = set_id
-        entry["canonical_identity"] = identity
-        aliases = raw_entry.get("name_aliases")
-        entry["name_aliases"] = (
-            [str(alias).strip()[:120] for alias in aliases if str(alias).strip()][:4]
-            if isinstance(aliases, list)
-            else []
-        )
-        entries.append(entry)
+        entry = _admit_registry_entry(raw_entry, now)
+        if entry is not None:
+            entries.append(entry)
     entries = entries[-MAX_ENTRIES:]
     session[REGISTRY_FIELD] = entries
     return entries
@@ -95,13 +110,6 @@ def snapshot(session: dict | None) -> list[dict[str, Any]]:
     """Return a copy suitable for context projection or persistence."""
 
     return [dict(entry) for entry in _entries(session)]
-
-
-def clear(session: dict | None) -> None:
-    if not isinstance(session, dict):
-        return
-    session[REGISTRY_FIELD] = []
-    session.pop("presented_entity_sequence", None)
 
 
 def place_ids(session: dict | None) -> dict[str, str]:
@@ -129,13 +137,14 @@ def _entry(
     sequence: int,
     presented_at: float,
     expires_at: float,
-    reason: str,
+    reason: object,
     canonical_place_id: str | None = None,
     name_aliases: list[str] | None = None,
 ) -> dict[str, Any]:
+    place_id = canonical_place_id or str(place.get("place_id") or "")
     return {
-        "place_id": canonical_place_id or str(place.get("place_id") or ""),
-        "canonical_place_id": canonical_place_id or str(place.get("place_id") or ""),
+        "place_id": place_id,
+        "canonical_place_id": place_id,
         "discovery_set_id": discovery_set_id,
         "ordinal": ordinal,
         "presentation_sequence": sequence,
@@ -144,16 +153,62 @@ def _entry(
         "canonical_identity": _identity_key(place),
         "reason": str(reason or "preference_match"),
         "name": str(place.get("name") or "")[:120],
-        "name_aliases": [
-            str(name).strip()[:120]
-            for name in (name_aliases or [])
-            if str(name).strip()
-        ][:4],
+        "name_aliases": _admitted_aliases(name_aliases),
         "address": str(place.get("address") or "")[:200],
         "neighborhood": str(place.get("neighborhood") or "")[:80],
         "borough": str(place.get("borough") or "")[:40],
         "category": str(place.get("category") or "")[:60],
     }
+
+
+def _rewrite_source_place_id(
+    source: dict[str, Any], selected_id: str, canonical_id: str
+) -> bool:
+    for stored in source.get("places") or []:
+        if isinstance(stored, dict) and str(stored.get("place_id") or "") == selected_id:
+            stored["place_id"] = canonical_id
+            return True
+    return False
+
+
+def _rewrite_canonical_place(
+    source: dict[str, Any],
+    selected: dict[str, Any],
+    existing: dict[str, Any] | None,
+) -> tuple[dict[str, Any], bool]:
+    prior_id = str(existing.get("place_id") or "") if existing else ""
+    selected_id = str(selected.get("place_id") or "")
+    canonical_id = prior_id or selected_id
+    rewritten = False
+    if canonical_id and selected_id and canonical_id != selected_id:
+        rewritten = _rewrite_source_place_id(source, selected_id, canonical_id)
+    normalized = dict(selected)
+    normalized["place_id"] = canonical_id
+    return normalized, rewritten
+
+
+def _reused_aliases(existing: dict[str, Any] | None) -> list[str]:
+    if existing is None:
+        return []
+    return [
+        *list(existing.get("name_aliases") or []),
+        str(existing.get("name") or ""),
+    ]
+
+
+def _upsert_registry_item(
+    entries: list[dict[str, Any]],
+    by_identity: dict[str, dict[str, Any]],
+    identity: str,
+    item: dict[str, Any],
+    existing: dict[str, Any] | None,
+) -> None:
+    if existing is None:
+        entries.append(item)
+        by_identity[identity] = entries[-1]
+        return
+    existing.clear()
+    existing.update(item)
 
 
 def record(
@@ -190,51 +245,49 @@ def record(
             continue
         identity = _identity_key(selected)
         existing = by_identity.get(identity)
-        canonical_id = (
-            str(existing.get("place_id") or "") if existing else ""
-        ) or str(selected.get("place_id") or "")
-        selected_id = str(selected.get("place_id") or "")
-        if canonical_id and selected_id and canonical_id != selected_id:
-            for stored in source.get("places") or []:
-                if isinstance(stored, dict) and str(stored.get("place_id") or "") == selected_id:
-                    stored["place_id"] = canonical_id
-                    source_changed = True
-                    break
-        normalized = dict(selected)
-        normalized["place_id"] = canonical_id
+        normalized, rewritten = _rewrite_canonical_place(source, selected, existing)
+        source_changed |= rewritten
         canonical_places.append(normalized)
-        item = _entry(
-            normalized,
-            discovery_set_id=discovery_set_id,
-            ordinal=ordinal,
-            sequence=sequence,
-            presented_at=presented_at,
-            expires_at=expires_at,
-            reason=str(selected.get("reason") or "preference_match"),
-            canonical_place_id=canonical_id,
-            name_aliases=(
-                list(existing.get("name_aliases") or [])
-                + [str(existing.get("name") or "")]
-                if existing
-                else []
+        _upsert_registry_item(
+            entries,
+            by_identity,
+            identity,
+            _entry(
+                normalized,
+                discovery_set_id=discovery_set_id,
+                ordinal=ordinal,
+                sequence=sequence,
+                presented_at=presented_at,
+                expires_at=expires_at,
+                reason=selected.get("reason"),
+                canonical_place_id=normalized["place_id"],
+                name_aliases=_reused_aliases(existing),
             ),
+            existing,
         )
-        if existing is None:
-            entries.append(item)
-            by_identity[identity] = entries[-1]
-        else:
-            existing.clear()
-            existing.update(item)
     session[REGISTRY_FIELD] = entries[-MAX_ENTRIES:]
     if source_changed:
         remaining_ttl = max(1, int(expires_at - time.time()))
         cache.cache_set(
-            store._key(discovery_set_id),
+            store.cache_key(discovery_set_id),
             json.dumps(source, separators=(",", ":"), default=str),
             remaining_ttl,
             fail_open=True,
         )
     return canonical_places
+
+
+def _place_in_source(
+    source: dict[str, Any], place_id: str, identity: str
+) -> dict[str, Any] | None:
+    for place in source.get("places") or []:
+        if not isinstance(place, dict):
+            continue
+        if place_id and str(place.get("place_id") or "") == place_id:
+            return place
+        if identity and _identity_key(place) == identity:
+            return place
+    return None
 
 
 def _entry_place(
@@ -244,16 +297,92 @@ def _entry_place(
     source = _store().load_discovery_set(set_id, session_id=session_id)
     if source is None:
         return None, None
-    place_id = str(entry.get("place_id") or "").strip()
-    identity = str(entry.get("canonical_identity") or "").strip()
-    for place in source.get("places") or []:
-        if not isinstance(place, dict):
-            continue
-        if place_id and str(place.get("place_id") or "") == place_id:
-            return place, set_id
-        if identity and _identity_key(place) == identity:
-            return place, set_id
-    return None, None
+    place = _place_in_source(
+        source,
+        str(entry.get("place_id") or "").strip(),
+        str(entry.get("canonical_identity") or "").strip(),
+    )
+    if place is None:
+        return None, None
+    return place, set_id
+
+
+def _scoped_entries(
+    session: dict | None,
+    session_id: str,
+    discovery_set_id: str | None,
+) -> list[dict[str, Any]]:
+    if not session_id:
+        return []
+    entries = _entries(session)
+    requested_set = str(discovery_set_id or "").strip()
+    if not requested_set:
+        return entries
+    return [
+        item
+        for item in entries
+        if str(item.get("discovery_set_id") or "") == requested_set
+    ]
+
+
+def _latest_by_sequence(entries: list[dict[str, Any]]) -> dict[str, Any] | None:
+    chosen: dict[str, Any] | None = None
+    best = -1
+    for item in entries:
+        sequence = int(item.get("presentation_sequence") or 0)
+        if chosen is None or sequence > best:
+            chosen = item
+            best = sequence
+    return chosen
+
+
+def _latest_ordinal_entry(
+    entries: list[dict[str, Any]], ordinal: object
+) -> tuple[dict[str, Any] | None, str | None]:
+    try:
+        wanted = int(ordinal)
+    except (TypeError, ValueError):
+        return None, "ordinal must be a whole number"
+    matches = [
+        item for item in entries if int(item.get("ordinal") or 0) == wanted
+    ]
+    chosen = _latest_by_sequence(matches)
+    if chosen is None:
+        return None, "ordinal is out of range for presented places"
+    return chosen, None
+
+
+def _name_alias_matches(item: dict[str, Any], normalized: str) -> bool:
+    for name in [item.get("name"), *(item.get("name_aliases") or [])]:
+        candidate = _normalized_name(name)
+        if candidate == normalized or candidate.startswith(normalized + " "):
+            return True
+    return False
+
+
+def _unique_description_entry(
+    entries: list[dict[str, Any]], description: str
+) -> tuple[dict[str, Any] | None, str | None]:
+    reference = _description_reference(description)
+    if (
+        not reference
+        or reference in _PRICE_REFERENCE_WORDS
+        or reference in _BOROUGH_REFERENCE_WORDS
+    ):
+        return None, None
+    normalized = _normalized_name(reference)
+    unique: dict[str, dict[str, Any]] = {}
+    for item in entries:
+        if _name_alias_matches(item, normalized):
+            unique[str(item.get("canonical_identity"))] = item
+    if len(unique) != 1:
+        return (
+            None,
+            "multiple presented places match that name; please specify which one"
+            if len(unique) > 1
+            else None,
+        )
+    return next(iter(unique.values())), None
 
 
 def resolve(
@@ -267,67 +396,23 @@ def resolve(
 ) -> tuple[dict[str, Any] | None, str | None, str | None]:
     """Resolve a presented name/id or newest compatible ordinal."""
 
-    if not isinstance(session, dict) or not session_id:
-        return None, None, None
-    entries = _entries(session)
-    requested_set = str(discovery_set_id or "").strip()
-    if requested_set:
-        entries = [
-            item
-            for item in entries
-            if str(item.get("discovery_set_id") or "") == requested_set
-        ]
+    entries = _scoped_entries(session, session_id, discovery_set_id)
     if not entries:
         return None, None, None
 
     chosen: dict[str, Any] | None = None
+    error: str | None = None
     if place_id:
-        matches = [
-            item for item in entries if str(item.get("place_id") or "") == str(place_id).strip()
-        ]
-        if matches:
-            chosen = max(matches, key=lambda item: int(item.get("presentation_sequence") or 0))
-    elif ordinal is not None:
-        try:
-            wanted = int(ordinal)
-        except (TypeError, ValueError):
-            return None, "ordinal must be a whole number", None
-        sequences = sorted(
-            {int(item.get("presentation_sequence") or 0) for item in entries},
-            reverse=True,
+        wanted = str(place_id).strip()
+        chosen = _latest_by_sequence(
+            [item for item in entries if str(item.get("place_id") or "") == wanted]
         )
-        for sequence in sequences:
-            matches = [
-                item
-                for item in entries
-                if int(item.get("presentation_sequence") or 0) == sequence
-                and int(item.get("ordinal") or 0) == wanted
-            ]
-            if matches:
-                chosen = matches[0]
-                break
-        if chosen is None:
-            return None, "ordinal is out of range for presented places", None
+    elif ordinal is not None:
+        chosen, error = _latest_ordinal_entry(entries, ordinal)
     elif description is not None:
-        reference = _description_reference(description)
-        if not reference or reference in _PRICE_REFERENCE_WORDS or reference in _BOROUGH_REFERENCE_WORDS:
-            return None, None, None
-        normalized = _normalized_name(reference)
-        matches = [
-            item
-            for item in entries
-            if any(
-                _normalized_name(name) == normalized
-                or _normalized_name(name).startswith(normalized + " ")
-                for name in [item.get("name"), *(item.get("name_aliases") or [])]
-            )
-        ]
-        unique = {str(item.get("canonical_identity")): item for item in matches}
-        if len(unique) > 1:
-            return None, "multiple presented places match that name; please specify which one", None
-        if unique:
-            chosen = max(unique.values(), key=lambda item: int(item.get("presentation_sequence") or 0))
-
+        chosen, error = _unique_description_entry(entries, description)
+    if error is not None:
+        return None, error, None
     if chosen is None:
         return None, None, None
     place, set_id = _entry_place(chosen, session_id=session_id)
@@ -344,67 +429,72 @@ def _finite_price(value: object) -> float | None:
     return number if number == number and abs(number) != float("inf") else None
 
 
+def _price_description_match(
+    places: list[dict[str, Any]],
+) -> tuple[dict[str, Any] | None, str | None]:
+    known = [
+        (place, _finite_price(place.get("price_level")))
+        for place in places
+        if _finite_price(place.get("price_level")) is not None
+    ]
+    if not known:
+        return None, "price information is unavailable for these places"
+    lowest = min(price for _place, price in known)
+    matches = [place for place, price in known if price == lowest]
+    if len(matches) == 1:
+        return matches[0], None
+    return None, "multiple places match that price reference"
+
+
+def _borough_description_match(
+    places: list[dict[str, Any]], reference: str
+) -> tuple[dict[str, Any] | None, str | None]:
+    matches: list[dict[str, Any]] = []
+    for place in places:
+        haystack = " ".join(
+            (
+                str(place.get("neighborhood") or "").casefold(),
+                str(place.get("address") or "").casefold(),
+            )
+        )
+        if reference in haystack:
+            matches.append(place)
+    if len(matches) == 1:
+        return matches[0], None
+    if len(matches) > 1:
+        return None, "multiple places match that location reference"
+    return None, "no place matches that location reference"
+
+
+def _text_description_match(
+    places: list[dict[str, Any]], reference: str
+) -> tuple[dict[str, Any] | None, str | None]:
+    reference_text = " ".join(reference.split())
+    matches: list[dict[str, Any]] = []
+    for place in places:
+        haystack = " ".join(
+            (
+                str(place.get("name") or "").casefold(),
+                str(place.get("category") or "").casefold(),
+            )
+        )
+        if reference_text in haystack:
+            matches.append(place)
+    if len(matches) == 1:
+        return matches[0], None
+    if len(matches) > 1:
+        return None, "multiple places match that description"
+    return None, "no place matches that description"
+
+
 def resolve_description(
     places: list[dict[str, Any]], description: str
 ) -> tuple[dict[str, Any] | None, str | None]:
-    words = " ".join(str(description or "").casefold().split()).split()
-    if words and words[0] in {"the", "that"}:
-        words = words[1:]
-    if words and words[-1] in {"one", "place"}:
-        words = words[:-1]
-    reference = " ".join(words)
+    reference = _description_reference(description)
     if not reference:
         return None, "place reference is incomplete"
     if reference in _PRICE_REFERENCE_WORDS:
-        known = [
-            (place, _finite_price(place.get("price_level")))
-            for place in places
-            if _finite_price(place.get("price_level")) is not None
-        ]
-        if not known:
-            return None, "price information is unavailable for these places"
-        lowest = min(price for _place, price in known)
-        matches = [place for place, price in known if price == lowest]
-        return (
-            (matches[0], None)
-            if len(matches) == 1
-            else (None, "multiple places match that price reference")
-        )
+        return _price_description_match(places)
     if reference in _BOROUGH_REFERENCE_WORDS:
-        matches = [
-            place
-            for place in places
-            if reference in " ".join(
-                str(value or "").casefold()
-                for value in (place.get("neighborhood"), place.get("address"))
-            )
-        ]
-        return (
-            (matches[0], None)
-            if len(matches) == 1
-            else (
-                None,
-                "multiple places match that location reference"
-                if len(matches) > 1
-                else "no place matches that location reference",
-            )
-        )
-    reference_text = " ".join(reference.split())
-    matches = [
-        place
-        for place in places
-        if reference_text in " ".join(
-            str(place.get(field) or "").casefold()
-            for field in ("name", "category")
-        )
-    ]
-    return (
-        (matches[0], None)
-        if len(matches) == 1
-        else (
-            None,
-            "multiple places match that description"
-            if len(matches) > 1
-            else "no place matches that description",
-        )
-    )
+        return _borough_description_match(places, reference)
+    return _text_description_match(places, reference)

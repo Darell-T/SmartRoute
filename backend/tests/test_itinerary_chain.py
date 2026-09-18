@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import unittest
 
+import pytest
+
 
 def _subway_steps(
     *,
@@ -54,13 +56,10 @@ class BuildChainedItineraryTests(unittest.TestCase):
             destination={"label": "Supreme Pizza", "lat": 40.721, "lng": -73.995},
         )
 
-        self.assertEqual(
-            [leg["mode"] for leg in itinerary["legs"]],
-            ["WALK", "SUBWAY", "WALK"],
-        )
-        self.assertGreater(itinerary["legs"][0]["street_walking_seconds"], 0)
-        self.assertGreater(itinerary["legs"][-1]["street_walking_seconds"], 0)
-        self.assertEqual(itinerary["destination"]["label"], "Supreme Pizza")
+        assert [leg["mode"] for leg in itinerary["legs"]] == ["WALK", "SUBWAY", "WALK"]
+        assert itinerary["legs"][0]["street_walking_seconds"] > 0
+        assert itinerary["legs"][-1]["street_walking_seconds"] > 0
+        assert itinerary["destination"]["label"] == "Supreme Pizza"
 
     def test_two_segments_default_25_min_dwell(self):
         from app.services.trips.itinerary import build_chained_itinerary
@@ -104,55 +103,46 @@ class BuildChainedItineraryTests(unittest.TestCase):
             reasons=["Multi-stop with pickup"],
         )
 
-        self.assertEqual(result["itinerary_id"], "chain-1")
-        self.assertEqual(result["origin"], "Prospect Park")
-        self.assertEqual(result["destination"], "Times Square")
-        self.assertEqual(result["timezone"], "America/New_York")
-        self.assertEqual(result["planning_mode"], "leave_now")
-        self.assertEqual(result["generated_at"], "2026-07-23T08:55:00-04:00")
-        self.assertEqual(
-            result["structured_recommendation_reasons"],
-            ["Multi-stop with pickup"],
-        )
+        assert result["itinerary_id"] == "chain-1"
+        assert result["origin"] == "Prospect Park"
+        assert result["destination"] == "Times Square"
+        assert result["timezone"] == "America/New_York"
+        assert result["planning_mode"] == "leave_now"
+        assert result["generated_at"] == "2026-07-23T08:55:00-04:00"
+        assert result["structured_recommendation_reasons"] == ["Multi-stop with pickup"]
 
         # One intermediate waypoint with server default dwell
-        self.assertEqual(len(result["waypoints"]), 1)
+        assert len(result["waypoints"]) == 1
         wp = result["waypoints"][0]
-        self.assertEqual(wp["display_name"], "Joe's Pizza")
-        self.assertEqual(wp["dwell_minutes"], 25)
-        self.assertEqual(wp["dwell_source"], "default")
+        assert wp["display_name"] == "Joe's Pizza"
+        assert wp["dwell_minutes"] == 25
+        assert wp["dwell_source"] == "default"
 
-        self.assertEqual(result["total_dwell_seconds"], 25 * 60)
+        assert result["total_dwell_seconds"] == 25 * 60
         # Segment totals 15+20 min + 25 dwell = 60 min = 3600 s
-        self.assertEqual(result["total_duration_seconds"], (15 + 20 + 25) * 60)
-        self.assertEqual(result["total_in_vehicle_seconds"], 15 * 60 + 20 * 60)
+        assert result["total_duration_seconds"] == (15 + 20 + 25) * 60
+        assert result["total_in_vehicle_seconds"] == 15 * 60 + 20 * 60
 
         # Legs concatenated (one subway leg per segment)
-        self.assertEqual(len(result["legs"]), 2)
-        self.assertEqual(result["legs"][0]["service_id"], "Q")
-        self.assertEqual(result["legs"][1]["service_id"], "N")
-        self.assertEqual(result["legs"][0]["ride_seconds"], 15 * 60)
-        self.assertEqual(result["legs"][1]["ride_seconds"], 20 * 60)
+        assert len(result["legs"]) == 2
+        assert result["legs"][0]["service_id"] == "Q"
+        assert result["legs"][1]["service_id"] == "N"
+        assert result["legs"][0]["ride_seconds"] == 15 * 60
+        assert result["legs"][1]["ride_seconds"] == 20 * 60
 
         # Clocks from first / last segment
-        self.assertEqual(result["departure_at"], "2026-07-23T09:00:00-04:00")
-        self.assertEqual(result["arrival_at"], "2026-07-23T10:00:00-04:00")
+        assert result["departure_at"] == "2026-07-23T09:00:00-04:00"
+        assert result["arrival_at"] == "2026-07-23T10:00:00-04:00"
 
         # A service change at the waypoint remains a transfer even though the
         # provider planned each OD segment independently.
-        self.assertEqual(result["transfer_count"], 1)
-        self.assertEqual(len(result["segments"]), 2)
-        self.assertEqual(result["segments"][0]["destination"]["display_name"], "Joe's Pizza")
-        self.assertEqual(result["segments"][1]["destination"], "Times Square")
-        self.assertEqual(result["segments"][0]["legs"][0]["segment_index"], 0)
-        self.assertEqual(result["segments"][1]["legs"][0]["segment_index"], 1)
-        self.assertEqual(result["dwell_events"], [{
-            "event_type": "dwell",
-            "after_segment_index": 0,
-            "waypoint": wp,
-            "duration_seconds": 25 * 60,
-            "source": "default",
-        }])
+        assert result["transfer_count"] == 1
+        assert len(result["segments"]) == 2
+        assert result["segments"][0]["destination"]["display_name"] == "Joe's Pizza"
+        assert result["segments"][1]["destination"] == "Times Square"
+        assert result["segments"][0]["legs"][0]["segment_index"] == 0
+        assert result["segments"][1]["legs"][0]["segment_index"] == 1
+        assert result["dwell_events"] == [{"event_type": "dwell", "after_segment_index": 0, "waypoint": wp, "duration_seconds": 25 * 60, "source": "default"}]
 
     def test_user_specified_dwell_source(self):
         from app.services.trips.itinerary import build_chained_itinerary
@@ -195,17 +185,17 @@ class BuildChainedItineraryTests(unittest.TestCase):
             final_destination="Work",
         )
 
-        self.assertEqual(len(result["waypoints"]), 1)
+        assert len(result["waypoints"]) == 1
         wp = result["waypoints"][0]
-        self.assertEqual(wp["display_name"], "Coffee Shop")
-        self.assertEqual(wp["place_id"], "poi-1")
-        self.assertEqual(wp["lat"], 40.72)
-        self.assertEqual(wp["lng"], -74.0)
-        self.assertEqual(wp["dwell_minutes"], 12)
-        self.assertEqual(wp["dwell_source"], "user")
-        self.assertEqual(result["total_dwell_seconds"], 12 * 60)
-        self.assertEqual(result["total_duration_seconds"], (10 + 15 + 12) * 60)
-        self.assertEqual(result["destination"], "Work")
+        assert wp["display_name"] == "Coffee Shop"
+        assert wp["place_id"] == "poi-1"
+        assert wp["lat"] == 40.72
+        assert wp["lng"] == -74.0
+        assert wp["dwell_minutes"] == 12
+        assert wp["dwell_source"] == "user"
+        assert result["total_dwell_seconds"] == 12 * 60
+        assert result["total_duration_seconds"] == (10 + 15 + 12) * 60
+        assert result["destination"] == "Work"
 
     def test_three_segments_two_waypoints(self):
         from app.services.trips.itinerary import build_chained_itinerary
@@ -237,22 +227,16 @@ class BuildChainedItineraryTests(unittest.TestCase):
             final_destination="End",
         )
 
-        self.assertEqual(len(result["waypoints"]), 2)
-        self.assertEqual(
-            [wp["display_name"] for wp in result["waypoints"]],
-            ["Stop A", "Stop B"],
-        )
+        assert len(result["waypoints"]) == 2
+        assert [wp["display_name"] for wp in result["waypoints"]] == ["Stop A", "Stop B"]
         for wp in result["waypoints"]:
-            self.assertEqual(wp["dwell_minutes"], 25)
-            self.assertEqual(wp["dwell_source"], "default")
-        self.assertEqual(result["total_dwell_seconds"], 2 * 25 * 60)
-        self.assertEqual(
-            result["total_duration_seconds"],
-            (10 + 8 + 12 + 25 + 25) * 60,
-        )
-        self.assertEqual(len(result["legs"]), 3)
-        self.assertEqual(result["departure_at"], "2026-07-23T09:00:00-04:00")
-        self.assertEqual(result["arrival_at"], "2026-07-23T11:12:00-04:00")
+            assert wp["dwell_minutes"] == 25
+            assert wp["dwell_source"] == "default"
+        assert result["total_dwell_seconds"] == 2 * 25 * 60
+        assert result["total_duration_seconds"] == (10 + 8 + 12 + 25 + 25) * 60
+        assert len(result["legs"]) == 3
+        assert result["departure_at"] == "2026-07-23T09:00:00-04:00"
+        assert result["arrival_at"] == "2026-07-23T11:12:00-04:00"
 
     def test_single_segment_no_waypoints_or_dwell(self):
         from app.services.trips.itinerary import build_chained_itinerary
@@ -270,15 +254,18 @@ class BuildChainedItineraryTests(unittest.TestCase):
             origin="A",
             final_destination="B",
         )
-        self.assertEqual(result["waypoints"], [])
-        self.assertEqual(result["total_dwell_seconds"], 0)
-        self.assertEqual(result["total_duration_seconds"], 20 * 60)
-        self.assertEqual(len(result["legs"]), 1)
+        assert result["waypoints"] == []
+        assert result["total_dwell_seconds"] == 0
+        assert result["total_duration_seconds"] == 20 * 60
+        assert len(result["legs"]) == 1
 
     def test_empty_segments_raises(self):
         from app.services.trips.itinerary import build_chained_itinerary
 
-        with self.assertRaises(ValueError):
+        with pytest.raises(
+            ValueError,
+            match="build_chained_itinerary requires at least one segment",
+        ):
             build_chained_itinerary(
                 [],
                 origin="A",
@@ -329,9 +316,9 @@ class BuildChainedItineraryTests(unittest.TestCase):
         )
         # 1 transfer in seg1 + B/2 -> N cross-segment service change;
         # dwell is not a transfer.
-        self.assertEqual(result["transfer_count"], 2)
-        self.assertEqual(result["total_dwell_seconds"], 25 * 60)
-        self.assertEqual(result["total_duration_seconds"], (25 + 15 + 25) * 60)
+        assert result["transfer_count"] == 2
+        assert result["total_dwell_seconds"] == 25 * 60
+        assert result["total_duration_seconds"] == (25 + 15 + 25) * 60
 
 
 if __name__ == "__main__":

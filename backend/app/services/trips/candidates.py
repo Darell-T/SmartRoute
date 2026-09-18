@@ -2,8 +2,9 @@
 
 import re
 
-from app.services.trips import scoring, text
+from app.services import text
 from app.services.mta.static_gtfs.stop_patterns import normalize_station_name
+from app.services.trips import scoring
 
 _CANDIDATE_ANALYSIS_PATTERN = re.compile(
     r"\[CANDIDATE_ANALYSIS\](.*?)\[/CANDIDATE_ANALYSIS\]",
@@ -11,7 +12,7 @@ _CANDIDATE_ANALYSIS_PATTERN = re.compile(
 )
 
 
-def _strip_model_control_blocks(raw_text: str) -> str:
+def strip_model_control_blocks(raw_text: str) -> str:
     without_route = re.sub(r"\s*\[ROUTE:\d+\]\s*", "", raw_text or "")
     return _CANDIDATE_ANALYSIS_PATTERN.sub("", without_route).strip()
 
@@ -22,78 +23,111 @@ def _build_fallback_candidate_reason(
     route_score: dict | None = None,
     chosen_score: dict | None = None,
 ) -> str:
-    route_score = route_score or scoring._route_score(route, [])
-    chosen_score = chosen_score or scoring._route_score(chosen_route, [])
+    route_score = route_score or scoring.route_score(route, [])
+    chosen_score = chosen_score or scoring.route_score(chosen_route, [])
     route_alerts = route_score.get("alerts") or []
     chosen_alerts = chosen_score.get("alerts") or []
-    route_alert = text._safe_text(route_alerts[0], 72) if route_alerts else ""
-    chosen_alert = text._safe_text(chosen_alerts[0], 72) if chosen_alerts else ""
+    route_alert = text.safe_text(route_alerts[0], 72) if route_alerts else ""
+    chosen_alert = text.safe_text(chosen_alerts[0], 72) if chosen_alerts else ""
     if is_recommended:
-        material_factors: list[str] = []
-        event_penalty = float(route_score.get("event_crowd_penalty") or 0)
-        walking_penalty = float(route_score.get("walking_penalty") or 0)
-        if walking_penalty > 0:
-            walk_minutes = max(0, int(route_score.get("walk_minutes") or 0))
-            material_factors.append(
-                f"preferred for less walking ({walk_minutes} min on foot)"
-            )
-        if event_penalty > 0:
-            material_factors.append("relevant event crowd exposure")
-        if material_factors:
-            duration = int(route_score.get("total_minutes") or 0)
-            return (
-                f"Recommended at {duration} min; "
-                + " and ".join(material_factors[:2])
-                + "."
-            )
-        if route_score.get("alert_count", 0) == 0:
-            return f"Fastest route at {route_score['total_minutes']} min."
-        if route_alert:
-            return (
-                f"Fastest route despite an alert: {route_alert}."
-            )
-        return "Fastest route despite active service alerts."
+        return _recommended_fallback_reason(route_score, route_alert)
+    return _alternate_fallback_reason(
+        route_score, chosen_score, route_alert, chosen_alert
+    )
 
+
+def _recommended_fallback_reason(route_score: dict, route_alert: str) -> str:
+    material_factors: list[str] = []
+    event_penalty = float(route_score.get("event_crowd_penalty") or 0)
+    walking_penalty = float(route_score.get("walking_penalty") or 0)
+    if walking_penalty > 0:
+        walk_minutes = max(0, int(route_score.get("walk_minutes") or 0))
+        material_factors.append(
+            f"preferred for less walking ({walk_minutes} min on foot)"
+        )
+    if event_penalty > 0:
+        material_factors.append("relevant event crowd exposure")
+    if material_factors:
+        duration = int(route_score.get("total_minutes") or 0)
+        return (
+            f"Recommended at {duration} min; "
+            + " and ".join(material_factors[:2])
+            + "."
+        )
+    if route_score.get("alert_count", 0) == 0:
+        return f"Fastest route at {route_score['total_minutes']} min."
+    if route_alert:
+        return f"Fastest route despite an alert: {route_alert}."
+    return "Fastest route despite active service alerts."
+
+
+def _alternate_fallback_reason(
+    route_score: dict,
+    chosen_score: dict,
+    route_alert: str,
+    chosen_alert: str,
+) -> str:
     route_minutes = int(route_score["total_minutes"])
     chosen_minutes = int(chosen_score["total_minutes"])
     delay = route_minutes - chosen_minutes
     transfer_delta = int(route_score["transfers"]) - int(chosen_score["transfers"])
     alert_delta = int(route_score["alert_count"]) - int(chosen_score["alert_count"])
-    if delay <= -2 and alert_delta > 0:
-        if route_alert:
-            return f"Faster by {abs(delay)} min, but affected by {route_alert}."
-        return f"Faster by {abs(delay)} min, but affected by service alerts."
+    delay_alert = _delay_with_alert_reason(delay, alert_delta, route_alert)
+    if delay_alert:
+        return delay_alert
     if delay <= -2 and transfer_delta > 0:
         return f"Faster by {abs(delay)} min, but adds an extra transfer."
-    if delay >= 3 and alert_delta > 0:
-        if route_alert:
-            return f"Slower by {delay} min and affected by {route_alert}."
-        return f"Slower by {delay} min and affected by service alerts."
     if delay >= 3:
         return f"Slower by {delay} min."
-    if transfer_delta > 0:
-        return (
-            "Adds an extra transfer."
-            if transfer_delta == 1
-            else f"Adds {transfer_delta} extra transfers."
-        )
-    if alert_delta > 0:
-        if route_alert:
-            return f"Affected by {route_alert}."
-        return "Affected by service alerts."
+    transfer_reason = _transfer_delta_reason(transfer_delta)
+    if transfer_reason:
+        return transfer_reason
+    alert_reason = _alert_only_reason(alert_delta, route_alert)
+    if alert_reason:
+        return alert_reason
     if chosen_alert and delay <= 2:
         return f"Similar time, but {chosen_alert} is already accounted for."
     return "Similar time, but less reliable than the selected route."
 
-def _build_route_candidates(
+
+def _delay_with_alert_reason(delay: int, alert_delta: int, route_alert: str) -> str | None:
+    if delay <= -2 and alert_delta > 0:
+        if route_alert:
+            return f"Faster by {abs(delay)} min, but affected by {route_alert}."
+        return f"Faster by {abs(delay)} min, but affected by service alerts."
+    if delay >= 3 and alert_delta > 0:
+        if route_alert:
+            return f"Slower by {delay} min and affected by {route_alert}."
+        return f"Slower by {delay} min and affected by service alerts."
+    return None
+
+
+def _transfer_delta_reason(transfer_delta: int) -> str | None:
+    if transfer_delta <= 0:
+        return None
+    if transfer_delta == 1:
+        return "Adds an extra transfer."
+    return f"Adds {transfer_delta} extra transfers."
+
+
+def _alert_only_reason(alert_delta: int, route_alert: str) -> str | None:
+    if alert_delta <= 0:
+        return None
+    if route_alert:
+        return f"Affected by {route_alert}."
+    return "Affected by service alerts."
+
+
+def build_route_candidates(
     routes: list[list[dict]],
     chosen_index: int,
     candidate_analysis: dict[int, dict[str, str]],
     scored_routes: list[dict] | None = None,
 ) -> list[dict]:
+    del candidate_analysis
     chosen_route = routes[chosen_index] if routes else []
-    scores = scoring._score_by_index(scored_routes or scoring._score_routes(routes, []))
-    chosen_score = scores.get(chosen_index, scoring._route_score(chosen_route, []))
+    scores = scoring.score_by_index(scored_routes or scoring.score_routes(routes, []))
+    chosen_score = scores.get(chosen_index, scoring.route_score(chosen_route, []))
     candidates = []
     for index, route in enumerate(routes):
         is_recommended = index == chosen_index
@@ -101,7 +135,7 @@ def _build_route_candidates(
         # alternate duration/walking/transfer facts.  It remains useful for
         # validating the model's choice, but the rider-facing reason must be
         # derived from this server-owned score row instead.
-        route_score = scores.get(index, scoring._route_score(route, []))
+        route_score = scores.get(index, scoring.route_score(route, []))
         fallback = _build_fallback_candidate_reason(
             route,
             chosen_route,
@@ -157,7 +191,7 @@ def _transit_steps(route: list[dict]) -> list[dict]:
     ]
 
 
-def _collect_route_and_bus_ids(routes: list[list[dict]]) -> tuple[set[str], set[str]]:
+def collect_route_and_bus_ids(routes: list[list[dict]]) -> tuple[set[str], set[str]]:
     """Collects the set of subway/bus route ids and the subset that are bus
     routes across every candidate route, and stamps each transit step with
     empty `intermediate_stops`/`intermediate_stop_locations` keys -- present
@@ -182,14 +216,14 @@ def _collect_route_and_bus_ids(routes: list[list[dict]]) -> tuple[set[str], set[
 def _route_ids(route: list[dict]) -> list[str]:
     route_ids: list[str] = []
     for step in _transit_steps(route):
-        route_id = str(step.get("route_id") or step.get("train_line") or "").strip().upper()
+        route_id = scoring.step_route_id(step)
         if route_id and route_id not in route_ids:
             route_ids.append(route_id)
     return route_ids
 
 
 def _display_stop(value: object) -> str:
-    return text._safe_text(str(value or ""), 44).strip()
+    return text.safe_text(str(value or ""), 44).strip()
 
 
 def _candidate_display_label(route: list[dict]) -> str:
@@ -216,7 +250,7 @@ def _candidate_display_label(route: list[dict]) -> str:
     return f"{base} from {board_stop}" if board_stop else base
 
 
-def _build_route_candidate_labels(routes: list[list[dict]]) -> list[dict]:
+def build_route_candidate_labels(routes: list[list[dict]]) -> list[dict]:
     return [
         {
             "index": index,
@@ -227,29 +261,31 @@ def _build_route_candidate_labels(routes: list[list[dict]]) -> list[dict]:
     ]
 
 
+def _parse_family_step(step: object) -> tuple[str, str, str, str] | None:
+    if not isinstance(step, dict):
+        return None
+    mode = str(step.get("type") or "").upper()
+    if mode not in {"SUBWAY", "BUS"}:
+        return None
+    route_id = scoring.step_route_id(step)
+    boarding = step.get("departure_stop_id") or step.get("departure_stop")
+    alighting = step.get("arrival_stop_id") or step.get("arrival_stop")
+    return (
+        mode,
+        route_id,
+        normalize_station_name(str(boarding or "")),
+        normalize_station_name(str(alighting or "")),
+    )
+
+
 def route_family_signature(route: list[dict]) -> tuple[tuple[str, str, str, str], ...]:
     """Return the stable transit-family and transfer-topology identity."""
 
-    signature = []
-    for step in route or []:
-        if (
-            not isinstance(step, dict)
-            or str(step.get("type") or "").upper() not in {"SUBWAY", "BUS"}
-        ):
-            continue
-        mode = str(step.get("type") or "").upper()
-        route_id = str(step.get("route_id") or step.get("train_line") or "").strip().upper()
-        boarding = step.get("departure_stop_id") or step.get("departure_stop")
-        alighting = step.get("arrival_stop_id") or step.get("arrival_stop")
-        signature.append(
-            (
-                mode,
-                route_id,
-                normalize_station_name(str(boarding or "")),
-                normalize_station_name(str(alighting or "")),
-            )
-        )
-    return tuple(signature)
+    return tuple(
+        parsed
+        for parsed in (_parse_family_step(step) for step in route or [])
+        if parsed is not None
+    )
 
 
 def dedupe_route_families(routes: list[list[dict]]) -> list[list[dict]]:

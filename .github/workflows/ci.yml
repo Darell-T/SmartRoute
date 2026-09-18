@@ -26,8 +26,39 @@ jobs:
       - run: npm run verify:transit-artifacts
       - run: npm run build
 
+  browser:
+    name: Browser (chat, map, accessibility)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:release:ci
+      - name: Bind browser evidence to the candidate
+        if: always()
+        run: |
+          npx tsx scripts/release/build-browser-evidence.ts \
+            test-results/release/results.json \
+            test-results/release/browser-evidence.json \
+            "${{ github.sha }}"
+      - name: Preserve browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-evidence
+          path: frontend/test-results/release/
+          retention-days: 14
+
   backend:
-    name: Backend (pytest)
+    name: Backend (pytest and coverage)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -45,7 +76,10 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt -r requirements-dev.txt
-      - run: python -m pytest -q
+      - name: Run backend tests with branch coverage
+        run: python -m coverage run --branch --source=app -m pytest -q
+      - name: Enforce the backend coverage floor
+        run: python -m coverage report --fail-under=85 --precision=2 --show-missing --skip-covered
 
   dependency-advisories:
     name: Dependency advisories (candidate-bound)

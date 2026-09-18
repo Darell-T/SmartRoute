@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { postProxy } from "@/lib/backend-proxy";
+import { postProxy } from "@/lib/server/backend-proxy";
 import { EnrichRouteSchema } from "./schema";
 
 /** Browsers default to GET; opening the route in a tab hits this (not POST). */

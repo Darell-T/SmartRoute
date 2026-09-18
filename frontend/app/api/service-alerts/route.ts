@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
-import { proxyToBackend } from "@/lib/backend-proxy";
-import { rateLimit } from "@/lib/rate-limit";
+import { proxyToBackend } from "@/lib/server/backend-proxy";
+import { rateLimit } from "@/lib/server/rate-limit";
 
 export async function GET(req: NextRequest) {
   const limited = rateLimit(req, { key: "service-alerts", limit: 120, windowMs: 60_000 });

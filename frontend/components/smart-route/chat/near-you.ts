@@ -1,22 +1,5 @@
-/* ════════════════════════════════════════════════════════════════════════
-   SmartRoute chat — "Near You" derivation
-
-   Pure helpers only (no React, no fetching). The route-id list mirrors the
-   left rail's own `nearbyRouteIds` derivation (left-rail.tsx lines ~94-106:
-   nearbyTransitGroups + arrivals + nearbyBusArrivals, deduped, uppercased)
-   so the chat top bar's bullets are "the same derivation the left rail
-   uses" per the design spec, without importing rail internals or standing
-   up a second WebSocket — the caller passes down the `LeftRailLiveData`
-   page.tsx already computes from the one shared `useLiveFeed` connection.
-   ════════════════════════════════════════════════════════════════════════ */
-
-import type {
-  Arrival,
-  NearbyTransitGroup,
-  ServiceAlert,
-} from "@/components/smart-route/left-rail/types";
+import type { ServiceAlert } from "@/components/smart-route/left-rail/types";
 import type { LeftRailLiveData } from "@/components/smart-route/left-rail/live-data";
-import type { ArrivalsTurnDirectionGroup, ArrivalsTurnPayload } from "@/lib/use-agent-chat";
 import type { NearbyTransitIssue } from "@/types/api";
 import {
   selectHomeNearbyIssue,
@@ -123,6 +106,67 @@ function conciseAlertSummary(alert: ServiceAlert): string {
   return `${prefix}service change nearby`;
 }
 
+function collectHomeArrivals(
+  groups: BuildHomeNearbyModelInput["data"]["nearbyTransitGroups"],
+): HomeNearbyArrival[] {
+  const arrivals: HomeNearbyArrival[] = [];
+  const seen = new Set<string>();
+  for (const group of groups) {
+    for (const arrival of group.arrivals) {
+      const routeId = arrival.routeIds[0]?.toUpperCase();
+      const minutes = arrival.arrivalMinutes
+        .filter((minute) => Number.isFinite(minute) && minute >= 0)
+        .sort((a, b) => a - b);
+      if (!routeId || minutes.length === 0) continue;
+      const key = `${routeId}:${arrival.destination}:${arrival.direction}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      arrivals.push({
+        id: arrival.id,
+        routeId,
+        destination: arrival.destination,
+        minutes: minutes.slice(0, 1),
+      });
+      if (arrivals.length === MAX_HOME_ARRIVALS) return arrivals;
+    }
+  }
+  return arrivals;
+}
+
+function nearbyCondition(
+  alert: ReturnType<typeof relevantAlert>,
+  serviceAlertsLoading: boolean | undefined,
+  serviceAlertsUnavailable: boolean | undefined,
+): HomeNearbyModel["condition"] {
+  if (alert) return { state: "alert", label: conciseAlertSummary(alert) };
+  if (serviceAlertsLoading) return { state: "loading", label: "Checking nearby service status" };
+  if (serviceAlertsUnavailable) {
+    return { state: "unavailable", label: "Service status unavailable" };
+  }
+  return { state: "clear", label: "No active service changes nearby" };
+}
+
+function nearbyStationName(
+  locationState: BuildHomeNearbyModelInput["locationState"],
+  groupName: string | undefined,
+  nearestStopName: string | null | undefined,
+): string | null {
+  if (locationState === "fallback_nyc") return "34 St–Herald Sq";
+  if (locationState === "pending") return "Locating you…";
+  return groupName ?? nearestStopName?.trim() ?? null;
+}
+
+function nearbyArrivalsState(
+  arrivalCount: number,
+  arrivalsLoading: boolean | undefined,
+  arrivalsUnavailable: boolean | undefined,
+): HomeNearbyModel["arrivalsState"] {
+  if (arrivalCount > 0) return "ready";
+  if (arrivalsLoading) return "loading";
+  if (arrivalsUnavailable) return "unavailable";
+  return "loading";
+}
+
 export function buildHomeNearbyModel({
   data,
   nearestStopName,
@@ -149,172 +193,33 @@ export function buildHomeNearbyModel({
       issue: null,
     };
   }
-  const arrivals: HomeNearbyArrival[] = [];
-  const seen = new Set<string>();
 
-  for (const group of data.nearbyTransitGroups) {
-    for (const arrival of group.arrivals) {
-      const routeId = arrival.routeIds[0]?.toUpperCase();
-      const minutes = arrival.arrivalMinutes
-        .filter((minute) => Number.isFinite(minute) && minute >= 0)
-        .sort((a, b) => a - b);
-      if (!routeId || minutes.length === 0) continue;
-
-      const key = `${routeId}:${arrival.destination}:${arrival.direction}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      arrivals.push({
-        id: arrival.id,
-        routeId,
-        destination: arrival.destination,
-        minutes: minutes.slice(0, 1),
-      });
-      if (arrivals.length === MAX_HOME_ARRIVALS) break;
-    }
-    if (arrivals.length === MAX_HOME_ARRIVALS) break;
-  }
-
+  const arrivals = collectHomeArrivals(data.nearbyTransitGroups);
   const nearbyRoutes = normalizedRouteIds([
     ...nearestRouteIds,
     ...data.nearbyTransitGroups.flatMap((group) => group.routeIds),
   ]);
-  const alert = relevantAlert(data.alerts, nearbyRoutes);
-
-  let condition: HomeNearbyModel["condition"];
-  if (alert) {
-    condition = { state: "alert", label: conciseAlertSummary(alert) };
-  } else if (serviceAlertsLoading) {
-    condition = { state: "loading", label: "Checking nearby service status" };
-  } else if (serviceAlertsUnavailable) {
-    condition = { state: "unavailable", label: "Service status unavailable" };
-  } else {
-    condition = { state: "clear", label: "No active service changes nearby" };
-  }
-  const issue = selectHomeNearbyIssue({
-    issues: nearbyIssues,
-    nearbyRouteIds: Array.from(nearbyRoutes),
-    hasPlannedRoute,
-    nowMs,
-  });
-
-  let stationName: string | null;
-  if (locationState === "fallback_nyc") {
-    stationName = "34 St–Herald Sq";
-  } else if (locationState === "pending") {
-    stationName = "Locating you…";
-  } else {
-    stationName = data.nearbyTransitGroups[0]?.name ?? nearestStopName?.trim() ?? null;
-  }
-
-  let arrivalsState: HomeNearbyModel["arrivalsState"];
-  if (arrivals.length > 0) {
-    arrivalsState = "ready";
-  } else if (arrivalsLoading) {
-    arrivalsState = "loading";
-  } else if (arrivalsUnavailable) {
-    arrivalsState = "unavailable";
-  } else {
-    arrivalsState = "loading";
-  }
-
   return {
     locationState,
     locationLabel: locationState === "fallback_nyc" ? "Starting area" : "Near you",
     locationNotice: null,
-    stationName,
+    stationName: nearbyStationName(
+      locationState,
+      data.nearbyTransitGroups[0]?.name,
+      nearestStopName,
+    ),
     arrivals,
-    arrivalsState,
-    condition,
-    issue,
-  };
-}
-
-/** Up to `limit` route ids the rider is standing near, nearest first (the
- *  inputs are already proximity-sorted by `buildLeftRailData`). */
-export function deriveNearbyRouteIds(data: {
-  nearbyTransitGroups?: NearbyTransitGroup[];
-  arrivals?: Arrival[];
-  nearbyBusArrivals?: Arrival[];
-}): string[] {
-  const seen = new Set<string>();
-  for (const group of data.nearbyTransitGroups ?? []) {
-    for (const routeId of group.routeIds) seen.add(routeId.toUpperCase());
-  }
-  for (const arrival of data.arrivals ?? []) {
-    for (const routeId of arrival.routeIds) seen.add(routeId.toUpperCase());
-  }
-  for (const arrival of data.nearbyBusArrivals ?? []) {
-    for (const routeId of arrival.routeIds) seen.add(routeId.toUpperCase());
-  }
-  return Array.from(seen);
-}
-
-/** The nearest nearby-transit-group's station name that actually serves
- *  `routeId`, falling back to the rider's overall nearest stop. Used as the
- *  ArrivalsCard header ("125 St") when a Near You bullet is tapped. */
-export function stationNameForRoute(
-  routeId: string,
-  nearbyTransitGroups: NearbyTransitGroup[],
-  fallback: string,
-): string {
-  const normalized = routeId.toUpperCase();
-  const group = nearbyTransitGroups.find((candidate) =>
-    candidate.routeIds.some((id) => id.toUpperCase() === normalized),
-  );
-  return group?.name ?? fallback;
-}
-
-const DIRECTION_LABEL: Record<"uptown" | "downtown", string> = {
-  uptown: "Uptown",
-  downtown: "Downtown",
-};
-
-/** Groups the rider's live arrivals for one route into the two direction
- *  buckets an `ArrivalsCard` renders ("Uptown · 2, 7, 12 min"). Arrivals
- *  with an unresolved direction ("unknown" — mostly buses on an E/W street)
- *  are omitted rather than guessed at. */
-export function buildArrivalsPayloadForRoute(
-  routeId: string,
-  arrivals: Arrival[],
-  stationName: string,
-  station?: {
-    walkMinutes?: number;
-    distanceMiles?: number;
-    coordinates?: { lat: number; lng: number };
-  },
-): ArrivalsTurnPayload {
-  const normalized = routeId.toUpperCase();
-  const minutesByDirection = new Map<"uptown" | "downtown", number[]>();
-
-  for (const arrival of arrivals) {
-    if (!arrival.routeIds.some((id) => id.toUpperCase() === normalized)) continue;
-    if (arrival.direction !== "uptown" && arrival.direction !== "downtown") continue;
-    const bucket = minutesByDirection.get(arrival.direction) ?? [];
-    bucket.push(...arrival.arrivalMinutes.filter((minutes) => minutes > 0));
-    minutesByDirection.set(arrival.direction, bucket);
-  }
-
-  const groups: ArrivalsTurnDirectionGroup[] = [];
-  for (const direction of ["uptown", "downtown"] as const) {
-    const minutes = minutesByDirection.get(direction);
-    if (!minutes || minutes.length === 0) continue;
-    const sorted = Array.from(new Set(minutes)).sort((a, b) => a - b).slice(0, 3);
-    groups.push({ direction, label: DIRECTION_LABEL[direction], minutes: sorted });
-  }
-
-  const guidanceParts: string[] = [];
-  if (station?.walkMinutes !== undefined) {
-    guidanceParts.push(`${station.walkMinutes} min walk`);
-  }
-  if (station?.distanceMiles !== undefined) {
-    guidanceParts.push(`${station.distanceMiles.toFixed(1)} mi away`);
-  }
-
-  return {
-    routeId: normalized,
-    stationName,
-    stationGuidance: guidanceParts.length > 0 ? guidanceParts.join(" · ") : undefined,
-    stationCoordinates: station?.coordinates,
-    groups,
+    arrivalsState: nearbyArrivalsState(arrivals.length, arrivalsLoading, arrivalsUnavailable),
+    condition: nearbyCondition(
+      relevantAlert(data.alerts, nearbyRoutes),
+      serviceAlertsLoading,
+      serviceAlertsUnavailable,
+    ),
+    issue: selectHomeNearbyIssue({
+      issues: nearbyIssues,
+      nearbyRouteIds: Array.from(nearbyRoutes),
+      hasPlannedRoute,
+      nowMs,
+    }),
   };
 }

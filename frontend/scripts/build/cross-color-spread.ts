@@ -16,13 +16,15 @@ const M_PER_DEG_LAT = 111320;
 
 type CrossColorFeatureProperties = {
   bundle_id?: string;
-  color?: unknown;
+  color?: string;
   route_ids?: RouteId[];
-  lane_slot_semantic?: unknown;
-  lane_slot?: unknown;
-  lane_slot_source?: unknown;
+  lane_slot_semantic?: number;
+  lane_slot?: number;
+  lane_slot_source?: string;
   length_m?: number | null;
-  [key: string]: unknown;
+  cross_color_spread_slot?: number;
+  lane_offset_baked?: boolean;
+  lane_width_m?: number;
 };
 
 export type CrossColorSpreadFeature = Feature<LineStringGeometry, CrossColorFeatureProperties>;
@@ -98,20 +100,24 @@ function cumulativeArc(coords: Position[]): number[] {
   return arc;
 }
 
-function isPosition(value: unknown): value is Position {
-  return Array.isArray(value) && value.length >= 2 && typeof value[0] === "number" && typeof value[1] === "number";
+function isFiniteNumber(value: number): boolean {
+  return value === Number(value) && Number.isFinite(value);
 }
 
-function isCrossColorFeature(feature: unknown): feature is CrossColorSpreadFeature {
-  if (!feature || typeof feature !== "object") return false;
-  const maybeFeature = feature as { geometry?: { type?: unknown; coordinates?: unknown }; properties?: unknown };
+function isPosition(value: Position | number[]): value is Position {
+  return value.length >= 2 && isFiniteNumber(value[0]) && isFiniteNumber(value[1]);
+}
+
+function isCrossColorFeature(feature: CrossColorSpreadFeature): boolean {
+  const geometry = feature.geometry;
+  const properties = feature.properties;
   return (
-    maybeFeature.geometry?.type === "LineString" &&
-    Array.isArray(maybeFeature.geometry.coordinates) &&
-    maybeFeature.geometry.coordinates.length >= 2 &&
-    maybeFeature.geometry.coordinates.every(isPosition) &&
-    maybeFeature.properties !== null &&
-    typeof maybeFeature.properties === "object"
+    geometry?.type === "LineString" &&
+    Array.isArray(geometry.coordinates) &&
+    geometry.coordinates.length >= 2 &&
+    geometry.coordinates.every(isPosition) &&
+    properties != null &&
+    !Array.isArray(properties)
   );
 }
 
@@ -137,6 +143,84 @@ function colorRank(color: string): number {
  * @param {number} [options.resampleM=25]
  * @returns {{ groups: Array<{ members: Array<{ bundle_id, color, route_ids, lane_slot, _featureRef }> }> }}
  */
+function adjacentSpinesShareCorridor(
+  left: CrossColorSpine,
+  right: CrossColorSpine,
+  sharedFractionMin: number,
+  sharedLenMinM: number,
+  avgDistMaxM: number,
+  tangentMaxDeg: number,
+  resampleM: number,
+): boolean {
+  if (left.color === right.color) return false;
+  const overlap = computePairOverlap(left, right, { resampleM, distMaxM: avgDistMaxM });
+  if (overlap.avgDistM > avgDistMaxM) return false;
+  if (overlap.sharedFractionShorter < sharedFractionMin) return false;
+  if (overlap.sharedLenM < sharedLenMinM) return false;
+  if (overlap.tangentDeltaAvgDeg > tangentMaxDeg) return false;
+  return true;
+}
+
+function unionAdjacentSpineRoots(
+  spines: CrossColorSpine[],
+  sharedFractionMin: number,
+  sharedLenMinM: number,
+  avgDistMaxM: number,
+  tangentMaxDeg: number,
+  resampleM: number,
+): number[] {
+  const parent = spines.map((_, index) => index);
+  const find = (index: number): number => (parent[index] === index ? index : (parent[index] = find(parent[index])));
+  for (let i = 0; i < spines.length; i++) {
+    for (let j = i + 1; j < spines.length; j++) {
+      if (!adjacentSpinesShareCorridor(spines[i], spines[j], sharedFractionMin, sharedLenMinM, avgDistMaxM, tangentMaxDeg, resampleM)) {
+        continue;
+      }
+      parent[find(i)] = find(j);
+    }
+  }
+  return parent.map((_, index) => find(index));
+}
+
+function slotByColorRank(colors: string[]): Map<string, number> {
+  const distinctColors = [...new Set(colors)];
+  distinctColors.sort(
+    (left, right) => (colorRank(left) - colorRank(right)) || String(left).localeCompare(String(right)),
+  );
+  const count = distinctColors.length;
+  return new Map(distinctColors.map((color, index) => [color, index - (count - 1) / 2]));
+}
+
+function emitCrossColorGroups(spines: CrossColorSpine[], roots: number[]): CrossColorGroup[] {
+  const byRoot = new Map<number, CrossColorSpine[]>();
+  for (let i = 0; i < spines.length; i++) {
+    const members = byRoot.get(roots[i]);
+    if (members) members.push(spines[i]);
+    else byRoot.set(roots[i], [spines[i]]);
+  }
+
+  const groups: CrossColorGroup[] = [];
+  for (const members of byRoot.values()) {
+    const slotForColor = slotByColorRank(members.map((member) => member.color));
+    if (slotForColor.size < 2) continue;
+
+    // _featureRef is a LIVE reference to the input feature. The build script
+    // mutates its geometry in place to bake the offset. Callers must NOT
+    // JSON.stringify a group object directly -- that would pull the whole
+    // feature (and its full coordinate array) into the debug artifact.
+    groups.push({
+      members: members.map((member) => ({
+        bundle_id: member.feature.properties.bundle_id,
+        color: member.color,
+        route_ids: member.feature.properties.route_ids ?? [],
+        lane_slot: slotForColor.get(member.color),
+        _featureRef: member.feature,
+      })),
+    });
+  }
+  return groups;
+}
+
 export function detectCrossColorAdjacency(
   features: CrossColorSpreadFeature[],
   options: DetectCrossColorAdjacencyOptions = {},
@@ -149,85 +233,30 @@ export function detectCrossColorAdjacency(
     resampleM = 25,
   } = options;
 
-  const candidates = features.filter((f): f is CrossColorSpreadFeature => {
-    if (!isCrossColorFeature(f)) return false;
-    const slot = Number(f.properties?.lane_slot_semantic ?? f.properties?.lane_slot ?? 0);
+  const candidates = features.filter((feature): feature is CrossColorSpreadFeature => {
+    if (!isCrossColorFeature(feature)) return false;
+    const slot = Number(feature.properties?.lane_slot_semantic ?? feature.properties?.lane_slot ?? 0);
     return (
       slot === 0 &&
-      // Members already offset by the continuous materialization carry their lane
-      // offset baked into geometry; re-spreading them would double-offset.
-      f.properties?.lane_slot_source !== "physical_bundle_continuous" &&
-      Boolean(f.properties?.color)
+      feature.properties?.lane_slot_source !== "physical_bundle_continuous" &&
+      Boolean(feature.properties?.color)
     );
   });
 
-  const spines: CrossColorSpine[] = candidates.map((f, idx) => ({
-    spine_id: String(idx),
-    geometry: f.geometry,
-    length_m: f.properties.length_m ?? null,
-    color: String(f.properties.color).toUpperCase(),
-    feature: f,
+  const spines: CrossColorSpine[] = candidates.map((feature, index) => ({
+    spine_id: String(index),
+    geometry: feature.geometry,
+    length_m: feature.properties.length_m ?? null,
+    color: String(feature.properties.color).toUpperCase(),
+    feature,
   }));
 
-  const parent = spines.map((_, i) => i);
-  const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
-  const union = (i: number, j: number): void => { parent[find(i)] = find(j); };
-
-  for (let i = 0; i < spines.length; i++) {
-    for (let j = i + 1; j < spines.length; j++) {
-      if (spines[i].color === spines[j].color) continue;
-      const o = computePairOverlap(spines[i], spines[j], { resampleM, distMaxM: avgDistMaxM });
-      if (o.avgDistM > avgDistMaxM) continue;
-      if (o.sharedFractionShorter < sharedFractionMin) continue;
-      if (o.sharedLenM < sharedLenMinM) continue;
-      if (o.tangentDeltaAvgDeg > tangentMaxDeg) continue;
-      union(i, j);
-    }
-  }
-
-  const byRoot = new Map<number, CrossColorSpine[]>();
-  for (let i = 0; i < spines.length; i++) {
-    const r = find(i);
-    let members = byRoot.get(r);
-    if (!members) {
-      members = [];
-      byRoot.set(r, members);
-    }
-    members.push(spines[i]);
-  }
-
-  const groups: CrossColorGroup[] = [];
-  for (const members of byRoot.values()) {
-    const distinctColors = [...new Set(members.map((m) => m.color))];
-    if (distinctColors.length < 2) continue;
-
-    // Tie-break by string so the slot assignment is deterministic even when two
-    // colors share a rank -- notably two unknown colors both return Infinity and
-    // (Infinity - Infinity) is NaN, which yields an unspecified sort order in V8.
-    distinctColors.sort(
-      (a, b) => (colorRank(a) - colorRank(b)) || String(a).localeCompare(String(b)),
-    );
-    const k = distinctColors.length;
-    const slotForColor = new Map<string, number>(
-      distinctColors.map((c, idx) => [c, idx - (k - 1) / 2]),
-    );
-
-    // _featureRef is a LIVE reference to the input feature. The build script
-    // mutates its geometry in place to bake the offset. Callers must NOT
-    // JSON.stringify a group object directly -- that would pull the whole
-    // feature (and its full coordinate array) into the debug artifact.
-    groups.push({
-      members: members.map((m) => ({
-        bundle_id: m.feature.properties.bundle_id,
-        color: m.color,
-        route_ids: m.feature.properties.route_ids ?? [],
-        lane_slot: slotForColor.get(m.color),
-        _featureRef: m.feature,
-      })),
-    });
-  }
-
-  return { groups };
+  return {
+    groups: emitCrossColorGroups(
+      spines,
+      unionAdjacentSpineRoots(spines, sharedFractionMin, sharedLenMinM, avgDistMaxM, tangentMaxDeg, resampleM),
+    ),
+  };
 }
 
 /**
@@ -240,44 +269,50 @@ export function detectCrossColorAdjacency(
  *
  * @returns {{ aStartArc, aEndArc, bStartArc, bEndArc, sharedLenM } | null}
  */
+function longestNearRun(samples: Position[], other: Position[], distMaxM: number): RunExtent | null {
+  let best: RunExtent | null = null;
+  let curStart = -1;
+  for (let i = 0; i < samples.length; i += 1) {
+    const near = pointToPolylineMinDistM(samples[i], other) <= distMaxM;
+    if (near) {
+      if (curStart === -1) curStart = i;
+      const len = i - curStart;
+      if (!best || len > best.endIdx - best.startIdx) {
+        best = { startIdx: curStart, endIdx: i };
+      }
+    } else {
+      curStart = -1;
+    }
+  }
+  return best;
+}
+
+function resampledPair(
+  coordsA: Position[],
+  coordsB: Position[],
+  resampleM: number,
+): { ra: Position[]; rb: Position[] } | null {
+  if (!Array.isArray(coordsA) || coordsA.length < 2) return null;
+  if (!Array.isArray(coordsB) || coordsB.length < 2) return null;
+  const ra = resamplePolyline(coordsA, resampleM);
+  const rb = resamplePolyline(coordsB, resampleM);
+  if (ra.length < 2 || rb.length < 2) return null;
+  return { ra, rb };
+}
+
 export function findSharedArcExtent(
   coordsA: Position[],
   coordsB: Position[],
   options: SharedArcExtentOptions = {},
 ): SharedArcExtent | null {
   const { resampleM = 25, distMaxM = 18, minSharedLenM = 250 } = options;
-  if (!Array.isArray(coordsA) || coordsA.length < 2) return null;
-  if (!Array.isArray(coordsB) || coordsB.length < 2) return null;
+  const pair = resampledPair(coordsA, coordsB, resampleM);
+  if (!pair) return null;
 
-  const ra = resamplePolyline(coordsA, resampleM);
-  const rb = resamplePolyline(coordsB, resampleM);
-  if (ra.length < 2 || rb.length < 2) return null;
-
-  const arcA = cumulativeArc(ra);
-  const arcB = cumulativeArc(rb);
-
-  // Longest contiguous run of samples on `samples` that are within distMaxM of
-  // `other`. Returns { startIdx, endIdx } (inclusive) or null.
-  function longestRun(samples: Position[], other: Position[]): RunExtent | null {
-    let best: RunExtent | null = null;
-    let curStart = -1;
-    for (let i = 0; i < samples.length; i += 1) {
-      const near = pointToPolylineMinDistM(samples[i], other) <= distMaxM;
-      if (near) {
-        if (curStart === -1) curStart = i;
-        const len = i - curStart;
-        if (!best || len > best.endIdx - best.startIdx) {
-          best = { startIdx: curStart, endIdx: i };
-        }
-      } else {
-        curStart = -1;
-      }
-    }
-    return best;
-  }
-
-  const runA = longestRun(ra, rb);
-  const runB = longestRun(rb, ra);
+  const arcA = cumulativeArc(pair.ra);
+  const arcB = cumulativeArc(pair.rb);
+  const runA = longestNearRun(pair.ra, pair.rb, distMaxM);
+  const runB = longestNearRun(pair.rb, pair.ra, distMaxM);
   if (!runA || !runB) return null;
 
   const aStartArc = arcA[runA.startIdx];

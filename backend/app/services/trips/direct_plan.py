@@ -15,24 +15,26 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from datetime import datetime, timezone
-from typing import Any, Iterable
+from collections.abc import Iterable
+from datetime import UTC, datetime
+from typing import Any
 
-from app.services.trips import candidates, enrichment, scoring, text
-from app.services.trips.route_incidents.scan import (
-    INCOMPLETE_INCIDENT_DISCLOSURE,
-    incident_scan_is_complete,
-)
+from app.services import text
+from app.services.trips import candidates, enrichment, scoring
 from app.services.trips.itinerary import build_canonical_itinerary
 from app.services.trips.location import ResolvedPlace
-from app.services.trips.preparation.dependencies import (
-    build_preparation_dependencies,
-)
-from app.services.trips.preparation.prepare import prepare_single_leg
 from app.services.trips.preparation.constraints import route_constraints
 from app.services.trips.preparation.context import (
     RoutePreparationContext,
     is_route_preparation_failure,
+)
+from app.services.trips.preparation.dependencies import (
+    build_preparation_dependencies,
+)
+from app.services.trips.preparation.prepare import prepare_single_leg
+from app.services.trips.route_incidents.scan import (
+    INCOMPLETE_INCIDENT_DISCLOSURE,
+    incident_scan_is_complete,
 )
 from app.services.trips.selection_record import build_route_selection_decision
 
@@ -53,6 +55,24 @@ class DirectTripError(Exception):
 DIRECT_TRIP_DEADLINE_S = float(os.getenv("DIRECT_TRIP_DEADLINE_S", "15.0"))
 
 
+_ROUTING_FAILED_ERRORS = {
+    "timeout": (503, "Google Routes API timed out"),
+    "not_configured": (500, "Routing provider is not configured"),
+    "request_failed": (502, "Upstream routing provider network error"),
+    "invalid_json": (502, "Upstream routing provider returned invalid data"),
+}
+
+
+def _parse_routing_failed_error(message: str) -> DirectTripError | None:
+    if "routing failed (" not in message:
+        return None
+    code = message.split("routing failed (", 1)[1].rstrip(")").strip()
+    mapped = _ROUTING_FAILED_ERRORS.get(code)
+    if mapped is not None:
+        return DirectTripError(*mapped)
+    return DirectTripError(502, f"Upstream routing provider error ({code})")
+
+
 def _translate_prepare_error(error: str) -> DirectTripError:
     """Map shared-preparation failures to the established REST status codes."""
     message = str(error or "").strip()
@@ -66,21 +86,9 @@ def _translate_prepare_error(error: str) -> DirectTripError:
         return DirectTripError(404, "No route found")
     if "temporarily unavailable" in lowered:
         return DirectTripError(503, "Destination lookup is temporarily unavailable.")
-    if "routing failed (" in message:
-        code = message.split("routing failed (", 1)[1].rstrip(")").strip()
-        if code == "timeout":
-            return DirectTripError(503, "Google Routes API timed out")
-        if code == "not_configured":
-            return DirectTripError(500, "Routing provider is not configured")
-        if code.startswith("http_"):
-            return DirectTripError(502, f"Upstream routing provider error ({code})")
-        if code == "request_failed":
-            return DirectTripError(502, "Upstream routing provider network error")
-        if code == "invalid_json":
-            return DirectTripError(
-                502, "Upstream routing provider returned invalid data"
-            )
-        return DirectTripError(502, f"Upstream routing provider error ({code})")
+    routing = _parse_routing_failed_error(message)
+    if routing is not None:
+        return routing
     return DirectTripError(404, "No route found")
 
 
@@ -155,6 +163,91 @@ NEUTRAL_RECOMMENDATION_FALLBACK = (
 )
 
 
+def _select_fastest_reason(
+    selected_score: dict[str, Any], alternatives: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    selected_minutes = _nonnegative_int(selected_score.get("total_minutes"))
+    next_best_minutes = min(
+        (_nonnegative_int(score.get("total_minutes")) for score in alternatives),
+        default=selected_minutes,
+    )
+    if selected_minutes > next_best_minutes:
+        return None
+    return {
+        "code": "fastest",
+        "duration_minutes": selected_minutes,
+        "difference_seconds": max(0, next_best_minutes - selected_minutes) * 60,
+    }
+
+
+def _select_less_walking_reason(
+    selected_score: dict[str, Any], alternatives: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    selected_walk = _walking_minutes(selected_score)
+    best_alternative_walk = min(
+        (_walking_minutes(score) for score in alternatives),
+        default=selected_walk,
+    )
+    if (
+        _nonnegative_number(selected_score.get("walking_penalty")) <= 0
+        or selected_walk >= best_alternative_walk
+    ):
+        return None
+    return {
+        "code": "less_walking",
+        "walking_minutes": selected_walk,
+        "walking_difference": best_alternative_walk - selected_walk,
+    }
+
+
+def _select_fewer_transfers_reason(
+    selected_score: dict[str, Any], alternatives: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    selected_transfers = _nonnegative_int(selected_score.get("transfers"))
+    best_alternative_transfers = min(
+        (_nonnegative_int(score.get("transfers")) for score in alternatives),
+        default=selected_transfers,
+    )
+    if selected_transfers >= best_alternative_transfers:
+        return None
+    return {
+        "code": "fewer_transfers",
+        "transfer_difference": best_alternative_transfers - selected_transfers,
+    }
+
+
+def _select_disruption_reason(
+    selected_score: dict[str, Any], alternatives: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    selected_alerts = scoring.alert_penalty_from_score(selected_score)
+    if any(
+        scoring.alert_penalty_from_score(score) > selected_alerts
+        for score in alternatives
+    ):
+        return {"code": "avoids_active_disruption"}
+    return None
+
+
+def _select_crowd_reason(
+    selected_score: dict[str, Any], alternatives: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    selected_event_penalty = _nonnegative_number(
+        selected_score.get("event_crowd_penalty")
+    )
+    best_alternative_event_penalty = min(
+        _nonnegative_number(score.get("event_crowd_penalty"))
+        for score in alternatives
+    )
+    if selected_event_penalty >= best_alternative_event_penalty:
+        return None
+    return {
+        "code": "lower_event_crowd_exposure",
+        "event_penalty_difference": (
+            best_alternative_event_penalty - selected_event_penalty
+        ),
+    }
+
+
 def build_recommendation_reasons(
     selected_score: dict[str, Any],
     alternative_scores: Iterable[dict[str, Any]],
@@ -163,74 +256,17 @@ def build_recommendation_reasons(
     alternatives = [score for score in alternative_scores if isinstance(score, dict)]
     if not alternatives:
         return []
-
-    reasons: list[dict[str, Any]] = []
-    selected_minutes = _nonnegative_int(selected_score.get("total_minutes"))
-    alternative_minutes = [
-        _nonnegative_int(score.get("total_minutes")) for score in alternatives
+    reasons = [
+        reason
+        for reason in (
+            _select_fastest_reason(selected_score, alternatives),
+            _select_less_walking_reason(selected_score, alternatives),
+            _select_fewer_transfers_reason(selected_score, alternatives),
+            _select_disruption_reason(selected_score, alternatives),
+            _select_crowd_reason(selected_score, alternatives),
+        )
+        if reason
     ]
-    next_best_minutes = min(alternative_minutes, default=selected_minutes)
-    if selected_minutes <= next_best_minutes:
-        reasons.append(
-            {
-                "code": "fastest",
-                "duration_minutes": selected_minutes,
-                "difference_seconds": max(0, next_best_minutes - selected_minutes) * 60,
-            }
-        )
-
-    selected_walk = _walking_minutes(selected_score)
-    alternative_walks = [_walking_minutes(score) for score in alternatives]
-    best_alternative_walk = min(alternative_walks, default=selected_walk)
-    if (
-        _nonnegative_number(selected_score.get("walking_penalty")) > 0
-        and selected_walk < best_alternative_walk
-    ):
-        reasons.append(
-            {
-                "code": "less_walking",
-                "walking_minutes": selected_walk,
-                "walking_difference": best_alternative_walk - selected_walk,
-            }
-        )
-
-    selected_transfers = _nonnegative_int(selected_score.get("transfers"))
-    best_alternative_transfers = min(
-        (_nonnegative_int(score.get("transfers")) for score in alternatives),
-        default=selected_transfers,
-    )
-    if selected_transfers < best_alternative_transfers:
-        reasons.append(
-            {
-                "code": "fewer_transfers",
-                "transfer_difference": best_alternative_transfers - selected_transfers,
-            }
-        )
-
-    selected_alerts = scoring.alert_penalty_from_score(selected_score)
-    if any(
-        scoring.alert_penalty_from_score(score) > selected_alerts
-        for score in alternatives
-    ):
-        reasons.append({"code": "avoids_active_disruption"})
-
-    selected_event_penalty = _nonnegative_number(
-        selected_score.get("event_crowd_penalty")
-    )
-    best_alternative_event_penalty = min(
-        _nonnegative_number(score.get("event_crowd_penalty"))
-        for score in alternatives
-    )
-    if selected_event_penalty < best_alternative_event_penalty:
-        reasons.append(
-            {
-                "code": "lower_event_crowd_exposure",
-                "event_penalty_difference": (
-                    best_alternative_event_penalty - selected_event_penalty
-                ),
-            }
-        )
-
     # An explicit optimization preference is more useful than a raw time
     # comparison when explaining why a slightly slower route won.
     reasons.sort(
@@ -239,35 +275,56 @@ def build_recommendation_reasons(
     return reasons
 
 
+def _project_fastest_reason(reason: dict) -> str:
+    seconds = _nonnegative_int(reason.get("difference_seconds"))
+    duration = _nonnegative_int(reason.get("duration_minutes"))
+    if seconds >= 60:
+        suffix = f" ({duration} min total)" if duration else ""
+        return f"About {round(seconds / 60)} min faster than the next option{suffix}."
+    if duration:
+        return f"Fastest available route at {duration} min."
+    return "Fastest available route."
+
+
+def _project_less_walking_reason(reason: dict) -> str:
+    difference = _nonnegative_int(reason.get("walking_difference"))
+    minutes = _nonnegative_int(reason.get("walking_minutes"))
+    if difference:
+        unit = "minute" if difference == 1 else "minutes"
+        return f"Uses {difference} fewer {unit} of walking ({minutes} min on foot)."
+    return f"Prioritizes less walking ({minutes} min on foot)."
+
+
+def _project_fewer_transfers_reason(reason: dict) -> str | None:
+    difference = _nonnegative_int(reason.get("transfer_difference"))
+    if not difference:
+        return None
+    unit = "transfer" if difference == 1 else "transfers"
+    return f"Uses {difference} fewer {unit}."
+
+
+_REASON_PROJECTIONS = {
+    "fastest": _project_fastest_reason,
+    "less_walking": _project_less_walking_reason,
+    "fewer_transfers": _project_fewer_transfers_reason,
+}
+_STATIC_REASONS = {
+    "avoids_active_disruption": "Avoids active service alerts on another option.",
+    "lower_event_crowd_exposure": "Avoids heavier event crowd exposure on another option.",
+}
+
+
 def format_recommendation_reason(reason: object) -> str | None:
     """Format one supported fact for legacy string consumers only."""
     if not isinstance(reason, dict):
         return None
     code = reason.get("code")
-    if code == "fastest":
-        seconds = _nonnegative_int(reason.get("difference_seconds"))
-        duration = _nonnegative_int(reason.get("duration_minutes"))
-        if seconds >= 60:
-            suffix = f" ({duration} min total)" if duration else ""
-            return f"About {round(seconds / 60)} min faster than the next option{suffix}."
-        return f"Fastest available route at {duration} min." if duration else "Fastest available route."
-    if code == "less_walking":
-        difference = _nonnegative_int(reason.get("walking_difference"))
-        minutes = _nonnegative_int(reason.get("walking_minutes"))
-        if difference:
-            unit = "minute" if difference == 1 else "minutes"
-            return f"Uses {difference} fewer {unit} of walking ({minutes} min on foot)."
-        return f"Prioritizes less walking ({minutes} min on foot)."
-    if code == "fewer_transfers":
-        difference = _nonnegative_int(reason.get("transfer_difference"))
-        if difference:
-            unit = "transfer" if difference == 1 else "transfers"
-            return f"Uses {difference} fewer {unit}."
-    if code == "avoids_active_disruption":
-        return "Avoids active service alerts on another option."
-    if code == "lower_event_crowd_exposure":
-        return "Avoids heavier event crowd exposure on another option."
-    return None
+    if not isinstance(code, str):
+        return None
+    projector = _REASON_PROJECTIONS.get(code)
+    if projector is not None:
+        return projector(reason)
+    return _STATIC_REASONS.get(code)
 
 
 def _nonnegative_int(value: object) -> int:
@@ -294,37 +351,12 @@ def _walking_minutes(score: dict[str, Any]) -> int:
     return 0
 
 
-def project_route_candidates(
-    *,
-    parsed_routes: list[list[dict]],
+def _select_recommendation_copy(
+    chosen_score: dict,
+    score_by_index: dict[int, dict],
     chosen_index: int,
-    scored: list[dict],
-    origin_place: ResolvedPlace,
-    destination_place: ResolvedPlace,
     incident_scan_metadata: dict,
-    selection_reason: str,
-    event_evidence_status: str,
-    event_impacts: list[dict],
-) -> tuple[list[dict], str, dict]:
-    """Build REST candidates, canonical itineraries, and selection facts."""
-    route_candidates = candidates._build_route_candidates(
-        parsed_routes,
-        chosen_index,
-        {},
-        scored,
-    )
-    score_by_index = scoring._score_by_index(scored)
-    chosen_score = score_by_index.get(chosen_index, {})
-    origin_point = {
-        "label": origin_place.name,
-        "lat": origin_place.latitude,
-        "lng": origin_place.longitude,
-    }
-    destination_point = {
-        "label": destination_place.name,
-        "lat": destination_place.latitude,
-        "lng": destination_place.longitude,
-    }
+) -> tuple[list[dict], str]:
     structured_reasons = build_recommendation_reasons(
         chosen_score,
         [
@@ -340,11 +372,88 @@ def project_route_candidates(
         )
         if rendered
     ]
-    recommendation = text._sanitize_recommendation(
+    recommendation = text.sanitize_recommendation(
         rendered_reasons[0] if rendered_reasons else NEUTRAL_RECOMMENDATION_FALLBACK
     )
     if not incident_scan_is_complete(incident_scan_metadata):
         recommendation = f"{recommendation} {INCOMPLETE_INCIDENT_DISCLOSURE}"
+    return structured_reasons, recommendation
+
+
+def _project_candidate_itinerary(
+    candidate: dict,
+    *,
+    index: int,
+    chosen_index: int,
+    recommendation: str,
+    structured_reasons: list[dict],
+    origin_point: dict,
+    destination_point: dict,
+    selection_decision: dict,
+) -> dict:
+    route = candidate.get("steps") or []
+    itinerary = build_canonical_itinerary(
+        route,
+        origin=origin_point,
+        destination=destination_point,
+        reasons=structured_reasons if index == chosen_index else [],
+        itinerary_id=str(candidate.get("id") or "") or None,
+    )
+    if index == chosen_index:
+        itinerary["selection_decision"] = selection_decision
+    projected = {
+        "itinerary": itinerary,
+        "structured_recommendation_reasons": (
+            structured_reasons if index == chosen_index else []
+        ),
+        "total_minutes": max(
+            0, round(int(itinerary["total_duration_seconds"]) / 60)
+        ),
+    }
+    if index == chosen_index and recommendation:
+        projected["recommendation_reason"] = recommendation
+    if itinerary.get("arrival_at"):
+        projected["arrival_at"] = itinerary["arrival_at"]
+    return projected
+
+
+def project_route_candidates(
+    *,
+    parsed_routes: list[list[dict]],
+    chosen_index: int,
+    scored: list[dict],
+    origin_place: ResolvedPlace,
+    destination_place: ResolvedPlace,
+    incident_scan_metadata: dict,
+    selection_reason: str,
+    event_evidence_status: str,
+    event_impacts: list[dict],
+) -> tuple[list[dict], str, dict]:
+    """Build REST candidates, canonical itineraries, and selection facts."""
+    route_candidates = candidates.build_route_candidates(
+        parsed_routes,
+        chosen_index,
+        {},
+        scored,
+    )
+    score_by_index = scoring.score_by_index(scored)
+    chosen_score = score_by_index.get(chosen_index, {})
+    origin_point = {
+        "label": origin_place.name,
+        "lat": origin_place.latitude,
+        "lng": origin_place.longitude,
+    }
+    destination_point = {
+        "label": destination_place.name,
+        "lat": destination_place.latitude,
+        "lng": destination_place.longitude,
+    }
+    structured_reasons, recommendation = _select_recommendation_copy(
+        chosen_score,
+        score_by_index,
+        chosen_index,
+        incident_scan_metadata,
+    )
     selection_decision = build_route_selection_decision(
         selected_index=chosen_index,
         selected_candidate_id=f"candidate-{chosen_index}",
@@ -358,30 +467,21 @@ def project_route_candidates(
     )
 
     for index, candidate in enumerate(route_candidates):
-        route = candidate.get("steps") or []
-        if index == chosen_index and recommendation:
-            candidate["recommendation_reason"] = recommendation
-        itinerary = build_canonical_itinerary(
-            route,
-            origin=origin_point,
-            destination=destination_point,
-            reasons=structured_reasons if index == chosen_index else [],
-            itinerary_id=str(candidate.get("id") or "") or None,
-        )
-        if index == chosen_index:
-            itinerary["selection_decision"] = selection_decision
-        candidate["itinerary"] = itinerary
-        candidate["structured_recommendation_reasons"] = (
-            structured_reasons if index == chosen_index else []
-        )
-        candidate["total_minutes"] = max(
-            0, round(int(itinerary["total_duration_seconds"]) / 60)
+        candidate.update(
+            _project_candidate_itinerary(
+                candidate,
+                index=index,
+                chosen_index=chosen_index,
+                recommendation=recommendation,
+                structured_reasons=structured_reasons,
+                origin_point=origin_point,
+                destination_point=destination_point,
+                selection_decision=selection_decision,
+            )
         )
         candidate.setdefault("score_breakdown", {})["transfers"] = int(
-            itinerary["transfer_count"]
+            candidate["itinerary"]["transfer_count"]
         )
-        if itinerary.get("arrival_at"):
-            candidate["arrival_at"] = itinerary["arrival_at"]
     return route_candidates, recommendation, selection_decision
 
 
@@ -411,7 +511,7 @@ async def _plan_direct_trip_once(
         session={},
         session_id="",
         turn_id="",
-        now_et=datetime.now(timezone.utc).isoformat(),
+        now_et=datetime.now(UTC).isoformat(),
         origin={"lat": origin_lat, "lng": origin_lng},
         telemetry={},
     )
@@ -441,7 +541,7 @@ async def _plan_direct_trip_once(
 
     enrichment_started = time.monotonic()
     chosen_route = prepared.parsed_routes[chosen_index]
-    await enrichment._enrich_route(gtfs, chosen_route)
+    await enrichment.enrich_route(gtfs, chosen_route)
     timings["enrichment_ms"] = (time.monotonic() - enrichment_started) * 1000
 
     route_candidates, recommendation, selection_decision = project_route_candidates(
@@ -502,16 +602,16 @@ async def plan_direct_trip(
             ),
             timeout=DIRECT_TRIP_DEADLINE_S,
         )
-    except asyncio.TimeoutError as exc:
+    except TimeoutError as exc:
         raise DirectTripError(503, "Trip planning is temporarily unavailable.") from exc
 
 
 __all__ = (
-    "build_recommendation_reasons",
-    "DirectTripError",
-    "format_recommendation_reason",
     "INCOMPLETE_INCIDENT_DISCLOSURE",
     "NEUTRAL_RECOMMENDATION_FALLBACK",
+    "DirectTripError",
+    "build_recommendation_reasons",
+    "format_recommendation_reason",
     "plan_direct_trip",
     "project_route_candidates",
 )

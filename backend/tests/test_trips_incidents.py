@@ -13,6 +13,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from app.services import cache
 from app.services.incidents import index as incident_index
 from app.services.trips.route_incidents import index_adapter as incident_index_adapter
 from app.services.trips.route_incidents import scan as incidents
@@ -20,7 +21,6 @@ from app.services.trips.route_incidents.context import (
     CandidateStopAssociation,
     CandidateStopContext,
 )
-from app.services import cache
 
 
 def _context(
@@ -78,7 +78,7 @@ class TripIncidentIndexTests(unittest.IsolatedAsyncioTestCase):
             update_index.assert_not_called()
             incident_index.upsert_incident({**incident, "affected_route_ids": ["B"]})
 
-        self.assertEqual(update_index.call_count, 2)
+        assert update_index.call_count == 2
 
     async def test_one_immediate_index_lookup_with_correct_tokens(self) -> None:
         calls: list[dict] = []
@@ -91,18 +91,15 @@ class TripIncidentIndexTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(incidents.incident_index, "lookup_incidents_async", side_effect=spy):
             result = await incidents.scan_route_incidents([_context()])
 
-        self.assertEqual(len(calls), 1)
-        self.assertEqual(calls[0]["stop_ids"], ["D24"])
-        self.assertEqual(calls[0]["route_ids"], ["Q"])
-        self.assertEqual(calls[0]["coverage_ids"], ["central-south-brooklyn"])
+        assert len(calls) == 1
+        assert calls[0]["stop_ids"] == ["D24"]
+        assert calls[0]["route_ids"] == ["Q"]
+        assert calls[0]["coverage_ids"] == ["central-south-brooklyn"]
         metadata = result["scan_metadata"]
-        self.assertEqual(metadata["lookup_kind"], "index")
-        self.assertEqual(metadata["requested_coverage_ids"], ["central-south-brooklyn"])
-        self.assertEqual(metadata["lookup_status"], "complete")
-        self.assertEqual(
-            metadata["sources"],
-            {"attempted": ["incident_index"], "completed": ["incident_index"]},
-        )
+        assert metadata["lookup_kind"] == "index"
+        assert metadata["requested_coverage_ids"] == ["central-south-brooklyn"]
+        assert metadata["lookup_status"] == "complete"
+        assert metadata["sources"] == {"attempted": ["incident_index"], "completed": ["incident_index"]}
 
     async def test_confirmed_batch_and_route_incident_reaches_advisor(self) -> None:
         incident_index.set_coverage(
@@ -128,20 +125,20 @@ class TripIncidentIndexTests(unittest.IsolatedAsyncioTestCase):
 
         result = await incidents.scan_route_incidents([_context()])
 
-        self.assertEqual(len(result["incidents"]), 1)
+        assert len(result["incidents"]) == 1
         advisor = result["incidents"][0]
-        self.assertEqual(advisor["affected_candidate_route_ids"], ["candidate-0"])
-        self.assertTrue(advisor["advisor_eligible"])
-        self.assertEqual(advisor["state"], "confirmed")
-        self.assertTrue(advisor["incident_id"].startswith("inc_"))
-        self.assertEqual(advisor["source"], "x_search + web_search")
-        self.assertEqual(advisor["affected_modes"], ["subway"])
+        assert advisor["affected_candidate_route_ids"] == ["candidate-0"]
+        assert advisor["advisor_eligible"]
+        assert advisor["state"] == "confirmed"
+        assert advisor["incident_id"].startswith("inc_")
+        assert advisor["source"] == "x_search + web_search"
+        assert advisor["affected_modes"] == ["subway"]
         metadata = result["scan_metadata"]
-        self.assertEqual(metadata["coverage_status"], "current")
-        self.assertEqual(metadata["status"], "complete")
-        self.assertEqual(metadata["warning_count"], 0)
-        self.assertTrue(incidents.incident_lookup_succeeded(metadata))
-        self.assertTrue(incidents.incident_scan_is_complete(metadata))
+        assert metadata["coverage_status"] == "current"
+        assert metadata["status"] == "complete"
+        assert metadata["warning_count"] == 0
+        assert incidents.incident_lookup_succeeded(metadata)
+        assert incidents.incident_scan_is_complete(metadata)
 
     async def test_confirmed_official_single_source_record_is_corroborated_and_eligible(self) -> None:
         incident_index.upsert_incident(
@@ -170,13 +167,13 @@ class TripIncidentIndexTests(unittest.IsolatedAsyncioTestCase):
         # A confirmed official record is verified evidence even with a single
         # authoritative source record; corroboration comes from canonical
         # state, never from the number of source records.
-        self.assertEqual(len(result["incidents"]), 1)
+        assert len(result["incidents"]) == 1
         advisor = result["incidents"][0]
-        self.assertTrue(advisor["advisor_eligible"])
-        self.assertEqual(advisor["state"], "confirmed")
-        self.assertTrue(advisor["corroborated"])
-        self.assertEqual(len(advisor["source_records"]), 1)
-        self.assertEqual(advisor["source_records"][0]["source"], "MTA Alerts")
+        assert advisor["advisor_eligible"]
+        assert advisor["state"] == "confirmed"
+        assert advisor["corroborated"]
+        assert len(advisor["source_records"]) == 1
+        assert advisor["source_records"][0]["source"] == "MTA Alerts"
 
     async def test_two_unconfirmed_source_records_do_not_imply_corroboration(self) -> None:
         incident_index.upsert_incident(
@@ -200,12 +197,12 @@ class TripIncidentIndexTests(unittest.IsolatedAsyncioTestCase):
 
         # Two same-origin/unconfirmed records are not proof: the record stays
         # a warning and never projects as corroborated.
-        self.assertEqual(result["incidents"], [])
-        self.assertEqual(len(result["warnings"]), 1)
+        assert result["incidents"] == []
+        assert len(result["warnings"]) == 1
         warning = result["warnings"][0]
-        self.assertFalse(warning["advisor_eligible"])
-        self.assertFalse(warning["corroborated"])
-        self.assertEqual(len(warning["source_records"]), 2)
+        assert not warning["advisor_eligible"]
+        assert not warning["corroborated"]
+        assert len(warning["source_records"]) == 2
 
     async def test_route_only_official_incident_matches_by_route_without_batch(self) -> None:
         incident_index.upsert_incident(
@@ -222,12 +219,12 @@ class TripIncidentIndexTests(unittest.IsolatedAsyncioTestCase):
 
         result = await incidents.scan_route_incidents([_context()])
 
-        self.assertEqual(len(result["incidents"]), 1)
-        self.assertEqual(result["incidents"][0]["affected_candidate_route_ids"], ["candidate-0"])
+        assert len(result["incidents"]) == 1
+        assert result["incidents"][0]["affected_candidate_route_ids"] == ["candidate-0"]
         # Route-wide official evidence is usable even with no coverage record.
-        self.assertEqual(result["scan_metadata"]["coverage_status"], "unscanned")
-        self.assertEqual(result["scan_metadata"]["status"], "unscanned")
-        self.assertTrue(incidents.incident_lookup_succeeded(result["scan_metadata"]))
+        assert result["scan_metadata"]["coverage_status"] == "unscanned"
+        assert result["scan_metadata"]["status"] == "unscanned"
+        assert incidents.incident_lookup_succeeded(result["scan_metadata"])
 
     async def test_stop_specific_incident_matches_physical_stop(self) -> None:
         incident_index.upsert_incident(
@@ -245,8 +242,8 @@ class TripIncidentIndexTests(unittest.IsolatedAsyncioTestCase):
 
         result = await incidents.scan_route_incidents([_context()])
 
-        self.assertEqual(len(result["incidents"]), 1)
-        self.assertEqual(result["incidents"][0]["affected_candidate_route_ids"], ["candidate-0"])
+        assert len(result["incidents"]) == 1
+        assert result["incidents"][0]["affected_candidate_route_ids"] == ["candidate-0"]
 
     async def test_batch_mismatch_keeps_incident_out_of_advisor(self) -> None:
         incident_index.upsert_incident(
@@ -264,10 +261,10 @@ class TripIncidentIndexTests(unittest.IsolatedAsyncioTestCase):
 
         result = await incidents.scan_route_incidents([_context()])
 
-        self.assertEqual(result["incidents"], [])
-        self.assertEqual(len(result["warnings"]), 1)
-        self.assertEqual(result["warnings"][0]["affected_candidate_route_ids"], [])
-        self.assertFalse(result["warnings"][0]["advisor_eligible"])
+        assert result["incidents"] == []
+        assert len(result["warnings"]) == 1
+        assert result["warnings"][0]["affected_candidate_route_ids"] == []
+        assert not result["warnings"][0]["advisor_eligible"]
 
     async def test_batch_only_incident_is_a_warning_not_advisor_evidence(self) -> None:
         incident_index.upsert_incident(
@@ -284,9 +281,9 @@ class TripIncidentIndexTests(unittest.IsolatedAsyncioTestCase):
 
         result = await incidents.scan_route_incidents([_context()])
 
-        self.assertEqual(result["incidents"], [])
-        self.assertEqual(len(result["warnings"]), 1)
-        self.assertEqual(result["scan_metadata"]["warning_count"], 1)
+        assert result["incidents"] == []
+        assert len(result["warnings"]) == 1
+        assert result["scan_metadata"]["warning_count"] == 1
 
     async def test_unconfirmed_and_stale_records_remain_warnings(self) -> None:
         unconfirmed_id = incident_index.upsert_incident(
@@ -317,11 +314,11 @@ class TripIncidentIndexTests(unittest.IsolatedAsyncioTestCase):
 
         result = await incidents.scan_route_incidents([_context()])
 
-        self.assertEqual(result["incidents"], [])
-        self.assertEqual(len(result["warnings"]), 2)
+        assert result["incidents"] == []
+        assert len(result["warnings"]) == 2
         states = {warning["state"] for warning in result["warnings"]}
-        self.assertEqual(states, {"unconfirmed", "stale"})
-        self.assertTrue(unconfirmed_id in {w["incident_id"] for w in result["warnings"]})
+        assert states == {"unconfirmed", "stale"}
+        assert unconfirmed_id in {w["incident_id"] for w in result["warnings"]}
 
     async def test_rejected_and_resolved_records_stay_filtered(self) -> None:
         rejected_id = incident_index.upsert_incident(
@@ -353,8 +350,8 @@ class TripIncidentIndexTests(unittest.IsolatedAsyncioTestCase):
 
         result = await incidents.scan_route_incidents([_context()])
 
-        self.assertEqual(result["incidents"], [])
-        self.assertEqual(result["warnings"], [])
+        assert result["incidents"] == []
+        assert result["warnings"] == []
 
     async def test_confirmed_eligible_usable_when_overall_coverage_is_partial(self) -> None:
         overlap = _context(stop_id="W4", name="Overlap", latitude=40.72, longitude=-73.96)
@@ -379,54 +376,54 @@ class TripIncidentIndexTests(unittest.IsolatedAsyncioTestCase):
 
         result = await incidents.scan_route_incidents([overlap])
 
-        self.assertEqual(len(result["incidents"]), 1)
+        assert len(result["incidents"]) == 1
         metadata = result["scan_metadata"]
-        self.assertEqual(metadata["coverage_status"], "partial")
-        self.assertEqual(metadata["status"], "partial")
-        self.assertTrue(incidents.incident_lookup_succeeded(metadata))
-        self.assertFalse(incidents.incident_scan_is_complete(metadata))
+        assert metadata["coverage_status"] == "partial"
+        assert metadata["status"] == "partial"
+        assert incidents.incident_lookup_succeeded(metadata)
+        assert not incidents.incident_scan_is_complete(metadata)
 
     async def test_truthful_empty_and_coverage_states(self) -> None:
         unscanned = await incidents.scan_route_incidents([_context()])
-        self.assertEqual(unscanned["scan_metadata"]["coverage_status"], "unscanned")
-        self.assertEqual(unscanned["scan_metadata"]["status"], "unscanned")
-        self.assertEqual(unscanned["incidents"], [])
+        assert unscanned["scan_metadata"]["coverage_status"] == "unscanned"
+        assert unscanned["scan_metadata"]["status"] == "unscanned"
+        assert unscanned["incidents"] == []
 
         incident_index.set_coverage(
             {"coverage_id": "central-south-brooklyn", "coverage_status": "current"}
         )
         current = await incidents.scan_route_incidents([_context()])
-        self.assertEqual(current["scan_metadata"]["coverage_status"], "current")
-        self.assertEqual(current["scan_metadata"]["status"], "complete")
-        self.assertEqual(current["incidents"], [])
+        assert current["scan_metadata"]["coverage_status"] == "current"
+        assert current["scan_metadata"]["status"] == "complete"
+        assert current["incidents"] == []
 
         incident_index.set_coverage(
             {"coverage_id": "central-south-brooklyn", "coverage_status": "unavailable"}
         )
         unavailable = await incidents.scan_route_incidents([_context()])
-        self.assertEqual(unavailable["scan_metadata"]["coverage_status"], "unavailable")
-        self.assertEqual(unavailable["scan_metadata"]["status"], "unavailable")
+        assert unavailable["scan_metadata"]["coverage_status"] == "unavailable"
+        assert unavailable["scan_metadata"]["status"] == "unavailable"
 
         incident_index.set_coverage(
             {"coverage_id": "central-south-brooklyn", "coverage_status": "current"}
         )
         _expire_record(f"{incident_index.COVERAGE_PREFIX}central-south-brooklyn")
         stale = await incidents.scan_route_incidents([_context()])
-        self.assertEqual(stale["scan_metadata"]["coverage_status"], "stale")
-        self.assertEqual(stale["scan_metadata"]["status"], "stale")
+        assert stale["scan_metadata"]["coverage_status"] == "stale"
+        assert stale["scan_metadata"]["status"] == "stale"
 
     async def test_empty_context_is_unscanned_and_malformed_entries_are_ignored(self) -> None:
         empty = await incidents.scan_route_incidents([])
-        self.assertEqual(empty["scan_metadata"]["status"], "unscanned")
-        self.assertEqual(empty["scan_metadata"]["coverage_status"], "unscanned")
-        self.assertEqual(empty["incidents"], [])
-        self.assertEqual(empty["scan_metadata"]["requested_coverage_ids"], [])
+        assert empty["scan_metadata"]["status"] == "unscanned"
+        assert empty["scan_metadata"]["coverage_status"] == "unscanned"
+        assert empty["incidents"] == []
+        assert empty["scan_metadata"]["requested_coverage_ids"] == []
 
         mixed = await incidents.scan_route_incidents(
             [object(), {"type": "SUBWAY", "route_id": "Q"}, "junk", _context()]
         )
-        self.assertEqual(mixed["scan_metadata"]["requested_coverage_ids"], ["central-south-brooklyn"])
-        self.assertEqual(mixed["scan_metadata"]["status"], "unscanned")
+        assert mixed["scan_metadata"]["requested_coverage_ids"] == ["central-south-brooklyn"]
+        assert mixed["scan_metadata"]["status"] == "unscanned"
 
     async def test_index_exception_degrades_without_any_cold_scan(self) -> None:
         with patch.object(
@@ -436,18 +433,15 @@ class TripIncidentIndexTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await incidents.scan_route_incidents([_context()])
 
-        self.assertEqual(result["incidents"], [])
-        self.assertEqual(result["warnings"], [])
+        assert result["incidents"] == []
+        assert result["warnings"] == []
         metadata = result["scan_metadata"]
-        self.assertEqual(metadata["lookup_status"], "failed")
-        self.assertEqual(metadata["coverage_status"], "unavailable")
-        self.assertEqual(metadata["status"], "unavailable")
-        self.assertFalse(incidents.incident_lookup_succeeded(metadata))
-        self.assertFalse(incidents.incident_scan_is_complete(metadata))
-        self.assertEqual(
-            metadata["sources"],
-            {"attempted": ["incident_index"], "completed": []},
-        )
+        assert metadata["lookup_status"] == "failed"
+        assert metadata["coverage_status"] == "unavailable"
+        assert metadata["status"] == "unavailable"
+        assert not incidents.incident_lookup_succeeded(metadata)
+        assert not incidents.incident_scan_is_complete(metadata)
+        assert metadata["sources"] == {"attempted": ["incident_index"], "completed": []}
 
     def test_normal_rider_modules_have_no_provider_scan_path(self) -> None:
         for module in (incidents, incident_index_adapter):
@@ -461,7 +455,7 @@ class TripIncidentIndexTests(unittest.IsolatedAsyncioTestCase):
                 "_inflight_scans",
                 "asyncio",
             ):
-                self.assertNotIn(forbidden, source)
+                assert forbidden not in source
 
 
 if __name__ == "__main__":

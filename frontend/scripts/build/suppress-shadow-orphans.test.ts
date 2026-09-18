@@ -15,7 +15,7 @@ function feat(
   color: string,
   routeIds: string[],
   coords: Position[],
-  extra: Record<string, unknown> = {},
+  extra: { qa_orphan_severity?: string } = {},
 ): LineFeature {
   return { type: "Feature", geometry: { type: "LineString", coordinates: coords }, properties: { corridor_id: cid, color, route_ids: routeIds, ...extra } };
 }
@@ -23,7 +23,7 @@ function feat(
 test("drops an error-orphan green line that shadows a different-color red line", () => {
   const straight = Array.from({ length: 40 }, (_, i) => P(...O, 0, i * 30));
   const red = feat("red2", "#EE352E", ["2"], straight);
-  const shadow = feat("grn5rush", "#00933C", ["5"], straight.map((c) => [...c] as Position), { qa_orphan_severity: "error" });
+  const shadow = feat("grn5rush", "#00933C", ["5"], straight.map((c): Position => [c[0], c[1]]), { qa_orphan_severity: "error" });
   const { features, removedIds } = suppressShadowOrphans([red, shadow], { shadowDistM: 18, shadowFracMin: 0.7 });
   assert.deepEqual(removedIds, ["grn5rush"]);
   assert.ok(features.find((f) => f.properties.corridor_id === "red2"));
@@ -33,7 +33,7 @@ test("drops an error-orphan green line that shadows a different-color red line",
 test("keeps a non-orphan green line that shares track with red (legit parallel pair)", () => {
   const straight = Array.from({ length: 40 }, (_, i) => P(...O, 0, i * 30));
   const red = feat("red", "#EE352E", ["2"], straight);
-  const green = feat("grn", "#00933C", ["5"], straight.map((c) => [...c] as Position)); // NOT an error orphan
+  const green = feat("grn", "#00933C", ["5"], straight.map((c): Position => [c[0], c[1]]));
   const { removedIds } = suppressShadowOrphans([red, green], { shadowDistM: 18, shadowFracMin: 0.7 });
   assert.deepEqual(removedIds, []);
 });
@@ -42,5 +42,13 @@ test("keeps an error-orphan that does NOT shadow another color (a real isolated 
   const red = feat("red", "#EE352E", ["2"], Array.from({ length: 40 }, (_, i) => P(...O, 0, i * 30)));
   const lone = feat("lone", "#00933C", ["5"], Array.from({ length: 20 }, (_, i) => P(...O, 500 + i * 30, 0)), { qa_orphan_severity: "error" });
   const { removedIds } = suppressShadowOrphans([red, lone], { shadowDistM: 18, shadowFracMin: 0.7 });
+  assert.deepEqual(removedIds, []);
+});
+
+test("keeps an error-orphan that shadows only a same-route-set line of another color", () => {
+  const straight = Array.from({ length: 40 }, (_, i) => P(...O, 0, i * 30));
+  const red = feat("red2", "#EE352E", ["2"], straight);
+  const shadow = feat("grn2", "#00933C", ["2"], straight.map((c): Position => [c[0], c[1]]), { qa_orphan_severity: "error" });
+  const { removedIds } = suppressShadowOrphans([red, shadow], { shadowDistM: 18, shadowFracMin: 0.7 });
   assert.deepEqual(removedIds, []);
 });

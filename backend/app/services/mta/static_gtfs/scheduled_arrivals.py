@@ -1,11 +1,10 @@
-"""Static-GTFS arrival fallback over a startup-loaded schedule artifact."""
-
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, time, timedelta, timezone
+from collections.abc import Iterable
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 from zoneinfo import ZoneInfo
 
 
@@ -51,8 +50,31 @@ def _direction_for(stop_id: str, headsign: object, direction_id: object) -> str:
     return str(headsign or direction_id or "route").strip().casefold()
 
 
+def _bound_predictions_per_direction(
+    predictions: list[dict[str, Any]], limit: int
+) -> list[dict[str, Any]]:
+    ordered = sorted(predictions, key=lambda row: row["arrival_time"])
+    bounded: list[dict[str, Any]] = []
+    per_direction: dict[str, int] = {}
+    for row in ordered:
+        key = str(row.get("direction") or "route")
+        if per_direction.get(key, 0) >= max(1, limit):
+            continue
+        per_direction[key] = per_direction.get(key, 0) + 1
+        bounded.append(row)
+    return bounded
+
+
+def _overnight_service_windows(local_now: datetime, timezone: ZoneInfo):
+    # Previous-day service is required for GTFS times beyond 24:00. The
+    # next service date covers trips just after midnight.
+    for offset in (-1, 0, 1):
+        operating_date = local_now.date() + timedelta(days=offset)
+        midnight = datetime.combine(operating_date, time.min, timezone)
+        yield operating_date, midnight
+
+
 class ScheduledArrivalIndex:
-    """A bounded in-memory view built offline from full static GTFS tables."""
 
     def __init__(self, artifact: dict[str, Any]):
         self._artifact = artifact
@@ -60,7 +82,7 @@ class ScheduledArrivalIndex:
         self.valid_until = _parse_datetime(artifact.get("valid_until"))
 
     @classmethod
-    def load(cls, path: str | Path) -> "ScheduledArrivalIndex":
+    def load(cls, path: str | Path) -> ScheduledArrivalIndex:
         return cls(json.loads(Path(path).read_text(encoding="utf-8")))
 
     def lookup(
@@ -72,7 +94,7 @@ class ScheduledArrivalIndex:
         now: datetime,
         limit: int,
     ) -> dict[str, Any]:
-        current = now.astimezone(timezone.utc)
+        current = now.astimezone(UTC)
         if self.valid_until is None or current > self.valid_until:
             return {
                 "status": "stale",
@@ -81,91 +103,150 @@ class ScheduledArrivalIndex:
             }
 
         local_now = current.astimezone(self.timezone)
-        requested = str(direction or "").casefold()
-        stop_set = {str(value) for value in stop_ids}
-        services = self._artifact.get("services") or {}
-        predictions: list[dict[str, Any]] = []
-        # Previous-day service is required for GTFS times beyond 24:00. The
-        # next service date covers trips just after midnight.
-        for offset in (-1, 0, 1):
-            operating_date = local_now.date() + timedelta(days=offset)
-            midnight = datetime.combine(operating_date, time.min, self.timezone)
-            for trip in self._artifact.get("trips") or []:
-                if str(trip.get("route_id") or "").upper() != route_id:
-                    continue
-                service = services.get(str(trip.get("service_id") or "")) or {}
-                if not _active_service(service, operating_date):
-                    continue
-                stop_times = [
-                    row
-                    for row in trip.get("stop_times") or []
-                    if str(row.get("stop_id") or "") in stop_set
-                ]
-                for row in stop_times:
-                    stop_id = str(row.get("stop_id") or "")
-                    label = str(
-                        trip.get("trip_headsign") or trip.get("direction_id") or "route"
-                    )
-                    normalized_direction = _direction_for(
-                        stop_id, label, trip.get("direction_id")
-                    )
-                    if (
-                        requested
-                        and requested not in normalized_direction
-                        and requested not in label.casefold()
-                    ):
-                        continue
-                    arrival_offset = _seconds(row.get("arrival_time"))
-                    if arrival_offset is None:
-                        continue
-                    frequencies = trip.get("frequencies") or []
-                    if frequencies:
-                        first_offset = _seconds(
-                            (trip.get("stop_times") or [{}])[0].get("arrival_time")
-                        )
-                        if first_offset is None:
-                            continue
-                        stop_offset = arrival_offset - first_offset
-                        for frequency in frequencies:
-                            start = _seconds(frequency.get("start_time"))
-                            end = _seconds(frequency.get("end_time"))
-                            headway = int(frequency.get("headway_secs") or 0)
-                            if start is None or end is None or headway <= 0:
-                                continue
-                            for departure in range(start, end, headway):
-                                self._append_prediction(
-                                    predictions,
-                                    midnight,
-                                    departure + stop_offset,
-                                    local_now,
-                                    normalized_direction,
-                                    label,
-                                    trip,
-                                )
-                    else:
-                        self._append_prediction(
-                            predictions,
-                            midnight,
-                            arrival_offset,
-                            local_now,
-                            normalized_direction,
-                            label,
-                            trip,
-                        )
-        ordered = sorted(predictions, key=lambda row: row["arrival_time"])
-        bounded: list[dict[str, Any]] = []
-        per_direction: dict[str, int] = {}
-        for row in ordered:
-            key = str(row.get("direction") or "route")
-            if per_direction.get(key, 0) >= max(1, limit):
-                continue
-            per_direction[key] = per_direction.get(key, 0) + 1
-            bounded.append(row)
+        predictions = self._collect_overnight_predictions(
+            route_id=route_id,
+            stop_set={str(value) for value in stop_ids},
+            requested=str(direction or "").casefold(),
+            local_now=local_now,
+        )
         return {
             "status": "scheduled",
-            "predictions": bounded,
+            "predictions": _bound_predictions_per_direction(predictions, limit),
             "valid_until": self.valid_until,
         }
+
+    def _trips_on_service_date(
+        self, route_id: str, operating_date: date
+    ) -> list[dict]:
+        services = self._artifact.get("services") or {}
+        trips: list[dict] = []
+        for trip in self._artifact.get("trips") or []:
+            if str(trip.get("route_id") or "").upper() != route_id:
+                continue
+            service = services.get(str(trip.get("service_id") or "")) or {}
+            if _active_service(service, operating_date):
+                trips.append(trip)
+        return trips
+
+    def _append_matching_stop_times(
+        self,
+        predictions: list[dict[str, Any]],
+        trip: dict,
+        stop_set: set[str],
+        requested: str,
+        midnight: datetime,
+        local_now: datetime,
+    ) -> None:
+        stop_times = [
+            row
+            for row in trip.get("stop_times") or []
+            if str(row.get("stop_id") or "") in stop_set
+        ]
+        for row in stop_times:
+            self._append_one_matching_stop(
+                predictions,
+                row,
+                trip,
+                requested,
+                midnight,
+                local_now,
+            )
+
+    def _collect_overnight_predictions(
+        self,
+        *,
+        route_id: str,
+        stop_set: set[str],
+        requested: str,
+        local_now: datetime,
+    ) -> list[dict[str, Any]]:
+        predictions: list[dict[str, Any]] = []
+        for operating_date, midnight in _overnight_service_windows(
+            local_now, self.timezone
+        ):
+            for trip in self._trips_on_service_date(route_id, operating_date):
+                self._append_matching_stop_times(
+                    predictions,
+                    trip,
+                    stop_set,
+                    requested,
+                    midnight,
+                    local_now,
+                )
+        return predictions
+
+    def _append_one_matching_stop(
+        self,
+        predictions: list[dict[str, Any]],
+        row: dict,
+        trip: dict,
+        requested: str,
+        midnight: datetime,
+        local_now: datetime,
+    ) -> None:
+        stop_id = str(row.get("stop_id") or "")
+        label = str(trip.get("trip_headsign") or trip.get("direction_id") or "route")
+        normalized_direction = _direction_for(stop_id, label, trip.get("direction_id"))
+        if (
+            requested
+            and requested not in normalized_direction
+            and requested not in label.casefold()
+        ):
+            return
+        arrival_offset = _seconds(row.get("arrival_time"))
+        if arrival_offset is None:
+            return
+        if trip.get("frequencies"):
+            self._append_frequency_departures(
+                predictions,
+                trip,
+                arrival_offset,
+                midnight,
+                local_now,
+                normalized_direction,
+                label,
+            )
+            return
+        self._append_prediction(
+            predictions,
+            midnight,
+            arrival_offset,
+            local_now,
+            normalized_direction,
+            label,
+            trip,
+        )
+
+    def _append_frequency_departures(
+        self,
+        predictions: list[dict[str, Any]],
+        trip: dict,
+        arrival_offset: int,
+        midnight: datetime,
+        local_now: datetime,
+        direction: str,
+        label: str,
+    ) -> None:
+        first_offset = _seconds((trip.get("stop_times") or [{}])[0].get("arrival_time"))
+        if first_offset is None:
+            return
+        stop_offset = arrival_offset - first_offset
+        for frequency in trip.get("frequencies") or []:
+            start = _seconds(frequency.get("start_time"))
+            end = _seconds(frequency.get("end_time"))
+            headway = int(frequency.get("headway_secs") or 0)
+            if start is None or end is None or headway <= 0:
+                continue
+            for departure in range(start, end, headway):
+                self._append_prediction(
+                    predictions,
+                    midnight,
+                    departure + stop_offset,
+                    local_now,
+                    direction,
+                    label,
+                    trip,
+                )
 
     @staticmethod
     def _append_prediction(
@@ -195,9 +276,9 @@ def _parse_datetime(value: object) -> datetime | None:
     if not isinstance(value, str):
         return None
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value)
     except ValueError:
         return None
     if parsed.tzinfo is None:
         return None
-    return parsed.astimezone(timezone.utc)
+    return parsed.astimezone(UTC)

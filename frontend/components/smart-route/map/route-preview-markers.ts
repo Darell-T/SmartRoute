@@ -1,3 +1,5 @@
+import { clamp } from "@/lib/utils";
+
 const CURRENT_LOCATION_STYLE_ID = "smart-route-current-location-marker-style";
 
 const EARTH_CIRCUMFERENCE_METERS = 40075016.686;
@@ -41,7 +43,7 @@ export function updateCurrentLocationDot(
   // more pixels, so the "general area" disc grows; zoom out and it shrinks
   // below the threshold and hides, leaving just the dot.
   const radiusPx =
-    typeof accuracyMeters === "number" && Number.isFinite(accuracyMeters)
+    accuracyMeters != null && Number.isFinite(accuracyMeters)
       ? accuracyMeters / metersPerPixelAtLatitude(lat, zoom)
       : 0;
   const visible = radiusPx >= 24;
@@ -160,10 +162,6 @@ function metersPerPixelAtLatitude(lat: number, zoom: number): number {
     (Math.cos(latitudeRadians) * EARTH_CIRCUMFERENCE_METERS) /
     (TILE_SIZE * 2 ** zoom)
   );
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
 }
 
 export function createDestinationPin(): HTMLDivElement {

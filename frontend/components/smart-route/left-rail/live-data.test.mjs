@@ -7,6 +7,76 @@ import {
   HALF_MILE_METERS,
 } from "./live-data.ts";
 import { buildPlan } from "./live-data/route-plan.ts";
+import { buildAlternatives } from "./live-data/route-candidates.ts";
+import "./live-data/types.ts";
+
+function itineraryFacts({
+  durationMinutes,
+  transferCount,
+  departureAt,
+  arrivalAt,
+  destination = "Destination",
+  legs = [],
+} = {}) {
+  const facts = {
+    itinerary_id: "test",
+    origin: { label: "Your location" },
+    destination: { display_name: destination },
+    total_duration_seconds: durationMinutes * 60,
+    transfer_count: transferCount,
+    legs,
+  };
+  if (departureAt) facts.departure_at = departureAt;
+  if (arrivalAt) facts.arrival_at = arrivalAt;
+  return facts;
+}
+
+function churchToAdeeSteps() {
+  return [
+    {
+      type: "WALK",
+      arrival_stop: "Church Av",
+      minutes_until_arrival: 3,
+      duration_minutes: 3,
+    },
+    {
+      type: "SUBWAY",
+      route_id: "Q",
+      train_line: "Q",
+      departure_stop: "Church Av",
+      arrival_stop: "14 St-Union Sq",
+      direction: "Manhattan-bound to 96 St",
+      minutes_until_arrival: 24,
+      duration_minutes: 17,
+      minutes_until_train_arrives: 7,
+      stop_count: 7,
+    },
+    {
+      type: "SUBWAY",
+      route_id: "5",
+      train_line: "5",
+      departure_stop: "14 St-Union Sq",
+      arrival_stop: "Burke Av",
+      direction: "Uptown to Nereid Av",
+      minutes_until_arrival: 44,
+      duration_minutes: 20,
+      stop_count: 12,
+    },
+    {
+      type: "WALK",
+      arrival_stop: "Adee Av",
+      minutes_until_arrival: 5,
+      duration_minutes: 5,
+    },
+  ];
+}
+
+function stripLabels(strip) {
+  return strip.map((segment) => {
+    if (segment.kind === "walk") return `walk:${segment.minutes}`;
+    return `${segment.mode}:${segment.routeId}`;
+  });
+}
 
 test("route reasoning insights derive from real nearby facts only", () => {
   const groups = [
@@ -573,6 +643,7 @@ test("route candidates become clickable alternatives; active one excluded", () =
       index: 0,
       steps: mkSteps("Q", 20),
       is_recommended: true,
+      total_minutes: 20,
       recommendation_reason: "Fastest with no alerts.",
     },
     {
@@ -580,6 +651,7 @@ test("route candidates become clickable alternatives; active one excluded", () =
       index: 1,
       steps: mkSteps("B", 29),
       is_recommended: false,
+      total_minutes: 29,
       rejection_reason: "Signal problems at DeKalb.",
     },
     {
@@ -587,6 +659,7 @@ test("route candidates become clickable alternatives; active one excluded", () =
       index: 2,
       steps: mkSteps("D", 24),
       is_recommended: false,
+      total_minutes: 24,
       rejection_reason: "One extra transfer.",
     },
   ];
@@ -608,7 +681,7 @@ test("route candidates become clickable alternatives; active one excluded", () =
   assert.equal(alts[0].status, "rejected");
   assert.equal(alts[1].delta, "+4 min");
   assert.equal(alts[1].sev, "medium");
-  assert.equal(alts[1].reason, "1 extra transfer");
+  assert.equal(alts[1].reason, "One extra transfer");
 });
 
 test("plan rationale surfaces sanitized model route reasoning with fallback", () => {
@@ -723,49 +796,20 @@ test("plan rationale surfaces sanitized model route reasoning with fallback", ()
 
 test("plan carries strip, detail steps, leave-by, and correct transfer count", () => {
   const nowMs = 1_700_000_000_000;
-  const steps = [
-    {
-      type: "WALK",
-      arrival_stop: "Church Av",
-      minutes_until_arrival: 3,
-      duration_minutes: 3,
-    },
-    {
-      type: "SUBWAY",
-      route_id: "Q",
-      train_line: "Q",
-      departure_stop: "Church Av",
-      arrival_stop: "14 St-Union Sq",
-      direction: "Manhattan-bound to 96 St",
-      minutes_until_arrival: 24,
-      duration_minutes: 17,
-      minutes_until_train_arrives: 7,
-      stop_count: 7,
-    },
-    {
-      type: "SUBWAY",
-      route_id: "5",
-      train_line: "5",
-      departure_stop: "14 St-Union Sq",
-      arrival_stop: "Burke Av",
-      direction: "Uptown to Nereid Av",
-      minutes_until_arrival: 44,
-      duration_minutes: 20,
-      stop_count: 12,
-    },
-    {
-      type: "WALK",
-      arrival_stop: "Adee Av",
-      minutes_until_arrival: 5,
-      duration_minutes: 5,
-    },
-  ];
+  const steps = churchToAdeeSteps();
   const candidate = {
     id: "c0",
     index: 0,
     steps,
     is_recommended: true,
     total_minutes: 86,
+    itinerary: itineraryFacts({
+      durationMinutes: 86,
+      transferCount: 1,
+      departureAt: "2023-11-14T17:14:00-05:00",
+      arrivalAt: "2023-11-14T18:40:00-05:00",
+      destination: "Adee Av",
+    }),
   };
   const data = buildLeftRailData({
     nowMs,
@@ -773,65 +817,80 @@ test("plan carries strip, detail steps, leave-by, and correct transfer count", (
     routeCandidates: [candidate],
     activeRouteCandidate: candidate,
   });
+  const strip = data.plan.strip;
+  const detailSteps = data.plan.detailSteps;
+  assert.ok(Array.isArray(strip));
+  assert.ok(Array.isArray(detailSteps));
 
   // Transfers = vehicle boardings minus one; start/end walks never count.
   assert.equal(data.plan.transferCount, 1);
-
   assert.deepEqual(
-    data.plan.strip?.map((segment) =>
-      segment.kind === "walk"
-        ? `walk:${segment.minutes}`
-        : `${segment.mode}:${segment.routeId}`,
-    ),
+    stripLabels(strip),
     ["walk:3", "subway:Q", "subway:5", "walk:5"],
     "compact strip mirrors the journey order",
   );
-
   assert.equal(
-    typeof data.plan.leaveByLabel,
-    "string",
-    "leave-by derives from transit departure minus the approach walk",
+    data.plan.leaveByLabel,
+    "5:14 PM",
+    "leave-by is itinerary.departure_at, not walk subtraction",
   );
   assert.equal(
     data.plan.nextDepartureMinutes,
     7,
     "route plan exposes the selected route's next vehicle countdown",
   );
-
   assert.deepEqual(
-    data.plan.detailSteps?.map((step) => step.kind),
+    detailSteps.map((step) => step.kind),
     ["walk", "board", "ride", "board", "ride", "walk"],
   );
   assert.equal(
-    data.plan.detailSteps?.[0]?.title,
+    detailSteps[0].title,
     "Walk to Church Av station",
     "approach walk names the subway station instead of a generic stop",
   );
-  const boardQ = data.plan.detailSteps?.[1];
-  assert.equal(boardQ?.title, "Board the Q train");
-  assert.equal(boardQ?.subtitle, "Manhattan-bound to 96 St");
-  assert.equal(boardQ?.note, "Departs in 7 min");
-  const rideQ = data.plan.detailSteps?.[2];
-  assert.equal(rideQ?.rideMeta, "Ride 7 stops · 17 min");
-  assert.equal(rideQ?.transferTo, "5", "ride hands off to the next boarding");
-  assert.equal(
-    data.plan.detailSteps?.[data.plan.detailSteps.length - 1]?.title,
-    "Walk to destination",
-  );
+  const boardQ = detailSteps[1];
+  assert.equal(boardQ.title, "Board the Q train");
+  assert.equal(boardQ.subtitle, "Manhattan-bound to 96 St");
+  assert.equal(boardQ.note, "Departs in 7 min");
+  const rideQ = detailSteps[2];
+  assert.equal(rideQ.rideMeta, "Ride 7 stops · 17 min");
+  assert.equal(rideQ.transferTo, "5", "ride hands off to the next boarding");
+  assert.equal(detailSteps[detailSteps.length - 1].title, "Walk to destination");
+});
 
-  // Single-leg trip: zero transfers.
+test("single-leg trip has zero transfers", () => {
+  const nowMs = 1_700_000_000_000;
+  const steps = churchToAdeeSteps();
+  const candidate = {
+    id: "c0",
+    index: 0,
+    steps,
+    is_recommended: true,
+    total_minutes: 86,
+    itinerary: itineraryFacts({
+      durationMinutes: 86,
+      transferCount: 1,
+      destination: "Adee Av",
+    }),
+  };
   const singleLeg = buildLeftRailData({
     nowMs,
     routeSteps: [steps[0], steps[1], steps[3]],
     routeCandidates: [candidate],
-    activeRouteCandidate: candidate,
+    activeRouteCandidate: {
+      ...candidate,
+      itinerary: itineraryFacts({
+        durationMinutes: 66,
+        transferCount: 0,
+        destination: "Adee Av",
+      }),
+    },
   });
   assert.equal(singleLeg.plan.transferCount, 0);
 });
 
-test("plan prefers candidate score_breakdown.transfers over step re-count", () => {
+test("plan prefers itinerary.transfer_count over step re-count", () => {
   const nowMs = 1_700_000_000_000;
-  // Two transit boardings re-count as 1 transfer; canonical says 2.
   const steps = [
     {
       type: "SUBWAY",
@@ -856,7 +915,12 @@ test("plan prefers candidate score_breakdown.transfers over step re-count", () =
     steps,
     is_recommended: true,
     total_minutes: 86,
-    score_breakdown: { duration_minutes: 86, transfers: 2, active_alerts: 0 },
+    score_breakdown: { duration_minutes: 86, transfers: 1, active_alerts: 0 },
+    itinerary: itineraryFacts({
+      durationMinutes: 86,
+      transferCount: 2,
+      destination: "Burke Av",
+    }),
   };
   const data = buildLeftRailData({
     nowMs,
@@ -886,7 +950,13 @@ test("plan prefers candidate arrival_at ISO over now+eta for clock", () => {
     is_recommended: true,
     total_minutes: 89,
     arrival_at: "2026-07-16T15:45:00-04:00",
-    score_breakdown: { duration_minutes: 89, transfers: 0, active_alerts: 0 },
+    score_breakdown: { duration_minutes: 40, transfers: 1, active_alerts: 0 },
+    itinerary: itineraryFacts({
+      durationMinutes: 89,
+      transferCount: 0,
+      arrivalAt: "2026-07-16T15:45:00-04:00",
+      destination: "Jay St",
+    }),
   };
   const data = buildLeftRailData({
     nowMs,
@@ -978,16 +1048,12 @@ test("alternate routes deduplicate by route signature", () => {
     },
   ];
   const candidates = [
-    { id: "c0", index: 0, steps: subway("Q", 22), is_recommended: true },
-    // Identical route, identical time — pure clone, dropped entirely.
-    { id: "c1", index: 1, steps: subway("Q", 22), is_recommended: false },
-    // Identical route, later departure — kept once with a real distinction.
-    { id: "c2", index: 2, steps: subway("Q", 26), is_recommended: false },
-    // Another same-route clone — the one slot is already used.
-    { id: "c3", index: 3, steps: subway("Q", 30), is_recommended: false },
-    { id: "c4", index: 4, steps: bus("B49", 27), is_recommended: false, rejection_reason: "More walking." },
-    // Duplicate of the B49 — first (better) one wins.
-    { id: "c5", index: 5, steps: bus("B49", 33), is_recommended: false },
+    { id: "c0", index: 0, steps: subway("Q", 22), is_recommended: true, total_minutes: 22 },
+    { id: "c1", index: 1, steps: subway("Q", 22), is_recommended: false, total_minutes: 22 },
+    { id: "c2", index: 2, steps: subway("Q", 26), is_recommended: false, total_minutes: 26 },
+    { id: "c3", index: 3, steps: subway("Q", 30), is_recommended: false, total_minutes: 30 },
+    { id: "c4", index: 4, steps: bus("B49", 27), is_recommended: false, total_minutes: 27, rejection_reason: "More walking." },
+    { id: "c5", index: 5, steps: bus("B49", 33), is_recommended: false, total_minutes: 33 },
   ];
 
   const data = buildLeftRailData({
@@ -1018,6 +1084,7 @@ test("switching to a rejected candidate: recommended shows as alternative + head
     index: 0,
     steps: steps("Q", 20),
     is_recommended: true,
+    total_minutes: 20,
     recommendation_reason: "Fastest tonight.",
   };
   const rejected = {
@@ -1025,6 +1092,7 @@ test("switching to a rejected candidate: recommended shows as alternative + head
     index: 1,
     steps: steps("B", 26),
     is_recommended: false,
+    total_minutes: 26,
     rejection_reason: "Slower by six minutes.",
   };
 
@@ -1098,11 +1166,11 @@ test("alternate reason copy normalizes long backend rejection strings", () => {
   assert.deepEqual(
     data.plan.alternatives.map((alternate) => alternate.reason),
     [
-      "Slower by 13 min · service conditions",
-      "1 extra transfer",
+      "Slower by 13 min service conditions",
+      "One extra transfer",
       "More walking",
-      "Slower by 8 min · Signal problem near DeKalb Av",
-      "Faster by 2 min · Stalled vehicle at 34 St",
+      "Slower by 8 min and affected by Signal pr...",
+      "Faster by 2 min, but affected by Stalled...",
     ],
   );
 });
@@ -1137,7 +1205,7 @@ test("plan rationale explains faster disrupted alternates as reliability tradeof
 
   assert.match(
     data.plan.rationale,
-    /I did not pick the C route because it is affected by Stalled vehicle at 34 St despite being 2 min faster\./,
+    /I did not pick the C route because it trades speed for lower reliability\./,
   );
 });
 
@@ -1254,7 +1322,7 @@ test("chat-origin routes do not repeat chat reasoning in the map rail", () => {
     recommendation_reason: "The Q is the clearest choice.",
   };
 
-  const plan = buildPlan(route, candidate, [candidate], null, null, null, 1_700_000_000_000, "chat");
+  const plan = buildPlan(route, candidate, [candidate], null, null, null, "chat");
   assert.equal(plan.rationale, "");
 });
 
@@ -1286,7 +1354,7 @@ test("canonical chained itinerary groups rail details and replaces cumulative st
     },
   };
 
-  const plan = buildPlan(route, candidate, [candidate], null, null, null, 1_700_000_000_000, "chat");
+  const plan = buildPlan(route, candidate, [candidate], null, null, null, "chat");
   assert.deepEqual(plan.journeyPlaces, ["Your location", "Luigi's Pizza", "Costco Sunset Park"]);
   assert.equal(plan.transferCount, 1);
   assert.deepEqual(
@@ -1303,17 +1371,20 @@ test("canonical chained itinerary groups rail details and replaces cumulative st
 
 test("bus arrivals split tabs by stop compass; crosstown and unknown remain all-directions rows", () => {
   const nowMs = 1_700_000_000_000;
-  const bus = (route, dest, stopCompass, stopId) => ({
-    route_id: route,
-    mode: "bus",
-    arrival_time: nowMs / 1000 + 180,
-    direction: "0",
-    terminal_stop_name: dest,
-    station_name: "W 34 ST/5 AV",
-    distance_m: 120,
-    stop_id: stopId,
-    ...(stopCompass === undefined ? {} : { stop_compass: stopCompass }),
-  });
+  const bus = (route, dest, stopCompass, stopId) => {
+    const row = {
+      route_id: route,
+      mode: "bus",
+      arrival_time: nowMs / 1000 + 180,
+      direction: "0",
+      terminal_stop_name: dest,
+      station_name: "W 34 ST/5 AV",
+      distance_m: 120,
+      stop_id: stopId,
+    };
+    if (stopCompass !== undefined) row.stop_compass = stopCompass;
+    return row;
+  };
   const liveFeed = {
     arrivals: [
       bus("M1", "HARLEM 147 ST", "NE", "400001"),
@@ -1457,6 +1528,11 @@ test("rail and tram modes flow through the plan end to end", () => {
     steps,
     is_recommended: true,
     total_minutes: 62,
+    itinerary: itineraryFacts({
+      durationMinutes: 62,
+      transferCount: 1,
+      destination: "Terminal 8",
+    }),
   };
   const data = buildLeftRailData({
     nowMs,
@@ -1563,4 +1639,138 @@ test("direct-leg canonical timings replace cumulative step clocks in plan detail
   );
   const walkTitles = data.plan.detailSteps.filter((step) => step.kind === "walk").map((step) => step.subtitle);
   assert.deepEqual(walkTitles, ["About 3 min", "About 5 min"], "walk rows keep canonical walk minutes");
+});
+
+test("buildPlan uses itinerary clocks and duration when steps and score_breakdown conflict", () => {
+  const steps = [
+    {
+      type: "WALK",
+      arrival_stop: "Church Av",
+      minutes_until_arrival: 12,
+      duration_minutes: 12,
+    },
+    {
+      type: "SUBWAY",
+      route_id: "Q",
+      train_line: "Q",
+      departure_stop: "Church Av",
+      arrival_stop: "Union Sq",
+      minutes_until_arrival: 40,
+      duration_minutes: 28,
+      minutes_until_train_arrives: 20,
+    },
+    {
+      type: "SUBWAY",
+      route_id: "5",
+      train_line: "5",
+      departure_stop: "Union Sq",
+      arrival_stop: "Burke Av",
+      minutes_until_arrival: 90,
+    },
+  ];
+  const candidate = {
+    id: "conflict",
+    index: 0,
+    steps,
+    is_recommended: true,
+    total_minutes: 89,
+    arrival_at: "2026-07-16T13:29:00-04:00",
+    score_breakdown: { duration_minutes: 89, transfers: 1, active_alerts: 0 },
+    itinerary: itineraryFacts({
+      durationMinutes: 31,
+      transferCount: 3,
+      departureAt: "2026-07-16T12:04:00-04:00",
+      arrivalAt: "2026-07-16T15:45:00-04:00",
+      destination: "Burke Av",
+    }),
+  };
+  const plan = buildPlan(steps, candidate, [candidate], null, null, null, "map_search");
+  assert.equal(plan.eta, "3:45 PM");
+  assert.equal(plan.totalTime, "31 min");
+  assert.equal(plan.leaveByLabel, "12:04 PM");
+  assert.equal(plan.transferCount, 3);
+});
+
+test("buildAlternatives uses itinerary duration when step ETAs conflict", () => {
+  const subway = (line, minutes) => [
+    {
+      type: "SUBWAY",
+      route_id: line,
+      train_line: line,
+      departure_stop: "Church Av",
+      arrival_stop: "Union Sq",
+      minutes_until_arrival: minutes,
+    },
+  ];
+  const recommended = {
+    id: "rec",
+    index: 0,
+    steps: subway("Q", 20),
+    is_recommended: true,
+    total_minutes: 40,
+    itinerary: itineraryFacts({ durationMinutes: 18, transferCount: 0 }),
+  };
+  const rejected = {
+    id: "alt",
+    index: 1,
+    steps: subway("B", 12),
+    is_recommended: false,
+    total_minutes: 12,
+    rejection_reason: "Signal problems at DeKalb.",
+    itinerary: itineraryFacts({ durationMinutes: 27, transferCount: 0 }),
+  };
+  const alts = buildAlternatives([recommended, rejected], recommended);
+  assert.equal(alts.length, 1);
+  assert.equal(alts[0].delta, "+9 min");
+  assert.equal(alts[0].totalMinutes, 27);
+  assert.equal(alts[0].reason, "Signal problems at DeKalb");
+});
+
+test("buildPlan keeps unavailable clocks when itinerary timestamps are missing or malformed", () => {
+  const steps = [
+    {
+      type: "SUBWAY",
+      route_id: "Q",
+      train_line: "Q",
+      departure_stop: "Church Av",
+      arrival_stop: "Union Sq",
+      minutes_until_arrival: 40,
+    },
+  ];
+  const missing = {
+    id: "missing",
+    index: 0,
+    steps,
+    is_recommended: true,
+    total_minutes: 40,
+    itinerary: itineraryFacts({ durationMinutes: 40, transferCount: 0 }),
+  };
+  const malformed = {
+    id: "malformed",
+    index: 0,
+    steps,
+    is_recommended: true,
+    arrival_at: "not-a-clock",
+    itinerary: {
+      itinerary_id: "malformed",
+      origin: { label: "Your location" },
+      destination: { display_name: "Union Sq" },
+      total_duration_seconds: "bad",
+      transfer_count: "bad",
+      departure_at: "also-bad",
+      arrival_at: "still-bad",
+      legs: [],
+    },
+  };
+  const missingPlan = buildPlan(steps, missing, [missing], null, null, null, "map_search");
+  assert.equal(missingPlan.eta, "Live");
+  assert.equal(missingPlan.leaveByLabel, undefined);
+  assert.equal(missingPlan.totalTime, "40 min");
+  assert.equal(missingPlan.transferCount, 0);
+
+  const malformedPlan = buildPlan(steps, malformed, [malformed], null, null, null, "map_search");
+  assert.equal(malformedPlan.eta, "Live");
+  assert.equal(malformedPlan.leaveByLabel, undefined);
+  assert.equal(malformedPlan.totalTime, "Calculated");
+  assert.equal(malformedPlan.transferCount, undefined);
 });

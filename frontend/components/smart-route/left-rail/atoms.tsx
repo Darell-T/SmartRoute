@@ -8,10 +8,7 @@
    are pure-presentation; no data fetching, no global state.
    ════════════════════════════════════════════════════════════════════════ */
 
-import {
-  FontAwesomeIcon,
-  type FontAwesomeIconProps,
-} from "@fortawesome/react-fontawesome";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faArrowRightArrowLeft,
   faBusSimple,
@@ -217,6 +214,28 @@ export function cleanTransitParagraphText(text: string): string {
     .trim();
 }
 
+function transitTokenBadge(
+  routeToken: string,
+  bulletSize: number,
+  key: number,
+): ReactNode {
+  if (SUBWAY_BULLET_ROUTES.has(routeToken)) {
+    return (
+      <span key={key} className="sr-line-token">
+        <RouteBullet line={routeToken} size={bulletSize} />
+      </span>
+    );
+  }
+  if (BUS_ROUTE_TOKEN.test(routeToken)) {
+    return (
+      <span key={key} className="sr-line-token">
+        <BusChip route={routeToken} />
+      </span>
+    );
+  }
+  return null;
+}
+
 export function TransitText({
   text,
   bulletSize = 15,
@@ -238,23 +257,9 @@ export function TransitText({
 
   while ((match = pattern.exec(text)) !== null) {
     const routeToken = match[1]?.toUpperCase();
-    let badge: ReactNode | null = null;
-
-    if (routeToken && SUBWAY_BULLET_ROUTES.has(routeToken)) {
-      badge = (
-        <span key={key++} className="sr-line-token">
-          <RouteBullet line={routeToken} size={bulletSize} />
-        </span>
-      );
-    } else if (routeToken && BUS_ROUTE_TOKEN.test(routeToken)) {
-      badge = (
-        <span key={key++} className="sr-line-token">
-          <BusChip route={routeToken} />
-        </span>
-      );
-    }
-
+    const badge = routeToken ? transitTokenBadge(routeToken, bulletSize, key) : null;
     if (!badge) continue;
+    key += 1;
     if (match.index > cursor) nodes.push(text.slice(cursor, match.index));
     nodes.push(badge);
     cursor = match.index + match[0].length;
@@ -286,6 +291,17 @@ const STEP_ICON_COLORS = {
   marker: "#ef3b5d",
 } as const;
 
+const STEP_ICON_SPEC = {
+  walk: { icon: faPersonWalking, data: "walk", color: "primary", size: 15 },
+  board: { icon: faTrain, data: "train", color: "secondary", size: 15 },
+  ride: { icon: faTrain, data: "train", color: "secondary", size: 15 },
+  bus: { icon: faBusSimple, data: "bus", color: "secondary", size: 15 },
+  transfer: { icon: faArrowRightArrowLeft, data: "transfer", color: "neutral", size: 15 },
+  exit: { icon: faRightFromBracket, data: "exit", color: "neutral", size: 15 },
+  destination: { icon: faMapPin, data: "destination", color: "marker", size: 16 },
+  arrive: { icon: faMapPin, data: "arrive", color: "marker", size: 16 },
+} as const;
+
 export function StepIcon({
   type,
   color,
@@ -295,76 +311,22 @@ export function StepIcon({
   color?: string;
   size?: number;
 }) {
-  const size =
-    sizeOverride ?? (type === "destination" || type === "arrive" ? 16 : 15);
-  const iconStyle = (iconColor: string): FontAwesomeIconProps["style"] => ({
-    display: "block",
-    width: size,
-    height: size,
-    color: iconColor,
-    flexShrink: 0,
-  });
-
-  switch (type) {
-    case "walk":
-      return (
-        <FontAwesomeIcon
-          icon={faPersonWalking}
-          data-step-icon="walk"
-          style={iconStyle(color ?? STEP_ICON_COLORS.primary)}
-          aria-hidden="true"
-        />
-      );
-    case "board":
-    case "ride":
-      return (
-        <FontAwesomeIcon
-          icon={faTrain}
-          data-step-icon="train"
-          style={iconStyle(color ?? STEP_ICON_COLORS.secondary)}
-          aria-hidden="true"
-        />
-      );
-    case "bus":
-      return (
-        <FontAwesomeIcon
-          icon={faBusSimple}
-          data-step-icon="bus"
-          style={iconStyle(color ?? STEP_ICON_COLORS.secondary)}
-          aria-hidden="true"
-        />
-      );
-    case "transfer":
-      return (
-        <FontAwesomeIcon
-          icon={faArrowRightArrowLeft}
-          data-step-icon="transfer"
-          style={iconStyle(color ?? STEP_ICON_COLORS.neutral)}
-          aria-hidden="true"
-        />
-      );
-    case "exit":
-      return (
-        <FontAwesomeIcon
-          icon={faRightFromBracket}
-          data-step-icon="exit"
-          style={iconStyle(color ?? STEP_ICON_COLORS.neutral)}
-          aria-hidden="true"
-        />
-      );
-    case "destination":
-    case "arrive":
-      return (
-        <FontAwesomeIcon
-          icon={faMapPin}
-          data-step-icon={type}
-          style={iconStyle(color ?? STEP_ICON_COLORS.marker)}
-          aria-hidden="true"
-        />
-      );
-    default:
-      return null;
-  }
+  const spec = STEP_ICON_SPEC[type];
+  const size = sizeOverride ?? spec.size;
+  return (
+    <FontAwesomeIcon
+      icon={spec.icon}
+      data-step-icon={spec.data}
+      style={{
+        display: "block",
+        width: size,
+        height: size,
+        color: color ?? STEP_ICON_COLORS[spec.color],
+        flexShrink: 0,
+      }}
+      aria-hidden="true"
+    />
+  );
 }
 
 /* ── LocationPin ─────────────────────────────────────────────

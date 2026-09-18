@@ -6,7 +6,7 @@ collects it. Drives the *real* agent loop (``loop.run_agent_turn``), the real
 the real candidate/discovery/trip/session stores, the real tool ledger, and
 real SSE events. Only deterministic Anthropic rounds and the documented
 genuine provider/data seams are scripted (``prepare_single_leg`` provider
-route/evidence seam, ``_enrich_route`` legacy enrichment guard, ``lookup_arrivals``
+route/evidence seam, ``enrich_route`` legacy enrichment guard, ``lookup_arrivals``
 live MTA arrivals, ``new_candidate_id`` opaque id generation, the
 Google-Routes/MTA provider seams of ``tests.conversation.conversation_cancellation_fixtures``,
 plus a recording wrapper around the real candidate store).
@@ -23,20 +23,19 @@ from __future__ import annotations
 import asyncio
 import copy
 import secrets
-from types import SimpleNamespace
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 from app.routers import agent_chat
 from app.services import admission
 from app.services.agent import candidate_store
 from app.services.agent import trip_state as trip_state_module
-from app.services.agent.tools.route import prepare_route_options  # noqa: F401
-from app.services.agent.tools._types import ToolResult
+from app.services.agent.tools.base import ToolResult
+
 from tests.conversation.conversation_cancellation_fixtures import (
     ACCEPTED_DESTINATION,
     CANDIDATE_V1,
-    LEAK_CHECK_TIMEOUT_S,
     NOW_ET,
     ROUTE_MESSAGE,
     ROUTE_NAVIGATION_TOOL_PROFILE,
@@ -107,15 +106,15 @@ class CancellationBase(unittest.IsolatedAsyncioTestCase):
 
     async def _assert_no_owned_pending_tasks(self, baseline: set[asyncio.Task]) -> None:
         # The turn drain above already awaited the cancelled task (its finally
-        # drained request-owned children), so the comparison is deterministic;
-        # the explicit deadline keeps this audit bounded by construction.
-        async with asyncio.timeout(LEAK_CHECK_TIMEOUT_S):
-            owned = [
-                task
-                for task in asyncio.all_tasks()
-                if task is not asyncio.current_task() and task not in baseline
-            ]
-            assert owned == [], f"leaked pending tasks: {owned}"
+        # drained request-owned children). Yield once so done-callbacks flush
+        # before the snapshot; the comparison is then deterministic.
+        await asyncio.sleep(0)
+        owned = [
+            task
+            for task in asyncio.all_tasks()
+            if task is not asyncio.current_task() and task not in baseline
+        ]
+        assert owned == [], f"leaked pending tasks: {owned}"
 
     def _offered_profile(self) -> frozenset:
         return frozenset(
@@ -128,7 +127,7 @@ class CancellationBase(unittest.IsolatedAsyncioTestCase):
             return_value=ToolResult(ok=False, error="fixture: no live arrivals")
         )
         patchers = [
-            patch("app.services.trips.enrichment._enrich_route", new=enrich),
+            patch("app.services.trips.enrichment.enrich_route", new=enrich),
             patch("app.services.agent.tools.transit.lookup_arrivals.execute", new=arrivals),
         ]
         if mocks is not None:
@@ -151,7 +150,7 @@ class CancellationBase(unittest.IsolatedAsyncioTestCase):
     def _route_seam_patchers(self, seam) -> list:
         return [
             patch(
-                "app.services.agent.tools.route.preparation_adapter._route_with_recovery",
+                "app.services.trips.preparation.dependencies.route_with_recovery",
                 new=seam,
             )
         ]
@@ -163,7 +162,7 @@ class CancellationBase(unittest.IsolatedAsyncioTestCase):
             # reaches the live-MTA gather (the blocking seam) without a
             # network provider; the real executor and stores still run.
             patch(
-                "app.services.agent.tools.route.preparation_adapter._route_with_recovery",
+                "app.services.trips.preparation.dependencies.route_with_recovery",
                 new=fast_routes_seam(),
             ),
             patch("app.services.mta.realtime.fetch_service_alerts", new=seam),
@@ -202,9 +201,10 @@ class CancellationBase(unittest.IsolatedAsyncioTestCase):
         for patcher in patchers:
             patcher.start()
         try:
+            assert not seam_cleaned.is_set()
 
             async def _consume():
-                async for event in loop.run_agent_turn(
+                agen = loop.run_agent_turn(
                     session=session,
                     session_id=session_id,
                     turn_id=turn_id,
@@ -214,8 +214,12 @@ class CancellationBase(unittest.IsolatedAsyncioTestCase):
                     origin=DEFAULT_ORIGIN,
                     response_presentation=mode,
                     trace=trace,
-                ):
-                    events.append(event)
+                )
+                try:
+                    while True:
+                        events.append(await anext(agen))
+                except StopAsyncIteration:
+                    return
 
             task = asyncio.create_task(_consume())
             await wait_for_seam_start(
@@ -285,21 +289,26 @@ class CancellationBase(unittest.IsolatedAsyncioTestCase):
                 patch.object(agent_chat.admission, "release", release_mock),
             ]
         )
-        args = dict(
-            request=request, session_id=session_id, session=session,
-            turn_id=turn_id, message=message, now_et=NOW_ET, gtfs=None,
-            origin=DEFAULT_ORIGIN, selected_card_id=None,
-            response_presentation=mode, trace=loop.TurnTrace(), lease=LEASE,
-        )
+        args = {
+            "request": request, "session_id": session_id, "session": session,
+            "turn_id": turn_id, "message": message, "now_et": NOW_ET, "gtfs": None,
+            "origin": DEFAULT_ORIGIN, "selected_card_id": None,
+            "response_presentation": mode, "trace": loop.TurnTrace(), "lease": LEASE,
+        }
+
         async def _collect() -> list:
             chunks: list = []
-            async for chunk in agent_chat._sse_stream(**args):
-                chunks.append(chunk)
-            return chunks
+            agen = agent_chat._sse_stream(**args)
+            try:
+                while True:
+                    chunks.append(await anext(agen))
+            except StopAsyncIteration:
+                return chunks
 
         for patcher in patchers:
             patcher.start()
         try:
+            assert not seam_cleaned.is_set()
             chunks = await collect_stream_with_deadline(
                 _collect, scenario_id=scenario_id, fail=self.fail
             )
@@ -321,30 +330,14 @@ class CancellationBase(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         """Cancellation leaves no candidate/card/destination/selection commit."""
 
-        self.assertTrue(
-            seam_cleaned.is_set(), f"{scenario_id} provider seam cleaned up"
-        )
-        self.assertEqual(
-            [event for event in events if event.type == "route_card"],
-            [], f"{scenario_id} no route card streamed after cancel",
-        )
-        self.assertNotIn("done", [event.type for event in events],
-                         f"{scenario_id} no terminal done after cancel")
-        self.assertEqual(
-            mocks["stored_candidate_set_ids"],
-            [], f"{scenario_id} no candidate set stored; "
-            f"actual={mocks['stored_candidate_set_ids']}",
-        )
-        self.assertEqual(
-            self._snapshot_session(session),
-            session_before, f"{scenario_id} cancelled turn mutates no trip/card state",
-        )
+        assert seam_cleaned.is_set(), f"{scenario_id} provider seam cleaned up"
+        assert [event for event in events if event.type == "route_card"] == [], f"{scenario_id} no route card streamed after cancel"
+        assert "done" not in [event.type for event in events], f"{scenario_id} no terminal done after cancel"
+        assert mocks["stored_candidate_set_ids"] == [], f"{scenario_id} no candidate set stored; " f"actual={mocks['stored_candidate_set_ids']}"
+        assert self._snapshot_session(session) == session_before, f"{scenario_id} cancelled turn mutates no trip/card state"
         state = trip_state_module.get_trip_state(session)
         if destination is not None:
-            self.assertIsNone(
-                state["destination"],
-                f"{scenario_id} destination never partially commits",
-            )
+            assert state["destination"] is None, f"{scenario_id} destination never partially commits"
 
     async def _natural_route_turn(
         self,
@@ -425,7 +418,6 @@ class CancellationBase(unittest.IsolatedAsyncioTestCase):
             mocks=mocks,
             session=session,
             session_id=session_id,
-            mode=mode,
             destination=destination,
             candidate_id=candidate_id,
         )
@@ -441,67 +433,38 @@ class CancellationBase(unittest.IsolatedAsyncioTestCase):
         mocks: dict,
         session: dict,
         session_id: str,
-        mode: str,
         destination: str,
         candidate_id: str,
     ) -> None:
         """Exact one-time commit contract for a successful natural routing turn."""
 
-        self.assertEqual(
-            [name for name, _input in trace.tool_calls],
-            ["declare_goals", "prepare_route_options", "present_route"],
-            f"{scenario_id} canonical chain",
-        )
-        self.assertEqual(
-            self._offered_profile(),
-            ROUTE_NAVIGATION_TOOL_PROFILE, f"{scenario_id} offered profile",
-        )
+        assert [name for name, _input in trace.tool_calls] == ["declare_goals", "prepare_route_options", "present_route"], f"{scenario_id} canonical chain"
+        assert self._offered_profile() == ROUTE_NAVIGATION_TOOL_PROFILE, f"{scenario_id} offered profile"
         cards = route_cards(events)
-        self.assertEqual(
-            (len(cards), cards[0].role if cards else None),
-            (1, "recommended"), f"{scenario_id} exactly one recommended card",
-        )
+        assert (len(cards), cards[0].role if cards else None) == (1, "recommended"), f"{scenario_id} exactly one recommended card"
         state = trip_state_module.get_trip_state(session)
         set_id = state["active_candidate_set_id"]
-        self.assertTrue(
-            bool(set_id) and set_id.startswith("cs_"),
-            f"{scenario_id} real server candidate set",
-        )
-        self.assertEqual(
-            (state["destination"], state["selected_candidate_id"]),
-            (destination, candidate_id),
-            f"{scenario_id} committed destination and selection",
-        )
-        self.assertEqual(
-            mocks["stored_candidate_set_ids"],
-            [set_id], f"{scenario_id} exactly one candidate set stored",
-        )
+        assert set_id
+        assert set_id.startswith("cs_"), f"{scenario_id} real server candidate set"
+        assert (state["destination"], state["selected_candidate_id"]) == (destination, candidate_id), f"{scenario_id} committed destination and selection"
+        assert mocks["stored_candidate_set_ids"] == [set_id], f"{scenario_id} exactly one candidate set stored"
         record = candidate_store.load_candidate_set(set_id, session_id=session_id)
-        self.assertIsNotNone(record, f"{scenario_id} stored candidate record")
-        self.assertTrue(record["presented"], f"{scenario_id} presented once")
-        self.assertEqual(
-            record["selected_candidate_id"],
-            candidate_id, f"{scenario_id} selection recorded in store",
-        )
-        self.assertEqual(
-            mocks["prepare_single_leg"].await_count,
-            1, f"{scenario_id} one provider prepare call",
-        )
+        assert record is not None, f"{scenario_id} stored candidate record"
+        assert record["presented"], f"{scenario_id} presented once"
+        assert record["selected_candidate_id"] == candidate_id, f"{scenario_id} selection recorded in store"
+        assert mocks["prepare_single_leg"].await_count == 1, f"{scenario_id} one provider prepare call"
         # Prepared candidates are immutable at presentation time. Keep the
         # legacy seam patched as a guard, but prove request-time enrichment is
         # not reintroduced on the prepare -> present path.
-        self.assertEqual(
-            mocks["enrich_route"].await_count,
-            0, f"{scenario_id} no request-time enrichment",
-        )
-        self.assertEqual(events[0].type, "meta", f"{scenario_id} meta first")
-        self.assertEqual(events[-1].type, "done", f"{scenario_id} done last")
-        self.assertEqual(events[-1].stop_reason, "end_turn", f"{scenario_id} end turn")
+        assert mocks["enrich_route"].await_count == 0, f"{scenario_id} no request-time enrichment"
+        assert events[0].type == "meta", f"{scenario_id} meta first"
+        assert events[-1].type == "done", f"{scenario_id} done last"
+        assert events[-1].stop_reason == "end_turn", f"{scenario_id} end turn"
 
 
 __all__ = (
-    "CancellationBase",
     "DEFAULT_ORIGIN",
     "LEASE",
     "ROUTE_STATE_KEYS",
+    "CancellationBase",
 )

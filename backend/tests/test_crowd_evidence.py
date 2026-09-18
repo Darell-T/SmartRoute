@@ -5,6 +5,7 @@ import unittest
 from datetime import datetime
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from app.services.trips.crowds import evidence as crowd_evidence
 from app.services.trips.crowds.hotspots import HotspotHit
 
@@ -66,8 +67,8 @@ class CrowdEvidenceTests(unittest.IsolatedAsyncioTestCase):
             ]
         )
 
-        self.assertEqual(len(impacts), 1)
-        self.assertEqual(impacts[0]["event_id"], "ticketmaster:1")
+        assert len(impacts) == 1
+        assert impacts[0]["event_id"] == "ticketmaster:1"
 
     async def test_partial_grok_coverage_never_becomes_an_all_clear(self):
         with (
@@ -96,10 +97,58 @@ class CrowdEvidenceTests(unittest.IsolatedAsyncioTestCase):
                 allow_live_search=True,
             )
 
-        self.assertEqual(status, "partial")
-        self.assertEqual(impacts, [])
-        self.assertIn("grok_partial", failures)
-        self.assertEqual(metadata["completed_sources"], ["web_search"])
+        assert status == "partial"
+        assert impacts == []
+        assert "grok_partial" in failures
+        assert metadata["completed_sources"] == ["web_search"]
+
+    async def test_explicit_request_uses_route_hubs_when_no_hotspots_were_preselected(self):
+        route_point = crowd_evidence.event_crowd.RoutePoint(
+            route_index=0,
+            name="57 St-7 Av",
+            latitude=40.765,
+            longitude=-73.98,
+            expected_at=datetime.fromisoformat("2026-07-25T20:40:00-04:00"),
+            route_id="Q",
+        )
+        search = AsyncMock(
+            return_value={
+                "status": "complete",
+                "events": [],
+                "completed_sources": ["web_search", "x_search"],
+            }
+        )
+        with (
+            patch.object(
+                crowd_evidence.event_crowd,
+                "search_hubs",
+                return_value=[route_point],
+            ),
+            patch.object(
+                crowd_evidence.event_crowd,
+                "collect_route_event_evidence",
+                new=AsyncMock(return_value=("no_relevant_events", [], [])),
+            ),
+            patch.object(
+                crowd_evidence.crowd_search,
+                "search_hotspots",
+                new=search,
+            ),
+        ):
+            status, impacts, failures, _metadata = await crowd_evidence.collect(
+                [_route()],
+                _Ctx(),
+                hotspot_hits=[],
+                explicit_crowd_request=True,
+                allow_live_search=True,
+            )
+
+        assert status == "no_relevant_events"
+        assert impacts == []
+        assert failures == []
+        generated_hits = search.await_args.args[0]
+        assert generated_hits[0].hotspot_key == "route-0-57-st-7-av"
+        assert generated_hits[0].route_id == "Q"
 
     async def test_grok_timeout_keeps_ticketmaster_result_and_marks_partial(self):
         async def slow_search(*_args, **_kwargs):
@@ -127,9 +176,9 @@ class CrowdEvidenceTests(unittest.IsolatedAsyncioTestCase):
                 allow_live_search=True,
             )
 
-        self.assertEqual(status, "partial")
-        self.assertEqual(impacts, [])
-        self.assertIn("grok_partial", failures)
+        assert status == "partial"
+        assert impacts == []
+        assert "grok_partial" in failures
 
     async def test_one_deadline_also_bounds_ticketmaster(self):
         async def slow_ticketmaster(*_args, **_kwargs):
@@ -163,9 +212,9 @@ class CrowdEvidenceTests(unittest.IsolatedAsyncioTestCase):
                 allow_live_search=True,
             )
 
-        self.assertEqual(status, "partial")
-        self.assertEqual(impacts, [])
-        self.assertIn("TimeoutError", failures)
+        assert status == "partial"
+        assert impacts == []
+        assert "TimeoutError" in failures
 
     async def test_quick_incidental_hotspot_does_not_require_live_grok(self):
         search = AsyncMock(
@@ -191,9 +240,9 @@ class CrowdEvidenceTests(unittest.IsolatedAsyncioTestCase):
                 allow_live_search=False,
             )
 
-        self.assertEqual(status, "no_relevant_events")
-        self.assertEqual(failures, [])
-        self.assertFalse(search.await_args.kwargs["allow_live_search"])
+        assert status == "no_relevant_events"
+        assert failures == []
+        assert not search.await_args.kwargs["allow_live_search"]
 
     async def test_partial_candidate_coverage_survives_optional_live_search(self):
         search = AsyncMock(
@@ -219,9 +268,9 @@ class CrowdEvidenceTests(unittest.IsolatedAsyncioTestCase):
                 allow_live_search=False,
             )
 
-        self.assertEqual(status, "partial")
-        self.assertEqual(impacts, [])
-        self.assertEqual(failures, [])
+        assert status == "partial"
+        assert impacts == []
+        assert failures == []
 
     async def test_caller_cancellation_cancels_and_drains_both_provider_tasks(self):
         ticketmaster_started = asyncio.Event()
@@ -269,9 +318,9 @@ class CrowdEvidenceTests(unittest.IsolatedAsyncioTestCase):
             await ticketmaster_started.wait()
             await grok_started.wait()
             collect_task.cancel()
-            with self.assertRaises(asyncio.CancelledError):
+            with pytest.raises(asyncio.CancelledError):
                 await collect_task
 
-        self.assertTrue(collect_task.cancelled())
-        self.assertTrue(ticketmaster_cleaned_up.is_set())
-        self.assertTrue(grok_cleaned_up.is_set())
+        assert collect_task.cancelled()
+        assert ticketmaster_cleaned_up.is_set()
+        assert grok_cleaned_up.is_set()

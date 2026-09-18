@@ -1,13 +1,14 @@
 """Route scoring + route-step accessors.
 
 Pure functions over Google-parsed route step dicts. Depends only on ``text``
-(for ``_safe_text``). ``_step_route_id`` lives here for route scoring and
+(for ``safe_text``). ``step_route_id`` lives here for route scoring and
 shared candidate display helpers.
 """
 
-from app.services.trips import text
-from app.services.trips.crowds import event as event_crowd
+from app.services import text
 from app.services.mta.alerts import is_material_service_alert
+from app.services.parsing import nonnegative_int
+from app.services.trips.crowds import event as event_crowd
 from app.services.trips.itinerary import TRANSIT_MODES
 from app.services.trips.transfer_semantics import (
     route_accessibility,
@@ -24,11 +25,7 @@ def _step_minutes(step: dict) -> int:
     return 4
 
 
-def _route_total_minutes(route: list[dict]) -> int:
-    # ``build_canonical_itinerary`` treats the provider's seconds value as the
-    # authoritative door-to-door duration.  Keep scoring and passenger reason
-    # facts on that same owner when older parsed responses also carry a rounded
-    # ``route_total_minutes`` field.
+def _parse_route_seconds_minutes(route: list[dict]) -> int | None:
     for step in route or []:
         route_total_seconds = step.get("route_total_seconds")
         if (
@@ -37,10 +34,18 @@ def _route_total_minutes(route: list[dict]) -> int:
             and route_total_seconds >= 0
         ):
             return max(1, round(route_total_seconds / 60))
+    return None
+
+
+def _parse_route_minutes_field(route: list[dict]) -> int | None:
     for step in route or []:
         route_total = step.get("route_total_minutes")
         if isinstance(route_total, (int, float)):
             return max(1, round(route_total))
+    return None
+
+
+def _select_live_arrival_minutes(route: list[dict]) -> int | None:
     live_arrivals = [
         step.get("minutes_until_arrival")
         for step in route or []
@@ -49,15 +54,32 @@ def _route_total_minutes(route: list[dict]) -> int:
     ]
     if live_arrivals:
         return max(1, round(max(live_arrivals)))
+    return None
+
+
+def route_total_minutes(route: list[dict]) -> int:
+    # ``build_canonical_itinerary`` treats the provider's seconds value as the
+    # authoritative door-to-door duration.  Keep scoring and passenger reason
+    # facts on that same owner when older parsed responses also carry a rounded
+    # ``route_total_minutes`` field.
+    parsed = _parse_route_seconds_minutes(route)
+    if parsed is not None:
+        return parsed
+    parsed = _parse_route_minutes_field(route)
+    if parsed is not None:
+        return parsed
+    live = _select_live_arrival_minutes(route)
+    if live is not None:
+        return live
     return max(1, sum(_step_minutes(step) for step in route))
 
 
-def _route_transfer_count(route: list[dict]) -> int:
+def route_transfer_count(route: list[dict]) -> int:
     transit_steps = [step for step in route if step.get("type") in TRANSIT_MODES]
     return max(0, len(transit_steps) - 1)
 
 
-def _step_route_id(step: dict) -> str:
+def step_route_id(step: dict) -> str:
     return str(step.get("route_id") or step.get("train_line") or "").strip().upper()
 
 
@@ -66,31 +88,55 @@ def _route_lines(route: list[dict]) -> list[str]:
     for step in route or []:
         if step.get("type") not in TRANSIT_MODES:
             continue
-        line = _step_route_id(step)
+        line = step_route_id(step)
         if line and line not in lines:
             lines.append(line)
     return lines
 
 
-def _route_alert_hits(route: list[dict], alerts: list[dict] | None) -> list[str]:
+def _parse_alert_route_ids(alert: dict) -> set[str]:
+    return {
+        str(route_id or "").strip().upper()
+        for route_id in alert.get("route_ids", [])
+        if str(route_id or "").strip()
+    }
+
+
+def _select_matching_alerts(
+    route: list[dict], alerts: list[dict] | None
+) -> list[dict]:
     route_lines = set(_route_lines(route))
-    hits: list[str] = []
+    matching: list[dict] = []
     for alert in alerts or []:
         if not isinstance(alert, dict) or not is_material_service_alert(alert):
             continue
-        alert_routes = {
-            str(route_id or "").strip().upper()
-            for route_id in alert.get("route_ids", [])
-            if str(route_id or "").strip()
-        }
-        if route_lines & alert_routes:
-            title = text._safe_text(alert.get("header") or "active alert", 80)
-            if title and title not in hits:
-                hits.append(title)
+        if route_lines & _parse_alert_route_ids(alert):
+            matching.append(alert)
+    return matching
+
+
+def route_alert_hits(route: list[dict], alerts: list[dict] | None) -> list[str]:
+    hits: list[str] = []
+    for alert in _select_matching_alerts(route, alerts):
+        title = text.safe_text(alert.get("header") or "active alert", 80)
+        if title and title not in hits:
+            hits.append(title)
     return hits
 
 
-def _route_alert_penalty(route: list[dict], alerts: list[dict] | None) -> float:
+def _calculate_alert_severity_penalty(copy: str) -> float | None:
+    if any(term in copy for term in ("elevator", "escalator", "accessibility")):
+        return None
+    if any(term in copy for term in ("suspended", "no service", "not running")):
+        return 24.0
+    if "severe" in copy:
+        return 16.0
+    if "minor" in copy:
+        return 4.0
+    return 8.0
+
+
+def route_alert_penalty(route: list[dict], alerts: list[dict] | None) -> float:
     """Weight relevant service impact, not mere alert existence.
 
     Accessibility-only notices remain available as evidence but do not make a
@@ -100,35 +146,18 @@ def _route_alert_penalty(route: list[dict], alerts: list[dict] | None) -> float:
     less.
     """
 
-    route_lines = set(_route_lines(route))
     penalty = 0.0
     seen: set[str] = set()
-    for alert in alerts or []:
-        if not isinstance(alert, dict) or not is_material_service_alert(alert):
-            continue
-        alert_routes = {
-            str(route_id or "").strip().upper()
-            for route_id in alert.get("route_ids", [])
-            if str(route_id or "").strip()
-        }
-        if not route_lines.intersection(alert_routes):
-            continue
+    for alert in _select_matching_alerts(route, alerts):
         copy = " ".join(
             str(alert.get(field) or "") for field in ("header", "description")
         ).casefold()
         if copy in seen:
             continue
         seen.add(copy)
-        if any(term in copy for term in ("elevator", "escalator", "accessibility")):
-            continue
-        if any(term in copy for term in ("suspended", "no service", "not running")):
-            penalty += 24.0
-        elif "severe" in copy:
-            penalty += 16.0
-        elif "minor" in copy:
-            penalty += 4.0
-        else:
-            penalty += 8.0
+        added = _calculate_alert_severity_penalty(copy)
+        if added is not None:
+            penalty += added
     return penalty
 
 
@@ -145,7 +174,7 @@ def _canonical_total_minutes(itinerary: dict | None, route: list[dict]) -> int:
         value = itinerary.get("total_duration_seconds")
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             return max(1, round(float(value) / 60))
-    return _route_total_minutes(route)
+    return route_total_minutes(route)
 
 
 def _route_incident_hits(incidents: list[dict] | None) -> list[str]:
@@ -155,7 +184,7 @@ def _route_incident_hits(incidents: list[dict] | None) -> list[str]:
     for incident in incidents or []:
         if not isinstance(incident, dict):
             continue
-        description = text._safe_text(
+        description = text.safe_text(
             incident.get("description")
             or incident.get("location")
             or incident.get("title")
@@ -189,6 +218,42 @@ def _vehicle_signal_hits(claims: list[dict] | None) -> list[str]:
     return hits
 
 
+def _select_walking_seconds(
+    canonical: dict, route: list[dict]
+) -> tuple[int, int]:
+    street_seconds = nonnegative_int(canonical.get("total_street_walking_seconds"))
+    in_station_seconds = nonnegative_int(
+        canonical.get("total_in_station_transfer_seconds")
+    )
+    if street_seconds or in_station_seconds:
+        return street_seconds, in_station_seconds
+    return route_walking_totals(route)
+
+
+def _calculate_walking_preference_penalty(
+    street_seconds: int, routing_preference: str
+) -> int:
+    if routing_preference != "LESS_WALKING":
+        return 0
+    return round(street_seconds / 60) * 2
+
+
+def _calculate_preferred_mode_penalty(
+    route: list[dict], preferred_modes: list[str] | set[str] | None
+) -> int:
+    preferred = {
+        normalized_mode(mode) for mode in preferred_modes or [] if str(mode).strip()
+    }
+    if not preferred:
+        return 0
+    route_modes = {
+        normalized_mode(step.get("type"))
+        for step in route
+        if normalized_mode(step.get("type")) in {"SUBWAY", "BUS", "RAIL"}
+    }
+    return 0 if route_modes.intersection(preferred) else 4
+
+
 def finalized_route_score(
     *,
     route: list[dict],
@@ -214,12 +279,12 @@ def finalized_route_score(
 
     canonical = itinerary if isinstance(itinerary, dict) else {}
     total_minutes = _canonical_total_minutes(canonical, route)
-    transfers = _nonnegative_int(
+    transfers = nonnegative_int(
         canonical.get("transfer_count"),
-        default=_route_transfer_count(route),
+        default=route_transfer_count(route),
     )
-    alert_hits = _route_alert_hits(route, alerts)
-    alert_penalty = _route_alert_penalty(route, alerts)
+    alert_hits = route_alert_hits(route, alerts)
+    alert_penalty = route_alert_penalty(route, alerts)
     incident_hits = _route_incident_hits(incidents)
     vehicle_hits = _vehicle_signal_hits(vehicle_claims)
     # Confirmed incidents receive the largest service-condition penalty. A
@@ -230,28 +295,13 @@ def finalized_route_score(
         route_index,
         event_impacts or [],
     )
-    street_seconds = _nonnegative_int(canonical.get("total_street_walking_seconds"))
-    in_station_seconds = _nonnegative_int(
-        canonical.get("total_in_station_transfer_seconds")
+    street_seconds, in_station_seconds = _select_walking_seconds(canonical, route)
+    walking_penalty = _calculate_walking_preference_penalty(
+        street_seconds, routing_preference
     )
-    if not street_seconds and not in_station_seconds:
-        street_seconds, in_station_seconds = route_walking_totals(route)
-    walking_penalty = (
-        round(street_seconds / 60) * 2 if routing_preference == "LESS_WALKING" else 0
-    )
-    preferred = {
-        _normalized_mode(mode) for mode in preferred_modes or [] if str(mode).strip()
-    }
-    route_modes = {
-        _normalized_mode(step.get("type"))
-        for step in route
-        if _normalized_mode(step.get("type")) in {"SUBWAY", "BUS", "RAIL"}
-    }
-    preferred_mode_penalty = (
-        4 if preferred and not route_modes.intersection(preferred) else 0
-    )
+    preferred_mode_penalty = _calculate_preferred_mode_penalty(route, preferred_modes)
     service_condition_penalty = alert_penalty + incident_penalty + vehicle_penalty
-    score = _component_score_total(
+    score = component_score_total(
         total_minutes=total_minutes,
         transfers=transfers,
         alert_count=len(alert_hits),
@@ -293,7 +343,7 @@ def finalized_route_score(
     }
 
 
-def _component_score_total(
+def component_score_total(
     *,
     total_minutes: int,
     transfers: int,
@@ -305,7 +355,7 @@ def _component_score_total(
 ) -> float:
     """Single authoritative route score formula.
 
-    Shared by single-leg ``_route_score`` and multi-stop aggregate rows so
+    Shared by single-leg ``route_score`` and multi-stop aggregate rows so
     every score is exactly explainable from the component fields of the row
     that reports it.
     """
@@ -341,7 +391,7 @@ def alert_penalty_from_score(score: dict) -> float:
     return float(max(0, int(score.get("alert_count") or 0)) * 8)
 
 
-def _route_score(
+def route_score(
     route: list[dict],
     alerts: list[dict] | None,
     *,
@@ -350,33 +400,21 @@ def _route_score(
     routing_preference: str = "FEWER_TRANSFERS",
     preferred_modes: list[str] | set[str] | None = None,
 ) -> dict:
-    total_minutes = _route_total_minutes(route)
-    transfers = _route_transfer_count(route)
-    alert_hits = _route_alert_hits(route, alerts)
-    alert_penalty = _route_alert_penalty(route, alerts)
+    total_minutes = route_total_minutes(route)
+    transfers = route_transfer_count(route)
+    alert_hits = route_alert_hits(route, alerts)
+    alert_penalty = route_alert_penalty(route, alerts)
     transit_count = len(_route_lines(route))
     street_walking_seconds, in_station_transfer_seconds = route_walking_totals(route)
     event_penalty = event_crowd.route_event_penalty(
         route_index,
         ticketmaster_event_impacts or [],
     )
-    walking_penalty = (
-        round(street_walking_seconds / 60) * 2
-        if routing_preference == "LESS_WALKING"
-        else 0
+    walking_penalty = _calculate_walking_preference_penalty(
+        street_walking_seconds, routing_preference
     )
-    preferred = {
-        _normalized_mode(mode) for mode in preferred_modes or [] if str(mode).strip()
-    }
-    route_modes = {
-        _normalized_mode(step.get("type"))
-        for step in route
-        if _normalized_mode(step.get("type")) in {"SUBWAY", "BUS", "RAIL"}
-    }
-    preferred_mode_penalty = (
-        4 if preferred and not route_modes.intersection(preferred) else 0
-    )
-    score = _component_score_total(
+    preferred_mode_penalty = _calculate_preferred_mode_penalty(route, preferred_modes)
+    score = component_score_total(
         total_minutes=total_minutes,
         transfers=transfers,
         alert_count=len(alert_hits),
@@ -403,7 +441,7 @@ def _route_score(
     }
 
 
-def _score_routes(
+def score_routes(
     routes: list[list[dict]],
     alerts: list[dict] | None,
     ticketmaster_event_impacts: list[dict] | None = None,
@@ -413,7 +451,7 @@ def _score_routes(
 ) -> list[dict]:
     scored = []
     for index, route in enumerate(routes):
-        score = _route_score(
+        score = route_score(
             route,
             alerts,
             route_index=index,
@@ -436,19 +474,10 @@ def _score_routes(
     return scored
 
 
-def _score_by_index(scored_routes: list[dict]) -> dict[int, dict]:
+def score_by_index(scored_routes: list[dict]) -> dict[int, dict]:
     return {int(row["index"]): row for row in scored_routes}
 
 
-def _normalized_mode(value: object) -> str:
+def normalized_mode(value: object) -> str:
     mode = str(value or "").strip().upper()
     return "RAIL" if mode in {"TRAIN", "LIGHT_RAIL", "TRAM"} else mode
-
-
-def _nonnegative_int(value: object, *, default: int = 0) -> int:
-    try:
-        if value is None or isinstance(value, bool):
-            return max(0, int(default))
-        return max(0, int(round(float(value))))
-    except (TypeError, ValueError, OverflowError):
-        return max(0, int(default))

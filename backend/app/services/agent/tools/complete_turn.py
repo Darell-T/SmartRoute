@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.services.agent.turn import completion as turn_completion
 from app.services.agent import events as agent_events
 from app.services.agent import trip_state as trip_state_module
 from app.services.agent.passenger_output import validated_terminal_message
-from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.base import ToolContext, ToolResult
+from app.services.agent.turn import completion as turn_completion
 from app.services.agent.turn.contract import GoalKind, GoalState, TurnContract
+from app.services.agent.turn.evidence import TurnEvidence
 
 COMPLETE_TURN_SCHEMA = {
     "name": "complete_turn",
@@ -151,94 +152,123 @@ def _projected_facts(
         for goal in contract.goals
     }
     if outcome == "answer":
-        if any(
-            contract.goal(key).kind != GoalKind.GENERAL_RESPONSE for key in goal_keys
-        ):
-            return {}, ToolResult(
-                ok=False,
-                error=(
-                    "answer may target only general_response goals; provider-grounded "
-                    "goals use their canonical presenter, and any separately attempted "
-                    "but unavailable goals must use outcome=unavailable with only those "
-                    "goal_keys without repeating presented facts"
-                ),
-                internal_diagnostic=True,
-            )
-        for key in goal_keys:
-            facts[key] = {
-                "state": GoalState.SATISFIED,
-                "attempted": facts[key]["attempted"],
-                "presented": facts[key]["presented"],
-            }
-        return facts, None
-
+        return _answer_goal_facts(facts, contract, goal_keys)
     if outcome in {"clarification", "refusal", "cancelled"}:
-        for key in goal_keys:
-            goal = contract.goal(key)
-            if outcome == "refusal" and goal.kind != GoalKind.GENERAL_RESPONSE:
-                return {}, ToolResult(
-                    ok=False,
-                    error="refusal may target only general_response goals",
-                    internal_diagnostic=True,
-                )
-            state = facts[key]["state"]
-            if (
-                state == GoalState.EVIDENCE_READY
-                and goal.kind != GoalKind.GENERAL_RESPONSE
-            ):
-                return {}, ToolResult(
-                    ok=False,
-                    error="provider-grounded evidence is ready and must be presented",
-                    internal_diagnostic=True,
-                )
-            if state in {
-                GoalState.SATISFIED,
-                GoalState.UNSUPPORTED,
-                GoalState.CANCELLED_BY_RIDER,
-                GoalState.SUPERSEDED,
-            }:
-                return {}, ToolResult(
-                    ok=False,
-                    error="goal_keys must target unresolved goals",
-                    internal_diagnostic=True,
-                )
-            state_by_outcome = {
-                "clarification": GoalState.BLOCKED_WAITING_FOR_RIDER,
-                "refusal": GoalState.UNSUPPORTED,
-                "cancelled": GoalState.CANCELLED_BY_RIDER,
-            }
-            facts[key] = {
-                "state": state_by_outcome[outcome],
-                "attempted": facts[key]["attempted"],
-                "presented": facts[key]["presented"],
-            }
-        return facts, None
+        return _interrupt_goal_facts(facts, contract, goal_keys, outcome)
+    return _unavailable_goal_facts(facts, contract, goal_keys)
 
+
+def _answer_goal_facts(
+    facts: dict[str, dict[str, object]],
+    contract: TurnContract,
+    goal_keys: tuple[str, ...],
+) -> tuple[dict[str, dict[str, object]], ToolResult | None]:
+    if any(contract.goal(key).kind != GoalKind.GENERAL_RESPONSE for key in goal_keys):
+        return {}, ToolResult(
+            ok=False,
+            error=(
+                "answer may target only general_response goals; provider-grounded "
+                "goals use their canonical presenter, and any separately attempted "
+                "but unavailable goals must use outcome=unavailable with only those "
+                "goal_keys without repeating presented facts"
+            ),
+            internal_diagnostic=True,
+        )
+    for key in goal_keys:
+        facts[key] = {
+            "state": GoalState.SATISFIED,
+            "attempted": facts[key]["attempted"],
+            "presented": facts[key]["presented"],
+        }
+    return facts, None
+
+
+def _interrupt_goal_facts(
+    facts: dict[str, dict[str, object]],
+    contract: TurnContract,
+    goal_keys: tuple[str, ...],
+    outcome: str,
+) -> tuple[dict[str, dict[str, object]], ToolResult | None]:
+    state_by_outcome = {
+        "clarification": GoalState.BLOCKED_WAITING_FOR_RIDER,
+        "refusal": GoalState.UNSUPPORTED,
+        "cancelled": GoalState.CANCELLED_BY_RIDER,
+    }
+    for key in goal_keys:
+        error = _interrupt_goal_error(facts, contract, key, outcome)
+        if error is not None:
+            return {}, error
+        facts[key] = {
+            "state": state_by_outcome[outcome],
+            "attempted": facts[key]["attempted"],
+            "presented": facts[key]["presented"],
+        }
+    return facts, None
+
+
+def _interrupt_goal_error(
+    facts: dict[str, dict[str, object]],
+    contract: TurnContract,
+    key: str,
+    outcome: str,
+) -> ToolResult | None:
+    goal = contract.goal(key)
+    if outcome == "refusal" and goal.kind != GoalKind.GENERAL_RESPONSE:
+        return ToolResult(
+            ok=False,
+            error="refusal may target only general_response goals",
+            internal_diagnostic=True,
+        )
+    state = facts[key]["state"]
+    if state == GoalState.EVIDENCE_READY and goal.kind != GoalKind.GENERAL_RESPONSE:
+        return ToolResult(
+            ok=False,
+            error="provider-grounded evidence is ready and must be presented",
+            internal_diagnostic=True,
+        )
+    if state in {
+        GoalState.SATISFIED,
+        GoalState.UNSUPPORTED,
+        GoalState.CANCELLED_BY_RIDER,
+        GoalState.SUPERSEDED,
+    }:
+        return ToolResult(
+            ok=False,
+            error="goal_keys must target unresolved goals",
+            internal_diagnostic=True,
+        )
+    return None
+
+
+def _unavailable_goal_facts(
+    facts: dict[str, dict[str, object]],
+    contract: TurnContract,
+    goal_keys: tuple[str, ...],
+) -> tuple[dict[str, dict[str, object]], ToolResult | None]:
     invalid_keys = [
         key
         for key in goal_keys
         if facts[key]["state"] != GoalState.ATTEMPTED_BUT_UNAVAILABLE
         or not facts[key]["attempted"]
     ]
-    if invalid_keys:
-        unavailable_keys = [
-            goal.goal_key
-            for goal in contract.goals
-            if facts[goal.goal_key]["state"]
-            == GoalState.ATTEMPTED_BUT_UNAVAILABLE
-            and facts[goal.goal_key]["attempted"]
-        ]
-        return {}, ToolResult(
-            ok=False,
-            error=(
-                "outcome=unavailable may target only attempted-but-unavailable "
-                f"goals; remove resolved or unattempted goal_keys: {invalid_keys!r}; "
-                f"use only these unavailable goal_keys: {unavailable_keys!r}; do not "
-                "repeat facts already emitted by a canonical presenter"
-            ),
-            internal_diagnostic=True,
-        )
-    return facts, None
+    if not invalid_keys:
+        return facts, None
+    unavailable_keys = [
+        goal.goal_key
+        for goal in contract.goals
+        if facts[goal.goal_key]["state"] == GoalState.ATTEMPTED_BUT_UNAVAILABLE
+        and facts[goal.goal_key]["attempted"]
+    ]
+    return {}, ToolResult(
+        ok=False,
+        error=(
+            "outcome=unavailable may target only attempted-but-unavailable "
+            f"goals; remove resolved or unattempted goal_keys: {invalid_keys!r}; "
+            f"use only these unavailable goal_keys: {unavailable_keys!r}; do not "
+            "repeat facts already emitted by a canonical presenter"
+        ),
+        internal_diagnostic=True,
+    )
 
 
 def _pending_goal_instruction(
@@ -284,7 +314,6 @@ def _pending_goal_instruction(
 
 def _record_outcome_goals(
     evidence: object,
-    contract: TurnContract,
     goal_keys: tuple[str, ...],
     outcome: str,
 ) -> None:
@@ -305,27 +334,42 @@ def _record_outcome_goals(
         record_goal(key, state)
 
 
-async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
+def _apply_complete_turn_side_effects(
+    ctx: ToolContext,
+    evidence: object,
+    outcome: str,
+) -> None:
+    if outcome == "cancelled" and isinstance(ctx.session, dict):
+        trip_state_module.discard_scenario(ctx.session)
+    if evidence is not None:
+        evidence.mark_terminal("complete_turn")
+
+
+def _parsed_complete_outcome(tool_input: dict) -> tuple[str, ToolResult | None]:
     outcome = str(tool_input.get("outcome") or "").strip()
-    if outcome not in {
+    if outcome in {
         "answer",
         "clarification",
         "refusal",
         "unavailable",
         "cancelled",
     }:
-        return ToolResult(
-            ok=False,
-            error=(
-                "outcome must be answer, clarification, refusal, unavailable, "
-                "or cancelled"
-            ),
-            internal_diagnostic=True,
-        )
-    message = validated_terminal_message(
-        tool_input.get("message"),
-        outcome=outcome,
+        return outcome, None
+    return "", ToolResult(
+        ok=False,
+        error=(
+            "outcome must be answer, clarification, refusal, unavailable, "
+            "or cancelled"
+        ),
+        internal_diagnostic=True,
     )
+
+
+async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
+    outcome, outcome_error = _parsed_complete_outcome(tool_input)
+    if outcome_error:
+        return outcome_error
+    message = validated_terminal_message(tool_input.get("message"), outcome=outcome)
     if not message:
         return ToolResult(
             ok=False,
@@ -336,26 +380,14 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
             ),
             internal_diagnostic=True,
         )
+    contract, contract_error = _bound_turn_contract(ctx)
+    if contract_error:
+        return contract_error
     evidence = getattr(ctx, "turn_evidence", None)
-    contract = getattr(evidence, "turn_contract", None)
-    if not isinstance(contract, TurnContract):
-        return ToolResult(
-            ok=False,
-            error=(
-                "complete_turn requires a bound TurnContract; declare the turn's "
-                "goals before choosing a terminal outcome"
-            ),
-            internal_diagnostic=True,
-        )
     goal_keys, goal_error = _parse_goal_keys(tool_input, contract)
     if goal_error:
         return goal_error
-
-    pending_instruction = _pending_goal_instruction(
-        evidence,
-        contract,
-        goal_keys,
-    )
+    pending_instruction = _pending_goal_instruction(evidence, contract, goal_keys)
     if pending_instruction:
         return ToolResult(
             ok=False,
@@ -363,10 +395,7 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
             internal_diagnostic=True,
         )
     projected, projection_error = _projected_facts(
-        evidence,
-        contract,
-        goal_keys,
-        outcome,
+        evidence, contract, goal_keys, outcome
     )
     if projection_error:
         return projection_error
@@ -374,7 +403,50 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
         contract.goal(key).kind == GoalKind.ROUTE for key in goal_keys
     ):
         message = _ROUTE_UNAVAILABLE_MESSAGE
-    decision = turn_completion.evaluate_completion(contract, projected)
+    return _terminate_turn(
+        ctx, evidence, contract, goal_keys, outcome, message, projected
+    )
+
+
+def _bound_turn_contract(ctx: ToolContext) -> tuple[TurnContract | None, ToolResult | None]:
+    evidence = getattr(ctx, "turn_evidence", None)
+    contract = getattr(evidence, "turn_contract", None)
+    if isinstance(contract, TurnContract):
+        return contract, None
+    return None, ToolResult(
+        ok=False,
+        error=(
+            "complete_turn requires a bound TurnContract; declare the turn's "
+            "goals before choosing a terminal outcome"
+        ),
+        internal_diagnostic=True,
+    )
+
+
+def _evidence_from_projected(projected: dict[str, dict[str, object]]) -> TurnEvidence:
+    snapshot = TurnEvidence()
+    for key, row in projected.items():
+        snapshot.record_goal(
+            key,
+            row["state"],
+            attempted=bool(row["attempted"]),
+            presented=bool(row["presented"]),
+        )
+    return snapshot
+
+
+def _terminate_turn(
+    ctx: ToolContext,
+    evidence: object,
+    contract: TurnContract,
+    goal_keys: tuple[str, ...],
+    outcome: str,
+    message: str,
+    projected: dict[str, dict[str, object]],
+) -> ToolResult:
+    decision = turn_completion.evaluate_completion(
+        contract, _evidence_from_projected(projected)
+    )
     if not decision.may_terminate:
         detail = ", ".join(decision.required_next_actions) or ", ".join(
             decision.remaining_goal_keys
@@ -387,19 +459,14 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
             ),
             internal_diagnostic=True,
         )
-    _record_outcome_goals(evidence, contract, goal_keys, outcome)
-    if outcome == "cancelled" and isinstance(ctx.session, dict):
-        trip_state_module.discard_scenario(ctx.session)
-    if evidence is not None:
-        evidence.mark_terminal("complete_turn")
+    _record_outcome_goals(evidence, goal_keys, outcome)
+    _apply_complete_turn_side_effects(ctx, evidence, outcome)
     return ToolResult(
         ok=True,
         data={
             "outcome": outcome,
             "message": message,
-            **(
-                {"turn_resolution": decision.turn_resolution.value}
-            ),
+            **({"turn_resolution": decision.turn_resolution.value}),
         },
         summary="Completed the turn",
         events=[agent_events.TokenEvent(text=message)],

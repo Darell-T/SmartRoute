@@ -73,6 +73,17 @@ function hermiteCurve(start: Position, end: Position, startUnit: Vector, endUnit
   return out;
 }
 
+function findEndpointHairpinCut(coords: Position[], minReversalDeg: number, maxArcM: number): number {
+  const n = coords.length;
+  let cumTurn = 0;
+  for (let i = n - 2; i > Math.max(0, n - 200); i -= 1) {
+    cumTurn += signedTurnDeg(coords[i - 1], coords[i], coords[i + 1]);
+    if (haversineM(coords[i], coords[n - 1]) > maxArcM) return -1;
+    if (Math.abs(cumTurn) >= minReversalDeg) return i;
+  }
+  return -1;
+}
+
 /**
  * Replace tight hairpin sections near polyline endpoints with a tangent-matched
  * Hermite arc. Returns the SAME array ref if no hairpin found.
@@ -94,36 +105,31 @@ export function replaceEndpointHairpin(
   targetTangentUnit?: Vector,
   options: HairpinOptions = {},
 ): Position[] {
-  const {
-    minReversalDeg = 120,
-    maxArcM = 300,
-    handleFrac = 0.55,
-    sampleM = 5,
-    tangentSampleN = 5,
-  } = options;
+  const resolved = ({
+    minReversalDeg: (options).minReversalDeg ?? 120,
+    maxArcM: (options).maxArcM ?? 300,
+    handleFrac: (options).handleFrac ?? 0.55,
+    sampleM: (options).sampleM ?? 5,
+    tangentSampleN: (options).tangentSampleN ?? 5,
+});
   if (!Array.isArray(coords) || coords.length < 10) return coords;
 
   const n = coords.length;
-  // Scan backwards from the end
-  let cumTurn = 0;
-  let cutIdx = -1;
-  for (let i = n - 2; i > Math.max(0, n - 200); i -= 1) {
-    cumTurn += signedTurnDeg(coords[i - 1], coords[i], coords[i + 1]);
-    const arc = haversineM(coords[i], coords[n - 1]);
-    if (arc > maxArcM) break;
-    if (Math.abs(cumTurn) >= minReversalDeg) { cutIdx = i; break; }
-  }
+  const cutIdx = findEndpointHairpinCut(coords, resolved.minReversalDeg, resolved.maxArcM);
   if (cutIdx < 0) return coords;
 
-  // Tangent at cut point (branch outbound heading)
-  const tSample = Math.min(tangentSampleN, cutIdx);
+  const tSample = Math.min(resolved.tangentSampleN, cutIdx);
   const branchTangent = unitVec(coords[cutIdx - tSample], coords[cutIdx]);
-
-  // Target: if provided, use it; otherwise use the polyline's own endpoint
-  const target = targetPoint || coords[n - 1];
-  const targetTangent = targetTangentUnit || unitVec(coords[n - 1], coords[n - 2]);
-
-  const curve = hermiteCurve(coords[cutIdx], target, branchTangent, targetTangent, handleFrac, sampleM);
+  const target = targetPoint ?? coords[n - 1];
+  const targetTangent = targetTangentUnit ?? unitVec(coords[n - 1], coords[n - 2]);
+  const curve = hermiteCurve(
+    coords[cutIdx],
+    target,
+    branchTangent,
+    targetTangent,
+    resolved.handleFrac,
+    resolved.sampleM,
+  );
 
   return [...coords.slice(0, cutIdx + 1), ...curve.slice(1)];
 }

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
@@ -11,19 +10,13 @@ from typing import Any
 
 import httpx
 
+from app import runtime
 
-def _bounded_timeout(name: str, default: float, maximum: float) -> float:
-    try:
-        return min(maximum, max(0.1, float(os.getenv(name, str(default)))))
-    except ValueError:
-        return default
-
-
-BUS_REQUEST_TIMEOUT_S = _bounded_timeout("MTA_BUS_REQUEST_TIMEOUT_S", 3.0, 8.0)
+BUS_REQUEST_TIMEOUT_S = runtime.env_float("MTA_BUS_REQUEST_TIMEOUT_S", 3.0, minimum=0.1, maximum=8.0)
 NEARBY_STOPS_CACHE_MAX_ENTRIES = 256
 STOP_MONITORING_CACHE_MAX_ENTRIES = 512
 NEARBY_ARRIVALS_CACHE_MAX_ENTRIES = 128
-_client: httpx.AsyncClient | None = None
+_client = None
 _client_lock = asyncio.Lock()
 _inflight_lock = asyncio.Lock()
 _inflight: dict[str, asyncio.Task[Any]] = {}
@@ -47,10 +40,10 @@ async def start_bus_client() -> None:
     global _client
     async with _client_lock:
         if _client is None or _client.is_closed:
-            _client = httpx.AsyncClient(timeout=BUS_REQUEST_TIMEOUT_S)
+            _client = httpx.AsyncClient(timeout=BUS_REQUEST_TIMEOUT_S)  # noqa: TID251
 
 
-async def bus_client() -> httpx.AsyncClient:
+async def bus_client():
     await start_bus_client()
     assert _client is not None
     return _client

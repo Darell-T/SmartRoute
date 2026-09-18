@@ -1,4 +1,4 @@
-import type { Feature, LineStringGeometry, Position } from "./types.ts";
+import type { Feature, FeatureProps, LineStringGeometry, Position } from "./types.ts";
 
 type JoralemonBbox = {
   minLon: number;
@@ -7,18 +7,7 @@ type JoralemonBbox = {
   maxLat: number;
 };
 
-type JoralemonFeatureProperties = {
-  corridor_id?: string;
-  color?: string;
-  route_ids?: string[];
-  joralemon_green_river_smoothed?: boolean;
-  joralemon_green_river_start_arc_m?: number;
-  joralemon_green_river_end_arc_m?: number;
-  joralemon_green_river_replaced_length_m?: number;
-  [key: string]: unknown;
-};
-
-type JoralemonFeature = Feature<LineStringGeometry, JoralemonFeatureProperties>;
+type JoralemonFeature = Feature<LineStringGeometry, FeatureProps>;
 
 type ArcRange = {
   arcs: number[];
@@ -94,7 +83,9 @@ function isLineFeature(feature: JoralemonFeature): boolean {
 }
 
 function routeIdsOf(feature: JoralemonFeature): string[] {
-  return (feature.properties?.route_ids ?? []).map(String);
+  return Array.isArray(feature.properties?.route_ids)
+    ? feature.properties.route_ids.map(String)
+    : [];
 }
 
 function isTargetGreenFeature(feature: JoralemonFeature, bbox: JoralemonBbox): boolean {

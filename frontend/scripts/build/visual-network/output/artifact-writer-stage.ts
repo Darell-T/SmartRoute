@@ -3,22 +3,15 @@ import {
   buildCandidateDoc,
   type CandidateDocParameters,
 } from "./artifact-metadata.ts";
-
-type ArtifactWriterBundleArtifacts = {
-  bundleFeatures: any[];
-  bundleLaneFeatures: any[];
-  unbundledFeatures: any[];
-  bundleGapFeatures: any[];
-  visualFeatures: any[];
-};
+import type { BundleArtifacts } from "../shared/types.ts";
 
 type ArtifactWriterStageInput = {
   generatedAt: string;
   openDataSourceName: string;
   openDataSourceDatasetId: string;
-  perRouteStats: any[];
-  validationFailures: any[];
-  bundleArtifacts: ArtifactWriterBundleArtifacts;
+  perRouteStats: unknown[];
+  validationFailures: unknown[];
+  bundleArtifacts: BundleArtifacts;
   candidatePath: string;
   finalPath: string;
   parameters: CandidateDocParameters;

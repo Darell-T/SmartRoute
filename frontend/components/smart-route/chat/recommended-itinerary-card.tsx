@@ -3,13 +3,78 @@
 import { useId, useMemo, useState } from "react";
 import { motion, useReducedMotion } from "motion/react";
 import { Map as MapIcon } from "iconoir-react";
-import type { RouteCard as RouteCardData } from "@/lib/agent-chat-stream";
+import type { RouteCard as RouteCardData } from "@/lib/agent-chat/stream";
 import {
   buildItineraryViewModel,
   buildMergedItineraryViewModel,
   type ItineraryViewModel,
 } from "./itinerary-view-model";
 import { ItineraryLeg, JourneyTitle, LAYOUT_EASE } from "./itinerary-card-legs";
+
+function InvalidItineraryCard({
+  titleId,
+  reason,
+}: {
+  titleId: string;
+  reason?: string;
+}) {
+  return (
+    <article
+      className="sr-itinerary-card sr-itinerary-card--invalid"
+      aria-labelledby={titleId}
+    >
+      <p id={titleId} className="sr-itinerary-card__invalid-msg">
+        {reason ?? "This itinerary is unavailable."}
+      </p>
+    </article>
+  );
+}
+
+function ItineraryArrivalLine({
+  arriveAround,
+  firstLegArrivalLabel,
+}: {
+  arriveAround: string | null;
+  firstLegArrivalLabel?: string | null;
+}) {
+  if (!arriveAround && !firstLegArrivalLabel) return null;
+  return (
+    <p className="sr-itinerary-card__arrive">
+      {arriveAround}
+      {arriveAround && firstLegArrivalLabel ? (
+        <span className="sr-itinerary-card__meta-sep" aria-hidden="true">
+          {" "}·{" "}
+        </span>
+      ) : null}
+      {firstLegArrivalLabel}
+    </p>
+  );
+}
+
+function ItineraryTripSummary({ model }: { model: ItineraryViewModel }) {
+  return (
+    <p className="sr-itinerary-card__summary" aria-label="Trip summary">
+      <span className="sr-itinerary-card__duration-value">{model.durationLabel}</span>
+      {model.metaParts.length > 0 ? (
+        <span className="sr-itinerary-card__meta">
+          <span className="sr-itinerary-card__meta-sep" aria-hidden="true">
+            {" "}·{" "}
+          </span>
+          {model.metaParts.map((part, index) => (
+            <span key={part}>
+              {index > 0 ? (
+                <span className="sr-itinerary-card__meta-sep" aria-hidden="true">
+                  {" "}·{" "}
+                </span>
+              ) : null}
+              {part}
+            </span>
+          ))}
+        </span>
+      ) : null}
+    </p>
+  );
+}
 
 function ItineraryCardShell({
   model,
@@ -27,16 +92,7 @@ function ItineraryCardShell({
   const [expandedLegIds, setExpandedLegIds] = useState<Set<string>>(() => new Set());
 
   if (model.invalid) {
-    return (
-      <article
-        className="sr-itinerary-card sr-itinerary-card--invalid"
-        aria-labelledby={titleId}
-      >
-        <p id={titleId} className="sr-itinerary-card__invalid-msg">
-          {model.invalidReason ?? "This itinerary is unavailable."}
-        </p>
-      </article>
-    );
+    return <InvalidItineraryCard titleId={titleId} reason={model.invalidReason} />;
   }
 
   const toggleLeg = (eventId: string) => {
@@ -48,68 +104,36 @@ function ItineraryCardShell({
     });
   };
 
+  const landTransition = reduceMotion
+    ? { duration: 0 }
+    : {
+        layout: { duration: 0.26, ease: LAYOUT_EASE },
+        opacity: { duration: 0.22, delay: landDelayMs / 1000 },
+        y: { duration: 0.26, delay: landDelayMs / 1000, ease: LAYOUT_EASE },
+      };
+  const arriveAround = model.arrivalLabel ? `Arrive around ${model.arrivalLabel}` : null;
+
   return (
     <motion.article
       layout
       className="sr-itinerary-card"
       data-selected={isSelected ? "true" : "false"}
-      data-has-final-walk={
-        model.events.at(-1)?.kind === "walk" ? "true" : "false"
-      }
+      data-has-final-walk={model.events.at(-1)?.kind === "walk" ? "true" : "false"}
       aria-labelledby={titleId}
       initial={reduceMotion ? false : { opacity: 0, y: 6 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={
-        reduceMotion
-          ? { duration: 0 }
-          : {
-              layout: { duration: 0.26, ease: LAYOUT_EASE },
-              opacity: { duration: 0.22, delay: landDelayMs / 1000 },
-              y: { duration: 0.26, delay: landDelayMs / 1000, ease: LAYOUT_EASE },
-            }
-      }
+      transition={landTransition}
     >
       <header className="sr-itinerary-card__header">
         <JourneyTitle names={model.placeNames} id={titleId} />
-        {model.arrivalLabel || model.firstLegArrivalLabel ? (
-          <p className="sr-itinerary-card__arrive">
-            {model.arrivalLabel ? `Arrive around ${model.arrivalLabel}` : null}
-            {model.arrivalLabel && model.firstLegArrivalLabel ? (
-              <span className="sr-itinerary-card__meta-sep" aria-hidden="true">
-                {" "}·{" "}
-              </span>
-            ) : null}
-            {model.firstLegArrivalLabel}
-          </p>
-        ) : null}
+        <ItineraryArrivalLine
+          arriveAround={arriveAround}
+          firstLegArrivalLabel={model.firstLegArrivalLabel}
+        />
       </header>
 
       <div className="sr-itinerary-card__hero">
-        <p className="sr-itinerary-card__summary" aria-label="Trip summary">
-          <span className="sr-itinerary-card__duration-value">
-            {model.durationLabel}
-          </span>
-          {model.metaParts.length > 0 ? (
-            <span className="sr-itinerary-card__meta">
-              <span className="sr-itinerary-card__meta-sep" aria-hidden="true">
-                {" "}·{" "}
-              </span>
-              {model.metaParts.map((part, index) => (
-                <span key={part}>
-                  {index > 0 ? (
-                    <span
-                      className="sr-itinerary-card__meta-sep"
-                      aria-hidden="true"
-                    >
-                      {" "}·{" "}
-                    </span>
-                  ) : null}
-                  {part}
-                </span>
-              ))}
-            </span>
-          ) : null}
-        </p>
+        <ItineraryTripSummary model={model} />
       </div>
 
       <div className="sr-itinerary-card__legs">

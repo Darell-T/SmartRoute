@@ -1,18 +1,9 @@
 "use client";
 
-/* ════════════════════════════════════════════════════════════════════════
-   SmartRoute chat — panel (composition root)
-
-   Top bar (brand + Near You row) + vendored prompt-kit ChatContainer thread
-   + composer. Wires `useAgentChat`'s returned state to the thread, renders
-   the empty-state intro with the three demo-query suggestion pills, and
-   turns a Near You bullet tap into a local (no-model-call) arrivals turn.
-   ════════════════════════════════════════════════════════════════════════ */
-
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import type { ArrivalsTurnPayload, useAgentChat } from "@/lib/use-agent-chat";
-import type { RouteCard } from "@/lib/agent-chat-stream";
-import type { ChatTheme } from "@/lib/use-chat-theme";
+import type { ArrivalsTurnPayload, useAgentChat } from "@/lib/agent-chat/use-agent-chat";
+import type { RouteCard } from "@/lib/agent-chat/stream";
+import type { ChatTheme } from "@/lib/hooks/use-chat-theme";
 import { responsePresentationModeStore } from "@/lib/response-presentation";
 import {
   ChatContainerContent,

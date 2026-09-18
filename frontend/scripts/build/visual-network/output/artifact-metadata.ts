@@ -6,6 +6,8 @@
 // (a module's __dirname differs from the orchestrator's, so paths must never be
 // recomputed here) — this module returns data only.
 
+import type { BundleArtifacts } from "../shared/types.ts";
+
 export type CandidateDocParameters = {
   minTripsPerBranch: number;
   resampleIntervalM: number;
@@ -20,17 +22,14 @@ export type BuildCandidateDocInput = {
   generatedAt: string;
   openDataSourceName: string;
   openDataSourceDatasetId: string;
-  perRouteStats: any[];
-  validationFailures: any[];
-  bundleArtifacts: {
-    bundleFeatures: any[];
-    bundleLaneFeatures: any[];
-    unbundledFeatures: any[];
-    bundleGapFeatures: any[];
-    visualFeatures: any[];
-  };
+  perRouteStats: unknown[];
+  validationFailures: unknown[];
+  bundleArtifacts: BundleArtifacts;
   parameters: CandidateDocParameters;
 };
+
+/** Public visual.geojson schema keeps this count. Solos are bundle_lane features. */
+export const REMAINING_UNBUNDLED_CORRIDORS = 0;
 
 export function buildCandidateDoc(input: BuildCandidateDocInput) {
   const {
@@ -67,7 +66,7 @@ export function buildCandidateDoc(input: BuildCandidateDocInput) {
         bundled_render_lane_count: bundleArtifacts.bundleLaneFeatures.length,
         corridors_converted_to_bundle_geometry:
           bundleArtifacts.bundleFeatures.length,
-        remaining_unbundled_corridors: bundleArtifacts.unbundledFeatures.length,
+        remaining_unbundled_corridors: REMAINING_UNBUNDLED_CORRIDORS,
         bundle_gap_count: bundleArtifacts.bundleGapFeatures.length,
       },
       parameters: {

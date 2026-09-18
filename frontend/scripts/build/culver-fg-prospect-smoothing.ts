@@ -1,4 +1,4 @@
-import type { Feature, LineStringGeometry, Position } from "./types.ts";
+import type { Feature, FeatureProps, LineStringGeometry, Position } from "./types.ts";
 
 type Vector = [number, number];
 
@@ -9,20 +9,7 @@ type BBox = {
   maxLat: number;
 };
 
-type CulverProperties = {
-  visual_feature_type?: string;
-  corridor_id?: string;
-  color?: unknown;
-  route_ids?: unknown;
-  color_route_ids?: unknown;
-  lane_offset_baked?: boolean;
-  culver_fg_prospect_smoothing?: boolean;
-  culver_fg_prospect_min_before_m?: number | null;
-  culver_fg_prospect_min_after_m?: number | null;
-  [key: string]: unknown;
-};
-
-type CulverFeature = Feature<LineStringGeometry, CulverProperties>;
+type CulverFeature = Feature<LineStringGeometry, FeatureProps>;
 
 type SmoothingOptions = {
   bbox: BBox;
@@ -50,6 +37,22 @@ type GreenChain = {
   secondReversed: boolean;
   gapM: number;
 };
+
+type CulverSeamRebuild =
+  | { ok: false; reason: string }
+  | {
+      ok: true;
+      first: Position[];
+      second: Position[];
+      firstReplacement: Position[];
+      secondReplacement: Position[];
+      firstRangeStart: number;
+      firstRangeEnd: number;
+      secondRangeStart: number;
+      secondRangeEnd: number;
+      minBeforeM: number;
+      minAfterM: number;
+    };
 
 type ReplacementResult = {
   green: Position[];
@@ -406,6 +409,85 @@ function replaceFeatureByOrientedRange(
   };
 }
 
+function findCulverMember(
+  features: CulverFeature[],
+  bbox: BBox,
+  color: string,
+  routeId: string,
+): CulverFeature | undefined {
+  return features.find((feature) => (
+    isLineFeature(feature) &&
+    String(feature.properties?.color ?? "").toUpperCase() === color &&
+    hasRoute(feature, routeId) &&
+    feature.geometry.coordinates.some((coord) => inBBox(coord, bbox))
+  ));
+}
+
+function findCulverGreenMembers(features: CulverFeature[], bbox: BBox): CulverFeature[] {
+  return features.filter((feature) => (
+    isLineFeature(feature) &&
+    String(feature.properties?.color ?? "").toUpperCase() === G_GREEN &&
+    hasRoute(feature, "G") &&
+    feature.geometry.coordinates.some((coord) => inBBox(coord, bbox))
+  ));
+}
+
+function buildCulverSeamRebuild(
+  orange: CulverFeature,
+  chain: GreenChain,
+  options: SmoothingOptions,
+): CulverSeamRebuild {
+  const seam: Position = [
+    (chain.first[chain.first.length - 1][0] + chain.second[0][0]) / 2,
+    (chain.first[chain.first.length - 1][1] + chain.second[0][1]) / 2,
+  ];
+  const first = chain.first.slice();
+  const second = chain.second.slice();
+  first[first.length - 1] = seam;
+  second[0] = seam;
+  const firstLen = lengthM(first);
+  const secondLen = lengthM(second);
+  const composite = removeAdjacentDuplicates([...first, ...second.slice(1)]);
+  const greenRange = arcRangeForBBox(composite, options.bbox, options.marginM);
+  const orangeRange = arcRangeForBBox(orange.geometry.coordinates, options.bbox, options.marginM);
+  if (!greenRange || !orangeRange) return { ok: false, reason: "missing_bbox_arc_range" };
+  if (greenRange.startArc >= firstLen || greenRange.endArc <= firstLen) {
+    return { ok: false, reason: "range_does_not_span_g_seam" };
+  }
+  const greenSegment = sliceArc(composite, greenRange.startArc, greenRange.endArc);
+  const orangeSegment = sliceArc(orange.geometry.coordinates, orangeRange.startArc, orangeRange.endArc);
+  if (greenSegment.length < 2 || orangeSegment.length < 2) {
+    return { ok: false, reason: "degenerate_local_segment" };
+  }
+  const replacement = buildGreenReplacementFromOrange(greenSegment, orangeSegment, options);
+  const greenReplacementArcs = cumulativeArcs(replacement.green);
+  const replacementTotal = greenReplacementArcs[greenReplacementArcs.length - 1] || 1;
+  const greenSpan = greenRange.endArc - greenRange.startArc;
+  const splitFraction = Math.max(0, Math.min(1, (firstLen - greenRange.startArc) / greenSpan));
+  const replacementSplitArc = replacementTotal * splitFraction;
+  const firstReplacement = sliceArc(replacement.green, 0, replacementSplitArc);
+  const secondReplacement = sliceArc(replacement.green, replacementSplitArc, replacementTotal);
+  const generatedSeam = interpolateAtArc(replacement.green, greenReplacementArcs, replacementSplitArc);
+  if (firstReplacement.length < 2 || secondReplacement.length < 2) {
+    return { ok: false, reason: "degenerate_split_replacement" };
+  }
+  firstReplacement[firstReplacement.length - 1] = generatedSeam;
+  secondReplacement[0] = generatedSeam;
+  return {
+    ok: true,
+    first,
+    second,
+    firstReplacement,
+    secondReplacement,
+    firstRangeStart: Math.max(0, greenRange.startArc),
+    firstRangeEnd: Math.min(firstLen, greenRange.endArc),
+    secondRangeStart: Math.max(0, greenRange.startArc - firstLen),
+    secondRangeEnd: Math.min(secondLen, greenRange.endArc - firstLen),
+    minBeforeM: replacement.minBeforeM,
+    minAfterM: replacement.minAfterM,
+  };
+}
+
 export function applyCulverFgProspectSmoothing(features: CulverFeature[], rawOptions: PartialSmoothingOptions = {}): SmoothingResult {
   const options = {
     bbox: DEFAULT_BBOX,
@@ -418,18 +500,8 @@ export function applyCulverFgProspectSmoothing(features: CulverFeature[], rawOpt
     ...rawOptions,
   };
 
-  const orange = features.find((feature) => (
-    isLineFeature(feature) &&
-    String(feature.properties?.color ?? "").toUpperCase() === ORANGE &&
-    hasRoute(feature, "F") &&
-    feature.geometry.coordinates.some((coord) => inBBox(coord, options.bbox))
-  ));
-  const greens = features.filter((feature) => (
-    isLineFeature(feature) &&
-    String(feature.properties?.color ?? "").toUpperCase() === G_GREEN &&
-    hasRoute(feature, "G") &&
-    feature.geometry.coordinates.some((coord) => inBBox(coord, options.bbox))
-  ));
+  const orange = findCulverMember(features, options.bbox, ORANGE, "F");
+  const greens = findCulverGreenMembers(features, options.bbox);
 
   const diagnostics: Diagnostics = {
     applied: false,
@@ -452,73 +524,27 @@ export function applyCulverFgProspectSmoothing(features: CulverFeature[], rawOpt
     return { features, diagnostics };
   }
 
-  const seam: Position = [
-    (chain.first[chain.first.length - 1][0] + chain.second[0][0]) / 2,
-    (chain.first[chain.first.length - 1][1] + chain.second[0][1]) / 2,
-  ];
-  const first = chain.first.slice();
-  const second = chain.second.slice();
-  first[first.length - 1] = seam;
-  second[0] = seam;
-  const firstLen = lengthM(first);
-  const secondLen = lengthM(second);
-  const composite = removeAdjacentDuplicates([...first, ...second.slice(1)]);
-
-  const greenRange = arcRangeForBBox(composite, options.bbox, options.marginM);
-  const orangeRange = arcRangeForBBox(orange.geometry.coordinates, options.bbox, options.marginM);
-  if (!greenRange || !orangeRange) {
-    diagnostics.reason = "missing_bbox_arc_range";
+  const rebuild = buildCulverSeamRebuild(orange, chain, options);
+  if (!rebuild.ok) {
+    diagnostics.reason = rebuild.reason;
     return { features, diagnostics };
   }
-  if (!(greenRange.startArc < firstLen && greenRange.endArc > firstLen)) {
-    diagnostics.reason = "range_does_not_span_g_seam";
-    return { features, diagnostics };
-  }
-
-  const greenSegment = sliceArc(composite, greenRange.startArc, greenRange.endArc);
-  const orangeSegment = sliceArc(orange.geometry.coordinates, orangeRange.startArc, orangeRange.endArc);
-  if (greenSegment.length < 2 || orangeSegment.length < 2) {
-    diagnostics.reason = "degenerate_local_segment";
-    return { features, diagnostics };
-  }
-
-  const replacement = buildGreenReplacementFromOrange(greenSegment, orangeSegment, options);
-  const greenReplacementArcs = cumulativeArcs(replacement.green);
-  const replacementTotal = greenReplacementArcs[greenReplacementArcs.length - 1] || 1;
-  const greenSpan = greenRange.endArc - greenRange.startArc;
-  const splitFraction = Math.max(0, Math.min(1, (firstLen - greenRange.startArc) / greenSpan));
-  const replacementSplitArc = replacementTotal * splitFraction;
-  const firstReplacement = sliceArc(replacement.green, 0, replacementSplitArc);
-  const secondReplacement = sliceArc(replacement.green, replacementSplitArc, replacementTotal);
-  const generatedSeam = interpolateAtArc(replacement.green, greenReplacementArcs, replacementSplitArc);
-
-  if (firstReplacement.length < 2 || secondReplacement.length < 2) {
-    diagnostics.reason = "degenerate_split_replacement";
-    return { features, diagnostics };
-  }
-  firstReplacement[firstReplacement.length - 1] = generatedSeam;
-  secondReplacement[0] = generatedSeam;
-
-  const firstRangeStart = Math.max(0, greenRange.startArc);
-  const firstRangeEnd = Math.min(firstLen, greenRange.endArc);
-  const secondRangeStart = Math.max(0, greenRange.startArc - firstLen);
-  const secondRangeEnd = Math.min(secondLen, greenRange.endArc - firstLen);
 
   diagnostics.applied = true;
   diagnostics.seam_gap_m = Number(chain.gapM.toFixed(2));
-  diagnostics.min_separation_before_m = Number(replacement.minBeforeM.toFixed(2));
-  diagnostics.min_separation_after_m = Number(replacement.minAfterM.toFixed(2));
+  diagnostics.min_separation_before_m = Number(rebuild.minBeforeM.toFixed(2));
+  diagnostics.min_separation_after_m = Number(rebuild.minAfterM.toFixed(2));
 
   return {
     features: features.map((feature) => {
       if (feature === chain.firstFeature) {
         const updated = replaceFeatureByOrientedRange(
           feature,
-          first,
+          rebuild.first,
           chain.firstReversed,
-          firstRangeStart,
-          firstRangeEnd,
-          firstReplacement,
+          rebuild.firstRangeStart,
+          rebuild.firstRangeEnd,
+          rebuild.firstReplacement,
         );
         updated.properties.culver_fg_prospect_min_before_m = diagnostics.min_separation_before_m;
         updated.properties.culver_fg_prospect_min_after_m = diagnostics.min_separation_after_m;
@@ -527,11 +553,11 @@ export function applyCulverFgProspectSmoothing(features: CulverFeature[], rawOpt
       if (feature === chain.secondFeature) {
         const updated = replaceFeatureByOrientedRange(
           feature,
-          second,
+          rebuild.second,
           chain.secondReversed,
-          secondRangeStart,
-          secondRangeEnd,
-          secondReplacement,
+          rebuild.secondRangeStart,
+          rebuild.secondRangeEnd,
+          rebuild.secondReplacement,
         );
         updated.properties.culver_fg_prospect_min_before_m = diagnostics.min_separation_before_m;
         updated.properties.culver_fg_prospect_min_after_m = diagnostics.min_separation_after_m;

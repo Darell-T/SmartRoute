@@ -19,7 +19,7 @@ import os
 import secrets
 import time
 from collections.abc import Iterable, Mapping, Sequence
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from app.services import cache
@@ -37,16 +37,16 @@ MAX_CONTINUATION_ATTEMPTS = 3
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _items(value: object, field: str) -> tuple[str, ...]:
     if value is None:
         return ()
-    if isinstance(value, (str, bytes)) or isinstance(value, Mapping):
-        raise ValueError(f"{field} must be a sequence of strings")
+    if isinstance(value, (str, bytes, Mapping)):
+        raise TypeError(f"{field} must be a sequence of strings")
     if not isinstance(value, Sequence):
-        raise ValueError(f"{field} must be a sequence of strings")
+        raise TypeError(f"{field} must be a sequence of strings")
     result: list[str] = []
     seen: set[str] = set()
     for item in value:
@@ -61,10 +61,10 @@ def _items(value: object, field: str) -> tuple[str, ...]:
 
 def _utc(value: datetime) -> datetime:
     if not isinstance(value, datetime):
-        raise ValueError("expiry metadata must be datetime values")
+        raise TypeError("expiry metadata must be datetime values")
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -92,7 +92,7 @@ class PendingContinuation:
         if isinstance(self.attempt_count, bool) or not isinstance(
             self.attempt_count, int
         ):
-            raise ValueError("attempt_count must be an integer")
+            raise TypeError("attempt_count must be an integer")
         if not 1 <= self.attempt_count <= MAX_CONTINUATION_ATTEMPTS:
             raise ValueError(
                 f"attempt_count must be between 1 and {MAX_CONTINUATION_ATTEMPTS}"
@@ -120,7 +120,7 @@ class PendingContinuation:
         attempt_count: int = 1,
         now: datetime | None = None,
         ttl: timedelta = DEFAULT_TTL,
-    ) -> "PendingContinuation":
+    ) -> PendingContinuation:
         created = _utc(now or _now())
         if ttl <= timedelta(0):
             raise ValueError("ttl must be positive")
@@ -134,10 +134,6 @@ class PendingContinuation:
             created_at=created,
             expires_at=created + ttl,
         )
-
-    @property
-    def recovery_options(self) -> tuple[str, ...]:
-        return self.approved_recovery_options
 
     def is_expired(self, now: datetime | None = None) -> bool:
         expires = self.expires_at
@@ -161,7 +157,7 @@ class PendingContinuation:
         }
 
     @classmethod
-    def from_dict(cls, payload: Mapping[str, Any]) -> "PendingContinuation":
+    def from_dict(cls, payload: Mapping[str, Any]) -> PendingContinuation:
         allowed = {
             "unresolved_outcomes",
             "missing_fields",
@@ -362,10 +358,6 @@ def _transcript_key(session_id: str) -> str:
     return transcript_store.transcript_key(session_id)
 
 
-def _revoked_key(session_id: str) -> str:
-    return transcript_store.revoked_key(session_id)
-
-
 def _session_lease_key(session_id: str) -> str:
     return f"{SESSION_LEASE_KEY_PREFIX}{session_id}"
 
@@ -528,6 +520,27 @@ def _trim_route_cards(cards: list) -> list:
     return list(cards)[-MAX_ROUTE_CARDS:]
 
 
+def _trimmed_session_blob(session: dict) -> str:
+    core_session = {
+        key: value for key, value in session.items() if key != _TRANSCRIPT_FIELD
+    }
+    blob = json.dumps(core_session, separators=(",", ":"), default=str)
+    while len(blob.encode("utf-8")) > MAX_SESSION_BYTES:
+        if session["route_cards"]:
+            session["route_cards"].pop(0)
+        elif session["history"]:
+            session["history"].pop(0)
+        elif session["pending_continuations"]:
+            session["pending_continuations"].pop(0)
+        else:
+            break
+        core_session["route_cards"] = session["route_cards"]
+        core_session["history"] = session["history"]
+        core_session["pending_continuations"] = session["pending_continuations"]
+        blob = json.dumps(core_session, separators=(",", ":"), default=str)
+    return blob
+
+
 def save_session(
     session_id: str,
     session: dict,
@@ -557,24 +570,7 @@ def save_session(
 
     discovery_store.presented_entity_registry(session)
     _normalise_pending_continuations(session)
-
-    core_session = {
-        key: value for key, value in session.items() if key != _TRANSCRIPT_FIELD
-    }
-    blob = json.dumps(core_session, separators=(",", ":"), default=str)
-    while len(blob.encode("utf-8")) > MAX_SESSION_BYTES:
-        if session["route_cards"]:
-            session["route_cards"].pop(0)
-        elif session["history"]:
-            session["history"].pop(0)
-        elif session["pending_continuations"]:
-            session["pending_continuations"].pop(0)
-        else:
-            break
-        core_session["route_cards"] = session["route_cards"]
-        core_session["history"] = session["history"]
-        core_session["pending_continuations"] = session["pending_continuations"]
-        blob = json.dumps(core_session, separators=(",", ":"), default=str)
+    blob = _trimmed_session_blob(session)
 
     ttl = int(AGENT_SESSION_TTL_S)
     transcript_store.save(session_id, session, ttl, refresh_ttl=refresh_ttl)
@@ -733,6 +729,34 @@ def next_turn_id(session: dict) -> str:
     return f"t{session['turn_seq']}"
 
 
+def _route_endpoint_slots(slots: dict, tool_input: dict) -> None:
+    origin = tool_input.get("origin")
+    if origin:
+        slots["origin"] = origin
+    destination = tool_input.get("destination")
+    if destination:
+        slots["destination"] = destination
+    departure_time = tool_input.get("departure_time")
+    if departure_time:
+        slots["time_anchor"] = departure_time
+
+
+def _route_constraint_slots(slots: dict, tool_input: dict) -> None:
+    exclude_modes = tool_input.get("exclude_modes")
+    if exclude_modes is not None:
+        slots.setdefault("constraints", {})["exclude_modes"] = list(exclude_modes)
+    excluded_route_ids = tool_input.get("excluded_route_ids")
+    if excluded_route_ids is not None:
+        slots.setdefault("constraints", {})["excluded_route_ids"] = list(
+            normalize_route_ids(excluded_route_ids)
+        )
+    routing_preference = tool_input.get("routing_preference")
+    if routing_preference:
+        slots.setdefault("constraints", {})["routing_preference"] = (
+            routing_preference
+        )
+
+
 def extract_slots(session: dict, tool_calls: list[tuple[str, dict]]) -> None:
     """Deterministically update session slots from this turn's ACTUAL tool
     calls -- never from model prose, which can drift from what really ran."""
@@ -744,28 +768,8 @@ def extract_slots(session: dict, tool_calls: list[tuple[str, dict]]) -> None:
             # A hypothetical preparation is intentionally isolated from the
             # active trip; present_route commits it only on explicit intent.
             continue
-        origin = tool_input.get("origin")
-        if origin:
-            slots["origin"] = origin
-        destination = tool_input.get("destination")
-        if destination:
-            slots["destination"] = destination
-        exclude_modes = tool_input.get("exclude_modes")
-        if exclude_modes is not None:
-            slots.setdefault("constraints", {})["exclude_modes"] = list(exclude_modes)
-        excluded_route_ids = tool_input.get("excluded_route_ids")
-        if excluded_route_ids is not None:
-            slots.setdefault("constraints", {})["excluded_route_ids"] = list(
-                normalize_route_ids(excluded_route_ids)
-            )
-        routing_preference = tool_input.get("routing_preference")
-        if routing_preference:
-            slots.setdefault("constraints", {})["routing_preference"] = (
-                routing_preference
-            )
-        departure_time = tool_input.get("departure_time")
-        if departure_time:
-            slots["time_anchor"] = departure_time
+        _route_endpoint_slots(slots, tool_input)
+        _route_constraint_slots(slots, tool_input)
         # The canonical prepare_route_options executor owns trip-state
         # mutation (route fields, active candidate set, selected candidate).
         # Finalization mirrors only conversational slots, so a non-presentable

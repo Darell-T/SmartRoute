@@ -20,8 +20,8 @@ import { Loader2, X } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
 import { Shimmer } from "@/components/ai-elements/shimmer";
-import type { ToolChip as ToolChipData } from "@/lib/use-agent-chat";
-import { isHiddenActivityTool, isSearchActivityTool } from "@/lib/agent-route-tools";
+import type { ToolChip as ToolChipData } from "@/lib/agent-chat/use-agent-chat";
+import { isHiddenActivityTool, isSearchActivityTool } from "@/lib/agent-chat/route-tools";
 
 const PROGRESS_COPY = {
   finding_routes: "Finding viable routes",
@@ -77,7 +77,7 @@ function ToolRow({ chip }: { chip: ToolChipData }) {
       )}
       <span className="sr-chat-tool-row__label">
         {chip.label}
-        {typeof chip.durationMs === "number" ? ` · ${(chip.durationMs / 1000).toFixed(1)}s` : ""}
+        {chip.durationMs != null ? ` · ${(chip.durationMs / 1000).toFixed(1)}s` : ""}
       </span>
     </div>
   );
@@ -125,6 +125,50 @@ function useElapsedSeconds(isStreaming: boolean): number | undefined {
   return elapsed;
 }
 
+function WorkingPanelTrigger({
+  isStreaming,
+  progress,
+  toolChips,
+  streamingLabel,
+  reduceMotion,
+  elapsedSeconds,
+}: {
+  isStreaming: boolean;
+  progress?: { stage: keyof typeof PROGRESS_COPY; status: "active" | "complete" };
+  toolChips: ToolChipData[];
+  streamingLabel: string;
+  reduceMotion: boolean;
+  elapsedSeconds: number | undefined;
+}) {
+  if (!isStreaming) {
+    return elapsedSeconds ? `Thought for ${elapsedSeconds}s` : "Done";
+  }
+  const searching =
+    progress?.status === "active"
+    || toolChips.some((chip) => isSearchActivityTool(chip.tool) && chip.status === "running");
+  if (!searching) {
+    return (
+      <Shimmer className="sr-chat-working-panel__shimmer" duration={1.35}>
+        {streamingLabel}
+      </Shimmer>
+    );
+  }
+  return (
+    <AnimatePresence initial={false} mode="wait">
+      <motion.span
+        key={streamingLabel}
+        className="sr-chat-working-panel__semantic-stage"
+        initial={reduceMotion ? false : { opacity: 0, y: 3 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={reduceMotion ? undefined : { opacity: 0, y: -3 }}
+        transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+      >
+        {streamingLabel}
+      </motion.span>
+    </AnimatePresence>
+  );
+}
+
 export function ChatWorkingPanel({
   toolChips,
   progress,
@@ -163,32 +207,14 @@ export function ChatWorkingPanel({
       aria-busy={isStreaming}
     >
       <ReasoningTrigger className="sr-chat-working-panel__trigger">
-        {isStreaming ? (
-          progress?.status === "active" || toolChips.some(
-            (chip) => isSearchActivityTool(chip.tool) && chip.status === "running",
-          ) ? (
-            <AnimatePresence initial={false} mode="wait">
-              <motion.span
-                key={streamingLabel}
-                className="sr-chat-working-panel__semantic-stage"
-                initial={reduceMotion ? false : { opacity: 0, y: 3 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={reduceMotion ? undefined : { opacity: 0, y: -3 }}
-                transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-              >
-                {streamingLabel}
-              </motion.span>
-            </AnimatePresence>
-          ) : (
-            <Shimmer className="sr-chat-working-panel__shimmer" duration={1.35}>
-              {streamingLabel}
-            </Shimmer>
-          )
-        ) : (
-          elapsedSeconds
-            ? `Thought for ${elapsedSeconds}s`
-            : "Done"
-        )}
+        <WorkingPanelTrigger
+          isStreaming={isStreaming}
+          progress={progress}
+          toolChips={toolChips}
+          streamingLabel={streamingLabel}
+          reduceMotion={reduceMotion}
+          elapsedSeconds={elapsedSeconds}
+        />
       </ReasoningTrigger>
       <ReasoningContent className="sr-chat-working-panel__content">
         {detailText ? (

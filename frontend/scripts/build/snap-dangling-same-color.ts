@@ -20,11 +20,10 @@ const M_PER_DEG_LAT = 110574;
 type SnapFeatureProperties = {
   corridor_id?: string;
   color?: string;
-  route_ids?: string[];
+  route_ids?: string[] | string;
   same_color_endpoint_snapped?: boolean;
   same_color_y_join_fabric?: boolean;
   same_color_y_join_fabric_count?: number;
-  [key: string]: unknown;
 };
 
 type SnapFeature = Feature<LineStringGeometry, SnapFeatureProperties>;
@@ -37,6 +36,10 @@ type Projection = {
   segmentIndex: number;
   segmentStart: Position;
   segmentEnd: Position;
+};
+
+type SiblingProjection = Projection & {
+  sibling: SnapFeature;
 };
 
 type SplitAtArc = {
@@ -73,6 +76,34 @@ type SnapDanglingOptions = {
 type SnapDanglingResult = {
   features: SnapFeature[];
   snappedCount: number;
+};
+
+type EndpointMergeResult = {
+  coords: Position[];
+  curved: boolean;
+};
+
+type SnapDanglingGates = {
+  snapDistM: number;
+  touchingEpsM: number;
+  convergeSampleM: number;
+  convergeMarginM: number;
+  looseSnapDistM: number;
+  looseEndM: number;
+  mergeCurveM: number;
+  curveSampleM: number;
+  curveHandleM: number;
+  maxDirectSnapTangentDeg: number;
+};
+
+type IndexedLine = {
+  f: SnapFeature;
+  i: number;
+};
+
+type SiblingJoinAngle = {
+  siblingTangentBase: Vector;
+  directAngle: number;
 };
 
 function mPerDegLng(lat: number): number {
@@ -221,16 +252,6 @@ function splitAtArcFromStart(coords: Position[], arcM: number): SplitAtArc {
   };
 }
 
-function splitAtArcFromEnd(coords: Position[], arcM: number): SplitAtArc {
-  const reversed = coords.slice().reverse();
-  const split = splitAtArcFromStart(reversed, arcM);
-  return {
-    point: split.point,
-    before: split.after.slice().reverse(),
-    after: split.before.slice().reverse(),
-  };
-}
-
 function hermiteCurve(
   startCoord: Position,
   endCoord: Position,
@@ -264,205 +285,240 @@ function hermiteCurve(
   return out;
 }
 
+function clonePosition(position: Position): Position {
+  return [position[0], position[1]];
+}
+
+function clonePolyline(coords: Position[]): Position[] {
+  return coords.map(clonePosition);
+}
+
+function replaceEndpoint(coords: Position[], side: EndpointSide, point: Position): Position[] {
+  const next = clonePolyline(coords);
+  if (side === "start") next[0] = clonePosition(point);
+  else next[next.length - 1] = clonePosition(point);
+  return next;
+}
+
+function curveJoinAtEndpoint(
+  coords: Position[],
+  side: EndpointSide,
+  targetPoint: Position,
+  siblingTangentBase: Vector,
+  usableMergeM: number,
+  curveSampleM: number,
+  curveHandleM: number,
+): EndpointMergeResult {
+  const orientedCoords = side === "start" ? coords : coords.slice().reverse();
+  const split = splitAtArcFromStart(orientedCoords, usableMergeM);
+  const rest = split.after.slice(1);
+  const curveOriginLat = (targetPoint[1] + split.point[1]) / 2;
+  const startTangent = orientVectorToward(siblingTangentBase, targetPoint, split.point, curveOriginLat);
+  const nextForPort = rest[0] ?? split.point;
+  const endTangent = unitVector(split.point, nextForPort, curveOriginLat);
+  const joined = [
+    ...hermiteCurve(targetPoint, split.point, startTangent, endTangent, {
+        sampleM: curveSampleM,
+        handleM: curveHandleM,
+      }),
+    ...rest,
+  ];
+  return { coords: side === "start" ? joined : joined.reverse(), curved: true };
+}
+
+function siblingJoinAngle(
+  coords: Position[],
+  side: EndpointSide,
+  targetPoint: Position,
+  projection: Projection,
+): SiblingJoinAngle {
+  const neighbor = side === "start" ? coords[1] : coords[coords.length - 2];
+  const originLat = (targetPoint[1] + neighbor[1]) / 2;
+  const siblingTangentBase = unitVector(projection.segmentStart, projection.segmentEnd, originLat);
+  const directBranchTangent = side === "start"
+    ? unitVector(targetPoint, neighbor, originLat)
+    : unitVector(neighbor, targetPoint, originLat);
+  const directSiblingTangent = orientVectorToward(
+    siblingTangentBase,
+    side === "start" ? targetPoint : neighbor,
+    side === "start" ? neighbor : targetPoint,
+    originLat,
+  );
+  return {
+    siblingTangentBase,
+    directAngle: angleBetweenDeg(directBranchTangent, directSiblingTangent),
+  };
+}
+
 function tangentMatchedEndpointMerge(
   coords: Position[],
   side: EndpointSide,
   targetPoint: Position,
   projection: Projection | null,
   options: MergeOptions,
-): { coords: Position[]; curved: boolean } {
-  const {
-    mergeCurveM,
-    curveSampleM,
-    curveHandleM,
-    maxDirectSnapTangentDeg,
-  } = options;
+): EndpointMergeResult {
   if (coords.length < 2 || !projection?.segmentStart || !projection?.segmentEnd) {
-    const next = coords.map((coord) => coord.slice() as Position);
-    if (side === "start") next[0] = targetPoint.slice() as Position;
-    else next[next.length - 1] = targetPoint.slice() as Position;
-    return { coords: next, curved: false };
+    return { coords: replaceEndpoint(coords, side, targetPoint), curved: false };
   }
 
-  const originLat = (targetPoint[1] + (side === "start" ? coords[1][1] : coords[coords.length - 2][1])) / 2;
-  const siblingTangentBase = unitVector(projection.segmentStart, projection.segmentEnd, originLat);
-  const directBranchTangent = side === "start"
-    ? unitVector(targetPoint, coords[1], originLat)
-    : unitVector(coords[coords.length - 2], targetPoint, originLat);
-  const directSiblingTangent = orientVectorToward(
-    siblingTangentBase,
-    side === "start" ? targetPoint : coords[coords.length - 2],
-    side === "start" ? coords[1] : targetPoint,
-    originLat,
-  );
-  const directAngle = angleBetweenDeg(directBranchTangent, directSiblingTangent);
-
-  if (directAngle <= maxDirectSnapTangentDeg) {
-    const next = coords.map((coord) => coord.slice() as Position);
-    if (side === "start") next[0] = targetPoint.slice() as Position;
-    else next[next.length - 1] = targetPoint.slice() as Position;
-    return { coords: next, curved: false };
+  const join = siblingJoinAngle(coords, side, targetPoint, projection);
+  if (join.directAngle <= options.maxDirectSnapTangentDeg) {
+    return { coords: replaceEndpoint(coords, side, targetPoint), curved: false };
   }
 
-  const usableMergeM = Math.min(mergeCurveM, Math.max(8, totalLengthM(coords) - 1));
+  const usableMergeM = Math.min(options.mergeCurveM, Math.max(8, totalLengthM(coords) - 1));
   if (usableMergeM < 8) {
-    const next = coords.map((coord) => coord.slice() as Position);
-    if (side === "start") next[0] = targetPoint.slice() as Position;
-    else next[next.length - 1] = targetPoint.slice() as Position;
-    return { coords: next, curved: false };
+    return { coords: replaceEndpoint(coords, side, targetPoint), curved: false };
   }
 
-  if (side === "start") {
-    const split = splitAtArcFromStart(coords, usableMergeM);
-    const rest = split.after.slice(1);
-    const curveOriginLat = (targetPoint[1] + split.point[1]) / 2;
-    const startTangent = orientVectorToward(siblingTangentBase, targetPoint, split.point, curveOriginLat);
-    const nextForPort = rest[0] ?? split.point;
-    const endTangent = unitVector(split.point, nextForPort, curveOriginLat);
-    const curve = hermiteCurve(targetPoint, split.point, startTangent, endTangent, {
-      sampleM: curveSampleM,
-      handleM: curveHandleM,
-    });
-    return {
-      coords: [...curve, ...rest],
-      curved: true,
-    };
-  }
+  return curveJoinAtEndpoint(
+    coords,
+    side,
+    targetPoint,
+    join.siblingTangentBase,
+    usableMergeM,
+    options.curveSampleM,
+    options.curveHandleM,
+  );
+}
 
-  const split = splitAtArcFromEnd(coords, usableMergeM);
-  const kept = split.before.slice(0, -1);
-  const curveOriginLat = (split.point[1] + targetPoint[1]) / 2;
-  const prevForPort = kept[kept.length - 1] ?? split.point;
-  const startTangent = unitVector(prevForPort, split.point, curveOriginLat);
-  const endTangent = orientVectorToward(siblingTangentBase, split.point, targetPoint, curveOriginLat);
-  const curve = hermiteCurve(split.point, targetPoint, startTangent, endTangent, {
-    sampleM: curveSampleM,
-    handleM: curveHandleM,
-  });
+function nearestSameColorSibling(
+  endpoint: Position,
+  feature: SnapFeature,
+  lines: IndexedLine[],
+  gates: SnapDanglingGates,
+): SiblingProjection | null {
+  let best: SiblingProjection | null = null;
+  for (const { f: sibling } of lines) {
+    if (sibling === feature || !sameColor(feature, sibling)) continue;
+    const projection = projectToPolyline(sibling.geometry.coordinates, endpoint);
+    if (!projection) continue;
+    if (projection.distM <= gates.touchingEpsM) return null;
+    if (projection.distM <= gates.snapDistM && (!best || projection.distM < best.distM)) {
+      best = { ...projection, sibling };
+    }
+  }
+  return best;
+}
+
+function isConvergingOntoSibling(
+  coords: Position[],
+  side: EndpointSide,
+  nearest: SiblingProjection,
+  gates: SnapDanglingGates,
+): boolean {
+  const inward = pointInwardFrom(coords, side, gates.convergeSampleM);
+  const inwardProjection = projectToPolyline(nearest.sibling.geometry.coordinates, inward);
+  return Boolean(inwardProjection && inwardProjection.distM >= nearest.distM + gates.convergeMarginM);
+}
+
+function isLooseEndTerminus(
+  endpoint: Position,
+  feature: SnapFeature,
+  lines: IndexedLine[],
+  gates: SnapDanglingGates,
+): boolean {
+  let nearestSameRoute = Infinity;
+  for (const { f: sibling } of lines) {
+    if (sibling === feature || !sharesRoute(feature, sibling)) continue;
+    const distanceM = minDistToFeature(sibling.geometry.coordinates, endpoint);
+    if (distanceM < nearestSameRoute) nearestSameRoute = distanceM;
+    if (nearestSameRoute <= gates.looseEndM) break;
+  }
+  return nearestSameRoute > gates.looseEndM;
+}
+
+function snapOneEndpoint(
+  coords: Position[],
+  side: EndpointSide,
+  feature: SnapFeature,
+  lines: IndexedLine[],
+  gates: SnapDanglingGates,
+): EndpointMergeResult | null {
+  const endpoint = side === "start" ? coords[0] : coords[coords.length - 1];
+  const nearest = nearestSameColorSibling(endpoint, feature, lines, gates);
+  if (!nearest) return null;
+  const converging = isConvergingOntoSibling(coords, side, nearest, gates);
+  if (!converging && nearest.distM > gates.looseSnapDistM) return null;
+  if (!converging && !isLooseEndTerminus(endpoint, feature, lines, gates)) return null;
+  return tangentMatchedEndpointMerge(coords, side, nearest.point, nearest, gates);
+}
+
+function snapFeatureEndpoints(
+  feature: SnapFeature,
+  lines: IndexedLine[],
+  gates: SnapDanglingGates,
+): { feature: SnapFeature; snappedCount: number } | null {
+  const coords = clonePolyline(feature.geometry.coordinates);
+  let snappedCount = 0;
+  let curvedCount = 0;
+  for (const side of ["start", "end"] as const) {
+    const merge = snapOneEndpoint(coords, side, feature, lines, gates);
+    if (!merge) continue;
+    coords.length = 0;
+    coords.push(...merge.coords);
+    snappedCount += 1;
+    if (merge.curved) curvedCount += 1;
+  }
+  if (snappedCount === 0) return null;
+  const properties: SnapFeatureProperties = {
+    ...feature.properties,
+    same_color_endpoint_snapped: true,
+  };
+  if (curvedCount > 0) {
+    properties.same_color_y_join_fabric = true;
+    properties.same_color_y_join_fabric_count =
+      Number(feature.properties?.same_color_y_join_fabric_count ?? 0) + curvedCount;
+  }
   return {
-    coords: [...kept, ...curve],
-    curved: true,
+    feature: {
+      ...feature,
+      geometry: { ...feature.geometry, coordinates: coords },
+      properties,
+    },
+    snappedCount,
+  };
+}
+
+function resolveSnapGates(options: SnapDanglingOptions): SnapDanglingGates {
+  return {
+    snapDistM: options.snapDistM ?? 14,
+    touchingEpsM: options.touchingEpsM ?? 1.5,
+    convergeSampleM: options.convergeSampleM ?? 22,
+    convergeMarginM: options.convergeMarginM ?? 3,
+    looseSnapDistM: options.looseSnapDistM ?? 7,
+    looseEndM: options.looseEndM ?? 20,
+    mergeCurveM: options.mergeCurveM ?? 90,
+    curveSampleM: options.curveSampleM ?? 5,
+    curveHandleM: options.curveHandleM ?? 45,
+    maxDirectSnapTangentDeg: options.maxDirectSnapTangentDeg ?? 25,
   };
 }
 
 /**
  * Snap a dangling endpoint onto the same-color sibling it is converging into.
- * Convergence is judged by DISTANCE: the lane must be getting closer to the
- * sibling toward its endpoint (a merge), not staying equidistant (a parallel
- * lane). This correctly catches offset lanes that run alongside the trunk and
- * then stop short -- whose endpoint tangent is ~perpendicular to the trunk --
- * while leaving genuine parallel lanes (e.g. the SI double-track) untouched.
- *
- * @param {Array} features
- * @param {object} [options]
- * @param {number} [options.snapDistM=14] snap an endpoint within this distance of a same-color sibling
- * @param {number} [options.touchingEpsM=1.5] endpoints already this close are considered joined
- * @param {number} [options.convergeSampleM=22] arc distance inward used to test convergence
- * @param {number} [options.convergeMarginM=3] required drop in sibling distance from sample to endpoint
- * @param {number} [options.looseSnapDistM=7] snap a loose-end terminus within this of a same-color sibling
- * @param {number} [options.looseEndM=20] an endpoint with no same-route piece within this is a loose end
- * @param {number} [options.mergeCurveM=90] branch distance replaced with tangent-matched curve when direct snap is kinky
- * @param {number} [options.curveSampleM=5] target spacing for generated merge curve vertices
- * @param {number} [options.curveHandleM=45] maximum Hermite handle length
- * @param {number} [options.maxDirectSnapTangentDeg=25] direct snap only when endpoint tangent is this close to sibling tangent
- * @returns {{ features: Array, snappedCount: number }}
+ * Convergence is judged by distance: the lane must be getting closer to the
+ * sibling toward its endpoint, not staying equidistant (a parallel lane).
  */
 export function snapDanglingSameColorEndpoints(
   features: SnapFeature[],
   options: SnapDanglingOptions = {},
 ): SnapDanglingResult {
-  const {
-    snapDistM = 14,
-    touchingEpsM = 1.5,
-    convergeSampleM = 22,
-    convergeMarginM = 3,
-    looseSnapDistM = 7,
-    looseEndM = 20,
-    mergeCurveM = 90,
-    curveSampleM = 5,
-    curveHandleM = 45,
-    maxDirectSnapTangentDeg = 25,
-  } = options;
-  const lines = features
-    .map((f, i) => ({ f, i }))
-    .filter(({ f }) => f.geometry?.type === "LineString" && Array.isArray(f.geometry.coordinates) && f.geometry.coordinates.length >= 2);
-
+  const gates = resolveSnapGates(options);
+  const lines: IndexedLine[] = [];
+  for (let index = 0; index < features.length; index += 1) {
+    const feature = features[index];
+    if (feature.geometry?.type !== "LineString") continue;
+    if (!Array.isArray(feature.geometry.coordinates) || feature.geometry.coordinates.length < 2) continue;
+    lines.push({ f: feature, i: index });
+  }
   const out = features.slice();
   let snappedCount = 0;
-
   for (const { f, i } of lines) {
-    const coords = f.geometry.coordinates.map((p) => p.slice() as Position);
-    let changed = false;
-    let curvedCount = 0;
-    for (const side of ["start", "end"] as const) {
-      const endpoint = side === "start" ? coords[0] : coords[coords.length - 1];
-
-      let best: (Projection & { sibling: SnapFeature }) | null = null;
-      let touching = false;
-      for (const { f: g } of lines) {
-        if (g === f) continue;
-        if (!sameColor(f, g)) continue;
-        const proj = projectToPolyline(g.geometry.coordinates, endpoint);
-        if (!proj) continue;
-        if (proj.distM <= touchingEpsM) { touching = true; break; }
-        if (proj.distM <= snapDistM && (!best || proj.distM < best.distM)) best = { ...proj, sibling: g };
-      }
-      if (touching || !best) continue;
-
-      // Convergence by distance: the sibling must be closer at the endpoint than
-      // a short way inward along this lane. Parallel lanes stay equidistant.
-      const inward = pointInwardFrom(coords, side, convergeSampleM);
-      const inwardProj = projectToPolyline(best.sibling.geometry.coordinates, inward);
-      const converging = inwardProj && inwardProj.distM >= best.distM + convergeMarginM;
-
-      // Loose-end terminus: this route's drawing simply ends here (no same-route
-      // piece nearby) right next to a same-color sibling. That is a fragment that
-      // should merge onto the trunk. Use a threshold tighter than the lane
-      // spacing so genuine parallel lanes (one full lane-width apart) are kept.
-      let looseEnd = false;
-      if (!converging && best.distM <= looseSnapDistM) {
-        let nearestSameRoute = Infinity;
-        for (const { f: g } of lines) {
-          if (g === f) continue;
-          if (!sharesRoute(f, g)) continue;
-          const d = minDistToFeature(g.geometry.coordinates, endpoint);
-          if (d < nearestSameRoute) nearestSameRoute = d;
-          if (nearestSameRoute <= looseEndM) break;
-        }
-        looseEnd = nearestSameRoute > looseEndM;
-      }
-
-      if (!converging && !looseEnd) continue;
-
-      const merge = tangentMatchedEndpointMerge(coords, side, best.point, best, {
-        mergeCurveM,
-        curveSampleM,
-        curveHandleM,
-        maxDirectSnapTangentDeg,
-      });
-      coords.length = 0;
-      coords.push(...merge.coords);
-      changed = true;
-      snappedCount += 1;
-      if (merge.curved) curvedCount += 1;
-    }
-    if (changed) {
-      const properties = {
-        ...f.properties,
-        same_color_endpoint_snapped: true,
-      };
-      if (curvedCount > 0) {
-        properties.same_color_y_join_fabric = true;
-        properties.same_color_y_join_fabric_count =
-          Number(f.properties?.same_color_y_join_fabric_count ?? 0) + curvedCount;
-      }
-      out[i] = {
-        ...f,
-        geometry: { ...f.geometry, coordinates: coords },
-        properties,
-      };
-    }
+    const snapped = snapFeatureEndpoints(f, lines, gates);
+    if (!snapped) continue;
+    out[i] = snapped.feature;
+    snappedCount += snapped.snappedCount;
   }
-
   return { features: out, snappedCount };
 }

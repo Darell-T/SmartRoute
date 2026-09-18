@@ -10,7 +10,7 @@ import type { Feature, FeatureCollection, LineStringGeometry, Position, RouteId 
 const here = __dirname;
 const frontendRoot = resolve(here, "..");
 const publicDir = resolve(frontendRoot, "public");
-const cacheDir = resolve(frontendRoot, ".gtfs-cache");
+const cacheDir = resolve(process.env.SMARTROUTE_GTFS_CACHE_DIR ?? resolve(frontendRoot, ".gtfs-cache"));
 
 const GTFS_URL =
   "http://web.mta.info/developers/data/nyct/subway/google_transit.zip";
@@ -64,12 +64,12 @@ type GtfsRoute = {
   color: string;
 };
 
-type ShapeRoute = {
-  shapeId: string;
+type GtfsPolylineRoute = {
+  polylineId: string;
   route: GtfsRoute;
 };
 
-type ShapePoint = {
+type GtfsPolylineVertex = {
   lat: number;
   lng: number;
   sequence: number;
@@ -78,7 +78,7 @@ type ShapePoint = {
 type CanonicalProperties = {
   route_id: RouteId;
   display_route: RouteId;
-  shape_id: string;
+  "shape_id": string;
   color: string;
 };
 
@@ -107,13 +107,19 @@ type RouteStats = {
 type BuildCanonicalInput = {
   routesRows: CsvRow[];
   tripsRows: CsvRow[];
-  shapesRows: CsvRow[];
+  polylineRows: CsvRow[];
 };
 
-// Single source of truth lives in lib/mta-colors.json.
+type CoordinateBbox = {
+  minLng: number;
+  maxLng: number;
+  minLat: number;
+  maxLat: number;
+};
+
 const ROUTE_COLOR_FALLBACKS = MTA_ROUTE_COLORS;
 
-export function normalizeRouteId(value: unknown): RouteId {
+export function normalizeRouteId(value: string): RouteId {
   const route = String(value || "").trim().toUpperCase();
   if (route === "6D") return "6X";
   if (route === "7D") return "7X";
@@ -123,7 +129,7 @@ export function normalizeRouteId(value: unknown): RouteId {
   return route;
 }
 
-export function normalizeColor(value: unknown, routeId: RouteId): string {
+export function normalizeColor(value: string, routeId: RouteId): string {
   const raw = String(value || "").trim().replace(/^#/, "");
   if (/^[0-9a-fA-F]{6}$/.test(raw)) return `#${raw.toUpperCase()}`;
   return ROUTE_COLOR_FALLBACKS[routeId] || "#A7A9AC";
@@ -137,72 +143,82 @@ function readUInt32(buffer: Buffer, offset: number): number {
   return buffer.readUInt32LE(offset);
 }
 
+function findEndOfCentralDirectoryOffset(zipBuffer: Buffer): number {
+  for (let i = zipBuffer.length - 22; i >= 0; i--) {
+    if (readUInt32(zipBuffer, i) === 0x06054b50) return i;
+  }
+  throw new Error("Could not find ZIP end-of-central-directory record.");
+}
+
+function decodeZipPayload(
+  compressionMethod: number,
+  compressed: Buffer,
+  uncompressedSize: number,
+  name: string,
+): Buffer {
+  let data: Buffer;
+  if (compressionMethod === 0) {
+    data = compressed;
+  } else if (compressionMethod === 8) {
+    data = inflateRawSync(compressed);
+  } else {
+    throw new Error(
+      `Unsupported ZIP compression method ${compressionMethod} for ${name}.`,
+    );
+  }
+  if (data.length !== uncompressedSize) {
+    throw new Error(`Unexpected uncompressed size for ${name}.`);
+  }
+  return data;
+}
+
+function readWantedZipFile(
+  zipBuffer: Buffer,
+  offset: number,
+  wanted: Set<string>,
+  entries: Map<string, string>,
+): number {
+  if (readUInt32(zipBuffer, offset) !== 0x02014b50) {
+    throw new Error("Malformed ZIP central directory.");
+  }
+
+  const compressionMethod = readUInt16(zipBuffer, offset + 10);
+  const compressedSize = readUInt32(zipBuffer, offset + 20);
+  const uncompressedSize = readUInt32(zipBuffer, offset + 24);
+  const fileNameLength = readUInt16(zipBuffer, offset + 28);
+  const extraLength = readUInt16(zipBuffer, offset + 30);
+  const commentLength = readUInt16(zipBuffer, offset + 32);
+  const localHeaderOffset = readUInt32(zipBuffer, offset + 42);
+  const name = zipBuffer
+    .subarray(offset + 46, offset + 46 + fileNameLength)
+    .toString("utf8");
+
+  if (wanted.has(name)) {
+    if (readUInt32(zipBuffer, localHeaderOffset) !== 0x04034b50) {
+      throw new Error(`Malformed ZIP local header for ${name}.`);
+    }
+    const localNameLength = readUInt16(zipBuffer, localHeaderOffset + 26);
+    const localExtraLength = readUInt16(zipBuffer, localHeaderOffset + 28);
+    const dataOffset = localHeaderOffset + 30 + localNameLength + localExtraLength;
+    const compressed = zipBuffer.subarray(dataOffset, dataOffset + compressedSize);
+    const data = decodeZipPayload(compressionMethod, compressed, uncompressedSize, name);
+    entries.set(name, data.toString("utf8").replace(/^\uFEFF/, ""));
+  }
+
+  return 46 + fileNameLength + extraLength + commentLength;
+}
+
 export function parseZipEntries(zipBuffer: Buffer, wantedNames: string[]): Map<string, string> {
   const wanted = new Set(wantedNames);
   const entries = new Map<string, string>();
-  let eocdOffset = -1;
-
-  for (let i = zipBuffer.length - 22; i >= 0; i--) {
-    if (readUInt32(zipBuffer, i) === 0x06054b50) {
-      eocdOffset = i;
-      break;
-    }
-  }
-
-  if (eocdOffset < 0) {
-    throw new Error("Could not find ZIP end-of-central-directory record.");
-  }
-
+  const eocdOffset = findEndOfCentralDirectoryOffset(zipBuffer);
   const centralDirectorySize = readUInt32(zipBuffer, eocdOffset + 12);
   const centralDirectoryOffset = readUInt32(zipBuffer, eocdOffset + 16);
   let offset = centralDirectoryOffset;
   const end = centralDirectoryOffset + centralDirectorySize;
 
   while (offset < end) {
-    if (readUInt32(zipBuffer, offset) !== 0x02014b50) {
-      throw new Error("Malformed ZIP central directory.");
-    }
-
-    const compressionMethod = readUInt16(zipBuffer, offset + 10);
-    const compressedSize = readUInt32(zipBuffer, offset + 20);
-    const uncompressedSize = readUInt32(zipBuffer, offset + 24);
-    const fileNameLength = readUInt16(zipBuffer, offset + 28);
-    const extraLength = readUInt16(zipBuffer, offset + 30);
-    const commentLength = readUInt16(zipBuffer, offset + 32);
-    const localHeaderOffset = readUInt32(zipBuffer, offset + 42);
-    const name = zipBuffer
-      .subarray(offset + 46, offset + 46 + fileNameLength)
-      .toString("utf8");
-
-    if (wanted.has(name)) {
-      if (readUInt32(zipBuffer, localHeaderOffset) !== 0x04034b50) {
-        throw new Error(`Malformed ZIP local header for ${name}.`);
-      }
-      const localNameLength = readUInt16(zipBuffer, localHeaderOffset + 26);
-      const localExtraLength = readUInt16(zipBuffer, localHeaderOffset + 28);
-      const dataOffset =
-        localHeaderOffset + 30 + localNameLength + localExtraLength;
-      const compressed = zipBuffer.subarray(
-        dataOffset,
-        dataOffset + compressedSize,
-      );
-      let data;
-      if (compressionMethod === 0) {
-        data = compressed;
-      } else if (compressionMethod === 8) {
-        data = inflateRawSync(compressed);
-      } else {
-        throw new Error(
-          `Unsupported ZIP compression method ${compressionMethod} for ${name}.`,
-        );
-      }
-      if (data.length !== uncompressedSize) {
-        throw new Error(`Unexpected uncompressed size for ${name}.`);
-      }
-      entries.set(name, data.toString("utf8").replace(/^\uFEFF/, ""));
-    }
-
-    offset += 46 + fileNameLength + extraLength + commentLength;
+    offset += readWantedZipFile(zipBuffer, offset, wanted, entries);
   }
 
   for (const name of wanted) {
@@ -286,6 +302,14 @@ async function ensureGtfsZip(): Promise<Buffer> {
   return buffer;
 }
 
+function requiredZipText(entries: Map<string, string>, name: string): string {
+  const text = entries.get(name);
+  if (text == null) {
+    throw new Error(`GTFS zip did not include required file: ${name}`);
+  }
+  return text;
+}
+
 function buildRoutesById(routesRows: CsvRow[]): Map<string, GtfsRoute> {
   const routes = new Map<string, GtfsRoute>();
   for (const row of routesRows) {
@@ -302,13 +326,13 @@ function buildRoutesById(routesRows: CsvRow[]): Map<string, GtfsRoute> {
   return routes;
 }
 
-function buildShapeRoutes(tripsRows: CsvRow[], routesByRawId: Map<string, GtfsRoute>): ShapeRoute[] {
-  const shapeRoutes = new Map<string, ShapeRoute>();
+function buildPolylineRoutes(tripsRows: CsvRow[], routesByRawId: Map<string, GtfsRoute>): GtfsPolylineRoute[] {
+  const polylineRoutes = new Map<string, GtfsPolylineRoute>();
 
   for (const row of tripsRows) {
-    const shapeId = String(row.shape_id || "").trim();
+    const polylineId = String(row["shape_id"] || "").trim();
     const rawRouteId = String(row.route_id || "").trim();
-    if (!shapeId || !rawRouteId) continue;
+    if (!polylineId || !rawRouteId) continue;
 
     const route = routesByRawId.get(rawRouteId) || {
       rawRouteId,
@@ -318,53 +342,53 @@ function buildShapeRoutes(tripsRows: CsvRow[], routesByRawId: Map<string, GtfsRo
     };
     if (!route.routeId) continue;
 
-    const key = `${shapeId}::${route.routeId}`;
-    shapeRoutes.set(key, { shapeId, route });
+    polylineRoutes.set(`${polylineId}::${route.routeId}`, { polylineId, route });
   }
 
-  return [...shapeRoutes.values()];
+  return [...polylineRoutes.values()];
 }
 
-function groupShapePoints(shapesRows: CsvRow[]): Map<string, ShapePoint[]> {
-  const shapes = new Map<string, ShapePoint[]>();
+function groupPolylineVertices(polylineRows: CsvRow[]): Map<string, GtfsPolylineVertex[]> {
+  const verticesById = new Map<string, GtfsPolylineVertex[]>();
 
-  for (const row of shapesRows) {
-    const shapeId = String(row.shape_id || "").trim();
-    const lat = Number(row.shape_pt_lat);
-    const lng = Number(row.shape_pt_lon);
-    const sequence = Number(row.shape_pt_sequence);
-    if (!shapeId || !Number.isFinite(lat) || !Number.isFinite(lng)) continue;
-    if (
-      lng < NYC_BBOX.minLng ||
-      lng > NYC_BBOX.maxLng ||
-      lat < NYC_BBOX.minLat ||
-      lat > NYC_BBOX.maxLat
-    ) {
-      continue;
-    }
-    if (!shapes.has(shapeId)) shapes.set(shapeId, []);
-    shapes.get(shapeId)!.push({ lat, lng, sequence });
+  for (const row of polylineRows) {
+    const polylineId = String(row["shape_id"] || "").trim();
+    const lat = Number(row["shape_pt_lat"]);
+    const lng = Number(row["shape_pt_lon"]);
+    const sequence = Number(row["shape_pt_sequence"]);
+    if (!polylineId || !Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+    if (!(((lng)
+    >= NYC_BBOX.minLng &&
+    (lng)
+        <= NYC_BBOX.maxLng &&
+    (lat)
+        >= NYC_BBOX.minLat &&
+    (lat)
+        <= NYC_BBOX.maxLat))) continue;
+    const vertices = verticesById.get(polylineId);
+    if (vertices) vertices.push({ lat, lng, sequence });
+    else verticesById.set(polylineId, [{ lat, lng, sequence }]);
   }
 
-  for (const points of shapes.values()) {
-    points.sort((a, b) => a.sequence - b.sequence);
+  for (const points of verticesById.values()) {
+    points.sort((left, right) => left.sequence - right.sequence);
   }
 
-  return shapes;
+  return verticesById;
 }
 
 export function buildCanonicalFeatureCollection({
   routesRows,
   tripsRows,
-  shapesRows,
+  polylineRows,
 }: BuildCanonicalInput): CanonicalFeatureCollection {
   const routesByRawId = buildRoutesById(routesRows);
-  const shapeRoutes = buildShapeRoutes(tripsRows, routesByRawId);
-  const shapes = groupShapePoints(shapesRows);
+  const polylineRoutes = buildPolylineRoutes(tripsRows, routesByRawId);
+  const verticesById = groupPolylineVertices(polylineRows);
   const features: CanonicalFeature[] = [];
 
-  for (const { shapeId, route } of shapeRoutes) {
-    const points = shapes.get(shapeId);
+  for (const { polylineId, route } of polylineRoutes) {
+    const points = verticesById.get(polylineId);
     if (!points || points.length < 2) continue;
 
     const coordinates: Position[] = points.map((point): Position => [point.lng, point.lat]);
@@ -373,7 +397,7 @@ export function buildCanonicalFeatureCollection({
       properties: {
         route_id: route.routeId,
         display_route: route.displayRoute || route.routeId,
-        shape_id: shapeId,
+        "shape_id": polylineId,
         color: route.color,
       },
       geometry: {
@@ -385,14 +409,14 @@ export function buildCanonicalFeatureCollection({
 
   const dedupedFeatures = dedupeFeaturesByRouteAndGeometry(features);
 
-  dedupedFeatures.sort((a, b) => {
-    const routeCompare = a.properties.route_id.localeCompare(
-      b.properties.route_id,
+  dedupedFeatures.sort((left, right) => {
+    const routeCompare = left.properties.route_id.localeCompare(
+      right.properties.route_id,
       "en",
       { numeric: true },
     );
     if (routeCompare !== 0) return routeCompare;
-    return a.properties.shape_id.localeCompare(b.properties.shape_id, "en", {
+    return left.properties["shape_id"].localeCompare(right.properties["shape_id"], "en", {
       numeric: true,
     });
   });
@@ -457,6 +481,62 @@ function distanceMeters(a: Position, b: Position): number {
   return 2 * radius * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
 }
 
+function requireCanonicalLine(feature: CanonicalFeature): Position[] {
+  if (feature.type !== "Feature" || feature.geometry.type !== "LineString") {
+    throw new Error(`Invalid canonical feature for route ${feature.properties.route_id || "unknown"}.`);
+  }
+  const routeId = feature.properties.route_id;
+  const polylineId = feature.properties["shape_id"];
+  const color = feature.properties.color;
+  const coordinates = feature.geometry.coordinates;
+  if (!routeId || !polylineId || !color || !Array.isArray(coordinates) || coordinates.length < 2) {
+    throw new Error(`Invalid canonical feature for route ${routeId || "unknown"}.`);
+  }
+  return coordinates;
+}
+
+function extendCoordinateBbox(
+  bbox: CoordinateBbox,
+  coordinates: Position[],
+  routeId: RouteId,
+  polylineId: string,
+): void {
+  for (const [lng, lat] of coordinates) {
+    if (!Number.isFinite(lng) || !Number.isFinite(lat)) {
+      throw new Error(`Invalid coordinate in ${routeId}/${polylineId}.`);
+    }
+    bbox.minLng = Math.min(bbox.minLng, lng);
+    bbox.maxLng = Math.max(bbox.maxLng, lng);
+    bbox.minLat = Math.min(bbox.minLat, lat);
+    bbox.maxLat = Math.max(bbox.maxLat, lat);
+  }
+}
+
+function currentNetworkFeatureCount(text: string): number {
+  const parsed: unknown = JSON.parse(text);
+  if (parsed == null || Array.isArray(parsed)) return 0;
+  const counted = Object.assign({ features: [] }, parsed);
+  return Array.isArray(counted.features) ? counted.features.length : 0;
+}
+
+function assertNycEnvelope(bbox: CoordinateBbox): void {
+  if (
+    bbox.minLng < NYC_BBOX.minLng ||
+    bbox.maxLng > NYC_BBOX.maxLng ||
+    bbox.minLat < NYC_BBOX.minLat ||
+    bbox.maxLat > NYC_BBOX.maxLat
+  ) {
+    throw new Error(
+      `Canonical output bbox outside NYC envelope: ${[
+        bbox.minLng,
+        bbox.minLat,
+        bbox.maxLng,
+        bbox.maxLat,
+      ].join(", ")}`,
+    );
+  }
+}
+
 export function validateFeatureCollection(collection: CanonicalFeatureCollection): Map<RouteId, RouteStats> {
   if (collection.type !== "FeatureCollection") {
     throw new Error("Canonical output is not a FeatureCollection.");
@@ -466,39 +546,17 @@ export function validateFeatureCollection(collection: CanonicalFeatureCollection
   }
 
   const byRoute = new Map<RouteId, RouteStats>();
-  let minLng = Infinity;
-  let maxLng = -Infinity;
-  let minLat = Infinity;
-  let maxLat = -Infinity;
+  const bbox: CoordinateBbox = {
+    minLng: Infinity,
+    maxLng: -Infinity,
+    minLat: Infinity,
+    maxLat: -Infinity,
+  };
 
   for (const feature of collection.features) {
-    const routeId = feature?.properties?.route_id;
-    const shapeId = feature?.properties?.shape_id;
-    const color = feature?.properties?.color;
-    const coordinates = feature?.geometry?.coordinates;
-
-    if (
-      feature?.type !== "Feature" ||
-      feature?.geometry?.type !== "LineString" ||
-      !routeId ||
-      !shapeId ||
-      !color ||
-      !Array.isArray(coordinates) ||
-      coordinates.length < 2
-    ) {
-      throw new Error(`Invalid canonical feature for route ${routeId || "unknown"}.`);
-    }
-
-    for (const [lng, lat] of coordinates) {
-      if (!Number.isFinite(lng) || !Number.isFinite(lat)) {
-        throw new Error(`Invalid coordinate in ${routeId}/${shapeId}.`);
-      }
-      minLng = Math.min(minLng, lng);
-      maxLng = Math.max(maxLng, lng);
-      minLat = Math.min(minLat, lat);
-      maxLat = Math.max(maxLat, lat);
-    }
-
+    const coordinates = requireCanonicalLine(feature);
+    const routeId = feature.properties.route_id;
+    extendCoordinateBbox(bbox, coordinates, routeId, feature.properties["shape_id"]);
     const current = byRoute.get(routeId) || { count: 0, km: 0 };
     current.count += 1;
     current.km += featureLengthKm(feature);
@@ -509,36 +567,17 @@ export function validateFeatureCollection(collection: CanonicalFeatureCollection
   if (missing.length > 0) {
     throw new Error(`Expected routes missing from canonical output: ${missing.join(", ")}`);
   }
-
-  if (
-    minLng < NYC_BBOX.minLng ||
-    maxLng > NYC_BBOX.maxLng ||
-    minLat < NYC_BBOX.minLat ||
-    maxLat > NYC_BBOX.maxLat
-  ) {
-    throw new Error(
-      `Canonical output bbox outside NYC envelope: ${[
-        minLng,
-        minLat,
-        maxLng,
-        maxLat,
-      ].join(", ")}`,
-    );
-  }
-
+  assertNycEnvelope(bbox);
   if (existsSync(CURRENT_NETWORK_PATH)) {
-    const current = JSON.parse(readFileSync(CURRENT_NETWORK_PATH, "utf8")) as { features?: unknown[] };
-    const currentCount = current.features?.length ?? 0;
-    const nextCount = collection.features.length;
+    const currentCount = currentNetworkFeatureCount(readFileSync(CURRENT_NETWORK_PATH, "utf8"));
     const min = Math.floor(currentCount * 0.8);
     const max = Math.ceil(currentCount * 1.2);
-    if (currentCount > 0 && (nextCount < min || nextCount > max)) {
+    if (currentCount > 0 && (collection.features.length < min || collection.features.length > max)) {
       throw new Error(
-        `Canonical feature count ${nextCount} is outside +/-20% of current ${currentCount}.`,
+        `Canonical feature count ${collection.features.length} is outside +/-20% of current ${currentCount}.`,
       );
     }
   }
-
   return byRoute;
 }
 
@@ -548,8 +587,8 @@ export function sha256(buffer: Buffer): string {
 
 function printRouteSummary(byRoute: Map<RouteId, RouteStats>): void {
   console.log(`[gtfs] canonical routes: ${byRoute.size}`);
-  for (const [route, stats] of [...byRoute.entries()].sort((a, b) =>
-    a[0].localeCompare(b[0], "en", { numeric: true }),
+  for (const [route, stats] of [...byRoute.entries()].sort((left, right) =>
+    left[0].localeCompare(right[0], "en", { numeric: true }),
   )) {
     console.log(
       `[gtfs]   route ${route.padStart(2, " ")}: ${String(stats.count).padStart(
@@ -570,9 +609,9 @@ async function main(): Promise<void> {
   ]);
 
   const collection = buildCanonicalFeatureCollection({
-    routesRows: parseCsv(files.get("routes.txt")!),
-    tripsRows: parseCsv(files.get("trips.txt")!),
-    shapesRows: parseCsv(files.get("shapes.txt")!),
+    routesRows: parseCsv(requiredZipText(files, "routes.txt")),
+    tripsRows: parseCsv(requiredZipText(files, "trips.txt")),
+    polylineRows: parseCsv(requiredZipText(files, "shapes.txt")),
   });
   collection.metadata.gtfs_zip_sha256 = sha256(zipBuffer);
 

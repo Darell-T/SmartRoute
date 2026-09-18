@@ -1,4 +1,5 @@
-import maplibregl from "maplibre-gl";
+import * as maplibregl from "maplibre-gl/dist/maplibre-gl.mjs";
+import { z } from "zod";
 import { getLineColor } from "./route-layers";
 import { subwayBulletName, subwayBulletSrc } from "../smart-route/train-bullet";
 
@@ -19,16 +20,6 @@ import { subwayBulletName, subwayBulletSrc } from "../smart-route/train-bullet";
 // Types
 // =====================================================================
 
-type StationFeature = GeoJSON.Feature<
-  GeoJSON.Point,
-  {
-    station_id: string;
-    name: string;
-    route_ids: string[];
-    is_transfer?: boolean;
-  }
->;
-
 interface LaneSegmentProps {
   route_id: string;
   color: string;
@@ -37,8 +28,8 @@ interface LaneSegmentProps {
 }
 
 interface StopDotProps {
-  station_id: string;
-  route_id: string;
+  station_id: unknown;
+  route_id: unknown;
   color: string;
   is_transfer: boolean;
 }
@@ -56,6 +47,7 @@ interface StationAnchorProps {
   name: string;
   route_ids: string[];
   route_count: number;
+  route_id?: string;
   color?: string;
   icon_id?: string;
   icon_offset?: [number, number];
@@ -126,22 +118,24 @@ export const SUBWAY_STATION_ROUTE_BADGES_LAYER_ID =
 // Stable rank for visual_z_order / line-sort-key. Lower number draws
 // first (under). Utility/shuttle colors at the bottom; prominent route
 // families on top.
-const COLOR_VISUAL_Z_ORDER: Record<string, number> = {
-  "#808183": 0, // S/FS/H gray shuttles
-  "#A7A9AC": 1, // L gray
-  "#996633": 2, // J/Z brown
-  "#6CBE45": 3, // G light green
-  "#0078C6": 4, // SI blue
-  "#FCCC0A": 5, // N/Q/R/W yellow
-  "#B933AD": 6, // 7 purple
-  "#0A84FF": 7, // A/C/E Apple system blue
-  "#FF6319": 8, // B/D/F/M orange
-  "#00933C": 9, // 4/5/6 green
-  "#EE352E": 10, // 1/2/3 red
-};
+const COLOR_VISUAL_Z_ORDER = new Map<string, number>(
+  Object.entries({
+    "#808183": 0, // S/FS/H gray shuttles
+    "#A7A9AC": 1, // L gray
+    "#996633": 2, // J/Z brown
+    "#6CBE45": 3, // G light green
+    "#0078C6": 4, // SI blue
+    "#FCCC0A": 5, // N/Q/R/W yellow
+    "#B933AD": 6, // 7 purple
+    "#0A84FF": 7, // A/C/E Apple system blue
+    "#FF6319": 8, // B/D/F/M orange
+    "#00933C": 9, // 4/5/6 green
+    "#EE352E": 10, // 1/2/3 red
+  }),
+);
 
 function visualZOrderForColor(color: string): number {
-  return COLOR_VISUAL_Z_ORDER[color] ?? 100;
+  return COLOR_VISUAL_Z_ORDER.get(color) ?? 100;
 }
 
 // Normalize segment direction so MapLibre's perpendicular line-offset is
@@ -149,15 +143,13 @@ function visualZOrderForColor(color: string): number {
 // This gives every emitted feature a consistent "left side" so the
 // line-offset paint expression produces predictable parallel lanes.
 function normalizeVisualDirection(
-  coords: [number, number][],
-): [number, number][] {
+  coords: GeoJSON.Position[],
+): GeoJSON.Position[] {
   if (coords.length < 2) return coords;
   const first = coords[0];
   const last = coords[coords.length - 1];
   const dLng = last[0] - first[0];
   const dLat = last[1] - first[1];
-  // If the segment is more horizontal than vertical, normalize to east.
-  // Otherwise normalize to north.
   if (Math.abs(dLng) > Math.abs(dLat)) {
     return dLng >= 0 ? coords : coords.slice().reverse();
   }
@@ -178,7 +170,7 @@ interface VisualLaneProps extends LaneSegmentProps {
   /** Original arc length in meters (from the longest member edge) */
   length_m: number;
   /** Source shape ids (for click inspector / debugging) */
-  source_shape_ids: string[];
+  "source_shape_ids": string[];
   /** Source visual edge ids from the Gate 2D artifact. */
   source_edge_ids: string[];
   representative_route_id: string;
@@ -202,10 +194,216 @@ interface VisualLaneProps extends LaneSegmentProps {
   lane_offset_baked?: boolean;
 }
 
-/**
- * Build lane render features from a Gate-2D-validated visual geojson.
- * Emits one feature per (corridor, distinct MTA color group).
- */
+const artifactIdsSchema = z.unknown().transform((value): string[] =>
+  Array.isArray(value) ? value.map((item) => String(item)) : [],
+);
+
+const artifactLaneColorSlotsSchema = z
+  .record(z.unknown())
+  .optional()
+  .catch(undefined);
+
+const visualArtifactPropertiesSchema = z
+  .object({
+    route_ids: artifactIdsSchema,
+    color_route_ids: artifactIdsSchema,
+    ["source_shape_ids"]: artifactIdsSchema,
+    source_edge_ids: artifactIdsSchema,
+    lane_order_basis: artifactIdsSchema,
+    color: z.unknown().optional(),
+    route_id: z.unknown().optional(),
+    representative_route_id: z.unknown().optional(),
+    corridor_id: z.unknown().optional(),
+    bundle_id: z.unknown().optional(),
+    lane_group_id: z.unknown().optional(),
+    from_stop_name: z.unknown().optional(),
+    to_stop_name: z.unknown().optional(),
+    length_m: z.unknown().optional(),
+    longest_member_length_m: z.unknown().optional(),
+    lane_slot: z.unknown().optional(),
+    lane_slot_semantic: z.unknown().optional(),
+    cross_color_segment_side: z.unknown().optional(),
+    lane_offset_baked: z.unknown().optional(),
+    visual_feature_type: z.unknown().optional(),
+    lane_slot_source: z.unknown().optional(),
+    lane_color_slots: artifactLaneColorSlotsSchema,
+  })
+  .passthrough();
+
+type VisualArtifactProperties = z.infer<typeof visualArtifactPropertiesSchema>;
+
+const stationArtifactPropertiesSchema = z
+  .object({
+    station_id: z.unknown().optional(),
+    name: z.unknown().optional(),
+    route_ids: z.array(z.unknown()).catch([]),
+    is_transfer: z.unknown().optional(),
+  })
+  .passthrough();
+
+type StationArtifactProperties = z.infer<typeof stationArtifactPropertiesSchema>;
+
+const emptyVisualArtifactProperties = visualArtifactPropertiesSchema.parse({});
+const emptyStationArtifactProperties = stationArtifactPropertiesSchema.parse({});
+
+function parsedVisualProperties(
+  properties: GeoJSON.GeoJsonProperties | null | undefined,
+): VisualArtifactProperties {
+  const parsed = visualArtifactPropertiesSchema.safeParse(properties ?? {});
+  return parsed.success ? parsed.data : emptyVisualArtifactProperties;
+}
+
+function parsedStationProperties(
+  properties: GeoJSON.GeoJsonProperties | null | undefined,
+): StationArtifactProperties {
+  const parsed = stationArtifactPropertiesSchema.safeParse(properties ?? {});
+  return parsed.success ? parsed.data : emptyStationArtifactProperties;
+}
+
+function nullableText(...values: unknown[]): string | null {
+  for (const value of values) {
+    const text = String(value ?? "");
+    if (text) return text;
+  }
+  return null;
+}
+
+function stopPairLabel(props: {
+  from_stop_name?: unknown;
+  to_stop_name?: unknown;
+}): string | null {
+  if (!props.from_stop_name || !props.to_stop_name) return null;
+  return `${props.from_stop_name} → ${props.to_stop_name}`;
+}
+
+function bundleLaneIdentity(rawProps: VisualArtifactProperties, routeIds: string[]) {
+  const color = String(
+    rawProps.color ?? getLineColor(String(rawProps.route_id ?? routeIds[0])),
+  );
+  const listed = rawProps.color_route_ids;
+  const colorRouteIds =
+    listed.length > 0
+      ? listed
+      : routeIds.filter((routeId) => getLineColor(routeId) === color);
+  return {
+    color,
+    colorRouteIds,
+    representativeRouteId: String(
+      rawProps.representative_route_id ?? rawProps.route_id ?? colorRouteIds[0] ?? routeIds[0],
+    ),
+  };
+}
+
+function bundleLaneFeature(
+  rawProps: VisualArtifactProperties,
+  coords: GeoJSON.Position[],
+  routeIds: string[],
+): GeoJSON.Feature<GeoJSON.LineString, VisualLaneProps> {
+  const { color, colorRouteIds, representativeRouteId } = bundleLaneIdentity(rawProps, routeIds);
+  const laneOrderBasis = rawProps.lane_order_basis;
+  const laneOffsetBaked = rawProps.lane_offset_baked === true;
+  return {
+    type: "Feature",
+    properties: {
+      route_id: representativeRouteId,
+      representative_route_id: representativeRouteId,
+      color,
+      lane_slot: laneOffsetBaked ? 0 : Number(rawProps.lane_slot ?? 0),
+      lane_slot_semantic: Number(rawProps.lane_slot_semantic ?? rawProps.lane_slot ?? 0),
+      cross_color_segment_side: Number(rawProps.cross_color_segment_side ?? 0),
+      lane_offset_baked: laneOffsetBaked,
+      corridor: null,
+      route_ids: routeIds,
+      color_route_ids: colorRouteIds,
+      visual_z_order: visualZOrderForColor(color),
+      corridor_id: nullableText(rawProps.corridor_id, rawProps.bundle_id),
+      stop_pair: stopPairLabel(rawProps),
+      length_m: Number(rawProps.length_m ?? 0),
+      ["source_shape_ids"]: rawProps["source_shape_ids"],
+      source_edge_ids: rawProps.source_edge_ids,
+      lane_group_id: nullableText(rawProps.lane_group_id, rawProps.bundle_id),
+      lane_slot_source: "bundle",
+      lane_order_basis: laneOrderBasis.length > 0 ? laneOrderBasis : [color],
+      bundle_id: nullableText(rawProps.bundle_id),
+      visual_feature_type: "bundle_lane",
+    },
+    geometry: {
+      type: "LineString",
+      coordinates: laneOffsetBaked ? coords : normalizeVisualDirection(coords),
+    },
+  };
+}
+
+function colorLaneFeature(
+  color: string,
+  slot: number,
+  routesInColor: string[],
+  routeIds: string[],
+  coords: GeoJSON.Position[],
+  props: VisualArtifactProperties,
+  laneOrderBasis: string[],
+): GeoJSON.Feature<GeoJSON.LineString, VisualLaneProps> {
+  const representativeRouteId =
+    [...routesInColor].sort((left, right) => left.localeCompare(right, "en", { numeric: true }))[0] ?? "";
+  return {
+    type: "Feature",
+    properties: {
+      route_id: representativeRouteId,
+      representative_route_id: representativeRouteId,
+      color,
+      lane_slot: slot,
+      corridor: null,
+      route_ids: routeIds,
+      color_route_ids: routesInColor,
+      visual_z_order: visualZOrderForColor(color),
+      corridor_id: nullableText(props.corridor_id),
+      stop_pair: stopPairLabel(props),
+      length_m: Number(props.longest_member_length_m ?? props.length_m ?? 0),
+      ["source_shape_ids"]: props["source_shape_ids"],
+      source_edge_ids: props.source_edge_ids,
+      lane_group_id: nullableText(props.lane_group_id),
+      lane_slot_source: props.lane_slot_source === "chain" ? "chain" : "local",
+      lane_order_basis: laneOrderBasis,
+    },
+    geometry: { type: "LineString", coordinates: coords },
+  };
+}
+
+function colorGroupLaneFeatures(
+  rawProps: VisualArtifactProperties,
+  coords: GeoJSON.Position[],
+  routeIds: string[],
+): GeoJSON.Feature<GeoJSON.LineString, VisualLaneProps>[] {
+  const colorBuckets = new Map<string, string[]>();
+  for (const routeId of routeIds) {
+    const color = getLineColor(routeId);
+    const bucket = colorBuckets.get(color) ?? [];
+    bucket.push(routeId);
+    colorBuckets.set(color, bucket);
+  }
+  const distinctColors = [...colorBuckets.keys()].sort(
+    (left, right) => visualZOrderForColor(left) - visualZOrderForColor(right),
+  );
+  const laneColorSlots = rawProps.lane_color_slots;
+  const laneOrderBasis = rawProps.lane_order_basis;
+  const basis = laneOrderBasis.length > 0 ? laneOrderBasis : distinctColors;
+  const normalized = normalizeVisualDirection(coords);
+  const colorCount = distinctColors.length;
+  return distinctColors.map((color, index) => {
+    const chainSlot = Number(laneColorSlots?.[color]);
+    const slot = Number.isFinite(chainSlot) ? chainSlot : index - (colorCount - 1) / 2;
+    return colorLaneFeature(
+      color,
+      slot,
+      colorBuckets.get(color) ?? [],
+      routeIds,
+      normalized,
+      rawProps,
+      basis,
+    );
+  });
+}
+
 export function buildSubwayLaneFeaturesFromVisual(
   visual: GeoJSON.FeatureCollection,
 ): GeoJSON.FeatureCollection<GeoJSON.LineString, VisualLaneProps> {
@@ -213,156 +411,27 @@ export function buildSubwayLaneFeaturesFromVisual(
 
   for (const raw of visual.features) {
     if (raw.geometry?.type !== "LineString") continue;
-    const coords = raw.geometry.coordinates as [number, number][];
+    const coords = raw.geometry.coordinates;
     if (coords.length < 2) continue;
-
-    const routeIds = Array.isArray(raw.properties?.route_ids)
-      ? (raw.properties!.route_ids as string[]).map((r) => String(r))
-      : [];
+    const rawProps = parsedVisualProperties(raw.properties);
+    const routeIds = rawProps.route_ids;
     if (routeIds.length === 0) continue;
-
-    const rawProps = raw.properties ?? {};
     if (rawProps.visual_feature_type === "bundle_lane") {
-      const color = String(rawProps.color ?? getLineColor(String(rawProps.route_id ?? routeIds[0])));
-      const colorRouteIds = Array.isArray(rawProps.color_route_ids)
-        ? (rawProps.color_route_ids as string[]).map((routeId) => String(routeId))
-        : routeIds.filter((routeId) => getLineColor(routeId) === color);
-      const representativeRouteId =
-        String(rawProps.representative_route_id ?? rawProps.route_id ?? colorRouteIds[0] ?? routeIds[0]);
-      const laneOrderBasis = Array.isArray(rawProps.lane_order_basis)
-        ? (rawProps.lane_order_basis as string[]).map((basis) => String(basis))
-        : [color];
-      // If the build script pre-baked the offset into the geometry, do
-      // NOT apply any MapLibre line-offset at runtime — pass lane_slot=0
-      // through to the paint expression. Also skip direction normalization
-      // because the baked geometry is already correctly directed.
-      const laneOffsetBaked = rawProps.lane_offset_baked === true;
-      const renderLaneSlot = laneOffsetBaked
-        ? 0
-        : Number(rawProps.lane_slot ?? 0);
-      const semanticLaneSlot = Number(
-        rawProps.lane_slot_semantic ?? rawProps.lane_slot ?? 0,
-      );
-      const renderCoords = laneOffsetBaked
-        ? coords
-        : normalizeVisualDirection(coords);
-      out.push({
-        type: "Feature",
-        properties: {
-          route_id: representativeRouteId,
-          representative_route_id: representativeRouteId,
-          color,
-          lane_slot: renderLaneSlot,
-          lane_slot_semantic: semanticLaneSlot,
-          // Segment-level cross-color spread (cross-color-spread.ts v2) only
-          // tapers a SUB-extent of the feature, so it can't set a whole-feature
-          // lane_slot_semantic without lying about the untouched majority of
-          // the line. It still carries a per-feature side flag for the fill
-          // sort-key to fall back on ahead of the color-rank tiebreak.
-          cross_color_segment_side: Number(rawProps.cross_color_segment_side ?? 0),
-          lane_offset_baked: laneOffsetBaked,
-          corridor: null,
-          route_ids: routeIds,
-          color_route_ids: colorRouteIds,
-          visual_z_order: visualZOrderForColor(color),
-          corridor_id: String(rawProps.corridor_id ?? rawProps.bundle_id ?? "") || null,
-          stop_pair: rawProps.from_stop_name && rawProps.to_stop_name
-            ? `${rawProps.from_stop_name} â†’ ${rawProps.to_stop_name}`
-            : null,
-          length_m: Number(rawProps.length_m ?? 0),
-          source_shape_ids: Array.isArray(rawProps.source_shape_ids)
-            ? (rawProps.source_shape_ids as string[])
-            : [],
-          source_edge_ids: Array.isArray(rawProps.source_edge_ids)
-            ? (rawProps.source_edge_ids as string[])
-            : [],
-          lane_group_id: String(rawProps.lane_group_id ?? rawProps.bundle_id ?? "") || null,
-          lane_slot_source: "bundle",
-          lane_order_basis: laneOrderBasis,
-          bundle_id: String(rawProps.bundle_id ?? "") || null,
-          visual_feature_type: "bundle_lane",
-        },
-        geometry: { type: "LineString", coordinates: renderCoords },
-      });
+      out.push(bundleLaneFeature(rawProps, coords, routeIds));
       continue;
     }
-
-    // Group routes by their MTA color, preserving first-seen order
-    const colorBuckets = new Map<string, string[]>();
-    for (const rid of routeIds) {
-      const c = getLineColor(rid);
-      if (!colorBuckets.has(c)) colorBuckets.set(c, []);
-      colorBuckets.get(c)!.push(rid);
-    }
-    const distinctColors = [...colorBuckets.keys()];
-    const K = distinctColors.length;
-    // Sort the distinct colors by their visual_z_order so the lane-slot
-    // assignment is stable run-to-run and the parallel order on a bundle
-    // matches the global color hierarchy.
-    distinctColors.sort(
-      (a, b) => visualZOrderForColor(a) - visualZOrderForColor(b),
-    );
-
-    const normalized = normalizeVisualDirection(coords);
-
-    const laneColorSlots =
-      raw.properties?.lane_color_slots &&
-      typeof raw.properties.lane_color_slots === "object"
-        ? (raw.properties.lane_color_slots as Record<string, unknown>)
-        : null;
-    const laneOrderBasis = Array.isArray(raw.properties?.lane_order_basis)
-      ? (raw.properties!.lane_order_basis as string[]).map((color) => String(color))
-      : distinctColors;
-
-    distinctColors.forEach((color, idx) => {
-      const localSlot = idx - (K - 1) / 2;
-      const chainSlot = Number(laneColorSlots?.[color]);
-      const slot = Number.isFinite(chainSlot) ? chainSlot : localSlot;
-      const routesInColor = colorBuckets.get(color) ?? [];
-      const representativeRouteId = [...routesInColor].sort((a, b) =>
-        a.localeCompare(b, "en", { numeric: true }),
-      )[0] ?? "";
-      const props = raw.properties ?? {};
-      out.push({
-        type: "Feature",
-        properties: {
-          route_id: representativeRouteId,
-          representative_route_id: representativeRouteId,
-          color,
-          lane_slot: slot,
-          corridor: null,
-          route_ids: routeIds,
-          color_route_ids: routesInColor,
-          visual_z_order: visualZOrderForColor(color),
-          corridor_id: String(props.corridor_id ?? "") || null,
-          stop_pair: props.from_stop_name && props.to_stop_name
-            ? `${props.from_stop_name} → ${props.to_stop_name}`
-            : null,
-          length_m: Number(props.longest_member_length_m ?? props.length_m ?? 0),
-          source_shape_ids: Array.isArray(props.source_shape_ids)
-            ? (props.source_shape_ids as string[])
-            : [],
-          source_edge_ids: Array.isArray(props.source_edge_ids)
-            ? (props.source_edge_ids as string[])
-            : [],
-          lane_group_id: String(props.lane_group_id ?? "") || null,
-          lane_slot_source:
-            props.lane_slot_source === "chain" ? "chain" : "local",
-          lane_order_basis: laneOrderBasis,
-        },
-        geometry: { type: "LineString", coordinates: normalized },
-      });
-    });
+    out.push(...colorGroupLaneFeatures(rawProps, coords, routeIds));
   }
 
-  // Stable paint order: by visual_z_order ascending, then by first route_id
-  out.sort((a, b) => {
-    if (a.properties.visual_z_order !== b.properties.visual_z_order) {
-      return a.properties.visual_z_order - b.properties.visual_z_order;
+  out.sort((left, right) => {
+    if (left.properties.visual_z_order !== right.properties.visual_z_order) {
+      return left.properties.visual_z_order - right.properties.visual_z_order;
     }
-    const aRid = a.properties.route_ids[0] ?? "";
-    const bRid = b.properties.route_ids[0] ?? "";
-    return aRid.localeCompare(bRid, "en", { numeric: true });
+    return (left.properties.route_ids[0] ?? "").localeCompare(
+      right.properties.route_ids[0] ?? "",
+      "en",
+      { numeric: true },
+    );
   });
 
   return { type: "FeatureCollection", features: out };
@@ -373,14 +442,7 @@ export function buildSubwayLaneFeaturesFromVisual(
  */
 export function summarizeVisualLanes(
   features: GeoJSON.FeatureCollection<GeoJSON.LineString, VisualLaneProps>,
-): {
-  renderFeatures: number;
-  distinctRoutes: number;
-  distinctColorGroups: number;
-  distinctColorLanes: number;
-  multiColorCorridors: number;
-  corridorsWithMultipleRoutes: number;
-} {
+) {
   const routes = new Set<string>();
   const colors = new Set<string>();
   const corridorColorCounts = new Map<string, Set<string>>();
@@ -426,19 +488,17 @@ export function buildSubwayStopFeatures(
   const out: GeoJSON.Feature<GeoJSON.Point, StopDotProps>[] = [];
   for (const raw of stations.features) {
     if (raw.geometry?.type !== "Point") continue;
-    const s = raw as StationFeature;
-    const routeIds = Array.isArray(s.properties.route_ids)
-      ? s.properties.route_ids
-      : [];
-    const isTransfer = Boolean(s.properties.is_transfer);
-    const coord = s.geometry.coordinates as [number, number];
+    const properties = parsedStationProperties(raw.properties);
+    const routeIds = properties.route_ids;
+    const isTransfer = Boolean(properties.is_transfer);
+    const coord = raw.geometry.coordinates;
     for (const rid of routeIds) {
       out.push({
         type: "Feature",
         properties: {
-          station_id: s.properties.station_id,
+          station_id: properties.station_id,
           route_id: rid,
-          color: getLineColor(rid),
+          color: getLineColor(String(rid)),
           is_transfer: isTransfer,
         },
         geometry: { type: "Point", coordinates: coord },
@@ -520,7 +580,7 @@ export function stationMarkerRouteIds(
   if (!stationMarkers) return [];
   const routeIds = new Set<string>();
   for (const feature of stationMarkers.badges.features) {
-    const routeId = (feature.properties as StationAnchorProps & { route_id?: string }).route_id;
+    const routeId = feature.properties.route_id;
     if (routeId) routeIds.add(routeId);
     for (const value of feature.properties.route_ids ?? []) routeIds.add(value);
   }
@@ -558,24 +618,15 @@ export async function ensureMtaBulletImages(
         map.addImage(imageId, imageData, { pixelRatio: 2 });
       } catch (error) {
         if (process.env.NODE_ENV !== "production") {
-          console.warn("[subway-station-badges] failed to register icon", {
-            routeId,
-            imageId,
-            error,
-          });
+          globalThis.reportError?.(
+            new Error(`Failed to register subway icon ${imageId} for ${routeId}`, {
+              cause: error,
+            }),
+          );
         }
       }
     }),
   );
-}
-
-function setSubwayLayerVisibility(
-  map: maplibregl.Map,
-  layerId: string,
-  visibility: "visible" | "none",
-) {
-  if (!map.getLayer(layerId)) return;
-  map.setLayoutProperty(layerId, "visibility", visibility);
 }
 
 function addOrUpdateGeoJsonSource(

@@ -13,9 +13,11 @@ import asyncio
 import json
 import os
 import time
-from datetime import datetime, timezone
-from typing import Any, Iterable
+from collections.abc import Iterable
+from datetime import UTC, datetime
+from typing import Any
 
+from app.services import cache
 from app.services.incidents.normalization import (
     ALLOWED_COVERAGE,
     ALLOWED_STATES,
@@ -28,7 +30,6 @@ from app.services.incidents.normalization import (
     normalize_incident_record,
     record_is_expired,
 )
-from app.services import cache
 
 INCIDENT_PREFIX = "incident:idx:"
 COVERAGE_PREFIX = "incident:cov:"
@@ -51,7 +52,7 @@ _INDEX_PREFIXES = {
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _as_list(raw: Iterable[str] | None) -> list[str]:
@@ -138,13 +139,56 @@ def get_coverage(coverage_id: str) -> dict[str, Any] | None:
 
 
 def _coverage_from_record(record: dict[str, Any]) -> dict[str, Any]:
-    """Expired coverage reads as stale, never current."""
     status = str(record.get("coverage_status") or DEFAULT_COVERAGE)
     if record_is_expired(record) and status not in _UNUSABLE_COVERAGE:
         copy = dict(record)
         copy["coverage_status"] = "stale"
         return copy
     return record
+
+
+def _unique_ids_from_index_keys(index_keys: list[str]) -> list[str]:
+    index_blobs = cache.cache_get_many(index_keys)
+    incident_ids: list[str] = []
+    for key in index_keys:
+        parsed = _parse_json(index_blobs.get(key))
+        if isinstance(parsed, list):
+            incident_ids.extend(str(item) for item in parsed if str(item).strip())
+    return list(dict.fromkeys(incident_ids))[:32]
+
+
+def _usable_lookup_records(unique_ids: list[str]) -> list[dict[str, Any]]:
+    record_keys = [f"{INCIDENT_PREFIX}{incident_id}" for incident_id in unique_ids]
+    record_blobs = cache.cache_get_many(record_keys)
+    incidents: list[dict[str, Any]] = []
+    for _incident_id, key in zip(unique_ids, record_keys, strict=True):
+        record = _parse_json(record_blobs.get(key))
+        if not isinstance(record, dict):
+            continue
+        if record_is_expired(record) and record.get("state") not in _FILTERED_STATES:
+            record["state"] = "stale"
+        if record.get("state") in _FILTERED_STATES:
+            continue
+        incidents.append(record)
+    return incidents
+
+
+def _requested_coverage(
+    coverage_ids: Iterable[str] | None,
+) -> tuple[list[str], dict[str, dict[str, Any]]]:
+    requested = [
+        cid
+        for cid in dict.fromkeys(bounded_text(cid, 120) for cid in _as_list(coverage_ids))
+        if cid
+    ]
+    coverage_keys = [f"{COVERAGE_PREFIX}{coverage_id}" for coverage_id in requested]
+    coverage_blobs = cache.cache_get_many(coverage_keys)
+    coverage_by_id: dict[str, dict[str, Any]] = {}
+    for coverage_id, key in zip(requested, coverage_keys, strict=True):
+        record = _parse_json(coverage_blobs.get(key))
+        if isinstance(record, dict):
+            coverage_by_id[coverage_id] = _coverage_from_record(record)
+    return requested, coverage_by_id
 
 
 def lookup_incidents(
@@ -166,38 +210,8 @@ def lookup_incidents(
         corridor_ids=corridor_ids,
         coverage_ids=coverage_ids,
     )
-    index_blobs = cache.cache_get_many(index_keys)
-    incident_ids: list[str] = []
-    for key in index_keys:
-        parsed = _parse_json(index_blobs.get(key))
-        if isinstance(parsed, list):
-            incident_ids.extend(str(item) for item in parsed if str(item).strip())
-
-    unique_ids = list(dict.fromkeys(incident_ids))[:32]
-    record_keys = [f"{INCIDENT_PREFIX}{incident_id}" for incident_id in unique_ids]
-    record_blobs = cache.cache_get_many(record_keys)
-    incidents: list[dict[str, Any]] = []
-    for incident_id, key in zip(unique_ids, record_keys, strict=True):
-        record = _parse_json(record_blobs.get(key))
-        if not isinstance(record, dict):
-            continue
-        if record_is_expired(record) and record.get("state") not in _FILTERED_STATES:
-            record["state"] = "stale"
-        if record.get("state") in _FILTERED_STATES:
-            continue
-        incidents.append(record)
-    requested = [
-        cid
-        for cid in dict.fromkeys(bounded_text(cid, 120) for cid in _as_list(coverage_ids))
-        if cid
-    ]
-    coverage_keys = [f"{COVERAGE_PREFIX}{coverage_id}" for coverage_id in requested]
-    coverage_blobs = cache.cache_get_many(coverage_keys)
-    coverage_by_id: dict[str, dict[str, Any]] = {}
-    for coverage_id, key in zip(requested, coverage_keys, strict=True):
-        record = _parse_json(coverage_blobs.get(key))
-        if isinstance(record, dict):
-            coverage_by_id[coverage_id] = _coverage_from_record(record)
+    incidents = _usable_lookup_records(_unique_ids_from_index_keys(index_keys))
+    requested, coverage_by_id = _requested_coverage(coverage_ids)
     return {
         "incidents": incidents,
         "coverage": list(coverage_by_id.values()),
@@ -233,7 +247,6 @@ def _index_keys_for_lookup(
     corridor_ids: Iterable[str] | None,
     coverage_ids: Iterable[str] | None,
 ) -> list[str]:
-    """All reverse-index keys one lookup reads, in deterministic order."""
     keys: list[str] = []
     for value, prefix, upper in (
         *((item, STOP_INDEX_PREFIX, False) for item in _as_list(stop_ids)),
@@ -249,35 +262,28 @@ def _index_keys_for_lookup(
 def _coverage_status(
     requested_ids: list[str], records_by_id: dict[str, dict[str, Any]]
 ) -> str:
-    """Aggregate status derived only from the requested coverage records."""
     if not requested_ids:
         return DEFAULT_COVERAGE
     statuses = {
         str(records_by_id[cid].get("coverage_status") or DEFAULT_COVERAGE)
-        for cid in requested_ids
         if cid in records_by_id
+        else "missing"
+        for cid in requested_ids
     }
-    statuses.update("missing" for cid in requested_ids if cid not in records_by_id)
-    if "partial" in statuses:
+    mixed = bool(statuses & {"current", "partial"} and statuses - {"current", "partial"})
+    if "partial" in statuses or mixed:
         return "partial"
-    if statuses & {"current", "partial"} and statuses - {"current", "partial"}:
-        # Usable (current/partial) mixed with missing/unavailable/unscanned/stale.
-        return "partial"
-    if statuses == {"current"}:
-        return "current"
-    if "stale" in statuses:
-        return "stale"
-    if "unavailable" in statuses:
-        return "unavailable"
-    return DEFAULT_COVERAGE
+    return next(
+        (status for status in ("current", "stale", "unavailable") if status in statuses),
+        DEFAULT_COVERAGE,
+    )
 
 
 def _index_keys_for(record: dict[str, Any]) -> list[str]:
     keys: list[str] = []
     for canonical, _alias, _bound, _upper in LIST_FIELDS:
         prefix = _INDEX_PREFIXES[canonical]
-        for value in record.get(canonical) or []:
-            keys.append(f"{prefix}{value}")
+        keys.extend(f"{prefix}{value}" for value in record.get(canonical) or [])
     return keys
 
 
@@ -308,7 +314,6 @@ def _load_json(key: str) -> Any:
 
 
 def _parse_json(raw: Any) -> Any:
-    """Parse one cached blob; malformed or missing blobs read as None."""
     if raw is None:
         return None
     try:

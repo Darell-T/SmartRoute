@@ -6,11 +6,11 @@ provider boundaries, or authoritative state.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 
 from app.services.agent import events as agent_events
 from app.services.agent.turn.contract import GoalKind, GoalState
-
 
 ACTIVITY_LABEL_FIELD = "activity_label"
 MAX_ACTIVITY_LABEL_CHARS = 100
@@ -135,6 +135,22 @@ def _contains_opaque_identifier(text: str) -> bool:
     )
 
 
+def _activity_copy_rejected(normalized: str) -> bool:
+    if normalized in _FLUFF_ONLY:
+        return True
+    if _contains_internal_language(normalized):
+        return True
+    if _contains_opaque_identifier(normalized):
+        return True
+    if any(promise in normalized for promise in _TIMING_PROMISES):
+        return True
+    if _contains_numeric_timing(normalized):
+        return True
+    if normalized.startswith(_RESULT_CLAIM_PREFIXES):
+        return True
+    return any(claim in normalized for claim in _RESULT_CLAIM_FRAGMENTS)
+
+
 def validated_activity_label(value: object) -> str | None:
     """Return concise safe activity copy, or ``None`` for server fallback."""
     if not isinstance(value, str) or any(mark in value for mark in "\r\n\t"):
@@ -143,19 +159,7 @@ def validated_activity_label(value: object) -> str | None:
     if not label or len(label) > MAX_ACTIVITY_LABEL_CHARS:
         return None
     normalized = label.casefold().strip(" .!?…")
-    if normalized in _FLUFF_ONLY:
-        return None
-    if _contains_internal_language(normalized):
-        return None
-    if _contains_opaque_identifier(normalized):
-        return None
-    if any(promise in normalized for promise in _TIMING_PROMISES):
-        return None
-    if _contains_numeric_timing(normalized):
-        return None
-    if normalized.startswith(_RESULT_CLAIM_PREFIXES):
-        return None
-    if any(claim in normalized for claim in _RESULT_CLAIM_FRAGMENTS):
+    if _activity_copy_rejected(normalized):
         return None
     return label
 
@@ -185,7 +189,7 @@ def _has_unowned_continuation(message: str) -> bool:
     neither permission, so they must stand on their own.
     """
 
-    normalized = " " + message.casefold().replace("’", "'") + " "
+    normalized = " " + message.casefold().replace("\u2019", "'") + " "
     if "?" in normalized:
         return True
     if any(
@@ -204,12 +208,7 @@ def _has_unowned_continuation(message: str) -> bool:
     return has_first_person_modal and has_future_condition
 
 
-def validated_terminal_message(
-    value: object,
-    *,
-    outcome: str | None = None,
-) -> str | None:
-    """Return formatted conversational prose only when it is safe to expose."""
+def _normalized_terminal_message(value: object) -> str | None:
     if not isinstance(value, str):
         return None
     raw = value.replace("\r\n", "\n").replace("\r", "\n")
@@ -221,11 +220,75 @@ def validated_terminal_message(
     message = "\n".join(lines)
     if not message or len(message) > MAX_TERMINAL_MESSAGE_CHARS:
         return None
+    return message
+
+
+def validated_terminal_message(
+    value: object,
+    *,
+    outcome: str | None = None,
+) -> str | None:
+    """Return formatted conversational prose only when it is safe to expose."""
+
+    message = _normalized_terminal_message(value)
+    if message is None:
+        return None
     if _contains_internal_language(message) or _contains_opaque_identifier(message):
         return None
     if outcome == "answer" and _has_unowned_continuation(message):
         return None
     return message
+
+
+_INTERNAL_CARD_REFERENCE = re.compile(
+    r"\b(?:route\s+)?card\s+[`'\"]?(?:rc|mock)[_-][A-Za-z0-9_-]+[`'\"]?\s*(?:[\u2014\u2013-]\s*)?",
+    re.IGNORECASE,
+)
+_OPAQUE_CARD_ID = re.compile(r"\b(?:rc|mock)[_-][A-Za-z0-9_-]{4,}\b", re.IGNORECASE)
+_OPAQUE_CANDIDATE_ID = re.compile(r"\b(?:cd|cs)_[A-Za-z0-9_-]{4,}\b", re.IGNORECASE)
+_OPAQUE_PLACE_ID = re.compile(
+    r"\b(?:pl|ds)_[A-Za-z0-9_-]{4,}\b|\bChIJ[A-Za-z0-9_-]{6,}\b",
+    re.IGNORECASE,
+)
+_INTERNAL_RUNTIME_LINE = re.compile(
+    r"(?im)^.*\b(?:prepare_route_options|present_route|get_place_details|"
+    r"search_local_places|accessibility_status|lookup_arrivals|"
+    r"check_area_conditions|transit_snapshot|event_lookup|venue_crowd_window|"
+    r"lookup_facts|web_search|plan_trip|destination_place_id|place_id|"
+    r"candidate_id|candidate_set_id|discovery_set_id|tool_use|tool_result|"
+    r"function\s*call)\b.*(?:\r?\n|$)"
+)
+_FAKE_WAIT_SENTENCE = re.compile(
+    r"(?i)(?:^|(?<=[.!?])\s+)(?:please\s+)?(?:give\s+me\s+(?:a\s+)?moment"
+    r"(?:\s+for\s+(?:the\s+)?results)?|i(?:'m|\s+am)\s+waiting\s+for\s+"
+    r"(?:the\s+)?(?:results|alternatives)|i\s+should\s+have\s+(?:those\s+)?"
+    r"(?:results|candidates)\s+shortly|let\s+me\s+call\s+that\s+now)"
+    r"[.!?]*(?=\s|$)"
+)
+SUSPICIOUS_RIDER_TEXT = re.compile(
+    r"[*_`~]|\bcard\s*$|\b(?:rc|mock|cd|cs|pl|ds)[_-]|\bChIJ|"
+    r"\b(?:prepare_route_options|present_route|get_place_details|"
+    r"search_local_places|destination_place_id|place_id|candidate_id|"
+    r"candidate_set_id|discovery_set_id|tool_use|tool_result)\b|"
+    r"\b(?:give\s+me\s+(?:a\s+)?moment|"
+    r"waiting\s+for\s+(?:the\s+)?results|results\s+shortly|let\s+me\s+call)",
+    re.IGNORECASE,
+)
+
+
+def sanitize_rider_text(text: str) -> str:
+    sanitized = _INTERNAL_CARD_REFERENCE.sub("", text)
+    sanitized = _OPAQUE_CARD_ID.sub("the route", sanitized)
+    sanitized = _OPAQUE_CANDIDATE_ID.sub("the route", sanitized)
+    sanitized = _OPAQUE_PLACE_ID.sub("the selected place", sanitized)
+    sanitized = _INTERNAL_RUNTIME_LINE.sub("", sanitized)
+    sanitized = _FAKE_WAIT_SENTENCE.sub("", sanitized)
+    sanitized = re.sub(r"\*\*(.*?)\*\*", r"\1", sanitized, flags=re.DOTALL)
+    sanitized = re.sub(r"__(.*?)__", r"\1", sanitized, flags=re.DOTALL)
+    sanitized = re.sub(r"`([^`]+)`", r"\1", sanitized)
+    sanitized = re.sub(r"(?m)^\s*#{1,6}\s+", "", sanitized)
+    sanitized = re.sub(r"~(?=\d)", "about ", sanitized)
+    return re.sub(r"[ \t]{2,}", " ", sanitized)
 
 
 def pop_activity_label(tool_input: dict) -> str | None:
@@ -281,9 +344,6 @@ _UNRESOLVED_ACTION_FALLBACK = (
     "I couldn't complete that request in this turn, so I don't have a "
     "verified result to share."
 )
-_RESOLVED_GOAL_STATES = frozenset(
-    {GoalState.SATISFIED, GoalState.CANCELLED_BY_RIDER, GoalState.SUPERSEDED}
-)
 
 
 def truthful_failure_text(evidence: object) -> str:
@@ -296,22 +356,11 @@ def truthful_failure_text(evidence: object) -> str:
         unresolved is not None
         and unresolved[0] == GoalKind.ROUTE
         and unresolved[1] != GoalState.BLOCKED_WAITING_FOR_RIDER
-    ):
-        route_text = _precise_route_failure_text(evidence)
-        if route_text is not None:
-            return route_text
-    elif unresolved is None and _route_goal_is_unresolved(evidence):
+    ) or (unresolved is None and _route_goal_is_unresolved(evidence)):
         route_text = _precise_route_failure_text(evidence)
         if route_text is not None:
             return route_text
     return _unresolved_goal_failure_text(evidence) or _UNRESOLVED_ACTION_FALLBACK
-
-
-def _goal_is_unresolved(evidence: object, goal_key: str) -> bool:
-    state = evidence.state_for(goal_key)
-    if state in _RESOLVED_GOAL_STATES:
-        return False
-    return not (state == GoalState.EVIDENCE_READY and evidence.presented_for(goal_key))
 
 
 def _route_goal_is_unresolved(evidence: object) -> bool:
@@ -320,7 +369,7 @@ def _route_goal_is_unresolved(evidence: object) -> bool:
         return False
     route_goals = [goal for goal in contract.goals if goal.kind == GoalKind.ROUTE]
     return bool(route_goals) and any(
-        _goal_is_unresolved(evidence, goal.goal_key) for goal in route_goals
+        evidence.goal_is_unresolved(goal.goal_key) for goal in route_goals
     )
 
 
@@ -329,7 +378,7 @@ def _first_unresolved_goal(evidence: object) -> tuple[GoalKind, GoalState] | Non
     if contract is None:
         return None
     for goal in contract.goals:
-        if _goal_is_unresolved(evidence, goal.goal_key):
+        if evidence.goal_is_unresolved(goal.goal_key):
             return goal.kind, evidence.state_for(goal.goal_key)
     return None
 
@@ -386,9 +435,11 @@ __all__ = [
     "MAX_PRESENTATION_FRAMING_CHARS",
     "MAX_RESEARCH_PRESENTATION_FRAMING_CHARS",
     "MAX_TERMINAL_MESSAGE_CHARS",
+    "SUSPICIOUS_RIDER_TEXT",
     "append_text",
     "framed_events",
     "pop_activity_label",
+    "sanitize_rider_text",
     "truthful_failure_text",
     "validated_activity_label",
     "validated_framing",

@@ -3,9 +3,145 @@ import { bridgeRouteGaps } from "../../bridge-route-gaps.ts";
 import { haversineM } from "../../brighton-bq-church-spacing.ts";
 import { simplifyTightCurves } from "../../simplify-tight-curves.ts";
 import { smoothSharpCorners } from "../../smooth-polyline.ts";
-import { snapOffRevenueToShape } from "../../snap-off-revenue-to-shape.ts";
-import type { RouteContinuityRepairStageInput } from "./route-continuity-repair-types.ts";
-import type { Position } from "../shared/types.ts";
+import { snapOffRevenueToPolyline } from "../../snap-off-revenue-to-shape.ts";
+import type { JsonValue } from "../../types.ts";
+import { isJsonNumber, isJsonObject, isJsonString, parsedJson } from "../shared/route-config.ts";
+import type { LineFeature, Position } from "../shared/types.ts";
+
+type RouteContinuityRepairStageInput = {
+  bundleArtifacts: { visualFeatures?: LineFeature[] };
+  canonicalGeoJsonPath: string;
+  bridgeMinGapM: number;
+  bridgeMaxGapM: number;
+  bridgeSubsetConnectorMaxGapM: number;
+  offRevenueMaxM: number;
+};
+
+type GtfsRouteTrack = {
+  routeId: string;
+  coords: Position[];
+};
+
+function parseGtfsRouteTrack(value: JsonValue | undefined): GtfsRouteTrack | null {
+  if (!isJsonObject(value)) return null;
+  const geometry = value.geometry;
+  if (!isJsonObject(geometry)) return null;
+  if (geometry.type !== "LineString" || !Array.isArray(geometry.coordinates)) return null;
+  if (geometry.coordinates.length < 2) return null;
+  const properties = value.properties;
+  if (!isJsonObject(properties)) return null;
+  const routeId = properties.route_id;
+  const routeIdIsScalar = [
+    isJsonString(routeId),
+    isJsonNumber(routeId),
+    routeId === true,
+    routeId === false,
+  ].includes(true);
+  if (!routeIdIsScalar) return null;
+  const coords: Position[] = [];
+  for (const item of geometry.coordinates) {
+    if (!Array.isArray(item) || item.length < 2) return null;
+    const lon = Number(item[0]);
+    const lat = Number(item[1]);
+    if ([Number.isFinite(lon), item[0] === lon, Number.isFinite(lat), item[1] === lat].includes(false)) {
+      return null;
+    }
+    coords.push([lon, lat]);
+  }
+  return { routeId: String(routeId), coords };
+}
+
+function indexGtfsTracksByRoute(raw: JsonValue): Map<string, Position[][]> {
+  const tracksByRoute = new Map<string, Position[][]>();
+  if (!isJsonObject(raw) || !Array.isArray(raw.features)) return tracksByRoute;
+  for (const feature of raw.features) {
+    const parsed = parseGtfsRouteTrack(feature);
+    if (!parsed) continue;
+    const existing = tracksByRoute.get(parsed.routeId) ?? [];
+    existing.push(parsed.coords);
+    tracksByRoute.set(parsed.routeId, existing);
+  }
+  return tracksByRoute;
+}
+
+function gtfsTracksForFeature(
+  feature: LineFeature,
+  tracksByRoute: Map<string, Position[][]>,
+): Position[][] {
+  const before = feature.geometry.coordinates;
+  const routes = Array.isArray(feature.properties?.route_ids) ? feature.properties.route_ids : [];
+  const start: Position = before[0];
+  const end: Position = before[before.length - 1];
+  const tracks: Position[][] = [];
+  for (const routeId of routes) {
+    const candidates = tracksByRoute.get(String(routeId));
+    if (!candidates?.length) continue;
+    let best = candidates[0];
+    let bestDistance = Infinity;
+    for (const candidate of candidates) {
+      if (candidate.length < 2) continue;
+      const forward = haversineM(start, candidate[0]) + haversineM(end, candidate[candidate.length - 1]);
+      const reverse = haversineM(start, candidate[candidate.length - 1]) + haversineM(end, candidate[0]);
+      const distance = Math.min(forward, reverse);
+      if (distance >= bestDistance) continue;
+      bestDistance = distance;
+      best = candidate;
+    }
+    tracks.push(best);
+  }
+  return tracks;
+}
+
+function rerouteFeatureOntoGtfs(
+  feature: LineFeature,
+  gtfsTracks: Position[][],
+  offRevenueMaxM: number,
+): boolean {
+  let coords = feature.geometry.coordinates;
+  let moved = false;
+  for (let pass = 0; pass < 4; pass += 1) {
+    const next = (snapOffRevenueToPolyline((coords), (gtfsTracks), { maxOffM: (offRevenueMaxM) }));
+    if (next === coords) break;
+    coords = next;
+    moved = true;
+  }
+  if (!moved) return false;
+  const filleted = smoothSharpCorners(coords, {
+    angleThresholdDeg: 12,
+    iterations: 5,
+    ratio: 0.28,
+    maxFilletM: 30,
+  });
+  feature.geometry.coordinates = simplifyTightCurves(filleted, {
+    tightTurnDeg: 40,
+    windowM: 60,
+    iterations: 40,
+    lambda: 0.5,
+  });
+  feature.properties.off_revenue_rerouted = true;
+  return true;
+}
+
+function rerouteOffRevenueToGtfs(
+  features: LineFeature[],
+  canonicalGeoJsonPath: string,
+  offRevenueMaxM: number,
+): void {
+  const canonicalDoc = parsedJson(readFileSync(canonicalGeoJsonPath, "utf8"));
+  const tracksByRoute = indexGtfsTracksByRoute(canonicalDoc);
+  let reroutedFeatureCount = 0;
+  for (const feature of features) {
+    if (feature.geometry?.type !== "LineString") continue;
+    const before = feature.geometry.coordinates;
+    if (!Array.isArray(before) || before.length < 3) continue;
+    const gtfsTracks = gtfsTracksForFeature(feature, tracksByRoute);
+    if (!gtfsTracks.length) continue;
+    if (rerouteFeatureOntoGtfs(feature, gtfsTracks, offRevenueMaxM)) reroutedFeatureCount += 1;
+  }
+  console.log(
+    `[visual-network] off-revenue re-route:        features=${reroutedFeatureCount} (>${offRevenueMaxM}m off GTFS revenue shape)`,
+  );
+}
 
 export function applyRouteContinuityRepairStage({
   bundleArtifacts,
@@ -15,17 +151,6 @@ export function applyRouteContinuityRepairStage({
   bridgeSubsetConnectorMaxGapM,
   offRevenueMaxM,
 }: RouteContinuityRepairStageInput): void {
-  // ----- Route gap bridging: close the small seams between same-route pieces -----
-  // The split-and-reassemble pipeline (shared spine from BASE geometry, fanouts/
-  // tails from MEMBER geometry, DeKalb clips) leaves small gaps (~11-20m) where a
-  // member fans out from the shared spine -- the two pieces differ by up to the
-  // overlap tolerance. Close those seams by extending the dangling source geometry
-  // into its same-route sibling. For same-color broad branch splits like the
-  // Queensboro N/W -> N/R seam, append an exact shared-route connector instead of
-  // extending either broad feature and falsely carrying W/R over the seam.
-  // In-place repairs stay bounded to <= BRIDGE_MAX_GAP_M; subset connectors are
-  // endpoint-only and capped by BRIDGE_SUBSET_CONNECTOR_MAX_GAP_M.
-  // Connectivity (Gate 2D) is GTFS-topology-based, so bridges do not affect it.
   if (bundleArtifacts.visualFeatures) {
     const bridgeResult = bridgeRouteGaps(bundleArtifacts.visualFeatures, {
       minGapM: bridgeMinGapM,
@@ -33,86 +158,16 @@ export function applyRouteContinuityRepairStage({
       allowSubsetRouteConnectors: true,
       subsetConnectorMaxGapM: bridgeSubsetConnectorMaxGapM,
     });
-    bundleArtifacts.visualFeatures = bridgeResult.features;
     console.log(
       `[visual-network] route gap bridging:          integrated=${bridgeResult.bridgeCount} (gap ${bridgeMinGapM}-${bridgeMaxGapM}m, subset endpoint <=${bridgeSubsetConnectorMaxGapM}m)`,
     );
+    bundleArtifacts.visualFeatures = bridgeResult.features;
   }
-
-  // ----- Off-revenue re-route: pull OpenData excursions onto the GTFS track -----
-  // FINAL geometry pass (after snap + bridge, so it operates on the settled
-  // endpoint geometry). Some NYC OpenData strokes swing far off the route's real
-  // revenue track (e.g. the 5 at 149 St / Mott Haven bulges ~300m west toward
-  // Walton Av). Each contiguous OFF-shape excursion (vertices > OFF_REVENUE_MAX_M
-  // from every GTFS revenue shape of that feature's routes) is replaced with the
-  // GTFS shape's own sub-path between where the line left and rejoined it -- so
-  // lines follow the real curve, never a straight chord, with no wild jumps.
   if (bundleArtifacts.visualFeatures) {
-    const canonicalDoc = JSON.parse(
-      readFileSync(canonicalGeoJsonPath, "utf8"),
-    );
-    const shapesByRoute = new Map();
-    for (const f of canonicalDoc.features) {
-      if (f.geometry?.type !== "LineString") continue;
-      const r = String(f.properties?.route_id);
-      if (!shapesByRoute.has(r)) shapesByRoute.set(r, []);
-      shapesByRoute.get(r).push(f.geometry.coordinates);
-    }
-    let reroutedFeatureCount = 0;
-    for (const f of bundleArtifacts.visualFeatures) {
-      if (f.geometry?.type !== "LineString") continue;
-      const before = f.geometry.coordinates;
-      if (!Array.isArray(before) || before.length < 3) continue;
-      const routes = Array.isArray(f.properties?.route_ids) ? f.properties.route_ids : [];
-      const fStart: Position = before[0];
-      const fEnd: Position = before[before.length - 1];
-      const shapes: Position[][] = [];
-      for (const r of routes) {
-        const routeShapes: Position[][] | undefined = shapesByRoute.get(String(r));
-        if (!routeShapes?.length) continue;
-        if (routeShapes.length === 1) { shapes.push(routeShapes[0]); continue; }
-        let best = routeShapes[0];
-        let bestDist = Infinity;
-        for (const shape of routeShapes) {
-          if (!shape || shape.length < 2) continue;
-          const d1 = haversineM(fStart, shape[0]) + haversineM(fEnd, shape[shape.length - 1]);
-          const d2 = haversineM(fStart, shape[shape.length - 1]) + haversineM(fEnd, shape[0]);
-          const d = Math.min(d1, d2);
-          if (d < bestDist) { bestDist = d; best = shape; }
-        }
-        shapes.push(best);
-      }
-      if (!shapes.length) continue;
-      let coords = before;
-      let moved = false;
-      for (let pass = 0; pass < 4; pass += 1) {
-        const next = snapOffRevenueToShape(coords, shapes, { maxOffM: offRevenueMaxM });
-        if (next === coords) break;
-        coords = next;
-        moved = true;
-      }
-      if (!moved) continue;
-      // Smooth the GTFS-derived path: round sharp single-vertex elbows and relax
-      // any tight kink where the re-routed sub-path rejoins, so the result reads as
-      // a clean curve rather than a literal/sharp GTFS trace. Endpoints are pinned.
-      let smoothed = smoothSharpCorners(coords, {
-        angleThresholdDeg: 12, // GTFS-derived path: round densely-sampled tight curls into clean arcs
-        iterations: 5,
-        ratio: 0.28,
-        maxFilletM: 30,
-      });
-      smoothed = simplifyTightCurves(smoothed, {
-        tightTurnDeg: 40,   // GTFS-derived: relax the real tight Mott-Haven-style curls harder
-        windowM: 60,
-        iterations: 40,
-        lambda: 0.5,
-      });
-      f.geometry.coordinates = smoothed;
-      f.properties.off_revenue_rerouted = true;
-      reroutedFeatureCount += 1;
-    }
-    console.log(
-      `[visual-network] off-revenue re-route:        features=${reroutedFeatureCount} (>${offRevenueMaxM}m off GTFS revenue shape)`,
+    rerouteOffRevenueToGtfs(
+      bundleArtifacts.visualFeatures,
+      canonicalGeoJsonPath,
+      offRevenueMaxM,
     );
   }
 }

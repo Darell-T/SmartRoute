@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from urllib.parse import urlsplit, urlunsplit
 
-
 _X_HOSTS = {"x.com", "twitter.com", "mobile.twitter.com"}
 
 

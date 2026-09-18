@@ -22,7 +22,7 @@ test("BUNDLE_COLOR_ORDER SI hex matches the build script's ROUTE_COLORS.SI", () 
 test("orderColorsForBundle returns { colors, overrideApplied } shape", () => {
   const result = orderColorsForBundle(["#EE352E"]);
   assert.ok(Array.isArray(result.colors));
-  assert.equal(typeof result.overrideApplied, "boolean");
+  assert.equal(result.overrideApplied, false);
 });
 
 test("orderColorsForBundle returns colors sorted by global rank (no override)", () => {

@@ -1,8 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
-import { readJsonBody } from "@/lib/backend-proxy-core";
-import { streamProxyToBackend } from "@/lib/backend-stream-proxy";
-import { rateLimit } from "@/lib/rate-limit";
+import { readJsonBody } from "@/lib/server/backend-proxy-core";
+import { streamProxyToBackend } from "@/lib/server/backend-stream-proxy";
+import { rateLimit } from "@/lib/server/rate-limit";
 
 // Node runtime (not edge): the backend proxy needs the standard fetch/stream
 // primitives and a longer execution budget than the edge runtime allows.
@@ -62,7 +62,6 @@ export async function POST(req: NextRequest) {
       code: issue.code,
       message: issue.message,
     }));
-    console.warn("[agent-chat] rejected invalid request", issues);
     return NextResponse.json(
       {
         error:

@@ -1,12 +1,13 @@
 import { writeFileSync } from "node:fs";
 import { loadOpenDataSubwayLines, OPEN_DATA_SOURCE_DATASET_ID, OPEN_DATA_SOURCE_NAME } from "../../opendata-subway-lines.ts";
 import { buildOpenDataInputsStage } from "./opendata-inputs.ts";
+import type { TopologyEdgeDiagnostics } from "./topology-edges.ts";
 
 type OpenDataVisualInputStageInput = {
   openDataLinesPath: string;
   expectedOpenDataRouteIds: string[];
   expectedEdges: number;
-  topologyEdgeDiagnostics: any;
+  topologyEdgeDiagnostics: TopologyEdgeDiagnostics;
   openDataMinFragmentLengthM: number;
   paths: { opendataLinesGeoJson: string; edgesGeoJson: string; opendataOverlapsGeoJson: string };
   parameters: { overlapMinRatio: number; overlapSharedLenMinM: number; containmentAvgDistanceMaxM: number; tangentMaxDiffDeg: number };
@@ -44,7 +45,7 @@ export function buildOpenDataVisualInputStage({
         visual_geometry_source: OPEN_DATA_SOURCE_NAME,
         visual_geometry_source_dataset_id: OPEN_DATA_SOURCE_DATASET_ID,
         raw_opendata_path: "frontend/public/subway-lines-nyc-opendata.geojson",
-        shape_selection_strategy: "nyc_opendata_full_lines",
+        "shape_selection_strategy": "nyc_opendata_full_lines",
       },
       diagnostics: {
         ...openDataLines.diagnostics,

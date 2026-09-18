@@ -4,18 +4,22 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import logging
 import os
 import re
 from collections.abc import Iterator, Mapping
 from typing import Any
 
+from app.services.text import collapse_whitespace
+
 _SDK: Any = None
 _MAX_TEXT = 80
 _TRACE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+_LOGGER = logging.getLogger(__name__)
 
 
 class _NoopSpan:
-    def __enter__(self) -> "_NoopSpan":
+    def __enter__(self) -> _NoopSpan:
         return self
 
     def __exit__(self, _type: object, _value: object, _traceback: object) -> None:
@@ -32,7 +36,9 @@ def _env(name: str, default: str) -> str:
     return os.getenv(name, default).strip() or default
 
 
-def initialize(*, span_exporter: object | None = None, api_key: str | None = None) -> None:
+def initialize(
+    *, span_exporter: object | None = None, api_key: str | None = None
+) -> None:
     global _SDK
     try:
         import telemetry_dev
@@ -51,7 +57,7 @@ def initialize(*, span_exporter: object | None = None, api_key: str | None = Non
             options["export_mode"] = "immediate"
         telemetry_dev.init(**options)
         _SDK = telemetry_dev
-    except BaseException:
+    except Exception:  # noqa: BLE001 unexpected SDK faults must not abort startup or a rider turn
         _SDK = None
 
 
@@ -63,16 +69,16 @@ def shutdown() -> None:
         return
     try:
         sdk.flush(timeout_s=1.0)
-    except BaseException:
-        pass
+    except Exception:  # noqa: BLE001 unexpected SDK faults must not abort startup or a rider turn
+        _LOGGER.debug("telemetry flush failed during shutdown")
     try:
         sdk.shutdown(timeout_s=1.0)
-    except BaseException:
-        pass
+    except Exception:  # noqa: BLE001 unexpected SDK faults must not abort startup or a rider turn
+        _LOGGER.debug("telemetry shutdown failed")
 
 
 def _text(value: object, *, default: str = "unknown") -> str:
-    return " ".join(str(value or "").split()).strip()[:_MAX_TEXT] or default
+    return collapse_whitespace(value)[:_MAX_TEXT] or default
 
 
 def _session_hash(session_id: object) -> str:
@@ -91,7 +97,7 @@ def _start(name: str, span_type: str, attributes: Mapping[str, object]) -> Any:
             capture_input=False,
             capture_output=False,
         )
-    except BaseException:
+    except Exception:  # noqa: BLE001 unexpected SDK faults must not abort startup or a rider turn
         return _NoopSpan()
 
 
@@ -111,14 +117,14 @@ def wrap_anthropic(client: Any) -> Any:
         if not isinstance(getattr(client, "messages", None), AsyncMessages):
             return client
         return provider_wrap(client)
-    except BaseException:
+    except Exception:  # noqa: BLE001 unexpected SDK faults must not abort startup or a rider turn
         return client
 
 
 def _trace_id(span: Any) -> str | None:
     try:
         traceparent = span.traceparent()
-    except BaseException:
+    except Exception:  # noqa: BLE001 unexpected SDK faults must not abort startup or a rider turn
         return None
     if not isinstance(traceparent, str):
         return None
@@ -146,14 +152,18 @@ def start_turn(ctx: Any, *, turn_id: str, mode: str) -> Any:
 def _finish(span: Any, attributes: Mapping[str, object]) -> None:
     try:
         span.end(attributes=dict(attributes))
-    except BaseException:
-        pass
+    except Exception:  # noqa: BLE001 unexpected SDK faults must not abort startup or a rider turn
+        _LOGGER.debug("telemetry span end failed")
 
 
 def finish_turn(span: Any, telemetry: Mapping[str, object]) -> None:
     attributes: dict[str, object] = {
-        "smartroute.outcome": _text(telemetry.get("turn_resolution"), default="incomplete"),
-        "smartroute.selection_source": _text(telemetry.get("selection_source"), default="none"),
+        "smartroute.outcome": _text(
+            telemetry.get("turn_resolution"), default="incomplete"
+        ),
+        "smartroute.selection_source": _text(
+            telemetry.get("selection_source"), default="none"
+        ),
     }
     goal_states = telemetry.get("goal_states")
     if isinstance(goal_states, Mapping):

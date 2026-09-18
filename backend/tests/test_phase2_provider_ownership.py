@@ -31,7 +31,7 @@ class ProviderOwnershipTests(unittest.IsolatedAsyncioTestCase):
                 "gtfs", 40.73, -73.99, {"Q"}
             )
 
-        self.assertIs(result, built)
+        assert result is built
         acquire.assert_awaited_once_with()
         pure_builder.assert_awaited_once_with(
             "gtfs", network, 40.73, -73.99, {"Q"}
@@ -52,9 +52,9 @@ class ProviderOwnershipTests(unittest.IsolatedAsyncioTestCase):
                 {"query": "concert"}, object()
             )
 
-        self.assertTrue(result.ok)
-        self.assertEqual(result.data, {"events": []})
-        self.assertEqual(result.summary, "no events")
+        assert result.ok
+        assert result.data == {"events": []}
+        assert result.summary == "no events"
         lookup.assert_awaited_once()
 
     async def test_event_crowd_uses_neutral_provider_failure_without_agent_import(self):
@@ -84,10 +84,10 @@ class ProviderOwnershipTests(unittest.IsolatedAsyncioTestCase):
                 type("Context", (), {"now_et": "2026-07-25T19:15:00-04:00"})(),
             )
 
-        self.assertEqual(status, "provider_unavailable")
-        self.assertEqual(impacts, [])
-        self.assertEqual(failures, ["event lookup timed out"] * lookup.await_count)
-        self.assertGreater(lookup.await_count, 0)
+        assert status == "provider_unavailable"
+        assert impacts == []
+        assert failures == ["event lookup timed out"] * lookup.await_count
+        assert lookup.await_count > 0
 
 
 if __name__ == "__main__":

@@ -3,28 +3,29 @@
 from __future__ import annotations
 
 import dataclasses
-import math
 import time
 from typing import Any
 
-from app.services.agent import candidate_store
-from app.services.agent import discovery_store
+from app.services.agent import candidate_store, discovery_store
 from app.services.agent import trip_state as trip_state_module
-from app.services.agent.tools._types import ToolContext, ToolOutcome, ToolResult
+from app.services.agent.tools.base import ToolContext, ToolOutcome, ToolResult
 from app.services.agent.tools.location_resolution import ResolvedPlace
-from app.services.agent.tools.route.prepare_route_branches import aggregate_destination_ids
+from app.services.agent.tools.route.preparation_adapter import PreparedLeg
+from app.services.agent.tools.route.prepare_route_branches import (
+    aggregate_destination_ids,
+)
+from app.services.agent.turn.finalization import record_phase_ms
+from app.services.parsing import finite_float
 from app.services.trips.preparation.constraints import (
     ROUTE_STATUSES,
     candidate_digest,
     route_status,
 )
-from app.services.trips.preparation.prepare import AggregatePreparation
 from app.services.trips.preparation.evidence import (
     coverage_for_prepared,
     serialize_evidence_envelopes,
 )
-from app.services.agent.tools.route.preparation_adapter import PreparedLeg
-from app.services.agent.turn.finalization import record_phase_ms
+from app.services.trips.preparation.prepare import AggregatePreparation
 from app.services.trips.route_incidents.scan import incident_scan_is_complete
 
 
@@ -180,6 +181,29 @@ def persist_route_candidates(
     )
     timings["plan_trip_ms"] = (time.monotonic() - started) * 1000
     record_phase_ms(ctx.telemetry, "plan_trip_complete_ms", timings["plan_trip_ms"])
+    return _prepared_candidate_result(
+        set_id=set_id,
+        visible_destination_ids=visible_destination_ids,
+        status=status,
+        presentation_allowed=presentation_allowed,
+        public_digests=public_digests,
+        aggregate=aggregate,
+        coverage=coverage,
+        timings=timings,
+    )
+
+
+def _prepared_candidate_result(
+    *,
+    set_id: str,
+    visible_destination_ids: list[str],
+    status: str,
+    presentation_allowed: bool,
+    public_digests: list[dict[str, Any]],
+    aggregate: AggregatePreparation,
+    coverage: dict[str, str],
+    timings: dict[str, float],
+) -> ToolResult:
     incomplete = not incident_scan_is_complete(aggregate.incident_scan_metadata)
     return ToolResult(
         ok=True,
@@ -263,7 +287,7 @@ def bind_canonical_destination_identities(
         destinations = [aggregate.destination_place]
 
     normalized: list[ResolvedPlace] = []
-    for index, destination in enumerate(destinations):
+    for _index, destination in enumerate(destinations):
         opaque_id = _destination_identity(
             destination,
             options=options,
@@ -329,46 +353,38 @@ def _opaque_id(value: object) -> str | None:
 
 def _place_match_key(place: Any) -> tuple[Any, ...]:
     if isinstance(place, ResolvedPlace):
-        provider_id = str(place.provider_place_id or "").strip().casefold()
-        current_id = str(place.place_id or "").strip()
-        if (
-            not provider_id
-            and current_id
-            and not discovery_store.is_opaque_place_id(current_id)
-        ):
-            provider_id = current_id.casefold()
+        provider_id = _provider_match_id(
+            str(place.provider_place_id or "").strip().casefold(),
+            str(place.place_id or "").strip(),
+        )
         if provider_id:
             return ("provider", provider_id)
         return (
             "coordinates",
-            _finite_coordinate(place.latitude),
-            _finite_coordinate(place.longitude),
+            finite_float(place.latitude),
+            finite_float(place.longitude),
         )
     if isinstance(place, dict):
-        provider_id = str(place.get("provider_place_id") or "").strip().casefold()
-        current_id = str(place.get("place_id") or "").strip()
-        if (
-            not provider_id
-            and current_id
-            and not discovery_store.is_opaque_place_id(current_id)
-        ):
-            provider_id = current_id.casefold()
+        provider_id = _provider_match_id(
+            str(place.get("provider_place_id") or "").strip().casefold(),
+            str(place.get("place_id") or "").strip(),
+        )
         if provider_id:
             return ("provider", provider_id)
         return (
             "coordinates",
-            _finite_coordinate(place.get("latitude", place.get("lat"))),
-            _finite_coordinate(place.get("longitude", place.get("lng"))),
+            finite_float(place.get("latitude", place.get("lat"))),
+            finite_float(place.get("longitude", place.get("lng"))),
         )
     return ("unknown", str(place or "").strip().casefold())
 
 
-def _finite_coordinate(value: object) -> float | None:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
+def _provider_match_id(provider_id: str, current_id: str) -> str:
+    if provider_id:
+        return provider_id
+    if current_id and not discovery_store.is_opaque_place_id(current_id):
+        return current_id.casefold()
+    return ""
 
 
 def _build_digests(
@@ -379,57 +395,79 @@ def _build_digests(
     snapshot_id: str,
     snapshot_observed_at: str,
 ) -> list[dict[str, Any]]:
-    digests: list[dict[str, Any]] = []
-    for index, route in enumerate(aggregate.parsed_routes):
-        evidence = candidate_evidence(aggregate, index)
-        score = next(
-            (row for row in aggregate.scored if int(row.get("index", -1)) == index),
-            {"index": index},
+    return [
+        _digest_for_candidate(
+            aggregate,
+            merged,
+            candidate_ids,
+            hard_constraints,
+            snapshot_id,
+            snapshot_observed_at,
+            index,
+            route,
         )
-        digest = candidate_digest(
-            route=route,
-            candidate_id=candidate_ids[index],
-            score=score,
-            alerts=evidence["alerts"],
-            incidents=evidence["incidents"],
-            event_impacts=evidence["event_impacts"],
-            prepared_arrival_by=merged.get("arrival_by"),
-            hard_constraints=hard_constraints[index],
-            unconfirmed_material_claims=evidence.get("unconfirmed_material_claims"),
-            evidence_coverage=evidence.get("evidence_coverage"),
-            itinerary=aggregate.candidate_itineraries[index],
-            evidence_snapshot={"id": snapshot_id, "observed_at": snapshot_observed_at},
-            soft_preferences={
-                "routing_preference": merged.get("routing_preference")
-                or "FEWER_TRANSFERS",
-                "routing_preference_source": (
-                    merged.get("routing_preference_source") or "default"
-                ),
-                "preferred_modes": list(merged.get("preferred_modes") or []),
-                "avoid_crowds": bool(merged.get("avoid_crowds")),
-                "avoid_crowds_source": merged.get("avoid_crowds_source") or "default",
-            },
-            destination_place_id=(
-                aggregate.candidate_destinations[index].place_id
-                if index < len(aggregate.candidate_destinations)
-                else aggregate.destination_place.place_id
-            ),
-            destination_name=(
-                aggregate.candidate_destinations[index].name
-                if index < len(aggregate.candidate_destinations)
-                else aggregate.destination_place.name
-            ),
-            branch_coverage=aggregate.branch_coverage,
-            stage_a_factors=aggregate.stage_a_factors,
-        )
-        digest["_canonical_itinerary"] = aggregate.candidate_itineraries[index]
-        digest["_evidence_snapshot"] = {
-            "id": snapshot_id,
-            "observed_at": snapshot_observed_at,
-        }
-        digest["_hard_constraints"] = hard_constraints[index]
-        digests.append(digest)
-    return digests
+        for index, route in enumerate(aggregate.parsed_routes)
+    ]
+
+
+def _digest_for_candidate(
+    aggregate: AggregatePreparation,
+    merged: dict[str, Any],
+    candidate_ids: list[str],
+    hard_constraints: list[dict[str, Any]],
+    snapshot_id: str,
+    snapshot_observed_at: str,
+    index: int,
+    route: list[dict[str, Any]],
+) -> dict[str, Any]:
+    evidence = candidate_evidence(aggregate, index)
+    destination = (
+        aggregate.candidate_destinations[index]
+        if index < len(aggregate.candidate_destinations)
+        else aggregate.destination_place
+    )
+    score = next(
+        (row for row in aggregate.scored if int(row.get("index", -1)) == index),
+        {"index": index},
+    )
+    digest = candidate_digest(
+        route=route,
+        candidate_id=candidate_ids[index],
+        score=score,
+        alerts=evidence["alerts"],
+        incidents=evidence["incidents"],
+        event_impacts=evidence["event_impacts"],
+        prepared_arrival_by=merged.get("arrival_by"),
+        hard_constraints=hard_constraints[index],
+        unconfirmed_material_claims=evidence.get("unconfirmed_material_claims"),
+        evidence_coverage=evidence.get("evidence_coverage"),
+        itinerary=aggregate.candidate_itineraries[index],
+        evidence_snapshot={"id": snapshot_id, "observed_at": snapshot_observed_at},
+        soft_preferences=_digest_soft_preferences(merged),
+        destination_place_id=destination.place_id,
+        destination_name=destination.name,
+        branch_coverage=aggregate.branch_coverage,
+        stage_a_factors=aggregate.stage_a_factors,
+    )
+    digest["_canonical_itinerary"] = aggregate.candidate_itineraries[index]
+    digest["_evidence_snapshot"] = {
+        "id": snapshot_id,
+        "observed_at": snapshot_observed_at,
+    }
+    digest["_hard_constraints"] = hard_constraints[index]
+    return digest
+
+
+def _digest_soft_preferences(merged: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "routing_preference": merged.get("routing_preference") or "FEWER_TRANSFERS",
+        "routing_preference_source": (
+            merged.get("routing_preference_source") or "default"
+        ),
+        "preferred_modes": list(merged.get("preferred_modes") or []),
+        "avoid_crowds": bool(merged.get("avoid_crowds")),
+        "avoid_crowds_source": merged.get("avoid_crowds_source") or "default",
+    }
 
 
 def _candidate_set_payload(
@@ -455,6 +493,56 @@ def _candidate_set_payload(
         if str(place_id or "").strip()
     }
     return {
+        **_snapshot_route_identity(
+            aggregate=aggregate,
+            merged=merged,
+            accepted_destination_label=accepted_destination_label,
+            used_discovery_set_id=used_discovery_set_id,
+            destination_discovery_set_id=destination_discovery_set_id,
+            waypoint_discovery_set_id=waypoint_discovery_set_id,
+            resolved_place_id=resolved_place_id,
+            destination_option_ids=destination_option_ids,
+            waypoints=waypoints,
+        ),
+        "parsed_routes": aggregate.parsed_routes,
+        "scored": aggregate.scored,
+        "relevant_alerts": aggregate.relevant_alerts,
+        "incidents": aggregate.incidents,
+        "event_evidence_status": aggregate.event_evidence_status,
+        "event_impacts": aggregate.event_impacts,
+        "event_failures": aggregate.event_failures,
+        "crowd_search_metadata": aggregate.crowd_search_metadata,
+        "incident_scan_metadata": aggregate.incident_scan_metadata,
+        "evidence_envelopes": serialize_evidence_envelopes(
+            aggregate.evidence_envelopes
+        ),
+        "candidate_evidence": aggregate.candidate_evidence,
+        "branch_coverage": aggregate.branch_coverage,
+        "collect_crowd_evidence": aggregate.collect_crowd_evidence,
+        "candidates": candidates,
+        "evidence_coverage": coverage,
+        "route_status": status,
+        "hard_constraints": {"required": True},
+        "aggregate_segments": aggregate.aggregate_segments,
+        "timings": aggregate.timings,
+        "snapshot_id": snapshot_id,
+        "snapshot_observed_at": snapshot_observed_at,
+    }
+
+
+def _snapshot_route_identity(
+    *,
+    aggregate: AggregatePreparation,
+    merged: dict[str, Any],
+    accepted_destination_label: str,
+    used_discovery_set_id: str | None,
+    destination_discovery_set_id: str | None,
+    waypoint_discovery_set_id: str | None,
+    resolved_place_id: str | None,
+    destination_option_ids: set[str],
+    waypoints: list[str],
+) -> dict[str, Any]:
+    return {
         "tool_input": merged,
         "discovery_set_id": used_discovery_set_id,
         "destination_discovery_set_id": destination_discovery_set_id,
@@ -476,32 +564,9 @@ def _candidate_set_payload(
         "arrival_by": merged.get("arrival_by"),
         "excluded": sorted(set(merged.get("exclude_modes") or [])),
         "excluded_route_ids": list(merged.get("excluded_route_ids") or []),
-        "parsed_routes": aggregate.parsed_routes,
-        "scored": aggregate.scored,
-        "relevant_alerts": aggregate.relevant_alerts,
-        "incidents": aggregate.incidents,
-        "event_evidence_status": aggregate.event_evidence_status,
-        "event_impacts": aggregate.event_impacts,
-        "event_failures": aggregate.event_failures,
-        "crowd_search_metadata": aggregate.crowd_search_metadata,
-        "incident_scan_metadata": aggregate.incident_scan_metadata,
-        "evidence_envelopes": serialize_evidence_envelopes(
-            aggregate.evidence_envelopes
-        ),
-        "candidate_evidence": aggregate.candidate_evidence,
-        "branch_coverage": aggregate.branch_coverage,
-        "collect_crowd_evidence": aggregate.collect_crowd_evidence,
-        "candidates": candidates,
-        "evidence_coverage": coverage,
-        "route_status": status,
-        "hard_constraints": {"required": True},
         "candidate_kind": "multi_stop" if waypoints else "single_leg",
-        "aggregate_segments": aggregate.aggregate_segments,
         "scenario_mode": merged["scenario"],
         "waypoints": merged.get("waypoints") or [],
-        "timings": aggregate.timings,
-        "snapshot_id": snapshot_id,
-        "snapshot_observed_at": snapshot_observed_at,
     }
 
 
@@ -529,34 +594,59 @@ def _update_trip_state(
         return
     trip_state_module.discard_scenario(session)
     if presentation_allowed:
-        trip_state_module.update_trip_state(
-            session,
-            origin=merged.get("origin"),
-            destination=accepted_destination_label or merged.get("destination"),
-            waypoints=merged.get("waypoints") or [],
-            planning_mode=(
-                "arrive_by"
-                if merged.get("arrival_by")
-                else "depart_at"
-                if merged.get("departure_time")
-                else "leave_now"
-            ),
-            requested_departure=merged.get("departure_time"),
-            requested_arrival=merged.get("arrival_by"),
-            active_candidate_set_id=set_id,
-            selected_candidate_id=None,
-        )
+        _bind_active_trip(session, merged, set_id, accepted_destination_label)
+    _bind_destination_discovery(
+        session,
+        destination_options,
+        destination_discovery_set_id,
+        resolved_place_id,
+    )
+
+
+def _bind_active_trip(
+    session: dict[str, Any],
+    merged: dict[str, Any],
+    set_id: str,
+    accepted_destination_label: str,
+) -> None:
+    trip_state_module.update_trip_state(
+        session,
+        origin=merged.get("origin"),
+        destination=accepted_destination_label or merged.get("destination"),
+        waypoints=merged.get("waypoints") or [],
+        planning_mode=(
+            "arrive_by"
+            if merged.get("arrival_by")
+            else "depart_at"
+            if merged.get("departure_time")
+            else "leave_now"
+        ),
+        requested_departure=merged.get("departure_time"),
+        requested_arrival=merged.get("arrival_by"),
+        active_candidate_set_id=set_id,
+        selected_candidate_id=None,
+    )
+
+
+def _bind_destination_discovery(
+    session: dict[str, Any],
+    destination_options: list[tuple[Any, str | None]],
+    destination_discovery_set_id: str | None,
+    resolved_place_id: str | None,
+) -> None:
     if len(destination_options) > 1 and destination_discovery_set_id:
         trip_state_module.bind_discovery_set(session, destination_discovery_set_id)
-    elif destination_discovery_set_id and resolved_place_id:
+        return
+    if destination_discovery_set_id and resolved_place_id:
         trip_state_module.bind_discovery_context(
             session,
             discovery_set_id=destination_discovery_set_id,
             selected_place_id=resolved_place_id,
         )
-    elif resolved_place_id:
+        return
+    if resolved_place_id:
         # Keep the opaque selected identity without granting discovery-set
-        # authority.  This is the safe legacy/provider-resolution fallback:
+        # authority. This is the safe legacy/provider-resolution fallback:
         # only an explicitly returned server-owned destination set may bind
         # discovery context.
         trip_state_module.bind_selected_place(session, resolved_place_id)
@@ -670,43 +760,56 @@ def _public_event_impact(value: object) -> dict[str, Any]:
 def _public_branch_coverage(value: object) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
-    rows: list[dict[str, Any]] = []
-    for item in value:
-        if not isinstance(item, dict):
-            continue
-        row = {
-            "place_id": str(item.get("place_id") or "") or None,
-            "name": str(item.get("name") or "") or None,
-            "status": str(item.get("status") or "") or "unavailable",
-            "coverage": str(item.get("coverage") or "") or "unavailable",
-        }
-        if row["place_id"] or row["name"]:
-            rows.append(row)
-    return rows
+    return [
+        row
+        for item in value
+        if (row := _public_branch_row(item)) is not None
+    ]
+
+
+def _public_branch_row(item: object) -> dict[str, Any] | None:
+    if not isinstance(item, dict):
+        return None
+    place_id = _public_text(item.get("place_id"))
+    name = _public_text(item.get("name"))
+    if not place_id and not name:
+        return None
+    return {
+        "place_id": place_id,
+        "name": name,
+        "status": _public_text(item.get("status"), "unavailable"),
+        "coverage": _public_text(item.get("coverage"), "unavailable"),
+    }
+
+
+def _public_text(value: object, default: str | None = None) -> str | None:
+    text = str(value or "").strip()
+    return text or default
 
 
 def _public_stage_a_factors(value: object) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
-    factors: list[dict[str, Any]] = []
-    for item in value:
-        if not isinstance(item, dict):
-            continue
-        code = str(item.get("code") or "").strip()
-        if not code:
-            continue
-        factors.append(
-            {
-                "code": code,
-                "status": str(item.get("status") or "validated"),
-                "basis": [
-                    str(basis)
-                    for basis in item.get("basis") or []
-                    if str(basis).strip()
-                ],
-            }
-        )
-    return factors
+    return [
+        row
+        for item in value
+        if (row := _public_stage_a_row(item)) is not None
+    ]
+
+
+def _public_stage_a_row(item: object) -> dict[str, Any] | None:
+    if not isinstance(item, dict):
+        return None
+    code = str(item.get("code") or "").strip()
+    if not code:
+        return None
+    return {
+        "code": code,
+        "status": str(item.get("status") or "validated"),
+        "basis": [
+            str(basis) for basis in item.get("basis") or [] if str(basis).strip()
+        ],
+    }
 
 
 __all__ = ("persist_route_candidates", "public_candidate_digest")

@@ -9,13 +9,36 @@ import {
 } from "./spine-validation.ts";
 import type { Position } from "./types.ts";
 
+type LaneTestProperties = {
+  spine_id?: string | null;
+  base_spine_hash?: string | null;
+  bundle_id?: string;
+  physical_bundle_id?: string;
+  physical_bundle_spine_hash?: string;
+  from_anchor_id?: string | null;
+  to_anchor_id?: string | null;
+  from_stop_id?: string | null;
+  to_stop_id?: string | null;
+  color?: string;
+  route_ids?: string[];
+  color_route_ids?: string[];
+  visual_feature_type?: string;
+  bundle_id_from?: string;
+  bundle_id_to?: string;
+  classification?: string;
+  lane_slot_source?: string;
+  transition_classification?: string;
+  length_m?: number;
+  bridge?: boolean;
+};
+
 type Fixture = {
   type: string;
   geometry: { type: string; coordinates: Position[] };
-  properties: Record<string, any>;
+  properties: LaneTestProperties;
 };
 
-function lane(props: Record<string, any>): Fixture {
+function lane(props: LaneTestProperties): Fixture {
   return { type: "Feature", geometry: { type: "LineString", coordinates: [[0,0],[0,1]] }, properties: props };
 }
 
@@ -83,14 +106,11 @@ test("assertSpineHashConsistency exempts branch_transition lanes lacking spine_i
   assert.equal(result.inconsistentGroups.length, 0);
 });
 
-test("assertSpineHashConsistency tolerates the alt key spelling", () => {
-  // The validator accepts both bundle_lane_features (snake) and bundleLaneFeatures (camel).
-  const result = assertSpineHashConsistency({
-    bundle_lane_features: [
-      lane({ spine_id: "spine-a", base_spine_hash: "h1", bundle_id: "b1" }),
-    ],
-  });
-  assert.equal(result.bundleLaneCount, 1);
+test("assertSpineHashConsistency treats an empty camelCase lane list as consistent", () => {
+  const result = assertSpineHashConsistency({ bundleLaneFeatures: [] });
+  assert.equal(result.bundleLaneCount, 0);
+  assert.equal(result.lanesWithMissingSpineId.length, 0);
+  assert.equal(result.inconsistentGroups.length, 0);
 });
 
 test("assertSpineHashConsistency: two lanes with same physical_bundle_id and same hash => zero inconsistencies", () => {
@@ -120,7 +140,7 @@ test("assertSpineHashConsistency: two lanes with same physical_bundle_id but dif
 // assertNoBogusTransitions
 // ---------------------------------------------------------------------------
 
-function makeBundleLane(props: Record<string, any>): Fixture {
+function makeBundleLane(props: LaneTestProperties): Fixture {
   return { type: "Feature", geometry: { type: "LineString", coordinates: [[0, 0], [0, 1]] }, properties: props };
 }
 
@@ -261,7 +281,7 @@ function irtLine(
 
 // Coordinates for Flatbush + Eastern Pkwy bbox [-73.961, 40.659, -73.940, 40.682]
 // We need an upstream feature OUTSIDE the bbox that ends near a feature inside.
-const FE_OUTSIDE: Position = [-73.965, 40.655]; // just outside the bbox
+const _FE_OUTSIDE: Position = [-73.965, 40.655]; // just outside the bbox
 const FE_INSIDE_1: Position = [-73.960, 40.661]; // just inside the bbox (lon = -73.960 > -73.961)
 const FE_INSIDE_2: Position = [-73.955, 40.665];
 const FE_INSIDE_3: Position = [-73.945, 40.675];
@@ -305,4 +325,134 @@ test("assertOriginsForRedGreenFlatbushEastern: empty feature list passes vacuous
   const result = assertOriginsForRedGreenFlatbushEastern([]);
   assert.equal(result.passed, true);
   assert.equal(result.missingUpstreamCount, 0);
+});
+
+test("assertSpineHashConsistency flags a present spine_id with a missing hash", () => {
+  const result = assertSpineHashConsistency({
+    bundleLaneFeatures: [
+      lane({ spine_id: "spine-a", base_spine_hash: null, bundle_id: "b1" }),
+    ],
+  });
+  assert.deepEqual(result.lanesWithMissingHash, ["spine-a/b1"]);
+  assert.equal(result.inconsistentGroups.length, 0);
+});
+
+test("assertQContinuousInBrooklyn uses coordinate keys when anchors are absent", () => {
+  const shared: Position = [-73.95, 40.61];
+  const f1 = qLine([-73.95, 40.60], shared, "q-1");
+  const f2 = qLine(shared, [-73.94, 40.62], "q-2");
+  const result = assertQContinuousInBrooklyn([f1, f2], null);
+  assert.equal(result.passed, true);
+  assert.equal(result.qFeatureCount, 2);
+  const again = assertQContinuousInBrooklyn([f1, f2], null);
+  assert.deepEqual(again.disconnectedBundleIds, result.disconnectedBundleIds);
+});
+
+test("assertQContinuousInBrooklyn ignores a one-point Q geometry", () => {
+  const stubCoord: Position = [-73.95, 40.60];
+  const stub = {
+    type: "Feature",
+    geometry: { type: "LineString", coordinates: [stubCoord] },
+    properties: { route_ids: ["Q"], bundle_id: "q-stub" },
+  };
+  const connected = qLine([-73.95, 40.60], [-73.94, 40.61], "q-ok", "anc-a", "anc-b");
+  const result = assertQContinuousInBrooklyn([connected, stub], null);
+  assert.equal(result.qFeatureCount, 2);
+  assert.equal(result.passed, false);
+  assert.deepEqual(result.disconnectedBundleIds, ["q-stub"]);
+});
+
+test("assertNoBogusTransitions treats a color present on one corridor as valid", () => {
+  const t = makeTransitionLane("b1", "b2", ["A"], ["A"], "likely_branch_exit", 8);
+  const index = new Map([
+    ["b1", new Set(["A"])],
+    ["b2", new Set(["C"])],
+  ]);
+  const result = assertNoBogusTransitions([t], index);
+  assert.equal(result.passed, true);
+});
+
+test("assertNoBogusTransitions treats missing corridor keys and missing color routes as empty sets", () => {
+  const t = makeBundleLane({
+    lane_slot_source: "branch_transition",
+    bundle_id: "transition-bare",
+    color: "#0A84FF",
+  });
+  const result = assertNoBogusTransitions([t], new Map());
+  assert.equal(result.passed, false);
+  assert.equal(result.violations.length, 1);
+});
+
+test("assertQContinuousInBrooklyn ignores a Q with no coordinates and a missing route list", () => {
+  const missingGeom = {
+    type: "Feature",
+    geometry: { type: "LineString", coordinates: [] },
+    properties: { route_ids: ["Q"], bundle_id: "q-empty" },
+  };
+  const noRoutes = qLine([-73.95, 40.60], [-73.94, 40.61], "q-noroute");
+  noRoutes.properties.route_ids = undefined;
+  const brooklyn = qLine([-73.95, 40.60], [-73.94, 40.61], "q-ok", "anc-a", "anc-b");
+  const result = assertQContinuousInBrooklyn([missingGeom, noRoutes, brooklyn], null);
+  assert.equal(result.qFeatureCount, 1);
+  assert.equal(result.passed, true);
+});
+
+test("assertQContinuousInBrooklyn walks a three-piece chain using coordinate keys", () => {
+  const a: Position = [-73.95, 40.60];
+  const b: Position = [-73.96, 40.61];
+  const c: Position = [-73.97, 40.62];
+  const d: Position = [-73.98, 40.63];
+  const result = assertQContinuousInBrooklyn(
+    [qLine(a, b, "q-1"), qLine(b, c, "q-2"), qLine(c, d, "q-3")],
+    null,
+  );
+  assert.equal(result.passed, true);
+  assert.equal(result.qFeatureCount, 3);
+});
+
+test("assertOriginsForRedGreenFlatbushEastern accepts a one-point 2/3 stub in the bbox", () => {
+  const stub = {
+    type: "Feature",
+    geometry: { type: "LineString", coordinates: [FE_INSIDE_1] },
+    properties: { route_ids: ["2", "3"], bundle_id: "irt-stub" },
+  };
+  const result = assertOriginsForRedGreenFlatbushEastern([stub]);
+  assert.equal(result.passed, true);
+});
+
+test("assertOriginsForRedGreenFlatbushEastern matches a nearby 4/5 upstream by distance", () => {
+  const farOutside: Position = [-73.970, 40.650];
+  const shared: Position = [-73.965, 40.655];
+  const upstream = irtLine([farOutside, shared], "green-up", ["4", "5"], "anc-out", "anc-shared");
+  const inside = irtLine([shared, FE_INSIDE_2], "green-in", ["4", "5"], "anc-shared", "anc-in2");
+  const result = assertOriginsForRedGreenFlatbushEastern([upstream, inside]);
+  assert.equal(result.passed, true, `expected pass but got ${JSON.stringify(result.violations)}`);
+});
+
+test("assertOriginsForRedGreenFlatbushEastern matches a nearby 4/5 origin without shared anchors", () => {
+  const upstreamEnd: Position = [-73.965, 40.655];
+  const insideStart: Position = [-73.9644, 40.6554];
+  const upstream = irtLine([ [-73.970, 40.650], upstreamEnd], "green-up-hav", ["4", "5"]);
+  const inside = irtLine([insideStart, FE_INSIDE_2], "green-in-hav", ["4", "5"]);
+  const result = assertOriginsForRedGreenFlatbushEastern([upstream, inside]);
+  assert.equal(result.passed, true, `expected pass but got ${JSON.stringify(result.violations)}`);
+});
+
+test("assertOriginsForRedGreenFlatbushEastern skips a 2/3 feature with no route list", () => {
+  const missingRoutes = irtLine([FE_INSIDE_1, FE_INSIDE_2], "irt-noroute", ["2", "3"]);
+  missingRoutes.properties.route_ids = undefined;
+  const result = assertOriginsForRedGreenFlatbushEastern([missingRoutes]);
+  assert.equal(result.passed, true);
+});
+
+test("assertQContinuousInBrooklyn walks past a one-point neighbor without using it as a join", () => {
+  const a: Position = [-73.95, 40.60];
+  const b: Position = [-73.94, 40.61];
+  const stub = {
+    type: "Feature",
+    geometry: { type: "LineString", coordinates: [a] },
+    properties: { route_ids: ["Q"], bundle_id: "q-point" },
+  };
+  const result = assertQContinuousInBrooklyn([qLine(a, b, "q-ok"), stub], null);
+  assert.equal(result.qFeatureCount, 2);
 });

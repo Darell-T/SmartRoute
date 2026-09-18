@@ -9,18 +9,19 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import httpx
 import json
+import logging
 import math
 import os
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from typing import Awaitable, Callable
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from app.services.trips import text
-from app.services import cache
+from app.services import cache, text
 from app.services.geography import distance_meters
+
+_LOGGER = logging.getLogger(__name__)
 
 TICKETMASTER_EVENTS_URL = "https://app.ticketmaster.com/discovery/v2/events.json"
 TICKETMASTER_NYC_LATLONG = "40.7128,-74.0060"
@@ -157,43 +158,19 @@ async def fetch_json(
     json_body: dict | None = None,
     headers: dict | None = None,
 ) -> tuple[dict | list | None, str | None]:
-    """Fetch one provider JSON response with bounded, redacted failures."""
+    # Lazy: agent.tools.__init__ imports venue tables from this module.
+    from app.services.agent.tools.provider_http import fetch_json as shared_fetch_json
 
-    kwargs: dict = {}
-    if params is not None:
-        kwargs["params"] = params
-    if headers is not None:
-        kwargs["headers"] = headers
-    try:
-        async with httpx.AsyncClient(timeout=timeout_s) as client:
-            response = (
-                await client.get(url, **kwargs)
-                if method == "GET"
-                else await client.post(url, json=json_body, **kwargs)
-            )
-            response.raise_for_status()
-            return response.json(), None
-    except httpx.TimeoutException:
-        print(f"[{log_tag}] {what} timed out")
-        return None, f"{what} timed out"
-    except httpx.HTTPStatusError as exc:
-        status = exc.response.status_code
-        print(f"[{log_tag}] {what} HTTP {status}")
-        if status in {401, 403}:
-            return None, f"{what} authentication failed"
-        if status == 429:
-            return None, f"{what} rate limited"
-        if status in {400, 404, 422}:
-            return None, f"{what} request was invalid"
-        if status >= 500:
-            return None, f"{what} is temporarily unavailable"
-        return None, f"{what} failed"
-    except httpx.RequestError as exc:
-        print(f"[{log_tag}] {what} request failed: {type(exc).__name__}")
-        return None, f"{what} failed"
-    except (ValueError, TypeError) as exc:
-        print(f"[{log_tag}] {what} invalid JSON: {exc!r}")
-        return None, f"{what} returned an unexpected response"
+    return await shared_fetch_json(
+        method,
+        url,
+        timeout_s=timeout_s,
+        log_tag=log_tag,
+        what=what,
+        params=params,
+        json_body=json_body,
+        headers=headers,
+    )
 
 
 def _et_day_bounds_utc(date_str: str) -> tuple[str, str] | None:
@@ -205,8 +182,8 @@ def _et_day_bounds_utc(date_str: str) -> tuple[str, str] | None:
     end_et = start_et + timedelta(days=1) - timedelta(seconds=1)
     fmt = "%Y-%m-%dT%H:%M:%SZ"
     return (
-        start_et.astimezone(timezone.utc).strftime(fmt),
-        end_et.astimezone(timezone.utc).strftime(fmt),
+        start_et.astimezone(UTC).strftime(fmt),
+        end_et.astimezone(UTC).strftime(fmt),
     )
 
 
@@ -237,8 +214,11 @@ def _cache_key(
 def _read_cache(key: str) -> dict | None:
     try:
         raw = cache.cache_get(key)
-    except Exception as exc:
-        print(f"[event-provider] cache read failed: {type(exc).__name__}")
+    except Exception as exc:  # noqa: BLE001 cache faults miss this lookup
+        _LOGGER.warning(
+            "[event-provider] cache read failed: %s",
+            type(exc).__name__,
+        )
         return None
     if raw is None:
         return None
@@ -252,8 +232,11 @@ def _read_cache(key: str) -> dict | None:
 def _write_cache(key: str, value: dict) -> None:
     try:
         cache.cache_set(key, json.dumps(value, default=str), EVENT_LOOKUP_CACHE_TTL_S)
-    except Exception as exc:
-        print(f"[event-provider] cache write failed: {type(exc).__name__}")
+    except Exception as exc:  # noqa: BLE001 cache faults skip storing this lookup
+        _LOGGER.warning(
+            "[event-provider] cache write failed: %s",
+            type(exc).__name__,
+        )
 
 
 def _positive_float_env(name: str, default: float, maximum: float) -> float:
@@ -283,22 +266,19 @@ def _event_dates(event: dict) -> dict:
     return _mapping(event.get("dates"))
 
 
-def _event_start_iso(event: dict) -> str | None:
-    start = _mapping(_event_dates(event).get("start"))
-    if any(
-        start.get(flag) is True
-        for flag in ("dateTBA", "dateTBD", "timeTBA", "noSpecificTime")
-    ):
+def _parse_aware_iso(value: object) -> str | None:
+    if not isinstance(value, str):
         return None
-    start_iso = start.get("dateTime")
-    if isinstance(start_iso, str):
-        try:
-            parsed = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
-        except ValueError:
-            return None
-        if parsed.tzinfo is None:
-            return None
-        return parsed.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _parse_local_event_start(event: dict, start: dict) -> str | None:
     local_date = start.get("localDate")
     local_time = start.get("localTime")
     if not isinstance(local_date, str) or not isinstance(local_time, str):
@@ -309,12 +289,27 @@ def _event_start_iso(event: dict) -> str | None:
         return None
     timezone_name = _event_dates(event).get("timezone") or event.get("timezone")
     try:
-        event_timezone = ZoneInfo(timezone_name) if isinstance(timezone_name, str) else _ET
+        event_timezone = (
+            ZoneInfo(timezone_name) if isinstance(timezone_name, str) else _ET
+        )
     except (ValueError, KeyError):
         event_timezone = _ET
-    return naive.replace(tzinfo=event_timezone).astimezone(timezone.utc).strftime(
+    return naive.replace(tzinfo=event_timezone).astimezone(UTC).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
+
+
+def _event_start_iso(event: dict) -> str | None:
+    start = _mapping(_event_dates(event).get("start"))
+    if any(
+        start.get(flag) is True
+        for flag in ("dateTBA", "dateTBD", "timeTBA", "noSpecificTime")
+    ):
+        return None
+    date_time = start.get("dateTime")
+    if isinstance(date_time, str):
+        return _parse_aware_iso(date_time)
+    return _parse_local_event_start(event, start)
 
 
 def _start_time_status(event: dict) -> str:
@@ -375,39 +370,51 @@ def _classification_strings(event: dict) -> tuple[str, str, str]:
     )
 
 
-def _parse_event(event: dict) -> dict:
-    name = text._safe_text(event.get("name"), 120)
+def _select_event_venue(event: dict) -> dict | None:
     event_venues = _mapping(event.get("_embedded")).get("venues") or []
     if not isinstance(event_venues, list):
         event_venues = []
-    first_venue = (
-        event_venues[0]
-        if event_venues and isinstance(event_venues[0], dict)
-        else None
-    )
+    if event_venues and isinstance(event_venues[0], dict):
+        return event_venues[0]
+    return None
+
+
+def _calculate_estimated_end(
+    event: dict, start_iso: str | None, status: str
+) -> tuple[str | None, str | None]:
+    if not start_iso or status in {
+        "canceled",
+        "cancelled",
+        "postponed",
+        "rescheduled",
+    }:
+        return None, None
+    try:
+        start_dt = datetime.strptime(start_iso, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=UTC
+        )
+    except ValueError:
+        return None, None
+    duration, basis = estimate_event_duration(*_classification_strings(event))
+    return (start_dt + duration).strftime("%Y-%m-%dT%H:%M:%SZ"), basis
+
+
+def parse_event(event: dict) -> dict:
+    name = text.safe_text(event.get("name"), 120)
+    first_venue = _select_event_venue(event)
     venue_name_raw = first_venue.get("name") if first_venue else None
-    venue_name = text._safe_text(venue_name_raw, 80) if venue_name_raw else None
+    venue_name = text.safe_text(venue_name_raw, 80) if venue_name_raw else None
     venue_key = normalize_venue_name(venue_name_raw)
     latitude, longitude = _venue_coordinates(first_venue)
     venue_context = VENUE_CROWD_TABLE.get(venue_key or "") or {}
     start_iso = _event_start_iso(event)
     dates = _event_dates(event)
-    status = text._safe_text(_mapping(dates.get("status")).get("code"), 32).lower() or "unknown"
-    estimated_end_iso = None
-    end_estimate_basis = None
-    if start_iso and status not in {"canceled", "cancelled", "postponed", "rescheduled"}:
-        try:
-            start_dt = datetime.strptime(start_iso, "%Y-%m-%dT%H:%M:%SZ").replace(
-                tzinfo=timezone.utc
-            )
-        except ValueError:
-            start_dt = None
-        if start_dt is not None:
-            duration, basis = estimate_event_duration(*_classification_strings(event))
-            estimated_end_iso = (start_dt + duration).strftime("%Y-%m-%dT%H:%M:%SZ")
-            end_estimate_basis = basis
+    status = text.safe_text(_mapping(dates.get("status")).get("code"), 32).lower() or "unknown"
+    estimated_end_iso, end_estimate_basis = _calculate_estimated_end(
+        event, start_iso, status
+    )
     return {
-        "event_id": text._safe_text(event.get("id"), 80) or None,
+        "event_id": text.safe_text(event.get("id"), 80) or None,
         "name": name,
         "venue_name": venue_name,
         "venue_key": venue_key,
@@ -417,7 +424,7 @@ def _parse_event(event: dict) -> dict:
         "nearby_lines": list(venue_context.get("lines") or []),
         "status": status,
         "start_time_status": _start_time_status(event),
-        "local_date": text._safe_text(_mapping(dates.get("start")).get("localDate"), 10) or None,
+        "local_date": text.safe_text(_mapping(dates.get("start")).get("localDate"), 10) or None,
         "start_iso": start_iso,
         "estimated_end_iso": estimated_end_iso,
         "end_estimate_basis": end_estimate_basis,
@@ -457,18 +464,15 @@ def _events_from_payload(payload: object) -> tuple[list[dict] | None, int]:
 FetchJSON = Callable[..., Awaitable[tuple[dict | list | None, str | None]]]
 
 
-async def _lookup_uncached(
+def _ticketmaster_params(
     query: str,
     date: str | None,
     venue: str | None,
     api_key: str,
     radius_miles: float,
-    latitude: float = 40.7128,
-    longitude: float = -74.0060,
-    *,
-    fetch_json_impl: FetchJSON | None = None,
-    max_pages: int | None = None,
-) -> EventLookupResult:
+    latitude: float,
+    longitude: float,
+) -> dict | EventLookupResult:
     params = {
         "apikey": api_key,
         "latlong": (
@@ -487,12 +491,122 @@ async def _lookup_uncached(
     keyword = f"{query} {venue}".strip() if venue else query
     if keyword:
         params["keyword"] = keyword
-    if date:
-        bounds = _et_day_bounds_utc(date)
-        if bounds is None:
-            return EventLookupResult(ok=False, error="date must be YYYY-MM-DD")
-        params["startDateTime"], params["endDateTime"] = bounds
+    if not date:
+        return params
+    bounds = _et_day_bounds_utc(date)
+    if bounds is None:
+        return EventLookupResult(ok=False, error="date must be YYYY-MM-DD")
+    params["startDateTime"], params["endDateTime"] = bounds
+    return params
 
+
+def _event_in_search(
+    parsed: dict,
+    seen: set[str],
+    latitude: float,
+    longitude: float,
+    radius_miles: float,
+) -> bool:
+    event_latitude = parsed["venue_latitude"]
+    event_longitude = parsed["venue_longitude"]
+    if (
+        event_latitude is not None
+        and event_longitude is not None
+        and not _is_within_search_radius(
+            event_latitude,
+            event_longitude,
+            latitude,
+            longitude,
+            radius_miles,
+        )
+    ):
+        return False
+    if parsed["status"] in {"canceled", "cancelled"}:
+        return False
+    return _event_identity(parsed) not in seen
+
+
+def _select_page_events(
+    raw_events: list[dict],
+    seen: set[str],
+    latitude: float,
+    longitude: float,
+    radius_miles: float,
+    remaining: int,
+) -> tuple[list[dict], set[str]]:
+    selected: list[dict] = []
+    accepted = set(seen)
+    if remaining <= 0:
+        return selected, accepted
+    for raw_event in raw_events:
+        parsed = parse_event(raw_event)
+        if not _event_in_search(parsed, accepted, latitude, longitude, radius_miles):
+            continue
+        accepted.add(_event_identity(parsed))
+        selected.append(parsed)
+        if len(selected) >= remaining:
+            break
+    return selected, accepted
+
+
+def _parse_ticketmaster_page(
+    payload: object, error: str | None, *, has_events: bool
+) -> tuple[list[dict] | None, int, EventLookupResult | None, bool]:
+    if error:
+        if has_events:
+            return None, 0, None, True
+        return None, 0, EventLookupResult(ok=False, error=error), False
+    raw_events, total_pages = _events_from_payload(payload)
+    if raw_events is None:
+        return (
+            None,
+            0,
+            EventLookupResult(
+                ok=False,
+                error="event lookup returned an unexpected response",
+            ),
+            False,
+        )
+    return raw_events, total_pages, None, False
+
+
+def _project_event_lookup_result(
+    parsed_events: list[dict], partial: bool, query: str
+) -> EventLookupResult:
+    data: dict = {"events": parsed_events}
+    if any(event.get("estimated_end_iso") for event in parsed_events):
+        data["note"] = (
+            "end times are estimates based on typical event length, "
+            "not an official schedule"
+        )
+    if partial:
+        data["partial"] = True
+    subject = f"'{query}'" if query else "the route area"
+    summary = (
+        f"found {len(parsed_events)} event(s) for {subject}"
+        if parsed_events
+        else f"no events found for {subject}"
+    )
+    return EventLookupResult(ok=True, data=data, summary=summary)
+
+
+async def _lookup_uncached(
+    query: str,
+    date: str | None,
+    venue: str | None,
+    api_key: str,
+    radius_miles: float,
+    latitude: float = 40.7128,
+    longitude: float = -74.0060,
+    *,
+    fetch_json_impl: FetchJSON | None = None,
+    max_pages: int | None = None,
+) -> EventLookupResult:
+    params = _ticketmaster_params(
+        query, date, venue, api_key, radius_miles, latitude, longitude
+    )
+    if isinstance(params, EventLookupResult):
+        return params
     fetch = fetch_json_impl or fetch_json
     timeout_s = _positive_float_env(
         "EVENT_LOOKUP_TIMEOUT_S",
@@ -516,84 +630,34 @@ async def _lookup_uncached(
             what="event lookup",
             params=params.copy(),
         )
-        if error:
-            if parsed_events:
-                partial = True
-                break
-            return EventLookupResult(ok=False, error=error)
-        raw_events, total_pages = _events_from_payload(payload)
-        if raw_events is None:
-            return EventLookupResult(
-                ok=False,
-                error="event lookup returned an unexpected response",
-            )
-        for raw_event in raw_events:
-            parsed = _parse_event(raw_event)
-            event_latitude = parsed["venue_latitude"]
-            event_longitude = parsed["venue_longitude"]
-            if (
-                event_latitude is not None
-                and event_longitude is not None
-                and not _is_within_search_radius(
-                    event_latitude,
-                    event_longitude,
-                    latitude,
-                    longitude,
-                    radius_miles,
-                )
-            ):
-                continue
-            if parsed["status"] in {"canceled", "cancelled"}:
-                continue
-            identity = _event_identity(parsed)
-            if identity in seen:
-                continue
-            seen.add(identity)
-            parsed_events.append(parsed)
-            if len(parsed_events) >= EVENT_LOOKUP_MAX_RESULTS:
-                break
+        raw_events, total_pages, terminal, stop_partial = _parse_ticketmaster_page(
+            payload, error, has_events=bool(parsed_events)
+        )
+        if terminal is not None:
+            return terminal
+        if stop_partial:
+            partial = True
+            break
+        new_events, seen = _select_page_events(
+            raw_events or [],
+            seen,
+            latitude,
+            longitude,
+            radius_miles,
+            EVENT_LOOKUP_MAX_RESULTS - len(parsed_events),
+        )
+        parsed_events.extend(new_events)
         pages_to_fetch = min(max(total_pages, 1), page_limit)
-        if len(parsed_events) >= EVENT_LOOKUP_MAX_RESULTS or page_number + 1 >= pages_to_fetch:
+        if (
+            len(parsed_events) >= EVENT_LOOKUP_MAX_RESULTS
+            or page_number + 1 >= pages_to_fetch
+        ):
             break
 
-    data: dict = {"events": parsed_events}
-    if any(event.get("estimated_end_iso") for event in parsed_events):
-        data["note"] = "end times are estimates based on typical event length, not an official schedule"
-    if partial:
-        data["partial"] = True
-    subject = f"'{query}'" if query else "the route area"
-    summary = (
-        f"found {len(parsed_events)} event(s) for {subject}"
-        if parsed_events
-        else f"no events found for {subject}"
-    )
-    return EventLookupResult(ok=True, data=data, summary=summary)
+    return _project_event_lookup_result(parsed_events, partial, query)
 
 
-async def lookup_events(
-    tool_input: dict,
-    _context: object | None = None,
-    *,
-    fetch_json_impl: FetchJSON | None = None,
-    lookup_uncached_impl: Callable[..., Awaitable[EventLookupResult]] | None = None,
-) -> EventLookupResult:
-    """Look up bounded NYC-area events without an agent-package dependency."""
-
-    del _context
-    query = str(tool_input.get("query") or "").strip()
-    if os.getenv("TICKETMASTER_ENABLED", "true").strip().lower() in {
-        "0",
-        "false",
-        "no",
-        "off",
-    }:
-        return EventLookupResult(ok=False, error="event lookup is disabled")
-    api_key = os.getenv("TICKETMASTER_API_KEY", "").strip()
-    if not api_key:
-        return EventLookupResult(ok=False, error="event lookup is not configured")
-
-    date = tool_input.get("date")
-    venue = tool_input.get("venue")
+def _search_point(tool_input: dict) -> tuple[float, float, float] | EventLookupResult:
     configured_radius = _positive_float_env(
         "TICKETMASTER_SEARCH_RADIUS_MILES",
         EVENT_LOOKUP_DEFAULT_RADIUS_MILES,
@@ -626,7 +690,44 @@ async def lookup_events(
             ok=False,
             error="event search location is outside the NYC service area",
         )
+    return latitude, longitude, radius_miles
 
+
+def _parse_lookup_api_key() -> str | EventLookupResult:
+    if os.getenv("TICKETMASTER_ENABLED", "true").strip().lower() in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }:
+        return EventLookupResult(ok=False, error="event lookup is disabled")
+    api_key = os.getenv("TICKETMASTER_API_KEY", "").strip()
+    if not api_key:
+        return EventLookupResult(ok=False, error="event lookup is not configured")
+    return api_key
+
+
+async def lookup_events(
+    tool_input: dict,
+    _context: object | None = None,
+    *,
+    fetch_json_impl: FetchJSON | None = None,
+    lookup_uncached_impl: Callable[..., Awaitable[EventLookupResult]] | None = None,
+) -> EventLookupResult:
+    """Look up bounded NYC-area events."""
+
+    del _context
+    query = str(tool_input.get("query") or "").strip()
+    api_key = _parse_lookup_api_key()
+    if isinstance(api_key, EventLookupResult):
+        return api_key
+
+    date = tool_input.get("date")
+    venue = tool_input.get("venue")
+    point = _search_point(tool_input)
+    if isinstance(point, EventLookupResult):
+        return point
+    latitude, longitude, radius_miles = point
     cache_key = _cache_key(query, date, venue, radius_miles, latitude, longitude)
 
     def cached_result() -> EventLookupResult | None:

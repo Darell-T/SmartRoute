@@ -16,7 +16,6 @@ type BranchLaneProperties = {
   from_anchor_id?: string | null;
   to_anchor_id?: string | null;
   materialized_bundle_id?: string | null;
-  [key: string]: unknown;
 };
 
 type BranchLane = Feature<LineStringGeometry, BranchLaneProperties>;
@@ -83,13 +82,7 @@ function haversineM([lon1, lat1]: Position, [lon2, lat2]: Position): number {
  *   `coincidentSkipped` is the number of pairs dropped by the minBridgeM filter.
  *   These represent endpoints already touching; no visual connector is needed.
  */
-export function buildBranchTransitions(
-  bundleLanes: BranchLane[],
-  { maxBridgeM = 90, minBridgeM = 0.5 }: BuildBranchTransitionsOptions = {},
-): BuildBranchTransitionsResult {
-  const out: BranchTransitionFeature[] = [];
-  let coincidentSkipped = 0;
-  // Group lane endpoints by (anchor_id, color).
+function indexLaneEndpoints(bundleLanes: BranchLane[]): Map<string, BranchEntry[]> {
   const byAnchorColor = new Map<string, BranchEntry[]>();
   for (const lane of bundleLanes) {
     const p = lane.properties;
@@ -97,65 +90,85 @@ export function buildBranchTransitions(
     if (coords.length < 2) continue;
     const fromCoord = coords[0];
     const toCoord = coords[coords.length - 1];
-    for (const [anchorId, endpoint, coord] of [
+    const endpoints: Array<[string | null | undefined, "from" | "to", Position]> = [
       [p.from_anchor_id, "from", fromCoord],
       [p.to_anchor_id, "to", toCoord],
-    ] as Array<[string | null | undefined, "from" | "to", Position]>) {
+    ];
+    for (const [anchorId, endpoint, coord] of endpoints) {
       if (!anchorId) continue;
       const key = `${anchorId}|${p.color}`;
-      if (!byAnchorColor.has(key)) byAnchorColor.set(key, []);
-      byAnchorColor.get(key)!.push({ lane, endpoint, coord });
+      const entries = byAnchorColor.get(key);
+      if (entries) entries.push({ lane, endpoint, coord });
+      else byAnchorColor.set(key, [{ lane, endpoint, coord }]);
     }
   }
+  return byAnchorColor;
+}
 
-  for (const [key, entries] of byAnchorColor) {
-    if (entries.length < 2) continue;
-    const anchorId = key.split("|")[0];
-    for (let i = 0; i < entries.length; i++) {
-      for (let j = i + 1; j < entries.length; j++) {
-        const a = entries[i];
-        const b = entries[j];
-        // Skip same-bundle pairs (those lanes already share the bundle's spine).
-        if (a.lane.properties.bundle_id === b.lane.properties.bundle_id) continue;
-        // Materialized physical bundles already encode their own shared spine,
-        // branch tail, and fanout geometry. Adding a separate straight
-        // transition inside the same materialized bundle creates the exact
-        // triangular/chord artifact the fanout is meant to avoid.
-        if (
-          a.lane.properties.materialized_bundle_id &&
-          a.lane.properties.materialized_bundle_id === b.lane.properties.materialized_bundle_id
-        ) {
-          continue;
-        }
-        const d = haversineM(a.coord, b.coord);
-        if (d > maxBridgeM) continue;
-        if (d < minBridgeM) {
-          coincidentSkipped++;
-          continue;
-        }
-        // Canonicalize the pair: sort by bundle_id lexicographically so the
-        // same logical transition produces the same artifact bytes across runs
-        // regardless of upstream iteration order.
-        const idA = a.lane.properties.bundle_id;
-        const idB = b.lane.properties.bundle_id;
-        const [fromEntry, toEntry] = idA! <= idB! ? [a, b] : [b, a];
-        out.push({
-          type: "Feature",
-          geometry: {
-            type: "LineString",
-            coordinates: [fromEntry.coord, toEntry.coord],
-          },
-          properties: {
-            visual_feature_type: "branch_transition",
-            color: a.lane.properties.color,
-            anchor_id: anchorId,
-            bundle_id_from: fromEntry.lane.properties.bundle_id,
-            bundle_id_to: toEntry.lane.properties.bundle_id,
-            length_m: d,
-          },
-        });
+function shouldSkipBranchPair(a: BranchEntry, b: BranchEntry): boolean {
+  if (a.lane.properties.bundle_id === b.lane.properties.bundle_id) return true;
+  const materializedA = a.lane.properties.materialized_bundle_id;
+  const materializedB = b.lane.properties.materialized_bundle_id;
+  return Boolean(materializedA && materializedA === materializedB);
+}
+
+function emitTransitionsForAnchor(
+  key: string,
+  entries: BranchEntry[],
+  maxBridgeM: number,
+  minBridgeM: number,
+): BuildBranchTransitionsResult {
+  const transitions: BranchTransitionFeature[] = [];
+  let coincidentSkipped = 0;
+  if (entries.length < 2) return { transitions, coincidentSkipped };
+  const anchorId = key.split("|")[0];
+  for (let i = 0; i < entries.length; i++) {
+    for (let j = i + 1; j < entries.length; j++) {
+      const a = entries[i];
+      const b = entries[j];
+      if (shouldSkipBranchPair(a, b)) continue;
+      const d = haversineM(a.coord, b.coord);
+      if (d > maxBridgeM) continue;
+      if (d < minBridgeM) {
+        coincidentSkipped += 1;
+        continue;
       }
+      const fromA = (a.lane.properties.bundle_id ?? "") <= (b.lane.properties.bundle_id ?? "");
+      const [fromEntry, toEntry] = fromA ? [a, b] : [b, a];
+      transitions.push({
+        type: "Feature",
+        geometry: {
+          type: "LineString",
+          coordinates: [fromEntry.coord, toEntry.coord],
+        },
+        properties: {
+          visual_feature_type: "branch_transition",
+          color: a.lane.properties.color,
+          anchor_id: anchorId,
+          bundle_id_from: fromEntry.lane.properties.bundle_id,
+          bundle_id_to: toEntry.lane.properties.bundle_id,
+          length_m: d,
+        },
+      });
     }
+  }
+  return { transitions, coincidentSkipped };
+}
+
+/**
+ * Build branch-transition LineString features connecting same-color lanes
+ * that share an anchor across DIFFERENT bundles.
+ */
+export function buildBranchTransitions(
+  bundleLanes: BranchLane[],
+  { maxBridgeM = 90, minBridgeM = 0.5 }: BuildBranchTransitionsOptions = {},
+): BuildBranchTransitionsResult {
+  const out: BranchTransitionFeature[] = [];
+  let coincidentSkipped = 0;
+  for (const [key, entries] of indexLaneEndpoints(bundleLanes)) {
+    const emitted = emitTransitionsForAnchor(key, entries, maxBridgeM, minBridgeM);
+    out.push(...emitted.transitions);
+    coincidentSkipped += emitted.coincidentSkipped;
   }
   return { transitions: out, coincidentSkipped };
 }

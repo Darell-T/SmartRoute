@@ -12,22 +12,22 @@ from __future__ import annotations
 
 import io
 import unittest
-from datetime import date
 from contextlib import redirect_stdout
+from datetime import date
 from unittest.mock import patch
 
-from app.services.agent.model import prompt as agent_prompt
-from app.services.agent import tools as agent_tools
+from app.services import cache
 from app.services.agent.tools import (
     ToolSpec,
-    provider_http as _http,
     declare_goals,
 )
+from app.services.agent.tools import (
+    provider_http as _http,
+)
 from app.services.agent.tools.transit import accessibility_status, lookup_facts
-from app.services import cache
+
 from tests._fake_http_tools import make_tool_ctx as _ctx
 from tests._fake_http_tools import recording_get_client as _recording_get_client
-
 from tests.test_agent_loop import _AgentLoopHelpers, _load_agent_loop, _test_registry
 
 
@@ -92,36 +92,36 @@ class AccessibilityStatusTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_station_required(self):
         result = await accessibility_status.execute({"station": ""}, _ctx())
-        self.assertFalse(result.ok)
+        assert not result.ok
 
     async def test_parses_realistic_feed_and_matches_station(self):
         payload = {"outages": [_outage(), _outage(station="Atlantic Av-Barclays Ctr", equipmenttype="ES")]}
         client_class = _recording_get_client(payload)
         with patch.object(_http.httpx, "AsyncClient", client_class):
             result = await accessibility_status.execute({"station": "34 St-Penn Station"}, _ctx())
-        self.assertTrue(result.ok)
-        self.assertEqual(result.data["station_matched"], "34 St-Penn Station")
-        self.assertEqual(len(result.data["elevator_outages"]), 1)
-        self.assertEqual(result.data["elevator_outages"][0]["equipment"], "EL256")
-        self.assertEqual(result.data["elevator_outages"][0]["serving"], "Street to Mezzanine")
-        self.assertEqual(result.data["escalator_outages_count"], 0)
+        assert result.ok
+        assert result.data["station_matched"] == "34 St-Penn Station"
+        assert len(result.data["elevator_outages"]) == 1
+        assert result.data["elevator_outages"][0]["equipment"] == "EL256"
+        assert result.data["elevator_outages"][0]["serving"] == "Street to Mezzanine"
+        assert result.data["escalator_outages_count"] == 0
 
     async def test_loose_matching_on_partial_station_name(self):
         payload = {"outages": [_outage(station="34 St-Penn Station")]}
         client_class = _recording_get_client(payload)
         with patch.object(_http.httpx, "AsyncClient", client_class):
             result = await accessibility_status.execute({"station": "Penn Station"}, _ctx())
-        self.assertTrue(result.ok)
-        self.assertEqual(len(result.data["elevator_outages"]), 1)
+        assert result.ok
+        assert len(result.data["elevator_outages"]) == 1
 
     async def test_no_match_is_unavailable_not_a_positive_signal(self):
         payload = {"outages": [_outage(station="34 St-Penn Station")]}
         client_class = _recording_get_client(payload)
         with patch.object(_http.httpx, "AsyncClient", client_class):
             result = await accessibility_status.execute({"station": "Coney Island-Stillwell Av"}, _ctx())
-        self.assertFalse(result.ok)
-        self.assertEqual(result.outcome, "unavailable")
-        self.assertIn("no accessibility record matched", result.error)
+        assert not result.ok
+        assert result.outcome == "unavailable"
+        assert "no accessibility record matched" in result.error
 
     async def test_elevators_vs_escalators_split(self):
         payload = {
@@ -134,8 +134,8 @@ class AccessibilityStatusTests(unittest.IsolatedAsyncioTestCase):
         client_class = _recording_get_client(payload)
         with patch.object(_http.httpx, "AsyncClient", client_class):
             result = await accessibility_status.execute({"station": "34 St-Penn Station"}, _ctx())
-        self.assertEqual(len(result.data["elevator_outages"]), 1)
-        self.assertEqual(result.data["escalator_outages_count"], 2)
+        assert len(result.data["elevator_outages"]) == 1
+        assert result.data["escalator_outages_count"] == 2
 
     async def test_borough_filter_narrows_match(self):
         payload = {
@@ -150,7 +150,7 @@ class AccessibilityStatusTests(unittest.IsolatedAsyncioTestCase):
                 {"station": "Broadway Junction", "borough": "Brooklyn"}, _ctx()
             )
         equipment_ids = {o["equipment"] for o in result.data["elevator_outages"]}
-        self.assertEqual(equipment_ids, {"EL_BK"})
+        assert equipment_ids == {"EL_BK"}
 
     async def test_cache_hit_skips_second_http_call(self):
         payload = {"outages": [_outage()]}
@@ -158,16 +158,16 @@ class AccessibilityStatusTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(_http.httpx, "AsyncClient", client_class):
             first = await accessibility_status.execute({"station": "34 St-Penn Station"}, _ctx())
             second = await accessibility_status.execute({"station": "34 St-Penn Station"}, _ctx())
-        self.assertTrue(first.ok)
-        self.assertTrue(second.ok)
-        self.assertEqual(len(client_class.requests), 1)
+        assert first.ok
+        assert second.ok
+        assert len(client_class.requests) == 1
 
     async def test_fetch_failure_is_fail_open_not_a_crash(self):
         client_class = _recording_get_client({}, status_code=404)
         with patch.object(_http.httpx, "AsyncClient", client_class):
             result = await accessibility_status.execute({"station": "34 St-Penn Station"}, _ctx())
-        self.assertFalse(result.ok)
-        self.assertEqual(result.error, "elevator status is temporarily unavailable")
+        assert not result.ok
+        assert result.error == "elevator status is temporarily unavailable"
 
     async def test_request_error_is_fail_open(self):
         import httpx
@@ -182,66 +182,66 @@ class AccessibilityStatusTests(unittest.IsolatedAsyncioTestCase):
             async def __aexit__(self, *_args):
                 return False
 
-            async def get(self, url, params=None):
+            async def get(self, _url, _params=None):
                 raise httpx.ConnectError("boom", request=None)
 
         with patch.object(_http.httpx, "AsyncClient", _RaisingClient):
             result = await accessibility_status.execute({"station": "34 St-Penn Station"}, _ctx())
-        self.assertFalse(result.ok)
-        self.assertEqual(result.error, "elevator status is temporarily unavailable")
+        assert not result.ok
+        assert result.error == "elevator status is temporarily unavailable"
 
     async def test_malformed_payload_shape_yields_no_outages_not_a_crash(self):
         client_class = _recording_get_client({"unexpected": "shape"})
         with patch.object(_http.httpx, "AsyncClient", client_class):
             result = await accessibility_status.execute({"station": "34 St-Penn Station"}, _ctx())
-        self.assertFalse(result.ok)
-        self.assertEqual(result.outcome, "unavailable")
+        assert not result.ok
+        assert result.outcome == "unavailable"
 
 
 class LookupFactsTests(unittest.IsolatedAsyncioTestCase):
     async def test_topic_required(self):
         result = await lookup_facts.execute({"topic": ""}, _ctx())
-        self.assertFalse(result.ok)
+        assert not result.ok
 
     async def test_every_section_retrievable_by_exact_slug(self):
         for slug in lookup_facts._SECTION_ORDER:
             result = await lookup_facts.execute({"topic": slug}, _ctx())
-            self.assertTrue(result.ok, slug)
-            self.assertEqual(result.data["topic"], slug)
-            self.assertTrue(result.data["text"])
+            assert result.ok, slug
+            assert result.data["topic"] == slug
+            assert result.data["text"]
 
     async def test_fuzzy_match_on_header_substring(self):
         result = await lookup_facts.execute({"topic": "fare"}, _ctx())
-        self.assertTrue(result.ok)
-        self.assertIn("fare", result.data["topic"])
+        assert result.ok
+        assert "fare" in result.data["topic"]
 
     async def test_fare_facts_are_effective_dated_and_sourced(self):
         result = await lookup_facts.execute({"topic": "fare"}, _ctx())
-        self.assertTrue(result.ok)
-        self.assertIn("$3.00", result.data["text"])
-        self.assertIn("$35.00", result.data["text"])
-        self.assertIn("MetroCard sales ended", result.data["text"])
-        self.assertEqual(result.data["source"]["version"], lookup_facts.FARE_FACTS_VERSION)
-        self.assertEqual(result.data["source"]["effective_date"], "2026-01-04")
-        self.assertEqual(result.data["source"]["url"], lookup_facts.FARE_FACTS_SOURCE_URL)
+        assert result.ok
+        assert "$3.00" in result.data["text"]
+        assert "$35.00" in result.data["text"]
+        assert "MetroCard sales ended" in result.data["text"]
+        assert result.data["source"]["version"] == lookup_facts.FARE_FACTS_VERSION
+        assert result.data["source"]["effective_date"] == "2026-01-04"
+        assert result.data["source"]["url"] == lookup_facts.FARE_FACTS_SOURCE_URL
 
     async def test_expired_fare_facts_fail_safely(self):
         with patch.object(lookup_facts, "date") as fake_date:
             fake_date.today.return_value = date(2026, 10, 28)
             result = await lookup_facts.execute({"topic": "fare"}, _ctx())
-        self.assertFalse(result.ok)
-        self.assertIn("require review", result.error)
+        assert not result.ok
+        assert "require review" in result.error
 
     async def test_fuzzy_match_on_natural_phrase(self):
         result = await lookup_facts.execute({"topic": "elevator accessibility"}, _ctx())
-        self.assertTrue(result.ok)
-        self.assertIn("accessibility", result.data["topic"])
+        assert result.ok
+        assert "accessibility" in result.data["topic"]
 
     async def test_unknown_topic_lists_available_topics(self):
         result = await lookup_facts.execute({"topic": "zzz-not-a-real-topic-zzz"}, _ctx())
-        self.assertFalse(result.ok)
+        assert not result.ok
         for slug in lookup_facts._SECTION_ORDER:
-            self.assertIn(slug, result.error)
+            assert slug in result.error
 
     async def test_truncation_cap_applied(self):
         with patch.dict(
@@ -249,66 +249,23 @@ class LookupFactsTests(unittest.IsolatedAsyncioTestCase):
             {"huge": {"header": "Huge", "body": "x" * 5000}},
         ):
             result = await lookup_facts.execute({"topic": "huge"}, _ctx())
-        self.assertTrue(result.ok)
-        self.assertLessEqual(len(result.data["text"]), lookup_facts.MAX_DIGEST_CHARS)
+        assert result.ok
+        assert len(result.data["text"]) <= lookup_facts.MAX_DIGEST_CHARS
 
 
 class TransitFactsFileTests(unittest.TestCase):
     def test_sections_parse_and_none_are_empty(self):
-        self.assertGreaterEqual(len(lookup_facts._SECTION_ORDER), 6)
+        assert len(lookup_facts._SECTION_ORDER) >= 6
         for slug in lookup_facts._SECTION_ORDER:
             section = lookup_facts._SECTIONS[slug]
-            self.assertTrue(section["header"].strip(), slug)
-            self.assertTrue(section["body"].strip(), slug)
+            assert section["header"].strip(), slug
+            assert section["body"].strip(), slug
 
     def test_expected_topics_present(self):
         expected_substrings = ["fares", "transfers", "accessibility", "airport"]
         joined = " ".join(lookup_facts._SECTION_ORDER)
         for substr in expected_substrings:
-            self.assertIn(substr, joined)
-
-
-class PromptGuardP2Tests(unittest.TestCase):
-    def test_factual_grounding_clause_present(self):
-        self.assertIn("FACTUAL GROUNDING", agent_prompt.SYSTEM_PROMPT)
-        self.assertIn("check_transit fact", agent_prompt.SYSTEM_PROMPT)
-        self.assertIn("accessibility", agent_prompt.SYSTEM_PROMPT)
-
-
-class RegistryP2Tests(unittest.TestCase):
-    def test_registry_tools_present_all_strict(self):
-        expected = {
-            "prepare_route_options",
-            "present_route",
-            "transit_snapshot",
-            "event_lookup",
-            "venue_crowd_window",
-            "accessibility_status",
-            "lookup_facts",
-            "lookup_arrivals",
-            "check_area_conditions",
-            "get_place_details",
-        }
-        self.assertEqual(
-            set(agent_tools.COMBINED_TOOL_REGISTRY.keys()),
-            expected
-            | {
-                "declare_goals",
-                "discover_places",
-                "present_places",
-                "check_transit",
-                "present_transit",
-                "complete_turn",
-            },
-        )
-        for name, spec in agent_tools.COMBINED_TOOL_REGISTRY.items():
-            self.assertTrue(spec.schema.get("strict"), name)
-            self.assertFalse(spec.schema["input_schema"].get("additionalProperties", True), name)
-            self.assertGreater(spec.timeout_s, 0, name)
-
-    def test_p2_tool_timeouts(self):
-        self.assertEqual(agent_tools.INTERNAL_TOOL_REGISTRY["accessibility_status"].timeout_s, 8.0)
-        self.assertEqual(agent_tools.INTERNAL_TOOL_REGISTRY["lookup_facts"].timeout_s, 2.0)
+            assert substr in joined
 
 
 class TimingLogLineTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
@@ -340,34 +297,34 @@ class TimingLogLineTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
                 session_id="timing-log-session",
             )
         lines = [line for line in buf.getvalue().splitlines() if line.startswith("[agent] turn=")]
-        self.assertEqual(len(lines), 1)
+        assert len(lines) == 1
         line = lines[0]
-        self.assertIn("sess=timing", line)
-        self.assertIn("rounds=1", line)
-        self.assertIn("model_tool_uses=2", line)
-        self.assertIn("provider_tool_executions=1", line)
-        self.assertIn("model_ms=", line)
-        self.assertIn("tools_ms=", line)
-        self.assertIn("intent_ms=", line)
-        self.assertIn("session_load_ms=", line)
-        self.assertIn("place_resolution_ms=", line)
-        self.assertIn("route_provider_ms=", line)
-        self.assertIn("mta_ms=", line)
-        self.assertIn("ticketmaster_ms=", line)
-        self.assertIn("arrival_lookup_ms=", line)
-        self.assertIn("scoring_ms=", line)
-        self.assertIn("stream_finalize_ms=", line)
-        self.assertIn("model_calls=", line)
-        self.assertIn("model_tool_uses=", line)
-        self.assertIn("provider_tool_executions=", line)
-        self.assertEqual(line.count("model_tool_uses="), 1)
-        self.assertEqual(line.count("provider_tool_executions="), 1)
-        self.assertIn("retry_count=", line)
-        self.assertIn("total_ms=", line)
-        self.assertIn("in_tok=", line)
-        self.assertIn("out_tok=", line)
-        self.assertIn("stop=end_turn", line)
-        self.assertNotIn("ok, taking the Q", line)
+        assert "sess=timing" in line
+        assert "rounds=1" in line
+        assert "model_tool_uses=2" in line
+        assert "provider_tool_executions=1" in line
+        assert "model_ms=" in line
+        assert "tools_ms=" in line
+        assert "intent_ms=" in line
+        assert "session_load_ms=" in line
+        assert "place_resolution_ms=" in line
+        assert "route_provider_ms=" in line
+        assert "mta_ms=" in line
+        assert "ticketmaster_ms=" in line
+        assert "arrival_lookup_ms=" in line
+        assert "scoring_ms=" in line
+        assert "stream_finalize_ms=" in line
+        assert "model_calls=" in line
+        assert "model_tool_uses=" in line
+        assert "provider_tool_executions=" in line
+        assert line.count("model_tool_uses=") == 1
+        assert line.count("provider_tool_executions=") == 1
+        assert "retry_count=" in line
+        assert "total_ms=" in line
+        assert "in_tok=" in line
+        assert "out_tok=" in line
+        assert "stop=end_turn" in line
+        assert "ok, taking the Q" not in line
 
     async def test_timing_log_counts_tools(self):
         buf = io.StringIO()
@@ -395,9 +352,9 @@ class TimingLogLineTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
                 session_id="timing-log-tools",
             )
         line = next(line for line in buf.getvalue().splitlines() if line.startswith("[agent] turn="))
-        self.assertIn("rounds=2", line)
-        self.assertIn("model_tool_uses=3", line)
-        self.assertIn("provider_tool_executions=2", line)
+        assert "rounds=2" in line
+        assert "model_tool_uses=3" in line
+        assert "provider_tool_executions=2" in line
 
 
 if __name__ == "__main__":

@@ -18,6 +18,10 @@ test.describe("SmartRoute deterministic chat release flows", () => {
     await sendChatMessage(page, "plan");
     await expect(page.getByRole("button", { name: "Open on map" })).toBeVisible();
     await expect(page.getByText("31 min")).toBeVisible();
+    const rideStops = page.getByRole("button", { name: /Ride / });
+    if (await rideStops.count()) {
+      await rideStops.first().click();
+    }
 
     await sendChatMessage(page, "arrival");
     const arrivalsCard = page.locator(".sr-chat-arrivals-card");
@@ -53,6 +57,11 @@ test.describe("SmartRoute deterministic chat release flows", () => {
 
     await expect(page.locator(".sr-tab-shell")).toHaveAttribute("data-tab", "livemap");
     await expect(page.locator('[data-active-tab="livemap"]')).toBeVisible();
+    await expect(page.locator(".maplibregl-canvas").first()).toBeVisible({ timeout: 15_000 });
+    const recenter = page.getByLabel("Recenter map");
+    if (await recenter.isVisible()) {
+      await recenter.click();
+    }
   });
 
   test("keeps the chat surface free of automated accessibility violations", async ({ page }) => {

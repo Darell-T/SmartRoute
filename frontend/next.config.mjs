@@ -1,4 +1,5 @@
 import path from "path"
+import { copyFileSync, mkdirSync } from "node:fs"
 import { fileURLToPath } from "url"
 import { createRequire } from "module"
 
@@ -8,6 +9,18 @@ const { loadEnvConfig, updateInitialEnv } = require("@next/env")
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.join(__dirname, "..")
 const development = process.env.NODE_ENV !== "production"
+
+// Next emits worker URLs as assets without their relative module dependencies.
+// Keep MapLibre's worker and shared module together, keyed by installed version.
+const maplibrePackage = require.resolve("maplibre-gl/package.json")
+const maplibreVersion = require(maplibrePackage).version
+const maplibreDist = path.join(path.dirname(maplibrePackage), "dist")
+const maplibrePublic = path.join(__dirname, "public", "maplibre", maplibreVersion)
+mkdirSync(maplibrePublic, { recursive: true })
+for (const file of ["maplibre-gl-worker.mjs", "maplibre-gl-shared.mjs"]) {
+  copyFileSync(path.join(maplibreDist, file), path.join(maplibrePublic, file))
+}
+
 
 // Load Next's standard frontend files first so they retain override priority.
 // Promote that result to @next/env's baseline, then force a root load that can

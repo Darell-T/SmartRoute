@@ -121,10 +121,6 @@ def set_destination(session: dict, destination: str) -> dict[str, Any]:
     )
 
 
-def set_origin(session: dict, origin: str) -> dict[str, Any]:
-    return update_trip_state(session, origin=str(origin or "").strip() or None)
-
-
 def replace_waypoints(session: dict, waypoints: list[str]) -> dict[str, Any]:
     cleaned = [
         point.strip()
@@ -229,14 +225,6 @@ def bind_selected_place(session: dict, place_id: str) -> dict[str, Any]:
     return update_trip_state(session, selected_place_id=place_id)
 
 
-def clear_route_selection(session: dict) -> dict[str, Any]:
-    return update_trip_state(
-        session,
-        active_candidate_set_id=None,
-        selected_candidate_id=None,
-    )
-
-
 def discard_scenario(session: dict) -> dict[str, Any]:
     state = get_trip_state(session)
     state["temporary_candidate_set_id"] = None
@@ -245,14 +233,7 @@ def discard_scenario(session: dict) -> dict[str, Any]:
     return save_trip_state(session, state)
 
 
-def commit_scenario(
-    session: dict,
-    *,
-    candidate_set_id: str,
-    candidate_id: str,
-    tool_input: dict[str, Any],
-) -> dict[str, Any]:
-    state = get_trip_state(session)
+def _apply_scenario_endpoints(state: dict[str, Any], tool_input: dict[str, Any]) -> None:
     if tool_input.get("origin"):
         state["origin"] = str(tool_input["origin"]).strip()
     if tool_input.get("destination"):
@@ -263,6 +244,13 @@ def commit_scenario(
             for value in tool_input["waypoints"]
             if str(value).strip()
         ][:3]
+
+
+def _apply_scenario_preferences(
+    session: dict,
+    state: dict[str, Any],
+    tool_input: dict[str, Any],
+) -> None:
     preference_patch = tool_input.get("preference_patch")
     if not isinstance(preference_patch, dict):
         preference_patch = preference_patch_from_tool_input(tool_input)
@@ -271,6 +259,18 @@ def commit_scenario(
         state["preferences"] = profile_module.normalize_preferences(
             {**(state.get("preferences") or {}), **preference_patch}
         )
+
+
+def commit_scenario(
+    session: dict,
+    *,
+    candidate_set_id: str,
+    candidate_id: str,
+    tool_input: dict[str, Any],
+) -> dict[str, Any]:
+    state = get_trip_state(session)
+    _apply_scenario_endpoints(state, tool_input)
+    _apply_scenario_preferences(session, state, tool_input)
     excluded_route_ids = normalize_route_ids(
         tool_input.get("excluded_route_ids") or []
     )
@@ -325,10 +325,9 @@ def reset_for_new_trip(
     return state
 
 
-def _normalize(
+def _normalized_planning_mode(
     raw: dict[str, Any],
-    profile_preferences: dict[str, Any] | None = None,
-) -> dict[str, Any]:
+) -> tuple[str, str | None, str | None]:
     mode = str(raw.get("planning_mode") or "leave_now")
     if mode not in {"leave_now", "depart_at", "arrive_by"}:
         mode = "leave_now"
@@ -338,11 +337,18 @@ def _normalize(
         mode = "leave_now"
     if mode == "arrive_by" and requested_arrival is None:
         mode = "leave_now"
+    return mode, requested_departure, requested_arrival
+
+
+def _normalize(
+    raw: dict[str, Any],
+    profile_preferences: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    mode, requested_departure, requested_arrival = _normalized_planning_mode(raw)
     try:
         updated_at = float(raw.get("updated_at") or time.time())
     except (TypeError, ValueError):
         updated_at = time.time()
-    waypoints = raw.get("waypoints")
     base_preferences = (
         profile_preferences
         if isinstance(profile_preferences, dict)
@@ -351,20 +357,22 @@ def _normalize(
     preferences = dict(base_preferences)
     if isinstance(raw.get("preferences"), dict):
         preferences.update(raw["preferences"])
+    waypoints = raw.get("waypoints")
+    normalized_waypoints = (
+        [
+            item.strip()
+            for item in waypoints
+            if isinstance(item, str)
+            and item.strip()
+            and len(item.strip()) <= MAX_WAYPOINT_CHARS
+        ][:MAX_WAYPOINTS]
+        if isinstance(waypoints, list)
+        else []
+    )
     return {
         "origin": _optional_str(raw.get("origin")),
         "destination": _optional_str(raw.get("destination")),
-        "waypoints": (
-            [
-                item.strip()
-                for item in waypoints
-                if isinstance(item, str)
-                and item.strip()
-                and len(item.strip()) <= MAX_WAYPOINT_CHARS
-            ][:MAX_WAYPOINTS]
-            if isinstance(waypoints, list)
-            else []
-        ),
+        "waypoints": normalized_waypoints,
         "planning_mode": mode,
         "requested_departure": requested_departure,
         "requested_arrival": requested_arrival,
@@ -390,7 +398,7 @@ def _optional_timestamp(value: object) -> str | None:
     if not text:
         return None
     try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(text)
     except ValueError:
         return None
     return text if parsed.tzinfo is not None and parsed.utcoffset() is not None else None
@@ -406,7 +414,6 @@ __all__ = (
     "bind_selected_place",
     "bind_temporary_candidate_set",
     "bind_temporary_selected_candidate",
-    "clear_route_selection",
     "commit_scenario",
     "discard_scenario",
     "empty_trip_state",
@@ -415,5 +422,4 @@ __all__ = (
     "reset_for_new_trip",
     "save_trip_state",
     "set_destination",
-    "set_origin",
 )

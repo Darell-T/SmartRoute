@@ -12,9 +12,10 @@ import concurrent.futures
 import json
 import re
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import NoReturn
 from urllib.parse import urlsplit
 
 import httpx
@@ -48,15 +49,19 @@ SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{7,64}$")
 RELEASE_VALIDATION_PRINCIPAL = "v1.release-validation"
 
 
+def _invalid(message: str) -> NoReturn:
+    raise ValueError(message)
+
+
 def parse_chat_headers(values: Iterable[str]) -> dict[str, str]:
     headers: dict[str, str] = {}
     for value in values:
         name, separator, header_value = value.partition(":")
         if not separator or not name.strip() or not header_value.strip():
-            raise ValueError("chat headers must use 'Name: value' syntax")
+            _invalid("chat headers must use 'Name: value' syntax")
         headers[name.strip()] = header_value.strip()
     if "x-app-key" not in {name.casefold() for name in headers}:
-        raise ValueError("model chat smoke requires the SmartRoute X-App-Key header")
+        _invalid("model chat smoke requires the SmartRoute X-App-Key header")
     return headers
 
 
@@ -126,22 +131,24 @@ class SseTerminalParser:
             line = raw_line.decode("utf-8")
         except UnicodeDecodeError:
             return TransportResult(False, None, "SSE stream contained invalid UTF-8")
-
         if not line:
             return self._finish_event()
         if line.startswith(":"):
             return None
         if line.startswith("event:"):
-            if self._event_name:
-                return TransportResult(False, None, "SSE event was malformed")
-            self._event_name = line.removeprefix("event:").strip()
-            if not self._event_name:
-                return TransportResult(False, None, "SSE event was malformed")
-            return None
+            return self._event_frame(line)
         if line.startswith("data:"):
             self._data_lines.append(line.removeprefix("data:").strip())
             return None
         return TransportResult(False, None, "SSE stream contained an unsupported frame")
+
+    def _event_frame(self, line: str) -> TransportResult | None:
+        if self._event_name:
+            return TransportResult(False, None, "SSE event was malformed")
+        self._event_name = line.removeprefix("event:").strip()
+        if not self._event_name:
+            return TransportResult(False, None, "SSE event was malformed")
+        return None
 
     def _finish_event(self) -> TransportResult | None:
         if not self._event_name:
@@ -150,15 +157,16 @@ class SseTerminalParser:
             return None
         if len(self._data_lines) != 1:
             return TransportResult(False, None, "SSE event was malformed")
-
         try:
             payload = json.loads(self._data_lines[0])
         except json.JSONDecodeError:
             return TransportResult(False, None, "SSE event payload was malformed")
-
         event_name = self._event_name
         self._event_name = ""
         self._data_lines = []
+        return self._terminal(event_name, payload)
+
+    def _terminal(self, event_name: str, payload: object) -> TransportResult | None:
         if event_name in {"error", "stream_error"}:
             return TransportResult(False, None, "SSE stream emitted an error event")
         if event_name != "done":
@@ -183,7 +191,7 @@ def http_check(
     body: bytes | None = None,
 ) -> TransportResult:
     try:
-        with httpx.Client(timeout=timeout_seconds, follow_redirects=False) as client:
+        with httpx.Client(timeout=timeout_seconds, follow_redirects=False) as client:  # noqa: TID251 release SSE/sync HTTP; provider_http only fetches JSON
             response = client.request(method, url, headers=headers, content=body)
     except httpx.TimeoutException:
         return TransportResult(False, None, "request timed out")
@@ -380,19 +388,21 @@ async def _read_chat_sse(
 ) -> TransportResult:
     timeout = httpx.Timeout(timeout_seconds)
     try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
-            async with client.stream("POST", url, headers=headers, content=body) as response:
-                if not response.is_success:
-                    return TransportResult(False, response.status_code, "non-success response")
-                content_type = response.headers.get("content-type", "")
-                if "text/event-stream" not in content_type.casefold():
-                    return TransportResult(False, response.status_code, "chat response was not an SSE stream")
-                parser = SseTerminalParser(max_bytes)
-                async for chunk in response.aiter_raw():
-                    result = parser.feed(chunk)
-                    if result is not None:
-                        return TransportResult(result.passed, response.status_code, result.reason)
-                return parser.finish()
+        async with (
+            httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client,  # noqa: TID251 release SSE/sync HTTP; provider_http only fetches JSON
+            client.stream("POST", url, headers=headers, content=body) as response,
+        ):
+            if not response.is_success:
+                return TransportResult(False, response.status_code, "non-success response")
+            content_type = response.headers.get("content-type", "")
+            if "text/event-stream" not in content_type.casefold():
+                return TransportResult(False, response.status_code, "chat response was not an SSE stream")
+            parser = SseTerminalParser(max_bytes)
+            async for chunk in response.aiter_raw():
+                result = parser.feed(chunk)
+                if result is not None:
+                    return TransportResult(result.passed, response.status_code, result.reason)
+            return parser.finish()
     except httpx.HTTPError:
         return TransportResult(False, None, "chat request failed")
 

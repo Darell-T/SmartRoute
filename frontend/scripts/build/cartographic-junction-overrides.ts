@@ -1,7 +1,6 @@
 import type { Feature, LineStringGeometry, Position } from "./types.ts";
 
 const EARTH_RADIUS_M = 6371000;
-const M_PER_DEG_LAT = 110574;
 const GREEN = "#00933C";
 
 type Bounds = {
@@ -24,7 +23,6 @@ type CartographicFeatureProperties = {
   visual_feature_type?: string;
   branch_cut_back_m?: number;
   trunk_merge_downstream_m?: number;
-  [key: string]: unknown;
 };
 
 type CartographicFeature = Feature<LineStringGeometry, CartographicFeatureProperties>;
@@ -72,10 +70,6 @@ const MOTT_HAVEN_SCHEMATIC_POINTS: Position[] = [
 const DEFAULT_BRANCH_CUT_BACK_M = 450;
 const DEFAULT_TRUNK_MERGE_DOWNSTREAM_M = 300;
 
-function metersPerDegLng(lat: number): number {
-  return 111320 * Math.cos((lat * Math.PI) / 180);
-}
-
 function haversineM([lon1, lat1]: Position, [lon2, lat2]: Position): number {
   const toRad = (d: number) => (d * Math.PI) / 180;
   const dLat = toRad(lat2 - lat1);
@@ -119,10 +113,7 @@ function pointAlong(coords: Position[], distanceM: number): Omit<SplitPoint, "be
       return {
         index: i - 1,
         t,
-        point: [
-          coords[i - 1][0] + (coords[i][0] - coords[i - 1][0]) * t,
-          coords[i - 1][1] + (coords[i][1] - coords[i - 1][1]) * t,
-        ],
+        point: interpolatePosition(coords[i - 1], coords[i], t),
       };
     }
     walked += seg;
@@ -139,6 +130,17 @@ function splitAtDistance(coords: Position[], distanceM: number): SplitPoint {
     index: split.index,
     t: split.t,
   };
+}
+
+function interpolatePosition(start: Position, end: Position, t: number): Position {
+  return [
+    start[0] + (end[0] - start[0]) * t,
+    start[1] + (end[1] - start[1]) * t,
+  ];
+}
+
+function midpoint(left: Position, right: Position): Position {
+  return [(left[0] + right[0]) / 2, (left[1] + right[1]) / 2];
 }
 
 function reverseFeatureDirection(feature: CartographicFeature): CartographicFeature {
@@ -169,69 +171,12 @@ function orientedFromMottHavenEndpoint(feature: CartographicFeature): Cartograph
     : reverseFeatureDirection(feature);
 }
 
-function vectorMeters(from: Position, to: Position): Position {
-  const lat = (from[1] + to[1]) / 2;
-  return [
-    (to[0] - from[0]) * metersPerDegLng(lat),
-    (to[1] - from[1]) * M_PER_DEG_LAT,
-  ];
-}
-
-function normalize(v: Position): Position {
-  const len = Math.hypot(v[0], v[1]);
-  return len < 1e-9 ? [0, 0] : [v[0] / len, v[1] / len];
-}
-
-function projectAtLat(point: Position, originLat: number): Position {
-  return [point[0] * metersPerDegLng(originLat), point[1] * M_PER_DEG_LAT];
-}
-
-function unprojectAtLat(point: Position, originLat: number): Position {
-  return [point[0] / metersPerDegLng(originLat), point[1] / M_PER_DEG_LAT];
-}
-
-function hermiteCurve(
-  start: Position,
-  end: Position,
-  startTangent: Position,
-  endTangent: Position,
-  sampleM: number,
-): Position[] {
-  const originLat = (start[1] + end[1]) / 2;
-  const p0 = projectAtLat(start, originLat);
-  const p1 = projectAtLat(end, originLat);
-  const distanceM = Math.hypot(p1[0] - p0[0], p1[1] - p0[1]);
-  const handleM = Math.max(65, Math.min(230, distanceM * 0.62));
-  const m0 = [startTangent[0] * handleM, startTangent[1] * handleM];
-  const m1 = [endTangent[0] * handleM, endTangent[1] * handleM];
-  const steps = Math.max(8, Math.ceil(distanceM / sampleM));
-  const out: Position[] = [];
-  for (let i = 0; i <= steps; i += 1) {
-    const t = i / steps;
-    const t2 = t * t;
-    const t3 = t2 * t;
-    const h00 = 2 * t3 - 3 * t2 + 1;
-    const h10 = t3 - 2 * t2 + t;
-    const h01 = -2 * t3 + 3 * t2;
-    const h11 = t3 - t2;
-    out.push(unprojectAtLat([
-      h00 * p0[0] + h10 * m0[0] + h01 * p1[0] + h11 * m1[0],
-      h00 * p0[1] + h10 * m0[1] + h01 * p1[1] + h11 * m1[1],
-    ] as Position, originLat));
-  }
-  return out;
-}
-
 function linearlySampleSegment(start: Position, end: Position, sampleM: number): Position[] {
   const distanceM = haversineM(start, end);
   const steps = Math.max(2, Math.ceil(distanceM / sampleM));
-  const out = [];
+  const out: Position[] = [];
   for (let i = 0; i <= steps; i += 1) {
-    const t = i / steps;
-    out.push([
-      start[0] + (end[0] - start[0]) * t,
-      start[1] + (end[1] - start[1]) * t,
-    ] as Position);
+    out.push(interpolatePosition(start, end, i / steps));
   }
   return out;
 }
@@ -243,10 +188,11 @@ function quadraticCurve(start: Position, control: Position, end: Position, sampl
   for (let i = 0; i <= steps; i += 1) {
     const t = i / steps;
     const u = 1 - t;
-    out.push([
+    const point: Position = [
       u * u * start[0] + 2 * u * t * control[0] + t * t * end[0],
       u * u * start[1] + 2 * u * t * control[1] + t * t * end[1],
-    ] as Position);
+    ];
+    out.push(point);
   }
   return out;
 }
@@ -266,12 +212,8 @@ function schematicCurveThrough(
     const current = points[i];
     const next = points[i + 1];
     if (!prev || !current || !next) continue;
-    const segmentStart: Position = i === 1
-      ? prev
-      : [(prev[0] + current[0]) / 2, (prev[1] + current[1]) / 2] as Position;
-    const segmentEnd: Position = i === points.length - 2
-      ? next
-      : [(current[0] + next[0]) / 2, (current[1] + next[1]) / 2] as Position;
+    const segmentStart = i === 1 ? prev : midpoint(prev, current);
+    const segmentEnd = i === points.length - 2 ? next : midpoint(current, next);
     const segment = quadraticCurve(segmentStart, current, segmentEnd, sampleM);
     output.push(...segment.slice(1));
   }
@@ -336,80 +278,124 @@ function replaceFeaturePreservingOriginalDirection(
   };
 }
 
-export function applyCartographicJunctionOverrides(
-  features: CartographicFeature[],
-  options: CartographicJunctionOptions = {},
-): CartographicJunctionResult {
-  const {
-    branchCutBackM = DEFAULT_BRANCH_CUT_BACK_M,
-    trunkMergeDownstreamM = DEFAULT_TRUNK_MERGE_DOWNSTREAM_M,
-    sampleM = 8,
-    maxEndpointGapM = 95,
-    schematicPoints = MOTT_HAVEN_SCHEMATIC_POINTS,
-    bbox = MOTT_HAVEN_BBOX,
-  } = options;
+type BranchCut = {
+  point: Position;
+  before: Position[];
+};
 
-  const branch = findMottHavenBranch(features);
-  const trunk = findMottHavenTrunk(features);
-  if (!branch || !trunk) return { features, appliedCount: 0, debugFeatures: [] };
+type MottHavenJoinGeometry = {
+  orientedBranch: CartographicFeature;
+  newBranchCoords: Position[];
+  curve: Position[];
+};
 
+type MottHavenJoinGates = {
+  branchCutBackM: number;
+  trunkMergeDownstreamM: number;
+  sampleM: number;
+  maxEndpointGapM: number;
+  schematicPoints: Position[];
+  bbox: Bounds;
+};
+
+function emptyJunctionResult(features: CartographicFeature[]): CartographicJunctionResult {
+  return { features, appliedCount: 0, debugFeatures: [] };
+}
+
+function branchCutForMottHaven(
+  orientedBranch: CartographicFeature,
+  branchLength: number,
+  gates: MottHavenJoinGates,
+): BranchCut {
+  const entryIndex = firstIndexInBBox(orientedBranch.geometry.coordinates, gates.bbox);
+  if (entryIndex >= 0) {
+    return {
+      point: orientedBranch.geometry.coordinates[entryIndex],
+      before: orientedBranch.geometry.coordinates.slice(0, entryIndex + 1),
+    };
+  }
+  return splitAtDistance(
+    orientedBranch.geometry.coordinates,
+    Math.max(0, branchLength - gates.branchCutBackM),
+  );
+}
+
+function mottHavenJoinGeometry(
+  branch: CartographicFeature,
+  trunk: CartographicFeature,
+  gates: MottHavenJoinGates,
+): MottHavenJoinGeometry | null {
   const orientedBranch = orientedTowardMottHavenEndpoint(branch);
   const orientedTrunk = orientedFromMottHavenEndpoint(trunk);
   const branchEndpoint = orientedBranch.geometry.coordinates[orientedBranch.geometry.coordinates.length - 1];
   const trunkEndpoint = orientedTrunk.geometry.coordinates[0];
-  if (haversineM(branchEndpoint, trunkEndpoint) > maxEndpointGapM) {
-    return { features, appliedCount: 0, debugFeatures: [] };
-  }
+  if (haversineM(branchEndpoint, trunkEndpoint) > gates.maxEndpointGapM) return null;
 
   const branchLength = polylineLengthM(orientedBranch.geometry.coordinates);
   const trunkLength = polylineLengthM(orientedTrunk.geometry.coordinates);
-  if (branchLength <= branchCutBackM + 20 || trunkLength <= trunkMergeDownstreamM + 20) {
-    return { features, appliedCount: 0, debugFeatures: [] };
+  if (branchLength <= gates.branchCutBackM + 20 || trunkLength <= gates.trunkMergeDownstreamM + 20) {
+    return null;
   }
 
-  const entryIndex = firstIndexInBBox(orientedBranch.geometry.coordinates, bbox);
-  const branchCut = entryIndex >= 0
-    ? {
-        point: orientedBranch.geometry.coordinates[entryIndex],
-        before: orientedBranch.geometry.coordinates.slice(0, entryIndex + 1),
-      }
-    : splitAtDistance(
-        orientedBranch.geometry.coordinates,
-        Math.max(0, branchLength - branchCutBackM),
-      );
-  const trunkMerge = splitAtDistance(orientedTrunk.geometry.coordinates, trunkMergeDownstreamM);
-  const branchStem = branchCut.before;
-  const approach = linearlySampleSegment(branchCut.point, trunkEndpoint, sampleM);
-  const loop = schematicCurveThrough(trunkEndpoint, trunkMerge.point, schematicPoints, sampleM);
+  const branchCut = branchCutForMottHaven(orientedBranch, branchLength, gates);
+  const trunkMerge = splitAtDistance(orientedTrunk.geometry.coordinates, gates.trunkMergeDownstreamM);
+  const approach = linearlySampleSegment(branchCut.point, trunkEndpoint, gates.sampleM);
+  const loop = schematicCurveThrough(trunkEndpoint, trunkMerge.point, gates.schematicPoints, gates.sampleM);
   const curve = [...approach, ...loop.slice(1)];
-  const newBranchCoords = [
-    ...branchStem.slice(0, -1),
-    ...curve,
-  ];
-
-  const repairedBranch = replaceFeaturePreservingOriginalDirection(branch, orientedBranch, newBranchCoords, {
-    cartographic_junction_override: "mott_haven_5",
-    cartographic_junction_override_applied: true,
-    cartographic_junction_branch_cut_back_m: branchCutBackM,
-    cartographic_junction_trunk_merge_downstream_m: trunkMergeDownstreamM,
-  });
-
-  const featuresOut = features.map((feature) => (feature === branch ? repairedBranch : feature));
   return {
-    features: featuresOut,
+    orientedBranch,
+    newBranchCoords: [...branchCut.before.slice(0, -1), ...curve],
+    curve,
+  };
+}
+
+export function applyCartographicJunctionOverrides(
+  features: CartographicFeature[],
+  options: CartographicJunctionOptions = {},
+): CartographicJunctionResult {
+  const gates: MottHavenJoinGates = {
+    branchCutBackM: options.branchCutBackM ?? DEFAULT_BRANCH_CUT_BACK_M,
+    trunkMergeDownstreamM: options.trunkMergeDownstreamM ?? DEFAULT_TRUNK_MERGE_DOWNSTREAM_M,
+    sampleM: options.sampleM ?? 8,
+    maxEndpointGapM: options.maxEndpointGapM ?? 95,
+    schematicPoints: options.schematicPoints ?? MOTT_HAVEN_SCHEMATIC_POINTS,
+    bbox: options.bbox ?? MOTT_HAVEN_BBOX,
+  };
+
+  const branch = findMottHavenBranch(features);
+  const trunk = findMottHavenTrunk(features);
+  if (!branch || !trunk) return emptyJunctionResult(features);
+
+  const join = mottHavenJoinGeometry(branch, trunk, gates);
+  if (!join) return emptyJunctionResult(features);
+
+  const repairedBranch = replaceFeaturePreservingOriginalDirection(
+    branch,
+    join.orientedBranch,
+    join.newBranchCoords,
+    {
+      cartographic_junction_override: "mott_haven_5",
+      cartographic_junction_override_applied: true,
+      cartographic_junction_branch_cut_back_m: gates.branchCutBackM,
+      cartographic_junction_trunk_merge_downstream_m: gates.trunkMergeDownstreamM,
+    },
+  );
+
+  return {
+    features: features.map((feature) => (feature === branch ? repairedBranch : feature)),
     appliedCount: 1,
-    debugFeatures: [{
-      type: "Feature",
-      geometry: { type: "LineString", coordinates: curve },
-      properties: {
+    debugFeatures: [({
+    type: "Feature",
+    geometry: { type: "LineString", coordinates: (join.curve) },
+    properties: {
         visual_feature_type: "cartographic_junction_override",
         cartographic_junction_override: "mott_haven_5",
         route_ids: ["5"],
         color: GREEN,
-        branch_cut_back_m: branchCutBackM,
-        trunk_merge_downstream_m: trunkMergeDownstreamM,
-        length_m: Number(polylineLengthM(curve).toFixed(2)),
-      },
-    }],
+        branch_cut_back_m: (gates).branchCutBackM,
+        trunk_merge_downstream_m: (gates).trunkMergeDownstreamM,
+        length_m: Number(polylineLengthM((join.curve)).toFixed(2)),
+    },
+})],
   };
 }

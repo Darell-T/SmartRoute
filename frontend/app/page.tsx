@@ -10,25 +10,24 @@ import {
   locationStateForCoordinates,
   nextLocationState,
   requestInitialLocation,
+  visibleMapLocation,
   type InitialLocationState,
 } from "@/lib/initial-geolocation";
-import { useLiveFeed } from "@/lib/use-live-feed";
-import { useServiceAlerts } from "@/lib/use-service-alerts";
-import { useMobileVisibleViewport } from "@/lib/use-mobile-visible-viewport";
+import { useLiveFeed } from "@/lib/hooks/use-live-feed";
+import { useServiceAlerts } from "@/lib/hooks/use-service-alerts";
+import { useMobileVisibleViewport } from "@/lib/hooks/use-mobile-visible-viewport";
 import { deriveTransitRouteIds } from "@/lib/route-planning";
 import { formatCanonicalRouteSummary } from "@/lib/smart-route";
-import { useAgentChat, type ArrivalsTurnPayload } from "@/lib/use-agent-chat";
+import { useAgentChat, type ArrivalsTurnPayload } from "@/lib/agent-chat/use-agent-chat";
 import {
   SmartRouteThemeProvider,
   useSmartRouteTheme,
-} from "@/lib/use-chat-theme";
-import type { RouteCard } from "@/lib/agent-chat-stream";
+} from "@/lib/hooks/use-chat-theme";
+import type { RouteCard } from "@/lib/agent-chat/stream";
 import {
   agentRoutePlanFromCards,
-  normalizeRouteCoordinate,
-} from "@/lib/agent-route-selection";
+} from "@/lib/agent-chat/route-selection";
 import {
-  type RouteRailStatus,
   type TabId,
 } from "@/components/smart-route/left-rail";
 import { buildLeftRailData } from "@/components/smart-route/left-rail/live-data";
@@ -42,7 +41,7 @@ import { buildHomeNearbyModel } from "@/components/smart-route/chat/near-you";
 import { useMobileRailSheet } from "@/components/smart-route/page/use-mobile-rail-sheet";
 import { useRoutePlanningController } from "@/components/smart-route/page/use-route-planning-controller";
 
-import { type AppTab, type MapActions } from "./page-parts";
+import { type AppTab, type MapActions, destinationCoordinatesFromRoute, nearbyStationSelection, routeCardsForSelection, routeRailStatus, shellPanelProps, toggleElementFullscreen, transitRouteData } from "./page-parts";
 
 const LiveWorkspace = dynamic(
   () =>
@@ -65,11 +64,7 @@ function SmartRoutePageContent() {
   const [locationState, setLocationState] = useState<InitialLocationState>({
     status: "pending",
   });
-  const userLocation =
-    locationState.status === "precise_nyc" ||
-    locationState.status === "fallback_nyc"
-      ? locationState.coordinates
-      : null;
+  const userLocation = visibleMapLocation(locationState);
   const chatOrigin = authoritativeChatOrigin(locationState);
   const [activeTab, setActiveTab] = useState<AppTab>("chat");
   const [mapRequested, setMapRequested] = useState(false);
@@ -106,25 +101,20 @@ function SmartRoutePageContent() {
 
   const activeRouteSteps = activeRouteCandidate?.steps ?? plannedRouteSteps;
 
-  const routeData = useMemo<TransitRouteData | null>(() => {
-    return activeRouteSteps.length > 0
-      ? { steps: activeRouteSteps, itinerary: activeRouteCandidate?.itinerary }
-      : null;
-  }, [activeRouteSteps, activeRouteCandidate?.itinerary]);
+  const routeData = useMemo<TransitRouteData | null>(
+    () => transitRouteData(activeRouteSteps, activeRouteCandidate?.itinerary),
+    [activeRouteSteps, activeRouteCandidate?.itinerary],
+  );
 
   const summary = useMemo(
     () => formatCanonicalRouteSummary(activeRouteCandidate),
     [activeRouteCandidate],
   );
 
-  const destCoords = useMemo(() => {
-    const lastStep = activeRouteSteps[activeRouteSteps.length - 1];
-    const rawDest =
-      lastStep?.type === "WALK" ? lastStep.end_point : lastStep?.arrival_coords;
-    const stepDestination = normalizeRouteCoordinate(rawDest);
-    if (stepDestination) return stepDestination;
-    return selectedDestination?.coordinates ?? null;
-  }, [activeRouteSteps, selectedDestination]);
+  const destCoords = useMemo(
+    () => destinationCoordinatesFromRoute(activeRouteSteps, selectedDestination?.coordinates),
+    [activeRouteSteps, selectedDestination],
+  );
 
   const activeRouteIds = useMemo(
     () => deriveTransitRouteIds(activeRouteSteps),
@@ -224,17 +214,7 @@ function SmartRoutePageContent() {
     ],
   );
 
-  // ── SmartRoute Left Rail status ──────────────────────────────────────────
-  // The rail consumes a four-value route status. We derive it from the
-  // existing app signals so the rail stays in lockstep with the recommendation
-  // pipeline (loading -> active -> idle/error).
-  const routeStatus: RouteRailStatus = isLoading
-    ? "thinking"
-    : errorText
-      ? "error"
-      : activeRouteCandidate
-        ? "result"
-        : "standby";
+  const routeStatus = routeRailStatus(isLoading, errorText, Boolean(activeRouteCandidate));
 
   useEffect(() => {
     return requestInitialLocation(
@@ -272,16 +252,11 @@ function SmartRoutePageContent() {
   }, []);
 
   async function toggleFullscreen(target: HTMLElement | null) {
-    if (!target || typeof document === "undefined") return;
-    try {
-      if (document.fullscreenElement) {
-        await document.exitFullscreen();
-        return;
-      }
-      await target.requestFullscreen();
-    } catch {
-      mapActionsRef.current?.recenter();
-    }
+    if (typeof document === "undefined") return;
+    await toggleElementFullscreen(target, {
+      element: document.fullscreenElement,
+      exit: () => document.exitFullscreen(),
+    }, () => mapActionsRef.current?.recenter());
   }
 
   const chat = useAgentChat({ getOrigin: () => chatOrigin });
@@ -314,14 +289,10 @@ function SmartRoutePageContent() {
 
   const handleOpenNearbyStation = useCallback(
     (arrivals: ArrivalsTurnPayload) => {
-      if (!arrivals.stationCoordinates) {
-        openLiveMap();
-        return;
+      const selection = nearbyStationSelection(arrivals);
+      if (selection) {
+        routePlanning.handleSearchSubmit(selection.label, selection);
       }
-      routePlanning.handleSearchSubmit(`${arrivals.stationName} station`, {
-        label: `${arrivals.stationName} station`,
-        coordinates: arrivals.stationCoordinates,
-      });
       openLiveMap();
     },
     [openLiveMap, routePlanning],
@@ -332,15 +303,8 @@ function SmartRoutePageContent() {
   // remains mounted for follow-up questions.
   const handleSelectRouteCard = useCallback(
     (card: RouteCard) => {
-      const sourceTurn = [...chat.messages]
-        .reverse()
-        .find(
-          (turn) =>
-            turn.role === "assistant" &&
-            turn.routeCards.some((candidate) => candidate.card_id === card.card_id),
-        );
       const plan = agentRoutePlanFromCards(
-        sourceTurn?.role === "assistant" ? sourceTurn.routeCards : [card],
+        routeCardsForSelection(chat.messages, card.card_id, [card]),
         card.card_id,
       );
       if (!plan) return;
@@ -352,6 +316,8 @@ function SmartRoutePageContent() {
   );
 
   const isLivemapTab = activeTab === "livemap";
+  const livemapPanel = shellPanelProps(isLivemapTab);
+  const chatPanel = shellPanelProps(!isLivemapTab);
 
   return (
     <MotionConfig reducedMotion="user">
@@ -395,11 +361,9 @@ function SmartRoutePageContent() {
           />
 
           <div
-            className={`sr-app-shell sr-tab-shell__panel sr-tab-shell__panel--livemap${
-              isLivemapTab ? "" : " sr-tab-shell__panel--hidden"
-            }`}
+            className={`sr-app-shell sr-tab-shell__panel sr-tab-shell__panel--livemap${livemapPanel.hiddenClass}`}
             data-active-tab="livemap"
-            inert={isLivemapTab ? undefined : true}
+            inert={livemapPanel.inert}
             style={{
               // Single full-viewport row: 400px LeftRail | 1fr Map. The rail owns
               // Route / Alerts, while the map carries its own overlays.
@@ -431,11 +395,9 @@ function SmartRoutePageContent() {
           </div>
 
           <div
-            className={`sr-chat-tab sr-tab-shell__panel sr-tab-shell__panel--chat${
-              isLivemapTab ? " sr-tab-shell__panel--hidden" : ""
-            }`}
+            className={`sr-chat-tab sr-tab-shell__panel sr-tab-shell__panel--chat${chatPanel.hiddenClass}`}
             data-sr-theme={theme}
-            inert={isLivemapTab ? true : undefined}
+            inert={chatPanel.inert}
           >
             <ChatPanel
               key={newTripKey}

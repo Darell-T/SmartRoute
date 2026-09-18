@@ -12,7 +12,6 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
-
 _DIRECTION_ALIASES = {
     "uptown": "uptown",
     "northbound": "uptown",
@@ -76,7 +75,7 @@ def normalize_direction_text(value: object) -> str:
 
     raw = "" if value is None else str(value)
     return " ".join(
-        raw.replace("–", "-").replace("—", "-").replace("_", " ").split()
+        raw.replace("\u2013", "-").replace("\u2014", "-").replace("_", " ").split()
     ).casefold()
 
 
@@ -118,29 +117,45 @@ def resolve_direction(
             resolved=canonical,
             authoritative=authoritative,
         )
-
-    for row in context_rows:
-        for key in _CONTEXT_VALUE_KEYS:
-            candidate = row.get(key)
-            if normalize_direction_text(candidate) != requested_text:
-                continue
-            resolved = _context_direction(row)
-            if resolved:
-                return DirectionResolution(
-                    requested=requested_text,
-                    resolved=resolved,
-                    authoritative=True,
-                    matched_value=normalize_direction_text(candidate),
-                )
-            if key in _HEADSIGN_CONTEXT_KEYS:
-                return DirectionResolution(
-                    requested=requested_text,
-                    resolved=requested_text,
-                    authoritative=True,
-                    matched_value=requested_text,
-                )
-
+    matched = _match_context_value(requested_text, context_rows)
+    if matched is not None:
+        return matched
     return DirectionResolution(requested_text, None, False)
+
+
+def _match_context_value(
+    requested_text: str, context_rows: list[Mapping[str, object]]
+) -> DirectionResolution | None:
+    for row in context_rows:
+        matched = _row_context_match(requested_text, row)
+        if matched is not None:
+            return matched
+    return None
+
+
+def _row_context_match(
+    requested_text: str, row: Mapping[str, object]
+) -> DirectionResolution | None:
+    for key in _CONTEXT_VALUE_KEYS:
+        candidate = row.get(key)
+        if normalize_direction_text(candidate) != requested_text:
+            continue
+        resolved = _context_direction(row)
+        if resolved:
+            return DirectionResolution(
+                requested=requested_text,
+                resolved=resolved,
+                authoritative=True,
+                matched_value=normalize_direction_text(candidate),
+            )
+        if key in _HEADSIGN_CONTEXT_KEYS:
+            return DirectionResolution(
+                requested=requested_text,
+                resolved=requested_text,
+                authoritative=True,
+                matched_value=requested_text,
+            )
+    return None
 
 
 def resolve_model_direction(
@@ -192,62 +207,90 @@ def _route_contexts(
     session: Mapping[str, object] | None,
     gtfs: object,
 ) -> list[dict[str, object]]:
-    contexts: list[dict[str, object]] = []
+    routes = {str(route).strip().upper() for route in route_ids if str(route).strip()}
+    if not routes:
+        return []
+    contexts = _session_route_contexts(session, routes)
+    itinerary = _active_canonical_itinerary(
+        session.get("active_trip") if isinstance(session, Mapping) else None
+    )
+    if itinerary is not None:
+        contexts.extend(_itinerary_contexts(itinerary, routes))
+    contexts.extend(_gtfs_pattern_contexts(routes, gtfs))
+    return contexts
+
+
+def _session_route_contexts(
+    session: Mapping[str, object] | None, routes: set[str]
+) -> list[dict[str, object]]:
     active_trip = session.get("active_trip") if isinstance(session, Mapping) else None
     boarding = (
         active_trip.get("first_boarding") if isinstance(active_trip, Mapping) else None
     )
-    routes = {str(route).strip().upper() for route in route_ids if str(route).strip()}
-    if not routes:
-        return contexts
-    if isinstance(boarding, Mapping):
-        boarding_route = str(boarding.get("route_id") or "").strip().upper()
-        if not routes or boarding_route in routes:
-            contexts.append(dict(boarding))
+    if not isinstance(boarding, Mapping):
+        return []
+    boarding_route = str(boarding.get("route_id") or "").strip().upper()
+    if boarding_route not in routes:
+        return []
+    return [dict(boarding)]
 
-    itinerary = _active_canonical_itinerary(active_trip)
-    if itinerary is not None:
-        contexts.extend(_itinerary_contexts(itinerary, routes))
 
+def _gtfs_pattern_contexts(
+    routes: set[str], gtfs: object
+) -> list[dict[str, object]]:
     pattern_index = getattr(gtfs, "_pattern_index", None) if gtfs else None
     route_patterns = getattr(pattern_index, "route_patterns", {})
     stops = getattr(pattern_index, "stops", {})
     if not isinstance(route_patterns, Mapping) or not isinstance(stops, Mapping):
-        return contexts
+        return []
+    contexts: list[dict[str, object]] = []
     for route_id in sorted(routes)[:3]:
-        patterns = route_patterns.get(route_id, [])
-        for pattern in patterns[:8] if isinstance(patterns, list) else []:
-            if not isinstance(pattern, Mapping):
-                continue
-            stop_ids = pattern.get("stop_ids")
-            terminal_id = (
-                stop_ids[-1] if isinstance(stop_ids, list) and stop_ids else None
-            )
-            terminal = stops.get(terminal_id) if terminal_id else None
-            contexts.append(
-                {
-                    "route_id": route_id,
-                    "direction_id": pattern.get("direction_id"),
-                    "direction": pattern.get("direction"),
-                    "direction_label": pattern.get("direction_label"),
-                    "canonical_direction": pattern.get("canonical_direction"),
-                    "semantic_direction": pattern.get("semantic_direction"),
-                    "direction_id_map": pattern.get("direction_id_map"),
-                    "headsign": pattern.get("trip_headsign") or pattern.get("headsign"),
-                    "label": pattern.get("label"),
-                    "stop_ids": stop_ids,
-                    "origin_coords": _stop_coords(stops.get(stop_ids[0]))
-                    if isinstance(stop_ids, list) and stop_ids
-                    else None,
-                    "destination_coords": _stop_coords(stops.get(stop_ids[-1]))
-                    if isinstance(stop_ids, list) and stop_ids
-                    else None,
-                    "destination_stop_name": (
-                        terminal.get("name") if isinstance(terminal, Mapping) else None
-                    ),
-                }
-            )
+        contexts.extend(_route_pattern_contexts(route_id, route_patterns, stops))
     return contexts
+
+
+def _route_pattern_contexts(
+    route_id: str,
+    route_patterns: Mapping[str, object],
+    stops: Mapping[str, object],
+) -> list[dict[str, object]]:
+    patterns = route_patterns.get(route_id, [])
+    rows: list[dict[str, object]] = []
+    for pattern in patterns[:8] if isinstance(patterns, list) else []:
+        row = _pattern_context(route_id, pattern, stops)
+        if row is not None:
+            rows.append(row)
+    return rows
+
+
+def _pattern_context(
+    route_id: str, pattern: object, stops: Mapping[str, object]
+) -> dict[str, object] | None:
+    if not isinstance(pattern, Mapping):
+        return None
+    stop_ids = pattern.get("stop_ids")
+    ordered = stop_ids if isinstance(stop_ids, list) and stop_ids else []
+    origin = stops.get(ordered[0]) if ordered else None
+    terminal = stops.get(ordered[-1]) if ordered else None
+    headsign = pattern.get("trip_headsign")
+    if not headsign:
+        headsign = pattern.get("headsign")
+    destination_name = terminal.get("name") if isinstance(terminal, Mapping) else None
+    return {
+        "route_id": route_id,
+        "direction_id": pattern.get("direction_id"),
+        "direction": pattern.get("direction"),
+        "direction_label": pattern.get("direction_label"),
+        "canonical_direction": pattern.get("canonical_direction"),
+        "semantic_direction": pattern.get("semantic_direction"),
+        "direction_id_map": pattern.get("direction_id_map"),
+        "headsign": headsign,
+        "label": pattern.get("label"),
+        "stop_ids": stop_ids,
+        "origin_coords": _stop_coords(origin),
+        "destination_coords": _stop_coords(terminal),
+        "destination_stop_name": destination_name,
+    }
 
 
 def _active_canonical_itinerary(active_trip: object) -> Mapping[str, object] | None:
@@ -283,8 +326,6 @@ def _itinerary_contexts(
 
 
 def _context_direction(row: Mapping[str, object]) -> str | None:
-    """Read semantic context without assigning meaning to a bare GTFS id."""
-
     for key in (
         "canonical_direction",
         "semantic_direction",
@@ -301,8 +342,7 @@ def _context_direction(row: Mapping[str, object]) -> str | None:
     direction_id = normalize_direction_text(raw_direction_id)
     mapping = row.get("direction_id_map")
     if direction_id and isinstance(mapping, Mapping):
-        # A route/pattern producer may explicitly publish this mapping; absent
-        # that field, numeric ids stay opaque for buses and nonstandard routes.
+        # Numeric GTFS ids stay opaque unless their producer supplies this map.
         return normalize_direction(
             mapping.get(direction_id, mapping.get(raw_direction_id))
         )
@@ -356,7 +396,6 @@ def _boarding_direction(
     routes: set[str],
     contexts: Iterable[Mapping[str, object]],
 ) -> str | None:
-    """Resolve direction from the accepted trip's authoritative boarding leg."""
     if not isinstance(boarding, Mapping):
         return None
     route_id = str(boarding.get("route_id") or "").strip().upper()
@@ -373,7 +412,6 @@ def _itinerary_direction(
     routes: set[str],
     contexts: Iterable[Mapping[str, object]],
 ) -> str | None:
-    """Resolve direction from the accepted canonical itinerary's route leg."""
     if not isinstance(itinerary, Mapping):
         return None
     for context in _itinerary_contexts(itinerary, routes):
@@ -434,8 +472,6 @@ def _resolve_context_label(
 def _semantic_direction(
     row: Mapping[str, object], contexts: Iterable[Mapping[str, object]] = ()
 ) -> str | None:
-    """Read only explicit semantics preserved on the accepted leg/card."""
-
     resolved = _context_direction(row)
     if resolved:
         return resolved
@@ -487,7 +523,7 @@ __all__ = [
     "direction_matches",
     "normalize_direction",
     "normalize_direction_text",
-    "resolve_model_direction",
     "resolve_direction",
+    "resolve_model_direction",
     "stop_id_direction",
 ]

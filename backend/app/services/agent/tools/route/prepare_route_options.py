@@ -3,22 +3,21 @@
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
-from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tool_input_policy import validated_goal_key
+from app.services.agent.tools.base import ToolContext, ToolResult
 from app.services.agent.tools.location_resolution import (
     ResolvedPlace,
     resolve_waypoint_places,
 )
 from app.services.agent.tools.route.preparation_adapter import (
+    PreparedLeg,
     build_preparation_dependencies,
     new_preparation_timings,
-)
-from app.services.agent.tools.route.preparation_adapter import PreparedLeg, prepare_single_leg
-from app.services.agent.tools.route.route_input import (
-    merge_route_preparation_input,
-    validated_waypoints,
+    prepare_single_leg,
 )
 from app.services.agent.tools.route.prepare_route_branches import (
     is_current_location_discovery,
@@ -33,19 +32,23 @@ from app.services.agent.tools.route.prepare_route_persistence import (
     nonfatal_prepare_result,
     persist_route_candidates,
 )
+from app.services.agent.tools.route.route_input import (
+    merge_route_preparation_input,
+    validated_waypoints,
+)
+from app.services.agent.turn.contract import GoalKind
 from app.services.trips.preparation.combine import combine_prepared_chains
-from app.services.trips.preparation.finalize import finalize_aggregate
-from app.services.trips.preparation.multi_stop import prepare_multi_stop
 from app.services.trips.preparation.context import RoutePreparationFailure
 from app.services.trips.preparation.evidence import (
     candidate_evidence_for_route,
     coverage_for_prepared,
 )
+from app.services.trips.preparation.finalize import finalize_aggregate
+from app.services.trips.preparation.multi_stop import prepare_multi_stop
 from app.services.trips.preparation.prepare import (
     AggregatePreparation,
     PreparedChain,
 )
-from app.services.agent.turn.contract import GoalKind
 
 MAX_WAYPOINTS = 3
 MAX_WAYPOINT_CHARS = 160
@@ -239,37 +242,6 @@ PREPARE_ROUTE_OPTIONS_SCHEMA = {
 }
 
 
-def _validate_goal_key(
-    tool_input: dict, ctx: ToolContext
-) -> tuple[str | None, ToolResult | None]:
-    evidence = getattr(ctx, "turn_evidence", None)
-    contract = getattr(evidence, "turn_contract", None)
-    if contract is None:
-        return None, None
-    raw_goal_key = tool_input.get("goal_key")
-    if not isinstance(raw_goal_key, str) or not raw_goal_key.strip():
-        return None, ToolResult(
-            ok=False,
-            error="goal_key is required when a turn contract is active",
-            internal_diagnostic=True,
-        )
-    goal_key = raw_goal_key.strip()
-    goal = contract.get_goal(goal_key)
-    if goal is None:
-        return None, ToolResult(
-            ok=False,
-            error="goal_key is unknown for this turn contract",
-            internal_diagnostic=True,
-        )
-    if goal.kind != GoalKind.ROUTE:
-        return None, ToolResult(
-            ok=False,
-            error="goal_key is incompatible with prepare_route_options",
-            internal_diagnostic=True,
-        )
-    return goal_key, None
-
-
 def _apply_destination_branch_input(
     merged: dict[str, Any],
     destination_options: list[tuple[ResolvedPlace, str | None]],
@@ -289,17 +261,112 @@ def _apply_destination_branch_input(
     return None
 
 
+@dataclass(frozen=True)
+class RoutePreparationAdmission:
+    """Complete validated inputs for one prepare_route_options call."""
+
+    session_id: str
+    merged: dict[str, Any]
+    destination_options: list[tuple[ResolvedPlace, str | None]]
+    resolved_destination: ResolvedPlace | None
+    resolved_place_id: str | None
+    destination_used_set: str | None
+    accepted_destination_label: str
+    waypoint_places: dict[str, Any]
+    waypoint_labels: list[str]
+    waypoint_used_set: str | None
+    waypoints: list[str]
+
+
 async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
-    _goal_key, goal_error = _validate_goal_key(tool_input or {}, ctx)
+    admitted = await _admit_route_preparation(tool_input or {}, ctx)
+    if isinstance(admitted, ToolResult):
+        return admitted
+    used_discovery_set_id = (
+        admitted.destination_used_set or admitted.waypoint_used_set
+    )
+    started = time.monotonic()
+    timings = new_preparation_timings()
+    await ctx.emit_progress("finding_routes", "active")
+    prepared, branch_chains, branch_coverage = await _prepare_route_request(
+        admitted.merged,
+        admitted.destination_options,
+        admitted.resolved_destination,
+        admitted.resolved_place_id,
+        admitted.waypoint_places,
+        admitted.waypoint_labels,
+        admitted.waypoints,
+        ctx,
+        timings,
+    )
+    if isinstance(prepared, ToolResult):
+        await ctx.emit_progress("finding_routes", "complete")
+        return nonfatal_prepare_result(prepared, admitted.merged, ctx, started)
+    snapshot_id, snapshot_observed_at = _route_snapshot_identity(
+        admitted.session_id, ctx
+    )
+    aggregate = _finalize_branch_candidates(
+        _finalize_prepared_aggregate(
+            prepared,
+            branch_coverage,
+            admitted.destination_options,
+            admitted.resolved_destination,
+            admitted.resolved_place_id,
+            admitted.merged,
+            snapshot_id=snapshot_id,
+            snapshot_observed_at=snapshot_observed_at,
+        ),
+        branch_chains,
+        branch_coverage,
+        admitted.destination_options,
+        admitted.merged,
+        ctx,
+        discovery_set_id=used_discovery_set_id,
+        resolved_place_id=admitted.resolved_place_id,
+        snapshot_id=snapshot_id,
+        snapshot_observed_at=snapshot_observed_at,
+    )
+    return persist_route_candidates(
+        aggregate,
+        prepared,
+        admitted.merged,
+        ctx,
+        session_id=admitted.session_id,
+        started=started,
+        timings=timings,
+        destination_options=admitted.destination_options,
+        accepted_destination_label=admitted.accepted_destination_label,
+        used_discovery_set_id=used_discovery_set_id,
+        destination_discovery_set_id=admitted.destination_used_set,
+        waypoint_discovery_set_id=admitted.waypoint_used_set,
+        resolved_place_id=admitted.resolved_place_id,
+        waypoints=admitted.waypoints,
+        snapshot_id=snapshot_id,
+        snapshot_observed_at=snapshot_observed_at,
+    )
+
+
+async def _admit_route_preparation(
+    tool_input: dict, ctx: ToolContext
+) -> RoutePreparationAdmission | ToolResult:
+    _goal_key, goal_error = validated_goal_key(
+        tool_input,
+        ctx,
+        compatible_kinds=frozenset({GoalKind.ROUTE}),
+        incompatible_error="goal_key is incompatible with prepare_route_options",
+    )
     if goal_error:
         return goal_error
     session_id = str(getattr(ctx, "session_id", None) or "").strip()
     if not session_id:
         return ToolResult(ok=False, error="session is required for route preparation")
-    merged = merge_route_preparation_input(tool_input or {}, ctx)
-    destination_state = await _resolve_destination_state(tool_input or {}, merged, ctx)
+    merged = merge_route_preparation_input(tool_input, ctx)
+    destination_state = await _resolve_destination_state(tool_input, merged, ctx)
     if isinstance(destination_state, ToolResult):
         return destination_state
+    waypoint_state = await _resolve_waypoint_state(tool_input, merged, ctx)
+    if isinstance(waypoint_state, ToolResult):
+        return waypoint_state
     (
         destination_options,
         resolved_destination,
@@ -307,82 +374,35 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
         destination_used_set,
         accepted_destination_label,
     ) = destination_state
-    waypoint_state = await _resolve_waypoint_state(tool_input or {}, merged, ctx)
-    if isinstance(waypoint_state, ToolResult):
-        return waypoint_state
     waypoint_places, waypoint_labels, waypoint_used_set, waypoints = waypoint_state
     comparison_error = _apply_destination_branch_input(
-        merged,
-        destination_options,
-        waypoints,
+        merged, destination_options, waypoints
     )
     if comparison_error:
         return comparison_error
-    used_discovery_set_id = destination_used_set or waypoint_used_set
-    started = time.monotonic()
-    timings = new_preparation_timings()
-    await ctx.emit_progress("finding_routes", "active")
-    prepared, branch_chains, branch_coverage = await _prepare_route_request(
-        merged,
-        destination_options,
-        resolved_destination,
-        resolved_place_id,
-        waypoint_places,
-        waypoint_labels,
-        waypoints,
-        ctx,
-        timings,
+    return RoutePreparationAdmission(
+        session_id=session_id,
+        merged=merged,
+        destination_options=destination_options,
+        resolved_destination=resolved_destination,
+        resolved_place_id=resolved_place_id,
+        destination_used_set=destination_used_set,
+        accepted_destination_label=accepted_destination_label,
+        waypoint_places=waypoint_places,
+        waypoint_labels=waypoint_labels,
+        waypoint_used_set=waypoint_used_set,
+        waypoints=waypoints,
     )
-    if isinstance(prepared, ToolResult):
-        await ctx.emit_progress("finding_routes", "complete")
-        return nonfatal_prepare_result(prepared, merged, ctx, started)
 
-    snapshot_observed_at = datetime.now(timezone.utc).isoformat()
+
+def _route_snapshot_identity(session_id: str, ctx: ToolContext) -> tuple[str, str]:
+    snapshot_observed_at = datetime.now(UTC).isoformat()
     snapshot_id = "route-snapshot:{session}:{turn}:{millis}".format(
         session=session_id,
         turn=str(getattr(ctx, "turn_id", None) or "turn"),
         millis=int(time.time() * 1000),
     )
-    aggregate = _finalize_prepared_aggregate(
-        prepared,
-        branch_coverage,
-        destination_options,
-        resolved_destination,
-        resolved_place_id,
-        merged,
-        snapshot_id=snapshot_id,
-        snapshot_observed_at=snapshot_observed_at,
-    )
-    aggregate = _finalize_branch_candidates(
-        aggregate,
-        branch_chains,
-        branch_coverage,
-        destination_options,
-        merged,
-        ctx,
-        discovery_set_id=used_discovery_set_id,
-        resolved_place_id=resolved_place_id,
-        snapshot_id=snapshot_id,
-        snapshot_observed_at=snapshot_observed_at,
-    )
-    return persist_route_candidates(
-        aggregate,
-        prepared,
-        merged,
-        ctx,
-        session_id=session_id,
-        started=started,
-        timings=timings,
-        destination_options=destination_options,
-        accepted_destination_label=accepted_destination_label,
-        used_discovery_set_id=used_discovery_set_id,
-        destination_discovery_set_id=destination_used_set,
-        waypoint_discovery_set_id=waypoint_used_set,
-        resolved_place_id=resolved_place_id,
-        waypoints=waypoints,
-        snapshot_id=snapshot_id,
-        snapshot_observed_at=snapshot_observed_at,
-    )
+    return snapshot_id, snapshot_observed_at
 
 
 def _finalize_prepared_aggregate(
@@ -573,21 +593,56 @@ def _finalize_branch_candidates(
             merged,
         )
     selected_chain_ids = {id(chain) for chain in selected_chains}
-    selected_branch_ids = {
+    selected_branch_ids = _selected_branch_place_ids(
+        aggregate, branch_chains, selected_chain_ids
+    )
+    _exclude_unselected_branches(branch_coverage, selected_branch_ids)
+    if len(selected_chains) == len(branch_chains):
+        return aggregate
+    return _rebuild_selected_aggregate(
+        selected_chains,
+        aggregate,
+        destination_options,
+        resolved_place_id,
+        merged,
+        snapshot_id,
+        snapshot_observed_at,
+    )
+
+
+def _selected_branch_place_ids(
+    aggregate: AggregatePreparation,
+    branch_chains: list[PreparedChain],
+    selected_chain_ids: set[int],
+) -> set[str]:
+    return {
         str(aggregate.candidate_destinations[index].place_id or "")
         for index, chain in enumerate(branch_chains)
         if id(chain) in selected_chain_ids
         and index < len(aggregate.candidate_destinations)
     }
+
+
+def _exclude_unselected_branches(
+    branch_coverage: list[dict[str, str]], selected_branch_ids: set[str]
+) -> None:
     for branch in branch_coverage:
         if (
             branch.get("status") == "available"
             and branch.get("place_id") not in selected_branch_ids
         ):
             branch.update(status="excluded", coverage="reasonable_pool")
-    if len(selected_chains) == len(branch_chains):
-        return aggregate
 
+
+def _rebuild_selected_aggregate(
+    selected_chains: list[PreparedChain],
+    aggregate: AggregatePreparation,
+    destination_options: list[tuple[ResolvedPlace, str | None]],
+    resolved_place_id: str | None,
+    merged: dict[str, Any],
+    snapshot_id: str,
+    snapshot_observed_at: str,
+) -> AggregatePreparation:
     selected_aggregate = combine_prepared_chains(
         selected_chains,
         waypoints=[],

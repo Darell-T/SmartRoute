@@ -6,13 +6,18 @@ geography).  The only searchable geography is the supplied candidate context.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass
+from itertools import pairwise
 from math import cos, isfinite, radians, sqrt
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any
 
-from app.services.trips.route_incidents.context import CandidateStopContext, valid_coordinate_pair
 from app.services.geography import distance_meters
-
+from app.services.trips.route_incidents.context import (
+    CandidateStopAssociation,
+    CandidateStopContext,
+    valid_coordinate_pair,
+)
 
 MILES_TO_METERS = 1609.344
 DEFAULT_SEARCH_RADIUS_MILES = 0.5
@@ -61,29 +66,6 @@ def _coordinates(item: Mapping[str, Any], prefix: str = "") -> tuple[float, floa
     )
 
 
-def _geometry_components(value: object) -> list[list[tuple[float, float]]]:
-    """Extract GeoJSON components without joining independent line strings."""
-    if not isinstance(value, Mapping):
-        return []
-    geometry_type = str(value.get("type") or "").lower()
-    if geometry_type == "geometrycollection":
-        components: list[list[tuple[float, float]]] = []
-        for geometry in value.get("geometries") or []:
-            components.extend(_geometry_components(geometry))
-        return components
-    coordinates = value.get("coordinates")
-    if geometry_type == "point":
-        point = _geojson_point(coordinates)
-        return [[point]] if point else []
-    if geometry_type in {"linestring", "multipoint"}:
-        return [_geojson_line(coordinates)] if _geojson_line(coordinates) else []
-    if geometry_type in {"multilinestring", "polygon"} and isinstance(coordinates, (list, tuple)):
-        return [line for item in coordinates if (line := _geojson_line(item))]
-    if geometry_type == "multipolygon" and isinstance(coordinates, (list, tuple)):
-        return [line for polygon in coordinates if isinstance(polygon, (list, tuple)) for ring in polygon if (line := _geojson_line(ring))]
-    return []
-
-
 def _geojson_point(value: object) -> tuple[float, float] | None:
     if not isinstance(value, (list, tuple)) or len(value) < 2:
         return None
@@ -96,31 +78,90 @@ def _geojson_line(value: object) -> list[tuple[float, float]]:
     return [point for item in value if (point := _geojson_point(item))]
 
 
+def _independent_line_components(coordinates: object) -> list[list[tuple[float, float]]]:
+    """Keep each GeoJSON ring or line as its own component. Do not join them."""
+    if not isinstance(coordinates, (list, tuple)):
+        return []
+    return [line for item in coordinates if (line := _geojson_line(item))]
+
+
+def _multipolygon_components(coordinates: object) -> list[list[tuple[float, float]]]:
+    """Keep each polygon ring independent. Do not join them."""
+    if not isinstance(coordinates, (list, tuple)):
+        return []
+    return [
+        line
+        for polygon in coordinates
+        if isinstance(polygon, (list, tuple))
+        for ring in polygon
+        if (line := _geojson_line(ring))
+    ]
+
+
+_GEOJSON_COMPONENTS: dict[str, Callable[[object], list[list[tuple[float, float]]]]] = {
+    "point": lambda coordinates: (
+        [[point]] if (point := _geojson_point(coordinates)) else []
+    ),
+    "linestring": lambda coordinates: (
+        [line] if (line := _geojson_line(coordinates)) else []
+    ),
+    "multipoint": lambda coordinates: (
+        [line] if (line := _geojson_line(coordinates)) else []
+    ),
+    "multilinestring": _independent_line_components,
+    "polygon": _independent_line_components,
+    "multipolygon": _multipolygon_components,
+}
+
+
+def _geometry_components(value: object) -> list[list[tuple[float, float]]]:
+    """Extract GeoJSON components without joining independent line strings."""
+    if not isinstance(value, Mapping):
+        return []
+    geometry_type = str(value.get("type") or "").lower()
+    if geometry_type == "geometrycollection":
+        components: list[list[tuple[float, float]]] = []
+        for geometry in value.get("geometries") or []:
+            components.extend(_geometry_components(geometry))
+        return components
+    extractor = _GEOJSON_COMPONENTS.get(geometry_type)
+    if extractor is None:
+        return []
+    return extractor(value.get("coordinates"))
+
+
 def _geometry_points(value: object) -> list[tuple[float, float]]:
     return [point for component in _geometry_components(value) for point in component]
 
 
+def _polyline_nibble(encoded: str, index: int) -> tuple[int, int]:
+    """Parse one Google-style polyline nibble into a signed delta and next index."""
+    shift = result = 0
+    while True:
+        byte = ord(encoded[index]) - 63
+        index += 1
+        result |= (byte & 0x1F) << shift
+        shift += 5
+        if byte < 0x20:
+            break
+    delta = ~(result >> 1) if result & 1 else result >> 1
+    return delta, index
+
+
 def _decode_polyline(value: object) -> list[tuple[float, float]]:
     """Decode a Google-style encoded polyline; malformed input yields []."""
-    if not isinstance(value, str) or not value or len(value) > 20000:
+    if not isinstance(value, str):
+        return []
+    if not value or len(value) > 20000:
         return []
     coordinates: list[tuple[float, float]] = []
     index = latitude = longitude = 0
     try:
         while index < len(value):
-            decoded: list[int] = []
-            for _ in range(2):
-                shift = result = 0
-                while True:
-                    byte = ord(value[index]) - 63
-                    index += 1
-                    result |= (byte & 0x1F) << shift
-                    shift += 5
-                    if byte < 0x20:
-                        break
-                decoded.append(~(result >> 1) if result & 1 else result >> 1)
-            latitude += decoded[0]
-            longitude += decoded[1]
+            lat_delta, index = _polyline_nibble(value, index)
+            lon_delta, index = _polyline_nibble(value, index)
+            latitude += lat_delta
+            longitude += lon_delta
             point = valid_coordinate_pair(latitude / 1e5, longitude / 1e5)
             if point is not None:
                 coordinates.append(point)
@@ -159,29 +200,38 @@ def _point_to_segment_meters(point: tuple[float, float], a: tuple[float, float],
     return sqrt(dx * dx + dy * dy)
 
 
+def _encoded_polyline_value(item: Mapping[str, Any]) -> object:
+    """Polyline may live on the incident or nested geometry."""
+    encoded_value = item.get("encoded_polyline") or item.get("polyline")
+    if encoded_value:
+        return encoded_value
+    geometry = item.get("geometry")
+    if isinstance(geometry, Mapping):
+        return geometry.get("encoded_polyline")
+    return None
+
+
 def _nearest_distance_meters(stop: CandidateStopContext, incident: object) -> tuple[float, str] | None:
     item = _as_mapping(incident)
     if item is None:
         return None
-    point_candidates = [(point, "point") for point in incident_points(item)]
-    if not point_candidates:
+    origin = (stop.latitude, stop.longitude)
+    distances = [
+        (distance_meters(stop.latitude, stop.longitude, point[0], point[1]), "point")
+        for point in incident_points(item)
+    ]
+    if not distances:
         return None
-    distances = [(distance_meters(stop.latitude, stop.longitude, point[0], point[1]), kind) for point, kind in point_candidates]
-    geometry_components = _geometry_components(item.get("geometry"))
-    for component in geometry_components:
-        distances.extend(
-            (_point_to_segment_meters((stop.latitude, stop.longitude), a, b), "geometry")
-            for a, b in zip(component, component[1:])
-        )
-    geometry = item.get("geometry")
-    encoded_value = item.get("encoded_polyline") or item.get("polyline")
-    if not encoded_value and isinstance(geometry, Mapping):
-        encoded_value = geometry.get("encoded_polyline")
-    encoded_points = _decode_polyline(encoded_value)
+    distances.extend(
+        (_point_to_segment_meters(origin, a, b), "geometry")
+        for component in _geometry_components(item.get("geometry"))
+        for a, b in pairwise(component)
+    )
+    encoded_points = _decode_polyline(_encoded_polyline_value(item))
     if len(encoded_points) > 1:
         distances.extend(
-            (_point_to_segment_meters((stop.latitude, stop.longitude), a, b), "polyline")
-            for a, b in zip(encoded_points, encoded_points[1:])
+            (_point_to_segment_meters(origin, a, b), "polyline")
+            for a, b in pairwise(encoded_points)
         )
     return min(distances, key=lambda item: item[0])
 
@@ -267,6 +317,125 @@ def _bounded_radius(requested_radius_miles: object, maximum_radius_miles: float)
     return min(radius, maximum_radius_miles)
 
 
+def _search_radius_meters(radius_miles: object, maximum_radius_miles: float) -> float:
+    try:
+        maximum = float(maximum_radius_miles)
+    except (TypeError, ValueError):
+        maximum = MAX_SEARCH_RADIUS_MILES
+    if not isfinite(maximum) or maximum <= 0:
+        maximum = MAX_SEARCH_RADIUS_MILES
+    maximum = max(0.01, maximum)
+    return _bounded_radius(radius_miles, maximum) * MILES_TO_METERS
+
+
+@dataclass(frozen=True)
+class _IncidentImpact:
+    relevance_by_mode: dict[str, str]
+    affected_modes: list[str]
+    impact_scope: str
+
+
+def _classify_incident_impact(item: Mapping[str, Any], modes: list[str]) -> _IncidentImpact:
+    """Station access else roadway else nearby. Order is the contract."""
+    if _station_access_incident(item):
+        return _IncidentImpact(
+            dict.fromkeys(modes, "station_access_only"),
+            ["transfer", "walk"],
+            "station_access",
+        )
+    if _roadway_incident(item):
+        return _IncidentImpact(
+            {
+                mode: "potential_bus_corridor" if mode == "bus" else "nearby_unconfirmed"
+                for mode in modes
+            },
+            ["bus", "walk"] if "bus" in modes else ["walk"],
+            "roadway",
+        )
+    return _IncidentImpact(dict.fromkeys(modes, "nearby"), modes, "nearby")
+
+
+def _requested_route_ids(candidate_route_ids: Iterable[str] | None) -> set[str]:
+    return {str(value) for value in candidate_route_ids or [] if str(value)}
+
+
+def _stops_for_requested_routes(
+    stops: Iterable[CandidateStopContext],
+    requested_ids: set[str],
+) -> list[CandidateStopContext]:
+    return [
+        stop for stop in stops
+        if not requested_ids or requested_ids.intersection(stop.candidate_route_ids)
+    ]
+
+
+def _requested_associations(
+    stop: CandidateStopContext,
+    requested_ids: set[str],
+) -> list[CandidateStopAssociation]:
+    return [
+        association
+        for association in stop.associations
+        if not requested_ids or association.candidate_route_id in requested_ids
+    ]
+
+
+def _nearby_stop_sort_key(match: IncidentStopMatch) -> tuple[float, str, str]:
+    return (match.distance_meters, match.stop_name or "", match.stop_id or "")
+
+
+def _mappable_incidents(incidents: Iterable[object]) -> Iterable[Mapping[str, Any]]:
+    for raw in incidents or []:
+        item = _as_mapping(raw)
+        if item is not None and incident_points(item):
+            yield item
+
+
+def _incident_stop_matches(
+    item: Mapping[str, Any],
+    scoped_stops: Iterable[CandidateStopContext],
+    requested_ids: set[str],
+    radius_meters: float,
+) -> list[IncidentStopMatch]:
+    matches: list[IncidentStopMatch] = []
+    for stop in scoped_stops:
+        nearest = _nearest_distance_meters(stop, item)
+        if nearest is None or nearest[0] > radius_meters:
+            continue
+        associations = _requested_associations(stop, requested_ids)
+        matches.append(IncidentStopMatch(
+            stop_id=stop.stop_id,
+            stop_name=stop.stop_name,
+            distance_meters=nearest[0],
+            match_source=nearest[1],
+            candidate_route_ids=sorted({bound.candidate_route_id for bound in associations}),
+            modes=sorted({bound.mode for bound in associations if bound.mode}),
+        ))
+    matches.sort(key=_nearby_stop_sort_key)
+    return matches
+
+
+def _matched_incident(item: Mapping[str, Any], matches: list[IncidentStopMatch]) -> MatchedIncident:
+    modes = sorted({mode for match in matches for mode in match.modes})
+    impact = _classify_incident_impact(item, modes)
+    return MatchedIncident(
+        source_id=_bounded_text(item.get("source_id") or item.get("id"), 120) or "unknown",
+        source=_bounded_text(item.get("source"), 32) or "511ny",
+        event_type=_bounded_text(item.get("event_type"), 80),
+        description=_bounded_text(item.get("description") or item.get("comment"), 500),
+        severity=_bounded_text(item.get("severity_normalized") or item.get("severity_raw"), 32),
+        roadway_name=_bounded_text(item.get("roadway_name"), 120),
+        nearest_stop=matches[0],
+        nearby_stops=matches[:MAX_NEARBY_STOP_MATCHES],
+        affected_candidate_route_ids=sorted({
+            candidate for match in matches for candidate in match.candidate_route_ids
+        }),
+        affected_modes=impact.affected_modes,
+        relevance_by_mode=impact.relevance_by_mode,
+        impact_scope=impact.impact_scope,
+    )
+
+
 def match_cached_incidents(
     incidents: Iterable[object],
     stops: Iterable[CandidateStopContext],
@@ -280,77 +449,50 @@ def match_cached_incidents(
     A requested radius can never exceed ``maximum_radius_miles``.  One result
     is emitted per incident, with its nearest stop and all matching candidates.
     """
-    try:
-        maximum = float(maximum_radius_miles)
-    except (TypeError, ValueError):
-        maximum = MAX_SEARCH_RADIUS_MILES
-    if not isfinite(maximum) or maximum <= 0:
-        maximum = MAX_SEARCH_RADIUS_MILES
-    maximum = max(0.01, maximum)
-    radius_meters = _bounded_radius(radius_miles, maximum) * MILES_TO_METERS
-    requested_ids = {str(value) for value in candidate_route_ids or [] if str(value)}
-    scoped_stops = [
-        stop for stop in stops
-        if not requested_ids or requested_ids.intersection(stop.candidate_route_ids)
-    ]
+    radius_meters = _search_radius_meters(radius_miles, maximum_radius_miles)
+    requested_ids = _requested_route_ids(candidate_route_ids)
+    scoped_stops = _stops_for_requested_routes(stops, requested_ids)
     results: list[MatchedIncident] = []
-    for raw_incident in incidents or []:
-        item = _as_mapping(raw_incident)
-        if item is None or not incident_points(item):
-            continue
-        matches: list[IncidentStopMatch] = []
-        for stop in scoped_stops:
-            nearest = _nearest_distance_meters(stop, item)
-            if nearest is None or nearest[0] > radius_meters:
-                continue
-            associations = [
-                association for association in stop.associations
-                if not requested_ids or association.candidate_route_id in requested_ids
-            ]
-            matches.append(IncidentStopMatch(
-                stop_id=stop.stop_id,
-                stop_name=stop.stop_name,
-                distance_meters=nearest[0],
-                match_source=nearest[1],
-                candidate_route_ids=sorted({item.candidate_route_id for item in associations}),
-                modes=sorted({item.mode for item in associations if item.mode}),
-            ))
+    for item in _mappable_incidents(incidents):
+        matches = _incident_stop_matches(item, scoped_stops, requested_ids, radius_meters)
         if not matches:
             continue
-        matches.sort(key=lambda match: (match.distance_meters, match.stop_name or "", match.stop_id or ""))
-        modes = sorted({mode for match in matches for mode in match.modes})
-        roadway = _roadway_incident(item)
-        station_access = _station_access_incident(item)
-        if station_access:
-            relevance = {mode: "station_access_only" for mode in modes}
-            affected_modes = ["transfer", "walk"]
-            impact_scope = "station_access"
-        elif roadway:
-            relevance = {
-                mode: "potential_bus_corridor" if mode == "bus" else "nearby_unconfirmed"
-                for mode in modes
-            }
-            affected_modes = ["bus", "walk"] if "bus" in modes else ["walk"]
-            impact_scope = "roadway"
-        else:
-            relevance = {mode: "nearby" for mode in modes}
-            affected_modes = modes
-            impact_scope = "nearby"
-        results.append(MatchedIncident(
-            source_id=_bounded_text(item.get("source_id") or item.get("id"), 120) or "unknown",
-            source=_bounded_text(item.get("source"), 32) or "511ny",
-            event_type=_bounded_text(item.get("event_type"), 80),
-            description=_bounded_text(item.get("description") or item.get("comment"), 500),
-            severity=_bounded_text(item.get("severity_normalized") or item.get("severity_raw"), 32),
-            roadway_name=_bounded_text(item.get("roadway_name"), 120),
-            nearest_stop=matches[0],
-            nearby_stops=matches[:MAX_NEARBY_STOP_MATCHES],
-            affected_candidate_route_ids=sorted({candidate for match in matches for candidate in match.candidate_route_ids}),
-            affected_modes=affected_modes,
-            relevance_by_mode=relevance,
-            impact_scope=impact_scope,
-        ))
+        results.append(_matched_incident(item, matches))
     return sorted(results, key=lambda result: (result.nearest_stop.distance_meters, result.source_id))
+
+
+def _valid_tool_route_id(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip()) and len(value) <= 80
+
+
+def _admit_candidate_route_ids(value: object) -> list[str] | None:
+    if not isinstance(value, list) or not value or len(value) > 12:
+        return None
+    if any(not _valid_tool_route_id(item) for item in value):
+        return None
+    return value
+
+
+def _admit_search_radius(value: object) -> float | None:
+    try:
+        radius = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not isfinite(radius) or radius <= 0 or radius > MAX_SEARCH_RADIUS_MILES:
+        return None
+    return radius
+
+
+def _admit_cached_search_arguments(arguments: object) -> tuple[list[str], float] | None:
+    if not isinstance(arguments, Mapping):
+        return None
+    if set(arguments) - {"candidate_route_ids", "radius_miles"}:
+        return None
+    ids = _admit_candidate_route_ids(arguments.get("candidate_route_ids"))
+    radius = _admit_search_radius(arguments.get("radius_miles", DEFAULT_SEARCH_RADIUS_MILES))
+    if ids is None or radius is None:
+        return None
+    return ids, radius
 
 
 class Cached511NYSearchTool:
@@ -363,18 +505,10 @@ class Cached511NYSearchTool:
         self._stops = list(stops)
 
     def execute(self, arguments: Mapping[str, Any]) -> dict[str, Any]:
-        if not isinstance(arguments, Mapping) or set(arguments) - {"candidate_route_ids", "radius_miles"}:
+        admitted = _admit_cached_search_arguments(arguments)
+        if admitted is None:
             return {"incidents": [], "status": "invalid_arguments"}
-        ids = arguments.get("candidate_route_ids")
-        if not isinstance(ids, list) or not ids or len(ids) > 12 or any(not isinstance(value, str) or not value.strip() or len(value) > 80 for value in ids):
-            return {"incidents": [], "status": "invalid_arguments"}
-        radius = arguments.get("radius_miles", DEFAULT_SEARCH_RADIUS_MILES)
-        try:
-            radius = float(radius)
-        except (TypeError, ValueError):
-            return {"incidents": [], "status": "invalid_arguments"}
-        if not isfinite(radius) or not 0 < radius <= MAX_SEARCH_RADIUS_MILES:
-            return {"incidents": [], "status": "invalid_arguments"}
+        ids, radius = admitted
         snapshot = self._snapshot_getter()
         snapshot_mapping = _as_mapping(snapshot)
         snapshot_metadata = _snapshot_metadata(snapshot_mapping)
@@ -386,7 +520,9 @@ class Cached511NYSearchTool:
         records = snapshot_mapping.get("incidents", []) if snapshot_mapping else snapshot
         if not isinstance(records, list):
             return {"incidents": [], "status": "unavailable", "snapshot": {"status": "unavailable"}}
-        matches = match_cached_incidents(records, self._stops, candidate_route_ids=ids, radius_miles=radius)
+        matches = match_cached_incidents(
+            records, self._stops, candidate_route_ids=ids, radius_miles=radius
+        )
         return {
             "incidents": [match.as_dict() for match in matches[:MAX_TOOL_INCIDENTS]],
             "status": "complete",

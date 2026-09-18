@@ -32,7 +32,11 @@ export interface BuiltTrips {
   totalDuration: number;
 }
 
-const STEP_DURATION: Record<string, number> = {
+interface StepDurationTable {
+  [stepType: string]: number;
+}
+
+const STEP_DURATION: StepDurationTable = {
   WALK: 1200,
   SUBWAY: 2400,
   BUS: 1800,
@@ -62,10 +66,7 @@ function hexToRgb(hex: string): [number, number, number] {
   return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
 }
 
-function segmentLengths(coords: [number, number][]): {
-  lens: number[];
-  total: number;
-} {
+function segmentLengths(coords: [number, number][]) {
   const lens: number[] = [];
   let total = 0;
   for (let i = 1; i < coords.length; i++) {

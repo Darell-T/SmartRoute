@@ -1,6 +1,12 @@
 "use client";
 
-const BULLET_NAME_BY_ROUTE: Record<string, string> = {
+import Image from "next/image";
+
+interface BulletNameByRoute {
+  [routeId: string]: string;
+}
+
+const BULLET_NAME_BY_ROUTE: BulletNameByRoute = {
   "6X": "6d",
   "7X": "7d",
   FX: "fd",
@@ -90,11 +96,14 @@ export function TrainBullet({
       }}
     >
       {/* Decorative: accessible name lives on the wrapper to avoid duplicate SR output. */}
-      <img
+      <Image
         src={subwayBulletSrc(line)}
+        width={size}
+        height={size}
         alt=""
         aria-hidden="true"
         draggable={false}
+        unoptimized
         style={{
           width: size,
           height: size,

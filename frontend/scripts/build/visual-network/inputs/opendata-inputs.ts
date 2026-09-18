@@ -1,4 +1,4 @@
-import type { LineFeature } from "../shared/types.ts";
+import type { LineFeature, Position } from "../shared/types.ts";
 import {
   bidirectionalHausdorff,
   geometryStats,
@@ -6,8 +6,19 @@ import {
   routeSetsIntersect,
 } from "../shared/geometry-utils.ts";
 
+type OpenDataLineProperties = {
+  opendata_line_id: string;
+  route_ids: string[];
+  length_m?: number;
+};
+
+type OpenDataLineFeature = {
+  geometry: { type: "LineString"; coordinates: Position[] };
+  properties: OpenDataLineProperties;
+};
+
 export type OpenDataInputsStageInput = {
-  opendataLineFeatures: any[];
+  opendataLineFeatures: OpenDataLineFeature[];
   geometrySourceName: string;
   overlapMinRatio: number;
   overlapSharedLenMinM: number;
@@ -15,14 +26,98 @@ export type OpenDataInputsStageInput = {
   tangentMaxDiffDeg: number;
 };
 
+type CorridorRow = {
+  corridor_id: string;
+  route_ids: string[];
+  member_edge_count: number;
+  longest_length_m: number;
+  is_shared: boolean;
+  geometry_source: string;
+};
+
+type OpenDataOverlapWarning = {
+  type: "Feature";
+  geometry: OpenDataLineFeature["geometry"];
+  properties: {
+    marker_type: "opendata_overlap_warning";
+    reason: "overlap_without_shared_route_ids";
+    left_corridor_id: string;
+    right_corridor_id: string;
+    left_route_ids: string[];
+    right_route_ids: string[];
+    hausdorff_m: number;
+    overlap: number;
+    overlap_a: number;
+    overlap_b: number;
+    shared_length_m: number;
+    avg_distance_a_m: number;
+    avg_distance_b_m: number;
+    avg_tangent_deg: number;
+  };
+};
+
 export type OpenDataInputsStageResult = {
   pairsConsidered: number;
   pairsMatched: number;
-  matchedPairs: any[];
+  matchedPairs: [];
   corridorFeatures: LineFeature[];
-  corridorRows: any[];
-  opendataOverlapWarnings: any[];
+  corridorRows: CorridorRow[];
+  opendataOverlapWarnings: OpenDataOverlapWarning[];
 };
+
+function collectOpenDataOverlapWarnings(
+  opendataLineFeatures: OpenDataLineFeature[],
+  overlapMinRatio: number,
+  overlapSharedLenMinM: number,
+  containmentAvgDistanceMaxM: number,
+  tangentMaxDiffDeg: number,
+): OpenDataOverlapWarning[] {
+  const opendataSamples = opendataLineFeatures.map((feature) =>
+    resampleEdgeAt5m(feature.geometry.coordinates),
+  );
+  const warnings: OpenDataOverlapWarning[] = [];
+  for (let i = 0; i < opendataLineFeatures.length; i += 1) {
+    for (let j = i + 1; j < opendataLineFeatures.length; j += 1) {
+      const left = opendataLineFeatures[i];
+      const right = opendataLineFeatures[j];
+      const leftRoutes = left.properties.route_ids ?? [];
+      const rightRoutes = right.properties.route_ids ?? [];
+      if (routeSetsIntersect(leftRoutes, rightRoutes)) continue;
+      const metrics = bidirectionalHausdorff(opendataSamples[i], opendataSamples[j]);
+      const shorterLenM = Math.min(left.properties.length_m ?? 0, right.properties.length_m ?? 0);
+      const sharedLenM = shorterLenM * metrics.overlap;
+      if (
+        metrics.overlap < overlapMinRatio ||
+        sharedLenM < overlapSharedLenMinM ||
+        Math.max(metrics.avgDistanceA, metrics.avgDistanceB) > containmentAvgDistanceMaxM ||
+        metrics.avgTangentDeg > tangentMaxDiffDeg
+      ) {
+        continue;
+      }
+      warnings.push({
+        type: "Feature",
+        geometry: left.geometry,
+        properties: {
+          marker_type: "opendata_overlap_warning",
+          reason: "overlap_without_shared_route_ids",
+          left_corridor_id: left.properties.opendata_line_id,
+          right_corridor_id: right.properties.opendata_line_id,
+          left_route_ids: leftRoutes,
+          right_route_ids: rightRoutes,
+          hausdorff_m: Number(metrics.hausdorff.toFixed(2)),
+          overlap: Number(metrics.overlap.toFixed(3)),
+          overlap_a: Number(metrics.overlapA.toFixed(3)),
+          overlap_b: Number(metrics.overlapB.toFixed(3)),
+          shared_length_m: Number(sharedLenM.toFixed(2)),
+          avg_distance_a_m: Number(metrics.avgDistanceA.toFixed(2)),
+          avg_distance_b_m: Number(metrics.avgDistanceB.toFixed(2)),
+          avg_tangent_deg: Number(metrics.avgTangentDeg.toFixed(2)),
+        },
+      });
+    }
+  }
+  return warnings;
+}
 
 export function buildOpenDataInputsStage({
   opendataLineFeatures,
@@ -32,14 +127,10 @@ export function buildOpenDataInputsStage({
   containmentAvgDistanceMaxM,
   tangentMaxDiffDeg,
 }: OpenDataInputsStageInput): OpenDataInputsStageResult {
-  const pairsConsidered = 0;
-  const pairsMatched = 0;
-  const matchedPairs: any[] = [];
   const corridorFeatures: LineFeature[] = [];
-  const corridorRows: any[] = [];
+  const corridorRows: CorridorRow[] = [];
 
-  for (let index = 0; index < opendataLineFeatures.length; index += 1) {
-    const feature = opendataLineFeatures[index];
+  for (const feature of opendataLineFeatures) {
     const stats = geometryStats(feature.geometry.coordinates);
     const corridorId = feature.properties.opendata_line_id;
     corridorFeatures.push({
@@ -59,7 +150,7 @@ export function buildOpenDataInputsStage({
         from_stop_name: null,
         to_stop_name: null,
         source_edge_ids: [],
-        source_shape_ids: [],
+        "source_shape_ids": [],
         length_m: stats.length_m,
         direct_distance_m: stats.direct_distance_m,
         sinuosity: stats.sinuosity,
@@ -78,56 +169,18 @@ export function buildOpenDataInputsStage({
     });
   }
 
-  const opendataSamples = opendataLineFeatures.map((feature) =>
-    resampleEdgeAt5m(feature.geometry.coordinates),
-  );
-  const opendataOverlapWarnings = [];
-  for (let i = 0; i < opendataLineFeatures.length; i += 1) {
-    for (let j = i + 1; j < opendataLineFeatures.length; j += 1) {
-      const left = opendataLineFeatures[i];
-      const right = opendataLineFeatures[j];
-      const leftRoutes = left.properties.route_ids ?? [];
-      const rightRoutes = right.properties.route_ids ?? [];
-      if (routeSetsIntersect(leftRoutes, rightRoutes)) continue;
-      const metrics = bidirectionalHausdorff(opendataSamples[i], opendataSamples[j]);
-      const shorterLenM = Math.min(left.properties.length_m ?? 0, right.properties.length_m ?? 0);
-      const sharedLenM = shorterLenM * metrics.overlap;
-      if (
-        metrics.overlap >= overlapMinRatio &&
-        sharedLenM >= overlapSharedLenMinM &&
-        Math.max(metrics.avgDistanceA, metrics.avgDistanceB) <= containmentAvgDistanceMaxM &&
-        metrics.avgTangentDeg <= tangentMaxDiffDeg
-      ) {
-        opendataOverlapWarnings.push({
-          type: "Feature",
-          geometry: left.geometry,
-          properties: {
-            marker_type: "opendata_overlap_warning",
-            reason: "overlap_without_shared_route_ids",
-            left_corridor_id: left.properties.opendata_line_id,
-            right_corridor_id: right.properties.opendata_line_id,
-            left_route_ids: leftRoutes,
-            right_route_ids: rightRoutes,
-            hausdorff_m: Number(metrics.hausdorff.toFixed(2)),
-            overlap: Number(metrics.overlap.toFixed(3)),
-            overlap_a: Number(metrics.overlapA.toFixed(3)),
-            overlap_b: Number(metrics.overlapB.toFixed(3)),
-            shared_length_m: Number(sharedLenM.toFixed(2)),
-            avg_distance_a_m: Number(metrics.avgDistanceA.toFixed(2)),
-            avg_distance_b_m: Number(metrics.avgDistanceB.toFixed(2)),
-            avg_tangent_deg: Number(metrics.avgTangentDeg.toFixed(2)),
-          },
-        });
-      }
-    }
-  }
-
   return {
-    pairsConsidered,
-    pairsMatched,
-    matchedPairs,
+    pairsConsidered: 0,
+    pairsMatched: 0,
+    matchedPairs: [],
     corridorFeatures,
     corridorRows,
-    opendataOverlapWarnings,
+    opendataOverlapWarnings: collectOpenDataOverlapWarnings(
+      opendataLineFeatures,
+      overlapMinRatio,
+      overlapSharedLenMinM,
+      containmentAvgDistanceMaxM,
+      tangentMaxDiffDeg,
+    ),
   };
 }

@@ -5,8 +5,6 @@
 // build helpers a single source of truth. Pure type module -- no runtime code,
 // so `import type` keeps it erased under `node --experimental-strip-types`.
 
-// A [lon, lat] pair. Some helpers spell it "Position", others "Coordinate";
-// both names point at the same tuple.
 export type Position = [number, number];
 export type Coordinate = Position;
 
@@ -20,39 +18,48 @@ export type LineStringGeometry = {
   coordinates: Position[];
 };
 
-export type AnyGeometry = PointGeometry | LineStringGeometry | Record<string, any>;
+export type AnyGeometry = PointGeometry | LineStringGeometry;
 
-export type Feature<
-  G = AnyGeometry,
-  P extends Record<string, any> = Record<string, any>,
-> = {
+// Raw GeoJSON property bags are JSON objects. Stages that read named fields
+// still declare their own property contracts; this is the unparsed default.
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | JsonObject;
+
+export type JsonObject = { [key: string]: JsonValue | undefined };
+
+export type FeatureProps = JsonObject;
+
+export type Feature<G = AnyGeometry, P = FeatureProps> = {
   type: "Feature";
   id?: string | number;
   geometry: G;
   properties: P;
 };
 
-export type FeatureCollection<F extends Feature = Feature> = {
+export type FeatureCollection<
+  F extends Feature<unknown, unknown> = Feature,
+  Metadata extends object = FeatureProps,
+> = {
   type: "FeatureCollection";
   features: F[];
-  metadata?: Record<string, any>;
+  metadata?: Metadata;
 };
 
-// An MTA route designator -- "A", "7", "GS", "SI", etc. A nominal alias for
-// readability where a bare string is really a route id.
 export type RouteId = string;
 
-// [minLon, minLat, maxLon, maxLat].
 export type BBox = [number, number, number, number];
 
-// Properties carried by the baked subway visual-network LineString features.
-// Permissive (index signature) because the pipeline attaches stage-specific
-// debug fields; the listed members are the ones the renderer actually reads.
 export type VisualFeatureProperties = {
-  route_ids?: RouteId[];
+  route_ids?: RouteId[] | string;
   color?: string;
-  corridor_id?: string;
+  corridor_id?: string | null;
+  bundle_id?: string | null;
+  route_id?: string;
   lane_slot_semantic?: number;
   visual_z_order?: number;
-  [key: string]: unknown;
 };

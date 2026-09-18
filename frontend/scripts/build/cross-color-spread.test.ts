@@ -33,9 +33,7 @@ function mustMember(group: CrossColorGroup, color: string) {
 
 function laneSlot(member: ReturnType<typeof mustMember>): number {
   const slot = member.lane_slot;
-  if (typeof slot !== "number") {
-    assert.fail("expected numeric lane slot");
-  }
+  assert.ok(slot === Number(slot) && Number.isFinite(slot), "expected numeric lane slot");
   return slot;
 }
 
@@ -122,8 +120,8 @@ test("detectCrossColorAdjacency assigns deterministic slots to unknown-rank colo
     const { groups } = detectCrossColorAdjacency([c1, c2], {
       sharedFractionMin: 0.6, sharedLenMinM: 250, avgDistMaxM: 18, resampleM: 25,
     });
-    const m = Object.fromEntries(groups[0].members.map((x) => [x.color, laneSlot(x)])) as Record<string, number>;
-    return m;
+    const assigned: Array<[string, number]> = groups[0].members.map((x) => [x.color, laneSlot(x)]);
+    return Object.fromEntries(assigned);
   };
   const a = run();
   const b = run();
@@ -223,4 +221,121 @@ test("offsetPolylineBySlotRamp tapers from inherited bundle slot to branch cente
   assert.ok(hav(coords[0], out[0]) > 3.5, "shared-side endpoint should inherit the 4m lane offset");
   assert.ok(hav(coords[Math.floor(coords.length / 2)], out[Math.floor(out.length / 2)]) > 1.5, "middle should still carry partial taper");
   assert.ok(hav(coords[out.length - 1], out[out.length - 1]) < 0.01, "branch-side endpoint should recenter");
+});
+
+test("detectCrossColorAdjacency rejects a close pair that fails later overlap gates", () => {
+  const blue = feat("b", "#0A84FF", ["A"], ns(-73.99, 40.686, 1000));
+  const green = feat("g", "#6CBE45", ["G"], ns(-73.99, 40.686, 1000).map(([x, y]) => [x + 6 * DEG_PER_M_LON, y]));
+  const { groups } = detectCrossColorAdjacency([blue, green], {
+    sharedFractionMin: 0.99,
+    sharedLenMinM: 5000,
+    avgDistMaxM: 18,
+    tangentMaxDeg: 1,
+    resampleM: 25,
+  });
+  assert.equal(groups.length, 0, "a pair that fails shared-length or tangent gates must not spread");
+});
+
+test("detectCrossColorAdjacency treats missing route_ids as an empty list", () => {
+  const base = ns(-73.99, 40.686, 1000);
+  const blue = feat("b", "#0A84FF", ["A"], base);
+  const green = feat("g", "#6CBE45", ["G"], base.map(([x, y]) => [x + 6 * DEG_PER_M_LON, y]));
+  delete green.properties.route_ids;
+  const { groups } = detectCrossColorAdjacency([blue, green], {
+    sharedFractionMin: 0.6, sharedLenMinM: 250, avgDistMaxM: 18, resampleM: 25,
+  });
+  assert.equal(groups.length, 1);
+  const greenMember = groups[0].members.find((member) => member.color === "#6CBE45");
+  assert.deepEqual(greenMember?.route_ids, []);
+});
+
+test("detectCrossColorAdjacency skips features without color or with non-line geometry", () => {
+  const base = ns(-73.99, 40.686, 1000);
+  const blue = feat("b", "#0A84FF", ["A"], base);
+  const noColor = feat("g", "#6CBE45", ["G"], base.map(([x, y]) => [x + 6 * DEG_PER_M_LON, y]));
+  delete noColor.properties.color;
+  const stub = feat("stub", "#6CBE45", ["G"], [base[0]]);
+  const { groups } = detectCrossColorAdjacency([blue, noColor, stub], {
+    sharedFractionMin: 0.6, sharedLenMinM: 250, avgDistMaxM: 18, resampleM: 25,
+  });
+  assert.equal(groups.length, 0);
+});
+
+test("findSharedArcExtent returns null for short, empty, or below-floor overlaps", () => {
+  const long = ns(-73.99, 40.70, 1000, 40);
+  assert.equal(findSharedArcExtent([long[0]], long), null);
+  assert.equal(findSharedArcExtent(long, [long[0]]), null);
+  assert.equal(findSharedArcExtent([], long), null);
+  const near = long.map(([x, y]): Position => [x + 6 * DEG_PER_M_LON, y]);
+  assert.equal(findSharedArcExtent(long, near, { minSharedLenM: 5000, resampleM: 25, distMaxM: 18 }), null);
+});
+
+test("offsetPolylineOverExtent leaves short input unchanged and skips zero-length segments", () => {
+  const one: Position[] = [[-73.99, 40.70]];
+  assert.equal(offsetPolylineOverExtent(one, 0, 10, 8), one);
+  const coords = ns(-73.99, 40.70, 1000, 40);
+  const withDup: Position[] = [coords[0], coords[0], ...coords.slice(1)];
+  const out = offsetPolylineOverExtent(withDup, 200, 800, 8, 40);
+  assert.equal(out.length, withDup.length);
+  assert.deepEqual(out[0], withDup[0]);
+});
+
+test("detectCrossColorAdjacency rejects a perpendicular pair that is close only at a crossing", () => {
+  const nsLine = ns(-73.99, 40.686, 1200);
+  const mid = nsLine[Math.floor(nsLine.length / 2)];
+  const ew = Array.from({ length: 21 }, (_, i): Position => [
+    mid[0] + (i - 10) * 60 * DEG_PER_M_LON,
+    mid[1],
+  ]);
+  const blue = feat("b", "#0A84FF", ["A"], nsLine);
+  const green = feat("g", "#6CBE45", ["G"], ew);
+  const { groups } = detectCrossColorAdjacency([blue, green], {
+    sharedFractionMin: 0.2,
+    sharedLenMinM: 50,
+    avgDistMaxM: 30,
+    tangentMaxDeg: 20,
+    resampleM: 25,
+  });
+  assert.equal(groups.length, 0, "a high-angle crossing must not count as a shared corridor");
+});
+
+test("detectCrossColorAdjacency treats a missing lane slot as slot 0", () => {
+  const base = ns(-73.99, 40.686, 1000);
+  const blue = feat("b", "#0A84FF", ["A"], base);
+  const green = feat("g", "#6CBE45", ["G"], base.map(([x, y]) => [x + 6 * DEG_PER_M_LON, y]));
+  delete blue.properties.lane_slot_semantic;
+  delete green.properties.lane_slot_semantic;
+  const { groups } = detectCrossColorAdjacency([blue, green], {
+    sharedFractionMin: 0.6, sharedLenMinM: 250, avgDistMaxM: 18, resampleM: 25,
+  });
+  assert.equal(groups.length, 1);
+});
+
+test("offsetPolylineOverExtent with taperM 0 still offsets the interior of a hairpin", () => {
+  const north = ns(-73.99, 40.70, 400, 8);
+  const south = [...north].reverse();
+  const hairpin: Position[] = [...north, ...south.slice(1)];
+  const out = offsetPolylineOverExtent(hairpin, 50, 350, 8, 0);
+  assert.equal(out.length, hairpin.length);
+  assert.notDeepEqual(out[4], hairpin[4], "zero taper still offsets vertices inside the extent");
+});
+
+test("offsetPolylineBySlotRamp offsets a zero-length vertex without dropping the polyline", () => {
+  const coords = ns(-73.99, 40.70, 400, 8);
+  const withDup: Position[] = [...coords.slice(0, 4), coords[4], ...coords.slice(4)];
+  const out = offsetPolylineBySlotRamp(withDup, 0.5, 0.5, 8);
+  assert.equal(out.length, withDup.length);
+  assert.notDeepEqual(out.at(-1), withDup.at(-1), "constant slot 0.5 should offset the far endpoint");
+});
+
+test("offsetPolylineBySlotRamp no-ops on short, zero, or NaN slot inputs", () => {
+  const coords = ns(-73.99, 40.70, 1000, 40);
+  const one: Position[] = [coords[0]];
+  assert.equal(offsetPolylineBySlotRamp(one, 0.5, 0, 8), one);
+  assert.deepEqual(offsetPolylineBySlotRamp(coords, Number.NaN, 0, 8), coords);
+  assert.deepEqual(offsetPolylineBySlotRamp(coords, 0.5, 0, 0), coords);
+  assert.deepEqual(offsetPolylineBySlotRamp(coords, 0, 0, 8), coords);
+  const withDup: Position[] = [coords[0], coords[0], ...coords.slice(1)];
+  const ramped = offsetPolylineBySlotRamp(withDup, 0.5, 0, 8);
+  assert.equal(ramped.length, withDup.length);
 });

@@ -27,7 +27,6 @@ type JointTaperProperties = {
   corridor_id?: string | null;
   joint_offset_taper_drop?: boolean;
   joint_offset_taper_baked?: boolean;
-  [key: string]: unknown;
 };
 
 type JointTaperFeature = Feature<LineStringGeometry, JointTaperProperties>;
@@ -104,7 +103,7 @@ function warpTailToTarget(
   const delta: Position = [target[0] - endpoint[0], target[1] - endpoint[1]];
 
   // Arc distance of each vertex from the warped endpoint.
-  const fromEnd = new Array(coords.length).fill(0);
+  const fromEnd = Array.from({ length: coords.length }, () => 0);
   if (endpointIndex === 0) {
     for (let i = 1; i < coords.length; i += 1) {
       fromEnd[i] = fromEnd[i - 1] + distM(coords[i - 1]!, coords[i]!);
@@ -125,6 +124,92 @@ function warpTailToTarget(
   });
 }
 
+function isTaperLine(feature: JointTaperFeature) {
+  return (
+    feature.geometry?.type === "LineString" &&
+    Array.isArray(feature.geometry.coordinates) &&
+    feature.geometry.coordinates.length >= 2
+  );
+}
+
+function collectTaperEntries(lanes: JointTaperFeature[]): TaperEntry[] {
+  return lanes.filter(isTaperLine).map((feature) => ({
+    feature,
+    slot: semanticSlot(feature),
+    routeIds: feature.properties?.route_ids ?? [],
+  }));
+}
+
+function nearestEligibleTarget(
+  mover: TaperEntry,
+  entries: TaperEntry[],
+  moverIndex: number,
+  endpoint: Position,
+  snapMinM: number,
+  snapMaxM: number,
+): BestTarget | null {
+  let best: BestTarget | null = null;
+  for (let j = 0; j < entries.length; j += 1) {
+    if (j === moverIndex) continue;
+    const still = entries[j];
+    if (Math.abs(mover.slot) <= Math.abs(still.slot)) continue;
+    if (!sharedRoute(mover.routeIds, still.routeIds)) continue;
+    const stillCoords = still.feature.geometry.coordinates;
+    for (const target of [stillCoords[0], stillCoords[stillCoords.length - 1]]) {
+      const gap = distM(endpoint, target);
+      if (gap < snapMinM || gap > snapMaxM) continue;
+      if (!best || gap < best.gap) best = { gap, target };
+    }
+  }
+  return best;
+}
+
+function flagWhiskerConnectors(
+  entries: TaperEntry[],
+  mover: TaperEntry,
+  endpoint: Position,
+  target: Position,
+) {
+  for (const other of entries) {
+    if (other === mover) continue;
+    const otherCoords = other.feature.geometry.coordinates;
+    if (otherCoords.length > 2) continue;
+    if (!sharedRoute(mover.routeIds, other.routeIds)) continue;
+    const start = otherCoords[0];
+    const end = otherCoords[otherCoords.length - 1];
+    const matches =
+      (distM(start, endpoint) <= 1 && distM(end, target) <= 1) ||
+      (distM(end, endpoint) <= 1 && distM(start, target) <= 1);
+    if (!matches) continue;
+    other.feature.properties = {
+      ...other.feature.properties,
+      joint_offset_taper_drop: true,
+    };
+  }
+}
+
+function warpMoverEndpoint(
+  mover: TaperEntry,
+  endpointEnd: "start" | "end",
+  target: Position,
+  blendM: number,
+) {
+  const coords = mover.feature.geometry.coordinates;
+  mover.feature.geometry = {
+    type: "LineString",
+    coordinates: warpTailToTarget(
+      coords,
+      endpointEnd === "start" ? 0 : coords.length - 1,
+      target,
+      blendM,
+    ),
+  };
+  mover.feature.properties = {
+    ...mover.feature.properties,
+    joint_offset_taper_baked: true,
+  };
+}
+
 /**
  * Detect and repair small lateral steps between baked same-route lane
  * endpoints whose semantic slots differ. Mutates matching features'
@@ -143,73 +228,20 @@ export function taperBakedJointSteps(
   options: TaperOptions = {},
 ): TaperResult {
   const { snapMinM = 1.5, snapMaxM = 10, blendM = 100 } = options;
-
-  const entries = lanes
-    .filter(
-      (f) =>
-        f.geometry?.type === "LineString" &&
-        Array.isArray(f.geometry.coordinates) &&
-        f.geometry.coordinates.length >= 2,
-    )
-    .map((f) => ({ feature: f, slot: semanticSlot(f), routeIds: f.properties?.route_ids ?? [] }));
-
+  const entries = collectTaperEntries(lanes);
   const joints: TaperJoint[] = [];
-
-  // One warp per mover endpoint, onto the NEAREST eligible target. Warping
+  // One warp per mover endpoint, onto the nearest eligible target. Warping
   // greedily per pair re-stepped an already-flush endpoint whenever a joint
   // had more than one same-route neighbor in range.
   for (let i = 0; i < entries.length; i += 1) {
     const mover = entries[i];
     for (const endpointEnd of ["start", "end"] as const) {
-      const mc = mover.feature.geometry.coordinates;
-      const endpoint = endpointEnd === "start" ? mc[0]! : mc[mc.length - 1]!;
-      let best: BestTarget | null = null;
-      for (let j = 0; j < entries.length; j += 1) {
-        if (i === j) continue;
-        const still = entries[j];
-        // Only the more-offset lane moves; a slot-0 (or lower-offset)
-        // neighbor stays put. Equal magnitudes have no defined mover.
-        if (Math.abs(mover.slot) <= Math.abs(still.slot)) continue;
-        if (!sharedRoute(mover.routeIds, still.routeIds)) continue;
-        const sc = still.feature.geometry.coordinates;
-        for (const target of [sc[0]!, sc[sc.length - 1]!]) {
-          const gap = distM(endpoint, target);
-          if (gap < snapMinM || gap > snapMaxM) continue;
-          if (!best || gap < best.gap) best = { gap, target };
-        }
-      }
+      const endpoint = ((endpointEnd)
+    === "start" ? (mover.feature.geometry.coordinates)[0] : (mover.feature.geometry.coordinates)[(mover.feature.geometry.coordinates).length - 1]);
+      const best = nearestEligibleTarget(mover, entries, i, endpoint, snapMinM, snapMaxM);
       if (!best) continue;
-      // An earlier pass may have stitched the step with a tiny 2-point
-      // connector between exactly these endpoints; the warp makes it a
-      // dangling whisker. Flag it for removal by the caller.
-      for (const other of entries) {
-        if (other === mover) continue;
-        const oc = other.feature.geometry.coordinates;
-        if (oc.length > 2) continue;
-        if (!sharedRoute(mover.routeIds, other.routeIds)) continue;
-        const matches =
-          (distM(oc[0]!, endpoint) <= 1 && distM(oc[oc.length - 1]!, best.target) <= 1) ||
-          (distM(oc[oc.length - 1]!, endpoint) <= 1 && distM(oc[0]!, best.target) <= 1);
-        if (matches) {
-          other.feature.properties = {
-            ...other.feature.properties,
-            joint_offset_taper_drop: true,
-          };
-        }
-      }
-      mover.feature.geometry = {
-        type: "LineString",
-        coordinates: warpTailToTarget(
-          mover.feature.geometry.coordinates,
-          endpointEnd === "start" ? 0 : mover.feature.geometry.coordinates.length - 1,
-          best.target,
-          blendM,
-        ),
-      };
-      mover.feature.properties = {
-        ...mover.feature.properties,
-        joint_offset_taper_baked: true,
-      };
+      flagWhiskerConnectors(entries, mover, endpoint, best.target);
+      warpMoverEndpoint(mover, endpointEnd, best.target, blendM);
       joints.push({
         routes: mover.routeIds.join(","),
         gapM: Number(best.gap.toFixed(2)),
@@ -217,6 +249,5 @@ export function taperBakedJointSteps(
       });
     }
   }
-
   return { count: joints.length, joints };
 }

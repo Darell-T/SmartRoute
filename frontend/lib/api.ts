@@ -1,8 +1,8 @@
 import type {
   DestinationSelection,
   RouteStep,
-  TripResponse,
 } from "@/types";
+import { parseTripResponse, TRIP_PLAN_FAILED, type ValidatedTripResponse } from "./trip-response";
 
 /** Empire State Building — demo fallback when GPS is unavailable */
 export const DEFAULT_LOCATION = { lng: -73.9857, lat: 40.7484 } as const;
@@ -36,7 +36,7 @@ type PlanTripOptions = {
 function signalWithTimeout(
   timeoutMs: number,
   externalSignal?: AbortSignal,
-): { signal: AbortSignal; cleanup: () => void } {
+) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -67,8 +67,8 @@ export async function planTrip(
   destination: string,
   selection?: DestinationSelection | null,
   options: PlanTripOptions = {},
-): Promise<TripResponse> {
-  async function attempt(): Promise<TripResponse> {
+): Promise<ValidatedTripResponse> {
+  async function attempt(): Promise<ValidatedTripResponse> {
     const abort = signalWithTimeout(60_000, options.signal);
     try {
       const res = await fetch("/api/trip", {
@@ -85,11 +85,17 @@ export async function planTrip(
       });
 
       if (!res.ok) {
-        const errorText = await res.text();
-        console.error("Backend error:", res.status, errorText);
-        throw new Error(res.status === 503 ? "Service unavailable" : "Failed to plan trip");
+        await res.body?.cancel();
+        throw new Error(res.status === 503 ? "Service unavailable" : TRIP_PLAN_FAILED);
       }
-      return res.json();
+      let payload: unknown;
+      try {
+        payload = await res.json();
+      } catch (err) {
+        if (err instanceof SyntaxError) throw new Error(TRIP_PLAN_FAILED);
+        throw err;
+      }
+      return parseTripResponse(payload);
     } finally {
       abort.cleanup();
     }
@@ -102,7 +108,6 @@ export async function planTrip(
     const msg = err instanceof Error ? err.message : "";
     const isRetryable = msg === "Service unavailable" || msg.includes("abort") || msg === "Failed to fetch";
     if (isRetryable) {
-      console.log("[api] first attempt failed, retrying in 2s…", msg);
       await new Promise((r) => setTimeout(r, 2000));
       return attempt();
     }

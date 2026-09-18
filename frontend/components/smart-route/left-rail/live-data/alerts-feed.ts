@@ -17,25 +17,42 @@ export function buildStation(liveFeed: Partial<LiveFeedResponse> | null | undefi
   };
 }
 
-export function buildHealth(liveFeed: Partial<LiveFeedResponse> | null | undefined): NetworkHealth {
-  const signals = liveFeed?.signals;
-  const rawStatus = signals?.network_status ?? (liveFeed?.degraded ? "caution" : "healthy");
-  const status: NetworkHealth["status"] =
-    rawStatus === "disrupted" ? "disrupted" : rawStatus === "caution" ? "minor" : "clear";
-  const affected = Array.from(
+const NETWORK_HEALTH_STATUS = {
+  disrupted: "disrupted",
+  caution: "minor",
+  healthy: "clear",
+} as const;
+
+function monitoredRouteIds(liveFeed: Partial<LiveFeedResponse> | null | undefined): string[] {
+  return Array.from(
     new Set(
       (liveFeed?.stops ?? [])
         .flatMap((stop) => stop.route_ids ?? [])
         .map((routeId) => String(routeId).toUpperCase()),
     ),
   ).sort();
+}
 
+function healthSignalCounts(
+  signals: NonNullable<LiveFeedResponse["signals"]> | undefined,
+  alertCount: number,
+  affectedCount: number,
+): Pick<NetworkHealth, "alerts" | "lines" | "major" | "stale"> {
   return {
-    status,
-    alerts: signals?.active_alert_count ?? liveFeed?.alerts?.length ?? 0,
-    lines: signals?.affected_route_count ?? affected.length,
+    alerts: signals?.active_alert_count ?? alertCount,
+    lines: signals?.affected_route_count ?? affectedCount,
     major: signals?.major_alert_count ?? 0,
     stale: signals?.stale_vehicle_count ?? 0,
+  };
+}
+
+export function buildHealth(liveFeed: Partial<LiveFeedResponse> | null | undefined): NetworkHealth {
+  const signals = liveFeed?.signals;
+  const rawStatus = signals?.network_status ?? (liveFeed?.degraded ? "caution" : "healthy");
+  const affected = monitoredRouteIds(liveFeed);
+  return {
+    status: NETWORK_HEALTH_STATUS[rawStatus as keyof typeof NETWORK_HEALTH_STATUS] ?? "clear",
+    ...healthSignalCounts(signals ?? undefined, liveFeed?.alerts?.length ?? 0, affected.length),
     summary: `${affected.length || "Nearby"} subway routes are being monitored inside a half-mile radius.`,
     affected: affected.slice(0, 12),
   };

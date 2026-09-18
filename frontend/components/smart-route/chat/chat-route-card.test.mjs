@@ -2,70 +2,96 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
-import { recommendedCardsForChat } from "./recommended-card-selection.ts";
+import { ChatMessage } from "./chat-message.tsx";
+import { Sources } from "../../prompt-kit/source.tsx";
+import { ChatRouteCardList } from "./chat-route-card.tsx";
+import { RecommendedItineraryCard, ItineraryCardSkeleton } from "./recommended-itinerary-card.tsx";
 
-const CARD_SOURCE = fs.readFileSync(
-  fileURLToPath(new URL("./recommended-itinerary-card.tsx", import.meta.url)),
-  "utf8",
-);
-const LEG_SOURCE = fs.readFileSync(
-  fileURLToPath(new URL("./itinerary-card-legs.tsx", import.meta.url)),
-  "utf8",
-);
-const CARD_RENDER_SOURCE = `${CARD_SOURCE}\n${LEG_SOURCE}`;
 const CHAT_CSS_SOURCE = fs.readFileSync(
   fileURLToPath(
     new URL("../../../app/styles/smart-route-chat.css", import.meta.url),
   ),
   "utf8",
 );
-const CHAT_MESSAGE_SOURCE = fs.readFileSync(
-  fileURLToPath(new URL("./chat-message.tsx", import.meta.url)),
-  "utf8",
-);
-const CHAT_PANEL_SOURCE = fs.readFileSync(
-  fileURLToPath(new URL("./chat-panel.tsx", import.meta.url)),
-  "utf8",
-);
 
-const cards = [
-  { card_id: "recommended", role: "recommended" },
-  { card_id: "alternative-1", role: "alternative" },
-  { card_id: "alternative-2", role: "alternative" },
-];
+const itineraryCard = {
+  card_id: "recommended",
+  turn_id: "t1",
+  role: "recommended",
+  origin: { label: "Your location", lat: 40.7, lng: -73.9 },
+  destination: { label: "Costco", lat: 40.6, lng: -74 },
+  summary: { eta_minutes: 34, transfers: 0, lines: ["A"], reason: "Server reason" },
+  route: [],
+  alerts: [],
+  itinerary: {
+    itinerary_id: "it_1",
+    total_duration_seconds: 2040,
+    transfer_count: 0,
+    arrival_at: "2026-07-16T15:45:00-04:00",
+    total_dwell_seconds: 0,
+    legs: [
+      {
+        mode: "WALK",
+        walk_seconds: 240,
+        board: { label: "Your location" },
+        alight: { label: "A station" },
+      },
+      {
+        mode: "SUBWAY",
+        ride_seconds: 1560,
+        service_id: "A",
+        board: { label: "A station" },
+        alight: { label: "Costco" },
+        stop_count: 8,
+      },
+    ],
+  },
+};
 
-test("chat renders only the recommended route without mutating map alternatives", () => {
-  const visible = recommendedCardsForChat(cards);
+function renderCard(card = itineraryCard, extra = {}) {
+  return renderToStaticMarkup(
+    createElement(RecommendedItineraryCard, { card, ...extra }),
+  );
+}
 
-  assert.deepEqual(visible.map((card) => card.card_id), ["recommended"]);
-  assert.deepEqual(cards.map((card) => card.card_id), [
-    "recommended",
-    "alternative-1",
-    "alternative-2",
-  ]);
+test("invalid canonical itinerary renders an unavailable card", () => {
+  const html = renderCard({
+    ...itineraryCard,
+    itinerary: { total_duration_seconds: "bad" },
+  });
+  assert.match(html, /sr-itinerary-card--invalid/);
+  assert.match(html, /unavailable|not available|could not/i);
 });
 
-test("chat does not promote an alternative when no recommendation exists", () => {
-  assert.deepEqual(recommendedCardsForChat(cards.slice(1)), []);
+test("itinerary skeleton keeps a quiet loading shell", () => {
+  const html = renderToStaticMarkup(createElement(ItineraryCardSkeleton));
+  assert.match(html, /sr-itinerary-card--skeleton/);
 });
 
 test("recommendation card keeps transit details collapsed by default", () => {
+  const html = renderCard();
+  assert.match(html, /data-expanded="false"/);
+  assert.match(html, /class="sr-itinerary-card/);
+  assert.doesNotMatch(html, /id="[^"]+-stops"/);
+});
+
+test("recommendation card keeps the route hierarchy compact", () => {
+  const html = renderCard();
+  assert.match(html, /sr-itinerary-card__summary/);
+  assert.match(html, /34 min/);
+  assert.doesNotMatch(html, /faArrowRightArrowLeft/);
+  assert.match(html, /sr-itinerary-card__walk-duration|Walk/);
   assert.match(
-    CARD_SOURCE,
-    /useState<Set<string>>\(\(\) => new Set\(\)\)/,
+    CHAT_CSS_SOURCE,
+    /\.sr-chat-tab \.sr-itinerary-card__duration-value\s*\{[\s\S]*?font-size:\s*20px;[\s\S]*?font-weight:\s*600;[\s\S]*?line-height:\s*24px;/,
   );
-  assert.match(LEG_SOURCE, /aria-expanded=\{expanded\}/);
-  assert.match(LEG_SOURCE, /aria-controls=\{`\$\{event\.id\}-stops`\}/);
-  assert.match(LEG_SOURCE, /onClick=\{onToggle\}/);
-  assert.match(LEG_SOURCE, /\{expanded && stops\.length > 0 \?/);
-  assert.match(LEG_SOURCE, /collapsedStopChainLabel\(event\)/);
-  assert.doesNotMatch(LEG_SOURCE, /stopsLabel, event\.durationLabel/);
   assert.match(
-    CARD_SOURCE,
-    /if \(next\.has\(eventId\)\) next\.delete\(eventId\);[\s\S]*else next\.add\(eventId\);/,
+    CHAT_CSS_SOURCE,
+    /\.sr-itinerary-card__leg,[\s\S]*?grid-template-columns:\s*24px minmax\(0, 1fr\) auto;[\s\S]*?border-top:\s*0;/,
   );
-  assert.match(CARD_SOURCE, /<motion\.article[\s\S]*?\blayout\b/);
 });
 
 test("recommendation card uses the same quiet shell as arrivals", () => {
@@ -88,24 +114,9 @@ test("recommendation card uses the same quiet shell as arrivals", () => {
   assert.match(arrivalShell, /border:\s*1px solid var\(--sr-chat-hairline\)/);
   assert.match(arrivalShell, /background:\s*var\(--sr-chat-surface\)/);
   assert.match(arrivalShell, /box-shadow:\s*var\(--sr-chat-raised-shadow\)/);
-  assert.doesNotMatch(CARD_SOURCE, /BorderBeam|border-beam/);
+  const html = renderCard();
+  assert.doesNotMatch(html, /BorderBeam|border-beam/);
   assert.doesNotMatch(routeShell, /18px 44px|inset/);
-});
-
-test("recommendation card keeps the route hierarchy compact", () => {
-  assert.match(CARD_SOURCE, /sr-itinerary-card__summary/);
-  assert.match(CARD_SOURCE, /model\.arrivalLabel && model\.firstLegArrivalLabel/);
-  assert.doesNotMatch(CARD_SOURCE, /faArrowRightArrowLeft/);
-  assert.match(LEG_SOURCE, /TrainBullet line=\{normalized\} size=\{24\}/);
-  assert.match(LEG_SOURCE, /sr-itinerary-card__walk-duration/);
-  assert.match(
-    CHAT_CSS_SOURCE,
-    /\.sr-chat-tab \.sr-itinerary-card__duration-value\s*\{[\s\S]*?font-size:\s*20px;[\s\S]*?font-weight:\s*600;[\s\S]*?line-height:\s*24px;/,
-  );
-  assert.match(
-    CHAT_CSS_SOURCE,
-    /\.sr-itinerary-card__leg,[\s\S]*?grid-template-columns:\s*24px minmax\(0, 1fr\) auto;[\s\S]*?border-top:\s*0;/,
-  );
 });
 
 test("recommendation card uses restrained three-level typography", () => {
@@ -132,10 +143,9 @@ test("recommendation card uses restrained three-level typography", () => {
 });
 
 test("recommendation card preserves total duration and route-colored chains", () => {
-  assert.match(CARD_SOURCE, /model\.durationLabel/);
-  assert.match(CARD_SOURCE, /model\.metaParts\.map/);
-  assert.match(LEG_SOURCE, /getRouteColor\(event\.routeIds\[0\]/);
-  assert.match(LEG_SOURCE, /duration: 0\.3, ease: LAYOUT_EASE/);
+  const html = renderCard();
+  assert.match(html, />34 min</);
+  assert.match(html, /Arrive around 3:45 PM/);
   assert.match(
     CHAT_CSS_SOURCE,
     /\.sr-itinerary-card__chain-marker--start,[\s\S]*?background: var\(--sr-route-color\)/,
@@ -147,43 +157,88 @@ test("recommendation card preserves total duration and route-colored chains", ()
 });
 
 test("chat card omits the redundant recommendation badge without changing recommendation data", () => {
-  assert.doesNotMatch(CARD_SOURCE, /sr-itinerary-card__badge/);
-  assert.match(CARD_SOURCE, /data-selected=\{isSelected/);
+  const html = renderCard(itineraryCard, { isSelected: true });
+  assert.doesNotMatch(html, /sr-itinerary-card__badge/);
+  assert.match(html, /data-selected="true"/);
 });
 
 test("bus legs use a compact bus glyph, plain route text, and the shared chain", () => {
-  assert.match(CARD_RENDER_SOURCE, /className="sr-itinerary-card__bus-glyph"/);
-  assert.match(CARD_RENDER_SOURCE, /className="sr-itinerary-card__bus-route"/);
-  assert.match(CARD_RENDER_SOURCE, /event\.kind === "bus"/);
-  assert.match(CARD_RENDER_SOURCE, /className="sr-itinerary-card__chain-track"/);
-  assert.doesNotMatch(CARD_RENDER_SOURCE, /<TrainBullet line=\{normalized\} size=\{34\}/);
+  const html = renderCard({
+    ...itineraryCard,
+    itinerary: {
+      ...itineraryCard.itinerary,
+      legs: [
+        {
+          mode: "BUS",
+          ride_seconds: 600,
+          service_id: "B44",
+          board: { label: "Atlantic Av" },
+          alight: { label: "Costco" },
+        },
+      ],
+    },
+  });
+  assert.match(html, /sr-itinerary-card__bus-glyph/);
+  assert.match(html, /sr-itinerary-card__bus-route/);
+  assert.match(html, /B44/);
+  assert.doesNotMatch(html, /TrainBullet/);
 });
 
 test("Open on map remains a direct keyboard-accessible action", () => {
-  assert.match(CARD_SOURCE, /<motion\.button[\s\S]*?type="button"/);
-  assert.match(CARD_SOURCE, /aria-label=\{model\.primaryActionLabel\}/);
-  assert.match(CARD_SOURCE, /disabled=\{!onPrimaryAction\}/);
-  assert.match(CARD_SOURCE, /onClick=\{onPrimaryAction\}/);
-  assert.doesNotMatch(CARD_SOURCE, /onClick=\{\(\) => onPrimaryAction/);
+  const html = renderCard(itineraryCard, { onSelect: () => {} });
+  assert.match(html, /aria-label="Open on map"/);
+  assert.match(html, /type="button"/);
+  assert.doesNotMatch(html, /disabled=""/);
 });
 
-test("chat shows route cards after the turn finishes even without assistant prose", () => {
-  assert.match(
-    CHAT_MESSAGE_SOURCE,
-    /const showCards = !turn\.isStreaming && isCaughtUp && turn\.routeCards\.length > 0;/,
-  );
-  assert.doesNotMatch(
-    CHAT_MESSAGE_SOURCE,
-    /showCards = !turn\.isStreaming && hasText && isCaughtUp/,
-  );
-});
+test("source attribution uses PromptKit-style favicon triggers", () => {
+  const markup = renderToStaticMarkup(Sources({
+    sources: [
+      { title: "Google Maps", url: "https://www.google.com/maps" },
+      { title: "Damn Lines", url: "https://damnlines.com/camera/l-industrie" },
+    ],
+  }));
 
-test("transit status exposes View alerts only from the typed action flag", () => {
-  assert.match(CHAT_MESSAGE_SOURCE, /turn\.transitStatusAction === "view_alerts"/);
-  assert.match(CHAT_MESSAGE_SOURCE, /className="sr-chat-transit-action"/);
-  assert.match(CHAT_MESSAGE_SOURCE, /onClick=\{onViewAlerts\}/);
-  assert.doesNotMatch(CHAT_MESSAGE_SOURCE, /turn\.text\.toLowerCase\(\)[\s\S]*alert|includes\(\s*["'][^)]*alert/i);
-  assert.match(CHAT_PANEL_SOURCE, /onViewAlerts\?: \(\) => void/);
-  assert.match(CHAT_PANEL_SOURCE, /onViewAlerts=\{onViewAlerts\}/);
+  assert.match(markup, /<div class="sr-chat-sources" aria-label="Sources">/);
+  assert.match(markup, />Source<\/span>/);
+  assert.match(markup, /href="https:\/\/damnlines\.com\/camera\/l-industrie"/);
+  assert.match(markup, /title="Damn Lines"/);
+  assert.match(markup, /www\.google\.com\/s2\/favicons\?sz=64&amp;domain_url=https%3A%2F%2Fdamnlines\.com%2Fcamera%2Fl-industrie/);
+  assert.match(markup, /class="sr-chat-sources__favicon"/);
+  assert.match(markup, /class="sr-chat-sources__google-attribution"/);
+  assert.match(markup, /Place data by/);
+  assert.match(markup, /href="https:\/\/www\.google\.com\/maps"/);
+  assert.equal(markup.match(/class="sr-chat-sources__favicon"/g)?.length, 1);
+  assert.match(markup, /target="_blank"/);
+  assert.match(markup, /rel="noopener noreferrer"/);
   assert.match(CHAT_CSS_SOURCE, /\.sr-chat-transit-action\s*\{/);
+});
+
+test("settled assistant route cards render without prose", () => {
+  const html = renderToStaticMarkup(createElement(ChatMessage, {
+    theme: "dark",
+    turn: { role: "assistant", turnId: "t1", text: "", reasoning: "", toolChips: [], routeCards: [itineraryCard], isStreaming: false },
+  }));
+  assert.match(html, /34 min/);
+  assert.match(html, /Open on map/);
+});
+
+
+test("chat renders only the recommendation without mutating map alternatives", () => {
+  const cards = [{
+    ...itineraryCard,
+    card_id: "alternative",
+    role: "alternative",
+    itinerary: { ...itineraryCard.itinerary, total_duration_seconds: 3600 },
+  }, itineraryCard];
+  const before = structuredClone(cards);
+  const html = renderToStaticMarkup(createElement(ChatRouteCardList, { cards }));
+  assert.match(html, /34 min/);
+  assert.doesNotMatch(html, /60 min/);
+  assert.deepEqual(cards, before);
+});
+
+test("chat does not promote an alternative when no recommendation exists", () => {
+  const cards = [{ ...itineraryCard, card_id: "alternative", role: "alternative" }];
+  assert.equal(renderToStaticMarkup(createElement(ChatRouteCardList, { cards })), "");
 });

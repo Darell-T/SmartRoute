@@ -30,6 +30,8 @@ export default defineConfig({
     colorScheme: "dark",
     locale: "en-US",
     timezoneId: "America/New_York",
+    geolocation: { latitude: 40.7484, longitude: -73.9857 },
+    permissions: ["geolocation"],
     trace: {
       mode: "retain-on-failure",
       // Prevent the CI artifact trace from retaining network snapshots or
@@ -58,7 +60,7 @@ export default defineConfig({
   ],
   webServer: process.env.SMARTROUTE_RELEASE_BASE_URL ? undefined : {
     command: "node node_modules/next/dist/bin/next dev --webpack --hostname 127.0.0.1 --port 3100",
-    port: 3100,
+    url: releaseBaseURL,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
   },

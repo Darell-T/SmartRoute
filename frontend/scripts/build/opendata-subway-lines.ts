@@ -47,12 +47,12 @@ const ROUTE_ALIASES: Array<{ base: string; alias: string }> = [
   { base: "F", alias: "FX" },
 ];
 
-const EXACT_SERVICE_OVERRIDES: Record<string, string[]> = {
-  SF: ["FS"],
-  ST: ["GS"],
-  SR: ["H"],
-  "5 PEAK": ["5"],
-};
+const EXACT_SERVICE_OVERRIDES = new Map([
+  ["SF", ["FS"]],
+  ["ST", ["GS"]],
+  ["SR", ["H"]],
+  ["5 PEAK", ["5"]],
+]);
 
 const IGNORED_SERVICE_WORDS = new Set<string>([
   "PEAK",
@@ -66,14 +66,27 @@ const IGNORED_SERVICE_WORDS = new Set<string>([
   "STREET",
 ]);
 
-type RawProperties = Record<string, unknown>;
+type RawProperties = {
+  id?: string | number;
+  objectid?: string | number;
+  name?: string | number;
+  service_name?: string | number;
+  rt_symbol?: string | number;
+  service?: string | number;
+  route_id?: string | number;
+  routes?: string | number;
+  line?: string | number;
+};
+
+type RawCoord = number[];
 
 type RawGeometry = {
   type?: string;
-  coordinates?: unknown;
+  coordinates?: RawCoord | RawCoord[] | RawCoord[][];
 };
 
 type RawFeature = {
+  type?: string;
   id?: string | number;
   geometry?: RawGeometry | null;
   properties?: RawProperties | null;
@@ -96,7 +109,7 @@ type OpenDataLineProperties = {
   visual_feature_type: "opendata_line";
   opendata_id: string;
   opendata_objectid: string | null;
-  opendata_name: unknown;
+  opendata_name: string | number | null;
   opendata_rt_symbol: string;
   opendata_symbol_field: string;
   opendata_part_index: number;
@@ -146,7 +159,7 @@ function compareRouteIds(left: string, right: string): number {
   return left.localeCompare(right, "en", { numeric: true });
 }
 
-function normalizeRouteId(value: unknown): string {
+function normalizeRouteId(value: string): string {
   const routeId = String(value ?? "").trim().toUpperCase();
   if (routeId === "6D") return "6X";
   if (routeId === "7D") return "7X";
@@ -162,7 +175,7 @@ function routeColorFor(routeId: string): string {
   return ROUTE_COLORS[routeId] ?? "#808183";
 }
 
-function colorRouteMap(routeIds: string[]): ColorRouteMap {
+function colorRouteMap(routeIds: string[]) {
   const byColor: ColorRouteMap = {};
   for (const routeId of routeIds) {
     const color = routeColorFor(routeId);
@@ -195,8 +208,14 @@ function lineLengthMeters(coords: Position[]): number {
 }
 
 function routeSymbolFromProperties(properties: RawProperties): RouteSymbol | null {
-  for (const field of ["rt_symbol", "service", "route_id", "routes", "line"]) {
-    const value = properties?.[field];
+  const candidates: Array<[string, string | number | undefined]> = [
+    ["rt_symbol", properties.rt_symbol],
+    ["service", properties.service],
+    ["route_id", properties.route_id],
+    ["routes", properties.routes],
+    ["line", properties.line],
+  ];
+  for (const [field, value] of candidates) {
     if (value != null && String(value).trim() !== "") {
       return { field, value: String(value).trim() };
     }
@@ -204,14 +223,15 @@ function routeSymbolFromProperties(properties: RawProperties): RouteSymbol | nul
   return null;
 }
 
-function parseRouteSymbols(rawSymbol: unknown, context: string): string[] {
+function parseRouteSymbols(rawSymbol: string, context: string): string[] {
   const normalizedRaw = String(rawSymbol ?? "").trim().toUpperCase();
   if (!normalizedRaw) {
     throw new Error(`${context}: missing route symbol`);
   }
 
-  if (EXACT_SERVICE_OVERRIDES[normalizedRaw]) {
-    return [...EXACT_SERVICE_OVERRIDES[normalizedRaw]];
+  const override = EXACT_SERVICE_OVERRIDES.get(normalizedRaw);
+  if (override) {
+    return [...override];
   }
 
   const splitTokens = normalizedRaw
@@ -252,7 +272,7 @@ function parseRouteSymbols(rawSymbol: unknown, context: string): string[] {
   return [...new Set(routeIds)].sort(compareRouteIds);
 }
 
-function isFiniteCoordinate(coord: unknown): coord is [unknown, unknown] {
+function isFiniteCoordinate(coord: number | RawCoord | RawCoord[]): coord is RawCoord {
   return (
     Array.isArray(coord) &&
     coord.length >= 2 &&
@@ -261,16 +281,16 @@ function isFiniteCoordinate(coord: unknown): coord is [unknown, unknown] {
   );
 }
 
-function cleanLineStringCoordinates(rawCoords: unknown, context: string): Position[] {
-  if (!Array.isArray(rawCoords) || rawCoords.length < 2) {
+function cleanLineStringCoordinates(rawCoords: RawCoord[], context: string): Position[] {
+  if (rawCoords.length < 2) {
     throw new Error(`${context}: LineString must contain at least two coordinates`);
   }
 
-  const coords = rawCoords.map((coord, index) => {
+  const coords: Position[] = rawCoords.map((coord, index): Position => {
     if (!isFiniteCoordinate(coord)) {
       throw new Error(`${context}: invalid coordinate at index ${index}`);
     }
-    return [Number(coord[0]), Number(coord[1])] as Position;
+    return [Number(coord[0]), Number(coord[1])];
   });
 
   const deduped: Position[] = [];
@@ -290,18 +310,32 @@ function cleanLineStringCoordinates(rawCoords: unknown, context: string): Positi
 function geometryParts(feature: RawFeature, context: string): Position[][] {
   const geometry = feature?.geometry;
   if (!geometry) throw new Error(`${context}: missing geometry`);
+  const coordinates = geometry.coordinates;
 
   if (geometry.type === "LineString") {
-    return [cleanLineStringCoordinates(geometry.coordinates, context)];
+    if (!Array.isArray(coordinates)) {
+      throw new Error(`${context}: LineString must contain at least two coordinates`);
+    }
+    const rows: RawCoord[] = [];
+    for (const row of coordinates) {
+      if (!isFiniteCoordinate(row)) {
+        throw new Error(`${context}: invalid coordinate at index ${rows.length}`);
+      }
+      rows.push(row);
+    }
+    return [cleanLineStringCoordinates(rows, context)];
   }
 
   if (geometry.type === "MultiLineString") {
-    if (!Array.isArray(geometry.coordinates) || geometry.coordinates.length === 0) {
+    if (!Array.isArray(coordinates) || coordinates.length === 0) {
       throw new Error(`${context}: MultiLineString must contain parts`);
     }
-    return geometry.coordinates.map((part, partIndex) =>
-      cleanLineStringCoordinates(part, `${context}:part-${partIndex}`),
-    );
+    return coordinates.map((part, partIndex) => {
+      if (!Array.isArray(part) || isFiniteCoordinate(part)) {
+        throw new Error(`${context}:part-${partIndex}: LineString must contain at least two coordinates`);
+      }
+      return cleanLineStringCoordinates(part, `${context}:part-${partIndex}`);
+    });
   }
 
   throw new Error(`${context}: unsupported geometry type ${geometry.type}`);
@@ -338,8 +372,93 @@ function applyExpectedRouteAliases(
   return aliasApplications;
 }
 
+function incrementCount(counts: CountMap, key: string): void {
+  counts[key] = (counts[key] ?? 0) + 1;
+}
+
+function openDataPartFeature(
+  properties: RawProperties,
+  objectId: string | null,
+  featureIndex: number,
+  routeSymbol: RouteSymbol,
+  routeIds: string[],
+  coordinates: Position[],
+  partIndex: number,
+  lengthM: number,
+): OpenDataLineFeature {
+  const normalizedRouteIds = [...routeIds];
+  return {
+    type: "Feature",
+    geometry: {
+      type: "LineString",
+      coordinates,
+    },
+    properties: {
+      visual_feature_type: "opendata_line",
+      opendata_id: String(properties.id ?? objectId ?? `feature-${featureIndex + 1}`),
+      opendata_objectid: objectId,
+      opendata_name: properties.name == null ? (properties.service_name ?? null) : String(properties.name),
+      opendata_rt_symbol: routeSymbol.value,
+      opendata_symbol_field: routeSymbol.field,
+      opendata_part_index: partIndex,
+      route_ids: normalizedRouteIds,
+      color_route_ids: colorRouteMap(normalizedRouteIds),
+      source_route_ids: normalizedRouteIds,
+      added_alias_route_ids: [],
+      geometry_source: OPEN_DATA_SOURCE_NAME,
+      geometry_source_dataset_id: OPEN_DATA_SOURCE_DATASET_ID,
+      length_m: Number(lengthM.toFixed(2)),
+      coordinate_count: coordinates.length,
+    },
+  };
+}
+
+function appendOpenDataFeature(
+  feature: RawFeature,
+  featureIndex: number,
+  minFragmentLengthM: number,
+  features: OpenDataLineFeature[],
+  sourceFieldCounts: CountMap,
+  geometryTypeCounts: CountMap,
+): number {
+  const properties = feature.properties ?? {};
+  const id = String(properties.id ?? properties.objectid ?? feature.id ?? featureIndex + 1);
+  const objectId = properties.objectid == null ? null : String(properties.objectid);
+  const routeSymbol = routeSymbolFromProperties(properties);
+  if (!routeSymbol) {
+    throw new Error(`OpenData feature ${id}: missing route symbol field`);
+  }
+  incrementCount(sourceFieldCounts, routeSymbol.field);
+  incrementCount(geometryTypeCounts, feature.geometry?.type ?? "missing");
+
+  const routeIds = parseRouteSymbols(routeSymbol.value, `OpenData feature ${id}`);
+  const parts = geometryParts(feature, `OpenData feature ${id}`);
+  let droppedShortFragmentCount = 0;
+  for (let partIndex = 0; partIndex < parts.length; partIndex += 1) {
+    const coordinates = parts[partIndex];
+    const lengthM = lineLengthMeters(coordinates);
+    if (minFragmentLengthM > 0 && lengthM < minFragmentLengthM) {
+      droppedShortFragmentCount += 1;
+      continue;
+    }
+    features.push(
+      openDataPartFeature(
+        properties,
+        objectId,
+        featureIndex,
+        routeSymbol,
+        routeIds,
+        coordinates,
+        partIndex,
+        lengthM,
+      ),
+    );
+  }
+  return droppedShortFragmentCount;
+}
+
 export function normalizeOpenDataSubwayLines(
-  geojson: RawFeatureCollection,
+  geojson: RawFeatureCollection | null | undefined,
   options: NormalizeOptions = {},
 ): NormalizeResult {
   if (!geojson || geojson.type !== "FeatureCollection" || !Array.isArray(geojson.features)) {
@@ -353,55 +472,16 @@ export function normalizeOpenDataSubwayLines(
   const geometryTypeCounts: CountMap = {};
   let droppedShortFragmentCount = 0;
 
-  geojson.features.forEach((feature, featureIndex) => {
-    const properties = feature.properties ?? {};
-    const id = String(properties.id ?? properties.objectid ?? feature.id ?? featureIndex + 1);
-    const objectId = properties.objectid == null ? null : String(properties.objectid);
-    const routeSymbol = routeSymbolFromProperties(properties);
-    if (!routeSymbol) {
-      throw new Error(`OpenData feature ${id}: missing route symbol field`);
-    }
-    sourceFieldCounts[routeSymbol.field] = (sourceFieldCounts[routeSymbol.field] ?? 0) + 1;
-    geometryTypeCounts[feature.geometry?.type ?? "missing"] =
-      (geometryTypeCounts[feature.geometry?.type ?? "missing"] ?? 0) + 1;
-
-    const routeIds = parseRouteSymbols(routeSymbol.value, `OpenData feature ${id}`);
-    const parts = geometryParts(feature, `OpenData feature ${id}`);
-
-    parts.forEach((coordinates, partIndex) => {
-      const lengthM = lineLengthMeters(coordinates);
-      if (minFragmentLengthM > 0 && lengthM < minFragmentLengthM) {
-        droppedShortFragmentCount += 1;
-        return;
-      }
-
-      const normalizedRouteIds = [...routeIds];
-      features.push({
-        type: "Feature",
-        geometry: {
-          type: "LineString",
-          coordinates,
-        },
-        properties: {
-          visual_feature_type: "opendata_line",
-          opendata_id: String(properties.id ?? objectId ?? `feature-${featureIndex + 1}`),
-          opendata_objectid: objectId,
-          opendata_name: properties.name == null ? (properties.service_name ?? null) : String(properties.name),
-          opendata_rt_symbol: routeSymbol.value,
-          opendata_symbol_field: routeSymbol.field,
-          opendata_part_index: partIndex,
-          route_ids: normalizedRouteIds,
-          color_route_ids: colorRouteMap(normalizedRouteIds),
-          source_route_ids: normalizedRouteIds,
-          added_alias_route_ids: [],
-          geometry_source: OPEN_DATA_SOURCE_NAME,
-          geometry_source_dataset_id: OPEN_DATA_SOURCE_DATASET_ID,
-          length_m: Number(lengthM.toFixed(2)),
-          coordinate_count: coordinates.length,
-        },
-      });
-    });
-  });
+  for (let featureIndex = 0; featureIndex < geojson.features.length; featureIndex += 1) {
+    droppedShortFragmentCount += appendOpenDataFeature(
+      geojson.features[featureIndex],
+      featureIndex,
+      minFragmentLengthM,
+      features,
+      sourceFieldCounts,
+      geometryTypeCounts,
+    );
+  }
 
   const aliasApplications = applyExpectedRouteAliases(features, expectedRouteIds);
   features.sort((left, right) => {
@@ -440,6 +520,8 @@ export function loadOpenDataSubwayLines(path: string, options: NormalizeOptions 
   if (!existsSync(path)) {
     throw new Error(`OpenData subway lines file missing at ${path}`);
   }
-  const geojson = JSON.parse(readFileSync(path, "utf8"));
+  const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+  const geojson: RawFeatureCollection = {};
+  if (parsed != null && !Array.isArray(parsed)) Object.assign(geojson, parsed);
   return normalizeOpenDataSubwayLines(geojson, options);
 }

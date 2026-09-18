@@ -4,14 +4,38 @@
 
 import type { Position, BBox } from "./types.ts";
 
+type LaneProperties = {
+  spine_id?: string | null;
+  base_spine_hash?: string | null;
+  bundle_id?: string;
+  bridge?: boolean;
+  lane_slot_source?: string;
+  physical_bundle_id?: string | null;
+  physical_bundle_spine_hash?: string | null;
+  route_ids?: string[];
+  from_anchor_id?: string | null;
+  to_anchor_id?: string | null;
+  from_stop_id?: string | null;
+  color?: string;
+  color_route_ids?: string[];
+  bundle_id_from?: string;
+  bundle_id_to?: string;
+};
+
 type LaneFeature = {
-  properties: Record<string, any>;
+  properties: LaneProperties;
   geometry?: { type?: string; coordinates?: Position[] } | null;
 };
 
-type BundleArtifactsInput = {
-  bundle_lane_features?: LaneFeature[];
-  bundleLaneFeatures?: LaneFeature[];
+type BundleLaneArtifacts = {
+  bundleLaneFeatures: LaneFeature[];
+};
+
+type EndpointKeys = {
+  fromKey: string;
+  toKey: string;
+  fromCoord: Position;
+  toCoord: Position;
 };
 
 const EARTH_RADIUS_M = 6371000;
@@ -41,13 +65,57 @@ function coordKey(coord: Position): string {
   return `${coord[0].toFixed(5)},${coord[1].toFixed(5)}`;
 }
 
-function getEndpointKeys(f: LaneFeature) {
+function getEndpointKeys(f: LaneFeature): EndpointKeys | null {
   const p = f.properties;
   const coords = f.geometry?.coordinates;
   if (!coords || coords.length < 2) return null;
   const fromKey = p.from_anchor_id ? `anchor:${p.from_anchor_id}` : `coord:${coordKey(coords[0])}`;
   const toKey = p.to_anchor_id ? `anchor:${p.to_anchor_id}` : `coord:${coordKey(coords[coords.length - 1])}`;
   return { fromKey, toKey, fromCoord: coords[0], toCoord: coords[coords.length - 1] };
+}
+
+type HashConflict = {
+  spine_id: string;
+  expected: string;
+  got: string;
+};
+
+type PhysicalBundleHashConflict = {
+  physical_bundle_id: string;
+  expected: string;
+  got: string;
+};
+
+function recordSpineHash(
+  store: Map<string, string>,
+  conflicts: HashConflict[],
+  spineId: string,
+  hash: string,
+): void {
+  const expected = store.get(spineId);
+  if (expected === undefined) {
+    store.set(spineId, hash);
+    return;
+  }
+  if (expected !== hash) {
+    conflicts.push({ spine_id: spineId, expected, got: hash });
+  }
+}
+
+function recordPhysicalBundleHash(
+  store: Map<string, string>,
+  conflicts: PhysicalBundleHashConflict[],
+  bundleId: string,
+  hash: string,
+): void {
+  const expected = store.get(bundleId);
+  if (expected === undefined) {
+    store.set(bundleId, hash);
+    return;
+  }
+  if (expected !== hash) {
+    conflicts.push({ physical_bundle_id: bundleId, expected, got: hash });
+  }
 }
 
 /**
@@ -58,24 +126,20 @@ function getEndpointKeys(f: LaneFeature) {
  * Also validates that for every physical_bundle_id (non-null), all lanes
  * carrying that id share the same physical_bundle_spine_hash.
  */
-export function assertSpineHashConsistency(bundleArtifacts: BundleArtifactsInput) {
-  const bundleLaneFeatures = bundleArtifacts.bundle_lane_features ?? bundleArtifacts.bundleLaneFeatures ?? [];
-  const hashBySpineId = new Map();
-  const lanesWithMissingSpineId = [];
-  const lanesWithMissingHash = [];
-  const inconsistentGroups = [];
-
-  // Physical bundle invariant: same physical_bundle_id => same physical_bundle_spine_hash.
-  const pbHashByBundleId = new Map();
-  const inconsistentPhysicalBundleGroups = [];
+export function assertSpineHashConsistency(bundleArtifacts: BundleLaneArtifacts) {
+  const bundleLaneFeatures = bundleArtifacts.bundleLaneFeatures;
+  const hashBySpineId = new Map<string, string>();
+  const lanesWithMissingSpineId: Array<string | undefined> = [];
+  const lanesWithMissingHash: string[] = [];
+  const inconsistentGroups: HashConflict[] = [];
+  const pbHashByBundleId = new Map<string, string>();
+  const inconsistentPhysicalBundleGroups: PhysicalBundleHashConflict[] = [];
 
   for (const lane of bundleLaneFeatures) {
     const sid = lane.properties.spine_id;
     const hash = lane.properties.base_spine_hash;
     if (sid == null) {
-      const isExempt = lane.properties.bridge === true
-        || lane.properties.lane_slot_source === "branch_transition";
-      if (!isExempt) {
+      if (!((lane.properties).bridge === true || (lane.properties).lane_slot_source === "branch_transition")) {
         lanesWithMissingSpineId.push(lane.properties.bundle_id);
       }
       continue;
@@ -84,26 +148,12 @@ export function assertSpineHashConsistency(bundleArtifacts: BundleArtifactsInput
       lanesWithMissingHash.push(`${sid}/${lane.properties.bundle_id}`);
       continue;
     }
-    if (!hashBySpineId.has(sid)) {
-      hashBySpineId.set(sid, hash);
-    } else if (hashBySpineId.get(sid) !== hash) {
-      inconsistentGroups.push({ spine_id: sid, expected: hashBySpineId.get(sid), got: hash });
-    }
+    recordSpineHash(hashBySpineId, inconsistentGroups, sid, hash);
 
-    // Physical bundle hash invariant.
     const pbId = lane.properties.physical_bundle_id;
     const pbHash = lane.properties.physical_bundle_spine_hash;
-    if (pbId != null && pbHash != null) {
-      if (!pbHashByBundleId.has(pbId)) {
-        pbHashByBundleId.set(pbId, pbHash);
-      } else if (pbHashByBundleId.get(pbId) !== pbHash) {
-        inconsistentPhysicalBundleGroups.push({
-          physical_bundle_id: pbId,
-          expected: pbHashByBundleId.get(pbId),
-          got: pbHash,
-        });
-      }
-    }
+    if (pbId == null || pbHash == null) continue;
+    recordPhysicalBundleHash(pbHashByBundleId, inconsistentPhysicalBundleGroups, pbId, pbHash);
   }
   return {
     bundleLaneCount: bundleLaneFeatures.length,
@@ -128,12 +178,12 @@ export function assertNoBogusTransitions(
     const p = lane.properties;
     if (p.lane_slot_source !== "branch_transition") continue;
 
-    const fromRoutes = corridorRouteIndex.get(p.bundle_id_from) ?? new Set();
-    const toRoutes = corridorRouteIndex.get(p.bundle_id_to) ?? new Set();
+    const fromRoutes = corridorRouteIndex.get(p.bundle_id_from ?? "") ?? new Set<string>();
+    const toRoutes = corridorRouteIndex.get(p.bundle_id_to ?? "") ?? new Set<string>();
     const colorRouteIds = p.color_route_ids ?? [];
 
-    const colorInFrom = colorRouteIds.some((r: string) => fromRoutes.has(r));
-    const colorInTo = colorRouteIds.some((r: string) => toRoutes.has(r));
+    const colorInFrom = colorRouteIds.some((r) => fromRoutes.has(r));
+    const colorInTo = colorRouteIds.some((r) => toRoutes.has(r));
 
     if (!colorInFrom && !colorInTo) {
       violations.push({
@@ -146,37 +196,20 @@ export function assertNoBogusTransitions(
   return { passed: violations.length === 0, violations };
 }
 
-/**
- * Assert that Q route in the Brooklyn bbox forms a single connected chain.
- * Excludes features that are entirely above lat 40.72 (Manhattan-side false positives).
- */
-export function assertQContinuousInBrooklyn(visualFeatures: LaneFeature[], _stationsGeojson?: unknown) {
-  const BROOKLYN_BBOX: BBox = [-74.05, 40.57, -73.83, 40.72]; // lat max 40.72 to exclude Manhattan
-
-  const qFeatures = visualFeatures.filter((f) => {
-    const routes = f.properties.route_ids ?? [];
-    return routes.includes("Q") && featureInBbox(f, BROOKLYN_BBOX);
-  });
-
-  if (qFeatures.length === 0) {
-    return { passed: false, qFeatureCount: 0, disconnectedBundleIds: [], detail: "No Q features in Brooklyn bbox" };
-  }
-
-  // Build endpoint adjacency
-  const endpointMap = new Map();
-  for (const f of qFeatures) {
-    const ep = getEndpointKeys(f);
-    if (!ep) continue;
-    for (const key of [ep.fromKey, ep.toKey]) {
-      if (!endpointMap.has(key)) endpointMap.set(key, []);
-      endpointMap.get(key).push(f);
+function connectedBundleIds(features: LaneFeature[]): Set<string | undefined> {
+  const endpointMap = new Map<string, LaneFeature[]>();
+  for (const feature of features) {
+    const endpoints = getEndpointKeys(feature);
+    if (!endpoints) continue;
+    for (const key of [endpoints.fromKey, endpoints.toKey]) {
+      const members = endpointMap.get(key);
+      if (members) members.push(feature);
+      else endpointMap.set(key, [feature]);
     }
   }
-
-  // BFS from first feature
-  const visited = new Set();
-  const queue = [qFeatures[0]];
-  visited.add(qFeatures[0].properties.bundle_id);
+  const visited = new Set<string | undefined>();
+  const queue = [features[0]];
+  visited.add(features[0].properties.bundle_id);
 
   while (queue.length > 0) {
     const cur = queue.shift();
@@ -184,16 +217,33 @@ export function assertQContinuousInBrooklyn(visualFeatures: LaneFeature[], _stat
     const ep = getEndpointKeys(cur);
     if (!ep) continue;
     for (const key of [ep.fromKey, ep.toKey]) {
-      for (const n of (endpointMap.get(key) ?? [])) {
-        const nid = n.properties.bundle_id;
-        if (!visited.has(nid)) {
-          visited.add(nid);
-          queue.push(n);
-        }
+      for (const neighbor of endpointMap.get(key) ?? []) {
+        const nid = neighbor.properties.bundle_id;
+        if (visited.has(nid)) continue;
+        visited.add(nid);
+        queue.push(neighbor);
       }
     }
   }
+  return visited;
+}
 
+/**
+ * Assert that Q route in the Brooklyn bbox forms a single connected chain.
+ * Excludes features that are entirely above lat 40.72 (Manhattan-side false positives).
+ */
+export function assertQContinuousInBrooklyn(visualFeatures: LaneFeature[], _stationsGeojson?: null) {
+  const brooklynBbox: BBox = [-74.05, 40.57, -73.83, 40.72];
+  const qFeatures = visualFeatures.filter((feature) => {
+    const routes = feature.properties.route_ids ?? [];
+    return routes.includes("Q") && featureInBbox(feature, brooklynBbox);
+  });
+
+  if (qFeatures.length === 0) {
+    return { passed: false, qFeatureCount: 0, disconnectedBundleIds: [], detail: "No Q features in Brooklyn bbox" };
+  }
+
+  const visited = connectedBundleIds(qFeatures);
   const unreached = qFeatures
     .filter((f) => !visited.has(f.properties.bundle_id))
     .map((f) => f.properties.bundle_id);
@@ -208,6 +258,27 @@ export function assertQContinuousInBrooklyn(visualFeatures: LaneFeature[], _stat
   };
 }
 
+function hasUpstreamOrigin(
+  feature: LaneFeature,
+  visualFeatures: LaneFeature[],
+  routeSet: string[],
+  maxDistanceM: number,
+): boolean {
+  const ep = getEndpointKeys(feature);
+  if (!ep) return true;
+
+  for (const g of visualFeatures) {
+    if (g === feature) continue;
+    const gRoutes = g.properties.route_ids ?? [];
+    if (!routeSet.some((routeId) => gRoutes.includes(routeId))) continue;
+    const gEp = getEndpointKeys(g);
+    if (!gEp) continue;
+    if (gEp.toKey === ep.fromKey) return true;
+    if (haversineM(gEp.toCoord, ep.fromCoord) <= maxDistanceM) return true;
+  }
+  return false;
+}
+
 /**
  * Assert that for each 2/3 and 4/5 feature in the Flatbush + Eastern Pkwy bbox,
  * there is an upstream feature within 90m of its origin endpoint.
@@ -216,50 +287,26 @@ export function assertQContinuousInBrooklyn(visualFeatures: LaneFeature[], _stat
  * of this feature's fromCoord.
  */
 export function assertOriginsForRedGreenFlatbushEastern(visualFeatures: LaneFeature[]) {
-  const FE_BBOX: BBox = [-73.961, 40.659, -73.940, 40.682];
-  const UPSTREAM_MAX_M = 90;
-
+  const feBbox: BBox = [-73.961, 40.659, -73.940, 40.682];
+  const upstreamMaxM = 90;
   const violations = [];
 
   for (const routeSet of [["2", "3"], ["4", "5"]]) {
-    const regionFeatures = visualFeatures.filter((f) => {
-      const routes = f.properties.route_ids ?? [];
-      return routeSet.some((r) => routes.includes(r)) && featureInBbox(f, FE_BBOX);
+    const regionFeatures = visualFeatures.filter((feature) => {
+      const routes = feature.properties.route_ids ?? [];
+      return routeSet.some((routeId) => routes.includes(routeId)) && featureInBbox(feature, feBbox);
     });
-
     for (const f of regionFeatures) {
+      if (hasUpstreamOrigin(f, visualFeatures, routeSet, upstreamMaxM)) continue;
       const ep = getEndpointKeys(f);
       if (!ep) continue;
-
-      // Check for upstream: any same-route feature ending within 90m of our fromCoord
-      let hasUpstream = false;
-
-      // First try anchor-based match
-      const { fromKey } = ep;
-      for (const _r of routeSet) {
-        for (const g of visualFeatures) {
-          if (g === f) continue;
-          const gRoutes = g.properties.route_ids ?? [];
-          if (!routeSet.some((rr) => gRoutes.includes(rr))) continue;
-          const gEp = getEndpointKeys(g);
-          if (!gEp) continue;
-          // Does g's toKey match our fromKey?
-          if (gEp.toKey === fromKey) { hasUpstream = true; break; }
-          // Or is g's toCoord within 90m of our fromCoord?
-          if (haversineM(gEp.toCoord, ep.fromCoord) <= UPSTREAM_MAX_M) { hasUpstream = true; break; }
-        }
-        if (hasUpstream) break;
-      }
-
-      if (!hasUpstream) {
-        violations.push({
-          bundle_id: f.properties.bundle_id,
-          route_ids: f.properties.route_ids,
-          from_stop_id: f.properties.from_stop_id,
-          from_coord: ep.fromCoord,
-          detail: `No upstream feature within ${UPSTREAM_MAX_M}m for routes [${routeSet.join(",")}]`,
-        });
-      }
+      violations.push({
+        bundle_id: f.properties.bundle_id,
+        route_ids: f.properties.route_ids,
+        from_stop_id: f.properties.from_stop_id,
+        from_coord: ep.fromCoord,
+        detail: `No upstream feature within ${upstreamMaxM}m for routes [${routeSet.join(",")}]`,
+      });
     }
   }
 

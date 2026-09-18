@@ -59,88 +59,96 @@ export function hermiteBetween(
   return out;
 }
 
-/**
- * @param {Array<[number,number]>} coords  source polyline (the shared spine)
- * @param {object} [options]
- * @param {number} [options.maxOffsetM=80] peak offset at the middle of the span
- * @param {"left"|"right"} [options.side="left"] which side to bow toward (left = +90deg of travel)
- * @param {number} [options.taperPow=1] >1 makes the bow flatter near the ends and rounder in the middle
- * @param {number} [options.peakAt] if set (0..1), skews the peak toward this arc fraction:
- *   a smooth (smoothstep) peel up to the peak, then a STRAIGHT linear descent to the
- *   merge. The linear descent makes the spine converge on the source at a constant angle
- *   -- a clean Y-join (as Apple draws it) instead of a symmetric rounded "leaf" bottom.
- * @param {[number,number]} [options.plateau] if set ([startFrac,endFrac], 0..1): teardrop
- *   profile -- smoothstep peel UP to startFrac, hold at max (run PARALLEL to the source)
- *   to endFrac, then a STRAIGHT linear descent to 0 at the end. Rounded top (no pointy
- *   apex) + parallel mid + straight Y-merge. Takes precedence over peakAt.
- * @param {number} [options.teardropK] if set (>1): teardrop profile sin(pi * t^k). A single
- *   smooth convex curve -- gentle tangential peel off the source, a rounded apex (no point),
- *   then a STEEP non-tangential rejoin (a Y, not a rounded tangential "bottom curve"). Larger
- *   k => steeper Y and lower/later apex. Takes precedence over plateau/peakAt.
- * @returns {Array<[number,number]>} bow polyline, same vertex count as coords
- */
-export function offsetBow(
-  coords: Position[],
-  options: {
-    maxOffsetM?: number;
-    side?: "left" | "right";
-    taperPow?: number;
-    peakAt?: number | null;
-    plateau?: Position | null;
-    teardropK?: number | null;
-  } = {},
-): Position[] {
-  const { maxOffsetM = 80, side = "left", taperPow = 1, peakAt = null, plateau = null, teardropK = null } = options;
-  if (!Array.isArray(coords) || coords.length < 2) return coords;
+type BowProfile = {
+  maxOffsetM: number;
+  side: "left" | "right";
+  taperPow: number;
+  peakAt: number | null;
+  plateau: Position | null;
+  teardropK: number | null;
+};
 
-  // cumulative arc for the taper parameter
-  const arcs = [0];
-  for (let i = 1; i < coords.length; i += 1) arcs.push(arcs[i - 1] + haversineM(coords[i - 1], coords[i]));
-  const total = arcs[arcs.length - 1] || 1;
-  const sign = side === "right" ? -1 : 1;
-  const smoothstep = (u: number): number => { const c = Math.max(0, Math.min(1, u)); return c * c * (3 - 2 * c); };
+function smoothstep(u: number): number {
+  const c = Math.max(0, Math.min(1, u));
+  return c * c * (3 - 2 * c);
+}
 
-  const out: Position[] = [];
-  for (let i = 0; i < coords.length; i += 1) {
-    const t = arcs[i] / total; // 0..1
-    let taper;
-    if (teardropK != null) {
-      // single smooth convex curve: tangential peel, rounded apex, steep Y-rejoin
-      taper = Math.sin(Math.PI * Math.pow(t, teardropK));
-    } else if (plateau != null) {
-      // teardrop: rounded peel up -> flat parallel plateau -> straight linear descent
-      const [ps, pe] = plateau;
-      if (t <= ps) taper = smoothstep(t / Math.max(1e-6, ps));
-      else if (t <= pe) taper = 1;
-      else taper = 1 - (t - pe) / Math.max(1e-6, 1 - pe);
-    } else if (peakAt != null) {
-      // asymmetric Y-join: smoothstep peel up to the peak, then a STRAIGHT linear
-      // descent to 0. Linear descent => constant convergence angle => the spine
-      // meets the source as a Y (a straight line into a vertex), not a rounded curve.
-      taper = t <= peakAt
-        ? smoothstep(t / Math.max(1e-6, peakAt))
-        : 1 - (t - peakAt) / Math.max(1e-6, 1 - peakAt);
-    } else {
-      taper = Math.sin(Math.PI * t) ** taperPow; // 0 at ends, 1 at middle
-    }
-    const offset = maxOffsetM * taper;
-
-    // local tangent (in meters) from neighbouring vertices
-    const a = coords[Math.max(0, i - 1)];
-    const b = coords[Math.min(coords.length - 1, i + 1)];
-    const k = mPerDegLng(coords[i][1]);
-    let tx = (b[0] - a[0]) * k;
-    let ty = (b[1] - a[1]) * M_PER_DEG_LAT;
-    const tl = Math.hypot(tx, ty) || 1;
-    tx /= tl; ty /= tl;
-    // left normal of travel direction is (-ty, tx)
-    const nx = -ty * sign;
-    const ny = tx * sign;
-
-    out.push([
-      coords[i][0] + (nx * offset) / k,
-      coords[i][1] + (ny * offset) / M_PER_DEG_LAT,
-    ]);
+function bowTaper(t: number, profile: BowProfile): number {
+  if (profile.teardropK != null) {
+    return Math.sin(Math.PI * Math.pow(t, profile.teardropK));
   }
-  return out;
+  if (profile.plateau != null) {
+    const [ps, pe] = profile.plateau;
+    if (t <= ps) return smoothstep(t / Math.max(1e-6, ps));
+    if (t <= pe) return 1;
+    return 1 - (t - pe) / Math.max(1e-6, 1 - pe);
+  }
+  if (profile.peakAt != null) {
+    if (t <= profile.peakAt) return smoothstep(t / Math.max(1e-6, profile.peakAt));
+    return 1 - (t - profile.peakAt) / Math.max(1e-6, 1 - profile.peakAt);
+  }
+  return Math.sin(Math.PI * t) ** profile.taperPow;
+}
+
+function offsetVertexAlongNormal(
+  coord: Position,
+  prev: Position,
+  next: Position,
+  offsetM: number,
+  sign: number,
+): Position {
+  const k = mPerDegLng(coord[1]);
+  let tx = (next[0] - prev[0]) * k;
+  let ty = (next[1] - prev[1]) * M_PER_DEG_LAT;
+  const tl = Math.hypot(tx, ty) || 1;
+  tx /= tl;
+  ty /= tl;
+  const nx = -ty * sign;
+  const ny = tx * sign;
+  return [
+    coord[0] + (nx * offsetM) / k,
+    coord[1] + (ny * offsetM) / M_PER_DEG_LAT,
+  ];
+}
+
+type BowOptions = {
+  maxOffsetM?: number;
+  side?: "left" | "right";
+  taperPow?: number;
+  peakAt?: number | null;
+  plateau?: Position | null;
+  teardropK?: number | null;
+};
+
+function cumulativeBowArcs(coords: Position[]): number[] {
+  const arcs = [0];
+  for (let i = 1; i < coords.length; i += 1) {
+    arcs.push(arcs[i - 1] + haversineM(coords[i - 1], coords[i]));
+  }
+  return arcs;
+}
+
+/** Offset a polyline with a tapered bow that rejoins its source at both ends. */
+export function offsetBow(coords: Position[], options: BowOptions = {}): Position[] {
+  if (!Array.isArray(coords) || coords.length < 2) return coords;
+  const profile: BowProfile = {
+    maxOffsetM: (options).maxOffsetM ?? 80,
+    side: (options).side ?? "left",
+    taperPow: (options).taperPow ?? 1,
+    peakAt: (options).peakAt ?? null,
+    plateau: (options).plateau ?? null,
+    teardropK: (options).teardropK ?? null,
+  };
+  const arcs = cumulativeBowArcs(coords);
+  const total = arcs[arcs.length - 1] || 1;
+  const sign = profile.side === "right" ? -1 : 1;
+  return coords.map((coord, index) =>
+    offsetVertexAlongNormal(
+      coord,
+      coords[Math.max(0, index - 1)],
+      coords[Math.min(coords.length - 1, index + 1)],
+      profile.maxOffsetM * bowTaper(arcs[index] / total, profile),
+      sign,
+    ),
+  );
 }

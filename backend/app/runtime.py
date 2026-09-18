@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 
-
 _PRODUCTION_PROFILES = frozenset({"production", "prod"})
 _LOCAL_TEST_PROFILES = frozenset({"local", "development", "dev", "test", "testing"})
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
@@ -41,6 +40,21 @@ def allows_mock_modes() -> bool:
 
 def enabled(name: str) -> bool:
     return os.getenv(name, "").strip().casefold() in _TRUE_VALUES
+
+
+def env_int(name: str, default: int, *, minimum: int = 0) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+    return max(minimum, value)
+
+
+def env_float(name: str, default: float, *, minimum: float, maximum: float) -> float:
+    try:
+        return min(maximum, max(minimum, float(os.getenv(name, str(default)))))
+    except ValueError:
+        return default
 
 
 def runtime_mode_label() -> str:
